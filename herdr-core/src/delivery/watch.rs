@@ -989,6 +989,7 @@ mod tests {
             answer_wait_ended: None,
             bell_line: None,
             bell_turn: None,
+            handed: false,
             intake_from: None,
             immediate: false,
             forced: false,

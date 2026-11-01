@@ -42,10 +42,10 @@ pub(crate) struct InputWork {
     /// brief, it gets its Enter; empty, the brief is typed again once
     /// someone answered the screen.
     pub resubmit: Option<Resubmit>,
-    /// The agent recorded the brief (`"session"`: among its session's
-    /// person messages; `"turn"`: by starting a turn after its typing,
-    /// `AgentId::turn_takes_brief`): the store is told, and nothing else is
-    /// done for it.
+    /// The agent recorded the brief or the letter's bell (`"session"`: among
+    /// its session's person messages; `"turn"`: by starting a turn after its
+    /// typing, `AgentId::turn_takes_brief`): the store is told, and nothing
+    /// else is done for it.
     pub recorded: Option<&'static str>,
 }
 
@@ -262,14 +262,37 @@ impl Runtime {
             }
         }
         for letter in &ledger.letters {
-            let Some(input) = letter.typed_input() else {
-                continue;
-            };
             let Some(observation) = self
                 .delivery_observations
                 .get(&letter.recipient.pane_id)
                 .filter(|observation| observation.actor.same_identity(&letter.recipient))
             else {
+                continue;
+            };
+            // A bell line the recipient's session file records is a bell it
+            // took, even when its prompt hook never reached the core or the
+            // doorbell could not tell the bell was typed.
+            if letter.state == crate::delivery::ledger::State::Pending
+                && !letter.handed
+                && letter.bell_line.as_deref().is_some_and(|line| {
+                    self.row_facts_of(&letter.recipient.pane_id)
+                        .is_some_and(|facts| {
+                            facts.prompt_digests.iter().any(|digest| {
+                                hide_agent_hooks::delivery::matches_prompt_digest(line, digest)
+                            })
+                        })
+                })
+            {
+                work.push(InputWork {
+                    key: InputKey::Letter(letter.id.clone()),
+                    observation: observation.clone(),
+                    notice: None,
+                    resubmit: None,
+                    recorded: Some("session"),
+                });
+                continue;
+            }
+            let Some(input) = letter.typed_input() else {
                 continue;
             };
             if !matches!(
@@ -698,6 +721,27 @@ pub(crate) mod tests {
         );
         runtime.publish_delivery(Arc::new(ledger), false);
         (root, runtime, spawn)
+    }
+
+    /// The agent row of `pane` with `prompts` among its session file's
+    /// person messages, as the label worker reads them.
+    pub(crate) fn record_prompts(runtime: &mut Runtime, pane: &str, kind: &str, prompts: &[&str]) {
+        let mut row = crate::sidebar::project_agents(
+            serde_json::from_value(json!({"agents": [
+                {"pane_id": pane, "agent": kind, "agent_status": "idle", "state_change_seq": 2}
+            ]}))
+            .unwrap(),
+        )
+        .agents
+        .remove(0);
+        row.row_facts = Some(crate::request_view::RowFacts {
+            prompt_digests: prompts
+                .iter()
+                .map(|prompt| hide_agent_hooks::delivery::prompt_digest(prompt))
+                .collect(),
+            ..Default::default()
+        });
+        runtime.snapshot.navigator.agents.push(row);
     }
 
     fn input_of(runtime: &Runtime, spawn: &str) -> TypedInput {

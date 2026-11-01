@@ -1229,6 +1229,11 @@
                             "description": "Sent with `hide request send --force` (PRD engine-bundle-1 D-14): its composer was read empty when it was sent, and the doorbell types its bell even while the recipient works, after reading the composer empty once more; a composer that shows text then leaves it an ordinary letter sent with `--now`. An older build drops the field and the letter waits as a `--now` letter.",
                             "type": "boolean"
                         },
+                        "handed": {
+                            "default": false,
+                            "description": "The recipient's own session took one of the letter's bells: its prompt hook asked with the bell line's digest, or its session file records that line. No bell is typed for it again, whether or not the hook's confirmation arrived (`delivery::doorbell`): the next bell's batch for the same recipient, a tool or turn-end hook or `hide inbox` brings it instead. An older build drops the field at its next save.",
+                            "type": "boolean"
+                        },
                         "hook_confirmed": {
                             "default": null,
                             "type": [
@@ -1336,6 +1341,7 @@
                         "answer_wait_ended",
                         "bell_line",
                         "bell_turn",
+                        "handed",
                         "intake_from",
                         "immediate",
                         "forced",
@@ -1608,6 +1614,11 @@
                     "description": "Sent with `hide request send --force` (PRD engine-bundle-1 D-14): its composer was read empty when it was sent, and the doorbell types its bell even while the recipient works, after reading the composer empty once more; a composer that shows text then leaves it an ordinary letter sent with `--now`. An older build drops the field and the letter waits as a `--now` letter.",
                     "type": "boolean"
                 },
+                "handed": {
+                    "default": false,
+                    "description": "The recipient's own session took one of the letter's bells: its prompt hook asked with the bell line's digest, or its session file records that line. No bell is typed for it again, whether or not the hook's confirmation arrived (`delivery::doorbell`): the next bell's batch for the same recipient, a tool or turn-end hook or `hide inbox` brings it instead. An older build drops the field at its next save.",
+                    "type": "boolean"
+                },
                 "hook_confirmed": {
                     "default": null,
                     "type": [
@@ -1715,6 +1726,7 @@
                 "answer_wait_ended",
                 "bell_line",
                 "bell_turn",
+                "handed",
                 "intake_from",
                 "immediate",
                 "forced",
@@ -4941,7 +4953,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:e2b2766197ea2610625457648691270613a6e6b069e5ed302db9052b922cdd8c",
+    "digest": "sha256:1c9c41997153e3e50554dc9cad36d8683a266f5f666f57a24f2b3e2da11b0d9f",
     "envelopes": {
         "agent": {
             "answer": "value",

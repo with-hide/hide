@@ -84,6 +84,14 @@ pub struct Letter {
     pub bell_line: Option<String>,
     #[serde(default)]
     pub bell_turn: Option<BellTurn>,
+    /// The recipient's own session took one of the letter's bells: its prompt
+    /// hook asked with the bell line's digest, or its session file records
+    /// that line. No bell is typed for it again, whether or not the hook's
+    /// confirmation arrived (`delivery::doorbell`): the next bell's batch for
+    /// the same recipient, a tool or turn-end hook or `hide inbox` brings it
+    /// instead. An older build drops the field at its next save.
+    #[serde(default)]
+    pub handed: bool,
     /// Where the letter's wait for intake began: on its recipient machine's
     /// clock while the ledger keeps one (`Ledger::node_clocks`), on the wall
     /// clock otherwise; null is its creation on the wall clock.
@@ -234,9 +242,29 @@ impl Letter {
 
     pub(crate) fn intake_confirmed(&self) -> bool {
         // Only legacy Delivered proves a hook confirmation. A legacy Ack
-        // may have preceded intake, so its missing receipt remains unknown.
+        // may have preceded intake, so its missing receipt remains unknown,
+        // as does a handed letter's that ended without one.
         self.hook_confirmed
-            .unwrap_or(self.state == State::Delivered)
+            .unwrap_or(self.state == State::Delivered && !self.handed)
+    }
+
+    /// Ends the wait for intake of a pending letter no receipt took in. One a
+    /// hook handed into its recipient's session ends delivered without a
+    /// receipt (`hook_confirmed` null), which its sender reads as probably
+    /// received, and still waits for an answer; any other is undelivered and
+    /// its sender waits for nothing.
+    fn end_unconfirmed(&mut self, now: u64) {
+        if self.handed {
+            self.state = State::Delivered;
+            self.hook_confirmed = None;
+            if !self.open() {
+                self.finished_at_unix_ms = Some(now);
+            }
+        } else {
+            self.state = State::Undelivered;
+            self.waiting_answer = false;
+            self.finished_at_unix_ms = Some(now);
+        }
     }
 
     pub(crate) fn awaiting_intake(&self) -> bool {
@@ -288,7 +316,8 @@ impl Letter {
         Some(super::typed::TypedInput {
             attempts: self.attempts(),
             typed_at_unix_ms: self.bell_typed_at_unix_ms?,
-            confirmed_at_unix_ms: (self.state != State::Pending).then_some(0),
+            // A bell its recipient took is recorded, confirmed or not.
+            confirmed_at_unix_ms: (self.state != State::Pending || self.handed).then_some(0),
             noticed: self.input_noticed,
             noticed_at_unix_ms: self.input_noticed_at_unix_ms,
         })
@@ -315,6 +344,9 @@ impl Letter {
         }
         if self.state != State::Pending || !self.within_deadline(clocks, now) {
             return Err("letter_not_pending".into());
+        }
+        if self.handed {
+            return Err("letter_handed".into());
         }
         if self.attempts() >= 3 {
             return Err("doorbell_attempt_limit".into());
@@ -477,9 +509,7 @@ impl Ledger {
                 continue;
             }
             if letter.state == State::Pending {
-                letter.state = State::Undelivered;
-                letter.waiting_answer = false;
-                letter.finished_at_unix_ms = Some(now);
+                letter.end_unconfirmed(now);
             } else {
                 // Acknowledged without a receipt by a build before the
                 // acknowledgement was the receipt. Its intake is no longer
@@ -536,9 +566,7 @@ impl Ledger {
             if letter.state != State::Pending || !failed.contains_key(&letter.id) {
                 continue;
             }
-            letter.state = State::Undelivered;
-            letter.waiting_answer = false;
-            letter.finished_at_unix_ms = Some(now);
+            letter.end_unconfirmed(now);
             changed = true;
         }
         changed

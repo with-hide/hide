@@ -313,7 +313,7 @@ pub(crate) fn letters_waiting(
         }
         let (count, ringable) = waiting.entry(pane).or_default();
         *count += 1;
-        *ringable |= letter.attempts() < 3;
+        *ringable |= letter.attempts() < 3 && !letter.handed;
     }
     waiting
         .into_iter()
@@ -441,7 +441,11 @@ impl Doorbell {
             .letters
             .iter()
             .filter(|letter| {
-                letter.state == State::Pending && letter.within_deadline(&ledger.node_clocks, now)
+                // A letter its recipient took is never belled again
+                // (`Letter::handed`), even without the hook's confirmation.
+                letter.state == State::Pending
+                    && !letter.handed
+                    && letter.within_deadline(&ledger.node_clocks, now)
             })
             .collect();
         let ids: HashSet<_> = pending.iter().map(|letter| letter.id.as_str()).collect();
@@ -742,7 +746,10 @@ impl Doorbell {
                 InputKey::Spawn(id) | InputKey::Letter(id) => id.clone(),
             };
             if let Some(by) = item.recorded {
-                record_brief(owner, &id, by);
+                match &item.key {
+                    InputKey::Spawn(_) => record_brief(owner, &id, by),
+                    InputKey::Letter(_) => record_bell(owner, &id, &item.observation.actor),
+                }
                 continue;
             }
             // The composer first: a brief it still shows gets its Enter, and
@@ -939,6 +946,28 @@ fn record_brief(owner: &Mutex<Runtime>, id: &str, by: &str) {
     crate::diagnostic!(
         json!({"component":"delivery","kind":"input.confirmed","spawn":id,
         "by":by,"code":result.err()})
+    );
+}
+
+/// Tells the store that letter `id`'s bell is in its recipient's session
+/// file, so no bell is typed for it again.
+fn record_bell(owner: &Mutex<Runtime>, id: &str, recipient: &crate::delivery::Actor) {
+    let result = owner
+        .lock()
+        .map_err(|_| "delivery_unavailable".to_owned())
+        .and_then(|guard| guard.hide_delivery(super::typed::INPUT_ROLE))
+        .and_then(|(client, _, _)| {
+            client.submit(
+                Effect::BellRecorded {
+                    id: id.to_owned(),
+                    recipient: recipient.clone(),
+                },
+                PROMPT_TIMEOUT,
+            )
+        });
+    crate::diagnostic!(
+        json!({"component":"delivery","kind":"input.confirmed","letter_id":id,
+        "by":"session","code":result.err()})
     );
 }
 
@@ -2020,6 +2049,122 @@ mod tests {
                 held: false,
             }
         );
+    }
+
+    /// What Hide's own `hide:input` told senders about bells not taken.
+    fn input_notices(bell: &Bell) -> Vec<Letter> {
+        let guard = bell.runtime.lock().unwrap();
+        let ledger = guard.delivery_state().unwrap();
+        ledger
+            .letters
+            .iter()
+            .filter(|letter| letter.sender.name == "hide:input")
+            .cloned()
+            .collect()
+    }
+
+    /// The recipient's own prompt hook asks with `prompt`'s digest.
+    fn prompt_pull(bell: &Bell, prompt: &str) -> Value {
+        use crate::delivery::Command;
+        use crate::runtime::delivery::tests::{authority, observed};
+        let recipient = observed(&bell.runtime.lock().unwrap(), "recipient").actor;
+        bell.client
+            .submit(
+                Effect::Command {
+                    authority: authority(&recipient),
+                    actor: recipient,
+                    target: None,
+                    command: Box::new(Command::Pull {
+                        prompt_digest: Some(hide_agent_hooks::delivery::prompt_digest(prompt)),
+                        session: Some("recipient-native".into()),
+                        point: hide_node_link::panes::PullPoint::Prompt,
+                    }),
+                },
+                Duration::from_secs(5),
+            )
+            .unwrap()
+    }
+
+    /// The passes a resting pane gets after its bell's turn ended, through
+    /// the record wait and the fresh read and past the retry timer.
+    fn passes_after_the_turn(bell: &Bell, doorbell: &mut Doorbell, start: u64) {
+        use crate::delivery::typed::{RECORD_WAIT_MS, REREAD_WAIT_MS};
+        crate::runtime::delivery::tests::observe_turn_ended(
+            &mut bell.runtime.lock().unwrap(),
+            "recipient",
+            start + 10,
+        );
+        let late = start + RECORD_WAIT_MS + 1_000;
+        for at in [
+            late,
+            late + REREAD_WAIT_MS,
+            late + REREAD_WAIT_MS + RETRY_LIMIT_MS,
+        ] {
+            bell.pass(doorbell, at);
+        }
+    }
+
+    /// A bell its recipient's prompt hook took is never typed again though
+    /// the hook's confirmation never came, as when that second process
+    /// missed its last 400 ms under load (letter-19680, 2026-11-01): the
+    /// resting pane is not belled, its sender is told nothing, and the
+    /// operator's next prompt carries no body.
+    #[test]
+    fn a_bell_its_hook_took_is_never_typed_again_without_the_confirmation() {
+        let bell = Bell::start(json!({}));
+        bell.runtime
+            .lock()
+            .unwrap()
+            .install_delivery_client(bell.client.clone());
+        let mut doorbell = Doorbell::default();
+        let start = now();
+        bell.pass(&mut doorbell, start);
+        assert_eq!(bell.typed().len(), 1);
+        let handed = prompt_pull(&bell, &bell.line().unwrap());
+        assert_eq!(handed["ids"], json!([bell.letter]));
+        passes_after_the_turn(&bell, &mut doorbell, start);
+        assert_eq!(bell.typed().len(), 1, "no second bell");
+        assert!(input_notices(&bell).is_empty(), "no sender is told");
+        // The operator's own prompt brings no letter body and promises none.
+        let operator = prompt_pull(&bell, "the operator's own prompt");
+        assert_eq!(operator["ids"], json!([]));
+        assert_eq!(operator["context"], "");
+    }
+
+    /// A bell line its recipient's session file records is a bell taken,
+    /// even when its prompt hook never reached the core (letter-19699,
+    /// 2026-11-01): the pane is not belled again and the sender is told
+    /// nothing.
+    #[test]
+    fn a_bell_the_session_file_records_is_never_typed_again() {
+        let bell = Bell::start(json!({}));
+        bell.runtime
+            .lock()
+            .unwrap()
+            .install_delivery_client(bell.client.clone());
+        let mut doorbell = Doorbell::default();
+        let start = now();
+        bell.pass(&mut doorbell, start);
+        assert_eq!(bell.typed().len(), 1);
+        let line = bell.line().unwrap();
+        crate::runtime::typed_input::tests::record_prompts(
+            &mut bell.runtime.lock().unwrap(),
+            "recipient",
+            "codex",
+            &[&line],
+        );
+        passes_after_the_turn(&bell, &mut doorbell, start);
+        assert_eq!(bell.typed().len(), 1, "no second bell");
+        assert!(input_notices(&bell).is_empty(), "no sender is told");
+        let guard = bell.runtime.lock().unwrap();
+        let ledger = guard.delivery_state().unwrap();
+        let letter = ledger
+            .letters
+            .iter()
+            .find(|letter| letter.id == bell.letter)
+            .unwrap();
+        assert!(letter.handed);
+        assert_eq!(letter.state, State::Pending, "only a hook takes it in");
     }
 
     /// PRD letters-to-busy-agents D-01, D-04, D-05, D-10: a working pane is

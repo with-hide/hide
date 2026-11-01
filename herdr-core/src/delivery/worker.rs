@@ -340,6 +340,12 @@ pub(crate) enum Effect {
         id: String,
         recipient: Actor,
     },
+    /// The recipient's session file records the letter's bell line: the
+    /// bell was taken (`Letter::handed`).
+    BellRecorded {
+        id: String,
+        recipient: Actor,
+    },
     /// Hide told the letter's sender that its bell `attempt` was not taken
     /// (`delivery::typed`).
     InputNoticed {
@@ -787,6 +793,16 @@ fn apply(ledger: &mut Ledger, request: &Request, now: u64) -> Result<(Value, boo
             // A typed bell is published: the core waits for the recipient's
             // record of it from then on (`delivery::typed`).
             return Ok((Value::Null, *sent));
+        }
+        Effect::BellRecorded { id, recipient } => {
+            if let Some(letter) = ledger.letters.iter_mut().find(|letter| {
+                letter.id == *id
+                    && letter.recipient.same_identity(recipient)
+                    && letter.state == super::ledger::State::Pending
+            }) {
+                letter.handed = true;
+            }
+            return Ok((Value::Null, true));
         }
         Effect::InputNoticed { id, attempt } => {
             if let Some(letter) = ledger.letters.iter_mut().find(|letter| letter.id == *id)
