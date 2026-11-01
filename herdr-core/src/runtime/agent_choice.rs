@@ -258,14 +258,18 @@ impl Runtime {
         scope: crate::agent_state::ReadRecordScope<'_>,
         live_pane_ids: Option<&HashSet<String>>,
     ) {
-        if settle_pane_launches(
+        let moved = settle_pane_launches(
             &mut self.snapshot.ui_state.pane_launches,
             agents,
             live_pane_ids,
             scope,
-        ) {
+        );
+        if moved {
             self.persist_ui_state();
         }
+        // A worker's launch is proven once its record names the worker's
+        // conversation, which a settle fills in, or once the worker binds.
+        self.record_node_launches(moved);
     }
 
     /// Remembers the kind and model a start named, so every start surface

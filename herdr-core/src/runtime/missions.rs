@@ -159,6 +159,9 @@ pub struct NodeView {
     /// a sleeping worker's card reads asleep, not working. None with no
     /// registration.
     pub agent_runtime: Option<crate::delivery::answer::Runtime>,
+    /// What the node's current worker was proven launched with; none until
+    /// it is proven, and none for a launch proven for an earlier worker.
+    pub launched: Option<crate::missions::NodeLaunch>,
     /// The worker's pane, which the node's status mark and `터미널로 이동`
     /// follow, on `machine`.
     pub pane_id: Option<String>,
@@ -321,6 +324,10 @@ pub(crate) struct MissionRuntime {
     /// node change asked to read again (D-09, B23), kept until that read is
     /// asked. Memory only: a restart reads every project anew.
     pub(super) reads_due: std::collections::BTreeSet<(String, String)>,
+    /// The ledger (held weakly) and the book's edit the last launch proof
+    /// read (`record_node_launches`), so an agent pass in which neither nor
+    /// a pane's launch record moved reads nothing.
+    launch_proof_made: Option<(std::sync::Weak<crate::delivery::ledger::Ledger>, u64)>,
 }
 
 #[derive(Default)]
@@ -807,6 +814,87 @@ impl Runtime {
     /// The pull request lists the missions' maps read were replaced.
     pub(super) fn mission_pulls_moved(&mut self) {
         self.missions.github_edit = self.missions.github_edit.wrapping_add(1);
+    }
+
+    /// Records on each node of an open mission whose worker's launch is not
+    /// yet kept the launch its pane now proves for that worker
+    /// (`proven_launch`), so the map still names what ran once the pane is
+    /// gone. It runs on the agent pass that settles the pane launch records,
+    /// looks again only when a launch record, the ledger or the book moved
+    /// since it last looked, compares in memory only, and saves through the
+    /// book's save thread when one moved.
+    pub(super) fn record_node_launches(&mut self, launches_moved: bool) {
+        let ledger = self.delivery_state().ok();
+        let same = |made: &(std::sync::Weak<crate::delivery::ledger::Ledger>, u64)| {
+            made.1 == self.missions.book_edit
+                && ledger
+                    .as_ref()
+                    .is_some_and(|ledger| std::ptr::eq(made.0.as_ptr(), Arc::as_ptr(ledger)))
+        };
+        if !launches_moved && self.missions.launch_proof_made.as_ref().is_some_and(same) {
+            return;
+        }
+        self.missions.launch_proof_made = ledger
+            .as_ref()
+            .map(|ledger| (Arc::downgrade(ledger), self.missions.book_edit));
+        let waiting = |node: &crate::missions::MissionNode| {
+            node.agent_id.as_deref().is_some_and(|id| {
+                node.launched
+                    .as_ref()
+                    .is_none_or(|launch| launch.agent_id != id)
+            })
+        };
+        let open = || {
+            self.missions
+                .book
+                .missions
+                .iter()
+                .filter(|mission| mission.status.open())
+        };
+        if !open().flat_map(|mission| &mission.nodes).any(waiting) {
+            return;
+        }
+        let Some(ledger) = ledger else {
+            return;
+        };
+        let records = worker_records(Some(&ledger), open());
+        let launches = &self.snapshot.ui_state.pane_launches;
+        let node_id = self.node.as_str();
+        let mut proven = Vec::new();
+        for (index, mission) in self.missions.book.missions.iter().enumerate() {
+            if !mission.status.open() {
+                continue;
+            }
+            for (at, node) in mission.nodes.iter().enumerate() {
+                if !waiting(node) {
+                    continue;
+                }
+                let launch = node
+                    .agent_id
+                    .as_deref()
+                    .and_then(|id| records.get(id))
+                    .and_then(|record| proven_launch(launches, node_id, record));
+                if let Some(launch) = launch {
+                    proven.push((index, at, launch));
+                }
+            }
+        }
+        if proven.is_empty() {
+            return;
+        }
+        for (index, at, launch) in proven {
+            crate::diagnostic!(json!({
+                "component": "missions", "kind": "mission.node_launch_recorded",
+                "mission": self.missions.book.missions[index].id,
+                "node": self.missions.book.missions[index].nodes[at].key,
+                "agent": launch.agent_id,
+            }));
+            self.missions.book.missions[index].nodes[at].launched = Some(launch);
+        }
+        self.save_missions();
+        if let Some(made) = &mut self.missions.launch_proof_made {
+            made.1 = self.missions.book_edit;
+        }
     }
 
     pub(super) fn save_missions(&mut self) {
@@ -2226,6 +2314,9 @@ impl Runtime {
                     worker: node.worker.clone(),
                     agent_id: node.agent_id.clone(),
                     agent_runtime: record.map(|record| crate::coordination::life(record, sleeping)),
+                    launched: node.launched.clone().filter(|launch| {
+                        node.agent_id.as_deref() == Some(launch.agent_id.as_str())
+                    }),
                     pane_id: record.map(|record| record.pane.clone()),
                     machine: record.map(|record| record.machine.clone()),
                     pr: node.current_pr(),
@@ -2595,6 +2686,27 @@ fn worker_records<'a, 'm>(
         .filter(|record| wanted.contains(record.id.as_str()))
         .map(|record| (record.id.as_str(), record))
         .collect()
+}
+
+/// The launch `record`'s pane says Hide started the registration's own
+/// conversation with: the pane's record names that conversation, so a later
+/// session in the same pane, or the same pane id on another machine, is
+/// never taken for it.
+fn proven_launch(
+    launches: &std::collections::BTreeMap<String, crate::model::PaneLaunch>,
+    node: &str,
+    record: &crate::coordination::AgentRecord,
+) -> Option<crate::missions::NodeLaunch> {
+    let pane = crate::address::pane_id_on(node, &record.machine, &record.pane);
+    let launch = launches
+        .get(&pane)
+        .filter(|launch| launch.session.as_deref() == Some(record.session.as_str()))?;
+    Some(crate::missions::NodeLaunch {
+        agent_id: record.id.clone(),
+        agent: launch.kind.clone(),
+        model: launch.choice.model.clone(),
+        effort: launch.choice.effort.clone(),
+    })
 }
 
 /// The node's step on its four-step bar (D-42, D-48): a pull request's is

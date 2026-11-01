@@ -358,7 +358,7 @@ function NodeCard({ mission, node, selected, dimmed, onSelect, actions }: { miss
   const hide = hideWords(mission, node, t);
   const satellites = satelliteLines(node.criteria);
   const word = markWord(node, look, t);
-  const worker = useNodeRun(mission, node);
+  const worker = useNodeRun(node);
   const run = worker?.run ?? null;
   const card = (
     <button
