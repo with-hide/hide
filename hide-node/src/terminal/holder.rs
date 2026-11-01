@@ -32,9 +32,10 @@ use std::time::{Duration, Instant};
 use hide_holder_protocol::record::{EndReason, PaneRecord};
 use hide_holder_protocol::{
     Answer, Ask, Capability, ClientMessage, CloseReason, Closed, HolderMessage, MAX_INPUT,
-    Modifiers, OLDEST_HOLDER_VERSION, OpenError, Scroll, Size, read_holder, write_client,
+    Modifiers, OLDEST_HOLDER_VERSION, OpenError, PROTOCOL_VERSION, Scroll, Size, read_holder,
+    write_client,
 };
-use hide_kit::holders::Source;
+use hide_kit::holders::{FOLDERS_CAP, Pruned, Source};
 use hide_kit::panes::{
     CloseError, Judgment, OrphanOutcome, Panes, RECONCILE_BUDGET, StartRefusal, StartRequest,
     Started,
@@ -177,7 +178,7 @@ impl Attacher for PaneAttacher {
         size: Option<GridSize>,
     ) -> Result<Transport, OpenFailure> {
         match self.known.socket(pane_id) {
-            Some(socket) => open_holder(&socket, size),
+            Some(socket) => open_holder(pane_id, &socket, size),
             None => self.herdr.open_transport(pane_id, mode, size),
         }
     }
@@ -187,14 +188,18 @@ impl Attacher for PaneAttacher {
     }
 }
 
-/// Opens the holder at `socket` as a control session: says hello, accepting
-/// its screen, and resizes it to `size` when that is not the size it has.
-/// A holder holds one connection at a time, so this takes the pane over
-/// from whoever held it.
-pub fn open_holder(socket: &Path, size: Option<GridSize>) -> Result<Transport, OpenFailure> {
+/// Opens the holder of `pane` at `socket` as a control session: says hello,
+/// accepting its screen and its notices, and resizes it to `size` when that
+/// is not the size it has. A holder holds one connection at a time, so this
+/// takes the pane over from whoever held it.
+pub fn open_holder(
+    pane: &str,
+    socket: &Path,
+    size: Option<GridSize>,
+) -> Result<Transport, OpenFailure> {
     let (stream, welcome) = hide_holder_protocol::open(
         socket,
-        vec![Capability::Screen],
+        vec![Capability::Screen, Capability::Notices],
         Instant::now() + OPEN_LIMIT,
     )
     .map_err(open_failure)?;
@@ -214,6 +219,7 @@ pub fn open_holder(socket: &Path, size: Option<GridSize>) -> Result<Transport, O
     let shutdown = stream.shutdown_handle();
     Ok(Transport {
         events: Box::new(HolderEvents {
+            pane: pane.to_owned(),
             stream,
             screen: None,
         }),
@@ -278,8 +284,11 @@ fn message(closed: &Closed) -> String {
 
 /// A holder connection's messages as session events: each fragment is a
 /// frame at the size it was drawn, and its close is the session's end with
-/// the reason the holder named.
+/// the reason the holder named. A notice, something the holder refused while
+/// the pane runs on, goes to the diagnostic log and the session goes on;
+/// the operator can do nothing about it, so nothing reaches the screen.
 struct HolderEvents {
+    pane: String,
     stream: LocalStream,
     /// The epoch and sequence of the last fragment.
     screen: Option<(u64, u64)>,
@@ -287,7 +296,30 @@ struct HolderEvents {
 
 impl SessionEvents for HolderEvents {
     fn next_event(&mut self) -> SessionEvent {
-        match read_holder(&mut self.stream) {
+        loop {
+            if let Some(event) = self.next_message() {
+                return event;
+            }
+        }
+    }
+}
+
+impl HolderEvents {
+    /// The session event the next message is, or `None` for a notice.
+    fn next_message(&mut self) -> Option<SessionEvent> {
+        Some(match read_holder(&mut self.stream) {
+            Ok(HolderMessage::Notice(notice)) => {
+                crate::diagnostic!(json!({
+                    "component": "pane_holder",
+                    "kind": format!("pane_holder.{}", notice.reason.name()),
+                    "pane_id": self.pane,
+                    "reason_code": notice.reason.code(),
+                    "count": notice.count,
+                    "bytes": notice.bytes,
+                    "message": notice.detail,
+                }));
+                return None;
+            }
             Ok(HolderMessage::Fragment(fragment)) => {
                 // A full fragment opens an epoch at 0; every other one is the
                 // next of its epoch. One out of order means the screen this
@@ -298,13 +330,13 @@ impl SessionEvents for HolderEvents {
                     self.screen == Some((fragment.epoch, fragment.seq.wrapping_sub(1)))
                 };
                 if !follows {
-                    return SessionEvent::Ended {
+                    return Some(SessionEvent::Ended {
                         category: "protocol_error",
                         message: format!(
                             "The pane's holder sent fragment {}.{} after {:?}",
                             fragment.epoch, fragment.seq, self.screen
                         ),
-                    };
+                    });
                 }
                 self.screen = Some((fragment.epoch, fragment.seq));
                 SessionEvent::Frame {
@@ -326,7 +358,7 @@ impl SessionEvents for HolderEvents {
                 category: "transport_eof",
                 message: format!("The pane's holder connection ended: {error}"),
             },
-        }
+        })
     }
 }
 
@@ -420,6 +452,7 @@ pub struct Recovered {
 pub struct Holders {
     panes: Panes,
     source: Source,
+    home: PathBuf,
     state_dir: PathBuf,
     known: Arc<Known>,
     reports: Arc<dyn ReportSink>,
@@ -453,6 +486,7 @@ impl Holders {
         Ok(Self {
             panes,
             source,
+            home: folders.home.to_owned(),
             state_dir: folders.state_dir.to_owned(),
             known: Arc::default(),
             reports,
@@ -489,10 +523,11 @@ impl Holders {
     /// The local node's terminal service as a daemon starts it: given
     /// `holders` (the switch on), their state folder's holder panes beside
     /// `herdr`'s sessions, the holder from [`Holders::local_source`], and
-    /// the holders that ran on while no node was there found again in the
-    /// background ([`Holders::recover_in_background`]); given none (the
-    /// switch off), `herdr`'s sessions alone and nothing of holders opened
-    /// or read. hided and the tools that measure a node
+    /// the holders that ran on while no node was there found again, and the
+    /// version folders nothing runs from removed, in the background
+    /// ([`Holders::recover_in_background`]); given none (the switch off),
+    /// `herdr`'s sessions alone and nothing of holders opened, read or
+    /// removed. hided and the tools that measure a node
     /// (`hide-node/examples/holder_node.rs`) start it here, so what they
     /// measure is how the daemon is built.
     pub fn start_local(
@@ -504,11 +539,24 @@ impl Holders {
     ) -> Result<LocalTerminals, String> {
         let holders = match holders {
             None => None,
-            Some(folders) => Some(Arc::new(Self::open(
-                folders,
-                Self::local_source(herdr_bin)?,
-                Arc::clone(&reports),
-            )?)),
+            Some(folders) => Some((folders, Self::local_source(herdr_bin)?)),
+        };
+        Self::start_from(holders, herdr, outputs, reports)
+    }
+
+    /// [`Holders::start_local`] with the holder program `source` names, for
+    /// a test that starts a node as the daemon does with the holder it built.
+    pub fn start_from(
+        holders: Option<(HolderFolders<'_>, Source)>,
+        herdr: Box<dyn Attacher>,
+        outputs: Arc<dyn super::OutputSink>,
+        reports: Arc<dyn ReportSink>,
+    ) -> Result<LocalTerminals, String> {
+        let holders = match holders {
+            None => None,
+            Some((folders, source)) => {
+                Some(Arc::new(Self::open(folders, source, Arc::clone(&reports))?))
+            }
         };
         let attacher = match &holders {
             Some(holders) => holders.attacher(herdr),
@@ -736,13 +784,17 @@ impl Holders {
         recovered
     }
 
-    /// [`Holders::recover`] on a thread of its own, so a node's start does
-    /// not wait on its holders.
+    /// [`Holders::recover`] and then [`Holders::prune_folders`] on a thread
+    /// of its own, so a node's start does not wait on its holders. The
+    /// folders are pruned after the holders are found again: the holders the
+    /// reconcile ended no record names, and the ones that died, leave their
+    /// folders unused, and this start removes them.
     pub fn recover_in_background(self: Arc<Self>, service: Arc<Service>) {
         if let Err(error) = thread::Builder::new()
             .name("hide-node-pane-holder-recover".into())
             .spawn(move || {
                 self.recover(&service);
+                self.prune_folders();
             })
         {
             crate::diagnostic!(json!({
@@ -751,6 +803,60 @@ impl Holders {
                 "message": error.to_string(),
             }));
         }
+    }
+
+    /// Removes the version folders under the home that are not this
+    /// build's and that nothing runs from (D-16, B20): a folder a holder or
+    /// an OpenConsole still runs from stays, one a start has reserved is
+    /// waited for, and the runtime copies live under another root
+    /// (`hide_kit::holders::prune`). What could not be removed, and more
+    /// than [`FOLDERS_CAP`] folders left, go to the diagnostic log; `None`
+    /// when this build's own folder could not be named, and nothing is
+    /// removed then.
+    pub fn prune_folders(&self) -> Option<Pruned> {
+        let current = match hide_kit::holders::version_name(PROTOCOL_VERSION, &self.source) {
+            Ok(name) => name,
+            Err(error) => {
+                crate::diagnostic!(json!({
+                    "component": "pane_holder",
+                    "kind": "pane_holder.folders_not_pruned",
+                    "message": format!("the holder's files could not be read: {error}"),
+                }));
+                return None;
+            }
+        };
+        let pruned = hide_kit::holders::prune(&self.home, &[&current]);
+        if pruned.busy {
+            crate::diagnostic!(json!({
+                "component": "pane_holder",
+                "kind": "pane_holder.folders_busy",
+                "message": "starts held the version folders for the whole wait; the next start prunes them",
+            }));
+        }
+        for (folder, detail) in &pruned.failed {
+            crate::diagnostic!(json!({
+                "component": "pane_holder",
+                "kind": "pane_holder.folder_remove_failed",
+                "folder": folder,
+                "message": detail,
+            }));
+        }
+        if let Some(count) = pruned.over_cap {
+            crate::diagnostic!(json!({
+                "component": "pane_holder",
+                "kind": "pane_holder.folders_over_cap",
+                "count": count,
+                "cap": FOLDERS_CAP,
+            }));
+        }
+        crate::diagnostic!(json!({
+            "component": "pane_holder",
+            "kind": "pane_holder.folders_pruned",
+            "removed": pruned.removed,
+            "in_use": pruned.in_use,
+            "failed": pruned.failed.len(),
+        }));
+        Some(pruned)
     }
 
     fn report_ended(&self, record: &PaneRecord) {

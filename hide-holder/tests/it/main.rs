@@ -12,6 +12,7 @@ mod lifecycle;
 mod meaning;
 mod memory;
 mod node;
+mod queues;
 mod records;
 mod role;
 mod screen;

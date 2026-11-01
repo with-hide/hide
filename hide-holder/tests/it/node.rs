@@ -16,6 +16,7 @@ use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread;
@@ -724,7 +725,7 @@ fn a_second_node_takes_the_pane_over_and_the_first_does_not_try_again() {
         node.text("t1").contains("hide-ok")
     });
 
-    let second = open_holder(&socket, None).unwrap();
+    let second = open_holder("t1", &socket, None).unwrap();
     let taken = node.reports.wait_state("t1", "taken_over");
     assert_eq!(taken.exit_category.as_deref(), Some("taken_over"));
     assert_eq!(taken.retry_decision, "none");
@@ -892,4 +893,214 @@ fn a_holder_older_than_the_oldest_supported_is_reported_and_left_running() {
     assert!(running.is_running(), "the old holder was ended");
     assert!(old_folder.exists(), "the old version folder was removed");
     assert!(!node.screens.drew("o1"));
+}
+
+/// What the node logged to its diagnostic log while a test listened
+/// ([`Listening`]), in order.
+static DIAGNOSTICS: Mutex<Vec<serde_json::Value>> = Mutex::new(Vec::new());
+static LISTENERS: AtomicUsize = AtomicUsize::new(0);
+
+/// The node's sink in this test binary: every record still reaches the
+/// error stream, as with no sink, so the other tests of the binary log as
+/// before; it is kept only while a test listens.
+fn keep_diagnostic(record: serde_json::Value) {
+    eprintln!("{record}");
+    if LISTENERS.load(Ordering::SeqCst) > 0 {
+        DIAGNOSTICS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(record);
+    }
+}
+
+/// A test reading the node's diagnostic log; the records kept for it go
+/// when the last listener does.
+struct Listening;
+
+impl Drop for Listening {
+    fn drop(&mut self) {
+        let mut kept = DIAGNOSTICS.lock().unwrap_or_else(PoisonError::into_inner);
+        if LISTENERS.fetch_sub(1, Ordering::SeqCst) == 1 {
+            kept.clear();
+        }
+    }
+}
+
+/// Makes the node's diagnostic log readable by [`wait_diagnostic`] until
+/// the answer drops. The sink is the process's, installed once, and passes
+/// every record on to the error stream; tests running at once share it, so
+/// each matches only the records that name what it made.
+fn diagnostics() -> Listening {
+    static INSTALLED: std::sync::Once = std::sync::Once::new();
+    INSTALLED.call_once(|| {
+        assert!(
+            hide_node::diagnostics::install(keep_diagnostic),
+            "another sink took the node's diagnostic log"
+        );
+    });
+    let _kept = DIAGNOSTICS.lock().unwrap_or_else(PoisonError::into_inner);
+    LISTENERS.fetch_add(1, Ordering::SeqCst);
+    Listening
+}
+
+/// Waits for the node to log a record of `kind` that `matches`, and answers
+/// it.
+fn wait_diagnostic(kind: &str, matches: impl Fn(&serde_json::Value) -> bool) -> serde_json::Value {
+    let mut found = None;
+    wait_until(&format!("a {kind} diagnostic"), || {
+        found = DIAGNOSTICS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .find(|record| record["kind"] == kind && matches(record))
+            .cloned();
+        found.is_some()
+    });
+    found.unwrap()
+}
+
+fn folder_name(dir: &Path) -> String {
+    dir.file_name().unwrap().to_string_lossy().into_owned()
+}
+
+/// B20 through a node's own start: a node with the switch on, started as the
+/// daemon starts one, removes the version folder of an older build nothing
+/// runs from once it has found its holders again, keeps this build's folder
+/// and the older build's folder a pane still runs from (its holder too old
+/// to speak to, left running), and logs what it did.
+#[test]
+fn a_starting_node_removes_the_old_version_folders_nothing_runs_from() {
+    let _listening = diagnostics();
+    let folder = Folder::new();
+    let home = folder.home.path();
+    let current = source();
+    let current_name =
+        hide_kit::holders::version_name(crate::support::current_version(), &current).unwrap();
+    drop(
+        folder
+            .home
+            .prepare(crate::support::current_version(), &current),
+    );
+
+    // An older build's folder a pane still runs from, by its record.
+    let older = folder.home.prepare(0, &current);
+    let older_name = folder_name(&older.dir);
+    let holder =
+        crate::support::start_ready(&older.program, &folder.home.socket("o"), &shell(), &[]);
+    drop(older);
+    hide_platform::fs::private::create_dir_all(&layout::pane_records(&folder.state)).unwrap();
+    fixture_record(&folder, "o1", 0, holder.process.pid, &older_name);
+
+    // An older build's folder nothing runs from.
+    let unused_program = home.join("unused-holder");
+    std::fs::write(&unused_program, b"an older holder").unwrap();
+    let unused = hide_kit::holders::Source {
+        program: unused_program,
+        conpty: current.conpty.clone(),
+    };
+    let unused_dir = folder.home.prepare(0, &unused).dir.clone();
+    let unused_name = folder_name(&unused_dir);
+
+    let (opened, _herdr_opened) = channel();
+    let reports = Arc::new(Reports::default());
+    let terminals = Holders::start_from(
+        Some((
+            HolderFolders {
+                home,
+                state_dir: &folder.state,
+            },
+            current,
+        )),
+        Box::new(Herdr(Mutex::new(opened))),
+        Arc::new(Screens::default()) as Arc<dyn OutputSink>,
+        Arc::clone(&reports) as Arc<dyn ReportSink>,
+    )
+    .unwrap();
+    assert!(terminals.holders.is_some());
+
+    // This test's prune: the one that names its unused folder.
+    let pruned = wait_diagnostic("pane_holder.folders_pruned", |record| {
+        record["removed"]
+            .as_array()
+            .is_some_and(|removed| removed.iter().any(|name| name == unused_name.as_str()))
+    });
+    assert_eq!(
+        pruned["removed"],
+        serde_json::json!([unused_name]),
+        "{pruned}"
+    );
+    assert_eq!(
+        pruned["in_use"],
+        serde_json::json!([older_name]),
+        "{pruned}"
+    );
+    assert_eq!(pruned["failed"], 0, "{pruned}");
+    assert!(!unused_dir.exists(), "{unused_name} was kept");
+    for name in [&current_name, &older_name] {
+        let dir = layout::holder_dir(home, name);
+        assert!(
+            dir.join(hide_kit::holders::program_name()).is_file(),
+            "{name} lost its holder"
+        );
+    }
+    assert_eq!(
+        reports
+            .wait_state("o1", "unsupported")
+            .exit_category
+            .as_deref(),
+        Some("unsupported_holder_version")
+    );
+    assert!(holder.process.is_running(), "the older holder was ended");
+}
+
+/// B14 through the node's own transport: a node accepts the holder's
+/// notices, logs a refusal of the program's answers with the pane's id, and
+/// its session of the pane goes on.
+#[test]
+fn a_node_logs_the_answers_its_holder_refused_with_the_pane_and_keeps_the_session() {
+    let _listening = diagnostics();
+    let home = Home::new();
+    let mut burst = b"\x1b]11;?\x07".repeat(6000);
+    burst.extend_from_slice(b"asked");
+    let script = crate::support::Script::new(&home, vec![b"ready".to_vec(), burst]);
+    let release: OsString = home.path().join("release").into();
+    let holder = script.start_with(&home, &[(crate::support::HOLD_WRITES, &release)]);
+    let transport = open_holder("q1", &holder.socket, None).unwrap();
+    let mut events = transport.events;
+    let (drawn, frames) = channel();
+    thread::spawn(move || {
+        loop {
+            let event = events.next_event();
+            let ended = matches!(event, SessionEvent::Ended { .. });
+            if drawn.send(event).is_err() || ended {
+                return;
+            }
+        }
+    });
+    script.go(1);
+    let refused = wait_diagnostic("pane_holder.answers_refused", |record| {
+        record["pane_id"] == "q1"
+    });
+    assert_eq!(refused["count"], 1, "{refused}");
+    assert!(
+        refused["message"].as_str().unwrap().contains("65536"),
+        "{refused}"
+    );
+    // The session read past the notice: the burst's end is drawn, and the
+    // session did not end.
+    let mut text = Vec::new();
+    let deadline = Instant::now() + HANG_LIMIT;
+    while !text_of(&text).contains("asked") {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match frames
+            .recv_timeout(left)
+            .expect("the burst's end was never drawn")
+        {
+            SessionEvent::Frame { bytes, .. } => text.extend_from_slice(&bytes),
+            SessionEvent::Ended { category, message } => {
+                panic!("the session ended ({category}): {message}")
+            }
+            _ => {}
+        }
+    }
 }

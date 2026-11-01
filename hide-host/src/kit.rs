@@ -577,6 +577,8 @@ fn build_pin(build: &Path) -> Option<String> {
 /// program it runs (PRD device-herdr-update D-09), and a copy another
 /// connection uploaded for its build, whose folder it places first, stays
 /// for that build. A copy whose use cannot be read is kept for the next pass.
+/// A copy kept for its use and a removal that fails each leave one record on
+/// the node's error stream, its diagnostic log.
 fn remove_unused_herdr(root: &Path) {
     let named = builds(root, None)
         .iter()
@@ -584,20 +586,65 @@ fn remove_unused_herdr(root: &Path) {
         .collect::<std::collections::HashSet<_>>();
     for copy in builds(&device_herdr::herdr_dir(root), None) {
         let name = copy.file_name().and_then(|name| name.to_str());
-        if name.is_some_and(|name| named.contains(name)) || herdr_runs(&copy) {
+        if name.is_some_and(|name| named.contains(name)) {
             continue;
         }
-        let _ = std::fs::remove_dir_all(copy);
+        if let Some(reason) = herdr_use(&copy) {
+            herdr_copy_record("kit.herdr_copy_kept", &copy, &reason);
+            continue;
+        }
+        if let Err(error) = std::fs::remove_dir_all(&copy) {
+            herdr_copy_record("kit.herdr_copy_remove_failed", &copy, &error.to_string());
+        }
     }
 }
 
-/// Whether a process on the device runs the Herdr in the copy `folder`, or
-/// whether that cannot be read.
-fn herdr_runs(folder: &Path) -> bool {
-    let program = folder.join(device_herdr::HERDR_PROGRAM);
-    match hide_platform::fs::identity::file_id(&program) {
-        Ok(file) => !matches!(hide_platform::process::running(&file), Ok(pids) if pids.is_empty()),
-        Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+fn herdr_copy_record(kind: &str, copy: &Path, reason: &str) {
+    eprintln!(
+        "{}",
+        serde_json::json!({
+            "component": "kit",
+            "kind": kind,
+            "copy": copy,
+            "reason": reason,
+        })
+    );
+}
+
+/// Why the Herdr copy `folder` stays: a process on the device runs it, or
+/// whether one does cannot be read. `None` when nothing runs it.
+///
+/// On Windows a copy is in use while a process holds any file in it, which
+/// a running Herdr's image is: Windows names a process's image only by the
+/// path it was started from, and a process whose path cannot be read (one
+/// that ends during the look, or that the system will not describe) would
+/// otherwise be left out and its copy removed around it, every file but the
+/// running image gone. A folder whose files cannot all be asked keeps it.
+fn herdr_use(folder: &Path) -> Option<String> {
+    #[cfg(windows)]
+    {
+        match hide_platform::fs::in_use::first_in_use(folder) {
+            Ok(held) => held.map(|file| format!("{} is in use", file.display())),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => Some(format!(
+                "whether its files are in use could not be read: {error}"
+            )),
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let program = folder.join(device_herdr::HERDR_PROGRAM);
+        match hide_platform::fs::identity::file_id(&program) {
+            Ok(file) => match hide_platform::process::running(&file) {
+                Ok(pids) if pids.is_empty() => None,
+                Ok(pids) => Some(format!("processes {pids:?} run it")),
+                Err(error) => Some(format!(
+                    "whether a process runs it could not be read: {error}"
+                )),
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => Some(format!("its program could not be read: {error}")),
+        }
     }
 }
 
@@ -1032,12 +1079,12 @@ mod tests {
     }
 
     /// A pinned Herdr copy under `root` named `id`, made from `program`.
-    #[cfg(unix)]
     fn herdr_copy(root: &Path, id: &str, program: &Path) -> PathBuf {
         let folder = device_herdr::herdr_dir(root).join(id);
         std::fs::create_dir_all(&folder).unwrap();
         let copy = folder.join(device_herdr::HERDR_PROGRAM);
         std::fs::write(&copy, std::fs::read(program).unwrap()).unwrap();
+        #[cfg(unix)]
         std::fs::set_permissions(
             &copy,
             <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o700),
@@ -1131,7 +1178,6 @@ mod tests {
 
     /// A build folder `version` under `root` that names the copy `pin`, and
     /// that copy.
-    #[cfg(unix)]
     fn pinned_build(root: &Path, version: &str, pin: &str) -> PathBuf {
         std::fs::create_dir_all(root.join(version)).unwrap();
         std::fs::write(
@@ -1143,9 +1189,15 @@ mod tests {
     }
 
     /// A process running the copy `program` of this test binary, once it
-    /// has replaced its image.
-    #[cfg(unix)]
+    /// has replaced its image. On Windows it runs from `program` with the
+    /// `.exe` a program there is started by, in the same copy folder.
     fn run_copy(program: &Path) -> hide_platform::process::OwnedChild {
+        #[cfg(windows)]
+        let program = &{
+            let image = program.with_extension("exe");
+            std::fs::copy(program, &image).unwrap();
+            image
+        };
         let server = hide_platform::process::OwnedChild::spawn(
             std::process::Command::new(program)
                 .args(["--exact", "kit::tests::held_copy_role", "--test-threads=1"])
@@ -1164,8 +1216,9 @@ mod tests {
         server
     }
 
+    /// On Windows too, where `process::running` reads each process's image
+    /// path: a copy a server runs stays whatever that look could read.
     #[test]
-    #[cfg(unix)]
     fn an_older_herdr_copy_stays_while_a_process_runs_it_and_goes_once_none_does() {
         let dir = tempfile::tempdir().unwrap();
         let placement = placed(dir.path(), "bbbbbbbbbbbbbbbb");

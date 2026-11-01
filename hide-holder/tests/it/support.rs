@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use hide_holder_protocol::{
     Answer, Ask, Capability, ClientMessage, Closed, Fragment, HolderMessage, MAX_READ_LINES,
-    OpenError, PROTOCOL_VERSION, Welcome, read_holder, write_client,
+    Notice, OpenError, PROTOCOL_VERSION, Welcome, read_holder, write_client,
 };
 use hide_kit::holders::{Reservation, Source};
 use hide_platform::ipc::LocalStream;
@@ -31,6 +31,9 @@ pub const ROLE: &str = "HIDE_HOLDER_TEST_ROLE";
 pub const PIDS_FILE: &str = "HIDE_HOLDER_TEST_PIDS";
 /// The folder the `script` role plays its steps from.
 pub const SCRIPT: &str = "HIDE_HOLDER_TEST_SCRIPT";
+/// Debug holders only: the file the holder writes nothing to its program
+/// until it exists (`hide-holder/src/holder.rs`, `HOLD_WRITES`).
+pub const HOLD_WRITES: &str = "HIDE_HOLDER_TEST_HOLD_WRITES";
 
 /// A private HOME for one test.
 pub struct Home {
@@ -304,6 +307,13 @@ impl Holder {
         Connection::new(stream, welcome, &self.socket)
     }
 
+    /// A connection that accepts `accepts`, as a node of a later build does.
+    pub fn open_accepting(&self, accepts: Vec<Capability>) -> Connection {
+        let (stream, welcome) =
+            hide_holder_protocol::open(&self.socket, accepts, Instant::now() + HANG_LIMIT).unwrap();
+        Connection::new(stream, welcome, &self.socket)
+    }
+
     pub fn try_open(&self) -> Result<(LocalStream, Welcome), OpenError> {
         hide_holder_protocol::open(
             &self.socket,
@@ -404,6 +414,7 @@ pub struct Connection {
     socket: PathBuf,
     heard: mpsc::Receiver<HolderMessage>,
     pub fragments: Vec<Fragment>,
+    pub notices: Vec<Notice>,
     pub closed: Option<Closed>,
 }
 
@@ -425,6 +436,7 @@ impl Connection {
             socket: socket.to_owned(),
             heard,
             fragments: Vec::new(),
+            notices: Vec::new(),
             closed: None,
         }
     }
@@ -437,6 +449,10 @@ impl Connection {
         match self.heard.recv_timeout(wait) {
             Ok(HolderMessage::Fragment(fragment)) => {
                 self.fragments.push(fragment);
+                true
+            }
+            Ok(HolderMessage::Notice(notice)) => {
+                self.notices.push(notice);
                 true
             }
             Ok(HolderMessage::Closed(closed)) => {
@@ -473,6 +489,23 @@ impl Connection {
                 "{text:?} never came; the pane shows: {seen}"
             );
             self.take(Duration::from_millis(50));
+        }
+    }
+
+    /// Reads until the holder has sent a notice for which `matches` holds,
+    /// and answers it.
+    pub fn wait_notice(&mut self, matches: impl Fn(&Notice) -> bool) -> Notice {
+        let started = Instant::now();
+        loop {
+            if let Some(notice) = self.notices.iter().find(|notice| matches(notice)) {
+                return notice.clone();
+            }
+            assert!(
+                started.elapsed() < HANG_LIMIT,
+                "the holder never sent the notice; it sent {:?}",
+                self.notices
+            );
+            self.take(Duration::from_millis(100));
         }
     }
 
@@ -573,6 +606,11 @@ impl Script {
 
     /// Starts a holder whose program plays this script.
     pub fn start(&self, home: &Home) -> Holder {
+        self.start_with(home, &[])
+    }
+
+    /// As [`Script::start`], with `environment` added to the holder's.
+    pub fn start_with(&self, home: &Home, environment: &[(&str, &OsString)]) -> Holder {
         let folder = home.prepare(current_version(), &source());
         let role: OsString = "script".into();
         let script: OsString = self.folder.clone().into();
@@ -582,7 +620,7 @@ impl Script {
             &folder.program,
             &socket,
             &role_program("script"),
-            &[(ROLE, &role), (SCRIPT, &script)],
+            &[&[(ROLE, &role), (SCRIPT, &script)][..], environment].concat(),
             &place,
             &place,
             self.theme.as_ref(),

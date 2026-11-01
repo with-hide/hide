@@ -90,18 +90,23 @@ fn manifest_digest(raw: &[u8]) -> String {
         .collect()
 }
 
-fn zig_version(zig: &Path) -> String {
-    let output = Command::new(zig).arg("version").output().unwrap_or_else(|err| {
-        if err.kind() == std::io::ErrorKind::NotFound {
-            panic!(
-                "Zig was not found at {}. hide-vt builds libghostty-vt with the Zig its prepared \
-                 build inputs hold; run `{PREPARE}` once where the network is reachable, or set ZIG \
-                 to a Zig binary of the version hide-vt/build-inputs.json pins",
-                zig.display()
-            );
-        }
-        panic!("could not run {} version: {err}", zig.display());
-    });
+/// The version `zig` says it is; `wanted` is the version the pins name, said
+/// when no Zig is there.
+fn zig_version(zig: &Path, wanted: &str) -> String {
+    let output = Command::new(zig)
+        .arg("version")
+        .output()
+        .unwrap_or_else(|err| {
+            if err.kind() == std::io::ErrorKind::NotFound {
+                panic!(
+                    "hide-vt needs Zig {wanted}, and Zig was not found at {}. hide-vt builds \
+                 libghostty-vt with the Zig its prepared build inputs hold; run `{PREPARE}` once \
+                 where the network is reachable, or set ZIG to a Zig {wanted} binary",
+                    zig.display()
+                );
+            }
+            panic!("could not run {} version: {err}", zig.display());
+        });
     assert!(
         output.status.success(),
         "{} version failed: {}",
@@ -151,7 +156,7 @@ fn main() {
             .join("zig")
             .join(if cfg!(windows) { "zig.exe" } else { "zig" })
     });
-    let found_zig = zig_version(&zig);
+    let found_zig = zig_version(&zig, wanted_zig);
     assert!(
         found_zig == wanted_zig,
         "hide-vt needs Zig {wanted_zig}, but {} is Zig {found_zig}; unset ZIG to use the prepared \

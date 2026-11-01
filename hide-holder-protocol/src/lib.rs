@@ -21,8 +21,9 @@
 //! none. A side never sends a message the other did not say it accepts.
 //!
 //! In version 1 a node sends input, a size, a theme, a redraw, a release and
-//! a terminate, and the holder sends the screen as [`Fragment`]s and why it
-//! closed. Releasing lets go of the connection and leaves the pane running;
+//! a terminate, and the holder sends the screen as [`Fragment`]s, what it
+//! refused while the pane runs on as [`Notice`]s to a node that accepts
+//! [`Capability::Notices`], and why it closed. Releasing lets go of the connection and leaves the pane running;
 //! terminating ends the pane's program and everything it started, then the
 //! holder.
 //!
@@ -131,6 +132,7 @@ mod kind {
     pub const CLOSED: u8 = 0x83;
     pub const FRAGMENT: u8 = 0x90;
     pub const ANSWER: u8 = 0x91;
+    pub const NOTICE: u8 = 0x92;
 }
 
 /// Something one side can do that the other must accept before it is used.
@@ -138,6 +140,10 @@ mod kind {
 pub enum Capability {
     /// The holder sends the screen as [`Fragment`]s.
     Screen,
+    /// The holder sends [`Notice`]s. A node that does not accept them, as
+    /// one built before they existed does not, is sent none, and the holder
+    /// logs what it would have said.
+    Notices,
     /// A capability this build does not know, kept by name so a side can
     /// answer with the ones it does.
     Other(String),
@@ -147,6 +153,7 @@ impl Capability {
     fn name(&self) -> &str {
         match self {
             Self::Screen => "screen",
+            Self::Notices => "notices",
             Self::Other(name) => name,
         }
     }
@@ -154,6 +161,7 @@ impl Capability {
     fn from_name(name: &str) -> Self {
         match name {
             "screen" => Self::Screen,
+            "notices" => Self::Notices,
             other => Self::Other(other.to_owned()),
         }
     }
@@ -338,6 +346,74 @@ impl CloseReason {
             Self::OpeningFull => "opening_full",
             Self::AskInvalid => "ask_invalid",
             Self::AskFailed => "ask_failed",
+        }
+    }
+}
+
+/// What a [`Notice`] says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NoticeReason {
+    /// The pane's program asked questions whose answers waited for it past
+    /// the holder's answer bound, since it was not reading its input; the
+    /// answers of the read that crossed it were refused whole, and those of
+    /// every read after it are, until the program takes what waits.
+    AnswersRefused,
+    /// The program took its waiting answers again; the notice counts the
+    /// answers refused since [`NoticeReason::AnswersRefused`].
+    AnswersResumed,
+    /// A reason this build does not know, by its code, so a node reads a
+    /// newer holder's notice without failing the connection.
+    Other(u16),
+}
+
+impl NoticeReason {
+    pub fn code(self) -> u16 {
+        match self {
+            Self::AnswersRefused => 1,
+            Self::AnswersResumed => 2,
+            Self::Other(code) => code,
+        }
+    }
+
+    pub fn from_code(code: u16) -> Self {
+        match code {
+            1 => Self::AnswersRefused,
+            2 => Self::AnswersResumed,
+            other => Self::Other(other),
+        }
+    }
+
+    /// The name logs use.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::AnswersRefused => "answers_refused",
+            Self::AnswersResumed => "answers_resumed",
+            Self::Other(_) => "unknown",
+        }
+    }
+}
+
+/// Something the holder refused while the pane runs on, told to the
+/// connection that holds the pane when it accepts [`Capability::Notices`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Notice {
+    pub reason: NoticeReason,
+    /// How many of what the reason names, and their bytes.
+    pub count: u64,
+    pub bytes: u64,
+    /// What happened, for the log; never parsed.
+    pub detail: String,
+}
+
+impl Notice {
+    pub fn new(reason: NoticeReason, count: u64, bytes: u64, detail: impl Into<String>) -> Self {
+        let mut detail = detail.into();
+        truncate(&mut detail, MAX_DETAIL);
+        Self {
+            reason,
+            count,
+            bytes,
+            detail,
         }
     }
 }
@@ -648,6 +724,7 @@ pub enum HolderMessage {
     Welcome(Welcome),
     Fragment(Fragment),
     Answer(Answer),
+    Notice(Notice),
     Closed(Closed),
 }
 
@@ -1155,6 +1232,15 @@ pub fn write_holder(writer: &mut impl Write, message: &HolderMessage) -> io::Res
             }
             write_frame(writer, kind::ANSWER, &payload)
         }
+        HolderMessage::Notice(notice) => {
+            let mut payload = notice.reason.code().to_le_bytes().to_vec();
+            payload.extend_from_slice(&notice.count.to_le_bytes());
+            payload.extend_from_slice(&notice.bytes.to_le_bytes());
+            let mut detail = notice.detail.clone();
+            truncate(&mut detail, MAX_DETAIL);
+            put_text(&mut payload, &detail);
+            write_frame(writer, kind::NOTICE, &payload)
+        }
         HolderMessage::Closed(closed) => {
             let mut payload = closed.reason.code().to_le_bytes().to_vec();
             payload.extend_from_slice(&closed.version.to_le_bytes());
@@ -1262,6 +1348,18 @@ pub fn read_holder(reader: &mut impl Read) -> Result<HolderMessage, FrameError> 
                 return Err(FrameError::Malformed(format!("an unknown answer {other}")));
             }
         }),
+        kind::NOTICE => {
+            let reason = NoticeReason::from_code(payload.u16()?);
+            let count = payload.u64()?;
+            let bytes = payload.u64()?;
+            let detail = payload.text(MAX_DETAIL)?;
+            HolderMessage::Notice(Notice {
+                reason,
+                count,
+                bytes,
+                detail,
+            })
+        }
         kind::CLOSED => {
             let code = payload.u16()?;
             let reason = CloseReason::from_code(code)
@@ -1398,9 +1496,11 @@ pub fn open(
         }
         HolderMessage::Welcome(welcome) => Ok((stream, welcome)),
         HolderMessage::Closed(closed) => Err(refused(closed)),
-        HolderMessage::Fragment(_) | HolderMessage::Answer(_) => Err(OpenError::Protocol(
-            FrameError::Malformed("a screen or an answer before the welcome".to_owned()),
-        )),
+        HolderMessage::Fragment(_) | HolderMessage::Answer(_) | HolderMessage::Notice(_) => {
+            Err(OpenError::Protocol(FrameError::Malformed(
+                "a screen, an answer or a notice before the welcome".to_owned(),
+            )))
+        }
     }
 }
 
@@ -1423,9 +1523,11 @@ pub fn ask(
     match read_holder(&mut stream)? {
         HolderMessage::Answer(answer) => Ok(answer),
         HolderMessage::Closed(closed) => Err(refused(closed)),
-        HolderMessage::Welcome(_) | HolderMessage::Fragment(_) => Err(OpenError::Protocol(
-            FrameError::Malformed("an ask answered with a screen".to_owned()),
-        )),
+        HolderMessage::Welcome(_) | HolderMessage::Fragment(_) | HolderMessage::Notice(_) => {
+            Err(OpenError::Protocol(FrameError::Malformed(
+                "an ask answered with a screen or a notice".to_owned(),
+            )))
+        }
     }
 }
 
@@ -1516,7 +1618,7 @@ mod tests {
                 generation: 7,
                 program: 1234,
                 size: Size { rows: 24, cols: 80 },
-                sends: vec![Capability::Screen],
+                sends: vec![Capability::Screen, Capability::Notices],
             }),
             HolderMessage::Fragment(Fragment {
                 epoch: 3,
@@ -1549,6 +1651,15 @@ mod tests {
                 shell: 10,
                 foreground: Foreground::Unknown(Unknown::NotOnThisSystem),
             }),
+            HolderMessage::Notice(Notice::new(
+                NoticeReason::AnswersRefused,
+                1,
+                70_000,
+                "past 64 KiB",
+            )),
+            HolderMessage::Notice(Notice::new(NoticeReason::AnswersResumed, 12, 96, "")),
+            // A newer holder's reason reads as itself, not as a broken frame.
+            HolderMessage::Notice(Notice::new(NoticeReason::Other(77), 0, 0, "later")),
             HolderMessage::Closed(closed),
         ] {
             assert_eq!(round_holder(message.clone()), message);

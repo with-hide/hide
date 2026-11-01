@@ -7,7 +7,9 @@ pins, runs in a pane holder that a real node started, the node the daemon
 builds (`Holders::start_local`, through `hide-node/examples/holder_node`),
 answered by the agent journey's fake model with no key. For each agent:
 
-1. the CLI starts in the holder with its first prompt, and the fake model
+1. the first node removes an older build's holder version folder nothing
+   runs from and logs it (`pane_holder.folders_pruned`, B20), then the CLI
+   starts in the holder with its first prompt, and the fake model
    receives that turn's token and the CLI draws its answer;
 2. the node alone is killed outright;
 3. a new node starts on the same state folder and attaches the pane again;
@@ -77,6 +79,11 @@ SCREEN_TRIES = 5
 QUIET_MS = 500
 FOLLOW_MS = 1000
 PASS, FAIL = "pass", "fail"
+# An older build's holder version folder nothing runs from, put in the home
+# before the first node starts, which must remove it (B20); a prune waits
+# at most 30 s for starts that hold the folders.
+OLD_HOLDER_FOLDER = "v0-" + "0" * 16
+PRUNE = 60
 # Cells whose failure is open as an issue, keyed by the agent's id in
 # contracts/agent-journey.json and `platform.system()`: each still runs and
 # shows its result, and its failure, whatever its cause, does not fail the
@@ -207,6 +214,40 @@ def wait_turn(log, value, seconds):
     while turns(log, value) == 0:
         if time.monotonic() > deadline:
             raise Failed(f"the fake model never received the turn of {value} in {seconds} s")
+        time.sleep(0.2)
+
+
+def plant_old_holder_folder(home):
+    """An older build's version folder, as a build of Hide before this one
+    leaves under the home; nothing runs from it."""
+    folder = home / ".hide/holders" / OLD_HOLDER_FOLDER
+    private_directory(folder)
+    write_private(folder / "hide-holder", b"an older holder")
+    return folder
+
+
+def wait_pruned(log, folder, seconds):
+    """The node's `pane_holder.folders_pruned` record (its diagnostic log is
+    its error stream, `log`) that names `folder` removed; fails when it
+    names a failure, or when none comes in `seconds`."""
+    deadline = time.monotonic() + seconds
+    while True:
+        text = log.read_text(encoding="utf-8", errors="replace") if log.is_file() else ""
+        for line in text.splitlines():
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(entry, dict) or entry.get("kind") != "pane_holder.folders_pruned":
+                continue
+            if entry.get("failed"):
+                raise Failed(f"the node failed to remove a holder version folder: {line}")
+            if folder.name in (entry.get("removed") or []):
+                if folder.exists():
+                    raise Failed(f"the node logged {folder.name} removed and it is still there")
+                return entry
+        if time.monotonic() > deadline:
+            raise Failed(f"the node logged no removal of the older holder folder {folder.name} in {seconds} s")
         time.sleep(0.2)
 
 
@@ -375,8 +416,10 @@ def cell(row, binaries, herdr_bin, run):
             # A .cmd launcher runs under cmd.exe, which a ConPTY start does not add.
             argv = [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/c", *argv]
         pane = kind
-        node = Node(binaries / exe("holder_node"), runtime.home, runtime.state, herdr_bin, run / f"node-{row['id']}.log",
-                    owned)
+        old_folder = plant_old_holder_folder(runtime.home)
+        node_log = run / f"node-{row['id']}.log"
+        node = Node(binaries / exe("holder_node"), runtime.home, runtime.state, herdr_bin, node_log, owned)
+        record["pruned"] = wait_pruned(node_log, old_folder, PRUNE)
         started = time.monotonic()
         holder = node.ask("start", pane=pane, program=argv, cwd=str(repo), env={}, rows=ROWS, cols=COLS)
         holder = holder["record"]["holder"]
