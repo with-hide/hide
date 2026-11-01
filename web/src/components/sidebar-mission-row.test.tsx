@@ -40,7 +40,7 @@ it("offers take over and the cause's choice on the mission's own Needs You item,
   const container = document.createElement("ul");
   document.body.append(container);
   const root = createRoot(container);
-  await act(async () => root.render(<TooltipProvider><SidebarMissionRow ask={ask!} inset="0px" actions={actions} /></TooltipProvider>));
+  await act(async () => root.render(<TooltipProvider><SidebarMissionRow ask={ask!} inset="0" actions={actions} /></TooltipProvider>));
   try {
     const row = container.querySelector<HTMLElement>(`[data-mission-ask="${mission.id}"]`)!;
     const buttons = [...row.querySelectorAll<HTMLButtonElement>("[data-mission-ask-choices] button")].map((button) => button.textContent);
