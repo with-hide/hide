@@ -415,13 +415,15 @@ it("draws each card as its mark, its title, its pull requests, its worker's mode
     // Every pull request the node holds is its own PR mark, in the order it got them (D-10).
     expect([...card(map, "core").querySelectorAll<HTMLElement>("[data-node-pr]")].map((mark) => mark.dataset.nodePr)).toEqual(["1703", "1704"]);
     // The worker's model and effort follow the marks as the panel's head words them: the pane's launch, else the plan's marked planned.
-    const row = (key: string) => [...card(map, key).querySelectorAll<HTMLElement>("[data-node-row] > *")].map((part) => (part.dataset.run ? `run:${part.dataset.run}` : part.dataset.nodeAttentionTag ? "!" : part.querySelector("[data-node-pr]") ? "marks" : "?"));
+    const row = (key: string) => [...card(map, key).querySelectorAll<HTMLElement>("[data-node-row] > *")].map((part) => (part.dataset.nodeRun ? `run:${part.dataset.nodeRun}` : part.dataset.nodeAttentionTag ? "!" : part.querySelector("[data-node-pr]") ? "marks" : "?"));
     expect(row("core")).toEqual(["marks", "run:plan"]);
     expect([card(map, "core").querySelector("[data-run-words]")?.textContent, card(map, "core").querySelector("[data-run-planned]")?.textContent]).toEqual(["opus·high", "(planned)"]);
     expect(row("launched")).toEqual(["marks", "run:launch", "!"]);
     expect(card(map, "launched").querySelector("[data-run]")?.textContent).toBe("Opus 5.5·high");
+    // The worker's agent mark stands before its model, as on the panel's head.
+    expect(["core", "launched"].map((key) => card(map, key).querySelector("[data-node-run] > :first-child")?.getAttribute("data-agent-mark"))).toEqual(["claude", "claude"]);
     // A node with no worker, or none Hide knows a run for, names no model.
-    expect(["asked", "next", "outside"].map((key) => card(map, key).querySelector("[data-run]"))).toEqual([null, null, null]);
+    expect(["asked", "next", "outside"].map((key) => card(map, key).querySelector("[data-run], [data-agent-mark]"))).toEqual([null, null, null]);
     // Its times, its finish lines, its line and its badges are the panel's (D-07).
     expect(card(map, "core").querySelector("[data-node-criteria], [data-node-line], [data-node-stage], [data-node-time], [data-node-reopened], [data-node-changed], [data-node-landing]")).toBeNull();
     expect(card(map, "core").getAttribute("aria-label")).toBe(`제안 core: 기록·공책·점수·반영 · In progress · PR ${"#"}1703 · PR ${"#"}1704 · opus·high (planned)`);

@@ -1,6 +1,7 @@
 import { CheckIcon, CogIcon, GitBranchIcon } from "lucide-react";
 import { useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import type { Actions } from "./actions";
+import { AgentMark } from "./AgentMark";
 import { DependencyGraphView, type EdgeLook, type OverlayEdge } from "./DependencyGraph";
 import type { GraphEdge } from "./dependencyLayout";
 import { formatElapsed, useElapsed, useMinuteClock } from "./components/elapsed";
@@ -342,8 +343,8 @@ const ATTENTION_CARD = "border-mission-hold ring-2 ring-mission-hold/20";
  * and border, its title on one line that ends in an ellipsis (the whole
  * title on hover and in its accessible name) with Hide's mark when Hide
  * changed it last, and one line holding its pull requests' marks, a direct
- * change's result, its worker's model and effort as the panel's head words
- * them, and `! 나` or `! Conductor` when it waits on someone to look, its
+ * change's result, its worker's agent mark, model and effort as the panel's
+ * head draws them, and `! 나` or `! Conductor` when it waits on someone to look, its
  * reason on hover. Its times, its finish lines and the Conductor's line are
  * the panel's. The other agents checking it stand
  * beside it as satellites tethered to its right side. Pressing it picks it
@@ -398,8 +399,13 @@ function NodeCard({ mission, node, selected, dimmed, onSelect, actions }: { miss
         <span className="flex min-w-0 items-center gap-x-xs text-caption text-muted-foreground" data-node-row="true">
           {/* The marks keep one line; the ones past the card's width leave it rather than overlap, and `!` keeps its place (B30). */}
           {result ? <span className="flex h-lh min-w-0 flex-wrap items-center gap-x-xs overflow-hidden">{result}</span> : null}
-          {/* The model takes only the room the marks leave, so it truncates away before a mark is pushed out. */}
-          {run ? <RunText run={run} className="flex-1 overflow-hidden" /> : null}
+          {/* The agent's mark and model take only the room the marks leave, so they truncate away before a mark is pushed out. */}
+          {run ? (
+            <span className="flex min-w-0 flex-1 items-center gap-xxs overflow-hidden" data-node-run={run.from}>
+              {node.worker?.agent ? <AgentMark kind={node.worker.agent} /> : null}
+              <RunText run={run} />
+            </span>
+          ) : null}
           {attention ? (
             <Hint label={attention.why}>
               <span className="ml-auto shrink-0 font-semibold text-mission-hold" data-node-attention-tag={node.attention!.reason}>! {attention.who}</span>
