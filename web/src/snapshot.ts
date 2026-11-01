@@ -2719,7 +2719,7 @@ export type DeskItem =
    * operator sent with 거절.
    */
   | { kind: "approval"; id: number; card: "command" | "edit" | "read" | "other"; command: string; folder: string | null; reason: string | null; state: DeskApprovalState; asks: DeskApprovalAsk[]; subject: string | null; refusal: string | null }
-  /** `detail` is the install's last line, the sign-in command for `login_needed`, or the blocked call. */
+  /** `detail` is the install's last line, the sign-in command for `login_needed`, the blocked call, or the agent's own reason for `turn_failed` when it gave one. */
   | { kind: "notice"; id: number; notice: DeskNotice; agent: DeskAgentId | null; detail: string | null }
   /** A letter Desk sent a running session (B16): handed work when `letter_kind` is `request`; no state, no place. `read` once its runtime took it in; `mark` is the recipient row's now, for its chip. */
   | { kind: "handed"; id: number; agent_id: string; pane_id: string; name: string; project: string | null; letter_kind: string; line: string; letter_id: string | null; read: boolean; agent_kind: string | null; mark: RowMark | null }

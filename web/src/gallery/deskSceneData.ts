@@ -250,6 +250,7 @@ export function stateItems(now: number): DeskItem[] {
     { kind: "notice", id: 72, notice: "resume_failed", agent: "claude", detail: null },
     { kind: "notice", id: 73, notice: "no_ask_mode", agent: "grok", detail: null },
     { kind: "notice", id: 74, notice: "turn_failed", agent: "claude", detail: null },
+    { kind: "notice", id: 94, notice: "turn_failed", agent: "opencode", detail: "Rate limit reached for bai/deepseek-v4.1-flash" },
     { kind: "reply", mentions: [], agent: "claude", id: 75, text: "정리하고 테스트를 다시 돌렸어요. 실패 하나는", at_ms: at(now, 1), state: "stopped", thought_ms: null, steps: NO_STEPS },
     { kind: "user", id: 76, text: "지금 돌고 있는 일들 어디까지 왔어요?", at_ms: at(now, 0), mentions: [] },
   ];

@@ -2,8 +2,9 @@
 //! run again in the agent's role. It proves what a caller of the host relies
 //! on: the session opens in its ask mode, a turn's reply and its permission
 //! request arrive, a refused ask mode keeps the session unused, a command
-//! the agent runs finds Desk's own `hide` first, and ending the host leaves
-//! nothing it started running.
+//! the agent runs finds Desk's own `hide` first, the agent has the account's
+//! environment without a pane's identity or Hide's own variables, and
+//! ending the host leaves nothing it started running.
 
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Write};
@@ -88,6 +89,23 @@ fn stand_in_agent() {
                         json!({"jsonrpc": "2.0", "method": "session/update", "params": {
                         "sessionId": "s1", "update": {"sessionUpdate": "agent_message_chunk",
                         "content": {"type": "text", "text": found}}}}),
+                    );
+                    send(json!({"jsonrpc": "2.0", "id": id, "result": {"stopReason": "end_turn"}}));
+                    continue;
+                }
+                if let Some(names) = text.strip_prefix("env ") {
+                    // As the agent's own configuration reads a variable.
+                    let seen: Vec<String> = names
+                        .split(',')
+                        .map(|name| match std::env::var(name) {
+                            Ok(value) => format!("{name}={value}"),
+                            Err(_) => format!("{name} unset"),
+                        })
+                        .collect();
+                    send(
+                        json!({"jsonrpc": "2.0", "method": "session/update", "params": {
+                        "sessionId": "s1", "update": {"sessionUpdate": "agent_message_chunk",
+                        "content": {"type": "text", "text": seen.join("\n")}}}}),
                     );
                     send(json!({"jsonrpc": "2.0", "id": id, "result": {"stopReason": "end_turn"}}));
                     continue;
@@ -290,6 +308,7 @@ fn a_command_desk_s_codex_runs_finds_desk_s_own_hide_before_the_account_s() {
             own_cli: None,
             hide_dir: desk_hide.parent().unwrap(),
             search: Some(&account.clone().into_os_string()),
+            account: None,
             desk: &desk,
             capability: &root.path().join("desk.json"),
             codex_home: &codex_home,
@@ -320,6 +339,70 @@ fn a_command_desk_s_codex_runs_finds_desk_s_own_hide_before_the_account_s() {
         std::fs::canonicalize(&found).unwrap(),
         std::fs::canonicalize(&desk_hide).unwrap(),
         "{found}"
+    );
+    host.end().unwrap();
+}
+
+/// A provider key the account's startup files export reaches the agent, as
+/// it reaches one the operator starts in a terminal (OpenCode's
+/// `{env:BAI_API_KEY}`), while a pane's identity and Hide's own variables do
+/// not, wherever they come from, and Desk's own settings win.
+#[test]
+fn the_agent_has_the_account_s_environment_but_no_pane_identity_or_hide_s_own() {
+    let root = tempfile::tempdir().unwrap();
+    let desk = root.path().join("desk");
+    let account: Vec<(OsString, OsString)> = [
+        ("DESK_PROVIDER_KEY", "from-the-profile"),
+        ("HERDR_PANE_ID", "w1:p1"),
+        ("HIDE_STATE_DIR", "/elsewhere"),
+        ("hide_cap_ref", "/a-pane-s.json"),
+        ("OPENCODE_CONFIG_CONTENT", "{}"),
+    ]
+    .into_iter()
+    .map(|(name, value)| (name.into(), value.into()))
+    .collect();
+    let mut launch = adapter::launch(
+        AdapterId::OPENCODE,
+        &Paths {
+            package: None,
+            own_cli: Some(&std::env::current_exe().unwrap()),
+            hide_dir: &root.path().join("app"),
+            search: None,
+            account: Some(&account),
+            desk: &desk,
+            capability: &root.path().join("desk.json"),
+            codex_home: &desk.join("codex"),
+            codex_sign_in: Err("unused"),
+        },
+        "n1",
+    )
+    .unwrap();
+    launch.args = STAND_IN.into_iter().map(OsString::from).collect();
+    launch.env.push((ROLE.into(), "agent".into()));
+    let (host, received) = start_launch(&launch);
+    let connection = host.connection().clone();
+    session::open(&connection, AdapterId::OPENCODE, &desk, None, &|| Ok(())).unwrap();
+
+    session::prompt(
+        &connection,
+        "s1",
+        "env DESK_PROVIDER_KEY,HERDR_PANE_ID,HIDE_STATE_DIR,HIDE_CAP_REF,OPENCODE_CONFIG_CONTENT",
+        1,
+    )
+    .unwrap();
+    let seen = text(next(&received));
+    let capability = root.path().join("desk.json");
+    let expected = [
+        "DESK_PROVIDER_KEY=from-the-profile".to_owned(),
+        "HERDR_PANE_ID unset".to_owned(),
+        "HIDE_STATE_DIR unset".to_owned(),
+        format!("HIDE_CAP_REF={}", capability.display()),
+    ];
+    let lines: Vec<&str> = seen.lines().collect();
+    assert_eq!(lines[..4], expected, "{seen}");
+    assert!(
+        lines[4].starts_with("OPENCODE_CONFIG_CONTENT={\"permission\""),
+        "Desk's own permissions win: {seen}"
     );
     host.end().unwrap();
 }

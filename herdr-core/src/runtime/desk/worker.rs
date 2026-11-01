@@ -133,7 +133,30 @@ pub(super) enum Report {
 pub(super) enum TurnOutcome {
     Done,
     Cancelled,
-    Failed(String),
+    /// The turn failed, with the agent's own one-line reason when it gave
+    /// one (a provider's refusal, a model it cannot reach), which the
+    /// operator can act on; the rest is in the diagnostic log.
+    Failed(Option<String>),
+}
+
+/// The longest reason a failed turn shows: one line of the agent's error.
+const MAX_REASON_CHARS: usize = 200;
+
+/// What a failed turn shows: the agent's own error message, first line,
+/// when the agent answered with one. A call that got no answer, or a stream
+/// that ended, names nothing the operator can act on (design rule 13).
+fn reason(error: &CallError) -> Option<String> {
+    let CallError::Rejected(rejected) = error else {
+        return None;
+    };
+    let line = rejected.message.lines().next()?.trim();
+    (!line.is_empty()).then(|| line.chars().take(MAX_REASON_CHARS).collect())
+}
+
+/// Whether the agent refused the call until the operator signs in (ACP's
+/// `auth_required`).
+fn signs_in(error: &CallError) -> bool {
+    matches!(error, CallError::Rejected(rejected) if rejected.code == session::AUTH_REQUIRED)
 }
 
 pub(super) struct Handle {
@@ -430,9 +453,10 @@ impl Worker {
                 running.reply = session::ReplyBlocks::default();
             }
             Err(error) => {
+                self.turn_failed(send.adapter, &error);
                 self.report(Report::TurnEnded {
                     tag: send.tag,
-                    outcome: TurnOutcome::Failed(error.to_string()),
+                    outcome: TurnOutcome::Failed(reason(&error)),
                 });
                 if matches!(error, CallError::Closed(_)) {
                     self.end_process(true);
@@ -466,6 +490,9 @@ impl Worker {
             None => None,
         };
         let search = programs::account_path();
+        // From the same login shell read as the search, kept until a
+        // startup file changes, so a start asks no shell of its own.
+        let account = programs::account_environment();
         let credential = self.platform.issue().map_err(OpenError::Failed)?;
         let launch = adapter::launch(
             adapter,
@@ -476,6 +503,7 @@ impl Worker {
                 own_cli: own_cli.as_deref(),
                 hide_dir: &places.hide_dir,
                 search: search.as_ref(),
+                account: account.as_deref(),
                 desk: &places.desk,
                 capability: &credential.reference,
                 codex_home: &places.codex_home,
@@ -667,7 +695,9 @@ impl Worker {
                 }
             }
             Incoming::Reply { tag, result } => {
-                if running.turn == Some(tag) {
+                let adapter = running.adapter;
+                let current = running.turn == Some(tag);
+                if current {
                     running.turn = None;
                     let steps = std::mem::take(&mut running.turn_calls)
                         .iter()
@@ -679,10 +709,25 @@ impl Worker {
                 let outcome = match result {
                     Ok(answer) => match session::stop_reason(&answer) {
                         Some("cancelled") => TurnOutcome::Cancelled,
-                        Some("refusal") => TurnOutcome::Failed("the agent refused".into()),
+                        Some("refusal") => {
+                            crate::diagnostic!(json!({
+                                "component": "desk",
+                                "kind": "desk.turn_refused",
+                                "adapter": adapter.as_str(),
+                            }));
+                            TurnOutcome::Failed(None)
+                        }
                         _ => TurnOutcome::Done,
                     },
-                    Err(error) => TurnOutcome::Failed(error.to_string()),
+                    Err(error) if current && signs_in(&error) => {
+                        self.turn_failed(adapter, &error);
+                        self.sign_in_needed(adapter, tag);
+                        return;
+                    }
+                    Err(error) => {
+                        self.turn_failed(adapter, &error);
+                        TurnOutcome::Failed(reason(&error))
+                    }
                 };
                 self.report(Report::TurnEnded { tag, outcome });
                 self.check_cap();
@@ -693,6 +738,41 @@ impl Worker {
                 self.end_process_with(true, Some(detail));
             }
         }
+    }
+
+    /// Records a failed turn with what the adapter last wrote to its error
+    /// output, which the screen never shows.
+    fn turn_failed(&self, adapter: AdapterId, error: &CallError) {
+        let tail = self
+            .running
+            .as_ref()
+            .map(|running| running.host.stderr_tail())
+            .unwrap_or_default();
+        crate::diagnostic!(json!({
+            "component": "desk",
+            "kind": "desk.turn_failed",
+            "adapter": adapter.as_str(),
+            "error": error.to_string(),
+            "stderr_tail": tail,
+        }));
+    }
+
+    /// The agent refused a turn until the operator signs in, as a provider
+    /// with no key does (B6). The turn ends as one the session's open
+    /// refused: its message goes back to the operator's input and the
+    /// sign-in line shows. The process ends with it, since an agent reads its
+    /// sign-in and its environment as it starts; the next message starts
+    /// one that reads them again.
+    fn sign_in_needed(&mut self, adapter: AdapterId, tag: u64) {
+        self.report(Report::OpenFailed {
+            adapter,
+            error: OpenError::Login,
+        });
+        self.report(Report::TurnEnded {
+            tag,
+            outcome: TurnOutcome::Cancelled,
+        });
+        self.end_process(false);
     }
 
     /// The session left its ask mode: it is ended rather than used (D-53).
@@ -931,6 +1011,32 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    #[test]
+    fn a_failed_turn_names_the_agent_s_own_first_line_and_nothing_hide_s() {
+        let rejected = |message: &str| {
+            CallError::Rejected(hide_desk::rpc::RpcError {
+                code: -32603,
+                message: message.into(),
+            })
+        };
+        assert_eq!(
+            reason(&rejected("Rate limit reached\n  at provider.ts:12")),
+            Some("Rate limit reached".into())
+        );
+        assert_eq!(
+            reason(&rejected(&"x".repeat(500))).map(|line| line.chars().count()),
+            Some(MAX_REASON_CHARS)
+        );
+        assert_eq!(reason(&rejected("  ")), None);
+        for nothing_to_act_on in [
+            CallError::Unanswered,
+            CallError::Busy,
+            CallError::Closed("eof".into()),
+        ] {
+            assert_eq!(reason(&nothing_to_act_on), None);
+        }
     }
 
     #[test]
