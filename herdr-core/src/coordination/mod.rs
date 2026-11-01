@@ -635,9 +635,12 @@ pub(crate) enum Mutation {
         parent: String,
         command: Command,
     },
-    /// The spawn's brief was submitted to its agent.
+    /// The spawn's brief was sent to its agent, and how
+    /// (`delivery::typed::SendRoute`): by its parent at the spawn, or by Hide
+    /// when it sends a brief again.
     Briefed {
         id: String,
+        route: crate::delivery::typed::SendRoute,
     },
     /// One typing of the spawn's brief is reserved before it is typed
     /// (`delivery::typed`): the spawn's first, by its parent, or a later
@@ -1387,7 +1390,7 @@ pub(crate) fn apply(
             ledger.spawns.push(record.clone());
             Ok(json!(record))
         }
-        Mutation::Briefed { id } => {
+        Mutation::Briefed { id, route } => {
             let parent = ledger
                 .spawns
                 .iter()
@@ -1395,7 +1398,10 @@ pub(crate) fn apply(
                 .ok_or("spawn_unavailable")?
                 .parent
                 .clone();
-            if !resolve_actor(ledger, &parent).is_some_and(|parent| parent.same_identity(caller)) {
+            if !input_authority(caller)
+                && !resolve_actor(ledger, &parent)
+                    .is_some_and(|parent| parent.same_identity(caller))
+            {
                 return Err("parent_authority_required".into());
             }
             let record = ledger
@@ -1405,6 +1411,9 @@ pub(crate) fn apply(
                 .ok_or("spawn_unavailable")?;
             if record.pane.is_none() || record.typed == 0 || record.brief.is_none() {
                 return Err("spawn_incomplete".into());
+            }
+            if let Some(input) = record.brief_input.as_mut() {
+                input.route = *route;
             }
             record.briefed = true;
             Ok(json!(record))
@@ -1434,6 +1443,15 @@ pub(crate) fn apply(
             let input = record.brief_input.get_or_insert_with(Default::default);
             if input.confirmed_at_unix_ms.is_some() {
                 return Err("brief_confirmed".into());
+            }
+            // A brief its start holds, or whose send lost its answer, may
+            // already be with the agent: nothing sends it again, whoever
+            // asks (engineering principle 11).
+            match input.route {
+                crate::delivery::typed::SendRoute::Launch => return Err("brief_launched".into()),
+                crate::delivery::typed::SendRoute::Lost => return Err("brief_send_lost".into()),
+                crate::delivery::typed::SendRoute::Typed
+                | crate::delivery::typed::SendRoute::Channel => {}
             }
             if input.attempts >= crate::delivery::typed::INPUT_ATTEMPTS {
                 return Err("brief_attempts_spent".into());
@@ -1465,15 +1483,16 @@ pub(crate) fn apply(
                 return Err("spawn_incomplete".into());
             }
             let input = record.brief_input.get_or_insert_with(Default::default);
-            if input.attempts > 0 && !input.launch {
-                // Typed once already: a start may not carry it as well.
+            let launched = input.route == crate::delivery::typed::SendRoute::Launch;
+            if input.attempts > 0 && !launched {
+                // Sent once already: a start may not carry it as well.
                 return Err("brief_typed".into());
             }
-            if !input.launch {
+            if !launched {
                 input.attempts = 1;
                 input.typed_at_unix_ms = now;
                 input.first_typed_at_unix_ms = now;
-                input.launch = true;
+                input.route = crate::delivery::typed::SendRoute::Launch;
             }
             record.briefed = true;
             Ok(json!(record))
@@ -3171,6 +3190,102 @@ mod tests {
         (ledger, actor, parent_id, id, child)
     }
 
+    /// A brief whose send lost its answer, or that its start carried, may
+    /// already be with the agent: once it is saved so, no caller can reserve
+    /// another typing of it, its parent's retry and Hide's own alike.
+    #[test]
+    fn a_launched_or_lost_brief_refuses_every_later_typing() {
+        for (route, refusal) in [
+            (crate::delivery::typed::SendRoute::Lost, "brief_send_lost"),
+            (crate::delivery::typed::SendRoute::Launch, "brief_launched"),
+        ] {
+            let mut ledger = Ledger::default();
+            let parent = record("parent", "native-parent", None);
+            let actor = parent.actor.clone();
+            let parent_id = register(&mut ledger, parent, &actor);
+            let mut spawn_command = command("mission-1:api");
+            if let Command::Spawn { brief, .. } = &mut spawn_command {
+                *brief = Some("Node api: add the call.".into());
+            }
+            let spawn = apply(
+                &mut ledger,
+                &actor,
+                &Mutation::Reserve {
+                    parent: parent_id,
+                    command: spawn_command,
+                },
+                1,
+            )
+            .unwrap()["id"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            apply(
+                &mut ledger,
+                &actor,
+                &Mutation::Advance {
+                    seed_tab: None,
+                    id: spawn.clone(),
+                    path: Some("/fixture/topic".into()),
+                    pane: Some("worker-pane".into()),
+                    terminal: None,
+                    shell: None,
+                    child: None,
+                },
+                2,
+            )
+            .unwrap();
+            apply(
+                &mut ledger,
+                &actor,
+                &Mutation::Typed { id: spawn.clone() },
+                2,
+            )
+            .unwrap();
+            if route == crate::delivery::typed::SendRoute::Launch {
+                apply(
+                    &mut ledger,
+                    &actor,
+                    &Mutation::BriefLaunched { id: spawn.clone() },
+                    3,
+                )
+                .unwrap();
+            } else {
+                apply(
+                    &mut ledger,
+                    &actor,
+                    &Mutation::BriefTyping { id: spawn.clone() },
+                    3,
+                )
+                .unwrap();
+                let saved = apply(
+                    &mut ledger,
+                    &actor,
+                    &Mutation::Briefed {
+                        id: spawn.clone(),
+                        route,
+                    },
+                    3,
+                )
+                .unwrap();
+                assert_eq!(saved["briefed"], true, "a lost send counts as sent");
+            }
+            let input = Actor::hide(crate::delivery::typed::INPUT_ROLE, "node");
+            for caller in [&actor, &input] {
+                assert_eq!(
+                    apply(
+                        &mut ledger,
+                        caller,
+                        &Mutation::BriefTyping { id: spawn.clone() },
+                        4
+                    )
+                    .unwrap_err(),
+                    refusal
+                );
+            }
+        }
+    }
+
     /// A spawn's brief is part of its intent, is marked submitted once so a
     /// retry never types it twice, and becomes the child's first letter when
     /// the child binds: delivered and confirmed under the spawn's intent,
@@ -3367,7 +3482,10 @@ mod tests {
             apply(
                 &mut ledger,
                 &actor,
-                &Mutation::Briefed { id: spawn.clone() },
+                &Mutation::Briefed {
+                    id: spawn.clone(),
+                    route: Default::default()
+                },
                 2
             )
             .unwrap_err(),
@@ -3398,7 +3516,10 @@ mod tests {
         let marked = apply(
             &mut ledger,
             &actor,
-            &Mutation::Briefed { id: spawn.clone() },
+            &Mutation::Briefed {
+                id: spawn.clone(),
+                route: Default::default(),
+            },
             3,
         )
         .unwrap();

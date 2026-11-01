@@ -332,9 +332,8 @@ pub(crate) enum Effect {
     Bell {
         id: String,
         recipient: Actor,
-        sent: bool,
-        /// The recipient's own way in answered that it took the bell.
-        received: bool,
+        /// How the bell was sent, or `None` when it failed.
+        route: Option<super::typed::SendRoute>,
     },
     /// A forced letter whose recipient's composer showed text when the
     /// doorbell was about to type it: it stays, as an ordinary letter.
@@ -772,25 +771,24 @@ fn apply(ledger: &mut Ledger, request: &Request, now: u64) -> Result<(Value, boo
         Effect::Bell {
             id,
             recipient,
-            sent,
-            received,
+            route,
         } => {
             if let Some(letter) = ledger.letters.iter_mut().find(|letter| {
                 letter.id == *id
                     && letter.recipient.same_identity(recipient)
                     && letter.state == super::ledger::State::Pending
             }) {
-                if *sent {
+                if let Some(route) = route {
                     letter.bell_sent = true;
                     letter.bell_typed_at_unix_ms = Some(now);
-                    letter.bell_received = *received;
+                    letter.bell_route = *route;
                 } else {
                     letter.bell_errors = letter.bell_errors.saturating_add(1).min(3);
                 }
             }
             // A typed bell is published: the core waits for the recipient's
             // record of it from then on (`delivery::typed`).
-            return Ok((Value::Null, *sent));
+            return Ok((Value::Null, route.is_some()));
         }
         Effect::InputNoticed { id, attempt } => {
             if let Some(letter) = ledger.letters.iter_mut().find(|letter| letter.id == *id)

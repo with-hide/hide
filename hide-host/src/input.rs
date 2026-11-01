@@ -36,9 +36,12 @@ pub fn deliver(home: &Path, channel: &InputChannel, text: &str, stop: &AtomicBoo
     }
 }
 
-/// `codex queue --thread <thread> --message <text>`: Codex's own durable
-/// queue for the session, which the running TUI takes as a turn. Exit 0 is
-/// Codex's answer that it queued the message.
+/// `codex queue --thread <thread> --message=<text>`: Codex's own durable
+/// queue for the session, which the running TUI takes as a turn once it
+/// rests with an empty composer. Exit 0 is Codex's answer that it queued
+/// the message, not that the session took it. The message is one argument
+/// (`--message=`), so a text that begins with `-` is never read as an
+/// option.
 fn codex_queue(home: &Path, thread: &str, text: &str, stop: &AtomicBool) -> Delivery {
     let Some(codex) = hide_platform::programs::find_cli("codex") else {
         return Delivery::Unavailable {
@@ -48,12 +51,13 @@ fn codex_queue(home: &Path, thread: &str, text: &str, stop: &AtomicBool) -> Deli
     let mut command = Command::new(codex.path());
     hide_platform::process::restrict_to_login_environment(&mut command);
     command
-        .args(["queue", "--thread", thread, "--message", text])
+        .args(["queue", "--thread", thread])
+        .arg(format!("--message={text}"))
         .env("HOME", home)
         .env("CODEX_HOME", AgentRuntime::Codex.home_directory(home))
         .env("PATH", codex.search());
     match run_to_end(&mut command, QUEUE_DEADLINE, stop) {
-        Ok(finished) if finished.succeeded() => Delivery::Received,
+        Ok(finished) if finished.succeeded() => Delivery::Sent,
         // Codex refused before queueing: an unknown thread ("no rollout
         // found") or an older Codex without the command.
         Ok(finished) => Delivery::Unavailable {

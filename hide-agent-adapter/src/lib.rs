@@ -843,12 +843,17 @@ pub enum AgentApi {
 }
 
 impl AgentApi {
-    /// Whether the rung says itself that the agent took the input, so Hide
-    /// needs no record of it: Codex's queue answers with the message it
-    /// queued; Claude's socket answers nothing, and a launch prompt is held
-    /// by a CLI that may still sit at a start screen.
-    pub const fn acknowledges(self) -> bool {
-        matches!(self, Self::CodexQueue)
+    /// The variables the agent hands its own hooks at a session's start
+    /// with the address this rung needs, socket first and token second:
+    /// Hide's SessionStart hook reports them (`docs/agent-hooks.md`).
+    pub const fn session_environment(self) -> Option<(&'static str, &'static str)> {
+        match self {
+            Self::ClaudeMessaging => Some((
+                "CLAUDE_CODE_MESSAGING_SOCKET",
+                "CLAUDE_CODE_MESSAGING_TOKEN",
+            )),
+            Self::LaunchPrompt | Self::CodexQueue => None,
+        }
     }
 
     /// Whether the rung takes only a fresh start's first input.

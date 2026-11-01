@@ -181,7 +181,7 @@ def brief_verdict(spawn, launched=False):
         return FAIL, f"the brief was recorded only after {attempts} typings"
     # An agent whose ladder starts with the launch prompt is handed its
     # brief by its start, never typed (docs/delivery.md, The input ladder).
-    if launched != bool(typed.get("launch")):
+    if launched != (typed.get("route") == "launch"):
         return FAIL, ("the brief was typed, though the agent declares the launch prompt" if launched
                       else "the brief rode the start, though the agent declares no launch prompt")
     how = "its start's prompt" if launched else "its one typing"
@@ -340,9 +340,13 @@ def bell_turn(events, bell_line):
     # which a console reader may drop. Compare the whole prompt; a prefix
     # proves no bell turn.
     def canonical(text):
-        # Trim Unicode White_Space. Python's default strip also removes the
-        # four C0 separators U+001C..U+001F, which remain part of the prompt.
-        return "".join(char for char in text if ord(char) <= 0xffff and char not in "\r\n").strip(
+        # hide_agent_hooks::delivery::canonical_prompt: line breaks (CR, LF,
+        # U+2028, U+2029) and characters above U+FFFF removed, a tab read as
+        # four spaces. Trim Unicode White_Space. Python's default strip also
+        # removes the four C0 separators U+001C..U+001F, which remain part of
+        # the prompt.
+        return "".join("    " if char == "\t" else char for char in text
+                       if ord(char) <= 0xffff and char not in "\r\n\u2028\u2029").strip(
             "\t\n\v\f\r \u0085\u00a0\u1680"
             "\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a"
             "\u2028\u2029\u202f\u205f\u3000")

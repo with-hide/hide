@@ -92,13 +92,23 @@ impl std::fmt::Debug for MessagingChannel {
 }
 
 impl MessagingChannel {
-    /// The channel a Claude Code session hands its hooks in their
-    /// environment, when it hands both parts.
-    pub fn from_environment() -> Option<Self> {
+    /// The channel the session of `agent` hands its hooks at its start,
+    /// when the agent's input ladder declares one
+    /// (`AgentApi::session_environment`) and the hook's environment carries
+    /// both parts.
+    pub fn of_agent(agent: &str) -> Option<Self> {
+        let (socket, token) =
+            hide_agent_adapter::adapter(agent)?
+                .input
+                .iter()
+                .find_map(|rung| match rung {
+                    hide_agent_adapter::InputRung::AgentApi(api) => api.session_environment(),
+                    hide_agent_adapter::InputRung::Typed => None,
+                })?;
         let read = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
         Some(Self {
-            socket: read("CLAUDE_CODE_MESSAGING_SOCKET")?,
-            token: read("CLAUDE_CODE_MESSAGING_TOKEN")?,
+            socket: read(socket)?,
+            token: read(token)?,
         })
     }
 }

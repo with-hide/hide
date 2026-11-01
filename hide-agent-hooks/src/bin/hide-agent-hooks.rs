@@ -1307,8 +1307,8 @@ fn report_pane(
                     waiting: speaks.then(|| applied.waiting.clone()),
                     // The session's own way in for Hide's input ladder,
                     // handed to its hooks at its start only.
-                    messaging: (starts && agent == AgentRuntime::ClaudeCode.id())
-                        .then(hide_agent_hooks::report::MessagingChannel::from_environment)
+                    messaging: starts
+                        .then(|| hide_agent_hooks::report::MessagingChannel::of_agent(agent))
                         .flatten(),
                 },
                 deadline,

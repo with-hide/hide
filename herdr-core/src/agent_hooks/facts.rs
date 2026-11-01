@@ -372,15 +372,17 @@ impl HookFacts {
         &self,
         pane: &str,
         runtime: &str,
-        lineage: Option<&str>,
+        lineage: &str,
     ) -> Option<ReportedSession> {
-        let facts = self.panes.get(pane)?;
-        let names = lineage.map(|lineage| {
-            move |kept: &str| {
-                crate::engine::tokens::session_digest(kept).as_deref() == Some(lineage)
-            }
-        });
-        let fact = &facts.sessions[bound_by(facts, runtime, names)?];
+        // Only the session Herdr names for the pane is addressed: another
+        // session the pane's hooks reported (a nested run, an agent that
+        // ended there) is never sent the pane's input.
+        let fact = self.panes.get(pane)?.sessions.iter().rev().find(|fact| {
+            fact.runtime == runtime
+                && fact.session.as_deref().is_some_and(|kept| {
+                    crate::engine::tokens::session_digest(kept).as_deref() == Some(lineage)
+                })
+        })?;
         Some(ReportedSession {
             session: fact.session.clone(),
             messaging: fact.messaging.clone(),
@@ -467,31 +469,11 @@ fn close_answered_waits(fact: &mut SessionFact, agent: &SessionAgentPayload) {
 /// there.
 fn bound<'a>(facts: &'a mut PaneFacts, agent: &SessionAgentPayload) -> Option<&'a mut SessionFact> {
     let runtime = hide_agent_adapter::adapter(agent.agent.as_deref()?)?.id;
-    let at = bound_at(facts, runtime, herdr_session(agent))?;
-    facts.sessions.get_mut(at)
-}
-
-/// Where in `facts` the session that speaks for the pane's agent of
-/// `runtime` is ([`bound`]), with `reported` the session id Herdr names.
-fn bound_at(facts: &PaneFacts, runtime: &str, reported: Option<&str>) -> Option<usize> {
-    bound_by(
-        facts,
-        runtime,
-        reported.map(|reported| move |kept: &str| kept == reported),
-    )
-}
-
-/// [`bound_at`] with `names` saying whether a kept session id is the one
-/// Herdr names, when Herdr names one.
-fn bound_by(
-    facts: &PaneFacts,
-    runtime: &str,
-    names: Option<impl Fn(&str) -> bool>,
-) -> Option<usize> {
+    let reported = herdr_session(agent);
     let named = facts.sessions.iter().rposition(|fact| {
         fact.runtime == runtime
-            && match (&names, fact.session.as_deref()) {
-                (Some(names), Some(kept)) => names(kept),
+            && match (reported, fact.session.as_deref()) {
+                (Some(reported), Some(kept)) => reported == kept,
                 _ => true,
             }
     });
@@ -506,7 +488,7 @@ fn bound_by(
             })
             .flatten()
     })?;
-    Some(at)
+    facts.sessions.get_mut(at)
 }
 
 /// A pane's facts from the records its hooks kept: no turn, which no record
@@ -603,9 +585,9 @@ mod tests {
         facts
             .record("w1:p1", &started("s-print", "/tmp/cc-socks/2.sock"))
             .unwrap();
-        let lineage = crate::engine::tokens::session_digest("s-pane");
+        let lineage = crate::engine::tokens::session_digest("s-pane").unwrap();
         let reported = facts
-            .reported_session("w1:p1", "claude-code", lineage.as_deref())
+            .reported_session("w1:p1", "claude-code", &lineage)
             .unwrap();
         assert_eq!(reported.session.as_deref(), Some("s-pane"));
         assert_eq!(
@@ -618,13 +600,32 @@ mod tests {
             .unwrap();
         assert!(
             facts
-                .reported_session("w1:p1", "claude-code", lineage.as_deref())
+                .reported_session("w1:p1", "claude-code", &lineage)
                 .unwrap()
                 .messaging
                 .is_some()
         );
-        assert_eq!(facts.reported_session("w1:p1", "codex", None), None);
-        assert_eq!(facts.reported_session("w1:p9", "claude-code", None), None);
+        assert_eq!(facts.reported_session("w1:p1", "codex", &lineage), None);
+        assert_eq!(
+            facts.reported_session("w1:p9", "claude-code", &lineage),
+            None
+        );
+    }
+
+    /// A pane whose hooks reported only a nested session, never the one
+    /// Herdr names for the pane, has no address: the pane's input never
+    /// reaches the nested session's socket, even though it reported last.
+    #[test]
+    fn only_a_nested_session_reported_gives_the_pane_no_address() {
+        let mut facts = HookFacts::default();
+        facts
+            .record("w1:p1", &started("s-nested", "/tmp/cc-socks/9.sock"))
+            .unwrap();
+        let lineage = crate::engine::tokens::session_digest("s-pane").unwrap();
+        assert_eq!(
+            facts.reported_session("w1:p1", "claude-code", &lineage),
+            None
+        );
     }
 
     /// The token is never saved: a restart keeps the session and its counts,
@@ -642,8 +643,9 @@ mod tests {
         let saved = std::fs::read_to_string(&path).unwrap();
         assert!(saved.contains("s-pane") && !saved.contains("token-of-s-pane"));
         let restored = HookFacts::restore(path, Vec::new);
+        let lineage = crate::engine::tokens::session_digest("s-pane").unwrap();
         let reported = restored
-            .reported_session("w1:p1", "claude-code", None)
+            .reported_session("w1:p1", "claude-code", &lineage)
             .unwrap();
         assert_eq!(reported.session.as_deref(), Some("s-pane"));
         assert_eq!(reported.messaging, None);

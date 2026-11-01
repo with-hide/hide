@@ -1874,26 +1874,26 @@ impl Runtime {
         lineage: Option<&str>,
     ) -> crate::delivery::ladder::InputTarget {
         use crate::delivery::ladder::{InputTarget, SessionAddress};
-        let reported = hide_agent_adapter::adapter(kind).and_then(|row| {
-            self.hook_facts
-                .lock()
-                .ok()?
-                .reported_session(pane_id, row.id, lineage)
-        });
-        // Herdr learns the session from the agent's own session start, the
-        // event Hide's hook reports from too: once Herdr names a session
-        // that Hide's hook did not report, the hook is not connected for it
-        // (or its report is a moment late), and the input is typed.
-        let address = match reported {
-            Some(reported) => SessionAddress::Known {
-                session: reported.session,
-                messaging: reported.messaging,
-            },
-            None if lineage.is_some() => SessionAddress::Known {
-                session: None,
-                messaging: None,
-            },
+        // Only the session Herdr names for the pane is addressed
+        // (`HookFacts::reported_session`). Herdr learns it from the agent's
+        // own session start, the event Hide's hook reports from too: once
+        // Herdr names a session that Hide's hook did not report, the hook is
+        // not connected for it (or its report is a moment late), and the
+        // input is typed.
+        let address = match lineage {
             None => SessionAddress::Pending,
+            Some(lineage) => {
+                let reported = hide_agent_adapter::adapter(kind).and_then(|row| {
+                    self.hook_facts
+                        .lock()
+                        .ok()?
+                        .reported_session(pane_id, row.id, lineage)
+                });
+                SessionAddress::Known {
+                    session: reported.as_ref().and_then(|found| found.session.clone()),
+                    messaging: reported.and_then(|found| found.messaging),
+                }
+            }
         };
         InputTarget {
             pane_id: pane_id.to_owned(),

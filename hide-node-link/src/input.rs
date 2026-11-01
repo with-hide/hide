@@ -45,10 +45,9 @@ impl InputChannel {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
 pub enum Delivery {
-    /// The agent's own API answered that it took the input.
-    Received,
-    /// The input was sent whole through a way in that answers nothing; the
-    /// agent's own record says whether it took it.
+    /// The input was sent whole: `codex queue` queued it, or the session's
+    /// socket took the write. Neither says the agent took it; the agent's
+    /// own record does.
     Sent,
     /// Nothing was sent: the way in cannot be used here or now (no such
     /// program, a system it was not proven on, a refusal). The next rung

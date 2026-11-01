@@ -124,11 +124,10 @@ pub struct Letter {
     /// prompt confirms it (`delivery::typed`). Null until a bell was typed.
     #[serde(default)]
     pub bell_typed_at_unix_ms: Option<u64>,
-    /// The recipient's own way in answered that it took the bell
-    /// (`delivery::ladder`, `Delivered::Received`): no record of the prompt
-    /// is owed, and the letter is handed when that prompt's hook pulls it.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub bell_received: bool,
+    /// How the last bell was sent (`delivery::ladder`), which words its
+    /// unconfirmed notice; the recipient's record confirms it either way.
+    #[serde(default)]
+    pub bell_route: super::typed::SendRoute,
     /// The bell whose unconfirmed notice the sender was sent, 0 for none.
     #[serde(default)]
     pub input_noticed: u8,
@@ -304,15 +303,11 @@ impl Letter {
             attempts: self.attempts(),
             typed_at_unix_ms: self.bell_typed_at_unix_ms?,
             first_typed_at_unix_ms: 0,
-            // A bell its recipient took is recorded, confirmed or not, and so
-            // is one its recipient's own way in took.
-            confirmed_at_unix_ms: (self.state != State::Pending
-                || self.handed
-                || self.bell_received)
-                .then_some(0),
+            // A bell its recipient took is recorded, confirmed or not.
+            confirmed_at_unix_ms: (self.state != State::Pending || self.handed).then_some(0),
             noticed: self.input_noticed,
             noticed_at_unix_ms: self.input_noticed_at_unix_ms,
-            launch: false,
+            route: self.bell_route,
         })
     }
 

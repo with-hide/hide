@@ -15,25 +15,6 @@ use crate::model::AskSubject;
 use super::Runtime;
 use super::delivery::Observation;
 
-/// The texts a spawn's brief is recorded as: the brief, and for a brief that
-/// rode the start's prompt argument the argument too, whose line breaks are
-/// U+2028 (`worktree_control::prompt_argument`): Codex 0.166.0 and agy
-/// 1.4.12 record that form, Claude Code 2.1.316 the brief's own line breaks
-/// (measured 2026-11-01).
-fn brief_forms(spawn: &SpawnRecord) -> Vec<std::borrow::Cow<'_, str>> {
-    let Some(brief) = spawn.brief.as_deref() else {
-        return Vec::new();
-    };
-    let mut forms = vec![std::borrow::Cow::Borrowed(brief)];
-    if spawn.brief_input.as_ref().is_some_and(|input| input.launch)
-        && let Ok(argument) = crate::worktree_control::prompt_argument(brief)
-        && argument != brief
-    {
-        forms.push(std::borrow::Cow::Owned(argument));
-    }
-    forms
-}
-
 /// Which typed input a piece of work is about.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum InputKey {
@@ -140,9 +121,9 @@ impl Runtime {
                 .is_some_and(|input| input.confirmed_at_unix_ms.is_none())
                 && self.spawn_pane_id(spawn).as_deref() == Some(pane_id)
                 && self.spawn_observation(spawn).is_some()
-                && brief_forms(spawn)
-                    .iter()
-                    .any(|brief| hide_agent_hooks::delivery::matches_prompt_digest(brief, digest))
+                && spawn.brief.as_deref().is_some_and(|brief| {
+                    hide_agent_hooks::delivery::matches_prompt_digest(brief, digest)
+                })
         }) else {
             return;
         };
@@ -213,31 +194,24 @@ impl Runtime {
             // message written after the typing, which Hide did not see the
             // operator submit, is: "don't fix tests" typed after a lost "fix
             // tests" is the operator's own.
-            let forms = brief_forms(spawn);
             if self
                 .row_facts_of(&observation.actor.pane_id)
                 .is_some_and(|facts| {
-                    forms.iter().any(|brief| {
-                        facts.prompt_digests.iter().any(|digest| {
-                            hide_agent_hooks::delivery::matches_prompt_digest(brief, digest)
-                        }) || facts
-                            .operator_request
-                            .iter()
-                            .chain(&facts.other_request)
-                            .any(|request| {
-                                !request.cut
-                                    && request.requester
-                                        != crate::labels::facts::Requester::Operator
-                                    && request
-                                        .at_unix_ms
-                                        .saturating_add(crate::labels::facts::CLOCK_SLACK_MS)
-                                        >= input.first_typed_at()
-                                    && hide_agent_hooks::delivery::ends_with_typed(
-                                        &request.text,
-                                        brief,
-                                    )
-                            })
-                    })
+                    facts.prompt_digests.iter().any(|digest| {
+                        hide_agent_hooks::delivery::matches_prompt_digest(brief, digest)
+                    }) || facts
+                        .operator_request
+                        .iter()
+                        .chain(&facts.other_request)
+                        .any(|request| {
+                            !request.cut
+                                && request.requester != crate::labels::facts::Requester::Operator
+                                && request
+                                    .at_unix_ms
+                                    .saturating_add(crate::labels::facts::CLOCK_SLACK_MS)
+                                    >= input.first_typed_at()
+                                && hide_agent_hooks::delivery::ends_with_typed(&request.text, brief)
+                        })
                 })
             {
                 work.push(InputWork {
@@ -320,7 +294,7 @@ impl Runtime {
                         &observation.actor.pane_id,
                         None,
                         source,
-                        input.launch,
+                        input.route,
                     ),
                     attempt: input.attempts,
                     target,
@@ -329,14 +303,15 @@ impl Runtime {
             // there is its own.
             // A launch prompt is held by the agent's start and never typed
             // again, so answering its screen cannot send it twice.
-            let resubmit =
-                (spawn.briefed && !input.launch && typed::composer_readable(observation, now))
-                    .then(|| Resubmit {
-                        brief: brief.clone(),
-                        attempts: input.attempts,
-                        left: input.attempts < typed::INPUT_ATTEMPTS,
-                        answered: source.is_ok() && typed::retype_due(input, observation, now),
-                    });
+            let resubmit = (spawn.briefed
+                && input.route.sends_again()
+                && typed::composer_readable(observation, now))
+            .then(|| Resubmit {
+                brief: brief.clone(),
+                attempts: input.attempts,
+                left: input.attempts < typed::INPUT_ATTEMPTS,
+                answered: source.is_ok() && typed::retype_due(input, observation, now),
+            });
             if notice.is_some() || resubmit.is_some() {
                 work.push(InputWork {
                     key: InputKey::Spawn(spawn.id.clone()),
@@ -402,7 +377,7 @@ impl Runtime {
                         &observation.actor.pane_id,
                         Some(&letter.id),
                         self.input_source(&letter.recipient.kind, &observation.actor.pane_id),
-                        false,
+                        input.route,
                     ),
                     attempt: input.attempts,
                     target,
@@ -934,7 +909,10 @@ pub(crate) mod tests {
             );
             apply(
                 &mut ledger,
-                Mutation::Briefed { id: spawn.clone() },
+                Mutation::Briefed {
+                    id: spawn.clone(),
+                    route: Default::default(),
+                },
                 typed_at,
             );
         }
@@ -949,7 +927,7 @@ pub(crate) mod tests {
     fn a_launched_brief_is_never_typed_and_its_parent_hears_the_start_holds_it() {
         const T: u64 = 100_000;
         let (_root, mut runtime, spawn) = spawned_with("codex", BRIEF, false, T, true);
-        assert!(input_of(&runtime, &spawn).launch);
+        assert_eq!(input_of(&runtime, &spawn).route, typed::SendRoute::Launch);
         runtime.typed_input_work(T + RECORD_WAIT_MS);
         let at = T + RECORD_WAIT_MS + REREAD_WAIT_MS;
         let work = runtime.typed_input_work(at);
@@ -973,22 +951,24 @@ pub(crate) mod tests {
         assert_eq!(input_of(&runtime, &spawn).attempts, 1);
     }
 
-    /// The prompt argument's line breaks are U+2028, the form Codex and agy
-    /// record; a launched brief is recognized in that form and in its own.
+    /// A launched brief's record is the prompt argument as the agent kept
+    /// it, line breaks as U+2028 and a tab as four spaces (Codex, agy): the
+    /// same canonical rule reads it as the brief, so it is taken.
     #[test]
-    fn a_launched_brief_is_recognized_in_the_form_its_argument_carried() {
-        let (_root, runtime, spawn) = spawned_with("codex", BRIEF, false, 1_000, true);
-        let ledger = runtime.delivery_ledger.as_ref().unwrap();
-        let record = ledger.spawns.iter().find(|s| s.id == spawn).unwrap();
-        let forms = brief_forms(record);
-        assert_eq!(forms.len(), 2);
-        assert_eq!(forms[0], BRIEF);
-        assert_eq!(forms[1], BRIEF.replace('\n', "\u{2028}"));
-
-        let (_root, runtime, spawn) = spawned(false, 1_000);
-        let ledger = runtime.delivery_ledger.as_ref().unwrap();
-        let record = ledger.spawns.iter().find(|s| s.id == spawn).unwrap();
-        assert_eq!(brief_forms(record).len(), 1, "a typed brief has one form");
+    fn a_launched_brief_with_a_tab_is_taken_by_the_record_of_its_argument() {
+        const T: u64 = 100_000;
+        let brief = "Steps:\n\tadd the call\nReport by letter.";
+        let (_root, mut runtime, _) = spawned_with("codex", brief, false, T, true);
+        record_request(
+            &mut runtime,
+            "child",
+            "codex",
+            "Steps:\u{2028}    add the call\u{2028}Report by letter.",
+            T + 1_000,
+        );
+        let work = runtime.typed_input_work(T + 1_000);
+        assert_eq!(work.len(), 1);
+        assert_eq!(work[0].recorded, Some("session"));
     }
 
     /// The agent row of `pane` whose session file's newest message from

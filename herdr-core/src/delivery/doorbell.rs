@@ -421,10 +421,8 @@ pub(crate) struct Doorbell {
 /// How one attempt ended without failing.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Outcome {
-    Rung,
-    /// The recipient's own way in answered that it took the line
-    /// (`ladder::Delivered::Received`).
-    Received,
+    /// The line was sent whole, by this route.
+    Rung(super::typed::SendRoute),
     Held(Hold),
     Stopped,
 }
@@ -588,7 +586,7 @@ impl Doorbell {
                 (&line, &sender, &letter.kind),
                 stop,
             ) {
-                Ok(outcome @ (Outcome::Rung | Outcome::Received)) => {
+                Ok(Outcome::Rung(route)) => {
                     self.held.remove(&letter.id);
                     self.tried.remove(&letter.id);
                     self.rung.insert(
@@ -598,14 +596,7 @@ impl Doorbell {
                             letter: letter.id.clone(),
                         },
                     );
-                    record(
-                        client,
-                        &letter.id,
-                        &observed,
-                        Rang::Sent {
-                            received: outcome == Outcome::Received,
-                        },
-                    );
+                    record(client, &letter.id, &observed, Rang::Sent(route));
                 }
                 Ok(Outcome::Held(reason)) => {
                     self.hold(&letter.id, pane, reason);
@@ -714,7 +705,7 @@ impl Doorbell {
             }
             *count += 1;
             match type_answer(owner, engine.as_ref(), &work, &observed, stop) {
-                Ok(Outcome::Rung | Outcome::Received) => {
+                Ok(Outcome::Rung(_)) => {
                     self.answer_tried.remove(&work.mission);
                     self.answer_held.remove(&work.mission);
                     if let Ok(mut guard) = owner.lock() {
@@ -1077,15 +1068,34 @@ fn resubmit_brief(
             .send_keys(Wait::Small(RPC_TIMEOUT), &observed.raw_pane_id, &["Enter"])
             .map_err(|_| "prompt_failed")?,
         Some((target, prepared)) => {
-            let received = crate::coordination::executor::send_brief(
+            let route = crate::coordination::executor::send_brief(
                 engine.as_ref(),
                 (&target, prepared),
                 id,
                 &resubmit.brief,
             )
             .map_err(|_| "prompt_failed")?;
-            if received {
-                record_brief(owner, id, "channel");
+            // How it went decides whether it is ever sent again.
+            if let Some((client, authority, actor)) = owner
+                .lock()
+                .ok()
+                .and_then(|guard| guard.hide_delivery(super::typed::INPUT_ROLE).ok())
+            {
+                let saved = client.submit(
+                    Effect::Agents {
+                        authority,
+                        actor,
+                        mutation: Box::new(crate::coordination::Mutation::Briefed {
+                            id: id.to_owned(),
+                            route,
+                        }),
+                    },
+                    PROMPT_TIMEOUT,
+                );
+                if let Err(code) = saved {
+                    crate::diagnostic!(json!({"component":"delivery",
+                        "kind":"input.route_unsaved","spawn":id,"code":code}));
+                }
             }
         }
     }
@@ -1168,7 +1178,7 @@ fn defer(client: &Client, letter: &Letter, reason: &str) {
 /// What one bell did, for the store.
 #[derive(Clone, Copy)]
 enum Rang {
-    Sent { received: bool },
+    Sent(super::typed::SendRoute),
     Failed,
 }
 
@@ -1177,8 +1187,10 @@ fn record(client: &Client, id: &str, observed: &Observation, rang: Rang) {
         Effect::Bell {
             id: id.to_owned(),
             recipient: observed.actor.clone(),
-            sent: matches!(rang, Rang::Sent { .. }),
-            received: matches!(rang, Rang::Sent { received: true }),
+            route: match rang {
+                Rang::Sent(route) => Some(route),
+                Rang::Failed => None,
+            },
         },
         Duration::from_secs(5),
     ) {
@@ -1196,17 +1208,6 @@ fn call_failure(error: EngineError) -> &'static str {
         EngineError::Answer(_) => "herdr_format",
         _ => "herdr_call_failed",
     }
-}
-
-/// Submits `line` to the agent in `pane`: once asked, a failure may follow
-/// a typed line.
-fn prompt(engine: &dyn Engine, pane: &str, line: &str) -> Result<(), SendFailure> {
-    engine
-        .prompt_agent(Wait::Small(PROMPT_TIMEOUT), pane, line)
-        .map_err(|error| match error {
-            EngineError::Request(_) => SendFailure::NotTyped("herdr_parameters"),
-            error => SendFailure::MaybeTyped(call_failure(error)),
-        })
 }
 
 /// Whether Herdr still reports the agent the verdict was read for, at the
@@ -1331,12 +1332,15 @@ fn deliver(
         .record_bell(&observed.actor.pane_id, line, (sender, kind));
     // Arrival is not intake. Only a flushed prompt-hook confirmation clears
     // it, even where the agent's own way in took the line.
-    match prepared.deliver(engine, &target, line) {
-        super::ladder::Delivered::Received => Ok(Outcome::Received),
-        super::ladder::Delivered::Unconfirmed { lost: None } => Ok(Outcome::Rung),
-        super::ladder::Delivered::Unconfirmed { lost: Some(code) } => {
-            Err(SendFailure::MaybeTyped(code))
-        }
+    sent(prepared.deliver(engine, &target, line))
+}
+
+/// A ladder's answer as one attempt's outcome: a lost answer may have
+/// typed it, and a NotYet sent nothing.
+fn sent(delivered: super::ladder::Delivered) -> Result<Outcome, SendFailure> {
+    match delivered {
+        super::ladder::Delivered::Sent(route) => Ok(Outcome::Rung(route)),
+        super::ladder::Delivered::Lost(code) => Err(SendFailure::MaybeTyped(code)),
         super::ladder::Delivered::NotYet(code) => Err(SendFailure::NotTyped(code)),
     }
 }
@@ -1370,8 +1374,13 @@ fn type_answer(
         // From here the answer may reach the conversation.
         guard.mission_answer_typing(&work.mission, work.key);
     }
-    prompt(engine, &observed.raw_pane_id, &work.line)?;
-    Ok(Outcome::Rung)
+    // The operator's own words: typed, as the operator types them, down the
+    // same rung every other typed input takes.
+    let target = owner
+        .lock()
+        .map_err(|_| SendFailure::NotTyped("runtime_unavailable"))?
+        .input_target(observed);
+    sent(super::ladder::typed_only().deliver(engine, &target, &work.line))
 }
 
 #[cfg(test)]
@@ -3116,7 +3125,17 @@ mod tests {
             doorbell.pass(&bell.runtime, &bell.client, &AtomicBool::new(false), now())
         })
         .1;
-        assert!(kinds(&rung).is_empty(), "the mark stays gone: {rung:?}");
+        assert_eq!(
+            kinds(&rung),
+            ["input.rung"],
+            "the mark stays gone, and the bell's rung is logged: {rung:?}"
+        );
+        assert_eq!(
+            rung.iter()
+                .find(|record| record["kind"] == "input.rung")
+                .unwrap()["rung"],
+            "typed"
+        );
         // The press types nothing itself: the pass rings through the
         // doorbell's own line, naming the unregistered sender by its runtime
         // as a ring at rest does, and the letter keeps that line.

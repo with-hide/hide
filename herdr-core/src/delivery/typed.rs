@@ -66,12 +66,46 @@ pub struct TypedInput {
     pub noticed: u8,
     #[serde(default, skip_serializing_if = "is_zero_ms")]
     pub noticed_at_unix_ms: u64,
-    /// The input rode the agent's start as its prompt argument
+    /// How the last send went (`delivery::ladder`); only a typed input is
+    /// ever sent again.
+    #[serde(default, skip_serializing_if = "SendRoute::is_typed")]
+    pub route: SendRoute,
+}
+
+/// How an input was last sent, which decides whether Hide may send it again
+/// and what its unconfirmed notice says (`docs/delivery.md`, The input
+/// ladder).
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum SendRoute {
+    /// Typed into the pane: something on its screen may have taken it, so
+    /// it is typed again once someone answered that screen.
+    #[default]
+    Typed,
+    /// Carried by the agent's start as its prompt argument
     /// (`AgentApi::LaunchPrompt`): the CLI holds it through its own start
-    /// screens, so it is never typed or typed again, and until the agent's
-    /// record of it appears it is not yet taken (`delivery::ladder`).
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub launch: bool,
+    /// screens and submits it after them.
+    Launch,
+    /// Handed to the agent's own way in (`codex queue`, Claude Code's
+    /// socket), which keeps it until the agent takes it.
+    Channel,
+    /// The send's answer was lost: it may have arrived.
+    Lost,
+}
+
+impl SendRoute {
+    pub(crate) fn is_typed(&self) -> bool {
+        *self == Self::Typed
+    }
+
+    /// Whether Hide may send the input again once someone answered the
+    /// agent's screen: only typing can have been taken by that screen, and
+    /// every other route either holds the input or may have delivered it.
+    pub(crate) fn sends_again(self) -> bool {
+        self == Self::Typed
+    }
 }
 
 impl TypedInput {
@@ -218,7 +252,7 @@ pub(crate) fn notice_body(
     pane: &str,
     letter: Option<&str>,
     source: Result<(), &str>,
-    launch: bool,
+    route: SendRoute,
 ) -> String {
     let what = match (kind, letter) {
         (InputKind::Brief, _) => "its brief".to_owned(),
@@ -231,24 +265,42 @@ pub(crate) fn notice_body(
     let trust = "Answering a trust or approval screen for it is your call: Hide does not check \
                  consent, and the operator sets how much agents may approve in Settings > Agents. \
                  Leave a login to the operator.";
-    match source {
+    let read = format!("read its screen with `hide pane read {pane}`");
+    let answer = format!(
+        "Answer the screen with `hide pane send {pane} --key <name>` (esc, enter, up, down, \
+         tab, ...) or with text and `--enter`"
+    );
+    match (source, route) {
+        // Hide lost the answer to its send: the agent may have it.
+        (_, SendRoute::Lost) => format!(
+            "{agent} cannot confirm {what} (Hide lost the answer to its send): {read}.\n\
+             Hide does not send it again, since the agent may have taken it; `hide agent show` \
+             names what it waits on. {answer}.\n{trust}"
+        ),
         // The agent's start holds a launch prompt through its own screens
         // and submits it after them, so nothing types it again.
-        Ok(()) if launch => format!(
+        (Ok(()), SendRoute::Launch) => format!(
             "{agent} has not taken {what} yet: read its screen with `hide pane read {pane}`.\n\
              Its start holds the brief and submits it once its screen is answered; \
              `hide agent show` names what it waits on. Answer the screen with \
              `hide pane send {pane} --key <name>` (esc, enter, up, down, tab, ...) or with text \
              and `--enter`; Hide never types the brief, so answering cannot send it twice.\n{trust}"
         ),
-        Ok(()) => format!(
+        // The agent's own way in keeps the input until the agent takes it.
+        (Ok(()), SendRoute::Channel) => format!(
+            "{agent} has not taken {what} yet: {read}.\n\
+             Hide handed it to the agent's own input queue, which keeps it until the agent \
+             takes it; `hide agent show` names what it waits on. {answer}; Hide does not send \
+             it again, so answering cannot send it twice.\n{trust}"
+        ),
+        (Ok(()), SendRoute::Typed) => format!(
             "{agent} has not confirmed {what}: read its screen with `hide pane read {pane}`.\n\
              Something on its screen may have taken the typed text; `hide agent show` names what \
              it waits on. Answer the screen with `hide pane send {pane} --key <name>` (esc, enter, \
              up, down, tab, ...) or with text and `--enter`; Hide types it again once the agent \
              is ready.\n{trust}"
         ),
-        Err(reason) => {
+        (Err(reason), _) => {
             let why = if reason == HOOKS_NOT_CONNECTED {
                 "its hooks are not connected"
             } else {

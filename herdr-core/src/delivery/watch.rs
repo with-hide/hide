@@ -995,7 +995,7 @@ mod tests {
             forced: false,
             tool_handovers: 0,
             bell_typed_at_unix_ms: None,
-            bell_received: false,
+            bell_route: Default::default(),
             input_noticed: 0,
             input_noticed_at_unix_ms: 0,
         }

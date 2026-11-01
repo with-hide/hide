@@ -362,11 +362,11 @@ class BriefRecord(unittest.TestCase):
         self.assertEqual(cells.brief_verdict(None)[0], cells.FAIL)
 
     def test_a_brief_rides_the_start_exactly_when_the_agent_declares_the_launch_prompt(self):
-        launched = {"attempts": 1, "typed_at_unix_ms": 10_000, "confirmed_at_unix_ms": 14_000, "launch": True}
+        launched = {"attempts": 1, "typed_at_unix_ms": 10_000, "confirmed_at_unix_ms": 14_000, "route": "launch"}
         self.assertEqual(cells.brief_verdict({"brief_input": launched}, launched=True),
                          (cells.PASS, "brief recorded by the agent 4.0 s after its start's prompt"))
         self.assertEqual(cells.brief_verdict({"brief_input": launched})[0], cells.FAIL)
-        typed = {**launched, "launch": False}
+        typed = {**launched, "route": "typed"}
         self.assertEqual(cells.brief_verdict({"brief_input": typed}, launched=True)[0], cells.FAIL)
 
 

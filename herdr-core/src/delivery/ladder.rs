@@ -8,13 +8,17 @@
 //! then [`Prepared::deliver`], which walks it and answers one of three
 //! things, all the rest of Hide reads, never the agent's kind:
 //!
-//! - [`Delivered::Received`]: the agent's own API said it took the input.
+//! - [`Delivered::Sent`]: the input was sent whole, typed or through the
+//!   agent's own way in. No way in says the agent took it (`codex queue`
+//!   answers that it queued the message, Claude Code's socket answers
+//!   nothing), so the agent's own record decides, as for typing
+//!   (`delivery::typed`).
 //! - [`Delivered::NotYet`]: nothing was sent, because the agent cannot take
 //!   it now (its session has not reported the way in yet, a refused call);
 //!   Hide tries again.
-//! - [`Delivered::Unconfirmed`]: sent without the agent's own answer (typed,
-//!   or through a way in that answers nothing); the agent's own record
-//!   decides, as for typing (`delivery::typed`).
+//! - [`Delivered::Lost`]: the send began and its answer was lost, so the
+//!   input may or may not have arrived; it is never sent again blindly, and
+//!   the agent's record still decides.
 //!
 //! An agent's own way in runs on the node of the machine whose pane runs
 //! the agent (`Call::Deliver`), so a connected device takes it as this
@@ -30,6 +34,7 @@ use hide_node_link::panes::MessagingChannel;
 use hide_node_link::protocol::Call;
 use serde_json::json;
 
+use crate::delivery::typed::SendRoute;
 use crate::engine::{Engine, EngineError, Wait};
 use crate::node_access::{LinkError, NodeLink};
 
@@ -43,14 +48,14 @@ const PROMPT_TIMEOUT: Duration = Duration::from_secs(10);
 /// What [`deliver`] answers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Delivered {
-    /// The agent's own API said it took the input.
-    Received,
-    /// Nothing was sent; `cause` says why, and the input is tried again.
+    /// Sent whole, typed or through the agent's own way in (the route
+    /// says which); the agent's own record decides whether it took it.
+    Sent(SendRoute),
+    /// Nothing was sent; the cause says why, and the input is tried again.
     NotYet(&'static str),
-    /// Sent with no answer of the agent's own; its record decides. `lost`
-    /// names a send whose own answer was lost, so the input may or may not
-    /// have arrived and is never sent again on a timer.
-    Unconfirmed { lost: Option<&'static str> },
+    /// The send began and its answer was lost; the cause names where. The
+    /// input may have arrived, so it is never sent again on a timer.
+    Lost(&'static str),
 }
 
 /// The cause of a [`Delivered::NotYet`] while the agent has not reported
@@ -120,6 +125,15 @@ pub(crate) fn prepare(target: &InputTarget) -> Result<Prepared, &'static str> {
     Ok(Prepared { steps })
 }
 
+/// The route for input that is the operator's own words, such as a
+/// mission's answer to its Conductor: typed, as the operator types, never
+/// framed as another session's message.
+pub(crate) fn typed_only() -> Prepared {
+    Prepared {
+        steps: vec![Step::Typed],
+    }
+}
+
 enum Address {
     Channel(InputChannel),
     Next,
@@ -176,22 +190,16 @@ impl Prepared {
                         DELIVER_TIMEOUT,
                     );
                     match answer {
-                        Ok(Delivery::Received) => {
-                            logged(target, rung, "received");
-                            return Delivered::Received;
-                        }
                         Ok(Delivery::Sent) => {
-                            logged(target, rung, "sent");
-                            return Delivered::Unconfirmed { lost: None };
+                            logged(target, rung);
+                            return Delivered::Sent(SendRoute::Channel);
                         }
                         Ok(Delivery::Unavailable { reason }) => {
                             unavailable_reason(target, rung, &reason);
                         }
                         Ok(Delivery::Unknown { reason }) => {
                             lost(target, rung, &reason);
-                            return Delivered::Unconfirmed {
-                                lost: Some("channel_answer_lost"),
-                            };
+                            return Delivered::Lost("channel_answer_lost");
                         }
                         // Nothing reached the node: the next rung takes it.
                         Err(
@@ -207,9 +215,7 @@ impl Prepared {
                         }
                         Err(LinkError::Unknown(reason)) => {
                             lost(target, rung, &reason);
-                            return Delivered::Unconfirmed {
-                                lost: Some("link_answer_lost"),
-                            };
+                            return Delivered::Lost("link_answer_lost");
                         }
                     }
                 }
@@ -219,15 +225,23 @@ impl Prepared {
                         &target.raw_pane_id,
                         text,
                     ) {
-                        Ok(()) => Delivered::Unconfirmed { lost: None },
+                        Ok(()) => {
+                            logged(target, TYPED);
+                            Delivered::Sent(SendRoute::Typed)
+                        }
                         // Herdr refused the parameters: nothing was typed.
-                        Err(EngineError::Request(_)) => Delivered::NotYet("herdr_parameters"),
-                        Err(EngineError::Answer(_)) => Delivered::Unconfirmed {
-                            lost: Some("herdr_format"),
-                        },
-                        Err(_) => Delivered::Unconfirmed {
-                            lost: Some("herdr_call_failed"),
-                        },
+                        Err(EngineError::Request(_)) => {
+                            unavailable_reason(target, TYPED, "herdr_parameters");
+                            Delivered::NotYet("herdr_parameters")
+                        }
+                        Err(EngineError::Answer(_)) => {
+                            lost(target, TYPED, "herdr_format");
+                            Delivered::Lost("herdr_format")
+                        }
+                        Err(_) => {
+                            lost(target, TYPED, "herdr_call_failed");
+                            Delivered::Lost("herdr_call_failed")
+                        }
                     };
                 }
             }
@@ -237,9 +251,12 @@ impl Prepared {
     }
 }
 
-fn logged(target: &InputTarget, rung: &str, outcome: &str) {
+/// The typed rung's name in a log line (`InputRung::name`).
+const TYPED: &str = "typed";
+
+fn logged(target: &InputTarget, rung: &str) {
     crate::diagnostic!(json!({"component":"delivery","kind":"input.rung",
-        "pane_id":target.pane_id,"raw_pane_id":target.raw_pane_id,"agent":target.kind,"rung":rung,"outcome":outcome}));
+        "pane_id":target.pane_id,"raw_pane_id":target.raw_pane_id,"agent":target.kind,"rung":rung}));
 }
 
 fn unavailable(target: &InputTarget, channel: &InputChannel, reason: &str) {
@@ -358,9 +375,9 @@ mod tests {
     }
 
     #[test]
-    fn codex_input_goes_to_its_session_queue_and_is_received_without_typing() {
+    fn codex_input_goes_to_its_session_queue_without_typing() {
         let herdr = herdr("ladder-codex-queue");
-        let node = Node::answering(Ok(Delivery::Received));
+        let node = Node::answering(Ok(Delivery::Sent));
         let target = target(
             "codex",
             reported(Some("thread-1"), None),
@@ -368,7 +385,8 @@ mod tests {
         );
         assert_eq!(
             deliver(&herdr, &target, "line one\nline two"),
-            Delivered::Received
+            Delivered::Sent(SendRoute::Channel),
+            "queued is not taken: the prompt hook's record decides"
         );
         assert_eq!(
             node.asked(),
@@ -385,11 +403,11 @@ mod tests {
     #[test]
     fn codex_with_no_reported_session_is_typed_since_its_first_turn_makes_the_session() {
         let herdr = herdr("ladder-codex-fresh");
-        let node = Node::answering(Ok(Delivery::Received));
+        let node = Node::answering(Ok(Delivery::Sent));
         let target = target("codex", SessionAddress::Pending, Some(node.clone()));
         assert_eq!(
             deliver(&herdr, &target, "brief"),
-            Delivered::Unconfirmed { lost: None }
+            Delivered::Sent(SendRoute::Typed)
         );
         assert!(node.asked().is_empty());
         assert_eq!(typed(&herdr), [json!("brief")]);
@@ -412,7 +430,7 @@ mod tests {
             );
             assert_eq!(
                 deliver(&herdr, &target, "letter"),
-                Delivered::Unconfirmed { lost: None }
+                Delivered::Sent(SendRoute::Typed)
             );
             assert_eq!(node.asked().len(), 1);
             assert_eq!(typed(&herdr), [json!("letter")]);
@@ -422,7 +440,7 @@ mod tests {
         let target = target("codex", reported(Some("thread-1"), None), None);
         assert_eq!(
             deliver(&herdr, &target, "letter"),
-            Delivered::Unconfirmed { lost: None }
+            Delivered::Sent(SendRoute::Typed)
         );
         assert_eq!(typed(&herdr), [json!("letter")]);
     }
@@ -438,9 +456,8 @@ mod tests {
             let herdr = herdr("ladder-lost");
             let node = Node::answering(answer);
             let target = target("codex", reported(Some("thread-1"), None), Some(node));
-            let Delivered::Unconfirmed { lost: Some(_) } = deliver(&herdr, &target, "letter")
-            else {
-                panic!("a lost answer is unconfirmed and says so");
+            let Delivered::Lost(_) = deliver(&herdr, &target, "letter") else {
+                panic!("a lost answer says so");
             };
             assert!(typed(&herdr).is_empty(), "the input may have arrived");
         }
@@ -467,7 +484,7 @@ mod tests {
         // The socket answers nothing: the prompt hook's record decides.
         assert_eq!(
             deliver(&herdr, &reported, "letter"),
-            Delivered::Unconfirmed { lost: None }
+            Delivered::Sent(SendRoute::Channel)
         );
         assert_eq!(
             node.asked(),
@@ -489,7 +506,7 @@ mod tests {
         let target = target("claude", reported(None, None), Some(node.clone()));
         assert_eq!(
             deliver(&herdr, &target, "letter"),
-            Delivered::Unconfirmed { lost: None }
+            Delivered::Sent(SendRoute::Typed)
         );
         assert!(node.asked().is_empty());
         assert_eq!(typed(&herdr), [json!("letter")]);
@@ -501,11 +518,11 @@ mod tests {
         // start's first input.
         for kind in ["grok", "agy"] {
             let herdr = herdr("ladder-typed");
-            let node = Node::answering(Ok(Delivery::Received));
+            let node = Node::answering(Ok(Delivery::Sent));
             let target = target(kind, reported(Some("s"), None), Some(node.clone()));
             assert_eq!(
                 deliver(&herdr, &target, "letter"),
-                Delivered::Unconfirmed { lost: None }
+                Delivered::Sent(SendRoute::Typed)
             );
             assert!(node.asked().is_empty(), "{kind}");
             assert_eq!(typed(&herdr), [json!("letter")], "{kind}");

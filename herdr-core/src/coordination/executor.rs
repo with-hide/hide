@@ -1,6 +1,7 @@
 use super::{AgentRecord, Command, Mutation, SpawnRecord, resolve_actor, view};
 use crate::agent_start::ShellStart;
 use crate::delivery::ladder::{Delivered, InputTarget, Prepared};
+use crate::delivery::typed::SendRoute;
 use crate::delivery::{
     Actor,
     worker::{Authority, Client, Effect},
@@ -412,21 +413,29 @@ pub(crate) fn brief_route(
 }
 
 /// Sends `brief` down its prepared route, the one submission path the
-/// doorbell uses too. Its typing was reserved first (`Mutation::BriefTyping`).
-/// `Ok(true)` is the agent's own answer that it took the brief; `Ok(false)`
-/// a send whose record confirms it (`delivery::typed`). A send that sent
-/// nothing, or lost its answer, is `brief_not_submitted`, and the typing it
-/// reserved stays spent.
+/// doorbell uses too. Its typing was reserved first (`Mutation::BriefTyping`),
+/// and the route it answers is saved after (`Mutation::Briefed`); the
+/// agent's own record confirms it (`delivery::typed`). A send whose answer
+/// was lost answers `SendRoute::Lost`, so the brief counts as sent and no
+/// retry of the spawn sends it again (engineering principle 11). A send
+/// that sent nothing is `brief_not_submitted`, and the typing it reserved
+/// stays spent.
 pub(crate) fn send_brief(
     engine: &dyn Engine,
     (target, prepared): (&InputTarget, Prepared),
     spawn: &str,
     brief: &str,
-) -> Result<bool, String> {
-    let received = match prepared.deliver(engine, target, brief) {
-        Delivered::Received => true,
-        Delivered::Unconfirmed { lost: None } => false,
-        Delivered::Unconfirmed { lost: Some(code) } | Delivered::NotYet(code) => {
+) -> Result<SendRoute, String> {
+    let route = match prepared.deliver(engine, target, brief) {
+        Delivered::Sent(route) => route,
+        Delivered::Lost(code) => {
+            crate::diagnostic!(json!({
+                "component": "spawn", "kind": "brief.send_lost", "spawn": spawn,
+                "pane_id": target.raw_pane_id, "code": code,
+            }));
+            return Ok(SendRoute::Lost);
+        }
+        Delivered::NotYet(code) => {
             return Err(brief_refused(
                 spawn,
                 &target.raw_pane_id,
@@ -437,9 +446,9 @@ pub(crate) fn send_brief(
     };
     crate::diagnostic!(json!({
         "component": "spawn", "kind": "brief.submitted", "spawn": spawn,
-        "pane_id": target.raw_pane_id, "bytes": brief.len(), "received": received,
+        "pane_id": target.raw_pane_id, "bytes": brief.len(), "route": route,
     }));
-    Ok(received)
+    Ok(route)
 }
 
 /// The actor of `agent` on `device`; `on_node` when that device is the core's
@@ -1292,7 +1301,7 @@ fn spawn(
                     || reserved
                         .brief_input
                         .as_ref()
-                        .is_some_and(|input| input.launch)
+                        .is_some_and(|input| input.route == SendRoute::Launch)
             });
             if let Some(prompt) = launched.and_then(|brief| launch_prompt(kind, &start_args, brief))
             {
@@ -1399,26 +1408,17 @@ fn spawn(
                 })?,
             )
             .map_err(|_| "spawn_unavailable")?;
-            let received = send_brief(engine.as_ref(), (&route.0, route.1), &reserved.id, &brief)?;
+            let sent = send_brief(engine.as_ref(), (&route.0, route.1), &reserved.id, &brief)?;
             reserved = serde_json::from_value(mutate(
                 client,
                 authority,
                 actor,
                 Mutation::Briefed {
                     id: reserved.id.clone(),
+                    route: sent,
                 },
             )?)
             .map_err(|_| "spawn_unavailable")?;
-            if received {
-                // The agent's own way in answered that it took the brief:
-                // no record of it is owed (`delivery::ladder`). Hide's own
-                // identity records it, as it records every confirmation.
-                if let Some(runtime) = client.runtime.upgrade()
-                    && let Ok(guard) = runtime.lock()
-                {
-                    guard.post_brief_confirmed(&reserved.id, "channel");
-                }
-            }
         }
         // The child's pane keeps its launch choice for the restarts Hide
         // makes of it, under the id the core knows the pane by and the name
