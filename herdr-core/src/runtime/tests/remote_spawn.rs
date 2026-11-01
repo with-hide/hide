@@ -665,10 +665,12 @@ fn a_spawn_starts_the_agent_with_its_choice_ahead_of_the_prompt() {
         .find(|(method, _)| method == "agent.start")
         .expect("the agent was started")
         .1;
+    // The device saved no 권한, so Codex starts with full access.
     assert_eq!(
         start["args"],
         json!([
             "--no-daemon",
+            "--dangerously-bypass-approvals-and-sandbox",
             "--model",
             "gpt-6-luna",
             "-c",
@@ -1451,4 +1453,63 @@ fn a_queued_spawn_waits_while_desk_is_off_and_starts_when_it_is_on_again() {
     assert_eq!(state, Some(crate::model::DeskJobState::Working));
     // The second spawn made its own worktree on the device, as the first did.
     assert_eq!(spawner.count("worktree.create"), 2);
+}
+
+/// A spawn takes the 권한 of the machine it starts on, read when it starts:
+/// the device's own choice, not this machine's; and a full-access flag the
+/// spawn's own native arguments already name is given once.
+#[test]
+fn a_spawn_takes_its_devices_permission_and_names_a_flag_once() {
+    for (device_choice, native, expected) in [
+        (
+            Some(json!({"mode": "ask"})),
+            vec!["--", "review"],
+            vec!["--no-daemon", "--", "review"],
+        ),
+        (
+            None,
+            vec!["--dangerously-bypass-approvals-and-sandbox", "--", "review"],
+            vec![
+                "--no-daemon",
+                "--dangerously-bypass-approvals-and-sandbox",
+                "--",
+                "review",
+            ],
+        ),
+    ] {
+        let spawner = spawner();
+        {
+            let mut runtime = spawner.runtime.lock().unwrap();
+            // This machine asks every time; only the device's choice counts.
+            let mine = json!({"schema_version": SCHEMA_VERSION, "kind": "agent_permission_set",
+                "payload": {"device_id": crate::node::TEST_NODE, "agent": "codex", "mode": "custom", "text": "--this-machine"}});
+            assert!(runtime.dispatch_json(&serde_json::to_vec(&mine).unwrap()));
+            if let Some(choice) = &device_choice {
+                let mut payload = json!({"device_id": DEVICE, "agent": "codex"});
+                payload
+                    .as_object_mut()
+                    .unwrap()
+                    .extend(choice.as_object().unwrap().clone());
+                let theirs = json!({"schema_version": SCHEMA_VERSION, "kind": "agent_permission_set", "payload": payload});
+                assert!(runtime.dispatch_json(&serde_json::to_vec(&theirs).unwrap()));
+            }
+        }
+        spawner
+            .spawn_with(
+                Some("here"),
+                Some(DEVICE),
+                "permission",
+                Default::default(),
+                native.iter().map(|arg| (*arg).to_owned()).collect(),
+            )
+            .unwrap();
+        let start = spawner
+            .herdr
+            .calls()
+            .into_iter()
+            .find(|(method, _)| method == "agent.start")
+            .expect("the agent was started")
+            .1;
+        assert_eq!(start["args"], json!(expected), "{device_choice:?}");
+    }
 }

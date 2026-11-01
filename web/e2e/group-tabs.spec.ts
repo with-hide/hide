@@ -5,7 +5,7 @@ import { expect, test, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { herdrHasFocus, startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { CLAUDE_FULL_ACCESS, herdrHasFocus, startHerdr, type HerdrFixture } from "./herdr-fixture";
 import { herdrGate } from "./herdr-gate";
 import { herdrTabs } from "./failure-dump";
 import { startHided, type Daemon } from "./hided-fixture";
@@ -234,7 +234,7 @@ test("Start agent opens a tab with its chosen model and prompt beside a terminal
     await expect.poll(() => {
       const info = herdr.run(["pane", "process-info", "--pane", added]) as { result: { process_info: { foreground_processes: { argv?: string[] | null }[] } } };
       return info.result.process_info.foreground_processes.map((process) => process.argv);
-    }, { timeout: 30_000 }).toContainEqual([expect.stringMatching(/(?:^|[/\\])claude(?:\.exe)?$/), "--model", "opus", "--", "새 탭의 에이전트"]);
+    }, { timeout: 30_000 }).toContainEqual([expect.stringMatching(/(?:^|[/\\])claude(?:\.exe)?$/), ...CLAUDE_FULL_ACCESS, "--model", "opus", "--", "새 탭의 에이전트"]);
     await page.locator(`[data-agent-tab-bar] [data-tab="${tab}"]`).click();
     await expect(page.locator(`[data-pane-view="${originalPane}"]`)).toBeVisible();
     await screenshot(page, "group-tabs-new-agent-tab");

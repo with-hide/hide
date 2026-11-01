@@ -33,6 +33,8 @@ const KEYS = new Map<string, MessageKey>([
 
   ["memory.recheck_ai_off", "memory.recheckNeedsAi"],
 
+  ["agent_permission.invalid_options", "agents.permission.invalidOptions"],
+
   ["repository.clone_busy", "coreError.clone.busy"],
   ["repository.clone_invalid", "coreError.clone.invalid"],
 

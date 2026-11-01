@@ -33,24 +33,27 @@ pub(crate) fn chosen_model(
         model: Some(model.to_owned()),
         effort: None,
     };
-    launch_arguments(kind, &choice).map_err(|reason| format!("{model}: {reason}"))?;
+    choice_arguments(kind, &choice).map_err(|reason| format!("{model}: {reason}"))?;
     Ok(Some(model.to_owned()))
 }
 
-/// The agent CLI's own arguments for a start: the model a `chosen_model`
-/// admitted, in the form the kind's adapter declares, and each folder a Home
-/// agent may write through its links (D-08). Extra roots are passed only to
-/// a launch dialect that accepts them, independently of the checkout cwd.
+/// The agent CLI's own arguments for a new start: the permission choice of
+/// the machine it starts on (`agent_permission`), then the model a
+/// `chosen_model` admitted, in the form the kind's adapter declares. None for
+/// a kind that starts no agent.
 pub(crate) fn agent_arguments(
     kind: Option<&str>,
     model: Option<&str>,
-    add_dirs: &[String],
+    permission: &crate::agent_permission::AgentPermission,
 ) -> Vec<String> {
-    let dialect = kind
-        .and_then(hide_agent_adapter::adapter)
-        .and_then(|row| row.start);
-    let mut args = Vec::new();
-    if let (Some(model), Some(dialect)) = (model, dialect) {
+    let Some(kind) = kind else {
+        return Vec::new();
+    };
+    let Some(dialect) = hide_agent_adapter::adapter(kind).and_then(|row| row.start) else {
+        return Vec::new();
+    };
+    let mut args = crate::agent_permission::arguments(kind, permission);
+    if let Some(model) = model {
         args.extend(
             dialect
                 .options()
@@ -59,20 +62,44 @@ pub(crate) fn agent_arguments(
                 .map(|part| part.replace("{}", model)),
         );
     }
-    if dialect.is_some_and(|dialect| dialect.accepts_extra_directories()) {
-        for dir in add_dirs {
-            args.push("--add-dir".to_owned());
-            args.push(dir.clone());
-        }
-    }
     args
 }
 
-/// The arguments a restart of a `kind` agent adds for the choice it was
-/// started with, after its resume arguments; none for the CLI's defaults.
-/// A saved choice the agent does not take (a store edited by hand) is
-/// refused with the reason rather than dropped, so the restart says so.
+/// Each folder a Home agent may write through its links (D-08), as extra
+/// roots, for a launch dialect that accepts them, independently of the
+/// checkout cwd.
+pub(crate) fn directory_arguments(kind: Option<&str>, dirs: &[String]) -> Vec<String> {
+    let accepts = kind
+        .and_then(hide_agent_adapter::adapter)
+        .and_then(|row| row.start)
+        .is_some_and(|dialect| dialect.accepts_extra_directories());
+    if !accepts {
+        return Vec::new();
+    }
+    dirs.iter()
+        .flat_map(|dir| ["--add-dir".to_owned(), dir.clone()])
+        .collect()
+}
+
+/// The arguments a restart of a `kind` agent adds after its resume or fork
+/// arguments: the machine's permission choice as it is now, then the model
+/// and effort it was started with (none for the CLI's defaults). A saved
+/// choice the agent does not take (a store edited by hand) is refused with
+/// the reason rather than dropped, so the restart says so.
 pub(crate) fn launch_arguments(
+    kind: &str,
+    choice: &hide_agent_adapter::LaunchChoice,
+    permission: &crate::agent_permission::AgentPermission,
+) -> Result<Vec<String>, String> {
+    let mut args = crate::agent_permission::arguments(kind, permission);
+    args.extend(choice_arguments(kind, choice)?);
+    Ok(args)
+}
+
+/// The model and effort part of [`launch_arguments`], for a start that
+/// reads the machine's permission choice later (`hide agent spawn`, whose
+/// device is known only once its context is).
+pub(crate) fn choice_arguments(
     kind: &str,
     choice: &hide_agent_adapter::LaunchChoice,
 ) -> Result<Vec<String>, String> {

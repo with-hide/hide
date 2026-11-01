@@ -609,9 +609,10 @@ fn spawn(
         return Err("invalid_agent_name".into());
     }
     // The choice goes before the native arguments, which may end with the
-    // first prompt after `--`.
+    // first prompt after `--`; the machine's permission choice goes before
+    // both once the child's machine is known.
     let mut start_args =
-        crate::runtime::agent_choice::launch_arguments(kind, launch).map_err(|detail| {
+        crate::runtime::agent_choice::choice_arguments(kind, launch).map_err(|detail| {
             crate::diagnostic!(json!({
                 "component": "spawn", "kind": "spawn.invalid_launch_choice", "intent": intent,
                 "agent_kind": kind, "detail": detail,
@@ -797,6 +798,7 @@ fn spawn(
         host_scope,
         machine: native_machine,
         codex: codex_daemon,
+        permissions,
         on_node,
         node,
     } = context(client, &child_device).map_err(|reason| {
@@ -1080,7 +1082,7 @@ fn spawn(
                 shell,
                 name,
                 kind,
-                start_args,
+                with_permission(kind, &permissions, start_args),
                 codex_daemon,
             )?;
             reserved = serde_json::from_value(mutate(
@@ -1685,8 +1687,64 @@ fn made_by_spawn<'a>(
     existing != repo && workspaces.any(|workspace| workspace == label)
 }
 
+/// A spawn's arguments behind the permission choice of the machine it
+/// starts on (`agent_permission`). A full-access option the spawn's own
+/// native arguments already name is not given twice, with its value if it
+/// has one: a CLI may refuse an option given twice (clap does for Codex's),
+/// and the operator who wrote it meant theirs. Typed options go as typed.
+fn with_permission(
+    kind: &str,
+    permissions: &crate::agent_permission::AgentPermissions,
+    args: Vec<String>,
+) -> Vec<String> {
+    use crate::agent_permission::AgentPermission;
+    let permission = crate::agent_permission::of(permissions, kind);
+    let mut start: Vec<String> = match &permission {
+        AgentPermission::Full => {
+            let named = |name: &str| {
+                args.iter()
+                    .take_while(|arg| arg.as_str() != "--")
+                    .any(|arg| arg == name)
+            };
+            crate::agent_permission::full_access(kind)
+                .iter()
+                .filter(|option| option.first().is_none_or(|name| !named(name)))
+                .flat_map(|option| option.iter().map(|word| (*word).to_owned()))
+                .collect()
+        }
+        _ => crate::agent_permission::arguments(kind, &permission),
+    };
+    start.extend(args);
+    start
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_full_access_option_the_spawn_names_itself_is_left_to_the_spawn_with_its_value() {
+        let full = crate::agent_permission::CLAUDE_FULL_ACCESS;
+        let start = |native: &[&str]| {
+            super::with_permission(
+                "claude",
+                &Default::default(),
+                native.iter().map(|arg| (*arg).to_owned()).collect(),
+            )
+        };
+        assert_eq!(start(&["--", "go"]), [&full[..], &["--", "go"]].concat());
+        // The spawn's own settings replace Hide's whole option, never only
+        // its name, which would leave Hide's value standing alone.
+        assert_eq!(
+            start(&["--settings", "/x.json", "--", "go"]),
+            [full[0], "--settings", "/x.json", "--", "go"]
+        );
+        assert_eq!(start(&[full[0]]), [full[1], full[2], full[0]]);
+        // A word after `--` is the prompt, not an option.
+        assert_eq!(
+            start(&["--", "--settings"]),
+            [&full[..], &["--", "--settings"]].concat()
+        );
+    }
+
     #[test]
     fn only_a_worktree_the_spawn_made_counts_as_made_by_it() {
         let label = "hide:spawn-1";
