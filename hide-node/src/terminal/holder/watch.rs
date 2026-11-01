@@ -12,6 +12,10 @@
 //! read by its new rules from the watch's own thread, in order with every
 //! other facts of the pane. A holder built before watches refuses the
 //! opening, and its pane is told once that it reads [`UNSUPPORTED_HOLDER`].
+//! A watch that ends any other way than with its pane (another watch took
+//! it, the connection broke, the holder sent what a watch never carries)
+//! tells the pane once that its screen reads [`WATCH_LOST`], until a later
+//! start of it follows it again.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -21,11 +25,11 @@ use std::time::{Duration, Instant};
 
 use hide_holder_protocol::{
     Capability, CloseReason, Facts, HolderMessage, OpenError, ScreenRead as WireRead,
-    ScreenState as WireState, WatchMessage, read_holder, write_watch,
+    ScreenState as WireState, WatchMessage, Watching, read_holder, write_watch,
 };
 use hide_node_link::holders::{
     ForegroundProgram, HolderError, NO_RULES_FOR_HOLDER, PaneFacts, PaneFactsSink, ScreenRead,
-    ScreenRules, ScreenState, UNSUPPORTED_HOLDER,
+    ScreenRules, ScreenState, UNSUPPORTED_HOLDER, WATCH_LOST,
 };
 use hide_platform::ipc::{LocalStream, ShutdownHandle};
 use serde_json::json;
@@ -141,11 +145,25 @@ impl Watches {
         }
     }
 
-    /// The pane's holder speaks a version too old to speak to: its pane is
+    /// The pane's holder, of `version`, sends no facts: a node too new to
+    /// speak to it at all found it (`watch` none), or its watch was refused
+    /// (`watch` the generation of that watch, still the pane's). Its pane is
     /// told so once.
-    pub(super) fn unsupported(&self, pane: &str) {
+    pub(super) fn unsupported(&self, pane: &str, watch: Option<u64>, version: u16) {
+        crate::diagnostic!(json!({
+            "component": "pane_holder",
+            "kind": "pane_holder.facts_unsupported",
+            "pane_id": pane,
+            "holder_version": version,
+        }));
         self.deliver(pane, |panes| {
-            let watched = panes.entry(pane.to_owned()).or_default();
+            let watched = match watch {
+                None => panes.entry(pane.to_owned()).or_default(),
+                Some(generation) => panes
+                    .get_mut(pane)
+                    .filter(|watched| watched.generation == generation)?,
+            };
+            watched.no_fit = false;
             watched.last = Some(unsupported());
             watched.told()
         });
@@ -196,68 +214,72 @@ impl Watches {
     }
 
     /// One watch's thread: opens it, gives the holder its rules, and tells
-    /// the sink each facts the holder sends until the watch ends.
+    /// the sink each facts the holder sends until the watch ends, then what
+    /// its end means for the pane.
     fn follow(&self, pane: &str, socket: &Path, generation: u64) {
         let ended = self.read_watch(pane, socket, generation);
-        let mut panes = locked(&self.panes);
-        if let Some(watched) = panes.get_mut(pane)
-            && watched.generation == generation
-        {
+        if let Ended::Lost(why) = &ended {
+            crate::diagnostic!(json!({
+                "component": "pane_holder",
+                "kind": "pane_holder.watch_lost",
+                "pane_id": pane,
+                "message": why,
+            }));
+        }
+        self.deliver(pane, |panes| {
+            let watched = panes
+                .get_mut(pane)
+                .filter(|watched| watched.generation == generation)?;
             watched.following = false;
             watched.open = None;
-            // A pane whose program ended is gone; a watch another node took
-            // over, or one that failed, leaves the pane known, and the next
-            // start of it follows it again.
-            if matches!(
-                ended,
-                Some(CloseReason::ProgramExited | CloseReason::Terminated)
-            ) {
-                panes.remove(pane);
+            match ended {
+                // A pane whose program ended is gone.
+                Ended::Gone => {
+                    panes.remove(pane);
+                    None
+                }
+                // What the holder last said may have moved since: the pane
+                // stays known, its screen read as unknown with why, and the
+                // next start of it follows it again.
+                Ended::Lost(_) => {
+                    let mut last = watched.last.take().unwrap_or_default();
+                    last.screen = ScreenRead::Unknown {
+                        reason: WATCH_LOST.to_owned(),
+                    };
+                    watched.last = Some(last);
+                    watched.no_fit = false;
+                    watched.told()
+                }
+                Ended::Told => None,
             }
-        }
+        });
     }
 
-    /// Opens the watch and reads it until it ends, answering why when the
-    /// holder said.
-    fn read_watch(&self, pane: &str, socket: &Path, generation: u64) -> Option<CloseReason> {
+    /// Opens the watch and reads it until it ends: how it ended.
+    fn read_watch(&self, pane: &str, socket: &Path, generation: u64) -> Ended {
         let opened = hide_holder_protocol::watch(
             socket,
             vec![Capability::Facts],
             Instant::now() + OPEN_LIMIT,
         );
+        if let Some(version) = too_old(&opened) {
+            self.unsupported(pane, Some(generation), version);
+            return Ended::Told;
+        }
         let (mut stream, watching) = match opened {
             Ok(opened) => opened,
-            // A holder built before watches reads the opening as a first
-            // message it does not know.
-            Err(OpenError::Refused(closed))
-                if matches!(
-                    closed.reason,
-                    CloseReason::HelloInvalid | CloseReason::ProtocolError
-                ) =>
-            {
-                self.refused(pane, generation, closed.version);
-                return None;
-            }
-            Err(error) => {
-                crate::diagnostic!(json!({
-                    "component": "pane_holder",
-                    "kind": "pane_holder.watch_failed",
-                    "pane_id": pane,
-                    "message": error.to_string(),
-                }));
-                return None;
-            }
+            Err(OpenError::Refused(closed)) => return Ended::of(&closed.reason),
+            Err(error) => return Ended::Lost(format!("the watch did not open: {error}")),
         };
-        if !watching.sends.contains(&Capability::Facts) {
-            self.refused(pane, generation, watching.version);
-            return None;
-        }
         let writer = Arc::new(Mutex::new(stream.duplicate()));
         let first = {
             let mut panes = locked(&self.panes);
-            let watched = panes
+            let Some(watched) = panes
                 .get_mut(pane)
-                .filter(|watched| watched.generation == generation)?;
+                .filter(|watched| watched.generation == generation)
+            else {
+                return Ended::Told;
+            };
             let (manifest, no_fit) = choose(watched.rules.as_ref(), watching.rules_engine);
             watched.no_fit = no_fit;
             watched.open = Some(Open {
@@ -292,40 +314,54 @@ impl Watches {
                         watched.told()
                     });
                     if !current {
-                        return None;
+                        return Ended::Told;
                     }
                 }
-                Ok(HolderMessage::Closed(closed)) => return Some(closed.reason),
+                Ok(HolderMessage::Closed(closed)) => return Ended::of(&closed.reason),
                 Ok(other) => {
-                    crate::diagnostic!(json!({
-                        "component": "pane_holder",
-                        "kind": "pane_holder.watch_protocol_error",
-                        "pane_id": pane,
-                        "message": format!("a watch was sent {}", message_name(&other)),
-                    }));
-                    return None;
+                    return Ended::Lost(format!("a watch was sent {}", message_name(&other)));
                 }
-                Err(_) => return None,
+                Err(error) => return Ended::Lost(format!("the watch broke: {error}")),
             }
         }
     }
+}
 
-    /// The holder does not send facts: its pane is told once, when the
-    /// watch that found it is still the pane's.
-    fn refused(&self, pane: &str, generation: u64, version: u16) {
-        crate::diagnostic!(json!({
-            "component": "pane_holder",
-            "kind": "pane_holder.facts_unsupported",
-            "pane_id": pane,
-            "holder_version": version,
-        }));
-        self.deliver(pane, |panes| {
-            let watched = panes
-                .get_mut(pane)
-                .filter(|watched| watched.generation == generation)?;
-            watched.last = Some(unsupported());
-            watched.told()
-        });
+/// How a pane's watch ended.
+enum Ended {
+    /// With the pane: its program exited or was ended.
+    Gone,
+    /// The pane was told what it reads (its holder sends no facts), or the
+    /// watch is no longer the pane's: nothing more is said.
+    Told,
+    /// Any other way, with why: the pane's facts are no longer followed.
+    Lost(String),
+}
+
+impl Ended {
+    fn of(reason: &CloseReason) -> Self {
+        match reason {
+            CloseReason::ProgramExited | CloseReason::Terminated => Self::Gone,
+            other => Self::Lost(format!("the holder closed the watch: {}", other.name())),
+        }
+    }
+}
+
+/// The version of a holder too old to send facts, as its answer to a watch
+/// says: it read the opening as a first message it does not know, or opened
+/// the watch without facts. The one place a node judges that.
+fn too_old(opened: &Result<(LocalStream, Watching), OpenError>) -> Option<u16> {
+    match opened {
+        Err(OpenError::Refused(closed))
+            if matches!(
+                closed.reason,
+                CloseReason::HelloInvalid | CloseReason::ProtocolError
+            ) =>
+        {
+            Some(closed.version)
+        }
+        Ok((_, watching)) if !watching.sends.contains(&Capability::Facts) => Some(watching.version),
+        _ => None,
     }
 }
 

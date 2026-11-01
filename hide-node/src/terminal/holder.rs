@@ -804,7 +804,7 @@ impl Holders {
                             record.protocol
                         ),
                     );
-                    self.watches.unsupported(&pane);
+                    self.watches.unsupported(&pane, None, record.protocol);
                     recovered.unsupported.push(pane);
                 }
                 Judgment::Pending(_) | Judgment::Starting(_) => waiting.push(pane),

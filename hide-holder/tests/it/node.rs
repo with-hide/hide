@@ -35,7 +35,7 @@ use hide_node::terminal::{
 };
 use hide_node_link::holders::{
     HolderError, NO_RULES_FOR_HOLDER, PaneFacts, PaneFactsSink, RuleSet, ScreenRead, ScreenRules,
-    ScreenState, UNSUPPORTED_HOLDER,
+    ScreenState, UNSUPPORTED_HOLDER, WATCH_LOST,
 };
 use hide_node_link::terminal::{
     GridSize, KeyTarget, TerminalControl, TerminalNode, TerminalReport,
@@ -1062,6 +1062,45 @@ fn a_node_tells_its_panes_facts_read_by_the_rules_its_holder_reads() {
     node.holders().watch_facts(later.sink());
     assert_eq!(later.wait("w1", "the last facts", |_| true), last);
     node.holders().terminate(&node.service, "w1").unwrap();
+}
+
+/// B19: a pane whose watch ends some other way than with the pane (here
+/// another watch takes it) is told once that its facts are no longer
+/// followed, with why, and keeps what it last showed.
+#[test]
+fn a_pane_whose_watch_another_took_reads_unknown_with_why() {
+    let folder = Folder::new();
+    let node = Node::start(Switch::On, folder.home.path(), &folder.state);
+    let told = Arc::new(Told::default());
+    node.holders().watch_facts(told.sink());
+    let script = Script::new(&folder.home, vec![b"\x1b]2;job\x07busy\r\n".to_vec()]);
+    node.start_pane(&request(
+        folder.home.path(),
+        "l1",
+        role_program("script"),
+        vec![
+            (ROLE.into(), "script".into()),
+            (SCRIPT.into(), script.folder.clone().into()),
+        ],
+    ));
+    told.wait("l1", "the title", |facts| {
+        facts.title.as_deref() == Some("job")
+    });
+
+    let (_other, _) = hide_holder_protocol::watch(
+        &layout::holder_socket(&folder.state, "l1"),
+        vec![hide_holder_protocol::Capability::Facts],
+        Instant::now() + HANG_LIMIT,
+    )
+    .unwrap();
+    let lost = told.wait("l1", "its watch lost", |facts| {
+        facts.screen
+            == ScreenRead::Unknown {
+                reason: WATCH_LOST.to_owned(),
+            }
+    });
+    assert_eq!(lost.title.as_deref(), Some("job"));
+    node.holders().terminate(&node.service, "l1").unwrap();
 }
 
 /// B10: a holder older than the oldest version a node speaks to is reported

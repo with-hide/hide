@@ -145,7 +145,7 @@ pub enum ScreenRead {
         rule: Option<String>,
     },
     /// The rules cannot be evaluated on this pane, under a stable code:
-    /// [`UNSUPPORTED_HOLDER`], [`NO_RULES_FOR_HOLDER`], or the holder's own
+    /// [`UNSUPPORTED_HOLDER`], [`NO_RULES_FOR_HOLDER`], [`WATCH_LOST`], or the holder's own
     /// refusal of the rules it was given.
     Unknown { reason: String },
 }
@@ -156,6 +156,9 @@ pub const UNSUPPORTED_HOLDER: &str = "unsupported_holder";
 /// Every rule set for the pane's agent needs a newer evaluator than its
 /// holder has.
 pub const NO_RULES_FOR_HOLDER: &str = "no_rules_for_holder";
+/// The pane's facts are no longer followed: its watch ended some other way
+/// than with the pane (another watch took it, or the connection broke).
+pub const WATCH_LOST: &str = "watch_lost";
 
 /// One agent's screen rule sets for a pane, highest priority first (the
 /// operator's file, then the built-in one, PRD D-20): the node sends its
