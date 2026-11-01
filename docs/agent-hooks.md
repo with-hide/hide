@@ -188,6 +188,7 @@ A runtime below that capability is diagnosed as `Update required` without disabl
 The helper is stateless, as a hook script must be.
 It reports to the core through hided and never to Herdr (PRD engine-bundle-1 D-7): it runs `hide workspace status --hook`, the `hide` beside it, with one JSON report on stdin, and that `hide` sends it as a hook request (`HookCommand::Status`), which hided proves came from the pane like every other hook request (`hided/src/pane_auth.rs`); a device's node forwards it with the pane's proof.
 The report names the runtime's adapter id, the hook version (`HOOK_VERSION`, 8), the session id the hook's input named, the session's turn when the event says one, its subagent counts for an agent that counts them, and whether the event is a session start (`hide_agent_hooks::report::HookStatusReport`).
+A Claude Code session start also names the session's messaging socket and its token (`MessagingChannel`, from `CLAUDE_CODE_MESSAGING_SOCKET` and `CLAUDE_CODE_MESSAGING_TOKEN` in the hook's environment), the address of the session's own way in ([delivery.md](delivery.md#the-input-ladder)); the core keeps it in memory with the session's report and never saves it, and no log or `Debug` form carries the token.
 The call has a two-second bound, so a hided that is absent or does not answer costs the event that long and no more (B13), and its outcome is recorded with the pane and the agent ([below](#what-the-report-records-when-it-fails)); nothing reaches the screen (B14).
 The bound also ends inside the time the agent gives the hook, counted from the hook's start rather than from the Memory and letter work before the report (`report::deadline`, from the same `install::hook_timeout` the entry is written with, less half a second for the helper to end), so Codex's three-second `Interrupt` entry is never cut by its own report.
 The core keeps the latest report of each session of each pane, at most eight sessions a pane and 1,024 panes (`herdr-core/src/agent_hooks/facts.rs`), and lays the one for the pane's agent on the session it projects; [status-model.md](status-model.md#where-each-axis-comes-from) owns what it decides.
@@ -688,7 +689,7 @@ As measured on 2026-10-30:
 | Pi | `pi-acp` (registry `pi-acp`), a separate package |
 | omp | built in, `omp acp`; not in the registry |
 | Grok | built in, `grok agent stdio` (registry `grok-build`); the top-level `grok --help` does not name ACP |
-| Antigravity | `agy_acp_server.par` (registry `antigravity-acp`), a separate program Google publishes for macOS, Linux and Windows, not part of the `agy` CLI |
+| Antigravity | built in since 1.4.12 as `agy acp` (`Antigravity ACP Server`, measured 2026-11-01); before it `agy_acp_server.par` (registry `antigravity-acp`), a separate program Google publishes for macOS, Linux and Windows |
 
 `session/load` is not a read-only way to look at a session: on 2026-10-30 claude-agent-acp 0.97.0 appended a `cost-state` record and codex-acp 2.3.0 a `thread_settings_applied` record to the session file it loaded, and codex-acp refuses to load a sub-agent's session without its parent.
 Replay quality differs by server: pi-acp 0.0.34 replayed tool calls titled only `bash`, `read` or `edit`, with no input, location, diff or command output, all of which Pi's own session file keeps.

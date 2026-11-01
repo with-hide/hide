@@ -456,11 +456,61 @@ The first start of a build with this rule resumes a stored session at its last p
 The rule reads the session Herdr reports for the pane, so a pane reported with another session is judged by that session.
 It guards against hide's own bell, not against a process of the same account, which could append records to the session file or type into the pane with `hide pane send` or through Herdr directly.
 
+### The input ladder
+
+Hide hands a running agent a spawn's brief or a letter's bell line through the agent's own way in when it has one, and types it only when it has none (`herdr-core/src/delivery/ladder.rs`).
+Each supported agent declares its rungs once, in `hide-agent-adapter` (`AgentAdapter::input`), from a fixed set of kinds, its own way in first and typing last; an agent with no way in of its own declares typing alone (`TYPED_ONLY`), and the adapter's contract test fails a declaration that does not end in typing, repeats a rung or names another agent's API.
+
+Every brief and letter goes through one entry, and its answer is always one of three, the only thing the rest of Hide reads, never the agent's kind:
+
+| Answer | Meaning | What follows |
+| --- | --- | --- |
+| Received | the agent's own API said it took the input | the input is taken (`input.confirmed` with `by: channel`); nothing waits for a record and nothing is sent again |
+| NotYet, with a cause | nothing was sent: the agent cannot take it now (`session_unreported`, Herdr's `herdr_parameters`) | the bell is held as for any other gate and the doorbell tries again; a brief waits within `BRIEF_READY_WAIT` and fails the spawn with `brief.not_yet` past it |
+| Unconfirmed | sent without the agent's own answer: typed, or through a way in that answers nothing | the agent's own record decides, as for typing ([Input an agent did not take](#input-an-agent-did-not-take)) |
+
+The doorbell's gates still decide when a bell goes (rest, draft, quiet period, menus); the ladder decides only how.
+The route is picked with nothing sent, before a bell or a brief typing is reserved, so a NotYet spends no attempt.
+A rung that answers that it sent nothing (no such program, an unknown thread, a system it was not proven on, a node that cannot be reached) passes the input to the next rung and is logged `input.rung_unavailable`; a rung that began and lost its answer (a timeout, a write cut short) answers Unconfirmed and is logged `input.rung_lost`, so the input is never sent again by a lower rung or a timer (engineering principle 11).
+Each send is logged `input.rung` with the rung's name; the text and a token never reach a log.
+
+An agent's own way in runs on the node of the machine whose pane runs the agent (`Call::Deliver`, `hide_host::input`), so a connected device takes it as this machine does, and nothing runs under the runtime lock or on the session-sync thread: the doorbell thread and the spawn's worker call it with a target the runtime copied under its lock.
+
+| Agent | Rungs | What the agent's own rung is | macOS | Linux | Windows |
+| --- | --- | --- | --- | --- | --- |
+| Claude Code | launch prompt, messaging socket, typed | the socket and token the session hands its own SessionStart hook (`CLAUDE_CODE_MESSAGING_SOCKET`, `CLAUDE_CODE_MESSAGING_TOKEN`), reported to the core with Hide's hook and kept in memory only | yes | yes | typed ([INSTALL.md](INSTALL.md#what-each-system-supports)) |
+| Codex | launch prompt, `codex queue`, typed | `codex queue --thread <session> --message <text>` with the account's Codex, its durable queue for the session, which the running TUI takes as a turn | yes | yes | yes |
+| Antigravity | launch prompt, typed | none Hide can address: its language server takes a message only with a start flag of its own and a port read from its log | yes | yes | yes |
+| every other agent | typed | none declared | yes | yes | yes |
+
+The launch prompt carries only a spawn's brief, as the agent's start argument, and only for an agent measured to hold it through its own start screens; every later input goes through the next rung.
+Measured 2026-11-01 on macOS with an isolated HOME, a private terminal server and the fake model:
+
+- Codex 0.166.0 holds a start prompt through its "Hooks need review" screen and submits it once that is answered; its prompt hook records the argument's U+2028 line breaks.
+  `codex queue` answers in about 0.3 s, and the TUI takes the message 7.4 to 7.7 s later as a turn of its own (`turn_trigger: queue`) whose prompt hook runs in the pane's environment with the exact text.
+  While a turn runs the message waits for it; with a draft in the composer it waits until the composer is empty and leaves the draft alone; with the `/model` menu open it is taken and the menu stays.
+  An unknown thread exits 1 with `no rollout found` and starts nothing, and a freshly started Codex has no thread until its first turn, so a fresh Codex's later letters are typed until its session is known.
+  Every Codex Hide starts runs with `--no-daemon` ([agent-hooks.md](agent-hooks.md)), which exposes no app-server address, and `codex queue` works for that in-process form.
+- Claude Code 2.1.316 holds a start prompt through its folder trust screen; its prompt hook records the argument's U+2028 as line breaks, so the brief's own form is its record.
+  A message on its socket waits for a running turn and then runs with the exact text in its prompt hook; at rest with a draft in the composer it runs at once and leaves the draft there.
+  The socket answers nothing, so a message sent whole is Unconfirmed and its prompt hook records it.
+  Before the session's SessionStart hook reports the socket there is nothing to address, which is NotYet; a session whose hooks are not connected never reports one and is typed.
+- Antigravity 1.4.12 holds `-i <prompt>` through its trust dialog and records the U+2028 form in its transcript.
+
+A launched brief is never typed or typed again: the spawn records it as launched (`BriefLaunched`, `brief_input.launch`) before it starts the agent, so answering the start screen cannot send it twice, and it is taken once the agent records the brief in either form.
+Until then its child shows as waiting to its parent, and the parent's notice says the start holds the brief and submits it once its screen is answered.
+A spawn whose arguments already carry a prompt, or whose brief the prompt argument refuses (a control character, past 64 KiB), types it as before (`brief.launch_refused`).
+A brief is at most 16 KiB, inside every system's command line, Windows' 32,767 characters included, and a start line past the terminal's canonical limit waits for the shell's line editor ([ARCHITECTURE.md](ARCHITECTURE.md)).
+
+A letter that goes through Claude Code's socket arrives in its transcript as a message from another Claude session that cannot grant escalation.
+That is the right frame for a letter, which an agent or Hide sends, never the operator: it asks the recipient to act and gives it no authority the operator did not.
+A spawn's brief does not take that path, since its launch prompt is the session's first prompt, and a mission's answer to a worker or the operator's own words stay typed, as the operator's.
+
 ### Input an agent did not take
 
 Herdr can read an agent ready for input while a screen of the agent's own takes whatever is typed: a hooks review, an update notice, a trust question.
 On 2026-10-31 a Codex 0.166 reviewer started while another program's hook entries sat at the front of `~/.codex/hooks.json`, so Codex opened its "review these hooks" screen; Herdr read it ready, the spawn typed the brief with `agent.prompt`, logged `brief.submitted`, and the brief was gone, while Codex never registered and every retry of the spawn answered `native_identity_unavailable`.
-A successful `agent.prompt` proves only that the text reached the pane, so a spawn's brief and a letter's bell are taken once the agent itself records them, never by reading its screen (design principle 13, `herdr-core/src/delivery/typed.rs`):
+A successful `agent.prompt`, or a way in that answers nothing ([The input ladder](#the-input-ladder)), proves only that the text reached the pane, so a spawn's brief and a letter's bell sent that way are taken once the agent itself records them, never by reading its screen (design principle 13, `herdr-core/src/delivery/typed.rs`):
 
 - Claude Code, Codex and Grok record it in their prompt hook: a pull at the prompt point whose digest is the typed text's (`prompt_digest`, the same canonical digest a bell is recognized by) confirms the brief of the spawn whose pane it came from (`Runtime::confirm_brief_by_hook`), before the pull's own identity check, because a child that never registered has no identity yet.
   Claude Code 2.1.316 records a paste of four lines or more, or of 800 characters or more, wrapped, in its prompt hook and its session file alike: `\n\n<pasted_content id="d974">\n` + the pasted text + `\n</pasted_content id="d974">\n`, the id four lowercase hex digits of its own; a shorter paste arrives as typed (measured 2026-11-01 in a private Herdr with `agent.prompt`, the path Hide types a brief by).
@@ -495,12 +545,13 @@ Such input is never typed again, since the agent may have taken it, and the pare
 1. The parent hears first.
    For a spawn's brief the notice goes to the spawn's parent, for a letter to its sender when that is an agent, as a `progress` letter with `--now` from the code-owned identity `hide:input`, under the intent `input-unconfirmed:<id>:<attempt>`, so a retry of the notice converges.
    Its first line is the one the operator reads in a wake summary: `<agent> has not confirmed its brief: read its screen with hide pane read <pane>.`, or `<agent> cannot confirm its brief (its hooks are not connected): ...` when the source is not available.
+   A launched brief's first line is `<agent> has not taken its brief yet: ...`, and its body says the start holds the brief and that Hide never types it.
    The rest names `hide agent show` for what the child waits on, says to answer the screen with `hide pane send <pane> --key <name>` or text and `--enter`, that Hide types the input again once the agent is ready (or, without a source, that it does not), and that answering a trust or approval screen is the parent's call: Hide does not check consent, the operator sets how much agents may approve in Settings > Agents, and a login is left to the operator.
    A notice that cannot be sent is logged `input.notice_unsent` and tried again after two minutes.
 2. The operator sees it when no parent can clear it.
    The child's row is laid an ask (`AskSubject::InputUnconfirmed { input: brief | letter, spent, held }`) and rises in Needs You as the seventh escalation cause, `input_unconfirmed`, verb Answer ([status-model.md](status-model.md)), at once for a handed-off child, a letter with no agent sender or a parent no longer observed, and otherwise after the parent's grace of two minutes (`PARENT_GRACE_MS`) or once the typings are spent.
    The row reads `질문 · 브리프 확인 안 됨` (`편지 확인 안 됨` for a letter, `· 재시도 다 씀` once spent) in the interface language, and `브리프 못 받음` only when a composer read saw the brief still sitting there (`held`); the phone words it the same way.
-3. A brief still in the composer gets its Enter; otherwise it is typed again only after someone answered the screen.
+3. A typed brief still in the composer gets its Enter; otherwise it is typed again only after someone answered the screen, and a launched brief never is.
    At rest, by the same gate a bell is typed through (`doorbell::unheld_turn` and `doorbell::takes_keys`: the core's turn at rest with no approval prompt and no question or plan approval of the agent's own, Herdr knowing the state and holding no blocked prompt, and a kind that takes letters at its tools not read working by Herdr), quiet for the quiet period, the doorbell reads the agent's composer once Herdr reports the same agent ready (`typed::composer_readable`, `delivery::composer::shows`).
    When it shows exactly the brief and nothing else (`Composer::holds`, which compares a one-line composer by the brief's first line), the submission was lost, and Hide presses Enter (`input.entered`); text and Enter on a choice screen could pick an option, which a composer showing the brief rules out.
    When it is empty, the brief is typed again only if someone answered the screen after the last typing (`Observation::answered_at_unix_ms`: the operator's keys, a phone reply, or a parent's `hide pane send` whose every write landed) (`input.retyped`); anything else in the composer holds (`composer_not_empty`), and a held retype is logged `input.retype_held` with its reason.
