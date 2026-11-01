@@ -158,6 +158,7 @@ impl Runtime {
         let mut work = Vec::new();
         let mut rereads = Vec::new();
         let mut open = std::collections::BTreeSet::new();
+        let mut verdicts = BTreeMap::new();
         for spawn in &ledger.spawns {
             let (Some(input), Some(brief)) = (
                 spawn
@@ -208,10 +209,12 @@ impl Runtime {
                 });
                 continue;
             }
-            match typed::standing(input, Some(observation), now) {
+            let standing = typed::standing(input, Some(observation), now);
+            self.note_verdict(&mut verdicts, &spawn.id, input.attempts, standing);
+            match standing {
                 Standing::Unconfirmed { .. } => {}
-                // The turn is laid within the pass: the reread asked and the
-                // composer read seen stay as they are until it is.
+                // Nothing moves until the turn is laid: the reread asked and
+                // the composer read seen stay as they are.
                 Standing::Unsettled => {
                     open.insert(spawn.id.clone());
                     continue;
@@ -277,7 +280,9 @@ impl Runtime {
             else {
                 continue;
             };
-            match typed::standing(&input, Some(observation), now) {
+            let standing = typed::standing(&input, Some(observation), now);
+            self.note_verdict(&mut verdicts, &letter.id, input.attempts, standing);
+            match standing {
                 Standing::Unconfirmed { .. } => {}
                 Standing::Unsettled => {
                     open.insert(letter.id.clone());
@@ -324,6 +329,7 @@ impl Runtime {
                 recorded: None,
             });
         }
+        self.plans.input_verdicts = verdicts;
         self.plans.input_reread.retain(|id, _| open.contains(id));
         self.plans.input_held.retain(|id, _| open.contains(id));
         for (id, attempts, pane) in rereads {
@@ -333,6 +339,53 @@ impl Runtime {
             }
         }
         work
+    }
+
+    /// Keeps input `id`'s verdict at typing `attempts` for the next pass: a
+    /// settled one replaces the last, and an unsettled one carries the last
+    /// over.
+    fn note_verdict(
+        &self,
+        verdicts: &mut BTreeMap<String, (u8, Standing)>,
+        id: &str,
+        attempts: u8,
+        standing: Standing,
+    ) {
+        let kept = match standing {
+            Standing::Unsettled => self
+                .plans
+                .input_verdicts
+                .get(id)
+                .filter(|(typing, _)| *typing == attempts)
+                .map(|(_, verdict)| *verdict),
+            settled => Some(settled),
+        };
+        if let Some(verdict) = kept {
+            verdicts.insert(id.to_owned(), (attempts, verdict));
+        }
+    }
+
+    /// Where input `id` stands for the pane as observed now, and while the
+    /// core has no turn for the pane, where the doorbell's last pass found
+    /// this same typing (`plans.input_verdicts`), so the row and `hide agent
+    /// show` keep saying what they said. Unsettled only when no pass judged
+    /// this typing yet.
+    pub(super) fn input_standing(
+        &self,
+        id: &str,
+        input: &TypedInput,
+        observation: Option<&Observation>,
+        now: u64,
+    ) -> Standing {
+        match typed::standing(input, observation, now) {
+            Standing::Unsettled => self
+                .plans
+                .input_verdicts
+                .get(id)
+                .filter(|(typing, _)| *typing == input.attempts)
+                .map_or(Standing::Unsettled, |(_, verdict)| *verdict),
+            standing => standing,
+        }
     }
 
     /// Where unconfirmed input `id`, at typing `attempts`, stands with the
@@ -482,13 +535,10 @@ impl Runtime {
             let Some(observation) = self.spawn_observation(spawn) else {
                 continue;
             };
-            let since = match typed::standing(input, Some(observation), now) {
-                Standing::Unconfirmed { since } => since,
-                Standing::Unsettled => {
-                    self.keep_input_ask(&mut asks, &observation.actor.pane_id);
-                    continue;
-                }
-                Standing::Confirmed | Standing::Waiting => continue,
+            let Standing::Unconfirmed { since } =
+                self.input_standing(&spawn.id, input, Some(observation), now)
+            else {
+                continue;
             };
             if self.reread(&spawn.id, input.attempts, &observation.actor.pane_id, now)
                 != Reread::Settled
@@ -514,13 +564,10 @@ impl Runtime {
             else {
                 continue;
             };
-            let since = match typed::standing(&input, Some(observation), now) {
-                Standing::Unconfirmed { since } => since,
-                Standing::Unsettled => {
-                    self.keep_input_ask(&mut asks, &observation.actor.pane_id);
-                    continue;
-                }
-                Standing::Confirmed | Standing::Waiting => continue,
+            let Standing::Unconfirmed { since } =
+                self.input_standing(&letter.id, &input, Some(observation), now)
+            else {
+                continue;
             };
             if self.reread(&letter.id, input.attempts, &observation.actor.pane_id, now)
                 != Reread::Settled
@@ -536,21 +583,6 @@ impl Runtime {
         asks.into_iter()
             .map(|(pane, (since, subject))| (pane, since, subject))
             .collect()
-    }
-
-    /// Keeps the ask the row of `pane` shows while the core's turn for the
-    /// pane is not laid (`Standing::Unsettled`), so a row does not drop its
-    /// ask for the moment between a pass's observation and its turn.
-    fn keep_input_ask(&self, asks: &mut BTreeMap<String, (u64, AskSubject)>, pane: &str) {
-        if let Some((_, since, subject)) = self
-            .plans
-            .input_asks
-            .iter()
-            .find(|(shown, ..)| shown == pane)
-        {
-            asks.entry(pane.to_owned())
-                .or_insert_with(|| (*since, subject.clone()));
-        }
     }
 }
 
@@ -961,40 +993,74 @@ pub(crate) mod tests {
         assert!(resubmit.answered);
     }
 
-    /// Between a pass's observation of the pane and the turn it lays, the
-    /// input's verdict stands: the row keeps its ask and the fresh session
-    /// read already given its time is not asked again. A turn that never
-    /// comes holds it no longer than the cap, after which the row drops it
-    /// as for an agent no longer observed.
+    /// The phase `hide agent show` gives the spawn's brief, as its parent
+    /// asks.
+    fn shown_phase(runtime: &Runtime, spawn: &str) -> serde_json::Value {
+        let parent = Actor {
+            pane_id: "sender".into(),
+            name: "sender".into(),
+            kind: "codex".into(),
+            device_id: TEST_NODE.into(),
+            session: crate::engine::tokens::session_digest("parent-native"),
+        };
+        crate::coordination::executor::Shown::read(runtime, &parent, spawn)
+            .unwrap()
+            .answer(TEST_NODE)["state"]["pending_inputs"][0]["phase"]
+            .clone()
+    }
+
+    /// While the child's read is stale the core has no turn for it, and the
+    /// brief's verdict stands however long that lasts: the row keeps the
+    /// brief's ask, `hide agent show` still says unconfirmed, nothing is
+    /// sent or typed, and the fresh session read already given its time is
+    /// not asked again. A fresh read's turn takes the verdict on from where
+    /// it was, and a pass that observed the pane before laying its turn
+    /// holds it the same way.
     #[test]
-    fn an_unlaid_turn_keeps_the_inputs_verdict_for_the_cap_and_no_longer() {
-        use crate::delivery::typed::UNSETTLED_HOLD_MS;
-        let (_root, mut runtime, _) = spawned(true, 1_000);
+    fn a_stale_read_keeps_the_briefs_verdict_until_a_fresh_turn_is_laid() {
+        let (_root, mut runtime, spawn) = spawned(true, 1_000);
         runtime.typed_input_work(1_000 + RECORD_WAIT_MS);
         let _ = runtime.take_session_rereads();
         let at = 1_000 + RECORD_WAIT_MS + REREAD_WAIT_MS;
+        runtime.typed_input_work(at);
         runtime.publish_input_asks(at);
-        assert_eq!(runtime.input_asks(at).len(), 1);
+        let asked = runtime.input_asks(at);
+        assert_eq!(asked.len(), 1);
+        assert_eq!(shown_phase(&runtime, &spawn), "unconfirmed");
 
-        // A pass observes the pane; its turn is not laid yet.
-        let child = runtime.delivery_observations.get_mut("child").unwrap();
-        child.observed_generation += 1;
-        child.observed_at_unix_ms = at;
-        assert_eq!(runtime.input_asks(at + 1).len(), 1, "the row keeps it");
-        assert!(runtime.typed_input_work(at + 1).is_empty());
+        runtime
+            .delivery_observations
+            .get_mut("child")
+            .unwrap()
+            .telemetry_stale = true;
+        let later = at + 600_000;
+        assert!(runtime.typed_input_work(later).is_empty());
+        assert_eq!(runtime.input_asks(later), asked, "the row keeps the ask");
+        assert_eq!(shown_phase(&runtime, &spawn), "unconfirmed");
         assert!(runtime.take_session_rereads().is_empty());
 
-        // The turn lands: the verdict goes on where it was.
+        // The read is fresh again and its pass lays the turn.
         let child = runtime.delivery_observations.get_mut("child").unwrap();
+        child.telemetry_stale = false;
         *child = child.clone().laid(None, None);
-        assert!(runtime.typed_input_work(at + 2)[0].notice.is_some());
+        assert_eq!(runtime.input_asks(later), asked);
+        assert!(runtime.typed_input_work(later)[0].resubmit.is_some());
         assert!(runtime.take_session_rereads().is_empty());
 
-        // A turn that never comes holds it for the cap only.
-        let child = runtime.delivery_observations.get_mut("child").unwrap();
-        child.observed_generation += 1;
-        assert_eq!(runtime.input_asks(at + UNSETTLED_HOLD_MS - 1).len(), 1);
-        assert!(runtime.input_asks(at + UNSETTLED_HOLD_MS).is_empty());
+        // A pass observed the pane and has not laid its turn yet.
+        runtime
+            .delivery_observations
+            .get_mut("child")
+            .unwrap()
+            .observed_generation += 1;
+        assert!(runtime.typed_input_work(later + 1).is_empty());
+        assert_eq!(runtime.input_asks(later + 1), asked);
+        assert_eq!(shown_phase(&runtime, &spawn), "unconfirmed");
+
+        // A pane Herdr no longer lists takes its input with it.
+        runtime.delivery_observations.remove("child");
+        assert!(runtime.typed_input_work(later + 2).is_empty());
+        assert!(runtime.input_asks(later + 2).is_empty());
     }
 
     /// An agent whose session file records the brief among its user

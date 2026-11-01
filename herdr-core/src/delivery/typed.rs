@@ -35,12 +35,6 @@ pub(crate) const RECORD_WAIT_MS: u64 = 15_000;
 /// tick of the ask. It caps a wait for a record, like `RECORD_WAIT_MS`.
 pub(crate) const REREAD_WAIT_MS: u64 = 5_000;
 
-/// How long a typed input's last verdict stands while the core has no turn
-/// for its pane (`Standing::Unsettled`), counted from the pane's last fresh
-/// read. A pass lays its turn within milliseconds of observing the pane, so
-/// this caps a wait for the turn; it judges nothing itself.
-pub(crate) const UNSETTLED_HOLD_MS: u64 = 5_000;
-
 /// Typings of one input at most: the first and two more, each only after
 /// someone answered the agent's screen. Past them the input waits for the
 /// operator with the reason.
@@ -89,8 +83,12 @@ pub(crate) enum Standing {
     /// The core has no turn for the pane's current read: the read is
     /// stale, or the pass that observed the pane has not laid the hook's and
     /// the session read's facts yet (`Observation::projected_turn`). Nothing
-    /// moves on it; whatever was decided last stands until the turn is laid,
-    /// for [`UNSETTLED_HOLD_MS`] since the last fresh read at most.
+    /// moves on it, and the last verdict stands (`Runtime::input_standing`).
+    /// A state ends it, never a timer: the next agent list, asked every
+    /// second while Herdr's stream stands, lays the turn of a fresh read; a
+    /// stale read ends with the list that confirms the agents again, and
+    /// until then the row shows the pane's activity unknown; a pane Herdr
+    /// no longer lists leaves the observations and takes its input with it.
     Unsettled,
     /// Typed, and the agent rested without its record for
     /// [`RECORD_WAIT_MS`] since `since`.
@@ -116,14 +114,7 @@ pub(crate) fn standing(
         return Standing::Waiting;
     }
     let Some(projected) = observation.projected_turn() else {
-        // Held for the moment the turn takes to be laid, never longer: a
-        // turn that does not come leaves the input waiting, as an agent not
-        // observed does, and the row shows the pane's activity unknown.
-        return if now.saturating_sub(observation.observed_at_unix_ms) < UNSETTLED_HOLD_MS {
-            Standing::Unsettled
-        } else {
-            Standing::Waiting
-        };
+        return Standing::Unsettled;
     };
     if projected.turn.activity == AgentActivity::Working {
         return Standing::Waiting;
