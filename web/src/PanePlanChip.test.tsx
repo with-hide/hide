@@ -312,11 +312,15 @@ it("draws every map card in two lines, who and what now, and opens a handed card
   const view = await mount([delegatingPlan(), childPlan()], "map", family());
   try {
     const line = (key: string) => view.container.querySelector(`[data-step-line=${key}]`)?.textContent;
-    expect(line("spec")).toBe("Me·delegate-spec.md");
-    expect(line("core")).toBe("Me·writing tests");
+    // The session's own step carries its agent mark, never `Me` (the operator on every other screen); a step still to be handed, a dashed circle.
+    const who = (key: string) => view.container.querySelector<HTMLElement>(`[data-step-line=${key}] [data-step-who]`)?.dataset.stepWho;
+    expect(line("spec")).toBe("·delegate-spec.md");
+    expect(line("core")).toBe("·writing tests");
     expect(line("web")).toBe("web-ui·map 2/4");
-    expect(line("review")).toBe("To hand off · waits on core title·web title");
-    expect(line("pr")).toBe("Me·Planned");
+    expect(line("review")).toBe("·Waits on core title·web title");
+    expect(line("pr")).toBe("·Planned");
+    expect([who("spec"), who("web"), who("review")]).toEqual(["owner", "child", "pending"]);
+    expect(view.container.querySelector("[data-step-line=review] [data-step-who=pending]")?.getAttribute("aria-label")).toBe("To hand off");
     expect(view.container.querySelector("[data-plan-step=web] [data-step-output]")?.textContent).toBe("PR");
     await act(async () => view.container.querySelector<HTMLElement>("[data-plan-step=web]")!.click());
     const detail = document.querySelector<HTMLElement>("[data-plan-step-detail=web]")!;

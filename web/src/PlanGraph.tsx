@@ -1,5 +1,5 @@
 import type { TFunction } from "i18next";
-import { ChevronRightIcon, HistoryIcon, XIcon } from "lucide-react";
+import { ChevronRightIcon, CircleDashedIcon, HistoryIcon, XIcon } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { agentProductName } from "./agentAdapters";
 import { AgentMark } from "./AgentMark";
@@ -109,7 +109,7 @@ function CardLine({ plan, step }: { plan: PlanView; step: PlanStep }) {
   const what = (() => {
     if (pending) {
       const waits = waitingOn(plan, step).map((other) => other.title);
-      return waits.length > 0 ? t("plan.delegation.pendingWaits", { steps: waits.join("·") }) : t("plan.delegation.pending");
+      return waits.length > 0 ? t("plan.delegation.waits", { steps: waits.join("·") }) : null;
     }
     if (step.status === "dropped") return null;
     if (step.status === "done") {
@@ -126,15 +126,21 @@ function CardLine({ plan, step }: { plan: PlanView; step: PlanStep }) {
   })();
   return (
     <span className="flex min-w-0 items-center gap-xs pl-(--size-agent-mark) text-micro text-muted-foreground" data-step-line={step.key}>
-      {pending ? null : delegation ? (
+      {pending ? (
+        <Hint label={t("plan.delegation.pending")}>
+          <CircleDashedIcon aria-label={t("plan.delegation.pending")} className="size-(--size-agent-mark) shrink-0 text-muted-foreground" data-step-who="pending" />
+        </Hint>
+      ) : delegation ? (
         <span className="flex min-w-0 max-w-1/2 shrink-0 items-center gap-xxs text-foreground" data-step-who="child">
           <AgentMark kind={delegation.agent} />
           <span className="min-w-0 truncate">{delegation.name}</span>
         </span>
       ) : (
-        <span className="shrink-0 text-subtle-foreground" data-step-who="me">{t("plan.me")}</span>
+        <span className="flex shrink-0 items-center" title={agentProductName(plan.session.agent) ?? undefined} data-step-who="owner">
+          <AgentMark kind={plan.session.agent} />
+        </span>
       )}
-      {what && !pending ? <span aria-hidden="true">·</span> : null}
+      {what ? <span aria-hidden="true">·</span> : null}
       {what ? (
         <span className={cn("min-w-0 truncate", step.evidence && step.status === "done" && "font-mono text-mission-done")} title={what} data-step-what="true">
           {what}
