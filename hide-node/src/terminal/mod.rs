@@ -23,6 +23,7 @@
 //! return at once and never call back.
 
 pub mod device;
+pub mod engine_panes;
 pub mod holder;
 mod input;
 mod permit;

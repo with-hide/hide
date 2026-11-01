@@ -124,6 +124,11 @@ jobs:
         run: |
           echo "pnpm store: $(pnpm store path)"
           bash scripts/verify-web.sh install
+      # hide-vt's Zig inputs and caches for the pane holder, which the vt
+      # lane saves.
+      - uses: ./.github/actions/vt-cache
+        with:
+          save: false
       - name: Build the web shell and the release binaries
         timeout-minutes: 50
         run: bash scripts/verify-web.sh desktop package compile
@@ -134,6 +139,7 @@ jobs:
             target/release/hided
             target/release/hide
             target/release/hide-agent-hooks
+            target/release/hide-holder
             desktop/out/release-binaries.json
           if-no-files-found: error
           retention-days: 7

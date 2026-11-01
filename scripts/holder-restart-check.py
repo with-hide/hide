@@ -32,11 +32,14 @@ and then, on every path, a stop signal included, by pid and start time
 (`holder_owned.Owned`); a cell fails when any of them is left running.
 
 Usage: holder-restart-check.py --bin <folder with holder_node and hide-holder>
-       --run-dir <new folder under agents/runs> [--agents id,...] [--herdr-bin <herdr>]
+       --run-dir <new folder under agents/runs> [--agents id,...]
 
-`--herdr-bin` names the pinned Herdr whose folder holds the ConPTY runtime a
-Windows holder runs on; Herdr itself is never started. Each CLI is found on
-PATH, where scripts/install-agent-clis.py put it.
+On Windows the binaries folder also holds the pinned ConPTY runtime a holder
+runs on, in `holder-conpty` (`scripts/fetch-conpty.py --out
+<folder>/holder-conpty`), where the node finds it beside its holder as hided
+does in the app. Herdr is
+never started. Each CLI is found on PATH, where
+scripts/install-agent-clis.py put it.
 """
 
 import argparse
@@ -125,14 +128,12 @@ class Owner:
 class Node:
     """A `holder_node node` process and its request line."""
 
-    def __init__(self, program, home, state, herdr_bin, log, owned):
+    def __init__(self, program, home, state, log, owned):
         # The runner's environment less any Herdr, Hide or provider
         # variable: a holder hands the node's environment to its program.
         env = {**clean_env(), **home_env(home)}
         env["HIDE_DEV_PANE_HOLDER"] = "1"
         argv = [str(program), "node", "--home", str(home), "--state", str(state)]
-        if herdr_bin:
-            argv += ["--herdr-bin", str(herdr_bin)]
         if WINDOWS:
             # Through libuv's job, as the desktop app starts its daemon: a
             # job the runner's own (which lets no process leave it) is
@@ -367,7 +368,7 @@ def same_processes(before, after):
     return None, helpers
 
 
-def cell(row, binaries, herdr_bin, run):
+def cell(row, binaries, run):
     """One agent's cell: its record, whatever happens."""
     kind = row["herdr_kind"]
     record = {"agent": row["id"], "kind": kind, "system": system(), "result": FAIL}
@@ -418,7 +419,7 @@ def cell(row, binaries, herdr_bin, run):
         pane = kind
         old_folder = plant_old_holder_folder(runtime.home)
         node_log = run / f"node-{row['id']}.log"
-        node = Node(binaries / exe("holder_node"), runtime.home, runtime.state, herdr_bin, node_log, owned)
+        node = Node(binaries / exe("holder_node"), runtime.home, runtime.state, node_log, owned)
         record["pruned"] = wait_pruned(node_log, old_folder, PRUNE)
         started = time.monotonic()
         holder = node.ask("start", pane=pane, program=argv, cwd=str(repo), env={}, rows=ROWS, cols=COLS)
@@ -437,7 +438,7 @@ def cell(row, binaries, herdr_bin, run):
             before = node.ask("tree", pane=pane)
             node.kill()
             killed = time.monotonic()
-            node = Node(binaries / exe("holder_node"), runtime.home, runtime.state, herdr_bin,
+            node = Node(binaries / exe("holder_node"), runtime.home, runtime.state,
                         run / f"node-{row['id']}.log", owned)
             full = node.ask("wait_full", pane=pane, since=0, timeout_ms=ATTACH * 1000)
             record["reattach_seconds"] = round(time.monotonic() - killed, 2)
@@ -515,10 +516,10 @@ def clean(node, pane, service, owned):
     return {"left": left}
 
 
-def run_cells(selected, binaries, herdr_bin, run, report):
+def run_cells(selected, binaries, run, report):
     for row in selected:
         print(f"== {row['id']}", flush=True)
-        record = cell(row, binaries, herdr_bin, run)
+        record = cell(row, binaries, run)
         if record["result"] == PASS and record["cleanup"]["left"]:
             record["result"] = FAIL
             record["reason"] = "left running: " + "; ".join(record["cleanup"]["left"])
@@ -558,14 +559,13 @@ def main(argv=None):
     parser.add_argument("--bin", type=Path, required=True)
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--agents", default="")
-    parser.add_argument("--herdr-bin", type=Path)
     args = parser.parse_args(argv)
     binaries = args.bin.resolve()
     for name in ("holder_node", "hide-holder"):
         if not (binaries / exe(name)).is_file():
             raise SystemExit(f"{binaries / exe(name)} is missing: copy the built holder and the example there")
-    if WINDOWS and not args.herdr_bin:
-        raise SystemExit("--herdr-bin is required on Windows: the holder runs on the ConPTY runtime beside it")
+    if WINDOWS and not (binaries / "holder-conpty").is_dir():
+        raise SystemExit(f"{binaries / 'holder-conpty'} is missing: a Windows holder runs on the pinned ConPTY runtime beside it (scripts/fetch-conpty.py --out)")
     run = args.run_dir.absolute()
     if run.exists():
         raise SystemExit(f"{run} exists: the run directory must be new")
@@ -579,7 +579,7 @@ def main(argv=None):
     report = {"format": 1, "lane": "holder-restart", "system": system(),
               "started": datetime.datetime.now(datetime.timezone.utc).isoformat(), "cells": []}
     try:
-        run_cells(selected, binaries, args.herdr_bin, run, report)
+        run_cells(selected, binaries, run, report)
     except holder_owned.Aborted as stop:
         report["aborted"] = str(stop)
         report["passed"] = False

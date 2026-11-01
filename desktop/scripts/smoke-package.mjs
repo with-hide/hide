@@ -106,9 +106,12 @@ try {
   const electron = path.join(app, `hide${exe}`);
 
   check("bundled files", () => {
-    const expected = [path.join(resources, "app.asar"), electron, ...["hide", "hided", "hide-agent-hooks", "herdr"].map(bundled)];
-    // herdr.exe finds its ConPTY runtime in the folder beside it.
-    if (process.platform === "win32") expected.push(path.join(resources, "conpty", "conpty.dll"));
+    const expected = [path.join(resources, "app.asar"), electron, ...["hide", "hided", "hide-agent-hooks", "hide-holder", "herdr"].map(bundled)];
+    // herdr.exe finds its ConPTY runtime in the folder beside it, and a pane
+    // holder its own pinned one in holder-conpty.
+    if (process.platform === "win32") {
+      expected.push(path.join(resources, "conpty", "conpty.dll"), path.join(resources, "holder-conpty", "conpty.dll"));
+    }
     const absent = expected.filter((file) => !fs.statSync(file, { throwIfNoEntry: false })?.isFile());
     if (absent.length > 0) throw new Error(`missing: ${absent.map((file) => path.relative(app, file)).join(", ")}`);
   });

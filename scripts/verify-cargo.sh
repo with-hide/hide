@@ -137,8 +137,10 @@ case "${1:-}" in
     release)
         # The binaries the packaged app ships; release hided embeds web/dist,
         # so `pnpm --dir web build` runs first (desktop/scripts/package.mjs).
+        # The pane holder links hide-vt, whose Zig inputs are prepared first.
         report_toolchain
-        exec cargo build --release --locked -p hided --bins -p hide-agent-hooks --bin hide-agent-hooks
+        prepare_vt_inputs
+        exec cargo build --release --locked -p hided --bins -p hide-agent-hooks --bin hide-agent-hooks -p hide-holder --bin hide-holder
         ;;
     cli)
         report_toolchain
