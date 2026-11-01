@@ -32,9 +32,10 @@ use std::time::{Duration, Instant};
 use hide_holder_protocol::record::{EndReason, PaneRecord};
 use hide_holder_protocol::{
     Answer, Ask, Capability, ClientMessage, CloseReason, Closed, HolderMessage, MAX_INPUT,
-    Modifiers, OLDEST_HOLDER_VERSION, OpenError, Scroll, Size, read_holder, write_client,
+    Modifiers, OLDEST_HOLDER_VERSION, OpenError, PROTOCOL_VERSION, Scroll, Size, read_holder,
+    write_client,
 };
-use hide_kit::holders::Source;
+use hide_kit::holders::{FOLDERS_CAP, Pruned, Source};
 use hide_kit::panes::{
     CloseError, Judgment, OrphanOutcome, Panes, RECONCILE_BUDGET, StartRefusal, StartRequest,
     Started,
@@ -420,6 +421,7 @@ pub struct Recovered {
 pub struct Holders {
     panes: Panes,
     source: Source,
+    home: PathBuf,
     state_dir: PathBuf,
     known: Arc<Known>,
     reports: Arc<dyn ReportSink>,
@@ -453,6 +455,7 @@ impl Holders {
         Ok(Self {
             panes,
             source,
+            home: folders.home.to_owned(),
             state_dir: folders.state_dir.to_owned(),
             known: Arc::default(),
             reports,
@@ -489,10 +492,11 @@ impl Holders {
     /// The local node's terminal service as a daemon starts it: given
     /// `holders` (the switch on), their state folder's holder panes beside
     /// `herdr`'s sessions, the holder from [`Holders::local_source`], and
-    /// the holders that ran on while no node was there found again in the
-    /// background ([`Holders::recover_in_background`]); given none (the
-    /// switch off), `herdr`'s sessions alone and nothing of holders opened
-    /// or read. hided and the tools that measure a node
+    /// the holders that ran on while no node was there found again, and the
+    /// version folders nothing runs from removed, in the background
+    /// ([`Holders::recover_in_background`]); given none (the switch off),
+    /// `herdr`'s sessions alone and nothing of holders opened, read or
+    /// removed. hided and the tools that measure a node
     /// (`hide-node/examples/holder_node.rs`) start it here, so what they
     /// measure is how the daemon is built.
     pub fn start_local(
@@ -504,9 +508,24 @@ impl Holders {
     ) -> Result<LocalTerminals, String> {
         let holders = match holders {
             None => None,
-            Some(folders) => Some(Arc::new(Self::open(
+            Some(folders) => Some((folders, Self::local_source(herdr_bin)?)),
+        };
+        Self::start_from(holders, herdr, outputs, reports)
+    }
+
+    /// [`Holders::start_local`] with the holder program `source` names, for
+    /// a test that starts a node as the daemon does with the holder it built.
+    pub fn start_from(
+        holders: Option<(HolderFolders<'_>, Source)>,
+        herdr: Box<dyn Attacher>,
+        outputs: Arc<dyn super::OutputSink>,
+        reports: Arc<dyn ReportSink>,
+    ) -> Result<LocalTerminals, String> {
+        let holders = match holders {
+            None => None,
+            Some((folders, source)) => Some(Arc::new(Self::open(
                 folders,
-                Self::local_source(herdr_bin)?,
+                source,
                 Arc::clone(&reports),
             )?)),
         };
@@ -736,13 +755,17 @@ impl Holders {
         recovered
     }
 
-    /// [`Holders::recover`] on a thread of its own, so a node's start does
-    /// not wait on its holders.
+    /// [`Holders::recover`] and then [`Holders::prune_folders`] on a thread
+    /// of its own, so a node's start does not wait on its holders. The
+    /// folders are pruned after the holders are found again: the holders the
+    /// reconcile ended no record names, and the ones that died, leave their
+    /// folders unused, and this start removes them.
     pub fn recover_in_background(self: Arc<Self>, service: Arc<Service>) {
         if let Err(error) = thread::Builder::new()
             .name("hide-node-pane-holder-recover".into())
             .spawn(move || {
                 self.recover(&service);
+                self.prune_folders();
             })
         {
             crate::diagnostic!(json!({
@@ -751,6 +774,60 @@ impl Holders {
                 "message": error.to_string(),
             }));
         }
+    }
+
+    /// Removes the version folders under the home that are not this
+    /// build's and that nothing runs from (D-16, B20): a folder a holder or
+    /// an OpenConsole still runs from stays, one a start has reserved is
+    /// waited for, and the runtime copies live under another root
+    /// (`hide_kit::holders::prune`). What could not be removed, and more
+    /// than [`FOLDERS_CAP`] folders left, go to the diagnostic log; `None`
+    /// when this build's own folder could not be named, and nothing is
+    /// removed then.
+    pub fn prune_folders(&self) -> Option<Pruned> {
+        let current = match hide_kit::holders::version_name(PROTOCOL_VERSION, &self.source) {
+            Ok(name) => name,
+            Err(error) => {
+                crate::diagnostic!(json!({
+                    "component": "pane_holder",
+                    "kind": "pane_holder.folders_not_pruned",
+                    "message": format!("the holder's files could not be read: {error}"),
+                }));
+                return None;
+            }
+        };
+        let pruned = hide_kit::holders::prune(&self.home, &[&current]);
+        if pruned.busy {
+            crate::diagnostic!(json!({
+                "component": "pane_holder",
+                "kind": "pane_holder.folders_busy",
+                "message": "starts held the version folders for the whole wait; the next start prunes them",
+            }));
+        }
+        for (folder, detail) in &pruned.failed {
+            crate::diagnostic!(json!({
+                "component": "pane_holder",
+                "kind": "pane_holder.folder_remove_failed",
+                "folder": folder,
+                "message": detail,
+            }));
+        }
+        if let Some(count) = pruned.over_cap {
+            crate::diagnostic!(json!({
+                "component": "pane_holder",
+                "kind": "pane_holder.folders_over_cap",
+                "count": count,
+                "cap": FOLDERS_CAP,
+            }));
+        }
+        crate::diagnostic!(json!({
+            "component": "pane_holder",
+            "kind": "pane_holder.folders_pruned",
+            "removed": pruned.removed.len(),
+            "in_use": pruned.in_use.len(),
+            "failed": pruned.failed.len(),
+        }));
+        Some(pruned)
     }
 
     fn report_ended(&self, record: &PaneRecord) {

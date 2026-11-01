@@ -893,3 +893,116 @@ fn a_holder_older_than_the_oldest_supported_is_reported_and_left_running() {
     assert!(old_folder.exists(), "the old version folder was removed");
     assert!(!node.screens.drew("o1"));
 }
+
+/// What the node logged to its diagnostic log, in order, once
+/// [`diagnostics`] installed the sink that keeps it.
+static DIAGNOSTICS: Mutex<Vec<serde_json::Value>> = Mutex::new(Vec::new());
+
+fn keep_diagnostic(record: serde_json::Value) {
+    DIAGNOSTICS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push(record);
+}
+
+/// Makes the node's diagnostic log readable by [`wait_diagnostic`]. The
+/// sink holds for the life of the test process.
+fn diagnostics() {
+    static INSTALLED: std::sync::Once = std::sync::Once::new();
+    INSTALLED.call_once(|| {
+        assert!(
+            hide_node::diagnostics::install(keep_diagnostic),
+            "another sink took the node's diagnostic log"
+        );
+    });
+}
+
+/// Waits for the node to log a record of `kind` that `matches`, and answers
+/// it.
+fn wait_diagnostic(kind: &str, matches: impl Fn(&serde_json::Value) -> bool) -> serde_json::Value {
+    let mut found = None;
+    wait_until(&format!("a {kind} diagnostic"), || {
+        found = DIAGNOSTICS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .find(|record| record["kind"] == kind && matches(record))
+            .cloned();
+        found.is_some()
+    });
+    found.unwrap()
+}
+
+fn folder_name(dir: &Path) -> String {
+    dir.file_name().unwrap().to_string_lossy().into_owned()
+}
+
+/// B20 through a node's own start: a node with the switch on, started as the
+/// daemon starts one, removes the version folder of an older build nothing
+/// runs from once it has found its holders again, keeps this build's folder
+/// and the older build's folder a pane still runs from (its holder too old
+/// to speak to, left running), and logs what it did.
+#[test]
+fn a_starting_node_removes_the_old_version_folders_nothing_runs_from() {
+    diagnostics();
+    let folder = Folder::new();
+    let home = folder.home.path();
+    let current = source();
+    let current_name =
+        hide_kit::holders::version_name(crate::support::current_version(), &current).unwrap();
+    drop(folder.home.prepare(crate::support::current_version(), &current));
+
+    // An older build's folder a pane still runs from, by its record.
+    let older = folder.home.prepare(0, &current);
+    let older_name = folder_name(&older.dir);
+    let holder =
+        crate::support::start_ready(&older.program, &folder.home.socket("o"), &shell(), &[]);
+    drop(older);
+    hide_platform::fs::private::create_dir_all(&layout::pane_records(&folder.state)).unwrap();
+    fixture_record(&folder, "o1", 0, holder.process.pid, &older_name);
+
+    // An older build's folder nothing runs from.
+    let unused_program = home.join("unused-holder");
+    std::fs::write(&unused_program, b"an older holder").unwrap();
+    let unused = hide_kit::holders::Source {
+        program: unused_program,
+        conpty: current.conpty.clone(),
+    };
+    let unused_dir = folder.home.prepare(0, &unused).dir.clone();
+    let unused_name = folder_name(&unused_dir);
+
+    let (opened, _herdr_opened) = channel();
+    let reports = Arc::new(Reports::default());
+    let terminals = Holders::start_from(
+        Some((
+            HolderFolders {
+                home,
+                state_dir: &folder.state,
+            },
+            current,
+        )),
+        Box::new(Herdr(Mutex::new(opened))),
+        Arc::new(Screens::default()) as Arc<dyn OutputSink>,
+        Arc::clone(&reports) as Arc<dyn ReportSink>,
+    )
+    .unwrap();
+    assert!(terminals.holders.is_some());
+
+    let pruned = wait_diagnostic("pane_holder.folders_pruned", |_| true);
+    assert_eq!(pruned["removed"], 1, "{pruned}");
+    assert_eq!(pruned["in_use"], 1, "{pruned}");
+    assert_eq!(pruned["failed"], 0, "{pruned}");
+    assert!(!unused_dir.exists(), "{unused_name} was kept");
+    for name in [&current_name, &older_name] {
+        let dir = layout::holder_dir(home, name);
+        assert!(
+            dir.join(hide_kit::holders::program_name()).is_file(),
+            "{name} lost its holder"
+        );
+    }
+    assert_eq!(
+        reports.wait_state("o1", "unsupported").exit_category.as_deref(),
+        Some("unsupported_holder_version")
+    );
+    assert!(holder.process.is_running(), "the older holder was ended");
+}
