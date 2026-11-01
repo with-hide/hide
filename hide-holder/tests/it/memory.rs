@@ -6,9 +6,10 @@
 //! scrollback, the bound decided for the bundle
 //! (docs/PERFORMANCE_TESTING.md, The pane holder's path), in every build on
 //! Linux and Windows. On macOS, where the return is what brings a flooded
-//! holder down, the holder is charged less after it than when the flood
-//! ended; a debug holder there sits around the bound, so in a debug build
-//! that is all this holds, and the release measurement judges the bound.
+//! holder down, the holder is within the budget or charged less after the
+//! return than when the flood ended; a debug holder there sits around the
+//! bound, so in a debug build that is all this holds, and the release
+//! measurement judges the bound.
 
 use std::ffi::OsString;
 
@@ -117,10 +118,18 @@ fn a_flooded_holder_keeps_within_its_budget_once_it_gave_freed_pages_back() {
         mib(flooded),
         mib(charged)
     );
+    // A return that stopped working leaves a flooded macOS holder where the
+    // flood left it (8.45 MiB in a local debug run), over the budget and no
+    // lower; a debug holder there may sit a little over the budget once it
+    // gave back (5.86 to 6.45 MiB locally), and a CI runner's may have
+    // nothing left to give (5.08 MiB at the flood's end, 5.09 after, job
+    // 124704224457), so either is a pass.
     if cfg!(target_os = "macos") {
         assert!(
-            charged < flooded,
-            "the return gave nothing back: {:.2} MiB before it, {:.2} MiB after",
+            charged <= BUDGET || charged < flooded,
+            "the return gave nothing back and the holder is over the {:.0} MiB budget: \
+             {:.2} MiB before it, {:.2} MiB after",
+            mib(BUDGET),
             mib(flooded),
             mib(charged)
         );
