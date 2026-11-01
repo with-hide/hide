@@ -13,6 +13,7 @@ use crate::worktree_control::{CheckoutTabRequest, WorktreeTaskOutcome};
 use hide_node_link::panes::PaneIdentity;
 use hide_node_link::protocol::Call;
 use hide_node_link::protocol::ShellLaunch;
+use hide_node_link::{ErrorCode, LinkError};
 
 #[cfg(test)]
 #[path = "checkout_start_tests.rs"]
@@ -40,7 +41,15 @@ fn inspect(control: &Control<'_>, pane: &str) -> Result<PaneIdentity, ControlFai
         },
         Duration::from_secs(5),
     )
-    .map_err(|_| uncertain("agent_start.terminal_unchecked"))
+    .map_err(|error| match error {
+        // A node with no Herdr server names no pane's shell at all (the
+        // core's own engine, until pane identity lands): nothing can ever
+        // confirm the start, so it fails for certain.
+        LinkError::Refused(refusal) if refusal.code == ErrorCode::Unsupported => {
+            ControlFailure::Definite("agent_start.terminal_unchecked".into())
+        }
+        _ => uncertain("agent_start.terminal_unchecked"),
+    })
 }
 
 fn save(control: &Control<'_>, effect: &Effect) -> Result<(), ControlFailure> {
@@ -265,7 +274,26 @@ pub(super) fn run(
         }
     }
     let (mut layout, pane, _) = discover(control, &start.marker, &effect)?;
-    let identity = inspect(control, &pane)?;
+    let identity = match inspect(control, &pane) {
+        Ok(identity) => identity,
+        // A terminal this start made and nothing will ever confirm goes with
+        // the start, in the same event, so no tab, pane or holder is left
+        // that no checkout lists. Until it is bound it sits alone in the tab
+        // the start's claim names, and no agent ran in it yet.
+        Err(failure) if !failure.is_ambiguous() && effect.binding.is_none() => {
+            if let Err(error) = control.engine.close_tab(CONTROL_WAIT, &layout.tab_id) {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "checkout_start",
+                    "kind": "start.unconfirmed_terminal_left",
+                    "tab_id": layout.tab_id,
+                    "pane_id": pane,
+                    "message": error.to_string(),
+                }));
+            }
+            return Err(failure);
+        }
+        Err(failure) => return Err(failure),
+    };
     if let Some(bound) = &effect.binding {
         if bound.pane_id != pane
             || bound.identity != identity
