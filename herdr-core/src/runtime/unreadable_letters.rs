@@ -18,16 +18,13 @@ use std::sync::Arc;
 use serde_json::json;
 
 use super::Runtime;
-use super::delivery::Observation;
+use super::hide_notes::{Note, NoteKind};
 use crate::delivery::doorbell::Turn;
 use crate::delivery::ledger::State;
 
 /// The Hide role that tells a sender its letter waits on a session Hide
 /// cannot read.
 pub(crate) const DELIVERY_ROLE: &str = "delivery";
-
-/// How long one note may take to land.
-const NOTE_CALL: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[derive(Default)]
 pub(in crate::runtime) struct UnreadableLetters {
@@ -44,12 +41,6 @@ impl UnreadableLetters {
     pub(in crate::runtime) fn touch(&mut self) {
         self.dirty = true;
     }
-}
-
-struct Note {
-    letter: String,
-    target: Observation,
-    body: String,
 }
 
 impl Runtime {
@@ -127,72 +118,16 @@ impl Runtime {
         if notes.is_empty() {
             return;
         }
-        let Some(context) = self.worker_context.clone() else {
-            // A runtime without a worker (a test) sends nothing.
-            return;
+        let kind = NoteKind {
+            role: DELIVERY_ROLE,
+            thread: "hide-unreadable-notes",
+            intent: "session-unreadable",
+            component: "delivery",
+            unsent: "delivery.unreadable_note_unsent",
         };
-        let (client, authority, actor) = match self.hide_delivery(DELIVERY_ROLE) {
-            Ok(delivery) => delivery,
-            Err(code) => {
-                crate::diagnostic!(json!({
-                    "component": "delivery", "kind": "delivery.unreadable_note_unsent",
-                    "count": notes.len(), "code": code,
-                }));
-                return;
-            }
-        };
-        self.unreadable_letters.noting = true;
-        let runtime = context.runtime.clone();
-        let spawned = std::thread::Builder::new()
-            .name("hide-unreadable-notes".to_owned())
-            .spawn(move || {
-                // A send that panics must not leave the runtime thinking a
-                // thread still tells senders, or no note would go again.
-                struct Ending(std::sync::Weak<std::sync::Mutex<Runtime>>);
-                impl Drop for Ending {
-                    fn drop(&mut self) {
-                        if let Some(runtime) = self.0.upgrade() {
-                            let mut guard =
-                                runtime.lock().unwrap_or_else(|poison| poison.into_inner());
-                            guard.unreadable_letters.noting = false;
-                        }
-                    }
-                }
-                let _ending = Ending(runtime);
-                for note in notes {
-                    let prepared = crate::delivery::worker::Prepared::new(
-                        client.clone(),
-                        crate::delivery::worker::Authority {
-                            caller: authority.caller.clone(),
-                            context: authority.context.clone(),
-                        },
-                        actor.clone(),
-                        Some(note.target.clone()),
-                        crate::delivery::Command::Send {
-                            target: note.target.actor.pane_id.clone(),
-                            intent: format!("session-unreadable:{}", note.letter),
-                            body: note.body,
-                            // Hide reads no answer, and the note wakes no one.
-                            kind: "progress".into(),
-                            now: false,
-                            force: false,
-                        },
-                    );
-                    if let Err(code) = prepared.run(NOTE_CALL) {
-                        crate::diagnostic!(json!({
-                            "component": "delivery", "kind": "delivery.unreadable_note_unsent",
-                            "letter_id": note.letter, "code": code,
-                        }));
-                    }
-                }
-            });
-        if let Err(error) = spawned {
-            self.unreadable_letters.noting = false;
-            crate::diagnostic!(json!({
-                "component": "delivery", "kind": "delivery.unreadable_note_unsent",
-                "code": "thread_not_started", "message": error.to_string(),
-            }));
-        }
+        self.unreadable_letters.noting = self.send_hide_notes(kind, notes, |runtime| {
+            runtime.unreadable_letters.noting = false;
+        });
     }
 }
 

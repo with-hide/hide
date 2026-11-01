@@ -13,6 +13,7 @@ use serde_json::json;
 
 use super::super::Runtime;
 use super::super::delivery::Observation;
+use super::super::hide_notes::{Note, NoteKind};
 use crate::agent_sleep::{DormantPhase, SleepId, SleepPhase, WakeMode};
 use crate::delivery::Actor;
 use crate::delivery::doorbell::Turn;
@@ -25,9 +26,6 @@ pub(in crate::runtime) const MAX_LETTER_WAKES: usize = 4;
 /// The Hide role that tells a sender its letter's recipient could not be
 /// woken (D-16).
 pub(crate) const WAKE_ROLE: &str = "wake";
-
-/// How long Hide's letter to a sender may take to land.
-const NOTE_CALL: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Where an asleep recipient sleeps: in its pane, or as a dormant
 /// conversation whose pane was closed.
@@ -126,13 +124,6 @@ impl Runtime {
     pub(in crate::runtime) fn letter_wakes_running(&self) -> usize {
         self.letter_wakes.running.len()
     }
-}
-
-/// A Hide letter to the sender of a letter a failed wake left undelivered.
-struct Note {
-    letter: String,
-    target: Observation,
-    body: String,
 }
 
 impl Runtime {
@@ -563,73 +554,17 @@ impl Runtime {
         if notes.is_empty() {
             return;
         }
-        let Some(context) = self.worker_context.clone() else {
-            // A runtime without a worker (a test) sends nothing.
-            return;
+        let kind = NoteKind {
+            role: WAKE_ROLE,
+            thread: "hide-wake-notes",
+            intent: "wake-failed",
+            component: "agent_sleep",
+            unsent: "agent_sleep.wake_note_unsent",
         };
-        let (client, authority, actor) = match self.hide_delivery(WAKE_ROLE) {
-            Ok(delivery) => delivery,
-            Err(code) => {
-                crate::diagnostic!(json!({
-                    "component": "agent_sleep", "kind": "agent_sleep.wake_note_unsent",
-                    "count": notes.len(), "code": code,
-                }));
-                return;
-            }
-        };
-        self.letter_wakes.noting = true;
-        let runtime = context.runtime.clone();
-        let spawned = std::thread::Builder::new()
-            .name("hide-wake-notes".to_owned())
-            .spawn(move || {
-                // A send that panics must not leave the runtime thinking a
-                // thread still tells senders, or no note would go again.
-                struct Ending(std::sync::Weak<std::sync::Mutex<Runtime>>);
-                impl Drop for Ending {
-                    fn drop(&mut self) {
-                        if let Some(runtime) = self.0.upgrade() {
-                            let mut guard =
-                                runtime.lock().unwrap_or_else(|poison| poison.into_inner());
-                            guard.letter_wakes.noting = false;
-                            guard.letter_wakes.dirty = true;
-                        }
-                    }
-                }
-                let _ending = Ending(runtime);
-                for note in notes {
-                    let prepared = crate::delivery::worker::Prepared::new(
-                        client.clone(),
-                        crate::delivery::worker::Authority {
-                            caller: authority.caller.clone(),
-                            context: authority.context.clone(),
-                        },
-                        actor.clone(),
-                        Some(note.target.clone()),
-                        crate::delivery::Command::Send {
-                            target: note.target.actor.pane_id.clone(),
-                            intent: format!("wake-failed:{}", note.letter),
-                            body: note.body,
-                            // Hide reads no answer, and the note wakes no one.
-                            kind: "progress".into(),
-                            now: false,
-                            force: false,
-                        },
-                    );
-                    if let Err(code) = prepared.run(NOTE_CALL) {
-                        crate::diagnostic!(json!({
-                            "component": "agent_sleep", "kind": "agent_sleep.wake_note_unsent",
-                            "letter_id": note.letter, "code": code,
-                        }));
-                    }
-                }
-            });
-        if let Err(error) = spawned {
-            self.letter_wakes.noting = false;
-            crate::diagnostic!(json!({
-                "component": "agent_sleep", "kind": "agent_sleep.wake_note_unsent",
-                "code": "thread_not_started", "message": error.to_string(),
-            }));
-        }
+        self.letter_wakes.noting = self.send_hide_notes(kind, notes, |runtime| {
+            runtime.letter_wakes.noting = false;
+            runtime.letter_wakes.dirty = true;
+        });
     }
 }
 

@@ -11,9 +11,9 @@ use std::collections::{HashMap, HashSet};
 use serde_json::json;
 
 use super::super::Runtime;
-use super::MAX_ENDS_IN_FLIGHT;
+use super::ends_left;
 use super::letters::Stage;
-use crate::agent_sleep::{SleepMachine, SleepPhase};
+use crate::agent_sleep::SleepMachine;
 use crate::missions::{Mission, MissionBook, MissionNode};
 use crate::model::AgentActionRefusal;
 
@@ -163,18 +163,7 @@ impl Runtime {
         let Ok(ledger) = self.delivery_ledger.as_ref().map(std::sync::Arc::clone) else {
             return false;
         };
-        let store = &self.snapshot.ui_state.agent_sleep;
-        let in_flight = store
-            .records
-            .values()
-            .filter(|record| record.phase == SleepPhase::Ending)
-            .count()
-            + store
-                .dormant
-                .values()
-                .filter(|record| record.phase.in_flight())
-                .count();
-        let mut budget = MAX_ENDS_IN_FLIGHT.saturating_sub(in_flight);
+        let mut budget = ends_left(&self.snapshot.ui_state.agent_sleep);
         let mut on_screen: HashMap<Option<String>, HashSet<String>> = HashMap::new();
         let mut changed = false;
         let mut kept = Vec::new();

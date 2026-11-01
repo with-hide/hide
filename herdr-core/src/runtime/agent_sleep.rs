@@ -26,6 +26,22 @@ pub(in crate::runtime) use dormant::Takeover;
 /// minute's decision.
 const MAX_ENDS_IN_FLIGHT: usize = 4;
 
+/// The ends that may still start now: `MAX_ENDS_IN_FLIGHT` less every end
+/// that runs, the idle and mission passes' alike, so both share one cap.
+fn ends_left(store: &crate::agent_sleep::AgentSleepStore) -> usize {
+    let in_flight = store
+        .records
+        .values()
+        .filter(|record| record.phase == SleepPhase::Ending)
+        .count()
+        + store
+            .dormant
+            .values()
+            .filter(|record| record.phase.in_flight())
+            .count();
+    MAX_ENDS_IN_FLIGHT.saturating_sub(in_flight)
+}
+
 /// A pane whose agent would not end: left alone until `until`, unless its
 /// state changes first, which `changed_at_unix_ms` tells (B8).
 #[derive(Clone, Copy, Debug)]
@@ -174,20 +190,7 @@ impl Runtime {
             &backoff_until,
             now_unix_ms,
         );
-        let in_flight = store
-            .records
-            .values()
-            .filter(|record| record.phase == SleepPhase::Ending)
-            .count();
-        let dormant_in_flight = store
-            .dormant
-            .values()
-            .filter(|record| record.phase.in_flight())
-            .count();
-        for pane_id in due
-            .into_iter()
-            .take(MAX_ENDS_IN_FLIGHT.saturating_sub(in_flight + dormant_in_flight))
-        {
+        for pane_id in due.into_iter().take(ends_left(store)) {
             changed |= self.begin_agent_sleep(&pane_id, "idle", now_unix_ms);
         }
         if seen && !changed {
