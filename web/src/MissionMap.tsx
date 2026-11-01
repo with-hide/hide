@@ -342,13 +342,13 @@ const ATTENTION_CARD = "border-mission-hold ring-2 ring-mission-hold/20";
  * A node on the map (PRD mission-node-simple D-07, B1-B3): its state's mark
  * and border, its title on one line that ends in an ellipsis (the whole
  * title on hover and in its accessible name) with Hide's mark when Hide
- * changed it last, and one line holding its pull requests' marks, a direct
- * change's result, its worker's agent mark, model and effort as the panel's
- * head draws them, and `! 나` or `! Conductor` when it waits on someone to look, its
- * reason on hover. Its times, its finish lines and the Conductor's line are
- * the panel's. The other agents checking it stand
- * beside it as satellites tethered to its right side. Pressing it picks it
- * (B30).
+ * changed it last, and one line holding its worker's agent mark, model and
+ * effort as the panel's head draws them on the left, its pull requests'
+ * marks or a direct change's result at the right end, and after them `! 나`
+ * or `! Conductor` when it waits on someone to look, its reason on hover.
+ * Its times, its finish lines and the Conductor's line are the panel's. The
+ * other agents checking it stand beside it as satellites tethered to its
+ * right side. Pressing it picks it (B30).
  */
 function NodeCard({ mission, node, selected, dimmed, onSelect, actions }: { mission: Mission; node: MissionNode; selected: boolean; dimmed: boolean; onSelect: () => void; actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -367,8 +367,8 @@ function NodeCard({ mission, node, selected, dimmed, onSelect, actions }: { miss
         node.title,
         word,
         ...(node.kind === "external" && look !== "external" ? [t("mission.look.external")] : []),
-        ...node.prs.map((pr) => t("mission.attention.pr", { number: String(pr.number) })),
         ...(run ? [run.text] : []),
+        ...node.prs.map((pr) => t("mission.attention.pr", { number: String(pr.number) })),
         ...(attention ? [`${t("mission.attention")} · ${attention.who} · ${attention.why}`] : []),
         ...(hide ? [t("mission.hide.mark", { what: hide })] : []),
       ].join(" · ")}
@@ -397,18 +397,16 @@ function NodeCard({ mission, node, selected, dimmed, onSelect, actions }: { miss
       </span>
       {result || run || attention ? (
         <span className="flex min-w-0 items-center gap-x-xs text-caption text-muted-foreground" data-node-row="true">
-          {/* The marks keep one line; the ones past the card's width leave it rather than overlap, and `!` keeps its place (B30). */}
+          {/* The worker's agent mark and model on the left take only the room the marks leave, so they truncate away before a mark is pushed out; with no run the empty span still holds the marks at the right. */}
+          <span className="flex min-w-0 flex-1 items-center gap-xxs overflow-hidden" data-node-run={run?.from}>
+            {run && node.worker?.agent ? <AgentMark kind={node.worker.agent} /> : null}
+            {run ? <RunText run={run} /> : null}
+          </span>
+          {/* The marks keep one line at the right end; the ones past the card's width leave it rather than overlap, and `!` keeps its place after them (B30). */}
           {result ? <span className="flex h-lh min-w-0 flex-wrap items-center gap-x-xs overflow-hidden">{result}</span> : null}
-          {/* The agent's mark and model take only the room the marks leave, so they truncate away before a mark is pushed out. */}
-          {run ? (
-            <span className="flex min-w-0 flex-1 items-center gap-xxs overflow-hidden" data-node-run={run.from}>
-              {node.worker?.agent ? <AgentMark kind={node.worker.agent} /> : null}
-              <RunText run={run} />
-            </span>
-          ) : null}
           {attention ? (
             <Hint label={attention.why}>
-              <span className="ml-auto shrink-0 font-semibold text-mission-hold" data-node-attention-tag={node.attention!.reason}>! {attention.who}</span>
+              <span className="shrink-0 font-semibold text-mission-hold" data-node-attention-tag={node.attention!.reason}>! {attention.who}</span>
             </Hint>
           ) : null}
         </span>
