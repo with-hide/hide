@@ -4,11 +4,15 @@
 # Version 2.0; see NOTICE at the repository root.
 # Changed by Hide: the manifest's id and aliases became this file's identity
 # and its version, engine and rules moved under [screen], unchanged.
+# [resume] last: maki.sh/docs/cli, "-c, --continue: Resume the most recent session in this directory.".
 schema = 1
 id = "maki"
 name = "Maki"
 executables = ["maki"]
 hooks = "none"
+
+[resume]
+last = ["--continue"]
 
 [screen]
 version = "2026.07.09.2"
