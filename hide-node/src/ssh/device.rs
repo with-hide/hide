@@ -11,6 +11,7 @@
 //! Herdr, files, Git, terminals and pages are that link's streams and calls,
 //! so a connection signs in once.
 
+use super::gate::Gate;
 use super::host::bootstrap::{self, HerdrChoice};
 use super::host::{ATTEMPT_ENDED as ENDED, HelperPackages, PaneEventsSlot, PaneHook, TerminalHook};
 use super::hosts::{Resolve, ssh_g};
@@ -19,8 +20,8 @@ use super::session::{self, Dial};
 use super::*;
 use hide_node_link::call_as;
 use hide_node_link::device::{
-    Attempt, Cancel, DeviceConnector, DeviceTransport, DialedTransport, EstablishError,
-    Established, HostConsent, HostIdentity, NodeReady, SshFailure, SshHostListing, SshProblem,
+    Attempt, DeviceConnector, DeviceTransport, DialedTransport, EstablishError, Established,
+    HostConsent, HostIdentity, NodeReady, SshFailure, SshHostListing, SshProblem,
 };
 use hide_node_link::protocol::{Call, Hello, KitAction};
 
@@ -300,54 +301,10 @@ impl ApiConnector for LinkedHerdr {
     }
 }
 
-/// The turns [`MAX_DIALING`] gives out, shared by every device.
-static DIALING: Turns = Turns {
-    taken: Mutex::new(0),
-    freed: std::sync::Condvar::new(),
-};
-
-struct Turns {
-    taken: Mutex<usize>,
-    freed: std::sync::Condvar,
-}
-
-/// One attempt's turn; its end frees it.
-struct Turn(&'static Turns);
-
-impl Turns {
-    /// Waits for a turn; none once `cancel` ends the attempt or the wait
-    /// runs out. The row reads connecting meanwhile: the operator has
-    /// nothing to do about the wait (design principle 13).
-    fn take(&'static self, cancel: &Cancel) -> Option<Turn> {
-        let deadline = Instant::now() + TURN_WITHIN;
-        let mut taken = lock_recover(&self.taken);
-        while *taken >= MAX_DIALING {
-            if cancel.is_cancelled() {
-                return None;
-            }
-            let left = deadline.checked_duration_since(Instant::now())?;
-            // A second at a time, so a cancel is seen while queued.
-            taken = self
-                .freed
-                .wait_timeout(taken, left.min(Duration::from_secs(1)))
-                .map(|(guard, _)| guard)
-                .unwrap_or_else(|poisoned| poisoned.into_inner().0);
-        }
-        if cancel.is_cancelled() {
-            return None;
-        }
-        *taken += 1;
-        drop(taken);
-        Some(Turn(self))
-    }
-}
-
-impl Drop for Turn {
-    fn drop(&mut self) {
-        *lock_recover(&self.0.taken) -= 1;
-        self.0.freed.notify_one();
-    }
-}
+/// The dials [`MAX_DIALING`] admits at once, shared by every device. A dial
+/// waiting for its place reads connecting: the operator has nothing to do
+/// about the wait (design principle 13).
+static DIALING: Gate = Gate::new(MAX_DIALING);
 
 impl DialedTransport for SshDevice {
     fn capability_test(&self, operation_id: &str, check: SnapshotCheck<'_>) -> CapabilityReport {
@@ -433,18 +390,21 @@ impl DialedTransport for SshDevice {
             .program
             .resolve(&self.alias)
             .map_err(EstablishError::Ssh)?;
-        let _turn = DIALING.take(&cancel).ok_or_else(|| {
-            if cancel.is_cancelled() {
-                return ended();
-            }
-            EstablishError::Ssh(SshFailure {
-                problem: SshProblem::Unclassified,
-                detail: format!(
-                    "{MAX_DIALING} other devices kept connecting for {} minutes",
-                    TURN_WITHIN.as_secs() / 60
-                ),
-            })
-        })?;
+        let cancelled = || cancel.is_cancelled();
+        let _turn = DIALING
+            .admit(Instant::now() + TURN_WITHIN, Some(&cancelled))
+            .ok_or_else(|| {
+                if cancel.is_cancelled() {
+                    return ended();
+                }
+                EstablishError::Ssh(SshFailure {
+                    problem: SshProblem::Unclassified,
+                    detail: format!(
+                        "{MAX_DIALING} other devices kept connecting for {} minutes",
+                        TURN_WITHIN.as_secs() / 60
+                    ),
+                })
+            })?;
         let (mut pipe, facts) = session::sign_in(
             &Dial {
                 program: &self.program,

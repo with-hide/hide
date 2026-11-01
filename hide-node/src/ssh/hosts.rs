@@ -344,24 +344,17 @@ pub(super) fn split_line(line: &str) -> Option<(String, Vec<String>)> {
     Some((keyword, arguments))
 }
 
-/// The `user`, `hostname` and `port` lines of `ssh -G`'s output.
+/// The `user`, `hostname` and `port` of `ssh -G`'s output, as the
+/// connection reads them ([`crate::ssh::openssh::Resolved`]); a user or host
+/// with a control character is no address to list.
 pub(crate) fn parse_resolved(output: &str) -> Option<Address> {
-    let (mut user, mut host, mut port) = (None, None, None);
-    for line in output.lines() {
-        let Some((key, value)) = line.split_once(' ') else {
-            continue;
-        };
-        let value = value.trim();
-        match key {
-            "user" if user.is_none() => user = Some(value.to_owned()),
-            "hostname" if host.is_none() => host = Some(value.to_owned()),
-            "port" if port.is_none() => port = value.parse::<u16>().ok(),
-            _ => {}
-        }
-    }
-    let (user, host, port) = (user?, host?, port?);
-    let clean = |value: &str| !value.is_empty() && !value.chars().any(char::is_control);
-    (clean(&user) && clean(&host)).then_some(Address { user, host, port })
+    let resolved = crate::ssh::openssh::Resolved::read(output)?;
+    let clean = |value: &str| !value.chars().any(char::is_control);
+    (clean(&resolved.user) && clean(&resolved.hostname)).then_some(Address {
+        user: resolved.user,
+        host: resolved.hostname,
+        port: resolved.port,
+    })
 }
 
 /// Asks where one alias leads, given the account's home and the listing's
