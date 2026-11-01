@@ -32,7 +32,7 @@ export function MissionAskChoices({ ask, actions, className }: { ask: MissionAsk
   return (
     <span className={cn("flex flex-wrap items-center gap-xs", className)} data-mission-ask-choices={ask.mission.id}>
       <MissionTakeOver mission={ask.mission} actions={actions} />
-      <AttentionChoices mission={ask.mission} node={ask.node} attention={ask.attention} actions={actions} />
+      <AttentionChoices key={`${ask.node.key}-${ask.attention.since_unix_ms}`} mission={ask.mission} node={ask.node} attention={ask.attention} actions={actions} />
     </span>
   );
 }

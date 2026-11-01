@@ -52,3 +52,28 @@ it("offers take over and the cause's choice on the mission's own Needs You item,
     await act(async () => root.unmount());
   }
 });
+
+it("gives the next node its own choices once the first one's choice is sent", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const { mission, rest } = missionFixture("no-conductor", Date.UTC(2026, 10, 1));
+  useShellStore.setState({ rest, connection: "live" });
+  const [first] = missionAsks([mission], [mission.id]);
+  const next = { ...first!, node: { ...first!.node, key: "screen", title: "API 쓰는 화면" }, attention: { ...first!.attention, reason: "worker_ended" as const, since_unix_ms: first!.attention.since_unix_ms + 1 } };
+  const sent: unknown[] = [];
+  const actions = createActions((event) => sent.push(event));
+  const container = document.createElement("ul");
+  document.body.append(container);
+  const root = createRoot(container);
+  const draw = (ask: typeof first) => act(async () => root.render(<TooltipProvider><SidebarMissionRow ask={ask!} inset="0" actions={actions} /></TooltipProvider>));
+  await draw(first);
+  try {
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-attention-choice="done"]')!.click());
+    await draw(next);
+    const drop = container.querySelector<HTMLButtonElement>('[data-attention-choice="drop"]')!;
+    expect(drop.disabled).toBe(false);
+    await act(async () => drop.click());
+    expect(sent.map((event) => (event as { payload: { node: string; action: string } }).payload)).toMatchObject([{ node: first!.node.key, action: "done" }, { node: "screen", action: "drop" }]);
+  } finally {
+    await act(async () => root.unmount());
+  }
+});
