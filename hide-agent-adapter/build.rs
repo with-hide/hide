@@ -1,8 +1,11 @@
 //! Generates each built-in agent definition's identity as constants from
 //! `agents/*.toml`, so `AgentAdapter` and every caller read the TOML's
-//! values with no second copy in Rust and a built-in file the schema
-//! refuses fails the build. The whole text is also included, for the
-//! loader that compiles the screen rules (`src/definition.rs`).
+//! values with no second copy in Rust. Each file goes through the same
+//! check of its fields as the operator's files (`src/definition/file.rs`),
+//! so a built-in file that fails one fails the build; only the file's name
+//! is checked here, since only the build maps a file to a constant. The
+//! whole text is also included, for the loader that compiles the screen
+//! rules (`src/definition.rs`).
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -32,49 +35,25 @@ fn main() {
         let path = folder.join(name);
         println!("cargo:rerun-if-changed={}", path.display());
         let text = std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{name}: {error}"));
-        let parsed: file::File =
-            toml::from_str(&text).unwrap_or_else(|error| panic!("{name}: {error}"));
-        let fail = |what: &str| -> ! { panic!("built-in agent definition {name}: {what}") };
-        if parsed.schema != file::SCHEMA {
-            fail("schema must be 1");
-        }
+        let fail = |what: String| -> ! { panic!("built-in agent definition {what}") };
+        let parsed = file::read(name, &text, file::Origin::Builtin).unwrap_or_else(|e| fail(e));
         if format!("{}.toml", parsed.id) != *name {
-            fail("the file is named after its id");
+            fail(format!("{name}: the file is named after its id"));
         }
-        if parsed.based_on.is_some() {
-            fail("based_on is for user files only");
-        }
-        let display = parsed
-            .name
-            .as_deref()
-            .unwrap_or_else(|| fail("name is required"));
-        let executables = parsed
-            .executables
-            .as_deref()
-            .unwrap_or_else(|| fail("executables is required"));
-        if executables.is_empty() {
-            fail("executables is empty");
-        }
-        let hooks = parsed.hooks.unwrap_or_else(|| fail("hooks is required"));
-        let home: Vec<&str> = match parsed.home.as_deref() {
-            None => Vec::new(),
-            Some(home) => home
-                .strip_prefix("~/")
-                .unwrap_or_else(|| fail("home starts with ~/"))
-                .split('/')
-                .collect(),
-        };
-        let resume = parsed.resume.unwrap_or_default();
+        let display = file::required(name, "name", parsed.name).unwrap_or_else(|e| fail(e));
+        let executables =
+            file::required(name, "executables", parsed.executables).unwrap_or_else(|e| fail(e));
+        let hooks = file::required(name, "hooks", parsed.hooks).unwrap_or_else(|e| fail(e));
         let constant = parsed.id.to_uppercase().replace('-', "_");
         writeln!(
             out,
             "pub(crate) const {constant}: Builtin = Builtin {{ id: {id:?}, name: {display:?}, executables: &{executables:?}, aliases: &{aliases:?}, home: {home}, hooks: Hooks::{hooks:?}, start_args: &{start:?}, resume_session: {session}, resume_last: {last}, text: include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/agents/{name}\")) }};",
             id = parsed.id,
             aliases = parsed.aliases.unwrap_or_default(),
-            home = if parsed.home.is_some() { format!("Some(&{home:?})") } else { "None".to_owned() },
-            start = parsed.start.unwrap_or_default().args,
-            session = option(resume.session),
-            last = option(resume.last),
+            home = option(parsed.home),
+            start = parsed.start_args.unwrap_or_default(),
+            session = option(parsed.resume_session),
+            last = option(parsed.resume_last),
         )
         .unwrap();
         all.push(constant);

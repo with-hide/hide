@@ -1,9 +1,12 @@
 //! Static agent declarations shared by hooks, sessions, installation and UI.
 //!
 //! A dialect id selects code in its existing owner; who each agent is comes
-//! from its definition file (`definition`). This crate performs no
-//! I/O, starts no work and stores no runtime state. Lookup borrows the input
-//! and static rows: no allocation, lock, normalization buffer or cache.
+//! from its definition file (`definition`). This crate reads no file and no
+//! network at run time, starts no work and keeps no state of a caller's.
+//! An adapter lookup borrows the input and static rows: no allocation, lock,
+//! normalization buffer or cache. The one exception is
+//! `definition::builtins`, which compiles the built-in files' screen rules
+//! once, on first use, behind a `LazyLock`, and keeps them for the process.
 
 pub mod composer;
 mod declarations;

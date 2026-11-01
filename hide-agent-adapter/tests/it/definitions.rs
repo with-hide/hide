@@ -168,6 +168,29 @@ fn a_file_with_a_built_in_id_replaces_only_its_screen_rules() {
 }
 
 #[test]
+fn every_later_file_for_the_same_built_in_names_the_one_whose_rules_were_taken() {
+    let pi = format!("schema = 1\nid = \"pi\"\n{RULES}");
+    let catalog = Catalog::read(
+        ["pi-a.toml", "pi-b.toml", "pi-c.toml"]
+            .into_iter()
+            .map(|name| text(name, &pi))
+            .collect(),
+    );
+    let reasons: Vec<&str> = catalog
+        .rejected
+        .iter()
+        .map(|rejected| rejected.reason.as_str())
+        .collect();
+    assert_eq!(
+        reasons,
+        [
+            "pi-b.toml: pi-a.toml already replaces the screen rules of pi",
+            "pi-c.toml: pi-a.toml already replaces the screen rules of pi",
+        ]
+    );
+}
+
+#[test]
 fn a_new_agent_names_its_program_and_reads_its_state_from_the_screen() {
     let catalog = Catalog::read(vec![text(
         "tool.toml",
@@ -256,6 +279,13 @@ fn each_unusable_file_is_left_out_alone_with_one_line_naming_it() {
                 "schema = 1\nid = \"path\"\nname = \"P\"\nexecutables = [\"/usr/bin/p\"]\nhooks = \"none\"\n",
             ),
             "is not a file name",
+        ),
+        (
+            text(
+                "space.toml",
+                "schema = 1\nid = \"space\"\nname = \"S\"\nexecutables = [\"space\", \"space cli\"]\nhooks = \"none\"\n",
+            ),
+            "program \"space cli\" is not a file name",
         ),
         (
             text(

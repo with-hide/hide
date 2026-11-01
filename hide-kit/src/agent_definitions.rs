@@ -8,7 +8,9 @@
 //! files directly in it count, in name order; the first
 //! [`MAX_USER_FILES`] are read when each is at most [`MAX_FILE_BYTES`], and
 //! every other is named as left out without being opened, so a full folder
-//! costs at most 64 reads of 256 KiB.
+//! costs at most 64 reads of 256 KiB. A file whose name is not UTF-8 is
+//! named as unreadable, with the bytes it cannot spell replaced, rather than
+//! passed over in silence.
 
 use std::path::Path;
 
@@ -29,23 +31,33 @@ fn files(folder: &Path) -> Result<Vec<UserFile>, String> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => return Err(format!("{}: {error}", folder.display())),
     };
+    // Each `.toml` file by the name it is shown with, and whether that name
+    // is the file's own (UTF-8) or a lossy spelling of it.
     let mut names = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|error| format!("{}: {error}", folder.display()))?;
-        let Ok(name) = entry.file_name().into_string() else {
-            continue;
+        let file_name = entry.file_name();
+        let (name, spelled) = match file_name.to_str() {
+            Some(name) => (name.to_owned(), true),
+            None => (file_name.to_string_lossy().into_owned(), false),
         };
         if name.ends_with(".toml") && entry.path().is_file() {
-            names.push(name);
+            names.push((name, spelled));
         }
     }
     names.sort();
     Ok(names
         .into_iter()
         .enumerate()
-        .map(|(index, name)| {
+        .map(|(index, (name, spelled))| {
             if index >= MAX_USER_FILES {
                 return UserFile::BeyondLimit { name };
+            }
+            if !spelled {
+                return UserFile::Unreadable {
+                    name,
+                    error: "its name is not UTF-8".to_owned(),
+                };
             }
             let path = folder.join(&name);
             match std::fs::metadata(&path) {
@@ -124,5 +136,21 @@ mod tests {
             matches!(&files[MAX_USER_FILES], UserFile::BeyondLimit { name } if name == "064.toml")
         );
         assert!(matches!(&files[0], UserFile::Text { .. }));
+    }
+
+    // macOS and Windows file systems refuse a name that is not Unicode.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_file_whose_name_is_not_utf8_is_named_as_unreadable() {
+        use std::os::unix::ffi::OsStrExt;
+        let folder = tempfile::tempdir().unwrap();
+        let name = std::ffi::OsStr::from_bytes(b"bad\xff.toml");
+        std::fs::write(folder.path().join(name), "schema = 1").unwrap();
+        let files = files(folder.path()).unwrap();
+        assert!(matches!(
+            files.as_slice(),
+            [UserFile::Unreadable { name, error }]
+                if name == "bad\u{fffd}.toml" && error == "its name is not UTF-8"
+        ));
     }
 }
