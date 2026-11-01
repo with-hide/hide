@@ -23,7 +23,7 @@ import { markdownPlainText } from "./markdownPlain";
 import { MissionMapCanvas } from "./MissionMapCanvas";
 import { MissionNodePanel } from "./MissionNodePanel";
 import { MissionTurn } from "./MissionTurn";
-import { markWord, RunText, useRunWords } from "./missionParts";
+import { markWord, RunText, useNodeRun } from "./missionParts";
 import {
   attentionWords,
   defectEdges,
@@ -358,7 +358,8 @@ function NodeCard({ mission, node, selected, dimmed, onSelect, actions }: { miss
   const hide = hideWords(mission, node, t);
   const satellites = satelliteLines(node.criteria);
   const word = markWord(node, look, t);
-  const run = useRunWords(mission, node.pane_id, node.machine, node.worker);
+  const worker = useNodeRun(mission, node);
+  const run = worker?.run ?? null;
   const card = (
     <button
       type="button"
@@ -399,7 +400,7 @@ function NodeCard({ mission, node, selected, dimmed, onSelect, actions }: { miss
         <span className="flex min-w-0 items-center gap-x-xs text-caption text-muted-foreground" data-node-row="true">
           {/* The worker's agent mark and model on the left take only the room the marks leave, so they truncate away before a mark is pushed out; with no run the empty span still holds the marks at the right. */}
           <span className="flex min-w-0 flex-1 items-center gap-xxs overflow-hidden" data-node-run={run?.from}>
-            {run && node.worker?.agent ? <AgentMark kind={node.worker.agent} /> : null}
+            {worker?.agent ? <AgentMark kind={worker.agent} /> : null}
             {run ? <RunText run={run} /> : null}
           </span>
           {/* The marks keep one line at the right end; the ones past the card's width leave it rather than overlap, and `!` keeps its place after them (B30). */}
