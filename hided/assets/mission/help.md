@@ -35,7 +35,7 @@ Running a command again changes nothing more, so after a timeout read `hide miss
 
 ## 1. Before the plan
 
-- Run `hide mission settings` for the operator's defaults: the concurrency cap, the default scope, the worker candidates, the verification strength (`default_strength`) and whether checkers come from another company (`other_vendor`).
+- Run `hide mission settings` for the operator's defaults: the concurrency cap, the default scope, the worker candidates, the verification strength (`default_strength`) and whether checkers are a different kind of agent than the worker (`other_vendor`).
 - Run `hide agent catalog` for the agents installed here, their models, their efforts and their weekly usage.
   The catalog reads the model lists if nobody has looked at them yet and waits up to 10 seconds for them; a list it still could not read comes with `models_unavailable_reason` instead of models (`models_read_timeout` after that wait; a device's models are read on the core's machine only) and `cli_default_model`, the model the agent runs with when asked for none.
   Name such an agent's model from its candidate's fixed model, or from `cli_default_model`.
@@ -123,7 +123,7 @@ Hide enforces none of it: the gate holds only each node's own lines, the check c
 - `thorough`: a `review` and a `verify` on every change node; several checkers deciding by `majority` on the risky ones; review again at most three times.
 - After the last round the strength allows, a serious finding still open is fixed in the node; a minor or rare-case one goes to the report as a follow-up.
 - Choose every checker from the worker candidates in Settings › Conductor, as you choose workers; with no candidates, among the agents installed here.
-  With the mission's `other_vendor` true, prefer a candidate of another company than the node's worker (a codex checker for a claude worker, a claude one for a codex worker); with it false, any candidate.
+  With the mission's `other_vendor` true, prefer a different kind of agent than the node's worker (a codex checker for a claude worker, a claude one for a codex worker); with it false, any candidate.
 - A mission created before verification strength has none and shows the review and verify defaults it recorded (`checkers`) instead: follow them, or name a strength in the next plan.
 
 ## Cutting the mission and briefing a worker
