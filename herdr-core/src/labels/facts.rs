@@ -52,7 +52,7 @@ const SUBMIT_WINDOW_MS: u64 = 120_000;
 const QUEUED_SUBMIT_WINDOW_MS: u64 = 30 * 60_000;
 /// How much earlier than its submit a message may be stamped (the two clocks
 /// are the conversation's and this daemon's).
-const CLOCK_SLACK_MS: u64 = 2_000;
+pub(crate) const CLOCK_SLACK_MS: u64 = 2_000;
 
 /// Who sent a person's message.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
