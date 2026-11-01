@@ -3102,6 +3102,9 @@ impl Runtime {
                     self.snapshot.focused.pane_id = Some(pane_id.clone());
                     self.snapshot.ui_state.selected_pane_id = Some(pane_id);
                     self.yield_surface_to_terminal();
+                    // Saved now, as every other move of the keyboard is: the
+                    // daemon started next shows the tab that holds it.
+                    self.persist_ui_state();
                 }
                 self.set_reopen_notices(outcome.notices);
             }

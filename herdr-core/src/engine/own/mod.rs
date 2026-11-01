@@ -606,6 +606,10 @@ fn named_key(name: &str) -> Answer<PaneKey> {
 }
 
 impl<'g> Engine for OwnEngine<'g> {
+    fn name(&self) -> &'static str {
+        "own_engine"
+    }
+
     fn gated<'a>(&'a self, gate: Gate<'a>) -> Box<dyn Engine + 'a> {
         let mut gates: Vec<Gate<'a>> = self.gates.clone();
         gates.push(gate);
@@ -1516,8 +1520,9 @@ mod tests {
     /// out under the same ids around the holders that ran on, starting none
     /// of them again; a pane whose holder ended gets a new shell under its
     /// id, in the home folder with a line saying why when its folder is
-    /// gone; a pane whose program exited while no daemon ran closes, with
-    /// the tab it was the last pane of, and no shell takes it again; a
+    /// gone; the tab shown before is shown again; a pane whose program
+    /// exited while no daemon ran closes, with the tab it was the last pane
+    /// of, and no shell takes it again; a
     /// running holder the save did not place is gathered into a new tab of
     /// its workspace; and a new pane takes an id past every one the records
     /// hold.
@@ -1547,6 +1552,9 @@ mod tests {
         let (exited_tab, exited) = first
             .create_tab(WAIT, &workspace, &wire(&kept), "exited", false, Env::new())
             .unwrap();
+        let (shown_tab, shown) = first
+            .create_tab(WAIT, &workspace, &wire(&kept), "shown", true, Env::new())
+            .unwrap();
         let before = first.session_payload(WAIT).unwrap();
         drop(first);
         std::fs::remove_dir(&gone).unwrap();
@@ -1566,8 +1574,23 @@ mod tests {
         holders.hand(HolderRecovery {
             closed: vec![exited.clone()],
             ended: vec![ended.clone()],
-            present: vec![running.clone(), unplaced.clone()],
+            present: vec![running.clone(), shown, unplaced.clone()],
         });
+        next.restored().unwrap();
+        let active = |engine: &OwnEngine<'_>| {
+            engine
+                .session(WAIT)
+                .unwrap()
+                .workspaces
+                .iter()
+                .find(|candidate| candidate.workspace_id == workspace)
+                .map(|candidate| candidate.active_tab_id.clone())
+        };
+        assert_eq!(
+            active(&next),
+            Some(shown_tab.clone()),
+            "the tab shown before is the one shown again"
+        );
         let split = next
             .split_pane(WAIT, &running, crate::live::PaneSplitDirection::Right, None)
             .unwrap();

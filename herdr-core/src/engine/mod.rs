@@ -169,6 +169,9 @@ pub(crate) type Answer<T> = Result<T, EngineError>;
 /// [`EngineError::Unanswered`], never with another kind, and a caller that
 /// met it reads the engine again before it asks for the change twice.
 pub(crate) trait Engine: Send + Sync {
+    /// The engine's name where a diagnostic says which engine moved
+    /// something: `herdr` or `own_engine`.
+    fn name(&self) -> &'static str;
     /// This engine, with every call first passing `gate`.
     fn gated<'a>(&'a self, gate: Gate<'a>) -> Box<dyn Engine + 'a>;
     /// How the session's watcher learns it changed: from an event stream it
