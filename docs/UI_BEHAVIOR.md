@@ -994,6 +994,7 @@ The selector's foot says `바꿔도 대화는 이어져요` and `에이전트 �
 The chosen agent's word also stands left of the bar, unless it is signed in or unread.
 
 A message goes to the chosen agent, model and effort; while a reply is being written, the next message waits and `중지` ends the turn.
+A reply reads as the agent's own screen shows it: the streamed pieces of one text block join as they came, and a block the agent wrote after a tool call, a thought, a plan or in another message starts a paragraph of its own (`ReplyBlocks` in `hide-desk/src/session.rs`).
 While it thinks, the conversation shows the time since the message (`생각 중 · 3초`), and each reply carries its turn folded into one line: the time to its first words and what the agent did, counted from its tool calls (sessions read, letters, sessions started, files read, other commands), such as `생각 8초 · 세션 4개 읽음`.
 The models and efforts are the ones the agent's last session offered, and a change shows as a line in the conversation.
 Switching agents shows a line saying whether the conversation went with it, and the new agent's first session receives it.
