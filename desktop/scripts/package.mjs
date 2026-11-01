@@ -39,7 +39,7 @@ import { APP_ID, buildInstallers } from "./installers.mjs";
 import { assertNotarized, developerIdOptions, macosSigning, notarizeApp } from "./macos-signing.mjs";
 import { orderOnMain, resolveVersion } from "./build-identity.mjs";
 import { DEVICE_BUNDLE_MANIFEST, readDeviceBundles } from "./device-helpers.mjs";
-import { checkReleaseBinaries, recordReleaseBinaries } from "./release-binaries.mjs";
+import { checkReleaseBinaries, recordReleaseBinaries, RELEASE_PROGRAMS } from "./release-binaries.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repo = path.resolve(root, "..");
@@ -162,7 +162,7 @@ if (carriesDeviceKit && !fs.existsSync(path.join(deviceBundles, DEVICE_BUNDLE_MA
 const deviceManifest = carriesDeviceKit ? readDeviceBundles(deviceBundles, identity) : null;
 if (platform === "darwin" && !releasing && phase !== "compile") console.log("device_manifest=none (a local build has no device release)");
 const cargoRelease = path.join(repo, "target", "release");
-const releaseBinaries = [`hided${exe}`, `hide${exe}`, `hide-agent-hooks${exe}`];
+const releaseBinaries = RELEASE_PROGRAMS.map((name) => `${name}${exe}`);
 if (phase === "assemble") {
   checkReleaseBinaries(binariesRecord, cargoRelease, releaseBinaries, { commit, version, order });
 } else {
@@ -204,6 +204,17 @@ if (deviceManifest) extraResource.push(deviceManifest);
 for (const companion of herdr.companions) {
   const target = path.join(staged, path.basename(companion));
   fs.cpSync(companion, target, { recursive: true });
+  extraResource.push(target);
+}
+// A Windows holder runs its pane only on the pinned ConPTY runtime, which the
+// node finds in `holder-conpty` beside its program (hide_kit::holders::
+// CONPTY_SOURCE), apart from the `conpty` folder Herdr's asset ships. The
+// fetch refuses a package or a file of any digest other than
+// contracts/conpty.json's, which fails the package.
+const HOLDER_CONPTY = "holder-conpty";
+if (platform === "win32") {
+  const target = path.join(staged, HOLDER_CONPTY);
+  run("python", ["scripts/fetch-conpty.py", "--out", target], { stdio: ["ignore", "pipe", "inherit"] });
   extraResource.push(target);
 }
 const notices = path.join(resources, "THIRD_PARTY_NOTICES");
@@ -322,6 +333,13 @@ for (const companion of herdr.companions) {
   const name = path.basename(companion);
   if (!fs.existsSync(path.join(bundledResources, name))) throw new Error(`Herdr's ${name} did not land in ${bundledResources}`);
 }
+if (platform === "win32") {
+  for (const file of ["conpty.dll", "x64/OpenConsole.exe", "arm64/OpenConsole.exe", "conpty-files.json"]) {
+    if (!fs.statSync(path.join(bundledResources, HOLDER_CONPTY, file), { throwIfNoEntry: false })?.isFile()) {
+      throw new Error(`the holder's ConPTY runtime ${file} did not land in ${path.join(bundledResources, HOLDER_CONPTY)}`);
+    }
+  }
+}
 if (platform === "darwin") {
   const helper = path.join(bundle, "Contents", "MacOS", path.basename(notificationHelper));
   if (!fs.statSync(helper, { throwIfNoEntry: false })?.isFile()) throw new Error(`the notification permission helper did not land at ${helper}`);
@@ -342,7 +360,7 @@ const installers = await buildInstallers({ app: bundle, version, out: release, s
 if (deviceManifest) {
   const manifest = JSON.parse(fs.readFileSync(path.join(bundledResources, DEVICE_BUNDLE_MANIFEST), "utf8"));
   for (const [devicePlatform, { asset }] of Object.entries(manifest.platforms)) {
-    for (const name of ["hided", "hide", "hide-agent-hooks", "herdr"]) {
+    for (const name of ["hided", "hide", "hide-agent-hooks", "hide-holder", "herdr"]) {
       if (fs.existsSync(path.join(bundledResources, `${name}-${devicePlatform}`))) throw new Error("foreign device binaries must not ship in the app");
     }
     // The archives and their manifest are release assets once, beside the
