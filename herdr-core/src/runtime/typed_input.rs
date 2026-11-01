@@ -60,10 +60,6 @@ pub(crate) struct Resubmit {
     /// Someone answered the agent's screen since the last typing and the
     /// agent's record has a source, so an empty composer is typed into.
     pub answered: bool,
-    /// The agent started a turn after this typing with no other input to
-    /// start it (`Runtime::note_turn_started`): it took the brief whatever
-    /// its record says, so an empty composer is never typed into again.
-    pub taken: bool,
 }
 
 /// Where an unconfirmed input stands with the fresh session read asked
@@ -226,10 +222,22 @@ impl Runtime {
                 });
                 continue;
             }
-            let taken = self.plans.input_turn_started.get(&spawn.id) == Some(&input.attempts)
-                || turn_took_brief(ledger, observation, input);
-            if taken {
+            // Any other agent took the brief once its hook reported a turn
+            // started after the typing that nothing else could have
+            // started; the core remembers that typing as taken, so the turn
+            // ending first changes nothing.
+            if self.plans.input_turn_started.get(&spawn.id) == Some(&input.attempts)
+                || turn_took_brief(ledger, observation, input)
+            {
                 turn_started.push((spawn.id.clone(), input.attempts));
+                work.push(InputWork {
+                    key: InputKey::Spawn(spawn.id.clone()),
+                    observation: observation.clone(),
+                    notice: None,
+                    resubmit: None,
+                    recorded: Some("turn"),
+                });
+                continue;
             }
             let standing = typed::standing(input, Some(observation), now);
             self.note_verdict(&mut verdicts, &spawn.id, input.attempts, standing);
@@ -280,7 +288,6 @@ impl Runtime {
                     attempts: input.attempts,
                     left: input.attempts < typed::INPUT_ATTEMPTS,
                     answered: source.is_ok() && typed::retype_due(input, observation, now),
-                    taken,
                 });
             if notice.is_some() || resubmit.is_some() {
                 work.push(InputWork {
@@ -400,7 +407,7 @@ impl Runtime {
     /// core has no turn for the pane, where the doorbell's last pass found
     /// this same typing (`plans.input_verdicts`), so the row and `hide agent
     /// show` keep saying what they said. Unsettled only when no pass judged
-    /// this typing yet.
+    /// this typing yet; confirmed once the agent took it by a turn.
     pub(super) fn input_standing(
         &self,
         id: &str,
@@ -408,6 +415,11 @@ impl Runtime {
         observation: Option<&Observation>,
         now: u64,
     ) -> Standing {
+        // A brief its agent took by a turn is confirmed by that turn, ahead
+        // of the store's record of it (`plans.input_turn_started`).
+        if self.plans.input_turn_started.get(id) == Some(&input.attempts) {
+            return Standing::Confirmed;
+        }
         match typed::standing(input, observation, now) {
             Standing::Unsettled => self
                 .plans
@@ -643,12 +655,14 @@ impl Runtime {
     }
 }
 
-/// Whether the agent took the brief's latest typing by starting a turn: the
-/// core's turn for it works and started after that typing, and nothing else
-/// could have started it, since no input reached the pane after the typing
-/// (the brief's own `agent.prompt` is no noted input) and no letter's bell
-/// was typed there since. A turn this misses (one shorter than a pass, input
-/// during it, a restart) leaves the brief judged by its record alone.
+/// Whether the agent took the brief's latest typing by starting a turn: its
+/// own hook reports the core's turn working (Herdr's reading alone never
+/// counts) since after that typing, and nothing else could have started it,
+/// since no input reached the pane after the typing (the brief's own
+/// `agent.prompt` is no noted input) and no letter's bell was typed there
+/// since. A turn this misses (one shorter than a pass, input during it, a
+/// restart, an agent whose hook reports no turn) leaves the brief judged by
+/// its record alone.
 fn turn_took_brief(
     ledger: &crate::delivery::ledger::Ledger,
     observation: &Observation,
@@ -657,6 +671,7 @@ fn turn_took_brief(
     let typed_at = input.typed_at_unix_ms;
     let started = observation.projected_turn().is_some_and(|projected| {
         projected.turn.activity == crate::agent_state::AgentActivity::Working
+            && projected.turn.reported
             && projected.working_since(observation) >= typed_at
     });
     let pane = &observation.actor.pane_id;
@@ -1051,41 +1066,61 @@ pub(crate) mod tests {
         assert!(resubmit.answered);
     }
 
-    /// A child whose record of the brief never matches, but whose turn
-    /// started after the typing with nothing else to start it, took the
-    /// brief: once it rests unconfirmed its parent is still told, and its
-    /// composer is still read for a brief left there, but even after someone
-    /// answered its screen the brief is never typed again. A turn something
-    /// else could have started (a key, a letter's bell) proves nothing.
+    /// A child whose record of the brief never matches, but whose hook
+    /// reported a turn started after the typing with nothing else to start
+    /// it, took the brief: the turn is its record, as for omp. Its parent is
+    /// never told, its row asks nothing, `hide agent show` lists no pending
+    /// brief, and nothing is typed again, during the turn and after it,
+    /// whoever answers its screen.
     #[test]
-    fn a_brief_whose_turn_started_after_the_typing_is_never_typed_again() {
+    fn a_brief_whose_hook_reports_a_turn_after_the_typing_is_confirmed_by_that_turn() {
         const T: u64 = 100_000;
-        let rested = |runtime: &mut Runtime| {
-            child_reads(runtime, "idle", None, T + 60_000);
+        let (_root, mut runtime, spawn) = spawned(true, T);
+        child_reads(&mut runtime, "idle", Some(HookTurn::Working), T + 1_000);
+        let work = runtime.typed_input_work(T + 1_000);
+        assert_eq!(work.len(), 1);
+        assert_eq!(work[0].recorded, Some("turn"));
+        assert!(work[0].notice.is_none() && work[0].resubmit.is_none());
+
+        // The turn ends with no record of the brief, and someone answers.
+        child_reads(&mut runtime, "idle", Some(HookTurn::Done), T + 60_000);
+        runtime.note_delivery_key_at("child", T + 61_000);
+        let late = T + 600_000;
+        let work = runtime.typed_input_work(late);
+        assert_eq!(work.len(), 1);
+        assert_eq!(work[0].recorded, Some("turn"));
+        assert!(work[0].notice.is_none() && work[0].resubmit.is_none());
+        assert!(runtime.take_session_rereads().is_empty());
+        assert!(runtime.input_asks(late).is_empty(), "the row asks nothing");
+        assert_eq!(shown_phase(&runtime, &spawn), serde_json::Value::Null);
+    }
+
+    /// A turn that only Herdr reads, or one something else could have
+    /// started (a key, a letter's bell after the typing), is no record: the
+    /// brief is judged by its record alone, and its parent hears once it
+    /// rests unconfirmed.
+    #[test]
+    fn a_turn_herdr_alone_reads_or_other_input_started_is_no_record_of_the_brief() {
+        const T: u64 = 100_000;
+        let judged = |runtime: &mut Runtime| {
+            assert!(runtime.typed_input_work(T + 1_000).is_empty(), "it works");
+            child_reads(runtime, "idle", Some(HookTurn::Done), T + 60_000);
             let asked = T + 60_000 + RECORD_WAIT_MS;
             runtime.typed_input_work(asked);
-            let at = asked + REREAD_WAIT_MS;
-            assert!(runtime.typed_input_work(at)[0].notice.is_some());
-            runtime.note_delivery_key_at("child", at + 1_000);
-            let quiet = at + 1_000 + crate::delivery::INPUT_QUIET_MS;
-            runtime.typed_input_work(quiet)[0].resubmit.clone().unwrap()
+            runtime.typed_input_work(asked + REREAD_WAIT_MS)[0]
+                .notice
+                .is_some()
         };
 
         let (_root, mut runtime, _) = spawned(false, T);
         child_reads(&mut runtime, "working", None, T + 1_000);
-        assert!(runtime.typed_input_work(T + 1_000).is_empty(), "it works");
-        let resubmit = rested(&mut runtime);
-        assert!(resubmit.answered, "its screen was answered");
-        assert!(resubmit.taken, "but its turn took the brief");
+        assert!(judged(&mut runtime), "Herdr's reading alone");
 
-        // A key reached the pane after the typing: the turn may be its.
         let (_root, mut runtime, _) = spawned(false, T);
         runtime.note_delivery_key_at("child", T + 500);
-        child_reads(&mut runtime, "working", None, T + 1_000);
-        runtime.typed_input_work(T + 1_000);
-        assert!(!rested(&mut runtime).taken);
+        child_reads(&mut runtime, "idle", Some(HookTurn::Working), T + 1_000);
+        assert!(judged(&mut runtime), "a key after the typing");
 
-        // A letter's bell was typed there after the typing.
         let (_root, mut runtime, _) = spawned(false, T);
         let mut ledger = (**runtime.delivery_ledger.as_ref().unwrap()).clone();
         let sender = ledger.agents[0].actor.clone();
@@ -1114,9 +1149,8 @@ pub(crate) mod tests {
             .unwrap()
             .bell_typed_at_unix_ms = Some(T + 500);
         runtime.publish_delivery(Arc::new(ledger), false);
-        child_reads(&mut runtime, "working", None, T + 1_000);
-        runtime.typed_input_work(T + 1_000);
-        assert!(!rested(&mut runtime).taken);
+        child_reads(&mut runtime, "idle", Some(HookTurn::Working), T + 1_000);
+        assert!(judged(&mut runtime), "a letter's bell after the typing");
     }
 
     /// The phase `hide agent show` gives the spawn's brief, as its parent
