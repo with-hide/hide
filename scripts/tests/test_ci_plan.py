@@ -16,16 +16,17 @@ CRATES = ci.cargo_crates(ROOT)
 EVERY_PACKAGE = sorted(crate["name"] for crate in CRATES.values())
 # The lanes that take a macOS runner; every other check on macOS is a job of
 # `nightly.yml`.
-MACOS_LANES = {"os-contract-macos", "vt", "desktop-e2e", "package", "omp-contract"}
+MACOS_LANES = {"os-contract-macos", "vt", "holder-restart", "desktop-e2e", "package", "omp-contract"}
 # What a push, the nightly and an unclassified path plan: every lane but
-# `package` and `agent-clis`, which are planned by their own paths only.
+# `package`, `agent-clis` and `holder-restart`, which are planned by their own
+# paths only.
 FULL = [
     "policy", "rust", "checks", "os-contract", "os-contract-macos", "vt", "agy-contract", "omp-contract", "agent-journey",
     "windows-check", "windows-e2e", "windows-desktop", "windows-wsl", "web-e2e", "remote-mailbox", "desktop-e2e",
 ]
 # Every lane, independently named: CI edits must exercise the planner's decisions.
 ALL = [
-    "policy", "rust", "checks", "os-contract", "os-contract-macos", "vt", "agy-contract", "omp-contract", "agent-journey",
+    "policy", "rust", "checks", "os-contract", "os-contract-macos", "vt", "holder-restart", "agy-contract", "omp-contract", "agent-journey",
     "agent-clis", "windows-check", "windows-e2e", "windows-desktop", "windows-wsl", "web-e2e", "remote-mailbox", "desktop-e2e",
     "package",
 ]
@@ -588,17 +589,23 @@ class NamedPaths(unittest.TestCase):
     def test_a_pin_or_its_installer_plans_the_lanes_that_install_pinned_clis(self):
         for path in ("contracts/agent-clis.json", "scripts/install-agent-clis.py"):
             with self.subTest(path=path):
-                self.assertEqual(self.lanes(path), {"policy", "agy-contract", "agent-clis"})
+                self.assertEqual(self.lanes(path), {"policy", "agy-contract", "agent-clis", "holder-restart"})
         self.assertEqual(plan(".github/workflows/agent-clis.yml")["lanes"], ALL)
         self.assertEqual(self.lanes("scripts/agent_journey/clis.py"),
-                         {"policy", "agent-journey", "agent-clis", "agy-contract"})
+                         {"policy", "agent-journey", "agent-clis", "agy-contract", "holder-restart"})
 
     def test_the_journey_and_its_stand_ins_plan_the_journey_lane(self):
         for path in ("scripts/agent_journey/cells.py", "scripts/agent-journey-check.py", "scripts/agent-journey-lane.py"):
             with self.subTest(path=path):
                 self.assertEqual(self.lanes(path), {"policy", "agent-journey"})
-        # The installer finds the contract's full-access flags in each CLI's help.
-        self.assertEqual(self.lanes("contracts/agent-journey.json"), {"policy", "agent-journey", "agent-clis"})
+        # The installer finds the contract's full-access flags in each CLI's
+        # help, and the holder restart lane reads the agent table too.
+        self.assertEqual(self.lanes("contracts/agent-journey.json"),
+                         {"policy", "agent-journey", "agent-clis", "holder-restart"})
+        # The holder restart lane reads the fake model's helpers.
+        for path in ("scripts/agent_journey/fake_model.py", "scripts/agent_journey/fake_lane.py"):
+            with self.subTest(path=path):
+                self.assertEqual(self.lanes(path), {"policy", "agent-journey", "holder-restart"})
         for path in ("web/e2e/shims/claude-shim.c", "web/e2e/shims/live-check.h", "web/e2e/shims/spawn-provider.c"):
             with self.subTest(path=path):
                 self.assertEqual(self.lanes(path), {"policy", "checks", "web-e2e", "windows-e2e", "desktop-e2e",
@@ -610,10 +617,10 @@ class NamedPaths(unittest.TestCase):
                 self.assertIn("rust", self.lanes(path))
         # The live check the journey runs and the web e2e drives, and its
         # Windows forms' test, which only the journey's Windows job runs.
-        for path in ("scripts/agent_live_check/processes.py", "scripts/agent_live_check/windows.py",
-                     "scripts/agent-live-check.py"):
+        for path in ("scripts/agent_live_check/processes.py", "scripts/agent_live_check/windows.py"):
             with self.subTest(path=path):
-                self.assertEqual(self.lanes(path), {"policy", "web-e2e", "agent-journey"})
+                self.assertEqual(self.lanes(path), {"policy", "web-e2e", "agent-journey", "holder-restart"})
+        self.assertEqual(self.lanes("scripts/agent-live-check.py"), {"policy", "web-e2e", "agent-journey"})
         self.assertEqual(self.lanes("scripts/tests/test_agent_live_windows.py"), {"policy", "agent-journey"})
         self.assertEqual(self.lanes("scripts/tests/test_agent_live_protection.py"), {"policy"})
 
@@ -825,7 +832,7 @@ def runner_jobs(block):
     if "uses: ./.github/workflows/desktop-e2e.yml" in block:
         # Each shard builds in place.
         return int(re.search(r"\n      shards: (\d+)", block).group(1))
-    if any(f"uses: ./.github/workflows/{name}.yml" in block for name in ("os-contract", "vt", "agy-contract", "omp-contract", "agent-clis")):
+    if any(f"uses: ./.github/workflows/{name}.yml" in block for name in ("os-contract", "vt", "holder-restart", "agy-contract", "omp-contract", "agent-clis")):
         # A lane whose macOS leg follows the plan names both lists; the most is the longer.
         systems = re.search(r"\n      systems: (.*)", block).group(1)
         return max(len(json.loads(found)) for found in re.findall(r"'(\[[^']*\])'", systems))
@@ -950,8 +957,10 @@ class Workflows(unittest.TestCase):
         # twenty-run median requires six web shards. The WSL device lane's
         # Linux build and Windows run add two, planned only for the crates the
         # WSL link crosses. The vt lane's three legs, planned only for a change
-        # to hide-vt's build, add three.
-        self.assertLessEqual(most, 38, "a run starts more jobs than the suites and native SDK contracts need")
+        # to hide-vt's build, add three. The holder restart lane's three legs,
+        # planned only for a change to the holder, the node's holder code, the
+        # agent pins or the lane's scripts, add three.
+        self.assertLessEqual(most, 41, "a run starts more jobs than the suites and native SDK contracts need")
         testing = (ROOT / "docs/TESTING.md").read_text()
         self.assertIn(f"starts at most {most} jobs", testing)
 
@@ -1021,11 +1030,12 @@ class MacosOnPullRequests(unittest.TestCase):
             ("hide-platform/tests/it/user_agents.rs", {"os-contract-macos", "omp-contract"}),
             ("desktop/scripts/macos-signing.mjs", {"package"}),
             ("desktop/scripts/package.mjs", {"package"}),
-            # No narrower rule names these, so they plan every lane and the package.
-            ("desktop/native/notification-status/main.swift", set(MACOS_LANES)),
-            ("desktop/resources/entitlements/app.plist", set(MACOS_LANES)),
-            ("hide-vt/build.rs", {"vt"}),
-            ("contracts/herdr-bundle.json", set(MACOS_LANES)),
+            # No narrower rule names these, so they plan every lane and the package
+            # (not `holder-restart`, which only its own paths plan).
+            ("desktop/native/notification-status/main.swift", set(MACOS_LANES) - {"holder-restart"}),
+            ("desktop/resources/entitlements/app.plist", set(MACOS_LANES) - {"holder-restart"}),
+            ("hide-vt/build.rs", {"vt", "holder-restart"}),
+            ("contracts/herdr-bundle.json", set(MACOS_LANES) - {"holder-restart"}),
             (".github/workflows/pr.yml", set(MACOS_LANES)),
             (".github/workflows/desktop-e2e.yml", set(MACOS_LANES)),
             (".github/actions/rust-cache/action.yml", set(MACOS_LANES)),
@@ -1092,7 +1102,7 @@ class MacosOnPullRequests(unittest.TestCase):
     def test_pr_yml_runs_the_macos_legs_the_plan_names(self):
         jobs = pr_jobs()
         self.assertIn("macos: ${{ steps.plan.outputs.macos }}", jobs["plan"])
-        for lane in ("vt", "omp-contract"):
+        for lane in ("vt", "holder-restart", "omp-contract"):
             with self.subTest(lane=lane):
                 expression = re.search(r"\n      systems: \$\{\{(.+?)\}\}", jobs[lane]).group(1)
                 self.assertEqual(json.loads(evaluate(expression, "true")), ["linux", "macos", "windows"])
@@ -1109,14 +1119,15 @@ class MacosOnPullRequests(unittest.TestCase):
 class Aggregate(unittest.TestCase):
     def test_nightly_requires_selected_jobs_and_rejects_failed_or_missing_agent_checks(self):
         jobs = {"web-e2e-macos", "web-e2e-windows", "remote-mailbox-macos", "agy-contract-all",
-                "agent-trust-contract-all", "agent-journey", "desktop-e2e", "perf", "verify", "package"}
+                "agent-trust-contract-all", "agent-journey", "holder-restart", "desktop-e2e", "perf", "verify", "package"}
         for lane, selected in (
             ("", jobs - {"web-e2e-windows"}),
             ("all", jobs - {"web-e2e-windows"}),
-            ("linux", {"agy-contract-all", "agent-trust-contract-all", "agent-journey", "desktop-e2e"}),
-            ("macos", {"agy-contract-all", "agent-trust-contract-all", "agent-journey", "desktop-e2e",
+            ("linux", {"agy-contract-all", "agent-trust-contract-all", "agent-journey", "holder-restart", "desktop-e2e"}),
+            ("macos", {"agy-contract-all", "agent-trust-contract-all", "agent-journey", "holder-restart", "desktop-e2e",
                        "web-e2e-macos", "remote-mailbox-macos", "perf"}),
-            ("windows", {"agy-contract-all", "agent-trust-contract-all", "agent-journey", "desktop-e2e", "web-e2e-windows"}),
+            ("windows", {"agy-contract-all", "agent-trust-contract-all", "agent-journey", "holder-restart", "desktop-e2e",
+                         "web-e2e-windows"}),
             ("agy", {"agy-contract-all", "agent-trust-contract-all"}),
         ):
             needs = {job: {"result": "success" if job in selected else "skipped"} for job in jobs}

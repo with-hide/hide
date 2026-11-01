@@ -33,3 +33,10 @@ vt100 = "=0.16.2"
 
 [target.'cfg(unix)'.dependencies]
 libc = "=0.2.190"
+
+# The node the holder restart lane and the holder measurements drive
+# (docs/TESTING.md, The holder restart lane). Built by those lanes only:
+# `cargo test` does not build it.
+[[example]]
+name = "holder_node"
+test = false
