@@ -64,6 +64,8 @@ use super::session::{
 ///   terminal sessions and starts, adopts and reads no pane holder; the app
 ///   and the daemon behave as they always have. Nobody but a developer of
 ///   the next engine sets it: the app shows no holder pane in this bundle.
+/// - Removal: deleted in bundle 4, the switch release, once the new engine
+///   is the default (docs/ARCHITECTURE.md, The pane holder).
 pub const SWITCH: &str = "HIDE_DEV_PANE_HOLDER";
 
 /// Whether [`SWITCH`] is on.
