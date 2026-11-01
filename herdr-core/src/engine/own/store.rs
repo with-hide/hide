@@ -195,42 +195,71 @@ pub(super) fn parse(text: &str) -> Result<Saved, String> {
     serde_json::from_value(value).map_err(|error| format!("the file is not a session: {error}"))
 }
 
-/// Moves `path` into `backups` under a name of its own, then removes all but
-/// the newest [`BACKUPS_KEPT`] there: where it went.
+/// Moves `path` into `backups` under a name that sorts after every backup
+/// already there, then removes all but the newest [`BACKUPS_KEPT`]: where it
+/// went.
 fn set_aside(path: &Path, backups: &Path) -> Result<PathBuf, String> {
     hide_platform::fs::private::create_dir_all(backups)
         .map_err(|error| format!("{} could not be made: {error}", backups.display()))?;
-    let stamp = std::time::SystemTime::now()
+    let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since| since.as_millis());
-    // Named by when it was set aside, so the names sort oldest first.
-    let mut turn = 0;
-    let mut kept = backups.join(format!("session-{stamp:015}-{turn:03}.json"));
-    while kept.exists() {
-        turn += 1;
-        kept = backups.join(format!("session-{stamp:015}-{turn:03}.json"));
-    }
+    let newest = backup_names(backups)
+        .last()
+        .and_then(|name| backup_order(name));
+    let kept = backups.join(backup_name(next_backup_order(now, newest)));
     std::fs::rename(path, &kept)
         .map_err(|error| format!("{} could not be moved: {error}", path.display()))?;
-    let mut found: Vec<PathBuf> = std::fs::read_dir(backups)
+    let found = backup_names(backups);
+    let excess = found.len().saturating_sub(BACKUPS_KEPT);
+    for old in found.into_iter().take(excess) {
+        let _ = std::fs::remove_file(backups.join(old));
+    }
+    Ok(kept)
+}
+
+/// The most turns one millisecond's name carries before the next backup
+/// moves on to the following millisecond, so names keep their fixed width.
+const BACKUP_TURNS: u32 = 1000;
+
+/// The backup names in `backups`, oldest first.
+fn backup_names(backups: &Path) -> Vec<String> {
+    let mut found: Vec<String> = std::fs::read_dir(backups)
         .map(|entries| {
             entries
                 .filter_map(Result::ok)
-                .map(|entry| entry.path())
-                .filter(|path| {
-                    path.file_name()
-                        .and_then(|name| name.to_str())
-                        .is_some_and(|name| name.starts_with("session-") && name.ends_with(".json"))
-                })
+                .filter_map(|entry| entry.file_name().into_string().ok())
+                .filter(|name| name.starts_with("session-") && name.ends_with(".json"))
                 .collect()
         })
         .unwrap_or_default();
     found.sort();
-    let excess = found.len().saturating_sub(BACKUPS_KEPT);
-    for old in found.into_iter().take(excess) {
-        let _ = std::fs::remove_file(old);
+    found
+}
+
+/// The millisecond and turn a backup name carries.
+fn backup_order(name: &str) -> Option<(u128, u32)> {
+    let (stamp, turn) = name
+        .strip_prefix("session-")?
+        .strip_suffix(".json")?
+        .split_once('-')?;
+    Some((stamp.parse().ok()?, turn.parse().ok()?))
+}
+
+/// The order of the next backup: now, unless that would not sort after the
+/// newest one already kept (several in one millisecond, or a clock set back),
+/// and then one turn after it.
+fn next_backup_order(now: u128, newest: Option<(u128, u32)>) -> (u128, u32) {
+    match newest {
+        Some((stamp, _)) if stamp < now => (now, 0),
+        Some((stamp, turn)) if turn + 1 < BACKUP_TURNS => (stamp, turn + 1),
+        Some((stamp, _)) => (stamp + 1, 0),
+        None => (now, 0),
     }
-    Ok(kept)
+}
+
+fn backup_name((stamp, turn): (u128, u32)) -> String {
+    format!("session-{stamp:015}-{turn:03}.json")
 }
 
 /// Replaces the saved session at `path` with `saved`, durably.
@@ -421,6 +450,24 @@ mod tests {
             ["not a session 2", "not a session 3", "not a session 4"]
         );
         assert!(matches!(read(&path, &backups), Read::Missing));
+    }
+
+    #[test]
+    fn a_backup_always_sorts_after_the_ones_already_kept() {
+        assert_eq!(next_backup_order(7, None), (7, 0));
+        assert_eq!(next_backup_order(7, Some((5, 4))), (7, 0));
+        // Several in one millisecond, and a clock set back.
+        assert_eq!(next_backup_order(7, Some((7, 0))), (7, 1));
+        assert_eq!(next_backup_order(3, Some((7, 2))), (7, 3));
+        assert_eq!(next_backup_order(7, Some((7, 999))), (8, 0));
+        let names: Vec<String> = [(7, 2), (7, 3), (7, 999), (8, 0)]
+            .into_iter()
+            .map(backup_name)
+            .collect();
+        let mut sorted = names.clone();
+        sorted.sort();
+        assert_eq!(sorted, names);
+        assert_eq!(backup_order(&names[2]), Some((7, 999)));
     }
 
     #[test]
