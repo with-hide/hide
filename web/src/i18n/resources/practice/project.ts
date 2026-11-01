@@ -3,7 +3,7 @@ import type { Catalog, Catalogs } from "../../schema";
 // Chapter 6's words (`practice/chapters/project.ts`).
 const en = {
   "practice.project.title": "The project at a glance",
-  "practice.project.summary": "The right lane: status, to do, Explorer, Hide AI",
+  "practice.project.summary": "The right lane: counts, the last 7 days, Explorer, Hide AI",
   "practice.project.lane.quest": "Open the lane",
   "practice.project.lane.kick": "An agent is fixing a payment bug",
   "practice.project.lane.title": "The whole project, on the right",
@@ -39,7 +39,7 @@ const en = {
 
 const ko = {
   "practice.project.title": "프로젝트 한눈에",
-  "practice.project.summary": "오른쪽 레인: 현황, 할 일, 탐색기, Hide AI",
+  "practice.project.summary": "오른쪽 레인: 숫자, 최근 7일, 탐색기, Hide AI",
   "practice.project.lane.quest": "레인 열기",
   "practice.project.lane.kick": "연습 프로젝트에서 에이전트가 결제 오류를 고치는 중",
   "practice.project.lane.title": "오른쪽에서 프로젝트 전체를",
@@ -75,7 +75,7 @@ const ko = {
 
 const zhCN = {
   "practice.project.title": "项目一览",
-  "practice.project.summary": "右侧面板：概况、待办、文件浏览器、Hide AI",
+  "practice.project.summary": "右侧面板：数字、最近 7 天、文件浏览器、Hide AI",
   "practice.project.lane.quest": "打开右侧面板",
   "practice.project.lane.kick": "练习项目里，一个智能体正在修复支付错误",
   "practice.project.lane.title": "在右边看整个项目",
@@ -111,7 +111,7 @@ const zhCN = {
 
 const ja = {
   "practice.project.title": "プロジェクトをひと目で",
-  "practice.project.summary": "右のレーン：状況、やること、エクスプローラー、Hide AI",
+  "practice.project.summary": "右のレーン：件数、直近 7 日、エクスプローラー、Hide AI",
   "practice.project.lane.quest": "レーンを開く",
   "practice.project.lane.kick": "エージェントが決済エラーを修正中",
   "practice.project.lane.title": "右側でプロジェクト全体を",
