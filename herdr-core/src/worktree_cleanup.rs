@@ -1576,9 +1576,10 @@ const DELETE_WAIT: Duration = Duration::from_secs(600);
 fn close_checkout(
     context: &CleanupPlace,
     workspace_id: &str,
-    id: u64,
+    id: Option<u64>,
     path: &str,
     reviewed: &[String],
+    wait: crate::worktree_control::ProcessWait,
 ) -> Result<(), Refusal> {
     let unverified = |message: String| Refusal::skipped("unverified", message);
     let (in_use, facts) =
@@ -1608,7 +1609,7 @@ fn close_checkout(
         context.node.as_ref(),
         &[path.to_owned()],
         &to_close,
-        crate::worktree_control::ProcessWait::for_folder_removal(true),
+        wait,
         crate::worktree_control::CONFIRM_TIMEOUT,
     )
     .map_err(|message| Refusal::failed("close_refused", message))
@@ -1648,6 +1649,93 @@ fn panes_to_close(
         .filter(|pane| live.iter().any(|(live, _)| live == *pane))
         .cloned()
         .collect())
+}
+
+/// A linked worktree of this machine whose folder its node found gone while
+/// panes still stand in it, which a removal outside Hide (`git worktree
+/// remove` from a script or an agent) leaves behind: what the runtime saw
+/// under its lock, for the worker that closes those panes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GoneCheckout {
+    /// The project the checkout is a row of.
+    pub workspace_id: String,
+    /// The Herdr workspaces whose tabs stand in the checkout, for the log.
+    pub herdr_workspace_ids: Vec<String>,
+    pub path: String,
+    /// The checkout's panes as the runtime listed them.
+    pub panes: Vec<String>,
+}
+
+/// Closes a gone checkout's panes once its node confirms the folder is
+/// missing (`present`), by the cleanup's own close (`close`), which rereads
+/// what is in use and closes only shells and finished agents. A folder that
+/// is there again or that the node could not read closes nothing.
+fn close_gone_checkout(
+    present: impl FnOnce() -> Result<PathState, String>,
+    close: impl FnOnce() -> Result<(), Refusal>,
+) -> Result<(), Refusal> {
+    match present().map_err(|message| Refusal::skipped("unverified", message))? {
+        PathState::Missing => close(),
+        PathState::Real { .. } => Err(Refusal::skipped(
+            "present",
+            "The folder is there again. No panes were closed.",
+        )),
+        PathState::Unreadable { reason } => Err(Refusal::skipped("unverified", reason)),
+    }
+}
+
+/// Starts the close of one gone checkout's panes off the runtime lock. Herdr
+/// closes a workspace with its last pane, so a workspace that held only
+/// this checkout goes with them. The answer is the diagnostic log's: the row
+/// leaves the sidebar when Herdr reports the panes gone, and a checkout kept
+/// stays a row the operator can still remove.
+pub(crate) fn spawn_gone_checkout_close(
+    context: CleanupPlace,
+    gone: GoneCheckout,
+) -> Result<(), String> {
+    std::thread::Builder::new()
+        .name("hide-gone-worktree-close".into())
+        .spawn(move || {
+            let result = close_gone_checkout(
+                || {
+                    real_paths(context.node.as_ref(), &[PathBuf::from(&gone.path)])
+                        .map(|mut states| states.remove(0))
+                },
+                // The folder is already gone, so no process can hold it.
+                || {
+                    close_checkout(
+                        &context,
+                        &gone.workspace_id,
+                        None,
+                        &gone.path,
+                        &gone.panes,
+                        crate::worktree_control::ProcessWait::Skip,
+                    )
+                },
+            );
+            let (kind, outcome, code, reason) = match &result {
+                Ok(()) => ("gone_worktree.closed", "closed", None, None),
+                Err(refusal) => (
+                    "gone_worktree.kept",
+                    refusal.outcome,
+                    Some(refusal.code),
+                    Some(refusal.message.as_str()),
+                ),
+            };
+            crate::diagnostic!(serde_json::json!({
+                "component": "cleanup",
+                "kind": kind,
+                "workspace_id": gone.workspace_id,
+                "herdr_workspace_ids": gone.herdr_workspace_ids,
+                "checkout": gone.path,
+                "pane_count": gone.panes.len(),
+                "outcome": outcome,
+                "reason_code": code,
+                "reason": reason,
+            }));
+        })
+        .map(|_| ())
+        .map_err(|error| format!("Gone worktree close worker could not start: {error}"))
 }
 
 pub fn spawn_confirm(
@@ -1701,7 +1789,16 @@ pub fn spawn_confirm(
                 &review,
                 &selected,
                 refresh,
-                |path, panes| close_checkout(&context, &review.workspace_id, id, path, panes),
+                |path, panes| {
+                    close_checkout(
+                        &context,
+                        &review.workspace_id,
+                        Some(id),
+                        path,
+                        panes,
+                        crate::worktree_control::ProcessWait::for_folder_removal(true),
+                    )
+                },
                 |path| {
                     let call = Call::WorktreeRemoveClean {
                         root: root.to_string_lossy().into_owned(),
@@ -3412,5 +3509,40 @@ mod tests {
         let cell = wire["cell_results"][0].as_object().unwrap();
         assert!(!cell.contains_key("reason"));
         assert_eq!(cell["reason_code"], "tracked_files");
+    }
+
+    /// A gone worktree's panes close only on the node's `missing`: a folder
+    /// the node could not read, one that is back, or a node that did not
+    /// answer closes nothing.
+    #[test]
+    fn a_gone_checkout_closes_only_when_its_node_confirms_the_folder_missing() {
+        let attempt = |present: Result<PathState, String>| {
+            let mut closed = false;
+            let result = close_gone_checkout(
+                || present,
+                || {
+                    closed = true;
+                    Ok(())
+                },
+            );
+            (result.err().map(|refusal| refusal.code), closed)
+        };
+        assert_eq!(attempt(Ok(PathState::Missing)), (None, true));
+        assert_eq!(
+            attempt(Ok(PathState::Unreadable {
+                reason: "Permission denied".into()
+            })),
+            (Some("unverified"), false)
+        );
+        assert_eq!(
+            attempt(Ok(PathState::Real {
+                path: "/w/topic".into()
+            })),
+            (Some("present"), false)
+        );
+        assert_eq!(
+            attempt(Err("the node did not answer".into())),
+            (Some("unverified"), false)
+        );
     }
 }

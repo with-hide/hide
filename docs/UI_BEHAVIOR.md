@@ -2217,7 +2217,7 @@ The text that results is ordinary Markdown, with nothing hidden or special in it
 
 ## Projects and checkout context
 
-Core owner: `herdr-core/src/sidebar.rs`, `herdr-core/src/project_context.rs`, `herdr-core/src/worktrees.rs`, `herdr-core/src/disk.rs` (measured on the node by `hide-host/src/disk.rs` and `hide-host/src/disk_layers.rs`), `herdr-core/src/worktree_cleanup.rs`, `herdr-core/src/runtime/projects.rs`. Web owner: `web/src/sidebar.tsx`, `web/src/projects.ts`.
+Core owner: `herdr-core/src/sidebar.rs`, `herdr-core/src/project_context.rs`, `herdr-core/src/worktrees.rs`, `herdr-core/src/disk.rs` (measured on the node by `hide-host/src/disk.rs` and `hide-host/src/disk_layers.rs`), `herdr-core/src/worktree_cleanup.rs`, `herdr-core/src/runtime/projects.rs`, `herdr-core/src/runtime/gone_worktrees.rs`. Web owner: `web/src/sidebar.tsx`, `web/src/projects.ts`.
 
 ### Sidebar type, rows and width
 
@@ -2244,6 +2244,9 @@ This is the 프로젝트 list; the `프로젝트 | 태스크` switch above it, �
 The sidebar hierarchy is Project > Workspace > Group > Tab > Agents; a Workspace corresponds to one checkout path, including a plain folder.
 Two checkouts of one repository share a project cycle.
 A project is always a repository and a worktree is always a checkout under it: a worktree whose folder was removed while a pane still sits in it, or that a registration still names, stays a row of its repository, drawn as a missing folder, and is never a project of its own.
+A linked worktree of this machine removed outside Hide, such as by `git worktree remove` in a script or by an agent cleaning up after itself, leaves the panes Herdr had open in it, and Hide closes them on its own: once this machine's node has answered that the folder is not there, and only when every pane in it is a shell or an agent that finished, so Herdr closes a workspace that held nothing else and the row leaves the cleanup fold without the operator.
+A folder the node could not read, an agent working or waiting on the operator (or one whose delegated agent is), a program other than the shell in a pane, and a tab the operator named keep the row, and the operator removes it as below; Hide starts that close once per row, records it in the diagnostic log (`gone_worktree.close_requested`, then `gone_worktree.closed` or `gone_worktree.kept` with its reason), and shows nothing on screen.
+A connected device's gone worktree, and a plain folder whose folder is gone, are not closed this way.
 Only a folder that neither its node, Git's worktree list nor Herdr's record of the checkout places in a repository is a project row of its own ([ARCHITECTURE.md](ARCHITECTURE.md), Workspaces in the web shell).
 Each checkout row shows a kind glyph: home for the stored primary checkout, otherwise the pull-request lifecycle icon when current GitHub data has a pull request, then branch, commit for detached HEAD, or folder for a plain folder.
 A project row with checkouts draws no glyph of its own: its name starts on the row's inset and its checkouts' kind glyphs stand on that same column under it, one step shallower than a project glyph would put them (PRD sidebar-quiet-mark-indent D-06); its type is the block's label and the hairline above an open block is what tells it from the project above, while a folded project is one line set off by a small gap and no hairline; a plain folder's row keeps its folder glyph, which says its checkout's kind (D-07).
