@@ -6,6 +6,14 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+/**
+ * The programs `verify-cargo.sh release` builds and every package ships flat
+ * in its resources, without the system's executable suffix. The pane holder
+ * among them runs only once the development switch HIDE_DEV_PANE_HOLDER turns
+ * on the core's own engine (PRD engine-bundle-3-core-owns D-23).
+ */
+export const RELEASE_PROGRAMS = ["hided", "hide", "hide-agent-hooks", "hide-holder"];
+
 const digest = (file) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 
 /** Records each binary's digest with the commit, version and order it was built for. */

@@ -364,6 +364,15 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
     seat.starting("core.herdr_program");
     let herdr_bin = herdr_program(&env).await?;
     match herdr_bin.as_ref() {
+        // The core's own engine runs no Herdr (PRD engine-bundle-3-core-owns D-5).
+        None if env.own_engine => eprintln!(
+            "{}",
+            serde_json::json!({
+                "component": "hided",
+                "kind": "engine.own",
+                "message": "the core runs its own engine over this node's pane holders; no Herdr is used",
+            })
+        ),
         Some(path) => eprintln!(
             "{}",
             serde_json::json!({
@@ -434,7 +443,11 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
     let pane_events: hide_node::ssh::PaneEventsSlot = Default::default();
     let _ = pane_events.set(Arc::new(node_panes::Events(Arc::clone(&node_panes))));
     seat.starting("core.owner");
-    let core = Arc::new(CoreHandle::spawn(options, Arc::clone(&pane_events))?);
+    let core = Arc::new(CoreHandle::spawn(
+        options,
+        env.own_engine,
+        Arc::clone(&pane_events),
+    )?);
     seat.starting("core.services");
     if effects_held {
         let mut open = move_gate.subscribe();

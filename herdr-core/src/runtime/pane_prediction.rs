@@ -14,11 +14,10 @@
 //! Where the prediction and Herdr still differ (a focus Herdr places
 //! elsewhere), Herdr's layout replaces it when it arrives.
 
+use crate::engine::own::layout::{contains, lay_out, remove_leaf, split_leaf};
 use crate::live::PaneResizeDirection;
 use crate::model::{PaneLayoutDirection, PaneLayoutNodeSnapshot, PaneLayoutSnapshot};
-use crate::sidebar::{
-    SessionLayoutPanePayload, SessionLayoutPayload, SessionLayoutRect, SessionLayoutSplitPayload,
-};
+use crate::sidebar::SessionLayoutPayload;
 
 /// Herdr keeps every split between these ratios.
 const RATIO_MIN: f32 = 0.1;
@@ -113,36 +112,6 @@ pub(super) fn overlay_session_layout(
     })
 }
 
-fn lay_out(
-    node: &PaneLayoutNodeSnapshot,
-    area: SessionLayoutRect,
-    panes: &mut Vec<SessionLayoutPanePayload>,
-    splits: &mut Vec<SessionLayoutSplitPayload>,
-) -> Result<(), String> {
-    match node {
-        PaneLayoutNodeSnapshot::Pane { pane_id } => panes.push(SessionLayoutPanePayload {
-            pane_id: pane_id.clone(),
-            rect: area,
-        }),
-        PaneLayoutNodeSnapshot::Split {
-            direction,
-            ratio,
-            first,
-            second,
-        } => {
-            let (first_area, second_area, _) = crate::live::split_areas(area, *direction, *ratio)?;
-            splits.push(SessionLayoutSplitPayload {
-                direction: *direction,
-                ratio: *ratio,
-                rect: area,
-            });
-            lay_out(first, first_area, panes, splits)?;
-            lay_out(second, second_area, panes, splits)?;
-        }
-    }
-    Ok(())
-}
-
 fn apply(layout: &mut PaneLayoutSnapshot, prediction: &Prediction) {
     match prediction {
         Prediction::Split {
@@ -182,73 +151,6 @@ fn apply(layout: &mut PaneLayoutSnapshot, prediction: &Prediction) {
             set_nearest_split_ratio(&mut layout.root, pane, *axis, *ratio);
         }
     }
-}
-
-fn contains(node: &PaneLayoutNodeSnapshot, pane: &str) -> bool {
-    match node {
-        PaneLayoutNodeSnapshot::Pane { pane_id } => pane_id == pane,
-        PaneLayoutNodeSnapshot::Split { first, second, .. } => {
-            contains(first, pane) || contains(second, pane)
-        }
-    }
-}
-
-fn first_leaf(node: &PaneLayoutNodeSnapshot) -> &str {
-    match node {
-        PaneLayoutNodeSnapshot::Pane { pane_id } => pane_id,
-        PaneLayoutNodeSnapshot::Split { first, .. } => first_leaf(first),
-    }
-}
-
-fn split_leaf(
-    node: &mut PaneLayoutNodeSnapshot,
-    target: &str,
-    direction: PaneLayoutDirection,
-    created: &str,
-) {
-    match node {
-        PaneLayoutNodeSnapshot::Pane { pane_id } if pane_id == target => {
-            let kept = PaneLayoutNodeSnapshot::Pane {
-                pane_id: pane_id.clone(),
-            };
-            *node = PaneLayoutNodeSnapshot::Split {
-                direction,
-                ratio: 0.5,
-                first: Box::new(kept),
-                second: Box::new(PaneLayoutNodeSnapshot::Pane {
-                    pane_id: created.to_owned(),
-                }),
-            };
-        }
-        PaneLayoutNodeSnapshot::Pane { .. } => {}
-        PaneLayoutNodeSnapshot::Split { first, second, .. } => {
-            split_leaf(first, target, direction, created);
-            split_leaf(second, target, direction, created);
-        }
-    }
-}
-
-/// Removes `pane` and puts its sibling in the parent's place. Returns the
-/// sibling's first leaf, the pane Herdr focuses when the closed one had focus.
-fn remove_leaf(node: &mut PaneLayoutNodeSnapshot, pane: &str) -> Option<String> {
-    let PaneLayoutNodeSnapshot::Split { first, second, .. } = node else {
-        return None;
-    };
-    let survivor = match (first.as_ref(), second.as_ref()) {
-        (PaneLayoutNodeSnapshot::Pane { pane_id }, _) if pane_id == pane => {
-            Some(second.as_ref().clone())
-        }
-        (_, PaneLayoutNodeSnapshot::Pane { pane_id }) if pane_id == pane => {
-            Some(first.as_ref().clone())
-        }
-        _ => None,
-    };
-    if let Some(survivor) = survivor {
-        let focus = first_leaf(&survivor).to_owned();
-        *node = survivor;
-        return Some(focus);
-    }
-    remove_leaf(first, pane).or_else(|| remove_leaf(second, pane))
 }
 
 /// The ratio of the innermost split of `axis` whose subtree holds `pane`.
@@ -313,6 +215,7 @@ fn set_nearest_split_ratio(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sidebar::{SessionLayoutPanePayload, SessionLayoutRect, SessionLayoutSplitPayload};
 
     fn pane(id: &str) -> PaneLayoutNodeSnapshot {
         PaneLayoutNodeSnapshot::Pane {

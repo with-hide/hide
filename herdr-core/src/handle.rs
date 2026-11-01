@@ -238,9 +238,10 @@ impl Core {
 
     /// `own_node` answers for the machine this core runs on (PRD
     /// core-host-node D-21); the core reaches that machine only through it.
-    /// `own_engine` is the engine that runs that machine's panes, the Herdr
+    /// `own_engine` is the engine that runs that machine's panes: the Herdr
     /// server at `options.herdr_socket_path`, given exactly when a socket is
-    /// (PRD engine-bundle-1 D-2).
+    /// (PRD engine-bundle-1 D-2), or with no socket the core's own engine
+    /// (`EngineHandle::own`, PRD engine-bundle-3-core-owns D-5).
     /// `devices` opens the transport to each registered device.
     /// `terminals` reaches every node's terminal service, and `reports` is
     /// what those services answer (PRD core-host-node-terminal D-05): the
@@ -270,9 +271,13 @@ impl Core {
         reports: crate::terminal_reports::TerminalReports,
         analytics: Option<Arc<dyn crate::product_analytics::Sink>>,
     ) -> Option<Box<Self>> {
-        if validate_options(&options).is_err()
-            || options.herdr_socket_path.is_some() != own_engine.is_some()
-        {
+        let engine_fits = match (&options.herdr_socket_path, &own_engine) {
+            (Some(_), Some(engine)) => engine.own_scope().is_none(),
+            (None, Some(engine)) => engine.own_scope().is_some(),
+            (Some(_), None) => false,
+            (None, None) => true,
+        };
+        if validate_options(&options).is_err() || !engine_fits {
             return None;
         }
         let environment = match options.home.as_deref() {
@@ -471,20 +476,22 @@ impl Core {
                 None
             }
         };
-        let session_sync = if let (Some(socket_path), Some(own_engine)) =
-            (options.herdr_socket_path.as_deref(), own_engine)
-        {
+        // A Herdr session is keyed by its socket, the core's own engine's by
+        // the folder it stands for (`hide_kit::layout::engine_dir`).
+        let session_sync = own_engine.and_then(|own_engine| {
+            let scope = match options.herdr_socket_path.as_deref() {
+                Some(socket_path) => socket_path.to_owned(),
+                None => own_engine.own_scope()?.to_string_lossy().into_owned(),
+            };
             live::install(
                 &runtime,
                 notifier.clone(),
                 Arc::clone(&own_node),
                 own_engine.shared(),
-                socket_path,
+                &scope,
                 usage_paths,
             )
-        } else {
-            None
-        };
+        });
         if lock_recover(&runtime).connect_registered_devices() {
             notifier.notify();
         }

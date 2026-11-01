@@ -78,7 +78,7 @@ The installer is not signed, so Windows SmartScreen warns about it the first tim
 Choose **More info**, check that the dialog names `hide-v<version>-windows-x64-setup.exe` with an unknown publisher, then choose **Run anyway**.
 Windows 11 with Smart App Control turned on blocks unsigned programs wherever they are, and hide and its Herdr are unsigned, so hide does not run there ([What each system supports](#what-each-system-supports)).
 
-The install folder holds the Electron app at its top and, in its `resources` folder, the same `hided`, `hide`, `hide-agent-hooks` and pinned Herdr the macOS app carries, as `.exe` files, with Herdr's ConPTY runtime in the `conpty` folder beside `herdr.exe`.
+The install folder holds the Electron app at its top and, in its `resources` folder, the same `hided`, `hide`, `hide-agent-hooks`, `hide-holder` and pinned Herdr the macOS app carries, as `.exe` files, with Herdr's ConPTY runtime in the `conpty` folder beside `herdr.exe` and the pane holder's own pinned one in `holder-conpty`; the holder runs only with the development switch `HIDE_DEV_PANE_HOLDER`.
 The app does not run the daemon or the Herdr server from there: at each launch it copies those programs into `%USERPROFILE%\.hide\runtime\<build>` and starts them from the copy, so installing a new version, by hand or by an update, never stops the Herdr server or the agents in it.
 A copy no program runs from any more is removed at a later launch, and at most four are kept; one that cannot be removed is recorded in the app's log (`runtime.copy_remove_failed`, `runtime.copies_over_cap`).
 
@@ -264,7 +264,7 @@ HIDE_VERSION=<version> pnpm --dir desktop package
 `HIDE_VERSION` sets the version the packaged app reports.
 Omit it to build from a checkout that a Git tag matching `v[0-9]*` already describes; the packaging script fails rather than ship a version nothing was released under.
 
-Packaging builds the web shell, builds the release `hided`, `hide` and `hide-agent-hooks` binaries, fetches and digest-verifies the pinned Herdr binary, and stops with a named error and no app if any of those is missing or not executable.
+Packaging builds the web shell, builds the release `hided`, `hide`, `hide-agent-hooks` and `hide-holder` binaries, fetches and digest-verifies the pinned Herdr binary, and stops with a named error and no app if any of those is missing or not executable.
 It then packages everything into `desktop/out/hide-darwin-arm64/hide.app`, ad-hoc signs it (or signs it with `HIDE_SIGN_IDENTITY`, which keeps macOS permissions such as Screen Recording across installs; see [BUILD.md](BUILD.md)), verifies the signature, and writes the release files into `desktop/out/release`: `hide-v<version>-macos-arm64.dmg` and the `.zip` the updater installs, each with its `.sha256`, `latest-mac.yml` and the zip's `.blockmap`.
 A release signs with the Developer ID certificate and notarizes instead; [BUILD.md](BUILD.md) gives the switch and what it needs.
 The same command on Windows x64 writes the app folder `desktop/out/hide-win32-x64/` and, in `desktop/out/release`, `hide-v<version>-windows-x64-setup.exe` with `latest.yml` and its `.blockmap`; on Linux x64 it writes `desktop/out/hide-linux-x64/` and `hide-v<version>-linux-x64.deb` and `.rpm` with one `latest-linux.yml`; each installer has its `.sha256`, the Windows and Linux ones are unsigned, and each system builds only its own package ([BUILD.md](BUILD.md)).

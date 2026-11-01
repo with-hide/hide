@@ -26,6 +26,7 @@ fn env(dir: &Path, tailscale: &Path) -> Env {
         home: dir.to_path_buf(),
         herdr_socket_path: None,
         herdr_bin_path: None,
+        own_engine: false,
         login_shell: None,
         state_dir: dir.join("state"),
         legacy_state_dir: None,

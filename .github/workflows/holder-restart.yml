@@ -8,8 +8,9 @@
 # a cell that cannot run fails, and the lane fails unless all seven passed.
 #
 # It shares the journey's pinned installs and fake model and nothing else:
-# no Herdr runs (on Windows only the ConPTY runtime beside the pinned Herdr is
-# fetched, which a holder runs its pane on), no hided, no kit. `pr.yml` runs
+# no Herdr runs but the color question's comparison, no hided, no kit; on
+# Windows the pinned ConPTY runtime a holder runs its pane on is fetched from
+# its NuGet pin (contracts/conpty.json) into the binaries' folder. `pr.yml` runs
 # it for a change to the holder, the node's holder code, the pins or this
 # lane's scripts (scripts/ci-plan.py), and `nightly.yml` every night.
 name: holder restart
@@ -110,13 +111,14 @@ jobs:
           if [[ "$RUNNER_OS" == Windows ]]; then suffix=.exe; fi
           mkdir -p "$RUNNER_TEMP/holder-bin"
           cp "target/debug/hide-holder$suffix" "target/debug/examples/holder_node$suffix" "$RUNNER_TEMP/holder-bin/"
+          # A Windows node finds the pinned ConPTY runtime beside its holder,
+          # as hided does in the app.
+          if [[ "$RUNNER_OS" == Windows ]]; then "$PYTHON" scripts/fetch-conpty.py --out "$RUNNER_TEMP/holder-bin/holder-conpty"; fi
       - name: Install the xterm the lane draws frames on
         timeout-minutes: 3
         run: bash scripts/verify-web.sh install holder
       - name: Fetch the pinned Herdr
-        # A Windows holder runs a pane only on the pinned ConPTY runtime, the
-        # `conpty` folder beside the pinned Herdr's herdr.exe. Herdr itself
-        # runs only for the color question's comparison below.
+        # Herdr runs only for the color question's comparison below.
         id: herdr
         timeout-minutes: 5
         # Assigned first, so a failed fetch fails this step rather than
@@ -132,12 +134,9 @@ jobs:
           echo "bin=$bin" >> "$GITHUB_OUTPUT"
       - name: Restart each agent's node
         timeout-minutes: 60
-        env:
-          HERDR_BIN: ${{ steps.herdr.outputs.bin }}
         run: |
           options=()
           if [[ -n "$AGENTS" ]]; then options+=(--agents "$AGENTS"); fi
-          if [[ "$RUNNER_OS" == Windows ]]; then options+=(--herdr-bin "$HERDR_BIN"); fi
           "$PYTHON" scripts/holder-restart-check.py --bin "$RUNNER_TEMP/holder-bin" --run-dir "$RUN_DIR" "${options[@]}"
       - name: The cells
         timeout-minutes: 1

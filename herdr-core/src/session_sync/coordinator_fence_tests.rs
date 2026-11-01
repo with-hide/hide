@@ -116,7 +116,7 @@ fn snapshot(panes: &[&str]) -> Value {
 }
 
 fn publish(context: &SessionSyncContext, replica: &mut SessionReplica) -> bool {
-    publish_replica(
+    publish_session(
         context,
         replica,
         &mut CatalogState::default(),

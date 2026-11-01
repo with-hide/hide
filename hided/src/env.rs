@@ -1,6 +1,6 @@
 //! Single registry for every environment key this crate reads.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
@@ -76,13 +76,13 @@ pub const REGISTRY: &[EnvKey] = &[
         key: HERDR_SOCKET_PATH,
         required: false,
         format: "absolute local socket path (a named pipe's name on Windows)",
-        absent_behavior: "The socket Herdr's default session uses (see XDG_CONFIG_HOME) when it exists; otherwise core starts without a Herdr socket and the sidebar shows that state",
+        absent_behavior: "The socket Herdr's default session uses (see XDG_CONFIG_HOME) when it exists; otherwise core starts without a Herdr socket and the sidebar shows that state. Ignored, with the default, while HIDE_DEV_PANE_HOLDER is `1`",
     },
     EnvKey {
         key: HERDR_BIN_PATH,
         required: false,
         format: "absolute path of an executable herdr binary; Herdr sets it in every pane it manages, and a daemon refuses to start on a path that no longer exists",
-        absent_behavior: "The pinned Herdr beside the helper build this program runs from (a device's helper, or a core a move put there), else the `herdr` the account's own terminal finds (the login shell's PATH, then PATH, then the usual install folders); with none, no pane terminal can attach and the daemon logs it",
+        absent_behavior: "The pinned Herdr beside the helper build this program runs from (a device's helper, or a core a move put there), else the `herdr` the account's own terminal finds (the login shell's PATH, then PATH, then the usual install folders); with none, no pane terminal can attach and the daemon logs it. Ignored, with every fallback, while HIDE_DEV_PANE_HOLDER is `1`",
     },
     EnvKey {
         key: PATH,
@@ -225,8 +225,8 @@ pub const REGISTRY: &[EnvKey] = &[
     EnvKey {
         key: HIDE_DEV_PANE_HOLDER,
         required: false,
-        format: "`1` (the node runs a pane holder for each pane it starts) or `0`; any other value fails the daemon's check with the values it takes",
-        absent_behavior: "Off: every pane opens through Herdr's terminal sessions and no pane holder is started, adopted or read; a device's node logs a diagnostic and stays on Herdr even when it is `1`",
+        format: "`1` (the daemon runs the core's own engine: each pane in a pane holder its node starts, with no Herdr server, socket or binary) or `0`; any other value fails the daemon's check with the values it takes",
+        absent_behavior: "Off: the core runs on Herdr, every pane opens through Herdr's terminal sessions and no pane holder is started, adopted or read; a device's node logs a diagnostic and stays on Herdr even when it is `1`",
     },
     EnvKey {
         key: HOME,
@@ -245,6 +245,10 @@ pub struct Env {
     /// `HERDR_BIN_PATH` as given; [`Env::herdr_program`] is the herdr a
     /// daemon runs.
     pub herdr_bin_path: Option<PathBuf>,
+    /// [`HIDE_DEV_PANE_HOLDER`] is on: the core runs its own engine over the
+    /// node's pane holders, and neither Herdr field is read (PRD
+    /// engine-bundle-3-core-owns D-5).
+    pub own_engine: bool,
     /// The account's login shell (`SHELL`), asked for the `PATH` a program
     /// is found on; `None` on Windows, which has none to ask.
     pub login_shell: Option<PathBuf>,
@@ -299,6 +303,9 @@ impl Env {
     /// every command, since the account's search can start its login shell.
     pub fn herdr_program(&self) -> Option<PathBuf> {
         static NEVER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if self.own_engine {
+            return None;
+        }
         self.herdr_bin_path
             .clone()
             .or_else(|| hide_kit::device_herdr::pinned_for_account(&self.home))
@@ -402,7 +409,23 @@ fn resolve(mut read: impl FnMut(&str) -> Option<String>) -> (Env, Vec<EnvError>)
             .find(|(known, _)| *known == key)
             .and_then(|(_, value)| value.clone())
     };
+    let own_engine = match read(HIDE_DEV_PANE_HOLDER) {
+        None => false,
+        Some(value) => match hide_node::terminal::holder::Switch::parse(Some(OsStr::new(&value))) {
+            Ok(switch) => switch == hide_node::terminal::holder::Switch::On,
+            Err(_) => {
+                errors.push(EnvError {
+                    key: HIDE_DEV_PANE_HOLDER,
+                    kind: "invalid",
+                });
+                false
+            }
+        },
+    };
+    // The core's own engine runs no Herdr: neither the socket a caller
+    // names nor the default one is read.
     let herdr_socket_path = match read(HERDR_SOCKET_PATH) {
+        _ if own_engine => None,
         Some(value) if value.is_empty() => {
             errors.push(EnvError {
                 key: HERDR_SOCKET_PATH,
@@ -425,7 +448,7 @@ fn resolve(mut read: impl FnMut(&str) -> Option<String>) -> (Env, Vec<EnvError>)
             .filter(|default| default.exists())
             .map(|default| default.display().to_string()),
     };
-    let herdr_bin_path = match read(HERDR_BIN_PATH) {
+    let herdr_bin_path = match read(HERDR_BIN_PATH).filter(|_| !own_engine) {
         Some(value) if value.is_empty() => {
             errors.push(EnvError {
                 key: HERDR_BIN_PATH,
@@ -571,19 +594,12 @@ fn resolve(mut read: impl FnMut(&str) -> Option<String>) -> (Env, Vec<EnvError>)
         Some(value) => Some(PathBuf::from(value)),
         None => None,
     };
-    if let Some(value) = read(HIDE_DEV_PANE_HOLDER)
-        && hide_node::terminal::holder::Switch::parse(Some(std::ffi::OsStr::new(&value))).is_err()
-    {
-        errors.push(EnvError {
-            key: HIDE_DEV_PANE_HOLDER,
-            kind: "invalid",
-        });
-    }
     let search_path = read(PATH).filter(|value| !value.is_empty());
     let env = Env {
         home,
         herdr_socket_path,
         herdr_bin_path,
+        own_engine,
         login_shell,
         state_dir,
         legacy_state_dir,
@@ -774,6 +790,30 @@ mod tests {
         (HIDE_TAILSCALE_BIN, "relative"),
         (HIDE_DEV_PANE_HOLDER, "yes"),
     ];
+
+    #[test]
+    fn the_switch_alone_chooses_the_core_s_own_engine_and_then_no_herdr_is_read() {
+        let herdr = [
+            (HOME, "/Users/example"),
+            (HERDR_SOCKET_PATH, "/tmp/herdr.sock"),
+            (HERDR_BIN_PATH, "/opt/herdr"),
+        ];
+        for off in [None, Some("0")] {
+            let mut pairs = herdr.to_vec();
+            pairs.extend(off.map(|value| (HIDE_DEV_PANE_HOLDER, value)));
+            let env = from_map(&pairs).unwrap();
+            assert!(!env.own_engine);
+            assert_eq!(env.herdr_socket_path.as_deref(), Some("/tmp/herdr.sock"));
+            assert_eq!(env.herdr_program(), Some(PathBuf::from("/opt/herdr")));
+        }
+        let mut pairs = herdr.to_vec();
+        pairs.push((HIDE_DEV_PANE_HOLDER, "1"));
+        let env = from_map(&pairs).unwrap();
+        assert!(env.own_engine);
+        assert_eq!(env.herdr_socket_path, None);
+        assert_eq!(env.herdr_bin_path, None);
+        assert_eq!(env.herdr_program(), None);
+    }
 
     #[test]
     fn a_relative_herdr_socket_is_refused_by_name() {

@@ -302,6 +302,10 @@ impl Engine for HerdrEngine<'_> {
         })
     }
 
+    fn changes(&self, _wake: super::Wake) -> super::Changes {
+        super::Changes::Streamed
+    }
+
     fn session(&self, wait: Wait) -> Answer<ProjectionState> {
         let answer = self.ask("session.snapshot", Ok(wire::empty_params()), wait)?;
         wire::snapshot_response(answer).map_err(from_snapshot)

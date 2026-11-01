@@ -39,7 +39,7 @@ class KnownFailures(unittest.TestCase):
         rows = [{"id": "antigravity"}, {"id": "codex"}]
         with mock.patch.object(self.lane, "cell", cell), \
                 mock.patch.object(self.lane.platform, "system", return_value="Windows"):
-            self.lane.run_cells(rows, None, None, self.run, report)
+            self.lane.run_cells(rows, None, self.run, report)
         return report
 
     def test_a_known_failure_that_ended_everything_is_marked_and_passes_the_lane(self):
