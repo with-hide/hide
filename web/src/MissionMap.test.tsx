@@ -402,16 +402,15 @@ it("draws each card as its mark, its title, its pull requests, its worker's mode
     node("merged-out", { kind: "external", delivery: null, external: { pr: 1702 }, status: "done", landing: { state: "landed", proof: { by: "outside" } } }),
     node("next", { depends_on: ["core", "outside"] }),
     node("sleeping", { status: "working", agent_id: "agent-2", agent_runtime: "asleep" }),
-    // Finished: one whose pane still says what it launched, one whose launch is gone with only the plan left.
-    node("ran", { status: "done", agent_id: "agent-5", pane_id: "w1:p8", machine: "mac", worker: { agent: "claude", model: "opus", effort: "high", effort_auto: false } }),
+    // Finished: one whose launch the core kept (its pane long gone), one with no launch kept and only the plan left.
+    node("ran", { status: "done", agent_id: "agent-5", worker: { agent: "claude", model: "opus", effort: "high", effort_auto: false }, launched: { agent_id: "agent-5", agent: "codex", model: "Sonnet 5.5", effort: "low" } }),
     node("bound", { status: "working", agent_id: "agent-4", pane_id: "w1:p6", machine: "mac", worker: { agent: "claude", model: "opus", effort: "high", effort_auto: false } }),
     node("ran-unknown", { status: "done", agent_id: "agent-6", pane_id: "w1:p7", machine: "mac", worker: { agent: "claude", model: "opus", effort: "high", effort_auto: false } }),
-    node("launched", { status: "working", pane_id: "w1:p9", machine: "mac", pr: 1910, pr_state: "pending", worker: { agent: "claude", model: "opus", effort: "medium", effort_auto: false }, attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 1, on_row: false, item: false } }),
+    node("launched", { status: "working", agent_id: "agent-9", pane_id: "w1:p9", machine: "mac", launched: { agent_id: "agent-9", agent: "codex", model: "Opus 5.5", effort: "high" }, pr: 1910, pr_state: "pending", worker: { agent: "claude", model: "opus", effort: "medium", effort_auto: false }, attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 1, on_row: false, item: false } }),
   ];
-  const launches = [{ device_id: "mac", pane_id: "w1:p9", session_digest: "w", launch_model: "Opus 5.5", launch_effort: "high" }, { device_id: "mac", pane_id: "w1:p8", session_digest: "r", launch_model: "Sonnet 5.5", launch_effort: "low" }];
-  // The panes' own agents, which the plan did not name: the mark is theirs.
-  const rows = [{ pane_id: "w1:p9", agent_kind: "codex", mark: "going" }, { pane_id: "w1:p8", agent_kind: "codex", mark: "done" }] as AgentRow[];
-  const map = await mount({ items: [mission({ nodes })] }, [], launches, {}, rows);
+  // A launch the pane now shows for some session: a node names only the launch the core kept for its own worker, never its pane's.
+  const launches = [{ device_id: "mac", pane_id: "w1:p6", session_digest: "other", launch_model: "Sonnet 5.5", launch_effort: "medium" }];
+  const map = await mount({ items: [mission({ nodes })] }, [], launches);
   try {
     expect(Object.fromEntries(nodes.map((n) => [n.key, card(map, n.key).dataset.nodeLook]))).toEqual({ core: "working", raised: "working", asked: "working", api: "done", branch: "done", outside: "external", "closed-out": "external", "merged-out": "done", next: "waiting", sleeping: "working", ran: "done", bound: "working", "ran-unknown": "done", launched: "working" });
     // One of three shapes, its word on hover and first in the card's name.
@@ -421,7 +420,7 @@ it("draws each card as its mark, its title, its pull requests, its worker's mode
     expect(card(map, "sleeping").querySelector("[data-node-mark] svg")?.getAttribute("class")).toContain("animate-spin");
     // Every pull request the node holds is its own PR mark, in the order it got them (D-10).
     expect([...card(map, "core").querySelectorAll<HTMLElement>("[data-node-pr]")].map((mark) => mark.dataset.nodePr)).toEqual(["1703", "1704"]);
-    // The worker's model and effort lead the line, before the marks, as the panel's head words them: the pane's launch, else the plan's marked planned.
+    // The worker's model and effort lead the line, before the marks, as the panel's head words them: the launch kept for its worker, else the plan's marked planned.
     const row = (key: string) => [...card(map, key).querySelectorAll<HTMLElement>("[data-node-row] > *")].map((part) => (part.dataset.nodeRun ? `run:${part.dataset.nodeRun}` : part.dataset.nodeAttentionTag ? "!" : part.querySelector("[data-node-pr]") ? "marks" : part.childElementCount === 0 ? "empty" : "?"));
     expect(row("core")).toEqual(["run:plan", "marks"]);
     expect([card(map, "core").querySelector("[data-run-words]")?.textContent, card(map, "core").querySelector("[data-run-planned]")?.textContent]).toEqual(["opus·high", "(planned)"]);
@@ -429,12 +428,12 @@ it("draws each card as its mark, its title, its pull requests, its worker's mode
     // With no run the left stays empty, so the marks and `!` still sit at the right end.
     expect([row("outside"), row("asked")]).toEqual([["empty", "marks"], ["empty", "!"]]);
     expect(card(map, "launched").querySelector("[data-run]")?.textContent).toBe("Opus 5.5·high");
-    // The agent mark stands before the model: the plan's agent while planned, the pane's own once launched (codex here, where the plan said claude).
+    // The agent mark stands before the model: the plan's agent while planned, the launched agent's once kept (codex here, where the plan said claude).
     expect(["core", "launched"].map((key) => card(map, key).querySelector("[data-node-run] > :first-child")?.getAttribute("data-agent-mark"))).toEqual(["claude", "codex"]);
-    // A finished node shows what its pane launched, never the plan marked planned; with no launch known it shows nothing.
+    // A finished node shows what its worker was launched with, its pane gone, never the plan marked planned; with no launch kept it shows nothing.
     expect([card(map, "ran").querySelector("[data-run]")?.textContent, card(map, "ran").querySelector("[data-run-planned]")]).toEqual(["Sonnet 5.5·low", null]);
     expect(card(map, "ran-unknown").querySelector("[data-run], [data-agent-mark]")).toBeNull();
-    // An unfinished node whose worker Hide knows no launch for (started on its CLI's defaults) keeps the plan, marked planned.
+    // An unfinished node with no launch kept (its worker started on its CLI's defaults) keeps the plan, marked planned, whatever its pane shows now.
     expect(card(map, "bound").querySelector("[data-run]")?.getAttribute("title")).toBe("opus·high (planned)");
     // The panel's head follows the same rule.
     await act(async () => card(map, "ran").click());

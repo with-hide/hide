@@ -110,7 +110,7 @@ export type RunWords = { words: string; planned: boolean };
  * model and effort are shown marked as planned (`자동` for an effort the
  * Conductor will choose), or nothing.
  */
-export function runWords(launch: LaunchSession | null, plan: MissionWorker | null | undefined, words: { auto: string; defaultModel: string }): RunWords | null {
+export function runWords(launch: Pick<LaunchSession, "launch_model" | "launch_effort"> | null, plan: MissionWorker | null | undefined, words: { auto: string; defaultModel: string }): RunWords | null {
   if (launch && (launch.launch_model || launch.launch_effort)) return { words: [launch.launch_model ?? words.defaultModel, launch.launch_effort].filter(Boolean).join("·"), planned: false };
   if (!plan) return null;
   const effort = plan.effort ?? (plan.effort_auto ? words.auto : null);

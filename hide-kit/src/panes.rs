@@ -593,7 +593,7 @@ impl Panes {
             );
         }
         match first_line(reader, START_LIMIT) {
-            Some(line) if line.starts_with("ready ") => {
+            Report::Line(line) if line.starts_with("ready ") => {
                 let _lock = self.lock()?;
                 match record::read(&layout::pane_record(&self.state_dir, pane)) {
                     // A program that exits at once may have ended the pane
@@ -623,14 +623,25 @@ impl Panes {
                     )),
                 }
             }
-            Some(line) => {
+            Report::Line(line) => {
                 let reason = line.strip_prefix("failed ").unwrap_or(&line).to_owned();
                 if let Some(holder) = holder {
                     wait_gone(holder, START_LIMIT);
                 }
                 self.settle_failed_start(reserved, holder, reason)
             }
-            None => {
+            Report::Closed => {
+                if let Some(holder) = holder {
+                    wait_gone(holder, START_LIMIT);
+                }
+                let reason = "the holder ended before it said it was ready or why".to_owned();
+                self.settle_failed_start(reserved, holder, reason)
+            }
+            Report::Unreadable(error) => {
+                let reason = format!("the holder's report could not be read: {error}");
+                self.settle_failed_start(reserved, holder, reason)
+            }
+            Report::Silent => {
                 let reason = format!("the holder said nothing within {} s", START_LIMIT.as_secs());
                 self.settle_failed_start(reserved, holder, reason)
             }
@@ -1415,18 +1426,38 @@ fn wait_gone(process: Identity, limit: Duration) {
 }
 
 /// The first line `reader` gives within `limit`, without its line end.
-fn first_line(reader: impl std::io::Read + Send + 'static, limit: Duration) -> Option<String> {
+/// What a holder's report pipe gave within a start's bound.
+#[derive(Debug)]
+enum Report {
+    /// Its first line: `ready ...` or `failed <reason>`.
+    Line(String),
+    /// The pipe closed with no line: the holder ended before it said
+    /// anything, which is not the same failure as a holder still silent.
+    Closed,
+    /// The pipe could not be read.
+    Unreadable(std::io::Error),
+    /// Nothing within the bound.
+    Silent,
+}
+
+fn first_line(reader: impl std::io::Read + Send + 'static, limit: Duration) -> Report {
     let (sender, heard) = mpsc::channel();
     std::thread::spawn(move || {
         let mut line = String::new();
-        let read = BufReader::new(reader).read_line(&mut line);
-        let _ = sender.send(
-            read.ok()
-                .filter(|count| *count > 0)
-                .map(|_| line.trim().to_owned()),
-        );
+        let report = match BufReader::new(reader).read_line(&mut line) {
+            Ok(0) => Report::Closed,
+            Ok(_) => Report::Line(line.trim().to_owned()),
+            Err(error) => Report::Unreadable(error),
+        };
+        let _ = sender.send(report);
     });
-    heard.recv_timeout(limit).ok().flatten()
+    match heard.recv_timeout(limit) {
+        Ok(report) => report,
+        Err(mpsc::RecvTimeoutError::Timeout) => Report::Silent,
+        Err(mpsc::RecvTimeoutError::Disconnected) => Report::Unreadable(std::io::Error::other(
+            "the thread reading the report ended without an answer",
+        )),
+    }
 }
 
 /// The state folder's identity as a record's owner: the folder's volume and
@@ -1514,6 +1545,22 @@ mod tests {
             program: None,
             end: None,
         }
+    }
+
+    #[test]
+    fn a_report_pipe_that_closes_with_no_line_reads_as_ended_not_as_silent() {
+        let limit = Duration::from_millis(200);
+        assert!(matches!(
+            first_line(std::io::empty(), limit),
+            Report::Closed
+        ));
+        assert!(matches!(
+            first_line(&b"ready holder=1\n"[..], limit),
+            Report::Line(line) if line == "ready holder=1"
+        ));
+        let (reader, writer) = std::io::pipe().unwrap();
+        assert!(matches!(first_line(reader, limit), Report::Silent));
+        drop(writer);
     }
 
     #[test]
