@@ -101,7 +101,7 @@ STORES = {
     ),
     "herdr-core/src/diagnostics.rs": (7, "the core's own log file"),
     "herdr-core/src/engine/own/store.rs": (
-        9,
+        8,
         "the core's own engine's saved layout beside the core's state file "
         "(PRD engine-bundle-3-core-owns D-6): read, written with the durable "
         "writer's own access type, and a file it cannot use moved into its "
