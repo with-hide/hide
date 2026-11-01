@@ -1,4 +1,5 @@
-//! Event-driven projection of Herdr's authoritative session state.
+//! The projection of an engine's session: Herdr's, applied from its event
+//! stream, or the core's own engine's, read whole on each wake.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
@@ -10,7 +11,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 
-use crate::engine::{EngineError, SharedEngine, Wait};
+use crate::engine::{Changes, EngineError, SharedEngine, Wait};
 use crate::handle::ChangeNotifier;
 use crate::live::{LiveContext, SessionFetchError};
 use crate::model::{
@@ -404,6 +405,7 @@ pub(crate) use launch_settle::record_start;
 mod path_facts;
 mod process_info;
 mod projection;
+mod pulled;
 mod replica;
 mod subscription;
 mod sync_reads;

@@ -224,10 +224,17 @@ fn keep_core_log_within_limit(state_dir: PathBuf) {
 /// the core's output is kept within its limit while it runs, and the
 /// machine's Herdr server is started when Herdr says none runs; a status
 /// Herdr cannot give starts nothing, so a server that may be running is
-/// never doubled.
+/// never doubled. A core on its own engine (`HIDE_DEV_PANE_HOLDER` on) runs
+/// no Herdr, so none is started for it.
 pub fn before_core_at_login() {
     if let Some(state_dir) = std::env::var_os(crate::env::HIDE_STATE_DIR) {
         keep_core_log_within_limit(PathBuf::from(state_dir));
+    }
+    if matches!(
+        crate::env::pane_holder_switch(),
+        Ok(hide_node::terminal::holder::Switch::On)
+    ) {
+        return;
     }
     let Some(bin) = std::env::var_os(crate::env::HERDR_BIN_PATH) else {
         return;

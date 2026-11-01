@@ -2,7 +2,7 @@
 // MIT License (vendor/portable-pty/LICENSE.md). Taken from Herdr v0.9.5's
 // vendor/portable-pty (commit 2ecf19a92fc3a7fff75b6ce3655ef04f4625ec01).
 // Herdr's patches in this file: 0001.
-// Hide's changes in this file: the pinned ConPTY runtime is required (no system fallback, no environment switch, x86_64 only) and its failure is returned, not a panic, in words that do not name the package's file list; `verify_runtime`; `spawn_command_in_job` starts the child suspended, puts it in the job and only then resumes it.
+// Hide's changes in this file: the pinned ConPTY runtime is required (no system fallback, no environment switch, x86_64 only) and its failure is returned, not a panic, in words that do not name the package's file list; the file list is Hide's own `conpty-files.json`, which scripts/fetch-conpty.py writes; `verify_runtime`; `spawn_command_in_job` starts the child suspended, puts it in the job and only then resumes it.
 // vendor/portable-pty/PATCHES.md lists both.
 use super::WinChild;
 use crate::cmdbuilder::CommandBuilder;
@@ -141,8 +141,9 @@ fn load_conpty() -> Result<ConPtyFuncs, String> {
 }
 
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-// The runtime's file list, as the package names it.
-const MANIFEST: &str = "herdr-conpty.json";
+// Hide: the runtime's file list, as scripts/fetch-conpty.py writes it from
+// the pinned NuGet package (contracts/conpty.json).
+const MANIFEST: &str = "conpty-files.json";
 
 // Hide: how a file of the runtime is named in an error the operator may
 // read; the list's own file name is the package's, not a word for it.

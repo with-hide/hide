@@ -44,6 +44,7 @@ describe("the environment registry", () => {
       userDataDir: null,
       herdrBinPath: null,
       herdrPaneId: null,
+      ownEngine: false,
       systemLanguage: null,
       updateFeedUrl: null,
       shell: "/bin/sh",
@@ -57,6 +58,8 @@ describe("the environment registry", () => {
     });
     expect(loadEnv({ ...source, HERDR_BIN_PATH: "/opt/herdr" }).herdrBinPath).toBe("/opt/herdr");
     expect(loadEnv({ ...source, HERDR_PANE_ID: "w1:p1" }).herdrPaneId).toBe("w1:p1");
+    expect(loadEnv({ ...source, HIDE_DEV_PANE_HOLDER: "1" }).ownEngine).toBe(true);
+    expect(loadEnv({ ...source, HIDE_DEV_PANE_HOLDER: "0" }).ownEngine).toBe(false);
     expect(() => loadEnv({ ...source, HERDR_BIN_PATH: "herdr" })).toThrow("HERDR_BIN_PATH: not an absolute path");
   });
 
@@ -76,6 +79,7 @@ describe("the environment registry", () => {
       userDataDir: null,
       herdrBinPath: null,
       herdrPaneId: null,
+      ownEngine: false,
       systemLanguage: null,
       updateFeedUrl: null,
       shell: null,

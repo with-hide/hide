@@ -7,7 +7,9 @@
 //!
 //! It is not a product program: it is built by those lanes only
 //! (`test = false` in `Cargo.toml`), and it must be copied beside the built
-//! `hide-holder`, where the node finds its holder as hided does.
+//! `hide-holder`, where the node finds its holder as hided does, and on
+//! Windows beside the pinned ConPTY runtime's `holder-conpty` folder
+//! (`scripts/fetch-conpty.py --out`).
 //!
 //! ```text
 //! holder_node node --home <dir> --state <dir> [--herdr-bin <herdr>] [--herdr-socket <socket>]
@@ -144,7 +146,6 @@ fn node(options: &Options) -> Result<(), String> {
             home: &options.home,
             state_dir: &options.state,
         }),
-        options.herdr_bin.as_deref(),
         herdr,
         Arc::clone(&screens) as Arc<dyn OutputSink>,
         Arc::clone(&reports) as Arc<dyn ReportSink>,

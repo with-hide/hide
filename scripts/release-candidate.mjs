@@ -6,8 +6,8 @@ import { execFileSync } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { releaseKind } from "./check-release-assets.mjs";
-import { deviceHelperDigests, HELPER_PROGRAMS } from "../desktop/scripts/device-helpers.mjs";
-import { checkReleaseBinaries } from "../desktop/scripts/release-binaries.mjs";
+import { deviceHelperDigests } from "../desktop/scripts/device-helpers.mjs";
+import { checkReleaseBinaries, RELEASE_PROGRAMS } from "../desktop/scripts/release-binaries.mjs";
 
 const REPOSITORY = "with-hide/hide";
 const SHA = /^[a-f0-9]{40}$/;
@@ -105,7 +105,7 @@ export function withDeviceHelpers(receipt, directory) {
 export function withMacosBinaries(receipt, directory) {
   if (receipt.schema !== 4 || "macos_binaries" in receipt) throw new Error("the Mac binaries complete a schema 4 receipt once");
   const record = path.join(directory, "desktop", "out", "release-binaries.json");
-  checkReleaseBinaries(record, path.join(directory, "target", "release"), HELPER_PROGRAMS, identityOf(receipt));
+  checkReleaseBinaries(record, path.join(directory, "target", "release"), RELEASE_PROGRAMS, identityOf(receipt));
   return { ...receipt, macos_binaries: JSON.parse(fs.readFileSync(record, "utf8")).files };
 }
 

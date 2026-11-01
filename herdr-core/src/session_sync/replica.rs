@@ -407,8 +407,7 @@ impl SessionReplica {
         }
     }
 
-    /// The remote session built from `payload`, which is [`Self::project`]
-    /// with the target's labels laid on.
+    #[cfg(test)]
     pub(crate) fn project_remote(
         &self,
         target_id: &str,
@@ -418,6 +417,8 @@ impl SessionReplica {
         Self::project_remote_state(&self.published_state, target_id, payload)
     }
 
+    /// The remote session built from `payload`, which is [`Self::project`]
+    /// with the target's labels laid on.
     pub(crate) fn project_remote_state(
         state: &ProjectionState,
         target_id: &str,

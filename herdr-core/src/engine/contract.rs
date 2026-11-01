@@ -10,9 +10,12 @@
 //!
 //! [`meets_the_contract`] is the suite. Each implementation runs it in one
 //! test of its own against an engine it started for the test, as each agent
-//! runs its fixture through `hide-session/tests/it/adapters.rs`; today that
-//! is the pinned Herdr in a private server, which needs `HIDE_E2E_HERDR_BIN`
-//! and so is ignored by default (the real Herdr steps of `pr.yml` run it).
+//! runs its fixture through `hide-session/tests/it/adapters.rs`: the pinned
+//! Herdr in a private server, which needs `HIDE_E2E_HERDR_BIN`, and the
+//! core's own engine over pane holders this node starts from the built
+//! holder, which needs `HIDE_TEST_HOLDER_BIN` (and `HIDE_HOLDER_CONPTY` on
+//! Windows). Both are ignored by default; the real-shell steps of `pr.yml`
+//! run them.
 
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
@@ -225,4 +228,95 @@ fn the_pinned_herdr_meets_the_engine_contract() {
     let engine = herdr.engine();
     let folder = herdr.home.to_string_lossy().into_owned();
     meets_the_contract(engine.as_ref(), &folder, || drop(herdr));
+}
+
+#[test]
+#[ignore = "needs the built pane holder: HIDE_TEST_HOLDER_BIN"]
+fn the_own_engine_meets_the_engine_contract() {
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use hide_node::terminal::engine_panes::LocalPanes;
+    use hide_node::terminal::holder::{HolderFolders, Holders};
+    use hide_node::terminal::{Attacher, Mode, OutputSink, ReportSink, SessionParts};
+
+    struct NoHerdr;
+    impl Attacher for NoHerdr {
+        fn open(&self, _: &str, _: Mode, _: u16, _: u16) -> Result<SessionParts, String> {
+            Err("this test runs no Herdr".to_owned())
+        }
+    }
+    struct Nowhere;
+    impl OutputSink for Nowhere {
+        fn output(&self, _: &str, _: &[u8], _: bool) {}
+        fn forget(&self, _: &str) {}
+    }
+    impl ReportSink for Nowhere {
+        fn report(&self, _: hide_node_link::terminal::TerminalReport) {}
+    }
+
+    let program = PathBuf::from(
+        std::env::var_os("HIDE_TEST_HOLDER_BIN")
+            .expect("HIDE_TEST_HOLDER_BIN names the built hide-holder"),
+    );
+    let conpty =
+        cfg!(windows).then(|| {
+            PathBuf::from(std::env::var_os("HIDE_HOLDER_CONPTY").expect(
+                "HIDE_HOLDER_CONPTY names the pinned ConPTY runtime (scripts/fetch-conpty.py)",
+            ))
+        });
+    // A holder's socket path is limited to about a hundred bytes on Unix.
+    let root = if cfg!(unix) {
+        tempfile::Builder::new()
+            .prefix("ho")
+            .tempdir_in("/tmp")
+            .unwrap()
+    } else {
+        tempfile::tempdir().unwrap()
+    };
+    let (home, state_dir, folder) = (
+        root.path().join("h"),
+        root.path().join("s"),
+        root.path().join("w"),
+    );
+    for dir in [&home, &state_dir, &folder] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    let terminals = Holders::start_from(
+        Some((
+            HolderFolders {
+                home: &home,
+                state_dir: &state_dir,
+            },
+            hide_kit::holders::Source { program, conpty },
+        )),
+        Box::new(NoHerdr),
+        Arc::new(Nowhere) as Arc<dyn OutputSink>,
+        Arc::new(Nowhere) as Arc<dyn ReportSink>,
+    )
+    .expect("the node's holders open");
+    let holders = terminals.holders.expect("the holders are on");
+    // The contract's command lines are a POSIX shell's and Windows
+    // PowerShell's, whatever shell this account uses.
+    let shell = if cfg!(windows) {
+        vec!["powershell.exe".into()]
+    } else {
+        vec!["/bin/sh".into()]
+    };
+    let panes = Arc::new(LocalPanes::new(
+        Arc::clone(&holders),
+        Arc::clone(&terminals.service),
+        shell,
+    ));
+    let engine = super::own::OwnEngine::new(panes);
+    let folder = hide_platform::path::to_wire(&folder).unwrap();
+    meets_the_contract(&engine, &folder, || {
+        // The holders outlive an engine; the test that started them ends
+        // every one it left.
+        let left = engine.pane_folders(WAIT).expect("the session reads");
+        engine.stop();
+        for (pane, _) in left {
+            let _ = holders.terminate(&terminals.service, &pane);
+        }
+    });
 }

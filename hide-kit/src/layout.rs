@@ -453,6 +453,13 @@ pub fn holder_dir(home: &Path, name: &str) -> PathBuf {
     holders_root(home).join(name)
 }
 
+/// The folder of the core's own engine in a state folder (PRD
+/// engine-bundle-3-core-owns D-6): what that engine's session is keyed by,
+/// as a Herdr session is by its socket.
+pub fn engine_dir(state_dir: &Path) -> PathBuf {
+    state_dir.join("engine")
+}
+
 /// The folder a state folder's holders listen and log in, one socket and
 /// one log per pane.
 pub fn holder_panes(state_dir: &Path) -> PathBuf {

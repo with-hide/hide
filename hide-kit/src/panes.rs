@@ -91,6 +91,16 @@ const LEFTOVER_LIMIT: Duration = Duration::from_secs(5);
 /// Where diagnostics go: one JSON record each.
 pub type Sink = fn(serde_json::Value);
 
+/// The id a pane's holder record, socket and log carry for the pane a core
+/// names `pane`. The core's own engine names its panes `<workspace>:p<n>`
+/// (PRD engine-bundle-3-core-owns D-4), and no Windows file name holds a
+/// `:` (`hide_holder_protocol::record::check_pane`), so each is written `_`;
+/// the core never names a pane with a `_`, so two of its panes never share a
+/// holder. An id without a `:` is its own holder id.
+pub fn holder_pane(pane: &str) -> String {
+    pane.replace(':', "_")
+}
+
 /// What a pane is started with.
 #[derive(Clone, Debug)]
 pub struct StartRequest {
