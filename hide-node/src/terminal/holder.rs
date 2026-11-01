@@ -38,7 +38,7 @@ use hide_holder_protocol::{
 use hide_kit::holders::{FOLDERS_CAP, Pruned, Source};
 use hide_kit::panes::{
     CloseError, Judgment, OrphanOutcome, Panes, RECONCILE_BUDGET, StartRefusal, StartRequest,
-    Started,
+    Started, holder_pane,
 };
 use hide_node_link::terminal::{
     GridSize, MAX_ATTACHED_PANES, PaneTerminalState, ReportSink, TerminalControl, TerminalNode,
@@ -574,21 +574,30 @@ impl Holders {
     /// size it was started at. The pane id is the start's key: asked again
     /// for a pane that lives, it answers that pane and starts no second
     /// holder. A pane past [`MAX_ATTACHED_PANES`] runs and is reported
-    /// `attach_limit` by the service, as any pane over the cap is.
+    /// `attach_limit` by the service, as any pane over the cap is. The
+    /// service and the reports name the pane by `request.pane`, the holder's
+    /// files by [`holder_pane`] of it.
     pub fn start(
         &self,
         service: &Service,
         request: &StartRequest,
     ) -> Result<Started, StartRefusal> {
-        let started = self.panes.start(request, &self.source)?;
+        let holder = holder_pane(&request.pane);
+        let started = self.panes.start(
+            &StartRequest {
+                pane: holder.clone(),
+                ..request.clone()
+            },
+            &self.source,
+        )?;
         let (Started::Started(record) | Started::Existing(record)) = &started;
         if record.end.is_some() {
-            self.report_ended(record);
+            self.report_ended(&request.pane, record);
             return Ok(started);
         }
         self.known.insert(
             &request.pane,
-            hide_kit::layout::holder_socket(&self.state_dir, &request.pane),
+            hide_kit::layout::holder_socket(&self.state_dir, &holder),
         );
         service.control(TerminalControl::Attach {
             pane: request.pane.clone(),
@@ -610,7 +619,7 @@ impl Holders {
             pane: pane.to_owned(),
             closing: true,
         });
-        let closed = self.panes.close(pane);
+        let closed = self.panes.close(&holder_pane(pane));
         if closed.is_ok() || matches!(closed, Err(CloseError::NoRecord)) {
             self.known.remove(pane);
             service.control(TerminalControl::Forget {
@@ -640,9 +649,10 @@ impl Holders {
     /// Asks in the version the pane's record says its holder speaks, so a
     /// newer node still reads an older holder.
     fn ask(&self, pane: &str, ask: Ask) -> Result<Answer, OpenError> {
+        let holder = holder_pane(pane);
         let record = self
             .panes
-            .record(pane)
+            .record(&holder)
             .map_err(|why| OpenError::Io(std::io::Error::other(why.to_string())))?
             .ok_or_else(|| {
                 OpenError::Io(std::io::Error::new(
@@ -651,7 +661,7 @@ impl Holders {
                 ))
             })?;
         hide_holder_protocol::ask(
-            &hide_kit::layout::holder_socket(&self.state_dir, pane),
+            &hide_kit::layout::holder_socket(&self.state_dir, &holder),
             ask,
             record.protocol,
             Instant::now() + ASK_LIMIT,
@@ -709,7 +719,7 @@ impl Holders {
             match judgment {
                 Judgment::Alive(_) => alive.push(pane),
                 Judgment::Ended(record) => {
-                    self.report_ended(&record);
+                    self.report_ended(&record.pane, &record);
                     recovered
                         .ended
                         .push((pane, record.end.as_ref().map(|end| end.reason)));
@@ -848,7 +858,7 @@ impl Holders {
         Some(pruned)
     }
 
-    fn report_ended(&self, record: &PaneRecord) {
+    fn report_ended(&self, pane: &str, record: &PaneRecord) {
         let (category, message) = match &record.end {
             Some(end) => (
                 end.reason.name(),
@@ -859,7 +869,7 @@ impl Holders {
             ),
             None => ("ended", "The pane ended".to_owned()),
         };
-        self.report(&record.pane, "ended", category, message);
+        self.report(pane, "ended", category, message);
     }
 
     fn report(&self, pane: &str, state: &str, category: &str, message: String) {
