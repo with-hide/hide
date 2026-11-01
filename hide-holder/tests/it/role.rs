@@ -11,8 +11,8 @@ use crate::support::{PIDS_FILE, ROLE, SCRIPT};
 /// How long a role that nobody ends lives.
 const ROLE_LIFE: Duration = Duration::from_secs(60);
 
-/// Exit on its own once its child runs: a shell that exits and leaves a
-/// process behind.
+/// Exit on its own once its child runs and the file this names appears: a
+/// shell that exits and leaves a process behind.
 pub const EXIT_EARLY: &str = "HIDE_HOLDER_TEST_EXIT_EARLY";
 
 /// The file whose appearance tells `exit_when_told` to exit.
@@ -107,7 +107,13 @@ fn stubborn_tree() {
     // ignores the hangup lives on past that, as this one must.
     let mut out = std::io::stdout();
     let _ = writeln!(out, "TREE READY").and_then(|()| out.flush());
-    if std::env::var_os(EXIT_EARLY).is_some() {
+    if let Some(go) = std::env::var_os(EXIT_EARLY) {
+        let go = std::path::PathBuf::from(go);
+        let deadline = Instant::now() + ROLE_LIFE;
+        while !go.exists() && Instant::now() < deadline {
+            #[allow(clippy::disallowed_methods)] // the role's own pace
+            thread::sleep(Duration::from_millis(5));
+        }
         return;
     }
     live_out();

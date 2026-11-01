@@ -175,17 +175,32 @@ fn ending_a_pane_ends_what_ignores_its_signals_and_what_it_starts_meanwhile() {
     }
 }
 
+/// The holder's `holder.ended` line: how it ended and whether it exits
+/// with a failure.
+fn ended_line(log: &str) -> serde_json::Value {
+    log.lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|line| line["event"] == "holder.ended")
+        .unwrap_or_else(|| panic!("the holder logged no end:\n{log}"))
+}
+
 #[test]
 fn a_program_that_exits_on_its_own_takes_what_it_left_with_it() {
     let home = Home::new();
-    let early: OsString = "1".into();
+    // The program exits once told, so what it leaves is caught running
+    // first: a program gone before it is looked for would leave nothing to
+    // check, and the test would prove nothing.
+    let go = home.path().join("go");
+    let early: OsString = go.clone().into();
     let (holder, pids) = stubborn_pane(&home, &[(EXIT_EARLY, &early)]);
-    // The program may exit before a connection is made, or while one opens,
-    // which is then told why; what is left of its tree is ended either way.
     let left: Vec<Running> = pids_in(&pids, 2)
         .into_iter()
         .filter_map(Running::of)
         .collect();
+    assert_eq!(left.len(), 2, "the program and its child run before it exits");
+    std::fs::write(&go, b"go").unwrap();
+    // The program may exit before a connection is made, or while one opens,
+    // which is then told why; what is left of its tree is ended either way.
     match holder.try_open() {
         Ok((stream, welcome)) => {
             let closed = Connection::new(stream, welcome, &holder.socket).wait_closed();
@@ -204,11 +219,17 @@ fn a_program_that_exits_on_its_own_takes_what_it_left_with_it() {
     }
     holder.wait_gone();
     assert_ended(&left, "its program");
+    let log = holder.log_text();
+    let ended = ended_line(&log);
+    assert_eq!(ended["reason"], "program_exited", "{log}");
+    assert_eq!(ended["failed"], false, "{log}");
 }
 
 /// A connection that never reads while the program floods it gets no queue,
 /// only the screen when it reads again, and an end asked for in the middle
-/// of the flood finishes.
+/// of the flood finishes whole: the PTY closes while its last output is
+/// still read, which a holder that could not confirm it logs
+/// (`holder.pty_close_unconfirmed`) before it exits with a failure.
 #[test]
 fn a_pane_that_floods_its_output_still_ends() {
     let home = Home::new();
@@ -231,6 +252,11 @@ fn a_pane_that_floods_its_output_still_ends() {
     assert_eq!(closed.reason, CloseReason::Terminated, "{closed:?}");
     holder.wait_gone();
     assert_ended(&flooding, "its pane");
+    let log = holder.log_text();
+    assert!(!log.contains("\"holder.pty_close_unconfirmed\""), "{log}");
+    let ended = ended_line(&log);
+    assert_eq!(ended["reason"], "terminated", "{log}");
+    assert_eq!(ended["failed"], false, "{log}");
 }
 
 /// The holder is killed outright: on Windows the job only it held ends the

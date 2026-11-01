@@ -803,11 +803,12 @@ impl Holder {
         self.log
             .event("holder.ending", &[("reason", reason.name().into())]);
         self.closer.close();
-        let mut status = ExitCode::SUCCESS;
+        // Whether an end it could not confirm makes it exit with a failure.
+        let mut failed = false;
         let mut closed = match self.session.end(TREE_END_LIMIT) {
             Ok(SessionEnd::Ended) => Closed::new(reason, why),
             Ok(SessionEnd::Unconfirmed { left }) => {
-                status = ExitCode::FAILURE;
+                failed = true;
                 self.log.event(
                     "holder.tree_end_unconfirmed",
                     &[("left", json!(left)), ("limit_ms", 5000.into())],
@@ -820,7 +821,7 @@ impl Holder {
                 closed
             }
             Err(error) => {
-                status = ExitCode::FAILURE;
+                failed = true;
                 self.log.event(
                     "holder.tree_end_failed",
                     &[("error", error.to_string().into())],
@@ -833,7 +834,7 @@ impl Holder {
         };
         closed.exit_code = exit_code;
         if !self.close_pty() {
-            status = ExitCode::FAILURE;
+            failed = true;
         }
         // Before the connection hears it, so a node told the pane ended
         // reads the same end in the record.
@@ -865,9 +866,14 @@ impl Holder {
             &[
                 ("reason", closed.reason.name().into()),
                 ("exit_code", json!(exit_code)),
+                ("failed", failed.into()),
             ],
         );
-        status
+        if failed {
+            ExitCode::FAILURE
+        } else {
+            ExitCode::SUCCESS
+        }
     }
 
     /// Writes why the pane ended into its record. One it cannot write is
