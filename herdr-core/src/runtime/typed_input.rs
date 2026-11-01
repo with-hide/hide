@@ -1500,7 +1500,8 @@ pub(crate) mod tests {
             (at + CLOCK_SLACK_MS + 1, sender.clone(), false),
             (at - 500, json!({"kind": "operator"}), false),
         ] {
-            let (_root, mut runtime, spawn) = spawned_with("antigravity", typed, false, typed_at, false);
+            let (_root, mut runtime, spawn) =
+                spawned_with("antigravity", typed, false, typed_at, false);
             let mut row = crate::sidebar::project_agents(
                 serde_json::from_value(json!({"agents": [
                     {"pane_id": "child", "agent": "antigravity", "agent_status": "idle", "state_change_seq": 2}
@@ -1543,7 +1544,8 @@ pub(crate) mod tests {
         let typed = fixture["typed"].as_str().unwrap();
         let record = &fixture["record"];
         let at = record["at_unix_ms"].as_u64().unwrap();
-        let (_root, mut runtime, spawn) = spawned_with("antigravity", typed, false, at - 500, false);
+        let (_root, mut runtime, spawn) =
+            spawned_with("antigravity", typed, false, at - 500, false);
         let retyped = at + CLOCK_SLACK_MS + 10_000;
         let mut ledger = (**runtime.delivery_ledger.as_ref().unwrap()).clone();
         crate::coordination::apply(
