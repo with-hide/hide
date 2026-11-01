@@ -12,9 +12,10 @@
 // builds an unsigned per-user installer and Linux x64 an unsigned deb and rpm
 // (operator decision 2026-10-03, PRD auto-update D-07: no paid signing outside
 // macOS). Each is built on its own system, because the release binaries come from that
-// system's cargo build. A Mac also consumes the two Linux device helper artifacts
-// built by device-helpers.yml at this exact source, version and build order,
-// publishing them separately while the app carries only their manifest.
+// system's cargo build. A release Mac app, and every Windows app, carries the
+// manifest of the two Linux device bundles a run made from device-helpers.yml
+// at this exact source, version and build order, publishing the archives
+// separately; a local Mac package carries none (see below).
 //
 // `package.mjs compile` stops after the web shell and the release binaries,
 // recording them in desktop/out/release-binaries.json, and `package.mjs
@@ -37,7 +38,7 @@ import { applyFuses, assertFuses } from "./fuses.mjs";
 import { APP_ID, buildInstallers } from "./installers.mjs";
 import { assertNotarized, developerIdOptions, macosSigning, notarizeApp } from "./macos-signing.mjs";
 import { orderOnMain, resolveVersion } from "./build-identity.mjs";
-import { DEVICE_BUNDLE_MANIFEST, fetchDeviceHerdr, prepareDeviceBundles, readDeviceBundles } from "./device-helpers.mjs";
+import { DEVICE_BUNDLE_MANIFEST, readDeviceBundles } from "./device-helpers.mjs";
 import { checkReleaseBinaries, recordReleaseBinaries } from "./release-binaries.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -141,27 +142,25 @@ if (phase !== "assemble") {
 const order = process.env.HIDE_BUILD_ORDER || orderOnMain();
 if (!/^[0-9]+$/.test(order)) throw new Error(`the package's build order could not be read (got '${order}')`);
 // Required artifacts are checked before the native release build, or before
-// the app is assembled from compiled binaries. No partial Mac or Windows app
-// may silently leave a Linux device, or a WSL distribution, without its kit.
-// The bundles a run's `device-bundles` job made, downloaded here, are used as
-// they are, so the Mac and Windows apps ship one manifest. A release (one
-// that names HIDE_VERSION) and every Windows app refuse to start without
-// them, since bundles made again here would not match the digests the other
-// app embeds; a local Mac build without them makes its own from the helpers.
+// the app is assembled from compiled binaries. No release Mac app and no
+// Windows app may silently leave a Linux device, or a WSL distribution,
+// without its kit: they take the bundles a run's `device-bundles` job made,
+// downloaded here, as they are, so both apps ship one manifest. A local Mac
+// package (no HIDE_VERSION) carries no device manifest at all: its version
+// is a `-main.` build with no published release, which the daemon refuses to
+// download for anyway (hide-node device_bundles), so building both Linux
+// helpers for it would only make the operator wait; a device then reports
+// that this build has no device download manifest.
 const deviceBundles = path.join(out, "device-bundles");
-const carriesDeviceKit = (platform === "darwin" || platform === "win32") && phase !== "compile";
-const identity = { version, commit, order };
-const madeBundles = fs.existsSync(path.join(deviceBundles, DEVICE_BUNDLE_MANIFEST));
 const releasing = Boolean(process.env.HIDE_VERSION);
-if (carriesDeviceKit && !madeBundles && (releasing || platform === "win32")) {
+const carriesDeviceKit = ((platform === "darwin" && releasing) || platform === "win32") && phase !== "compile";
+const identity = { version, commit, order };
+if (carriesDeviceKit && !fs.existsSync(path.join(deviceBundles, DEVICE_BUNDLE_MANIFEST))) {
   const app = releasing ? `the ${version} release` : "the Windows app";
   throw new Error(`${app} needs this run's device bundles in ${deviceBundles} (the hide-device-bundles artifact, made by desktop/scripts/device-helpers.mjs bundle)`);
 }
-const deviceManifest = !carriesDeviceKit
-  ? null
-  : madeBundles
-    ? readDeviceBundles(deviceBundles, identity)
-    : prepareDeviceBundles(path.join(out, "device-helpers"), identity, deviceBundles, fetchDeviceHerdr());
+const deviceManifest = carriesDeviceKit ? readDeviceBundles(deviceBundles, identity) : null;
+if (platform === "darwin" && !releasing && phase !== "compile") console.log("device_manifest=none (a local build has no device release)");
 const cargoRelease = path.join(repo, "target", "release");
 const releaseBinaries = [`hided${exe}`, `hide${exe}`, `hide-agent-hooks${exe}`];
 if (phase === "assemble") {
