@@ -218,6 +218,7 @@ pub(crate) fn send(
         answer_wait_ended: None,
         bell_line: None,
         bell_turn: None,
+        handed: false,
         immediate: false,
         forced: false,
         tool_handovers: 0,
@@ -416,7 +417,13 @@ pub fn apply(
         Command::Pull {
             prompt_digest: Some(digest),
             ..
-        } if rang(ledger, actor, digest) => Ok(json!(pull(ledger, actor)?)),
+        } if rang(ledger, actor, digest) => {
+            let intake = pull(ledger, actor)?;
+            // Handed over now, whether or not the hook's confirmation, a
+            // second process inside its last 400 ms, ever arrives.
+            mark_handed(ledger, &intake);
+            Ok(json!(intake))
+        }
         // An agent no bell rings for takes its letters on its next prompt,
         // whoever typed it: no turn of Hide's own will ever bring them.
         Command::Pull { .. } if next_prompt_letters(&actor.kind) => Ok(json!(pull(ledger, actor)?)),
@@ -478,9 +485,7 @@ fn record_intake(letter: &mut Letter, now: u64) -> Option<(Actor, Actor)> {
 
 fn end_report_watches(ledger: &mut Ledger, report: Option<(Actor, Actor)>) {
     if let Some((sender, recipient)) = report {
-        ledger.watches.retain(|watch| {
-            !(sender.same_identity(&watch.target) && recipient.same_identity(&watch.parent))
-        });
+        ledger.end_report_watch(&sender, &recipient);
     }
 }
 
@@ -539,6 +544,7 @@ fn rang(ledger: &Ledger, actor: &Actor, digest: &str) -> bool {
 /// it nothing.
 fn bell_pending(ledger: &Ledger, letter: &Letter, now: u64) -> bool {
     letter.state == State::Pending
+        && !letter.handed
         && letter.within_deadline(&ledger.node_clocks, now)
         && letter.attempts() < 3
         && super::doorbell::bell_target(&letter.recipient.kind)
@@ -635,6 +641,18 @@ pub(crate) fn record_tool_handover(ledger: &mut Ledger, intake: &Intake) -> bool
         changed = true;
     }
     changed
+}
+
+/// Marks the pending letters `intake` hands over as handed: no bell is typed
+/// for them again.
+fn mark_handed(ledger: &mut Ledger, intake: &Intake) {
+    for letter in ledger
+        .letters
+        .iter_mut()
+        .filter(|letter| letter.state == State::Pending && intake.ids.contains(&letter.id))
+    {
+        letter.handed = true;
+    }
 }
 
 /// The letter bodies for the turn Hide's bell opened.
@@ -1326,11 +1344,18 @@ mod tests {
         )));
         // The same words in another agent's pane are not its bell.
         assert!(counted(pull_for(&mut ledger, &other, LINE)));
-        let bell = pull_for(&mut ledger, &recipient, LINE);
-        assert_eq!(bell.ids, [ledger.letters[0].id.clone()]);
         // A second bell for the letter replaces the line the first typed.
-        ring(&mut ledger, 0, "🦉 sender 보고: body-0 · 외 1통");
+        let second = "🦉 sender 보고: body-0 · 외 1통";
+        ring(&mut ledger, 0, second);
         assert!(counted(pull_for(&mut ledger, &recipient, LINE)));
+        let bell = pull_for(&mut ledger, &recipient, second);
+        assert_eq!(bell.ids, [ledger.letters[0].id.clone()]);
+        // The bell's pull handed it over: no bell is typed for it again.
+        assert!(ledger.letters[0].handed);
+        assert_eq!(
+            ledger.letters[0].reserve_bell(&Default::default(), 60, LINE.into()),
+            Err("letter_handed".into())
+        );
         // Once the letter is taken in, its line opens nothing.
         let id = ledger.letters[0].id.clone();
         apply(
@@ -1343,6 +1368,138 @@ mod tests {
         .unwrap();
         let after = pull_for(&mut ledger, &recipient, "🦉 sender 보고: body-0 · 외 1통");
         assert!(after.ids.is_empty() && after.context.is_empty());
+    }
+
+    /// A letter the bell's pull handed over but no confirmation took in
+    /// rides the next bell's batch for the same recipient, is not counted as
+    /// a bell still coming, and at its deadline ends delivered without a
+    /// receipt, never undelivered; a letter never handed ends undelivered.
+    #[test]
+    fn a_handed_letter_rides_the_next_bell_and_never_ends_undelivered() {
+        let mut ledger = Ledger::default();
+        let recipient = actor("recipient");
+        let first = pending_for(&mut ledger, &recipient, 1).remove(0);
+        ring(&mut ledger, 0, LINE);
+        assert_eq!(
+            pull_for(&mut ledger, &recipient, LINE).ids,
+            [first.as_str()]
+        );
+        let next = send(
+            &mut ledger,
+            &actor("sender"),
+            &recipient,
+            "next",
+            "body-next",
+            "request",
+            None,
+            60,
+        )
+        .unwrap()
+        .id;
+        let counted = pull_for(&mut ledger, &recipient, "the operator's own prompt");
+        assert!(counted.ids.is_empty());
+        assert!(counted.context.contains("1통"), "{}", counted.context);
+        let line = "🦉 sender 보고: body-next";
+        ring(&mut ledger, 1, line);
+        assert_eq!(
+            pull_for(&mut ledger, &recipient, line).ids,
+            [first.clone(), next.clone()]
+        );
+        let unrung = send(
+            &mut ledger,
+            &actor("sender"),
+            &actor("other-recipient"),
+            "unrung",
+            "body-unrung",
+            "request",
+            None,
+            61,
+        )
+        .unwrap()
+        .id;
+        assert!(ledger.expire(super::super::DELIVERY_EXPIRY_MS + 1_000));
+        let state = |ledger: &Ledger, id: &str| {
+            let letter = ledger
+                .letters
+                .iter()
+                .find(|letter| letter.id == id)
+                .unwrap();
+            (
+                letter.state,
+                letter.hook_confirmed,
+                letter.intake_confirmed(),
+            )
+        };
+        assert_eq!(state(&ledger, &first), (State::Delivered, None, false));
+        assert_eq!(state(&ledger, &next), (State::Delivered, None, false));
+        assert_eq!(state(&ledger, &unrung).0, State::Undelivered);
+        // A confirmation that comes late still takes it in.
+        apply(
+            &mut ledger,
+            &recipient,
+            None,
+            &Command::Confirm {
+                ids: vec![first.clone()],
+            },
+            super::super::DELIVERY_EXPIRY_MS + 2_000,
+        )
+        .unwrap();
+        assert_eq!(state(&ledger, &first), (State::Delivered, Some(true), true));
+    }
+
+    /// A handed letter whose recipient's wake failed is undelivered, as any
+    /// letter there is: the wake's failure, not a missing receipt, ends it.
+    #[test]
+    fn a_handed_letter_whose_wake_failed_is_undelivered() {
+        let mut ledger = Ledger::default();
+        let recipient = actor("recipient");
+        let id = pending_for(&mut ledger, &recipient, 1).remove(0);
+        ring(&mut ledger, 0, LINE);
+        pull_for(&mut ledger, &recipient, LINE);
+        assert!(ledger.letters[0].handed);
+        let failed = std::collections::BTreeMap::from([(id, "wake_failed".to_owned())]);
+        assert!(ledger.fail_woken(&failed, 100));
+        assert_eq!(ledger.letters[0].state, State::Undelivered);
+    }
+
+    /// A report a prompt hook handed over ends its parent's watch at its
+    /// deadline, as a confirmation would; one no hook handed ends
+    /// undelivered and leaves the watch.
+    #[test]
+    fn a_handed_report_ends_its_watch_at_the_deadline_and_an_unhanded_one_does_not() {
+        for handed in [true, false] {
+            let mut ledger = Ledger::default();
+            let parent = actor("parent");
+            let child = actor("child");
+            super::super::watch::start(&mut ledger, &parent, &child, 0).unwrap();
+            let report = send(
+                &mut ledger,
+                &child,
+                &parent,
+                "done",
+                "body-0",
+                "report",
+                None,
+                1,
+            )
+            .unwrap()
+            .id;
+            let line = "🦉 child 보고: body-0";
+            ring(&mut ledger, 0, line);
+            if handed {
+                assert_eq!(pull_for(&mut ledger, &parent, line).ids, [report.as_str()]);
+            }
+            assert!(ledger.expire(super::super::DELIVERY_EXPIRY_MS + 1_000));
+            let state = ledger.letters[0].state;
+            assert_eq!(
+                (state, ledger.watches.is_empty()),
+                if handed {
+                    (State::Delivered, true)
+                } else {
+                    (State::Undelivered, false)
+                }
+            );
+        }
     }
 
     #[test]
