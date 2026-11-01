@@ -56,6 +56,7 @@ export const plansEnglish = {
   "plan.delegation.noPlan": "Working without a plan",
   "plan.chipNow": "Plan {{progress}}, now {{step}}",
   "plan.steplist": "Plan steps",
+  "plan.side.next": "Next",
   "plan.side.left": "Left",
   "plan.side.handed": "Handed to",
 } as const;
@@ -113,6 +114,7 @@ const ko: Catalog<typeof plansEnglish> = {
   "plan.delegation.noPlan": "계획 없이 일하고 있어요",
   "plan.chipNow": "계획 {{progress}}, 지금 {{step}}",
   "plan.steplist": "계획 단계",
+  "plan.side.next": "다음",
   "plan.side.left": "남긴 것",
   "plan.side.handed": "맡긴 일",
 };
@@ -170,6 +172,7 @@ const zh: Catalog<typeof plansEnglish> = {
   "plan.delegation.noPlan": "没有计划，直接在做",
   "plan.chipNow": "计划 {{progress}}，当前 {{step}}",
   "plan.steplist": "计划步骤",
+  "plan.side.next": "下一步",
   "plan.side.left": "产出",
   "plan.side.handed": "已委派",
 };
@@ -227,6 +230,7 @@ const ja: Catalog<typeof plansEnglish> = {
   "plan.delegation.noPlan": "計画なしで作業中",
   "plan.chipNow": "計画 {{progress}}、いま {{step}}",
   "plan.steplist": "計画の段階",
+  "plan.side.next": "次",
   "plan.side.left": "残したもの",
   "plan.side.handed": "任せた仕事",
 };

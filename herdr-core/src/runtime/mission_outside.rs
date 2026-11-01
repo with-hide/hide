@@ -210,16 +210,13 @@ pub(super) fn begin_round(seq: &mut u64, before: Option<&MissionNode>, node: &mu
     });
     if new_round {
         *seq += 1;
-        node.round = *seq;
+        node.outside_round = *seq;
         node.branch_ahead = None;
     }
 }
 
 fn settled(status: NodeStatus) -> bool {
-    matches!(
-        status,
-        NodeStatus::Done | NodeStatus::Failed | NodeStatus::Dropped
-    )
+    status.finished()
 }
 
 fn found_of(badge: PullRequestBadge) -> Found {
@@ -297,7 +294,7 @@ fn outside_asks(
                     external,
                     ahead: node.branch_ahead.clone(),
                     reopens: outside.reopens_of(&mission.id),
-                    round: node.round,
+                    round: node.outside_round,
                 },
             };
             match pull {
@@ -540,7 +537,8 @@ impl Runtime {
     }
 
     /// Moves each node to what was found: an outside node open or unread
-    /// waits, in main is done and closed is failed; a direct change in main
+    /// is in progress, in main is done and closed is raised to the
+    /// Conductor; a direct change in main
     /// keeps the commit Hide read there, open or unread keeps none, and a
     /// mission that was waiting only on such branches is done. A node a
     /// replan changed or settled since the ask is left as it is.
@@ -574,7 +572,7 @@ impl Runtime {
                         node.key == ask.node
                             && node.kind == NodeKind::External
                             && node.external.as_ref() == Some(external)
-                            && node.round == *round
+                            && node.outside_round == *round
                             && !settled(node.status)
                     })
                     .filter(|_| self.missions.outside.reopens_of(&ask.mission) == *reopens),
@@ -659,10 +657,39 @@ impl Runtime {
             }
             let (status, wake) = match found {
                 Found::Open | Found::Ahead(_) | Found::NoOwnWork { .. } | Found::Unread(_) => {
-                    (NodeStatus::Waiting, None)
+                    (NodeStatus::Working, None)
                 }
                 Found::InMain(_) => (NodeStatus::Done, Some(WakeEvent::OutsideDone)),
-                Found::Closed => (NodeStatus::Failed, Some(WakeEvent::OutsideFailed)),
+                // Closed without its merge, it stays in progress with the
+                // Conductor asked to look (PRD mission-node-simple D-04,
+                // B12); the raise is its letter.
+                Found::Closed => {
+                    let pr = match external {
+                        External::Pr(number) => Some(*number),
+                        External::Branch(_) => None,
+                    };
+                    let mut events = Vec::new();
+                    if mission.nodes[at].status == NodeStatus::Planned {
+                        let node = &mission.nodes[at];
+                        let mut next = node.clone();
+                        next.status = NodeStatus::Working;
+                        events = super::mission_events::node_events(node, &next, now);
+                        mission.nodes[at] = next;
+                    }
+                    events.extend(super::mission_health::raise(
+                        mission,
+                        &ask.node,
+                        crate::missions::AttentionReason::PrClosed,
+                        pr,
+                        now,
+                    ));
+                    if !events.is_empty() {
+                        mission.updated_at_unix_ms = now;
+                        self.record_mission_events(&ask.mission, events);
+                        changed = true;
+                    }
+                    continue;
+                }
             };
             let node = &mission.nodes[at];
             if node.status == status {
@@ -681,7 +708,7 @@ impl Runtime {
                     External::Pr(number) => Some(*number),
                     External::Branch(_) => None,
                 };
-                super::missions::record_wake(mission, ask.node.clone(), pr, event, None);
+                super::missions::record_wake(mission, ask.node.clone(), pr, event, None, None);
             }
             crate::diagnostic!(json!({
                 "component": "missions", "kind": "mission.outside_settled",

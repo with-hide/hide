@@ -16,6 +16,7 @@ import { TitleRow } from "../TitleRow";
 import { OVERVIEW_ENTRY, useUiStore } from "../ui";
 import { WorkspaceScreen } from "../WorkspaceScreen";
 import { hideKey, overviewFocusWorld, overviewWorld } from "./overviewSceneData";
+import { withMissionAsk } from "./MissionScene";
 import { AGENT_ADAPTERS } from "../agentAdapters";
 import { ledgerScene } from "./usageHistorySceneData";
 import type { SessionRecord, SessionSearchOptions, SessionSearchStatus, WorkSession } from "../snapshot";
@@ -25,7 +26,7 @@ import { installKeyboard } from "../keyboard";
 import { Palette } from "../Palette";
 import { requireInterfaceLanguage, type InterfaceLanguage } from "../i18n/locale";
 
-const STATES = ["work", "focus", "backlog", "backlog-add", "backlog-detail", "projects", "history", "usage", "home-record", "record"] as const;
+const STATES = ["work", "mission-ask", "focus", "backlog", "backlog-add", "backlog-detail", "projects", "history", "usage", "home-record", "record"] as const;
 type OverviewSceneState = (typeof STATES)[number];
 export type OverviewSceneParams = { state: OverviewSceneState; theme: "light" | "dark"; palette: "hide" | "neutral"; language: InterfaceLanguage; scale: number; content?: string };
 
@@ -95,7 +96,8 @@ export function OverviewScene({ state, theme, palette, language, scale, content 
     return () => { document.documentElement.style.removeProperty("--interface-scale"); };
   }, [scale]);
   useLayoutEffect(() => {
-    const rest = structuredClone(world.rest);
+    // `mission-ask`: a mission no row carries waits on the operator beside the agents that do (PRD mission-node-simple B14).
+    const rest = state === "mission-ask" ? withMissionAsk(structuredClone(world.rest), "local", Date.now()) : structuredClone(world.rest);
     const sessionRecord = { session: world.recordSession, loading: false, failure: null, record: world.record };
     if (state === "record") {
       const project = rest.navigator!.workspaces!.find((row) => row.id === "hide")!;
@@ -124,7 +126,7 @@ export function OverviewScene({ state, theme, palette, language, scale, content 
     useUiStore.setState({
       screen: state === "record" ? { kind: "workspace" } : { kind: "main" },
       overviewOpen: false,
-      mainView: state === "projects" ? "projects" : (state === "work" || state === "focus") ? "work" : state === "history" ? "history" : state === "usage" ? "usage" : "backlog",
+      mainView: state === "projects" ? "projects" : (state === "work" || state === "mission-ask" || state === "focus") ? "work" : state === "history" ? "history" : state === "usage" ? "usage" : "backlog",
       overview: { ...OVERVIEW_ENTRY, panel: state === "home-record" ? { kind: "record", session: world.recordSession } : state === "backlog-detail" ? { kind: "item", workspaceId: "hide", taskKey: hideKey(163) } : null },
       quickAdd: state === "backlog-add" ? { returnFocus: null } : null,
     });

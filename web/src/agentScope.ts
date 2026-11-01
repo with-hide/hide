@@ -36,7 +36,10 @@ export type ProjectStray = {
 };
 
 export type AgentScope = {
+  /** Needs You on this scope, agents and, on a device's scope, the missions in `mission_asks`. */
   overview_needs_you: number;
+  /** On a device's scope, the missions that are their own Needs You item (no Conductor or worker row carries what waits on the operator, PRD mission-node-simple B14), oldest first; counted in `overview_needs_you` and `groups.needs_you`. Absent when there are none. */
+  mission_asks?: string[];
   has_working: boolean;
   relations: Record<string, { issues: string[]; project_id: string; checkout_id: string; rows: { pane_id: string; occurrence: number; depth: number; tag: "here" | "parent" | null; caption_parent: string | null }[] }[]>;
   listed: { pane_id: string; device_id: string; device_label: string | null; remote: boolean; index: number }[];

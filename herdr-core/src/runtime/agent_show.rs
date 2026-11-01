@@ -91,7 +91,10 @@ impl Runtime {
                 let Some(input) = letter.typed_input() else {
                     continue;
                 };
-                if let Some(phase) = phase(&input, observation, now) {
+                if let Some(phase) = phase(
+                    &input,
+                    self.input_standing(&letter.id, &input, observation, now),
+                ) {
                     let sender = crate::coordination::registered_id(ledger, &letter.sender);
                     pending.push((
                         pending_input(InputKind::Letter, &input, phase, None, Some(&letter.id)),
@@ -143,7 +146,10 @@ impl Runtime {
         now: u64,
     ) -> Option<(PendingInput, Option<String>)> {
         let input = spawn.brief_input.as_ref()?;
-        let phase = phase(input, self.spawn_observation(spawn), now)?;
+        let phase = phase(
+            input,
+            self.input_standing(&spawn.id, input, self.spawn_observation(spawn), now),
+        )?;
         let parent = (spawn.mode == crate::coordination::SpawnMode::Delegation)
             .then(|| spawn.parent.clone());
         Some((
@@ -153,18 +159,16 @@ impl Runtime {
     }
 }
 
-/// Where typed `input` stands, or `None` once the agent recorded it.
-fn phase(
-    input: &typed::TypedInput,
-    observation: Option<&super::delivery::Observation>,
-    now: u64,
-) -> Option<InputPhase> {
+/// Where typed `input` stands by its `standing` (`Runtime::input_standing`,
+/// the verdict the row reads), or `None` once the agent recorded it.
+fn phase(input: &typed::TypedInput, standing: Standing) -> Option<InputPhase> {
     if input.attempts == 0 {
         return None;
     }
-    match typed::standing(input, observation, now) {
+    match standing {
         Standing::Confirmed => None,
-        Standing::Waiting => Some(InputPhase::AwaitingRecord),
+        // No pass judged this typing yet: no record is owed on what is known.
+        Standing::Waiting | Standing::Unsettled => Some(InputPhase::AwaitingRecord),
         Standing::Unconfirmed { .. } if input.attempts >= typed::INPUT_ATTEMPTS => {
             Some(InputPhase::Exhausted)
         }
@@ -284,6 +288,13 @@ fn waiting(
             AskSubject::MissionDecision { line } => {
                 let mut waiting = Waiting::on(WaitCause::MissionDecision, None, None);
                 waiting.text = Some(line.chars().take(TEXT_CHARS).collect());
+                waiting
+            }
+            // A mission node that waits on the operator, laid on this row:
+            // the node's title is what to look at.
+            AskSubject::MissionAttention { node, .. } => {
+                let mut waiting = Waiting::on(WaitCause::MissionAttention, None, None);
+                waiting.text = Some(node.chars().take(TEXT_CHARS).collect());
                 waiting
             }
             AskSubject::InputUnconfirmed { .. } => {

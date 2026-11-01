@@ -141,11 +141,9 @@ pub(crate) fn node_events(
         event.status = Some(after.status);
         out.push(event);
     }
-    if let Some(number) = after.pr
-        && after.pr != before.pr
-    {
+    for number in after.prs.iter().filter(|pr| !before.prs.contains(pr)) {
         let mut event = MissionEvent::new(now, EventKind::PrOpened).node(&after.key);
-        event.pr = Some(number);
+        event.pr = Some(*number);
         out.push(event);
     }
     if after.commit.is_some() && after.commit != before.commit {
@@ -199,17 +197,41 @@ impl Runtime {
         self.missions.events_edit = self.missions.events_edit.wrapping_add(1);
     }
 
-    /// Adds `events` to `mission`'s history and hands it to the store. A
-    /// full history drops its oldest and logs it; recording never refuses
-    /// the change it records (B21).
+    /// Adds `events` to `mission`'s history (`stage_mission_events`), then
+    /// saves the book with the change they record, so the writer has the
+    /// history before the book (B27). Every change is saved here, events or
+    /// none.
     pub(crate) fn record_mission_events(&mut self, mission: &str, events: Vec<MissionEvent>) {
+        self.stage_mission_events(mission, events);
+        self.save_missions();
+    }
+
+    /// Adds `events` to `mission`'s history and hands them to the store. An
+    /// event Hide's own evaluation made carries a key from the facts it
+    /// stands on (`MissionEvent::id`), and one the history already holds is
+    /// left out, so the same facts evaluated again after a restart or a
+    /// failed save write it once (B27, engineering #11). A full history
+    /// drops its oldest and logs it; recording never refuses the change it
+    /// records (B21).
+    pub(crate) fn stage_mission_events(&mut self, mission: &str, events: Vec<MissionEvent>) {
         if events.is_empty() {
             return;
         }
-        let events: Vec<Arc<MissionEvent>> = events.into_iter().map(Arc::new).collect();
         let log = self.missions.events.entry(mission.to_owned()).or_default();
+        let mut fresh: Vec<Arc<MissionEvent>> = Vec::new();
+        for event in events {
+            let held = event.id.as_deref().is_some_and(|id| {
+                log.holds(id) || fresh.iter().any(|new| new.id.as_deref() == Some(id))
+            });
+            if !held {
+                fresh.push(Arc::new(event));
+            }
+        }
+        if fresh.is_empty() {
+            return;
+        }
         let before = log.dropped;
-        for event in &events {
+        for event in &fresh {
             log.push(Arc::clone(event));
         }
         // The first drop and each hundredth after it, so a full log does not
@@ -224,7 +246,7 @@ impl Runtime {
         if self.missions.unreadable.is_none()
             && let Some(store) = &self.missions.event_store
         {
-            store.append(mission, &events);
+            store.append(mission, &fresh);
         }
     }
 
@@ -334,7 +356,6 @@ impl Runtime {
         };
         target.updated_at_unix_ms = now;
         self.missions.answers_held.remove(id);
-        self.save_missions();
         self.record_mission_events(id, events);
         Ok(true)
     }
@@ -503,8 +524,14 @@ impl Runtime {
         let target = self.missions.book.get_mut(id).ok_or("mission_unknown")?;
         target.end_asked_at_unix_ms = Some(now);
         target.updated_at_unix_ms = now;
-        let intent =
-            super::missions::record_wake(target, String::new(), None, WakeEvent::EndAsked, None);
+        let intent = super::missions::record_wake(
+            target,
+            String::new(),
+            None,
+            WakeEvent::EndAsked,
+            None,
+            None,
+        );
         crate::diagnostic!(json!({
             "component": "missions", "kind": "mission.end_asked",
             "mission": id, "intent": intent,
@@ -592,7 +619,6 @@ impl Runtime {
                 "component": "missions", "kind": "mission.answer_undelivered",
                 "mission": id, "reason": "conductor_gone",
             }));
-            self.save_missions();
             let mut event = MissionEvent::new(now, EventKind::AnswerUndelivered).line(Some(&text));
             event.node = asked;
             self.record_mission_events(&id, vec![event]);
@@ -665,7 +691,7 @@ impl Runtime {
 
     /// The doorbell's thread changed what a mission shows; a command's
     /// change is announced by the event that made it.
-    fn announce_missions(&self) {
+    pub(super) fn announce_missions(&self) {
         if let Some(context) = &self.worker_context {
             context.notifier.notify();
         }
@@ -733,7 +759,6 @@ impl Runtime {
             }
         };
         event.node = asked;
-        self.save_missions();
         self.record_mission_events(id, vec![event]);
         self.announce_missions();
     }

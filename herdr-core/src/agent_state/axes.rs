@@ -1167,6 +1167,9 @@ pub(crate) struct TurnProjection {
     /// The agent's own native question or a plan approval waits for the
     /// operator (`native_question`, `session_wait`).
     pub operator_wait: bool,
+    /// The activity is the turn the agent's own hook reported, not Herdr's
+    /// reading of its screen: proof the agent itself started or ended it.
+    pub reported: bool,
 }
 
 pub(crate) fn turn_projection(agent: &SessionAgentPayload) -> TurnProjection {
@@ -1174,6 +1177,7 @@ pub(crate) fn turn_projection(agent: &SessionAgentPayload) -> TurnProjection {
         activity: agent_activity(agent),
         prompt: approval_prompt(agent),
         operator_wait: native_question(agent) || session_wait(agent),
+        reported: !agent.telemetry_stale && hook_turn(agent).is_some(),
     }
 }
 

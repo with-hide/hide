@@ -68,7 +68,7 @@ it("offers one verification strength and the other-company toggle beside the can
     expect(group.querySelector("h3")?.textContent).toBe("Verification");
     // Two controls: the strength's three choices and the switch, nothing else.
     expect(tab.strengths().map((option) => [option.textContent, option.getAttribute("data-state")])).toEqual([["Fast", "off"], ["Normal", "on"], ["Thorough", "off"]]);
-    expect([...group.querySelectorAll('[role="switch"]')].map((toggle) => [toggle.getAttribute("aria-label"), toggle.getAttribute("aria-checked")])).toEqual([["Checks use a model from another company than the worker's", "true"]]);
+    expect([...group.querySelectorAll('[role="switch"]')].map((toggle) => [toggle.getAttribute("aria-label"), toggle.getAttribute("aria-checked")])).toEqual([["Checks use a different kind of agent than the worker (Codex for Claude)", "true"]]);
     expect(group.querySelectorAll('[role="combobox"], input')).toHaveLength(0);
     expect(group.querySelector("[data-conductor-strength-terms]")?.textContent).toContain("At most twice, only what changed");
     expect(group.textContent).toContain("A change applies from the next mission.");

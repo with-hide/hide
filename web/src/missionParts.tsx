@@ -7,7 +7,7 @@ import { MissionPrMark } from "./components/mission-pr";
 import { useInterfaceTranslation } from "./i18n/client";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
-import { checkerState, launchSession, nodeTimes, runWords, shortCommit, type NodeLook, type NodeResult } from "./missions";
+import { checkerState, launchSession, nodeTimes, runWords, shortCommit, workerAsleep, type NodeLook, type NodeResult } from "./missions";
 import { allAgents, agentsByPane } from "./paneAgents";
 import type { Mission, MissionChecker, MissionEvent, MissionNode, MissionWorker } from "./snapshot";
 import { useShellStore } from "./store";
@@ -71,13 +71,18 @@ export function lookWord(look: NodeLook, t: TFunction<"translation">): string {
   return t(`mission.look.${look}`);
 }
 
-/** How long a node took and how long a decision held it, from its events (B28); nothing moves while its device does not answer (B35). */
+/** A node mark's hover and accessible name (PRD mission-node-simple B1): its look's word, and a sleeping worker's sleep beside it, since the mark itself has no fourth shape. */
+export function markWord(node: MissionNode, look: NodeLook, t: TFunction<"translation">): string {
+  return look === "working" && workerAsleep(node) ? `${lookWord(look, t)} · ${t("mission.worker.asleep")}` : lookWord(look, t);
+}
+
+/** How long a node took, from its events (B28); nothing moves while its device does not answer (B35). */
 export function useNodeTimes(mission: Mission, node: MissionNode, events: MissionEvent[] | null, end: number) {
   const { i18n } = useInterfaceTranslation();
   const language = requireInterfaceLanguage(i18n.language);
   const times = events ? nodeTimes(node, events, end) : null;
   if (!times || (times.running && mission.stale)) return null;
-  return { took: times.took != null && times.took > 0 ? formatElapsed(language, times.took) : null, held: times.held > 0 ? formatElapsed(language, times.held) : null };
+  return { took: times.took != null && times.took > 0 ? formatElapsed(language, times.took) : null };
 }
 
 const CHECKER_TONE = { pass: "text-muted-foreground", fail: "text-mission-failed", running: "text-mission-working", waiting: "text-muted-foreground" } as const;

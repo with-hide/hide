@@ -159,7 +159,7 @@ function PlanSide({ plan, openPane }: { plan: PlanView; openPane: (paneId: strin
           </SummaryRow>
         ) : null}
         {next ? (
-          <SummaryRow name={t("mission.summary.next")} field="next">
+          <SummaryRow name={t("plan.side.next")} field="next">
             <span className="min-w-0 break-words">{next.title}</span>
           </SummaryRow>
         ) : null}

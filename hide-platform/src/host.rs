@@ -1,8 +1,8 @@
 //! What this machine and the account running on it are called, and where
 //! their things live: the home folder, the folder an application keeps its
 //! state in, the socket the pinned Herdr listens on by default, the programs
-//! on the search path, the `PATH` the login shell sets up, the default
-//! shell, the Trash, the Tailscale CLI, the account's primary language, and
+//! on the search path, the `PATH` and the environment the login shell sets
+//! up, the account's environment on Windows, the default shell, the Trash, the Tailscale CLI, the account's primary language, and
 //! the machine's name and identity.
 //!
 //! Every function answers for the machine this process runs on, from the
@@ -218,37 +218,63 @@ pub fn herdr_config_dir_from(variables: Variables) -> io::Result<PathBuf> {
 /// files add (`~/.zshrc`, `~/.bashrc`) is on it only when the process was
 /// started from a terminal: the desktop app opened from the Dock adds the
 /// system folders and the usual install folders, and an SSH exec channel has
-/// the system folders alone. [`login_shell_path`] asks the shell.
+/// the system folders alone. [`login_shell`] asks the shell.
 pub fn login_path() -> io::Result<OsString> {
     std::env::var_os("PATH")
         .filter(|path| !path.is_empty())
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "PATH is not set"))
 }
 
-/// The mark the login shell prints its `PATH` between, so nothing its startup
-/// files print before or after can be read as part of it.
+/// The marks the login shell prints its `PATH`, and then its environment,
+/// between, so nothing its startup files print before or after can be read
+/// as part of either.
 const SHELL_PATH_MARK: &str = "__HIDE_LOGIN_PATH__";
+const SHELL_ENVIRONMENT_MARK: &str = "__HIDE_LOGIN_ENVIRONMENT__";
 
-/// The `PATH` the account's login shell sets up, which is what the operator's
-/// terminal searches: `shell -ilc` runs the startup files an installer edits
-/// (`-i` reads `~/.zshrc` and `~/.bashrc`, `-l` the login files) and prints
-/// the result between two marks, past anything those files print.
+/// Variables a shell sets about itself, not about the account: its folder,
+/// the one before, its depth and the last command it ran. A program started
+/// from the account's environment gets its own.
+const SHELL_OWN_VARIABLES: &[&str] = &["PWD", "OLDPWD", "SHLVL", "_"];
+
+/// What the account's login shell sets up.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LoginShell {
+    /// Its `PATH`, which is what the operator's terminal searches.
+    pub path: OsString,
+    /// Every variable it exports but the shell's own (`PWD`, `OLDPWD`,
+    /// `SHLVL`, `_`), as `env` lists them: what the account's startup files
+    /// export over the login variables, such as a provider key an agent's
+    /// configuration reads. A value that is not UTF-8 is left out. Why it
+    /// could not be read when it could not: a shell whose `env` cannot end
+    /// each variable with a NUL, or a listing past the output a run keeps
+    /// ([`crate::process::RUN_OUTPUT_CAP`]); the `PATH` is read apart from
+    /// it, so it still holds.
+    pub environment: Result<Vec<(OsString, OsString)>, String>,
+}
+
+/// The `PATH` and the environment the account's login shell sets up, which
+/// is what the operator's terminal has: `shell -ilc` runs the startup files
+/// an installer or the operator edits (`-i` reads `~/.zshrc` and `~/.bashrc`,
+/// `-l` the login files) and prints the `PATH` and then `env -0` between
+/// marks, past anything those files print.
 ///
 /// The shell gets the account's login variables only
 /// ([`crate::process::LOGIN_CHILD_VARIABLES`]), with `HOME` set to `home`,
 /// plus the variables that keep Oh My Zsh's update prompt and its tmux
 /// autostart from holding an interactive shell open, the ones the desktop
-/// host sets when it asks the same question (`desktop/src/main/cli.ts`). The
-/// shell and everything it started end when `deadline` passes (`TimedOut`)
-/// or `stop` is raised (`Interrupted`); a shell that ends without printing
-/// the marks says `InvalidData`. Windows has no login shell: a process there
-/// is given the account's own `Path`, so it says `Unsupported`.
-pub fn login_shell_path(
+/// host sets when it asks the same question (`desktop/src/main/cli.ts`); so
+/// its environment is the account's, never this process's or the terminal's
+/// that started it. The shell and everything it started end when `deadline`
+/// passes (`TimedOut`) or `stop` is raised (`Interrupted`); a shell that
+/// ends without printing the `PATH` marks says `InvalidData`. Windows has no
+/// login shell: a process there is given the account's own `Path`
+/// ([`account_environment`] reads the rest), so it says `Unsupported`.
+pub fn login_shell(
     shell: &Path,
     home: &Path,
     deadline: std::time::Duration,
     stop: &std::sync::atomic::AtomicBool,
-) -> io::Result<OsString> {
+) -> io::Result<LoginShell> {
     use crate::process::{RunFailure, restrict_to_login_environment, run_to_end};
     if cfg!(windows) {
         return Err(io::Error::new(
@@ -257,8 +283,9 @@ pub fn login_shell_path(
         ));
     }
     let mut command = std::process::Command::new(shell);
+    // `command` skips an alias or a function the startup files named `env`.
     command.arg("-ilc").arg(format!(
-        "printf '\\n{SHELL_PATH_MARK}%s{SHELL_PATH_MARK}\\n' \"$PATH\""
+        "printf '\\n{SHELL_PATH_MARK}%s{SHELL_PATH_MARK}\\n' \"$PATH\"; printf '{SHELL_ENVIRONMENT_MARK}'; command env -0; printf '{SHELL_ENVIRONMENT_MARK}\\n'"
     ));
     restrict_to_login_environment(&mut command);
     command
@@ -274,7 +301,8 @@ pub fn login_shell_path(
         ),
         RunFailure::Stopped => io::Error::new(io::ErrorKind::Interrupted, "stopped"),
     })?;
-    marked_path(&finished.stdout)
+    let path = marked(&finished.stdout, SHELL_PATH_MARK)
+        .filter(|path| !path.is_empty())
         .map(OsString::from)
         .ok_or_else(|| {
             io::Error::new(
@@ -285,14 +313,56 @@ pub fn login_shell_path(
                     finished.code
                 ),
             )
-        })
+        })?;
+    let environment = marked(&finished.stdout, SHELL_ENVIRONMENT_MARK)
+        .ok_or_else(|| format!("{} printed no environment", shell.display()))
+        .and_then(|listing| {
+            listed_environment(listing).ok_or_else(|| {
+                format!(
+                    "{}'s env did not end each variable with a NUL",
+                    shell.display()
+                )
+            })
+        });
+    Ok(LoginShell { path, environment })
 }
 
-/// The non-empty text between the first two marks.
-fn marked_path(output: &str) -> Option<&str> {
-    let (_, after) = output.split_once(SHELL_PATH_MARK)?;
-    let (path, _) = after.split_once(SHELL_PATH_MARK)?;
-    (!path.is_empty()).then_some(path)
+/// The text between the first two `mark`s.
+fn marked<'a>(output: &'a str, mark: &str) -> Option<&'a str> {
+    let (_, after) = output.split_once(mark)?;
+    let (text, _) = after.split_once(mark)?;
+    Some(text)
+}
+
+/// The variables `env -0` listed: each `NAME=value` ends with a NUL, so a
+/// value may hold line breaks. A listing with no NUL came from an `env` that
+/// ignored `-0` or failed (a shell always has `HOME`), and is refused.
+fn listed_environment(listing: &str) -> Option<Vec<(OsString, OsString)>> {
+    if !listing.contains('\0') {
+        return None;
+    }
+    Some(
+        listing
+            .split('\0')
+            .filter_map(|entry| entry.split_once('='))
+            .filter(|(name, value)| {
+                !name.is_empty()
+                    && !value.contains(char::REPLACEMENT_CHARACTER)
+                    && !SHELL_OWN_VARIABLES.contains(name)
+            })
+            .map(|(name, value)| (OsString::from(name), OsString::from(value)))
+            .collect(),
+    )
+}
+
+/// The environment Windows builds for a new sign-in of the account this
+/// process runs as: the system's variables and the account's own, as
+/// System Properties and `setx` keep them, which is what Explorer gives a
+/// terminal it starts, never this process's own (a variable whoever started
+/// this process set, a terminal's session markers). Only Windows builds one:
+/// macOS and Linux say `Unsupported`, where [`login_shell`] reads it.
+pub fn account_environment() -> io::Result<Vec<(OsString, OsString)>> {
+    sys::account_environment()
 }
 
 /// The program `name` as this system's shell would find it on `path`: the
@@ -564,6 +634,14 @@ fn absolute_variable(variables: Variables, name: &str) -> io::Result<PathBuf> {
 mod sys {
     use std::io;
 
+    pub(super) fn account_environment() -> io::Result<Vec<(std::ffi::OsString, std::ffi::OsString)>>
+    {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "macOS and Linux build no sign-in environment; the login shell sets it up",
+        ))
+    }
+
     pub(super) fn network_addresses() -> io::Result<std::collections::BTreeSet<std::net::IpAddr>> {
         use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
         let mut first: *mut libc::ifaddrs = std::ptr::null_mut();
@@ -790,6 +868,71 @@ mod sys {
             io::ErrorKind::Unsupported,
             "the network address set is not read on Windows yet",
         ))
+    }
+
+    pub(super) fn account_environment() -> io::Result<Vec<(OsString, OsString)>> {
+        use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+        use windows_sys::Win32::Security::{TOKEN_DUPLICATE, TOKEN_QUERY};
+        use windows_sys::Win32::System::Environment::{
+            CreateEnvironmentBlock, DestroyEnvironmentBlock,
+        };
+        use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+        let mut token: HANDLE = null_mut();
+        // SAFETY: the current-process pseudo handle is always valid.
+        if unsafe {
+            OpenProcessToken(
+                GetCurrentProcess(),
+                TOKEN_QUERY | TOKEN_DUPLICATE,
+                &mut token,
+            )
+        } == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        let mut block: *mut std::ffi::c_void = null_mut();
+        // SAFETY: `token` is open with the rights the call needs, and `block`
+        // receives an allocation DestroyEnvironmentBlock frees below. Not
+        // inheriting leaves this process's own variables out.
+        let made = unsafe { CreateEnvironmentBlock(&mut block, token, 0) };
+        let made_error = io::Error::last_os_error();
+        // SAFETY: `token` was opened above and is closed once.
+        unsafe { CloseHandle(token) };
+        if made == 0 {
+            return Err(made_error);
+        }
+        let mut variables = Vec::new();
+        let mut cursor = block.cast::<u16>().cast_const();
+        loop {
+            // SAFETY: the block is a run of NUL-terminated `NAME=value`
+            // strings ended by an empty one, so every unit read up to a NUL
+            // lies inside it.
+            let entry = unsafe {
+                let mut length = 0;
+                while *cursor.add(length) != 0 {
+                    length += 1;
+                }
+                std::slice::from_raw_parts(cursor, length)
+            };
+            if entry.is_empty() {
+                break;
+            }
+            // A name starting with `=` is a drive's folder (`=C:`), not a
+            // variable.
+            if entry[0] != u16::from(b'=')
+                && let Some(split) = entry.iter().position(|unit| *unit == u16::from(b'='))
+            {
+                variables.push((
+                    OsString::from_wide(&entry[..split]),
+                    OsString::from_wide(&entry[split + 1..]),
+                ));
+            }
+            // SAFETY: the entry's NUL is inside the block, and the block's
+            // end is the empty entry after it.
+            cursor = unsafe { cursor.add(entry.len() + 1) };
+        }
+        // SAFETY: `block` came from CreateEnvironmentBlock and is freed once.
+        unsafe { DestroyEnvironmentBlock(block) };
+        Ok(variables)
     }
 
     use windows_sys::Win32::Foundation::ERROR_SUCCESS;

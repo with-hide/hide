@@ -8,6 +8,7 @@ import { legacyAgentRow } from "../test/legacyAgentRow";
 import { createActions } from "./actions";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { initializeInterfaceI18n } from "./i18n/instance";
+import { withMissionAsk } from "./gallery/MissionScene";
 import { OverviewGraph } from "./OverviewGraph";
 import type { BoardProject } from "./projectBoard";
 import { GRAPH_CHOICES_DEFAULTS } from "./overviewGraphModel";
@@ -107,6 +108,34 @@ it.each([
       ? { kind: "focus_pane", payload: { pane_id: pane, origin: "operator", focus_device: front !== device } }
       : { kind: "remote_control", payload: { target_id: "mini", action: "focus_pane", pane_id: pane } });
     expect(Boolean((events[0]!.payload as { focus_device?: boolean }).focus_device)).toBe(front !== device);
+  } finally { await act(async () => root.unmount()); }
+});
+
+// PRD mission-node-simple B14, review 5 P2-2: a mission no row carries is
+// listed on the Overview with its title, reason and choices even when the
+// map draws no session at all.
+it("lists a mission waiting on the operator when no session is drawn", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  initializeInterfaceI18n("en");
+  const base = { navigator: { devices: [{ id: "local", kind: "local", agent_scope: emptyScope() }], workspaces: [], focused_device_id: "local" }, status: { remote: [] }, overview_graph: { available: true, limit: 2000, retained_count: 0, truncated: false, retention_ms: 86400000, letters: [], sessions: [] } } as unknown as SnapshotRest;
+  const rest = withMissionAsk(base, "local", Date.UTC(2026, 10, 1));
+  useShellStore.setState({ rest, agents: [], focusedPaneId: null, connection: "live", linkSummaries: null });
+  useUiStore.getState().setOverview({ projectId: null, panel: null });
+  const events: Parameters<DispatchFn>[0][] = [];
+  const actions = createActions((event) => { events.push(event); return true; });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<TooltipProvider><OverviewGraph projects={[]} deviceId="local" actions={actions} /></TooltipProvider>));
+    expect(container.querySelector(".og-empty")).not.toBeNull();
+    const item = container.querySelector<HTMLElement>('[data-graph-mission-asks] [data-graph-mission-ask="mission-1"]');
+    expect(item?.textContent).toContain("이슈 정리");
+    expect(item?.textContent).toContain("API 추가");
+    expect([...item!.querySelectorAll("[data-mission-ask-choices] button")].map((button) => button.textContent)).toEqual(["Take over", "Mark done"]);
+    expect(container.querySelector("[data-graph-mission-asks] h3")?.textContent).toBe("Waiting on you 1");
+    // The filter's counts say they are the map's sessions.
+    expect(container.querySelector(".og-filter-scope")?.textContent).toBe("Sessions on the map");
   } finally { await act(async () => root.unmount()); }
 });
 

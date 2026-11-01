@@ -1076,10 +1076,10 @@ impl Runtime {
                 match outcome {
                     TurnOutcome::Done => self.finish_turn(DeskReplyState::Done),
                     TurnOutcome::Cancelled => self.finish_turn(DeskReplyState::Stopped),
-                    TurnOutcome::Failed(detail) => {
+                    TurnOutcome::Failed(reason) => {
                         self.finish_turn(DeskReplyState::Stopped);
                         let agent = self.selected_agent();
-                        self.push_notice(DeskNotice::TurnFailed, agent, Some(detail));
+                        self.push_notice(DeskNotice::TurnFailed, agent, reason);
                     }
                 }
                 if self.desk.host.open {
@@ -2152,6 +2152,93 @@ mod tests {
             runtime.desk.agents[&AdapterId::CODEX].0,
             DeskAgentState::Ready
         );
+    }
+
+    /// A turn the agent ended with an error shows the agent's own reason
+    /// beside `답을 끝내지 못했어요`, and one with nothing to act on shows
+    /// none.
+    #[test]
+    fn a_failed_turn_shows_the_agent_s_own_reason_when_it_gave_one() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "opencode"}));
+        for (text, reason) in [
+            ("first", Some("Model not found: bai/gone".to_owned())),
+            ("second", None),
+        ] {
+            assert!(event(&mut runtime, "desk_send", json!({"text": text})));
+            let send = sent(&received);
+            opened(&mut runtime, AdapterId::OPENCODE);
+            runtime.desk_report(Report::TurnEnded {
+                tag: send.tag,
+                outcome: TurnOutcome::Failed(reason.clone()),
+            });
+            let items = items(&runtime);
+            let Some(DeskItem::Notice {
+                notice: DeskNotice::TurnFailed,
+                detail,
+                ..
+            }) = items.last()
+            else {
+                panic!("no failed-turn notice: {items:?}");
+            };
+            assert_eq!(detail, &reason);
+        }
+    }
+
+    /// An agent that refuses a turn for its sign-in (a provider with no key)
+    /// ends the process with the turn: the message goes back to the input
+    /// and the sign-in line shows, as when the session's open is refused,
+    /// and the next message starts a process that reads the sign-in again.
+    #[test]
+    fn a_turn_refused_for_the_sign_in_points_at_the_agent_s_login_and_starts_afresh() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, received) = runtime(root.path());
+        event(&mut runtime, "desk_select", json!({"agent": "opencode"}));
+        assert!(event(&mut runtime, "desk_send", json!({"text": "hello"})));
+        let send = sent(&received);
+        opened(&mut runtime, AdapterId::OPENCODE);
+        // What the worker reports for the refusal, in its order.
+        runtime.desk_report(Report::OpenFailed {
+            adapter: AdapterId::OPENCODE,
+            error: OpenError::Login,
+        });
+        runtime.desk_report(Report::TurnEnded {
+            tag: send.tag,
+            outcome: TurnOutcome::Cancelled,
+        });
+        runtime.desk_report(Report::Ended {
+            unexpected: false,
+            detail: None,
+        });
+
+        let items = items(&runtime);
+        assert!(
+            !items
+                .iter()
+                .any(|item| matches!(item, DeskItem::User { .. })),
+            "{items:?}"
+        );
+        assert!(
+            items.iter().any(|item| matches!(item,
+                DeskItem::Notice { notice: DeskNotice::LoginNeeded, detail: Some(command), .. }
+                    if command == "opencode auth login")),
+            "{items:?}"
+        );
+        assert!(
+            !items.iter().any(|item| matches!(
+                item,
+                DeskItem::Notice {
+                    notice: DeskNotice::TurnFailed | DeskNotice::HostStopped,
+                    ..
+                }
+            )),
+            "{items:?}"
+        );
+        let desk = runtime.snapshot.desk.as_ref().unwrap();
+        assert_eq!(desk.host.state, DeskHostState::Idle);
+        assert!(event(&mut runtime, "desk_send", json!({"text": "hello"})));
+        assert_eq!(sent(&received).text, "hello");
     }
 
     #[test]

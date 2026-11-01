@@ -238,8 +238,15 @@ pub fn set_choice(
 /// What one `session/update` says, as far as Desk uses it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Update {
-    /// Text of the agent's reply.
-    Text(String),
+    /// Text of the agent's reply, with the ACP message it belongs to when
+    /// the adapter names one.
+    Text {
+        text: String,
+        message: Option<String>,
+    },
+    /// A thought or a plan: shown between the reply's words, so the text
+    /// after it is a block of its own.
+    Break,
     /// A tool call announced or changed; kept by id for the permission
     /// request that may follow.
     Tool {
@@ -262,7 +269,14 @@ pub fn read_update(params: &Value) -> Update {
             .pointer("/content/text")
             .and_then(Value::as_str)
             .filter(|_| update.pointer("/content/type").and_then(Value::as_str) == Some("text"))
-            .map_or(Update::Other, |text| Update::Text(text.to_owned())),
+            .map_or(Update::Other, |text| Update::Text {
+                text: text.to_owned(),
+                message: update
+                    .get("messageId")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+            }),
+        Some("agent_thought_chunk" | "plan") => Update::Break,
         Some("tool_call" | "tool_call_update") => update
             .get("toolCallId")
             .and_then(Value::as_str)
@@ -276,6 +290,46 @@ pub fn read_update(params: &Value) -> Update {
             .map_or(Update::Other, |mode| Update::Mode(mode.to_owned())),
         Some("config_option_update") => Update::Choices(choices(update)),
         _ => Update::Other,
+    }
+}
+
+/// One turn's reply text as the agent's own screen shows it: the streamed
+/// chunks of one text block joined as they came, and each later block a
+/// paragraph of its own. A block ends where the agent shows something else
+/// (a tool call, a thought, a plan) or starts another ACP message.
+#[derive(Debug, Default)]
+pub struct ReplyBlocks {
+    /// The message of the block still open, while one is.
+    open: Option<Option<String>>,
+    /// Text has been written in this turn.
+    written: bool,
+}
+
+impl ReplyBlocks {
+    /// The text `update` adds to the reply, if any; a block after an
+    /// earlier one starts with a paragraph break.
+    pub fn piece(&mut self, update: &Update) -> Option<String> {
+        match update {
+            Update::Text { text, message } => {
+                if text.is_empty() {
+                    return None;
+                }
+                let joins = self.open.as_ref() == Some(message);
+                let piece = if self.written && !joins {
+                    format!("\n\n{text}")
+                } else {
+                    text.clone()
+                };
+                self.open = Some(message.clone());
+                self.written = true;
+                Some(piece)
+            }
+            Update::Tool { .. } | Update::Break => {
+                self.open = None;
+                None
+            }
+            Update::Mode(_) | Update::Choices(_) | Update::Other => None,
+        }
     }
 }
 
@@ -327,7 +381,10 @@ mod tests {
         assert_eq!(
             read_update(&json!({"update": {"sessionUpdate": "agent_message_chunk",
                 "content": {"type": "text", "text": "안녕"}}})),
-            Update::Text("안녕".into())
+            Update::Text {
+                text: "안녕".into(),
+                message: None
+            }
         );
         assert!(matches!(
             read_update(&json!({"update": {"sessionUpdate": "tool_call", "toolCallId": "t1"}})),
@@ -336,7 +393,53 @@ mod tests {
         assert_eq!(
             read_update(&json!({"update": {"sessionUpdate": "agent_thought_chunk",
                 "content": {"type": "text", "text": "hmm"}}})),
-            Update::Other
+            Update::Break
         );
+    }
+
+    fn reply(updates: &[Value]) -> String {
+        let mut blocks = ReplyBlocks::default();
+        updates
+            .iter()
+            .filter_map(|update| blocks.piece(&read_update(&json!({"update": update}))))
+            .collect()
+    }
+
+    fn said(text: &str) -> Value {
+        json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}})
+    }
+
+    #[test]
+    fn a_reply_keeps_one_block_s_chunks_together_and_parts_blocks_a_call_or_a_thought_divides() {
+        let text = reply(&[
+            json!({"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "hmm"}}),
+            said("명령을 "),
+            said("실행합니다."),
+            json!({"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Bash", "status": "pending"}),
+            json!({"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed"}),
+            said("desk-probe-2.txt를 만들었어요."),
+            json!({"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "check"}}),
+            said("끝."),
+        ]);
+        assert_eq!(
+            text,
+            "명령을 실행합니다.\n\ndesk-probe-2.txt를 만들었어요.\n\n끝."
+        );
+    }
+
+    #[test]
+    fn a_reply_parts_two_messages_and_joins_chunks_of_one() {
+        let chunk = |id: &str, text: &str| {
+            json!({"sessionUpdate": "agent_message_chunk", "messageId": id,
+                "content": {"type": "text", "text": text}})
+        };
+        let text = reply(&[
+            chunk("m1", "하나"),
+            chunk("m1", " 둘"),
+            json!({"sessionUpdate": "current_mode_update", "currentModeId": "ask"}),
+            chunk("m1", " 셋"),
+            chunk("m2", "넷"),
+        ]);
+        assert_eq!(text, "하나 둘 셋\n\n넷");
     }
 }

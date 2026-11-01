@@ -18,7 +18,7 @@ import { PILL } from "./MissionMap";
 import { MissionStartGuide } from "./MissionStartGuide";
 import { MissionTakeOver } from "./MissionTakeOver";
 import { groupMissions, CLOSED_SHOWN, missionEntry, projectMissions, shownMission, turnCount, type MissionEntry, type MissionGroup } from "./missionList";
-import { liveNodes, missionCells, missionCounts, type TurnItem } from "./missions";
+import { attentionReasonText, liveNodes, missionCells, missionCounts, type TurnItem } from "./missions";
 import { allAgents, agentsByPane } from "./paneAgents";
 import { frontProject } from "./projectStatus";
 import { CandidateAdd, CandidateRows, CapControl, ConductorError, OtherVendorControl, ScopeControl, StrengthControl, useConductorEdit } from "./settings/ConductorControls";
@@ -220,11 +220,11 @@ function OpenRow({ entry, selected, actions }: { entry: MissionEntry; selected: 
   );
 }
 
-const TURN_PILL: Record<TurnItem["kind"], "missionTool.pill.decision" | "missionTool.pill.takeover" | "missionTool.pill.blocked" | "missionTool.pill.closedPr" | "missionTool.pill.merge"> = {
+const TURN_PILL: Record<TurnItem["kind"], "missionTool.pill.decision" | "missionTool.pill.takeover" | "mission.attention" | "missionTool.pill.blocked" | "missionTool.pill.merge"> = {
   decision: "missionTool.pill.decision",
   takeover: "missionTool.pill.takeover",
+  attention: "mission.attention",
   worker_blocked: "missionTool.pill.blocked",
-  outside_closed: "missionTool.pill.closedPr",
   landing: "missionTool.pill.merge",
 };
 
@@ -259,8 +259,8 @@ function RowLine({ mission, turn }: { mission: Mission; turn: TurnItem | null })
       }
       case "worker_blocked":
         return <Line data="worker_blocked">{turn.node.title} · {turn.line ?? t(`mission.turn.cause.${turn.cause}`)}</Line>;
-      case "outside_closed":
-        return <Line data="outside_closed">{turn.node.title} · {t("mission.outside.closed")}</Line>;
+      case "attention":
+        return <Line data="attention">{turn.node.title} · {attentionReasonText(turn.attention.reason, turn.attention.pr, t)}</Line>;
       case "landing":
         return <LandingLine nodes={turn.nodes} join={turn.git} />;
     }
