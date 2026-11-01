@@ -888,6 +888,18 @@ impl AgentApi {
     }
 }
 
+impl InputRung {
+    /// The rung's name in the journey contract and a log line.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::AgentApi(AgentApi::LaunchPrompt) => "launch_prompt",
+            Self::AgentApi(AgentApi::CodexQueue) => "codex_queue",
+            Self::AgentApi(AgentApi::ClaudeMessaging) => "claude_messaging",
+            Self::Typed => "typed",
+        }
+    }
+}
+
 /// What an [`AgentApi`] rung does before the agent reported its session.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BeforeSession {

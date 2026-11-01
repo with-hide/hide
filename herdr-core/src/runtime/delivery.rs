@@ -1896,6 +1896,7 @@ impl Runtime {
             None => SessionAddress::Pending,
         };
         InputTarget {
+            pane_id: pane_id.to_owned(),
             kind: kind.to_owned(),
             raw_pane_id: raw_pane_id.to_owned(),
             address,

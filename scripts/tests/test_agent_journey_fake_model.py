@@ -49,6 +49,17 @@ class Answer(unittest.TestCase):
         self.assertEqual(fake_model.answer(request), "OK")
 
 
+class Hold(unittest.TestCase):
+    def test_only_the_turn_whose_prompt_carries_the_mark_is_held(self):
+        held = {"messages": [{"role": "user", "content": "Reply with exactly JOURNEY-0000000A (journey-hold)"}]}
+        self.assertTrue(fake_model.held(held))
+        after = {"messages": [*held["messages"], {"role": "assistant", "content": "JOURNEY-0000000A"},
+                              {"role": "user", "content": "Reply with exactly JOURNEY-0000000B"}]}
+        self.assertFalse(fake_model.held(after))
+        title = {**held, "output_format": {"type": "json_schema", "schema": {"type": "object"}}}
+        self.assertFalse(fake_model.held(title))
+
+
 class Schema(unittest.TestCase):
     def test_a_title_request_is_answered_with_its_schemas_object(self):
         # The shapes Claude Code 2.1.302 and Codex 0.163 send for a session title.

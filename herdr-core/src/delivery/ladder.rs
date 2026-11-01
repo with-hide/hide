@@ -77,6 +77,8 @@ pub(crate) enum SessionAddress {
 pub(crate) struct InputTarget {
     /// The agent kind Herdr reports.
     pub kind: String,
+    /// The pane as Hide names it, in its log lines.
+    pub pane_id: String,
     /// The pane as its own Herdr names it.
     pub raw_pane_id: String,
     pub address: SessionAddress,
@@ -237,7 +239,7 @@ impl Prepared {
 
 fn logged(target: &InputTarget, rung: &str, outcome: &str) {
     crate::diagnostic!(json!({"component":"delivery","kind":"input.rung",
-        "pane_id":target.raw_pane_id,"agent":target.kind,"rung":rung,"outcome":outcome}));
+        "pane_id":target.pane_id,"raw_pane_id":target.raw_pane_id,"agent":target.kind,"rung":rung,"outcome":outcome}));
 }
 
 fn unavailable(target: &InputTarget, channel: &InputChannel, reason: &str) {
@@ -249,13 +251,13 @@ fn unavailable(target: &InputTarget, channel: &InputChannel, reason: &str) {
 fn unavailable_reason(target: &InputTarget, rung: &str, reason: &str) {
     crate::diagnostic!(
         json!({"component":"delivery","kind":"input.rung_unavailable",
-        "pane_id":target.raw_pane_id,"agent":target.kind,"rung":rung,"reason":reason})
+        "pane_id":target.pane_id,"raw_pane_id":target.raw_pane_id,"agent":target.kind,"rung":rung,"reason":reason})
     );
 }
 
 fn lost(target: &InputTarget, rung: &str, reason: &str) {
     crate::diagnostic!(json!({"component":"delivery","kind":"input.rung_lost",
-        "pane_id":target.raw_pane_id,"agent":target.kind,"rung":rung,"reason":reason}));
+        "pane_id":target.pane_id,"raw_pane_id":target.raw_pane_id,"agent":target.kind,"rung":rung,"reason":reason}));
 }
 
 #[cfg(test)]
@@ -330,6 +332,7 @@ mod tests {
 
     fn target(kind: &str, address: SessionAddress, node: Option<Arc<Node>>) -> InputTarget {
         InputTarget {
+            pane_id: "pane".into(),
             kind: kind.into(),
             raw_pane_id: "w1:p2".into(),
             address,

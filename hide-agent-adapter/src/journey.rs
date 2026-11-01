@@ -32,6 +32,10 @@ pub struct JourneyAdapter {
     /// How the core hands a letter to the agent at rest; absent when the
     /// letter cell is not declared.
     pub letter: Option<JourneyLetter>,
+    /// The agent's input ladder (`AgentAdapter::input`), each rung by its
+    /// name, its own way in first and `typed` last: the cells check that a
+    /// brief and a letter took the rung the agent declares.
+    pub input: Vec<&'static str>,
     /// How a sleeping agent is woken; absent when it cannot sleep.
     pub wake: Option<JourneyWake>,
     /// Where the native title the `title` cell reads comes from, measured the
@@ -155,6 +159,14 @@ pub struct JourneyCells {
     pub guidance_memory: bool,
     /// A letter reaches the agent and its reply.
     pub letter: bool,
+    /// A letter sent while the agent works on a turn reaches it once, after
+    /// that turn, which ends with its own answer: for an agent the doorbell
+    /// rings.
+    pub letter_busy: bool,
+    /// A letter sent while a picker of the agent's own is open reaches it
+    /// once the picker is closed, never as the picker's choice: for an
+    /// agent the doorbell rings through a way in of its own.
+    pub letter_menu: bool,
     /// Typed, erased, pasted and cleared text reads as the composer's own
     /// verdict on its screen. It starts no model turn.
     pub composer: bool,
@@ -181,6 +193,15 @@ fn context_cell(row: &super::AgentAdapter) -> bool {
     start && (guidance || memory)
 }
 
+/// Whether a letter can reach the agent through a way in of its own, not
+/// only typed (`docs/delivery.md`, The input ladder).
+fn own_way_in(row: &super::AgentAdapter) -> bool {
+    row.input.iter().any(|rung| match rung {
+        super::InputRung::AgentApi(api) => !api.first_input_only(),
+        super::InputRung::Typed => false,
+    })
+}
+
 pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
     super::ADAPTERS.iter().map(|row| {
         let start = row.start.is_some();
@@ -191,6 +212,8 @@ pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
             integration: start,
             guidance_memory: context_cell(row),
             letter: start && (row.bell || row.tool_letters.is_some()),
+            letter_busy: start && row.bell,
+            letter_menu: start && row.bell && own_way_in(row),
             composer: start && row.composer.is_some(),
             sleep_wake: start && row.sleep.is_some(),
             resume: start && row.sleep.is_some() && row.resume.is_some(),
@@ -206,11 +229,15 @@ pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
         // to use it) and the prompt typed after Wake. The other cells judge
         // what Hide shows of those turns and start none; the composer cell
         // types text it never submits.
+        // The busy letter starts two: the turn it waits behind and its own.
         let turns = [
             start,
             cells.start_untrusted,
             cells.guidance_memory,
             cells.letter,
+            cells.letter_busy,
+            cells.letter_busy,
+            cells.letter_menu,
             cells.fork,
             cells.resume,
         ]
@@ -261,6 +288,7 @@ pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
             minimum_version: row.minimum.map(|minimum| minimum.version),
             update_commands: row.updates.iter().map(|route| route.command).collect(),
             letter,
+            input: row.input.iter().map(|rung| rung.name()).collect(),
             wake,
             title,
         }

@@ -361,6 +361,62 @@ class BriefRecord(unittest.TestCase):
                          cells.FAIL)
         self.assertEqual(cells.brief_verdict(None)[0], cells.FAIL)
 
+    def test_a_brief_rides_the_start_exactly_when_the_agent_declares_the_launch_prompt(self):
+        launched = {"attempts": 1, "typed_at_unix_ms": 10_000, "confirmed_at_unix_ms": 14_000, "launch": True}
+        self.assertEqual(cells.brief_verdict({"brief_input": launched}, launched=True),
+                         (cells.PASS, "brief recorded by the agent 4.0 s after its start's prompt"))
+        self.assertEqual(cells.brief_verdict({"brief_input": launched})[0], cells.FAIL)
+        typed = {**launched, "launch": False}
+        self.assertEqual(cells.brief_verdict({"brief_input": typed}, launched=True)[0], cells.FAIL)
+
+
+class InputRung(unittest.TestCase):
+    CODEX = ["launch_prompt", "codex_queue", "typed"]
+    CLAUDE = ["launch_prompt", "claude_messaging", "typed"]
+
+    def test_a_letter_passes_through_the_first_rung_the_agent_declares(self):
+        used = [{"kind": "input.rung", "rung": "codex_queue", "outcome": "received"}]
+        self.assertEqual(cells.rung_verdict(self.CODEX, used), (cells.PASS, "carried by codex_queue"))
+        self.assertEqual(cells.rung_verdict(["typed"], [{"kind": "input.rung", "rung": "typed"}])[0], cells.PASS)
+
+    def test_a_declared_rung_that_fell_to_typing_fails_with_its_reason(self):
+        fell = [{"kind": "input.rung_unavailable", "rung": "codex_queue", "reason": "codex_not_found"},
+                {"kind": "input.rung", "rung": "typed"}]
+        verdict = cells.rung_verdict(self.CODEX, fell)
+        self.assertEqual(verdict[0], cells.FAIL)
+        self.assertIn("codex_not_found", verdict[1])
+        self.assertEqual(cells.rung_verdict(self.CODEX, [])[0], cells.FAIL)
+
+    def test_a_rung_unproven_on_this_system_hands_the_letter_to_the_next(self):
+        windows = [{"kind": "input.rung_unavailable", "rung": "claude_messaging", "reason": "unsupported_system"},
+                   {"kind": "input.rung", "rung": "typed"}]
+        self.assertEqual(cells.rung_verdict(self.CLAUDE, windows), (cells.PASS, "carried by typed"))
+
+
+class BusyAndMenuLetters(unittest.TestCase):
+    def read(self, *texts):
+        return {"session": "s", "events": [{"role": role, "text": text} for role, text in texts]}
+
+    def test_a_busy_letter_passes_after_the_held_turn_kept_its_answer(self):
+        shown = {"state": "delivered", "bell_attempts": 1}
+        read = self.read(("user", "hold"), ("assistant", "JOURNEY-00000001"), ("user", "bell"),
+                         ("assistant", "JOURNEY-00000002"))
+        self.assertEqual(cells.busy_letter_verdict(shown, read, "s", "JOURNEY-00000001", "JOURNEY-00000002")[0],
+                         cells.PASS)
+        lost = self.read(("user", "hold"), ("user", "bell"), ("assistant", "JOURNEY-00000002"))
+        self.assertEqual(cells.busy_letter_verdict(shown, lost, "s", "JOURNEY-00000001", "JOURNEY-00000002")[0],
+                         cells.FAIL)
+        twice = {**shown, "bell_attempts": 2}
+        self.assertEqual(cells.busy_letter_verdict(twice, read, "s", "JOURNEY-00000001", "JOURNEY-00000002")[0],
+                         cells.FAIL)
+
+    def test_a_menu_letter_passes_only_answered_after_one_bell(self):
+        read = self.read(("user", "/model"), ("user", "bell"), ("assistant", "JOURNEY-00000003"))
+        shown = {"state": "delivered", "bell_attempts": 1}
+        self.assertEqual(cells.menu_letter_verdict(shown, read, "s", "JOURNEY-00000003", 0)[0], cells.PASS)
+        self.assertEqual(cells.menu_letter_verdict({**shown, "state": "pending"}, read, "s", "JOURNEY-00000003", 0)[0],
+                         cells.FAIL)
+
 
 if __name__ == "__main__":
     unittest.main()
