@@ -812,6 +812,10 @@ def pr_jobs():
     return {re.match(r"\s*([a-z0-9-]+):", block).group(1): block for block in blocks if block.strip()}
 
 
+# The package call's macOS jobs, which follow the plan's `macos` output.
+INCLUDE_MACOS = r"include-macos: \$\{\{ needs\.plan\.outputs\.macos == 'true' \}\}"
+
+
 def runner_jobs(block):
     """How many runner jobs one `pr.yml` job starts: a reusable workflow starts its own."""
     if "uses: ./.github/workflows/web-e2e.yml" in block:
@@ -822,7 +826,9 @@ def runner_jobs(block):
         # Each shard builds in place.
         return int(re.search(r"\n      shards: (\d+)", block).group(1))
     if any(f"uses: ./.github/workflows/{name}.yml" in block for name in ("os-contract", "vt", "agy-contract", "omp-contract", "agent-clis")):
-        return len(json.loads(re.search(r"systems: '(\[[^']*\])'", block).group(1)))
+        # A lane whose macOS leg follows the plan names both lists; the most is the longer.
+        systems = re.search(r"\n      systems: (.*)", block).group(1)
+        return max(len(json.loads(found)) for found in re.findall(r"'(\[[^']*\])'", systems))
     if "uses: ./.github/workflows/wsl-device.yml" in block:
         # Windows cannot build the Linux programs the distribution runs.
         return 2
@@ -832,7 +838,7 @@ def runner_jobs(block):
         return len([system for system in systems if system != "windows"]) + ("windows" in systems)
     if "uses: ./.github/workflows/package.yml" in block:
         package = (ROOT / ".github/workflows/package.yml").read_text()
-        return len(re.findall(r"\n    name: package \((?:linux|windows)\)\n", package)) + ("include-macos: true" in block)
+        return len(re.findall(r"\n    name: package \((?:linux|windows)\)\n", package)) + bool(re.search(INCLUDE_MACOS, block))
     return 1
 
 
@@ -874,8 +880,8 @@ class Workflows(unittest.TestCase):
         triggers = package[package.index("\non:\n"):package.index("\njobs:\n")]
         self.assertNotIn("pull_request", triggers)
         self.assertNotIn("paths:", triggers)
-        # The pull request's call builds the macOS package and runs its specs.
-        self.assertIn("include-macos: true", pr_jobs()["package"])
+        # The call builds the macOS package and runs its specs when the run takes macOS.
+        self.assertRegex(pr_jobs()["package"], INCLUDE_MACOS)
 
     def test_every_lane_has_a_job_that_asks_the_plan_and_verify_waits_on_it(self):
         jobs = pr_jobs()
@@ -926,7 +932,7 @@ class Workflows(unittest.TestCase):
         for lane, block in jobs.items():
             with self.subTest(lane=lane):
                 body = "\n".join(line for line in block.splitlines() if not line.lstrip().startswith("#"))
-                names_macos = bool(re.search(r"macos-\d+|\"macos\"|include-macos: true", body))
+                names_macos = bool(re.search(r"macos-\d+|\"macos\"|include-macos:", body))
                 self.assertEqual(names_macos, lane in MACOS_LANES)
 
     def test_the_most_a_pull_request_starts_is_the_count_testing_md_states(self):
@@ -948,6 +954,156 @@ class Workflows(unittest.TestCase):
         self.assertLessEqual(most, 38, "a run starts more jobs than the suites and native SDK contracts need")
         testing = (ROOT / "docs/TESTING.md").read_text()
         self.assertIn(f"starts at most {most} jobs", testing)
+
+
+def pr_plan(*paths, status="M"):
+    """A pull request's plan, with its macOS jobs decided as `plan` decides them."""
+    entries = [(status, path) for path in paths]
+    return ci.pull_request_macos(ci.select(entries, CRATES, ROOT), entries, ROOT)
+
+
+def evaluate(expression, macos):
+    """A `pr.yml` expression evaluated for the plan's `macos` output, the way the
+    concurrency test evaluates its condition."""
+    code = expression.replace("needs.plan.outputs.macos", repr(macos)).replace("&&", " and ").replace("||", " or ")
+    return eval(code, {"__builtins__": {}})
+
+
+class MacosOnPullRequests(unittest.TestCase):
+    """A pull request takes a macOS runner only for a macOS path; main and the nightly run every macOS job."""
+
+    def assertNoMacos(self, result):
+        self.assertFalse(result["macos"]["runs"], result["macos"])
+        self.assertFalse(set(result["lanes"]) & set(ci.MACOS_ONLY_LANES))
+        # `verify` passes with the macOS-only lanes skipped, and fails if one ran.
+        ci.aggregate(needs_for(result))
+        for lane in ci.MACOS_ONLY_LANES:
+            with self.assertRaises(ValueError):
+                ci.aggregate(needs_for(result, **{lane: "success"}))
+
+    def test_a_web_only_pull_request_plans_no_macos_job(self):
+        before = plan("web/src/Overview.tsx")
+        self.assertIn("desktop-e2e", before["lanes"])
+        result = pr_plan("web/src/Overview.tsx")
+        self.assertEqual(result["lanes"], ["policy", "rust", "checks", "web-e2e"])
+        self.assertNoMacos(result)
+        self.assertIn("macOS jobs: skipped", ci.summary(result))
+
+    def test_a_pull_request_without_a_macos_path_plans_none_whatever_else_it_plans(self):
+        for status in ("A", "M"):
+            for path in (
+                "herdr-core/src/lib.rs", "hided/src/lib.rs", "desktop/src/main/index.ts", "desktop/src/main/host.ts",
+                "desktop/static/icon.png", "desktop/e2e/desktop.spec.ts", "web/e2e/herdr-fixture.ts",
+                "hide-herdr-client/src/lib.rs", "hide-platform/src/wsl.rs", "hide-platform/src/path.rs",
+                "hide-kit/src/lib.rs", "hide-ai/src/omp.rs", "hide-holder/src/lib.rs",
+                "desktop/scripts/build-identity.mjs", "desktop/scripts/macos-signing.test.mjs",
+                "desktop/src/main/updater.test.ts", "Cargo.lock", "mystery/file.txt",
+                ".github/workflows/agent-canary.yml", ".github/workflows/nightly.yml", "docs/TESTING.md",
+            ):
+                with self.subTest(status=status, path=path):
+                    self.assertNoMacos(pr_plan(path, status=status))
+        # Lanes with a macOS leg still run their Linux and Windows legs.
+        self.assertIn("package", pr_plan("hide-kit/src/lib.rs")["lanes"])
+        self.assertIn("omp-contract", pr_plan("hide-ai/src/omp.rs")["lanes"])
+        self.assertIn("vt", pr_plan("hide-holder/src/lib.rs")["lanes"])
+        self.assertTrue({"os-contract", "windows-check"} <= set(pr_plan("hide-platform/src/wsl.rs")["lanes"]))
+        # A CI definition outside the macOS jobs still exercises every other lane.
+        self.assertEqual(pr_plan(".github/workflows/agent-canary.yml")["lanes"],
+                         [lane for lane in ALL if lane not in ci.MACOS_ONLY_LANES])
+
+    def test_a_pull_request_that_changes_a_macos_path_plans_its_macos_jobs(self):
+        cases = (
+            ("desktop/src/main/windowChrome.ts", {"desktop-e2e"}),
+            ("desktop/src/main/menu.ts", {"desktop-e2e"}),
+            ("desktop/src/main/updater.ts", {"desktop-e2e", "package"}),
+            ("hide-platform/src/process.rs", {"os-contract-macos", "omp-contract"}),
+            ("hide-platform/src/user_agents/launchd.rs", {"os-contract-macos", "omp-contract"}),
+            ("hide-platform/tests/it/user_agents.rs", {"os-contract-macos", "omp-contract"}),
+            ("desktop/scripts/macos-signing.mjs", {"package"}),
+            ("desktop/scripts/package.mjs", {"package"}),
+            # No narrower rule names these, so they plan every lane and the package.
+            ("desktop/native/notification-status/main.swift", set(MACOS_LANES)),
+            ("desktop/resources/entitlements/app.plist", set(MACOS_LANES)),
+            ("hide-vt/build.rs", {"vt"}),
+            ("contracts/herdr-bundle.json", set(MACOS_LANES)),
+            (".github/workflows/pr.yml", set(MACOS_LANES)),
+            (".github/workflows/desktop-e2e.yml", set(MACOS_LANES)),
+            (".github/actions/rust-cache/action.yml", set(MACOS_LANES)),
+            ("scripts/ci-plan.py", set(MACOS_LANES)),
+        )
+        for status in ("A", "M", "D"):
+            for path, expected in cases:
+                with self.subTest(status=status, path=path):
+                    result = pr_plan(path, status=status)
+                    self.assertTrue(result["macos"]["runs"], result["macos"])
+                    self.assertEqual(set(result["lanes"]) & MACOS_LANES, expected)
+                    ci.aggregate(needs_for(result))
+        # A mixed change keeps the macOS jobs every path plans once one path is macOS.
+        result = pr_plan("web/src/Overview.tsx", "desktop/src/main/windowChrome.ts")
+        self.assertIn("desktop-e2e", result["lanes"])
+        self.assertIn("macOS path: desktop/src/main/windowChrome.ts", result["macos"]["why"])
+        # A deleted hide-platform file cannot be read for its macOS code.
+        self.assertTrue(pr_plan("hide-platform/src/wsl.rs", status="D")["macos"]["runs"])
+
+    def test_every_macos_path_names_a_tracked_file(self):
+        tracked = subprocess.run(["git", "ls-files"], cwd=ROOT, capture_output=True, text=True, check=True).stdout.splitlines()
+        for pattern in ci.MACOS_PATHS:
+            with self.subTest(pattern=pattern):
+                self.assertTrue(any(fnmatchcase(name, pattern) for name in tracked), f"{pattern} names no file")
+        # The macOS code marker finds hide-platform's macOS forms and leaves its other files out.
+        marked = {name for name in tracked if name.startswith("hide-platform/") and ci.macos_path("M", name)}
+        self.assertTrue({"hide-platform/src/process.rs", "hide-platform/src/user_agents/launchd.rs"} <= marked)
+        self.assertFalse({"hide-platform/src/wsl.rs", "hide-platform/src/path.rs", "hide-platform/Cargo.toml"} & marked)
+
+    def test_main_pushes_the_nightly_and_unreadable_plans_run_every_macos_job(self):
+        for event in ("push", "schedule", "workflow_dispatch", "workflow_call"):
+            with self.subTest(event=event):
+                result = ci.plan(event, None, None, ROOT)
+                self.assertTrue(result["macos"]["runs"])
+                self.assertEqual(result["lanes"], FULL)
+                self.assertTrue(set(ci.MACOS_ONLY_LANES) <= set(result["lanes"]))
+        nightly = ci.plan("schedule", None, None, ROOT, nightly_agent_checks=True)
+        self.assertTrue(nightly["macos"]["runs"])
+        self.assertTrue(set(ci.MACOS_ONLY_LANES) <= set(nightly["lanes"]))
+        unreadable = ci.plan("pull_request", "0" * 40, "HEAD", ROOT)
+        self.assertTrue(unreadable["macos"]["runs"])
+        self.assertIn("comparison unavailable", unreadable["macos"]["why"][0])
+        self.assertEqual(unreadable["lanes"], FULL)
+        self.assertTrue(ci.select([("T", "web/src/store.ts")], CRATES, ROOT)["full"])
+        self.assertTrue(ci.macos_path("T", "web/src/store.ts"))
+
+    def test_a_pull_request_read_from_git_decides_macos_from_its_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            pr = PullRequest(directory)
+            pr.commit("main", "base", {"web/src/x.ts": "one\n", "hide-platform/src/a.rs": "fn a() {}\n"})
+            pr.git("checkout", "-qb", "topic")
+            pr.commit("topic", "web", {"web/src/x.ts": "two\n"})
+            pr.check_out_merge()
+            result = pr.plan(None)
+            self.assertEqual(result["lanes"], ["policy", "rust", "checks", "web-e2e"])
+            self.assertFalse(result["macos"]["runs"])
+            pr.commit("topic", "platform", {"hide-platform/src/a.rs": '#[cfg(target_os = "macos")]\nfn a() {}\n'})
+            pr.check_out_merge()
+            result = pr.plan(None)
+            self.assertTrue(result["macos"]["runs"])
+            self.assertIn("desktop-e2e", result["lanes"])
+            self.assertEqual(result["macos"]["why"], ["macOS code: hide-platform/src/a.rs"])
+
+    def test_pr_yml_runs_the_macos_legs_the_plan_names(self):
+        jobs = pr_jobs()
+        self.assertIn("macos: ${{ steps.plan.outputs.macos }}", jobs["plan"])
+        for lane in ("vt", "omp-contract"):
+            with self.subTest(lane=lane):
+                expression = re.search(r"\n      systems: \$\{\{(.+?)\}\}", jobs[lane]).group(1)
+                self.assertEqual(json.loads(evaluate(expression, "true")), ["linux", "macos", "windows"])
+                self.assertEqual(json.loads(evaluate(expression, "false")), ["linux", "windows"])
+        expression = re.search(r"\n      include-macos: \$\{\{(.+?)\}\}", jobs["package"]).group(1)
+        self.assertIs(evaluate(expression, "true"), True)
+        self.assertIs(evaluate(expression, "false"), False)
+        # The macOS-only lanes follow the plan's lanes, which leave them out.
+        for lane in ci.MACOS_ONLY_LANES:
+            self.assertIn(f"if: contains(fromJSON(needs.plan.outputs.lanes), '{lane}')", jobs[lane])
+        self.assertEqual(set(ci.MACOS_ONLY_LANES) | set(ci.MACOS_LEG_LANES), MACOS_LANES)
 
 
 class Aggregate(unittest.TestCase):
@@ -1144,7 +1300,7 @@ class ReuseGreenRun(unittest.TestCase):
                 self.assertEqual(ci.plan_record(result, 7, 202)["verified"], self.green)
                 self.assertIn("this run checks " + ", ".join(lanes), ci.summary(result))
                 # A lost artifact must run the whole PR's app checks again.
-                self.assertIn("desktop-e2e", self.pr.plan(None)["lanes"])
+                self.assertIn("web-e2e", self.pr.plan(None)["lanes"])
 
     def test_modified_and_deleted_unit_tests_are_rechecked_against_the_original_green_anchor(self):
         self.green["head"] = self.pr.commit("topic", "unit fixture", {"desktop/src/main/x.test.ts": "first\n"})

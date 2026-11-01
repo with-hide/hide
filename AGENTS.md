@@ -59,7 +59,7 @@ A pull request that ends one names it across repositories, `Closes with-hide/hid
 
 `main` takes pull-request merges only, and the `verify` workflow has to pass; this repository currently uses merge commits, and no one, maintainer included, can push around branch protection.
 A green pull request does not need the latest main to merge: `python3 scripts/premerge-check.py <number>` decides against main as it is now and prints the merge command.
-When main's push run fails, follow `CONTRIBUTING.md`, When main's push run fails: it owns the merge freeze, the narrow exception for unrelated development changes during an existing Windows-only failure, and the full verification required before release.
+When main's push run fails, follow `CONTRIBUTING.md`, When main's push run fails: it owns the merge freeze, the narrow exception for unrelated development changes during an existing Windows-only failure, the rule that a failure only in macOS jobs does not freeze merges, and the full verification required before release.
 `CONTRIBUTING.md` lists every gate with its local command; run the lanes the diff touches before opening the pull request, and change a gate that is wrong in the same pull request with the reason in the description.
 While you wait for CI, keep a background watch on the run and act when it ends; `CONTRIBUTING.md`, Waiting for CI, owns the commands.
 Commit subjects and pull request titles take the form `<type>: <imperative sentence>` in English, such as `fix: keep a named tab when its last agent closes`, even when the operator writes in Korean; `CONTRIBUTING.md`, Commit messages and attribution, owns the types and the rule.

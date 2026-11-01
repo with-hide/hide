@@ -12,6 +12,10 @@ CI definition changes on a pull request exercise every lane, including those two
 No lane takes a macOS runner for anything but what only macOS proves
 (`os-contract-macos`, `desktop-e2e`, `omp-contract`'s SDK boundary, `vt`'s
 macOS build of libghostty-vt, and `package`'s packaged app); the rest of the macOS checks are jobs of `nightly.yml`.
+A pull request runs those macOS jobs only when it changes a macOS path
+(MACOS_PATHS, MACOS_CODE); otherwise the plan drops the macOS-only lanes and
+its `macos` output leaves out the macOS legs of the others, and main's push
+run and the nightly run every macOS job.
 Nightly explicitly owns agy and the journey in its direct calls and removes
 those two internal lanes from its verify plan.
 
@@ -245,6 +249,96 @@ def macos_lanes(name):
     return {lane for lane, inputs in MACOS_LANE_INPUTS.items()
             if any(fnmatchcase(name, pattern) for pattern in inputs["paths"])
             and not any(fnmatchcase(name, pattern) for pattern in inputs.get("exclude", ()))}
+
+
+# Whether a pull request takes a macOS runner at all (operator decision
+# 2026-11-01). GitHub's hosted macOS runners are shared by every pull request
+# of the organization, and over the 40 green `pr.yml` runs of 2026-10-31 and
+# 11-01 the macOS jobs ended 24 of them, mostly by waiting for a runner; a
+# pull request therefore runs its macOS jobs only when it changes one of
+# these paths, and main's push run and the nightly run all of them. A macOS
+# break another change causes shows up on main and is fixed before the next
+# release (CONTRIBUTING.md, When main's push run fails).
+#
+# The lanes that run on macOS alone, dropped from a pull request's plan
+# without a macOS path, and the lanes with a macOS leg beside their Linux and
+# Windows ones, which run without it (`pr.yml` reads the plan's `macos`).
+MACOS_ONLY_LANES = ("os-contract-macos", "desktop-e2e")
+MACOS_LEG_LANES = ("vt", "omp-contract", "package")
+# Each entry is code or CI whose macOS form only a macOS job of a pull
+# request proves. A glob's `*` includes descendants.
+MACOS_PATHS = (
+    # The workflows that define the macOS jobs a pull request runs, and
+    # `pr.yml`, which calls them and picks their runners and legs.
+    ".github/workflows/pr.yml", ".github/workflows/desktop-e2e.yml", ".github/workflows/os-contract.yml",
+    ".github/workflows/vt.yml", ".github/workflows/omp-contract.yml", ".github/workflows/package.yml",
+    # Steps every macOS job runs: the Rust and vt caches keyed by system and
+    # `compile (macos)`'s quick release build.
+    ".github/actions/*",
+    # This plan, which decides which macOS jobs run.
+    "scripts/ci-plan.py",
+    # The packaged macOS app, which only `package (macos)` builds and starts:
+    # its signing and notarization, the packager and installers that make the
+    # .app, dmg and zip (their Windows and Linux forms are the package lane's
+    # other jobs), and the entitlements, icon and Swift helper only the .app carries.
+    "desktop/scripts/macos-*.mjs", "desktop/scripts/package.mjs", "desktop/scripts/installers.mjs",
+    "desktop/resources/entitlements/*", "desktop/resources/hide.icns", "desktop/native/*",
+    # The desktop host's macOS forms, which only the macOS desktop suite
+    # runs: the title bar under the traffic lights, the app menu's macOS
+    # items, the notification permission read through the Swift helper, VS
+    # Code found by its bundle, and the update installed from the zip.
+    "desktop/src/main/windowChrome.ts", "desktop/src/main/menu.ts", "desktop/src/main/notificationPermission.ts",
+    "desktop/src/main/editor.ts", "desktop/src/main/updater.ts",
+    # hide-vt's Zig build: the macOS target it maps and the macOS Zig and
+    # inputs it downloads, which `vt (macos)` builds.
+    "hide-vt/build.rs", "hide-vt/build-inputs.json",
+    # The Herdr pin names the macOS asset, which only macOS jobs run.
+    "contracts/herdr-bundle.json",
+)
+# Folders whose macOS form sits in shared files: a file there counts when it
+# holds macOS-only code. `hide-platform` is where each system's form is
+# written once: its process, host, local stream, file and launchd login-item
+# forms and their contract tests carry `target_os = "macos"` and reach `os
+# contract (macOS)` and `omp SDK (macos)`; a file with none (the WSL listing,
+# the Windows listeners, path spelling) is proved on Linux and Windows.
+MACOS_CODE = (("hide-platform/*", re.compile(r'target_os\s*=\s*"macos"')),)
+
+
+def macos_path(status, name, root=ROOT):
+    """Why a changed path makes a pull request run its macOS jobs, or None."""
+    if is_unit_test(name):
+        # Registered desktop unit tests run on Linux and Windows only.
+        return None
+    if status not in ("A", "M", "D"):
+        return f"{status} change, unreadable: {name}"
+    if any(fnmatchcase(name, pattern) for pattern in MACOS_PATHS):
+        return f"macOS path: {name}"
+    for pattern, marker in MACOS_CODE:
+        if fnmatchcase(name, pattern):
+            if status == "D":
+                # A deleted file cannot be read for its code.
+                return f"deleted from a folder with macOS code: {name}"
+            if marker.search((root / name).read_text(encoding="utf-8", errors="replace")):
+                return f"macOS code: {name}"
+    return None
+
+
+def with_macos(result, runs, why):
+    """Record whether the macOS jobs run; without them, drop the macOS-only lanes."""
+    result["macos"] = {"runs": runs, "why": why}
+    if not runs:
+        result["lanes"] = [lane for lane in result["lanes"] if lane not in MACOS_ONLY_LANES]
+        for lane in MACOS_ONLY_LANES:
+            result["reasons"].pop(lane, None)
+    return result
+
+
+def pull_request_macos(result, entries, root=ROOT):
+    """A pull request's plan with its macOS jobs only when it changes a macOS path."""
+    why = [reason for reason in (macos_path(status, name, root) for status, name in entries) if reason]
+    if why:
+        return with_macos(result, True, why)
+    return with_macos(result, False, ["no macOS path changed; main's push run and the nightly run the macOS jobs"])
 
 
 # Paths named here and in READERS are the only ones narrower than "every
@@ -748,16 +842,19 @@ def plan(event, base, head, root=ROOT, crates=None, draft=False, last_green=None
         # A draft is not a merge candidate: no lane runs, `aggregate` fails
         # `verify` for it, and marking the pull request ready for review
         # starts the run that plans lanes.
-        return {"full": False, "lanes": [], "rust_packages": [], "reasons": {}, "draft": True}
+        return {"full": False, "lanes": [], "rust_packages": [], "reasons": {}, "draft": True,
+                "macos": {"runs": False, "why": ["draft"]}}
     if crates is None:
         try:
             crates = cargo_crates(root)
         except (subprocess.CalledProcessError, ValueError, KeyError) as error:
             # Without the crate graph no Rust change can be narrowed; the full
             # Rust lane runs the whole workspace and needs no package list.
-            return select([], {}, root, f"crate graph unavailable: {error}")
+            reason = f"crate graph unavailable: {error}"
+            return with_macos(select([], {}, root, reason), True, [reason])
     if event != "pull_request":
-        return select([], crates, root, f"{event}: every lane runs on main")
+        return with_macos(select([], crates, root, f"{event}: every lane runs on main"), True,
+                          [f"{event}: every macOS job runs"])
     try:
         # A pull request's checkout is the merge commit GitHub made; anything
         # else would compare against a parent that is not the base.
@@ -768,25 +865,27 @@ def plan(event, base, head, root=ROOT, crates=None, draft=False, last_green=None
             raise ValueError(f"{head} is not a merge commit")
         entries = changed_entries(base, head, root)
     except (subprocess.CalledProcessError, UnicodeDecodeError, ValueError) as error:
-        return select([], crates, root, f"comparison unavailable: {error_detail(error)}")
+        # Paths that cannot be listed cannot be shown to leave macOS alone.
+        reason = f"comparison unavailable: {error_detail(error)}"
+        return with_macos(select([], crates, root, reason), True, [reason])
     result = select(entries, crates, root)
     result["commits"] = {"base": parents[1], "head": parents[2]}
     # `policy` alone is what a reuse plans; nothing to save.
     if last_green is None or result["lanes"] == ["policy"]:
-        return result
+        return pull_request_macos(result, entries, root)
     try:
         verified = last_green()
         why, delta = still_stands(verified, base, head, entries, crates, root)
     except (NotReused, subprocess.CalledProcessError, OSError, ValueError) as error:
         # Every failure keeps the plan the change itself needs.
         result["reuse"] = {"run": None, "why": error_detail(error)}
-        return result
+        return pull_request_macos(result, entries, root)
     # Never call select with an empty delta: an empty comparison deliberately
     # plans every lane. Preserve the original green anchor even after these
     # checks succeed, so a later run compares with the app code actually tested.
     rerun = select(delta, crates, root) if delta else {"lanes": ["policy"], "rust_packages": [], "reasons": {"policy": []}}
     rerun["reasons"]["policy"].append(f"reuses run {verified['run']}: {why}")
-    return {
+    return pull_request_macos({
         "full": False,
         "lanes": rerun["lanes"],
         "rust_packages": rerun["rust_packages"],
@@ -794,7 +893,7 @@ def plan(event, base, head, root=ROOT, crates=None, draft=False, last_green=None
         "commits": result["commits"],
         "reuse": {"run": verified["run"], "why": why},
         "verified": verified,
-    }
+    }, entries, root)
 
 
 def plan_record(result, number, run_id):
@@ -865,6 +964,10 @@ def summary(result, runs_url=None):
     if result["rust_packages"]:
         lines.append("")
         lines.append("Rust packages: " + ", ".join(result["rust_packages"]))
+    macos = result["macos"]
+    why = "; ".join(macos["why"][:3]) + (f" (+{len(macos['why']) - 3} more)" if len(macos["why"]) > 3 else "")
+    lines.append("")
+    lines.append(f"macOS jobs: {'run' if macos['runs'] else 'skipped'}: {why}.")
     reuse = result.get("reuse")
     if reuse:
         lines.append("")
@@ -916,6 +1019,7 @@ def main():
                 output.write(f"lanes={json.dumps(result['lanes'])}\n")
                 output.write(f"full={str(result['full']).lower()}\n")
                 output.write(f"draft={str(result.get('draft', False)).lower()}\n")
+                output.write(f"macos={str(result['macos']['runs']).lower()}\n")
                 output.write(f"rust-packages={json.dumps(result['rust_packages'])}\n")
         if os.environ.get("GITHUB_STEP_SUMMARY"):
             with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as output:

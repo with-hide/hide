@@ -7,9 +7,11 @@
 # pinned Herdr for that system, the one place the pinned Windows asset runs.
 # The crates are small, so this lane builds in minutes and does not wait for
 # the workspace. The caller names the systems: `pr.yml` runs Linux and Windows
-# for a change to anything that differs by system and macOS, whose runners are
-# the scarce ones, only for a change to these two crates (`os-contract-macos`);
-# the nightly's call of `pr.yml` plans every lane, so it runs all three.
+# for a change to anything that differs by system, and macOS, whose runners are
+# the scarce ones, in a pull request only for a change to these two crates that
+# is also a macOS path (`os-contract-macos`; `scripts/ci-plan.py`, MACOS_CODE);
+# main's push run and the nightly's call of `pr.yml` plan every lane, so they
+# run all three.
 name: os contract
 
 on:
