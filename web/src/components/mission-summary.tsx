@@ -28,7 +28,8 @@ export function MissionSummary({ mission, onSelect }: { mission: Mission; onSele
   );
 }
 
-function Row({ name, field, children }: { name: string; field: string; children: ReactNode }) {
+/** One row of a work page's side column: a dim name over its values (a plan's map draws the same rows). */
+export function SummaryRow({ name, field, children }: { name: string; field: string; children: ReactNode }) {
   return (
     <div className="flex min-w-0 flex-col gap-xxs" data-mission-summary-row={field}>
       <dt className="text-caption text-muted-foreground">{name}</dt>
@@ -44,7 +45,7 @@ function OpenRows({ mission, onSelect }: { mission: Mission; onSelect: (key: str
   return (
     <>
       {attention.length > 0 ? (
-        <Row name={t("mission.summary.attention", { count: attention.length })} field="attention">
+        <SummaryRow name={t("mission.summary.attention", { count: attention.length })} field="attention">
           {attention.map((node) => {
             const words = attentionWords(node, t);
             return (
@@ -54,10 +55,10 @@ function OpenRows({ mission, onSelect }: { mission: Mission; onSelect: (key: str
               </span>
             );
           })}
-        </Row>
+        </SummaryRow>
       ) : null}
       {working.length > 0 ? (
-        <Row name={t("mission.summary.working", { count: working.length })} field="working">
+        <SummaryRow name={t("mission.summary.working", { count: working.length })} field="working">
           {working.map((node) => {
             const line = cardLine(mission, node, node.plan ? planNowLine(node.plan, t) : null, t)?.text ?? t(stageWord(node));
             return (
@@ -67,19 +68,19 @@ function OpenRows({ mission, onSelect }: { mission: Mission; onSelect: (key: str
               </span>
             );
           })}
-        </Row>
+        </SummaryRow>
       ) : null}
       {done.length > 0 ? (
-        <Row name={t("mission.summary.done", { count: done.length })} field="done">
+        <SummaryRow name={t("mission.summary.done", { count: done.length })} field="done">
           <span className="flex min-w-0 flex-wrap gap-x-sm gap-y-xxs">
             {done.map((node) => <NodeName key={node.key} node={node} onSelect={onSelect} />)}
           </span>
-        </Row>
+        </SummaryRow>
       ) : null}
-      {pulls.length > 0 ? <Row name={t("mission.field.pr")} field="pr"><Pulls mission={mission} nodes={pulls} /></Row> : null}
-      <Row name={t("mission.summary.workers")} field="workers">
+      {pulls.length > 0 ? <SummaryRow name={t("mission.field.pr")} field="pr"><Pulls mission={mission} nodes={pulls} /></SummaryRow> : null}
+      <SummaryRow name={t("mission.summary.workers")} field="workers">
         <span className="tabular-nums">{t("mission.summary.running", { running: String(mission.running), cap: String(mission.cap) })}</span>
-      </Row>
+      </SummaryRow>
     </>
   );
 }
@@ -94,12 +95,12 @@ function ClosedRows({ mission }: { mission: Mission }) {
   const took = start != null && end != null ? [formatElapsed(language, end - start), formatDateTime(language, end, { month: "2-digit", day: "2-digit" })].join(" · ") : null;
   return (
     <>
-      {took ? <Row name={t("mission.summary.took")} field="took"><span className="tabular-nums">{took}</span></Row> : null}
-      {pulls.length > 0 ? <Row name={t("mission.panel.result")} field="result"><Pulls mission={mission} nodes={pulls} /></Row> : null}
+      {took ? <SummaryRow name={t("mission.summary.took")} field="took"><span className="tabular-nums">{took}</span></SummaryRow> : null}
+      {pulls.length > 0 ? <SummaryRow name={t("mission.panel.result")} field="result"><Pulls mission={mission} nodes={pulls} /></SummaryRow> : null}
       {agents ? (
-        <Row name={t("mission.summary.workers")} field="agents">
+        <SummaryRow name={t("mission.summary.workers")} field="agents">
           <span className="tabular-nums">{agents.checkers > 0 ? t("mission.summary.agents", { workers: String(agents.workers), checkers: String(agents.checkers) }) : String(agents.workers)}</span>
-        </Row>
+        </SummaryRow>
       ) : null}
     </>
   );

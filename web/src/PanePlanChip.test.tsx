@@ -134,7 +134,10 @@ it("opens a checklist in the order the steps wait on, never a map or a record fo
     expect(popover.querySelector(".truncate")).toBeNull();
     expect(popover.querySelector("[data-plan-graph]")).toBeNull();
     expect(popover.querySelector("[data-pane-plan-record]")).toBeNull();
-    expect(popover.querySelector("[data-plan-summary]")?.textContent).toBe("Plan1/3· updated 5m ago");
+    // The head reads as the plan's page does: its state, its count; when it last moved is in the foot.
+    expect(popover.querySelector("[data-plan-pill]")?.textContent).toBe("Running");
+    expect(popover.querySelector("[data-plan-count]")?.textContent).toBe("1/3");
+    expect(popover.querySelector("[data-plan-summary-when]")?.textContent).toBe("updated 5m ago");
     await act(async () => popover.querySelector<HTMLButtonElement>("[data-pane-plan-large]")!.click());
     expect(view.events.at(-1)).toEqual({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "plan", session: SESSION } } });
   } finally { await view.unmount(); }
@@ -154,15 +157,18 @@ it("lists every step of a finished plan in the popover with what each left and w
   try {
     await act(async () => view.actions.togglePlanChip());
     const popover = view.popover()!;
-    expect(popover.querySelector("[data-plan-summary]")?.textContent).toBe("Plan finished5/5· took 2h");
+    expect(popover.querySelector("[data-plan-pill]")?.textContent).toBe("Finished");
+    expect(popover.querySelector("[data-plan-count]")?.textContent).toBe("5/5");
+    expect(popover.querySelector("[data-plan-summary-when]")?.textContent).toBe("took 2h");
     const rows = [...popover.querySelectorAll<HTMLElement>("[data-plan-row]")];
     expect(rows.map((row) => [row.dataset.planRow, row.textContent])).toEqual([
       ["spec", "spec titledelegate-spec.md"],
       ["core", "core title"],
       ["old", "old titlePR"],
       ["docs", "docs titlePR"],
-      ["web", "web title#1879web-ui"],
-      ["review", "review titleReportreviewer"],
+      // The number is built so the token check does not read it as a colour.
+      ["web", `web titleweb-ui#${1879}`],
+      ["review", "review titlereviewerReport"],
     ]);
     // A child that is no longer on screen has a name and no way to its pane.
     expect(popover.querySelector("[data-step-child-pane]")).toBeNull();
@@ -276,7 +282,7 @@ it("shows a handed step with its child's current step and name, the short words 
     const popover = view.popover()!;
     const text = (key: string) => popover.querySelector(`[data-plan-row=${key}]`)?.textContent;
     expect(text("spec")).toBe("spec titledelegate-spec.md");
-    expect(text("web")).toBe("web title · mapweb-ui");
+    expect(text("web")).toBe("web titleweb-ui· map");
     expect(text("review")).toBe("review titleTo hand off");
     expect(text("pr")).toBe("pr titlePR");
     // The chip's cells stay by state: the handed step at work is blue like the main's.
@@ -306,11 +312,15 @@ it("draws every map card in two lines, who and what now, and opens a handed card
   const view = await mount([delegatingPlan(), childPlan()], "map", family());
   try {
     const line = (key: string) => view.container.querySelector(`[data-step-line=${key}]`)?.textContent;
-    expect(line("spec")).toBe("Me·delegate-spec.md");
-    expect(line("core")).toBe("Me·writing tests");
+    // The session's own step carries its agent mark, never `Me` (the operator on every other screen); a step still to be handed, a dashed circle.
+    const who = (key: string) => view.container.querySelector<HTMLElement>(`[data-step-line=${key}] [data-step-who]`)?.dataset.stepWho;
+    expect(line("spec")).toBe("·delegate-spec.md");
+    expect(line("core")).toBe("·writing tests");
     expect(line("web")).toBe("web-ui·map 2/4");
-    expect(line("review")).toBe("To hand off · waits on core title·web title");
-    expect(line("pr")).toBe("Me·Planned");
+    expect(line("review")).toBe("·Waits on core title·web title");
+    expect(line("pr")).toBe("·Planned");
+    expect([who("spec"), who("web"), who("review")]).toEqual(["owner", "child", "pending"]);
+    expect(view.container.querySelector("[data-step-line=review] [data-step-who=pending]")?.getAttribute("aria-label")).toBe("To hand off");
     expect(view.container.querySelector("[data-plan-step=web] [data-step-output]")?.textContent).toBe("PR");
     await act(async () => view.container.querySelector<HTMLElement>("[data-plan-step=web]")!.click());
     const detail = document.querySelector<HTMLElement>("[data-plan-step-detail=web]")!;
