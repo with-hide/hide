@@ -39,7 +39,7 @@ import { kitUnavailableText, kitWhyText } from "./kitWhy";
 import { kitRefusalLine } from "./settings";
 import { FIRST_CHAPTER, openPractice } from "./practice/channel";
 import { NotOnSystem } from "./settings/AgentRow";
-import { installDocUrl, machineSystem, supportedAgents, type AgentPart } from "./settings/agentRows";
+import { installDocUrl, machineSystem, supportedAgents } from "./settings/agentRows";
 import { useAgentsDemand } from "./settings/useAgentsDemand";
 import { localDeviceId, type KitAgent, type WorkspaceRegistration } from "./snapshot";
 import { useStartPanel } from "./startDraft";
@@ -300,7 +300,7 @@ function AgentsStep({ actions, reopened, desktop, primary, chosen, onChoose, onN
               {changes.rows.map((row) => (
                 <li key={row.path} className="flex min-h-(--size-sidebar-line) items-center gap-md" data-first-run-change={row.path}>
                   <span className="min-w-0 flex-1 break-all font-mono text-foreground">{row.path}</span>
-                  <span className="shrink-0 text-muted-foreground">{row.labels.join(", ")} · {t(AGENT_PART[row.part])}</span>
+                  <span className="shrink-0 text-muted-foreground">{row.labels.join(", ")}</span>
                 </li>
               ))}
               {changes.rows.length === 0 ? <li className="flex min-h-(--size-sidebar-line) items-center text-muted-foreground">{t("firstRun.agents.nothingChanges")}</li> : null}
@@ -349,15 +349,6 @@ function AgentsStep({ actions, reopened, desktop, primary, chosen, onChoose, onN
     </>
   );
 }
-
-/** What each piece is called under What changes: the words Settings > Agents uses. */
-const AGENT_PART: Record<AgentPart, MessageKey> = {
-  hook: "agents.part.hook",
-  plugin: "agents.part.plugin",
-  extension: "agents.part.extension",
-  skill: "agents.part.skill",
-  herdr: "agents.part.herdr",
-};
 
 const TILE_STATUS: Record<Exclude<TileStatus, "unsupported">, MessageKey> = {
   checking: "firstRun.tile.checking",

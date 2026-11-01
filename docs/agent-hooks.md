@@ -938,7 +938,7 @@ On Windows `~/.agents/skills` is `%USERPROFILE%\.agents\skills`; no vendor page 
 | Antigravity | `~/.gemini/config/skills` | done: the `hide` block in `~/.gemini/config/hooks.json`, with guidance, letters, Memory, the spawn guard and the subagent count ([Antigravity: Hide's hook block](#antigravity-hides-hook-block)) | `antigravity-cli`, in `~/.gemini/config` | [skills](https://antigravity.google/docs/skills/) |
 
 Each row also carries what Hide can do for that agent as a list of features (`hide_agent_adapter::Feature`, re-exported by `hide_kit::agents`, and `KitAgentSnapshot.features`).
-An agent without both prompt intake and spawn refusal wears the Basic chip, regardless of other missing features.
+An agent without both prompt intake and spawn refusal wears the `일부 기능` chip (`Some features`), regardless of other missing features.
 Its popover groups the feature table into Herdr basics, session reading and multi-agent collaboration, retaining a mark and a supported/unavailable word for every feature:
 
 | Feature | Supported when | Claude Code, Codex | OpenCode | Pi | omp | Grok | Antigravity |

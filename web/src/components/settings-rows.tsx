@@ -10,8 +10,10 @@ import { cn } from "../lib/utils";
 /**
  * A card whose rows are separated by hairlines, like `HideSettingsGroup`; titled unless it stands alone, like the Hide AI switch.
  * A `caption` beside the title says what the group decides; an `action` sits at the title's right edge, for the one button that adds to the list below (Add device).
+ * `columns` sits between the title and the card, for the heads of the controls its rows line up at their right edge (Agents' 권한 and 켬).
+ * A `note` follows the card: words, or a block of its own (Agents' permission box).
  */
-export function Group({ title, caption, note, action, children, ...data }: { title?: string; caption?: ReactNode; note?: ReactNode; action?: ReactNode; children: ReactNode } & Record<`data-${string}`, string>) {
+export function Group({ title, caption, note, action, columns, children, ...data }: { title?: string; caption?: ReactNode; note?: ReactNode; action?: ReactNode; columns?: ReactNode; children: ReactNode } & Record<`data-${string}`, string>) {
   return (
     <section className="mb-lg" {...data}>
       {title || action ? (
@@ -25,14 +27,19 @@ export function Group({ title, caption, note, action, children, ...data }: { tit
           {action}
         </div>
       ) : null}
+      {columns}
       <div className="divide-y divide-border rounded-md border border-border bg-card">{children}</div>
-      {note ? <p className="mt-sm text-body text-muted-foreground">{note}</p> : null}
+      {note ? <div className="mt-sm text-body text-muted-foreground">{note}</div> : null}
     </section>
   );
 }
 
-/** A row wraps on narrow sheets; a separate value keeps its control at the first line's right edge. */
-export function Row({ label, children, detail, value, className, ...data }: { label: ReactNode; children?: ReactNode; detail?: ReactNode; value?: ReactNode; className?: string } & Record<`data-${string}`, string>) {
+/**
+ * A row wraps on narrow sheets; a separate value keeps its control at the first line's right edge.
+ * `controlsEnd` keeps the controls at the right edge when they wrap under the label, so rows whose controls
+ * stand in columns (Agents' 권한 and 켬) keep them lined up at any width.
+ */
+export function Row({ label, children, detail, value, className, controlsEnd = false, ...data }: { label: ReactNode; children?: ReactNode; detail?: ReactNode; value?: ReactNode; className?: string; controlsEnd?: boolean } & Record<`data-${string}`, string>) {
   return (
     <div className={cn("px-md py-sm", className)} {...data}>
       {value !== undefined ? <div className="flex items-start gap-md">
@@ -43,7 +50,7 @@ export function Row({ label, children, detail, value, className, ...data }: { la
         <div className="flex min-h-lh shrink-0 items-center text-subhead">{children}</div>
       </div> : <div className="flex flex-wrap items-center gap-x-md gap-y-xs">
         <div className="min-w-[min(100%,var(--size-settings-control-w))] flex-1 text-subhead text-foreground">{label}</div>
-        {children ? <div className="flex min-w-0 max-w-full flex-wrap items-center justify-end gap-sm">{children}</div> : null}
+        {children ? <div className={cn("flex min-w-0 max-w-full flex-wrap items-center justify-end gap-sm", controlsEnd && "ml-auto")}>{children}</div> : null}
       </div>}
       {detail ? <div className="mt-xs">{detail}</div> : null}
     </div>

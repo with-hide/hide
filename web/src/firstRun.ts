@@ -5,7 +5,6 @@
 import { AGENT_ADAPTERS } from "./agentAdapters";
 import type { ProviderKind } from "./agentPicker";
 import type { NotificationPermission } from "./host";
-import { hookPart, type AgentPart } from "./settings/agentRows";
 import { FIRST_RUN_VERSION, type AgentUpdate, type AiProvider, type FirstRunStep, type HerdrProfiles, type Kit, type KitAgent, type KitPiece, type KitWhy, type SnapshotRest } from "./snapshot";
 
 /** The desktop route includes saved devices; a browser tab has its first step alone. */
@@ -69,8 +68,8 @@ export function noAgentInstalled(agents: readonly KitAgent[]): boolean {
 
 export const SUGGESTED_INSTALLS = ["claude-code", "codex"] as const;
 
-/** One place under What changes: the path Hide writes, the agents it writes it for and which of their pieces it is (B11). */
-export type ChangeRow = { path: string; labels: string[]; part: AgentPart };
+/** One place under What changes: the path Hide writes and the agents it writes it for, with no piece named (B11). */
+export type ChangeRow = { path: string; labels: string[] };
 
 export function accountHome(homeFolder: string | null | undefined): string | null {
   if (!homeFolder) return null;
@@ -98,13 +97,13 @@ export function whatChanges(agents: readonly KitAgent[], on: ReadonlySet<string>
   const rows: ChangeRow[] = [];
   for (const agent of agents) {
     if (!on.has(agent.id)) continue;
-    const pieces: [KitPiece | null | undefined, AgentPart][] = [[agent.hook, hookPart(agent)], [agent.skill, "skill"], [agent.herdr, "herdr"]];
-    for (const [piece, part] of pieces) {
+    const pieces: (KitPiece | null | undefined)[] = [agent.hook, agent.skill, agent.herdr];
+    for (const piece of pieces) {
       if (!piece || piece.state === "absent" || !piece.location) continue;
       const path = underHome(piece.location, home);
       const shared = rows.find((row) => row.path === path);
       if (shared) shared.labels.push(agent.label);
-      else rows.push({ path, labels: [agent.label], part });
+      else rows.push({ path, labels: [agent.label] });
     }
   }
   const cli = kit?.components.find((component) => component.id === "cli")?.location ?? null;

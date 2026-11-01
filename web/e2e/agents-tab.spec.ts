@@ -62,8 +62,8 @@ test("lists the installed agents with a status and a switch, and folds the other
     await expect(page.locator("[data-agents-machines]")).toHaveCount(0);
     await expect(list).not.toContainText("Skill and session hook");
 
-    // B16: an agent that is on and has no session is Ready; one that is off has no status.
-    await expect(list.locator(`[data-agent-status="${daemon.node}:codex:ready"]`)).toHaveText(/Ready/);
+    // B16: a healthy agent with no session says nothing; one that is off has no status either.
+    await expect(list.locator(`[data-agent-row="${daemon.node}:codex:on"] [data-agent-status]`)).toHaveCount(0);
     await expect(list.locator(`[data-agent-row="${daemon.node}:grok:off"] [data-agent-status]`)).toHaveCount(0);
 
     // B16: the fixture's two Claude Code panes are running sessions, and the row says how many and nothing more.
@@ -143,7 +143,10 @@ test("a switch installs and takes out Hide's own entries, and a hook the operato
     fs.writeFileSync(claude, "{}\n");
     await list.locator("[data-agents-check]").click();
     const problem = list.locator(`[data-agent-problem="${daemon.node}:claude-code"]`);
-    await expect(problem).toContainText("Hook: Removed", { timeout: 60_000 });
+    // One plain line names no piece; which piece and its state are its hover.
+    await expect(problem).toContainText("Disconnected from Hide", { timeout: 60_000 });
+    await expect(problem).toHaveAttribute("title", /Hook: Removed/);
+    await expect(problem).not.toContainText("Hook");
     await expect(list.locator("[data-agent-problem]")).toHaveCount(1);
     await screenshot(page, "agents-problem");
     expect(read(claude)).not.toContain("hide-subagents@");
