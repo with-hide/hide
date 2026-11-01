@@ -159,6 +159,22 @@ impl OwnEngine<'static> {
             )
         })?;
         let _ = engine.shared.saver.set(saver);
+        // A pane whose program exits on its own closes, as Herdr closes it.
+        // The node holds no engine: it is told the engine's shared state
+        // weakly, so an engine dropped is not kept by its holders.
+        let shared = Arc::downgrade(&engine.shared);
+        engine
+            .shared
+            .holders
+            .watch_ends(Arc::new(move |pane: &str| {
+                if let Some(shared) = shared.upgrade() {
+                    OwnEngine {
+                        shared,
+                        gates: Vec::new(),
+                    }
+                    .program_exited(pane);
+                }
+            }));
         restore::start(
             OwnEngine {
                 shared: Arc::clone(&engine.shared),
@@ -463,6 +479,16 @@ impl OwnEngine<'_> {
         }
         self.changed();
         Ok(())
+    }
+
+    /// Closes `pane`, whose program exited on its own; its holder ended
+    /// with it.
+    fn program_exited(&self, pane: &str) {
+        // A pane the engine closed first, or never held, is left alone.
+        let removed = self.topology().remove_pane(pane);
+        if removed.is_ok() {
+            self.changed();
+        }
     }
 
     /// The pane, refused when the engine holds no such pane.
@@ -1240,6 +1266,7 @@ mod tests {
         started: Mutex<Vec<HolderStart>>,
         ended: Mutex<Vec<String>>,
         found: (Mutex<Option<HolderRecovery>>, Condvar),
+        ends: Mutex<Option<hide_node_link::holders::PaneEnded>>,
     }
 
     impl Holders {
@@ -1282,6 +1309,9 @@ mod tests {
         }
         fn input(&self, _: &str, _: Vec<u8>) -> Result<(), HolderError> {
             Ok(())
+        }
+        fn watch_ends(&self, ended: hide_node_link::holders::PaneEnded) {
+            *self.ends.lock().unwrap() = Some(ended);
         }
         fn recovered(&self, timeout: Duration) -> Result<HolderRecovery, HolderError> {
             let found = self.found.0.lock().unwrap();
@@ -1547,5 +1577,43 @@ mod tests {
         );
         assert_eq!(holders.started().len(), 1, "only the new pane started");
         assert!(holders.ended.lock().unwrap().is_empty(), "nothing ended");
+    }
+
+    /// A pane whose program exits on its own closes as a close would, its
+    /// holder already gone, and its tab with it when it was the last.
+    #[test]
+    fn a_pane_whose_program_exits_closes_and_takes_its_last_tab_with_it() {
+        let root = tempfile::tempdir().unwrap();
+        let place = place(root.path());
+        std::fs::create_dir_all(&place.home).unwrap();
+        let holders = Holders::found(HolderRecovery::default());
+        let engine =
+            OwnEngine::open(Arc::clone(&holders) as Arc<dyn PaneHolders>, place.clone()).unwrap();
+        let home = wire(&place.home);
+        let (workspace, tab, first) = engine
+            .create_workspace(WAIT, &home, "w", true, Env::new())
+            .unwrap();
+        let second = engine.split_beside(WAIT, &first, None, Env::new()).unwrap();
+        let (lone_tab, lone) = engine
+            .create_tab(WAIT, &workspace, &home, "lone", false, Env::new())
+            .unwrap();
+        let exited = holders
+            .ends
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("the engine watches ends");
+
+        exited(&second);
+        exited(&lone);
+        exited("w9:p1");
+
+        let session = engine.session_payload(WAIT).unwrap();
+        assert_eq!(layout_of(&session, &tab), [first]);
+        assert!(session.tabs.iter().all(|found| found.tab_id != lone_tab));
+        assert!(
+            holders.ended.lock().unwrap().is_empty(),
+            "no holder was asked to end"
+        );
     }
 }

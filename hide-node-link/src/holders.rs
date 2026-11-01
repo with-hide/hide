@@ -32,6 +32,10 @@ pub struct HolderStart {
     pub notice: Option<String>,
 }
 
+/// Told the id of a pane whose program exited on its own
+/// ([`PaneHolders::watch_ends`]).
+pub type PaneEnded = std::sync::Arc<dyn Fn(&str) + Send + Sync>;
+
 /// What a node found of its panes' holders when it started (PRD
 /// engine-bundle-3-core-owns D-7), under the core's pane ids: the panes whose
 /// holders ended while no node ran (their program exited, or the machine
@@ -105,4 +109,9 @@ pub trait PaneHolders: Send + Sync {
     /// every record, waiting at most `timeout` for it: refused
     /// `recovery_unfinished` when it has not finished by then.
     fn recovered(&self, timeout: std::time::Duration) -> Result<HolderRecovery, HolderError>;
+    /// Tells `ended`, from now on, the id of each pane whose program exits
+    /// on its own while the node holds its screen, so the engine closes it
+    /// as Herdr closes a pane whose program ends. A pane ended by
+    /// [`PaneHolders::terminate`] is not told.
+    fn watch_ends(&self, ended: PaneEnded);
 }

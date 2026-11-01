@@ -14,7 +14,8 @@ use std::sync::Arc;
 use hide_holder_protocol::{Answer, Appearance, Foreground, OpenError, Size, Theme};
 use hide_kit::panes::{CloseError, StartRefusal, StartRequest, Started};
 use hide_node_link::holders::{
-    HolderError, HolderForeground, HolderProcesses, HolderRecovery, HolderStart, PaneHolders,
+    HolderError, HolderForeground, HolderProcesses, HolderRecovery, HolderStart, PaneEnded,
+    PaneHolders,
 };
 use hide_node_link::terminal::{KeyTarget, TerminalNode};
 
@@ -151,6 +152,10 @@ impl PaneHolders for LocalPanes {
         self.service
             .key(KeyTarget::Pane(pane.to_owned()), bytes, super::unix_ms());
         Ok(())
+    }
+
+    fn watch_ends(&self, ended: PaneEnded) {
+        self.holders.watch_ends(ended);
     }
 
     fn recovered(&self, timeout: std::time::Duration) -> Result<HolderRecovery, HolderError> {

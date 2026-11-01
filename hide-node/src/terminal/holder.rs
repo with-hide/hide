@@ -156,11 +156,29 @@ impl Known {
     }
 }
 
+/// Who is told when a holder pane's program exits on its own.
+#[derive(Default)]
+struct Ends(Mutex<Option<hide_node_link::holders::PaneEnded>>);
+
+impl Ends {
+    fn tell(&self, pane: &str) {
+        let watch = self
+            .0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        if let Some(watch) = watch {
+            watch(pane);
+        }
+    }
+}
+
 /// Opens a pane its node knows by its holder's record over the holder's
 /// socket, and every other pane through `herdr`.
 pub struct PaneAttacher {
     herdr: Box<dyn Attacher>,
     known: Arc<Known>,
+    ends: Arc<Ends>,
 }
 
 impl Attacher for PaneAttacher {
@@ -181,7 +199,7 @@ impl Attacher for PaneAttacher {
         size: Option<GridSize>,
     ) -> Result<Transport, OpenFailure> {
         match self.known.socket(pane_id) {
-            Some(socket) => open_holder(pane_id, &socket, size),
+            Some(socket) => open_watched(pane_id, &socket, size, Some(Arc::clone(&self.ends))),
             None => self.herdr.open_transport(pane_id, mode, size),
         }
     }
@@ -199,6 +217,16 @@ pub fn open_holder(
     pane: &str,
     socket: &Path,
     size: Option<GridSize>,
+) -> Result<Transport, OpenFailure> {
+    open_watched(pane, socket, size, None)
+}
+
+/// [`open_holder`], telling `ends` when the pane's program exits.
+fn open_watched(
+    pane: &str,
+    socket: &Path,
+    size: Option<GridSize>,
+    ends: Option<Arc<Ends>>,
 ) -> Result<Transport, OpenFailure> {
     let (stream, welcome) = hide_holder_protocol::open(
         socket,
@@ -225,6 +253,7 @@ pub fn open_holder(
             pane: pane.to_owned(),
             stream,
             screen: None,
+            ends,
         }),
         writer: Some(Box::new(writer)),
         kept: None,
@@ -295,6 +324,8 @@ struct HolderEvents {
     stream: LocalStream,
     /// The epoch and sequence of the last fragment.
     screen: Option<(u64, u64)>,
+    /// Told when the pane's program exits on its own.
+    ends: Option<Arc<Ends>>,
 }
 
 impl SessionEvents for HolderEvents {
@@ -349,10 +380,17 @@ impl HolderEvents {
                     bytes: fragment.bytes,
                 }
             }
-            Ok(HolderMessage::Closed(closed)) => SessionEvent::Ended {
-                category: category(closed.reason),
-                message: message(&closed),
-            },
+            Ok(HolderMessage::Closed(closed)) => {
+                if closed.reason == CloseReason::ProgramExited
+                    && let Some(ends) = &self.ends
+                {
+                    ends.tell(&self.pane);
+                }
+                SessionEvent::Ended {
+                    category: category(closed.reason),
+                    message: message(&closed),
+                }
+            }
             Ok(HolderMessage::Welcome(_) | HolderMessage::Answer(_)) => SessionEvent::Ended {
                 category: "protocol_error",
                 message: "The pane's holder sent a welcome or an answer on its screen".to_owned(),
@@ -458,6 +496,7 @@ pub struct Holders {
     home: PathBuf,
     state_dir: PathBuf,
     known: Arc<Known>,
+    ends: Arc<Ends>,
     reports: Arc<dyn ReportSink>,
     /// What the last [`Holders::recover`] found, for the core's restore to
     /// wait on ([`Holders::recovered`]).
@@ -495,6 +534,7 @@ impl Holders {
             home: folders.home.to_owned(),
             state_dir: folders.state_dir.to_owned(),
             known: Arc::default(),
+            ends: Arc::default(),
             reports,
             recovery: (Mutex::new(None), Condvar::new()),
         })
@@ -574,6 +614,7 @@ impl Holders {
         Box::new(PaneAttacher {
             herdr,
             known: Arc::clone(&self.known),
+            ends: Arc::clone(&self.ends),
         })
     }
 
@@ -818,6 +859,12 @@ impl Holders {
             .wait_timeout_while(found, timeout, |found| found.is_none())
             .unwrap_or_else(PoisonError::into_inner);
         found.clone()
+    }
+
+    /// Tells `ended` the id of each pane whose program exits on its own
+    /// while this node holds its screen, from now on.
+    pub fn watch_ends(&self, ended: hide_node_link::holders::PaneEnded) {
+        *self.ends.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(ended);
     }
 
     /// How many of the state folder's panes may still run
