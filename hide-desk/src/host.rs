@@ -3,6 +3,14 @@
 //! standard streams the ACP connection (engineering practice: resident
 //! processes).
 //!
+//! Its environment is the one an agent the operator starts in a terminal
+//! has: what the process keeps from hided ([`KEPT_VARIABLES`] and the login
+//! variables), then the account's environment as a new terminal gets it
+//! ([`crate::adapter::Paths::account`]), then what Desk sets. No pane's
+//! identity (`HERDR_*`) and nothing of Hide's own (`HIDE_*`) reaches it from
+//! either side, so no pane hook reads the Desk process as a pane session;
+//! Desk sets its capability (`HIDE_CAP_REF`) itself.
+//!
 //! Its owner (the core's Desk worker) holds the [`Host`]; dropping it ends
 //! the whole tree. The tree is measured after each turn against
 //! [`MAX_DESCENDANTS`] and [`MAX_RSS_BYTES`]; crossing either is the owner's
@@ -28,9 +36,11 @@ pub const MAX_RSS_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const STDERR_TAIL_BYTES: usize = 16 * 1024;
 
 /// Variables a Desk process keeps from hided besides the login ones: its
-/// shell, its language and the operator's network route. A pane's
-/// identity (`HERDR_*`), Hide's own (`HIDE_*`) and every other variable
-/// stay out, so no pane hook reads the Desk process as a pane session.
+/// shell, its language and the operator's network route, which a Dock's
+/// launch may set where no startup file does. Every other variable of
+/// hided's stays out: hided started from a terminal carries that terminal's
+/// session, and one started from the Dock lacks what the startup files
+/// export, so the rest comes from the account's environment.
 const KEPT_VARIABLES: &[&str] = &[
     "SHELL",
     "LANG",
@@ -47,18 +57,41 @@ const KEPT_VARIABLES: &[&str] = &[
     "NODE_EXTRA_CA_CERTS",
 ];
 
-fn kept(name: &OsStr) -> bool {
+/// Name prefixes no variable a Desk process gets carries, whether hided or
+/// the account's environment has it: a pane's identity and Hide's own.
+const NEVER_PREFIXES: &[&str] = &["HERDR_", "HIDE_"];
+
+/// Whether two variable names name one variable: case decides on macOS and
+/// Linux, and not on Windows.
+pub fn same_name(one: &OsStr, other: &OsStr) -> bool {
+    if cfg!(windows) {
+        one.to_string_lossy()
+            .eq_ignore_ascii_case(&other.to_string_lossy())
+    } else {
+        one == other
+    }
+}
+
+fn never(name: &OsStr) -> bool {
     let name = name.to_string_lossy();
-    process::LOGIN_CHILD_VARIABLES
-        .iter()
-        .chain(KEPT_VARIABLES)
-        .any(|kept| {
-            if cfg!(windows) {
-                kept.eq_ignore_ascii_case(&name)
-            } else {
-                *kept == name
-            }
-        })
+    NEVER_PREFIXES.iter().any(|prefix| {
+        name.get(..prefix.len())
+            .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
+    })
+}
+
+fn kept(name: &OsStr) -> bool {
+    !never(name)
+        && process::LOGIN_CHILD_VARIABLES
+            .iter()
+            .chain(KEPT_VARIABLES)
+            .any(|kept| same_name(OsStr::new(kept), name))
+}
+
+/// Whether a variable of the account's environment reaches the Desk
+/// process: every one but a pane's identity and Hide's own.
+pub fn from_account(name: &OsStr) -> bool {
+    !never(name)
 }
 
 /// What [`Host::end`] and a failed start leave behind for the diagnostic.

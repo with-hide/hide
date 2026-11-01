@@ -163,7 +163,9 @@ export function DeskNotice({ item, onAction, onCopy }: { item: Extract<DeskItem,
   const { t } = useInterfaceTranslation();
   const failed = item.notice === "blocked" || item.notice === "host_stopped" || item.notice === "install_failed" || item.notice === "turn_failed";
   const action = NOTICE_ACTION[item.notice];
-  const words = t(NOTICE[item.notice], { agent: item.agent ? agentProductName(item.agent) : t("desk.name"), detail: item.detail ?? "" });
+  // A failed turn names the agent's own reason when it gave one (a provider's refusal).
+  const key = item.notice === "turn_failed" && item.detail ? "desk.notice.turn_failed_why" : NOTICE[item.notice];
+  const words = t(key, { agent: item.agent ? agentProductName(item.agent) : t("desk.name"), detail: item.detail ?? "" });
   return (
     <p className="flex min-w-0 flex-wrap items-center gap-x-sm gap-y-xxs text-caption" role={failed ? "alert" : "status"} data-desk-item="notice" data-desk-notice={item.notice}>
       <span className={cn("min-w-0", failed ? "text-warning" : item.notice === "preparing" ? "animate-pulse text-muted-foreground" : "text-subtle-foreground")}>{words}</span>

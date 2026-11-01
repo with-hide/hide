@@ -879,7 +879,13 @@ impl Runtime {
         card.read = !row.unread;
         let ask = match (&row.ask_subject, row.status_code) {
             (Some(crate::model::AskSubject::PlanReview { .. }), _) => DeskAskKind::PlanReview,
-            (Some(crate::model::AskSubject::MissionDecision { .. }), _) => DeskAskKind::Decision,
+            (
+                Some(
+                    crate::model::AskSubject::MissionDecision { .. }
+                    | crate::model::AskSubject::MissionAttention { .. },
+                ),
+                _,
+            ) => DeskAskKind::Decision,
             // Something on the agent's screen took Hide's input: a stop the
             // operator clears, as a block is.
             (Some(crate::model::AskSubject::InputUnconfirmed { .. }), _) => DeskAskKind::Blocked,

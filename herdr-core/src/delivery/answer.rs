@@ -103,6 +103,7 @@ pub enum WaitCause {
     Blocked,
     PlanReview,
     MissionDecision,
+    MissionAttention,
     InputUnconfirmed,
     Draft,
     ParentBlocked,

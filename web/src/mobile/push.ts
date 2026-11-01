@@ -5,6 +5,8 @@
 // opens, and a revoked phone drops its local subscription.
 
 import { translate } from "../i18n/translator";
+import { attentionReasonText } from "../missions";
+import { MISSION_ATTENTION_REASONS } from "../snapshot";
 import { staleTags, type AgentGroup } from "./protocol";
 import { patch, usePhone } from "./store";
 import { send } from "./connection";
@@ -43,7 +45,9 @@ export async function postWords(): Promise<void> {
   const statusWords = Object.fromEntries((["question", "approval", "error", "working", "done", "idle", "unknown", "waiting", "stopped", "unfinished"] as const).map((code) => [`status_${code}`, translate(`agents.status.${code}`)]));
   // A subject's words keep their `{{count}}` for the worker to fill: an interpolation marker no catalog uses leaves it as written.
   const planReview = translate("plan.askReview", { count: 0, interpolation: { prefix: "\u0000", suffix: "\u0000" } });
-  worker?.active?.postMessage({ type: "words", words: { needs_you: translate("mobile.group.needs_you"), done: translate("mobile.group.done"), observer_unconfirmed: translate("mobile.notice.observerUnconfirmed"), letter_undelivered: translate("mobile.notice.letterUndelivered"), subject_plan_review: planReview, subject_mission_decision: translate("mission.askDecision"), subject_input_unconfirmed_brief: translate("agents.input.brief"), subject_input_unconfirmed_letter: translate("agents.input.letter"), subject_input_unconfirmed_brief_held: translate("agents.input.briefHeld"), subject_input_unconfirmed_letter_held: translate("agents.input.letterHeld"), ...statusWords } });
+  // A mission node raised to the operator is worded by why, the node's title put before it by the worker (PRD mission-node-simple B14).
+  const attentionWords = Object.fromEntries(MISSION_ATTENTION_REASONS.map((reason) => [`subject_mission_attention_${reason}`, attentionReasonText(reason, null, translate)]));
+  worker?.active?.postMessage({ type: "words", words: { needs_you: translate("mobile.group.needs_you"), done: translate("mobile.group.done"), observer_unconfirmed: translate("mobile.notice.observerUnconfirmed"), letter_undelivered: translate("mobile.notice.letterUndelivered"), subject_plan_review: planReview, subject_mission_decision: translate("mission.askDecision"), subject_mission_attention: translate("mission.attention"), subject_input_unconfirmed_brief: translate("agents.input.brief"), subject_input_unconfirmed_letter: translate("agents.input.letter"), subject_input_unconfirmed_brief_held: translate("agents.input.briefHeld"), subject_input_unconfirmed_letter_held: translate("agents.input.letterHeld"), ...attentionWords, ...statusWords } });
 }
 
 async function subscribe(): Promise<boolean> {

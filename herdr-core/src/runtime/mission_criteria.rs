@@ -52,7 +52,7 @@ impl Runtime {
         node: &MissionNode,
         pulls: Option<&GithubProjectSnapshot>,
     ) -> Option<String> {
-        if let Some(pull) = node.pr.and_then(|number| pull_in(pulls, number))
+        if let Some(pull) = node.current_pr().and_then(|number| pull_in(pulls, number))
             && merged(pull)
         {
             return pull.head_oid.clone();
@@ -104,7 +104,7 @@ impl Runtime {
             .criteria
             .iter()
             .any(|line| line.kind == CriterionKind::Ci);
-        if let Some(number) = node.pr
+        if let Some(number) = node.current_pr()
             && !has_ci
         {
             let known = pull_in(pulls, number).is_some_and(|pull| {
@@ -233,7 +233,7 @@ impl Runtime {
         if mission.exempt {
             return Ok(next);
         }
-        if next.pr != node.pr {
+        if next.current_pr() != node.current_pr() {
             next.criteria.retain(|line| line.kind != CriterionKind::Ci);
             if let Some(project) = self.mission_pulls(mission) {
                 read_node_ci(&mut next, project, now);
@@ -434,7 +434,6 @@ impl Runtime {
             "component": "missions", "kind": "mission.criterion_recorded",
             "mission": id, "node": node, "line": key, "pass": pass,
         }));
-        self.save_missions();
         self.record_mission_events(&id, events);
         Ok((json!({"mission": self.mission_view_of(&id)}), true))
     }
@@ -505,7 +504,6 @@ impl Runtime {
             .node(node)
             .line(Some(&reason));
         event.criterion = Some(key.to_owned());
-        self.save_missions();
         self.record_mission_events(&id, vec![event]);
         Ok((json!({"mission": self.mission_view_of(&id)}), true))
     }
@@ -560,6 +558,9 @@ impl Runtime {
             },
         )?;
         next.reopened = next.reopened.saturating_add(1);
+        if next.status.finished() {
+            next.back_to_work();
+        }
         if next.status != NodeStatus::Working {
             next = crate::missions::apply_patch(
                 &next,
@@ -584,7 +585,6 @@ impl Runtime {
         let target = self.missions.book.get_mut(id).ok_or("mission_unknown")?;
         target.nodes[index] = next;
         target.updated_at_unix_ms = now;
-        self.save_missions();
         self.record_mission_events(id, events);
         Ok((json!({"mission": self.mission_view_of(id)}), true))
     }
@@ -656,13 +656,10 @@ impl Runtime {
 }
 
 /// Whether a node whose check or CI spent its rerun goes back to work
-/// (B13): one waiting, in review or not yet started; a node the operator
-/// holds, or one done, failed or dropped, stays as it is.
+/// (B13): one not yet started; a node at work stays at work, and one done
+/// or dropped stays as it is.
 pub(super) fn back_to_work(status: NodeStatus) -> bool {
-    matches!(
-        status,
-        NodeStatus::Planned | NodeStatus::Review | NodeStatus::Waiting
-    )
+    status == NodeStatus::Planned
 }
 
 fn pull_in(pulls: Option<&GithubProjectSnapshot>, number: u32) -> Option<&PullRequestSnapshot> {
@@ -731,7 +728,10 @@ fn read_node_ci(
     now: u64,
 ) -> crate::mission_criteria::Effect {
     let mut out = crate::mission_criteria::Effect::default();
-    let Some(pull) = node.pr.and_then(|number| pull_in(Some(project), number)) else {
+    let Some(pull) = node
+        .current_pr()
+        .and_then(|number| pull_in(Some(project), number))
+    else {
         return out;
     };
     let line = node

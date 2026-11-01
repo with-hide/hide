@@ -49,6 +49,18 @@ pub enum CriterionState {
     Skipped,
 }
 
+impl CriterionState {
+    /// Its stored spelling, which names it in a node's resume mark.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Pass => "pass",
+            Self::Fail => "fail",
+            Self::Skipped => "skipped",
+        }
+    }
+}
+
 /// How several checkers decide one line (D-07).
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -89,6 +101,9 @@ pub enum Role {
     Checker,
     Conductor,
     Hide,
+    /// The operator, from a raised node's `끝으로` (PRD mission-node-simple
+    /// B15).
+    Operator,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

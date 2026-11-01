@@ -20,6 +20,8 @@
 .og-filters button span { font-variant-numeric: tabular-nums; color: var(--muted-foreground); }
 .og-filters button[data-focus="turn"] span { color: var(--warning); }
 .og-filters input { accent-color: var(--primary); }
+.og-filters .og-filter-scope { color: var(--muted-foreground); }
+.og-waiting-alone { padding: 0 var(--spacing-lg); }
 
 /* The operator at the center of the map. */
 .og-operator { display: flex; width: 100%; height: 100%; align-items: center; justify-content: center; border: var(--size-hairline) solid var(--foreground); border-radius: 50%; background: var(--secondary); color: var(--foreground); font-size: var(--text-body); font-weight: 600; }
@@ -155,7 +157,7 @@
 .og-project-list > div:hover .og-eye, .og-project-list > div:focus-within .og-eye, .og-project-list > div[data-hidden="true"] .og-eye { opacity: 1; }
 /* A touch screen has no pointer to point with, so the eye is always there. */
 @media (hover: none) { .og-project-list .og-eye { opacity: 1; } }
-.og-navigator h3, .og-details h3 { display: flex; gap: var(--spacing-xs); margin: var(--spacing-lg) 0 var(--spacing-xs); color: var(--muted-foreground); font-size: var(--text-caption); font-weight: 500; }
+.og-navigator h3, .og-details h3, .og-waiting-alone h3 { display: flex; gap: var(--spacing-xs); margin: var(--spacing-lg) 0 var(--spacing-xs); color: var(--muted-foreground); font-size: var(--text-caption); font-weight: 500; }
 .og-waiting h3 span { color: var(--warning); font-variant-numeric: tabular-nums; }
 .og-ask { display: flex; flex-direction: column; align-items: start; gap: var(--spacing-xs); margin-bottom: var(--spacing-sm); padding: var(--spacing-sm) var(--spacing-md); border: var(--size-hairline) solid color-mix(in srgb, var(--warning) 40%, var(--border)); border-radius: var(--radius-md); background: color-mix(in srgb, var(--warning) calc(var(--opacity-subtle-fill) * 100%), transparent); }
 .og-ask p { margin: 0; overflow-wrap: anywhere; }

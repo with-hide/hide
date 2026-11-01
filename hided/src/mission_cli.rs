@@ -15,15 +15,15 @@ use std::collections::BTreeMap;
 /// at: how a Conductor works with the operator and what Hide holds it to.
 pub const HELP: &str = include_str!("../assets/mission/help.md");
 
-pub const USAGE: &str = "hide mission help\nhide mission create --title <title> [--scope pr|merge] [--cap <n>] [--github <account>]\nhide mission plan [--mission <id>] (--file <plan.json> | --json <plan>)\nhide mission node <key> [--mission <id>] [--status <status>] [--agent-id <id> | --no-agent-id] [--pr <n> | --no-pr] [--base-pr <n> | --no-base-pr] [--branch <name> | --no-branch] [--attempts <n>] [--line <text> | --no-line] [--change <text> | --no-change] [--review <text> | --no-review] [--commit <sha> | --no-commit] [--verdict pass|fail | --no-verdict] [--checks <passed>/<total> | --no-checks]\nhide mission node <key> [--mission <id>] [--reviewer <agent-id>] [--verifier <agent-id>]\nhide mission record <node> <line> [--mission <id>] (--pass | --fail) --evidence <text> [--commit <sha>] [--rerun]\nhide mission skip <node> <line> [--mission <id>] --reason <text> [--decision <key>]\nhide mission defect <node> [--mission <id>] --found-by <node> --line <text>\nhide mission start [--mission <id>]\nhide mission decide [--mission <id>] (--line <text> [--why <text>] [--option <text>]... [--recommend <n>] [--node <key>] | --clear)\nhide mission delay [--mission <id>] (--line <text> | --clear)\nhide mission close [--mission <id>] --as done|merge_wait|cancelled [--report <text> | --report-file <path>]\nhide mission reopen [--mission <id>]\nhide mission take <id>\nhide mission show [--mission <id>]\nhide mission list\nhide mission settings";
+pub const USAGE: &str = "hide mission help\nhide mission create --title <title> [--scope pr|merge] [--cap <n>] [--github <account>]\nhide mission plan [--mission <id>] (--file <plan.json> | --json <plan>)\nhide mission node <key> [--mission <id>] [--status <status>] [--agent-id <id> | --no-agent-id] [--pr <n> | --no-pr] [--base-pr <n> | --no-base-pr] [--branch <name> | --no-branch] [--attempts <n>] [--line <text> | --no-line] [--change <text> | --no-change] [--review <text> | --no-review] [--commit <sha> | --no-commit] [--verdict pass|fail | --no-verdict] [--checks <passed>/<total> | --no-checks]\nhide mission node <key> [--mission <id>] [--reviewer <agent-id>] [--verifier <agent-id>]\nhide mission record <node> <line> [--mission <id>] (--pass | --fail) --evidence <text> [--commit <sha>] [--rerun]\nhide mission skip <node> <line> [--mission <id>] --reason <text> [--decision <key>]\nhide mission defect <node> [--mission <id>] --found-by <node> --line <text>\nhide mission start [--mission <id>]\nhide mission decide [--mission <id>] (--line <text> [--why <text>] [--option <text>]... [--recommend <n>] [--node <key>] | --clear)\nhide mission delay [--mission <id>] (--line <text> | --clear)\nhide mission close [--mission <id>] --as done|merge_wait|cancelled [--report <text> | --report-file <path>]\nhide mission reopen [--mission <id>]\nhide mission take <id> [--handover <token>]\nhide mission show [--mission <id>]\nhide mission list\nhide mission settings";
 
 /// The largest plan or report file read from disk; the daemon refuses a
 /// frame past its own limit anyway.
 const FILE_LIMIT: u64 = 96 * 1024;
 
-pub const STATUSES: &[&str] = &[
-    "planned", "working", "waiting", "review", "held", "done", "failed", "dropped",
-];
+/// The statuses a Conductor sets (PRD mission-node-simple D-16); a plan
+/// sets `planned`.
+pub const STATUSES: &[&str] = &["working", "done", "dropped"];
 
 // Parsed once per command line and never stored, so its size is not worth
 // a box.
@@ -111,7 +111,7 @@ pub const FLAGS: &[(&str, &[&str], &[&str])] = &[
     ("start", &["--mission"], &[]),
     ("reopen", &["--mission"], &[]),
     ("show", &["--mission"], &[]),
-    ("take", &[], &[]),
+    ("take", &["--handover"], &[]),
     ("list", &[], &[]),
     ("settings", &[], &[]),
 ];
@@ -288,8 +288,11 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<MissionCl
             let status = values
                 .get("--status")
                 .map(|status| {
-                    serde_json::from_value::<NodeStatus>(json!(status))
-                        .map_err(|_| format!("--status is one of {}", STATUSES.join(", ")))
+                    STATUSES
+                        .contains(&status.as_str())
+                        .then(|| serde_json::from_value::<NodeStatus>(json!(status)).ok())
+                        .flatten()
+                        .ok_or_else(|| format!("--status is one of {}", STATUSES.join(", ")))
                 })
                 .transpose()?;
             let text = |value: &str, clear: &str| -> Result<Option<Option<String>>, String> {
@@ -521,12 +524,13 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<MissionCl
             }
         }
         "take" => {
-            let (positional, _, _) = flags(args, "take")?;
+            let (positional, mut values, _) = flags(args, "take")?;
             let [mission] = positional.as_slice() else {
                 return Err(USAGE.to_owned());
             };
             MissionCommand::Take {
                 mission: key(mission)?,
+                handover: values.remove("--handover"),
             }
         }
         verb @ ("list" | "settings") => {
@@ -705,6 +709,15 @@ mod tests {
         assert!(parse(both.iter()).is_err());
         let zero = words(&["node", "a", "--pr", "0"]);
         assert!(parse(zero.iter()).is_err());
+        // The Conductor sets working, done or dropped; Hide keeps the rest.
+        for status in ["planned", "review", "held", "failed", "waiting"] {
+            let refused = words(&["node", "a", "--status", status]);
+            assert_eq!(
+                parse(refused.iter()).err().as_deref(),
+                Some("--status is one of working, done, dropped"),
+                "{status}"
+            );
+        }
     }
 
     #[test]

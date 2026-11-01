@@ -2,8 +2,9 @@ import { projectRows, checkoutPresentation, checkoutCard } from "../test/legacyA
 import { emptyScope } from "../test/legacyAgentScope";
 import { legacyAgentRow } from "../test/legacyAgentRow";
 import { describe, expect, it } from "vitest";
-import { activeCheckouts, cardSingleValue, checkoutHasSecondLine, checkoutNameParts, checkoutRowExpansion, projectCheckout, projectRowExpansion, relativeActivity, shownPullRequest } from "./projects";
+import { projectRows as listRows, activeCheckouts, cardSingleValue, checkoutHasSecondLine, checkoutNameParts, checkoutRowExpansion, projectCheckout, projectRowExpansion, relativeActivity, shownPullRequest } from "./projects";
 import { initializeInterfaceI18n } from "./i18n/instance";
+import type { MissionAsk } from "./missions";
 import type { AgentRow, Checkout, GithubStatus, PullRequest, Workspace } from "./snapshot";
 
 const t = initializeInterfaceI18n("en").t;
@@ -418,3 +419,16 @@ describe("checkout row lines (PRD sidebar-typography D-04, D-06)", () => {
   });
 });
 
+
+describe("a mission in Needs You (PRD mission-node-simple D-19, B14)", () => {
+  const ask = { mission: { id: "m1", title: "Ship it" }, node: { key: "a", title: "API" }, attention: { reason: "pr_closed", pr: 7, to: "operator", since_unix_ms: 1, on_row: false }, more: 0 } as unknown as MissionAsk;
+
+  it("opens Needs You for a mission no row carries, above the projects, with no agent raised", () => {
+    const rows = listRows([], {}, [], null, [], [ask]);
+    expect(rows[0]).toEqual({ kind: "raised", group: "needs_you", agents: [], more: [], expanded: false, missions: [ask] });
+  });
+
+  it("leaves Needs You out with no mission and no agent in it", () => {
+    expect(listRows([], {}, [], null, []).some((row) => row.kind === "raised")).toBe(false);
+  });
+});

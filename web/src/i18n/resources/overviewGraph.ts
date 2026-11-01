@@ -29,6 +29,7 @@ const words = {
   "overviewGraph.allProjects": ["All projects", "전체 프로젝트", "すべてのプロジェクト", "全部项目"],
   "overviewGraph.resetLayout": ["Reset layout", "배치 초기화", "配置をリセット", "重置布局"],
   "overviewGraph.filter": ["Session filter", "세션 필터", "セッション絞り込み", "会话筛选"],
+  "overviewGraph.sessionScope": ["Sessions on the map", "지도의 세션", "マップのセッション", "图中的会话"],
   "overviewGraph.focus.all": ["All", "전체", "すべて", "全部"],
   "overviewGraph.focus.turn": ["My turn", "내 차례", "自分の番", "轮到我"],
   "overviewGraph.focus.working": ["Working", "작업 중", "作業中", "工作中"],

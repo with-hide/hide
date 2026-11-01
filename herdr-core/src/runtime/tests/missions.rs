@@ -631,7 +631,7 @@ fn a_missions_pull_request_wakes_its_conductor_once_per_change() {
     );
     assert_eq!(
         runtime.note_mission_pulls(node, &pushed),
-        vec!["mission:mission-1:fix:7:new_head:b2:1:sender"]
+        vec!["mission:mission-1:new_head:fix:7:b2:sender"]
     );
     assert!(runtime.note_mission_pulls(node, &pushed).is_empty());
 
@@ -646,7 +646,7 @@ fn a_missions_pull_request_wakes_its_conductor_once_per_change() {
     );
     assert_eq!(
         runtime.note_mission_pulls(node, &reviewed),
-        vec!["mission:mission-1:fix:7:changes_requested:b2:2:sender"]
+        vec!["mission:mission-1:changes_requested:fix:7:b2:1:sender"]
     );
 
     // A new commit on a done mission's pull request opens it again.
@@ -717,7 +717,7 @@ fn a_done_mission_does_not_open_beside_its_conductors_open_one() {
     let pushed = github(vec![pull(7, "b2", PullRequestBadge::Open, None)], false);
     assert_eq!(
         runtime.note_mission_pulls(node, &pushed),
-        vec!["mission:mission-1:fix:7:new_head:b2:1:sender"],
+        vec!["mission:mission-1:new_head:fix:7:b2:sender"],
         "the Conductor is still told"
     );
     let status = |runtime: &Runtime, id: &str| runtime.missions.book.get(id).unwrap().status;
@@ -771,10 +771,20 @@ fn a_missions_wake_waits_in_the_record_until_its_letter_is_delivered() {
         )],
         false,
     );
+    // A second ask on the same head is news again: GitHub's time of the
+    // pull request moved with it.
+    let mut asked_again = pull(
+        7,
+        "a1",
+        PullRequestBadge::Open,
+        Some(ReviewDecision::ChangesRequested),
+    );
+    asked_again.updated_at_unix_ms = Some(2);
+    let asked_again = github(vec![asked_again], false);
     runtime.note_mission_pulls(node, &open);
     let first = runtime.note_mission_pulls(node, &asked);
     runtime.note_mission_pulls(node, &open);
-    let second = runtime.note_mission_pulls(node, &asked);
+    let second = runtime.note_mission_pulls(node, &asked_again);
     assert_eq!(first.len(), 1);
     assert_eq!(second.len(), 1);
     assert_ne!(first, second, "a second ask is its own letter");
@@ -1315,7 +1325,7 @@ fn a_merge_wait_mission_closes_when_its_whole_stack_is_merged() {
 }
 
 /// A waiting mission stands only behind the pull requests still in its
-/// stack: a node that failed is out of it, a pull request closed without
+/// stack: a dropped node is out of it, a pull request closed without
 /// its merge leaves nothing to wait on, and a mission with none closes at
 /// once.
 #[test]
@@ -1341,7 +1351,7 @@ fn a_merge_wait_mission_waits_only_on_the_pull_requests_left_in_its_stack() {
     command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
     for (node, pr, status) in [
         ("api", 7, "done"),
-        ("screen", 8, "failed"),
+        ("screen", 8, "dropped"),
         ("docs", 9, "done"),
     ] {
         without_gate(&mut runtime);
@@ -1386,7 +1396,7 @@ fn a_merge_wait_mission_waits_only_on_the_pull_requests_left_in_its_stack() {
     assert_eq!(
         status(&runtime, "mission-1"),
         MissionStatus::Done,
-        "the failed node's open pull request is not waited on"
+        "the dropped node's open pull request is not waited on"
     );
 
     command(
@@ -1680,7 +1690,7 @@ fn each_change_is_one_event_and_the_same_change_again_is_none() {
     command(
         &mut runtime,
         "sender",
-        node(json!({"status": "failed", "line": "CI failed"})),
+        node(json!({"status": "dropped", "line": "CI failed"})),
     )
     .unwrap();
     command(
@@ -2669,7 +2679,7 @@ fn an_outside_node_is_done_once_its_pull_request_or_branch_is_in_main() {
         node,
         &github(vec![pull(1232, "a1", PullRequestBadge::Open, None)], false),
     );
-    assert_eq!(node_view(&runtime, "parser").status, NodeStatus::Waiting);
+    assert_eq!(node_view(&runtime, "parser").status, NodeStatus::Working);
     let refused = command(
         &mut runtime,
         "sender",
@@ -2704,7 +2714,7 @@ fn an_outside_node_is_done_once_its_pull_request_or_branch_is_in_main() {
         .unwrap()
         .node("lib")
         .unwrap()
-        .round;
+        .outside_round;
     let lib = || Ask {
         mission: "mission-1".into(),
         node: "lib".into(),
@@ -2723,7 +2733,7 @@ fn an_outside_node_is_done_once_its_pull_request_or_branch_is_in_main() {
         )],
     );
     let read = node_view(&runtime, "lib");
-    assert_eq!((read.status, read.unread), (NodeStatus::Waiting, true));
+    assert_eq!((read.status, read.unread), (NodeStatus::Working, true));
     runtime.ingest_outside(&place, vec![(lib(), Found::InMain(Some(HEAD.into())))]);
     let read = node_view(&runtime, "lib");
     assert_eq!((read.status, read.unread), (NodeStatus::Done, false));
@@ -2738,11 +2748,11 @@ fn an_outside_node_is_done_once_its_pull_request_or_branch_is_in_main() {
     );
 }
 
-/// PRD mission-map-git-criteria B20: an outside pull request closed
-/// without a merge fails, the node waiting on it reads blocked, and the
-/// mission cannot close as done until the node is dropped.
+/// PRD mission-node-simple D-15: an outside pull request closed without a
+/// merge keeps its node in progress with the Conductor asked to look, and
+/// the mission cannot close as done until the node is dropped.
 #[test]
-fn an_outside_pull_request_closed_without_a_merge_blocks_the_nodes_after_it() {
+fn an_outside_pull_request_closed_without_a_merge_asks_the_conductor() {
     use crate::missions::WakeEvent;
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
@@ -2761,17 +2771,20 @@ fn an_outside_pull_request_closed_without_a_merge_blocks_the_nodes_after_it() {
             false,
         ),
     );
-    assert_eq!(node_view(&runtime, "parser").status, NodeStatus::Failed);
+    let parser = node_view(&runtime, "parser");
+    assert_eq!(parser.status, NodeStatus::Working);
+    let attention = parser.attention.expect("the closed pull request is raised");
     assert_eq!(
-        node_view(&runtime, "fix").blocked,
-        Some(crate::missions::Blocked::UpstreamFailed)
+        (attention.reason, attention.pr),
+        (crate::missions::AttentionReason::PrClosed, Some(1232))
     );
+    assert_eq!(node_view(&runtime, "fix").blocked, None);
     let last = runtime.missions.book.missions[0]
         .wakes
         .last()
         .cloned()
         .unwrap();
-    assert_eq!(last.event, WakeEvent::OutsideFailed);
+    assert_eq!(last.event, WakeEvent::Attention);
     let refused = command(
         &mut runtime,
         "sender",
@@ -2956,10 +2969,9 @@ fn a_check_holds_only_on_its_folders_current_commit_and_its_command() {
 }
 
 /// Review finding 5: a pull request's CI gets one rerun per head however
-/// many runs GitHub reports, and a spent rerun sends a node in review back
-/// to its worker.
+/// many runs GitHub reports; the node stays in progress throughout.
 #[test]
-fn a_failed_ci_rerun_sends_the_node_back_to_work_and_reads_no_more_runs_on_that_head() {
+fn a_failed_ci_rerun_reads_no_more_runs_on_that_head() {
     use crate::mission_criteria::CriterionState;
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
@@ -2968,7 +2980,7 @@ fn a_failed_ci_rerun_sends_the_node_back_to_work_and_reads_no_more_runs_on_that_
     command(
         &mut runtime,
         "sender",
-        json!({"op": "node", "node": "fix", "patch": {"status": "review"}}),
+        json!({"op": "node", "node": "fix", "patch": {"status": "working"}}),
     )
     .unwrap();
     let read = |runtime: &mut Runtime, checks| {
@@ -2980,12 +2992,12 @@ fn a_failed_ci_rerun_sends_the_node_back_to_work_and_reads_no_more_runs_on_that_
     };
     read(&mut runtime, PullRequestChecks::Failed);
     assert_eq!(line_state(&runtime, "ci"), CriterionState::Fail);
-    assert_eq!(node_view(&runtime, "fix").status, NodeStatus::Review);
+    assert_eq!(node_view(&runtime, "fix").status, NodeStatus::Working);
     // The rerun runs and passes: the line passes with its rerun counted.
     read(&mut runtime, PullRequestChecks::Pending);
     read(&mut runtime, PullRequestChecks::Passing);
     assert_eq!(line_state(&runtime, "ci"), CriterionState::Pass);
-    assert_eq!(node_view(&runtime, "fix").status, NodeStatus::Review);
+    assert_eq!(node_view(&runtime, "fix").status, NodeStatus::Working);
     // Another run on the same head fails: there is no second rerun.
     read(&mut runtime, PullRequestChecks::Pending);
     read(&mut runtime, PullRequestChecks::Failed);
@@ -3155,20 +3167,12 @@ fn a_mission_waiting_on_its_pull_requests_keeps_waiting_while_a_node_is_back_at_
     runtime.github = merged.clone();
     runtime.note_mission_pulls(crate::node::TEST_NODE, &merged);
     assert_eq!(mission_status(&runtime), MissionStatus::MergeWait);
-    command(
-        &mut runtime,
-        "sender",
-        json!({"op": "node", "node": "fix", "patch": {"status": "failed"}}),
-    )
-    .unwrap();
-    runtime.note_mission_pulls(crate::node::TEST_NODE, &merged);
-    assert_eq!(mission_status(&runtime), MissionStatus::MergeWait);
 }
 
 /// Re-review finding 1: the same rule holds the close a waiting mission
 /// makes on its branches in main.
 #[test]
-fn a_mission_waiting_on_its_branches_keeps_waiting_while_a_node_is_back_at_work_or_failed() {
+fn a_mission_waiting_on_its_branches_keeps_waiting_while_a_node_is_back_at_work() {
     use crate::runtime::mission_outside::Found;
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
@@ -3177,14 +3181,6 @@ fn a_mission_waiting_on_its_branches_keeps_waiting_while_a_node_is_back_at_work_
         &mut runtime,
         "sender",
         json!({"op": "defect", "node": "b", "found_by": "a", "line": "b drops a field"}),
-    )
-    .unwrap();
-    land(&mut runtime, "a", Found::InMain(Some(HEAD.into())));
-    assert_eq!(mission_status(&runtime), MissionStatus::MergeWait);
-    command(
-        &mut runtime,
-        "sender",
-        json!({"op": "node", "node": "b", "patch": {"status": "failed"}}),
     )
     .unwrap();
     land(&mut runtime, "a", Found::InMain(Some(HEAD.into())));
@@ -3410,7 +3406,7 @@ fn a_git_mission_in_a_repository_with_no_remote_follows_its_branches_into_main()
     // Hide reads the library branch's own commit before main takes it.
     runtime.read_outside_through(device, &root, &host);
     let lib = node_view(&runtime, "lib");
-    assert_eq!((lib.status, lib.unread), (NodeStatus::Waiting, false));
+    assert_eq!((lib.status, lib.unread), (NodeStatus::Working, false));
     git_in(&repo, &["merge", "-q", "--no-ff", "-m", "lib", "feat/lib"]);
     runtime.read_outside_through(device, &root, &host);
     let lib = node_view(&runtime, "lib");
@@ -3551,20 +3547,20 @@ fn an_outside_branch_is_in_main_only_once_its_own_work_reached_main() {
     let line = |runtime: &Runtime, key: &str| node_view(runtime, key).line.unwrap_or_default();
 
     runtime.read_outside_through(device, &root, &host);
-    assert_eq!(status(&runtime, "cut"), NodeStatus::Waiting);
+    assert_eq!(status(&runtime, "cut"), NodeStatus::Working);
     // The Conductor reads why it waits, and what finishes it, in the line.
     assert!(line(&runtime, "cut").contains("has not seen a commit of its own"));
-    assert_eq!(status(&runtime, "old"), NodeStatus::Waiting);
+    assert_eq!(status(&runtime, "old"), NodeStatus::Working);
     assert!(line(&runtime, "old").contains("name its pull request instead, or drop the node"));
     assert_eq!(status(&runtime, "squashed"), NodeStatus::Done);
-    assert_eq!(status(&runtime, "forced"), NodeStatus::Waiting);
+    assert_eq!(status(&runtime, "forced"), NodeStatus::Working);
     assert!(line(&runtime, "forced").contains("commits main does not have"));
 
     // Main moving on leaves the cut branch behind it, still with nothing
     // of its own.
     git_in(&repo, &["commit", "-q", "--allow-empty", "-m", "elsewhere"]);
     runtime.read_outside_through(device, &root, &host);
-    assert_eq!(status(&runtime, "cut"), NodeStatus::Waiting);
+    assert_eq!(status(&runtime, "cut"), NodeStatus::Working);
 
     git_in(&repo, &["checkout", "-q", "feat/cut"]);
     git_in(&repo, &["rebase", "-q", "trunk"]);
@@ -3572,9 +3568,9 @@ fn an_outside_branch_is_in_main_only_once_its_own_work_reached_main() {
     // The forced branch's commit is thrown away for main's head.
     git_in(&repo, &["branch", "-f", "feat/forced", "trunk"]);
     runtime.read_outside_through(device, &root, &host);
-    assert_eq!(status(&runtime, "cut"), NodeStatus::Waiting);
+    assert_eq!(status(&runtime, "cut"), NodeStatus::Working);
     assert!(line(&runtime, "cut").contains("commits main does not have"));
-    assert_eq!(status(&runtime, "forced"), NodeStatus::Waiting);
+    assert_eq!(status(&runtime, "forced"), NodeStatus::Working);
     assert!(line(&runtime, "forced").contains("were replaced"));
 
     // A restart reads the book back and forgets every read.
@@ -3621,7 +3617,7 @@ fn an_outside_branch_answer_from_an_earlier_round_proves_nothing() {
             external: External::Branch("feat/a".into()),
             ahead: None,
             reopens: runtime.missions.outside.reopens_of("mission-1"),
-            round: runtime.missions.book.missions[0].nodes[0].round,
+            round: runtime.missions.book.missions[0].nodes[0].outside_round,
         },
     };
     let seen = |runtime: &Runtime| {
@@ -3634,7 +3630,7 @@ fn an_outside_branch_answer_from_an_earlier_round_proves_nothing() {
     command(&mut runtime, "sender", plan("feat/b")).unwrap();
     command(&mut runtime, "sender", plan("feat/a")).unwrap();
     // A node taken out of the plan and put back gets a round never given.
-    let before = runtime.missions.book.missions[0].nodes[0].round;
+    let before = runtime.missions.book.missions[0].nodes[0].outside_round;
     command(
         &mut runtime,
         "sender",
@@ -3644,7 +3640,7 @@ fn an_outside_branch_answer_from_an_earlier_round_proves_nothing() {
     )
     .unwrap();
     command(&mut runtime, "sender", plan("feat/a")).unwrap();
-    assert!(runtime.missions.book.missions[0].nodes[0].round > before);
+    assert!(runtime.missions.book.missions[0].nodes[0].outside_round > before);
     runtime.ingest_outside(&place, vec![(late, Found::Ahead("a".repeat(40)))]);
     assert_eq!(seen(&runtime), None);
     assert_eq!(node_view(&runtime, "lib").line, None);
@@ -3663,7 +3659,7 @@ fn an_outside_branch_answer_from_an_earlier_round_proves_nothing() {
     command(
         &mut runtime,
         "sender",
-        json!({"op": "node", "node": "lib", "patch": {"status": "waiting"}}),
+        json!({"op": "node", "node": "lib", "patch": {"status": "working"}}),
     )
     .unwrap();
     assert_eq!(seen(&runtime), None);
@@ -3693,7 +3689,7 @@ fn an_outside_branch_answer_from_an_earlier_round_proves_nothing() {
     command(
         &mut runtime,
         "sender",
-        json!({"op": "node", "node": "lib", "patch": {"status": "waiting"}}),
+        json!({"op": "node", "node": "lib", "patch": {"status": "working"}}),
     )
     .unwrap();
     runtime.ingest_outside(&place, vec![(late, Found::Ahead("e".repeat(40)))]);
@@ -3789,7 +3785,7 @@ fn a_branch_cut_from_a_main_that_moved_during_the_read_has_no_work_of_its_own() 
     for _ in 0..2 {
         runtime.read_outside_through(device, &root, &node);
         let read = node_view(&runtime, "topic");
-        assert_eq!((read.status, read.unread), (NodeStatus::Waiting, false));
+        assert_eq!((read.status, read.unread), (NodeStatus::Working, false));
         assert!(
             read.line
                 .unwrap_or_default()
@@ -4006,7 +4002,7 @@ fn a_plan_of_more_outside_branches_than_one_read_takes_is_read_whole_when_admitt
             if node_view(&runtime, "last").status == NodeStatus::Done {
                 for index in 0..32 {
                     let node = node_view(&runtime, &format!("e{index}"));
-                    assert_eq!((node.status, node.unread), (NodeStatus::Waiting, true));
+                    assert_eq!((node.status, node.unread), (NodeStatus::Working, true));
                 }
                 assert!(
                     runtime
@@ -4148,7 +4144,7 @@ fn a_node_followed_while_a_read_is_out_is_read_once_that_read_answers() {
             let runtime = fixture.runtime.lock().unwrap();
             if node_view(&runtime, "last").status == NodeStatus::Done {
                 let first = node_view(&runtime, "first");
-                assert_eq!((first.status, first.unread), (NodeStatus::Waiting, true));
+                assert_eq!((first.status, first.unread), (NodeStatus::Working, true));
                 assert!(
                     runtime
                         .missions
@@ -4351,13 +4347,17 @@ struct LandingCase {
 
 const SHA: &str = "4f1c9a27be03aa00bb11cc22dd33ee44ff556677";
 
-fn seen(merged: bool, closed: bool) -> Option<crate::missions::PrSeen> {
-    Some(crate::missions::PrSeen {
+/// What GitHub last answered of `node`'s current pull request.
+fn see(node: &mut crate::missions::MissionNode, merged: bool, closed: bool) {
+    let number = node.current_pr().expect("the node holds a pull request");
+    node.pr_seen.retain(|seen| seen.number != number);
+    node.pr_seen.push(crate::missions::PrSeen {
+        number,
         head: Some("head".into()),
         merged,
         closed,
         changes_requested: false,
-    })
+    });
 }
 
 fn node_mut<'a>(
@@ -4381,8 +4381,8 @@ fn direct_in_main(mission: &mut crate::missions::Mission) {
 
 /// Both pull requests merged and the branch in main: nothing waits.
 fn all_landed(mission: &mut crate::missions::Mission) {
-    node_mut(mission, "pr").pr_seen = seen(true, false);
-    node_mut(mission, "first").pr_seen = seen(true, false);
+    see(node_mut(mission, "pr"), true, false);
+    see(node_mut(mission, "first"), true, false);
     direct_in_main(mission);
 }
 
@@ -4425,9 +4425,9 @@ fn landing_case(case: &LandingCase, status: MissionStatus) -> Fixture {
             node.status = NodeStatus::Done;
             node.finished_at_unix_ms = Some(1);
         }
-        node_mut(mission, "pr").pr = Some(11);
+        node_mut(mission, "pr").prs = vec![11];
         node_mut(mission, "pr").base_pr = Some(10);
-        node_mut(mission, "first").pr = Some(10);
+        node_mut(mission, "first").prs = vec![10];
         node_mut(mission, "direct").branch = Some("feat/direct".into());
         mission.exempt = case.exempt;
         mission.status = status;
@@ -4471,8 +4471,8 @@ fn a_missions_landing_decides_its_close_and_its_published_actions_from_one_rule(
             name: "merge_wait, pull requests open and the branch not in main, by merge order",
             status: MissionStatus::MergeWait,
             set: |mission| {
-                node_mut(mission, "pr").pr_seen = seen(false, false);
-                node_mut(mission, "first").pr_seen = seen(false, false);
+                see(node_mut(mission, "pr"), false, false);
+                see(node_mut(mission, "first"), false, false);
             },
             direct_unread: false,
             landing: [
@@ -4492,7 +4492,7 @@ fn a_missions_landing_decides_its_close_and_its_published_actions_from_one_rule(
             status: MissionStatus::MergeWait,
             set: |mission| {
                 all_landed(mission);
-                node_mut(mission, "pr").pr_seen = seen(false, true);
+                see(node_mut(mission, "pr"), false, true);
             },
             direct_unread: false,
             landing: [
@@ -4512,7 +4512,7 @@ fn a_missions_landing_decides_its_close_and_its_published_actions_from_one_rule(
             status: MissionStatus::MergeWait,
             set: |mission| {
                 all_landed(mission);
-                node_mut(mission, "pr").pr_seen = None;
+                node_mut(mission, "pr").pr_seen.clear();
             },
             direct_unread: false,
             landing: [
@@ -4615,11 +4615,11 @@ fn a_missions_landing_decides_its_close_and_its_published_actions_from_one_rule(
             explicit: None,
         },
         LandingCase {
-            name: "merge_wait, a failed node keeps it waiting and has no landing",
+            name: "merge_wait, a node back at work keeps it waiting and has no landing",
             status: MissionStatus::MergeWait,
             set: |mission| {
                 all_landed(mission);
-                node_mut(mission, "direct").status = NodeStatus::Failed;
+                node_mut(mission, "direct").status = NodeStatus::Working;
             },
             direct_unread: false,
             landing: [
@@ -4641,7 +4641,7 @@ fn a_missions_landing_decides_its_close_and_its_published_actions_from_one_rule(
                 all_landed(mission);
                 let pr = node_mut(mission, "pr");
                 pr.status = NodeStatus::Dropped;
-                pr.pr_seen = seen(false, false);
+                see(pr, false, false);
             },
             direct_unread: false,
             landing: [
@@ -4661,7 +4661,7 @@ fn a_missions_landing_decides_its_close_and_its_published_actions_from_one_rule(
             status: MissionStatus::Running,
             set: |mission| {
                 all_landed(mission);
-                node_mut(mission, "pr").pr_seen = seen(false, false);
+                see(node_mut(mission, "pr"), false, false);
                 node_mut(mission, "direct").in_main = None;
             },
             direct_unread: false,
@@ -4681,8 +4681,8 @@ fn a_missions_landing_decides_its_close_and_its_published_actions_from_one_rule(
             name: "cancelled, nothing is left and what landed stays proven",
             status: MissionStatus::Cancelled,
             set: |mission| {
-                node_mut(mission, "pr").pr_seen = seen(false, false);
-                node_mut(mission, "first").pr_seen = seen(true, false);
+                see(node_mut(mission, "pr"), false, false);
+                see(node_mut(mission, "first"), true, false);
             },
             direct_unread: false,
             landing: [
@@ -4700,7 +4700,7 @@ fn a_missions_landing_decides_its_close_and_its_published_actions_from_one_rule(
         LandingCase {
             name: "done, an open pull request is still left and a branch no longer read",
             status: MissionStatus::Done,
-            set: |mission| node_mut(mission, "pr").pr_seen = seen(false, false),
+            set: |mission| see(node_mut(mission, "pr"), false, false),
             direct_unread: false,
             landing: [
                 ("pr", left_merge.clone()),
@@ -4715,13 +4715,13 @@ fn a_missions_landing_decides_its_close_and_its_published_actions_from_one_rule(
             explicit: None,
         },
         LandingCase {
-            name: "exempt merge_wait, a pull request still in review keeps it waiting (#1939 review 1)",
+            name: "exempt merge_wait, an open pull request at work keeps it waiting (#1939 review 1)",
             status: MissionStatus::MergeWait,
             set: |mission| {
                 all_landed(mission);
                 let pr = node_mut(mission, "pr");
-                pr.status = NodeStatus::Review;
-                pr.pr_seen = seen(false, false);
+                pr.status = NodeStatus::Working;
+                see(pr, false, false);
             },
             direct_unread: false,
             landing: [
@@ -4743,7 +4743,7 @@ fn a_missions_landing_decides_its_close_and_its_published_actions_from_one_rule(
                 all_landed(mission);
                 let pr = node_mut(mission, "pr");
                 pr.status = NodeStatus::Working;
-                pr.pr_seen = None;
+                pr.pr_seen.clear();
             },
             direct_unread: false,
             landing: [
@@ -4865,4 +4865,982 @@ fn a_missions_landing_decides_its_close_and_its_published_actions_from_one_rule(
             );
         }
     }
+}
+
+/// PRD mission-node-simple B6, B18: a pull request merged with every line
+/// met finishes its node with Hide's mark, and the last node finished
+/// closes the mission with the Conductor told.
+#[test]
+fn hide_finishes_a_merged_node_and_closes_the_mission_after_its_last_node() {
+    use crate::missions::{HideAction, WakeEvent};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running_criteria_mission(&mut runtime);
+    met_fix(&mut runtime);
+    let now = crate::runtime::unix_milliseconds();
+    runtime.drive_mission_health(now);
+    assert_eq!(node_view(&runtime, "fix").status, NodeStatus::Working);
+
+    let merged = github(vec![pull(7, HEAD, PullRequestBadge::Merged, None)], false);
+    runtime.github = merged.clone();
+    runtime.note_mission_pulls(crate::node::TEST_NODE, &merged);
+    runtime.drive_mission_health(now);
+    let fix = node_view(&runtime, "fix");
+    assert_eq!(fix.status, NodeStatus::Done);
+    assert_eq!(fix.hide.map(|mark| mark.action), Some(HideAction::Done));
+    assert_eq!(
+        mission_status(&runtime),
+        MissionStatus::Running,
+        "docs is open"
+    );
+
+    // GitHub's answer goes stale before the last node finishes: the close
+    // waits, raising nothing and refusing nothing, until a read comes back.
+    let stale = github(vec![pull(7, HEAD, PullRequestBadge::Merged, None)], true);
+    runtime.github = stale.clone();
+    runtime.note_mission_pulls(crate::node::TEST_NODE, &stale);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "docs", "patch": {"status": "dropped"}}),
+    )
+    .unwrap();
+    runtime.drive_mission_health(now);
+    runtime.drive_mission_health(now);
+    assert_eq!(mission_status(&runtime), MissionStatus::Running);
+    let mission = runtime.missions.book.get("mission-1").unwrap();
+    assert!(
+        mission.nodes.iter().all(|node| node.attention.is_none()),
+        "{:?}",
+        mission
+            .nodes
+            .iter()
+            .map(|node| &node.attention)
+            .collect::<Vec<_>>()
+    );
+    runtime.github = merged.clone();
+    runtime.note_mission_pulls(crate::node::TEST_NODE, &merged);
+    runtime.drive_mission_health(now);
+    assert_ne!(mission_status(&runtime), MissionStatus::Running);
+    let mission = runtime.missions.book.get("mission-1").unwrap();
+    assert!(
+        mission
+            .wakes
+            .iter()
+            .any(|wake| wake.event == WakeEvent::Closed),
+        "{:?}",
+        mission.wakes
+    );
+}
+
+/// PRD mission-node-simple B6, B13, B14: a merge with a line unmet is
+/// raised to the Conductor once, with its letter waiting, and is not raised
+/// again after the Conductor settles it.
+#[test]
+fn a_merge_with_a_line_unmet_is_raised_to_the_conductor_once() {
+    use crate::missions::{AttentionReason, WakeEvent};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running_criteria_mission(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2", "pr": 7}}),
+    )
+    .unwrap();
+    let merged = github(vec![pull(7, HEAD, PullRequestBadge::Merged, None)], false);
+    runtime.github = merged.clone();
+    runtime.note_mission_pulls(crate::node::TEST_NODE, &merged);
+    let now = crate::runtime::unix_milliseconds();
+    runtime.drive_mission_health(now);
+    let fix = node_view(&runtime, "fix");
+    assert_eq!(fix.status, NodeStatus::Working);
+    let attention = fix.attention.expect("the merge is raised");
+    assert_eq!(
+        (attention.reason, attention.pr, attention.to),
+        (
+            AttentionReason::MergedUnproven,
+            Some(7),
+            crate::runtime::missions::AttentionTo::Conductor
+        )
+    );
+    let raised = |runtime: &Runtime| {
+        runtime.missions.events["mission-1"]
+            .events
+            .iter()
+            .filter(|event| event.kind == crate::mission_events::EventKind::Raised)
+            .count()
+    };
+    assert_eq!(raised(&runtime), 1);
+    let letters = &runtime.missions.book.get("mission-1").unwrap().wakes;
+    assert!(
+        letters
+            .iter()
+            .any(|wake| wake.event == WakeEvent::Attention)
+    );
+    // The Conductor drops the node: the mark goes and nothing is raised again.
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "dropped"}}),
+    )
+    .unwrap();
+    runtime.drive_mission_health(now);
+    assert!(node_view(&runtime, "fix").attention.is_none());
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working"}}),
+    )
+    .unwrap();
+    runtime.drive_mission_health(now);
+    assert!(node_view(&runtime, "fix").attention.is_none());
+    assert_eq!(raised(&runtime), 1);
+}
+
+/// PRD mission-node-simple B5: a node that waits on the operator with no
+/// Needs You row to lay it on, neither the Conductor nor its worker, is
+/// told by notice once; one with a row standing is not.
+#[test]
+fn a_raise_with_no_row_to_lay_it_on_is_told_to_the_operator_once() {
+    use crate::delivery::worker::HumanNoticeKind;
+    use crate::missions::AttentionReason;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    runtime.snapshot.navigator.agents = vec![conductor_row()];
+    running(&mut runtime);
+    let now = crate::runtime::unix_milliseconds();
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    assert!(
+        !crate::runtime::mission_health::raise(
+            mission,
+            "fix",
+            AttentionReason::PrClosed,
+            Some(7),
+            now
+        )
+        .is_empty()
+    );
+    runtime.save_missions();
+    // Past ten minutes the raise reaches the operator, laid on the
+    // Conductor's row while it is there.
+    runtime.raise_to_operator(now + 10 * 60 * 1000);
+    assert_eq!(
+        node_view(&runtime, "fix")
+            .attention
+            .map(|attention| attention.to),
+        Some(crate::runtime::missions::AttentionTo::Operator)
+    );
+    assert!(runtime.claim_mission_notices().is_empty());
+
+    runtime.delivery_observations.remove("sender");
+    runtime.snapshot.navigator.agents.clear();
+    let notices = runtime.claim_mission_notices();
+    assert_eq!(
+        notices
+            .iter()
+            .map(|notice| (notice.kind, notice.id.as_str(), notice.about.as_str()))
+            .collect::<Vec<_>>(),
+        [(HumanNoticeKind::MissionAttention, "mission-1", "Fix it")]
+    );
+    assert!(runtime.claim_mission_notices().is_empty(), "told once");
+    let stored = runtime.missions.book.get("mission-1").unwrap();
+    assert!(
+        stored
+            .node("fix")
+            .unwrap()
+            .attention
+            .as_ref()
+            .unwrap()
+            .notified
+    );
+}
+
+/// PRD mission-node-simple B14, letter 19419: a mission whose node waits on
+/// the operator with no row to carry it is counted in its device's Needs You
+/// number, the one the Overview, the device rail and the sidebar read, and
+/// named on that scope; while the Conductor's row carries it, it is not.
+#[test]
+fn a_mission_no_row_carries_is_counted_in_its_devices_needs_you() {
+    use crate::missions::AttentionReason;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    runtime.snapshot.navigator.agents = vec![conductor_row()];
+    running(&mut runtime);
+    let now = crate::runtime::unix_milliseconds();
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    assert!(
+        !crate::runtime::mission_health::raise(
+            mission,
+            "fix",
+            AttentionReason::PrClosed,
+            Some(7),
+            now
+        )
+        .is_empty()
+    );
+    runtime.save_missions();
+    runtime.raise_to_operator(now + 10 * 60 * 1000);
+    let device = runtime
+        .snapshot
+        .missions
+        .items
+        .first()
+        .map(|mission| mission.device_id.clone())
+        .unwrap_or_else(|| crate::node::TEST_NODE.to_owned());
+    let counted = |runtime: &mut Runtime| {
+        runtime.snapshot_delta_payload(0);
+        let scope = &runtime.snapshot.navigator.agent_scope;
+        let device = runtime
+            .snapshot
+            .navigator
+            .devices
+            .iter()
+            .find(|row| row.id == device)
+            .map(|row| {
+                (
+                    row.agent_scope.mission_asks.clone(),
+                    row.agent_scope.overview_needs_you,
+                    row.agent_scope.groups.needs_you,
+                )
+            });
+        (
+            scope.mission_asks.clone(),
+            scope.overview_needs_you,
+            scope.groups.needs_you,
+            device,
+        )
+    };
+    let (asks, overview, needs_you, on_device) = counted(&mut runtime);
+    assert!(asks.is_empty(), "the Conductor's row carries it: {asks:?}");
+    runtime.delivery_observations.remove("sender");
+    runtime.snapshot.navigator.agents.clear();
+    let (asks, after_overview, after_needs_you, after_device) = counted(&mut runtime);
+    assert_eq!(asks, ["mission-1"]);
+    // One item either way: the Conductor's row while it carried the raise,
+    // the mission once no row does.
+    assert_eq!((overview, needs_you), (1, 1));
+    assert_eq!((after_overview, after_needs_you), (1, 1));
+    let (before, after) = (on_device.unwrap(), after_device.unwrap());
+    assert_eq!((before.1, before.2), (1, 1));
+    assert_eq!(after, (vec!["mission-1".to_owned()], 1, 1));
+    // Counted once however often it is published.
+    assert_eq!(counted(&mut runtime).1, after_overview);
+
+    // Review 5 P2-3: cancelled, the mission keeps its record and asks
+    // nothing: the count and the list are both empty, and stay so after a
+    // restart reads the same book.
+    assert!(runtime.mission_end_event("mission-1"));
+    assert_eq!(mission_status(&runtime), MissionStatus::Cancelled);
+    let kept = &runtime.missions.book.get("mission-1").unwrap().nodes;
+    assert!(kept.iter().any(|node| node.attention.is_some()));
+    let (asks, overview, needs_you, on_device) = counted(&mut runtime);
+    assert!(asks.is_empty(), "{asks:?}");
+    assert_eq!((overview, needs_you), (0, 0));
+    assert_eq!(on_device.unwrap(), (Vec::<String>::new(), 0, 0));
+    assert!(
+        runtime.snapshot.missions.items[0]
+            .nodes
+            .iter()
+            .filter_map(|node| node.attention.as_ref())
+            .all(|attention| !attention.item)
+    );
+    let book = runtime.missions.book.clone();
+    drop(runtime);
+    let restarted = conducting();
+    let mut runtime = restarted.runtime.lock().unwrap();
+    runtime.missions.book = book;
+    let (asks, overview, _, _) = counted(&mut runtime);
+    assert!(asks.is_empty(), "{asks:?}");
+    assert_eq!(overview, 0);
+}
+
+/// PRD mission-node-simple B14, review 4 P1-2: a raise that reached the
+/// operator is on a row only while a row shown now carries it. A resting
+/// Conductor's row does; a working Conductor's row, a worker whose
+/// registration stands with no row shown, and no row at all do not, and
+/// then the mission is its device's own Needs You item and the operator is
+/// told by notice.
+#[test]
+fn a_raise_is_on_a_row_only_while_a_row_shown_carries_it() {
+    use crate::missions::AttentionReason;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    runtime.snapshot.navigator.agents = vec![conductor_row()];
+    running(&mut runtime);
+    let now = crate::runtime::unix_milliseconds();
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    assert!(
+        !crate::runtime::mission_health::raise(
+            mission,
+            "fix",
+            AttentionReason::PrClosed,
+            Some(7),
+            now
+        )
+        .is_empty()
+    );
+    runtime.save_missions();
+    runtime.raise_to_operator(now + 10 * 60 * 1000);
+    let shown = |runtime: &mut Runtime| {
+        runtime.snapshot_delta_payload(0);
+        let on_row = node_view(runtime, "fix")
+            .attention
+            .map(|attention| attention.on_row);
+        let device = runtime
+            .snapshot
+            .navigator
+            .devices
+            .iter()
+            .find(|device| device.id == crate::node::TEST_NODE)
+            .unwrap();
+        (on_row, device.agent_scope.mission_asks.clone())
+    };
+
+    // A resting Conductor's row carries it.
+    assert_eq!(shown(&mut runtime), (Some(true), vec![]));
+    assert_eq!(
+        runtime.snapshot.navigator.agents[0].ask_subject,
+        Some(crate::model::AskSubject::MissionAttention {
+            node: "Fix it".into(),
+            reason: AttentionReason::PrClosed,
+        })
+    );
+    assert!(runtime.claim_mission_notices().is_empty());
+
+    // A working Conductor's row shows its work and carries nothing.
+    let mut working = vec![conductor_row()];
+    working[0].activity = "working".into();
+    runtime.lay_plan_reviews(crate::node::TEST_NODE, &mut working);
+    runtime.snapshot.navigator.agents = working;
+    assert_eq!(
+        shown(&mut runtime),
+        (Some(false), vec!["mission-1".to_owned()])
+    );
+    assert_eq!(runtime.claim_mission_notices().len(), 1, "told once");
+
+    // The Conductor gone, a worker whose registration stands with no row
+    // shown carries nothing either.
+    let mut actor = runtime.delivery_observations["sender"].actor.clone();
+    actor.pane_id = "recipient".into();
+    runtime.delivery_observations.remove("sender");
+    runtime.snapshot.navigator.agents.clear();
+    let mut ledger = crate::delivery::ledger::Ledger::default();
+    ledger.agents.push(crate::coordination::AgentRecord {
+        id: "agent-2".into(),
+        name: Some("recipient".into()),
+        machine: crate::node::TEST_NODE.into(),
+        host_scope: "scope".into(),
+        native_machine: "fixture-machine".into(),
+        session: "recipient-session".into(),
+        instance: "recipient".into(),
+        pane: "recipient".into(),
+        parent: None,
+        origin: None,
+        project: None,
+        actor,
+        ended: false,
+        terminal_id: None,
+        forked: false,
+    });
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    mission
+        .nodes
+        .iter_mut()
+        .find(|node| node.key == "fix")
+        .unwrap()
+        .agent_id = Some("agent-2".into());
+    runtime.save_missions();
+    assert_eq!(
+        shown(&mut runtime),
+        (Some(false), vec!["mission-1".to_owned()])
+    );
+
+    // With no registration either, it stays the mission's own item.
+    runtime.delivery_ledger = Ok(Arc::new(crate::delivery::ledger::Ledger::default()));
+    assert_eq!(
+        shown(&mut runtime),
+        (Some(false), vec!["mission-1".to_owned()])
+    );
+}
+
+/// The fix node of `running_criteria_mission`, its pull request 7 merged
+/// with no line recorded: raised to the Conductor as `merged_unproven`.
+fn merged_unproven(runtime: &mut Runtime, now: u64) {
+    running_criteria_mission(runtime);
+    command(
+        runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2", "pr": 7}}),
+    )
+    .unwrap();
+    let merged = github(vec![pull(7, HEAD, PullRequestBadge::Merged, None)], false);
+    runtime.github = merged.clone();
+    runtime.note_mission_pulls(crate::node::TEST_NODE, &merged);
+    runtime.drive_mission_health(now);
+    assert!(node_view(runtime, "fix").attention.is_some());
+}
+
+/// The operator's `action` on `node`, made on the raise the map shows now.
+fn operator_chose(runtime: &mut Runtime, node: &str, action: &str) {
+    let since = node_view(runtime, node)
+        .attention
+        .map(|attention| attention.since_unix_ms);
+    let payload = serde_json::from_value(
+        json!({"mission": "mission-1", "node": node, "action": action, "since_unix_ms": since}),
+    )
+    .unwrap();
+    runtime.mission_attention_event(payload);
+}
+
+/// PRD mission-node-simple B16, B17, D-15: the operator's `끝으로` finishes
+/// the node past each open line as the operator's own decision, and the
+/// Conductor is told what was settled instead of the raise.
+#[test]
+fn the_operators_done_skips_the_open_lines_as_their_decision_and_tells_the_conductor() {
+    use crate::mission_criteria::{CriterionState, Role};
+    use crate::missions::{OperatorAction, WakeEvent};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let now = crate::runtime::unix_milliseconds();
+    merged_unproven(&mut runtime, now);
+    // A choice made on a raise that is not the one standing is refused.
+    let stale = serde_json::from_value(
+        json!({"mission": "mission-1", "node": "fix", "action": "drop", "since_unix_ms": 1}),
+    )
+    .unwrap();
+    runtime.mission_attention_event(stale);
+    assert_eq!(node_view(&runtime, "fix").status, NodeStatus::Working);
+    operator_chose(&mut runtime, "fix", "done");
+    let fix = node_view(&runtime, "fix");
+    assert_eq!(fix.status, NodeStatus::Done);
+    assert!(fix.attention.is_none());
+    let skipped: Vec<_> = fix
+        .criteria
+        .iter()
+        .filter(|line| line.state == CriterionState::Skipped)
+        .collect();
+    assert!(!skipped.is_empty());
+    assert!(
+        skipped
+            .iter()
+            .all(|line| { line.by.as_ref().is_some_and(|by| by.role == Role::Operator) })
+    );
+    let wakes = &runtime.missions.book.get("mission-1").unwrap().wakes;
+    assert!(
+        !wakes.iter().any(|wake| wake.event == WakeEvent::Attention),
+        "the raise's own letter is withdrawn: {wakes:?}"
+    );
+    assert!(
+        wakes
+            .iter()
+            .any(|wake| wake.event == WakeEvent::Resolved
+                && wake.action == Some(OperatorAction::Done)),
+        "{wakes:?}"
+    );
+}
+
+/// PRD mission-node-simple B16, B18: `다시 진행` on a node of a mission Hide
+/// closed opens the mission again with the node at work; a mission whose
+/// Conductor already conducts another open one is refused with both left
+/// as they were.
+#[test]
+fn the_operators_resume_reopens_a_closed_mission_or_changes_nothing() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running(&mut runtime);
+    for node in ["cause", "fix"] {
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "node", "node": node, "patch": {"status": "dropped"}}),
+        )
+        .unwrap();
+    }
+    without_gate(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "done", "report": "Done."}),
+    )
+    .unwrap();
+    assert_eq!(mission_status(&runtime), MissionStatus::Done);
+
+    // The same Conductor opens another mission: the first cannot reopen.
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Next"}),
+    )
+    .unwrap();
+    operator_chose(&mut runtime, "fix", "resume");
+    assert_eq!(mission_status(&runtime), MissionStatus::Done);
+    assert_eq!(node_view(&runtime, "fix").status, NodeStatus::Dropped);
+
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "cancelled"}),
+    )
+    .unwrap();
+    operator_chose(&mut runtime, "fix", "resume");
+    assert_eq!(mission_status(&runtime), MissionStatus::Running);
+    assert_eq!(node_view(&runtime, "fix").status, NodeStatus::Working);
+}
+
+/// A node the Conductor takes back to work is not finished again on the
+/// pull request it held, and is once the follow-up it names in the same
+/// command merges.
+#[test]
+fn a_node_taken_back_to_work_is_finished_again_only_on_its_next_pull_request() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let now = crate::runtime::unix_milliseconds();
+    running_criteria_mission(&mut runtime);
+    met_fix(&mut runtime);
+    let merged = |runtime: &mut Runtime, pulls: Vec<PullRequestSnapshot>| {
+        let read = github(pulls, false);
+        runtime.github = read.clone();
+        runtime.note_mission_pulls(crate::node::TEST_NODE, &read);
+        runtime.drive_mission_health(now);
+    };
+    merged(
+        &mut runtime,
+        vec![pull(7, HEAD, PullRequestBadge::Merged, None)],
+    );
+    assert_eq!(node_view(&runtime, "fix").status, NodeStatus::Done);
+
+    // Back to work with its follow-up named in the same command.
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "pr": 8}}),
+    )
+    .unwrap();
+    merged(
+        &mut runtime,
+        vec![
+            pull(7, HEAD, PullRequestBadge::Merged, None),
+            pull(8, HEAD, PullRequestBadge::Open, None),
+        ],
+    );
+    assert_eq!(node_view(&runtime, "fix").status, NodeStatus::Working);
+    merged(
+        &mut runtime,
+        vec![
+            pull(7, HEAD, PullRequestBadge::Merged, None),
+            pull(8, HEAD, PullRequestBadge::Merged, None),
+        ],
+    );
+    assert_eq!(node_view(&runtime, "fix").status, NodeStatus::Done);
+}
+
+/// PRD mission-node-simple B15: a Conductor still there may be taken over
+/// once a raise it was asked first reached the operator, and not while it
+/// has its ten minutes or for a raise that goes to the operator at once.
+#[test]
+fn a_present_conductor_is_taken_over_once_with_the_operators_handover() {
+    use crate::missions::{Attention, AttentionReason, WakeEvent};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    let raise = |runtime: &mut Runtime, reason, operator_at_unix_ms| {
+        runtime.missions.book.get_mut("mission-1").unwrap().nodes[0].attention = Some(Attention {
+            reason,
+            pr: None,
+            agent: None,
+            key: 1,
+            since_unix_ms: 1,
+            operator_at_unix_ms,
+            notified: false,
+        });
+    };
+    let take = |runtime: &mut Runtime, pane: &str, token: Option<&str>| {
+        let mut asked = json!({"op": "take", "mission": "mission-1"});
+        if let Some(token) = token {
+            asked["handover"] = json!(token);
+        }
+        command(runtime, pane, asked)
+    };
+    let refused = |answer: Result<(Value, bool), String>| {
+        crate::coordination::split_refusal(&answer.unwrap_err())
+            .0
+            .to_owned()
+    };
+    let token = "0f8e2b9c-4c1d-4b7a-9e3f-5a6b7c8d9e0f";
+    // No raise reached the operator: no handover is made, and a take is
+    // refused while the Conductor is there.
+    raise(&mut runtime, AttentionReason::WorkerEnded, None);
+    assert!(!runtime.mission_handover_event("mission-1", token));
+    assert_eq!(
+        refused(take(&mut runtime, "recipient", Some(token))),
+        "mission_conducted"
+    );
+    // One the operator settles first is no reason either.
+    raise(&mut runtime, AttentionReason::ConductorFailed, Some(1));
+    assert!(!runtime.mission_handover_event("mission-1", token));
+    // Ten minutes unanswered reached the operator, but a take without the
+    // operator's handover is still refused (B15).
+    raise(&mut runtime, AttentionReason::WorkerEnded, Some(2));
+    assert_eq!(
+        refused(take(&mut runtime, "recipient", None)),
+        "mission_conducted"
+    );
+    assert!(runtime.mission_handover_event("mission-1", token));
+    assert_eq!(
+        refused(take(&mut runtime, "recipient", Some("not-the-token-made"))),
+        "mission_conducted"
+    );
+    let (taken, changed) = take(&mut runtime, "recipient", Some(token)).unwrap();
+    assert!(changed);
+    assert_eq!(taken["mission"]["conductor"]["name"], "recipient");
+    // The handover is spent, and what reached the operator because the old
+    // Conductor did not answer goes to the new one first, with its own ten
+    // minutes, so the old timeout hands it on to no one else.
+    let mission = runtime.missions.book.get("mission-1").unwrap();
+    assert!(mission.handover.is_none());
+    let attention = mission.nodes[0].attention.clone().unwrap();
+    assert_eq!(attention.operator_at_unix_ms, None);
+    assert!(attention.since_unix_ms > 2);
+    assert!(
+        mission
+            .wakes
+            .iter()
+            .any(|wake| wake.event == WakeEvent::Attention)
+    );
+    assert!(!runtime.mission_handover_event("mission-1", token));
+    assert_eq!(
+        refused(take(&mut runtime, "sender", Some(token))),
+        "mission_conducted"
+    );
+}
+
+/// PRD mission-node-simple B18: the operator opens a closed mission again
+/// from the map and its Conductor is told; an open one does not move.
+#[test]
+fn the_operator_opens_a_closed_mission_again_from_the_map() {
+    use crate::missions::WakeEvent;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    let closed = runtime.missions.book.get_mut("mission-1").unwrap();
+    closed.status = MissionStatus::Done;
+    for node in &mut closed.nodes {
+        node.status = NodeStatus::Dropped;
+    }
+    assert!(runtime.mission_reopen_event("mission-1"));
+    assert_eq!(mission_status(&runtime), MissionStatus::Running);
+    // Every node is still finished, and the reopen holds: Hide does not
+    // close it again until a node moves.
+    runtime.drive_mission_health(crate::runtime::unix_milliseconds());
+    assert_eq!(mission_status(&runtime), MissionStatus::Running);
+    assert!(
+        runtime
+            .missions
+            .book
+            .get("mission-1")
+            .unwrap()
+            .nodes
+            .iter()
+            .all(|node| node.attention.is_none())
+    );
+    let wakes = &runtime.missions.book.get("mission-1").unwrap().wakes;
+    assert!(
+        wakes.iter().any(|wake| wake.event == WakeEvent::Reopened),
+        "{wakes:?}"
+    );
+    assert!(!runtime.mission_reopen_event("mission-1"));
+}
+
+/// PRD mission-node-simple B18: a reopen holds the mission open until a node
+/// moves, and a node that went back to work and finished again has moved,
+/// though it looks as it did, so Hide closes the mission again.
+#[test]
+fn a_reopened_mission_whose_node_worked_and_finished_again_closes_again() {
+    use crate::missions::OperatorAction;
+    use crate::runtime::mission_health::MissionAttentionPayload;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    let closed = runtime.missions.book.get_mut("mission-1").unwrap();
+    closed.status = MissionStatus::Done;
+    for node in &mut closed.nodes {
+        node.status = NodeStatus::Dropped;
+    }
+    // The operator sets a dropped node to work again: the mission opens.
+    assert!(runtime.mission_attention_event(MissionAttentionPayload {
+        mission: "mission-1".into(),
+        node: "docs".into(),
+        action: OperatorAction::Resume,
+        since_unix_ms: None,
+    }));
+    assert_eq!(mission_status(&runtime), MissionStatus::Running);
+    assert_eq!(
+        runtime.missions.book.get("mission-1").unwrap().reopened_on,
+        None
+    );
+    // Its Conductor drops it again: every node looks as the reopen found
+    // it, and the mission closes.
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "docs", "patch": {"status": "dropped"}}),
+    )
+    .unwrap();
+    runtime.drive_mission_health(crate::runtime::unix_milliseconds());
+    assert_ne!(mission_status(&runtime), MissionStatus::Running);
+}
+
+/// PRD mission-node-simple B28: with every letter slot taken a new wake is
+/// refused and those waiting keep their place.
+#[test]
+fn a_full_wake_queue_keeps_what_waits() {
+    use crate::missions::{PENDING_WAKE_LIMIT, WakeEvent};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    for _ in 0..PENDING_WAKE_LIMIT {
+        assert!(
+            crate::runtime::missions::record_wake(
+                mission,
+                "a".into(),
+                None,
+                WakeEvent::Merged,
+                None,
+                None
+            )
+            .is_some()
+        );
+    }
+    assert!(
+        crate::runtime::missions::record_wake(
+            mission,
+            "b".into(),
+            None,
+            WakeEvent::Closed,
+            None,
+            None
+        )
+        .is_none()
+    );
+    assert_eq!(mission.wakes.len(), PENDING_WAKE_LIMIT);
+    assert_eq!(mission.wakes[0].seq, 1);
+    // A worker's wake is capped apart, so the Conductor's letters never
+    // starve it.
+    let worker = crate::missions::PendingWake {
+        seq: 99,
+        node: "a".into(),
+        pr: Some(7),
+        event: WakeEvent::Fix,
+        head: None,
+        to: Some("agent-2".into()),
+        reason: None,
+        why: None,
+        action: None,
+        key: None,
+    };
+    assert!(crate::runtime::missions::push_wake(mission, worker).is_some());
+}
+
+/// PRD mission-node-simple B27: an act Hide's evaluation makes is keyed by
+/// the facts it stands on, so the same facts evaluated again, as after a
+/// restart that lost the book's last save, write one history event and make
+/// the same letter, whatever was saved first.
+#[test]
+fn the_same_facts_evaluated_twice_write_one_event_and_one_letter() {
+    use crate::mission_events::EventKind;
+    use crate::missions::AttentionReason;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    let lost = runtime.missions.book.clone();
+    let raise = |runtime: &mut Runtime, now: u64| {
+        let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+        let events = crate::runtime::mission_health::raise(
+            mission,
+            "fix",
+            AttentionReason::WorkerEnded,
+            None,
+            now,
+        );
+        let wake = mission.wakes.last().cloned().unwrap();
+        let intent = crate::runtime::missions::wake_intent(mission, &wake);
+        runtime.record_mission_events("mission-1", events);
+        intent
+    };
+    let first = raise(&mut runtime, 5);
+    // The save is lost: the book is as it was before the raise, the history
+    // and the letter are not.
+    runtime.missions.book = lost;
+    let second = raise(&mut runtime, 9);
+    assert_eq!(first, second);
+    let raised = runtime.missions.events["mission-1"]
+        .events
+        .iter()
+        .filter(|event| event.kind == EventKind::Raised)
+        .count();
+    assert_eq!(raised, 1);
+}
+
+/// PRD mission-node-simple B27, review 4 P2-1: a raise that reaches the
+/// operator, written by the missions' one writer to real files, is in the
+/// history once across a restart whichever save failed: a book that failed
+/// after its history is made again under the same keys, and a history that
+/// failed holds the book back, so no restart reads a change its history
+/// lost.
+#[test]
+fn a_raise_to_the_operator_is_in_the_history_once_whichever_save_failed_before_a_restart() {
+    use crate::mission_events::{EventKind, MissionEventStore};
+    use crate::missions::{AttentionReason, MissionStore, Restored};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running(&mut runtime);
+    let before = runtime.missions.book.clone();
+    let dir = tempfile::tempdir().unwrap();
+    let history = dir.path().join("mission-events");
+    let book = dir.path().join("state/missions.json");
+    let start = |runtime: &mut Runtime| {
+        let store = MissionEventStore::with_book(history.clone(), book.clone());
+        let logs = store.restore(["mission-1"].into_iter());
+        runtime.install_mission_events(store, logs);
+    };
+    // One evaluation: the Conductor is asked, and ten minutes later the
+    // operator.
+    let evaluate = |runtime: &mut Runtime, now: u64| {
+        let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+        let events = crate::runtime::mission_health::raise(
+            mission,
+            "fix",
+            AttentionReason::PrClosed,
+            Some(7),
+            now,
+        );
+        runtime.record_mission_events("mission-1", events);
+        runtime.raise_to_operator(now + 10 * 60 * 1000);
+    };
+    let stop = |runtime: &mut Runtime| drop(runtime.missions.event_store.take());
+    let written = || {
+        let log = MissionEventStore::new(history.clone()).restore(["mission-1"].into_iter());
+        let count = |kind: EventKind| {
+            log.get("mission-1").map_or(0, |log| {
+                log.events.iter().filter(|event| event.kind == kind).count()
+            })
+        };
+        (count(EventKind::Raised), count(EventKind::RaisedToOperator))
+    };
+    let saved_book = || match MissionStore::new(book.clone()).restore() {
+        Restored::Read(book) => Some(book),
+        _ => None,
+    };
+
+    // The book cannot be written (a file stands where its folder goes);
+    // the history is written first and stays.
+    std::fs::write(dir.path().join("state"), "a file").unwrap();
+    start(&mut runtime);
+    evaluate(&mut runtime, 1_000);
+    stop(&mut runtime);
+    assert_eq!(written(), (1, 1));
+    assert!(saved_book().is_none());
+    // A restart reads the book from before the raise and makes it again,
+    // later: the history keeps one of each, and the book is written now.
+    std::fs::remove_file(dir.path().join("state")).unwrap();
+    runtime.missions.book = before.clone();
+    start(&mut runtime);
+    evaluate(&mut runtime, 5_000);
+    stop(&mut runtime);
+    assert_eq!(written(), (1, 1));
+    let saved = saved_book().expect("the book is written once its folder can be");
+    let attention = saved
+        .get("mission-1")
+        .unwrap()
+        .nodes
+        .iter()
+        .find(|node| node.key == "fix")
+        .and_then(|node| node.attention.clone());
+    assert!(attention.is_some_and(|attention| attention.operator_at_unix_ms.is_some()));
+
+    // The other order: the history cannot be written, so the book waits
+    // and the restart finds neither.
+    std::fs::remove_dir_all(&history).unwrap();
+    std::fs::remove_file(&book).unwrap();
+    std::fs::write(&history, "a file").unwrap();
+    runtime.missions.book = before.clone();
+    runtime.missions.events.clear();
+    start(&mut runtime);
+    evaluate(&mut runtime, 9_000);
+    stop(&mut runtime);
+    assert!(saved_book().is_none(), "the book waits for its history");
+    std::fs::remove_file(&history).unwrap();
+    runtime.missions.book = before;
+    runtime.missions.events.clear();
+    start(&mut runtime);
+    evaluate(&mut runtime, 12_000);
+    stop(&mut runtime);
+    assert_eq!(written(), (1, 1));
+    assert!(saved_book().is_some());
+}
+
+/// PRD mission-node-simple B27: a node that cannot remember a new cause
+/// does not raise it either, so nothing is raised that would come again
+/// once settled; what it already remembers stays.
+#[test]
+fn a_node_that_cannot_remember_a_cause_does_not_raise_it() {
+    use crate::missions::{AttentionReason, HANDLED_LIMIT};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    for index in 0..HANDLED_LIMIT {
+        assert!(mission.nodes[0].note_handled(format!("cause:{index}")));
+    }
+    let wakes = mission.wakes.len();
+    let raised = crate::runtime::mission_health::raise(
+        mission,
+        "fix",
+        AttentionReason::WorkerEnded,
+        None,
+        5,
+    );
+    assert!(raised.is_empty());
+    assert!(mission.nodes[0].attention.is_none());
+    assert_eq!(mission.wakes.len(), wakes);
+    assert_eq!(mission.attention_seq, 0);
+    assert_eq!(mission.nodes[0].handled.len(), HANDLED_LIMIT);
 }

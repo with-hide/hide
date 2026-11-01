@@ -1,6 +1,7 @@
 import { badgeParts } from "./agentRow";
 import { scopeOccurrences, type AgentRef } from "./agentScope";
 import type { AgentScope } from "./agentScope";
+import type { MissionAsk } from "./missions";
 // The Projects list as the sidebar draws it: the raised Needs You and Done
 // agents, then pinned rows under their own header, then the activity rows
 // with a per-device fold of projects with no agents and one of inactive
@@ -27,7 +28,7 @@ export function projectCheckout(workspace: Workspace, recent: readonly RecentChe
 
 export type ProjectRow =
   | { kind: "header"; section: "pinned" | "recent"; count: number }
-  | { kind: "raised"; group: AgentGroup; agents: ListedAgent[]; more: ListedAgent[]; expanded: boolean }
+  | { kind: "raised"; group: AgentGroup; agents: ListedAgent[]; more: ListedAgent[]; expanded: boolean; missions: MissionAsk[] }
   | { kind: "workspace"; workspace: Workspace; level: "root" | "child" }
   | { kind: "no_agents"; group: InactiveProjectGroup; count: number }
   | { kind: "inactive_projects"; group: InactiveProjectGroup; count: number };
@@ -56,6 +57,7 @@ export function projectRows(
   listed: ListedAgent[],
   scope: AgentScope | null,
   openRaised: readonly string[] = [],
+  missions: readonly MissionAsk[] = [],
 ): ProjectRow[] {
   const rows: ProjectRow[] = [];
   const drawn = (refs: AgentRef[]) => scopeOccurrences(refs, listed.map(r => r.agent)).map(agent => {
@@ -63,7 +65,11 @@ export function projectRows(
     return { ...row, agent: { ...agent, lineage_collapsed: true } };
   });
   for (const raised of scope?.raised ?? []) {
-    rows.push({ kind: "raised", group: raised.group, agents: drawn(raised.shown), more: drawn(raised.more), expanded: openRaised.includes(raised.group) });
+    rows.push({ kind: "raised", group: raised.group, agents: drawn(raised.shown), more: drawn(raised.more), expanded: openRaised.includes(raised.group), missions: raised.group === "needs_you" ? [...missions] : [] });
+  }
+  // A mission no row carries is Needs You on its own, with no agent raised beside it too (PRD mission-node-simple D-19, B14).
+  if (missions.length > 0 && !rows.some((row) => row.kind === "raised" && row.group === "needs_you")) {
+    rows.unshift({ kind: "raised", group: "needs_you", agents: [], more: [], expanded: false, missions: [...missions] });
   }
   const pinned = workspaces.filter((row) => row.pinned);
   const recent = workspaces.filter((row) => !row.pinned);

@@ -309,6 +309,13 @@ pub struct Paths<'a> {
     pub hide_dir: &'a Path,
     /// The account's `PATH` as the login shell gives it.
     pub search: Option<&'a OsString>,
+    /// The environment a new terminal of the account starts with
+    /// (`hide_platform::programs::account_environment`), which an agent the
+    /// operator starts in a pane has: a provider key its own configuration
+    /// reads (OpenCode's `{env:…}`, `ANTHROPIC_API_KEY`), its settings
+    /// folder. A pane's identity and Hide's own variables in it are left out
+    /// ([`crate::host::from_account`]), and Desk's own variables win over it.
+    pub account: Option<&'a [(OsString, OsString)]>,
     /// Desk's own folder for this process: its working folder and Pi's
     /// launcher, extension and marker.
     pub desk: &'a Path,
@@ -326,7 +333,8 @@ pub struct Paths<'a> {
 pub struct Launch {
     pub program: PathBuf,
     pub args: Vec<OsString>,
-    /// Variables set on top of the login variables.
+    /// Variables set over what the process keeps from hided: the account's
+    /// environment, then Desk's own, each named once.
     pub env: Vec<(OsString, OsString)>,
     pub cwd: PathBuf,
     /// Files to write before the start (Pi's launcher and extension,
@@ -429,6 +437,18 @@ pub fn launch(adapter: AdapterId, paths: &Paths<'_>, nonce: &str) -> Result<Laun
         }
         _ => {}
     }
+    let mut account: Vec<(OsString, OsString)> = paths
+        .account
+        .unwrap_or_default()
+        .iter()
+        .filter(|(name, _)| {
+            crate::host::from_account(name)
+                && !env.iter().any(|(own, _)| crate::host::same_name(own, name))
+        })
+        .cloned()
+        .collect();
+    account.extend(env);
+    let env = account;
     let (program, args) = match adapter.route() {
         Route::Package(pin) => {
             let (package, node) = paths
@@ -556,6 +576,7 @@ mod tests {
             own_cli: None,
             hide_dir: Path::new("/Applications/hide.app/Contents/Resources"),
             search: account,
+            account: None,
             desk,
             capability: Path::new("/state/pane-capabilities/desk.json"),
             codex_home: home,
