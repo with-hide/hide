@@ -152,6 +152,9 @@ export function laneCalled(event: Parameters<DispatchFn>[0]): boolean {
  * paste goes through `clipboard`, the system one unless the screen gives its
  * own (the practice window keeps its copies off the operator's clipboard).
  */
+/** Takeover starts whose handover token a confirmation may still ask for. */
+const HANDOVER_TOKENS_KEPT = 8;
+
 export function createActions(send: DispatchFn, clipboard?: Clipboard) {
   /** The handover token each takeover start was made with, by its request id, so a confirmation of that start names the same one. */
   const handoverTokens = new Map<string, string>();
@@ -1895,14 +1898,22 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       const provider = takeOverProvider(mission, rest()?.ui_state?.agent_start);
       // A Conductor still there is handed over once, to the session this start makes (PRD mission-node-simple B15): the core keeps the token, and only this prompt names it. A confirmation of the same start keeps its token.
       let handover: string | undefined;
-      if (conductorUnanswered(mission)) {
-        const key = request?.requestId ?? "";
+      const key = request?.requestId ?? "";
+      if (request?.confirmOnly) {
+        // A confirmation is the start's last use of its token.
         handover = handoverTokens.get(key);
-        if (!handover) {
-          handover = globalThis.crypto.randomUUID();
-          if (key) handoverTokens.set(key, handover);
-          dispatch({ schema_version: 2, kind: "mission_handover", payload: { mission: missionId, token: handover } });
+        handoverTokens.delete(key);
+      } else if (conductorUnanswered(mission)) {
+        handover = globalThis.crypto.randomUUID();
+        if (key) {
+          handoverTokens.set(key, handover);
+          // Starts that were never confirmed leave at most a few behind.
+          for (const old of handoverTokens.keys()) {
+            if (handoverTokens.size <= HANDOVER_TOKENS_KEPT) break;
+            handoverTokens.delete(old);
+          }
         }
+        dispatch({ schema_version: 2, kind: "mission_handover", payload: { mission: missionId, token: handover } });
       }
       this.startAgent({
         target: { checkoutPath: mission.checkout_path },
