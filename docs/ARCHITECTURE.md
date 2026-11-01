@@ -1710,7 +1710,7 @@ Behavior the schema does not state: the pinned Herdr leaves an `agent.start` `la
 ## Agent adapters
 
 `hide-agent-adapter` is the data-only leaf shared by the hook helper, session readers, kit, core, daemon and device helper.
-One static row per supported agent declares its canonical id and aliases, labels, programs, skill location, installation and hook dialects, session format, launch/find/usage selectors, links and logo id.
+One static row per supported agent declares its canonical id and aliases, labels and programs (read from its [definition file](#agent-definition-files)), skill location, installation and hook dialects, session format, launch/find/usage selectors, links and logo id.
 Prompt intake, spawn refusal, subagent counts, Memory, bell eligibility and passive tool-result observation are independent fields: gaining a prompt hook does not make an agent a bell target or make its session readable.
 Every row must choose a native or plugin observation dialect, or explicitly declare observation unsupported with a reason.
 Guidance, automatic Memory injection and native titles also require an explicit supported route or reader, or an absence with its reason, repository evidence and closure condition, using the same `Support` sum type as usage.
@@ -1862,6 +1862,28 @@ An identity outside those bounds is never retained or individually logged, and t
 After an oversized identity is rejected, later admissible pairs remain eligible while capacity remains; once-per-pair identity logging is guaranteed only inside the admitted domain.
 This adds bounded work when a kit report arrives, no new polling, notifier fan-out, process or persistent file.
 The adapter lookup on projection and hook paths performs only a scan of the fixed static rows and their aliases.
+
+### Agent definition files
+
+Every agent Hide knows has one definition file, TOML of schema 1 (PRD engine-bundle-3-core-owns D-16): `id`, `name`, `executables`, `aliases`, `home`, `hooks`, `[start] args`, `[resume] session` (one `{session}`) and `last`, and `[screen]`, the screen rules in Herdr's agent detection grammar; `based_on` is for the operator's files only.
+The built-in files are `hide-agent-adapter/agents/*.toml`: the seven agents with Hide's own features and the sixteen others Herdr v0.9.5 has screen rules for, their rules copied unchanged (omp has none; its extension reports its state).
+`hooks` names which of Hide's own code reads an agent (`claude`, `codex`, `grok`, `opencode`, `pi`, `omp`, `agy`), or `none` for an agent whose state only its screen shows; a new value comes only with the code for it.
+The seven agents' identity is the file's: `hide-agent-adapter/build.rs` turns each built-in file into constants, `AgentAdapter`'s `id`, `label`, `aliases`, `executables` and `folder` and `LaunchDialect::resume_flag` read them, and a built-in file the schema refuses fails the build; everything else on the adapter row is Hide's own feature, kept in Rust.
+`hide_agent_adapter::definition` is the one reader of a definition, for built-in files and the operator's alike: it parses a file, checks every field it carries (an id of lowercase letters, digits and dashes; programs that are file names, the first a plain command name; start and resume words without control characters or apostrophes, at most 63 words and 8 KiB, Herdr's resume command limits; a home under `~/`), and compiles its rules with `hide-screen-rules`.
+
+`hide-screen-rules` is Herdr's `src/detect/manifest.rs` cut to the grammar, its limits (128 rules, 512 gates, 1024 matchers, 32 per gate, 512 characters each, gates eight deep), the compiler and the evaluator; its `ENGINE_VERSION` is Herdr's 3, and a rule set that asks for a newer one is refused.
+Rules are a value the caller hands in, never a file it finds or a download: the screen rules are the app's built-in ones and the operator's own `[screen]`, and Hide asks the network for none (D-19).
+It depends on no workspace member and stays off the shared feature set, because the pane holder will link it to evaluate a pane's own grid; in this bundle the definition reader compiles with it and the holder does not evaluate yet.
+A change to a built-in `[screen]` raises its `version` and is proven against a captured screen of that agent (`scripts/check-agent-screen-rules.py`, [TESTING.md: Agent screen rules](TESTING.md#agent-screen-rules)).
+
+The operator's files are `~/.hide/agents/*.toml` (`hide_kit::layout::agent_definitions`), read after the built-in ones in name order by `hide_kit::agent_definitions`, and only with the development switch `HIDE_DEV_PANE_HOLDER=1` (D-17, B1).
+A file with a built-in agent's id may only replace that agent's `[screen]`; a new id names its programs and `hooks = "none"`, or copies one built-in agent with `based_on` and changes the fields it writes, keeping that agent's hooks and what Hide does with them; a copy of a copy is refused.
+A program another agent already claims, or a name (`id` or alias) another agent uses, leaves the later file out, so one process is read as one agent.
+The folder is capped: the first 64 `.toml` files are read, each at most 256 KiB, and a file past either limit is named as left out without being opened.
+A file that fails any check is left out alone, with one line that starts with its name, and the rest are used; a folder that cannot be listed leaves the built-in agents and its reason.
+The daemon reads the folder at start and on every `hide agent catalog`, on its own thread, and the core's worker reads it again when Settings › Agents opens (`agent_definitions_read`); the core only swaps the result in under its lock (`runtime/agent_definitions.rs`), logs each file left out once per reason (`agent_definitions.file_left_out`), and publishes them in `status.agent_definitions`, which Settings › Agents draws as one dimmed line per file.
+There is no watch: an edited file is read on the next ask.
+With the switch off nothing is read, `status.agent_definitions` is absent, and `hide agent catalog` and the kinds a spawn starts are the seven agents they were; on, the catalog adds every other definition with `source`, `based_on`, `hooks`, `screen` (its source and version) and `spawn: false`, since starting such an agent comes with the new engine's agent start, and `definitions_rejected` beside the items.
 
 ## The platform layer
 

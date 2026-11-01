@@ -409,6 +409,14 @@ A test whose assertion requires a pipe to have no readers creates and closes tha
    A flaky OS-contract test is fixed or deleted by its issue's deadline like any other; it is not ignored.
    The rule against raising a deadline to pass is unchanged.
 
+### Agent screen rules
+
+A built-in agent's `[screen]` (`hide-agent-adapter/agents/<id>.toml`) reaches the operator only in a release, so a change to it is gated twice.
+`scripts/check-agent-screen-rules.py`, in the policy lane and `premerge-check.py`, refuses a changed `[screen]` whose `version` is not higher than the base's, and one whose agent has no captured screen under `hide-agent-adapter/tests/fixtures/screens/<id>/`; a new definition file adds an agent and is reviewed as that.
+`hide-agent-adapter/tests/it/screens.rs` evaluates every agent's rules against each of its captures, which are the real agent's screen as Herdr drew it, colours included, named `<idle|working|blocked>-<what>.ansi` for the state the operator saw; no rule matching reads as idle, as Herdr reads it.
+The first captures are the composer captures of `composer.rs` (an empty and a typed composer of six agents, all idle); a capture is never written from the rule it tests.
+The rule grammar, its limits and the evaluator have their own cases in `hide-screen-rules/tests/it/rules.rs`, taken from Herdr's manifest tests.
+
 ## Which lanes a pull request runs
 
 `pr.yml`'s `plan` job reads the paths a pull request changes against the base it merges into and plans the lanes they need; `scripts/ci-plan.py` is the one place the rules live, and `scripts/tests/test_ci_plan.py` checks them against real paths.

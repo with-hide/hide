@@ -2279,6 +2279,12 @@ export type WslDistribution = {
   problem: "setup_unfinished" | "wsl1" | null;
 };
 
+/** What the last read of `~/.hide/agents` left out: each file with one line that starts with its name, and why the folder itself could not be listed. */
+export interface AgentDefinitions {
+  rejected: { file: string; reason: string }[];
+  unreadable: string | null;
+}
+
 /** `idle` before the first `ssh_hosts_list`, `loading` while one runs (the last answer stays), `ready` once it is in. */
 export type SshHosts = {
   state: "idle" | "loading" | "ready";
@@ -3267,6 +3273,8 @@ export type SnapshotRest = {
     background_ai?: BackgroundAi;
     /** The Host entries Add device lists, read on an `ssh_hosts_list` event (PRD settings-cleanup D-19). */
     ssh_hosts?: SshHosts;
+    /** The operator's agent definition files left out, with why (PRD engine-bundle-3-core-owns D-17, B24); absent while the development switch `HIDE_DEV_PANE_HOLDER` is off. */
+    agent_definitions?: AgentDefinitions | null;
     herdr_profiles?: HerdrProfiles;
     diagnostics?: CoreDiagnostic[];
     async_operations?: AsyncOperation[];

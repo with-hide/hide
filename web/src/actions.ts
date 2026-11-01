@@ -1474,6 +1474,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     listSshHosts() {
       dispatch({ schema_version: 2, kind: "ssh_hosts_list", payload: {} });
     },
+    /** Settings › Agents opened: with the development switch on, hided reads `~/.hide/agents` again and publishes `status.agent_definitions`; off, nothing is read. */
+    readAgentDefinitions() {
+      dispatch({ schema_version: 2, kind: "agent_definitions_read", payload: {} });
+    },
 
     registerDevice(id: string, label: string, alias: string, options: { hostConsent: boolean; herdrSocketPath: string | null }) {
       dispatch({
