@@ -144,7 +144,99 @@ fn the_login_shell_path_is_what_its_startup_files_set_past_what_they_print() {
         "echo 'Last login: today'\necho 'nvm: warning' >&2\nPATH=\"$HOME/.grok/bin:$PATH\"\nexport PATH",
     );
 
-    let path = host::login_shell_path(
+    let path = host::login_shell(
+        &shell,
+        &home,
+        Duration::from_secs(10),
+        &AtomicBool::new(false),
+    )
+    .unwrap()
+    .path;
+
+    let folders: Vec<PathBuf> = std::env::split_paths(&path).collect();
+    // The shell ran with the home it was given, not this process's.
+    assert_eq!(folders[0], home.join(".grok/bin"), "{path:?}");
+    assert!(folders.len() > 1, "the inherited folders follow: {path:?}");
+}
+
+/// A variable this process has that the account's login variables do not
+/// name, such as one the test runner set: the account's environment must not
+/// carry it.
+fn a_variable_only_this_process_has() -> Option<String> {
+    std::env::vars_os()
+        .filter_map(|(name, _)| name.into_string().ok())
+        .find(|name| {
+            !hide_platform::process::LOGIN_CHILD_VARIABLES
+                .iter()
+                .any(|login| login.eq_ignore_ascii_case(name))
+                && !name.starts_with('=')
+        })
+}
+
+/// What a caller starts a program with from the login shell's answer: what
+/// the startup files export, a value with a line break whole, and neither the
+/// shell's own variables nor one only this process has.
+#[cfg(unix)]
+#[test]
+fn the_login_shell_environment_is_what_its_startup_files_export_over_the_login_variables() {
+    use std::ffi::OsString;
+    use std::sync::atomic::AtomicBool;
+    use std::time::Duration;
+    let folder = tempfile::tempdir().unwrap();
+    let home = folder.path().join("home");
+    let shell = fake_shell(
+        folder.path(),
+        "echo 'Last login: today'\nPROVIDER_KEY='one\ntwo'\nexport PROVIDER_KEY\ncd /",
+    );
+
+    let environment = host::login_shell(
+        &shell,
+        &home,
+        Duration::from_secs(10),
+        &AtomicBool::new(false),
+    )
+    .unwrap()
+    .environment
+    .unwrap();
+
+    let value = |name: &str| {
+        environment
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.clone())
+    };
+    assert_eq!(value("PROVIDER_KEY"), Some(OsString::from("one\ntwo")));
+    assert_eq!(value("HOME"), Some(home.into_os_string()));
+    for own in ["PWD", "OLDPWD", "SHLVL", "_"] {
+        assert_eq!(value(own), None, "{own}");
+    }
+    if let Some(name) = a_variable_only_this_process_has() {
+        assert_eq!(
+            value(&name),
+            None,
+            "{name} is this process's, not the account's"
+        );
+    }
+}
+
+/// An `env` that cannot list with NUL ends (or fails) leaves the
+/// environment unread, while the `PATH` read beside it still holds.
+#[cfg(unix)]
+#[test]
+fn a_login_shell_whose_env_cannot_list_still_answers_its_path() {
+    use std::sync::atomic::AtomicBool;
+    use std::time::Duration;
+    let folder = tempfile::tempdir().unwrap();
+    let home = folder.path().join("home");
+    let bin = folder.path().join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    crate::stand_ins::program(&bin.join("env"), "#!/bin/sh\nprintf 'A=1\\nB=2\\n'\n");
+    let shell = fake_shell(
+        folder.path(),
+        &format!("PATH=\"{}:$PATH\"\nexport PATH", bin.display()),
+    );
+
+    let read = host::login_shell(
         &shell,
         &home,
         Duration::from_secs(10),
@@ -152,10 +244,13 @@ fn the_login_shell_path_is_what_its_startup_files_set_past_what_they_print() {
     )
     .unwrap();
 
-    let folders: Vec<PathBuf> = std::env::split_paths(&path).collect();
-    // The shell ran with the home it was given, not this process's.
-    assert_eq!(folders[0], home.join(".grok/bin"), "{path:?}");
-    assert!(folders.len() > 1, "the inherited folders follow: {path:?}");
+    assert_eq!(
+        std::env::split_paths(&read.path).next(),
+        Some(bin),
+        "{:?}",
+        read.path
+    );
+    assert!(read.environment.is_err(), "{:?}", read.environment);
 }
 
 #[cfg(unix)]
@@ -165,7 +260,7 @@ fn a_login_shell_that_prints_no_path_or_never_answers_is_refused_in_time() {
     use std::time::{Duration, Instant};
     let folder = tempfile::tempdir().unwrap();
     let silent = fake_shell(folder.path(), "exit 0");
-    let error = host::login_shell_path(
+    let error = host::login_shell(
         &silent,
         folder.path(),
         Duration::from_secs(10),
@@ -178,7 +273,7 @@ fn a_login_shell_that_prints_no_path_or_never_answers_is_refused_in_time() {
     fs::create_dir(&hanging).unwrap();
     let hanging = fake_shell(&hanging, "sleep 30");
     let started = Instant::now();
-    let error = host::login_shell_path(
+    let error = host::login_shell(
         &hanging,
         folder.path(),
         Duration::from_millis(500),
@@ -189,11 +284,35 @@ fn a_login_shell_that_prints_no_path_or_never_answers_is_refused_in_time() {
     assert!(started.elapsed() < Duration::from_secs(10));
 }
 
+/// Windows builds the account's environment for a sign-in: the account's
+/// own folders are in it, and a variable only this process has is not. macOS
+/// and Linux build none; the login shell sets it up there.
+#[test]
+fn the_account_environment_is_the_sign_in_s_on_windows_only() {
+    let environment = match host::account_environment() {
+        Ok(environment) => environment,
+        Err(error) if cfg!(windows) => panic!("{error}"),
+        Err(error) => {
+            assert_eq!(error.kind(), ErrorKind::Unsupported, "{error}");
+            return;
+        }
+    };
+    let has = |name: &str| {
+        environment
+            .iter()
+            .any(|(key, _)| key.to_string_lossy().eq_ignore_ascii_case(name))
+    };
+    assert!(has("SystemRoot") && has("USERPROFILE"), "{environment:?}");
+    if let Some(name) = a_variable_only_this_process_has() {
+        assert!(!has(&name), "{name} is this process's, not the account's");
+    }
+}
+
 #[cfg(windows)]
 #[test]
 fn windows_has_no_login_shell_to_ask() {
     use std::sync::atomic::AtomicBool;
-    let error = host::login_shell_path(
+    let error = host::login_shell(
         &host::default_shell().unwrap(),
         &host::home_dir().unwrap(),
         std::time::Duration::from_secs(1),

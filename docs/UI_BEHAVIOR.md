@@ -975,6 +975,7 @@ A picked session or project stands in the box as one chip (D-85, B49): a session
 One ⌫ right after a chip takes it out whole, ← and → step over it, Shift+↵ starts a line, a paste comes in as plain text, and a Hangul syllable being composed is left to the input method.
 The box holds each chip as its `@session(<pane> <name>)` or `@project(<path> <name>)` token, and the send carries the words exactly so, a project named by its primary checkout's path (the folder's own for a project with none), which Desk's agent hands to `--repo` and pressing its chip opens; a chip the operator took out is not sent, and the sent message shows the same chips.
 `다시 시도` on a notice sends the operator's last message again.
+A turn that failed reads `답을 끝내지 못했어요 · <reason>` with the agent's own one-line reason when it answered with one (a provider's refusal, a model it cannot reach), and `답을 끝내지 못했어요` alone when nothing the operator can act on is known; a turn the agent refused for its sign-in is the sign-in line above.
 Pressing a card, any session chip (a reply's, the operator's `@`, a letter's line, one inside a thread) or `답하기` opens that session's thread in Desk's lane, whether Desk started it or not, and Desk stays in front; only the thread's `터미널로` and ⌘J go to its tab (see Desk's lane, D-87, B51).
 A card's change sends only the `desk_jobs` section; the conversation is sent again only when it, the agents or the room's settings change.
 
