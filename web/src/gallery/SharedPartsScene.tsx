@@ -12,7 +12,7 @@ import { MissionChip } from "../components/mission-chip";
 import { PlanChecklist } from "../components/plan-checklist";
 import { PrMark } from "../components/pr-mark";
 import { MilestoneMark, SessionRow, SessionRowBody } from "../components/session-row";
-import { StatusMark } from "../components/status-mark";
+import { LookButton, StatusMark } from "../components/status-mark";
 import { RowButton } from "../components/ui/row-button";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { requireInterfaceLanguage } from "../i18n/locale";
@@ -90,6 +90,9 @@ export function SharedPartsScene({ params }: { params: URLSearchParams }) {
               </SessionRowBody>
             </RowButton>
           </State>
+        </Part>
+        <Part name="To look at · LookButton">
+          <State name="Pane header"><span className="flex min-w-0 items-center gap-sm text-caption"><LookButton label="볼 것 · boundary-final.html" onLook={open} /><AgentMark kind="claude" /><span className="truncate">미션 상태 단순화 경계 목업</span></span></State>
         </Part>
         <Part name="Plan steps · PlanChecklist">
           <State name="Running"><div className="text-caption"><PlanChecklist plan={plan} /></div></State>

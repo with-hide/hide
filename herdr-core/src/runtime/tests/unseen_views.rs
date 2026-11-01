@@ -654,6 +654,110 @@ fn reads_keep_no_receipt_so_any_number_of_them_leaves_room_for_an_open() {
 /// waits in Needs You under its file name, `hide view list` names who opened
 /// it and nothing of the file, a second open brings the same tab forward,
 /// and looking at it ends the wait.
+/// `hide browser open <outside file>` from `caller`, as hided hands it on
+/// once the window granted the file: an outside file named by `grant`.
+fn open_outside(
+    runtime: &mut Runtime,
+    caller: &str,
+    grant: &str,
+    name: &str,
+    request: &str,
+) -> String {
+    let action = Action::OpenExternal {
+        grant: grant.into(),
+        name: name.into(),
+        kind: crate::view_layout::ExternalKind::Html,
+    };
+    let expected = runtime
+        .workspace_control_query(
+            crate::node::TEST_NODE,
+            caller,
+            crate::workspace_control::Query::Info,
+        )
+        .unwrap()
+        .context;
+    let request = format!("{}-{request}", unix_milliseconds());
+    let prepared = runtime
+        .workspace_control_prepare_action(
+            crate::node::TEST_NODE,
+            caller,
+            &expected,
+            &request,
+            &action,
+        )
+        .unwrap();
+    assert!(matches!(
+        prepared,
+        crate::workspace_control::ActionPreparation::Ready
+    ));
+    let answer = runtime
+        .workspace_control_action(
+            crate::node::TEST_NODE,
+            caller,
+            &expected,
+            &request,
+            action,
+            Ok(None),
+        )
+        .unwrap();
+    runtime.sync_workspace_view();
+    answer.view_id
+}
+
+/// The rows of `pane`'s `N views` as the front Workspace publishes them.
+fn pane_views(runtime: &Runtime, pane: &str) -> Vec<crate::model::OpenedViewSnapshot> {
+    runtime
+        .snapshot
+        .workspace_view
+        .as_ref()
+        .and_then(|view| view.feedback.as_ref())
+        .map(|feedback| {
+            feedback
+                .opened
+                .iter()
+                .filter(|row| row.pane_id == pane)
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Outside files carry no path, so only their grant tells them apart: each
+/// is a row of its own in the opener's `N views`, and the one not looked at
+/// keeps its 볼 것 mark there (UI_BEHAVIOR, View openers and comments).
+#[test]
+fn each_outside_file_an_agent_opens_is_its_own_row_and_keeps_its_unseen_mark() {
+    let (_root, runtime) = fixture(false);
+    let mut guard = runtime.lock().unwrap();
+    keyboard(&mut guard, Some("sender"));
+    let first = open_outside(
+        &mut guard,
+        "recipient",
+        &"a1".repeat(16),
+        "first.html",
+        "first",
+    );
+    look_at(&mut guard, &first);
+    keyboard(&mut guard, Some("recipient"));
+    assert!(!unseen(&guard, &first));
+    keyboard(&mut guard, Some("sender"));
+    let second = open_outside(
+        &mut guard,
+        "recipient",
+        &"b2".repeat(16),
+        "second.html",
+        "second",
+    );
+    assert_ne!(first, second);
+    assert!(unseen(&guard, &second));
+    let rows = pane_views(&guard, "recipient");
+    let listed: Vec<(&str, bool)> = rows
+        .iter()
+        .map(|row| (row.label.as_str(), row.unseen))
+        .collect();
+    assert_eq!(listed, [("first.html", false), ("second.html", true)]);
+}
+
 #[test]
 fn an_agents_open_of_an_outside_file_is_tracked_as_its_open_by_grant_alone() {
     let (_root, runtime) = fixture(false);
@@ -661,45 +765,7 @@ fn an_agents_open_of_an_outside_file_is_tracked_as_its_open_by_grant_alone() {
     keyboard(&mut guard, Some("sender"));
     let grant = "a1".repeat(16);
     let open = |runtime: &mut Runtime, request: &str| {
-        let action = Action::OpenExternal {
-            grant: grant.clone(),
-            name: "report.html".into(),
-            kind: crate::view_layout::ExternalKind::Html,
-        };
-        let expected = runtime
-            .workspace_control_query(
-                crate::node::TEST_NODE,
-                "recipient",
-                crate::workspace_control::Query::Info,
-            )
-            .unwrap()
-            .context;
-        let request = format!("{}-{request}", unix_milliseconds());
-        let prepared = runtime
-            .workspace_control_prepare_action(
-                crate::node::TEST_NODE,
-                "recipient",
-                &expected,
-                &request,
-                &action,
-            )
-            .unwrap();
-        assert!(matches!(
-            prepared,
-            crate::workspace_control::ActionPreparation::Ready
-        ));
-        let answer = runtime
-            .workspace_control_action(
-                crate::node::TEST_NODE,
-                "recipient",
-                &expected,
-                &request,
-                action,
-                Ok(None),
-            )
-            .unwrap();
-        runtime.sync_workspace_view();
-        answer.view_id
+        open_outside(runtime, "recipient", &grant, "report.html", request)
     };
     let view = open(&mut guard, "first");
     let display = guard

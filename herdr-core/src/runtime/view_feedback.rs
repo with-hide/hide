@@ -1658,31 +1658,34 @@ impl Runtime {
         let mut displays = Vec::new();
         collect_displays(&layout.root, &mut displays);
         let mut opened: Vec<OpenedViewSnapshot> = Vec::new();
+        let mut shown: Vec<(String, crate::view_layout::Shown<'_>)> = Vec::new();
         let views = self.view_layout_of(key);
         for display in &displays {
             let Some(pane) = display.opener.as_ref().and_then(|o| o.pane_id.clone()) else {
                 continue;
             };
-            let same = opened.iter_mut().find(|row| {
-                row.pane_id == pane
-                    && row.kind == display.kind
-                    && row.path == display.path
-                    && row.url == display.url
-            });
-            match same {
-                Some(_) => {}
-                None => opened.push(OpenedViewSnapshot {
-                    pane_id: pane,
-                    view_id: display.id.clone(),
-                    kind: display.kind,
-                    label: display.label.clone(),
-                    path: display.path.clone(),
-                    url: display.url.clone(),
-                    comments: display.comments,
-                    unseen: views
-                        .and_then(|views| views.display(&display.id))
-                        .is_some_and(|stored| stored.unseen.is_some()),
-                }),
+            let unseen = views
+                .and_then(|views| views.display(&display.id))
+                .is_some_and(|stored| stored.unseen.is_some());
+            // Two tabs showing the same thing are one row, which is unseen
+            // while either is: the row is how the operator reaches it.
+            match shown.iter().position(|(row_pane, row_shown)| {
+                *row_pane == pane && *row_shown == display.shown()
+            }) {
+                Some(index) => opened[index].unseen |= unseen,
+                None => {
+                    shown.push((pane.clone(), display.shown()));
+                    opened.push(OpenedViewSnapshot {
+                        pane_id: pane,
+                        view_id: display.id.clone(),
+                        kind: display.kind,
+                        label: display.label.clone(),
+                        path: display.path.clone(),
+                        url: display.url.clone(),
+                        comments: display.comments,
+                        unseen,
+                    });
+                }
             }
         }
         let feedback = self.feedback_of(key);

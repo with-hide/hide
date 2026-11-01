@@ -619,13 +619,10 @@ impl Runtime {
                     continue;
                 };
                 // The same file, diff or page in one checkout is one tile.
-                if found.iter().any(|(other, seen, _)| {
-                    *other == key
-                        && seen.kind == display.kind
-                        && seen.path == display.path
-                        && seen.committed == display.committed
-                        && seen.url == display.url
-                }) {
+                if found
+                    .iter()
+                    .any(|(other, seen, _)| *other == key && seen.shown() == display.shown())
+                {
                     continue;
                 }
                 found.push((key, display, session));

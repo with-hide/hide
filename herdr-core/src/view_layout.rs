@@ -79,6 +79,40 @@ impl DisplayKind {
     }
 }
 
+/// What a View shows, which is all that makes two Views the same one: a
+/// file by its path, a diff by its path and Changes group, a page by its
+/// address and an outside file by its grant, since it carries no path. A
+/// page that names no address yet is the same as no other View, so it is
+/// named by its own id. Every list that counts a View once compares this.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Shown<'a> {
+    File(&'a str),
+    Diff(&'a str, Option<bool>),
+    Page(&'a str),
+    External(&'a str),
+    Unnamed(&'a str),
+}
+
+impl<'a> Shown<'a> {
+    pub fn of(
+        id: &'a str,
+        kind: DisplayKind,
+        path: &'a str,
+        committed: Option<bool>,
+        url: Option<&'a str>,
+        external: Option<&'a ExternalFile>,
+    ) -> Self {
+        match kind {
+            DisplayKind::File => Self::File(path),
+            DisplayKind::Diff => Self::Diff(path, committed),
+            DisplayKind::Browser => url.map_or(Self::Unnamed(id), Self::Page),
+            DisplayKind::External => {
+                external.map_or(Self::Unnamed(id), |file| Self::External(&file.grant))
+            }
+        }
+    }
+}
+
 /// Whether a browser display may hold `url`: the web, a local file, or the
 /// blank page, spelled on one line within the cap. The desktop host loads
 /// only these too.
@@ -277,6 +311,18 @@ impl Display {
         self.operator
             || self.openers.is_empty()
             || scope.is_some_and(|scope| self.openers.iter().any(|o| o.of_session(scope)))
+    }
+
+    /// What this display shows, as every list that counts it once compares.
+    pub fn shown(&self) -> Shown<'_> {
+        Shown::of(
+            &self.id,
+            self.kind,
+            &self.path,
+            self.committed,
+            self.url.as_deref(),
+            self.external.as_ref(),
+        )
     }
 
     /// Whether this display shows the document named by `path`, `kind` and,

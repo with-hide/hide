@@ -521,6 +521,20 @@ pub struct ViewDisplaySnapshot {
     pub external: Option<crate::view_layout::ExternalFile>,
 }
 
+impl ViewDisplaySnapshot {
+    /// What this display shows, as its stored display's `shown` says it.
+    pub fn shown(&self) -> crate::view_layout::Shown<'_> {
+        crate::view_layout::Shown::of(
+            &self.id,
+            self.kind,
+            &self.path,
+            self.committed,
+            self.url.as_deref(),
+            self.external.as_ref(),
+        )
+    }
+}
+
 fn load_unset(load: &u64) -> bool {
     *load == 0
 }

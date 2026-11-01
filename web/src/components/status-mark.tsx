@@ -1,4 +1,5 @@
 import type { HTMLAttributes } from "react";
+import { Button } from "./ui/button";
 import { MoonIcon } from "lucide-react";
 import { cn } from "../lib/utils";
 import type { RowMark } from "../snapshot";
@@ -65,4 +66,32 @@ export function StatusMark({ mark, label, read = false, className, ...rest }: { 
     </span>
   );
   return label ? <Hint label={label}>{shape}</Hint> : shape;
+}
+
+/**
+ * The `볼 것` mark drawn on its own, outside a row that answers it: the eye
+ * is the press that answers it there, bringing the newest View to look at
+ * forward as pressing the row does (PRD unseen-agent-views B3), so no
+ * surface draws an eye that does nothing.
+ */
+export function LookButton({ label, onLook, ...rest }: { label: string; onLook: () => void } & Omit<HTMLAttributes<HTMLButtonElement>, "onClick">) {
+  return (
+    <Hint label={label}>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-xs"
+        aria-label={label}
+        className="size-auto shrink-0 rounded-full p-0"
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={(event) => {
+          event.stopPropagation();
+          onLook();
+        }}
+        {...rest}
+      >
+        <StatusMark mark="look" />
+      </Button>
+    </Hint>
+  );
 }
