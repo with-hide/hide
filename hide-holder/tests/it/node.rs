@@ -16,6 +16,7 @@ use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread;
@@ -894,20 +895,42 @@ fn a_holder_older_than_the_oldest_supported_is_reported_and_left_running() {
     assert!(!node.screens.drew("o1"));
 }
 
-/// What the node logged to its diagnostic log, in order, once
-/// [`diagnostics`] installed the sink that keeps it.
+/// What the node logged to its diagnostic log while a test listened
+/// ([`Listening`]), in order.
 static DIAGNOSTICS: Mutex<Vec<serde_json::Value>> = Mutex::new(Vec::new());
+static LISTENERS: AtomicUsize = AtomicUsize::new(0);
 
+/// The node's sink in this test binary: every record still reaches the
+/// error stream, as with no sink, so the other tests of the binary log as
+/// before; it is kept only while a test listens.
 fn keep_diagnostic(record: serde_json::Value) {
-    DIAGNOSTICS
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .push(record);
+    eprintln!("{record}");
+    if LISTENERS.load(Ordering::SeqCst) > 0 {
+        DIAGNOSTICS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(record);
+    }
 }
 
-/// Makes the node's diagnostic log readable by [`wait_diagnostic`]. The
-/// sink holds for the life of the test process.
-fn diagnostics() {
+/// A test reading the node's diagnostic log; the records kept for it go
+/// when the last listener does.
+struct Listening;
+
+impl Drop for Listening {
+    fn drop(&mut self) {
+        let mut kept = DIAGNOSTICS.lock().unwrap_or_else(PoisonError::into_inner);
+        if LISTENERS.fetch_sub(1, Ordering::SeqCst) == 1 {
+            kept.clear();
+        }
+    }
+}
+
+/// Makes the node's diagnostic log readable by [`wait_diagnostic`] until
+/// the answer drops. The sink is the process's, installed once, and passes
+/// every record on to the error stream; tests running at once share it, so
+/// each matches only the records that name what it made.
+fn diagnostics() -> Listening {
     static INSTALLED: std::sync::Once = std::sync::Once::new();
     INSTALLED.call_once(|| {
         assert!(
@@ -915,6 +938,9 @@ fn diagnostics() {
             "another sink took the node's diagnostic log"
         );
     });
+    let _kept = DIAGNOSTICS.lock().unwrap_or_else(PoisonError::into_inner);
+    LISTENERS.fetch_add(1, Ordering::SeqCst);
+    Listening
 }
 
 /// Waits for the node to log a record of `kind` that `matches`, and answers
@@ -944,7 +970,7 @@ fn folder_name(dir: &Path) -> String {
 /// to speak to, left running), and logs what it did.
 #[test]
 fn a_starting_node_removes_the_old_version_folders_nothing_runs_from() {
-    diagnostics();
+    let _listening = diagnostics();
     let folder = Folder::new();
     let home = folder.home.path();
     let current = source();
@@ -992,9 +1018,22 @@ fn a_starting_node_removes_the_old_version_folders_nothing_runs_from() {
     .unwrap();
     assert!(terminals.holders.is_some());
 
-    let pruned = wait_diagnostic("pane_holder.folders_pruned", |_| true);
-    assert_eq!(pruned["removed"], 1, "{pruned}");
-    assert_eq!(pruned["in_use"], 1, "{pruned}");
+    // This test's prune: the one that names its unused folder.
+    let pruned = wait_diagnostic("pane_holder.folders_pruned", |record| {
+        record["removed"]
+            .as_array()
+            .is_some_and(|removed| removed.iter().any(|name| name == unused_name.as_str()))
+    });
+    assert_eq!(
+        pruned["removed"],
+        serde_json::json!([unused_name]),
+        "{pruned}"
+    );
+    assert_eq!(
+        pruned["in_use"],
+        serde_json::json!([older_name]),
+        "{pruned}"
+    );
     assert_eq!(pruned["failed"], 0, "{pruned}");
     assert!(!unused_dir.exists(), "{unused_name} was kept");
     for name in [&current_name, &older_name] {
@@ -1019,7 +1058,7 @@ fn a_starting_node_removes_the_old_version_folders_nothing_runs_from() {
 /// its session of the pane goes on.
 #[test]
 fn a_node_logs_the_answers_its_holder_refused_with_the_pane_and_keeps_the_session() {
-    diagnostics();
+    let _listening = diagnostics();
     let home = Home::new();
     let mut burst = b"\x1b]11;?\x07".repeat(6000);
     burst.extend_from_slice(b"asked");

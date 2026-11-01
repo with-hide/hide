@@ -852,8 +852,8 @@ impl Holders {
         crate::diagnostic!(json!({
             "component": "pane_holder",
             "kind": "pane_holder.folders_pruned",
-            "removed": pruned.removed.len(),
-            "in_use": pruned.in_use.len(),
+            "removed": pruned.removed,
+            "in_use": pruned.in_use,
             "failed": pruned.failed.len(),
         }));
         Some(pruned)
