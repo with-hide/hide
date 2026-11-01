@@ -119,14 +119,14 @@ pub struct MissionEvent {
     pub reason: Option<AttentionReason>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action: Option<OperatorAction>,
-    /// The event's number in its mission (`Mission::event_seq`), given in
-    /// the same book save as the change it records (B27). The history is
-    /// written only once that book is on disk, so a number in the history
-    /// is never given again, and a restart writes the book's unwritten
-    /// events (`Mission::unlogged`) once. None for an event written before
-    /// numbering.
+    /// The key of an act Hide's own evaluation made, from the facts it
+    /// stands on: the mission, the node and its work round, what was done
+    /// and the pull request or head it was about (B27). The same facts
+    /// evaluated again make the same key, and a history holding it takes
+    /// the event once. None for an event of a command or a person's choice,
+    /// which happens once.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub id: Option<u64>,
+    pub id: Option<String>,
 }
 
 impl MissionEvent {
@@ -173,15 +173,12 @@ pub struct History {
     pub dropped: u64,
 }
 
-/// The newest event number among `events`, 0 with none: numbers only
-/// grow, so an event at or under it is one the log already holds.
-fn last_id<'a>(events: impl DoubleEndedIterator<Item = &'a MissionEvent>) -> u64 {
-    events.rev().find_map(|event| event.id).unwrap_or(0)
-}
-
 impl History {
-    pub(crate) fn last_id(&self) -> u64 {
-        last_id(self.events.iter().map(AsRef::as_ref))
+    /// Whether an event with key `id` is in the history kept.
+    pub(crate) fn holds(&self, id: &str) -> bool {
+        self.events
+            .iter()
+            .any(|event| event.id.as_deref() == Some(id))
     }
 
     /// Adds `event`, dropping the oldest past `EVENT_LIMIT` as `EventLog`
@@ -217,8 +214,10 @@ pub struct EventLog {
 }
 
 impl EventLog {
-    pub(crate) fn last_id(&self) -> u64 {
-        last_id(self.events.iter())
+    fn holds(&self, id: &str) -> bool {
+        self.events
+            .iter()
+            .any(|event| event.id.as_deref() == Some(id))
     }
 
     /// Adds `event`, dropping the oldest past `EVENT_LIMIT`. Returns
@@ -327,22 +326,17 @@ pub(crate) struct MissionEventStore {
     dir: PathBuf,
     shared: Arc<(Mutex<Pending>, Condvar)>,
     worker: Option<JoinHandle<()>>,
-    /// The newest event number on disk, by mission, so the book lets go of
-    /// what is written (`Mission::unlogged`).
-    written: Arc<Mutex<HashMap<String, u64>>>,
 }
 
 impl MissionEventStore {
     pub(crate) fn new(dir: PathBuf) -> Self {
         let shared = Arc::new((Mutex::new(Pending::default()), Condvar::new()));
-        let written = Arc::new(Mutex::new(HashMap::new()));
         let worker = {
             let shared = Arc::clone(&shared);
-            let written = Arc::clone(&written);
             let dir = dir.clone();
             std::thread::Builder::new()
                 .name("hide-mission-events".to_owned())
-                .spawn(move || run(&shared, &written, &dir))
+                .spawn(move || run(&shared, &dir))
                 .inspect_err(|error| {
                     crate::diagnostic!(json!({
                         "component": "missions", "kind": "mission_events.worker_failed",
@@ -355,18 +349,7 @@ impl MissionEventStore {
             dir,
             shared,
             worker,
-            written,
         }
-    }
-
-    /// The newest event number of `mission` known on disk.
-    pub(crate) fn written(&self, mission: &str) -> u64 {
-        self.written
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(mission)
-            .copied()
-            .unwrap_or(0)
     }
 
     /// Reads the events of `missions` from their files, before the lock is
@@ -396,10 +379,6 @@ impl MissionEventStore {
         let held = out
             .iter()
             .map(|(id, log)| (id.clone(), History::from(log.clone())))
-            .collect();
-        *self.written.lock().unwrap_or_else(PoisonError::into_inner) = out
-            .iter()
-            .map(|(id, log)| (id.clone(), log.last_id()))
             .collect();
         self.shared
             .0
@@ -485,70 +464,91 @@ fn file(dir: &Path, mission: &str) -> PathBuf {
     dir.join(format!("{mission}.json"))
 }
 
+/// How long a history file whose write failed waits before it is written
+/// again, while nothing new arrives for it.
+const RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Deletes and writes what is pending until the store stops, finishing the
 /// work already handed over first. The thread keeps each log it writes, so
-/// an event costs the lock only its pointer.
-fn run(shared: &(Mutex<Pending>, Condvar), written: &Mutex<HashMap<String, u64>>, dir: &Path) {
+/// an event costs the lock only its pointer. A write that failed keeps its
+/// log in memory and is written again after `RETRY_AFTER`, or with the
+/// mission's next event, so a disk that recovers loses nothing; its failure
+/// is logged once until a write succeeds.
+fn run(shared: &(Mutex<Pending>, Condvar), dir: &Path) {
     let (lock, wake) = shared;
     let mut logs: HashMap<String, EventLog> = HashMap::new();
+    let mut failing: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     loop {
-        let work = {
+        let mut work = {
             let mut pending = lock.lock().unwrap_or_else(PoisonError::into_inner);
             while pending.work.is_empty() && !pending.stop {
-                pending = wake.wait(pending).unwrap_or_else(PoisonError::into_inner);
+                if failing.is_empty() {
+                    pending = wake.wait(pending).unwrap_or_else(PoisonError::into_inner);
+                } else {
+                    let (next, waited) = wake
+                        .wait_timeout(pending, RETRY_AFTER)
+                        .unwrap_or_else(PoisonError::into_inner);
+                    pending = next;
+                    if waited.timed_out() {
+                        break;
+                    }
+                }
             }
             for (id, log) in std::mem::take(&mut pending.restored) {
                 logs.entry(id).or_insert(log);
             }
-            if pending.work.is_empty() {
+            if pending.work.is_empty() && (pending.stop || failing.is_empty()) {
                 return;
             }
             std::mem::take(&mut pending.work)
         };
+        // A log whose write failed is written again with this pass.
+        for mission in &failing {
+            work.entry(mission.clone()).or_default();
+        }
         for (mission, work) in work {
             let path = file(dir, &mission);
             let mut result = Ok(());
             if work.removed {
                 logs.remove(&mission);
-                written
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .remove(&mission);
                 result = match std::fs::remove_file(&path) {
                     Ok(()) => Ok(()),
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
                     Err(error) => Err(format!("could not be deleted: {error}")),
                 };
-            }
-            if result.is_ok() && !work.added.is_empty() {
+            } else {
                 let log = logs.entry(mission.clone()).or_default();
-                // A numbered event the log already holds is one a restart
-                // handed over again (`Mission::unlogged`).
-                let mut last = log.last_id();
                 let mut added = false;
                 for event in work.added {
-                    if event.id.is_some_and(|id| id <= last) {
+                    // An act evaluated again on the same facts is in the log
+                    // already (`MissionEvent::id`).
+                    if event.id.as_deref().is_some_and(|id| log.holds(id)) {
                         continue;
                     }
-                    last = last.max(event.id.unwrap_or(0));
                     log.push(Arc::unwrap_or_clone(event));
                     added = true;
                 }
-                if added {
+                if added || failing.contains(&mission) {
                     result = write(dir, &path, log);
                 }
-                if result.is_ok() {
-                    written
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .insert(mission.clone(), log.last_id());
-                }
             }
-            if let Err(reason) = result {
-                crate::diagnostic!(json!({
-                    "component": "missions", "kind": "mission_events.save_failed",
-                    "mission": mission, "message": reason,
-                }));
+            match result {
+                Ok(()) => {
+                    failing.remove(&mission);
+                }
+                Err(reason) => {
+                    if failing.insert(mission.clone()) {
+                        crate::diagnostic!(json!({
+                            "component": "missions", "kind": "mission_events.save_failed",
+                            "mission": mission, "message": reason,
+                        }));
+                    }
+                    // A delete that failed is finished by the next start's
+                    // sweep, not here.
+                    if work.removed {
+                        failing.remove(&mission);
+                    }
+                }
             }
         }
     }
@@ -641,5 +641,51 @@ mod tests {
         .unwrap();
         let store = MissionEventStore::new(dir.path().to_path_buf());
         assert!(store.restore(["mission-1"].into_iter()).is_empty());
+    }
+
+    /// B27: an act written again under its key is in the file once, also
+    /// after a start, and a log whose write failed is written with the next
+    /// event once the disk takes it, nothing lost.
+    #[test]
+    fn a_keyed_event_is_written_once_and_a_failed_write_is_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("mission-events");
+        let keyed = |at: u64, key: &str| {
+            let mut event = event(at);
+            event.id = Some(key.to_owned());
+            Arc::new(event)
+        };
+        {
+            let store = MissionEventStore::new(folder.clone());
+            store.append("mission-1", &[keyed(1, "a@0:done#0")]);
+            store.append(
+                "mission-1",
+                &[keyed(2, "a@0:done#0"), keyed(3, "a@0:raise:x")],
+            );
+        }
+        {
+            let store = MissionEventStore::new(folder.clone());
+            store.restore(["mission-1"].into_iter());
+            store.append("mission-1", &[keyed(4, "a@0:done#0")]);
+        }
+        let restored = MissionEventStore::new(folder.clone()).restore(["mission-1"].into_iter());
+        let keys: Vec<_> = restored["mission-1"]
+            .events
+            .iter()
+            .map(|event| event.id.clone().unwrap())
+            .collect();
+        assert_eq!(keys, ["a@0:done#0", "a@0:raise:x"]);
+
+        // A file where the folder should be fails the write; once it is
+        // gone, the next event writes both.
+        let blocked = dir.path().join("blocked");
+        std::fs::write(&blocked, "a file").unwrap();
+        let store = MissionEventStore::new(blocked.clone());
+        store.append("mission-1", &[keyed(5, "b@0:done#0")]);
+        std::fs::remove_file(&blocked).unwrap();
+        store.append("mission-1", &[keyed(6, "b@0:raise:y")]);
+        drop(store);
+        let restored = MissionEventStore::new(blocked).restore(["mission-1"].into_iter());
+        assert_eq!(restored["mission-1"].events.len(), 2);
     }
 }

@@ -618,7 +618,7 @@ impl Runtime {
                     External::Pr(number) => Some(*number),
                     External::Branch(_) => None,
                 };
-                super::missions::record_wake(mission, ask.node.clone(), pr, event, None);
+                super::missions::record_wake(mission, ask.node.clone(), pr, event, None, None);
             }
             crate::diagnostic!(json!({
                 "component": "missions", "kind": "mission.outside_settled",

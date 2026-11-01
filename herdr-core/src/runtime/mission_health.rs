@@ -134,6 +134,7 @@ pub(super) fn raise_for(
         }));
         return Vec::new();
     }
+    let raise_key = act_key(&mission.nodes[at], &format!("raise:{cause}"));
     // A cause the node cannot remember is not raised: raised with no
     // memory of it, it would come again once settled (B27).
     if !mission.nodes[at].note_handled(cause) {
@@ -176,6 +177,7 @@ pub(super) fn raise_for(
                 reason: Some(reason),
                 why: None,
                 action: None,
+                key: Some(raise_key.clone()),
             },
         );
     }
@@ -190,6 +192,7 @@ pub(super) fn raise_for(
     .node(key);
     event.reason = Some(reason);
     event.pr = pr;
+    event.id = Some(raise_key);
     vec![event]
 }
 
@@ -210,6 +213,13 @@ pub(super) fn conductor_unanswered(mission: &Mission) -> bool {
 pub(super) fn ask_new_conductor(mission: &mut Mission, now: u64) {
     let mut asked = Vec::new();
     for node in &mut mission.nodes {
+        let Some(key) = node
+            .attention
+            .as_ref()
+            .map(|attention| act_key(node, &format!("raise:{}", attention.cause())))
+        else {
+            continue;
+        };
         let Some(attention) = node.attention.as_mut() else {
             continue;
         };
@@ -219,9 +229,9 @@ pub(super) fn ask_new_conductor(mission: &mut Mission, now: u64) {
         attention.since_unix_ms = now;
         attention.operator_at_unix_ms = None;
         attention.notified = false;
-        asked.push((node.key.clone(), attention.pr, attention.reason));
+        asked.push((node.key.clone(), attention.pr, attention.reason, key));
     }
-    for (node, pr, reason) in asked {
+    for (node, pr, reason, key) in asked {
         mission.wake_seq += 1;
         super::missions::push_wake(
             mission,
@@ -235,6 +245,7 @@ pub(super) fn ask_new_conductor(mission: &mut Mission, now: u64) {
                 reason: Some(reason),
                 why: None,
                 action: None,
+                key: Some(key),
             },
         );
     }
@@ -269,6 +280,44 @@ pub(super) fn prune_attention_wakes(mission: &mut Mission) {
                 .reason
                 .is_some_and(|reason| standing.contains(&(wake.node.clone(), reason)))
     });
+}
+
+/// The key of one of Hide's acts on `node` (B27): the node, its work
+/// round and what the act stands on. The same facts evaluated again make
+/// the same key, which the history writes once and which names the act's
+/// letter.
+fn act_key(node: &MissionNode, act: &str) -> String {
+    format!("{}@{}:{act}", node.key, node.round)
+}
+
+/// Gives the events of one act that carry no key of their own `key`, each
+/// by its place in the act.
+pub(super) fn key_events(key: &str, events: &mut [MissionEvent]) {
+    for (place, event) in events.iter_mut().enumerate() {
+        if event.id.is_none() {
+            event.id = Some(format!("{key}#{place}"));
+        }
+    }
+}
+
+/// The key of Hide's close of `mission` (B27): each node with its round and
+/// status, which a later close after a reopen cannot share, since that
+/// close waits for a node to move. Hashed, as a mission may hold 64 nodes.
+fn close_key(mission: &Mission) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for node in &mission.nodes {
+        let part = format!("{}@{}={};", node.key, node.round, node.status.as_str());
+        for byte in part.bytes() {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+    format!("close:{hash:016x}")
+}
+
+/// A short head for a key, so it stays readable and short.
+fn short(head: Option<&str>) -> &str {
+    head.map_or("-", |head| head.get(..12).unwrap_or(head))
 }
 
 /// What a node's cleanup was decided on: its finish and the pull
@@ -357,7 +406,6 @@ impl Runtime {
     /// run by the coordinator's tick. Whether the book changed.
     pub(crate) fn drive_mission_health(&mut self, now: u64) -> bool {
         self.drain_mission_reads(std::time::Instant::now());
-        self.drain_mission_outbox();
         if self.missions.book.missions.is_empty() || self.missions.unreadable.is_some() {
             return false;
         }
@@ -434,6 +482,17 @@ impl Runtime {
             let mission = &mut self.missions.book.missions[index];
             let mut events = Vec::new();
             for node in &mut mission.nodes {
+                // The raise and when it was made name its reaching the
+                // operator, so a raise asked again of a new Conductor
+                // reaches them as its own act (B27).
+                let Some(key) = node.attention.as_ref().map(|attention| {
+                    act_key(
+                        node,
+                        &format!("operator:{}:{}", attention.cause(), attention.since_unix_ms),
+                    )
+                }) else {
+                    continue;
+                };
                 let Some(attention) = node.attention.as_mut() else {
                     continue;
                 };
@@ -452,6 +511,7 @@ impl Runtime {
                 let mut event = MissionEvent::new(now, EventKind::RaisedToOperator).node(&node.key);
                 event.reason = Some(attention.reason);
                 event.pr = attention.pr;
+                event.id = Some(key);
                 events.push(event);
             }
             if !events.is_empty() {
@@ -466,7 +526,6 @@ impl Runtime {
             self.stage_mission_events(&id, events);
         }
         self.save_missions();
-        self.drain_mission_outbox();
         true
     }
 
@@ -722,8 +781,10 @@ impl Runtime {
             why: None,
             at_unix_ms: now,
         };
-        events.extend(super::mission_events::node_events(&before, node, now));
-        events.push(hide_event(now, &node.key, &mark));
+        let mut done = super::mission_events::node_events(&before, node, now);
+        done.push(hide_event(now, &node.key, &mark));
+        key_events(&act_key(&before, &format!("attach:{pr}")), &mut done);
+        events.extend(done);
         node.hide = Some(mark);
         crate::diagnostic!(json!({
             "component": "missions", "kind": "mission.pr_attached",
@@ -779,8 +840,10 @@ impl Runtime {
             why: None,
             at_unix_ms: now,
         };
-        events.extend(super::mission_events::node_events(&before, node, now));
-        events.push(hide_event(now, &node.key, &mark));
+        let mut done = super::mission_events::node_events(&before, node, now);
+        done.push(hide_event(now, &node.key, &mark));
+        key_events(&act_key(&before, "done"), &mut done);
+        events.extend(done);
         node.hide = Some(mark);
         node.attention = None;
         crate::diagnostic!(json!({
@@ -843,6 +906,10 @@ impl Runtime {
             }));
             return false;
         }
+        let act = act_key(
+            &mission.nodes[at],
+            &format!("wake:{pr}:{}:{}", why.as_str(), short(head.as_deref())),
+        );
         mission.wake_seq += 1;
         let pushed = super::missions::push_wake(
             mission,
@@ -856,6 +923,7 @@ impl Runtime {
                 reason: None,
                 why: Some(why),
                 action: None,
+                key: Some(act.clone()),
             },
         );
         if pushed.is_none() {
@@ -871,7 +939,9 @@ impl Runtime {
             why: Some(why),
             at_unix_ms: now,
         };
-        events.push(hide_event(now, &key, &mark));
+        let mut event = hide_event(now, &key, &mark);
+        event.id = Some(act);
+        events.push(event);
         node.hide = Some(mark);
         crate::diagnostic!(json!({
             "component": "missions", "kind": "mission.worker_woken",
@@ -889,42 +959,51 @@ impl Runtime {
             return false;
         };
         let report = mission.report.is_none().then(|| closing_report(mission));
-        // The close, the refused close it settles, its letter and its event
-        // are kept in one save (B27).
+        let key = close_key(mission);
+        let wake_key = key.clone();
+        // The close, the refused close it settles, its letter and its
+        // events go together, under one key (B27).
         let closed =
-            self.close_mission_with(id, MissionEnd::MergeWait, report, "hide", now, |mission| {
-                for node in &mut mission.nodes {
-                    if node
-                        .attention
-                        .as_ref()
-                        .is_some_and(|attention| attention.reason == AttentionReason::CloseRefused)
-                    {
-                        settle(&mission.id, node, "hide");
+            self.close_mission_with(
+                id,
+                MissionEnd::MergeWait,
+                report,
+                "hide",
+                now,
+                Some(&key),
+                |mission| {
+                    for node in &mut mission.nodes {
+                        if node.attention.as_ref().is_some_and(|attention| {
+                            attention.reason == AttentionReason::CloseRefused
+                        }) {
+                            settle(&mission.id, node, "hide");
+                        }
                     }
-                }
-                prune_attention_wakes(mission);
-                mission.wake_seq += 1;
-                let node = mission
-                    .nodes
-                    .last()
-                    .map(|node| node.key.clone())
-                    .unwrap_or_default();
-                super::missions::push_wake(
-                    mission,
-                    PendingWake {
-                        seq: mission.wake_seq,
-                        node,
-                        pr: None,
-                        event: WakeEvent::Closed,
-                        head: None,
-                        to: None,
-                        reason: None,
-                        why: None,
-                        action: None,
-                    },
-                );
-                vec![MissionEvent::new(now, EventKind::HideClosed)]
-            });
+                    prune_attention_wakes(mission);
+                    mission.wake_seq += 1;
+                    let node = mission
+                        .nodes
+                        .last()
+                        .map(|node| node.key.clone())
+                        .unwrap_or_default();
+                    super::missions::push_wake(
+                        mission,
+                        PendingWake {
+                            seq: mission.wake_seq,
+                            node,
+                            pr: None,
+                            event: WakeEvent::Closed,
+                            head: None,
+                            to: None,
+                            reason: None,
+                            why: None,
+                            action: None,
+                            key: Some(wake_key),
+                        },
+                    );
+                    vec![MissionEvent::new(now, EventKind::HideClosed)]
+                },
+            );
         match closed {
             Ok(_) => true,
             Err(code) => {
@@ -988,7 +1067,7 @@ impl Runtime {
                 .last()
                 .map(|node| node.key.clone())
                 .unwrap_or_default();
-            super::missions::record_wake(mission, node, None, WakeEvent::Reopened, None);
+            super::missions::record_wake(mission, node, None, WakeEvent::Reopened, None, None);
         }
         self.save_missions();
         self.follow_mission_outside(id);
@@ -1226,6 +1305,7 @@ impl Runtime {
                     reason: attention.as_ref().map(|attention| attention.reason),
                     why: None,
                     action: Some(payload.action),
+                    key: None,
                 },
             );
         }
@@ -1457,7 +1537,9 @@ impl Runtime {
                 why: None,
                 at_unix_ms: now,
             };
-            events.push(hide_event(now, key, &mark));
+            let mut event = hide_event(now, key, &mark);
+            event.id = Some(act_key(node, "cleaned"));
+            events.push(event);
             node.hide = Some(mark);
         }
         mission.updated_at_unix_ms = now;
@@ -1494,7 +1576,6 @@ impl Runtime {
             self.stage_mission_events(&id, events);
         }
         self.save_missions();
-        self.drain_mission_outbox();
         self.flush_mission_wakes();
     }
 

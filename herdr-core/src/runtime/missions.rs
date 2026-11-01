@@ -320,14 +320,6 @@ pub(crate) struct MissionRuntime {
     /// node change asked to read again (D-09, B23), kept until that read is
     /// asked. Memory only: a restart reads every project anew.
     pub(super) reads_due: std::collections::BTreeSet<(String, String)>,
-    /// The number of the book's last save (`MissionStore::save`): letters
-    /// and history wait until it is on disk.
-    pub(super) saved: u64,
-    /// The newest event number handed to the history store this run, by
-    /// mission; a restart hands the book's unwritten events again.
-    pub(super) handed: HashMap<String, u64>,
-    /// A flush of the Conductors' letters waited for the book.
-    pub(super) wakes_wait: bool,
 }
 
 #[derive(Default)]
@@ -547,6 +539,7 @@ pub(super) fn record_wake(
     pr: Option<u32>,
     event: WakeEvent,
     head: Option<String>,
+    key: Option<String>,
 ) -> Option<String> {
     mission.wake_seq += 1;
     let wake = PendingWake {
@@ -559,6 +552,7 @@ pub(super) fn record_wake(
         reason: None,
         why: None,
         action: None,
+        key,
     };
     push_wake(mission, wake)
 }
@@ -568,8 +562,9 @@ pub(super) fn record_wake(
 /// is refused and logged, and every one waiting keeps its place
 /// (engineering #15): what it was about stays on the map, and a raise
 /// reaches the operator on its own. A worker's wake is capped apart
-/// (`WORKER_WAKE_LIMIT`), so a Conductor that is gone never starves it.
-pub(super) fn push_wake(mission: &mut Mission, wake: PendingWake) -> Option<String> {
+/// (`WORKER_WAKE_LIMIT`), so a Conductor that is gone never starves it. A
+/// wake with no key of its own gets one from what it is about.
+pub(super) fn push_wake(mission: &mut Mission, mut wake: PendingWake) -> Option<String> {
     let waiting = mission
         .wakes
         .iter()
@@ -583,36 +578,81 @@ pub(super) fn push_wake(mission: &mut Mission, wake: PendingWake) -> Option<Stri
         }));
         return None;
     }
+    if wake.key.is_none() {
+        wake.key = Some(wake_key(&wake));
+    }
     let intent = wake_intent(mission, &wake);
     mission.wakes.push(wake);
     Some(intent)
 }
 
-/// The letter intent of one recorded wake to the mission's Conductor now:
-/// the same wake re-sent after a restart is the same letter (engineering
-/// #11), two wakes are two, and a Conductor that took the mission over gets
-/// its own letter rather than the one its predecessor was sent, since one
-/// intent reaches one recipient.
-fn wake_intent(mission: &Mission, wake: &PendingWake) -> String {
+/// The key of a wake from what it is about (B27): a pull request's news by
+/// its head, an outside node's by its outcome, so the same fact read again
+/// is the same letter. A wake no fact names, the operator's or a
+/// Conductor's coming back, is its own by when it was made.
+fn wake_key(wake: &PendingWake) -> String {
+    let head = wake
+        .head
+        .as_deref()
+        .map_or("-", |head| head.get(..12).unwrap_or(head));
+    let pr = wake
+        .pr
+        .map_or_else(|| "-".to_owned(), |number| number.to_string());
+    let fact = format!("{}:{}:{pr}:{head}", wake.event.as_str(), wake.node);
+    match wake.event {
+        WakeEvent::Merged
+        | WakeEvent::ChangesRequested
+        | WakeEvent::NewHead
+        | WakeEvent::OutsideDone
+        | WakeEvent::OutsideFailed => fact,
+        _ => format!(
+            "{fact}:{}:{}",
+            wake.action
+                .map_or("-", crate::missions::OperatorAction::as_str),
+            super::unix_milliseconds()
+        ),
+    }
+}
+
+/// The letter intent of one recorded wake to its recipient now: the
+/// mission, the wake's key and the recipient. The same facts evaluated
+/// again after a restart or a lost save make the same letter, which the
+/// letters keep once (engineering #11); a Conductor that took the mission
+/// over gets its own letter, since one intent reaches one recipient. A
+/// wake recorded before keys names its `seq`; a key too long for an intent
+/// is hashed.
+pub(super) fn wake_intent(mission: &Mission, wake: &PendingWake) -> String {
     let conductor = &mission.conductor;
-    format!(
-        "mission:{}:{}:{}:{}:{}:{}:{}",
-        mission.id,
-        wake.node,
-        wake.pr
-            .map_or_else(|| "-".to_owned(), |number| number.to_string()),
-        wake.event.as_str(),
-        // `seq` makes the intent unique; a short head keeps it readable
-        // and under the intent's length limit.
-        wake.head
-            .as_deref()
-            .map_or("-", |head| head.get(..12).unwrap_or(head)),
-        wake.seq,
-        wake.to.as_deref().unwrap_or_else(|| conductor
+    let recipient = wake.to.as_deref().unwrap_or_else(|| {
+        conductor
             .agent_id
             .as_deref()
-            .unwrap_or(&conductor.actor.pane_id))
-    )
+            .unwrap_or(&conductor.actor.pane_id)
+    });
+    let Some(key) = wake.key.as_deref() else {
+        return format!(
+            "mission:{}:{}:{}:{}:{}:{}:{recipient}",
+            mission.id,
+            wake.node,
+            wake.pr
+                .map_or_else(|| "-".to_owned(), |number| number.to_string()),
+            wake.event.as_str(),
+            wake.head
+                .as_deref()
+                .map_or("-", |head| head.get(..12).unwrap_or(head)),
+            wake.seq,
+        );
+    };
+    let intent = format!("mission:{}:{key}:{recipient}", mission.id);
+    if crate::delivery::valid_key(&intent) {
+        return intent;
+    }
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in key.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0100_0000_01b3);
+    }
+    format!("mission:{}:{hash:016x}:{recipient}", mission.id)
 }
 
 impl Runtime {
@@ -660,12 +700,13 @@ impl Runtime {
         by: &str,
         now: u64,
     ) -> Result<bool, String> {
-        self.close_mission_with(id, end, report, by, now, |_| Vec::new())
+        self.close_mission_with(id, end, report, by, now, None, |_| Vec::new())
     }
 
     /// `close_mission`, with what the closer adds to the closed mission
-    /// (`also`, which returns its events) kept in the same save, so a
-    /// restart never finds the close without what it said (B27).
+    /// (`also`, which returns its events) in the same save, and the events
+    /// keyed by `key` when an evaluation closes it (B27).
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn close_mission_with(
         &mut self,
         id: &str,
@@ -673,6 +714,7 @@ impl Runtime {
         report: Option<String>,
         by: &str,
         now: u64,
+        key: Option<&str>,
         also: impl FnOnce(&mut Mission) -> Vec<crate::mission_events::MissionEvent>,
     ) -> Result<bool, String> {
         let current = self.missions.book.get(id).ok_or("mission_unknown")?;
@@ -713,6 +755,9 @@ impl Runtime {
         let mut events = super::mission_events::close_events(&before, target, now);
         events.extend(ended);
         events.extend(also(target));
+        if let Some(key) = key {
+            super::mission_health::key_events(key, &mut events);
+        }
         if !target.status.open() {
             self.missions.answers_held.remove(id);
         }
@@ -787,17 +832,8 @@ impl Runtime {
             return;
         }
         if let Some(store) = &self.missions.store {
-            self.missions.saved = store.save(&self.missions.book);
+            store.save(&self.missions.book);
         }
-    }
-
-    /// Whether the book as last saved is on disk; with no store it is never
-    /// written, so nothing waits on it.
-    pub(super) fn missions_on_disk(&self) -> bool {
-        self.missions
-            .store
-            .as_ref()
-            .is_none_or(|store| store.durable() >= self.missions.saved)
     }
 
     /// Runs a `hide mission` command from `caller`'s pane on `device`.
@@ -945,11 +981,9 @@ impl Runtime {
                     closed_at_unix_ms: None,
                     wakes: Vec::new(),
                     wake_seq: 0,
-                    event_seq: 0,
                     end_asked_at_unix_ms: None,
                     attention_seq: 0,
                     reopened_on: None,
-                    unlogged: Vec::new(),
                     handover: None,
                 };
                 crate::diagnostic!(json!({
@@ -1544,7 +1578,7 @@ impl Runtime {
                 continue;
             }
             if let Some(mission) = self.missions.book.get_mut(&id) {
-                record_wake(mission, String::new(), None, WakeEvent::Resumed, None);
+                record_wake(mission, String::new(), None, WakeEvent::Resumed, None, None);
             }
             crate::diagnostic!(json!({
                 "component": "missions", "kind": "mission.conductor_resumed",
@@ -1739,15 +1773,40 @@ impl Runtime {
                         None => {}
                         Some(before) => {
                             if now_seen.merged && !before.merged {
-                                merged.push(super::mission_events::merged_event(node, number, now));
-                                events.push((node.key.clone(), number, WakeEvent::Merged, None));
+                                // Keyed by the fact, so a read again after a
+                                // lost save writes it once (B27).
+                                let mut event =
+                                    super::mission_events::merged_event(node, number, now);
+                                event.id =
+                                    Some(format!("{}@{}:merged:{number}", node.key, node.round));
+                                merged.push(event);
+                                events.push((
+                                    node.key.clone(),
+                                    number,
+                                    WakeEvent::Merged,
+                                    None,
+                                    None,
+                                ));
                             } else if !now_seen.merged {
                                 if now_seen.changes_requested && !before.changes_requested {
+                                    // Changes asked for again on one head are
+                                    // news again: GitHub's time of the pull
+                                    // request tells the asks apart.
+                                    let key = format!(
+                                        "changes_requested:{}:{number}:{}:{}",
+                                        node.key,
+                                        now_seen
+                                            .head
+                                            .as_deref()
+                                            .map_or("-", |head| head.get(..12).unwrap_or(head)),
+                                        pull.updated_at_unix_ms.unwrap_or_default()
+                                    );
                                     events.push((
                                         node.key.clone(),
                                         number,
                                         WakeEvent::ChangesRequested,
                                         now_seen.head.clone(),
+                                        Some(key),
                                     ));
                                 }
                                 if now_seen.head.is_some() && now_seen.head != before.head {
@@ -1756,6 +1815,7 @@ impl Runtime {
                                         number,
                                         WakeEvent::NewHead,
                                         now_seen.head.clone(),
+                                        None,
                                     ));
                                 }
                             }
@@ -1784,7 +1844,7 @@ impl Runtime {
             // A done mission's merge is the end it was waiting for, not work
             // for its Conductor (B41).
             if done {
-                events.retain(|(_, _, event, _)| *event != WakeEvent::Merged);
+                events.retain(|(_, _, event, _, _)| *event != WakeEvent::Merged);
             }
             // A Conductor conducts one open mission at a time, so a change
             // to a done one while it conducts another wakes it with the
@@ -1826,8 +1886,8 @@ impl Runtime {
             if reopen {
                 reopened.push(mission.id.clone());
             }
-            for (node, pr, event, head) in events {
-                recorded.extend(record_wake(mission, node, Some(pr), event, head));
+            for (node, pr, event, head, key) in events {
+                recorded.extend(record_wake(mission, node, Some(pr), event, head, key));
             }
         }
         for (id, events) in ended {
@@ -1846,7 +1906,6 @@ impl Runtime {
         // One save keeps every change of this read with its events (B27).
         if changed {
             self.save_missions();
-            self.drain_mission_outbox();
         }
         // The outside nodes follow the same answer (B19, B20).
         for project in self.outside_projects(device) {
@@ -1931,13 +1990,6 @@ impl Runtime {
     /// Conductor's inbox, so one that fails is tried again on the next
     /// GitHub read or takeover.
     pub(super) fn flush_mission_wakes(&mut self) {
-        // A letter goes once the book that holds its wake and the change it
-        // tells is on disk, so a restart never tells a change it lost
-        // (B27); the tick sends it then (`drain_mission_outbox`).
-        if !self.missions_on_disk() {
-            self.missions.wakes_wait = true;
-            return;
-        }
         if self.missions.waking {
             self.missions.rewake = true;
             return;

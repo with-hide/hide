@@ -558,6 +558,9 @@ impl Runtime {
             },
         )?;
         next.reopened = next.reopened.saturating_add(1);
+        if next.status.finished() {
+            next.back_to_work();
+        }
         if next.status != NodeStatus::Working {
             next = crate::missions::apply_patch(
                 &next,

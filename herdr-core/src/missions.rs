@@ -419,8 +419,8 @@ pub struct PrSeen {
 /// and never loses it (D-39, engineering #11).
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PendingWake {
-    /// The mission's count of wakes, so the same event twice (changes
-    /// asked for again on one head) is two letters, not one.
+    /// The mission's count of wakes, which names the wake in the record
+    /// while its letter is sent; its letter's intent is `key`.
     pub seq: u64,
     pub node: String,
     /// The pull request the news is about; none for an outside branch.
@@ -438,6 +438,13 @@ pub struct PendingWake {
     pub why: Option<FixReason>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action: Option<OperatorAction>,
+    /// The facts the wake stands on (`MissionEvent::id`'s kind of key), its
+    /// letter's intent with the mission and the recipient: the same facts
+    /// evaluated again, after a restart or a lost save, are the same letter
+    /// (B27, engineering #11). None for a wake recorded before keys, whose
+    /// intent names `seq`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -655,6 +662,11 @@ pub struct MissionNode {
     /// that waited for room or was withdrawn is started again.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub cleanup_accepted: bool,
+    /// How often the node went back to work from a finish: the keys of
+    /// Hide's acts on it name it, so an act of a later round is its own
+    /// (`MissionEvent::id`, B27).
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub round: u32,
     /// What Hide itself did to the node last (D-07, D-15).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hide: Option<HideMark>,
@@ -741,6 +753,7 @@ impl MissionNode {
     /// of its worktree goes with it, so its next finish is asked again
     /// (B20).
     pub(crate) fn back_to_work(&mut self) {
+        self.round = self.round.saturating_add(1);
         self.cleanup_accepted = false;
         let ask = cause_key(AttentionReason::CleanupAsk, None, None);
         self.handled.retain(|cause| *cause != ask);
@@ -863,10 +876,6 @@ pub struct Mission {
     /// How many wakes this mission has had; the next one's `seq`.
     #[serde(default)]
     pub wake_seq: u64,
-    /// How many of Hide's own acts have been numbered for the history; the
-    /// next one's `MissionEvent::id`.
-    #[serde(default)]
-    pub event_seq: u64,
     /// When the operator asked the Conductor to end the mission (`미션
     /// 종료`), until it closes; a second press asks nothing more.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -879,12 +888,6 @@ pub struct Mission {
     /// mission-node-simple B18).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reopened_on: Option<String>,
-    /// History events saved with the state they record and not yet known
-    /// written to the mission's history file, oldest first, at most
-    /// `UNLOGGED_LIMIT` (B27): the history is written only once the book
-    /// holding them is on disk, and a restart writes what is left.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub unlogged: Vec<crate::mission_events::MissionEvent>,
     /// The operator's one handover of a Conductor that is still there
     /// (B15): good for one `hide mission take --handover` from the session
     /// it was made for, while the Conductor it was made on holds the
@@ -892,11 +895,6 @@ pub struct Mission {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handover: Option<Handover>,
 }
-
-/// Events a mission keeps waiting for its history file; past this the
-/// oldest goes and that is logged, as the history itself drops its oldest
-/// (B21).
-pub const UNLOGGED_LIMIT: usize = 64;
 
 /// How long the operator's handover waits for the session it started.
 pub const HANDOVER_TTL_MS: u64 = 10 * 60_000;
@@ -923,6 +921,10 @@ pub struct Handover {
 }
 
 fn is_zero_u64(value: &u64) -> bool {
+    *value == 0
+}
+
+fn is_zero_u32(value: &u32) -> bool {
     *value == 0
 }
 
@@ -1780,6 +1782,7 @@ pub(crate) fn apply_plan(
                 handled: Vec::new(),
                 resumed: None,
                 cleanup_accepted: false,
+                round: 0,
                 hide: None,
                 woken: Vec::new(),
                 worktree: None,
@@ -2565,15 +2568,8 @@ impl MissionStore {
             .map_err(|error| format!("could not keep its copy before conversion: {error}"))
     }
 
-    /// Queues `book` to be written and returns its save's number
-    /// (`durable`).
-    pub(crate) fn save(&self, book: &MissionBook) -> u64 {
-        self.file.save(Arc::new(book.clone()))
-    }
-
-    /// The number of the newest save known on disk.
-    pub(crate) fn durable(&self) -> u64 {
-        self.file.durable()
+    pub(crate) fn save(&self, book: &MissionBook) {
+        self.file.save(Arc::new(book.clone()));
     }
 
     pub(crate) fn path(&self) -> &std::path::Path {
@@ -2634,11 +2630,9 @@ pub(crate) mod tests {
             closed_at_unix_ms: None,
             wakes: Vec::new(),
             wake_seq: 0,
-            event_seq: 0,
             end_asked_at_unix_ms: None,
             attention_seq: 0,
             reopened_on: None,
-            unlogged: Vec::new(),
             handover: None,
         }
     }

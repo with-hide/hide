@@ -631,7 +631,7 @@ fn a_missions_pull_request_wakes_its_conductor_once_per_change() {
     );
     assert_eq!(
         runtime.note_mission_pulls(node, &pushed),
-        vec!["mission:mission-1:fix:7:new_head:b2:1:sender"]
+        vec!["mission:mission-1:new_head:fix:7:b2:sender"]
     );
     assert!(runtime.note_mission_pulls(node, &pushed).is_empty());
 
@@ -646,7 +646,7 @@ fn a_missions_pull_request_wakes_its_conductor_once_per_change() {
     );
     assert_eq!(
         runtime.note_mission_pulls(node, &reviewed),
-        vec!["mission:mission-1:fix:7:changes_requested:b2:2:sender"]
+        vec!["mission:mission-1:changes_requested:fix:7:b2:1:sender"]
     );
 
     // A new commit on a done mission's pull request opens it again.
@@ -717,7 +717,7 @@ fn a_done_mission_does_not_open_beside_its_conductors_open_one() {
     let pushed = github(vec![pull(7, "b2", PullRequestBadge::Open, None)], false);
     assert_eq!(
         runtime.note_mission_pulls(node, &pushed),
-        vec!["mission:mission-1:fix:7:new_head:b2:1:sender"],
+        vec!["mission:mission-1:new_head:fix:7:b2:sender"],
         "the Conductor is still told"
     );
     let status = |runtime: &Runtime, id: &str| runtime.missions.book.get(id).unwrap().status;
@@ -771,10 +771,20 @@ fn a_missions_wake_waits_in_the_record_until_its_letter_is_delivered() {
         )],
         false,
     );
+    // A second ask on the same head is news again: GitHub's time of the
+    // pull request moved with it.
+    let mut asked_again = pull(
+        7,
+        "a1",
+        PullRequestBadge::Open,
+        Some(ReviewDecision::ChangesRequested),
+    );
+    asked_again.updated_at_unix_ms = Some(2);
+    let asked_again = github(vec![asked_again], false);
     runtime.note_mission_pulls(node, &open);
     let first = runtime.note_mission_pulls(node, &asked);
     runtime.note_mission_pulls(node, &open);
-    let second = runtime.note_mission_pulls(node, &asked);
+    let second = runtime.note_mission_pulls(node, &asked_again);
     assert_eq!(first.len(), 1);
     assert_eq!(second.len(), 1);
     assert_ne!(first, second, "a second ask is its own letter");
@@ -5131,14 +5141,22 @@ fn a_full_wake_queue_keeps_what_waits() {
                 "a".into(),
                 None,
                 WakeEvent::Merged,
+                None,
                 None
             )
             .is_some()
         );
     }
     assert!(
-        crate::runtime::missions::record_wake(mission, "b".into(), None, WakeEvent::Closed, None)
-            .is_none()
+        crate::runtime::missions::record_wake(
+            mission,
+            "b".into(),
+            None,
+            WakeEvent::Closed,
+            None,
+            None
+        )
+        .is_none()
     );
     assert_eq!(mission.wakes.len(), PENDING_WAKE_LIMIT);
     assert_eq!(mission.wakes[0].seq, 1);
@@ -5154,88 +5172,55 @@ fn a_full_wake_queue_keeps_what_waits() {
         reason: None,
         why: None,
         action: None,
+        key: None,
     };
     assert!(crate::runtime::missions::push_wake(mission, worker).is_some());
 }
 
-/// PRD mission-node-simple B27: an event is saved in the book with the
-/// change it records, the history is written from there once that book is
-/// on disk, and a restart writes what the history missed, each number once.
+/// PRD mission-node-simple B27: an act Hide's evaluation makes is keyed by
+/// the facts it stands on, so the same facts evaluated again, as after a
+/// restart that lost the book's last save, write one history event and make
+/// the same letter, whatever was saved first.
 #[test]
-fn a_restart_writes_the_events_its_history_missed_once_each() {
-    use crate::mission_events::{EventKind, MissionEvent, MissionEventStore};
-    use crate::missions::{MissionBook, MissionStore, Restored};
-    let dir = tempfile::tempdir().unwrap();
-    let book_path = dir.path().join("missions.json");
-    let events_dir = dir.path().join("events");
-    // A book that was saved with two numbered events its history never got:
-    // the stop came between the book's write and the history's.
-    let mut mission = crate::missions::tests::mission();
-    let mut first = MissionEvent::new(5, EventKind::HideClosed);
-    first.id = Some(1);
-    let mut second = MissionEvent::new(6, EventKind::Raised).node("a");
-    second.id = Some(2);
-    mission.event_seq = 2;
-    mission.unlogged = vec![first, second];
-    {
-        let store = MissionStore::new(book_path.clone());
-        let number = store.save(&MissionBook {
-            missions: vec![mission],
-            next: 1,
-        });
-        drop(store);
-        assert!(number > 0);
-    }
-    let restart = || {
-        let fixture = conducting();
-        {
-            let mut runtime = fixture.runtime.lock().unwrap();
-            let store = MissionStore::new(book_path.clone());
-            let restored = store.restore();
-            assert!(matches!(restored, Restored::Read(_)));
-            runtime.install_mission_store(store, restored);
-            let events = MissionEventStore::new(events_dir.clone());
-            let logs = events.restore(["mission-1"].into_iter());
-            runtime.install_mission_events(events, logs);
-            runtime.drain_mission_outbox();
-            runtime.drain_mission_outbox();
-        }
-        fixture
+fn the_same_facts_evaluated_twice_write_one_event_and_one_letter() {
+    use crate::mission_events::EventKind;
+    use crate::missions::AttentionReason;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    let lost = runtime.missions.book.clone();
+    let raise = |runtime: &mut Runtime, now: u64| {
+        let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+        let events = crate::runtime::mission_health::raise(
+            mission,
+            "fix",
+            AttentionReason::WorkerEnded,
+            None,
+            now,
+        );
+        let wake = mission.wakes.last().cloned().unwrap();
+        let intent = crate::runtime::missions::wake_intent(mission, &wake);
+        runtime.record_mission_events("mission-1", events);
+        intent
     };
-    let ids = |fixture: &Fixture| -> Vec<u64> {
-        let runtime = fixture.runtime.lock().unwrap();
-        runtime.missions.events["mission-1"]
-            .events
-            .iter()
-            .filter_map(|event| event.id)
-            .collect()
-    };
-    let fixture = restart();
-    assert_eq!(ids(&fixture), [1, 2]);
-    {
-        // A new act is numbered after them, in the same save as its change.
-        let mut runtime = fixture.runtime.lock().unwrap();
-        runtime.record_mission_events("mission-1", vec![MissionEvent::new(7, EventKind::Raised)]);
-        assert_eq!(runtime.missions.book.get("mission-1").unwrap().event_seq, 3);
-    }
-    let on_disk = |dir: &std::path::Path| -> Vec<u64> {
-        MissionEventStore::new(dir.to_path_buf()).restore(["mission-1"].into_iter())["mission-1"]
-            .events
-            .iter()
-            .filter_map(|event| event.id)
-            .collect()
-    };
-    // A stop before that book is known on disk leaves the new act in the
-    // book only; the history file never holds a number the book lost.
-    drop(fixture);
-    assert_eq!(on_disk(&events_dir), [1, 2]);
-    // The next start writes it, and one after that writes nothing twice.
-    drop(restart());
-    assert_eq!(on_disk(&events_dir), [1, 2, 3]);
-    let fixture = restart();
-    assert_eq!(ids(&fixture), [1, 2, 3]);
-    drop(fixture);
-    assert_eq!(on_disk(&events_dir), [1, 2, 3]);
+    let first = raise(&mut runtime, 5);
+    // The save is lost: the book is as it was before the raise, the history
+    // and the letter are not.
+    runtime.missions.book = lost;
+    let second = raise(&mut runtime, 9);
+    assert_eq!(first, second);
+    let raised = runtime.missions.events["mission-1"]
+        .events
+        .iter()
+        .filter(|event| event.kind == EventKind::Raised)
+        .count();
+    assert_eq!(raised, 1);
 }
 
 /// PRD mission-node-simple B27: a node that cannot remember a new cause
