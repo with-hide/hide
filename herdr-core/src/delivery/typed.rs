@@ -12,6 +12,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::agent_state::AgentActivity;
 use crate::runtime::delivery::Observation;
 
 /// The Hide role that tells a parent, or a letter's sender, that typed input
@@ -79,12 +80,25 @@ pub(crate) enum Standing {
     /// Not typed yet, typed too recently, or the agent works or is not
     /// observed: no record is owed yet.
     Waiting,
+    /// The core has no turn for the pane's current read: the read is
+    /// stale, or the pass that observed the pane has not laid the hook's and
+    /// the session read's facts yet (`Observation::projected_turn`). Nothing
+    /// moves on it, and the last verdict stands (`Runtime::input_standing`).
+    /// A state ends it, never a timer: the next agent list, asked every
+    /// second while Herdr's stream stands, lays the turn of a fresh read; a
+    /// stale read ends with the list that confirms the agents again, and
+    /// until then the row shows the pane's activity unknown; a pane Herdr
+    /// no longer lists leaves the observations and takes its input with it.
+    Unsettled,
     /// Typed, and the agent rested without its record for
     /// [`RECORD_WAIT_MS`] since `since`.
     Unconfirmed { since: u64 },
 }
 
 /// Where `input` stands by `observation` of the pane it was typed into.
+/// Whether the agent works is the core's turn (`agent_state::turn_projection`,
+/// the answer the row and the doorbell read), never Herdr's own status: an
+/// agent the turn reads at rest, or in a state no source names, rests.
 pub(crate) fn standing(
     input: &TypedInput,
     observation: Option<&Observation>,
@@ -96,12 +110,18 @@ pub(crate) fn standing(
     let Some(observation) = observation else {
         return Standing::Waiting;
     };
-    if input.attempts == 0 || observation.status == "working" || observation.telemetry_stale {
+    if input.attempts == 0 {
+        return Standing::Waiting;
+    }
+    let Some(projected) = observation.projected_turn() else {
+        return Standing::Unsettled;
+    };
+    if projected.turn.activity == AgentActivity::Working {
         return Standing::Waiting;
     }
     let rest_since = input
         .typed_at_unix_ms
-        .max(observation.status_changed_at_unix_ms);
+        .max(projected.changed_at(observation));
     if now.saturating_sub(rest_since) >= RECORD_WAIT_MS {
         Standing::Unconfirmed { since: rest_since }
     } else {
@@ -113,10 +133,10 @@ pub(crate) fn standing(
 /// agent's screen since the last typing (`Observation::answered_at_unix_ms`:
 /// the operator's keys, a phone reply, or a parent's `hide pane send` that
 /// landed whole, never one that stopped partway), input has been quiet
-/// for the quiet period, the agent rests, and typings are left. Text and
-/// Enter on a choice screen can pick an option, so an unanswered screen is
-/// never typed into again; the composer is read empty right before the
-/// typing as well (`composer::forced_clear`).
+/// for the quiet period, the agent rests (`composer_readable`), and typings
+/// are left. Text and Enter on a choice screen can pick an option, so an
+/// unanswered screen is never typed into again; the composer is read empty
+/// right before the typing as well (`composer::forced_clear`).
 pub(crate) fn retype_due(input: &TypedInput, observation: &Observation, now: u64) -> bool {
     matches!(
         standing(input, Some(observation), now),
@@ -127,11 +147,14 @@ pub(crate) fn retype_due(input: &TypedInput, observation: &Observation, now: u64
 }
 
 /// Whether the composer of an agent whose input is unconfirmed may be read
-/// now: it rests as `idle` or `done` with a known state and nobody typed
+/// now: the core's turn reads it at rest with nothing of its own waiting,
+/// Herdr knows its state and lets keys in (the doorbell's gate,
+/// `doorbell::unheld_turn` and `doorbell::takes_keys`), and nobody typed
 /// there for the quiet period, so what it shows is what was left there.
 pub(crate) fn composer_readable(observation: &Observation, now: u64) -> bool {
-    matches!(observation.status.as_str(), "idle" | "done")
-        && observation.state_change_seq.is_some()
+    super::doorbell::unheld_turn(observation)
+        .is_ok_and(|projected| projected.turn.activity == AgentActivity::Stopped)
+        && super::doorbell::takes_keys(observation).is_ok()
         && now.saturating_sub(observation.last_input_at_unix_ms) >= super::INPUT_QUIET_MS
 }
 
@@ -246,6 +269,8 @@ mod tests {
             observed_generation: 0,
             unreadable: None,
         }
+        // The core's turn, from Herdr's state alone, as the pass lays it.
+        .laid(None, None)
     }
 
     fn typed(at: u64) -> TypedInput {

@@ -75,6 +75,16 @@ pub(crate) struct PlanRuntime {
     /// before the input is judged unconfirmed: the typing and when it was
     /// asked. Bounded by the unconfirmed inputs.
     pub(crate) input_reread: BTreeMap<String, (u8, u64)>,
+    /// Each unconfirmed input's last verdict reached while the core had a
+    /// turn for its pane, by input id, with the typing it is for: what the
+    /// row and `hide agent show` keep saying while the turn is not laid
+    /// (`typed::Standing::Unsettled`). Bounded by the unconfirmed inputs.
+    pub(crate) input_verdicts: BTreeMap<String, (u8, crate::delivery::typed::Standing)>,
+    /// Briefs whose agent's hook reported a turn started after the typing
+    /// with no other input to start it, by spawn id, with that typing: the
+    /// turn is their record (`input.confirmed` with `by: turn`), kept until
+    /// the store confirms it. Bounded by the unconfirmed briefs.
+    pub(crate) input_turn_started: BTreeMap<String, u8>,
     /// The panes whose sessions are to be read again, taken by this
     /// machine's session-sync thread on its next tick.
     pub(crate) session_rereads: Vec<String>,
