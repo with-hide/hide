@@ -1,121 +1,255 @@
 //! Claude Code's record of a paste. A paste of four lines or more, or of
-//! 800 characters or more, reaches its prompt hook and its session file
-//! wrapped as `\n\n<pasted_content id="d974">\n<the pasted text, trimmed>\n
-//! </pasted_content id="d974">\n`, the id its own (Claude Code 2.1.316,
-//! measured 2026-11-01); a shorter one arrives as typed. Every reader of a
-//! person's message that needs the words as typed goes through here: the
+//! 800 characters or more, reaches its prompt hook and its session file as a
+//! block, `\n\n<pasted_content id="d974">\n<the pasted text>\n
+//! </pasted_content id="d974">\n`, whose id is four lowercase hex digits; a
+//! shorter one arrives as typed (Claude Code 2.1.316, measured 2026-11-01).
+//! Inside a block, and in the typed words beside one, Claude Code writes a
+//! backslash after each `<` that starts a `pasted_content` tag, so a pasted
+//! text cannot close its own block.
+//!
+//! This reads blocks as Claude Code's own reader does (`C0t` and `Mde` in the
+//! 2.1.316 bundle): a block opens at `<pasted_content id="` with a valid id
+//! and a line break, closes at the first line that starts with its own close
+//! tag, and takes up to two line breaks on each side with it. Every reader of
+//! a person's message that needs the words as typed goes through here: the
 //! thread keeps pasted text apart from typed words, and the prompt digest
 //! compares what Hide pasted with what the agent took.
 
-const OPEN: &str = "<pasted_content";
-const CLOSE: &str = "</pasted_content";
+use std::borrow::Cow;
 
-/// `text` cut at each pasted-content wrapper, the wrapped text marked as
-/// pasted and without its tags; pieces that hold only white space are left
-/// out. A wrapper closes at the first close tag naming the same attributes
-/// as its open tag, or at a bare `</pasted_content>`; an unclosed wrapper is
-/// the person's text.
-pub fn pasted_pieces(text: &str) -> Vec<(&str, bool)> {
+const OPEN: &str = "<pasted_content id=\"";
+const OPEN_END: &str = "\">\n";
+/// The longest run of characters between `<\` and the tag name Claude
+/// Code's escape reads as part of the tag, such as the `/` of a close tag.
+const ESCAPE_FILLER: usize = 8;
+
+/// One piece of a person's message: words they typed, or a paste's body.
+enum Piece<'a> {
+    Typed(&'a str),
+    Pasted(&'a str),
+}
+
+/// `text` in the pieces Claude Code's reader cuts it into.
+fn pieces(text: &str) -> Vec<Piece<'_>> {
+    let bytes = text.as_bytes();
     let mut pieces = Vec::new();
-    let mut rest = text;
-    while let Some((open, inner, end)) = next_wrapper(rest) {
-        pieces.push((&rest[..open], false));
-        pieces.push((inner, true));
-        rest = &rest[end..];
+    let mut taken = 0;
+    let mut from = 0;
+    while let Some(found) = text[from..].find(OPEN) {
+        let open = from + found;
+        let id_at = open + OPEN.len();
+        let id = text.get(id_at..id_at + 4).filter(|id| valid_id(id));
+        let (Some(id), true) = (
+            id,
+            text.get(id_at + 4..)
+                .is_some_and(|rest| rest.starts_with(OPEN_END)),
+        ) else {
+            from = id_at;
+            continue;
+        };
+        let body_at = id_at + 4 + OPEN_END.len();
+        let close = format!("\n</pasted_content id=\"{id}\">");
+        // The close tag's line break may be the open tag's own: an empty body.
+        let Some(found) = text[body_at - 1..].find(&close) else {
+            break;
+        };
+        let close_at = body_at - 1 + found + 1;
+        let mut start = open;
+        for _ in 0..2 {
+            if start > taken && bytes[start - 1] == b'\n' {
+                start -= 1;
+            }
+        }
+        if start > taken {
+            pieces.push(Piece::Typed(&text[taken..start]));
+        }
+        let mut end = close_at + close.len() - 1;
+        for _ in 0..2 {
+            if bytes.get(end) == Some(&b'\n') {
+                end += 1;
+            }
+        }
+        pieces.push(Piece::Pasted(text.get(body_at..close_at - 1).unwrap_or("")));
+        taken = end;
+        from = end;
     }
-    pieces.push((rest, false));
+    if taken < text.len() {
+        pieces.push(Piece::Typed(&text[taken..]));
+    }
+    pieces
+}
+
+fn valid_id(id: &str) -> bool {
+    id.bytes()
+        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+/// `text` cut at each paste, the pasted text marked as pasted and without
+/// its tags; pieces that hold only white space are left out.
+pub fn pasted_pieces(text: &str) -> Vec<(&str, bool)> {
+    let mut pieces: Vec<_> = pieces(text)
+        .into_iter()
+        .map(|piece| match piece {
+            Piece::Typed(text) => (text, false),
+            Piece::Pasted(body) => (body, true),
+        })
+        .collect();
     pieces.retain(|(piece, _)| !piece.trim().is_empty());
     pieces
 }
 
-/// The pasted text when `text` is one paste and nothing else: what a person,
-/// or Hide, pasted into an empty composer.
-pub fn only_pasted(text: &str) -> Option<&str> {
-    match pasted_pieces(text).as_slice() {
-        [(inner, true)] => Some(inner),
-        _ => None,
+/// What the person typed and pasted, in order, from Claude Code's record of
+/// it: each paste's body in place of its block, with Claude Code's escape of
+/// a `pasted_content` tag undone. Repeated until nothing changes, so a paste
+/// that itself held a block, written escaped inside the outer one, reads as
+/// the same text whether Claude Code wrapped it or not. Any other text comes
+/// back as it is.
+pub fn typed_text(record: &str) -> Cow<'_, str> {
+    let mut text = Cow::Borrowed(record);
+    loop {
+        let joined = join(&text);
+        let next = unescape(&joined).into_owned();
+        if next == *text {
+            return text;
+        }
+        // Each pass takes tags or a backslash out, so the text shortens.
+        text = Cow::Owned(next);
     }
 }
 
-/// The first closed wrapper in `text`: where its open tag starts, the text
-/// between the tags, and where its close tag ends.
-fn next_wrapper(text: &str) -> Option<(usize, &str, usize)> {
-    let mut from = 0;
-    loop {
-        let open = from + text[from..].find(OPEN)?;
-        let after = open + OPEN.len();
-        // `<pasted_contents` or `<pasted_content-x` is another tag.
-        if !text[after..].starts_with(['>', ' ']) {
-            from = after;
-            continue;
-        }
-        let tag_end = after + text[after..].find('>')? + 1;
-        let attributes = &text[after..tag_end - 1];
-        let body = &text[tag_end..];
-        let named = format!("{CLOSE}{attributes}>");
-        let bare = format!("{CLOSE}>");
-        let close = body
-            .find(&named)
-            .map(|at| (at, named.len()))
-            .or_else(|| body.find(&bare).map(|at| (at, bare.len())))?;
-        return Some((open, &body[..close.0], tag_end + close.0 + close.1));
+fn join(text: &str) -> Cow<'_, str> {
+    let pieces = pieces(text);
+    if pieces.iter().all(|piece| matches!(piece, Piece::Typed(_))) {
+        return Cow::Borrowed(text);
     }
+    Cow::Owned(
+        pieces
+            .into_iter()
+            .map(|piece| match piece {
+                Piece::Typed(text) | Piece::Pasted(text) => text,
+            })
+            .collect(),
+    )
+}
+
+/// `text` with the backslash taken out of each `<\` that Claude Code put
+/// before a `pasted_content` tag (any case, `-`, `_` or nothing between the
+/// words, a few other characters such as `/` before them). Look-alike letters
+/// Claude Code also escapes stay as written.
+fn unescape(text: &str) -> Cow<'_, str> {
+    let mut out = String::new();
+    let mut copied = 0;
+    let mut from = 0;
+    while let Some(found) = text[from..].find("<\\") {
+        let at = from + found;
+        let rest = &text[at + 2..];
+        let filler = rest
+            .char_indices()
+            .take(ESCAPE_FILLER + 1)
+            .find(|(_, c)| c.is_ascii_alphanumeric())
+            .map(|(index, _)| index);
+        if filler.is_some_and(|index| names_the_tag(&rest[index..])) {
+            out.push_str(&text[copied..at + 1]);
+            copied = at + 2;
+        }
+        from = at + 2;
+    }
+    if copied == 0 {
+        return Cow::Borrowed(text);
+    }
+    out.push_str(&text[copied..]);
+    Cow::Owned(out)
+}
+
+fn names_the_tag(text: &str) -> bool {
+    let starts = |text: &str, word: &str| {
+        text.get(..word.len())
+            .is_some_and(|head| head.eq_ignore_ascii_case(word))
+    };
+    if !starts(text, "pasted") {
+        return false;
+    }
+    let rest = &text["pasted".len()..];
+    let rest = rest.strip_prefix(['-', '_']).unwrap_or(rest);
+    starts(rest, "content")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // The shape Claude Code 2.1.316's `UserPromptSubmit` hook and session
-    // file carried for a 3.5 KB markdown brief typed by `agent.prompt`.
-    const WRAPPED: &str = "\n\n<pasted_content id=\"d974\">\n# Brief\n\nRun `hide agent show`.\n</pasted_content id=\"d974\">\n";
+    /// What Claude Code 2.1.316 writes for `pasted` (`hSe`): its escape of a
+    /// tag, the block around it with a line break before the close tag.
+    fn claude_block(id: &str, pasted: &str) -> String {
+        let escaped = pasted
+            .replace("<pasted_content", "<\\pasted_content")
+            .replace("</pasted_content", "<\\/pasted_content");
+        let end = if escaped.ends_with('\n') { "" } else { "\n" };
+        format!("\n\n<pasted_content id=\"{id}\">\n{escaped}{end}</pasted_content id=\"{id}\">\n")
+    }
 
     #[test]
-    fn pasted_content_is_cut_out_of_the_typed_words() {
-        let text = "look at this\n<pasted_content id=\"a1\">\nlog line\n</pasted_content>\nwhy?";
+    fn a_paste_reads_as_the_text_that_was_pasted() {
+        let brief = "# Brief\n\nRun `hide agent show`.";
+        assert_eq!(typed_text(&claude_block("d974", brief)), brief);
+        // Typed words beside it stay, as Claude Code's reader keeps them.
+        let mixed = format!("fix this{}why?", claude_block("0a1f", "panic at main.rs:3"));
+        assert_eq!(typed_text(&mixed), "fix thispanic at main.rs:3why?");
         assert_eq!(
-            pasted_pieces(text),
-            vec![
-                ("look at this\n", false),
-                ("\nlog line\n", true),
-                ("\nwhy?", false)
+            pasted_pieces(&mixed),
+            [
+                ("fix this", false),
+                ("panic at main.rs:3", true),
+                ("why?", false)
             ]
         );
+    }
+
+    #[test]
+    fn a_paste_that_quotes_another_paste_reads_as_typed_both_ways() {
+        // A parent's brief quoting the operator's paste: Claude Code escapes
+        // the quoted tags inside the child's own block.
+        let quoted = claude_block("fc7e", "the operator's log");
+        let brief = format!("Look at this:{quoted}and fix it.");
+        let recorded = claude_block("d974", &brief);
+        assert!(recorded.contains("<\\/pasted_content id=\"fc7e\">"));
+        assert_eq!(typed_text(&recorded), typed_text(&brief));
         assert_eq!(
-            pasted_pieces("<pasted_content id=\"a\">never closed"),
-            vec![("<pasted_content id=\"a\">never closed", false)]
+            typed_text(&brief),
+            "Look at this:the operator's logand fix it."
         );
     }
 
     #[test]
-    fn a_whole_paste_reads_as_the_text_that_was_pasted() {
-        assert_eq!(
-            only_pasted(WRAPPED),
-            Some("\n# Brief\n\nRun `hide agent show`.\n")
-        );
+    fn only_a_block_as_claude_code_writes_one_is_a_paste() {
+        for text in [
+            // Not four lowercase hex digits.
+            "<pasted_content id=\"p1\">\nx\n</pasted_content id=\"p1\">",
+            // No line break after the open tag or before the close tag.
+            "<pasted_content id=\"a1b2\">x\n</pasted_content id=\"a1b2\">",
+            "<pasted_content id=\"a1b2\">\nx</pasted_content id=\"a1b2\">",
+            // Another block's close tag, or none.
+            "<pasted_content id=\"a1b2\">\nx\n</pasted_content id=\"c3d4\">",
+            "<pasted_content id=\"a1b2\">\nnever closed",
+        ] {
+            assert_eq!(typed_text(text), text, "{text:?}");
+            assert_eq!(pasted_pieces(text), [(text, false)], "{text:?}");
+        }
     }
 
     #[test]
-    fn a_paste_beside_typed_words_or_unclosed_is_not_a_whole_paste() {
+    fn only_a_backslash_claude_code_put_before_the_tag_is_taken_out() {
         assert_eq!(
-            only_pasted("fix this\n<pasted_content id=\"a\">\nx\n</pasted_content id=\"a\">"),
-            None
+            unescape("<\\pasted_content <\\/PASTED-CONTENT <\\ /pastedcontent"),
+            "<pasted_content </PASTED-CONTENT < /pastedcontent"
         );
-        assert_eq!(only_pasted("<pasted_content id=\"a\">\nx\n"), None);
-        assert_eq!(only_pasted("plain words"), None);
-    }
-
-    #[test]
-    fn a_wrapper_closes_at_its_own_close_tag_only() {
-        // A pasted text quoting another paste's close tag keeps it.
-        let text = "<pasted_content id=\"b\">\nsee </pasted_content id=\"a\"> here\n</pasted_content id=\"b\">";
-        assert_eq!(
-            only_pasted(text),
-            Some("\nsee </pasted_content id=\"a\"> here\n")
-        );
-        assert_eq!(
-            pasted_pieces("<pasted_contents>x</pasted_contents>"),
-            [("<pasted_contents>x</pasted_contents>", false)]
-        );
+        for text in ["<\\pasted", "<\\b>", "a <\\ b", "<\\pasted_contents?"] {
+            let expected = if text.starts_with("<\\pasted_content") {
+                "<pasted_contents?"
+            } else {
+                text
+            };
+            assert_eq!(unescape(text), expected, "{text:?}");
+        }
     }
 }

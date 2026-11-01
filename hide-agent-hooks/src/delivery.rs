@@ -78,27 +78,39 @@ pub fn read_prompt(payload: &[u8], truncated: bool) -> Result<Prompt, Failure> {
 }
 
 /// What the hook tells the core about the submitted prompt: the SHA-256 of
-/// its canonical text in lowercase hex. The canonical text is what was typed,
-/// as each agent records it: a prompt that is one paste and nothing else is
-/// the pasted text (`hide_session::pasted`, Claude Code's wrapper), and line
-/// breaks (CR and LF) and characters above U+FFFF are removed before
-/// trimming. A terminal paste sends each line break as CR, an agent records
-/// LF, and Grok on Windows takes the paste without them; some console readers
-/// drop characters above U+FFFF, including the leading owl. Every agent and
-/// system uses
-/// this same identity rule, on both sides: the hook's prompt and the session
-/// file's message, and the text Hide typed.
+/// its canonical text ([`canonical_prompt`]) in lowercase hex. Every agent
+/// and system uses this same identity rule, on both sides: the hook's prompt
+/// and the session file's message, and the text Hide typed.
 /// Only the core knows which line its
 /// doorbell typed into the pane, so the prompt is the bell exactly when this
 /// matches the digest of that line; the hook never decides it from the text,
 /// and the prompt itself never leaves the hook.
 pub fn prompt_digest(prompt: &str) -> String {
-    let typed = hide_session::pasted::only_pasted(prompt).unwrap_or(prompt);
-    let canonical: String = typed
+    full_prompt_digest(&canonical_prompt(prompt))
+}
+
+/// What was typed, as each agent records it: Claude Code's record of a paste
+/// reads as the text that was pasted (`hide_session::pasted::typed_text`),
+/// and line breaks (CR and LF) and characters above U+FFFF are removed before
+/// trimming. A terminal paste sends each line break as CR, an agent records
+/// LF, and Grok on Windows takes the paste without them; some console readers
+/// drop characters above U+FFFF, including the leading owl.
+pub fn canonical_prompt(prompt: &str) -> String {
+    let canonical: String = hide_session::pasted::typed_text(prompt)
         .chars()
         .filter(|&c| c <= '\u{ffff}' && c != '\r' && c != '\n')
         .collect();
-    full_prompt_digest(&canonical)
+    canonical.trim().to_owned()
+}
+
+/// Whether an agent's record of a person's message ends with `typed`: what
+/// the composer already held when Hide typed stays in front of it, such as a
+/// terminal report Antigravity on Windows took as typed (`27;1$y`, agent
+/// journey, 2026-11-01). The record holds the whole typed text, so the agent
+/// took it.
+pub fn ends_with_typed(record: &str, typed: &str) -> bool {
+    let typed = canonical_prompt(typed);
+    !typed.is_empty() && canonical_prompt(record).ends_with(&typed)
 }
 
 /// Accept the canonical digest and the whole-line digest older hooks send
