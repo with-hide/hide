@@ -208,37 +208,47 @@ pub(super) fn parse(text: &str) -> Result<Saved, String> {
 fn set_aside(path: &Path, backups: &Path) -> Result<PathBuf, String> {
     hide_platform::fs::private::create_dir_all(backups)
         .map_err(|error| format!("{} could not be made: {error}", backups.display()))?;
-    let stamp = std::time::SystemTime::now()
+    let backup_names = || -> Vec<(u128, u32)> {
+        std::fs::read_dir(backups)
+            .map(|entries| {
+                entries
+                    .filter_map(Result::ok)
+                    .filter_map(|entry| backup_name(entry.file_name().to_str()?))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since| since.as_millis());
-    // Named by when it was set aside, so the names sort oldest first.
-    let mut turn = 0;
-    let mut kept = backups.join(format!("session-{stamp:015}-{turn:03}.json"));
-    while kept.exists() {
-        turn += 1;
-        kept = backups.join(format!("session-{stamp:015}-{turn:03}.json"));
-    }
+    // Named by when it was set aside, after every backup already there, so
+    // the names sort oldest first even when two come in one millisecond or
+    // the clock stepped back; a name the pruning below freed is never used
+    // again, which would sort the newest first and remove it at once.
+    let name = backup_names()
+        .into_iter()
+        .max()
+        .filter(|newest| *newest >= (now, 0))
+        .map_or((now, 0), |(stamp, turn)| (stamp, turn + 1));
+    let kept = backups.join(format!("session-{:015}-{:03}.json", name.0, name.1));
     std::fs::rename(path, &kept)
         .map_err(|error| format!("{} could not be moved: {error}", path.display()))?;
-    let mut found: Vec<PathBuf> = std::fs::read_dir(backups)
-        .map(|entries| {
-            entries
-                .filter_map(Result::ok)
-                .map(|entry| entry.path())
-                .filter(|path| {
-                    path.file_name()
-                        .and_then(|name| name.to_str())
-                        .is_some_and(|name| name.starts_with("session-") && name.ends_with(".json"))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    found.sort();
+    let mut found = backup_names();
+    found.sort_unstable();
     let excess = found.len().saturating_sub(BACKUPS_KEPT);
-    for old in found.into_iter().take(excess) {
-        let _ = std::fs::remove_file(old);
+    for (stamp, turn) in found.into_iter().take(excess) {
+        let _ = std::fs::remove_file(backups.join(format!("session-{stamp:015}-{turn:03}.json")));
     }
     Ok(kept)
+}
+
+/// The time and turn a backup's file name says it was set aside at.
+fn backup_name(name: &str) -> Option<(u128, u32)> {
+    let (stamp, turn) = name
+        .strip_prefix("session-")?
+        .strip_suffix(".json")?
+        .split_once('-')?;
+    Some((stamp.parse().ok()?, turn.parse().ok()?))
 }
 
 /// Replaces the saved session at `path` with `saved`, durably.
@@ -412,6 +422,8 @@ mod tests {
 
     #[test]
     fn an_unreadable_session_is_kept_in_the_backups_the_newest_three() {
+        // Five within a millisecond or two: the newest are kept whatever the
+        // clock reads.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("session.json");
         let backups = dir.path().join("backups");
@@ -429,6 +441,26 @@ mod tests {
             ["not a session 2", "not a session 3", "not a session 4"]
         );
         assert!(matches!(read(&path, &backups), Read::Missing));
+    }
+
+    #[test]
+    fn a_backup_sorts_after_every_one_there_even_when_the_clock_stepped_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.json");
+        let backups = dir.path().join("backups");
+        std::fs::create_dir_all(&backups).unwrap();
+        std::fs::write(backups.join("session-999999999999999-000.json"), "later").unwrap();
+        std::fs::write(&path, "not a session").unwrap();
+        assert!(matches!(read(&path, &backups), Read::Unreadable));
+        let mut names: Vec<_> = std::fs::read_dir(&backups)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        names.sort();
+        assert_eq!(
+            std::fs::read_to_string(names.last().unwrap()).unwrap(),
+            "not a session"
+        );
     }
 
     #[test]
