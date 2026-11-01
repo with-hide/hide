@@ -183,7 +183,7 @@ pub fn next_action(code: &str) -> Option<&'static str> {
             "The agent in that pane is asleep or waking; send it a letter with hide request send instead"
         }
         "composer_not_empty" => {
-            "The agent's input box holds text, which may be a person's draft; nothing was sent. Read the pane with hide pane read, and send text and its keys in one hide pane send"
+            "Someone typed into the agent's input box and its text may be a person's draft; nothing was sent. Read the pane with hide pane read, and send again once the box is empty or submitted"
         }
         "keys_not_sent" => {
             "The text was typed but the keys were not pressed; read the pane with hide pane read before sending again"
@@ -473,11 +473,15 @@ impl Send<'_> {
             Some(gate) => Some(gate.admit(subject).map_err(|_| "pane_asleep".to_owned())?),
             None => None,
         };
-        // A person's draft is judged as a forced letter judges it, by the
-        // agent's composer read now (`composer::forced_clear`). A screen with
-        // no composer to read, such as a trust or menu screen, is the screen
-        // a send exists to answer, so only text read in the composer refuses.
-        if let Some(kind) = self.agent_kind
+        // A person's draft is judged by the two rules a held letter is: the
+        // core's draft rule, input routed to the pane since its last
+        // submission (`Observation::unsent_draft`), and the agent's composer
+        // read now (`composer::forced_clear`). Text read where no input can
+        // have made a draft is the agent's own screen, such as Codex's hooks
+        // review, whose `›` cursor reads as its composer, and a screen with
+        // no composer to read is the screen a send exists to answer.
+        if self.draft_may_stand()
+            && let Some(kind) = self.agent_kind
             && crate::delivery::composer::forced_clear(self.engine, self.raw, kind)
                 == Err(crate::delivery::composer::NOT_EMPTY)
         {
@@ -516,6 +520,18 @@ impl Send<'_> {
         Ok((text_sent, !pressed.is_empty()))
     }
 
+    /// Whether a draft may stand in the pane now, by the core's own draft
+    /// rule, read right before the write.
+    fn draft_may_stand(&self) -> bool {
+        let (Some(pane), Some(runtime)) = (self.noted, self.runtime.upgrade()) else {
+            return false;
+        };
+        runtime
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .draft_may_stand(pane)
+    }
+
     /// A write Herdr took is input routed to the pane, the answer that lets
     /// typed input be typed again (`delivery::typed`) and the draft guard's
     /// clock; a refused or unanswered one is neither.
@@ -524,7 +540,7 @@ impl Send<'_> {
             runtime
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .note_delivery_key(pane, "pane_send");
+                .note_pane_send(pane);
         }
     }
 

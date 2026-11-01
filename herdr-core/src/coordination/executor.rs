@@ -83,7 +83,10 @@ pub(crate) struct Shown {
 
 enum Found {
     Agent(Box<AgentRecord>, crate::runtime::agent_show::StateFacts),
-    Spawn(Box<super::SpawnRecord>, crate::runtime::agent_show::StateFacts),
+    Spawn(
+        Box<super::SpawnRecord>,
+        crate::runtime::agent_show::StateFacts,
+    ),
 }
 
 impl Shown {

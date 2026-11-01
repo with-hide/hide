@@ -124,6 +124,28 @@ impl Runtime {
         })
     }
 
+    /// Whether a person's draft may stand in `pane`: input since its last
+    /// submission by the core's draft rule (`Observation::unsent_draft`),
+    /// which a held letter waits on too, and the newest of it not what a
+    /// `hide pane send` wrote.
+    pub(crate) fn draft_may_stand(&self, pane: &str) -> bool {
+        self.delivery_observations
+            .get(pane)
+            .is_some_and(|observed| {
+                observed.unsent_draft()
+                    && observed.last_input_at_unix_ms > observed.pane_send_at_unix_ms
+            })
+    }
+
+    /// Notes a write a `hide pane send` landed: input routed to the pane, as
+    /// any key is, and marked as the sender's own.
+    pub(crate) fn note_pane_send(&mut self, pane: &str) {
+        self.note_delivery_key(pane, "pane_send");
+        if let Some(observed) = self.delivery_observations.get_mut(pane) {
+            observed.pane_send_at_unix_ms = observed.last_input_at_unix_ms;
+        }
+    }
+
     /// Whether the agent in `pane` on `machine` is known to take a paste as
     /// one: an agent kind the composer journey measured taking one, on a
     /// system where it does (`AgentId::takes_one_paste`). A pane with no agent
@@ -471,9 +493,19 @@ mod tests {
         );
     }
 
-    /// A person's draft in the composer refuses the send as it refuses a
-    /// forced letter, before anything is written; a screen with no
-    /// composer, such as a trust question, takes it.
+    /// Marks a person's input in the fixture's `recipient` after its last
+    /// submission, the core's rule for a draft that may stand there.
+    fn person_typed(runtime: &Arc<std::sync::Mutex<Runtime>>) {
+        let mut runtime = runtime.lock().unwrap();
+        let observation = runtime.delivery_observations.get_mut("recipient").unwrap();
+        observation.last_submit_at_unix_ms = 1;
+        observation.entered_working_at_unix_ms = 1;
+        observation.last_input_at_unix_ms = 2;
+    }
+
+    /// A person's draft refuses the send by the two rules a held letter
+    /// waits on, before anything is written: input since the last
+    /// submission, and text the composer reads now.
     #[test]
     fn a_draft_in_the_composer_refuses_a_send_before_any_write() {
         use crate::engine::keys::PaneKey;
@@ -484,6 +516,7 @@ mod tests {
             ..SendHerdr::default()
         }));
         let (runtime, context, _root, _fake) = send_fixture(herdr.clone());
+        person_typed(&runtime);
         let before = input_at(&runtime);
         assert_eq!(
             send(
@@ -526,6 +559,100 @@ mod tests {
                 false
             )
             .is_ok()
+        );
+    }
+
+    /// Codex 0.166's hooks review, the screen of the 2026-10-31 incident,
+    /// draws its list cursor `›` where its composer prompt would be, so it
+    /// reads as text; with no input since the last submission no person's
+    /// draft can stand there, and the key that answers it goes through.
+    #[test]
+    fn a_screen_no_person_typed_into_takes_the_keys_that_answer_it() {
+        use crate::engine::keys::PaneKey;
+        let herdr = Arc::new(std::sync::Mutex::new(SendHerdr {
+            screen: Some(include_str!(
+                "../../../hide-agent-adapter/tests/fixtures/composer/codex-0.166-hooks-review.ansi"
+            )),
+            ..SendHerdr::default()
+        }));
+        let (runtime, context, _root, _fake) = send_fixture(herdr.clone());
+        assert!(!runtime.lock().unwrap().draft_may_stand("recipient"));
+        assert_eq!(
+            send(
+                &runtime,
+                &context,
+                "recipient",
+                None,
+                &[PaneKey::Esc],
+                false,
+                false
+            )
+            .unwrap()["keys_sent"],
+            json!(["esc"])
+        );
+        assert_eq!(
+            written(&herdr),
+            vec![(
+                "pane.send_keys".to_owned(),
+                json!({"pane_id":"recipient","keys":["esc"]})
+            )]
+        );
+    }
+
+    /// Text a send left in the composer is its sender's own: the sender's
+    /// next keys, such as the Enter an agent's command popup did not take,
+    /// go through, and a key a person types after it holds the next send.
+    #[test]
+    fn a_senders_own_text_is_no_draft_until_a_person_types_after_it() {
+        use crate::engine::keys::PaneKey;
+        let herdr = Arc::new(std::sync::Mutex::new(SendHerdr {
+            screen: Some(include_str!(
+                "../../../hide-agent-adapter/tests/fixtures/composer/codex-1-typed.ansi"
+            )),
+            ..SendHerdr::default()
+        }));
+        let (runtime, context, _root, _fake) = send_fixture(herdr.clone());
+        assert!(
+            send(
+                &runtime,
+                &context,
+                "recipient",
+                Some("/hooks"),
+                &[],
+                false,
+                false
+            )
+            .is_ok()
+        );
+        assert!(!runtime.lock().unwrap().draft_may_stand("recipient"));
+        assert!(
+            send(
+                &runtime,
+                &context,
+                "recipient",
+                None,
+                &[PaneKey::Enter],
+                false,
+                false
+            )
+            .is_ok()
+        );
+        let typed = input_at(&runtime) + 1;
+        runtime
+            .lock()
+            .unwrap()
+            .note_delivery_key_at("recipient", typed);
+        assert_eq!(
+            send(
+                &runtime,
+                &context,
+                "recipient",
+                None,
+                &[PaneKey::Enter],
+                false,
+                false
+            ),
+            Err("composer_not_empty".into())
         );
     }
 

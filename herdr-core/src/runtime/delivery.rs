@@ -52,6 +52,11 @@ pub(crate) struct Observation {
     /// no draft the bell waits for, since the operator saw the composer above
     /// which the mark sits and chose to ring. Input after it is a draft again.
     pub released_input_at_unix_ms: u64,
+    /// The input an agent's `hide pane send` last wrote here. Input up to it
+    /// is that agent's own, no person's draft, so its next send is not held
+    /// for it (`Runtime::draft_may_stand`); a key a person types after it
+    /// makes the newer input theirs.
+    pub pane_send_at_unix_ms: u64,
     /// The last prompt hook of the pane's own session that ran at rest; 0
     /// until one runs. A turn it started that has ended with no key since
     /// leaves the composer known empty, the moment an agent version's
@@ -331,6 +336,7 @@ impl Runtime {
                     _ => now,
                 },
                 released_input_at_unix_ms: previous.map_or(0, |old| old.released_input_at_unix_ms),
+                pane_send_at_unix_ms: previous.map_or(0, |old| old.pane_send_at_unix_ms),
                 observed_at_unix_ms: if agent.telemetry_stale {
                     previous.map_or(0, |old| old.observed_at_unix_ms)
                 } else {

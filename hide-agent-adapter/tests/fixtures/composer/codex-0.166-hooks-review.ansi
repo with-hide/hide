@@ -1,0 +1,40 @@
+ 
+  [0m[38;2;99;168;248m>_ [0m[1mOpenAI Codex[0m[2m (v0.166.0)[0m
+     [0m[2m~/src/stuck-codex[0m
+[0m[2m  permissions: [0m[1m[38;5;5mYOLO mode[0m
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+  [0m[1mHooks[0m
+  [0m[2mLifecycle hooks from config and enabled plugins.[0m
+ 
+  [0m[38;5;3m⚠ 3 hooks need review before they can run.[0m
+ 
+  Event                 Installed   Active      Review      Description
+ 
+  PreToolUse            [0m[2m1           1           0           Before a tool executes[0m
+  PermissionRequest     [0m[2m1           1           0           When permission is requested[0m
+  PostToolUse           [0m[2m1           1           0           After a tool executes[0m
+  PreCompact            [0m[2m0           0           0           Before context compaction[0m
+  PostCompact           [0m[2m0           0           0           After context compaction[0m
+[0m[1m[7m› SessionStart          3           0           3           When a new session starts                                  [0m
+  SessionEnd            [0m[2m0           0           0           Right before a session ends[0m
+  UserPromptSubmit      [0m[2m1           1           0           When the user submits a prompt[0m
+[0m[38;2;99;168;248m↓[0m
+ 
+  [0m[1mt[0m[2m trust all · [0m[1menter[0m[2m review · [0m[1mesc[0m[2m close                                                                               [0m

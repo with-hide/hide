@@ -1334,6 +1334,7 @@ mod tests {
             last_submit_at_unix_ms: NOW - 60_000,
             entered_working_at_unix_ms: NOW - 120_000,
             released_input_at_unix_ms: 0,
+            pane_send_at_unix_ms: 0,
             observed_at_unix_ms: 0,
             hook_submit_at_unix_ms: 0,
             session: None,
