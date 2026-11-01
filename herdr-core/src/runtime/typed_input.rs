@@ -192,11 +192,12 @@ impl Runtime {
                 continue;
             }
             // An agent whose session records the brief only at its turn's end
-            // took it once it started a turn after the typing.
-            if observation.status == "working"
-                && observation.status_changed_at_unix_ms >= input.typed_at_unix_ms
-                && hide_agent_adapter::adapter(&spawn.kind)
-                    .is_some_and(|row| row.key.turn_takes_brief())
+            // took it once the core's turn for it started after the typing.
+            if observation.projected_turn().is_some_and(|projected| {
+                projected.turn.activity == crate::agent_state::AgentActivity::Working
+                    && projected.working_since(observation) >= input.typed_at_unix_ms
+            }) && hide_agent_adapter::adapter(&spawn.kind)
+                .is_some_and(|row| row.key.turn_takes_brief())
             {
                 work.push(InputWork {
                     key: InputKey::Spawn(spawn.id.clone()),
@@ -207,11 +208,15 @@ impl Runtime {
                 });
                 continue;
             }
-            if !matches!(
-                typed::standing(input, Some(observation), now),
-                Standing::Unconfirmed { .. }
-            ) {
-                continue;
+            match typed::standing(input, Some(observation), now) {
+                Standing::Unconfirmed { .. } => {}
+                // The turn is laid within the pass: the reread asked and the
+                // composer read seen stay as they are until it is.
+                Standing::Unsettled => {
+                    open.insert(spawn.id.clone());
+                    continue;
+                }
+                Standing::Confirmed | Standing::Waiting => continue,
             }
             open.insert(spawn.id.clone());
             match self.reread(&spawn.id, input.attempts, &observation.actor.pane_id, now) {
@@ -272,11 +277,13 @@ impl Runtime {
             else {
                 continue;
             };
-            if !matches!(
-                typed::standing(&input, Some(observation), now),
-                Standing::Unconfirmed { .. }
-            ) {
-                continue;
+            match typed::standing(&input, Some(observation), now) {
+                Standing::Unconfirmed { .. } => {}
+                Standing::Unsettled => {
+                    open.insert(letter.id.clone());
+                    continue;
+                }
+                Standing::Confirmed | Standing::Waiting => continue,
             }
             // Open past its notice too: the row reads the settled fresh read.
             open.insert(letter.id.clone());
@@ -475,9 +482,13 @@ impl Runtime {
             let Some(observation) = self.spawn_observation(spawn) else {
                 continue;
             };
-            let Standing::Unconfirmed { since } = typed::standing(input, Some(observation), now)
-            else {
-                continue;
+            let since = match typed::standing(input, Some(observation), now) {
+                Standing::Unconfirmed { since } => since,
+                Standing::Unsettled => {
+                    self.keep_input_ask(&mut asks, &observation.actor.pane_id);
+                    continue;
+                }
+                Standing::Confirmed | Standing::Waiting => continue,
             };
             if self.reread(&spawn.id, input.attempts, &observation.actor.pane_id, now)
                 != Reread::Settled
@@ -503,9 +514,13 @@ impl Runtime {
             else {
                 continue;
             };
-            let Standing::Unconfirmed { since } = typed::standing(&input, Some(observation), now)
-            else {
-                continue;
+            let since = match typed::standing(&input, Some(observation), now) {
+                Standing::Unconfirmed { since } => since,
+                Standing::Unsettled => {
+                    self.keep_input_ask(&mut asks, &observation.actor.pane_id);
+                    continue;
+                }
+                Standing::Confirmed | Standing::Waiting => continue,
             };
             if self.reread(&letter.id, input.attempts, &observation.actor.pane_id, now)
                 != Reread::Settled
@@ -521,6 +536,21 @@ impl Runtime {
         asks.into_iter()
             .map(|(pane, (since, subject))| (pane, since, subject))
             .collect()
+    }
+
+    /// Keeps the ask the row of `pane` shows while the core's turn for the
+    /// pane is not laid (`Standing::Unsettled`), so a row does not drop its
+    /// ask for the moment between a pass's observation and its turn.
+    fn keep_input_ask(&self, asks: &mut BTreeMap<String, (u64, AskSubject)>, pane: &str) {
+        if let Some((_, since, subject)) = self
+            .plans
+            .input_asks
+            .iter()
+            .find(|(shown, ..)| shown == pane)
+        {
+            asks.entry(pane.to_owned())
+                .or_insert_with(|| (*since, subject.clone()));
+        }
     }
 }
 
@@ -570,6 +600,7 @@ pub(crate) mod tests {
     use crate::delivery::ledger::Ledger;
     use crate::delivery::typed::{PARENT_GRACE_MS, RECORD_WAIT_MS, REREAD_WAIT_MS};
     use crate::node::TEST_NODE;
+    use hide_node_link::panes::HookTurn;
 
     pub(crate) const BRIEF: &str = "Node api: add the call.\nReport by letter.";
 
@@ -841,9 +872,7 @@ pub(crate) mod tests {
         // omp writes the brief to its session only when its turn ends; a
         // first turn of ten minutes is no lost brief.
         let (_root, mut runtime, spawn) = spawned_as("omp", false, T);
-        let child = runtime.delivery_observations.get_mut("child").unwrap();
-        child.status = "working".into();
-        child.status_changed_at_unix_ms = T + 6_000;
+        child_reads(&mut runtime, "working", None, T + 6_000);
         let work = runtime.typed_input_work(T + 6_000);
         assert_eq!(work.len(), 1);
         assert_eq!(work[0].key, InputKey::Spawn(spawn.clone()));
@@ -855,18 +884,117 @@ pub(crate) mod tests {
 
         // A turn that began before the typing is not this brief's.
         let (_root, mut runtime, _) = spawned_as("omp", false, T);
-        let child = runtime.delivery_observations.get_mut("child").unwrap();
-        child.status = "working".into();
-        child.status_changed_at_unix_ms = T - 1;
+        child_reads(&mut runtime, "working", None, T - 1);
         assert!(runtime.typed_input_work(T + 600_000).is_empty());
+
+        // The core's turn decides, not Herdr's status: omp's hook starting
+        // a turn after the typing takes the brief while Herdr still reads
+        // the pane idle.
+        let (_root, mut runtime, _) = spawned_as("omp", false, T);
+        child_reads(&mut runtime, "idle", Some(HookTurn::Working), T + 6_000);
+        assert_eq!(
+            runtime.typed_input_work(T + 6_000)[0].recorded,
+            Some("turn")
+        );
 
         // Another session-file agent records the person's message at the
         // take, so its turn alone confirms nothing; it waits for its rest.
         let (_root, mut runtime, _) = spawned_as("pi", false, T);
-        let child = runtime.delivery_observations.get_mut("child").unwrap();
-        child.status = "working".into();
-        child.status_changed_at_unix_ms = T + 6_000;
+        child_reads(&mut runtime, "working", None, T + 6_000);
         assert!(runtime.typed_input_work(T + 600_000).is_empty());
+    }
+
+    /// The child's pane as one pass lays it: Herdr reporting `herdr` since
+    /// `at`, the hook of its session having reported `hook`, and the core's
+    /// turn decided from both at `at`.
+    fn child_reads(runtime: &mut Runtime, herdr: &str, hook: Option<HookTurn>, at: u64) {
+        let child = runtime.delivery_observations.get_mut("child").unwrap();
+        child.status = herdr.into();
+        child.status_changed_at_unix_ms = at;
+        if herdr == "working" {
+            child.entered_working_at_unix_ms = at;
+        }
+        *child = child.clone().laid(hook, None);
+        child.projected.as_mut().unwrap().changed_at_unix_ms = Some(at);
+    }
+
+    /// The hook says the child works on its brief while Herdr reads its
+    /// pane idle: the core's turn, the one the row and the doorbell read,
+    /// says it works, so no record is owed. Its parent is not told, the row
+    /// shows nothing, and an answered screen does not have the brief typed
+    /// into a working agent a second time.
+    #[test]
+    fn a_child_whose_hook_says_it_works_owes_no_record_while_herdr_reads_it_idle() {
+        const T: u64 = 100_000;
+        let (_root, mut runtime, _) = spawned(true, T);
+        child_reads(&mut runtime, "idle", Some(HookTurn::Working), T + 1_000);
+        runtime.note_delivery_key_at("child", T + 2_000);
+        for now in [T + RECORD_WAIT_MS, T + 10 * RECORD_WAIT_MS] {
+            assert!(runtime.typed_input_work(now).is_empty(), "at {now}");
+            assert!(runtime.input_asks(now).is_empty(), "at {now}");
+        }
+        assert!(runtime.take_session_rereads().is_empty());
+    }
+
+    /// The hook says the child's turn ended while Herdr still reads it
+    /// working: the child rests by the core's turn, so after the record wait
+    /// its parent hears, and once someone answered its screen the brief is
+    /// typed again, as for any child at rest.
+    #[test]
+    fn a_child_whose_hook_says_it_rests_is_unconfirmed_while_herdr_reads_it_working() {
+        const T: u64 = 100_000;
+        let (_root, mut runtime, _) = spawned(false, T);
+        child_reads(&mut runtime, "working", Some(HookTurn::Idle), T + 1_000);
+        let asked = T + 1_000 + RECORD_WAIT_MS;
+        assert!(
+            runtime.typed_input_work(asked - 1).is_empty(),
+            "its rest counts from the turn's end"
+        );
+        assert!(runtime.typed_input_work(asked).is_empty());
+        assert_eq!(runtime.take_session_rereads(), vec!["child".to_owned()]);
+        let at = asked + REREAD_WAIT_MS;
+        let work = runtime.typed_input_work(at);
+        assert!(work[0].notice.is_some(), "the parent is told");
+        runtime.note_delivery_key_at("child", at + 1_000);
+        let quiet = at + 1_000 + crate::delivery::INPUT_QUIET_MS;
+        let resubmit = runtime.typed_input_work(quiet)[0].resubmit.clone().unwrap();
+        assert!(resubmit.answered);
+    }
+
+    /// Between a pass's observation of the pane and the turn it lays, the
+    /// input's verdict stands: the row keeps its ask and the fresh session
+    /// read already given its time is not asked again. A turn that never
+    /// comes holds it no longer than the cap, after which the row drops it
+    /// as for an agent no longer observed.
+    #[test]
+    fn an_unlaid_turn_keeps_the_inputs_verdict_for_the_cap_and_no_longer() {
+        use crate::delivery::typed::UNSETTLED_HOLD_MS;
+        let (_root, mut runtime, _) = spawned(true, 1_000);
+        runtime.typed_input_work(1_000 + RECORD_WAIT_MS);
+        let _ = runtime.take_session_rereads();
+        let at = 1_000 + RECORD_WAIT_MS + REREAD_WAIT_MS;
+        runtime.publish_input_asks(at);
+        assert_eq!(runtime.input_asks(at).len(), 1);
+
+        // A pass observes the pane; its turn is not laid yet.
+        let child = runtime.delivery_observations.get_mut("child").unwrap();
+        child.observed_generation += 1;
+        child.observed_at_unix_ms = at;
+        assert_eq!(runtime.input_asks(at + 1).len(), 1, "the row keeps it");
+        assert!(runtime.typed_input_work(at + 1).is_empty());
+        assert!(runtime.take_session_rereads().is_empty());
+
+        // The turn lands: the verdict goes on where it was.
+        let child = runtime.delivery_observations.get_mut("child").unwrap();
+        *child = child.clone().laid(None, None);
+        assert!(runtime.typed_input_work(at + 2)[0].notice.is_some());
+        assert!(runtime.take_session_rereads().is_empty());
+
+        // A turn that never comes holds it for the cap only.
+        let child = runtime.delivery_observations.get_mut("child").unwrap();
+        child.observed_generation += 1;
+        assert_eq!(runtime.input_asks(at + UNSETTLED_HOLD_MS - 1).len(), 1);
+        assert!(runtime.input_asks(at + UNSETTLED_HOLD_MS).is_empty());
     }
 
     /// An agent whose session file records the brief among its user

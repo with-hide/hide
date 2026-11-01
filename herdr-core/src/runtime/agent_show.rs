@@ -164,7 +164,8 @@ fn phase(
     }
     match typed::standing(input, observation, now) {
         Standing::Confirmed => None,
-        Standing::Waiting => Some(InputPhase::AwaitingRecord),
+        // A turn not laid yet says nothing new: no record is owed on it.
+        Standing::Waiting | Standing::Unsettled => Some(InputPhase::AwaitingRecord),
         Standing::Unconfirmed { .. } if input.attempts >= typed::INPUT_ATTEMPTS => {
             Some(InputPhase::Exhausted)
         }
