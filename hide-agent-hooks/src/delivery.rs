@@ -80,10 +80,12 @@ pub fn read_prompt(payload: &[u8], truncated: bool) -> Result<Prompt, Failure> {
 /// What the hook tells the core about the submitted prompt: the SHA-256 of
 /// its canonical text in lowercase hex. The canonical text is what was typed,
 /// as each agent records it: a prompt that is one paste and nothing else is
-/// the pasted text (`hide_session::pasted`, Claude Code's wrapper), each line
-/// break is one LF (a terminal paste sends CR, and an agent records LF), and
-/// characters above U+FFFF are removed before trimming, since some console
-/// readers drop them, including the leading owl. Every agent and system uses
+/// the pasted text (`hide_session::pasted`, Claude Code's wrapper), and line
+/// breaks (CR and LF) and characters above U+FFFF are removed before
+/// trimming. A terminal paste sends each line break as CR, an agent records
+/// LF, and Grok on Windows takes the paste without them; some console readers
+/// drop characters above U+FFFF, including the leading owl. Every agent and
+/// system uses
 /// this same identity rule, on both sides: the hook's prompt and the session
 /// file's message, and the text Hide typed.
 /// Only the core knows which line its
@@ -93,10 +95,8 @@ pub fn read_prompt(payload: &[u8], truncated: bool) -> Result<Prompt, Failure> {
 pub fn prompt_digest(prompt: &str) -> String {
     let typed = hide_session::pasted::only_pasted(prompt).unwrap_or(prompt);
     let canonical: String = typed
-        .replace("\r\n", "\n")
         .chars()
-        .filter(|&c| c <= '\u{ffff}')
-        .map(|c| if c == '\r' { '\n' } else { c })
+        .filter(|&c| c <= '\u{ffff}' && c != '\r' && c != '\n')
         .collect();
     full_prompt_digest(&canonical)
 }
@@ -568,15 +568,21 @@ mod tests {
         // The SHA-256 of the brief's own trimmed text, computed apart from
         // the canonical rule under test.
         use sha2::{Digest, Sha256};
-        let expected: String = Sha256::digest(typed.trim().as_bytes())
+        let expected: String = Sha256::digest(typed.replace('\n', "").trim().as_bytes())
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect();
         assert_eq!(reported, expected);
         assert!(matches_prompt_digest(typed, &reported));
-        // A terminal paste sends each line break as CR; the agent records LF.
-        assert_eq!(prompt_digest(&typed.replace('\n', "\r")), expected);
-        assert_eq!(prompt_digest(&typed.replace('\n', "\r\n")), expected);
+        // A terminal paste sends each line break as CR, the agent records LF,
+        // and Grok on Windows records the paste without them (agent journey,
+        // 2026-11-01): the line breaks are not what identifies it.
+        assert!(matches_prompt_digest(&typed.replace('\n', "\r"), &reported));
+        assert!(matches_prompt_digest(
+            &typed.replace('\n', "\r\n"),
+            &reported
+        ));
+        assert!(matches_prompt_digest(&typed.replace('\n', ""), &reported));
         // Typed words beside a paste are not the paste.
         let prompt = fixture["payload"]["prompt"].as_str().unwrap();
         assert_ne!(prompt_digest(&format!("also {prompt}")), expected);
