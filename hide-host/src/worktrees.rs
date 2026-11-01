@@ -1801,6 +1801,18 @@ impl WalkBudget {
         }
     }
 
+    /// Takes one entry from the budget, or says which bound it reached.
+    pub(crate) fn spend(&mut self) -> Result<(), String> {
+        self.entries = self
+            .entries
+            .checked_sub(1)
+            .ok_or_else(|| "the look reached its entry limit".to_owned())?;
+        if std::time::Instant::now() >= self.until {
+            return Err("the look reached its time limit".to_owned());
+        }
+        Ok(())
+    }
+
     /// The entries and time still left.
     pub fn left(&self) -> (usize, Duration) {
         (

@@ -47,11 +47,12 @@ pub enum CacheFolderOutcome {
     /// Not deleted: `code` names the check it failed (a `FolderRefusal`
     /// code, `nested_repository`, `tracked_files`, `replaced`, `unverified`,
     /// `io` or `restore_failed`). A folder that failed after its move is
-    /// moved back; one that cannot be is kept in the trash under a name no
-    /// sweep deletes, and `reason` says where.
+    /// moved back; one that cannot be stays in the hold under the
+    /// repository's common Git directory, which nothing deletes, and
+    /// `reason` says where.
     Kept { code: String, reason: String },
-    /// Moved aside and judged, but its deletion failed (an open file on
-    /// Windows): it waits in the repository's trash for the next sweep.
+    /// Passed every check, but its deletion failed (an open file on
+    /// Windows): it waits in the hold, and the next clear deletes it.
     Left { reason: String },
 }
 

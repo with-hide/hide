@@ -1314,11 +1314,17 @@ impl Runtime {
                     }
                 }
                 let _ending = Ending(context.runtime.clone(), done.clone());
+                // Named for the node's finish and this start, so the node
+                // can say whether this deletion still runs.
+                let job = format!("{}:{}:{round}:{}", done.0, done.1, super::memory::now_ms());
+                let runtime = context.runtime.clone();
                 let outcome = super::mission_worktree::clear_build_cache(
                     engine.as_ref(),
                     link.as_ref(),
                     &root,
                     &branch,
+                    &job,
+                    &|| runtime.strong_count() > 0,
                 );
                 let Some(runtime) = context.runtime.upgrade() else {
                     return;

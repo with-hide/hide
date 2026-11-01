@@ -68,6 +68,8 @@ pub(super) fn clear_build_cache(
     node: &dyn crate::node_access::NodeLink,
     repo: &str,
     branch: &str,
+    job: &str,
+    keep_waiting: &dyn Fn() -> bool,
 ) -> Result<Cleared, String> {
     let Some(path) = worktree_path(engine, repo, branch)? else {
         return Ok(Cleared::Gone);
@@ -82,6 +84,8 @@ pub(super) fn clear_build_cache(
         node,
         Path::new(repo),
         Path::new(&path),
+        job,
+        keep_waiting,
         |folder| busy_in(engine, &folder.to_string_lossy()),
     )? {
         crate::worktree_cleanup::CacheClear::Busy => Ok(Cleared::Busy { path }),

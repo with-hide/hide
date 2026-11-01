@@ -183,10 +183,19 @@ impl Siblings {
 /// signed `CACHEDIR.TAG` inside it, else a rule of the table whose marker is
 /// beside it. `None` means `other`.
 pub(crate) fn layer_of(folder: &Path, siblings: &Siblings) -> Option<Layer> {
-    if has_cache_tag(folder) {
+    layer_named(
+        folder.file_name()?.to_str()?,
+        has_cache_tag(folder),
+        siblings,
+    )
+}
+
+/// The layer of an ignored folder named `name`, `tagged` when it holds a
+/// signed `CACHEDIR.TAG`.
+fn layer_named(name: &str, tagged: bool, siblings: &Siblings) -> Option<Layer> {
+    if tagged {
         return Some(Layer::BuildCache);
     }
-    let name = folder.file_name()?.to_str()?;
     RULES
         .iter()
         .filter(|rule| siblings.holds(rule))
@@ -216,6 +225,71 @@ fn has_cache_tag(folder: &Path) -> bool {
         .and_then(|mut file| file.read_exact(&mut head))
         .is_ok()
         && head == CACHEDIR_SIGNATURE
+}
+
+/// Whether the open folder `dir` holds a signed `CACHEDIR.TAG`, read through
+/// the handle and not through a link.
+fn has_cache_tag_in(dir: &cap_std::fs::Dir) -> bool {
+    use std::io::Read;
+    let Ok(metadata) = dir.symlink_metadata("CACHEDIR.TAG") else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    let mut head = [0u8; CACHEDIR_SIGNATURE.len()];
+    dir.open("CACHEDIR.TAG")
+        .and_then(|mut file| file.read_exact(&mut head))
+        .is_ok()
+        && head == CACHEDIR_SIGNATURE
+}
+
+/// [`verify_folder`] through open folders rather than a path: `parents` are
+/// the checkout root and each folder below it down to the folder's parent,
+/// `names` the names that lead from the root to the folder, and `folder`
+/// the folder itself, each opened from the one above without following a
+/// link. The rules and markers are read from those handles, so a folder or
+/// parent swapped after it was opened cannot change what is judged.
+pub(crate) fn verify_held(
+    root: &Path,
+    parents: &[cap_std::fs::Dir],
+    names: &[&std::ffi::OsStr],
+    folder: &cap_std::fs::Dir,
+    layer: Layer,
+    exclude_dir: Option<&Path>,
+) -> Result<(), FolderRefusal> {
+    if names.is_empty() || parents.len() != names.len() {
+        return Err(FolderRefusal::Changed);
+    }
+    let mut rules = base_rules(root, exclude_dir);
+    let mut here = root.to_path_buf();
+    for (index, (dir, name)) in parents.iter().zip(names).enumerate() {
+        rules = rules.with_file(dir, &here, ".gitignore");
+        here.push(name);
+        // An ignored ancestor would have been the candidate itself.
+        if index + 1 < names.len() && rules.ignores(&here, true) {
+            return Err(FolderRefusal::Changed);
+        }
+    }
+    if !rules.ignores(&here, true) {
+        return Err(FolderRefusal::Changed);
+    }
+    let parent = parents.last().ok_or(FolderRefusal::Changed)?;
+    let siblings = Siblings::new(
+        parent
+            .entries()
+            .map_err(|_| FolderRefusal::NotFound)?
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned()),
+    );
+    let name = names
+        .last()
+        .and_then(|name| name.to_str())
+        .ok_or(FolderRefusal::Changed)?;
+    match layer_named(name, has_cache_tag_in(folder), &siblings) {
+        Some(found) if found == layer => Ok(()),
+        _ => Err(FolderRefusal::Changed),
+    }
 }
 
 /// Reads the folder's classification again from the files: it is inside the

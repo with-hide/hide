@@ -280,9 +280,11 @@ use crate::error::HostError;
 /// (`Call::SessionThread`; PRD session-docs-and-assistant B25). A helper on
 /// 65 would refuse it, so it is refused at Hello and upgraded.
 /// 67: a node deletes a finished mission node's build cache folders itself,
-/// judging each again where it stands and once moved, in one call
-/// (`Call::ClearCacheFolders`; PRD mission-node-simple B20). A helper on 66
-/// would refuse it, so it is refused at Hello and upgraded.
+/// holding each by open folders and judging it again where it stands and
+/// once moved, in one call named by a job, and answers whether that job
+/// still runs (`Call::ClearCacheFolders`, `Call::CacheClearRunning`; PRD
+/// mission-node-simple B20). A helper on 66 would refuse them, so it is
+/// refused at Hello and upgraded.
 pub const PROTOCOL_VERSION: u32 = 67;
 
 /// What agy's index held in a checkout before Hide typed `/fork`
@@ -737,11 +739,19 @@ pub enum Call {
     /// is judged again where it stands, moved into the trash under `common`,
     /// judged again as moved, and deleted before the answer; anything in
     /// doubt is kept. Answers one `cleanup::CacheFolderOutcome` per folder.
+    /// `job` names the clear while it runs, for [`Call::CacheClearRunning`].
     ClearCacheFolders {
+        job: String,
         root: String,
         common: String,
         folders: Vec<String>,
         walk: crate::cleanup::WalkAllowance,
+    },
+    /// Whether the build cache clear `job` (`Call::ClearCacheFolders`) still
+    /// runs on the node: a caller that stopped waiting for its answer holds
+    /// its place until this answers `false`.
+    CacheClearRunning {
+        job: String,
     },
     /// Deletes what waits in the trash under `common`, waiting up to
     /// `wait_ms` for `ours`; answers how many of them remain.
@@ -1212,6 +1222,7 @@ impl Call {
             | Self::SetAsideFolder { .. }
             | Self::WorktreeRemoveClean { .. }
             | Self::ClearCacheFolders { .. }
+            | Self::CacheClearRunning { .. }
             | Self::DrainTrash { .. }
             | Self::RepositoryClone { .. }
             | Self::Git { .. }
