@@ -24,7 +24,7 @@
       "guidance_memory": true,
       "letter": true,
       "letter_busy": true,
-      "letter_menu": true,
+      "letter_menu": false,
       "composer": true,
       "sleep_wake": true,
       "resume": true,
@@ -35,12 +35,11 @@
     "letter": "bell",
     "input": [
       "launch_prompt",
-      "claude_messaging",
       "typed"
     ],
     "wake": "pane",
     "title": "automatic",
-    "request_budget": 27,
+    "request_budget": 24,
     "fake_home": {
       "status": "proven",
       "key_env": "ANTHROPIC_API_KEY",

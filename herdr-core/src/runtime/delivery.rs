@@ -1873,33 +1873,25 @@ impl Runtime {
         device: &str,
         lineage: Option<&str>,
     ) -> crate::delivery::ladder::InputTarget {
-        use crate::delivery::ladder::{InputTarget, SessionAddress};
+        use crate::delivery::ladder::InputTarget;
         // Only the session Herdr names for the pane is addressed
         // (`HookFacts::reported_session`). Herdr learns it from the agent's
         // own session start, the event Hide's hook reports from too: once
         // Herdr names a session that Hide's hook did not report, the hook is
         // not connected for it (or its report is a moment late), and the
         // input is typed.
-        let address = match lineage {
-            None => SessionAddress::Pending,
-            Some(lineage) => {
-                let reported = hide_agent_adapter::adapter(kind).and_then(|row| {
-                    self.hook_facts
-                        .lock()
-                        .ok()?
-                        .reported_session(pane_id, row.id, lineage)
-                });
-                SessionAddress::Known {
-                    session: reported.as_ref().and_then(|found| found.session.clone()),
-                    messaging: reported.and_then(|found| found.messaging),
-                }
-            }
-        };
+        let session = lineage.and_then(|lineage| {
+            let row = hide_agent_adapter::adapter(kind)?;
+            self.hook_facts
+                .lock()
+                .ok()?
+                .reported_session(pane_id, row.id, lineage)
+        });
         InputTarget {
             pane_id: pane_id.to_owned(),
             kind: kind.to_owned(),
             raw_pane_id: raw_pane_id.to_owned(),
-            address,
+            session,
             node: self.linked_node(device).ok().map(|(_, node)| node),
         }
     }

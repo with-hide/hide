@@ -291,9 +291,13 @@ pub const ADAPTERS: &[AgentAdapter] = &[
                 style: Style::Dim,
             }],
         }),
+        // Claude Code's messaging socket is not a rung: Claude Code holds a
+        // message for a session that bypasses permission prompts unless its
+        // sender attests a matching permission mode (2.1.302 in the agent
+        // journey, 2026-11-01), and a session Hide starts with full access
+        // does, so the letter waited for review instead of running.
         input: &[
             InputRung::AgentApi(AgentApi::LaunchPrompt),
-            InputRung::AgentApi(AgentApi::ClaudeMessaging),
             InputRung::Typed,
         ],
         start: Some(LaunchDialect::Claude),

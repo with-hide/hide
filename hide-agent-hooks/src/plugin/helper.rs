@@ -498,7 +498,6 @@ fn subagents(home: &Path, agent: &Agent, input: Input, started: Instant) -> Valu
             }),
             session_start: false,
             waiting: None,
-            messaging: None,
         },
         started + report::REPORT_TIMEOUT,
     );
@@ -539,7 +538,6 @@ fn turn(home: &Path, agent: &Agent, input: Input, started: Instant) -> Value {
                 }),
                 session_start: false,
                 waiting: None,
-                messaging: None,
             },
             started + report::REPORT_TIMEOUT,
         )

@@ -63,54 +63,6 @@ pub struct HookStatusReport {
     /// turn says. Absent for an event that says nothing of them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub waiting: Option<Vec<String>>,
-    /// The session's own messaging socket and its token, as the agent
-    /// handed them to its SessionStart hook (Claude Code's
-    /// `CLAUDE_CODE_MESSAGING_SOCKET` and `CLAUDE_CODE_MESSAGING_TOKEN`):
-    /// the address the core's input ladder hands the session a letter
-    /// through (`docs/delivery.md`, The input ladder). Sent at a session
-    /// start only, and never written to a file or a log.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub messaging: Option<MessagingChannel>,
-}
-
-/// A session's messaging socket and the token that opens it. Its `Debug`
-/// leaves the token out, so no log carries it.
-#[derive(Clone, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct MessagingChannel {
-    pub socket: String,
-    pub token: String,
-}
-
-impl std::fmt::Debug for MessagingChannel {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("MessagingChannel")
-            .field("socket", &self.socket)
-            .finish_non_exhaustive()
-    }
-}
-
-impl MessagingChannel {
-    /// The channel the session of `agent` hands its hooks at its start,
-    /// when the agent's input ladder declares one
-    /// (`AgentApi::session_environment`) and the hook's environment carries
-    /// both parts.
-    pub fn of_agent(agent: &str) -> Option<Self> {
-        let (socket, token) =
-            hide_agent_adapter::adapter(agent)?
-                .input
-                .iter()
-                .find_map(|rung| match rung {
-                    hide_agent_adapter::InputRung::AgentApi(api) => api.session_environment(),
-                    hide_agent_adapter::InputRung::Typed => None,
-                })?;
-        let read = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
-        Some(Self {
-            socket: read(socket)?,
-            token: read(token)?,
-        })
-    }
 }
 
 /// Where a session's turn stands, as its hook saw it.
@@ -273,7 +225,6 @@ mod tests {
             }),
             session_start: false,
             waiting: None,
-            messaging: None,
         };
         assert_eq!(
             serde_json::to_value(&report).unwrap(),
@@ -303,7 +254,6 @@ mod tests {
                 counts: None,
                 session_start: false,
                 waiting: None,
-                messaging: None,
             },
             started + REPORT_TIMEOUT,
         );

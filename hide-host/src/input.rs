@@ -4,14 +4,13 @@
 //!
 //! Each way in answers whether it sent the input whole, sent nothing, or
 //! began and lost its answer, so the core never sends again what may have
-//! arrived (engineering principle 11). The text and the token never reach a
-//! log or an error: an answer's reason names only what failed.
+//! arrived (engineering principle 11). The text never reaches a log or an
+//! error: an answer's reason names only what failed.
 
-use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::AtomicBool;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use hide_agent_hooks::runtime::AgentRuntime;
 use hide_node_link::input::{Delivery, InputChannel};
@@ -21,18 +20,11 @@ use hide_platform::process::{RunFailure, run_to_end};
 /// 0.166.0, measured 2026-11-01); this bounds one that does not.
 const QUEUE_DEADLINE: Duration = Duration::from_secs(10);
 
-/// How long a write to a Claude Code session's socket may take: the session
-/// reads it at once, and nothing is read back.
-const SOCKET_DEADLINE: Duration = Duration::from_secs(3);
-
 /// Hands `text` to the agent behind `channel`, for the account whose home
 /// is `home`.
 pub fn deliver(home: &Path, channel: &InputChannel, text: &str, stop: &AtomicBool) -> Delivery {
     match channel {
         InputChannel::CodexQueue { thread } => codex_queue(home, thread, text, stop),
-        InputChannel::ClaudeMessaging { socket, token } => {
-            claude_messaging(Path::new(socket), token, text)
-        }
     }
 }
 
@@ -91,47 +83,4 @@ fn first_line(text: &str) -> String {
         .find(|line| !line.trim().is_empty())
         .unwrap_or("");
     line.chars().take(200).collect()
-}
-
-/// Writes the session's two lines, `auth` with the token its hook received
-/// and the `user` message, to its messaging socket. The socket answers
-/// nothing; the prompt hook's digest is the record (Claude Code 2.1.316,
-/// measured 2026-11-01). A Windows session's socket is a named pipe no run
-/// has measured, so there the rung is unavailable and the next one takes
-/// the input (`docs/INSTALL.md`, What each system supports).
-fn claude_messaging(socket: &Path, token: &str, text: &str) -> Delivery {
-    if !hide_agent_adapter::AgentApi::ClaudeMessaging
-        .systems()
-        .include_this_one()
-    {
-        return Delivery::Unavailable {
-            reason: "unsupported_system".into(),
-        };
-    }
-    let lines = format!(
-        "{}\n{}\n",
-        serde_json::json!({"type": "auth", "token": token}),
-        serde_json::json!({"type": "user", "message": {"role": "user", "content": text}}),
-    );
-    let deadline = Instant::now() + SOCKET_DEADLINE;
-    let mut stream = match hide_platform::ipc::LocalStream::connect_until(socket, deadline) {
-        Ok(stream) => stream,
-        Err(error) => {
-            return Delivery::Unavailable {
-                reason: format!(
-                    "the session's socket could not be reached: {}",
-                    error.kind()
-                ),
-            };
-        }
-    };
-    match stream
-        .write_all(lines.as_bytes())
-        .and_then(|()| stream.flush())
-    {
-        Ok(()) => Delivery::Sent,
-        Err(error) => Delivery::Unknown {
-            reason: format!("the write to the session's socket failed: {}", error.kind()),
-        },
-    }
 }

@@ -8,7 +8,6 @@ mod clone;
 mod copy;
 mod document;
 mod git;
-mod input;
 mod item_identity;
 mod mutate;
 mod project;

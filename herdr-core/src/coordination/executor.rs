@@ -381,37 +381,6 @@ fn launch_prompt(kind: &str, args: &[String], brief: &str) -> Option<[String; 2]
     }
 }
 
-/// The input ladder's route for a spawn's brief (`delivery::ladder`),
-/// decided before a typing is reserved. While the agent's own way in waits
-/// for the session its hook has not reported, the brief waits too, up to
-/// `BRIEF_READY_WAIT` from `since`; past it the spawn is
-/// `brief_not_submitted` with nothing sent, and the same command tries
-/// again.
-#[allow(clippy::disallowed_methods)] // a production wait on the agent's own report, bounded by the deadline
-pub(crate) fn brief_route(
-    target: impl Fn() -> Result<InputTarget, String>,
-    spawn: &str,
-    pane: &str,
-    since: Instant,
-) -> Result<(InputTarget, Prepared), String> {
-    let deadline = since + super::BRIEF_READY_WAIT;
-    loop {
-        let target = target()?;
-        match crate::delivery::ladder::prepare(&target) {
-            Ok(prepared) => return Ok((target, prepared)),
-            Err(cause) if Instant::now() >= deadline => {
-                return Err(brief_refused(
-                    spawn,
-                    pane,
-                    "brief.not_yet",
-                    cause.to_owned(),
-                ));
-            }
-            Err(_) => std::thread::sleep(Duration::from_millis(250)),
-        }
-    }
-}
-
 /// Sends `brief` down its prepared route, the one submission path the
 /// doorbell uses too. Its typing was reserved first (`Mutation::BriefTyping`),
 /// and the route it answers is saved after (`Mutation::Briefed`); the
@@ -1358,36 +1327,24 @@ fn spawn(
                     }));
                 }
             }
-            let since = Instant::now();
             brief_ready(engine.as_ref(), &reserved.id, pane, name)?;
             let pane_key = if on_node {
                 pane.to_owned()
             } else {
                 crate::address::scoped_pane_id(&child_device, pane)
             };
-            let route = brief_route(
-                || {
-                    // The session Herdr names for the agent now, read off
-                    // the lock: until it names one, a way in that needs the
-                    // session waits for it.
-                    let lineage = engine
-                        .delivery_agent(Wait::Each(Duration::from_secs(5)), pane)
-                        .ok()
-                        .and_then(|agent| agent.session);
-                    let runtime = client.runtime.upgrade().ok_or("delivery_unavailable")?;
-                    let guard = runtime.lock().map_err(|_| "delivery_unavailable")?;
-                    Ok(guard.input_target_for(
-                        &pane_key,
-                        pane,
-                        kind,
-                        &child_device,
-                        lineage.as_deref(),
-                    ))
-                },
-                &reserved.id,
-                pane,
-                since,
-            )?;
+            // The session Herdr names for the agent now, read off the lock:
+            // until it names one, the brief is typed.
+            let lineage = engine
+                .delivery_agent(Wait::Each(Duration::from_secs(5)), pane)
+                .ok()
+                .and_then(|agent| agent.session);
+            let target = {
+                let runtime = client.runtime.upgrade().ok_or("delivery_unavailable")?;
+                let guard = runtime.lock().map_err(|_| "delivery_unavailable")?;
+                guard.input_target_for(&pane_key, pane, kind, &child_device, lineage.as_deref())
+            };
+            let prepared = crate::delivery::ladder::prepare(&target);
             // Saved before it is sent, so a send a crash interrupts is
             // counted and never repeated blindly (engineering #11).
             reserved = serde_json::from_value(
@@ -1408,7 +1365,7 @@ fn spawn(
                 })?,
             )
             .map_err(|_| "spawn_unavailable")?;
-            let sent = send_brief(engine.as_ref(), (&route.0, route.1), &reserved.id, &brief)?;
+            let sent = send_brief(engine.as_ref(), (&target, prepared), &reserved.id, &brief)?;
             reserved = serde_json::from_value(mutate(
                 client,
                 authority,

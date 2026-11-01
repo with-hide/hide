@@ -74,13 +74,6 @@ struct SessionFact {
     /// its approval (a refusal in the dialog sends no hook event).
     #[serde(skip)]
     waiting_seq: Option<u64>,
-    /// The session's own messaging channel, as its SessionStart hook
-    /// received it: the input ladder's address for a Claude Code session
-    /// (`delivery::ladder`). It holds a token, so it is never saved: after a
-    /// restart the session has none until it starts again, and its input is
-    /// typed.
-    #[serde(skip)]
-    messaging: Option<hide_node_link::panes::MessagingChannel>,
 }
 
 /// The most open approvals one session reports; the hook keeps the same
@@ -103,14 +96,6 @@ struct PaneFacts {
     /// started again in the same pane).
     #[serde(skip)]
     reported_since_herdr: bool,
-}
-
-/// What a pane's current session reported, for the input ladder
-/// ([`HookFacts::reported_session`]).
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ReportedSession {
-    pub session: Option<String>,
-    pub messaging: Option<hide_node_link::panes::MessagingChannel>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -239,7 +224,6 @@ impl HookFacts {
                 turn_seq: None,
                 waiting: Vec::new(),
                 waiting_seq: None,
-                messaging: None,
             },
         };
         facts.reported_since_herdr = true;
@@ -255,7 +239,6 @@ impl HookFacts {
             // A resumed or compacted session has no turn running yet.
             fact.turn = None;
             fact.waiting.clear();
-            fact.messaging.clone_from(&report.messaging);
         }
         if let Some(waiting) = &report.waiting
             && *waiting != fact.waiting
@@ -364,16 +347,15 @@ impl HookFacts {
     /// What the session that speaks for `pane`'s agent of `runtime`
     /// reported, chosen as a projection chooses it ([`bound`]), with
     /// `lineage` the digest of the session Herdr names for the agent
-    /// (`engine::tokens::session_digest`, the actor's `session`): its id and
-    /// its messaging channel. `None` while no session of that runtime
-    /// reported there, so a nested session the pane's agent started never
-    /// answers for it.
+    /// (`engine::tokens::session_digest`, the actor's `session`): its id.
+    /// `None` while that session did not report there, so a nested session
+    /// the pane's agent started never answers for it.
     pub(crate) fn reported_session(
         &self,
         pane: &str,
         runtime: &str,
         lineage: &str,
-    ) -> Option<ReportedSession> {
+    ) -> Option<String> {
         // Only the session Herdr names for the pane is addressed: another
         // session the pane's hooks reported (a nested run, an agent that
         // ended there) is never sent the pane's input.
@@ -383,10 +365,7 @@ impl HookFacts {
                     crate::engine::tokens::session_digest(kept).as_deref() == Some(lineage)
                 })
         })?;
-        Some(ReportedSession {
-            session: fact.session.clone(),
-            messaging: fact.messaging.clone(),
-        })
+        fact.session.clone()
     }
 
     fn save(&self) {
@@ -513,7 +492,6 @@ fn seeded_facts(records: Vec<hide_agent_hooks::counters::SessionRecord>) -> Pane
             turn_seq: None,
             waiting: Vec::new(),
             waiting_seq: None,
-            messaging: None,
         })
         .collect();
     PaneFacts {
@@ -558,97 +536,48 @@ mod tests {
             counts: None,
             session_start: false,
             waiting: None,
-            messaging: None,
         }
     }
 
-    fn started(session: &str, socket: &str) -> HookStatusReport {
+    fn started(runtime: &str, session: &str) -> HookStatusReport {
         HookStatusReport {
+            runtime: runtime.to_owned(),
             session_start: true,
-            messaging: Some(hide_node_link::panes::MessagingChannel {
-                socket: socket.to_owned(),
-                token: format!("token-of-{session}"),
-            }),
             ..report(Some(session), None)
         }
     }
 
-    /// The input ladder's address for a pane is the channel of the session
-    /// Herdr names there, never that of a nested `claude -p` that started
-    /// later in the same pane and reported its own.
+    /// The input ladder's address for a pane is the session Herdr names
+    /// there, never a nested `codex exec` that started later in the same
+    /// pane and reported its own.
     #[test]
-    fn the_panes_own_session_gives_its_messaging_channel() {
+    fn the_panes_own_session_is_its_address() {
         let mut facts = HookFacts::default();
-        facts
-            .record("w1:p1", &started("s-pane", "/tmp/cc-socks/1.sock"))
-            .unwrap();
-        facts
-            .record("w1:p1", &started("s-print", "/tmp/cc-socks/2.sock"))
-            .unwrap();
+        facts.record("w1:p1", &started("codex", "s-pane")).unwrap();
+        facts.record("w1:p1", &started("codex", "s-exec")).unwrap();
         let lineage = crate::engine::tokens::session_digest("s-pane").unwrap();
-        let reported = facts
-            .reported_session("w1:p1", "claude-code", &lineage)
-            .unwrap();
-        assert_eq!(reported.session.as_deref(), Some("s-pane"));
         assert_eq!(
-            reported.messaging.map(|channel| channel.socket),
-            Some("/tmp/cc-socks/1.sock".to_owned())
+            facts.reported_session("w1:p1", "codex", &lineage),
+            Some("s-pane".to_owned())
         );
-        // A later event of the session keeps the channel its start gave.
-        facts
-            .record("w1:p1", &report(Some("s-pane"), Some(HookTurn::Working)))
-            .unwrap();
-        assert!(
-            facts
-                .reported_session("w1:p1", "claude-code", &lineage)
-                .unwrap()
-                .messaging
-                .is_some()
-        );
-        assert_eq!(facts.reported_session("w1:p1", "codex", &lineage), None);
-        assert_eq!(
-            facts.reported_session("w1:p9", "claude-code", &lineage),
-            None
-        );
-    }
-
-    /// A pane whose hooks reported only a nested session, never the one
-    /// Herdr names for the pane, has no address: the pane's input never
-    /// reaches the nested session's socket, even though it reported last.
-    #[test]
-    fn only_a_nested_session_reported_gives_the_pane_no_address() {
-        let mut facts = HookFacts::default();
-        facts
-            .record("w1:p1", &started("s-nested", "/tmp/cc-socks/9.sock"))
-            .unwrap();
-        let lineage = crate::engine::tokens::session_digest("s-pane").unwrap();
         assert_eq!(
             facts.reported_session("w1:p1", "claude-code", &lineage),
             None
         );
+        assert_eq!(facts.reported_session("w1:p9", "codex", &lineage), None);
     }
 
-    /// The token is never saved: a restart keeps the session and its counts,
-    /// and the session's input is typed until it starts again.
+    /// A pane whose hooks reported only a nested session, never the one
+    /// Herdr names for the pane, has no address: the pane's input never
+    /// reaches the nested session, even though it reported last.
     #[test]
-    fn the_messaging_channel_is_never_saved() {
-        let folder = tempfile::tempdir().unwrap();
-        let path = folder.path().join("hook-facts.json");
-        {
-            let mut facts = HookFacts::restore(path.clone(), Vec::new);
-            facts
-                .record("w1:p1", &started("s-pane", "/tmp/cc-socks/1.sock"))
-                .unwrap();
-        }
-        let saved = std::fs::read_to_string(&path).unwrap();
-        assert!(saved.contains("s-pane") && !saved.contains("token-of-s-pane"));
-        let restored = HookFacts::restore(path, Vec::new);
-        let lineage = crate::engine::tokens::session_digest("s-pane").unwrap();
-        let reported = restored
-            .reported_session("w1:p1", "claude-code", &lineage)
+    fn only_a_nested_session_reported_gives_the_pane_no_address() {
+        let mut facts = HookFacts::default();
+        facts
+            .record("w1:p1", &started("codex", "s-nested"))
             .unwrap();
-        assert_eq!(reported.session.as_deref(), Some("s-pane"));
-        assert_eq!(reported.messaging, None);
+        let lineage = crate::engine::tokens::session_digest("s-pane").unwrap();
+        assert_eq!(facts.reported_session("w1:p1", "codex", &lineage), None);
     }
 
     fn payload(session: &str) -> SessionSnapshotPayload {

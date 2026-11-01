@@ -33,7 +33,6 @@ pub mod bell_line;
 pub mod calls;
 mod catalog;
 mod claude_attachment;
-mod claude_peer;
 mod conversation_cursor;
 pub mod cursor;
 mod envelope;
@@ -1469,21 +1468,6 @@ fn parse_claude_line(item: &Value, reply: &dyn Fn() -> CommandReply) -> LineResu
         };
     }
     let images = image_blocks(content, "image");
-    // A letter's bell line Claude Code's messaging socket took is the line
-    // Hide sent, as when it is typed.
-    if role == "user"
-        && let Some(line) = claude_peer::bell_line(item)
-    {
-        return match timestamp_ms(item.get("timestamp")) {
-            Ok(at) => LineResult::Event(ConversationEvent::new(
-                role,
-                EventKind::Human,
-                at,
-                line.to_owned(),
-            )),
-            Err(reason) => LineResult::Skip(reason),
-        };
-    }
     let text = match session_text(content) {
         Some(text) => text,
         None if role == "user" && images > 0 => String::new(),
@@ -2331,29 +2315,6 @@ mod tests {
                 "{own}"
             );
         }
-    }
-
-    #[test]
-    fn claude_peer_record_of_a_bell_reads_as_the_bell_and_another_peer_stays_injected() {
-        let peer = |message: &str| {
-            serde_json::json!({
-                "type": "user", "timestamp": "2026-11-01T14:24:33.831Z", "isMeta": true,
-                "promptSource": "system", "userType": "external", "promptId": "p",
-                "origin": {"kind": "peer", "from": "unknown"},
-                "message": {"role": "user", "content": format!(
-                    "Another Claude session sent a message:\n{message}\n\nThis came from another Claude session."
-                )},
-            })
-            .to_string()
-                + "\n"
-        };
-        let bell = "🦉 lead report: the fix is in";
-        let parsed = parse_claude_events(&peer(bell));
-        assert_eq!(parsed.events.len(), 1);
-        assert_eq!(parsed.events[0].kind, EventKind::Human);
-        assert_eq!(parsed.events[0].text, bell);
-        let parsed = parse_claude_events(&peer("review my branch"));
-        assert_eq!(parsed.events[0].kind, EventKind::Injected);
     }
 
     #[test]

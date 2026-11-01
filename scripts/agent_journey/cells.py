@@ -195,23 +195,18 @@ RUNG_KINDS = ("input.rung", "input.rung_unavailable", "input.rung_lost")
 def rung_verdict(declared, records):
     """A letter's bell took the first rung after the launch prompt the
     agent declares (`declared`, the contract's `input`), as the core's log
-    lines for the pane (`records`) say; a rung declared unproven on this
-    system (`unsupported_system`) hands it to the next one."""
+    lines for the pane (`records`) say."""
     ladder = [rung for rung in declared if rung != "launch_prompt"]
     if not ladder:
         return FAIL, "the agent declares no input rung"
+    rung = ladder[0]
     used = [record.get("rung") for record in records if record.get("kind") == "input.rung"]
-    for rung in ladder:
-        if rung in used:
-            return PASS, "carried by " + rung
-        refused = [record for record in records
-                   if record.get("kind") == "input.rung_unavailable" and record.get("rung") == rung]
-        if not any(record.get("reason") == "unsupported_system" for record in refused):
-            reasons = "; ".join(str(record.get("reason")) for record in refused + [
-                record for record in records if record.get("kind") == "input.rung_lost"])
-            return FAIL, f"not carried by {rung}, its declared rung" + (f" ({reasons})" if reasons else
-                                                                          f" (the log names {used or 'none'})")
-    return FAIL, "no declared rung carried it"
+    if rung in used:
+        return PASS, "carried by " + rung
+    reasons = "; ".join(str(record.get("reason")) for record in records
+                        if record.get("kind") in ("input.rung_unavailable", "input.rung_lost"))
+    return FAIL, f"not carried by {rung}, its declared rung" + (f" ({reasons})" if reasons else
+                                                                  f" (the log names {used or 'none'})")
 
 
 def busy_letter_verdict(shown, read, session, held, token):

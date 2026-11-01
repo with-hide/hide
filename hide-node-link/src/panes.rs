@@ -9,7 +9,7 @@ pub use hide_agent_hooks::observation::{
     DirectObservation, ITEM_LIMIT as OBSERVATION_ITEM_LIMIT,
     RECIPIENT_LIMIT as OBSERVATION_RECIPIENT_LIMIT, SEND_BUDGET as OBSERVATION_SEND_BUDGET,
 };
-pub use hide_agent_hooks::report::{HookCounts, HookStatusReport, HookTurn, MessagingChannel};
+pub use hide_agent_hooks::report::{HookCounts, HookStatusReport, HookTurn};
 use serde::{Deserialize, Serialize};
 
 /// Recovery advice shared by local and device pane refusals.

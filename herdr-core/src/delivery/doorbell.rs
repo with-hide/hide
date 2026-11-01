@@ -100,9 +100,6 @@ pub(crate) enum Hold {
     /// The letter was confirmed, cancelled, expired or reserved after the
     /// verdict.
     Letter,
-    /// The recipient's own way in needs the session its hook has not
-    /// reported yet (`ladder::Delivered::NotYet`).
-    NotYet,
     /// Three reservations consumed and this pane is eligible for another bell.
     Exhausted,
     /// The core waits for its move's link before it types into any pane
@@ -138,7 +135,6 @@ impl Hold {
             Self::Exhausted => "attempts_exhausted",
             Self::CorePending => "core_pending",
             Self::ComposerUnread => "composer_unconfirmed",
-            Self::NotYet => crate::delivery::ladder::SESSION_UNREPORTED,
         }
     }
 }
@@ -1041,7 +1037,7 @@ fn resubmit_brief(
                 .lock()
                 .map_err(|_| "pane_unavailable")?
                 .input_target(observed);
-            let prepared = super::ladder::prepare(&target)?;
+            let prepared = super::ladder::prepare(&target);
             Some((target, prepared))
         }
     };
@@ -1270,15 +1266,12 @@ fn deliver(
     if let Err(reason) = native_current(engine, observed).map_err(SendFailure::NotTyped)? {
         return Ok(Outcome::Held(reason));
     }
-    // The ladder's route is decided before a bell is spent: an agent whose
-    // own way in waits for its session spends nothing and is tried again.
+    // The ladder's route is decided before a bell is spent.
     let target = owner
         .lock()
         .map_err(|_| SendFailure::NotTyped("runtime_unavailable"))?
         .input_target(observed);
-    let Ok(prepared) = super::ladder::prepare(&target) else {
-        return Ok(Outcome::Held(Hold::NotYet));
-    };
+    let prepared = super::ladder::prepare(&target);
     let reservation = client
         .submit(
             Effect::BellAttempt {

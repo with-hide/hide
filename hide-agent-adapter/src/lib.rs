@@ -828,59 +828,18 @@ pub enum AgentApi {
     /// trust question (measured 2026-11-01). Only a fresh start's first input
     /// takes it.
     LaunchPrompt,
-    /// `codex queue --thread <session> --message <text>`: the session's own
+    /// `codex queue --thread <session> --message=<text>`: the session's own
     /// durable queue, which the running TUI takes as a turn once it rests
     /// with an empty composer (Codex 0.166.0, measured 2026-11-01). A Codex
     /// has no thread before its first turn, so this rung needs the session
     /// its hook reported.
     CodexQueue,
-    /// The session's messaging socket (`CLAUDE_CODE_MESSAGING_SOCKET`),
-    /// authenticated with the token Hide's own SessionStart hook received
-    /// (`CLAUDE_CODE_MESSAGING_TOKEN`). It answers nothing, so the prompt
-    /// hook's digest confirms it as it confirms typing (Claude Code 2.1.316,
-    /// measured 2026-11-01).
-    ClaudeMessaging,
 }
 
 impl AgentApi {
-    /// The variables the agent hands its own hooks at a session's start
-    /// with the address this rung needs, socket first and token second:
-    /// Hide's SessionStart hook reports them (`docs/agent-hooks.md`).
-    pub const fn session_environment(self) -> Option<(&'static str, &'static str)> {
-        match self {
-            Self::ClaudeMessaging => Some((
-                "CLAUDE_CODE_MESSAGING_SOCKET",
-                "CLAUDE_CODE_MESSAGING_TOKEN",
-            )),
-            Self::LaunchPrompt | Self::CodexQueue => None,
-        }
-    }
-
     /// Whether the rung takes only a fresh start's first input.
     pub const fn first_input_only(self) -> bool {
         matches!(self, Self::LaunchPrompt)
-    }
-
-    /// What Hide does while the agent has not reported the session the rung
-    /// needs. Claude Code reports its session when it starts, so input
-    /// waits for it; Codex reports its session only at its first turn, which
-    /// the input itself would start, so input goes to the next rung.
-    pub const fn before_session(self) -> BeforeSession {
-        match self {
-            Self::ClaudeMessaging => BeforeSession::Wait,
-            Self::LaunchPrompt | Self::CodexQueue => BeforeSession::NextRung,
-        }
-    }
-
-    /// The systems the rung was proven on. Claude Code's socket is a named
-    /// pipe on Windows, which no run has measured (`docs/INSTALL.md`, What
-    /// each system supports); there a node answers it unavailable and the
-    /// next rung takes the input.
-    pub const fn systems(self) -> Systems {
-        match self {
-            Self::ClaudeMessaging => Systems::MacOsAndLinux,
-            Self::LaunchPrompt | Self::CodexQueue => Systems::Every,
-        }
     }
 
     /// The agent whose own API this is.
@@ -888,7 +847,6 @@ impl AgentApi {
         match self {
             Self::LaunchPrompt => None,
             Self::CodexQueue => Some(AgentId::Codex),
-            Self::ClaudeMessaging => Some(AgentId::ClaudeCode),
         }
     }
 }
@@ -899,20 +857,9 @@ impl InputRung {
         match self {
             Self::AgentApi(AgentApi::LaunchPrompt) => "launch_prompt",
             Self::AgentApi(AgentApi::CodexQueue) => "codex_queue",
-            Self::AgentApi(AgentApi::ClaudeMessaging) => "claude_messaging",
             Self::Typed => "typed",
         }
     }
-}
-
-/// What an [`AgentApi`] rung does before the agent reported its session.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum BeforeSession {
-    /// The input is not sent yet: Hide answers that the agent cannot take
-    /// it now and tries again.
-    Wait,
-    /// The rung has no address yet, and the next rung takes the input.
-    NextRung,
 }
 
 /// The ladder of an agent with no way in of its own.

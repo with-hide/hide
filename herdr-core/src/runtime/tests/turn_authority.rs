@@ -97,7 +97,6 @@ fn synced(witnesses: &Witnesses) -> (Runtime, crate::delivery::Actor) {
             counts: None,
             session_start: false,
             waiting: None,
-            messaging: None,
         };
         runtime
             .ingest_hook_status(crate::node::TEST_NODE, PANE, &report)

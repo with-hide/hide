@@ -10,12 +10,10 @@
 //!
 //! - [`Delivered::Sent`]: the input was sent whole, typed or through the
 //!   agent's own way in. No way in says the agent took it (`codex queue`
-//!   answers that it queued the message, Claude Code's socket answers
-//!   nothing), so the agent's own record decides, as for typing
-//!   (`delivery::typed`).
+//!   answers only that it queued the message), so the agent's own record
+//!   decides, as for typing (`delivery::typed`).
 //! - [`Delivered::NotYet`]: nothing was sent, because the agent cannot take
-//!   it now (its session has not reported the way in yet, a refused call);
-//!   Hide tries again.
+//!   it now (Herdr refused the typing); Hide tries again.
 //! - [`Delivered::Lost`]: the send began and its answer was lost, so the
 //!   input may or may not have arrived; it is never sent again blindly, and
 //!   the agent's record still decides.
@@ -28,9 +26,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use hide_agent_adapter::{AgentApi, BeforeSession, InputRung};
+use hide_agent_adapter::{AgentApi, InputRung};
 use hide_node_link::input::{Delivery, InputChannel};
-use hide_node_link::panes::MessagingChannel;
 use hide_node_link::protocol::Call;
 use serde_json::json;
 
@@ -58,25 +55,6 @@ pub(crate) enum Delivered {
     Lost(&'static str),
 }
 
-/// The cause of a [`Delivered::NotYet`] while the agent has not reported
-/// the session its way in needs.
-pub(crate) const SESSION_UNREPORTED: &str = "session_unreported";
-
-/// What the pane's session told Hide through its own hook, for the rungs
-/// that need an address.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum SessionAddress {
-    /// The agent's hook has not reported the pane's session yet, and nothing
-    /// says it never will.
-    Pending,
-    /// What the session reported: its id and its messaging channel. Both
-    /// absent for a session whose hooks are not connected.
-    Known {
-        session: Option<String>,
-        messaging: Option<MessagingChannel>,
-    },
-}
-
 /// One input's destination, owned, as the runtime knew it under its lock.
 #[derive(Clone)]
 pub(crate) struct InputTarget {
@@ -86,7 +64,10 @@ pub(crate) struct InputTarget {
     pub pane_id: String,
     /// The pane as its own Herdr names it.
     pub raw_pane_id: String,
-    pub address: SessionAddress,
+    /// The id of the session Herdr names for the pane, as Hide's own hook
+    /// reported it there; `None` until both name the same session, and then
+    /// only typing is left (`HookFacts::reported_session`).
+    pub session: Option<String>,
     /// The node of the machine whose pane runs the agent; `None` when its
     /// link is down, and then only typing is left.
     pub node: Option<Arc<dyn NodeLink>>,
@@ -99,30 +80,24 @@ enum Step {
     Typed,
 }
 
-/// The rungs `target` can take now, in order, with nothing sent. A rung
-/// that waits for the session answers its cause.
+/// The rungs `target` can take now, in order, with nothing sent.
 pub(crate) struct Prepared {
     steps: Vec<Step>,
 }
 
 /// Decides the route for `target` without sending anything, so a caller
 /// that reserves an attempt does so only when something will be sent.
-pub(crate) fn prepare(target: &InputTarget) -> Result<Prepared, &'static str> {
+pub(crate) fn prepare(target: &InputTarget) -> Prepared {
     let ladder = hide_agent_adapter::adapter(&target.kind)
         .map_or(hide_agent_adapter::TYPED_ONLY, |row| row.input);
-    let mut steps = Vec::new();
-    for rung in ladder {
-        match rung {
-            InputRung::AgentApi(api) if api.first_input_only() => {}
-            InputRung::AgentApi(api) => match channel(*api, &target.address) {
-                Address::Channel(channel) => steps.push(Step::Channel(channel)),
-                Address::Next => {}
-                Address::Wait => return Err(SESSION_UNREPORTED),
-            },
-            InputRung::Typed => steps.push(Step::Typed),
-        }
-    }
-    Ok(Prepared { steps })
+    let steps = ladder
+        .iter()
+        .filter_map(|rung| match rung {
+            InputRung::AgentApi(api) => channel(*api, target.session.as_deref()).map(Step::Channel),
+            InputRung::Typed => Some(Step::Typed),
+        })
+        .collect();
+    Prepared { steps }
 }
 
 /// The route for input that is the operator's own words, such as a
@@ -134,33 +109,15 @@ pub(crate) fn typed_only() -> Prepared {
     }
 }
 
-enum Address {
-    Channel(InputChannel),
-    Next,
-    Wait,
-}
-
-fn channel(api: AgentApi, address: &SessionAddress) -> Address {
-    let reported = match address {
-        SessionAddress::Pending => {
-            return match api.before_session() {
-                BeforeSession::Wait => Address::Wait,
-                BeforeSession::NextRung => Address::Next,
-            };
-        }
-        SessionAddress::Known { session, messaging } => (session, messaging),
-    };
-    match (api, reported) {
-        (AgentApi::CodexQueue, (Some(thread), _)) => Address::Channel(InputChannel::CodexQueue {
-            thread: thread.clone(),
+/// The way in `api` gives for `session`; `None` hands the input to the next
+/// rung. A launch prompt takes only a fresh start's first input, and Codex
+/// has no thread before its first turn, which the input itself starts.
+fn channel(api: AgentApi, session: Option<&str>) -> Option<InputChannel> {
+    match api {
+        AgentApi::LaunchPrompt => None,
+        AgentApi::CodexQueue => session.map(|thread| InputChannel::CodexQueue {
+            thread: thread.to_owned(),
         }),
-        (AgentApi::ClaudeMessaging, (_, Some(messaging))) => {
-            Address::Channel(InputChannel::ClaudeMessaging {
-                socket: messaging.socket.clone(),
-                token: messaging.token.clone(),
-            })
-        }
-        _ => Address::Next,
     }
 }
 
@@ -347,42 +304,25 @@ mod tests {
             .collect()
     }
 
-    fn target(kind: &str, address: SessionAddress, node: Option<Arc<Node>>) -> InputTarget {
+    fn target(kind: &str, session: Option<&str>, node: Option<Arc<Node>>) -> InputTarget {
         InputTarget {
             pane_id: "pane".into(),
             kind: kind.into(),
             raw_pane_id: "w1:p2".into(),
-            address,
+            session: session.map(str::to_owned),
             node: node.map(|node| node as Arc<dyn NodeLink>),
         }
     }
 
-    fn reported(session: Option<&str>, messaging: Option<(&str, &str)>) -> SessionAddress {
-        SessionAddress::Known {
-            session: session.map(str::to_owned),
-            messaging: messaging.map(|(socket, token)| MessagingChannel {
-                socket: socket.into(),
-                token: token.into(),
-            }),
-        }
-    }
-
     fn deliver(herdr: &FakeHerdr, target: &InputTarget, text: &str) -> Delivered {
-        match prepare(target) {
-            Ok(prepared) => prepared.deliver(herdr.engine().as_ref(), target, text),
-            Err(cause) => Delivered::NotYet(cause),
-        }
+        prepare(target).deliver(herdr.engine().as_ref(), target, text)
     }
 
     #[test]
     fn codex_input_goes_to_its_session_queue_without_typing() {
         let herdr = herdr("ladder-codex-queue");
         let node = Node::answering(Ok(Delivery::Sent));
-        let target = target(
-            "codex",
-            reported(Some("thread-1"), None),
-            Some(node.clone()),
-        );
+        let target = target("codex", Some("thread-1"), Some(node.clone()));
         assert_eq!(
             deliver(&herdr, &target, "line one\nline two"),
             Delivered::Sent(SendRoute::Channel),
@@ -404,7 +344,7 @@ mod tests {
     fn codex_with_no_reported_session_is_typed_since_its_first_turn_makes_the_session() {
         let herdr = herdr("ladder-codex-fresh");
         let node = Node::answering(Ok(Delivery::Sent));
-        let target = target("codex", SessionAddress::Pending, Some(node.clone()));
+        let target = target("codex", None, Some(node.clone()));
         assert_eq!(
             deliver(&herdr, &target, "brief"),
             Delivered::Sent(SendRoute::Typed)
@@ -423,11 +363,7 @@ mod tests {
         ] {
             let herdr = herdr("ladder-unavailable");
             let node = Node::answering(answer);
-            let target = target(
-                "codex",
-                reported(Some("thread-1"), None),
-                Some(node.clone()),
-            );
+            let target = target("codex", Some("thread-1"), Some(node.clone()));
             assert_eq!(
                 deliver(&herdr, &target, "letter"),
                 Delivered::Sent(SendRoute::Typed)
@@ -437,7 +373,7 @@ mod tests {
         }
         // A machine whose node cannot be reached is typed straight away.
         let herdr = herdr("ladder-no-node");
-        let target = target("codex", reported(Some("thread-1"), None), None);
+        let target = target("codex", Some("thread-1"), None);
         assert_eq!(
             deliver(&herdr, &target, "letter"),
             Delivered::Sent(SendRoute::Typed)
@@ -455,7 +391,7 @@ mod tests {
         ] {
             let herdr = herdr("ladder-lost");
             let node = Node::answering(answer);
-            let target = target("codex", reported(Some("thread-1"), None), Some(node));
+            let target = target("codex", Some("thread-1"), Some(node));
             let Delivered::Lost(_) = deliver(&herdr, &target, "letter") else {
                 panic!("a lost answer says so");
             };
@@ -464,62 +400,13 @@ mod tests {
     }
 
     #[test]
-    fn claude_input_waits_until_herdr_names_its_session_then_goes_to_its_socket() {
-        let herdr = herdr("ladder-claude");
-        let node = Node::answering(Ok(Delivery::Sent));
-        let waiting = target("claude", SessionAddress::Pending, Some(node.clone()));
-        assert_eq!(
-            deliver(&herdr, &waiting, "brief"),
-            Delivered::NotYet(SESSION_UNREPORTED)
-        );
-        assert!(
-            node.asked().is_empty() && typed(&herdr).is_empty(),
-            "nothing is sent"
-        );
-        let reported = target(
-            "claude",
-            reported(Some("session-1"), Some(("/tmp/cc-socks/1.sock", "token-1"))),
-            Some(node.clone()),
-        );
-        // The socket answers nothing: the prompt hook's record decides.
-        assert_eq!(
-            deliver(&herdr, &reported, "letter"),
-            Delivered::Sent(SendRoute::Channel)
-        );
-        assert_eq!(
-            node.asked(),
-            [(
-                InputChannel::ClaudeMessaging {
-                    socket: "/tmp/cc-socks/1.sock".into(),
-                    token: "token-1".into()
-                },
-                "letter".into()
-            )]
-        );
-        assert!(typed(&herdr).is_empty());
-    }
-
-    #[test]
-    fn a_session_that_reported_no_channel_is_typed() {
-        let herdr = herdr("ladder-claude-none");
-        let node = Node::answering(Ok(Delivery::Sent));
-        let target = target("claude", reported(None, None), Some(node.clone()));
-        assert_eq!(
-            deliver(&herdr, &target, "letter"),
-            Delivered::Sent(SendRoute::Typed)
-        );
-        assert!(node.asked().is_empty());
-        assert_eq!(typed(&herdr), [json!("letter")]);
-    }
-
-    #[test]
     fn a_typed_only_agent_and_a_launch_prompt_agent_after_its_start_are_typed() {
-        // Grok declares typing alone; agy's launch prompt takes only a fresh
-        // start's first input.
-        for kind in ["grok", "agy"] {
+        // Grok declares typing alone; the launch prompt of agy and Claude
+        // Code takes only a fresh start's first input.
+        for kind in ["grok", "agy", "claude"] {
             let herdr = herdr("ladder-typed");
             let node = Node::answering(Ok(Delivery::Sent));
-            let target = target(kind, reported(Some("s"), None), Some(node.clone()));
+            let target = target(kind, Some("s"), Some(node.clone()));
             assert_eq!(
                 deliver(&herdr, &target, "letter"),
                 Delivered::Sent(SendRoute::Typed)
@@ -527,19 +414,5 @@ mod tests {
             assert!(node.asked().is_empty(), "{kind}");
             assert_eq!(typed(&herdr), [json!("letter")], "{kind}");
         }
-    }
-
-    #[test]
-    fn the_token_never_reaches_a_debug_line() {
-        let channel = InputChannel::ClaudeMessaging {
-            socket: "/tmp/cc-socks/1.sock".into(),
-            token: "secret-token".into(),
-        };
-        assert!(!format!("{channel:?}").contains("secret-token"));
-        let fact = MessagingChannel {
-            socket: "/tmp/cc-socks/1.sock".into(),
-            token: "secret-token".into(),
-        };
-        assert!(!format!("{fact:?}").contains("secret-token"));
     }
 }

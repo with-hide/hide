@@ -30,16 +30,9 @@ fn record(record: &Value, thread: &mut Thread) {
     let message = &record["message"];
     let cwd = record["cwd"].as_str().unwrap_or_default();
     match (role, &message["content"]) {
-        ("user", Value::String(text)) => match crate::claude_peer::bell_line(record) {
-            // A bell line the session's messaging socket took reads as the
-            // line Hide sent.
-            Some(line) => thread.user(
-                record["uuid"].as_str(),
-                Origin::Operator,
-                [Part::Text(line)],
-            ),
-            None => thread.user(record["uuid"].as_str(), origin(record), [Part::Text(text)]),
-        },
+        ("user", Value::String(text)) => {
+            thread.user(record["uuid"].as_str(), origin(record), [Part::Text(text)]);
+        }
         ("user", Value::Array(blocks)) => user_blocks(record, blocks, thread),
         ("assistant", Value::Array(blocks)) => {
             let id = message["id"].as_str().or(record["uuid"].as_str());

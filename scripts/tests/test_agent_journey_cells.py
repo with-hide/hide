@@ -372,7 +372,7 @@ class BriefRecord(unittest.TestCase):
 
 class InputRung(unittest.TestCase):
     CODEX = ["launch_prompt", "codex_queue", "typed"]
-    CLAUDE = ["launch_prompt", "claude_messaging", "typed"]
+    CLAUDE = ["launch_prompt", "typed"]
 
     def test_a_letter_passes_through_the_first_rung_the_agent_declares(self):
         used = [{"kind": "input.rung", "rung": "codex_queue", "outcome": "received"}]
@@ -387,10 +387,9 @@ class InputRung(unittest.TestCase):
         self.assertIn("codex_not_found", verdict[1])
         self.assertEqual(cells.rung_verdict(self.CODEX, [])[0], cells.FAIL)
 
-    def test_a_rung_unproven_on_this_system_hands_the_letter_to_the_next(self):
-        windows = [{"kind": "input.rung_unavailable", "rung": "claude_messaging", "reason": "unsupported_system"},
-                   {"kind": "input.rung", "rung": "typed"}]
-        self.assertEqual(cells.rung_verdict(self.CLAUDE, windows), (cells.PASS, "carried by typed"))
+    def test_an_agent_whose_only_rung_after_its_start_is_typing_passes_typed(self):
+        typed = [{"kind": "input.rung", "rung": "typed"}]
+        self.assertEqual(cells.rung_verdict(self.CLAUDE, typed), (cells.PASS, "carried by typed"))
 
 
 class BusyAndMenuLetters(unittest.TestCase):

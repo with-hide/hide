@@ -113,7 +113,7 @@ class Journey:
         # confirm; the stand-ins imitate only the agent's prompt argument.
         self.brief_start = brief_start
         # A stand-in has no way in of its own (its Codex refuses `codex
-        # queue`, its Claude reports no socket), so only a real CLI's input is
+        # queue`), so only a real CLI's input is
         # held to the rungs its agent declares.
         self.own_rungs = brief_start
         self.table, self.row, self.repository = table, contract_row, repository

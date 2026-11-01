@@ -280,9 +280,8 @@ use crate::error::HostError;
 /// (`Call::SessionThread`; PRD session-docs-and-assistant B25). A helper on
 /// 65 would refuse it, so it is refused at Hello and upgraded.
 /// 67: a node hands input to a running agent through the agent's own way
-/// in (`Call::Deliver`), and a pane's hook report carries a Claude Code
-/// session's messaging channel (`HookStatusReport::messaging`). A helper on
-/// 66 would refuse both, so it is refused at Hello and upgraded.
+/// in (`Call::Deliver`). A helper on 66 would refuse it, so it is refused
+/// at Hello and upgraded.
 pub const PROTOCOL_VERSION: u32 = 67;
 
 /// What agy's index held in a checkout before Hide typed `/fork`

@@ -1194,7 +1194,6 @@ fn a_hook_turn_ends_when_the_session_file_reads_an_interruption_after_it() {
             counts: None,
             session_start: false,
             waiting: None,
-            messaging: None,
         };
         runtime
             .ingest_hook_status(crate::node::TEST_NODE, PANE, &report)
@@ -1278,7 +1277,6 @@ fn an_interruption_the_session_file_reads_closes_the_open_approvals() {
                 counts: None,
                 session_start: false,
                 waiting: Some(vec!["Bash:00aa".to_owned()]),
-                messaging: None,
             },
         )
         .unwrap();
@@ -1398,7 +1396,6 @@ fn a_hook_turn_ends_on_the_session_files_interruption_with_summaries_off() {
                 counts: None,
                 session_start: false,
                 waiting: None,
-                messaging: None,
             },
         )
         .unwrap();
@@ -1507,7 +1504,6 @@ fn a_hook_turn_whose_prompt_the_session_file_shows_unanswered_ends_at_rest() {
                     counts: None,
                     session_start: false,
                     waiting: None,
-                    messaging: None,
                 },
             )
             .unwrap();
@@ -1646,7 +1642,6 @@ fn an_approval_ends_when_the_session_file_reads_the_refused_calls_result() {
                 counts: None,
                 session_start: false,
                 waiting: Some(vec![call]),
-                messaging: None,
             },
         )
         .unwrap();
