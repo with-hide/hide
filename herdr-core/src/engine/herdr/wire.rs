@@ -1895,25 +1895,14 @@ pub(crate) fn pane_resize_changed(value: Value) -> Result<bool, String> {
 }
 /// The value of the pane token `token` in a `pane.get` answer, `None` when
 /// the pane carries none.
-/// The values of `tokens` in a `pane.get` answer, in their order.
-pub(crate) fn pane_tokens(value: Value, tokens: &[&str]) -> Result<Vec<Option<String>>, String> {
+pub(crate) fn pane_token(value: Value, token: &str) -> Result<Option<String>, String> {
     let missing = "pane.get response is missing pane";
     match response(value, missing)? {
-        res::ResponseResult::PaneInfo { pane } => {
-            let held: Vec<(String, String)> = pane
-                .tokens
-                .into_iter()
-                .map(|(key, value)| (String::from(key), value))
-                .collect();
-            Ok(tokens
-                .iter()
-                .map(|token| {
-                    held.iter()
-                        .find(|(key, _)| key == token)
-                        .map(|(_, value)| value.clone())
-                })
-                .collect())
-        }
+        res::ResponseResult::PaneInfo { pane } => Ok(pane
+            .tokens
+            .into_iter()
+            .find(|(key, _)| String::from(key.clone()) == token)
+            .map(|(_, value)| value)),
         _ => Err(missing.into()),
     }
 }

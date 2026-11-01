@@ -592,32 +592,13 @@ fn start(
     shell: ShellStart,
     wait: Duration,
 ) -> Result<crate::engine::StartedAgent, StartError> {
-    start_with(
-        herdr,
-        pane,
-        name,
-        shell,
-        wait,
-        vec!["--".into(), format!("promote {name}")],
-    )
-}
-
-/// A start of the stand-in `claude` with `args`.
-fn start_with(
-    herdr: &PrivateHerdr,
-    pane: &str,
-    name: &str,
-    shell: ShellStart,
-    wait: Duration,
-    args: Vec<String>,
-) -> Result<crate::engine::StartedAgent, StartError> {
     let engine = herdr.engine();
     let start = engine
         .prepare_start(crate::engine::AgentLaunch {
             pane_id: pane.to_owned(),
             name: name.to_owned(),
             kind: "claude".into(),
-            args,
+            args: vec!["--".into(), format!("promote {name}")],
             codex_daemon: crate::codex_launch::CodexDaemon::Unknown,
         })
         .unwrap();
@@ -872,91 +853,6 @@ fn a_fish_startup_question_is_never_answered_by_a_start_and_each_tab_runs_its_ow
 fn a_windows_powershell_startup_question_is_never_answered_by_a_start_and_each_tab_runs_its_own_prompt()
  {
     startup_question("powershell", "HIDE_TEST_POWERSHELL_BIN");
-}
-
-/// The operator's alias for the agent's program repeats the option Hide's
-/// start adds (`alias codex="codex --dangerously-bypass-approvals-and-sandbox"`
-/// beside Settings › Agents' full access, 2026-11-01), and the stand-in
-/// refuses a repeated option as Codex does. The start in a tab Hide made
-/// runs the program itself: the option once, and the agent shows.
-#[cfg(unix)]
-fn an_alias_of_the_program(shell: &str, variable: &str) {
-    let herdr = PrivateHerdr::new(std::env::var(variable).ok());
-    unix_agent(&herdr);
-    std::fs::write(
-        herdr.home.join("bin/claude"),
-        "#!/bin/bash\nprintf '%s\\n' \"${PWD##*/} $*\" >> \"$HOME/claude-args\"\nseen=' '\nfor arg in \"$@\"; do\n  [ \"$arg\" = -- ] && break\n  case $seen in *\" $arg \"*) echo \"error: the argument '$arg' cannot be used multiple times\" >&2; exit 2;; esac\n  seen=\"$seen$arg \"\ndone\nexec -a claude \"$HOME/agent/claude\" run\n",
-    )
-    .unwrap();
-    let alias = match shell {
-        "fish" => "alias claude 'claude --dangerously-skip-permissions'\n",
-        _ => "alias claude='claude --dangerously-skip-permissions'\n",
-    };
-    let rc = prompt_files(&herdr, shell);
-    let text = std::fs::read_to_string(&rc).unwrap();
-    std::fs::write(rc, text + alias).unwrap();
-    let node = Node {
-        home: herdr.home.clone(),
-        shell: std::env::var(variable).ok(),
-    };
-    let launch = shell_launch(Some(&node), "real-herdr").expect("the shell is integrated");
-    let created = herdr.request(
-        "workspace.create",
-        json!({"cwd": herdr.home, "label": "agents", "focus": false}),
-    );
-    let workspace = created["workspace"]["workspace_id"].as_str().unwrap();
-    let pane = herdr.tab(workspace, "aliased", Some(&launch));
-    start_with(
-        &herdr,
-        &pane,
-        "aliased",
-        ShellStart::of_tab(true, Some(&launch)),
-        Duration::from_secs(30),
-        ["--dangerously-skip-permissions", "--", "promote aliased"]
-            .map(str::to_owned)
-            .to_vec(),
-    )
-    .unwrap_or_else(|error| panic!("{error:?}"));
-    herdr.wait_on(&pane, Duration::from_secs(30), "the agent shows", || {
-        agent_pane(&herdr, "aliased").as_deref() == Some(pane.as_str())
-    });
-    assert_eq!(
-        herdr.file("claude-args"),
-        "aliased --dangerously-skip-permissions -- promote aliased\n"
-    );
-    // The mark names what the shell dropped, and nothing of the alias.
-    assert_eq!(
-        herdr
-            .engine()
-            .pane_tokens(
-                Wait::Each(READ_TIMEOUT),
-                &pane,
-                &[hide_node_link::protocol::UNSHADOWED_TOKEN]
-            )
-            .unwrap(),
-        [Some("claude".to_owned())]
-    );
-}
-
-#[cfg(unix)]
-#[test]
-#[ignore = "needs the pinned Herdr and zsh: HIDE_E2E_HERDR_BIN, HIDE_TEST_ZSH_BIN"]
-fn a_start_in_zsh_runs_the_program_past_an_alias_that_repeats_its_option() {
-    an_alias_of_the_program("zsh", "HIDE_TEST_ZSH_BIN");
-}
-
-#[cfg(unix)]
-#[test]
-#[ignore = "needs the pinned Herdr and bash: HIDE_E2E_HERDR_BIN, HIDE_TEST_BASH_BIN"]
-fn a_start_in_bash_runs_the_program_past_an_alias_that_repeats_its_option() {
-    an_alias_of_the_program("bash", "HIDE_TEST_BASH_BIN");
-}
-
-#[cfg(unix)]
-#[test]
-#[ignore = "needs the pinned Herdr and fish: HIDE_E2E_HERDR_BIN, HIDE_TEST_FISH_BIN"]
-fn a_start_in_fish_runs_the_program_past_an_alias_that_repeats_its_option() {
-    an_alias_of_the_program("fish", "HIDE_TEST_FISH_BIN");
 }
 
 /// Codex CLI 0.165.0 as a sleep meets it: it turns the kitty keyboard

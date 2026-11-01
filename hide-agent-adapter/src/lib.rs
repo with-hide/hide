@@ -918,17 +918,6 @@ const fn start_kinds() -> [&'static str; start_count()] {
 
 pub const START_KINDS: [&str; start_count()] = start_kinds();
 
-/// The program the pinned Herdr types for each agent Hide starts
-/// (`detect::interactive_agent_executable` in Herdr v0.9.5), which is the
-/// program each start row declares; the names an integrated shell runs past
-/// an alias or a function of theirs (`hide_host`'s shell integration).
-pub fn start_programs() -> impl Iterator<Item = &'static str> {
-    ADAPTERS
-        .iter()
-        .filter(|row| row.start.is_some())
-        .flat_map(|row| row.executables.iter().copied())
-}
-
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Feature {

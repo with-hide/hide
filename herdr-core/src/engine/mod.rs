@@ -360,8 +360,8 @@ pub(crate) trait Engine: Send + Sync {
     -> Answer<(Option<String>, Option<PaneSession>)>;
     /// The terminal a pane runs now.
     fn pane_terminal(&self, wait: Wait, pane: &str) -> Answer<String>;
-    /// The values of a pane's metadata `tokens`, in their order, from one read.
-    fn pane_tokens(&self, wait: Wait, pane: &str, tokens: &[&str]) -> Answer<Vec<Option<String>>>;
+    /// The value of a pane's metadata `token`.
+    fn pane_token(&self, wait: Wait, pane: &str, token: &str) -> Answer<Option<String>>;
     /// The agent status the engine shows for a pane.
     fn pane_agent_status(&self, wait: Wait, pane: &str) -> Answer<String>;
     /// How far a pane is scrolled, when the engine reports it.
