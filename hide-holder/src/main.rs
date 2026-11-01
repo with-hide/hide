@@ -304,7 +304,7 @@ fn main() -> ExitCode {
                 );
                 if let Err(error) = claim.end(end) {
                     log.event(
-                        hide_holder_protocol::record::UNWRITTEN_EVENT,
+                        record::UNWRITTEN_EVENT,
                         &[
                             (
                                 "reason",
