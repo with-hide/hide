@@ -363,6 +363,11 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
   const worker = useNodeRun(node);
   const run = worker?.run ?? null;
   const took = useNodeTimes(mission, node, events, end)?.took ?? null;
+  const titleText = (
+    <span className={cn("min-w-0 flex-1 truncate text-body font-semibold", (look === "external" || look === "cancelled" || look === "waiting") && "text-muted-foreground", look === "dropped" && "text-muted-foreground line-through")} title={node.line ? undefined : node.title}>
+      {node.title}
+    </span>
+  );
   const card = (
     <button
       type="button"
@@ -394,14 +399,13 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
     >
       <span className="flex min-w-0 items-center gap-xs">
         <MissionNodeMark look={look} label={word} />
-        <span className={cn("min-w-0 flex-1 truncate text-body font-semibold", (look === "external" || look === "cancelled" || look === "waiting") && "text-muted-foreground", look === "dropped" && "text-muted-foreground line-through")} title={node.line ? undefined : node.title}>
-          {node.title}
-        </span>
+        {/* The Conductor's last line is the title's hover, under the whole title, never a line of the card; on the title alone, so it never stacks on the `!` or Hide mark hints (operator decision 2026-11-02). */}
+        {node.line ? <Hint label={`${node.title}\n${node.line}`} reveals contentClassName="max-w-(--size-mission-node)">{titleText}</Hint> : titleText}
         {hide ? <HideMark words={hide} /> : null}
       </span>
       {/* Who works it and how long it has taken have a line of their own, so a long branch or several pull requests never push them out (operator decision 2026-11-02). */}
       {run || took ? (
-        <span className="flex min-w-0 items-center gap-xxs text-caption text-muted-foreground" data-node-run={run?.from}>
+        <span className="flex min-w-0 items-center gap-xxs text-caption text-muted-foreground" data-node-run={run?.from ?? "none"}>
           {worker?.agent ? <AgentMark kind={worker.agent} /> : null}
           {run ? <RunText run={run} /> : null}
           {took ? <span className="shrink-0" data-node-took="true">{run ? "· " : ""}{took}</span> : null}
@@ -420,15 +424,13 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
       ) : null}
     </button>
   );
-  // The Conductor's last line is the hover's, under the whole title, never a line of the card (operator decision 2026-11-02).
-  const shown = node.line ? <Hint label={`${node.title}\n${node.line}`} reveals contentClassName="max-w-(--size-mission-node)">{card}</Hint> : card;
   // The card and its satellites are one box to the layout, the card centred in it, so edges meet the card's middle.
   // An empty column as wide as the satellites' keeps the card in the middle of the box.
-  if (satellites.length === 0) return <div data-dependency-node={node.key} className="flex">{shown}</div>;
+  if (satellites.length === 0) return <div data-dependency-node={node.key} className="flex">{card}</div>;
   return (
     <div data-dependency-node={node.key} className="grid grid-cols-[var(--spacing-xl)_auto_var(--spacing-xl)] items-center">
       <span aria-hidden="true" />
-      {shown}
+      {card}
       {/* 노드 상세 opens the node's panel; it never shuts the panel already open, as a second press on the card does. */}
       <Satellites mission={mission} lines={satellites} dimmed={dimmed} onSelect={() => !selected && onSelect()} actions={actions} />
     </div>

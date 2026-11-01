@@ -541,6 +541,8 @@ it("shows on the card and in the panel how long a node took from its events, and
   try {
     // The card says it on its run line, as the panel does (operator decision 2026-11-02).
     expect(["a", "b", "c"].map((key) => card(map, key).querySelector("[data-node-took]")?.textContent ?? null)).toEqual(["1h", "40m", null]);
+    // With no worker the line holds the time alone.
+    expect(card(map, "a").querySelector("[data-node-took]")?.closest("[data-node-run]")?.getAttribute("data-node-run")).toBe("none");
     expect(await facts(map, "a")).toBe("took 1h");
     expect(await facts(map, "b")).toBe("took 40m");
     // A node with no event that moved it draws no time.
