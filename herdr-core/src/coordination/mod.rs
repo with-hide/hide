@@ -1438,6 +1438,9 @@ pub(crate) fn apply(
             }
             input.attempts += 1;
             input.typed_at_unix_ms = now;
+            if input.attempts == 1 {
+                input.first_typed_at_unix_ms = now;
+            }
             Ok(json!(record))
         }
         Mutation::BriefConfirmed { id } => {

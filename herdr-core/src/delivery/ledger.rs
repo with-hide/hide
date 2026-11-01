@@ -288,6 +288,7 @@ impl Letter {
         Some(super::typed::TypedInput {
             attempts: self.attempts(),
             typed_at_unix_ms: self.bell_typed_at_unix_ms?,
+            first_typed_at_unix_ms: 0,
             confirmed_at_unix_ms: (self.state != State::Pending).then_some(0),
             noticed: self.input_noticed,
             noticed_at_unix_ms: self.input_noticed_at_unix_ms,
