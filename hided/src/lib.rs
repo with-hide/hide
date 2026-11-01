@@ -773,6 +773,9 @@ pub async fn start_node_role(env: Env, seat: seat::SeatParts) -> Result<RunningN
             herdr: Some(herdr_core::engine::EngineHandle::herdr(hide_node::herdr(
                 std::path::Path::new(&herdr_socket),
             ))),
+            // A node daemon runs its panes in Herdr; holder panes belong to
+            // the machine whose core runs the core's own engine.
+            panes: None,
         },
         || false,
     );

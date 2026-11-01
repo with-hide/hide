@@ -101,6 +101,13 @@ pub fn holder_pane(pane: &str) -> String {
     pane.replace(':', "_")
 }
 
+/// The pane a core names by the holder id `holder`, [`holder_pane`] read
+/// back: a record's file name is all a node finds of a holder when it
+/// starts, and the core's pane ids hold no `_`.
+pub fn core_pane(holder: &str) -> String {
+    holder.replace('_', ":")
+}
+
 /// What a pane is started with.
 #[derive(Clone, Debug)]
 pub struct StartRequest {
@@ -820,6 +827,15 @@ impl Panes {
         let mut aside = log.into_os_string();
         aside.push(".1");
         let _ = std::fs::remove_file(PathBuf::from(aside));
+    }
+
+    /// How many panes may still run: the records not ended and the ones that
+    /// cannot be read, counted under the lock as a start counts them against
+    /// [`HOLDER_CAP`]. A daemon of the core's own engine lives while this is
+    /// above zero (PRD engine-bundle-3-core-owns D-10).
+    pub fn live(&self) -> Result<usize, String> {
+        let _lock = self.lock()?;
+        self.count_live()
     }
 
     /// The records not ended, and the ones that cannot be read, which may

@@ -7,20 +7,26 @@
 //! ([`Engine::changes`]), and the watcher reads the whole session again
 //! ([`Engine::session`]); there is no event stream to replay.
 //!
-//! This is the skeleton the later bundle 3 pull requests fill (D-25): it
-//! makes workspaces, tabs and panes, splits and closes them, keeps focus,
-//! names and Hide's tokens, and reads, types into and lists the processes of
-//! a pane. What a later pull request brings (zoom, resize, swap and move,
-//! saved layouts, agent starts and their state, pane identity, worktrees)
-//! answers a refusal under [`UNSUPPORTED`] that names it, never a silent
-//! default. Only a daemon with the development switch `HIDE_DEV_PANE_HOLDER`
-//! on builds this engine (D-5).
+//! It makes workspaces, tabs and panes and lays them out by the rules of
+//! [`layout`] (split, close, zoom, resize, swap, move, a saved layout given
+//! back), binds workspaces to checkouts and makes worktrees ([`worktrees`]),
+//! keeps focus, names and Hide's tokens, and reads, types into and lists the
+//! processes of a pane. A daemon's engine saves its session after every
+//! change ([`store`]) and, as it opens, lays the saved session out again
+//! around the holders that ran on and starts the rest again ([`restore`]),
+//! so a pane keeps its id across a restart and a reboot. What a later bundle 3
+//! pull request brings (agent starts and their state, pane identity, styled
+//! reads, scrolling, paste) answers a refusal under [`UNSUPPORTED`] that
+//! names it, never a silent default. Only a daemon with the development
+//! switch `HIDE_DEV_PANE_HOLDER` on builds this engine (D-5).
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::Duration;
 
+use hide_node_link::NodeLink;
 use hide_node_link::holders::{HolderError, HolderStart, PaneHolders};
 
 use super::keys::PaneKey;
@@ -36,7 +42,10 @@ use crate::sidebar::{SessionLayoutPayload, SessionSnapshotPayload};
 
 mod ids;
 pub(crate) mod layout;
+mod restore;
+mod store;
 mod topology;
+mod worktrees;
 
 use topology::{Closed, Pane, Topology};
 
@@ -55,19 +64,81 @@ const READ_LINES_CAP: u32 = u16::MAX as u32;
 /// gives: the last rows of its screen and scrollback, soft wraps joined
 /// (`hide_holder_protocol::Ask::Read`). `recent` is therefore unwrapped as
 /// `recent_unwrapped` is, and `visible` reads those same last rows, the
-/// screen's bottom rows among them; a read of exactly the drawn screen comes
-/// with the layout pull request, which knows each pane's rectangle.
+/// screen's bottom rows among them; a read of exactly the drawn screen is
+/// not answered yet: the screen's size is the attached client's, which the
+/// engine does not hold.
 const READ_SOURCES: [&str; 3] = ["recent", "recent_unwrapped", "visible"];
 
 /// The refusal code of a read from a source this engine does not hold.
 const UNKNOWN_SOURCE: &str = "unknown_read_source";
 
+/// Where a daemon's engine keeps its session and finds its home: the
+/// state folder its saved session lives in (`hide_kit::layout::
+/// engine_session`), the home a restored pane whose folder is gone opens in
+/// and new worktrees go under, and the node of the machine its panes run on,
+/// which reads that machine's folders and runs its Git, since the core
+/// touches no machine (PRD core-host-node D-21).
+#[derive(Clone)]
+pub(crate) struct Place {
+    pub(crate) state_dir: PathBuf,
+    pub(crate) home: PathBuf,
+    pub(crate) node: Arc<dyn NodeLink>,
+}
+
 /// The engine and whatever it holds, shared by every gated view of it.
 struct Shared {
-    topology: Mutex<Topology>,
+    topology: Arc<Mutex<Topology>>,
     holders: Arc<dyn PaneHolders>,
     wake: Mutex<Option<Wake>>,
     stopped: AtomicBool,
+    place: Option<Place>,
+    /// The thread that saves the session, for a daemon's engine; dropped
+    /// with the engine, which writes the last change.
+    saver: OnceLock<store::Saver>,
+    /// Whether the restore has finished: until it has, no pane is made, so
+    /// a new pane never takes an id a holder still running was recorded
+    /// under before the restore counted past it.
+    restored: Arc<Restored>,
+}
+
+/// One hold of the topology's lock. As it ends, a change of the tab the
+/// keyboard's workspace shows is recorded as a move, so the session reports
+/// every move in the order the holds made them ([`Topology::note_shown`]).
+struct Held<'a>(MutexGuard<'a, Topology>);
+
+impl std::ops::Deref for Held<'_> {
+    type Target = Topology;
+    fn deref(&self) -> &Topology {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Held<'_> {
+    fn deref_mut(&mut self) -> &mut Topology {
+        &mut self.0
+    }
+}
+
+impl Drop for Held<'_> {
+    fn drop(&mut self) {
+        self.0.note_shown();
+    }
+}
+
+/// Whether a restore has finished, which the restore marks once it has let
+/// go of the engine, so an engine dropped after a pane was made is dropped
+/// whole, its last change written.
+#[derive(Default)]
+pub(super) struct Restored {
+    done: Mutex<bool>,
+    finished: Condvar,
+}
+
+impl Restored {
+    pub(super) fn finish(&self) {
+        *self.done.lock().unwrap_or_else(PoisonError::into_inner) = true;
+        self.finished.notify_all();
+    }
 }
 
 /// The own engine, with every call first passing `gates`.
@@ -77,14 +148,77 @@ pub(crate) struct OwnEngine<'g> {
 }
 
 impl OwnEngine<'static> {
-    /// An engine with no workspace, whose panes `holders` run.
+    /// An engine with no workspace, whose panes `holders` run, that saves
+    /// nothing and restores nothing: a test's.
+    #[cfg(test)]
     pub(crate) fn new(holders: Arc<dyn PaneHolders>) -> Self {
+        Self::with(Topology::default(), holders, None, true)
+    }
+
+    /// A daemon's engine (PRD engine-bundle-3-core-owns D-6, D-7): its
+    /// session read from `place`'s saved session, saved there after every
+    /// change, and laid out again around what `holders` found running as
+    /// soon as the node says what that is, on a thread of its own.
+    pub(crate) fn open(holders: Arc<dyn PaneHolders>, place: Place) -> Result<Self, String> {
+        let path = hide_kit::layout::engine_session(&place.state_dir);
+        let backups = hide_kit::layout::engine_backups(&place.state_dir);
+        let topology = restore::read(&path, &backups);
+        let saved = topology.panes().map(|(id, _)| id.to_owned()).collect();
+        let engine = Self::with(topology, holders, Some(place), false);
+        let session = Arc::clone(&engine.shared.topology);
+        let saver = store::Saver::start(path, move || {
+            Some(
+                session
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .to_saved(),
+            )
+        })?;
+        let _ = engine.shared.saver.set(saver);
+        // A pane whose program exits on its own closes, as Herdr closes it.
+        // The node holds no engine: it is told the engine's shared state
+        // weakly, so an engine dropped is not kept by its holders.
+        let shared = Arc::downgrade(&engine.shared);
+        engine
+            .shared
+            .holders
+            .watch_ends(Arc::new(move |pane: &str| {
+                if let Some(shared) = shared.upgrade() {
+                    OwnEngine {
+                        shared,
+                        gates: Vec::new(),
+                    }
+                    .program_exited(pane);
+                }
+            }));
+        restore::start(
+            OwnEngine {
+                shared: Arc::clone(&engine.shared),
+                gates: Vec::new(),
+            },
+            saved,
+        )?;
+        Ok(engine)
+    }
+
+    fn with(
+        topology: Topology,
+        holders: Arc<dyn PaneHolders>,
+        place: Option<Place>,
+        restored: bool,
+    ) -> Self {
         Self {
             shared: Arc::new(Shared {
-                topology: Mutex::default(),
+                topology: Arc::new(Mutex::new(topology)),
                 holders,
                 wake: Mutex::default(),
                 stopped: AtomicBool::new(false),
+                place,
+                saver: OnceLock::new(),
+                restored: Arc::new(Restored {
+                    done: Mutex::new(restored),
+                    finished: Condvar::new(),
+                }),
             }),
             gates: Vec::new(),
         }
@@ -100,11 +234,13 @@ impl OwnEngine<'_> {
         self.shared.stopped.store(true, Ordering::Release);
     }
 
-    fn topology(&self) -> MutexGuard<'_, Topology> {
-        self.shared
-            .topology
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+    fn topology(&self) -> Held<'_> {
+        Held(
+            self.shared
+                .topology
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        )
     }
 
     /// Whether a call may run: the engine runs and every gate lets it.
@@ -121,8 +257,61 @@ impl OwnEngine<'_> {
         Ok(())
     }
 
-    /// Tells the watcher the session changed, once per change.
+    /// Waits for the restore to finish before a pane is made; refused when
+    /// it has not within its own bound.
+    fn restored(&self) -> Result<(), EngineError> {
+        let restored = &self.shared.restored;
+        let done = restored.done.lock().unwrap_or_else(PoisonError::into_inner);
+        let (done, _) = restored
+            .finished
+            .wait_timeout_while(done, restore::BOUND, |done| !*done)
+            .unwrap_or_else(PoisonError::into_inner);
+        if *done {
+            Ok(())
+        } else {
+            Err(EngineError::Refused {
+                code: "restore_unfinished".to_owned(),
+                message: "the core's own engine is still laying its saved session out again"
+                    .to_owned(),
+            })
+        }
+    }
+
+    /// What marks the restore finished.
+    fn restore_gate(&self) -> Arc<Restored> {
+        Arc::clone(&self.shared.restored)
+    }
+
+    /// The node of this engine's machine.
+    fn node(&self) -> Result<&Arc<dyn NodeLink>, EngineError> {
+        self.shared
+            .place
+            .as_ref()
+            .map(|place| &place.node)
+            .ok_or_else(|| EngineError::Refused {
+                code: "no_node".to_owned(),
+                message: "this engine was given no node to reach its machine".to_owned(),
+            })
+    }
+
+    /// The home this engine opens worktrees and lost folders under.
+    fn home(&self) -> Result<PathBuf, EngineError> {
+        self.shared
+            .place
+            .as_ref()
+            .map(|place| place.home.clone())
+            .ok_or_else(|| EngineError::Refused {
+                code: "no_home".to_owned(),
+                message: "this engine was given no home folder".to_owned(),
+            })
+    }
+
+    /// Tells the watcher the session changed, once per change, and has it
+    /// saved.
     fn changed(&self) {
+        if let Some(saver) = self.shared.saver.get() {
+            saver.changed();
+        }
         let wake = self
             .shared
             .wake
@@ -134,13 +323,15 @@ impl OwnEngine<'_> {
         }
     }
 
-    /// Starts `pane`'s holder running `program`, or the machine's shell.
+    /// Starts `pane`'s holder running `program`, or the machine's shell
+    /// after `notice` when one is given.
     fn start_pane(
         &self,
         pane: &str,
         program: Option<&[String]>,
         cwd: &str,
         env: Env,
+        notice: Option<&str>,
     ) -> Result<(), EngineError> {
         self.shared
             .holders
@@ -151,6 +342,7 @@ impl OwnEngine<'_> {
                 env: env.into_iter().collect(),
                 rows: START_ROWS,
                 cols: START_COLS,
+                notice: notice.map(str::to_owned),
             })
             .map_err(holder_error)
     }
@@ -190,6 +382,7 @@ impl OwnEngine<'_> {
         env: Env,
         program: Option<&[String]>,
     ) -> Answer<(String, String)> {
+        self.restored()?;
         let reserved = {
             let mut topology = self.topology();
             if let Some(replace) = replace
@@ -203,12 +396,12 @@ impl OwnEngine<'_> {
             topology.reserve_tab(workspace)?
         };
         let (tab, pane) = &reserved;
-        self.start_pane(pane, program, cwd, env)?;
+        self.start_pane(pane, program, cwd, env.clone(), None)?;
         let added = self.topology().add_tab(
             workspace,
             (tab, pane),
             label,
-            Pane::new(cwd, pane_label),
+            Pane::started(cwd, pane_label, program, &env),
             focus,
         );
         if let Err(error) = added {
@@ -223,15 +416,18 @@ impl OwnEngine<'_> {
         Ok(reserved)
     }
 
-    /// A new pane beside `target`: its id.
+    /// A new pane beside `target`, `target` keeping `ratio` of the room: its
+    /// id.
     fn open_split(
         &self,
         target: &str,
         direction: PaneLayoutDirection,
+        ratio: f32,
         cwd: Option<&str>,
         env: Env,
         focus: bool,
     ) -> Answer<String> {
+        self.restored()?;
         let (pane, cwd) = {
             let mut topology = self.topology();
             let cwd = match cwd.filter(|cwd| !cwd.trim().is_empty()) {
@@ -241,10 +437,15 @@ impl OwnEngine<'_> {
             let (workspace, _) = topology.pane_place(target)?;
             (topology.reserve_pane(&workspace)?, cwd)
         };
-        self.start_pane(&pane, None, &cwd, env)?;
-        let added =
-            self.topology()
-                .add_split(target, direction, &pane, Pane::new(&cwd, None), focus);
+        self.start_pane(&pane, None, &cwd, env.clone(), None)?;
+        let added = self.topology().add_split(
+            target,
+            direction,
+            ratio,
+            &pane,
+            Pane::started(&cwd, None, None, &env),
+            focus,
+        );
         if let Err(error) = added {
             // The pane beside it closed while this one started.
             let _ = self.end_panes(std::slice::from_ref(&pane));
@@ -252,6 +453,48 @@ impl OwnEngine<'_> {
         }
         self.changed();
         Ok(pane)
+    }
+
+    /// Lays `root` out in a new tab of `workspace`, over `replace` when
+    /// given: the panes `replace` runs that `root` names stay running in
+    /// their places, the leaves it does not run start, and the panes of
+    /// `replace` it leaves out end. Herdr makes every pane again; this
+    /// engine keeps the ones it can, since ending a shell to draw it again
+    /// would lose what runs there.
+    fn apply_planned(
+        &self,
+        workspace: &str,
+        replace: Option<&str>,
+        label: Option<&str>,
+        root: &ClosedLayoutNode,
+    ) -> Answer<ClosedLayout> {
+        self.restored()?;
+        let planned = self
+            .topology()
+            .plan_layout(workspace, replace, label, root)?;
+        let mut started: Vec<String> = Vec::new();
+        for (pane, spec) in &planned.new {
+            let command = spec.command.as_deref();
+            if let Err(error) = self.start_pane(pane, command, &spec.cwd, spec.env.clone(), None) {
+                // Nothing of the layout is added: what started ends.
+                let _ = self.end_panes(&started);
+                return Err(error);
+            }
+            started.push(pane.clone());
+        }
+        let added = self.topology().add_planned(planned, replace);
+        let (dropped, made) = match added {
+            Ok(added) => added,
+            Err(error) => {
+                // The workspace or the replaced tab closed while the panes
+                // started.
+                let _ = self.end_panes(&started);
+                return Err(error);
+            }
+        };
+        self.changed();
+        self.end_panes(&dropped)?;
+        Ok(made)
     }
 
     fn close_tab_now(&self, tab: &str) -> Answer<()> {
@@ -264,6 +507,16 @@ impl OwnEngine<'_> {
         }
         self.changed();
         Ok(())
+    }
+
+    /// Closes `pane`, whose program exited on its own; its holder ended
+    /// with it.
+    fn program_exited(&self, pane: &str) {
+        // A pane the engine closed first, or never held, is left alone.
+        let removed = self.topology().remove_pane(pane);
+        if removed.is_ok() {
+            self.changed();
+        }
     }
 
     /// The pane, refused when the engine holds no such pane.
@@ -319,7 +572,6 @@ fn unsupported<T>(call: &str, brought_by: &str) -> Answer<T> {
     })
 }
 
-const LAYOUT_PR: &str = "layout pull request";
 const AGENTS_PR: &str = "agent start pull request";
 const IDENTITY_PR: &str = "pane identity pull request";
 
@@ -354,6 +606,10 @@ fn named_key(name: &str) -> Answer<PaneKey> {
 }
 
 impl<'g> Engine for OwnEngine<'g> {
+    fn name(&self) -> &'static str {
+        "own_engine"
+    }
+
     fn gated<'a>(&'a self, gate: Gate<'a>) -> Box<dyn Engine + 'a> {
         let mut gates: Vec<Gate<'a>> = self.gates.clone();
         gates.push(gate);
@@ -437,10 +693,15 @@ impl<'g> Engine for OwnEngine<'g> {
         env: Env,
     ) -> Answer<(String, String, String)> {
         self.check()?;
+        self.restored()?;
         let reserved = self.topology().reserve_workspace();
-        self.start_pane(&reserved.pane, None, cwd, env)?;
-        self.topology()
-            .add_workspace(&reserved, label, Pane::new(cwd, None), focus);
+        self.start_pane(&reserved.pane, None, cwd, env.clone(), None)?;
+        self.topology().add_workspace(
+            &reserved,
+            label,
+            Pane::started(cwd, None, None, &env),
+            focus,
+        );
         self.changed();
         Ok((reserved.workspace, reserved.tab, reserved.pane))
     }
@@ -591,21 +852,25 @@ impl<'g> Engine for OwnEngine<'g> {
         self.topology().pane_layout(pane)
     }
 
-    fn export_layout(&self, _wait: Wait, _tab: &str) -> Answer<ClosedLayout> {
+    fn export_layout(&self, _wait: Wait, tab: &str) -> Answer<ClosedLayout> {
         self.check()?;
-        unsupported("a layout export", LAYOUT_PR)
+        self.topology().export(tab)
     }
 
     fn apply_layout(
         &self,
         _wait: Wait,
-        _workspace: &str,
-        _tab: Option<&str>,
-        _tab_label: Option<&str>,
-        _root: &ClosedLayoutNode,
+        workspace: &str,
+        tab: Option<&str>,
+        tab_label: Option<&str>,
+        root: &ClosedLayoutNode,
     ) -> Answer<ClosedLayout> {
         self.check()?;
-        unsupported("a saved layout", LAYOUT_PR)
+        layout::check_layout(root).map_err(|why| EngineError::Refused {
+            code: "invalid_layout".to_owned(),
+            message: why,
+        })?;
+        self.apply_planned(workspace, tab, tab_label, root)
     }
 
     fn split_pane(
@@ -620,20 +885,31 @@ impl<'g> Engine for OwnEngine<'g> {
             crate::live::PaneSplitDirection::Right => PaneLayoutDirection::Right,
             crate::live::PaneSplitDirection::Down => PaneLayoutDirection::Down,
         };
-        self.open_split(pane, direction, cwd, Env::new(), true)
+        self.open_split(pane, direction, 0.5, cwd, Env::new(), true)
     }
 
     fn split_pane_at(
         &self,
         _wait: Wait,
-        _pane: &str,
-        _direction: ClosedSplitDirection,
-        _cwd: &str,
-        _ratio: f32,
-        _env: Env,
+        pane: &str,
+        direction: ClosedSplitDirection,
+        cwd: &str,
+        ratio: f32,
+        env: Env,
     ) -> Answer<String> {
         self.check()?;
-        unsupported("a split at a ratio", LAYOUT_PR)
+        let direction = match direction {
+            ClosedSplitDirection::Right => PaneLayoutDirection::Right,
+            ClosedSplitDirection::Down => PaneLayoutDirection::Down,
+        };
+        self.open_split(
+            pane,
+            direction,
+            layout::valid_ratio(ratio),
+            Some(cwd),
+            env,
+            true,
+        )
     }
 
     fn split_beside(
@@ -644,12 +920,12 @@ impl<'g> Engine for OwnEngine<'g> {
         env: Env,
     ) -> Answer<String> {
         self.check()?;
-        self.open_split(parent, PaneLayoutDirection::Right, cwd, env, false)
+        self.open_split(parent, PaneLayoutDirection::Right, 0.5, cwd, env, false)
     }
 
     fn split_replacement(&self, _wait: Wait, pane: &str, cwd: &str, env: Env) -> Answer<String> {
         self.check()?;
-        self.open_split(pane, PaneLayoutDirection::Right, Some(cwd), env, false)
+        self.open_split(pane, PaneLayoutDirection::Right, 0.5, Some(cwd), env, false)
     }
 
     fn close_pane(&self, _wait: Wait, pane: &str) -> Answer<()> {
@@ -680,53 +956,76 @@ impl<'g> Engine for OwnEngine<'g> {
         Ok(())
     }
 
-    fn toggle_zoom(&self, _wait: Wait, _pane: &str) -> Answer<bool> {
+    fn toggle_zoom(&self, _wait: Wait, pane: &str) -> Answer<bool> {
         self.check()?;
-        unsupported("a zoom", LAYOUT_PR)
+        let changed = self.topology().zoom(pane, None)?;
+        if changed {
+            self.changed();
+        }
+        Ok(changed)
     }
 
-    fn set_zoom(&self, _wait: Wait, _pane: &str, _zoom: Zoom) -> Answer<()> {
+    fn set_zoom(&self, _wait: Wait, pane: &str, zoom: Zoom) -> Answer<()> {
         self.check()?;
-        unsupported("a zoom", LAYOUT_PR)
+        if self.topology().zoom(pane, Some(zoom == Zoom::On))? {
+            self.changed();
+        }
+        Ok(())
     }
 
     fn resize_pane(
         &self,
         _wait: Wait,
-        _pane: &str,
-        _direction: crate::live::PaneResizeDirection,
-        _amount: f32,
+        pane: &str,
+        direction: crate::live::PaneResizeDirection,
+        amount: f32,
     ) -> Answer<bool> {
         self.check()?;
-        unsupported("a resize", LAYOUT_PR)
+        let changed = self.topology().resize(pane, direction, amount)?;
+        if changed {
+            self.changed();
+        }
+        Ok(changed)
     }
 
-    fn swap_panes(&self, _wait: Wait, _first: &str, _second: &str) -> Answer<()> {
+    fn swap_panes(&self, _wait: Wait, first: &str, second: &str) -> Answer<()> {
         self.check()?;
-        unsupported("a swap", LAYOUT_PR)
+        self.topology().swap(first, second)?;
+        self.changed();
+        Ok(())
     }
 
     fn move_pane_to_new_tab(
         &self,
         _wait: Wait,
-        _pane: &str,
-        _workspace: &str,
-        _label: &str,
+        pane: &str,
+        workspace: &str,
+        label: &str,
     ) -> Answer<PaneJoinResult> {
         self.check()?;
-        unsupported("a pane move", LAYOUT_PR)
+        let moved = self.topology().move_to_new_tab(pane, workspace, label)?;
+        if moved.changed {
+            self.changed();
+        }
+        Ok(moved)
     }
 
     fn move_pane_beside(
         &self,
         _wait: Wait,
-        _pane: &str,
-        _target_tab: &str,
-        _target_pane: &str,
-        _down: bool,
+        pane: &str,
+        target_tab: &str,
+        target_pane: &str,
+        down: bool,
     ) -> Answer<PaneJoinResult> {
         self.check()?;
-        unsupported("a pane move", LAYOUT_PR)
+        let moved = self
+            .topology()
+            .move_beside(pane, target_tab, target_pane, down)?;
+        if moved.changed {
+            self.changed();
+        }
+        Ok(moved)
     }
 
     fn pane_session(
@@ -777,7 +1076,7 @@ impl<'g> Engine for OwnEngine<'g> {
         _offset_from_bottom: u64,
     ) -> Answer<Option<crate::find::pane::PaneScroll>> {
         self.check()?;
-        unsupported("a scroll", LAYOUT_PR)
+        unsupported("a scroll", IDENTITY_PR)
     }
 
     fn report_pane_tokens(
@@ -827,12 +1126,12 @@ impl<'g> Engine for OwnEngine<'g> {
 
     fn read_screen(&self, _wait: Wait, _pane: &str) -> Answer<PaneText> {
         self.check()?;
-        unsupported("a styled screen read", LAYOUT_PR)
+        unsupported("a styled screen read", AGENTS_PR)
     }
 
     fn read_rows(&self, _wait: Wait, _pane: &str, _lines: u32) -> Answer<PaneText> {
         self.check()?;
-        unsupported("a read of drawn rows", LAYOUT_PR)
+        unsupported("a read of drawn rows", AGENTS_PR)
     }
 
     fn send_text(&self, _wait: Wait, pane: &str, text: &str) -> Answer<()> {
@@ -955,52 +1254,77 @@ impl<'g> Engine for OwnEngine<'g> {
     fn create_worktree(
         &self,
         _wait: Wait,
-        _cwd: &str,
-        _branch: &str,
-        _base: Option<&str>,
-        _label: Option<&str>,
-        _path: Option<&str>,
-        _focus: bool,
+        cwd: &str,
+        branch: &str,
+        base: Option<&str>,
+        label: Option<&str>,
+        path: Option<&str>,
+        focus: bool,
     ) -> Answer<CreatedWorktree> {
         self.check()?;
-        unsupported("a worktree", LAYOUT_PR)
+        self.make_worktree(cwd, branch, base, label, path, focus)
     }
 
-    fn worktree_path(&self, _wait: Wait, _cwd: &str, _branch: &str) -> Answer<Option<String>> {
+    fn worktree_path(&self, _wait: Wait, cwd: &str, branch: &str) -> Answer<Option<String>> {
         self.check()?;
-        unsupported("a worktree", LAYOUT_PR)
+        self.listed_worktree(cwd, branch)
     }
 
     fn open_worktree(
         &self,
         _wait: Wait,
-        _path: &str,
-        _repository_root: &str,
-        _focus: bool,
+        path: &str,
+        repository_root: &str,
+        focus: bool,
     ) -> Answer<OpenedWorktree> {
         self.check()?;
-        unsupported("a worktree", LAYOUT_PR)
+        self.open_checkout(path, repository_root, focus)
     }
 
-    fn remove_worktree(&self, _wait: Wait, _workspace: &str) -> Answer<()> {
+    fn remove_worktree(&self, _wait: Wait, workspace: &str) -> Answer<()> {
         self.check()?;
-        unsupported("a worktree", LAYOUT_PR)
+        self.drop_worktree(workspace)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Condvar, Mutex};
 
-    use hide_node_link::holders::HolderProcesses;
+    use hide_node_link::holders::{HolderProcesses, HolderRecovery};
+
+    use crate::sidebar::SessionSnapshotPayload;
 
     use super::*;
 
     /// Holders that start every pane until told to refuse, as a node whose
-    /// holder program cannot start refuses.
+    /// holder program cannot start refuses, and say what they found of the
+    /// last daemon's holders once the test hands them that.
     #[derive(Default)]
     struct Holders {
         refuse: AtomicBool,
+        started: Mutex<Vec<HolderStart>>,
+        ended: Mutex<Vec<String>>,
+        found: (Mutex<Option<HolderRecovery>>, Condvar),
+        ends: Mutex<Option<hide_node_link::holders::PaneEnded>>,
+    }
+
+    impl Holders {
+        fn found(recovery: HolderRecovery) -> Arc<Self> {
+            let holders = Arc::new(Self::default());
+            holders.hand(recovery);
+            holders
+        }
+
+        fn hand(&self, recovery: HolderRecovery) {
+            *self.found.0.lock().unwrap() = Some(recovery);
+            self.found.1.notify_all();
+        }
+
+        fn started(&self) -> Vec<HolderStart> {
+            self.started.lock().unwrap().clone()
+        }
     }
 
     impl PaneHolders for Holders {
@@ -1011,9 +1335,11 @@ mod tests {
                     message: format!("pane {}: the holder program is missing", start.pane),
                 });
             }
+            self.started.lock().unwrap().push(start.clone());
             Ok(())
         }
-        fn terminate(&self, _: &str) -> Result<(), HolderError> {
+        fn terminate(&self, pane: &str) -> Result<(), HolderError> {
+            self.ended.lock().unwrap().push(pane.to_owned());
             Ok(())
         }
         fn read(&self, _: &str, _: u16) -> Result<(String, bool), HolderError> {
@@ -1024,6 +1350,21 @@ mod tests {
         }
         fn input(&self, _: &str, _: Vec<u8>) -> Result<(), HolderError> {
             Ok(())
+        }
+        fn watch_ends(&self, ended: hide_node_link::holders::PaneEnded) {
+            *self.ends.lock().unwrap() = Some(ended);
+        }
+        fn recovered(&self, timeout: Duration) -> Result<HolderRecovery, HolderError> {
+            let found = self.found.0.lock().unwrap();
+            let (found, _) = self
+                .found
+                .1
+                .wait_timeout_while(found, timeout, |found| found.is_none())
+                .unwrap();
+            found.clone().ok_or(HolderError::Refused {
+                code: "recovery_unfinished",
+                message: "not handed".to_owned(),
+            })
         }
     }
 
@@ -1096,5 +1437,401 @@ mod tests {
             .map(|(id, _)| id)
             .collect();
         assert_eq!(panes, vec![pane]);
+    }
+
+    fn moves(engine: &OwnEngine<'_>) -> (Vec<String>, Option<(String, bool)>) {
+        let session = engine.session(WAIT).unwrap();
+        (
+            session.tab_moves.unwrap().recent.into_iter().collect(),
+            session
+                .tab_focus
+                .map(|focus| (focus.tab_id, focus.creation)),
+        )
+    }
+
+    /// letter-19988: the core settles a tab move it asked for when a
+    /// session reports the move (`runtime::tab_focus`), and a session of the
+    /// core's own engine reports every move it made, a creation's included,
+    /// so nothing waits out the deadline for a confirmation Herdr would send.
+    #[test]
+    fn every_move_of_the_shown_tab_is_reported_with_the_session_and_none_for_a_tab_already_shown() {
+        let engine = OwnEngine::new(Arc::new(Holders::default()));
+        let (workspace, first, _) = engine
+            .create_workspace(WAIT, "/w", "w", true, Env::new())
+            .unwrap();
+        let (second, _) = engine
+            .create_tab(WAIT, &workspace, "/w", "two", true, Env::new())
+            .unwrap();
+        assert_eq!(
+            moves(&engine),
+            (
+                vec![first.clone(), second.clone()],
+                Some((second.clone(), true))
+            ),
+            "the creation's move is reported as one"
+        );
+
+        engine.focus_tab(WAIT, &second).unwrap();
+        engine.focus_tab(WAIT, &first).unwrap();
+        let (_, quiet) = engine
+            .create_tab(WAIT, &workspace, "/w", "quiet", false, Env::new())
+            .unwrap();
+        assert_eq!(
+            moves(&engine),
+            (
+                vec![first.clone(), second.clone(), first.clone()],
+                Some((first.clone(), false))
+            ),
+            "a focus of the shown tab and a tab made without focus move nothing"
+        );
+        let _ = quiet;
+    }
+
+    /// A daemon's place under `root`, its machine read by a real node.
+    fn place(root: &std::path::Path) -> Place {
+        let home = root.join("home");
+        Place {
+            state_dir: root.join("state"),
+            node: Arc::new(hide_node::Local::new(Some(home.clone()))),
+            home,
+        }
+    }
+
+    fn wire(path: &std::path::Path) -> String {
+        hide_platform::path::to_wire(path).unwrap()
+    }
+
+    fn layout_of(session: &SessionSnapshotPayload, tab: &str) -> Vec<String> {
+        session
+            .layouts
+            .iter()
+            .find(|layout| layout.tab_id == tab)
+            .map(|layout| {
+                layout
+                    .panes
+                    .iter()
+                    .map(|pane| pane.pane_id.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// D-7 and letter-19977: a daemon opened again lays its saved session
+    /// out under the same ids around the holders that ran on, starting none
+    /// of them again; a pane whose holder ended gets a new shell under its
+    /// id, in the home folder with a line saying why when its folder is
+    /// gone; the tab shown before is shown again; a pane whose program
+    /// exited while no daemon ran closes, with the tab it was the last pane
+    /// of, and no shell takes it again; a
+    /// running holder the save did not place is gathered into a new tab of
+    /// its workspace; and a new pane takes an id past every one the records
+    /// hold.
+    #[test]
+    fn a_daemon_opened_again_lays_its_session_out_around_the_panes_that_ran_on() {
+        let root = tempfile::tempdir().unwrap();
+        let place = place(root.path());
+        let (kept, gone) = (root.path().join("kept"), root.path().join("gone"));
+        for dir in [&place.home, &kept, &gone] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let first =
+            OwnEngine::open(Holders::found(HolderRecovery::default()), place.clone()).unwrap();
+        let (workspace, tab, running) = first
+            .create_workspace(WAIT, &wire(&kept), "w", true, Env::new())
+            .unwrap();
+        let ended = first
+            .split_pane_at(
+                WAIT,
+                &running,
+                ClosedSplitDirection::Down,
+                &wire(&gone),
+                0.3,
+                Env::new(),
+            )
+            .unwrap();
+        let (exited_tab, exited) = first
+            .create_tab(WAIT, &workspace, &wire(&kept), "exited", false, Env::new())
+            .unwrap();
+        let (shown_tab, shown) = first
+            .create_tab(WAIT, &workspace, &wire(&kept), "shown", true, Env::new())
+            .unwrap();
+        let before = first.session_payload(WAIT).unwrap();
+        drop(first);
+        std::fs::remove_dir(&gone).unwrap();
+
+        // The node of the next daemon found the first pane's holder running,
+        // the second's ended under it, the third's program exited, and one
+        // more the save never placed.
+        let unplaced = format!("{workspace}:p7");
+        let holders = Arc::new(Holders::default());
+        let next =
+            OwnEngine::open(Arc::clone(&holders) as Arc<dyn PaneHolders>, place.clone()).unwrap();
+        assert_eq!(
+            layout_of(&next.session_payload(WAIT).unwrap(), &tab),
+            layout_of(&before, &tab),
+            "the saved layout is there before the node answers"
+        );
+        holders.hand(HolderRecovery {
+            closed: vec![exited.clone()],
+            ended: vec![ended.clone()],
+            present: vec![running.clone(), shown, unplaced.clone()],
+        });
+        next.restored().unwrap();
+        let active = |engine: &OwnEngine<'_>| {
+            engine
+                .session(WAIT)
+                .unwrap()
+                .workspaces
+                .iter()
+                .find(|candidate| candidate.workspace_id == workspace)
+                .map(|candidate| candidate.active_tab_id.clone())
+        };
+        assert_eq!(
+            active(&next),
+            Some(shown_tab.clone()),
+            "the tab shown before is the one shown again"
+        );
+        let split = next
+            .split_pane(WAIT, &running, crate::live::PaneSplitDirection::Right, None)
+            .unwrap();
+
+        let started = holders.started();
+        assert_eq!(started.len(), 2, "{started:?}");
+        assert_eq!(started[0].pane, ended);
+        assert_eq!(started[0].cwd, wire(&place.home));
+        assert!(
+            started[0]
+                .notice
+                .as_deref()
+                .is_some_and(|notice| notice.contains(&wire(&gone))),
+            "{:?}",
+            started[0].notice
+        );
+        assert_eq!(started[1].pane, split);
+        assert_eq!(split, format!("{workspace}:p8"), "past every recorded id");
+        assert!(holders.ended.lock().unwrap().is_empty(), "nothing ended");
+        let session = next.session_payload(WAIT).unwrap();
+        assert_eq!(
+            layout_of(&session, &tab),
+            [running.clone(), split, ended.clone()],
+            "the same tab under the same ids"
+        );
+        let gathered = session
+            .tabs
+            .iter()
+            .find(|candidate| candidate.label == "restored")
+            .expect("the unplaced holder's tab");
+        assert_eq!(gathered.workspace_id, workspace);
+        assert_eq!(layout_of(&session, &gathered.tab_id), [unplaced]);
+        assert!(
+            started.iter().all(|start| start.pane != exited),
+            "no shell takes the pane whose program exited"
+        );
+        assert!(
+            session
+                .tabs
+                .iter()
+                .all(|candidate| candidate.tab_id != exited_tab),
+            "its tab closed with its last pane"
+        );
+        assert!(session.panes.iter().all(|pane| pane.pane_id != exited));
+    }
+
+    /// D-6 and B15: a save that cannot be read is kept in the backups, and
+    /// the holders that ran on are gathered into a new tab of the workspace
+    /// their ids name, none started again and none ended.
+    #[test]
+    fn an_unreadable_save_is_kept_and_the_running_panes_gathered_without_ending_one() {
+        let root = tempfile::tempdir().unwrap();
+        let place = place(root.path());
+        std::fs::create_dir_all(&place.home).unwrap();
+        let path = hide_kit::layout::engine_session(&place.state_dir);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "{ not a session").unwrap();
+
+        let holders = Holders::found(HolderRecovery {
+            closed: Vec::new(),
+            ended: Vec::new(),
+            present: vec!["w2:p1".to_owned(), "w2:p3".to_owned()],
+        });
+        let engine =
+            OwnEngine::open(Arc::clone(&holders) as Arc<dyn PaneHolders>, place.clone()).unwrap();
+        let (workspace, _, pane) = engine
+            .create_workspace(WAIT, &wire(&place.home), "new", false, Env::new())
+            .unwrap();
+
+        let backups = hide_kit::layout::engine_backups(&place.state_dir);
+        let kept: Vec<String> = std::fs::read_dir(&backups)
+            .unwrap()
+            .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
+            .collect();
+        assert_eq!(kept, ["{ not a session"]);
+        let session = engine.session_payload(WAIT).unwrap();
+        let gathered = session
+            .tabs
+            .iter()
+            .find(|tab| tab.workspace_id == "w2")
+            .expect("the running panes' tab");
+        assert_eq!(gathered.label, "restored");
+        assert_eq!(layout_of(&session, &gathered.tab_id), ["w2:p1", "w2:p3"]);
+        assert_eq!(
+            (workspace.as_str(), pane.as_str()),
+            ("w3", "w3:p1"),
+            "a new workspace past the recorded ones"
+        );
+        assert_eq!(holders.started().len(), 1, "only the new pane started");
+        assert!(holders.ended.lock().unwrap().is_empty(), "nothing ended");
+    }
+
+    /// A pane whose program exits on its own closes as a close would, its
+    /// holder already gone, and its tab with it when it was the last.
+    #[test]
+    fn a_pane_whose_program_exits_closes_and_takes_its_last_tab_with_it() {
+        let root = tempfile::tempdir().unwrap();
+        let place = place(root.path());
+        std::fs::create_dir_all(&place.home).unwrap();
+        let holders = Holders::found(HolderRecovery::default());
+        let engine =
+            OwnEngine::open(Arc::clone(&holders) as Arc<dyn PaneHolders>, place.clone()).unwrap();
+        let home = wire(&place.home);
+        let (workspace, tab, first) = engine
+            .create_workspace(WAIT, &home, "w", true, Env::new())
+            .unwrap();
+        let second = engine.split_beside(WAIT, &first, None, Env::new()).unwrap();
+        let (lone_tab, lone) = engine
+            .create_tab(WAIT, &workspace, &home, "lone", false, Env::new())
+            .unwrap();
+        let exited = holders
+            .ends
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("the engine watches ends");
+
+        exited(&second);
+        exited(&lone);
+        exited("w9:p1");
+
+        let session = engine.session_payload(WAIT).unwrap();
+        assert_eq!(layout_of(&session, &tab), [first]);
+        assert!(session.tabs.iter().all(|found| found.tab_id != lone_tab));
+        assert!(
+            holders.ended.lock().unwrap().is_empty(),
+            "no holder was asked to end"
+        );
+    }
+
+    fn run_git(dir: &std::path::Path, arguments: &[&str]) {
+        let output = std::process::Command::new("git")
+            .current_dir(dir)
+            .args(arguments)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {arguments:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn same_folder(left: &str, right: &std::path::Path) -> bool {
+        std::fs::canonicalize(left).ok() == std::fs::canonicalize(right).ok()
+    }
+
+    /// D-28 and B8: a worktree the engine makes goes under Hide's own
+    /// folder and opens in a workspace bound to it; a checkout under Herdr's
+    /// folder opens where it is, once; removing a worktree removes its
+    /// checkout and its workspace.
+    #[test]
+    fn a_new_worktree_goes_under_hides_folder_and_a_herdr_one_opens_where_it_is() {
+        let root = tempfile::tempdir().unwrap();
+        let place = place(root.path());
+        let repo = place.home.join("repo");
+        std::fs::create_dir_all(&place.home).unwrap();
+        run_git(&place.home, &["init", "-q", "repo"]);
+        run_git(
+            &repo,
+            &[
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "user.name=t",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "init",
+            ],
+        );
+        let herdr_place = place.home.join(".herdr/worktrees/repo/old");
+        run_git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "old",
+                &herdr_place.to_string_lossy(),
+            ],
+        );
+        let engine =
+            OwnEngine::open(Holders::found(HolderRecovery::default()), place.clone()).unwrap();
+
+        let made = engine
+            .create_worktree(WAIT, &wire(&repo), "feat/Layout", None, None, None, true)
+            .expect("a worktree is made");
+        let expected = hide_kit::layout::engine_worktree(&place.home, "repo", "feat-layout");
+        assert!(
+            same_folder(&made.path, &expected),
+            "{} is not {}",
+            made.path,
+            expected.display()
+        );
+        let session = engine.session(WAIT).unwrap();
+        let bound = session
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.workspace_id == made.workspace_id)
+            .and_then(|workspace| workspace.worktree.clone())
+            .expect("the workspace is bound to its worktree");
+        assert!(bound.is_linked_worktree);
+        assert_eq!(bound.repo_name, "repo");
+        assert!(same_folder(&bound.repo_root, &repo));
+
+        let opened = engine
+            .open_worktree(WAIT, &wire(&herdr_place), &wire(&repo), false)
+            .expect("Herdr's worktree opens");
+        assert!(!opened.already_open);
+        let session = engine.session(WAIT).unwrap();
+        let in_place = session
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.workspace_id == opened.workspace_id)
+            .and_then(|workspace| workspace.worktree.clone())
+            .expect("the workspace is bound to Herdr's checkout");
+        assert!(
+            same_folder(&in_place.checkout_path, &herdr_place),
+            "opened where it is"
+        );
+        let again = engine
+            .open_worktree(WAIT, &wire(&herdr_place), &wire(&repo), false)
+            .unwrap();
+        assert!(again.already_open);
+        assert_eq!(again.workspace_id, opened.workspace_id);
+
+        engine
+            .remove_worktree(WAIT, &made.workspace_id)
+            .expect("the worktree is removed");
+        assert!(!expected.exists(), "its checkout is gone");
+        assert!(
+            engine
+                .session(WAIT)
+                .unwrap()
+                .workspaces
+                .iter()
+                .all(|workspace| workspace.workspace_id != made.workspace_id)
+        );
+        assert!(herdr_place.exists(), "Herdr's checkout stays where it is");
     }
 }

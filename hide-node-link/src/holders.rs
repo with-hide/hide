@@ -26,6 +26,31 @@ pub struct HolderStart {
     /// The size the pane starts at, before any screen draws it.
     pub rows: u16,
     pub cols: u16,
+    /// One line the pane shows before its shell's first output, such as why
+    /// a restored pane opened somewhere else; only a pane started with no
+    /// program takes one.
+    pub notice: Option<String>,
+}
+
+/// Told the id of a pane whose program exited on its own
+/// ([`PaneHolders::watch_ends`]).
+pub type PaneEnded = std::sync::Arc<dyn Fn(&str) + Send + Sync>;
+
+/// What a node found of its panes' holders when it started (PRD
+/// engine-bundle-3-core-owns D-7), under the core's pane ids, every pane it
+/// holds a record of in exactly one list.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct HolderRecovery {
+    /// Panes that finished while no node ran: their program exited or a node
+    /// ended them, so they close, as a pane whose program exits closes.
+    pub closed: Vec<String>,
+    /// Panes whose holders ended under them while no node ran (the machine
+    /// restarted, the holder was lost or failed, a start never finished),
+    /// so a saved layout opens a new shell in their place.
+    pub ended: Vec<String>,
+    /// Panes whose holders run or may still run, never started a second
+    /// time.
+    pub present: Vec<String>,
 }
 
 /// The processes a pane's terminal holds: its program, which is the shell
@@ -86,4 +111,13 @@ pub trait PaneHolders: Send + Sync {
     /// Types `bytes` into the pane as they are, through the connection that
     /// holds its screen, in order with every other key typed there.
     fn input(&self, pane: &str, bytes: Vec<u8>) -> Result<(), HolderError>;
+    /// What the node's start found of its holders, once it has looked at
+    /// every record, waiting at most `timeout` for it: refused
+    /// `recovery_unfinished` when it has not finished by then.
+    fn recovered(&self, timeout: std::time::Duration) -> Result<HolderRecovery, HolderError>;
+    /// Tells `ended`, from now on, the id of each pane whose program exits
+    /// on its own while the node holds its screen, so the engine closes it
+    /// as Herdr closes a pane whose program ends. A pane ended by
+    /// [`PaneHolders::terminate`] is not told.
+    fn watch_ends(&self, ended: PaneEnded);
 }

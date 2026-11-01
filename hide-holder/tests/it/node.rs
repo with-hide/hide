@@ -702,6 +702,48 @@ fn a_node_killed_outright_finds_its_holders_again_and_attaches_sixty_four() {
     );
 }
 
+/// Ends a holder this test found by its identity, however the test ends.
+struct EndsHolder(Identity);
+
+impl Drop for EndsHolder {
+    fn drop(&mut self) {
+        if self.0.runs() {
+            let _ = hide_platform::process::kill_tree(self.0.pid);
+        }
+    }
+}
+
+/// PRD engine-bundle-3-core-owns B17 and D-8: a holder whose record went
+/// with its deleted state folder is not ended by the next node, which finds
+/// no record of it; it runs on and ends when its shell does.
+#[test]
+fn a_holder_whose_record_was_deleted_runs_on_until_its_shell_ends() {
+    let folder = Folder::new();
+    let node = Node::start(Switch::On, folder.home.path(), &folder.state);
+    node.start_pane(&folder.shell("b17"));
+    node.screens.first_full("b17");
+    let record = folder.record("b17");
+    let holder = EndsHolder(record.holder.expect("the holder wrote itself in"));
+    let program = record.program.expect("the holder started its shell");
+    drop(node);
+    std::fs::remove_dir_all(&folder.state).unwrap();
+
+    let next = Node::start(Switch::On, folder.home.path(), &folder.state);
+    let recovered = next.holders().recover(&next.service);
+    assert!(recovered.complete, "{recovered:?}");
+    assert!(
+        recovered.attached.is_empty() && recovered.ended.is_empty(),
+        "the next node knows nothing of the pane: {recovered:?}"
+    );
+    assert!(
+        holder.0.runs(),
+        "the next node ended a holder it holds no record of"
+    );
+
+    hide_platform::process::kill_tree(program.pid).unwrap();
+    wait_until("the holder to end with its shell", || !holder.0.runs());
+}
+
 /// B9: a bad first message leaves the node's connection alone; a second
 /// node that says hello takes the pane over, the first node's session ends
 /// `taken_over` and is not tried again, and what the first node types after

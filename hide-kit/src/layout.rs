@@ -468,6 +468,27 @@ pub fn engine_dir(state_dir: &Path) -> PathBuf {
     state_dir.join("engine")
 }
 
+/// The saved session of the core's own engine (PRD engine-bundle-3-core-owns
+/// D-6): its workspaces, tabs, pane trees and panes, read once when the
+/// daemon starts and replaced whole after every change.
+pub fn engine_session(state_dir: &Path) -> PathBuf {
+    engine_dir(state_dir).join("session.json")
+}
+
+/// Where a saved session the engine could not read is kept, the newest
+/// three, rather than deleted.
+pub fn engine_backups(state_dir: &Path) -> PathBuf {
+    engine_dir(state_dir).join("backups")
+}
+
+/// Where the core's own engine makes a repository's worktree named `name`
+/// (PRD engine-bundle-3-core-owns D-28): `~/.hide/worktrees/<repo>/<name>`.
+/// A worktree another engine made elsewhere (Herdr's `~/.herdr/worktrees`)
+/// stays where it is and is opened by its path.
+pub fn engine_worktree(home: &Path, repo: &str, name: &str) -> PathBuf {
+    hide_home(home).join("worktrees").join(repo).join(name)
+}
+
 /// The folder a state folder's holders listen and log in, one socket and
 /// one log per pane.
 pub fn holder_panes(state_dir: &Path) -> PathBuf {

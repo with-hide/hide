@@ -4,7 +4,9 @@
 // Version 2.0; see NOTICE at the repository root.
 // Changed by Hide: keeps only the public id shapes and their number
 // encoding; the counters are the own engine's topology's, not a process-wide
-// atomic, so an engine's ids start from what it holds.
+// atomic, so an engine's ids start from what it holds; adds the reading of an
+// id back into its number, so a restored engine counts on past every id it
+// finds.
 
 //! The ids the own engine gives its workspaces, tabs and panes, in Herdr's
 //! shape so every reader of a pane id reads them as it reads Herdr's (PRD
@@ -30,6 +32,38 @@ pub(super) fn encode_public_number(mut value: usize) -> String {
     encoded.iter().rev().collect()
 }
 
+/// The number `encode_public_number` spelled, or `None` for a spelling it
+/// never makes.
+pub(super) fn decode_public_number(spelled: &str) -> Option<usize> {
+    if spelled.is_empty() {
+        return None;
+    }
+    let mut value: usize = 0;
+    for letter in spelled.bytes() {
+        let digit = PUBLIC_ID_ALPHABET
+            .iter()
+            .position(|known| *known == letter)?;
+        value = value
+            .checked_mul(PUBLIC_ID_ALPHABET.len())?
+            .checked_add(digit + 1)?;
+    }
+    Some(value)
+}
+
+/// The workspace a pane or tab id names and its number there, read from an
+/// id this engine's shape spells (`<workspace>:p<n>`, `<workspace>:t<n>`).
+pub(super) fn numbered(id: &str, kind: char) -> Option<(&str, usize)> {
+    let (workspace, rest) = id.split_once(':')?;
+    let number = rest.strip_prefix(kind)?;
+    workspace_number(workspace)?;
+    Some((workspace, decode_public_number(number)?))
+}
+
+/// The number of a workspace id (`w<n>`).
+pub(super) fn workspace_number(workspace: &str) -> Option<usize> {
+    decode_public_number(workspace.strip_prefix('w')?)
+}
+
 pub(super) fn workspace_id(number: usize) -> String {
     format!("w{}", encode_public_number(number))
 }
@@ -52,5 +86,20 @@ mod tests {
         assert_eq!(pane_id("w1", 32), "w1:p0");
         assert_eq!(tab_id("w1", 33), "w1:t11");
         assert_eq!(workspace_id(9 + 1), "wA");
+    }
+
+    #[test]
+    fn an_id_reads_back_as_the_number_it_was_given() {
+        for number in [1, 9, 31, 32, 33, 1024, 1025, 40_000] {
+            let pane = pane_id(&workspace_id(number), number);
+            assert_eq!(
+                numbered(&pane, 'p'),
+                Some((workspace_id(number).as_str(), number))
+            );
+            assert_eq!(workspace_number(&workspace_id(number)), Some(number));
+        }
+        assert_eq!(numbered("w1:t3", 'p'), None);
+        assert_eq!(numbered("pane-1", 'p'), None);
+        assert_eq!(decode_public_number("I"), None);
     }
 }

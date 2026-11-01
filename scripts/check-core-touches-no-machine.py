@@ -100,6 +100,13 @@ STORES = {
         "and the one copy a store keeps of the file a schema conversion read",
     ),
     "herdr-core/src/diagnostics.rs": (7, "the core's own log file"),
+    "herdr-core/src/engine/own/store.rs": (
+        9,
+        "the core's own engine's saved layout beside the core's state file "
+        "(PRD engine-bundle-3-core-owns D-6): read, written with the durable "
+        "writer's own access type, and a file it cannot use moved into its "
+        "backups folder, the newest three kept",
+    ),
     "herdr-core/src/labels/mod.rs": (
         1,
         "reads the operator's AI choice, a core store beside the core's "

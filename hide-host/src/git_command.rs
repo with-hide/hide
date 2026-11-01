@@ -1,7 +1,7 @@
 //! The fixed git commands the core has a node run in one of its
 //! repositories (`hide_node_link::git::GitCommand`): reading a worktree's
-//! state, switching its branch, fetching a branch, and the branch settings
-//! Hide keeps in the repository's configuration.
+//! state, switching its branch, fetching a branch, the branch settings
+//! Hide keeps in the repository's configuration, and adding a worktree.
 
 use std::path::Path;
 
@@ -14,8 +14,9 @@ use crate::error::{ErrorCode, HostError, HostResult};
 const GREP_READ_BYTES: u64 = 1024 * 1024;
 
 /// Runs `command` in `root` and answers its output, trimmed. A read, a
-/// branch check and a fetch are bounded (`worktrees::git`); a checkout and a
-/// branch setting get the long bound of a change (`git_run::CHANGE_DEADLINE`).
+/// branch check and a fetch are bounded (`worktrees::git`); a checkout, a
+/// branch setting and a new worktree get the long bound of a change
+/// (`git_run::CHANGE_DEADLINE`).
 pub fn run(root: &Path, command: &GitCommand) -> HostResult<String> {
     let args = command
         .args()
@@ -82,7 +83,8 @@ pub fn run(root: &Path, command: &GitCommand) -> HostResult<String> {
         GitCommand::CurrentBranch
         | GitCommand::Checkout { .. }
         | GitCommand::SetBranchConfig { .. }
-        | GitCommand::UnsetBranchConfig { .. } => {
+        | GitCommand::UnsetBranchConfig { .. }
+        | GitCommand::WorktreeAdd { .. } => {
             let output = crate::git_run::output(
                 crate::git_run::at(root).args(&args),
                 crate::git_run::CHANGE_DEADLINE,

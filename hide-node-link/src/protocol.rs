@@ -279,7 +279,10 @@ use crate::error::HostError;
 /// ACP session updates, newest, before a page or forward from one
 /// (`Call::SessionThread`; PRD session-docs-and-assistant B25). A helper on
 /// 65 would refuse it, so it is refused at Hello and upgraded.
-pub const PROTOCOL_VERSION: u32 = 66;
+/// 67: a node adds a worktree for the core's own engine
+/// (`git::GitCommand::WorktreeAdd`; PRD engine-bundle-3-core-owns D-28). A
+/// helper on 66 would refuse it, so it is refused at Hello and upgraded.
+pub const PROTOCOL_VERSION: u32 = 67;
 
 /// What agy's index held in a checkout before Hide typed `/fork`
 /// ([`Call::AntigravityForkMark`]).

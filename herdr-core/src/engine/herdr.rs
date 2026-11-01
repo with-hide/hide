@@ -293,6 +293,10 @@ impl StopEvents for HerdrStop {
 }
 
 impl Engine for HerdrEngine<'_> {
+    fn name(&self) -> &'static str {
+        "herdr"
+    }
+
     fn gated<'g>(&'g self, gate: Gate<'g>) -> Box<dyn Engine + 'g> {
         Box::new(HerdrEngine {
             connector: Arc::new(GatedConnector {
