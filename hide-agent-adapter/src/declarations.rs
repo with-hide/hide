@@ -942,7 +942,10 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         // 2026-11-01). Its running TUI is also a language server on a
         // loopback port that takes a message, but only with a token set by
         // a hidden start flag and a port read from its log: not declared.
-        input: &[InputRung::AgentApi(AgentApi::LaunchPrompt), InputRung::Typed],
+        input: &[
+            InputRung::AgentApi(AgentApi::LaunchPrompt),
+            InputRung::Typed,
+        ],
         start: Some(LaunchDialect::Antigravity),
         find: None,
         usage: UsageDeclaration {

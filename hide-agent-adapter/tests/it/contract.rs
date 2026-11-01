@@ -669,10 +669,9 @@ fn cursor_is_retired_from_active_support_and_launches() {
 #[test]
 fn every_agent_declares_an_input_ladder_that_ends_typed() {
     use hide_agent_adapter::{AgentApi, InputRung};
-    for row in ADAPTERS
-        .iter()
-        .chain(std::iter::once(hide_agent_adapter::AgentId::Cursor.adapter()))
-    {
+    for row in ADAPTERS.iter().chain(std::iter::once(
+        hide_agent_adapter::AgentId::Cursor.adapter(),
+    )) {
         assert_eq!(
             row.input.last(),
             Some(&InputRung::Typed),
@@ -702,7 +701,11 @@ fn every_agent_declares_an_input_ladder_that_ends_typed() {
                 assert_eq!(agent, row.key, "{}: {api:?} is another agent's", row.id);
             }
             if *api == AgentApi::LaunchPrompt {
-                assert!(row.start.is_some(), "{}: a launch prompt needs a start", row.id);
+                assert!(
+                    row.start.is_some(),
+                    "{}: a launch prompt needs a start",
+                    row.id
+                );
                 assert_eq!(
                     row.input.first(),
                     Some(rung),

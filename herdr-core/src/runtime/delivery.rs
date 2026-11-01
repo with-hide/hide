@@ -1848,10 +1848,11 @@ impl Runtime {
     /// Where the input ladder hands `observed`'s agent its input
     /// (`delivery::ladder`): what the pane's session reported through Hide's
     /// own hook and the node of its machine, owned, so the send runs off the
-    /// lock. A session that has not reported is pending only while nothing
-    /// says its hooks are not connected; one whose pane reads Not connected
-    /// has no address, and its input is typed.
-    pub(crate) fn input_target(&self, observed: &Observation) -> crate::delivery::ladder::InputTarget {
+    /// lock. A session is pending only until Herdr names it.
+    pub(crate) fn input_target(
+        &self,
+        observed: &Observation,
+    ) -> crate::delivery::ladder::InputTarget {
         self.input_target_for(
             &observed.actor.pane_id,
             &observed.raw_pane_id,
@@ -1879,21 +1880,19 @@ impl Runtime {
                 .ok()?
                 .reported_session(pane_id, row.id, lineage)
         });
+        // Herdr learns the session from the agent's own session start, the
+        // event Hide's hook reports from too: once Herdr names a session
+        // that Hide's hook did not report, the hook is not connected for it
+        // (or its report is a moment late), and the input is typed.
         let address = match reported {
             Some(reported) => SessionAddress::Known {
                 session: reported.session,
                 messaging: reported.messaging,
             },
-            None if self
-                .pane_children_of(pane_id)
-                .and_then(|children| children.connection.as_ref())
-                .is_some_and(|connection| !connection.connected) =>
-            {
-                SessionAddress::Known {
-                    session: None,
-                    messaging: None,
-                }
-            }
+            None if lineage.is_some() => SessionAddress::Known {
+                session: None,
+                messaging: None,
+            },
             None => SessionAddress::Pending,
         };
         InputTarget {

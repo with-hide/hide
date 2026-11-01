@@ -474,7 +474,11 @@ fn bound<'a>(facts: &'a mut PaneFacts, agent: &SessionAgentPayload) -> Option<&'
 /// Where in `facts` the session that speaks for the pane's agent of
 /// `runtime` is ([`bound`]), with `reported` the session id Herdr names.
 fn bound_at(facts: &PaneFacts, runtime: &str, reported: Option<&str>) -> Option<usize> {
-    bound_by(facts, runtime, reported.map(|reported| move |kept: &str| kept == reported))
+    bound_by(
+        facts,
+        runtime,
+        reported.map(|reported| move |kept: &str| kept == reported),
+    )
 }
 
 /// [`bound_at`] with `names` saying whether a kept session id is the one
@@ -574,6 +578,75 @@ mod tests {
             waiting: None,
             messaging: None,
         }
+    }
+
+    fn started(session: &str, socket: &str) -> HookStatusReport {
+        HookStatusReport {
+            session_start: true,
+            messaging: Some(hide_node_link::panes::MessagingChannel {
+                socket: socket.to_owned(),
+                token: format!("token-of-{session}"),
+            }),
+            ..report(Some(session), None)
+        }
+    }
+
+    /// The input ladder's address for a pane is the channel of the session
+    /// Herdr names there, never that of a nested `claude -p` that started
+    /// later in the same pane and reported its own.
+    #[test]
+    fn the_panes_own_session_gives_its_messaging_channel() {
+        let mut facts = HookFacts::default();
+        facts
+            .record("w1:p1", &started("s-pane", "/tmp/cc-socks/1.sock"))
+            .unwrap();
+        facts
+            .record("w1:p1", &started("s-print", "/tmp/cc-socks/2.sock"))
+            .unwrap();
+        let lineage = crate::engine::tokens::session_digest("s-pane");
+        let reported = facts
+            .reported_session("w1:p1", "claude-code", lineage.as_deref())
+            .unwrap();
+        assert_eq!(reported.session.as_deref(), Some("s-pane"));
+        assert_eq!(
+            reported.messaging.map(|channel| channel.socket),
+            Some("/tmp/cc-socks/1.sock".to_owned())
+        );
+        // A later event of the session keeps the channel its start gave.
+        facts
+            .record("w1:p1", &report(Some("s-pane"), Some(HookTurn::Working)))
+            .unwrap();
+        assert!(
+            facts
+                .reported_session("w1:p1", "claude-code", lineage.as_deref())
+                .unwrap()
+                .messaging
+                .is_some()
+        );
+        assert_eq!(facts.reported_session("w1:p1", "codex", None), None);
+        assert_eq!(facts.reported_session("w1:p9", "claude-code", None), None);
+    }
+
+    /// The token is never saved: a restart keeps the session and its counts,
+    /// and the session's input is typed until it starts again.
+    #[test]
+    fn the_messaging_channel_is_never_saved() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("hook-facts.json");
+        {
+            let mut facts = HookFacts::restore(path.clone(), Vec::new);
+            facts
+                .record("w1:p1", &started("s-pane", "/tmp/cc-socks/1.sock"))
+                .unwrap();
+        }
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(saved.contains("s-pane") && !saved.contains("token-of-s-pane"));
+        let restored = HookFacts::restore(path, Vec::new);
+        let reported = restored
+            .reported_session("w1:p1", "claude-code", None)
+            .unwrap();
+        assert_eq!(reported.session.as_deref(), Some("s-pane"));
+        assert_eq!(reported.messaging, None);
     }
 
     fn payload(session: &str) -> SessionSnapshotPayload {

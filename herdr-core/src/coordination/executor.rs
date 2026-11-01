@@ -1,10 +1,10 @@
 use super::{AgentRecord, Command, Mutation, SpawnRecord, resolve_actor, view};
 use crate::agent_start::ShellStart;
+use crate::delivery::ladder::{Delivered, InputTarget, Prepared};
 use crate::delivery::{
     Actor,
     worker::{Authority, Client, Effect},
 };
-use crate::delivery::ladder::{Delivered, InputTarget, Prepared};
 use crate::engine::{Engine, EngineError, Wait};
 use crate::runtime::delivery::CoordinationContext;
 use crate::session_sync::ProjectedAgent;
@@ -399,7 +399,12 @@ pub(crate) fn brief_route(
         match crate::delivery::ladder::prepare(&target) {
             Ok(prepared) => return Ok((target, prepared)),
             Err(cause) if Instant::now() >= deadline => {
-                return Err(brief_refused(spawn, pane, "brief.not_yet", cause.to_owned()));
+                return Err(brief_refused(
+                    spawn,
+                    pane,
+                    "brief.not_yet",
+                    cause.to_owned(),
+                ));
             }
             Err(_) => std::thread::sleep(Duration::from_millis(250)),
         }
@@ -1353,9 +1358,22 @@ fn spawn(
             };
             let route = brief_route(
                 || {
+                    // The session Herdr names for the agent now, read off
+                    // the lock: until it names one, a way in that needs the
+                    // session waits for it.
+                    let lineage = engine
+                        .delivery_agent(Wait::Each(Duration::from_secs(5)), pane)
+                        .ok()
+                        .and_then(|agent| agent.session);
                     let runtime = client.runtime.upgrade().ok_or("delivery_unavailable")?;
                     let guard = runtime.lock().map_err(|_| "delivery_unavailable")?;
-                    Ok(guard.input_target_for(&pane_key, pane, kind, &child_device, None))
+                    Ok(guard.input_target_for(
+                        &pane_key,
+                        pane,
+                        kind,
+                        &child_device,
+                        lineage.as_deref(),
+                    ))
                 },
                 &reserved.id,
                 pane,

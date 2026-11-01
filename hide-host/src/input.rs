@@ -82,7 +82,10 @@ fn codex_queue(home: &Path, thread: &str, text: &str, stop: &AtomicBool) -> Deli
 
 /// The first line of a CLI's error output, cut to a log line's length.
 fn first_line(text: &str) -> String {
-    let line = text.lines().find(|line| !line.trim().is_empty()).unwrap_or("");
+    let line = text
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("");
     line.chars().take(200).collect()
 }
 
@@ -111,11 +114,17 @@ fn claude_messaging(socket: &Path, token: &str, text: &str) -> Delivery {
         Ok(stream) => stream,
         Err(error) => {
             return Delivery::Unavailable {
-                reason: format!("the session's socket could not be reached: {}", error.kind()),
+                reason: format!(
+                    "the session's socket could not be reached: {}",
+                    error.kind()
+                ),
             };
         }
     };
-    match stream.write_all(lines.as_bytes()).and_then(|()| stream.flush()) {
+    match stream
+        .write_all(lines.as_bytes())
+        .and_then(|()| stream.flush())
+    {
         Ok(()) => Delivery::Sent,
         Err(error) => Delivery::Unknown {
             reason: format!("the write to the session's socket failed: {}", error.kind()),
