@@ -417,6 +417,12 @@ jobs:
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^opener_lifecycle::/)'
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^connect_stop::/)'
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^handshake::/)'
+      - name: A device's Herdr copy a server runs is kept
+        # The kit judges a copy's use by the files a process holds in it on
+        # Windows, never by the image paths it could read (hide-host/src/kit.rs).
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
+        timeout-minutes: 10
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-host) & kind(lib) & test(=kit::tests::an_older_herdr_copy_stays_while_a_process_runs_it_and_goes_once_none_does)'
       - name: The weekly usage child's environment
         # The `/usage` child is started with a restricted environment, which
         # on Windows has to carry what Node and the CLI need to start, and the
