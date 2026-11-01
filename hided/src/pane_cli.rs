@@ -172,13 +172,11 @@ pub fn parse_purpose(args: &[String]) -> Result<PaneCli, String> {
 /// `{"ok":true,"value":…}` or `{"ok":false,"error":{"code","message"}}` with
 /// the step to take, and a non-zero exit for a refusal.
 pub fn run(env: &Env, cli: PaneCli) -> Result<(), String> {
-    let refused = |code: String, message: &str| {
-        println!(
-            "{}",
-            json!({"ok":false,"error":{"code":code,"message":message}})
-        );
+    let refused_with = |code: String, message: &str, answer: &serde_json::Value| {
+        println!("{}", crate::cli::refusal_line(&code, message, answer));
         Err(code)
     };
+    let refused = |code: String, message: &str| refused_with(code, message, &json!({}));
     if let Err(code) = cli.command.check() {
         let message = herdr_core::pane_command::next_action(code).unwrap_or_default();
         return refused(code.to_owned(), message);
@@ -214,7 +212,7 @@ pub fn run(env: &Env, cli: PaneCli) -> Result<(), String> {
                 .or_else(|| herdr_core::pane_command::next_action(&code))
                 .unwrap_or("Retry; the reason is in Hide's diagnostic log")
                 .to_owned();
-            refused(code, &message)
+            refused_with(code, &message, &answer)
         }
         Err(code) => {
             let message = crate::cli::request_next_action(&code);

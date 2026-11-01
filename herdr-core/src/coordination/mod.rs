@@ -31,6 +31,9 @@ pub fn split_refusal(refusal: &str) -> (&str, Option<&str>) {
     match refusal.split_once(DETAIL) {
         Some((
             code @ ("machine_unknown"
+            | "keys_not_sent"
+            | "send_unconfirmed"
+            | "operator_typing"
             | crate::agent_start::SHELL_STARTING
             | "card_not_processed"
             | "mission_cap_reached"

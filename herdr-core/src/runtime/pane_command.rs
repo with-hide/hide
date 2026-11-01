@@ -124,28 +124,6 @@ impl Runtime {
         })
     }
 
-    /// Whether a person's draft may stand in `pane`: input since its last
-    /// submission by the core's draft rule (`Observation::unsent_draft`),
-    /// which a held letter waits on too, and the newest of it not what a
-    /// `hide pane send` wrote.
-    pub(crate) fn draft_may_stand(&self, pane: &str) -> bool {
-        self.delivery_observations
-            .get(pane)
-            .is_some_and(|observed| {
-                observed.unsent_draft()
-                    && observed.last_input_at_unix_ms > observed.pane_send_at_unix_ms
-            })
-    }
-
-    /// Notes a write a `hide pane send` landed: input routed to the pane, as
-    /// any key is, and marked as the sender's own.
-    pub(crate) fn note_pane_send(&mut self, pane: &str) {
-        self.note_delivery_key(pane, "pane_send");
-        if let Some(observed) = self.delivery_observations.get_mut(pane) {
-            observed.pane_send_at_unix_ms = observed.last_input_at_unix_ms;
-        }
-    }
-
     /// Whether the agent in `pane` on `machine` is known to take a paste as
     /// one: an agent kind the composer journey measured taking one, on a
     /// system where it does (`AgentId::takes_one_paste`). A pane with no agent
@@ -376,6 +354,15 @@ mod tests {
     struct SendHerdr {
         screen: Option<&'static str>,
         refuse: Vec<&'static str>,
+        /// Methods taken and never answered, a lost reply.
+        lose: Vec<&'static str>,
+        /// A method during which a person types into `pane` of the runtime,
+        /// before its answer.
+        typed_during: Option<(
+            &'static str,
+            &'static str,
+            std::sync::Weak<std::sync::Mutex<Runtime>>,
+        )>,
         calls: Vec<(String, serde_json::Value)>,
     }
 
@@ -389,9 +376,36 @@ mod tests {
         tempfile::TempDir,
         crate::fake_herdr::FakeHerdr,
     ) {
-        let (runtime, context, root, fake) = fixture_answering(false, move |method, params| {
+        let (runtime, context, root, fake) = fixture_answering(false, send_answers(herdr));
+        (
+            Arc::new(std::sync::Mutex::new(runtime)),
+            context,
+            root,
+            fake,
+        )
+    }
+
+    /// How the fake Herdr answers by `herdr`.
+    fn send_answers(
+        herdr: Arc<std::sync::Mutex<SendHerdr>>,
+    ) -> impl FnMut(&str, &serde_json::Value) -> Result<serde_json::Value, (String, String)>
+    + Send
+    + 'static {
+        move |method, params| {
             let mut herdr = herdr.lock().unwrap();
             herdr.calls.push((method.to_owned(), params.clone()));
+            if let Some((during, pane, runtime)) = &herdr.typed_during
+                && *during == method
+                && let Some(runtime) = runtime.upgrade()
+            {
+                runtime
+                    .lock()
+                    .unwrap()
+                    .note_delivery_key_at(pane, crate::runtime::unix_milliseconds());
+            }
+            if herdr.lose.contains(&method) {
+                return Err((crate::fake_herdr::NO_REPLY.into(), String::new()));
+            }
             if herdr.refuse.contains(&method) {
                 return Err(("pane_not_found".into(), "refused".into()));
             }
@@ -408,13 +422,7 @@ mod tests {
                 }
                 other => panic!("a send reads the composer and writes input, got {other}"),
             }
-        });
-        (
-            Arc::new(std::sync::Mutex::new(runtime)),
-            context,
-            root,
-            fake,
-        )
+        }
     }
 
     fn send(
@@ -576,7 +584,7 @@ mod tests {
             ..SendHerdr::default()
         }));
         let (runtime, context, _root, _fake) = send_fixture(herdr.clone());
-        assert!(!runtime.lock().unwrap().draft_may_stand("recipient"));
+        assert!(!runtime.lock().unwrap().person_draft("recipient"));
         assert_eq!(
             send(
                 &runtime,
@@ -624,7 +632,7 @@ mod tests {
             )
             .is_ok()
         );
-        assert!(!runtime.lock().unwrap().draft_may_stand("recipient"));
+        assert!(!runtime.lock().unwrap().person_draft("recipient"));
         assert!(
             send(
                 &runtime,
@@ -656,11 +664,9 @@ mod tests {
         );
     }
 
-    /// A send that fails is not the input that lets a brief be typed again:
-    /// a refused key-only send notes nothing, while text Herdr took whose
-    /// keys it refused is input and is answered as such.
+    /// A send that fails before anything lands notes no input.
     #[test]
-    fn only_a_write_herdr_took_counts_as_input_and_a_partial_send_says_what_landed() {
+    fn a_refused_send_is_no_input() {
         use crate::engine::keys::PaneKey;
         let herdr = Arc::new(std::sync::Mutex::new(SendHerdr {
             refuse: vec!["pane.send_keys"],
@@ -681,11 +687,200 @@ mod tests {
             Err("pane_unavailable".into())
         );
         assert_eq!(input_at(&runtime), before, "a refused key is no input");
+    }
+
+    /// The parent of a child whose brief is unconfirmed, with a fake Herdr
+    /// answering by `herdr`: the brief was typed at `BRIEF_AT` and judged
+    /// unconfirmed with nobody having answered the child's screen.
+    fn unconfirmed_brief(
+        herdr: Arc<std::sync::Mutex<SendHerdr>>,
+    ) -> (
+        Arc<std::sync::Mutex<Runtime>>,
+        Context,
+        tempfile::TempDir,
+        crate::fake_herdr::FakeHerdr,
+    ) {
+        use crate::delivery::typed::{RECORD_WAIT_MS, REREAD_WAIT_MS};
+        const BRIEF_AT: u64 = 100_000;
+        let (root, mut runtime, _) = crate::runtime::typed_input::tests::spawned(false, BRIEF_AT);
+        let fake =
+            crate::fake_herdr::FakeHerdr::start_with_errors("pane-send", send_answers(herdr));
+        runtime.live = Some(crate::live::LiveContext {
+            socket_path: fake.socket_path().to_path_buf(),
+            runtime: std::sync::Weak::new(),
+            notifier: crate::handle::ChangeNotifier::noop(),
+            engine: fake.engine(),
+            node: Arc::new(hide_node::Local::of_process()),
+        });
+        let asked = BRIEF_AT + RECORD_WAIT_MS;
+        runtime.typed_input_work(asked);
+        runtime.take_session_rereads();
+        let work = runtime.typed_input_work(asked + REREAD_WAIT_MS);
         assert_eq!(
-            send(&runtime, &context, "recipient", Some("y"), &[], true, false),
-            Err("keys_not_sent".into())
+            work[0].resubmit.as_ref().map(|resubmit| resubmit.answered),
+            Some(false)
         );
-        assert!(input_at(&runtime) > before, "the text Herdr took is input");
+        let context = runtime
+            .workspace_control_query(NODE, "sender", Query::Info)
+            .unwrap()
+            .context;
+        (
+            Arc::new(std::sync::Mutex::new(runtime)),
+            context,
+            root,
+            fake,
+        )
+    }
+
+    /// Whether the child's screen counts as answered once input is quiet,
+    /// the condition the brief is typed again on (`typed::retype_due`).
+    fn screen_answered(runtime: &Arc<std::sync::Mutex<Runtime>>) -> Option<bool> {
+        let quiet = crate::runtime::unix_milliseconds() + crate::delivery::INPUT_QUIET_MS;
+        runtime.lock().unwrap().typed_input_work(quiet)[0]
+            .resubmit
+            .as_ref()
+            .map(|resubmit| resubmit.answered)
+    }
+
+    /// The landed part of a partial send, as its refusal's `sent` detail.
+    fn sent_of(refusal: &str) -> (&str, serde_json::Value) {
+        let (code, detail) = crate::coordination::split_refusal(refusal);
+        (
+            code,
+            serde_json::from_str(detail.expect("what landed")).unwrap(),
+        )
+    }
+
+    /// A send that stopped partway, its keys refused or their reply lost,
+    /// landed its text and answered nothing: the parent's unconfirmed brief
+    /// is not typed again for it, and the refusal says what landed. The
+    /// same send landing whole is the answer that lets the brief be typed
+    /// again.
+    #[test]
+    fn only_a_send_that_landed_whole_lets_an_unconfirmed_brief_be_typed_again() {
+        use crate::engine::keys::PaneKey;
+        for (herdr, code) in [
+            (
+                SendHerdr {
+                    refuse: vec!["pane.send_keys"],
+                    ..SendHerdr::default()
+                },
+                "keys_not_sent",
+            ),
+            (
+                SendHerdr {
+                    lose: vec!["pane.send_keys"],
+                    ..SendHerdr::default()
+                },
+                "send_unconfirmed",
+            ),
+        ] {
+            let herdr = Arc::new(std::sync::Mutex::new(herdr));
+            let (runtime, context, _root, _fake) = unconfirmed_brief(herdr.clone());
+            let refused = send(
+                &runtime,
+                &context,
+                "child",
+                Some("t"),
+                &[PaneKey::Esc],
+                false,
+                false,
+            )
+            .unwrap_err();
+            assert_eq!(
+                sent_of(&refused),
+                (
+                    code,
+                    json!({"text_sent": true, "keys_sent": [], "enter_sent": false})
+                )
+            );
+            assert_eq!(
+                screen_answered(&runtime),
+                Some(false),
+                "{code}: nothing answered"
+            );
+            herdr.lock().unwrap().refuse.clear();
+            herdr.lock().unwrap().lose.clear();
+            send(
+                &runtime,
+                &context,
+                "child",
+                None,
+                &[PaneKey::Esc],
+                false,
+                false,
+            )
+            .unwrap();
+            assert_eq!(
+                screen_answered(&runtime),
+                Some(true),
+                "{code}: a whole send answers"
+            );
+        }
+    }
+
+    /// A person who types while the send's text is on its way keeps their
+    /// input: the send stops before its keys with `operator_typing` and
+    /// says the text landed, and the person's input stays a draft the next
+    /// send is held by.
+    #[test]
+    fn a_person_typing_during_a_send_stops_it_before_its_next_write_and_keeps_their_draft() {
+        use crate::engine::keys::PaneKey;
+        let herdr = Arc::new(std::sync::Mutex::new(SendHerdr {
+            screen: Some(include_str!(
+                "../../../hide-agent-adapter/tests/fixtures/composer/codex-1-typed.ansi"
+            )),
+            ..SendHerdr::default()
+        }));
+        let (runtime, context, _root, _fake) = send_fixture(herdr.clone());
+        {
+            let mut runtime = runtime.lock().unwrap();
+            let observation = runtime.delivery_observations.get_mut("recipient").unwrap();
+            observation.last_submit_at_unix_ms = 1;
+            observation.entered_working_at_unix_ms = 1;
+            observation.last_input_at_unix_ms = 1;
+        }
+        herdr.lock().unwrap().typed_during =
+            Some(("pane.send_text", "recipient", Arc::downgrade(&runtime)));
+        let refused = send(
+            &runtime,
+            &context,
+            "recipient",
+            Some("y"),
+            &[PaneKey::Down],
+            true,
+            false,
+        )
+        .unwrap_err();
+        assert_eq!(
+            sent_of(&refused),
+            (
+                "operator_typing",
+                json!({"text_sent": true, "keys_sent": [], "enter_sent": false})
+            )
+        );
+        assert_eq!(
+            written(&herdr),
+            vec![(
+                "pane.send_text".to_owned(),
+                json!({"pane_id": "recipient", "text": "y"})
+            )],
+            "nothing is written after the person's input"
+        );
+        assert!(runtime.lock().unwrap().person_draft("recipient"));
+        herdr.lock().unwrap().typed_during = None;
+        assert_eq!(
+            send(
+                &runtime,
+                &context,
+                "recipient",
+                None,
+                &[PaneKey::Enter],
+                false,
+                false
+            ),
+            Err("composer_not_empty".into())
+        );
     }
 
     /// A paste goes in as one input with each line break a CR, only where

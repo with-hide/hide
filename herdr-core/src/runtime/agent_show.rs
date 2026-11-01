@@ -78,21 +78,11 @@ impl Runtime {
         let unknown = disconnected
             || observation.is_none_or(|observation| observation.telemetry_stale)
             || row.as_ref().is_none_or(|row| row.telemetry_stale);
-        let mut pending = Vec::new();
+        let mut pending: Vec<_> = spawns
+            .iter()
+            .filter_map(|spawn| self.spawn_pending(spawn, now))
+            .collect();
         if let Ok(ledger) = self.delivery_ledger.as_ref() {
-            for spawn in spawns {
-                if let Some(input) = &spawn.brief_input {
-                    let observation = self.spawn_observation(spawn);
-                    if let Some(phase) = phase(input, observation, now) {
-                        let parent = (spawn.mode == crate::coordination::SpawnMode::Delegation)
-                            .then(|| spawn.parent.clone());
-                        pending.push((
-                            pending_input(InputKind::Brief, input, phase, Some(&spawn.id), None),
-                            parent,
-                        ));
-                    }
-                }
-            }
             for letter in ledger
                 .letters
                 .iter()
@@ -123,22 +113,43 @@ impl Runtime {
 
 impl Runtime {
     /// The facts of a spawn whose agent has not registered: its pane's,
-    /// while the pane still runs the terminal the spawn recorded.
+    /// while the pane still runs the terminal the spawn recorded. A pane
+    /// that runs another terminal now, or none Hide observes, says nothing
+    /// of this spawn's agent, which is then unknown; whatever occupies the
+    /// pane is never read as it.
     pub(crate) fn spawn_state_facts(&self, spawn: &SpawnRecord) -> StateFacts {
-        let actor = match self.spawn_observation(spawn) {
-            Some(observation) => observation.actor.clone(),
-            None => Actor {
-                pane_id: self.spawn_pane_id(spawn).unwrap_or_default(),
-                name: spawn.name.clone(),
-                kind: spawn.kind.clone(),
-                device_id: spawn
-                    .machine
-                    .clone()
-                    .unwrap_or_else(|| self.node.to_string()),
-                session: None,
+        match self.spawn_observation(spawn) {
+            Some(observation) => {
+                let actor = observation.actor.clone();
+                self.agent_state_facts(&actor, &[spawn])
+            }
+            None => StateFacts {
+                row: None,
+                unknown: true,
+                observed_at_unix_ms: None,
+                pending: self
+                    .spawn_pending(spawn, super::unix_milliseconds())
+                    .into_iter()
+                    .collect(),
             },
-        };
-        self.agent_state_facts(&actor, &[spawn])
+        }
+    }
+
+    /// The spawn's brief while its agent has not recorded it, with the
+    /// parent it waits on for a delegated spawn.
+    fn spawn_pending(
+        &self,
+        spawn: &SpawnRecord,
+        now: u64,
+    ) -> Option<(PendingInput, Option<String>)> {
+        let input = spawn.brief_input.as_ref()?;
+        let phase = phase(input, self.spawn_observation(spawn), now)?;
+        let parent = (spawn.mode == crate::coordination::SpawnMode::Delegation)
+            .then(|| spawn.parent.clone());
+        Some((
+            pending_input(InputKind::Brief, input, phase, Some(&spawn.id), None),
+            parent,
+        ))
     }
 }
 
@@ -420,6 +431,39 @@ mod tests {
             .answer(TEST_NODE);
         assert_eq!(stale["state"]["activity"], "unknown");
         assert_eq!(stale["state"]["waiting"]["cause"], "unknown");
+    }
+
+    /// A spawn whose pane runs another terminal now is unknown: the pane's
+    /// new occupant, resting with nothing to ask, is never read as the
+    /// spawn's agent stopped and waiting for nothing.
+    #[test]
+    fn a_spawn_whose_pane_runs_another_terminal_is_unknown_never_the_occupants_state() {
+        let (_root, mut runtime, spawn) = spawned(false, 1_000);
+        runtime.snapshot.navigator.agents.push(child_row());
+        let read = |runtime: &crate::runtime::Runtime| {
+            Shown::read(runtime, &parent(), &spawn)
+                .unwrap()
+                .answer(TEST_NODE)["state"]
+                .clone()
+        };
+        assert_eq!(
+            read(&runtime)["activity"],
+            "stopped",
+            "its own terminal is read"
+        );
+        runtime
+            .delivery_observations
+            .get_mut("child")
+            .unwrap()
+            .terminal_id = Some("term-other".into());
+        let state = read(&runtime);
+        assert_eq!(state["activity"], "unknown");
+        assert_eq!(state["observed_at_unix_ms"], json!(null));
+        assert_eq!(
+            state["waiting"],
+            json!({"cause": "unknown", "on": null, "since_unix_ms": null, "letter_id": null,
+                "spawn_id": null, "text": null})
+        );
     }
 
     /// A delegated child's own question waits on its parent and a root's on

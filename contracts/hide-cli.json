@@ -3371,15 +3371,22 @@
                 },
                 {
                     "name": "text",
+                    "required": false,
                     "value": {
-                        "type": "body"
+                        "type": "text"
                     }
                 }
             ],
             "command": "pane send",
+            "needs_one_of": [
+                "text",
+                "--key",
+                "--enter"
+            ],
             "options": [
                 {
                     "name": "--key",
+                    "repeats_at_most": 32,
                     "required": false,
                     "requires": [],
                     "value": {
@@ -3423,7 +3430,8 @@
                 "pane_asleep",
                 "composer_not_empty",
                 "keys_not_sent",
-                "send_unconfirmed"
+                "send_unconfirmed",
+                "operator_typing"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -4922,7 +4930,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:71b875b02b642f54d1129ea45b910cd53f545b337908409a9df684726ceb6a4c",
+    "digest": "sha256:ec5a755fee2a89007ca4c83914b0fa68fe34d9d532637e5a70d60a31b4b0456f",
     "envelopes": {
         "agent": {
             "answer": "value",

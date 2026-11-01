@@ -54,6 +54,17 @@ impl PaneKey {
         }
     }
 
+    /// Every key's name, in the order of [`Self::ALL`].
+    pub const NAMES: [&'static str; 10] = {
+        let mut names = [""; 10];
+        let mut index = 0;
+        while index < Self::ALL.len() {
+            names[index] = Self::ALL[index].name();
+            index += 1;
+        }
+        names
+    };
+
     /// The key `name` names, exactly as [`Self::name`] spells it.
     pub fn parse(name: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|key| key.name() == name)

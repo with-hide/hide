@@ -347,18 +347,12 @@ fn print_answer(result: Result<serde_json::Value, String>) -> Result<(), String>
         }
     }
 }
-/// The refusal line of an answer the daemon refused. A spawn that stopped
-/// partway keeps the spawn and pane it names, so the caller can look the
-/// child up with `hide agent show <spawn id>`.
+/// The refusal line of an answer the daemon refused, with the daemon's next
+/// step, the one the caller can act on.
 fn refused(answer: &serde_json::Value) -> serde_json::Value {
     let code = answer["reason"].as_str().unwrap_or("agent_unavailable");
-    // The daemon's next step is what the caller can act on.
     let message = answer["next_action"].as_str().unwrap_or(code);
-    let mut error = serde_json::json!({"code":code,"message":message});
-    if answer["spawn"].is_object() {
-        error["spawn"] = answer["spawn"].clone();
-    }
-    serde_json::json!({"ok":false,"error":error})
+    crate::cli::refusal_line(code, message, answer)
 }
 #[cfg(test)]
 mod tests {

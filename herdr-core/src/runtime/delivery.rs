@@ -52,11 +52,22 @@ pub(crate) struct Observation {
     /// no draft the bell waits for, since the operator saw the composer above
     /// which the mark sits and chose to ring. Input after it is a draft again.
     pub released_input_at_unix_ms: u64,
-    /// The input an agent's `hide pane send` last wrote here. Input up to it
-    /// is that agent's own, no person's draft, so its next send is not held
-    /// for it (`Runtime::draft_may_stand`); a key a person types after it
-    /// makes the newer input theirs.
-    pub pane_send_at_unix_ms: u64,
+    /// How many inputs were noted here, each counted once whatever its
+    /// clock says: a writer that read it before an off-lock write knows
+    /// after the write whether anyone else's input came meanwhile
+    /// (`delivery_pane_unmoved`, `note_pane_send_write`).
+    pub input_generation: u64,
+    /// The `input_generation` a `hide pane send`'s own write left. While it
+    /// is still the newest, the newest input is that sender's and no
+    /// person's draft (`Observation::person_draft`); any input noted after
+    /// it, or during that write, is not.
+    pub pane_send_generation: Option<u64>,
+    /// The last input that answered the agent's screen: a key the operator
+    /// typed, a phone reply, or a `hide pane send` whose every write landed
+    /// (`note_pane_send_answered`). A brief or letter typed before it may be
+    /// typed again (`typed::retype_due`); a send that stopped partway or
+    /// lost its reply landed input and answered nothing.
+    pub answered_at_unix_ms: u64,
     /// The last prompt hook of the pane's own session that ran at rest; 0
     /// until one runs. A turn it started that has ended with no key since
     /// leaves the composer known empty, the moment an agent version's
@@ -175,6 +186,13 @@ impl Observation {
                 .last_submit_at_unix_ms
                 .max(self.entered_working_at_unix_ms)
                 .max(self.released_input_at_unix_ms)
+    }
+
+    /// A draft a person may be writing: an unsent draft
+    /// ([`Observation::unsent_draft`]) whose newest input is not what a
+    /// `hide pane send` wrote. The one rule a pane send is held by.
+    pub(crate) fn person_draft(&self) -> bool {
+        self.unsent_draft() && self.pane_send_generation != Some(self.input_generation)
     }
 }
 
@@ -336,7 +354,9 @@ impl Runtime {
                     _ => now,
                 },
                 released_input_at_unix_ms: previous.map_or(0, |old| old.released_input_at_unix_ms),
-                pane_send_at_unix_ms: previous.map_or(0, |old| old.pane_send_at_unix_ms),
+                input_generation: previous.map_or(0, |old| old.input_generation),
+                pane_send_generation: previous.and_then(|old| old.pane_send_generation),
+                answered_at_unix_ms: previous.map_or(0, |old| old.answered_at_unix_ms),
                 observed_at_unix_ms: if agent.telemetry_stale {
                     previous.map_or(0, |old| old.observed_at_unix_ms)
                 } else {
@@ -838,7 +858,59 @@ impl Runtime {
         self.reopen_resolved_session(pane_id);
         if let Some(observation) = self.delivery_observations.get_mut(pane_id) {
             observation.last_input_at_unix_ms = observation.last_input_at_unix_ms.max(at_unix_ms);
+            observation.input_generation += 1;
+            observation.answered_at_unix_ms = observation.answered_at_unix_ms.max(at_unix_ms);
             self.sync_composer_mark(pane_id, unix_milliseconds());
+        }
+    }
+
+    /// The input generation of `pane` a writer reads before its off-lock
+    /// write, or `None` for a pane Hide observes no agent in.
+    pub(crate) fn input_fence(&self, pane_id: &str) -> Option<u64> {
+        self.delivery_observations
+            .get(pane_id)
+            .map(|observation| observation.input_generation)
+    }
+
+    /// Whether a person's draft may stand in `pane` now
+    /// ([`Observation::person_draft`]).
+    pub(crate) fn person_draft(&self, pane_id: &str) -> bool {
+        self.delivery_observations
+            .get(pane_id)
+            .is_some_and(Observation::person_draft)
+    }
+
+    /// A `hide pane send` write landed in `pane`, or may have with its reply
+    /// lost, after the sender read `fence`. It is input, as any key is, and
+    /// answers nothing until the whole send has landed. The answer is the
+    /// fence for the sender's next write while no one else's input came
+    /// since `fence`, which makes the newest input the sender's own, and
+    /// `None` when some did: that input stays theirs, and the send stops.
+    pub(crate) fn note_pane_send_write(&mut self, pane_id: &str, fence: u64) -> Option<u64> {
+        self.reopen_resolved_session(pane_id);
+        let now = unix_milliseconds();
+        let Some(observation) = self.delivery_observations.get_mut(pane_id) else {
+            return Some(fence);
+        };
+        let own = observation.input_generation == fence;
+        observation.last_input_at_unix_ms = observation.last_input_at_unix_ms.max(now);
+        observation.input_generation += 1;
+        if own {
+            observation.pane_send_generation = Some(observation.input_generation);
+        }
+        let generation = observation.input_generation;
+        self.sync_composer_mark(pane_id, now);
+        self.trace_delivery_input(pane_id, "pane_send");
+        own.then_some(generation)
+    }
+
+    /// A `hide pane send` whose every write landed answered the agent's
+    /// screen, which lets typed input be typed again (`typed::retype_due`).
+    pub(crate) fn note_pane_send_answered(&mut self, pane_id: &str) {
+        if let Some(observation) = self.delivery_observations.get_mut(pane_id) {
+            observation.answered_at_unix_ms = observation
+                .answered_at_unix_ms
+                .max(observation.last_input_at_unix_ms);
         }
     }
 
@@ -849,6 +921,8 @@ impl Runtime {
         if let Some(observation) = self.delivery_observations.get_mut(pane_id) {
             let now = unix_milliseconds();
             observation.last_input_at_unix_ms = now;
+            observation.input_generation += 1;
+            observation.answered_at_unix_ms = now;
             observation.last_submit_at_unix_ms = now;
             self.sync_composer_mark(pane_id, now);
             self.trace_delivery_input(pane_id, source);
@@ -1840,7 +1914,7 @@ impl Runtime {
         {
             return Err(Hold::Moved);
         }
-        if current.last_input_at_unix_ms != observed.last_input_at_unix_ms {
+        if current.input_generation != observed.input_generation {
             return Err(Hold::Input);
         }
         Ok(current)

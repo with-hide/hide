@@ -1377,6 +1377,24 @@ pub(crate) fn bootstrap_refused(reason: &str) -> bool {
     matches!(reason, "checkout_not_registered" | "caller_unavailable")
 }
 
+/// One refused command's line, `{"ok":false,"error":{"code","message"}}`,
+/// with what work that stopped partway left as a field of `error`: a
+/// spawn's `spawn`, the id and pane `hide agent show` finds it by, and a
+/// pane send's `sent`, what of it landed.
+pub(crate) fn refusal_line(
+    code: &str,
+    message: &str,
+    answer: &serde_json::Value,
+) -> serde_json::Value {
+    let mut error = serde_json::json!({"code": code, "message": message});
+    for field in ["spawn", "sent"] {
+        if answer[field].is_object() {
+            error[field] = answer[field].clone();
+        }
+    }
+    serde_json::json!({"ok": false, "error": error})
+}
+
 /// What a command that could not reach the core can do, one sentence for a
 /// code whichever topic ran it.
 pub(crate) fn request_next_action(reason: &str) -> &'static str {

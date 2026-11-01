@@ -110,8 +110,9 @@ pub(crate) fn standing(
 }
 
 /// Whether unconfirmed `input` may be typed again now: someone answered the
-/// agent's screen since the last typing (input Hide routed to the pane: the
-/// operator's keys or a parent's `hide pane send`), that input has been quiet
+/// agent's screen since the last typing (`Observation::answered_at_unix_ms`:
+/// the operator's keys, a phone reply, or a parent's `hide pane send` that
+/// landed whole, never one that stopped partway), input has been quiet
 /// for the quiet period, the agent rests, and typings are left. Text and
 /// Enter on a choice screen can pick an option, so an unanswered screen is
 /// never typed into again; the composer is read empty right before the
@@ -121,7 +122,7 @@ pub(crate) fn retype_due(input: &TypedInput, observation: &Observation, now: u64
         standing(input, Some(observation), now),
         Standing::Unconfirmed { .. }
     ) && input.attempts < INPUT_ATTEMPTS
-        && observation.last_input_at_unix_ms > input.typed_at_unix_ms
+        && observation.answered_at_unix_ms > input.typed_at_unix_ms
         && composer_readable(observation, now)
 }
 
@@ -232,7 +233,9 @@ mod tests {
             last_submit_at_unix_ms: 0,
             entered_working_at_unix_ms: 0,
             released_input_at_unix_ms: 0,
-            pane_send_at_unix_ms: 0,
+            input_generation: 0,
+            pane_send_generation: None,
+            answered_at_unix_ms: input,
             observed_at_unix_ms: 0,
             hook_submit_at_unix_ms: 0,
             session: None,

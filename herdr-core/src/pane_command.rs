@@ -185,6 +185,9 @@ pub fn next_action(code: &str) -> Option<&'static str> {
         "composer_not_empty" => {
             "Someone typed into the agent's input box and its text may be a person's draft; nothing was sent. Read the pane with hide pane read, and send again once the box is empty or submitted"
         }
+        "operator_typing" => {
+            "Someone typed into the pane while the send was writing, so it stopped; sent says what landed. Read the pane with hide pane read before sending again"
+        }
         "keys_not_sent" => {
             "The text was typed but the keys were not pressed; read the pane with hide pane read before sending again"
         }
@@ -366,20 +369,37 @@ impl Prepared {
                     runtime: &runtime,
                 };
                 let outcome = send.run(text.as_deref(), &keys, enter, paste);
+                let landed = match &outcome {
+                    Ok(landed) | Err((_, landed)) => *landed,
+                };
                 crate::diagnostic!(
                     json!({"component":"pane_command","kind":"pane_command.sent",
                     "caller":caller,"pane_id":noted.as_deref().unwrap_or(&raw),
                     "text_bytes":text.as_ref().map_or(0, String::len),"keys":keys.len(),
                     "enter":enter,"paste":paste,
-                    "outcome":outcome.as_ref().err().map_or("sent", String::as_str)})
+                    "outcome":outcome.as_ref().err().map_or("sent", |(code, _)| code.as_str()),
+                    "text_landed":landed.text,"keys_landed":landed.keys})
                 );
-                let (text_sent, pressed) = outcome?;
-                serde_json::to_value(PaneSent {
+                let sent = PaneSent {
                     pane,
-                    text_sent,
-                    keys_sent: if pressed { keys } else { Vec::new() },
-                    enter_sent: pressed && enter,
-                })
+                    text_sent: landed.text,
+                    keys_sent: if landed.keys { keys } else { Vec::new() },
+                    enter_sent: landed.keys && enter,
+                };
+                match outcome {
+                    Ok(_) => serde_json::to_value(sent),
+                    // What landed of a send that stopped partway is a field
+                    // of its refusal, never a guess for the caller to make.
+                    Err((code, _)) if PARTIAL.contains(&code.as_str()) => {
+                        return Err(crate::coordination::refusal(
+                            &code,
+                            &json!({"text_sent":sent.text_sent,"keys_sent":sent.keys_sent,
+                                "enter_sent":sent.enter_sent})
+                            .to_string(),
+                        ));
+                    }
+                    Err((code, _)) => return Err(code),
+                }
             }
             Step::Open {
                 caller,
@@ -447,16 +467,38 @@ struct Send<'a> {
 /// writes to one pane; a fixed number, so the set never grows with panes.
 static SEND_STRIPES: [std::sync::Mutex<()>; 16] = [const { std::sync::Mutex::new(()) }; 16];
 
+/// The pane's input as a send last saw it: `At` the input generation it
+/// read or its own write left, `Moved` once someone else's input came
+/// meanwhile, and `Unfenced` for a pane Hide observes no agent in.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Fence {
+    Unfenced,
+    At(u64),
+    Moved,
+}
+
+/// What of one send landed: its text, then its keys and Enter (one write).
+#[derive(Clone, Copy, Default)]
+struct Landed {
+    text: bool,
+    keys: bool,
+}
+
+/// The refusals of a send that may have landed part of itself; each carries
+/// what did land (`sent`) as its detail.
+pub const PARTIAL: [&str; 3] = ["keys_not_sent", "send_unconfirmed", "operator_typing"];
+
 impl Send<'_> {
-    /// Whether the text and then the keys were written, or the refusal's
-    /// code.
+    /// What landed, or the refusal's code with what landed before it.
     fn run(
         &self,
         text: Option<&str>,
         keys: &[PaneKey],
         enter: bool,
         paste: bool,
-    ) -> Result<(bool, bool), String> {
+    ) -> Result<Landed, (String, Landed)> {
+        let mut landed = Landed::default();
+        let refused = |code: &str, landed: Landed| (code.to_owned(), landed);
         let subject = self.noted.unwrap_or(self.raw);
         let stripe = {
             use std::hash::{Hash, Hasher};
@@ -470,90 +512,131 @@ impl Send<'_> {
         // Held across every write: the pane of an agent being put to sleep
         // takes nothing, and the sleep waits for a write already admitted.
         let _admitted = match self.gate {
-            Some(gate) => Some(gate.admit(subject).map_err(|_| "pane_asleep".to_owned())?),
+            Some(gate) => Some(
+                gate.admit(subject)
+                    .map_err(|_| refused("pane_asleep", landed))?,
+            ),
             None => None,
         };
+        // The pane's input as the send found it: input noted after this,
+        // during the composer read or a write, is someone else's, and the
+        // send stops before its next write (`operator_typing`).
+        let mut fence = self
+            .with_runtime(|runtime, pane| runtime.input_fence(pane))
+            .flatten()
+            .map_or(Fence::Unfenced, Fence::At);
         // A person's draft is judged by the two rules a held letter is: the
-        // core's draft rule, input routed to the pane since its last
-        // submission (`Observation::unsent_draft`), and the agent's composer
-        // read now (`composer::forced_clear`). Text read where no input can
+        // core's draft rule, input since the pane's last submission that no
+        // send wrote (`Observation::person_draft`), and the agent's composer
+        // read now (`composer::forced_clear`). Text read where no person can
         // have made a draft is the agent's own screen, such as Codex's hooks
         // review, whose `›` cursor reads as its composer, and a screen with
         // no composer to read is the screen a send exists to answer.
-        if self.draft_may_stand()
+        if self
+            .with_runtime(|runtime, pane| runtime.person_draft(pane))
+            .unwrap_or(false)
             && let Some(kind) = self.agent_kind
             && crate::delivery::composer::forced_clear(self.engine, self.raw, kind)
                 == Err(crate::delivery::composer::NOT_EMPTY)
         {
-            return Err(crate::delivery::composer::NOT_EMPTY.to_owned());
+            return Err(refused(crate::delivery::composer::NOT_EMPTY, landed));
         }
-        let mut wrote = false;
-        let text_sent = match text {
-            Some(text) => {
-                let written = if paste {
-                    // As a terminal pastes: each line break a CR, so no
-                    // program reads one as the LF some take for Enter.
-                    let text = text.replace("\r\n", "\r").replace('\n', "\r");
-                    self.engine.paste_text(self.wait, self.raw, &text)
-                } else {
-                    self.engine.send_text(self.wait, self.raw, text)
-                };
-                written.map_err(|error| self.failed("text", &error, "pane_unavailable", wrote))?;
-                wrote = true;
-                self.note();
-                true
+        if let Some(text) = text {
+            self.unmoved(fence).map_err(|code| refused(code, landed))?;
+            let written = if paste {
+                // As a terminal pastes: each line break a CR, so no program
+                // reads one as the LF some take for Enter.
+                let text = text.replace("\r\n", "\r").replace('\n', "\r");
+                self.engine.paste_text(self.wait, self.raw, &text)
+            } else {
+                self.engine.send_text(self.wait, self.raw, text)
+            };
+            fence = self.wrote(fence, &written);
+            written.map_err(|error| {
+                refused(&self.failed("text", &error, "pane_unavailable"), landed)
+            })?;
+            landed.text = true;
+            if fence == Fence::Moved {
+                return Err(refused("operator_typing", landed));
             }
-            None => false,
-        };
+        }
         let mut pressed: Vec<PaneKey> = keys.to_vec();
         if enter {
             pressed.push(PaneKey::Enter);
         }
         if !pressed.is_empty() {
-            self.engine
-                .press_pane_keys(self.wait, self.raw, &pressed)
-                .map_err(|error| self.failed("keys", &error, "keys_not_sent", wrote))?;
-            if !wrote {
-                self.note();
-            }
+            self.unmoved(fence).map_err(|code| refused(code, landed))?;
+            let written = self.engine.press_pane_keys(self.wait, self.raw, &pressed);
+            self.wrote(fence, &written);
+            let later = if landed.text {
+                "keys_not_sent"
+            } else {
+                "pane_unavailable"
+            };
+            written.map_err(|error| refused(&self.failed("keys", &error, later), landed))?;
+            landed.keys = true;
         }
-        Ok((text_sent, !pressed.is_empty()))
+        // Only a send that landed whole answered the agent's screen.
+        self.with_runtime(|runtime, pane| runtime.note_pane_send_answered(pane));
+        Ok(landed)
     }
 
-    /// Whether a draft may stand in the pane now, by the core's own draft
-    /// rule, read right before the write.
-    fn draft_may_stand(&self) -> bool {
-        let (Some(pane), Some(runtime)) = (self.noted, self.runtime.upgrade()) else {
-            return false;
-        };
-        runtime
+    /// `act` on the runtime and the observed pane, when there are both.
+    fn with_runtime<T>(
+        &self,
+        act: impl FnOnce(&mut crate::runtime::Runtime, &str) -> T,
+    ) -> Option<T> {
+        let (pane, runtime) = (self.noted?, self.runtime.upgrade()?);
+        let mut runtime = runtime
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .draft_may_stand(pane)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Some(act(&mut runtime, pane))
     }
 
-    /// A write Herdr took is input routed to the pane, the answer that lets
-    /// typed input be typed again (`delivery::typed`) and the draft guard's
-    /// clock; a refused or unanswered one is neither.
-    fn note(&self) {
-        if let (Some(pane), Some(runtime)) = (self.noted, self.runtime.upgrade()) {
-            runtime
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .note_pane_send(pane);
+    /// Refuses the next write with `operator_typing` when input came to the
+    /// pane since `fence`.
+    fn unmoved(&self, fence: Fence) -> Result<(), &'static str> {
+        let fence = match fence {
+            Fence::Unfenced => return Ok(()),
+            Fence::Moved => return Err("operator_typing"),
+            Fence::At(fence) => fence,
+        };
+        let moved = self
+            .with_runtime(|runtime, pane| runtime.input_fence(pane).is_some_and(|now| now != fence))
+            .unwrap_or(false);
+        if moved {
+            Err("operator_typing")
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Notes a write that Herdr took, or whose reply was lost and so may
+    /// have landed, as input the sender wrote after `fence`; a refused one
+    /// is none. The answer is the next write's fence, `Moved` once someone
+    /// else's input came during this one.
+    fn wrote(&self, fence: Fence, written: &Result<(), EngineError>) -> Fence {
+        let Fence::At(at) = fence else {
+            return fence;
+        };
+        if matches!(written, Err(error) if !error.reply_unknown()) {
+            return fence;
+        }
+        match self.with_runtime(|runtime, pane| runtime.note_pane_send_write(pane, at)) {
+            Some(Some(next)) => Fence::At(next),
+            Some(None) => Fence::Moved,
+            None => fence,
         }
     }
 
     /// A write that failed: refused before anything landed is
     /// `pane_unavailable`, after the text landed `later`, and with its answer
     /// lost `send_unconfirmed`.
-    fn failed(&self, step: &str, error: &EngineError, later: &str, wrote: bool) -> String {
+    fn failed(&self, step: &str, error: &EngineError, later: &str) -> String {
         let code = if error.reply_unknown() {
             "send_unconfirmed"
-        } else if wrote {
-            later
         } else {
-            "pane_unavailable"
+            later
         };
         failed(step, self.raw, error, code)
     }
@@ -705,6 +788,7 @@ mod tests {
             "composer_not_empty",
             "keys_not_sent",
             "send_unconfirmed",
+            "operator_typing",
         ] {
             assert!(next_action(code).is_some(), "{code}");
         }
