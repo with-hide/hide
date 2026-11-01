@@ -317,15 +317,22 @@ struct Work {
     added: Vec<Arc<MissionEvent>>,
 }
 
-/// The logs read at start, which the thread's own copies begin from, and
-/// the work by mission.
+/// The logs read at start, which the thread's own copies begin from, the
+/// work by mission, and the newest book to write after them.
 #[derive(Default)]
 struct Pending {
     restored: HashMap<String, EventLog>,
     work: BTreeMap<String, Work>,
+    book: Option<Arc<crate::missions::MissionBook>>,
     stop: bool,
 }
 
+/// The one writer of the missions' files: each mission's history, and,
+/// when it is given the book's path, the book after them (B27). A history
+/// is written before the book that a change of it went with, and the book
+/// waits while a history write fails, so a stop between the two leaves a
+/// book that does not yet know the act, which its next evaluation makes
+/// again under the same key, never an act the history lost.
 pub(crate) struct MissionEventStore {
     dir: PathBuf,
     shared: Arc<(Mutex<Pending>, Condvar)>,
@@ -333,14 +340,25 @@ pub(crate) struct MissionEventStore {
 }
 
 impl MissionEventStore {
+    /// A writer of the histories in `dir` only.
+    #[cfg(test)]
     pub(crate) fn new(dir: PathBuf) -> Self {
+        Self::start(dir, None)
+    }
+
+    /// The writer of the histories in `dir` and of the book at `book`.
+    pub(crate) fn with_book(dir: PathBuf, book: PathBuf) -> Self {
+        Self::start(dir, Some(book))
+    }
+
+    fn start(dir: PathBuf, book: Option<PathBuf>) -> Self {
         let shared = Arc::new((Mutex::new(Pending::default()), Condvar::new()));
         let worker = {
             let shared = Arc::clone(&shared);
             let dir = dir.clone();
             std::thread::Builder::new()
                 .name("hide-mission-events".to_owned())
-                .spawn(move || run(&shared, &dir))
+                .spawn(move || run(&shared, &dir, book.as_deref()))
                 .inspect_err(|error| {
                     crate::diagnostic!(json!({
                         "component": "missions", "kind": "mission_events.worker_failed",
@@ -426,6 +444,14 @@ impl MissionEventStore {
         self.post(mission, |work| work.added.extend(events.iter().cloned()));
     }
 
+    /// Hands the save thread the book to write once the histories handed
+    /// over before it are written; a newer book replaces one still waiting.
+    pub(crate) fn save_book(&self, book: Arc<crate::missions::MissionBook>) {
+        let (lock, wake) = &*self.shared;
+        lock.lock().unwrap_or_else(PoisonError::into_inner).book = Some(book);
+        wake.notify_one();
+    }
+
     /// Deletes the mission's file with the mission (D-22).
     pub(crate) fn remove(&self, mission: &str) {
         self.post(mission, |work| {
@@ -468,25 +494,31 @@ fn file(dir: &Path, mission: &str) -> PathBuf {
     dir.join(format!("{mission}.json"))
 }
 
-/// How long a history file whose write failed waits before it is written
-/// again, while nothing new arrives for it.
+/// How long a history or book whose write failed waits before it is
+/// written again, while nothing new arrives for it.
 const RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Deletes and writes what is pending until the store stops, finishing the
-/// work already handed over first. The thread keeps each log it writes, so
-/// an event costs the lock only its pointer. A write that failed keeps its
-/// log in memory and is written again after `RETRY_AFTER`, or with the
-/// mission's next event, so a disk that recovers loses nothing; its failure
-/// is logged once until a write succeeds.
-fn run(shared: &(Mutex<Pending>, Condvar), dir: &Path) {
+/// work already handed over first, then the book (`MissionEventStore`).
+/// The thread keeps each log it writes, so an event costs the lock only
+/// its pointer. A write that failed keeps its log, or the newest book, in
+/// memory and is written again after `RETRY_AFTER`, with the next change,
+/// and once more when the store stops, so a disk that recovers loses
+/// nothing; the book is not written while a history is failing. Each
+/// failure is logged once until a write succeeds. What it holds is one log
+/// per mission and one book, so a failing disk grows nothing.
+fn run(shared: &(Mutex<Pending>, Condvar), dir: &Path, book_path: Option<&Path>) {
     let (lock, wake) = shared;
     let mut logs: HashMap<String, EventLog> = HashMap::new();
     let mut failing: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut book: Option<Arc<crate::missions::MissionBook>> = None;
+    let mut book_failing = false;
+    let mut book_held = false;
     loop {
-        let mut work = {
+        let (mut work, stop) = {
             let mut pending = lock.lock().unwrap_or_else(PoisonError::into_inner);
-            while pending.work.is_empty() && !pending.stop {
-                if failing.is_empty() {
+            while pending.work.is_empty() && pending.book.is_none() && !pending.stop {
+                if failing.is_empty() && book.is_none() {
                     pending = wake.wait(pending).unwrap_or_else(PoisonError::into_inner);
                 } else {
                     let (next, waited) = wake
@@ -501,10 +533,10 @@ fn run(shared: &(Mutex<Pending>, Condvar), dir: &Path) {
             for (id, log) in std::mem::take(&mut pending.restored) {
                 logs.entry(id).or_insert(log);
             }
-            if pending.work.is_empty() && (pending.stop || failing.is_empty()) {
-                return;
+            if let Some(newer) = pending.book.take() {
+                book = Some(newer);
             }
-            std::mem::take(&mut pending.work)
+            (std::mem::take(&mut pending.work), pending.stop)
         };
         // A log whose write failed is written again with this pass.
         for mission in &failing {
@@ -555,7 +587,55 @@ fn run(shared: &(Mutex<Pending>, Condvar), dir: &Path) {
                 }
             }
         }
+        match (&book, book_path) {
+            (Some(_), None) => book = None,
+            (Some(_), Some(_)) if !failing.is_empty() => {
+                if !book_held {
+                    book_held = true;
+                    crate::diagnostic!(json!({
+                        "component": "missions", "kind": "missions.save_held",
+                        "failing": failing.len(),
+                    }));
+                }
+            }
+            (Some(waiting), Some(path)) => {
+                book_held = false;
+                match write_book(path, waiting) {
+                    Ok(()) => {
+                        book = None;
+                        book_failing = false;
+                    }
+                    Err(reason) => {
+                        if !book_failing {
+                            book_failing = true;
+                            crate::diagnostic!(json!({
+                                "component": "missions", "kind": "missions.save_failed",
+                                "path": path.to_string_lossy(), "message": reason,
+                            }));
+                        }
+                    }
+                }
+            }
+            (None, _) => {}
+        }
+        if stop {
+            return;
+        }
     }
+}
+
+fn write_book(path: &Path, book: &Arc<crate::missions::MissionBook>) -> Result<(), String> {
+    let bytes = crate::missions::encode(book)?;
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        hide_platform::fs::private::create_dir_all(parent)
+            .map_err(|error| format!("folder could not be prepared: {error}"))?;
+    }
+    hide_platform::fs::atomic::write_file(path, &bytes, hide_platform::fs::Access::Private)
+        .map(|_| ())
+        .map_err(|error| format!("could not be replaced: {error}"))
 }
 
 fn write(dir: &Path, path: &Path, log: &EventLog) -> Result<(), String> {
@@ -645,6 +725,31 @@ mod tests {
         .unwrap();
         let store = MissionEventStore::new(dir.path().to_path_buf());
         assert!(store.restore(["mission-1"].into_iter()).is_empty());
+    }
+
+    /// B27, review 4 P2-1: the book is written after the histories handed
+    /// over before it, never while one fails, and a failed write is tried
+    /// again when the store stops.
+    #[test]
+    fn the_book_waits_for_a_failing_history_and_both_are_written_once_the_disk_takes_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let history = dir.path().join("mission-events");
+        let book_path = dir.path().join("missions.json");
+        let book = Arc::new(crate::missions::MissionBook::default());
+        std::fs::write(&history, "a file").unwrap();
+        let store = MissionEventStore::with_book(history.clone(), book_path.clone());
+        store.append("mission-1", &[Arc::new(event(1))]);
+        store.save_book(Arc::clone(&book));
+        drop(store);
+        assert!(!book_path.exists(), "the book waits for its history");
+        std::fs::remove_file(&history).unwrap();
+        let store = MissionEventStore::with_book(history.clone(), book_path.clone());
+        store.append("mission-1", &[Arc::new(event(1))]);
+        store.save_book(book);
+        drop(store);
+        assert!(book_path.exists());
+        let restored = MissionEventStore::new(history).restore(["mission-1"].into_iter());
+        assert_eq!(restored["mission-1"].events.len(), 1);
     }
 
     /// B27: an act written again under its key is in the file once, also

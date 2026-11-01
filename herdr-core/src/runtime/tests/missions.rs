@@ -5448,6 +5448,104 @@ fn the_same_facts_evaluated_twice_write_one_event_and_one_letter() {
     assert_eq!(raised, 1);
 }
 
+/// PRD mission-node-simple B27, review 4 P2-1: a raise that reaches the
+/// operator, written by the missions' one writer to real files, is in the
+/// history once across a restart whichever save failed: a book that failed
+/// after its history is made again under the same keys, and a history that
+/// failed holds the book back, so no restart reads a change its history
+/// lost.
+#[test]
+fn a_raise_to_the_operator_is_in_the_history_once_whichever_save_failed_before_a_restart() {
+    use crate::mission_events::{EventKind, MissionEventStore};
+    use crate::missions::{AttentionReason, MissionStore, Restored};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running(&mut runtime);
+    let before = runtime.missions.book.clone();
+    let dir = tempfile::tempdir().unwrap();
+    let history = dir.path().join("mission-events");
+    let book = dir.path().join("state/missions.json");
+    let start = |runtime: &mut Runtime| {
+        let store = MissionEventStore::with_book(history.clone(), book.clone());
+        let logs = store.restore(["mission-1"].into_iter());
+        runtime.install_mission_events(store, logs);
+    };
+    // One evaluation: the Conductor is asked, and ten minutes later the
+    // operator.
+    let evaluate = |runtime: &mut Runtime, now: u64| {
+        let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+        let events = crate::runtime::mission_health::raise(
+            mission,
+            "fix",
+            AttentionReason::PrClosed,
+            Some(7),
+            now,
+        );
+        runtime.record_mission_events("mission-1", events);
+        runtime.raise_to_operator(now + 10 * 60 * 1000);
+    };
+    let stop = |runtime: &mut Runtime| drop(runtime.missions.event_store.take());
+    let written = || {
+        let log = MissionEventStore::new(history.clone()).restore(["mission-1"].into_iter());
+        let count = |kind: EventKind| {
+            log.get("mission-1").map_or(0, |log| {
+                log.events.iter().filter(|event| event.kind == kind).count()
+            })
+        };
+        (count(EventKind::Raised), count(EventKind::RaisedToOperator))
+    };
+    let saved_book = || match MissionStore::new(book.clone()).restore() {
+        Restored::Read(book) => Some(book),
+        _ => None,
+    };
+
+    // The book cannot be written (a file stands where its folder goes);
+    // the history is written first and stays.
+    std::fs::write(dir.path().join("state"), "a file").unwrap();
+    start(&mut runtime);
+    evaluate(&mut runtime, 1_000);
+    stop(&mut runtime);
+    assert_eq!(written(), (1, 1));
+    assert!(saved_book().is_none());
+    // A restart reads the book from before the raise and makes it again,
+    // later: the history keeps one of each, and the book is written now.
+    std::fs::remove_file(dir.path().join("state")).unwrap();
+    runtime.missions.book = before.clone();
+    start(&mut runtime);
+    evaluate(&mut runtime, 5_000);
+    stop(&mut runtime);
+    assert_eq!(written(), (1, 1));
+    let saved = saved_book().expect("the book is written once its folder can be");
+    let attention = saved
+        .get("mission-1")
+        .unwrap()
+        .nodes
+        .iter()
+        .find(|node| node.key == "fix")
+        .and_then(|node| node.attention.clone());
+    assert!(attention.is_some_and(|attention| attention.operator_at_unix_ms.is_some()));
+
+    // The other order: the history cannot be written, so the book waits
+    // and the restart finds neither.
+    std::fs::remove_dir_all(&history).unwrap();
+    std::fs::remove_file(&book).unwrap();
+    std::fs::write(&history, "a file").unwrap();
+    runtime.missions.book = before.clone();
+    runtime.missions.events.clear();
+    start(&mut runtime);
+    evaluate(&mut runtime, 9_000);
+    stop(&mut runtime);
+    assert!(saved_book().is_none(), "the book waits for its history");
+    std::fs::remove_file(&history).unwrap();
+    runtime.missions.book = before;
+    runtime.missions.events.clear();
+    start(&mut runtime);
+    evaluate(&mut runtime, 12_000);
+    stop(&mut runtime);
+    assert_eq!(written(), (1, 1));
+    assert!(saved_book().is_some());
+}
+
 /// PRD mission-node-simple B27: a node that cannot remember a new cause
 /// does not raise it either, so nothing is raised that would come again
 /// once settled; what it already remembers stays.

@@ -197,12 +197,13 @@ impl Runtime {
         self.missions.events_edit = self.missions.events_edit.wrapping_add(1);
     }
 
-    /// Saves the book with the change `events` record, then adds them to
-    /// `mission`'s history (`stage_mission_events`). Every change is saved
-    /// here, events or none.
+    /// Adds `events` to `mission`'s history (`stage_mission_events`), then
+    /// saves the book with the change they record, so the writer has the
+    /// history before the book (B27). Every change is saved here, events or
+    /// none.
     pub(crate) fn record_mission_events(&mut self, mission: &str, events: Vec<MissionEvent>) {
-        self.save_missions();
         self.stage_mission_events(mission, events);
+        self.save_missions();
     }
 
     /// Adds `events` to `mission`'s history and hands them to the store. An

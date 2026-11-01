@@ -310,6 +310,17 @@ pub(super) fn prune_attention_wakes(mission: &mut Mission) {
     });
 }
 
+/// Who a mission's raises are asked of first, as a reaching of the
+/// operator's key names it: the Conductor's agent, else its session, else
+/// its pane.
+fn conductor_identity(conductor: &crate::missions::Conductor) -> String {
+    conductor
+        .agent_id
+        .clone()
+        .or_else(|| conductor.actor.session.clone())
+        .unwrap_or_else(|| format!("{}/{}", conductor.actor.device_id, conductor.actor.pane_id))
+}
+
 /// The key of one of Hide's acts on `node` (B27): the node, its work
 /// round and what the act stands on. The same facts evaluated again make
 /// the same key, which the history writes once and which names the act's
@@ -482,16 +493,15 @@ impl Runtime {
             // worktree check raises goes to the operator at once.
             let present = mission.status.open() && self.conductor_present(&mission.conductor.actor);
             let mission = &mut self.missions.book.missions[index];
+            let asked = conductor_identity(&mission.conductor);
             let mut events = Vec::new();
             for node in &mut mission.nodes {
-                // The raise and when it was made name its reaching the
-                // operator, so a raise asked again of a new Conductor
-                // reaches them as its own act (B27).
+                // The raise's cause and round and the Conductor it was asked
+                // of name its reaching the operator: the same raise read
+                // again after a restart makes the same key, and one asked
+                // again of a Conductor that took over is its own act (B27).
                 let Some(key) = node.attention.as_ref().map(|attention| {
-                    act_key(
-                        node,
-                        &format!("operator:{}:{}", attention.cause(), attention.since_unix_ms),
-                    )
+                    act_key(node, &format!("operator:{}:{asked}", attention.cause()))
                 }) else {
                     continue;
                 };

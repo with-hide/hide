@@ -836,8 +836,8 @@ impl Runtime {
         if self.missions.unreadable.is_some() {
             return;
         }
-        if let Some(store) = &self.missions.store {
-            store.save(&self.missions.book);
+        if let Some(store) = &self.missions.event_store {
+            store.save_book(Arc::new(self.missions.book.clone()));
         }
     }
 

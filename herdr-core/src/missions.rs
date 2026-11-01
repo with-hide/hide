@@ -26,7 +26,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::delivery::Actor;
-use crate::latest_file::{LatestFile, read_capped};
+use crate::latest_file::read_capped;
 use crate::mission_criteria::{CheckInput, Criterion};
 
 const SCHEMA_VERSION: u32 = 3;
@@ -2253,7 +2253,7 @@ struct Stored {
     book: MissionBook,
 }
 
-fn encode(book: &Arc<MissionBook>) -> Result<Vec<u8>, String> {
+pub(crate) fn encode(book: &Arc<MissionBook>) -> Result<Vec<u8>, String> {
     serde_json::to_vec(&Stored {
         schema_version: SCHEMA_VERSION,
         book: MissionBook::clone(book),
@@ -2488,23 +2488,16 @@ pub(crate) enum Restored {
     Unreadable(String),
 }
 
+/// Where the book lives and how it is read at launch; it is written by the
+/// missions' one writer, after the histories it goes with
+/// (`mission_events::MissionEventStore`).
 pub(crate) struct MissionStore {
     path: PathBuf,
-    file: LatestFile<Arc<MissionBook>>,
 }
 
 impl MissionStore {
     pub(crate) fn new(path: PathBuf) -> Self {
-        Self {
-            file: LatestFile::new(
-                path.clone(),
-                "hide-mission-save",
-                "missions",
-                "missions",
-                encode,
-            ),
-            path,
-        }
+        Self { path }
     }
 
     /// Reads the book at launch, before the runtime lock is taken. A schema
@@ -2555,10 +2548,6 @@ impl MissionStore {
         outcome
             .map(|_| ())
             .map_err(|error| format!("could not keep its copy before conversion: {error}"))
-    }
-
-    pub(crate) fn save(&self, book: &MissionBook) {
-        self.file.save(Arc::new(book.clone()));
     }
 
     pub(crate) fn path(&self) -> &std::path::Path {
