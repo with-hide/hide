@@ -49,12 +49,16 @@ __hide_restore() {
 }
 
 # Runs before the first prompt, after every startup file and anything they
-# asked: Herdr keeps the mark on the pane, where Hide reads it.
+# asked: Herdr keeps the mark on the pane, where Hide reads it; outside a
+# Herdr pane the shell marks its prompt on the screen (OSC 133;A), which the
+# pane's holder counts, with a builtin and no process.
 __hide_first_prompt() {
   add-zsh-hook -d precmd __hide_first_prompt
   builtin unfunction __hide_first_prompt
   if [[ -n ${HERDR_BIN_PATH-} && -n ${HERDR_PANE_ID-} ]]; then
     "$HERDR_BIN_PATH" pane report-metadata "$HERDR_PANE_ID" --source hide:shell --token hide_prompt=1 >/dev/null 2>&1
+  else
+    builtin printf '\033]133;A\007'
   fi
 }
 

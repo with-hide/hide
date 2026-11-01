@@ -3,10 +3,13 @@
 # --init-file naming this file, which bash reads in place of ~/.bashrc
 # (after the system's bashrc where bash was built to read one), so it reads
 # ~/.bashrc here. Then the shell tells Herdr it has finished starting, which
-# is when Hide may type.
+# is when Hide may type; outside a Herdr pane it marks its prompt on the
+# screen (OSC 133;A) for the pane's holder, with a builtin and no process.
 if [ -r "$HOME/.bashrc" ]; then
   . "$HOME/.bashrc"
 fi
 if [ -n "${HERDR_BIN_PATH-}" ] && [ -n "${HERDR_PANE_ID-}" ]; then
   "$HERDR_BIN_PATH" pane report-metadata "$HERDR_PANE_ID" --source hide:shell --token hide_prompt=1 >/dev/null 2>&1
+else
+  builtin printf '\033]133;A\007'
 fi

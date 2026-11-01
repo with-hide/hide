@@ -18,4 +18,6 @@ elif [ -r "$HOME/.profile" ]; then
 fi
 if [ -n "${HERDR_BIN_PATH-}" ] && [ -n "${HERDR_PANE_ID-}" ]; then
   "$HERDR_BIN_PATH" pane report-metadata "$HERDR_PANE_ID" --source hide:shell --token hide_prompt=1 >/dev/null 2>&1
+else
+  builtin printf '\033]133;A\007'
 fi
