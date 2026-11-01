@@ -929,8 +929,10 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 name = "hide-agent-adapter"
 version = "0.1.0"
 dependencies = [
+ "hide-screen-rules",
  "serde",
  "serde_json",
+ "toml",
  "workspace-hack",
 ]
 
@@ -1155,6 +1157,15 @@ dependencies = [
  "sha2",
  "tempfile",
  "workspace-hack",
+]
+
+[[package]]
+name = "hide-screen-rules"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "serde",
+ "toml",
 ]
 
 [[package]]
@@ -2438,6 +2449,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_spanned"
+version = "1.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e7523beb55eece201a2356bee0bbca0d1ab466c14c07703b2e0ee6d42cb0c2c"
+dependencies = [
+ "serde_core",
+]
+
+[[package]]
 name = "serde_tokenstream"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2797,6 +2817,21 @@ dependencies = [
  "log",
  "tokio",
  "tungstenite 0.30.0",
+]
+
+[[package]]
+name = "toml"
+version = "1.1.4+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3aace63f4bbcdfc2c965b059de67119c89c4017a70d633be6c104910f67056f5"
+dependencies = [
+ "indexmap 2.14.2",
+ "serde_core",
+ "serde_spanned",
+ "toml_datetime",
+ "toml_parser",
+ "toml_writer",
+ "winnow",
 ]
 
 [[package]]
@@ -3578,6 +3613,8 @@ dependencies = [
  "once_cell",
  "proc-macro2",
  "quote",
+ "regex-automata",
+ "regex-syntax",
  "rusqlite",
  "rustix",
  "schemars 0.8.22",
@@ -3590,9 +3627,13 @@ dependencies = [
  "syn 2.0.119",
  "syn 3.0.4",
  "tokio",
+ "toml_datetime",
+ "toml_parser",
+ "toml_writer",
  "tracing",
  "typenum",
  "windows-sys 0.61.2",
+ "winnow",
 ]
 
 [[package]]

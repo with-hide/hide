@@ -115,6 +115,12 @@ enum Command {
         report: hide_node_link::panes::HookStatusReport,
         reply: Sender<Result<(), &'static str>>,
     },
+    /// A read of the operator's agent definition folder, made off the owner
+    /// thread with the development switch on.
+    AgentDefinitions {
+        home: std::path::PathBuf,
+        read: Result<hide_agent_adapter::definition::Catalog, String>,
+    },
     AgentCatalog {
         device_id: String,
         machine: Option<String>,
@@ -267,6 +273,11 @@ pub struct CoreHandle {
     /// The core's state folder, which holds the Hide global instruction a
     /// session start reads without the owner thread.
     state_dir: std::path::PathBuf,
+    /// The home whose agent definition folder is read at start and on each
+    /// `hide agent catalog`, with the development switch
+    /// (`crate::env::HIDE_DEV_PANE_HOLDER`) on only; `None` reads nothing
+    /// (PRD engine-bundle-3-core-owns B1, D-17).
+    definitions_home: Option<std::path::PathBuf>,
     /// This machine's engine, the same one the core holds: a pane's proof
     /// and a phone's read ask it without the owner thread or the runtime
     /// lock. `None` when the daemon runs without a Herdr server.
@@ -578,6 +589,8 @@ impl CoreHandle {
         device: &str,
         machine: Option<String>,
     ) -> Result<serde_json::Value, String> {
+        // A file the operator edited is read on this ask.
+        self.read_agent_definitions();
         let deadline = std::time::Instant::now() + CATALOG_WAIT;
         loop {
             let timed_out = std::time::Instant::now() >= deadline;
@@ -588,6 +601,19 @@ impl CoreHandle {
             std::thread::sleep(
                 CATALOG_POLL.min(deadline.saturating_duration_since(std::time::Instant::now())),
             );
+        }
+    }
+
+    /// Read the operator's agent definition folder here, off the owner
+    /// thread and the runtime lock, and hand the result to the core; nothing
+    /// with the development switch off.
+    fn read_agent_definitions(&self) {
+        if let Some(home) = &self.definitions_home {
+            let read = hide_kit::agent_definitions::read(home);
+            let _ = self.commands.send(Command::AgentDefinitions {
+                home: home.clone(),
+                read,
+            });
         }
     }
 
@@ -775,6 +801,14 @@ impl CoreHandle {
             .parent()
             .unwrap_or(std::path::Path::new("."))
             .to_path_buf();
+        let definitions_home = match crate::env::pane_holder_switch()? {
+            hide_node::terminal::holder::Switch::Off => None,
+            hide_node::terminal::holder::Switch::On => Some(match options.home.as_ref() {
+                Some(home) => std::path::PathBuf::from(home),
+                None => hide_platform::host::home_dir()
+                    .map_err(|error| format!("agent definitions need a home folder: {error}"))?,
+            }),
+        };
         let (command_tx, command_rx) = mpsc::channel::<Command>();
         let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
         let (notify_tx, _) = broadcast::channel(32);
@@ -816,7 +850,7 @@ impl CoreHandle {
         ready_rx
             .recv()
             .map_err(|_| "core owner thread exited before ready".to_owned())??;
-        Ok(Self {
+        let handle = Self {
             node,
             commands: command_tx,
             notify: notify_tx,
@@ -824,9 +858,12 @@ impl CoreHandle {
             hub,
             outputs,
             state_dir,
+            definitions_home,
             engine,
             running: Mutex::new(Some(Running { thread, local })),
-        })
+        };
+        handle.read_agent_definitions();
+        Ok(handle)
     }
 
     /// The core's input gate (`herdr_core::input_gate`), which a writer that
@@ -1418,6 +1455,7 @@ fn owner_loop(
             } => {
                 let _ = reply.send(core.hook_status(&device_id, &pane_id, &report));
             }
+            Command::AgentDefinitions { home, read } => core.set_agent_definitions(home, read),
             Command::AgentCatalog {
                 device_id,
                 machine,

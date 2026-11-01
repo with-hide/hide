@@ -1,0 +1,60 @@
+# The [screen] rules are Herdr v0.9.5's agent detection manifest for this agent
+# (https://github.com/herdrdev/herdr, commit 2ecf19a, src/detect/manifests/droid.toml).
+# Copyright 2025 herdr contributors. Licensed under the Apache License,
+# Version 2.0; see NOTICE at the repository root.
+# Changed by Hide: the manifest's id and aliases became this file's identity
+# and its version, engine and rules moved under [screen], unchanged.
+schema = 1
+id = "droid"
+name = "Droid"
+executables = ["droid"]
+hooks = "none"
+
+[screen]
+version = "2026.06.10.1"
+min_engine_version = 1
+updated_at = "2026-06-10T00:00:00Z"
+
+[[screen.rules]]
+id = "execute_selection_blocker"
+state = "blocked"
+priority = 300
+region = "whole_recent"
+visible_blocker = true
+contains = ["enter to select", "esc to cancel"]
+any = [
+  { contains = ["↑↓ to navigate"] },
+  { contains = ["use ↑↓ to navigate"] },
+]
+all = [
+  { any = [{ contains = ["> yes, allow"] }, { contains = ["> no, cancel"] }] },
+]
+
+[[screen.rules]]
+id = "selection_menu_blocker"
+state = "blocked"
+priority = 290
+region = "bottom_non_empty_lines(8)"
+visible_blocker = true
+contains = ["enter select", "esc cancel"]
+any = [
+  { contains = ["↑/↓ navigate"] },
+  { contains = ["↑↓ navigate"] },
+]
+
+[[screen.rules]]
+id = "spinner_stop_working"
+state = "working"
+priority = 110
+region = "whole_recent"
+visible_working = true
+contains = ["esc to stop"]
+line_regex = ['^\s*[\u2800-\u28FF]']
+
+[[screen.rules]]
+id = "stop_hint_working"
+state = "working"
+priority = 100
+region = "whole_recent"
+visible_working = true
+contains = ["esc to stop"]

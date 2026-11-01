@@ -1,0 +1,88 @@
+# The [screen] rules are Herdr v0.9.5's agent detection manifest for this agent
+# (https://github.com/herdrdev/herdr, commit 2ecf19a, src/detect/manifests/kimi.toml).
+# Copyright 2025 herdr contributors. Licensed under the Apache License,
+# Version 2.0; see NOTICE at the repository root.
+# Changed by Hide: the manifest's id and aliases became this file's identity
+# and its version, engine and rules moved under [screen], unchanged.
+schema = 1
+id = "kimi"
+name = "Kimi Code"
+executables = ["kimi", "kimi-code", "kimi code"]
+hooks = "none"
+
+[screen]
+version = "2026.06.10.1"
+min_engine_version = 1
+updated_at = "2026-06-10T00:00:00Z"
+
+[[screen.rules]]
+id = "current_approval_panel"
+state = "blocked"
+priority = 400
+region = "whole_recent"
+visible_blocker = true
+contains = ["↵ confirm"]
+any = [
+  { contains = ["run this command?"] },
+  { contains = ["write this file?"] },
+  { contains = ["apply these edits?"] },
+  { contains = ["stop this task?"] },
+  { contains = ["ready to build with this plan?"] },
+  { line_regex = ['(?i)^\s*▶?\s*approve .*\?$'] },
+]
+all = [
+  { contains = [" choose"] },
+  { any = [{ contains = ["approve"] }, { contains = ["reject"] }, { contains = ["revise"] }] },
+]
+
+[[screen.rules]]
+id = "question_panel"
+state = "blocked"
+priority = 390
+region = "whole_recent"
+visible_blocker = true
+contains = ["↑↓ select", "esc cancel"]
+line_regex = ['^\s*question\s*$', '^\s*\? ']
+any = [
+  { contains = ["↵ choose"] },
+  { contains = ["↵ toggle"] },
+  { contains = ["↵ save"] },
+]
+
+[[screen.rules]]
+id = "legacy_approval_panel"
+state = "blocked"
+priority = 300
+region = "whole_recent"
+contains = ["requesting approval", "reject"]
+any = [
+  { contains = ["approve once"] },
+  { contains = ["approve for this session"] },
+]
+all = [
+  { any = [{ contains = ["1/2/3/4 choose"] }, { contains = ["↵ confirm"] }] },
+]
+
+[[screen.rules]]
+id = "background_agent_status_working"
+state = "working"
+priority = 120
+region = "bottom_non_empty_lines(3)"
+visible_working = true
+line_regex = ['(?i)\bkimi[-\w.]*\s+thinking\b.*\[[1-9][0-9]*\s+agents?\s+running\]']
+
+[[screen.rules]]
+id = "moon_spinner_working"
+state = "working"
+priority = 100
+region = "whole_recent"
+visible_working = true
+line_regex = ['^\s*(🌕|🌖|🌗|🌘|🌑|🌒|🌓|🌔)\s*$']
+
+[[screen.rules]]
+id = "braille_spinner_working"
+state = "working"
+priority = 90
+region = "whole_recent"
+visible_working = true
+line_regex = ['(?i)^\s*[\u2800-\u28FF]+\s*(thinking\.\.\.|working\.\.\.|using )']

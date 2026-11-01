@@ -1,0 +1,103 @@
+# The [screen] rules are Herdr v0.9.5's agent detection manifest for this agent
+# (https://github.com/herdrdev/herdr, commit 2ecf19a, src/detect/manifests/muse.toml).
+# Copyright 2025 herdr contributors. Licensed under the Apache License,
+# Version 2.0; see NOTICE at the repository root.
+# Changed by Hide: the manifest's id and aliases became this file's identity
+# and its version, engine and rules moved under [screen], unchanged.
+schema = 1
+id = "muse"
+name = "Muse"
+executables = ["muse", "muse-code", "muse-cli"]
+hooks = "none"
+
+[screen]
+version = "2026.08.26.1"
+min_engine_version = 2
+updated_at = "2026-08-26T00:00:00Z"
+
+[[screen.rules]]
+id = "workspace_trust_blocked"
+state = "blocked"
+priority = 970
+region = "bottom_non_empty_lines(12)"
+visible_blocker = true
+contains = ["Do you trust this workspace?"]
+any = [
+  { contains = ["Trust and continue"] },
+  { contains = ["Use Up/Down"] },
+]
+
+[[screen.rules]]
+id = "pick_request_blocked"
+state = "blocked"
+priority = 950
+region = "bottom_non_empty_lines(8)"
+visible_blocker = true
+any = [
+  { contains = ["Enter to select", "Tab for an optional note"] },
+  { contains = ["Enter to toggle", "Esc to interrupt"] },
+]
+
+[[screen.rules]]
+id = "menu_overlay"
+state = "unknown"
+priority = 940
+region = "bottom_non_empty_lines(8)"
+skip_state_update = true
+any = [
+  { contains = ["enter confirm", "esc go back"] },
+  { contains = ["enter save", "esc go back"] },
+  { contains = ["space toggle", "esc close", "type filter"] },
+]
+
+[[screen.rules]]
+id = "working_esc_interrupt"
+state = "working"
+priority = 900
+region = "bottom_non_empty_lines(8)"
+visible_working = true
+contains = ["esc to interrupt"]
+not = [
+  { contains = ["Enter to select", "Tab for an optional note"] },
+  { contains = ["Enter to toggle", "Esc to interrupt"] },
+]
+
+[[screen.rules]]
+id = "blocked_approval"
+state = "blocked"
+priority = 850
+region = "bottom_non_empty_lines(8)"
+visible_blocker = true
+any = [
+  { contains = ["Allow this stage once", "Always allow in this workspace"] },
+  { contains = ["Allow once", "Allow for this session"] },
+  { contains = ["Yes, proceed", "Yes, don't ask again this session"] },
+]
+
+[[screen.rules]]
+id = "idle_prompt"
+state = "idle"
+priority = 700
+region = "bottom_non_empty_lines(5)"
+visible_idle = true
+any = [
+  { line_regex = ['^\s*⟩\s*$'] },
+  { line_regex = ['^\s*⟩\s+\S'] },
+]
+not = [
+  { contains = ["esc to interrupt"] },
+  { contains = ["Enter to select", "Tab for an optional note"] },
+  { contains = ["Enter to toggle", "Esc to interrupt"] },
+  { contains = ["enter confirm", "esc go back"] },
+  { contains = ["enter save", "esc go back"] },
+  { contains = ["space toggle", "esc close", "type filter"] },
+]
+
+[[screen.rules]]
+id = "idle_status_fallback"
+state = "idle"
+priority = 500
+region = "bottom_non_empty_lines(3)"
+visible_idle = true
+line_regex = ['^\s*\S+ · (none|minimal|low|medium|high|xhigh|ultra) · ']
+not = [{ contains = ["esc to interrupt"] }]

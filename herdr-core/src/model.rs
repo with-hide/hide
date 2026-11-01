@@ -6833,6 +6833,29 @@ pub struct StatusSnapshot {
     /// The latest 마무리 맡기기 presses, oldest first and bounded, so a 흘린
     /// 것 row reads its own (PRD project-panel-results B12, B13).
     pub stray_hand_offs: Vec<StrayHandOffSnapshot>,
+    /// The operator's agent definition files that were left out, each with
+    /// why (PRD engine-bundle-3-core-owns D-17, B24): Settings › Agents draws
+    /// one dimmed line for each. `None` while the development switch
+    /// `HIDE_DEV_PANE_HOLDER` is off, which reads no definition file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_definitions: Option<AgentDefinitionsSnapshot>,
+}
+
+/// What the last read of the operator's agent definition folder left out.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct AgentDefinitionsSnapshot {
+    /// Each file left out, in the folder's name order.
+    pub rejected: Vec<RejectedDefinitionSnapshot>,
+    /// The folder itself could not be listed, so only the built-in agents
+    /// are known; the reason in one line.
+    pub unreadable: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct RejectedDefinitionSnapshot {
+    pub file: String,
+    /// One line that starts with the file's name.
+    pub reason: String,
 }
 
 /// The concrete Host entries of the account's `~/.ssh/config`, as Add device
@@ -7576,6 +7599,7 @@ impl Snapshot {
                 pane_focus_request: None,
                 browser_opens: Vec::new(),
                 stray_hand_offs: Vec::new(),
+                agent_definitions: None,
                 server_discovery: ServerDiscoverySnapshot {
                     loading: true,
                     failure: None,

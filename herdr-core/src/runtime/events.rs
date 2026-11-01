@@ -1303,6 +1303,11 @@ pub(super) struct KitCheckPayload {}
 #[derive(Debug, Deserialize)]
 pub(super) struct SshHostsListPayload {}
 
+/// Settings › Agents opened: the operator's agent definition folder is read
+/// again, with the development switch on only (`status.agent_definitions`).
+#[derive(Debug, Deserialize)]
+pub(super) struct AgentDefinitionsReadPayload {}
+
 #[derive(Debug, Deserialize)]
 pub(super) struct HerdrProfilesListPayload {}
 
@@ -1724,6 +1729,7 @@ pub(super) enum Event {
     CodexDaemonDisable(CodexDaemonDisablePayload),
     KitCheck(KitCheckPayload),
     SshHostsList(SshHostsListPayload),
+    AgentDefinitionsRead(AgentDefinitionsReadPayload),
     HerdrProfilesList(HerdrProfilesListPayload),
     HerdrProfileConnect(HerdrProfileConnectPayload),
     UiAttached(UiAttachedPayload),
@@ -2070,6 +2076,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "codex_daemon_disable" => decode!(CodexDaemonDisablePayload, CodexDaemonDisable),
         "kit_check" => decode!(KitCheckPayload, KitCheck),
         "ssh_hosts_list" => decode!(SshHostsListPayload, SshHostsList),
+        "agent_definitions_read" => decode!(AgentDefinitionsReadPayload, AgentDefinitionsRead),
         "herdr_profiles_list" => decode!(HerdrProfilesListPayload, HerdrProfilesList),
         "herdr_profile_connect" => decode!(HerdrProfileConnectPayload, HerdrProfileConnect),
         "ui_attached" => decode!(UiAttachedPayload, UiAttached),
@@ -2497,6 +2504,7 @@ impl Runtime {
             ),
             Event::KitCheck(_) => self.request_kit_check(),
             Event::SshHostsList(_) => self.request_ssh_hosts(),
+            Event::AgentDefinitionsRead(_) => self.request_agent_definitions(),
             Event::HerdrProfilesList(_) => self.request_herdr_profiles(),
             Event::HerdrProfileConnect(payload) => {
                 self.connect_herdr_profile(&payload.profile_id, payload.host_consent)
