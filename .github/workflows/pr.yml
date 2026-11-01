@@ -293,6 +293,8 @@ jobs:
         # agent_start/real_herdr_tests.rs: zsh, bash and fish tabs on the
         # pinned Herdr started with the integration, whose startup file asks
         # a one-key question no start may answer. herdr-core's
+        # engine/own/shell_line.rs: zsh, bash and fish run the resume line
+        # the core's own engine types after a reboot. herdr-core's
         # engine/contract.rs: the pinned Herdr, and the core's own engine over
         # pane holders started from the built holder, meet the engine contract.
         if: ${{ !cancelled() && (env.FULL == 'true' || contains(fromJSON(env.PACKAGES), 'herdr-core') || contains(fromJSON(env.PACKAGES), 'hide-host')) }}
@@ -303,7 +305,7 @@ jobs:
           export HIDE_E2E_HERDR_BIN=$(zsh scripts/fetch-herdr-runtime.sh --platform linux-x86_64)
           bash scripts/verify-cargo.sh build -p hide-holder --bin hide-holder
           export HIDE_TEST_HOLDER_BIN=$PWD/target/debug/hide-holder
-          bash scripts/verify-cargo.sh nextest --profile ci -p hide-host -p herdr-core --lib -E 'test(/^shell_integration::real_shell_tests::/) | test(/^agent_start::real_herdr_tests::/) | test(/^engine::contract::/)' --run-ignored only --no-capture
+          bash scripts/verify-cargo.sh nextest --profile ci -p hide-host -p herdr-core --lib -E 'test(/^shell_integration::real_shell_tests::/) | test(/^engine::own::shell_line::real_shell_tests::/) | test(/^agent_start::real_herdr_tests::/) | test(/^engine::contract::/)' --run-ignored only --no-capture
       - name: Mint the development issues token
         # Development issues live in with-hide/hide-private (docs/TESTING.md,
         # Flaky tests); one App token reads this run here and files there. A run

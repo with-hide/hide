@@ -65,19 +65,15 @@ pub(super) fn definition<'c>(catalog: &'c Catalog, kind: &str) -> Option<&'c Def
     })
 }
 
-/// The definition whose `executables` name `program`.
+/// The definition whose `executables` name `program`, by the name its
+/// holder gave it (`hide_holder::foreground::program_name`: its first
+/// argument's file name, or the script a runtime runs).
 fn recognized<'c>(catalog: &'c Catalog, program: &ForegroundProgram) -> Option<&'c Definition> {
-    // A program that renamed itself (a runtime's `process.title`) says its
-    // name in its first argument.
-    let renamed = program.argv.first().map(|first| {
-        let name = first.rsplit(['/', '\\']).next().unwrap_or(first);
-        name.strip_suffix(".exe").unwrap_or(name)
-    });
     catalog.definitions.iter().find(|definition| {
-        definition.executables.iter().any(|executable| {
-            executable.eq_ignore_ascii_case(&program.name)
-                || renamed.is_some_and(|name| executable.eq_ignore_ascii_case(name))
-        })
+        definition
+            .executables
+            .iter()
+            .any(|executable| executable.eq_ignore_ascii_case(&program.name))
     })
 }
 
@@ -529,10 +525,9 @@ mod tests {
     }
 
     /// An agent run by a runtime under another name: pi's npm build runs as
-    /// `node …/dist/bundle/cli.js`, which the holder names `cli`, and a
-    /// program that renamed itself says its name in its first argument.
+    /// `node …/dist/bundle/cli.js`, which the holder names `cli`.
     #[test]
-    fn a_started_agent_is_whatever_its_start_runs_and_a_renamed_program_is_known_by_its_argv() {
+    fn a_started_agent_is_whatever_its_start_runs() {
         let mut pane = Pane::new();
         pane.agent = Some(PaneAgent::started("pi", Some("worker"), None));
         pane.facts(PaneFacts {
@@ -554,15 +549,6 @@ mod tests {
             pane.agent.is_none(),
             "an unnamed program is no agent of its own"
         );
-        pane.facts(PaneFacts {
-            foreground: Some(ForegroundProgram {
-                pid: 8,
-                name: "node".to_owned(),
-                argv: vec!["/usr/local/bin/gemini".to_owned()],
-            }),
-            ..PaneFacts::default()
-        });
-        assert_eq!(pane.agent.as_ref().unwrap().kind, "gemini");
     }
 
     #[test]

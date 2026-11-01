@@ -9,9 +9,10 @@
 // Version 2.0; see NOTICE at the repository root.
 // Changed by Hide: one module for the line the own engine types into a
 // pane's shell; the shell is told by its name, PowerShell's or a POSIX
-// shell's, with no cmd.exe form, since the own engine's panes run one of
-// those; a resume line can say, when the agent ended with a failure, how it
-// ended; the Windows title prefix is dropped on every system.
+// shell's, and cmd.exe is given no line, since the own engine's panes run
+// PowerShell on Windows; a resume line says, when the agent ended with a
+// failure, that it did, in a form zsh, bash, fish and PowerShell all read;
+// the Windows title prefix is dropped on every system.
 
 //! The line the core's own engine types into a pane's shell to start an
 //! agent (PRD engine-bundle-3-core-owns D-4, D-16): the agent's program and
@@ -28,19 +29,22 @@ pub(super) enum Shell {
 impl Shell {
     /// The shell a pane's program name says, or this system's own when the
     /// name is unknown: the own engine starts PowerShell on Windows and a
-    /// POSIX shell elsewhere.
-    pub(super) fn of(name: Option<&str>) -> Self {
-        let powershell = |name: &str| {
-            let name = name.rsplit(['/', '\\']).next().unwrap_or(name);
-            let name = name.trim_start_matches('-').to_ascii_lowercase();
-            let name = name.strip_suffix(".exe").unwrap_or(&name);
-            matches!(name, "pwsh" | "powershell")
+    /// POSIX shell elsewhere. cmd.exe reads neither line, so it has none: a
+    /// pane a caller made run it takes no start.
+    pub(super) fn of(name: Option<&str>) -> Option<Self> {
+        let Some(name) = name else {
+            return Some(if cfg!(windows) {
+                Self::PowerShell
+            } else {
+                Self::Posix
+            });
         };
-        match name {
-            Some(name) if powershell(name) => Self::PowerShell,
-            Some(_) => Self::Posix,
-            None if cfg!(windows) => Self::PowerShell,
-            None => Self::Posix,
+        let name = name.rsplit(['/', '\\']).next().unwrap_or(name);
+        let name = name.trim_start_matches('-').to_ascii_lowercase();
+        match name.strip_suffix(".exe").unwrap_or(&name) {
+            "pwsh" | "powershell" => Some(Self::PowerShell),
+            "cmd" => None,
+            _ => Some(Self::Posix),
         }
     }
 }
@@ -59,10 +63,11 @@ pub(super) fn command(argv: &[String], shell: Shell) -> Option<String> {
 }
 
 /// A resume of `argv` typed into `shell`, which says, when the agent ends
-/// with a failure, that this pane is a shell now and how the agent ended:
-/// true both of a resume that could not open the conversation and of an
-/// agent that ran and then ended with a failure (PRD D-7, B13). An agent that
-/// ends cleanly prints nothing.
+/// with a failure, that it did and that this pane is a shell now: true both
+/// of a resume that could not open the conversation and of an agent that ran
+/// and then ended with a failure (PRD D-7, B13). An agent that ends cleanly
+/// prints nothing. The POSIX line names no exit code, which zsh and bash
+/// spell `$?` and fish refuses to read, so one line serves all three.
 pub(super) fn resume_command(argv: &[String], agent: &str, shell: Shell) -> Option<String> {
     let (program, args) = argv.split_first()?;
     let agent: String = agent
@@ -71,7 +76,7 @@ pub(super) fn resume_command(argv: &[String], agent: &str, shell: Shell) -> Opti
         .collect();
     Some(match shell {
         Shell::Posix => format!(
-            "{} || printf 'hide: %s ended with exit code %s after its resume; this pane is a shell now.\\n' {} \"$?\"",
+            "{} || printf 'hide: %s ended with a failure after its resume; this pane is a shell now.\\n' {}",
             command(argv, shell)?,
             posix_quote(&agent)
         ),
@@ -83,7 +88,7 @@ pub(super) fn resume_command(argv: &[String], agent: &str, shell: Shell) -> Opti
                 // The name is a string literal here, never a bare word,
                 // which an expression would run as a command; the filter
                 // above leaves no apostrophe in it.
-                "if({script}){{& {program} {powershell_args}; $hideExit = $LASTEXITCODE}}else{{$hideExit = ({process} -PassThru).ExitCode}}; if ($hideExit) {{ Write-Host ('hide: {agent} ended with exit code ' + $hideExit + ' after its resume; this pane is a shell now.') }}",
+                "if({script}){{& {program} {powershell_args}; $hideExit = $LASTEXITCODE}}else{{$hideExit = ({process} -PassThru).ExitCode}}; if ($hideExit) {{ Write-Host 'hide: {agent} ended with a failure after its resume; this pane is a shell now.' }}",
                 program = powershell_quote(program),
                 powershell_args = powershell_args(args),
             )
@@ -292,19 +297,24 @@ mod tests {
 
     #[test]
     fn the_shell_is_told_by_its_name_and_else_by_the_system() {
-        assert_eq!(Shell::of(Some("-zsh")), Shell::Posix);
-        assert_eq!(Shell::of(Some("pwsh.exe")), Shell::PowerShell);
-        assert_eq!(Shell::of(Some("/usr/local/bin/pwsh")), Shell::PowerShell);
+        assert_eq!(Shell::of(Some("-zsh")), Some(Shell::Posix));
+        assert_eq!(Shell::of(Some("fish")), Some(Shell::Posix));
+        assert_eq!(Shell::of(Some("pwsh.exe")), Some(Shell::PowerShell));
+        assert_eq!(
+            Shell::of(Some("/usr/local/bin/pwsh")),
+            Some(Shell::PowerShell)
+        );
+        assert_eq!(Shell::of(Some("C:\\Windows\\System32\\cmd.exe")), None);
         let fallback = if cfg!(windows) {
             Shell::PowerShell
         } else {
             Shell::Posix
         };
-        assert_eq!(Shell::of(None), fallback);
+        assert_eq!(Shell::of(None), Some(fallback));
     }
 
     #[test]
-    fn a_resume_line_says_how_the_agent_ended_only_when_it_failed() {
+    fn a_resume_line_says_the_agent_failed_only_when_it_did() {
         let line = resume_command(
             &words(&["claude", "--resume", "abc"]),
             "Claude Code",
@@ -313,7 +323,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             line,
-            "claude --resume abc || printf 'hide: %s ended with exit code %s after its resume; this pane is a shell now.\\n' 'Claude Code' \"$?\""
+            "claude --resume abc || printf 'hide: %s ended with a failure after its resume; this pane is a shell now.\\n' 'Claude Code'"
         );
         let line = resume_command(
             &words(&["claude", "--resume", "abc"]),
@@ -323,7 +333,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             line,
-            "if((Get-Command claude -ErrorAction SilentlyContinue).CommandType -eq 'ExternalScript'){& claude '--resume' abc; $hideExit = $LASTEXITCODE}else{$hideExit = (Start-Process -FilePath claude -ArgumentList '--resume abc' -NoNewWindow -Wait -PassThru).ExitCode}; if ($hideExit) { Write-Host ('hide: its ended with exit code ' + $hideExit + ' after its resume; this pane is a shell now.') }"
+            "if((Get-Command claude -ErrorAction SilentlyContinue).CommandType -eq 'ExternalScript'){& claude '--resume' abc; $hideExit = $LASTEXITCODE}else{$hideExit = (Start-Process -FilePath claude -ArgumentList '--resume abc' -NoNewWindow -Wait -PassThru).ExitCode}; if ($hideExit) { Write-Host 'hide: its ended with a failure after its resume; this pane is a shell now.' }"
         );
     }
 
@@ -351,5 +361,74 @@ mod tests {
         assert_eq!(stripped_title("  plain  ").as_deref(), Some("plain"));
         assert_eq!(stripped_title("⠋"), None);
         assert_eq!(stripped_title(""), None);
+    }
+}
+
+/// The resume line run by the shells themselves, which only they can say
+/// they read: fish refuses a line zsh and bash take (`$?`), and a pane whose
+/// line its shell refuses is never resumed. They need the shells, named in
+/// `HIDE_TEST_ZSH_BIN`, `HIDE_TEST_BASH_BIN` and `HIDE_TEST_FISH_BIN`, so they
+/// are ignored by default; the rust lane's shell step runs them with
+/// `--ignored`.
+#[cfg(all(test, unix))]
+mod real_shell_tests {
+    use std::process::{Command, Stdio};
+
+    use super::*;
+
+    /// What the shell named in `variable` writes running `argv`'s resume.
+    #[allow(clippy::disallowed_methods)] // env_clear: the shell starts with no files and no environment of the test's
+    fn resumed(variable: &str, argv: &[&str]) -> String {
+        let shell =
+            std::env::var_os(variable).unwrap_or_else(|| panic!("{variable} names the shell"));
+        let home = tempfile::tempdir().unwrap();
+        let argv: Vec<String> = argv.iter().map(|word| (*word).to_owned()).collect();
+        let line = resume_command(&argv, "Claude Code", Shell::Posix).unwrap();
+        let output = Command::new(shell)
+            .arg("-c")
+            .arg(&line)
+            .env_clear()
+            .env("HOME", home.path())
+            .env("PATH", "/usr/bin:/bin")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(
+            output.stderr.is_empty(),
+            "{variable} refused {line}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    }
+
+    /// An agent that fails says so after what it wrote, with its words
+    /// quoted as the shell read them; one that ends cleanly adds nothing.
+    fn resume_line_runs_in(variable: &str) {
+        assert_eq!(
+            resumed(
+                variable,
+                &["sh", "-c", "printf '%s\\n' \"$0\"; exit 3", "it's a 'word'"]
+            ),
+            "it's a 'word'\nhide: Claude Code ended with a failure after its resume; this pane is a shell now.\n"
+        );
+        assert_eq!(resumed(variable, &["sh", "-c", "exit 0"]), "");
+    }
+
+    #[test]
+    #[ignore = "needs zsh: HIDE_TEST_ZSH_BIN"]
+    fn zsh_runs_the_resume_line_and_says_a_failure() {
+        resume_line_runs_in("HIDE_TEST_ZSH_BIN");
+    }
+
+    #[test]
+    #[ignore = "needs bash: HIDE_TEST_BASH_BIN"]
+    fn bash_runs_the_resume_line_and_says_a_failure() {
+        resume_line_runs_in("HIDE_TEST_BASH_BIN");
+    }
+
+    #[test]
+    #[ignore = "needs fish: HIDE_TEST_FISH_BIN"]
+    fn fish_runs_the_resume_line_and_says_a_failure() {
+        resume_line_runs_in("HIDE_TEST_FISH_BIN");
     }
 }

@@ -18,7 +18,8 @@
 //! agent's conversation in it (D-7, B13): by its `[resume] session` when the
 //! save knows the session, else by its `[resume] last`. The resumes are typed
 //! one pane at a time once the restore's gate has let other calls through,
-//! each when its shell holds the terminal, and no conversation is resumed in
+//! each once its shell is ready as any start into a shell waits for it
+//! ([`crate::agent_start::wait_for_shell`]), and no conversation is resumed in
 //! two panes: a second pane with the same session (or, for `last`, the same
 //! agent in the same folder) or one an adopted pane still runs stays a shell.
 //! A pane that cannot be resumed opens with one line saying why, and a resume
@@ -28,7 +29,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use hide_agent_adapter::definition::Catalog;
 use hide_node_link::holders::HolderRecovery;
@@ -38,8 +39,9 @@ use super::agents::{self, PaneAgent};
 use super::shell_line::{self, Shell};
 use super::store::{self, Read};
 use super::topology::{Pane, Topology};
-use super::{EngineError, Env, OwnEngine};
-use crate::node_access::call_as;
+use super::{Env, OwnEngine};
+use crate::agent_start::{ShellStart, StartError};
+use crate::node_access::{NodeLink, call_as};
 
 /// How long the restore waits for the node to finish judging its records.
 /// A node judges each record in a few rounds of a bounded budget, so this
@@ -79,9 +81,6 @@ pub(super) fn read(path: &Path, backups: &Path) -> Topology {
     }
 }
 
-/// How often a resume reads whether its pane's shell holds the terminal.
-const SHELL_POLL: Duration = Duration::from_millis(100);
-
 /// Starts the restore of the panes `saved` names on a thread of its own.
 pub(super) fn start(engine: OwnEngine<'static>, saved: BTreeSet<String>) -> Result<(), String> {
     std::thread::Builder::new()
@@ -106,8 +105,8 @@ struct Restart {
     agent: Option<PaneAgent>,
 }
 
-/// What a restarted pane's agent gets: its resume, typed once its shell
-/// holds the terminal, or the line its shell opens with saying why not.
+/// What a restarted pane's agent gets: its resume, typed once its shell is
+/// ready, or the line its shell opens with saying why not.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Plan {
     Resume(Resume),
@@ -405,8 +404,8 @@ impl OwnEngine<'static> {
     }
 
     /// Types each of `resumes` into its pane, one pane after another, each
-    /// once its shell holds the terminal; one that cannot be typed leaves its
-    /// pane a shell and logs why.
+    /// once its shell is ready; one that cannot be typed leaves its pane a
+    /// shell and logs why.
     pub(super) fn resume_agents(&self, resumes: &[Resume]) {
         for resume in resumes {
             if self.check().is_err() {
@@ -431,32 +430,41 @@ impl OwnEngine<'static> {
         }
     }
 
-    /// Waits up to [`crate::agent_start::SHELL_WAIT`] for `resume`'s pane's
-    /// shell to hold the terminal alone, then records the agent as started
-    /// and types its resume.
-    #[allow(clippy::disallowed_methods)] // a production wait, not test code
+    /// Waits for `resume`'s pane's shell as every start into a shell waits
+    /// for it, then records the agent as started and types its resume. A
+    /// restarted pane runs the machine's shell with no integration, as a
+    /// pane Herdr restores does, so it marks no prompt: it is ready when it
+    /// holds the terminal alone, as the core waits for the shell of any pane
+    /// it did not just open (`ShellStart::Plain`).
     fn resume_agent(&self, resume: &Resume) -> Result<(), String> {
-        let deadline = Instant::now() + crate::agent_start::SHELL_WAIT;
-        let shell = loop {
-            match self.processes(&resume.pane) {
-                Ok(group) if group.shell_holds_terminal() => {
-                    break Shell::of(group.shell_name());
-                }
-                Ok(_) => {}
-                Err(EngineError::Refused { code, .. }) if code == "pane_not_found" => {
-                    return Err("the pane closed before its shell was ready".to_owned());
-                }
-                Err(_) => {}
+        // The longest of the shells' lines, as a start is bounded.
+        let longest = [Shell::Posix, Shell::PowerShell]
+            .into_iter()
+            .filter_map(|shell| shell_line::resume_command(&resume.argv, &resume.shown, shell))
+            .map(|line| line.len() + 1)
+            .max()
+            .ok_or_else(|| "the resume names no program".to_owned())?;
+        let node = self.node().ok().map(|node| &**node as &dyn NodeLink);
+        crate::agent_start::wait_for_shell(
+            self,
+            node,
+            &format!("restore:{}", resume.pane),
+            &resume.pane,
+            ShellStart::Plain,
+            longest,
+        )
+        .map_err(|error| match error {
+            StartError::NotStarted { detail, .. } => detail,
+            StartError::ShellStarting(line) => {
+                crate::agent_start::shell_starting_message(line.as_deref())
             }
-            let now = Instant::now();
-            if now >= deadline {
-                return Err(format!(
-                    "the shell did not hold the terminal within {} s",
-                    crate::agent_start::SHELL_WAIT.as_secs()
-                ));
-            }
-            std::thread::sleep(SHELL_POLL.min(deadline - now));
-        };
+            StartError::Herdr(error) => error.to_string(),
+        })?;
+        let group = self
+            .processes(&resume.pane)
+            .map_err(|error| error.to_string())?;
+        let shell = Shell::of(group.shell_name())
+            .ok_or_else(|| "the pane's shell is cmd.exe, which takes no resume line".to_owned())?;
         let line = shell_line::resume_command(&resume.argv, &resume.shown, shell)
             .ok_or_else(|| "the resume names no program".to_owned())?;
         {

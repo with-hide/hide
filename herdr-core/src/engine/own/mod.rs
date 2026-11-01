@@ -1515,13 +1515,18 @@ impl<'g> Engine for OwnEngine<'g> {
                 format!("pane {pane} runs a program; an agent starts only in an idle shell"),
             ));
         }
-        let line = shell_line::command(&argv, shell_line::Shell::of(processes.shell_name()))
-            .ok_or_else(|| {
-                refused(
-                    "agent_start_refused",
-                    format!("the {} start cannot be typed into a shell", definition.id),
-                )
-            })?;
+        let shell = shell_line::Shell::of(processes.shell_name()).ok_or_else(|| {
+            refused(
+                "agent_start_refused",
+                format!("pane {pane} runs cmd.exe, which takes no start line; start the agent from PowerShell"),
+            )
+        })?;
+        let line = shell_line::command(&argv, shell).ok_or_else(|| {
+            refused(
+                "agent_start_refused",
+                format!("the {} start cannot be typed into a shell", definition.id),
+            )
+        })?;
         {
             let mut topology = self.topology();
             if topology.name_taken(&launch.name, pane) {
@@ -2550,12 +2555,10 @@ mod tests {
         });
         next.restored().unwrap();
 
-        let resumed = holders.wait_typed(&claude);
-        assert!(
-            resumed.starts_with("claude --resume s-1 || printf 'hide: %s ended with exit code"),
-            "{resumed:?}"
+        assert_eq!(
+            holders.wait_typed(&claude),
+            "claude --resume s-1 || printf 'hide: %s ended with a failure after its resume; this pane is a shell now.\\n' 'Claude Code'\r"
         );
-        assert!(resumed.ends_with("\"$?\"\r"), "{resumed:?}");
         assert!(
             holders
                 .wait_typed(&gemini)
