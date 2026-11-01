@@ -665,19 +665,25 @@ fn a_spawn_starts_the_agent_with_its_choice_ahead_of_the_prompt() {
         .find(|(method, _)| method == "agent.start")
         .expect("the agent was started")
         .1;
-    // The device saved no 권한, so Codex starts with full access.
+    // The device saved no 권한, so Codex starts with full access, which the
+    // effort's own `-c` does not stand in for.
     assert_eq!(
         start["args"],
-        json!([
-            "--no-daemon",
-            "--dangerously-bypass-approvals-and-sandbox",
-            "--model",
-            "gpt-6-luna",
-            "-c",
-            "model_reasoning_effort=low",
-            "--",
-            "review the diff"
-        ])
+        json!(
+            [
+                &["--no-daemon"][..],
+                &crate::agent_permission::CODEX_FULL_ACCESS,
+                &[
+                    "--model",
+                    "gpt-6-luna",
+                    "-c",
+                    "model_reasoning_effort=low",
+                    "--",
+                    "review the diff"
+                ]
+            ]
+            .concat()
+        )
     );
     let runtime = spawner.runtime.lock().unwrap();
     let kept = &runtime.snapshot.ui_state.pane_launches["remote:mini:pane:w2:p1"];
@@ -1481,10 +1487,11 @@ fn a_queued_spawn_waits_while_desk_is_off_and_starts_when_it_is_on_again() {
 }
 
 /// A spawn takes the 권한 of the machine it starts on, read when it starts:
-/// the device's own choice, not this machine's; and a full-access flag the
-/// spawn's own native arguments already name is given once.
+/// the device's own choice, not this machine's; and Codex's overrides go
+/// beside a bypass flag the spawn's own native arguments name, which Codex
+/// accepts (0.166.0, 2026-11-01) where it refuses that flag twice.
 #[test]
-fn a_spawn_takes_its_devices_permission_and_names_a_flag_once() {
+fn a_spawn_takes_its_devices_permission_and_codex_overrides_go_beside_its_own_flag() {
     for (device_choice, native, expected) in [
         (
             Some(json!({"mode": "ask"})),
@@ -1494,12 +1501,12 @@ fn a_spawn_takes_its_devices_permission_and_names_a_flag_once() {
         (
             None,
             vec!["--dangerously-bypass-approvals-and-sandbox", "--", "review"],
-            vec![
-                "--no-daemon",
-                "--dangerously-bypass-approvals-and-sandbox",
-                "--",
-                "review",
-            ],
+            [
+                &["--no-daemon"][..],
+                &crate::agent_permission::CODEX_FULL_ACCESS,
+                &["--dangerously-bypass-approvals-and-sandbox", "--", "review"],
+            ]
+            .concat(),
         ),
     ] {
         let spawner = spawner();

@@ -7,6 +7,8 @@ use crate::fake_herdr::FakeHerdr;
 mod agent_areas;
 #[path = "tests/agent_connection.rs"]
 mod agent_connection;
+#[path = "tests/agent_definitions.rs"]
+mod agent_definitions;
 #[path = "tests/agent_features.rs"]
 mod agent_features;
 #[path = "tests/agent_scopes.rs"]

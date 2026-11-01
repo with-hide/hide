@@ -4,9 +4,10 @@
 //
 // The daemon's own keys (HIDE_STATE_DIR, HERDR_SOCKET_PATH, ...) are not
 // read here: the `hide` CLI inherits this process's environment and
-// `hided/src/env.rs` owns them. HOME (USERPROFILE on Windows), HERDR_BIN_PATH
-// and HERDR_PANE_ID are read by both: the host reads the two Herdr keys only to know whether it
-// may name the Herdr it bundles (`herdr.ts`).
+// `hided/src/env.rs` owns them. HOME (USERPROFILE on Windows), HERDR_BIN_PATH,
+// HERDR_PANE_ID and HIDE_DEV_PANE_HOLDER are read by both: the host reads the
+// Herdr keys only to know whether it may name the Herdr it bundles
+// (`herdr.ts`), and the switch only to know whether to start a Herdr server.
 
 import os from "node:os";
 import { HAS_LOGIN_SHELL } from "./cli";
@@ -48,6 +49,13 @@ export const ENV_REGISTRY: readonly EnvKey[] = [
     shape: "any non-empty value; only its presence is read",
     fallback: "absent: an inherited HERDR_BIN_PATH is an explicit override",
     note: "Herdr sets it in every pane beside its own HERDR_BIN_PATH, so a packaged app opened from a pane replaces that HERDR_BIN_PATH with its bundled herdr instead of inheriting a path that dies with the bundle that started the server",
+  },
+  {
+    key: "HIDE_DEV_PANE_HOLDER",
+    requirement: "optional",
+    shape: "`1` turns it on; hided owns the key and refuses any value other than `0` or `1`",
+    fallback: "off: the host starts the bundled Herdr server when none answers",
+    note: "The development switch that makes the daemon run the core's own engine over pane holders, with no Herdr (PRD engine-bundle-3-core-owns D-5); while it is `1` the host starts no Herdr server",
   },
   {
     key: "SHELL",
@@ -126,6 +134,8 @@ export type DesktopEnv = {
   userDataDir: string | null;
   herdrBinPath: string | null;
   herdrPaneId: string | null;
+  /** The daemon runs the core's own engine (HIDE_DEV_PANE_HOLDER=1), so no Herdr server is started. */
+  ownEngine: boolean;
   /** A language tag standing in for the system's; null on a normal launch. */
   systemLanguage: string | null;
   /** Another update feed than with-hide/hide's releases; null on a normal launch. */
@@ -192,6 +202,7 @@ export function loadEnv(source: Record<string, string | undefined>): DesktopEnv 
     userDataDir: absolute("HIDE_DESKTOP_USER_DATA_DIR"),
     herdrBinPath: absolute("HERDR_BIN_PATH"),
     herdrPaneId: source.HERDR_PANE_ID || null,
+    ownEngine: source.HIDE_DEV_PANE_HOLDER === "1",
     systemLanguage: source.HIDE_DESKTOP_SYSTEM_LANGUAGE || null,
     updateFeedUrl: feed("HIDE_UPDATE_FEED_URL"),
     shell: HAS_LOGIN_SHELL ? (absolute("SHELL") ?? accountShell()) : null,

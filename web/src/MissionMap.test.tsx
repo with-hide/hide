@@ -397,23 +397,23 @@ it("draws each card as its mark, its title, its pull requests, its worker's mode
     node("asked", { status: "working", attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 1, on_row: false, item: false } }),
     node("api", { status: "done", pr: 1650, pr_state: "merged", landing: { state: "landed", proof: { by: "merged" } }, hide: { action: "done", at_unix_ms: 1 }, criteria: [line("c1", "own", { state: "pass" })], criteria_met: 1, criteria_skipped: 0 }),
     node("branch", { status: "done", delivery: "direct", branch: "feat/a-very-long-branch-name-for-the-screen-node", landing: { state: "left", action: "join" } }),
+    node("on-branch", { status: "working", branch: "feat/engine-own-layout", worker: { agent: "claude", model: "opus", effort: "xhigh", effort_auto: false } }),
     node("outside", { title: "바깥: isolated 앱 실행기 정리", kind: "external", delivery: null, external: { pr: 1232 } }),
     node("closed-out", { kind: "external", delivery: null, external: { pr: 1605 }, status: "working", attention: { reason: "pr_closed", pr: 1605, to: "conductor", since_unix_ms: 1, on_row: false, item: false } }),
     node("merged-out", { kind: "external", delivery: null, external: { pr: 1702 }, status: "done", landing: { state: "landed", proof: { by: "outside" } } }),
     node("next", { depends_on: ["core", "outside"] }),
     node("sleeping", { status: "working", agent_id: "agent-2", agent_runtime: "asleep" }),
-    // Finished: one whose pane still says what it launched, one whose launch is gone with only the plan left.
-    node("ran", { status: "done", agent_id: "agent-5", pane_id: "w1:p8", machine: "mac", worker: { agent: "claude", model: "opus", effort: "high", effort_auto: false } }),
+    // Finished: one whose launch the core kept (its pane long gone), one with no launch kept and only the plan left.
+    node("ran", { status: "done", agent_id: "agent-5", worker: { agent: "claude", model: "opus", effort: "high", effort_auto: false }, launched: { agent_id: "agent-5", agent: "codex", model: "Sonnet 5.5", effort: "low" } }),
     node("bound", { status: "working", agent_id: "agent-4", pane_id: "w1:p6", machine: "mac", worker: { agent: "claude", model: "opus", effort: "high", effort_auto: false } }),
     node("ran-unknown", { status: "done", agent_id: "agent-6", pane_id: "w1:p7", machine: "mac", worker: { agent: "claude", model: "opus", effort: "high", effort_auto: false } }),
-    node("launched", { status: "working", pane_id: "w1:p9", machine: "mac", pr: 1910, pr_state: "pending", worker: { agent: "claude", model: "opus", effort: "medium", effort_auto: false }, attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 1, on_row: false, item: false } }),
+    node("launched", { status: "working", agent_id: "agent-9", pane_id: "w1:p9", machine: "mac", launched: { agent_id: "agent-9", agent: "codex", model: "Opus 5.5", effort: "high" }, pr: 1910, pr_state: "pending", worker: { agent: "claude", model: "opus", effort: "medium", effort_auto: false }, attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 1, on_row: false, item: false } }),
   ];
-  const launches = [{ device_id: "mac", pane_id: "w1:p9", session_digest: "w", launch_model: "Opus 5.5", launch_effort: "high" }, { device_id: "mac", pane_id: "w1:p8", session_digest: "r", launch_model: "Sonnet 5.5", launch_effort: "low" }];
-  // The panes' own agents, which the plan did not name: the mark is theirs.
-  const rows = [{ pane_id: "w1:p9", agent_kind: "codex", mark: "going" }, { pane_id: "w1:p8", agent_kind: "codex", mark: "done" }] as AgentRow[];
-  const map = await mount({ items: [mission({ nodes })] }, [], launches, {}, rows);
+  // A launch the pane now shows for some session: a node names only the launch the core kept for its own worker, never its pane's.
+  const launches = [{ device_id: "mac", pane_id: "w1:p6", session_digest: "other", launch_model: "Sonnet 5.5", launch_effort: "medium" }];
+  const map = await mount({ items: [mission({ nodes })] }, [], launches);
   try {
-    expect(Object.fromEntries(nodes.map((n) => [n.key, card(map, n.key).dataset.nodeLook]))).toEqual({ core: "working", raised: "working", asked: "working", api: "done", branch: "done", outside: "external", "closed-out": "external", "merged-out": "done", next: "waiting", sleeping: "working", ran: "done", bound: "working", "ran-unknown": "done", launched: "working" });
+    expect(Object.fromEntries(nodes.map((n) => [n.key, card(map, n.key).dataset.nodeLook]))).toEqual({ core: "working", raised: "working", asked: "working", api: "done", branch: "done", outside: "external", "closed-out": "external", "merged-out": "done", next: "waiting", sleeping: "working", ran: "done", bound: "working", "ran-unknown": "done", launched: "working", "on-branch": "working" });
     // One of three shapes, its word on hover and first in the card's name.
     expect(["next", "core", "api"].map((key) => card(map, key).querySelector("[data-node-mark]")?.getAttribute("aria-label"))).toEqual(["Waiting", "In progress", "Done"]);
     // A worker Hide put to sleep leaves its node in progress, the same ring; only its words name the sleep (B1).
@@ -421,20 +421,30 @@ it("draws each card as its mark, its title, its pull requests, its worker's mode
     expect(card(map, "sleeping").querySelector("[data-node-mark] svg")?.getAttribute("class")).toContain("animate-spin");
     // Every pull request the node holds is its own PR mark, in the order it got them (D-10).
     expect([...card(map, "core").querySelectorAll<HTMLElement>("[data-node-pr]")].map((mark) => mark.dataset.nodePr)).toEqual(["1703", "1704"]);
-    // The worker's model and effort lead the line, before the marks, as the panel's head words them: the pane's launch, else the plan's marked planned.
-    const row = (key: string) => [...card(map, key).querySelectorAll<HTMLElement>("[data-node-row] > *")].map((part) => (part.dataset.nodeRun ? `run:${part.dataset.nodeRun}` : part.dataset.nodeAttentionTag ? "!" : part.querySelector("[data-node-pr]") ? "marks" : part.childElementCount === 0 ? "empty" : "?"));
-    expect(row("core")).toEqual(["run:plan", "marks"]);
+    // Under the title, a line of the worker's model and effort as the panel's head words them (the launch kept for its worker, else the plan's marked planned), then a line of the marks and `!`; a line with nothing to hold is not drawn.
+    const lines = (key: string) => [...card(map, key).children].slice(1).map((el) => {
+      const part = el as HTMLElement;
+      if (part.hasAttribute("data-node-run")) return `run:${part.dataset.nodeRun}`;
+      if (!part.dataset.nodeRow) return "?";
+      return [...part.children].map((one) => ((one as HTMLElement).dataset.nodeAttentionTag ? "!" : one.querySelector("[data-node-pr]") ? "marks" : one.querySelector("[data-node-branch]") ? "branch" : one.childElementCount === 0 ? "empty" : "?")).join("+");
+    });
+    expect(lines("core")).toEqual(["run:plan", "marks"]);
     expect([card(map, "core").querySelector("[data-run-words]")?.textContent, card(map, "core").querySelector("[data-run-planned]")?.textContent]).toEqual(["opus·high", "(planned)"]);
-    expect(row("launched")).toEqual(["run:launch", "marks", "!"]);
-    // With no run the left stays empty, so the marks and `!` still sit at the right end.
-    expect([row("outside"), row("asked")]).toEqual([["empty", "marks"], ["empty", "!"]]);
+    expect(lines("launched")).toEqual(["run:launch", "marks+!"]);
+    // With no run there is no run line, and `!` still sits at the right end.
+    expect([lines("outside"), lines("asked")]).toEqual([["marks"], ["empty+!"]]);
+    // A long branch has its own line, so the worker's words stay whole beside nothing.
+    expect(lines("on-branch")).toEqual(["run:plan", "branch"]);
+    expect([card(map, "on-branch").querySelector("[data-run-words]")?.textContent, card(map, "on-branch").querySelector("[data-node-row] [data-node-branch]")?.textContent]).toEqual(["opus·xhigh", "feat/engine-own-layout"]);
+    // The Conductor's line is the hover's, under the whole title, so the title drops its own native hover only then.
+    expect([card(map, "core").querySelector("[title='제안 core: 기록·공책·점수·반영']"), card(map, "api").querySelector(`[title="${nodes.find((one) => one.key === "api")!.title}"]`)]).toEqual([null, expect.anything()]);
     expect(card(map, "launched").querySelector("[data-run]")?.textContent).toBe("Opus 5.5·high");
-    // The agent mark stands before the model: the plan's agent while planned, the pane's own once launched (codex here, where the plan said claude).
+    // The agent mark stands before the model: the plan's agent while planned, the launched agent's once kept (codex here, where the plan said claude).
     expect(["core", "launched"].map((key) => card(map, key).querySelector("[data-node-run] > :first-child")?.getAttribute("data-agent-mark"))).toEqual(["claude", "codex"]);
-    // A finished node shows what its pane launched, never the plan marked planned; with no launch known it shows nothing.
+    // A finished node shows what its worker was launched with, its pane gone, never the plan marked planned; with no launch kept it shows nothing.
     expect([card(map, "ran").querySelector("[data-run]")?.textContent, card(map, "ran").querySelector("[data-run-planned]")]).toEqual(["Sonnet 5.5·low", null]);
     expect(card(map, "ran-unknown").querySelector("[data-run], [data-agent-mark]")).toBeNull();
-    // An unfinished node whose worker Hide knows no launch for (started on its CLI's defaults) keeps the plan, marked planned.
+    // An unfinished node with no launch kept (its worker started on its CLI's defaults) keeps the plan, marked planned, whatever its pane shows now.
     expect(card(map, "bound").querySelector("[data-run]")?.getAttribute("title")).toBe("opus·high (planned)");
     // The panel's head follows the same rule.
     await act(async () => card(map, "ran").click());
@@ -466,7 +476,7 @@ it("draws each card as its mark, its title, its pull requests, its worker's mode
     expect(card(map, "closed-out").querySelector("[data-node-attention-tag]")?.getAttribute("data-node-attention-tag")).toBe("pr_closed");
     expect(card(map, "merged-out").getAttribute("aria-label")).toBe("Node merged-out · Done · Outside the mission");
     // A long title is one line ending in an ellipsis, the whole of it on hover and in the name (B30).
-    expect(card(map, "core").querySelector("[title='제안 core: 기록·공책·점수·반영']")?.className).toContain("truncate");
+    expect(card(map, "core").querySelector(".truncate")?.textContent).toBe("제안 core: 기록·공책·점수·반영");
   } finally { await map.unmount(); }
 });
 
@@ -514,7 +524,7 @@ it("tethers each agent checking a node to its card's right side as a satellite, 
   } finally { await map.unmount(); }
 });
 
-it("shows in the panel how long a node took from its events, and no number without them or while the device is gone (B4, B28, B35)", async () => {
+it("shows on the card and in the panel how long a node took from its events, and no number without them or while the device is gone (B4, B28, B35)", async () => {
   // The page reads its own clock, so the test holds it.
   const now = Math.floor(Date.now() / 60_000) * 60_000;
   vi.useFakeTimers({ toFake: ["Date"] });
@@ -529,8 +539,10 @@ it("shows in the panel how long a node took from its events, and no number witho
   };
   const map = await mount({ items: [mission({ nodes })] }, [], [], { mission_events: { mission: "mission-1", events, dropped: 0 } });
   try {
-    // The card carries no time; the panel does (D-07).
-    expect(map.q("[data-node-time]")).toBeNull();
+    // The card says it on its run line, as the panel does (operator decision 2026-11-02).
+    expect(["a", "b", "c"].map((key) => card(map, key).querySelector("[data-node-took]")?.textContent ?? null)).toEqual(["1h", "40m", null]);
+    // With no worker the line holds the time alone.
+    expect(card(map, "a").querySelector("[data-node-took]")?.closest("[data-node-run]")?.getAttribute("data-node-run")).toBe("none");
     expect(await facts(map, "a")).toBe("took 1h");
     expect(await facts(map, "b")).toBe("took 40m");
     // A node with no event that moved it draws no time.
@@ -541,6 +553,7 @@ it("shows in the panel how long a node took from its events, and no number witho
     // The finished node's time stays; the running ones stop, and so does the head's.
     expect(await facts(stale, "a")).toBe("took 1h");
     expect(await facts(stale, "b")).toBeNull();
+    expect(["a", "b"].map((key) => card(stale, key).querySelector("[data-node-took]")?.textContent ?? null)).toEqual(["1h", null]);
     expect(stale.q('[data-mission-stat="time"]')).toBeNull();
   } finally { await stale.unmount(); }
 });

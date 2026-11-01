@@ -241,12 +241,13 @@ class Selection(unittest.TestCase):
             <= set(result["lanes"])
         )
         self.assertNotIn("desktop-e2e", result["lanes"])
-        # The data-only adapter, the text-only shell reader and the terminal
-        # parser are independent, and workspace-hack depends on no member;
-        # every other crate consumes the platform layer.
+        # The data-only adapter and the screen rules it compiles, the
+        # text-only shell reader and the terminal parser are independent, and
+        # workspace-hack depends on no member; every other crate consumes the
+        # platform layer.
         self.assertEqual(result["rust_packages"],
                          [name for name in EVERY_PACKAGE
-                          if name not in ("hide-agent-adapter", "hide-shell", "hide-vt", "workspace-hack")])
+                          if name not in ("hide-agent-adapter", "hide-screen-rules", "hide-shell", "hide-vt", "workspace-hack")])
         self.assertFalse(result["full"])
 
     def test_an_adapter_change_tests_its_real_consumers_and_compiles_on_windows(self):

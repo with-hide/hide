@@ -1,0 +1,9 @@
+schema = 1
+id = "omp"
+name = "omp"
+executables = ["omp"]
+home = "~/.omp/agent"
+hooks = "omp"
+
+[resume]
+session = ["--resume", "{session}"]

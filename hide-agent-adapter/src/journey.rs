@@ -276,7 +276,7 @@ pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
             fake_home: row.fake_home,
             herdr_kind: row.herdr.name,
             herdr_source: row.herdr.session_source(),
-            home_folder: row.herdr.folder,
+            home_folder: row.folder,
             prompt_flag: row.start.map(|start| start.prompt_flag()),
             model_flag: row.start.map_or(&[], |start| start.options().model),
             full_access_flag: row

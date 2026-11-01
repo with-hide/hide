@@ -237,6 +237,7 @@ MACOS_LANE_INPUTS = {
         "paths": (
             "desktop/scripts/*", "desktop/package.json", "desktop/resources/*", "desktop/native/*",
             "contracts/herdr-bundle.json", "scripts/fetch-herdr-runtime.*",
+            "contracts/conpty.json", "scripts/fetch-conpty.py",
             "scripts/verify-cargo.sh", "scripts/verify-web.sh", "scripts/toolchain-env.sh",
             "hided/build.rs", "hided/src/cli.rs", "hide-kit/*", "hide-agent-hooks/*",
             "desktop/src/main/updater*", "scripts/check-release-assets.mjs", "desktop/e2e/packaged-*",
@@ -370,6 +371,7 @@ POLICY_ONLY = (
     "scripts/check-harness-ignore-anchor.sh", "scripts/check-herdr-pin-single-source.sh",
     "scripts/check-core-touches-no-machine.py", "scripts/check-engine-boundary.py", "scripts/rust_scan.py",
     "scripts/check-ai-prompt-language.py", "scripts/check-pr-screenshots.py",
+    "scripts/check-agent-screen-rules.py",
     "scripts/check-no-workstation-identity.*", "scripts/check-worktree-removal-boundary.sh",
     "scripts/check-typed-live-remote.sh",
     "scripts/check-release-assets.mjs", "scripts/release-draft.mjs", "scripts/premerge-check.py",
@@ -465,6 +467,11 @@ NAMED_LANES = (
     ("scripts/agent_journey/ci.py", JOURNEY_LANES | HOLDER_RESTART_LANES),
     ("scripts/agent_journey/local.py", JOURNEY_LANES | HOLDER_RESTART_LANES),
     ("scripts/agent_journey/opencode_service.py", JOURNEY_LANES | HOLDER_RESTART_LANES),
+    # The pinned Windows ConPTY runtime a holder runs on: the vt lane's
+    # Windows tests and the restart lane's Windows cells fetch it, and the
+    # package carries it beside the holder.
+    ("contracts/conpty.json", {"vt", "package"} | HOLDER_RESTART_LANES),
+    ("scripts/fetch-conpty.py", {"vt", "package"} | HOLDER_RESTART_LANES),
     ("scripts/holder-restart-check.py", HOLDER_RESTART_LANES),
     ("scripts/holder_owned.py", HOLDER_RESTART_LANES),
     ("scripts/holder-restart-spawn.mjs", HOLDER_RESTART_LANES),

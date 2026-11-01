@@ -1,0 +1,23 @@
+{
+  "package": "Microsoft.Windows.Console.ConPTY",
+  "version": "1.24.260710001",
+  "license": "MIT",
+  "source_url": "https://api.nuget.org/v3-flatcontainer/microsoft.windows.console.conpty/1.24.260710001/microsoft.windows.console.conpty.1.24.260710001.nupkg",
+  "sha256": "175640566a3b59c4b132070ee96c2c77e5ab7edd2e92732a5eb3610bbf63d90e",
+  "size": 1732296,
+  "files": {
+    "conpty.dll": {
+      "from": "runtimes/win-x64/native/conpty.dll",
+      "sha256": "39fba2713e2495117b1591ae8c32a3b904bea7aa66069cf7815e2844c76d75d8"
+    },
+    "x64/OpenConsole.exe": {
+      "from": "build/native/runtimes/x64/OpenConsole.exe",
+      "sha256": "b7fd936c2668b87b9ecf7b3366dc6568afc1c6f981874cba3e955a1c35cf8160"
+    },
+    "arm64/OpenConsole.exe": {
+      "from": "build/native/runtimes/arm64/OpenConsole.exe",
+      "sha256": "ed7622fd0d3bedc9ab9f122f5e58edf0def9e7999224f52dd395ba9f54edbe09"
+    }
+  },
+  "verification": "The single source of the Windows ConPTY runtime a pane holder runs on. scripts/fetch-conpty.py downloads the package from nuget.org, refuses it unless its size and sha256 are these, takes each file from its place in the package, refuses one whose sha256 differs, and writes the runtime folder with its file list (conpty-files.json). CONPTY_FILES in vendor/portable-pty/src/win/psuedocon.rs pins the same file digests, which the holder checks before it loads the runtime; scripts/tests/test_fetch_conpty.py fails when the two disagree."
+}

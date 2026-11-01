@@ -127,6 +127,16 @@ pub(crate) const CLAUDE_FULL_ACCESS: [&str; 3] = [
     r#"{"skipDangerousModePermissionPrompt":true}"#,
 ];
 
+/// Codex's full-access words as 0.166.0 accepts them repeated (measured in
+/// an empty HOME on 2026-11-01), written here once for tests.
+#[cfg(test)]
+pub(crate) const CODEX_FULL_ACCESS: [&str; 4] = [
+    "-c",
+    "approval_policy=never",
+    "-c",
+    "sandbox_mode=danger-full-access",
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -140,10 +150,7 @@ mod tests {
         // Each CLI's `--help`, read 2026-11-01.
         for (kind, expected) in [
             ("claude", words(&CLAUDE_FULL_ACCESS)),
-            (
-                "codex",
-                words(&["--dangerously-bypass-approvals-and-sandbox"]),
-            ),
+            ("codex", words(&CODEX_FULL_ACCESS)),
             ("grok", words(&["--always-approve"])),
             ("opencode", words(&["--auto"])),
             ("omp", words(&["--auto-approve"])),

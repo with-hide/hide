@@ -13,16 +13,17 @@
 //! nearest enclosing split of its axis by the amount, clamped to 0.1..0.9.
 //! Where the prediction and Herdr still differ (a focus Herdr places
 //! elsewhere), Herdr's layout replaces it when it arrives.
+//!
+//! The tree rules themselves live in `engine::own::layout`, the ones the
+//! core's own engine applies (PRD engine-bundle-3-core-owns D-4): a drawing
+//! ahead of that engine is exactly what it then confirms.
 
+use crate::engine::own::layout::{
+    contains, lay_out, remove_leaf, resized, set_nearest_split_ratio, split_leaf,
+};
 use crate::live::PaneResizeDirection;
 use crate::model::{PaneLayoutDirection, PaneLayoutNodeSnapshot, PaneLayoutSnapshot};
-use crate::sidebar::{
-    SessionLayoutPanePayload, SessionLayoutPayload, SessionLayoutRect, SessionLayoutSplitPayload,
-};
-
-/// Herdr keeps every split between these ratios.
-const RATIO_MIN: f32 = 0.1;
-const RATIO_MAX: f32 = 0.9;
+use crate::sidebar::SessionLayoutPayload;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum Prediction {
@@ -66,14 +67,7 @@ pub(super) fn resize_prediction(
     direction: PaneResizeDirection,
     amount: f32,
 ) -> Option<Prediction> {
-    let (axis, sign) = match direction {
-        PaneResizeDirection::Left => (PaneLayoutDirection::Right, -1.0),
-        PaneResizeDirection::Right => (PaneLayoutDirection::Right, 1.0),
-        PaneResizeDirection::Up => (PaneLayoutDirection::Down, -1.0),
-        PaneResizeDirection::Down => (PaneLayoutDirection::Down, 1.0),
-    };
-    let current = nearest_split_ratio(&layout.root, pane, axis)?;
-    let ratio = (current + sign * amount).clamp(RATIO_MIN, RATIO_MAX);
+    let (axis, ratio) = resized(&layout.root, pane, direction, amount)?;
     Some(Prediction::Resize {
         pane: pane.to_owned(),
         axis,
@@ -111,36 +105,6 @@ pub(super) fn overlay_session_layout(
         panes,
         splits,
     })
-}
-
-fn lay_out(
-    node: &PaneLayoutNodeSnapshot,
-    area: SessionLayoutRect,
-    panes: &mut Vec<SessionLayoutPanePayload>,
-    splits: &mut Vec<SessionLayoutSplitPayload>,
-) -> Result<(), String> {
-    match node {
-        PaneLayoutNodeSnapshot::Pane { pane_id } => panes.push(SessionLayoutPanePayload {
-            pane_id: pane_id.clone(),
-            rect: area,
-        }),
-        PaneLayoutNodeSnapshot::Split {
-            direction,
-            ratio,
-            first,
-            second,
-        } => {
-            let (first_area, second_area, _) = crate::live::split_areas(area, *direction, *ratio)?;
-            splits.push(SessionLayoutSplitPayload {
-                direction: *direction,
-                ratio: *ratio,
-                rect: area,
-            });
-            lay_out(first, first_area, panes, splits)?;
-            lay_out(second, second_area, panes, splits)?;
-        }
-    }
-    Ok(())
 }
 
 fn apply(layout: &mut PaneLayoutSnapshot, prediction: &Prediction) {
@@ -184,135 +148,10 @@ fn apply(layout: &mut PaneLayoutSnapshot, prediction: &Prediction) {
     }
 }
 
-fn contains(node: &PaneLayoutNodeSnapshot, pane: &str) -> bool {
-    match node {
-        PaneLayoutNodeSnapshot::Pane { pane_id } => pane_id == pane,
-        PaneLayoutNodeSnapshot::Split { first, second, .. } => {
-            contains(first, pane) || contains(second, pane)
-        }
-    }
-}
-
-fn first_leaf(node: &PaneLayoutNodeSnapshot) -> &str {
-    match node {
-        PaneLayoutNodeSnapshot::Pane { pane_id } => pane_id,
-        PaneLayoutNodeSnapshot::Split { first, .. } => first_leaf(first),
-    }
-}
-
-fn split_leaf(
-    node: &mut PaneLayoutNodeSnapshot,
-    target: &str,
-    direction: PaneLayoutDirection,
-    created: &str,
-) {
-    match node {
-        PaneLayoutNodeSnapshot::Pane { pane_id } if pane_id == target => {
-            let kept = PaneLayoutNodeSnapshot::Pane {
-                pane_id: pane_id.clone(),
-            };
-            *node = PaneLayoutNodeSnapshot::Split {
-                direction,
-                ratio: 0.5,
-                first: Box::new(kept),
-                second: Box::new(PaneLayoutNodeSnapshot::Pane {
-                    pane_id: created.to_owned(),
-                }),
-            };
-        }
-        PaneLayoutNodeSnapshot::Pane { .. } => {}
-        PaneLayoutNodeSnapshot::Split { first, second, .. } => {
-            split_leaf(first, target, direction, created);
-            split_leaf(second, target, direction, created);
-        }
-    }
-}
-
-/// Removes `pane` and puts its sibling in the parent's place. Returns the
-/// sibling's first leaf, the pane Herdr focuses when the closed one had focus.
-fn remove_leaf(node: &mut PaneLayoutNodeSnapshot, pane: &str) -> Option<String> {
-    let PaneLayoutNodeSnapshot::Split { first, second, .. } = node else {
-        return None;
-    };
-    let survivor = match (first.as_ref(), second.as_ref()) {
-        (PaneLayoutNodeSnapshot::Pane { pane_id }, _) if pane_id == pane => {
-            Some(second.as_ref().clone())
-        }
-        (_, PaneLayoutNodeSnapshot::Pane { pane_id }) if pane_id == pane => {
-            Some(first.as_ref().clone())
-        }
-        _ => None,
-    };
-    if let Some(survivor) = survivor {
-        let focus = first_leaf(&survivor).to_owned();
-        *node = survivor;
-        return Some(focus);
-    }
-    remove_leaf(first, pane).or_else(|| remove_leaf(second, pane))
-}
-
-/// The ratio of the innermost split of `axis` whose subtree holds `pane`.
-fn nearest_split_ratio(
-    node: &PaneLayoutNodeSnapshot,
-    pane: &str,
-    axis: PaneLayoutDirection,
-) -> Option<f32> {
-    let PaneLayoutNodeSnapshot::Split {
-        direction,
-        ratio,
-        first,
-        second,
-    } = node
-    else {
-        return None;
-    };
-    let inner = if contains(first, pane) {
-        nearest_split_ratio(first, pane, axis)
-    } else if contains(second, pane) {
-        nearest_split_ratio(second, pane, axis)
-    } else {
-        return None;
-    };
-    inner.or((*direction == axis).then_some(*ratio))
-}
-
-/// Sets the ratio of the split `nearest_split_ratio` reads. Returns whether
-/// it found one.
-fn set_nearest_split_ratio(
-    node: &mut PaneLayoutNodeSnapshot,
-    pane: &str,
-    axis: PaneLayoutDirection,
-    value: f32,
-) -> bool {
-    let PaneLayoutNodeSnapshot::Split {
-        direction,
-        ratio,
-        first,
-        second,
-    } = node
-    else {
-        return false;
-    };
-    let inner = if contains(first, pane) {
-        set_nearest_split_ratio(first, pane, axis, value)
-    } else if contains(second, pane) {
-        set_nearest_split_ratio(second, pane, axis, value)
-    } else {
-        return false;
-    };
-    if inner {
-        return true;
-    }
-    if *direction == axis {
-        *ratio = value;
-        return true;
-    }
-    false
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sidebar::{SessionLayoutPanePayload, SessionLayoutRect, SessionLayoutSplitPayload};
 
     fn pane(id: &str) -> PaneLayoutNodeSnapshot {
         PaneLayoutNodeSnapshot::Pane {

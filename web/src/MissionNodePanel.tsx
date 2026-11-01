@@ -52,7 +52,7 @@ import { useShellStore } from "./store";
 export function MissionNodePanel({ mission, node, events, end, onSelect, onClose, actions }: { mission: Mission; node: MissionNode; events: MissionEvent[] | null; end: number; onSelect: (key: string) => void; onClose: () => void; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const look = nodeLook(mission, node);
-  const worker = useNodeRun(mission, node);
+  const worker = useNodeRun(node);
   const times = useNodeTimes(mission, node, events, end);
   const facts = [
     ...(times?.took ? [t("mission.elapsed.total", { elapsed: times.took })] : []),

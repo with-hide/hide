@@ -249,6 +249,14 @@ pub fn desk_adapters(home: &Path) -> PathBuf {
     hide_home(home).join("desk-adapters")
 }
 
+/// The operator's own agent definition files (`<id>.toml`), read after the
+/// built-in ones (PRD engine-bundle-3-core-owns D-17,
+/// `hide_agent_adapter::definition`). Account-wide: one machine's agents are
+/// the same for every state folder.
+pub fn agent_definitions(home: &Path) -> PathBuf {
+    hide_home(home).join("agents")
+}
+
 /// The Hide global instruction every session started in a Hide pane receives
 /// at its start, in every Project (PRD memory-self-improve D-23, D-29): Hide's
 /// own file, which the operator may edit and the core writes for a fix the
@@ -451,6 +459,34 @@ pub fn holders_root(home: &Path) -> PathBuf {
 /// (`crate::holders::version_name`).
 pub fn holder_dir(home: &Path, name: &str) -> PathBuf {
     holders_root(home).join(name)
+}
+
+/// The folder of the core's own engine in a state folder (PRD
+/// engine-bundle-3-core-owns D-6): what that engine's session is keyed by,
+/// as a Herdr session is by its socket.
+pub fn engine_dir(state_dir: &Path) -> PathBuf {
+    state_dir.join("engine")
+}
+
+/// The saved session of the core's own engine (PRD engine-bundle-3-core-owns
+/// D-6): its workspaces, tabs, pane trees and panes, read once when the
+/// daemon starts and replaced whole after every change.
+pub fn engine_session(state_dir: &Path) -> PathBuf {
+    engine_dir(state_dir).join("session.json")
+}
+
+/// Where a saved session the engine could not read is kept, the newest
+/// three, rather than deleted.
+pub fn engine_backups(state_dir: &Path) -> PathBuf {
+    engine_dir(state_dir).join("backups")
+}
+
+/// Where the core's own engine makes a repository's worktree named `name`
+/// (PRD engine-bundle-3-core-owns D-28): `~/.hide/worktrees/<repo>/<name>`.
+/// A worktree another engine made elsewhere (Herdr's `~/.herdr/worktrees`)
+/// stays where it is and is opened by its path.
+pub fn engine_worktree(home: &Path, repo: &str, name: &str) -> PathBuf {
+    hide_home(home).join("worktrees").join(repo).join(name)
 }
 
 /// The folder a state folder's holders listen and log in, one socket and

@@ -1,9 +1,12 @@
 //! The engine boundary: the one way the core speaks to the program that runs
 //! its panes (PRD engine-bundle-1 D-2). Pane existence, split geometry, zoom,
 //! cwd, agent lifecycle and the PTY are the engine's; the core asks for them
-//! through [`Engine`] and never names the engine's protocol. The one engine
-//! today is Herdr ([`herdr::HerdrEngine`]), and only that module speaks
-//! Herdr's socket API and its generated wire types; the CI check
+//! through [`Engine`] and never names the engine's protocol. There are two
+//! engines: Herdr ([`herdr::HerdrEngine`]), the one users run, and the
+//! core's own ([`own::OwnEngine`]), which runs panes in the node's holders
+//! and only a daemon with the development switch `HIDE_DEV_PANE_HOLDER` on
+//! builds (PRD engine-bundle-3-core-owns D-3, D-5). Only the Herdr module
+//! speaks Herdr's socket API and its generated wire types; the CI check
 //! `scripts/check-engine-boundary.py` keeps it so.
 //!
 //! Terminal bytes (`TerminalRoutes`) and a machine's own work (`NodeLink`)
@@ -19,6 +22,7 @@ pub(crate) mod answers;
 mod contract;
 pub mod herdr;
 pub mod keys;
+pub(crate) mod own;
 pub(crate) mod tokens;
 
 /// How long a call may wait for the engine and how much of an answer it
@@ -165,8 +169,17 @@ pub(crate) type Answer<T> = Result<T, EngineError>;
 /// [`EngineError::Unanswered`], never with another kind, and a caller that
 /// met it reads the engine again before it asks for the change twice.
 pub(crate) trait Engine: Send + Sync {
+    /// The engine's name where a diagnostic says which engine moved
+    /// something: `herdr` or `own_engine`.
+    fn name(&self) -> &'static str;
     /// This engine, with every call first passing `gate`.
     fn gated<'a>(&'a self, gate: Gate<'a>) -> Box<dyn Engine + 'a>;
+    /// How the session's watcher learns it changed: from an event stream it
+    /// subscribes to ([`Changes::Streamed`], `wake` unused), or by `wake`,
+    /// called once a change has been made, after which it reads the whole
+    /// session again ([`Changes::Pulled`]). Asked once per watcher; a later
+    /// call replaces the earlier `wake`.
+    fn changes(&self, wake: Wake) -> Changes;
 
     // The session as a whole.
 
@@ -524,6 +537,20 @@ impl<'a> Gate<'a> {
     }
 }
 
+/// What an engine calls once its session changed ([`Engine::changes`]).
+pub(crate) type Wake = Arc<dyn Fn() + Send + Sync>;
+
+/// How an engine tells its watcher the session changed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Changes {
+    /// Each change is an event of the stream [`Engine::subscribe`] opens.
+    Streamed,
+    /// The engine calls the watcher's wake; the watcher reads
+    /// [`Engine::session`] again. The session is the engine's own state, so
+    /// nothing is replayed (PRD engine-bundle-3-core-owns D-3).
+    Pulled,
+}
+
 /// Whether a tab is to be zoomed on a pane.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Zoom {
@@ -558,11 +585,52 @@ pub(crate) type EventLine =
 #[derive(Clone)]
 pub struct EngineHandle {
     engine: SharedEngine,
+    /// The folder the core's own engine stands for, when this is that
+    /// engine: what the core keys this machine's session by where it keys a
+    /// Herdr session by its socket.
+    own_scope: Option<std::path::PathBuf>,
 }
 
 impl EngineHandle {
     pub(crate) fn new(engine: SharedEngine) -> Self {
-        Self { engine }
+        Self {
+            engine,
+            own_scope: None,
+        }
+    }
+
+    /// The core's own engine, whose panes `holders` run, for the state
+    /// folder `state_dir`: it stands for that folder's engine folder
+    /// (`hide_kit::layout::engine_dir`), saves its session there and lays
+    /// the saved session out again as it opens, `home` is where it opens
+    /// worktrees and a restored pane whose folder is gone, and `node` is this
+    /// machine's node, which reads its folders and runs its Git. Only a daemon
+    /// with the development switch `HIDE_DEV_PANE_HOLDER` on builds it (PRD
+    /// engine-bundle-3-core-owns D-5).
+    pub fn own(
+        holders: Arc<dyn hide_node_link::holders::PaneHolders>,
+        node: Arc<dyn hide_node_link::NodeLink>,
+        state_dir: std::path::PathBuf,
+        home: std::path::PathBuf,
+    ) -> Result<Self, String> {
+        let scope = hide_kit::layout::engine_dir(&state_dir);
+        let engine = own::OwnEngine::open(
+            holders,
+            own::Place {
+                state_dir,
+                home,
+                node,
+            },
+        )?;
+        Ok(Self {
+            engine: Arc::new(engine),
+            own_scope: Some(scope),
+        })
+    }
+
+    /// The folder the core's own engine stands for; `None` for Herdr.
+    pub fn own_scope(&self) -> Option<&std::path::Path> {
+        self.own_scope.as_deref()
     }
 
     pub(crate) fn shared(&self) -> SharedEngine {

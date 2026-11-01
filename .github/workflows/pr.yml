@@ -197,6 +197,7 @@ jobs:
           python3 scripts/check-core-touches-no-machine.py
           python3 scripts/check-engine-boundary.py
           python3 scripts/check-ai-prompt-language.py
+          python3 scripts/check-agent-screen-rules.py
 
       # Reads the pull request's body, which no merge result carries, so it is
       # the one policy check `premerge-check.py` does not repeat.
@@ -292,13 +293,16 @@ jobs:
         # agent_start/real_herdr_tests.rs: zsh, bash and fish tabs on the
         # pinned Herdr started with the integration, whose startup file asks
         # a one-key question no start may answer. herdr-core's
-        # engine/contract.rs: the pinned Herdr meets the engine contract.
+        # engine/contract.rs: the pinned Herdr, and the core's own engine over
+        # pane holders started from the built holder, meet the engine contract.
         if: ${{ !cancelled() && (env.FULL == 'true' || contains(fromJSON(env.PACKAGES), 'herdr-core') || contains(fromJSON(env.PACKAGES), 'hide-host')) }}
-        timeout-minutes: 10
+        timeout-minutes: 15
         run: |
           sudo apt-get install -y --no-install-recommends zsh fish
           export HIDE_TEST_ZSH_BIN=$(command -v zsh) HIDE_TEST_FISH_BIN=$(command -v fish) HIDE_TEST_BASH_BIN=$(command -v bash)
           export HIDE_E2E_HERDR_BIN=$(zsh scripts/fetch-herdr-runtime.sh --platform linux-x86_64)
+          bash scripts/verify-cargo.sh build -p hide-holder --bin hide-holder
+          export HIDE_TEST_HOLDER_BIN=$PWD/target/debug/hide-holder
           bash scripts/verify-cargo.sh nextest --profile ci -p hide-host -p herdr-core --lib -E 'test(/^shell_integration::real_shell_tests::/) | test(/^agent_start::real_herdr_tests::/) | test(/^engine::contract::/)' --run-ignored only --no-capture
       - name: Mint the development issues token
         # Development issues live in with-hide/hide-private (docs/TESTING.md,
@@ -522,15 +526,27 @@ jobs:
         run: |
           bin=$(pwsh -NoProfile -File scripts/fetch-herdr-runtime.ps1 | tr -d '\r')
           echo "bin=$bin" >> "$GITHUB_OUTPUT"
+      - name: Build the pane holder and fetch its pinned ConPTY runtime
+        # For the core's own engine below: its panes run in holders started
+        # from this build, on the ConPTY runtime contracts/conpty.json pins.
+        id: holder
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
+        timeout-minutes: 15
+        run: |
+          bash scripts/verify-cargo.sh build -p hide-holder --bin hide-holder
+          python scripts/fetch-conpty.py --out "$RUNNER_TEMP/holder-conpty"
       - name: Agent start in Windows PowerShell on the pinned Herdr
         # herdr-core/src/agent_start/real_herdr_tests.rs: a Windows
         # PowerShell tab Hide starts with its integration, whose profile
         # asks a question no start may answer; engine/contract.rs: the
-        # pinned Herdr meets the engine contract in Windows PowerShell.
-        if: ${{ !cancelled() && steps.tests.outcome == 'success' && steps.herdr.outcome == 'success' }}
+        # pinned Herdr, and the core's own engine over pane holders, meet the
+        # engine contract in Windows PowerShell.
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' && steps.herdr.outcome == 'success' && steps.holder.outcome == 'success' }}
         timeout-minutes: 10
         env:
           HIDE_E2E_HERDR_BIN: ${{ steps.herdr.outputs.bin }}
+          HIDE_TEST_HOLDER_BIN: ${{ github.workspace }}\target\debug\hide-holder.exe
+          HIDE_HOLDER_CONPTY: ${{ runner.temp }}\holder-conpty
         run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(herdr-core) & kind(lib) & (test(/^agent_start::real_herdr_tests::/) | test(/^engine::contract::/))' --run-ignored only --no-capture
       - name: hided against the pinned Herdr
         if: ${{ !cancelled() && steps.tests.outcome == 'success' && steps.herdr.outcome == 'success' }}

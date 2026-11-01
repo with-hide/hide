@@ -106,31 +106,52 @@ class Install(unittest.TestCase):
             self.install("9.9.9")
         self.assertIn("pi answered '9.9.9', agent-clis.json pins", str(stopped.exception))
 
-    def install_codex(self, help_text):
-        """main() for Codex at its pin, its `--help` answering `help_text`."""
+    def install_kind(self, kind, help_text="", render=""):
+        """main() for `kind` at its pin, its `--help` answering `help_text` and
+        anything else it is asked answering `render`."""
         with tempfile.TemporaryDirectory() as temporary:
-            program = Path(temporary) / "codex"
+            program = Path(temporary) / kind
             program.write_text("")
             with mock.patch.dict(os.environ, {"CI": "true", "RUNNER_TEMP": temporary}), \
                     mock.patch.dict(os.environ, {"GITHUB_PATH": "", "GITHUB_OUTPUT": ""}), \
-                    mock.patch.object(install, "npm", return_value={"codex": program}), \
-                    mock.patch.object(install, "answered", return_value=clis.table()["codex"]["version"]), \
-                    mock.patch.object(install, "helped", return_value=help_text):
-                return install.main(["codex"])
+                    mock.patch.object(install, "npm", return_value={kind: program}), \
+                    mock.patch.object(install, "answered", return_value=clis.table()[kind]["version"]), \
+                    mock.patch.object(install, "helped", return_value=help_text), \
+                    mock.patch.object(install, "rendered", return_value=render) as asked:
+                return install.main([kind]), asked
 
     def test_every_started_agent_has_its_full_access_flag_in_the_contract(self):
         flags = install.full_access_flags()
-        self.assertEqual(flags["codex"], ["--dangerously-bypass-approvals-and-sandbox"])
+        self.assertEqual(flags["opencode"], ["--auto"])
         self.assertEqual(flags["pi"], [])
+        self.assertEqual(install.full_access_words("codex"),
+                         ["-c", "approval_policy=never", "-c", "sandbox_mode=danger-full-access"])
 
     def test_a_cli_whose_help_lists_its_full_access_flag_installs(self):
-        self.assertEqual(self.install_codex("      --dangerously-bypass-approvals-and-sandbox\n"), 0)
+        self.assertEqual(self.install_kind("opencode", "      --auto  run without asking\n")[0], 0)
 
     def test_a_cli_whose_help_lacks_its_full_access_flag_fails_the_install(self):
         # A longer option that starts with the flag is not the flag.
         with self.assertRaises(SystemExit) as stopped:
-            self.install_codex("      --dangerously-bypass-approvals-and-sandbox-later\n")
-        self.assertIn("--help lists no --dangerously-bypass-approvals-and-sandbox", str(stopped.exception))
+            self.install_kind("opencode", "      --auto-later\n")
+        self.assertIn("--help lists no --auto", str(stopped.exception))
+
+    def test_codex_installs_when_its_full_access_words_render_full_access(self):
+        # Codex 0.166.0's prompt input with those words (measured 2026-11-01).
+        render = "Approval policy is currently never. ... `sandbox_mode` is `danger-full-access`: No filesystem sandboxing"
+        code, asked = self.install_kind("codex", render=render)
+        self.assertEqual(code, 0)
+        self.assertEqual(asked.call_args.args[1:],
+                         (["-c", "approval_policy=never", "-c", "sandbox_mode=danger-full-access"],
+                          ["debug", "prompt-input"]))
+
+    def test_codex_whose_full_access_words_start_it_with_defaults_fails_the_install(self):
+        # A key Codex no longer knows is ignored, so the approval line goes
+        # missing while the command still succeeds.
+        with self.assertRaises(SystemExit) as stopped:
+            self.install_kind("codex", help_text="  -c, --config <key=value>\n",
+                              render="`sandbox_mode` is `danger-full-access`")
+        self.assertIn("lacks Approval policy is currently never", str(stopped.exception))
 
     def install_agy(self, url, payload, sha512):
         """agy() on this runner, the row naming `url` and `sha512` and the download answering `payload`."""

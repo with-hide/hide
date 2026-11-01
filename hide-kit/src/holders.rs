@@ -41,8 +41,18 @@ pub fn program_name() -> String {
     format!("hide-holder{}", std::env::consts::EXE_SUFFIX)
 }
 
-/// The ConPTY runtime's folder beside the holder (Windows).
+/// The ConPTY runtime's folder beside the holder in a version folder
+/// (Windows), where the holder loads it from.
 pub const CONPTY: &str = "conpty";
+
+/// The folder beside a node's own program that holds the holder's pinned
+/// ConPTY runtime (Windows): where the app package puts it and where
+/// `scripts/fetch-conpty.py --out` is pointed for a lane's binaries. It is
+/// not named [`CONPTY`] because the app also ships the bundled Herdr's own
+/// `conpty` folder beside `herdr.exe`, whose file list differs, and a
+/// runtime folder holds exactly its own files. A version folder names its
+/// copy [`CONPTY`].
+pub const CONPTY_SOURCE: &str = "holder-conpty";
 
 /// The lock file in the root.
 const LOCK: &str = ".lock";

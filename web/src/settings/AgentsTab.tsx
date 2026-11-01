@@ -10,6 +10,7 @@ import { machineName, windowDeviceId, windowFirst } from "../screenMachine";
 import { useShellStore } from "../store";
 import { agentMachines, checkFailedReason, type AgentMachine } from "./agentRows";
 import { AgentRow, NotInstalledRow } from "./AgentRow";
+import { AgentFilesGroup } from "./AgentFilesGroup";
 import { IdleAgentsGroup } from "./IdleAgentsGroup";
 import { HideSkillsGroup } from "./HideSkillsGroup";
 import { StartingWorkGroup } from "./StartingWorkGroup";
@@ -153,6 +154,8 @@ function MachineAgents({ machine, actions }: { machine: AgentMachine; actions: A
           ) : null}
         </>
       ) : null}
+      {/* The core's machine reads the operator's agent files. */}
+      {device.kind !== "remote" ? <AgentFilesGroup actions={actions} /> : null}
     </div>
   );
 }

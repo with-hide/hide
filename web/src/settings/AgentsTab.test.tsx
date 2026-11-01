@@ -386,7 +386,7 @@ it("puts each installed agent's permission in its row's 권한 column, full acce
   const menu = await openMenu(q('[data-agent-permission-select="local:claude-code"]')!);
   expect(menu).toEqual(["Allow everythingclaude --dangerously-skip-permissions", "Ask every timeclaude", "Custom…"]);
   await act(async () => { document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
-  expect((await openMenu(q('[data-agent-permission-select="local:codex"]')!))[0]).toBe("Allow everythingcodex --dangerously-bypass-approvals-and-sandbox");
+  expect((await openMenu(q('[data-agent-permission-select="local:codex"]')!))[0]).toBe("Allow everythingcodex -c approval_policy=never -c sandbox_mode=danger-full-access");
   await act(async () => { document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
   expect((await openMenu(q('[data-agent-permission-select="local:opencode"]')!))[0]).toBe("Allow everythingopencode --auto");
   await act(async () => { document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
@@ -438,4 +438,31 @@ it("says why a hook waits in plain words, naming the piece only in its hover (PR
   expect(line.parentElement?.getAttribute("title")).toContain("Plugin");
   expect(q("[data-agent-problem]")).toBeNull();
   await unmount();
+});
+
+it("names each agent file Hide left out on the core's machine with its reason dimmed, and asks for a fresh read only while the core publishes them (engine-bundle-3 B1, B24)", async () => {
+  const off = await mount(state([device("local")]));
+  expect(off.q("[data-agents-definitions]")).toBeNull();
+  expect(sent(off.events, "agent_definitions_read")).toHaveLength(0);
+  await off.unmount();
+
+  const on = state([device("local")]);
+  (on.rest.status as Record<string, unknown>).agent_definitions = {
+    rejected: [{ file: "mypi.toml", reason: "mypi.toml: based_on foo is not a built-in agent" }],
+    unreadable: null,
+  };
+  const shown = await mount(on);
+  expect(sent(shown.events, "agent_definitions_read")).toHaveLength(1);
+  const row = shown.q('[data-agents-definition-left-out="mypi.toml"]');
+  expect(row?.textContent).toContain("mypi.toml");
+  expect(row?.textContent).toContain("Not loaded");
+  expect(row?.querySelector("p")?.className).toContain("text-muted-foreground");
+  expect(row?.querySelector("p")?.textContent).toBe("mypi.toml: based_on foo is not a built-in agent");
+  await shown.unmount();
+
+  const clean = state([device("local")]);
+  (clean.rest.status as Record<string, unknown>).agent_definitions = { rejected: [], unreadable: null };
+  const quiet = await mount(clean);
+  expect(quiet.q("[data-agents-definitions]")).toBeNull();
+  await quiet.unmount();
 });

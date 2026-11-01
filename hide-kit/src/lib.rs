@@ -18,6 +18,7 @@
 //!   "never installed"; `~/.hide/agent-hooks/installed-once` from before the
 //!   kit is not such a record (B20).
 
+pub mod agent_definitions;
 mod agent_kit;
 mod agent_update;
 pub mod agents;

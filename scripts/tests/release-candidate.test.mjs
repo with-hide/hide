@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { awaitStartedVerification, candidateReceipt, VERIFY_START_LIMIT_MS, withDeviceHelpers, withMacosBinaries } from "../release-candidate.mjs";
-import { recordReleaseBinaries } from "../../desktop/scripts/release-binaries.mjs";
+import { recordReleaseBinaries, RELEASE_PROGRAMS } from "../../desktop/scripts/release-binaries.mjs";
 
 // The producer/consumer contract: public dispatch inputs, one receipt,
 // the exact push/main verification it names, never private revision metadata.
@@ -172,7 +172,7 @@ function macosArtifact(t, identity) {
   const binaries = path.join(root, "target", "release");
   fs.mkdirSync(binaries, { recursive: true });
   fs.mkdirSync(path.join(root, "desktop", "out"), { recursive: true });
-  const names = ["hided", "hide", "hide-agent-hooks"];
+  const names = RELEASE_PROGRAMS;
   for (const name of names) fs.writeFileSync(path.join(binaries, name), `mach-o ${name}`);
   recordReleaseBinaries(path.join(root, "desktop", "out", "release-binaries.json"), binaries, names, identity);
   const digests = Object.fromEntries(names.map((name) => [name, createHash("sha256").update(`mach-o ${name}`).digest("hex")]));

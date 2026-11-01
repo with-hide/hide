@@ -20,7 +20,7 @@ Herdr's `vendor/portable-pty.patches.md`, in the same release, gives each one's 
 | File | Change |
 | --- | --- |
 | `Cargo.toml` | Written by hand instead of crates.io's normalized form: `publish = false`, no examples or their dev-dependencies, no `lazy_static`, and the `winapi` feature the job start needs (`jobapi2`). |
-| `src/win/psuedocon.rs` | The pinned runtime is required: Herdr's fallback to the ConPTY in `kernel32.dll` when the runtime is absent, its `HERDR_WINDOWS_CONPTY=system` switch and its fallback on other architectures are gone, so a pane runs only on the ConPTY Hide tested, and only on x86_64. A missing, changed or unloadable runtime is an error kept once and answered to every caller (`verify_runtime`), not a panic, and its words name the runtime's file list rather than the file Herdr's bundle keeps it in. `spawn_command_in_job` starts the child suspended, puts it in the caller's job and only then resumes it, so nothing it starts escapes the job. |
+| `src/win/psuedocon.rs` | The pinned runtime is required: Herdr's fallback to the ConPTY in `kernel32.dll` when the runtime is absent, its `HERDR_WINDOWS_CONPTY=system` switch and its fallback on other architectures are gone, so a pane runs only on the ConPTY Hide tested, and only on x86_64. A missing, changed or unloadable runtime is an error kept once and answered to every caller (`verify_runtime`), not a panic, and its words name the runtime's file list rather than the file it is kept in; that file is Hide's own `conpty-files.json`, which `scripts/fetch-conpty.py` writes, in place of the `herdr-conpty.json` of Herdr's bundle. `spawn_command_in_job` starts the child suspended, puts it in the caller's job and only then resumes it, so nothing it starts escapes the job. |
 | `src/win/conpty.rs` | `ConPtySlavePty` implements `spawn_command_in_job`. |
 | `src/win/mod.rs` | Exports `verify_runtime`. |
 | `src/lib.rs` | `SlavePty::spawn_command_in_job` (Windows), which refuses by default. |
@@ -29,9 +29,11 @@ Herdr's `vendor/portable-pty.patches.md`, in the same release, gives each one's 
 ## The ConPTY runtime
 
 The runtime itself is not in this repository.
-It is Microsoft's `Microsoft.Windows.Console.ConPTY` 1.24.260710001 (MIT), the `conpty/` folder the pinned Herdr release ships beside `herdr.exe`, unchanged; `CONPTY_FILES` in `src/win/psuedocon.rs` pins each file's sha256, and the holder's version folder carries a copy (docs/ARCHITECTURE.md, The pane holder).
+It is Microsoft's `Microsoft.Windows.Console.ConPTY` 1.24.260710001 (MIT), the same package the pinned Herdr release ships beside `herdr.exe`, taken from nuget.org at the version and digest `contracts/conpty.json` pins: `scripts/fetch-conpty.py` refuses a package or a file whose sha256 differs from the pin and writes the runtime folder (`conpty.dll`, `x64/OpenConsole.exe`, `arm64/OpenConsole.exe` and the file list `conpty-files.json`).
+`CONPTY_FILES` in `src/win/psuedocon.rs` pins each file's sha256 too, which the holder checks before it loads the runtime; `scripts/tests/test_fetch_conpty.py` fails when it and the contract disagree.
+The app package carries the folder beside the holder, and the holder's version folder carries a copy (docs/ARCHITECTURE.md, The pane holder).
 
 ## Moving to a newer upstream
 
 Compare the new `portable-pty` (or the new Herdr release's `vendor/portable-pty` and its patch notes) with these sources, carry Hide's changes above across, and update the headers and this file in the same change.
-When the pinned Herdr moves its ConPTY runtime, `CONPTY_FILES` moves with it.
+A newer ConPTY moves `contracts/conpty.json` and `CONPTY_FILES` together.

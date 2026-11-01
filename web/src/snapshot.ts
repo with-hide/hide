@@ -1446,6 +1446,9 @@ export type MissionEventsSnapshot = { mission: string | null; events: MissionEve
 /** The agent a node or a candidate names, with its model and effort. */
 export type MissionWorker = { agent: string; model?: string | null; effort?: string | null; effort_auto?: boolean };
 
+/** The agent, model and effort Hide started a node's worker with (`missions::NodeLaunch`). */
+export type MissionNodeLaunch = { agent_id: string; agent: string; model?: string | null; effort?: string | null };
+
 /** One node of a mission's map, with what the map draws and nothing the shell works out (`NodeView`). */
 export type MissionNode = {
   key: string;
@@ -1459,6 +1462,8 @@ export type MissionNode = {
   agent_id: string | null;
   /** The worker's life as `hide agent show` gives it: a worker Hide put to sleep is `asleep` (`NodeView.agent_runtime`); none with no registration or from an older core. */
   agent_runtime?: AgentRuntime | null;
+  /** What the node's current worker was proven launched with (`NodeView.launched`): kept by the core for that registration, so it outlives the worker's pane; none until proven, for a start on the CLI's defaults, or from an older core. */
+  launched?: MissionNodeLaunch | null;
   /** The worker's pane on `machine`, which its status mark and 터미널로 이동 follow. */
   pane_id: string | null;
   machine: string | null;
@@ -2273,6 +2278,12 @@ export type WslDistribution = {
   /** Why it cannot be connected: its first-run setup has not finished (B28), or it runs on WSL 1. */
   problem: "setup_unfinished" | "wsl1" | null;
 };
+
+/** What the last read of `~/.hide/agents` left out: each file with one line that starts with its name, and why the folder itself could not be listed. */
+export interface AgentDefinitions {
+  rejected: { file: string; reason: string }[];
+  unreadable: string | null;
+}
 
 /** `idle` before the first `ssh_hosts_list`, `loading` while one runs (the last answer stays), `ready` once it is in. */
 export type SshHosts = {
@@ -3262,6 +3273,8 @@ export type SnapshotRest = {
     background_ai?: BackgroundAi;
     /** The Host entries Add device lists, read on an `ssh_hosts_list` event (PRD settings-cleanup D-19). */
     ssh_hosts?: SshHosts;
+    /** The operator's agent definition files left out, with why (PRD engine-bundle-3-core-owns D-17, B24); absent while the development switch `HIDE_DEV_PANE_HOLDER` is off. */
+    agent_definitions?: AgentDefinitions | null;
     herdr_profiles?: HerdrProfiles;
     diagnostics?: CoreDiagnostic[];
     async_operations?: AsyncOperation[];

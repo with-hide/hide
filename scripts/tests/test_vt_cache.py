@@ -24,6 +24,10 @@ USERS = {
     ('pr.yml', 'windows-check'): False,
     ('release.yml', 'test'): False,
     ('holder-restart.yml', 'restart'): False,
+    ('package.yml', 'windows-compile'): False,
+    ('package.yml', 'package'): False,
+    ('package.yml', 'macos-compile'): False,
+    ('release-candidate.yml', 'macos-binaries'): False,
 }
 
 

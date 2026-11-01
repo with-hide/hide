@@ -2696,6 +2696,7 @@ fn a_pending_core_does_nothing_outside_until_its_link_commits() -> Result<()> {
             home: home.clone(),
             herdr_socket_path: None,
             herdr_bin_path: None,
+            own_engine: false,
             login_shell: None,
             state_dir: state.clone(),
             legacy_state_dir: None,

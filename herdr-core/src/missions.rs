@@ -642,6 +642,28 @@ pub struct MissionNode {
     /// The wakes Hide sent the sleeping worker (B10); at most `WOKEN_LIMIT`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub woken: Vec<Woken>,
+    /// What the node's worker was proven launched with, kept with the
+    /// registration it was proven for, so the map names what ran after the
+    /// worker's pane is gone and never another session's launch in the same
+    /// pane (`Runtime::record_node_launches`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launched: Option<NodeLaunch>,
+}
+
+/// The agent, model and effort Hide started a node's worker with, proven for
+/// one registration: its pane's launch record named the registration's own
+/// conversation. A start on the CLI's defaults records no launch, so it
+/// proves none.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct NodeLaunch {
+    /// The worker's registration the launch was proven for.
+    pub agent_id: String,
+    /// The agent kind, in Herdr's spelling.
+    pub agent: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
 }
 
 /// Causes a node remembers as raised; past this a new cause is refused
@@ -1749,6 +1771,7 @@ pub(crate) fn apply_plan(
                 round: 0,
                 hide: None,
                 woken: Vec::new(),
+                launched: None,
             });
             node.title.clone_from(&input.title);
             node.kind = input.kind;

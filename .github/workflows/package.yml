@@ -205,6 +205,11 @@ jobs:
         with:
           set: release
           save: ${{ github.ref == 'refs/heads/main' }}
+      # hide-vt's Zig inputs and caches for the pane holder, which the vt
+      # lane saves.
+      - uses: ./.github/actions/vt-cache
+        with:
+          save: false
       - if: inputs.quick-build
         uses: ./.github/actions/quick-release-build
       - uses: pnpm/action-setup@v6
@@ -231,6 +236,7 @@ jobs:
             target/release/hided.exe
             target/release/hide.exe
             target/release/hide-agent-hooks.exe
+            target/release/hide-holder.exe
             desktop/out/release-binaries.json
           if-no-files-found: error
           retention-days: 1
@@ -263,6 +269,11 @@ jobs:
         with:
           set: release
           save: ${{ github.ref == 'refs/heads/main' }}
+      # hide-vt's Zig inputs and caches for the pane holder, which the vt
+      # lane saves.
+      - uses: ./.github/actions/vt-cache
+        with:
+          save: false
       - if: inputs.quick-build
         uses: ./.github/actions/quick-release-build
       - uses: pnpm/action-setup@v6
@@ -627,6 +638,11 @@ jobs:
         with:
           set: release
           save: ${{ github.ref == 'refs/heads/main' }}
+      # hide-vt's Zig inputs and caches for the pane holder, which the vt
+      # lane saves.
+      - uses: ./.github/actions/vt-cache
+        with:
+          save: false
       - if: inputs.quick-build
         uses: ./.github/actions/quick-release-build
       - uses: pnpm/action-setup@v6
@@ -653,6 +669,7 @@ jobs:
             target/release/hided
             target/release/hide
             target/release/hide-agent-hooks
+            target/release/hide-holder
             desktop/out/release-binaries.json
           if-no-files-found: error
           retention-days: 1

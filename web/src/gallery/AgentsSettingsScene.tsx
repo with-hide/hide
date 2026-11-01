@@ -1,7 +1,8 @@
 // Settings › Agents over invented wire values, for review captures: every
 // installed agent on one line, a broken one with its one problem line, Codex
 // on 직접 입력, Grok with the 일부 기능 chip and Pi with no permission
-// question. The page takes the window's width up to the sheet's, so a narrow
+// question; `state=definitions` adds the agent files under ~/.hide/agents
+// that Hide left out, as the development switch shows them. The page takes the window's width up to the sheet's, so a narrow
 // window draws it as a phone or a narrow sheet would. Which pieces
 // are broken and what each start runs is the core's and is tested there.
 import { useLayoutEffect, useMemo } from "react";
@@ -44,10 +45,18 @@ function agents(state: string): KitAgent[] {
   ];
 }
 
+const LEFT_OUT = {
+  rejected: [
+    { file: "mypi.toml", reason: "mypi.toml: based_on foo is not a built-in agent" },
+    { file: "tool.toml", reason: "tool.toml: program pi is taken by pi" },
+  ],
+  unreadable: null,
+};
+
 export function AgentsSettingsScene({ params }: { params: URLSearchParams }) {
   const theme = params.get("theme") === "light" ? "light" : "dark";
   const state = params.get("state") ?? "healthy";
-  if (state !== "healthy" && state !== "broken") throw new Error(`Unknown Agents settings scene state ${state}`);
+  if (state !== "healthy" && state !== "broken" && state !== "definitions") throw new Error(`Unknown Agents settings scene state ${state}`);
   const lang = params.get("lang") ?? "ko";
   if (!["en", "ko", "ja", "zh-CN"].includes(lang)) throw new Error(`Unknown Agents settings language ${lang}`);
   const actions = useMemo(() => createActions(() => true), []);
@@ -55,7 +64,7 @@ export function AgentsSettingsScene({ params }: { params: URLSearchParams }) {
     useShellStore.setState({
       connection: "live",
       rest: {
-        status: {},
+        status: state === "definitions" ? { agent_definitions: LEFT_OUT } : {},
         navigator: {
           focused_device_id: "local",
           devices: [{ id: "local", kind: "local", label: null, machine_name: "Mac", state: "local", kit: { unavailable: null, busy: false, components: [{ id: "cli", state: "installed" }], agents: agents(state), offers_reinstall: false, shares_account_with: null } }],

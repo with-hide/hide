@@ -69,6 +69,7 @@ fn daemon_env(root: &Path, herdr: &PrivateHerdr) -> Env {
         home: herdr.home.clone(),
         herdr_socket_path: Some(herdr.socket.display().to_string()),
         herdr_bin_path: Some(herdr.bin.clone()),
+        own_engine: false,
         login_shell: None,
         state_dir: root.join("state"),
         legacy_state_dir: None,

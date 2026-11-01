@@ -72,7 +72,7 @@
       "{}"
     ],
     "full_access_flag": [
-      "--dangerously-bypass-approvals-and-sandbox"
+      "-c"
     ],
     "untitled": "Codex",
     "cells": {

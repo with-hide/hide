@@ -100,16 +100,18 @@ jobs:
         timeout-minutes: 3
         run: bash scripts/verify-web.sh install holder
       - name: Fetch the pinned ConPTY runtime
-        # A Windows holder runs a pane only on the pinned ConPTY runtime: the
-        # conpty folder beside the pinned Herdr's herdr.exe, which the fetch
-        # checks against the pin's digest.
+        # A Windows holder runs a pane only on the pinned ConPTY runtime:
+        # Microsoft's NuGet package at the version and digest
+        # contracts/conpty.json pins, which the fetch refuses when it or a
+        # file in it differs.
         id: conpty
         if: matrix.system == 'windows'
         timeout-minutes: 5
         shell: pwsh
         run: |
-          $bin = (pwsh -NoProfile -File scripts/fetch-herdr-runtime.ps1 | Select-Object -Last 1).Trim()
-          "folder=$(Join-Path (Split-Path -Parent $bin) 'conpty')" >> $env:GITHUB_OUTPUT
+          $folder = (python scripts/fetch-conpty.py | Select-Object -Last 1).Trim()
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "folder=$folder" >> $env:GITHUB_OUTPUT
       - name: The pane holder's tests and Clippy
         # The holder links hide-vt; its tests start the built holder from a
         # version folder as a node does, without one (docs/TESTING.md, The

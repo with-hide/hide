@@ -8,6 +8,7 @@ mod agent_areas;
 mod agent_catalog;
 pub(crate) mod agent_choice;
 mod agent_close;
+mod agent_definitions;
 mod agent_groups;
 mod agent_hook_status;
 mod agent_permission;
@@ -1984,6 +1985,9 @@ pub struct Runtime {
     next_ssh_hosts_id: u64,
     /// The listing `status.ssh_hosts` reports as loading, while its worker runs.
     ssh_hosts_job: Option<ssh_hosts::SshHostsJob>,
+    /// The operator's agent definition files as last read; `None` while the
+    /// development switch is off, which reads none (`agent_definitions`).
+    agent_definitions: Option<agent_definitions::AgentDefinitions>,
     herdr_profiles_job: Option<herdr_profiles::HerdrProfilesJob>,
     herdr_profile_endpoints: BTreeMap<String, Result<String, String>>,
     /// The connection attempt each first-run Connect started, by device and
@@ -2615,6 +2619,7 @@ impl Runtime {
             repository_clone_job: None,
             next_ssh_hosts_id: 0,
             ssh_hosts_job: None,
+            agent_definitions: None,
             herdr_profiles_job: None,
             herdr_profile_endpoints: BTreeMap::new(),
             first_run_attempts: BTreeMap::new(),

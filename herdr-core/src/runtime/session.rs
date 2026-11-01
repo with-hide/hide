@@ -1749,12 +1749,12 @@ impl Runtime {
                 "checkout_id": checkout_id,
                 "from_tab_id": hide_tab,
                 "to_tab_id": herdr_tab,
-                "origin": "herdr",
+                "origin": self.engine_name(),
             }));
             self.push_diagnostic(
                 "tab.focus.followed",
                 format!(
-                    "Herdr focused tab {herdr_tab} in {checkout_id}; Hide was showing {hide_tab}"
+                    "The engine focused tab {herdr_tab} in {checkout_id}; Hide was showing {hide_tab}"
                 ),
             );
         }
@@ -3969,12 +3969,19 @@ impl Runtime {
             "kind": "pane.focus.followed",
             "from_pane_id": from,
             "to_pane_id": arriving,
-            "origin": "herdr",
+            "origin": self.engine_name(),
         }));
         self.push_diagnostic(
             "pane.focus.followed",
-            format!("Herdr focused pane {arriving}; Hide was on {from}"),
+            format!("The engine focused pane {arriving}; Hide was on {from}"),
         );
+    }
+
+    /// The name of the engine this machine's session comes from, for a
+    /// diagnostic that says which engine moved something; `None` before an
+    /// engine is connected.
+    fn engine_name(&self) -> Option<&'static str> {
+        self.live.as_ref().map(|live| live.engine.name())
     }
     /// Drops the operator focus once Herdr moves focus off the pane the
     /// operator chose.

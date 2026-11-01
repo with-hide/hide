@@ -1,0 +1,74 @@
+# The [screen] rules are Herdr v0.9.5's agent detection manifest for this agent
+# (https://github.com/herdrdev/herdr, commit 2ecf19a, src/detect/manifests/antigravity.toml).
+# Copyright 2025 herdr contributors. Licensed under the Apache License,
+# Version 2.0; see NOTICE at the repository root.
+# Changed by Hide: the manifest's id and aliases became this file's identity
+# and its version, engine and rules moved under [screen], unchanged.
+schema = 1
+id = "antigravity"
+name = "Antigravity"
+executables = ["agy"]
+aliases = ["agy", "antigravity-cli", "antigravity_cli"]
+home = "~/.gemini/config"
+hooks = "agy"
+
+[resume]
+session = ["--conversation", "{session}"]
+
+[screen]
+version = "2026.10.05.1"
+min_engine_version = 1
+updated_at = "2026-10-05T00:00:00Z"
+
+[[screen.rules]]
+id = "permission_prompt"
+state = "blocked"
+priority = 300
+region = "bottom_non_empty_lines(2)"
+visible_blocker = true
+contains = ["navigate", "tab amend"]
+
+[[screen.rules]]
+id = "question_prompt"
+state = "blocked"
+priority = 290
+region = "bottom_non_empty_lines(2)"
+visible_blocker = true
+contains = ["navigate", "esc skip"]
+
+[[screen.rules]]
+id = "trust_prompt"
+state = "blocked"
+priority = 280
+region = "bottom_non_empty_lines(8)"
+visible_blocker = true
+contains = ["do you trust the contents of this project?", "yes, i trust this folder", "enter confirm"]
+
+# Pre-1.1.28 permission dialog.
+[[screen.rules]]
+id = "legacy_permission_prompt"
+state = "blocked"
+priority = 270
+region = "whole_recent"
+visible_blocker = true
+contains = ["requesting permission for:"]
+any = [
+  { contains = ["do you want to proceed?"] },
+  { contains = ["tab amend", "edit command"] },
+]
+
+[[screen.rules]]
+id = "esc_cancel_footer_working"
+state = "working"
+priority = 110
+region = "bottom_non_empty_lines(2)"
+visible_working = true
+regex = ['(?m)^\s*─{3,}\s*esc to cancel\b']
+
+[[screen.rules]]
+id = "spinner_working"
+state = "working"
+priority = 100
+region = "bottom_non_empty_lines(12)"
+visible_working = true
+line_regex = ['^\s*[\u2801-\u28FF]+\s+\S']

@@ -2017,3 +2017,42 @@ fn a_new_file_at_a_renamed_tabs_old_path_gets_its_own_tab_id() {
         Runtime::file_tab_id("w", "c", "/r/b.txt")
     );
 }
+
+/// B10: a reopen that brings the keyboard to the pane it made saves that
+/// choice at once, so the daemon started next shows the reopened tab, not
+/// the one the keyboard was in before it.
+#[test]
+fn a_reopen_saves_the_pane_it_brings_the_keyboard_to() {
+    let mut runtime = runtime();
+    runtime.snapshot.ui_state.selected_pane_id = Some("w1:p2".to_owned());
+    runtime.persist_ui_state();
+    let item = closed_file("closed", "/repo/closed.rs");
+    runtime.push_recent_closed(item.clone());
+    runtime.reopen_in_flight = Some("closed".to_owned());
+    let request = crate::recent_closed::reopen::ReopenRequest {
+        codex_daemon: Default::default(),
+        permissions: Default::default(),
+        item,
+        workspace_exists: true,
+        tab_exists: true,
+        fallback_pane_id: None,
+        owner: None,
+    };
+
+    assert!(runtime.ingest_reopen_result(
+        &request,
+        Ok(
+            crate::recent_closed::reopen::FileReopenResultOrHerdr::Herdr(
+                crate::recent_closed::reopen::ReopenOutcome {
+                    tab_id: None,
+                    consumed: true,
+                    focused_pane_id: Some("w1:p4".to_owned()),
+                    notices: vec![],
+                    agents: vec![],
+                }
+            )
+        ),
+    ));
+    let (saved, _, _) = crate::persistence::load(&runtime.state_path);
+    assert_eq!(saved.selected_pane_id.as_deref(), Some("w1:p4"));
+}

@@ -1,4 +1,14 @@
 use super::*;
+use crate::definition::{Builtin, builtin as defs};
+
+/// The agent's own folder, from its built-in definition's `home`; a
+/// definition with Hide's features always names one, or the build fails.
+const fn folder(definition: &Builtin) -> &'static [&'static str] {
+    match definition.home {
+        Some(home) => home,
+        None => panic!("a built-in agent with Hide's features names its home"),
+    }
+}
 use composer::{Composer, Placeholder, Region, Style};
 const GROK_CONTEXT_ABSENCE: CapabilityAbsence = CapabilityAbsence {
     reason: "Grok discards SessionStart and UserPromptSubmit output; the installed path cannot inject guidance or Memory.",
@@ -233,13 +243,14 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             },
             evidence: "https://code.claude.com/docs/en/settings-reference",
         },
-        id: "claude-code",
-        label: "Claude Code",
+        id: defs::CLAUDE_CODE.id,
+        label: defs::CLAUDE_CODE.name,
         picker_label: "Claude",
         sidebar_label: Some("Claude"),
         terminal_click: true,
-        aliases: &["claude", "claude_code"],
-        executables: &["claude"],
+        aliases: defs::CLAUDE_CODE.aliases,
+        executables: defs::CLAUDE_CODE.executables,
+        folder: folder(&defs::CLAUDE_CODE),
         minimum: Some(MinimumVersion {
             version: "2.1.278",
             evidence: "docs/agent-hooks.md#the-oldest-version-of-each-agent",
@@ -251,7 +262,6 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         herdr: HerdrIntegration {
             name: "claude",
             target: "claude",
-            folder: &[".claude"],
         },
         home_variable: None,
         ai: Support::Supported(AiProvider {
@@ -337,13 +347,14 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             },
             evidence: "https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/core/config.schema.json",
         },
-        id: "codex",
-        label: "Codex",
+        id: defs::CODEX.id,
+        label: defs::CODEX.name,
         picker_label: "Codex",
         sidebar_label: Some("Codex"),
         terminal_click: false,
-        aliases: &[],
-        executables: &["codex"],
+        aliases: defs::CODEX.aliases,
+        executables: defs::CODEX.executables,
+        folder: folder(&defs::CODEX),
         minimum: Some(MinimumVersion {
             version: "0.155.1",
             evidence: "docs/agent-hooks.md#the-oldest-version-of-each-agent",
@@ -355,7 +366,6 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         herdr: HerdrIntegration {
             name: "codex",
             target: "codex",
-            folder: &[".codex"],
         },
         home_variable: Some("CODEX_HOME"),
         ai: Support::Supported(AiProvider {
@@ -434,13 +444,14 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             },
             evidence: "https://docs.x.ai/build/settings/reference.md",
         },
-        id: "grok",
-        label: "Grok",
+        id: defs::GROK.id,
+        label: defs::GROK.name,
         picker_label: "Grok",
         sidebar_label: None,
         terminal_click: false,
-        aliases: &[],
-        executables: &["grok"],
+        aliases: defs::GROK.aliases,
+        executables: defs::GROK.executables,
+        folder: folder(&defs::GROK),
         minimum: Some(MinimumVersion {
             // The journey ran on 1.0.52 on all three systems; 1.0.50 is a
             // reading of Grok's source, not a run.
@@ -454,7 +465,6 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         herdr: HerdrIntegration {
             name: "grok",
             target: "grok",
-            folder: &[".grok"],
         },
         home_variable: None,
         ai: Support::Supported(AiProvider {
@@ -551,13 +561,14 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             },
             evidence: "https://opencode.ai/v2/docs/config/",
         },
-        id: "opencode",
-        label: "OpenCode",
+        id: defs::OPENCODE.id,
+        label: defs::OPENCODE.name,
         picker_label: "OpenCode",
         sidebar_label: Some("OpenCode"),
         terminal_click: false,
-        aliases: &[],
-        executables: &["opencode"],
+        aliases: defs::OPENCODE.aliases,
+        executables: defs::OPENCODE.executables,
+        folder: folder(&defs::OPENCODE),
         minimum: Some(MinimumVersion {
             // Windows loaded the plugin on 1.18.35; 1.18.30's shapes are
             // proven on macOS and Linux only.
@@ -571,7 +582,6 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         herdr: HerdrIntegration {
             name: "opencode",
             target: "opencode",
-            folder: &[".config", "opencode"],
         },
         home_variable: None,
         ai: Support::Supported(AiProvider {
@@ -664,13 +674,14 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             },
             evidence: "https://unpkg.com/@earendil-works/pi-coding-agent@1.0.4/docs/models.md",
         },
-        id: "pi",
-        label: "Pi",
+        id: defs::PI.id,
+        label: defs::PI.name,
         picker_label: "Pi",
         sidebar_label: None,
         terminal_click: false,
-        aliases: &[],
-        executables: &["pi"],
+        aliases: defs::PI.aliases,
+        executables: defs::PI.executables,
+        folder: folder(&defs::PI),
         minimum: Some(MinimumVersion {
             version: "1.0.4",
             evidence: "hide-agent-hooks/tests/fixtures/pi-extension/pi-1.0.4.json",
@@ -682,7 +693,6 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         herdr: HerdrIntegration {
             name: "pi",
             target: "pi",
-            folder: &[".pi", "agent"],
         },
         home_variable: None,
         ai: Support::Supported(AiProvider {
@@ -772,13 +782,14 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             },
             evidence: "https://github.com/can1357/oh-my-pi/blob/v18.7.0/packages/coding-agent/src/main.ts",
         },
-        id: "omp",
-        label: "omp",
+        id: defs::OMP.id,
+        label: defs::OMP.name,
         picker_label: "omp",
         sidebar_label: None,
         terminal_click: false,
-        aliases: &[],
-        executables: &["omp"],
+        aliases: defs::OMP.aliases,
+        executables: defs::OMP.executables,
+        folder: folder(&defs::OMP),
         minimum: Some(MinimumVersion {
             version: "18.7.0",
             evidence: "hide-agent-hooks/tests/fixtures/pi-extension/omp-18.7.0.json",
@@ -790,7 +801,6 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         herdr: HerdrIntegration {
             name: "omp",
             target: "omp",
-            folder: &[".omp", "agent"],
         },
         home_variable: None,
         ai: Support::Supported(AiProvider {
@@ -879,13 +889,14 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             }),
             reason: "The API-key environment has not been proven.",
         },
-        id: "antigravity",
-        label: "Antigravity",
+        id: defs::ANTIGRAVITY.id,
+        label: defs::ANTIGRAVITY.name,
         picker_label: "Antigravity",
         sidebar_label: Some("Antigravity"),
         terminal_click: false,
-        aliases: &["agy", "antigravity-cli", "antigravity_cli"],
-        executables: &["agy"],
+        aliases: defs::ANTIGRAVITY.aliases,
+        executables: defs::ANTIGRAVITY.executables,
+        folder: folder(&defs::ANTIGRAVITY),
         minimum: Some(MinimumVersion {
             // The Windows guard was proven on 1.4.2; 1.4.0 on macOS only.
             version: "1.4.2",
@@ -898,7 +909,6 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         herdr: HerdrIntegration {
             name: "agy",
             target: "antigravity-cli",
-            folder: &[".gemini", "config"],
         },
         home_variable: None,
         ai: Support::Supported(AiProvider {
@@ -998,13 +1008,14 @@ pub(super) const RETIRED_CURSOR: AgentAdapter = AgentAdapter {
         auto_update: None,
         reason: "The API-key environment and auto-update policy have not been proven.",
     },
-    id: "cursor",
-    label: "Cursor",
+    id: defs::CURSOR.id,
+    label: defs::CURSOR.name,
     picker_label: "Cursor",
     sidebar_label: None,
     terminal_click: false,
-    aliases: &[],
-    executables: &["cursor-agent"],
+    aliases: defs::CURSOR.aliases,
+    executables: defs::CURSOR.executables,
+    folder: folder(&defs::CURSOR),
     minimum: None,
     skill_location: SkillLocation::Shared,
     hook: HookInstall::None,
@@ -1015,7 +1026,6 @@ pub(super) const RETIRED_CURSOR: AgentAdapter = AgentAdapter {
     herdr: HerdrIntegration {
         name: "cursor",
         target: "cursor",
-        folder: &[".cursor"],
     },
     home_variable: None,
     ai: Support::Unsupported(RETIRED_CONTEXT_ABSENCE),

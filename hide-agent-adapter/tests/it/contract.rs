@@ -611,6 +611,10 @@ fn a_launch_choice_reaches_each_agent_only_as_its_declared_options_take_it() {
 /// Claude Code also takes the setting that skips the warning it stops a
 /// bypass start at (seen on 2.1.316 in an empty HOME, 2026-11-01). The
 /// `agent CLIs` lane finds each option's name again in the pinned CLI's help.
+/// Codex takes the two overrides its bypass flag sets, which it accepts
+/// repeated where it refuses that flag twice (measured on 0.166.0 in an empty
+/// HOME, 2026-11-01), so an operator's alias that adds the option again does
+/// not stop the start.
 #[test]
 fn every_started_agent_declares_how_it_starts_without_permission_questions() {
     use hide_agent_adapter::FullAccess;
@@ -627,7 +631,12 @@ fn every_started_agent_declares_how_it_starts_without_permission_questions() {
         ),
         (
             "codex",
-            FullAccess::Options(&[&["--dangerously-bypass-approvals-and-sandbox"]]),
+            FullAccess::Options(&[&[
+                "-c",
+                "approval_policy=never",
+                "-c",
+                "sandbox_mode=danger-full-access",
+            ]]),
         ),
         ("grok", FullAccess::Options(&[&["--always-approve"]])),
         ("opencode", FullAccess::Options(&[&["--auto"]])),
@@ -645,7 +654,7 @@ fn every_started_agent_declares_how_it_starts_without_permission_questions() {
     assert_eq!(started, expected);
     for (id, access) in started {
         assert!(
-            access.names().iter().all(|name| name.starts_with("--")),
+            access.names().iter().all(|name| name.starts_with('-')),
             "{id}: each full-access option starts with its name"
         );
     }

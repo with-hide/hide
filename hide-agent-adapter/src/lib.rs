@@ -1,11 +1,16 @@
 //! Static agent declarations shared by hooks, sessions, installation and UI.
 //!
-//! A dialect id selects code in its existing owner. This crate performs no
-//! I/O, starts no work and stores no runtime state. Lookup borrows the input
-//! and static rows: no allocation, lock, normalization buffer or cache.
+//! A dialect id selects code in its existing owner; who each agent is comes
+//! from its definition file (`definition`). This crate reads no file and no
+//! network at run time, starts no work and keeps no state of a caller's.
+//! An adapter lookup borrows the input and static rows: no allocation, lock,
+//! normalization buffer or cache. The one exception is
+//! `definition::builtins`, which compiles the built-in files' screen rules
+//! once, on first use, behind a `LazyLock`, and keeps them for the process.
 
 pub mod composer;
 mod declarations;
+pub mod definition;
 mod home;
 pub use home::{HomeScope, HomeUnresolved, antigravity_app_data};
 mod journey;
@@ -382,6 +387,21 @@ impl LaunchDialect {
     /// whose preselected answer exits, so its start also carries the setting
     /// that skips only that warning, as `--settings` JSON: nothing is written
     /// to its own files, and a brief typed at the start reaches the prompt.
+    ///
+    /// The operator's shell alias of the program may add the same option
+    /// again, since the pinned Herdr types the program's bare name, so each
+    /// full-access option is one its CLI accepts twice (measured 2026-11-01 in
+    /// an empty HOME with the option given twice): Claude Code 2.1.316, agy
+    /// 1.4.12, OpenCode 2.0.29 and omp 18.7.0 start.
+    /// Codex 0.166.0 refuses `--dangerously-bypass-approvals-and-sandbox`
+    /// twice ("cannot be used multiple times"), and `-a never -s
+    /// danger-full-access` twice or beside that flag, so it takes the two
+    /// `-c` overrides that flag sets: Codex accepts them repeated and beside
+    /// the flag, and its `/status` shows "Full Access" and the prompt input
+    /// `codex debug prompt-input` renders is the same as the flag's. Grok
+    /// 1.0.70 refuses `--always-approve` twice and `--permission-mode` twice,
+    /// and has no option that does the same and may be repeated, so an alias
+    /// that adds `--always-approve` stops a Grok start (docs/INSTALL.md).
     pub const fn options(self) -> LaunchOptions {
         match self {
             Self::Antigravity => LaunchOptions {
@@ -407,8 +427,15 @@ impl LaunchDialect {
                 model: &["--model", "{}"],
                 effort: &["-c", "model_reasoning_effort={}"],
                 efforts: &["minimal", "low", "medium", "high", "xhigh"],
+                // `--dangerously-bypass-approvals-and-sandbox` sets these
+                // two, but Codex refuses it twice; a repeated `-c` is
+                // accepted, beside that flag too (see above). One option,
+                // both overrides, so Settings › Agents shows the sandbox too.
                 full_access: FullAccess::Options(&[&[
-                    "--dangerously-bypass-approvals-and-sandbox",
+                    "-c",
+                    "approval_policy=never",
+                    "-c",
+                    "sandbox_mode=danger-full-access",
                 ]]),
             },
             Self::Grok => LaunchOptions {
@@ -539,13 +566,23 @@ impl LaunchDialect {
 
     /// The native selector prefix, independent of whether this build has
     /// implemented and declared the reader needed to resume that agent.
+    /// It is the first word of the agent's definition's `[resume] session`,
+    /// whose second is the session; retired Cursor keeps its own.
     pub const fn resume_flag(self) -> &'static str {
-        match self {
-            Self::Codex => "resume",
-            Self::Pi => "--session",
-            Self::OpenCode => "-s",
-            Self::Claude | Self::Grok | Self::Omp | Self::Cursor => "--resume",
-            Self::Antigravity => "--conversation",
+        use definition::builtin as defs;
+        let session = match self {
+            Self::Claude => defs::CLAUDE_CODE.resume_session,
+            Self::Codex => defs::CODEX.resume_session,
+            Self::Grok => defs::GROK.resume_session,
+            Self::OpenCode => defs::OPENCODE.resume_session,
+            Self::Pi => defs::PI.resume_session,
+            Self::Omp => defs::OMP.resume_session,
+            Self::Antigravity => defs::ANTIGRAVITY.resume_session,
+            Self::Cursor => return "--resume",
+        };
+        match session {
+            Some([flag, _]) => flag,
+            _ => panic!("a resume dialect's definition resumes with `<flag> {{session}}`"),
         }
     }
 }
@@ -562,8 +599,9 @@ pub struct LaunchOptions {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FullAccess {
     /// The options that turn its questions off, each as its words with the
-    /// option's name first: the flag its `--help` names, then any option the
-    /// CLI needs so that it does not stop to confirm that flag.
+    /// option's name first: the words its `--help` names for that (Codex's
+    /// two `-c` overrides are one option), then any option the CLI needs so
+    /// that it does not stop to confirm them.
     Options(&'static [&'static [&'static str]]),
     /// The CLI asks no permission question, so there is nothing to turn off.
     NotAsked,
@@ -702,7 +740,6 @@ pub struct HerdrIntegration {
     /// The `herdr integration install <target>` name, which is the kind for
     /// every agent but agy (kind `agy`, target `antigravity-cli`).
     pub target: &'static str,
-    pub folder: &'static [&'static str],
 }
 
 impl HerdrIntegration {
@@ -878,12 +915,18 @@ impl AgentAdapter {
 #[derive(Clone, Copy, Debug)]
 pub struct AgentAdapter {
     pub key: AgentId,
+    /// The agent's identity is its built-in definition file's
+    /// (`agents/<id>.toml`, [`definition::Builtin`]): `id`, `label` (the
+    /// file's `name`), `aliases`, `executables` and `folder` (its `home`)
+    /// are that file's values, never written here.
     pub id: &'static str,
     pub label: &'static str,
     pub picker_label: &'static str,
     pub sidebar_label: Option<&'static str>,
     pub aliases: &'static [&'static str],
     pub executables: &'static [&'static str],
+    /// The agent's own folder under the account's home, as its parts.
+    pub folder: &'static [&'static str],
     /// Every supported agent declares one; only a retired agent, for which
     /// Hide installs nothing, has none.
     pub minimum: Option<MinimumVersion>,
@@ -893,7 +936,7 @@ pub struct AgentAdapter {
     pub guidance: Capability<ContextRoute>,
     pub herdr: HerdrIntegration,
     /// The variable that moves the agent's own folder away from
-    /// [`HerdrIntegration::folder`] when the operator runs it (Codex's
+    /// [`AgentAdapter::folder`] when the operator runs it (Codex's
     /// `CODEX_HOME`), read only through [`AgentAdapter::home`]; `None` for an
     /// agent whose folder Hide reads at its default place alone.
     pub home_variable: Option<&'static str>,

@@ -5,19 +5,27 @@
 //! another and a tab launched with a command run what they were given;
 //! Hide's metadata on a workspace and a pane reads back as written and
 //! clears; a closed pane is gone; a call about a pane that does not exist is
-//! the engine's refusal under a code; and an engine whose server has gone
+//! the engine's refusal under a code; a tab's layout zooms, resizes, swaps,
+//! moves a pane out and back, comes back in its shape when exported and
+//! applied again, and refuses a layout past its limits (PRD
+//! engine-bundle-3-core-owns B3, B4); and an engine whose server has gone
 //! answers that nothing is running.
 //!
 //! [`meets_the_contract`] is the suite. Each implementation runs it in one
 //! test of its own against an engine it started for the test, as each agent
-//! runs its fixture through `hide-session/tests/it/adapters.rs`; today that
-//! is the pinned Herdr in a private server, which needs `HIDE_E2E_HERDR_BIN`
-//! and so is ignored by default (the real Herdr steps of `pr.yml` run it).
+//! runs its fixture through `hide-session/tests/it/adapters.rs`: the pinned
+//! Herdr in a private server, which needs `HIDE_E2E_HERDR_BIN`, and the
+//! core's own engine over pane holders this node starts from the built
+//! holder, which needs `HIDE_TEST_HOLDER_BIN` (and `HIDE_HOLDER_CONPTY` on
+//! Windows). Both are ignored by default; the real-shell steps of `pr.yml`
+//! run them.
 
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-use super::{Engine, EngineError, Wait};
+use super::{Engine, EngineError, Wait, Zoom};
+use crate::live::PaneResizeDirection;
+use crate::recent_closed::{ClosedLayoutNode, ClosedSplitDirection};
 
 const WAIT: Wait = Wait::Each(Duration::from_secs(10));
 const SHOWN_WITHIN: Duration = Duration::from_secs(30);
@@ -67,7 +75,9 @@ fn shows(engine: &dyn Engine, pane: &str, text: &str) {
 }
 
 /// Waits until the pane's shell has drawn something, its prompt, so typed
-/// text reaches a shell that reads it.
+/// text reaches a shell that reads it. `visible` is Herdr's drawn screen and
+/// the own engine's last rows of screen and scrollback, which both hold a
+/// new pane's prompt.
 #[allow(clippy::disallowed_methods)] // a polling helper: it sleeps between observations of a state, bounded by a deadline
 fn prompted(engine: &dyn Engine, pane: &str) {
     let deadline = Instant::now() + SHOWN_WITHIN;
@@ -100,6 +110,118 @@ fn panes(engine: &dyn Engine) -> Vec<(String, String)> {
         .iter()
         .map(|pane| (pane.pane_id.clone(), tab_of(&pane.pane_id)))
         .collect()
+}
+
+/// The rectangle `pane` is laid out in.
+fn rect(engine: &dyn Engine, pane: &str) -> crate::sidebar::SessionLayoutRect {
+    engine
+        .pane_layout(WAIT, pane)
+        .expect("the pane's layout reads")
+        .panes
+        .into_iter()
+        .find(|laid| laid.pane_id == pane)
+        .expect("the layout holds the pane")
+        .rect
+}
+
+/// A tree's shape: its splits' directions and its leaves, ids left out.
+fn shape(node: &ClosedLayoutNode) -> String {
+    match node {
+        ClosedLayoutNode::Pane { .. } => "pane".to_owned(),
+        ClosedLayoutNode::Split {
+            direction,
+            first,
+            second,
+            ..
+        } => format!("{direction:?}({}, {})", shape(first), shape(second)),
+    }
+}
+
+/// `count` panes side by side, one more than an engine lays out in a tab
+/// when it is 25.
+fn row_of(count: usize, folder: &str) -> ClosedLayoutNode {
+    let leaf = || ClosedLayoutNode::Pane {
+        pane_id: None,
+        label: None,
+        cwd: Some(folder.to_owned()),
+        command: None,
+        env: BTreeMap::new(),
+    };
+    (1..count).fold(leaf(), |node, _| ClosedLayoutNode::Split {
+        direction: ClosedSplitDirection::Right,
+        ratio: 0.5,
+        first: Box::new(node),
+        second: Box::new(leaf()),
+    })
+}
+
+/// The layout steps of the suite, on `pane`, the one pane of `tab`.
+fn lays_out(engine: &dyn Engine, workspace: &str, tab: &str, pane: &str, folder: &str) {
+    // A split at a ratio opens beside the pane, in its tab.
+    let lower = engine
+        .split_pane_at(
+            WAIT,
+            pane,
+            ClosedSplitDirection::Down,
+            folder,
+            0.3,
+            BTreeMap::new(),
+        )
+        .expect("a split at a ratio opens");
+    assert!(panes(engine).contains(&(lower.clone(), tab.to_owned())));
+
+    // A zoom turns on and off; a zoom of a lone pane changes nothing.
+    assert!(engine.toggle_zoom(WAIT, pane).expect("the pane zooms"));
+    assert!(engine.pane_layout(WAIT, pane).unwrap().zoomed);
+    engine.set_zoom(WAIT, pane, Zoom::Off).unwrap();
+    assert!(!engine.pane_layout(WAIT, pane).unwrap().zoomed);
+
+    // A resize moves the split; a swap trades the two panes' places.
+    let before = rect(engine, pane);
+    assert!(
+        engine
+            .resize_pane(WAIT, pane, PaneResizeDirection::Down, 0.1)
+            .expect("the pane resizes"),
+        "a resize inside the limits moves the split"
+    );
+    assert!(rect(engine, pane).height > before.height);
+    engine
+        .swap_panes(WAIT, pane, &lower)
+        .expect("the panes swap");
+    assert!(rect(engine, pane).y > rect(engine, &lower).y);
+
+    // An exported tab applied again comes back in its shape.
+    let exported = engine.export_layout(WAIT, tab).expect("the tab exports");
+    let applied = engine
+        .apply_layout(WAIT, workspace, None, Some("applied"), &exported.root)
+        .expect("the layout applies in a new tab");
+    assert_eq!(shape(&applied.root), shape(&exported.root));
+    assert_ne!(applied.tab_id, tab);
+    engine.close_tab(WAIT, &applied.tab_id).unwrap();
+
+    // A pane moves to a new tab, and back beside the pane it left.
+    let moved = engine
+        .move_pane_to_new_tab(WAIT, &lower, workspace, "moved")
+        .expect("the pane moves to a new tab");
+    let created = moved.created_tab_id.clone().expect("a tab was made for it");
+    assert!(moved.changed);
+    assert!(panes(engine).contains(&(moved.pane_id.clone(), created.clone())));
+    let back = engine
+        .move_pane_beside(WAIT, &moved.pane_id, tab, pane, true)
+        .expect("the pane moves back beside");
+    assert!(back.changed);
+    assert!(panes(engine).contains(&(back.pane_id.clone(), tab.to_owned())));
+    engine.close_pane(WAIT, &back.pane_id).unwrap();
+    assert!(
+        !engine.toggle_zoom(WAIT, pane).expect("a lone pane answers"),
+        "a lone pane does not zoom"
+    );
+
+    // A layout past an engine's limits is refused with its reason.
+    refused(
+        engine.apply_layout(WAIT, workspace, None, Some("too many"), &row_of(25, folder)),
+        "a layout of 25 panes",
+    );
 }
 
 fn refused(answer: Result<impl std::fmt::Debug, EngineError>, what: &str) {
@@ -209,6 +331,8 @@ pub(crate) fn meets_the_contract(engine: &dyn Engine, folder: &str, stop: impl F
         .expect("the tab closes");
     assert!(panes(engine).iter().all(|(id, _)| *id != launched));
 
+    lays_out(engine, &workspace, &tab, &pane, folder);
+
     // An engine whose server has gone answers that nothing is running.
     stop();
     match engine.ping(WAIT) {
@@ -225,4 +349,95 @@ fn the_pinned_herdr_meets_the_engine_contract() {
     let engine = herdr.engine();
     let folder = herdr.home.to_string_lossy().into_owned();
     meets_the_contract(engine.as_ref(), &folder, || drop(herdr));
+}
+
+#[test]
+#[ignore = "needs the built pane holder: HIDE_TEST_HOLDER_BIN"]
+fn the_own_engine_meets_the_engine_contract() {
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use hide_node::terminal::engine_panes::LocalPanes;
+    use hide_node::terminal::holder::{HolderFolders, Holders};
+    use hide_node::terminal::{Attacher, Mode, OutputSink, ReportSink, SessionParts};
+
+    struct NoHerdr;
+    impl Attacher for NoHerdr {
+        fn open(&self, _: &str, _: Mode, _: u16, _: u16) -> Result<SessionParts, String> {
+            Err("this test runs no Herdr".to_owned())
+        }
+    }
+    struct Nowhere;
+    impl OutputSink for Nowhere {
+        fn output(&self, _: &str, _: &[u8], _: bool) {}
+        fn forget(&self, _: &str) {}
+    }
+    impl ReportSink for Nowhere {
+        fn report(&self, _: hide_node_link::terminal::TerminalReport) {}
+    }
+
+    let program = PathBuf::from(
+        std::env::var_os("HIDE_TEST_HOLDER_BIN")
+            .expect("HIDE_TEST_HOLDER_BIN names the built hide-holder"),
+    );
+    let conpty =
+        cfg!(windows).then(|| {
+            PathBuf::from(std::env::var_os("HIDE_HOLDER_CONPTY").expect(
+                "HIDE_HOLDER_CONPTY names the pinned ConPTY runtime (scripts/fetch-conpty.py)",
+            ))
+        });
+    // A holder's socket path is limited to about a hundred bytes on Unix.
+    let root = if cfg!(unix) {
+        tempfile::Builder::new()
+            .prefix("ho")
+            .tempdir_in("/tmp")
+            .unwrap()
+    } else {
+        tempfile::tempdir().unwrap()
+    };
+    let (home, state_dir, folder) = (
+        root.path().join("h"),
+        root.path().join("s"),
+        root.path().join("w"),
+    );
+    for dir in [&home, &state_dir, &folder] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    let terminals = Holders::start_from(
+        Some((
+            HolderFolders {
+                home: &home,
+                state_dir: &state_dir,
+            },
+            hide_kit::holders::Source { program, conpty },
+        )),
+        Box::new(NoHerdr),
+        Arc::new(Nowhere) as Arc<dyn OutputSink>,
+        Arc::new(Nowhere) as Arc<dyn ReportSink>,
+    )
+    .expect("the node's holders open");
+    let holders = terminals.holders.expect("the holders are on");
+    // The contract's command lines are a POSIX shell's and Windows
+    // PowerShell's, whatever shell this account uses.
+    let shell = if cfg!(windows) {
+        vec!["powershell.exe".into()]
+    } else {
+        vec!["/bin/sh".into()]
+    };
+    let panes = Arc::new(LocalPanes::new(
+        Arc::clone(&holders),
+        Arc::clone(&terminals.service),
+        shell,
+    ));
+    let engine = super::own::OwnEngine::new(panes);
+    let folder = hide_platform::path::to_wire(&folder).unwrap();
+    meets_the_contract(&engine, &folder, || {
+        // The holders outlive an engine; the test that started them ends
+        // every one it left.
+        let left = engine.pane_folders(WAIT).expect("the session reads");
+        engine.stop();
+        for (pane, _) in left {
+            let _ = holders.terminate(&terminals.service, &pane);
+        }
+    });
 }

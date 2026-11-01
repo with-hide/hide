@@ -151,6 +151,7 @@ section!(StatusSections, StatusSnapshot, s, {
     pane_focus_request: Option<PaneFocusRequestSnapshot> => s.pane_focus_request,
     browser_opens: Vec<BrowserOpenReceiptSnapshot> => s.browser_opens,
     stray_hand_offs: Vec<StrayHandOffSnapshot> => s.stray_hand_offs,
+    agent_definitions: Option<AgentDefinitionsSnapshot> => s.agent_definitions,
 }, {});
 
 section!(RestSections, Snapshot, s, {
