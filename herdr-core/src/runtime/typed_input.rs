@@ -209,7 +209,10 @@ impl Runtime {
             // its state changes.
             // A message that ends with the brief is its record too: what the
             // composer held before the typing stays in front of it. The row
-            // keeps the newest request's words, cut past 8 KiB.
+            // keeps the newest request's words, cut past 8 KiB. Only a
+            // message written after the typing, which Hide did not see the
+            // operator submit, is: "don't fix tests" typed after a lost "fix
+            // tests" is the operator's own.
             let forms = brief_forms(spawn);
             if self
                 .row_facts_of(&observation.actor.pane_id)
@@ -223,6 +226,12 @@ impl Runtime {
                             .chain(&facts.other_request)
                             .any(|request| {
                                 !request.cut
+                                    && request.requester
+                                        != crate::labels::facts::Requester::Operator
+                                    && request
+                                        .at_unix_ms
+                                        .saturating_add(crate::labels::facts::CLOCK_SLACK_MS)
+                                        >= input.first_typed_at()
                                     && hide_agent_hooks::delivery::ends_with_typed(
                                         &request.text,
                                         brief,
@@ -799,13 +808,14 @@ pub(crate) mod tests {
         handoff: bool,
         typed_at: u64,
     ) -> (tempfile::TempDir, Runtime, String) {
-        spawned_with(kind, handoff, typed_at, false)
+        spawned_with(kind, BRIEF, handoff, typed_at, false)
     }
 
-    /// A spawn whose brief was typed, or with `launched`, rode its start's
-    /// prompt argument.
+    /// [`spawned_as`] with `brief` typed, or with `launched`, carried by the
+    /// start's prompt argument.
     fn spawned_with(
         kind: &str,
+        brief: &str,
         handoff: bool,
         typed_at: u64,
         launched: bool,
@@ -884,7 +894,7 @@ pub(crate) mod tests {
                     args: Vec::new(),
                     launch: Default::default(),
                     task: None,
-                    brief: Some(BRIEF.into()),
+                    brief: Some(brief.into()),
                     beside: false,
                     mission: None,
                     plan_node: None,
@@ -938,7 +948,7 @@ pub(crate) mod tests {
     #[test]
     fn a_launched_brief_is_never_typed_and_its_parent_hears_the_start_holds_it() {
         const T: u64 = 100_000;
-        let (_root, mut runtime, spawn) = spawned_with("codex", false, T, true);
+        let (_root, mut runtime, spawn) = spawned_with("codex", BRIEF, false, T, true);
         assert!(input_of(&runtime, &spawn).launch);
         runtime.typed_input_work(T + RECORD_WAIT_MS);
         let at = T + RECORD_WAIT_MS + REREAD_WAIT_MS;
@@ -967,7 +977,7 @@ pub(crate) mod tests {
     /// record; a launched brief is recognized in that form and in its own.
     #[test]
     fn a_launched_brief_is_recognized_in_the_form_its_argument_carried() {
-        let (_root, runtime, spawn) = spawned_with("codex", false, 1_000, true);
+        let (_root, runtime, spawn) = spawned_with("codex", BRIEF, false, 1_000, true);
         let ledger = runtime.delivery_ledger.as_ref().unwrap();
         let record = ledger.spawns.iter().find(|s| s.id == spawn).unwrap();
         let forms = brief_forms(record);
@@ -1465,5 +1475,118 @@ pub(crate) mod tests {
                 .and_then(|work| work.recorded);
             assert_eq!(found == Some("session"), recorded, "{text:?}");
         }
+    }
+
+    /// The record Antigravity on Windows wrote for a brief Hide pasted, with
+    /// the terminal report its composer took first (agent journey run
+    /// 41278776284), is the brief's record; the same words stamped before the
+    /// typing, past the two clocks' slack, or a message Hide saw the operator
+    /// submit, are not.
+    #[test]
+    fn antigravitys_record_after_a_terminal_report_is_the_brief_only_after_the_typing() {
+        use crate::labels::facts::CLOCK_SLACK_MS;
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/antigravity-windows-brief-record.json"
+        ))
+        .unwrap();
+        let typed = fixture["typed"].as_str().unwrap();
+        let record = &fixture["record"];
+        let at = record["at_unix_ms"].as_u64().unwrap();
+        let sender = record["sender"].clone();
+        for (typed_at, requester, recorded) in [
+            (at - 500, sender.clone(), true),
+            // The session stamps whole seconds.
+            (at + 900, sender.clone(), true),
+            (at + CLOCK_SLACK_MS + 1, sender.clone(), false),
+            (at - 500, json!({"kind": "operator"}), false),
+        ] {
+            let (_root, mut runtime, spawn) = spawned_with("antigravity", typed, false, typed_at, false);
+            let mut row = crate::sidebar::project_agents(
+                serde_json::from_value(json!({"agents": [
+                    {"pane_id": "child", "agent": "antigravity", "agent_status": "idle", "state_change_seq": 2}
+                ]}))
+                .unwrap(),
+            )
+            .agents
+            .remove(0);
+            row.row_facts = Some(crate::request_view::RowFacts {
+                other_request: Some(
+                    serde_json::from_value(json!({
+                        "text": record["text"], "cut": record["cut"], "images": 0,
+                        "at_unix_ms": at, "requester": requester, "first": true,
+                    }))
+                    .unwrap(),
+                ),
+                ..Default::default()
+            });
+            runtime.snapshot.navigator.agents.push(row);
+            let found = runtime
+                .typed_input_work(typed_at + RECORD_WAIT_MS)
+                .into_iter()
+                .find(|work| work.key == InputKey::Spawn(spawn.clone()))
+                .and_then(|work| work.recorded);
+            assert_eq!(found == Some("session"), recorded, "{typed_at} {requester}");
+        }
+    }
+
+    /// A record the agent wrote after the first typing stays the brief's
+    /// record once Hide typed it again later (each typing moves
+    /// `typed_at_unix_ms`): Antigravity's record at `at`, then a second
+    /// typing well past the clocks' slack.
+    #[test]
+    fn a_record_after_the_first_typing_survives_a_later_typing() {
+        use crate::labels::facts::CLOCK_SLACK_MS;
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/antigravity-windows-brief-record.json"
+        ))
+        .unwrap();
+        let typed = fixture["typed"].as_str().unwrap();
+        let record = &fixture["record"];
+        let at = record["at_unix_ms"].as_u64().unwrap();
+        let (_root, mut runtime, spawn) = spawned_with("antigravity", typed, false, at - 500, false);
+        let retyped = at + CLOCK_SLACK_MS + 10_000;
+        let mut ledger = (**runtime.delivery_ledger.as_ref().unwrap()).clone();
+        crate::coordination::apply(
+            &mut ledger,
+            &Actor::hide(typed::INPUT_ROLE, TEST_NODE),
+            &Mutation::BriefTyping { id: spawn.clone() },
+            retyped,
+        )
+        .unwrap();
+        runtime.publish_delivery(Arc::new(ledger), false);
+        let input = input_of(&runtime, &spawn);
+        assert_eq!(
+            (
+                input.attempts,
+                input.first_typed_at(),
+                input.typed_at_unix_ms
+            ),
+            (2, at - 500, retyped)
+        );
+        let mut row = crate::sidebar::project_agents(
+            serde_json::from_value(json!({"agents": [
+                {"pane_id": "child", "agent": "antigravity", "agent_status": "idle", "state_change_seq": 2}
+            ]}))
+            .unwrap(),
+        )
+        .agents
+        .remove(0);
+        row.row_facts = Some(crate::request_view::RowFacts {
+            other_request: Some(
+                serde_json::from_value(json!({
+                    "text": record["text"], "cut": record["cut"], "images": 0,
+                    "at_unix_ms": at, "requester": record["sender"], "first": true,
+                }))
+                .unwrap(),
+            ),
+            ..Default::default()
+        });
+        runtime.snapshot.navigator.agents.push(row);
+        let found = runtime
+            .typed_input_work(retyped + RECORD_WAIT_MS)
+            .into_iter()
+            .find(|work| work.key == InputKey::Spawn(spawn.clone()))
+            .and_then(|work| work.recorded);
+        assert_eq!(found, Some("session"));
     }
 }

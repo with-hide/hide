@@ -878,3 +878,249 @@ fn a_missing_worktree_row_git_has_not_answered_for_is_not_removed() {
     );
     assert!(shared.lock().unwrap().snapshot.worktree_removal.is_none());
 }
+
+/// The device's runtime with an agent's pane in the main checkout, the
+/// caller of `hide workspace remove`, and a finished agent's pane left in the
+/// linked worktree, whose Herdr is `herdr`.
+fn command_runtime(repo: &Repo, herdr: &crate::fake_herdr::FakeHerdr) -> SharedRuntime {
+    let shared = device_runtime(repo);
+    let mut runtime = shared.lock().unwrap();
+    let project = &mut runtime.snapshot.status.remote[0]
+        .session
+        .as_mut()
+        .unwrap()
+        .workspaces[0];
+    let caller = format!("remote:{DEVICE}:pane:w1:p1");
+    project.checkouts[0] = checkout(
+        &project.id,
+        &format!("remote:{DEVICE}:checkout:w1"),
+        &repo.root,
+        Some(pane(&caller, &repo.root)),
+    );
+    let mut linked = checkout(
+        &project.id,
+        &format!("remote:{DEVICE}:checkout:w2"),
+        &repo.linked,
+        Some(pane(&format!("remote:{DEVICE}:pane:w2:p1"), &repo.linked)),
+    );
+    linked.branch = Some("feature".to_owned());
+    linked.is_worktree = true;
+    project.checkouts.push(linked);
+    runtime.install_remote_control(RemoteControlContext::new(
+        DEVICE,
+        herdr.engine(),
+        shared.weak(),
+        ChangeNotifier::noop(),
+    ));
+    drop(runtime);
+    shared
+}
+
+/// A device Herdr that closes what it is asked to and then lists no pane.
+fn closing_herdr(name: &str) -> crate::fake_herdr::FakeHerdr {
+    crate::fake_herdr::FakeHerdr::start(name, |method, _| match method {
+        "pane.close" => serde_json::json!({"type": "ok"}),
+        "session.snapshot" => serde_json::json!({"type": "session_snapshot", "snapshot": {
+            "version": "fixture", "protocol": hide_herdr_client::HERDR_PROTOCOL_REVISION,
+            "workspaces": [], "tabs": [], "panes": [], "layouts": [], "agents": []
+        }}),
+        other => panic!("unexpected {other}"),
+    })
+}
+
+/// `hide workspace remove` as the daemon runs it: started under the lock,
+/// then waited for on the removal's record until it ends.
+fn remove_command(
+    shared: &Arc<Mutex<Runtime>>,
+    repo: &Repo,
+    command: crate::worktree_command::WorktreeRemove,
+) -> Result<serde_json::Value, String> {
+    let caller = format!("remote:{DEVICE}:pane:w1:p1");
+    let expected = crate::workspace_control::Context {
+        device_id: DEVICE.to_owned(),
+        workspace_id: format!("remote:{DEVICE}:workspace:w1"),
+        checkout_id: format!("remote:{DEVICE}:checkout:w1"),
+        checkout_path: repo.root.clone(),
+    };
+    let id = shared
+        .lock()
+        .unwrap()
+        .worktree_remove_command(DEVICE, &caller, &expected, &command)?;
+    let answer = |runtime: &Runtime| {
+        runtime
+            .worktree_removal_record(id)
+            .and_then(crate::worktree_command::answer)
+    };
+    wait(shared, "the removal to end", |runtime| {
+        answer(runtime).is_some()
+    });
+    answer(&shared.lock().unwrap()).unwrap()
+}
+
+fn removal(path: &str) -> crate::worktree_command::WorktreeRemove {
+    crate::worktree_command::WorktreeRemove {
+        path: path.to_owned(),
+        delete_branch: true,
+        force: false,
+    }
+}
+
+/// The command a mission's lead runs after a merge closes the finished
+/// agent's pane in Herdr before Git removes the folder, so no workspace is
+/// left behind with a missing directory, and the merged branch goes too.
+#[test]
+fn the_remove_command_closes_the_worktrees_herdr_panes_then_removes_it() {
+    let repo = repo();
+    let herdr = closing_herdr("workspace-remove");
+    let shared = command_runtime(&repo, &herdr);
+
+    let removed = remove_command(&shared, &repo, removal(&repo.linked)).unwrap();
+
+    assert_eq!(removed["removed"], repo.linked.as_str());
+    assert_eq!(removed["branch_result"], "deleted");
+    assert!(
+        herdr
+            .calls()
+            .iter()
+            .any(|(method, params)| method == "pane.close" && params["pane_id"] == "w2:p1"),
+        "{:?}",
+        herdr.calls()
+    );
+    assert!(!Path::new(&repo.linked).exists());
+    assert_eq!(git(&repo.root, &["branch", "--list", "feature"]), "");
+    assert_eq!(
+        last_error(&shared),
+        None,
+        "a command's answer is the caller's"
+    );
+    // A retry after the removal ended answers the same end.
+    let again = remove_command(&shared, &repo, removal(&repo.linked)).unwrap();
+    assert_eq!(again["removed"], repo.linked.as_str());
+}
+
+/// The dialog's refusals come back to the caller as codes with the step to
+/// take, before any pane closes: its own checkout, a working agent, the
+/// main checkout, and work the folder or the branch would lose without
+/// `--force`.
+#[test]
+fn the_remove_command_refuses_what_the_dialog_refuses_and_closes_nothing() {
+    let repo = repo();
+    git(
+        &repo.linked,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "unmerged",
+        ],
+    );
+    std::fs::write(Path::new(&repo.linked).join("draft.txt"), "wip\n").unwrap();
+    let herdr = closing_herdr("workspace-remove-refusals");
+    let shared = command_runtime(&repo, &herdr);
+    let refused = |command| {
+        let code = remove_command(&shared, &repo, command).unwrap_err();
+        let (code, detail) = crate::coordination::split_refusal(&code);
+        assert!(
+            crate::worktree_command::next_action(code).is_some(),
+            "{code}"
+        );
+        (code.to_owned(), detail.map(str::to_owned))
+    };
+
+    assert_eq!(
+        refused(removal(&repo.root)).0,
+        "worktree_remove_own_checkout"
+    );
+
+    let (code, detail) = refused(removal(&repo.linked));
+    assert_eq!(code, "worktree_remove_needs_force");
+    assert_eq!(detail.as_deref(), Some("1 uncommitted or untracked files"));
+
+    let (code, detail) = refused(crate::worktree_command::WorktreeRemove {
+        path: repo.linked.clone(),
+        delete_branch: true,
+        force: false,
+    });
+    assert_eq!(code, "worktree_remove_needs_force", "{detail:?}");
+
+    std::fs::remove_file(Path::new(&repo.linked).join("draft.txt")).unwrap();
+    {
+        let mut runtime = shared.lock().unwrap();
+        runtime.request_device_worktrees(DEVICE, true);
+    }
+    wait(&shared, "the clean worktree to be read", |runtime| {
+        runtime.device_worktrees[DEVICE].projects[&repo.root]
+            .worktrees
+            .iter()
+            .any(|row| row.path == repo.linked && row.deletion_gate.discard.is_none())
+    });
+    let (code, detail) = refused(removal(&repo.linked));
+    assert_eq!(code, "worktree_remove_branch_unmerged");
+    assert!(detail.unwrap().contains("commits"));
+
+    let set_row = |change: &dyn Fn(&mut crate::model::WorktreeSnapshot)| {
+        let mut runtime = shared.lock().unwrap();
+        let row = runtime
+            .device_worktrees
+            .get_mut(DEVICE)
+            .unwrap()
+            .projects
+            .get_mut(&repo.root)
+            .unwrap()
+            .worktrees
+            .iter_mut()
+            .find(|row| row.path == repo.linked)
+            .unwrap();
+        change(row);
+    };
+    set_row(&|row| {
+        row.agent_line.agents = vec![crate::model::AgentChipSnapshot {
+            tone: Default::default(),
+            pane_id: format!("remote:{DEVICE}:pane:w2:p1"),
+            label: "worker".to_owned(),
+            checkout_label: None,
+            detail: None,
+            status_word_visible: true,
+            agent_kind: "claude".to_owned(),
+            demand: String::new(),
+            activity: String::new(),
+            emphasized: false,
+            mark: Default::default(),
+            status_code: crate::model::AgentStatusCode::Working,
+            delegated: true,
+        }];
+    });
+    let (code, detail) = refused(crate::worktree_command::WorktreeRemove {
+        force: true,
+        ..removal(&repo.linked)
+    });
+    assert_eq!(code, "worktree_remove_agent_working");
+    assert_eq!(detail.as_deref(), Some("worker (Working)"));
+
+    set_row(&|row| {
+        row.agent_line.agents.clear();
+        row.deletion_gate.blocked = Some(crate::model::WorktreeDeletionBlock::Main);
+    });
+    assert_eq!(
+        refused(crate::worktree_command::WorktreeRemove {
+            force: true,
+            ..removal(&repo.linked)
+        })
+        .0,
+        "worktree_remove_blocked"
+    );
+
+    assert!(herdr.calls().is_empty(), "{:?}", herdr.calls());
+    assert!(shared.lock().unwrap().snapshot.worktree_removal.is_none());
+    assert!(Path::new(&repo.linked).exists());
+    assert_eq!(
+        last_error(&shared),
+        None,
+        "a command's refusal is the caller's"
+    );
+}

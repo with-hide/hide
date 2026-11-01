@@ -1073,10 +1073,18 @@ pub(crate) fn derive_read_state(
     sort_agents(agents);
 }
 
+/// Nothing this agent reports now can be trusted as a demand, a wait or a
+/// completion: its list was not confirmed (`telemetry_stale`), or its pane's
+/// terminal failed to restore and no process is left to ask or finish
+/// anything (`terminal_failed`).
+fn reports_nothing(agent: &SessionAgentPayload) -> bool {
+    agent.telemetry_stale || agent.terminal_failed
+}
+
 /// The demand axis. A block outranks a question and a question an approval,
 /// so the worse thing waiting is the one the row names.
 pub(crate) fn agent_demand(agent: &SessionAgentPayload) -> AgentDemand {
-    if agent.telemetry_stale {
+    if reports_nothing(agent) {
         AgentDemand::None
     } else if agent.label.as_ref().is_some_and(|label| label.blocked) {
         AgentDemand::Error
@@ -1112,7 +1120,7 @@ pub(crate) fn agent_blocked(agent: &SessionAgentPayload) -> bool {
 /// prompt. A hook that reported the turn has said whether it waits on a
 /// permission, so Herdr's blocked prompt is no longer the answer for it.
 fn approval_prompt(agent: &SessionAgentPayload) -> bool {
-    if agent.telemetry_stale {
+    if reports_nothing(agent) {
         return false;
     }
     match hook_turn(agent) {
@@ -1125,7 +1133,7 @@ fn approval_prompt(agent: &SessionAgentPayload) -> bool {
 /// current state, while the activity axis does not say the agent went on
 /// working past it (a kind that waits while it works excepted).
 fn session_wait(agent: &SessionAgentPayload) -> bool {
-    !agent.telemetry_stale
+    !reports_nothing(agent)
         && agent
             .facts
             .as_ref()
@@ -1143,7 +1151,7 @@ fn session_wait(agent: &SessionAgentPayload) -> bool {
 /// question stays open while the agent works (Codex
 /// `request_user_input_async`), and the demand axis shows it so.
 fn native_question(agent: &SessionAgentPayload) -> bool {
-    !agent.telemetry_stale
+    !reports_nothing(agent)
         && agent
             .facts
             .as_ref()
@@ -1177,7 +1185,7 @@ pub(crate) fn turn_projection(agent: &SessionAgentPayload) -> TurnProjection {
         activity: agent_activity(agent),
         prompt: approval_prompt(agent),
         operator_wait: native_question(agent) || session_wait(agent),
-        reported: !agent.telemetry_stale && hook_turn(agent).is_some(),
+        reported: !reports_nothing(agent) && hook_turn(agent).is_some(),
     }
 }
 
@@ -1186,8 +1194,14 @@ pub(crate) fn turn_projection(agent: &SessionAgentPayload) -> TurnProjection {
 /// idle (engineering rule 4). A turn that just ended whose session read has
 /// not landed is not a stop yet: whether a background task will wake the
 /// agent is not known, and a row announced as finished there is taken back
-/// when the read lands (#902). It goes on as it was.
+/// when the read lands (#902). It goes on as it was. A pane whose terminal
+/// failed to restore runs no process, so its agent is stopped with nothing to
+/// interrupt, never unknown: Herdr reports it `unknown` for good, and reading
+/// that as an unread activity would ask for a status check nothing can give.
 pub(crate) fn agent_activity(agent: &SessionAgentPayload) -> AgentActivity {
+    if agent.terminal_failed {
+        return AgentActivity::Stopped;
+    }
     if agent.telemetry_stale {
         return AgentActivity::Unknown;
     }
@@ -1239,7 +1253,7 @@ pub enum AgentStart {
 /// server is also at sequence 0 and unknown, but carries no pending start,
 /// and an unconfirmed list says nothing about the agent now.
 pub(crate) fn agent_starting(agent: &SessionAgentPayload) -> bool {
-    !agent.telemetry_stale && agent.launch_pending && agent.state_change_seq == Some(0)
+    !reports_nothing(agent) && agent.launch_pending && agent.state_change_seq == Some(0)
 }
 
 /// Whether this stopped pane has actually completed work: its hook saying the
@@ -1249,7 +1263,7 @@ pub(crate) fn agent_starting(agent: &SessionAgentPayload) -> bool {
 /// separate from activity and read state; Herdr's tab-scoped seen value never
 /// decides Hide's pane-level read axis.
 pub(crate) fn agent_completed(agent: &SessionAgentPayload) -> bool {
-    if agent.telemetry_stale {
+    if reports_nothing(agent) {
         return false;
     }
     if let Some(turn) = hook_turn(agent) {

@@ -303,6 +303,7 @@ impl Letter {
         Some(super::typed::TypedInput {
             attempts: self.attempts(),
             typed_at_unix_ms: self.bell_typed_at_unix_ms?,
+            first_typed_at_unix_ms: 0,
             // A bell its recipient took is recorded, confirmed or not, and so
             // is one its recipient's own way in took.
             confirmed_at_unix_ms: (self.state != State::Pending

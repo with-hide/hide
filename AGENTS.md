@@ -85,13 +85,14 @@ They once did: an evidence tree reached 123 MB and carried a browser profile wit
 
 - No build directory is ever shared between worktrees: cargo names artifacts by workspace-relative path, so two checkouts sharing one read each other's build as fresh, and its lock serializes the parallel builds worktrees exist for.
 - The release binaries are `target/release/{hided,hide,hide-agent-hooks}` inside the worktree that built them; `desktop/scripts/package.mjs` reads that fixed path, so never redirect a release build with `CARGO_TARGET_DIR` or `--target-dir`.
-- Every build lands inside the worktree, cargo in `target/`, the web shell in `web/dist/`, the desktop host in `desktop/dist/` and the packaged app in `desktop/out/`, all ignored; `git worktree remove` is the whole cleanup, and nothing under `/tmp` belongs to a checkout.
+- Every build lands inside the worktree, cargo in `target/`, the web shell in `web/dist/`, the desktop host in `desktop/dist/` and the packaged app in `desktop/out/`, all ignored; removing the worktree is the whole cleanup, and nothing under `/tmp` belongs to a checkout.
 - `scripts/verify-cargo.sh` and `scripts/verify-web.sh` are the only Rust and web verification entrypoints; a check script calls them rather than cargo or pnpm directly.
 - Every script that calls cargo sources `scripts/toolchain-env.sh`, so an isolated HOME reuses the machine's toolchain; without it rustup installs a private 1.4 GB copy and exits 0.
 - The PRD harness binds `scripts/verify-cargo.sh`, because a verify command runs with no shell and an `ENV=value cargo ...` binding fails with ENOENT at verify time.
 - `[profile.dev] incremental = false` is deliberate: an agent worktree is built a few times and discarded, which never repays an incremental cache.
 - A debug build stays small (`docs/BUILD.md`, A debug build is kept small): the dev profile carries no debug info, a dependency or feature change is followed by `cargo hakari generate` and `cargo hakari manage-deps --yes`, no member feature exists only for tests, and a crate's integration tests are modules of its one `tests/it` binary.
-- `git worktree remove` takes the cache with the work; a worktree kept alive after its branch lands keeps its cache alive too.
+- Removing the worktree takes the cache with the work; a worktree kept alive after its branch lands keeps its cache alive too.
+  Remove a checkout Hide shows with `hide workspace remove <path>`, which closes its Herdr workspace and panes first; a raw `git worktree remove` leaves them open on a folder that is gone (`docs/delivery.md`, Removing a worktree).
 - The root checkout stays on `main`; every branch is worked on in its own sibling worktree directory.
   `scripts/hooks/root-worktree-main-only.sh` is a `PreToolUse` hook (registered for Claude Code in `.claude/settings.json`, for Codex in `~/.codex/hooks.json`) that refuses a `git checkout`/`git switch` off `main` in the root worktree and answers with the `git worktree add` form to use instead.
 

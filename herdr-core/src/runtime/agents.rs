@@ -481,11 +481,10 @@ impl Runtime {
                 );
             }
             let status_unknown = matches!(&payload.request, RemoteControlRequest::ClosePane { .. })
-                && session.agents.iter().any(|agent| {
-                    agent.pane_id == pane_id
-                        && (agent.requires_close_status_check
-                            && self.failed_terminal_id(&agent.pane_id).is_none())
-                });
+                && session
+                    .agents
+                    .iter()
+                    .any(|agent| agent.pane_id == pane_id && agent.requires_close_status_check);
             if status_unknown {
                 self.report_remote_failure(report, &target_id,
                     "remote.control.close_status_unknown",
@@ -498,11 +497,10 @@ impl Runtime {
             }
             let needs_confirmation =
                 matches!(&payload.request, RemoteControlRequest::ClosePane { .. })
-                    && session.agents.iter().any(|agent| {
-                        agent.pane_id == pane_id
-                            && (agent.requires_close_confirmation
-                                && self.failed_terminal_id(&agent.pane_id).is_none())
-                    });
+                    && session
+                        .agents
+                        .iter()
+                        .any(|agent| agent.pane_id == pane_id && agent.requires_close_confirmation);
             if needs_confirmation && !payload.request.confirmed() {
                 self.report_remote_failure(report, &target_id,
                     "remote.control.close_confirmation_required",
@@ -783,9 +781,7 @@ impl Runtime {
                     .map(|pane| pane.id.as_str())
                     .collect::<HashSet<_>>();
                 let status_unknown = session.agents.iter().any(|agent| {
-                    pane_ids.contains(agent.pane_id.as_str())
-                        && (agent.requires_close_status_check
-                            && self.failed_terminal_id(&agent.pane_id).is_none())
+                    pane_ids.contains(agent.pane_id.as_str()) && agent.requires_close_status_check
                 });
                 if status_unknown {
                     self.report_remote_failure(report, &target_id,
@@ -798,9 +794,7 @@ impl Runtime {
                     return false;
                 }
                 let needs_confirmation = session.agents.iter().any(|agent| {
-                    pane_ids.contains(agent.pane_id.as_str())
-                        && (agent.requires_close_confirmation
-                            && self.failed_terminal_id(&agent.pane_id).is_none())
+                    pane_ids.contains(agent.pane_id.as_str()) && agent.requires_close_confirmation
                 });
                 if needs_confirmation && !confirmed {
                     self.report_remote_failure(report, &target_id,
@@ -978,7 +972,7 @@ impl Runtime {
             .flat_map(|workspace| &workspace.checkouts)
             .flat_map(|checkout| &checkout.tabs)
             .flat_map(|tab| &tab.panes)
-            .filter(|pane| pane.requires_close_confirmation && pane.failed_terminal_id.is_none())
+            .filter(|pane| pane.requires_close_confirmation)
             .filter_map(|pane| {
                 let source = crate::address::pane_of(&pane.id, &target_id)?;
                 scope_pane_ids.contains(&source.to_owned()).then_some(())?;

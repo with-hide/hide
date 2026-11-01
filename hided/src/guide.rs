@@ -41,6 +41,11 @@ mod tests {
         assert!(TEXT.contains(crate::pane_cli::USAGE));
     }
 
+    #[test]
+    fn the_guide_spells_hide_workspace_remove_as_the_command_parses_it() {
+        assert!(TEXT.contains(crate::worktree_cli::USAGE));
+    }
+
     /// What an agent is taught at its session's start, by `hide guide` and
     /// by `hide mission help`.
     fn taught() -> Vec<(&'static str, String)> {
@@ -83,7 +88,8 @@ mod tests {
                     continue;
                 }
                 if words.get(1) == Some(&"help")
-                    || (*topic == "workspace" && words.get(1) != Some(&"purpose"))
+                    || (*topic == "workspace"
+                        && !matches!(words.get(1), Some(&"purpose" | &"remove")))
                 {
                     continue;
                 }

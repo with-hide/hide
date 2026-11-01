@@ -1,6 +1,7 @@
 import { CogIcon, GitBranchIcon } from "lucide-react";
 import { useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import type { Actions } from "./actions";
+import { AgentMark } from "./AgentMark";
 import { DependencyGraphView, type EdgeLook, type OverlayEdge } from "./DependencyGraph";
 import type { GraphEdge } from "./dependencyLayout";
 import { formatElapsed, useElapsed, useMinuteClock } from "./components/elapsed";
@@ -22,7 +23,7 @@ import { markdownPlainText } from "./markdownPlain";
 import { MissionMapCanvas } from "./MissionMapCanvas";
 import { MissionNodePanel } from "./MissionNodePanel";
 import { MissionTurn } from "./MissionTurn";
-import { markWord } from "./missionParts";
+import { markWord, RunText, useNodeRun } from "./missionParts";
 import {
   attentionWords,
   defectEdges,
@@ -340,12 +341,13 @@ const ATTENTION_CARD = "border-mission-hold ring-2 ring-mission-hold/20";
  * A node on the map (PRD mission-node-simple D-07, B1-B3): its state's mark
  * and border, its title on one line that ends in an ellipsis (the whole
  * title on hover and in its accessible name) with Hide's mark when Hide
- * changed it last, and one line holding its pull requests' marks, a direct
- * change's result, and `! 나` or `! Conductor` when it waits on someone to
- * look, its reason on hover. Who works it, its times, its finish lines and
- * the Conductor's line are the panel's. The other agents checking it stand
- * beside it as satellites tethered to its right side. Pressing it picks it
- * (B30).
+ * changed it last, and one line holding its worker's agent mark, model and
+ * effort as the panel's head draws them on the left, its pull requests'
+ * marks or a direct change's result at the right end, and after them `! 나`
+ * or `! Conductor` when it waits on someone to look, its reason on hover.
+ * Its times, its finish lines and the Conductor's line are the panel's. The
+ * other agents checking it stand beside it as satellites tethered to its
+ * right side. Pressing it picks it (B30).
  */
 function NodeCard({ mission, node, selected, dimmed, onSelect, actions }: { mission: Mission; node: MissionNode; selected: boolean; dimmed: boolean; onSelect: () => void; actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -355,6 +357,8 @@ function NodeCard({ mission, node, selected, dimmed, onSelect, actions }: { miss
   const hide = hideWords(mission, node, t);
   const satellites = satelliteLines(node.criteria);
   const word = markWord(node, look, t);
+  const worker = useNodeRun(mission, node);
+  const run = worker?.run ?? null;
   const card = (
     <button
       type="button"
@@ -363,6 +367,7 @@ function NodeCard({ mission, node, selected, dimmed, onSelect, actions }: { miss
         node.title,
         word,
         ...(node.kind === "external" && look !== "external" ? [t("mission.look.external")] : []),
+        ...(run ? [run.text] : []),
         ...node.prs.map((pr) => t("mission.attention.pr", { number: String(pr.number) })),
         ...(attention ? [`${t("mission.attention")} · ${attention.who} · ${attention.why}`] : []),
         ...(hide ? [t("mission.hide.mark", { what: hide })] : []),
@@ -390,10 +395,15 @@ function NodeCard({ mission, node, selected, dimmed, onSelect, actions }: { miss
         </span>
         {hide ? <HideMark words={hide} /> : null}
       </span>
-      {result || attention ? (
+      {result || run || attention ? (
         <span className="flex min-w-0 items-center gap-x-xs text-caption text-muted-foreground" data-node-row="true">
-          {/* The marks keep one line; the ones past the card's width leave it rather than overlap, and `!` keeps its place (B30). */}
-          <span className="flex h-lh min-w-0 flex-1 flex-wrap items-center gap-x-xs overflow-hidden">{result}</span>
+          {/* The worker's agent mark and model on the left take only the room the marks leave, so they truncate away before a mark is pushed out; with no run the empty span still holds the marks at the right. */}
+          <span className="flex min-w-0 flex-1 items-center gap-xxs overflow-hidden" data-node-run={run?.from}>
+            {worker?.agent ? <AgentMark kind={worker.agent} /> : null}
+            {run ? <RunText run={run} /> : null}
+          </span>
+          {/* The marks keep one line at the right end; the ones past the card's width leave it rather than overlap, and `!` keeps its place after them (B30). */}
+          {result ? <span className="flex h-lh min-w-0 flex-wrap items-center gap-x-xs overflow-hidden">{result}</span> : null}
           {attention ? (
             <Hint label={attention.why}>
               <span className="shrink-0 font-semibold text-mission-hold" data-node-attention-tag={node.attention!.reason}>! {attention.who}</span>

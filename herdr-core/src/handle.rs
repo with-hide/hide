@@ -666,6 +666,39 @@ impl Core {
         Ok(answer)
     }
 
+    /// Starts `hide workspace remove`: the delete dialog's removal of a
+    /// worktree on the caller's machine, admitted under the lock. The id is
+    /// the removal record [`Self::worktree_removal_answer`] reads.
+    pub fn worktree_remove(
+        &self,
+        device: &str,
+        caller: &str,
+        expected: &crate::workspace_control::Context,
+        command: &crate::worktree_command::WorktreeRemove,
+    ) -> Result<u64, String> {
+        if !check_owner_thread(self, "worktree.remove") {
+            return Err("worktree_remove_worker_unavailable".into());
+        }
+        let started =
+            lock_recover(&self.runtime).worktree_remove_command(device, caller, expected, command);
+        // A refusal can still have asked for a fresh worktree list.
+        notify_change(self);
+        started
+    }
+
+    /// How the removal `id` ended, `None` while it runs. A record another
+    /// removal replaced answers that its result is unknown.
+    pub fn worktree_removal_answer(&self, id: u64) -> Option<Result<serde_json::Value, String>> {
+        if !check_owner_thread(self, "worktree.removal_answer") {
+            return Some(Err("worktree_remove_worker_unavailable".into()));
+        }
+        let runtime = lock_recover(&self.runtime);
+        match runtime.worktree_removal_record(id) {
+            Some(removal) => crate::worktree_command::answer(removal),
+            None => Some(Err("worktree_remove_result_unknown".into())),
+        }
+    }
+
     /// Runs a `hide plan` command (PRD hide-plan D-27): one change under the
     /// lock, saved by the link worker, judged with the evidence `proofs`
     /// already read. A change whose evidence still needs reading answers

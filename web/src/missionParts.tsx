@@ -122,6 +122,22 @@ export function useRunWords(mission: Mission, paneId: string | null | undefined,
     : { text: run.words, words: run.words, mark: null, from: "launch" };
 }
 
+/**
+ * A node's worker as its card and its panel's head draw it (operator,
+ * 2026-11-01): the agent and the model and effort its pane was proven
+ * launched with; the plan's, marked planned, only while the node has not
+ * finished, so finished work never shows the plan as what ran. Neither
+ * known, nothing.
+ */
+export function useNodeRun(mission: Mission, node: MissionNode): { run: RunLabel; agent: string | null } | null {
+  const row = useWorkerRow(node);
+  const planned = node.status !== "done" && node.status !== "dropped";
+  const run = useRunWords(mission, node.pane_id, node.machine, planned ? node.worker : null);
+  if (!run) return null;
+  // The mark is the launched agent's own when the launch speaks, never the plan's.
+  return { run, agent: run.from === "launch" ? (row?.agent_kind ?? null) : (node.worker?.agent ?? null) };
+}
+
 /** A run's words, which truncate, before its planned mark, which never does, so a planned model never reads as launched. */
 export function RunText({ run, className, wordsClassName, children }: { run: RunLabel; className?: string; wordsClassName?: string; children?: ReactNode }) {
   return (

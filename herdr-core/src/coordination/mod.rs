@@ -65,6 +65,9 @@ pub fn split_refusal(refusal: &str) -> (&str, Option<&str>) {
             | "pane_busy"),
             detail,
         )) => (code, Some(detail)),
+        Some((code, detail)) if crate::worktree_command::DETAILED.contains(&code) => {
+            (code, Some(detail))
+        }
         _ => (refusal, None),
     }
 }
@@ -1437,6 +1440,9 @@ pub(crate) fn apply(
             }
             input.attempts += 1;
             input.typed_at_unix_ms = now;
+            if input.attempts == 1 {
+                input.first_typed_at_unix_ms = now;
+            }
             Ok(json!(record))
         }
         Mutation::BriefLaunched { id } => {
@@ -1466,6 +1472,7 @@ pub(crate) fn apply(
             if !input.launch {
                 input.attempts = 1;
                 input.typed_at_unix_ms = now;
+                input.first_typed_at_unix_ms = now;
                 input.launch = true;
             }
             record.briefed = true;

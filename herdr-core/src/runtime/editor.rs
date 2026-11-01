@@ -1051,9 +1051,7 @@ impl Runtime {
                     .iter()
                     .any(|pane_id| pane_id == &agent.pane_id),
             };
-            in_target
-                && (agent.requires_close_status_check
-                    && self.failed_terminal_id(&agent.pane_id).is_none())
+            in_target && agent.requires_close_status_check
         });
         if activity_status_unknown {
             return Some(
@@ -1092,9 +1090,7 @@ impl Runtime {
                         .iter()
                         .any(|pane_id| pane_id == &agent.pane_id),
                 };
-                in_target
-                    && (agent.requires_close_confirmation
-                        && self.failed_terminal_id(&agent.pane_id).is_none())
+                in_target && agent.requires_close_confirmation
             })
             .map(|agent| agent.pane_id.as_str())
             .collect::<Vec<_>>();
@@ -1411,9 +1407,7 @@ impl Runtime {
                         .iter()
                         .any(|pane_id| pane_id == &agent.pane_id),
                 };
-                in_target
-                    && (agent.requires_close_confirmation
-                        && self.failed_terminal_id(&agent.pane_id).is_none())
+                in_target && agent.requires_close_confirmation
             })
             .map(|agent| agent.pane_id.clone())
             .collect::<Vec<_>>();
@@ -3163,9 +3157,7 @@ impl Runtime {
             .map(|pane| pane.id.as_str())
             .collect::<HashSet<_>>();
         let status_unknown = self.snapshot.navigator.agents.iter().any(|agent| {
-            pane_ids.contains(agent.pane_id.as_str())
-                && (agent.requires_close_status_check
-                    && self.failed_terminal_id(&agent.pane_id).is_none())
+            pane_ids.contains(agent.pane_id.as_str()) && agent.requires_close_status_check
         });
         if status_unknown {
             self.set_error(
@@ -3178,9 +3170,7 @@ impl Runtime {
             return true;
         }
         let requires_confirmation = self.snapshot.navigator.agents.iter().any(|agent| {
-            pane_ids.contains(agent.pane_id.as_str())
-                && (agent.requires_close_confirmation
-                    && self.failed_terminal_id(&agent.pane_id).is_none())
+            pane_ids.contains(agent.pane_id.as_str()) && agent.requires_close_confirmation
         });
         if requires_confirmation && !confirmed {
             self.set_error(
@@ -3221,11 +3211,12 @@ impl Runtime {
             );
             return true;
         }
-        let status_unknown = self.snapshot.navigator.agents.iter().any(|agent| {
-            agent.pane_id == pane_id
-                && (agent.requires_close_status_check
-                    && self.failed_terminal_id(&agent.pane_id).is_none())
-        });
+        let status_unknown = self
+            .snapshot
+            .navigator
+            .agents
+            .iter()
+            .any(|agent| agent.pane_id == pane_id && agent.requires_close_status_check);
         if status_unknown {
             self.set_error(
                 "pane.close_status_unknown",
@@ -3236,11 +3227,12 @@ impl Runtime {
             );
             return true;
         }
-        let requires_confirmation = self.snapshot.navigator.agents.iter().any(|agent| {
-            agent.pane_id == pane_id
-                && (agent.requires_close_confirmation
-                    && self.failed_terminal_id(&agent.pane_id).is_none())
-        });
+        let requires_confirmation = self
+            .snapshot
+            .navigator
+            .agents
+            .iter()
+            .any(|agent| agent.pane_id == pane_id && agent.requires_close_confirmation);
         if requires_confirmation && !confirmed {
             self.set_error(
                 "pane.close_confirmation_required",

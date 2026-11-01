@@ -196,6 +196,11 @@ pub struct SessionAgentPayload {
     /// Internal provenance, never supplied by Herdr or a shell client.
     #[serde(skip)]
     pub(crate) telemetry_stale: bool,
+    /// The pane's terminal failed to restore (Herdr's `restore_error`): no
+    /// process runs behind this agent, whatever Herdr's `agent_status` says.
+    /// Laid on from the pane by [`project_agents`], never supplied by Herdr.
+    #[serde(skip)]
+    pub(crate) terminal_failed: bool,
     #[serde(default)]
     pub id: Option<String>,
     /// The name Herdr knows the agent by (`agent.start --name`, `agent
@@ -382,7 +387,18 @@ pub struct AgentProjection {
 pub fn project_agents(payload: SessionSnapshotPayload) -> AgentProjection {
     let mut agents = Vec::with_capacity(payload.agents.len());
     let mut excluded = Vec::new();
-    for (source_index, agent) in payload.agents.into_iter().enumerate() {
+    let failed = payload
+        .panes
+        .iter()
+        .filter(|pane| pane.failed_terminal_id.is_some())
+        .map(|pane| pane.pane_id.as_str())
+        .collect::<BTreeSet<_>>();
+    for (source_index, mut agent) in payload.agents.into_iter().enumerate() {
+        agent.terminal_failed = agent
+            .pane_id
+            .as_deref()
+            .or(agent.id.as_deref())
+            .is_some_and(|pane| failed.contains(pane));
         let pane_id =
             non_empty(agent.pane_id.as_deref().or(agent.id.as_deref())).map(str::to_owned);
         match project_agent(agent) {

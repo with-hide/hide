@@ -79,6 +79,16 @@ hide workspace purpose <text>
 - `hide workspace purpose <text>` sets your checkout's one-line purpose, 40 characters at most, which the sidebar shows.
 - A refusal is one line with its `code` and the step to take: a pane or agent that is not there, a limit passed, or a shell outside a Hide pane.
 
+## Removing a worktree
+
+```
+hide workspace remove <path> [--delete-branch] [--force]
+```
+
+- Remove a worktree Hide shows with this, never a plain `git worktree remove`: it closes the checkout's panes first, as the operator's Delete does, while Git alone leaves them open on a folder that is gone.
+- `--delete-branch` takes the local branch with it. Without `--force` it refuses uncommitted or untracked files (`worktree_remove_needs_force`) and a branch with commits its base lacks (`worktree_remove_branch_unmerged`); add `--force` only when that work may go.
+- It refuses the main checkout, your own checkout and a worktree whose agent is still working or waiting there, and it waits until the removal ends; running it again waits for the same removal or answers how it ended.
+
 ## Devices
 
 ```
