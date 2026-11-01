@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import tomllib
 from pathlib import Path
 
 from .protection import ProtectionError
@@ -22,7 +23,7 @@ def source_contract(checkout: Path) -> dict:
                 raise ProtectionError("nested_adapter_declaration")
             row = {}
         elif row is not None and line.startswith('        id: '):
-            row["id"] = json.loads(line.removeprefix("        id: ").removesuffix(","))
+            row["id"] = adapter_id(checkout, line.removeprefix("        id: ").removesuffix(","))
         elif row is not None and line.startswith("        bell: "):
             value = line.removeprefix("        bell: ").removesuffix(",")
             if value not in ("true", "false"):
@@ -44,6 +45,18 @@ def source_contract(checkout: Path) -> dict:
         raise ProtectionError("doorbell_quiet_declaration_unreadable")
     return {"bell": bell, "quiet_seconds": int(quiet.replace("_", "")) / 1000, "targets": rows,
             "declaration_sha256": hashlib.sha256(source.read_bytes()).hexdigest()}
+
+
+def adapter_id(checkout: Path, value: str) -> str:
+    """An adapter's id, which it reads from its built-in definition file:
+    `defs::CLAUDE_CODE.id` is the `id` of `agents/claude-code.toml`."""
+    constant = value.removeprefix("defs::").removesuffix(".id")
+    if value != f"defs::{constant}.id" or not constant.replace("_", "").isalpha():
+        raise ProtectionError("unreadable_adapter_id_declaration")
+    file = checkout / "hide-agent-adapter/agents" / f"{constant.lower().replace('_', '-')}.toml"
+    if not file.is_file():
+        raise ProtectionError("adapter_definition_missing")
+    return tomllib.loads(file.read_text())["id"]
 
 
 def declaration(file: Path, prefix: str) -> str:
