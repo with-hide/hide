@@ -3,7 +3,8 @@
 The expected split is owned by hided/src/agent_cli.rs: --model before -- is
 the retained launch choice; arguments after -- reach only the first start.
 The first start of a real CLI carries its first prompt as Hide's --brief,
-which the agent's own record has to confirm (docs/delivery.md, Input an
+a markdown brief of many lines like a real spawn's, which the agent's own
+record has to confirm (docs/delivery.md, Input an
 agent did not take); the untrusted start and a stand-in's first start keep
 the agent's prompt argument.
 Capture the outbound command before any product process or provider runs.
@@ -11,6 +12,7 @@ Capture the outbound command before any product process or provider runs.
 
 import json
 from pathlib import Path
+import re
 import sys
 from types import SimpleNamespace
 import unittest
@@ -58,7 +60,15 @@ class JourneySpawn(unittest.TestCase):
     def assert_brief_only(self, outer, native):
         self.assertEqual(native, [])
         self.assertEqual(outer.count("--brief"), 1)
-        self.assertRegex(outer[outer.index("--brief") + 1], r"^Reply with exactly JOURNEY-[0-9A-F]{8}$")
+        # A real spawn's shape: Claude Code records a paste of four lines or
+        # more, or of 800 characters or more, wrapped as pasted content, and
+        # the record has to confirm that brief too.
+        brief = outer[outer.index("--brief") + 1]
+        self.assertGreaterEqual(len(brief), 800)
+        self.assertGreaterEqual(len(brief.strip().splitlines()), 4)
+        self.assertIn("`", brief)
+        self.assertRegex(brief.strip().splitlines()[-1], r"^Reply with exactly JOURNEY-[0-9A-F]{8}$")
+        self.assertEqual(len(re.findall(r"JOURNEY-[0-9A-F]{8}", brief)), 1)
 
     def assert_prompt_only(self, native):
         self.assertEqual(len(native), 2)

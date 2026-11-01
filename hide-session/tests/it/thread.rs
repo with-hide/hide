@@ -700,7 +700,7 @@ fn hide_and_harness_wrappers_stay_apart_from_the_operators_words() {
     let placed = Placed::new(&SAMPLES[0]);
     let letter = "Hide letter letter-1 from ci-lead (claude) [request]\nCI 다시 봐줘\nFull letter: hide request show letter-1";
     let records = [
-        json!({"type":"user","uuid":"a","message":{"content":"고쳐줘\n<pasted_content id=\"p1\">\npanic at main.rs:3\n</pasted_content>\n왜 그래?"}}),
+        json!({"type":"user","uuid":"a","message":{"content":"고쳐줘\n<pasted_content id=\"a1b2\">\npanic at main.rs:3\n</pasted_content id=\"a1b2\">\n왜 그래?"}}),
         json!({"type":"user","uuid":"b","isMeta":true,"message":{"content":"Caveat: local command output"}}),
         json!({"type":"user","uuid":"c","message":{"content":"<system-reminder>hook said hi</system-reminder>"}}),
         json!({"type":"user","uuid":"d","message":{"content":letter}}),

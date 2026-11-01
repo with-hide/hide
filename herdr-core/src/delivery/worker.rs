@@ -1733,16 +1733,19 @@ mod tests {
     /// docs/delivery.md, Watch activity and completion: the watch reads the
     /// child's own row, so a child stopped on a question, or one Herdr holds
     /// at a blocked prompt with or without a question, tells its parent one
-    /// tick later with its own first line; one stopped without a question
-    /// and one working on an async question wait as before.
+    /// tick later with its own first line; one stopped without a question,
+    /// one working on an async question, and one whose row shows only Hide's
+    /// own question about input it typed (`InputUnconfirmed`, laid as the
+    /// core lays it, `Runtime::publish_input_asks`) wait as before.
     #[test]
     fn a_child_stopped_on_a_question_or_held_at_a_prompt_warns_its_parent_after_one_tick() {
-        for (status, question, first_line) in [
-            ("idle", true, Some("Stopped with a question")),
-            ("idle", false, None),
-            ("working", true, None),
-            ("blocked", true, Some("Blocked at a prompt")),
-            ("blocked", false, Some("Blocked at a prompt")),
+        for (status, question, laid_input, first_line) in [
+            ("idle", true, false, Some("Stopped with a question")),
+            ("idle", false, false, None),
+            ("idle", false, true, None),
+            ("working", true, false, None),
+            ("blocked", true, false, Some("Blocked at a prompt")),
+            ("blocked", false, false, Some("Blocked at a prompt")),
         ] {
             let root = tempfile::tempdir().unwrap();
             let (runtime, parent, observed, _) = fixture(root.path());
@@ -1763,6 +1766,9 @@ mod tests {
             guard.publish_delivery(Arc::new(ledger.clone()), false);
             guard.observe_delivery_laid(crate::node::TEST_NODE, &payload, None, None);
             show_agents(&mut guard, payload);
+            if laid_input {
+                crate::runtime::delivery::tests::lay_unconfirmed_brief(&mut guard, "recipient");
+            }
             let work = guard.delivery_watch_work();
             drop(guard);
             let sample = read_activity(work.into_iter().next().unwrap());
@@ -1780,10 +1786,17 @@ mod tests {
                 .collect();
             match first_line {
                 Some(first) => {
-                    assert_eq!(lines.len(), 1, "{status}, question {question}");
+                    assert_eq!(
+                        lines.len(),
+                        1,
+                        "{status}, question {question}, laid {laid_input}"
+                    );
                     assert!(lines[0].starts_with(first), "{status}: {}", lines[0]);
                 }
-                None => assert!(lines.is_empty(), "{status}, question {question}"),
+                None => assert!(
+                    lines.is_empty(),
+                    "{status}, question {question}, laid {laid_input}"
+                ),
             }
         }
     }

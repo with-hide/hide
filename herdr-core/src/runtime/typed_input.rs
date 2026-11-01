@@ -188,12 +188,22 @@ impl Runtime {
             // An agent whose prompt hook reports no digest records the brief
             // in its session file, which the label worker reads on each of
             // its state changes.
+            // A message that ends with the brief is its record too: what the
+            // composer held before the typing stays in front of it. The row
+            // keeps the newest request's words, cut past 8 KiB.
             if self
                 .row_facts_of(&observation.actor.pane_id)
                 .is_some_and(|facts| {
                     facts.prompt_digests.iter().any(|digest| {
                         hide_agent_hooks::delivery::matches_prompt_digest(brief, digest)
-                    })
+                    }) || facts
+                        .operator_request
+                        .iter()
+                        .chain(&facts.other_request)
+                        .any(|request| {
+                            !request.cut
+                                && hide_agent_hooks::delivery::ends_with_typed(&request.text, brief)
+                        })
                 })
             {
                 work.push(InputWork {
@@ -1246,5 +1256,47 @@ pub(crate) mod tests {
         assert_eq!(work[0].key, InputKey::Spawn(spawn));
         assert_eq!(work[0].recorded, Some("session"));
         assert!(work[0].notice.is_none());
+    }
+
+    /// A message that holds the brief after what the composer already held,
+    /// such as the terminal report Antigravity on Windows took as typed
+    /// (`27;1$y`, agent journey 2026-11-01), is the brief's record; a message
+    /// that holds only part of it, or more after it, is not.
+    #[test]
+    fn a_message_that_ends_with_the_brief_is_its_record() {
+        for (text, recorded) in [
+            (format!("27;1$y{BRIEF}"), true),
+            (BRIEF.lines().last().unwrap().to_owned(), false),
+            (format!("{BRIEF} and more"), false),
+        ] {
+            let (_root, mut runtime, spawn) = spawned_as("antigravity", false, 1_000);
+            let mut row = crate::sidebar::project_agents(
+                serde_json::from_value(json!({"agents": [
+                    {"pane_id": "child", "agent": "antigravity", "agent_status": "idle", "state_change_seq": 2}
+                ]}))
+                .unwrap(),
+            )
+            .agents
+            .remove(0);
+            row.row_facts = Some(crate::request_view::RowFacts {
+                other_request: Some(crate::labels::facts::Request {
+                    text: text.clone(),
+                    offset: Some(1),
+                    cut: false,
+                    images: 0,
+                    at_unix_ms: 1_500,
+                    requester: crate::labels::facts::Requester::Agent,
+                    first: true,
+                }),
+                ..Default::default()
+            });
+            runtime.snapshot.navigator.agents.push(row);
+            let work = runtime.typed_input_work(1_000 + RECORD_WAIT_MS);
+            let found = work
+                .iter()
+                .find(|work| work.key == InputKey::Spawn(spawn.clone()))
+                .and_then(|work| work.recorded);
+            assert_eq!(found == Some("session"), recorded, "{text:?}");
+        }
     }
 }

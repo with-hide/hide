@@ -2036,8 +2036,18 @@ impl Runtime {
                     .and_then(|_| self.agent_row(&watch.target.pane_id))
                     .filter(|row| row.lineage_session == watch.target.session);
                 let blocked = row.is_some_and(|row| row.blocked);
+                // Input Hide typed and the agent did not confirm is laid on
+                // the row as a question (`AskSubject::InputUnconfirmed`), but
+                // it is Hide's, which its own notice already told the parent,
+                // not one the target asked.
                 let asking = row.is_some_and(|row| {
-                    row.demand == "question" && row.activity == "stopped" && !row.blocked
+                    row.demand == "question"
+                        && row.activity == "stopped"
+                        && !row.blocked
+                        && !matches!(
+                            row.ask_subject,
+                            Some(crate::model::AskSubject::InputUnconfirmed { .. })
+                        )
                 });
                 // A mission worker waiting on its pull request's CI, review
                 // or merge is not quiet (PRD mission-node-simple D-06, B22).
@@ -2430,6 +2440,23 @@ pub(crate) mod tests {
     /// The agent rows the sidebar shows on this machine.
     pub(crate) fn show_agents(runtime: &mut Runtime, payload: SessionSnapshotPayload) {
         runtime.snapshot.navigator.agents = crate::sidebar::project_agents(payload).agents;
+    }
+
+    /// Lays on the row of `pane` the core's question about a brief it typed
+    /// and the agent did not confirm, as a doorbell pass does
+    /// (`Runtime::publish_input_asks`).
+    pub(crate) fn lay_unconfirmed_brief(runtime: &mut Runtime, pane: &str) {
+        runtime.plans.input_asks = vec![(
+            pane.to_owned(),
+            1,
+            crate::model::AskSubject::InputUnconfirmed {
+                input: crate::delivery::typed::InputKind::Brief,
+                spent: false,
+                held: false,
+            },
+        )];
+        runtime.plans.input_edit += 1;
+        assert!(runtime.refresh_plan_reviews(), "the ask is laid on the row");
     }
 
     /// An archived session whose one member holds `actor`'s registration and

@@ -218,7 +218,7 @@ impl Thread {
                                 .or_else(|| crate::bell_sender(text).map(str::to_owned))
                         })
                         .flatten();
-                    for (piece, pasted) in pasted_pieces(text) {
+                    for (piece, pasted) in crate::pasted::pasted_pieces(text) {
                         let block = text_block(piece, pasted.then_some(("pasted", json!(true))));
                         self.letter_chunk(message, origin, from.as_deref(), block);
                     }
@@ -449,30 +449,6 @@ fn classify(origin: Origin, text: &str) -> Origin {
     }
 }
 
-const PASTED_OPEN: &str = "<pasted_content";
-const PASTED_CLOSE: &str = "</pasted_content>";
-
-/// `text` cut at each pasted-content wrapper, the wrapped text marked as
-/// pasted and without its tags. An unclosed wrapper is the operator's text.
-fn pasted_pieces(text: &str) -> Vec<(&str, bool)> {
-    let mut pieces = Vec::new();
-    let mut rest = text;
-    while let Some(open) = rest.find(PASTED_OPEN) {
-        let Some(tag_end) = rest[open..].find('>').map(|end| open + end + 1) else {
-            break;
-        };
-        let Some(close) = rest[tag_end..].find(PASTED_CLOSE).map(|end| tag_end + end) else {
-            break;
-        };
-        pieces.push((&rest[..open], false));
-        pieces.push((&rest[tag_end..close], true));
-        rest = &rest[close + PASTED_CLOSE.len()..];
-    }
-    pieces.push((rest, false));
-    pieces.retain(|(piece, _)| !piece.trim().is_empty());
-    pieces
-}
-
 fn text_block(text: &str, mark: Option<(&'static str, Value)>) -> ContentBlock {
     let (text, truncated) = capped(text);
     let marks = mark
@@ -575,23 +551,6 @@ fn image_mime(path: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn pasted_content_is_cut_out_of_the_typed_words() {
-        let text = "look at this\n<pasted_content id=\"a1\">\nlog line\n</pasted_content>\nwhy?";
-        assert_eq!(
-            pasted_pieces(text),
-            vec![
-                ("look at this\n", false),
-                ("\nlog line\n", true),
-                ("\nwhy?", false)
-            ]
-        );
-        assert_eq!(
-            pasted_pieces("<pasted_content id=\"a\">never closed"),
-            vec![("<pasted_content id=\"a\">never closed", false)]
-        );
-    }
 
     #[test]
     fn text_at_the_cap_is_whole_and_one_past_it_is_marked() {
