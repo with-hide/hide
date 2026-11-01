@@ -2700,7 +2700,10 @@ fn an_outside_node_is_done_once_its_pull_request_or_branch_is_in_main() {
     let lib = || Ask {
         mission: "mission-1".into(),
         node: "lib".into(),
-        watch: Watch::Outside(External::Branch("feat/lib".into())),
+        watch: Watch::Outside {
+            external: External::Branch("feat/lib".into()),
+            ahead: None,
+        },
     };
     runtime.ingest_outside(
         &place,
@@ -3441,6 +3444,113 @@ fn a_git_mission_in_a_repository_with_no_remote_follows_its_branches_into_main()
     );
 }
 
+/// mission-23: an outside branch is in main once work of its own reached
+/// main, never because it was cut from main. In a repository with no
+/// remote, a branch with no commit of its own waits, and keeps waiting
+/// while main moves on; after a commit that main then takes by a
+/// fast-forward it is done. A branch named after its real merge is done on
+/// the first read, and so is one GitHub squash-merged, whose commits main
+/// never holds.
+#[test]
+fn an_outside_branch_is_in_main_only_once_its_own_work_reached_main() {
+    let folder = tempfile::tempdir().unwrap();
+    let repo = std::fs::canonicalize(folder.path()).unwrap();
+    for args in [
+        &["init", "-q", "-b", "trunk"][..],
+        &["config", "user.name", "Fixture"],
+        &["config", "user.email", "fixture@example.invalid"],
+        &["config", "commit.gpgsign", "false"],
+        &["commit", "-q", "--allow-empty", "-m", "seed"],
+        &["branch", "feat/cut"],
+        &["branch", "feat/old"],
+        &["branch", "feat/squashed"],
+    ] {
+        git_in(&repo, args);
+    }
+    for branch in ["feat/old", "feat/squashed"] {
+        git_in(&repo, &["checkout", "-q", branch]);
+        git_in(&repo, &["commit", "-q", "--allow-empty", "-m", branch]);
+    }
+    git_in(&repo, &["checkout", "-q", "trunk"]);
+    // Merged for real before the mission names it.
+    git_in(&repo, &["merge", "-q", "--no-ff", "-m", "old", "feat/old"]);
+    let root = hide_platform::path::to_wire(&repo).unwrap();
+
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    let outside = |key: &str, branch: &str| json!({"key": key, "title": key, "kind": "external", "external": {"branch": branch}});
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "plan", "plan": {"nodes": [
+            outside("cut", "feat/cut"),
+            outside("old", "feat/old"),
+            outside("squashed", "feat/squashed"),
+        ]}}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    runtime.missions.book.missions[0].project = root.clone();
+    runtime
+        .worktree_catalog
+        .projects
+        .push(crate::model::ProjectWorktreesSnapshot {
+            root_path: root.clone(),
+            base_branch: Some("trunk".into()),
+            ..Default::default()
+        });
+    let squashed = git_in(&repo, &["rev-parse", "feat/squashed"]);
+    let mut merged = pull(9, &squashed, PullRequestBadge::Merged, None);
+    merged.base_branch = "trunk".into();
+    runtime.github = GithubSnapshot {
+        projects: vec![GithubProjectSnapshot {
+            pull_requests_read: true,
+            root_path: root.clone(),
+            pull_requests: vec![merged],
+            ..Default::default()
+        }],
+    };
+    let host = Host(hide_host::serve::Env::standalone(Some(repo.clone())));
+    let device = crate::node::TEST_NODE;
+    let status = |runtime: &Runtime, key: &str| {
+        let read = node_view(runtime, key);
+        assert!(!read.unread, "{key} was read");
+        read.status
+    };
+
+    let line = |runtime: &Runtime, key: &str| node_view(runtime, key).line.unwrap_or_default();
+    runtime.read_outside_through(device, &root, &host);
+    assert_eq!(status(&runtime, "cut"), NodeStatus::Waiting);
+    // The Conductor reads why it waits in the node's line.
+    assert!(line(&runtime, "cut").contains("no commit of its own"));
+    assert_eq!(status(&runtime, "old"), NodeStatus::Done);
+    assert_eq!(status(&runtime, "squashed"), NodeStatus::Done);
+
+    // Main moving on leaves the cut branch behind it, still with nothing
+    // of its own.
+    git_in(&repo, &["commit", "-q", "--allow-empty", "-m", "elsewhere"]);
+    runtime.read_outside_through(device, &root, &host);
+    assert_eq!(status(&runtime, "cut"), NodeStatus::Waiting);
+
+    git_in(&repo, &["checkout", "-q", "feat/cut"]);
+    git_in(&repo, &["rebase", "-q", "trunk"]);
+    git_in(&repo, &["commit", "-q", "--allow-empty", "-m", "the work"]);
+    runtime.read_outside_through(device, &root, &host);
+    assert_eq!(status(&runtime, "cut"), NodeStatus::Waiting);
+    assert!(line(&runtime, "cut").contains("commits main does not have"));
+
+    git_in(&repo, &["checkout", "-q", "trunk"]);
+    git_in(&repo, &["merge", "-q", "--ff-only", "feat/cut"]);
+    runtime.read_outside_through(device, &root, &host);
+    assert_eq!(status(&runtime, "cut"), NodeStatus::Done);
+}
+
 /// verify-screen's finding on #1729: a direct change already in main is
 /// read there as soon as its node is done, while the mission still runs, so
 /// the map shows `→ main` and not `합치기 남음`; the node turning done starts
@@ -3570,6 +3680,11 @@ fn a_plan_of_more_outside_branches_than_one_read_takes_is_read_whole_when_admitt
         &["config", "user.email", "fixture@example.invalid"],
         &["config", "commit.gpgsign", "false"],
         &["commit", "-q", "--allow-empty", "-m", "seed"],
+        // A branch whose own work is in main.
+        &["checkout", "-q", "-b", "landed"],
+        &["commit", "-q", "--allow-empty", "-m", "landed"],
+        &["checkout", "-q", "trunk"],
+        &["merge", "-q", "--no-ff", "-m", "landed", "landed"],
     ] {
         git_in(&repo, args);
     }
@@ -3618,7 +3733,7 @@ fn a_plan_of_more_outside_branches_than_one_read_takes_is_read_whole_when_admitt
             .collect();
         nodes.push(
             json!({"key": "last", "title": "In main", "kind": "external",
-                          "external": {"branch": "trunk"}}),
+                          "external": {"branch": "landed"}}),
         );
         command(
             &mut runtime,
@@ -3703,6 +3818,11 @@ fn a_node_followed_while_a_read_is_out_is_read_once_that_read_answers() {
         &["config", "user.email", "fixture@example.invalid"],
         &["config", "commit.gpgsign", "false"],
         &["commit", "-q", "--allow-empty", "-m", "seed"],
+        // A branch whose own work is in main.
+        &["checkout", "-q", "-b", "landed"],
+        &["commit", "-q", "--allow-empty", "-m", "landed"],
+        &["checkout", "-q", "trunk"],
+        &["merge", "-q", "--no-ff", "-m", "landed", "landed"],
     ] {
         git_in(&repo, args);
     }
@@ -3757,7 +3877,7 @@ fn a_node_followed_while_a_read_is_out_is_read_once_that_read_answers() {
         command(
             &mut runtime,
             "sender",
-            json!({"op": "plan", "plan": {"nodes": [outside("first", "absent"), outside("last", "trunk")]}}),
+            json!({"op": "plan", "plan": {"nodes": [outside("first", "absent"), outside("last", "landed")]}}),
         )
         .unwrap();
         assert_eq!(node_view(&runtime, "last").status, NodeStatus::Planned);

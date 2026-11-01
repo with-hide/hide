@@ -380,6 +380,11 @@ pub struct MissionNode {
     /// while the node stays done.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub in_main: Option<Landed>,
+    /// An outside branch's head when Hide last read it with commits main
+    /// lacks: work of its own, which makes the node done once main holds
+    /// it. A branch only cut from main has none (B19).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch_ahead: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verdict: Option<Verdict>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1334,6 +1339,7 @@ pub(crate) fn apply_plan(
                 commit: None,
                 folder: None,
                 in_main: None,
+                branch_ahead: None,
                 verdict: None,
                 checks: None,
             });
@@ -1349,7 +1355,11 @@ pub(crate) fn apply_plan(
                 with_check && input.kind == NodeKind::Change,
                 same_check,
             );
-            node.external.clone_from(&input.external);
+            if node.external != input.external {
+                // What Hide saw of one branch proves nothing about another.
+                node.branch_ahead = None;
+                node.external.clone_from(&input.external);
+            }
             node.issues.clone_from(&input.issues);
             node.paths.clone_from(&input.paths);
             if input.change.is_some() {
