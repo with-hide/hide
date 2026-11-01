@@ -23,6 +23,20 @@
 //!   is passed inline as Herdr passes its own, because a script file would
 //!   need an execution policy that allows scripts.
 //!
+//! Each of them, after the user's own files and before the mark, also drops
+//! an alias or a function (in fish also an abbreviation) named as a program
+//! Hide starts an agent with ([`AGENT_PROGRAMS`]), when that program is on
+//! the `PATH`: the pinned Herdr types an agent's start as the program's bare
+//! name, which the shell would otherwise expand, so an operator's
+//! `alias codex="codex --dangerously-bypass-approvals-and-sandbox"` doubled
+//! the option Hide adds and Codex refused to start. A name the `PATH` does
+//! not find keeps its alias, which is then the only way to the program. The
+//! names come in `HIDE_SHELL_PROGRAMS`, removed once read, and the mark
+//! carries the names whose alias or function went ([`UNSHADOWED_TOKEN`]),
+//! which the start logs. Only the panes Hide makes for a start are changed;
+//! the operator's own terminals keep theirs. This is a transition path until
+//! Hide's own engine types the start line ([`AGENT_PROGRAMS`]).
+//!
 //! A shell starts as Herdr starts its own by default (Herdr's `auto` mode):
 //! a login shell on macOS and not on Linux. Other Unix shells, and an
 //! integration that cannot be installed, get an explicit ordinary launch
@@ -48,6 +62,34 @@ pub use hide_node_link::protocol::{ShellLaunch, ShellReadiness};
 /// The token the first prompt reports on the pane, and the value it reports.
 pub const PROMPT_TOKEN: &str = "hide_prompt";
 
+/// The token the first prompt also reports when the shell dropped an alias
+/// or a function of an agent program: those programs' names, joined by `,`,
+/// never what the alias or function held.
+pub const UNSHADOWED_TOKEN: &str = "hide_unshadowed";
+
+/// The variable that names, separated by spaces, the programs whose aliases
+/// and functions an integrated shell drops before its first prompt.
+///
+/// A transition path: the pinned Herdr types an agent's start as the bare
+/// program name, which Hide cannot spell `command codex`. It goes away, with
+/// [`UNSHADOWED_TOKEN`] and the scripts' loops, once Hide's own engine types
+/// the start line (engine bundle 3), which then runs the program itself.
+const AGENT_PROGRAMS: &str = "HIDE_SHELL_PROGRAMS";
+
+/// The program the pinned Herdr types for each agent Hide starts
+/// (`detect::interactive_agent_executable` in Herdr v0.9.5), which is the
+/// program each adapter declares.
+pub fn agent_programs() -> impl Iterator<Item = &'static str> {
+    hide_agent_adapter::ADAPTERS
+        .iter()
+        .filter(|row| row.start.is_some())
+        .flat_map(|row| row.executables.iter().copied())
+}
+
+fn agent_programs_variable() -> String {
+    agent_programs().collect::<Vec<_>>().join(" ")
+}
+
 #[cfg(unix)]
 const ZSH: [(&str, &str); 4] = [
     (".zshenv", include_str!("shell_integration/zshenv.zsh")),
@@ -66,17 +108,27 @@ const BASH: [(&str, &str); 2] = [
 ];
 /// fish's `-C` command, run after its configuration.
 #[cfg(unix)]
-const FISH_MARK: &str = "if set -q HERDR_BIN_PATH HERDR_PANE_ID; $HERDR_BIN_PATH pane report-metadata $HERDR_PANE_ID --source hide:shell --token hide_prompt=1 >/dev/null 2>&1; end";
+const FISH_MARK: &str = concat!(
+    "set -g __hide_removed; if set -q HIDE_SHELL_PROGRAMS; for __hide_program in (string split ' ' -- $HIDE_SHELL_PROGRAMS); if command -q -- $__hide_program; and begin; functions -q -- $__hide_program; or abbr -q -- $__hide_program; end; functions -e -- $__hide_program; abbr -e -- $__hide_program 2>/dev/null; set -a __hide_removed $__hide_program; end; end; set -e HIDE_SHELL_PROGRAMS; end; ",
+    "set -g __hide_tokens --token hide_prompt=1; set -q __hide_removed[1]; and set -a __hide_tokens --token hide_unshadowed=(string join , -- $__hide_removed); ",
+    "if set -q HERDR_BIN_PATH HERDR_PANE_ID; $HERDR_BIN_PATH pane report-metadata $HERDR_PANE_ID --source hide:shell $__hide_tokens >/dev/null 2>&1; end; set -e __hide_removed __hide_tokens __hide_program"
+);
 /// Windows PowerShell's `-Command`, run after the user's profile: Herdr
 /// 0.9.3's own prompt wrapper for its PowerShell panes
 /// (`WINDOWS_POWERSHELL_SHELL_INTEGRATION_COMMAND` in its `src/pane.rs`),
-/// which reports the folder as OSC 9;9 at each prompt, then the mark. Like
-/// Herdr's, it holds no double quote, which powershell.exe's own command
-/// line parsing would corrupt.
+/// which reports the folder as OSC 9;9 at each prompt, then the agent
+/// programs' aliases and functions dropped, then the mark. Like Herdr's, it
+/// holds no double quote, which powershell.exe's own command line parsing
+/// would corrupt. With arguments the pinned Herdr starts a program through
+/// `Start-Process`, which no alias or function reaches; without any it types
+/// `& <program>`, which one does.
 #[cfg(windows)]
 const POWERSHELL_COMMAND: &str = concat!(
     r"if ($null -eq $global:__HerdrOriginalPrompt) { $global:__HerdrOriginalPrompt = $function:prompt; function global:prompt { $out = @(& $global:__HerdrOriginalPrompt) -join ' '; $loc = $ExecutionContext.SessionState.Path.CurrentLocation; if ($loc.Provider.Name -eq 'FileSystem') { try { [Environment]::CurrentDirectory = $loc.ProviderPath } catch {}; $esc = [string][char]27; $out += $esc + ']9;9;' + $loc.ProviderPath + $esc + '\' }; $out } }",
-    r"; if ($env:HERDR_BIN_PATH -and $env:HERDR_PANE_ID) { & $env:HERDR_BIN_PATH pane report-metadata $env:HERDR_PANE_ID --source hide:shell --token hide_prompt=1 *> $null }"
+    r"; $__hideRemoved = @(); if ($env:HIDE_SHELL_PROGRAMS) { foreach ($__hideProgram in $env:HIDE_SHELL_PROGRAMS.Split(' ')) { $__hidePaths = ('alias:' + $__hideProgram), ('function:' + $__hideProgram); if ((Get-Command -Name $__hideProgram -CommandType Application,ExternalScript -ErrorAction SilentlyContinue) -and ((Test-Path -LiteralPath $__hidePaths) -contains $true)) { Remove-Item -LiteralPath $__hidePaths -Force -ErrorAction SilentlyContinue; $__hideRemoved += $__hideProgram } }; Remove-Item -LiteralPath env:HIDE_SHELL_PROGRAMS }",
+    r"; $__hideTokens = @('--token', 'hide_prompt=1'); if ($__hideRemoved.Count) { $__hideTokens += '--token', ('hide_unshadowed=' + ($__hideRemoved -join ',')) }",
+    r"; if ($env:HERDR_BIN_PATH -and $env:HERDR_PANE_ID) { & $env:HERDR_BIN_PATH pane report-metadata $env:HERDR_PANE_ID --source hide:shell @__hideTokens *> $null }",
+    r"; Remove-Variable -Name __hideRemoved, __hideTokens, __hideProgram, __hidePaths -ErrorAction SilentlyContinue"
 );
 /// How long another build's folder stays after a pane was last started
 /// with it. A shell reads its later startup files only once a question in
@@ -227,7 +279,8 @@ pub fn install(home: &Path, user: &UserShell) -> io::Result<Option<ShellLaunch>>
     let login = cfg!(target_os = "macos");
     let with = |path: PathBuf| path.to_string_lossy().into_owned();
     let mut command = vec![shell.to_owned()];
-    let mut env = std::collections::BTreeMap::new();
+    let mut env =
+        std::collections::BTreeMap::from([(AGENT_PROGRAMS.to_owned(), agent_programs_variable())]);
     match name {
         "zsh" => {
             if login {
@@ -269,7 +322,10 @@ pub fn install(_home: &Path, _user: &UserShell) -> io::Result<Option<ShellLaunch
             "-Command".into(),
             POWERSHELL_COMMAND.into(),
         ],
-        env: Default::default(),
+        env: std::collections::BTreeMap::from([(
+            AGENT_PROGRAMS.to_owned(),
+            agent_programs_variable(),
+        )]),
         readiness: ShellReadiness::Integrated,
     }))
 }
@@ -537,7 +593,8 @@ mod tests {
             assert!(folder.join(name).is_file(), "{name}");
         }
         assert!(folder.starts_with(hide_kit::layout::shell_integration(home.path())));
-        assert_eq!(zsh.env.len(), 1, "the user had no ZDOTDIR: {:?}", zsh.env);
+        assert_eq!(zsh.env.len(), 2, "the user had no ZDOTDIR: {:?}", zsh.env);
+        assert_eq!(zsh.env[AGENT_PROGRAMS], agent_programs_variable());
         // The user's own ZDOTDIR follows, and a second install answers the
         // same folder without writing it again.
         let again = install(
@@ -582,7 +639,11 @@ mod tests {
                 "interactive.bash"
             }
         );
-        assert!(bash.env.is_empty(), "bash's environment is the user's");
+        assert_eq!(
+            bash.env.keys().collect::<Vec<_>>(),
+            [AGENT_PROGRAMS],
+            "bash's environment is the user's"
+        );
     }
 
     #[test]
@@ -595,8 +656,18 @@ mod tests {
         }
         expected.extend(["-C", FISH_MARK]);
         assert_eq!(fish.command, expected);
-        assert!(fish.env.is_empty());
+        assert_eq!(fish.env.keys().collect::<Vec<_>>(), [AGENT_PROGRAMS]);
         assert!(!hide_kit::layout::shell_integration(home.path()).exists());
+    }
+
+    /// Herdr v0.9.5 types these names (`detect::interactive_agent_executable`)
+    /// for the kinds Hide starts, so these are the words an alias could take.
+    #[test]
+    fn the_programs_a_shell_runs_past_their_aliases_are_the_ones_herdr_types() {
+        assert_eq!(
+            agent_programs_variable(),
+            "claude codex grok opencode pi omp agy"
+        );
     }
 
     #[test]

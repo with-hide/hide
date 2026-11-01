@@ -49,12 +49,26 @@ __hide_restore() {
 }
 
 # Runs before the first prompt, after every startup file and anything they
-# asked: Herdr keeps the mark on the pane, where Hide reads it.
+# asked: an agent program Hide starts runs as itself, past an alias or a
+# function of its name, when the PATH finds it (a transition path, until
+# Hide types the start itself); then Herdr keeps the mark on the pane, with
+# the names whose alias or function went, where Hide reads them.
 __hide_first_prompt() {
   add-zsh-hook -d precmd __hide_first_prompt
   builtin unfunction __hide_first_prompt
+  builtin zmodload zsh/parameter 2>/dev/null
+  local __hide_program
+  local -a __hide_removed
+  for __hide_program in ${=HIDE_SHELL_PROGRAMS-}; do
+    (( ${+aliases[$__hide_program]} || ${+galiases[$__hide_program]} || ${+functions[$__hide_program]} )) || continue
+    builtin whence -p -- "$__hide_program" >/dev/null || continue
+    builtin unalias -- "$__hide_program" 2>/dev/null
+    builtin unfunction -- "$__hide_program" 2>/dev/null
+    __hide_removed+=("$__hide_program")
+  done
+  builtin unset HIDE_SHELL_PROGRAMS
   if [[ -n ${HERDR_BIN_PATH-} && -n ${HERDR_PANE_ID-} ]]; then
-    "$HERDR_BIN_PATH" pane report-metadata "$HERDR_PANE_ID" --source hide:shell --token hide_prompt=1 >/dev/null 2>&1
+    "$HERDR_BIN_PATH" pane report-metadata "$HERDR_PANE_ID" --source hide:shell --token hide_prompt=1 ${__hide_removed:+--token} ${__hide_removed:+hide_unshadowed=${(j:,:)__hide_removed}} >/dev/null 2>&1
   fi
 }
 

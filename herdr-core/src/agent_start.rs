@@ -627,13 +627,41 @@ impl Shell<'_> {
             self.awaits_mark.set(false);
             return Ok(false);
         }
-        let marked = self
+        let unshadowed = hide_host::shell_integration::UNSHADOWED_TOKEN;
+        let tokens = self
             .engine
-            .pane_token(Wait::Each(READ_TIMEOUT), self.pane_id, PROMPT_TOKEN)
-            .map_err(|error| shell_unreadable(error.within("pane.get failed")))?
-            .is_some();
+            .pane_tokens(
+                Wait::Each(READ_TIMEOUT),
+                self.pane_id,
+                &[PROMPT_TOKEN, unshadowed],
+            )
+            .map_err(|error| shell_unreadable(error.within("pane.get failed")))?;
+        let marked = tokens.first().is_some_and(Option::is_some);
         self.awaits_mark.set(!marked);
+        if marked && let Some(Some(names)) = tokens.get(1) {
+            self.log_unshadowed(names);
+        }
         Ok(!marked)
+    }
+
+    /// Records which agent programs' aliases or functions the marked shell
+    /// dropped (`hide_host::shell_integration::UNSHADOWED_TOKEN`, read with
+    /// the mark), by name only and only names of agent programs. A transition
+    /// path that goes with the shells' loops (`hide_host::shell_integration`).
+    fn log_unshadowed(&self, names: &str) {
+        let programs: Vec<&str> = names
+            .split(',')
+            .filter(|name| {
+                hide_host::shell_integration::agent_programs().any(|known| known == *name)
+            })
+            .collect();
+        crate::diagnostic!(serde_json::json!({
+            "component": "agent_start",
+            "kind": "shell_integration.unshadowed",
+            "request": self.correlation_id,
+            "pane_id": self.pane_id,
+            "programs": programs,
+        }));
     }
 
     /// The last line the pane's screen shows, at most [`SCREEN_LINE_CHARS`]
@@ -1462,6 +1490,45 @@ mod tests {
         let methods = herdr.methods();
         assert_eq!(methods.iter().filter(|m| *m == "pane.get").count(), 3);
         assert_eq!(methods.last().map(String::as_str), Some("agent.start"));
+    }
+
+    /// The marked shell's dropped aliases and functions are logged by the
+    /// program's name, once, and a name that is no agent program is not.
+    #[test]
+    fn the_programs_a_marked_shell_unshadowed_are_logged_by_name_only() {
+        let token = hide_host::shell_integration::UNSHADOWED_TOKEN;
+        let herdr = FakeHerdr::start("agent-start-unshadowed", move |method, _| match method {
+            "pane.process_info" => process_info(SHELL, &[SHELL]),
+            "pane.get" => pane_with(json!({PROMPT_TOKEN: "1", token: "codex,grok,rm -rf"})),
+            "agent.start" => started(),
+            other => panic!("unexpected {other}"),
+        });
+        let (outcome, records) =
+            crate::diagnostics::capture(|| start_integrated(&herdr, Duration::from_secs(5)));
+        assert!(outcome.is_ok());
+        let logged: Vec<_> = records
+            .iter()
+            .filter(|record| record["kind"] == "shell_integration.unshadowed")
+            .collect();
+        assert_eq!(logged.len(), 1, "{records:?}");
+        assert_eq!(logged[0]["pane_id"], "w1:p1");
+        assert_eq!(logged[0]["programs"], json!(["codex", "grok"]));
+
+        let herdr = FakeHerdr::start("agent-start-shadowless", move |method, _| match method {
+            "pane.process_info" => process_info(SHELL, &[SHELL]),
+            "pane.get" => pane_with(json!({PROMPT_TOKEN: "1"})),
+            "agent.start" => started(),
+            other => panic!("unexpected {other}"),
+        });
+        let (outcome, records) =
+            crate::diagnostics::capture(|| start_integrated(&herdr, Duration::from_secs(5)));
+        assert!(outcome.is_ok());
+        assert!(
+            !records
+                .iter()
+                .any(|record| record["kind"] == "shell_integration.unshadowed"),
+            "{records:?}"
+        );
     }
 
     /// The question holds the terminal with the shell alone, or with a

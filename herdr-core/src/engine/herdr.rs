@@ -708,6 +708,12 @@ impl Engine for HerdrEngine<'_> {
         })
     }
 
+    fn pane_tokens(&self, wait: Wait, pane: &str, tokens: &[&str]) -> Answer<Vec<Option<String>>> {
+        self.call("pane.get", wire::pane_target_params(pane), wait, |answer| {
+            wire::pane_tokens(answer, tokens)
+        })
+    }
+
     fn pane_agent_status(&self, wait: Wait, pane: &str) -> Answer<String> {
         self.call(
             "pane.get",

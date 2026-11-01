@@ -232,3 +232,109 @@ fn fish_marks_after_its_configuration() {
     assert_eq!(log, "config\nmark\nafter\n");
     assert_eq!(mark, MARK);
 }
+
+/// The launch for `shell` with a PATH whose `codex` and `grok` are programs
+/// and that has no `claude`, as the pane's environment would carry it.
+fn with_agents_on_path(home: &Path, shell: &Path) -> (Vec<String>, BTreeMap<String, String>) {
+    let bin = home.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    for name in ["codex", "grok"] {
+        let program = bin.join(name);
+        std::fs::write(&program, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(
+            &program,
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
+    }
+    let launch = install(&home.join("hide"), &user(shell, None))
+        .unwrap()
+        .unwrap();
+    let mut env = launch.env;
+    env.insert("PATH".into(), format!("{}:/usr/bin:/bin", bin.display()));
+    (launch.command, env)
+}
+
+/// The mark of a shell that dropped `codex`'s and `grok`'s, by name only.
+const UNSHADOWED_MARK: &str = "pane report-metadata w1:p1 --source hide:shell --token hide_prompt=1 --token hide_unshadowed=codex,grok\n";
+
+/// What the user's files declare in each shell: `codex` an alias that adds
+/// an option Hide adds too, `grok` a function, `claude`, which the PATH
+/// does not find, an alias that is the only way to it.
+const ZSH_AGENTS: &str = "alias codex='codex --dangerously-bypass-approvals-and-sandbox'\nfunction grok { print wrapped }\nalias claude=$HOME/elsewhere/claude\n";
+const BASH_AGENTS: &str = "alias codex='codex --dangerously-bypass-approvals-and-sandbox'\ngrok() { echo wrapped; }\nalias claude=$HOME/elsewhere/claude\n";
+
+#[test]
+#[ignore = "needs zsh: set HIDE_TEST_ZSH_BIN and run with --ignored"]
+fn zsh_runs_an_agent_program_past_the_users_alias_or_function_of_its_name() {
+    let zsh = shell("HIDE_TEST_ZSH_BIN");
+    let home = tempfile::tempdir().unwrap();
+    let home = home.path().canonicalize().unwrap();
+    std::fs::write(home.join(".zshenv"), "skip_global_compinit=1\n").unwrap();
+    std::fs::write(home.join(".zshrc"), ZSH_AGENTS).unwrap();
+    let (_, env) = with_agents_on_path(&home, &zsh);
+    let (log, mark) = run(
+        &zsh,
+        &["-i"],
+        &home,
+        &env,
+        "print -r -- \"$(whence -w codex grok claude) ${+HIDE_SHELL_PROGRAMS}\" >> $HOME/log\nexit\n",
+    );
+    assert_eq!(
+        log,
+        "mark\ncodex: command\ngrok: command\nclaude: alias 0\n"
+    );
+    assert_eq!(mark, UNSHADOWED_MARK);
+}
+
+#[test]
+#[ignore = "needs bash: set HIDE_TEST_BASH_BIN and run with --ignored"]
+fn bash_runs_an_agent_program_past_the_users_alias_or_function_of_its_name() {
+    let bash = shell("HIDE_TEST_BASH_BIN");
+    for (init, file) in [
+        ("login.bash", ".bash_profile"),
+        ("interactive.bash", ".bashrc"),
+    ] {
+        let home = tempfile::tempdir().unwrap();
+        let home = home.path().canonicalize().unwrap();
+        std::fs::write(home.join(file), BASH_AGENTS).unwrap();
+        let (command, env) = with_agents_on_path(&home, &bash);
+        let init = Path::new(&command[2]).parent().unwrap().join(init);
+        let (log, mark) = run(
+            &bash,
+            &["--init-file", &init.display().to_string(), "-i"],
+            &home,
+            &env,
+            "echo \"$(type -t codex) $(type -t grok) $(type -t claude) ${HIDE_SHELL_PROGRAMS-unset}\" >> \"$HOME/log\"\nexit\n",
+        );
+        assert_eq!(log, "mark\nfile file alias unset\n", "{file}");
+        assert_eq!(mark, UNSHADOWED_MARK, "{file}");
+    }
+}
+
+#[test]
+#[ignore = "needs fish: set HIDE_TEST_FISH_BIN and run with --ignored"]
+fn fish_runs_an_agent_program_past_the_users_alias_function_or_abbreviation_of_its_name() {
+    let fish = shell("HIDE_TEST_FISH_BIN");
+    let home = tempfile::tempdir().unwrap();
+    let home = home.path().canonicalize().unwrap();
+    let config = home.join(".config/fish");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(
+        config.join("config.fish"),
+        "alias codex 'codex --dangerously-bypass-approvals-and-sandbox'\nabbr -a grok 'grok --wrapped'\nfunction claude; $HOME/elsewhere/claude $argv; end\n",
+    )
+    .unwrap();
+    let (command, env) = with_agents_on_path(&home, &fish);
+    let mut args: Vec<&str> = command[1..].iter().map(String::as_str).collect();
+    args.push("-i");
+    let (log, mark) = run(
+        &fish,
+        &args,
+        &home,
+        &env,
+        "echo (type -t codex) (abbr -q grok; and echo abbreviation; or echo none) (type -t claude) (set -q HIDE_SHELL_PROGRAMS; and echo set; or echo unset) >> $HOME/log\nexit\n",
+    );
+    assert_eq!(log, "mark\nfile none function unset\n");
+    assert_eq!(mark, UNSHADOWED_MARK);
+}
