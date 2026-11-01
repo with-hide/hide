@@ -307,6 +307,63 @@ fn a_pane_already_gone_counts_as_closed_and_an_unlisted_descendant_stays_open() 
     assert_eq!(started(&runtime), ["w1:p2"]);
 }
 
+// A child whose terminal failed to restore (its folder was removed, say) has
+// no process: Herdr reports it `unknown` for good, and no status check could
+// ever settle it. Its row is at rest, so the parent's close sheet lists it as
+// a finished child and Close all goes through; a live pane Herdr cannot read
+// still refuses (the test below).
+#[test]
+fn a_child_whose_terminal_failed_to_restore_rests_and_never_blocks_its_parents_close() {
+    let mut payload = tree_payload(&EVERY, &[("w1:p3", "unknown")]);
+    payload
+        .panes
+        .iter_mut()
+        .find(|pane| pane.pane_id == "w1:p3")
+        .unwrap()
+        .failed_terminal_id = Some("restored-terminal".into());
+    let mut runtime = live_runtime(payload);
+    let child = runtime
+        .snapshot()
+        .navigator
+        .agents
+        .iter()
+        .find(|agent| agent.pane_id == "w1:p3")
+        .unwrap()
+        .clone();
+    assert_eq!(child.mark, crate::agent_state::RowMark::Quiet);
+    assert_eq!(child.status_code, crate::model::AgentStatusCode::Idle);
+    assert_eq!(child.state.subtree, "quiet");
+    assert!(!child.requires_close_status_check && !child.requires_close_confirmation);
+
+    let close = &runtime.snapshot().navigator.agent_scope.closes["w1:p1"];
+    let subtree = close
+        .subtree
+        .as_ref()
+        .expect("the parent lists its subtree");
+    assert!(!subtree.unknown && !subtree.target_unknown);
+    assert_eq!(subtree.counts.unknown, 0);
+    assert_eq!(
+        subtree
+            .rows
+            .iter()
+            .find(|row| row.pane_id == "w1:p3")
+            .map(|row| row.state),
+        Some("quiet")
+    );
+
+    close_tree(
+        &mut runtime,
+        pane_target("w1:p1"),
+        &["w1:p2", "w1:p3", "w1:p4", "w5:p5"],
+        false,
+    );
+    assert_eq!(
+        started(&runtime),
+        ["w1:p3", "w5:p5"],
+        "Close all goes through"
+    );
+}
+
 #[test]
 fn a_listed_pane_that_needs_a_status_check_or_a_confirmation_refuses_the_whole_close() {
     let mut runtime = tree_runtime(&[("w1:p3", "unknown")]);

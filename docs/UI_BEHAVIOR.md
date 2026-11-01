@@ -642,7 +642,7 @@ Why the terminal is not live is said where the terminal would be, never on the s
 Sleep, restoration failure and a local stream that can be attached again draw bodies of their own, described below; every other notice covers the terminal with its words on the card fill: `연결 안 됨 · <device>`, `다시 연결하는 중…`, `헬퍼가 허용되지 않음 · 설정 > 기기에서 허용하세요`, `사용할 수 없음`, `종료됨`, or a failed exit in red with the actual code.
 A start or a close that passes by itself is a small caption over whatever the terminal shows, and a wheel another client holds is a corner caption, because that terminal is live.
 Connection and sleep recovery controls stay in the body, and limited integration stays a header icon.
-Herdr's explicit restoration failure is a terminal fact, independent of an agent's activity or its saved sleep record.
+Herdr's explicit restoration failure is a terminal fact, independent of a saved sleep record; the pane's agent runs no process, so its row reads stopped and at rest rather than unknown ([status-model.md](status-model.md#where-each-axis-comes-from)).
 Its pane body says the terminal could not be restored, names its folder and offers Close pane; raw details remain in diagnostics.
 Visiting this pane preserves a saved conversation and its title without waking it, and neither Wake nor attach Retry is offered as terminal recovery.
 A missing folder alone never establishes restoration failure.
@@ -830,6 +830,7 @@ Each row is focusable, and its accessible name is its name, its device when it d
 Colour in both sheets is the status marks' and the one destructive button's (`모두 닫기`, `Stop work and close`); `취소`, `Keep open` and `이것만 닫기` are neutral.
 Its buttons are `취소`, `이것만 닫기` and `모두 닫기`, and `모두 닫기` holds the keyboard when it opens, so Enter closes the whole subtree; Escape or `취소` sends nothing and gives focus back.
 While a descendant's status is unknown, `모두 닫기` is disabled, `취소` holds the keyboard, and a `상태 확인` in the sheet reads the status again without closing it; while a target's own status is unknown, `이것만 닫기` is disabled too.
+A descendant whose pane's terminal failed to restore runs nothing and is listed as a finished child, never as unknown, so it never disables `모두 닫기` ([status-model.md](status-model.md#where-each-axis-comes-from)).
 `이것만 닫기` closes the target alone as the ordinary close, with no second question; its direct children become the operator's roots and their own children stay under them.
 While the sheet is open its list is live, as in the removal dialogs: a descendant that appears shows up, one that goes drops out, and the title's N and the count line follow.
 `모두 닫기` sends one event naming the target and exactly the descendants the sheet shows at the press: one that appears after the press is not closed, and one already gone counts as closed.
