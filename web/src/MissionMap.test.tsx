@@ -404,6 +404,7 @@ it("draws each card as its mark, its title, its pull requests, its worker's mode
     node("sleeping", { status: "working", agent_id: "agent-2", agent_runtime: "asleep" }),
     // Finished: one whose pane still says what it launched, one whose launch is gone with only the plan left.
     node("ran", { status: "done", agent_id: "agent-5", pane_id: "w1:p8", machine: "mac", worker: { agent: "claude", model: "opus", effort: "high", effort_auto: false } }),
+    node("bound", { status: "working", agent_id: "agent-4", pane_id: "w1:p6", machine: "mac", worker: { agent: "claude", model: "opus", effort: "high", effort_auto: false } }),
     node("ran-unknown", { status: "done", agent_id: "agent-6", pane_id: "w1:p7", machine: "mac", worker: { agent: "claude", model: "opus", effort: "high", effort_auto: false } }),
     node("launched", { status: "working", pane_id: "w1:p9", machine: "mac", pr: 1910, pr_state: "pending", worker: { agent: "claude", model: "opus", effort: "medium", effort_auto: false }, attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 1, on_row: false, item: false } }),
   ];
@@ -412,7 +413,7 @@ it("draws each card as its mark, its title, its pull requests, its worker's mode
   const rows = [{ pane_id: "w1:p9", agent_kind: "codex", mark: "going" }, { pane_id: "w1:p8", agent_kind: "codex", mark: "done" }] as AgentRow[];
   const map = await mount({ items: [mission({ nodes })] }, [], launches, {}, rows);
   try {
-    expect(Object.fromEntries(nodes.map((n) => [n.key, card(map, n.key).dataset.nodeLook]))).toEqual({ core: "working", raised: "working", asked: "working", api: "done", branch: "done", outside: "external", "closed-out": "external", "merged-out": "done", next: "waiting", sleeping: "working", ran: "done", "ran-unknown": "done", launched: "working" });
+    expect(Object.fromEntries(nodes.map((n) => [n.key, card(map, n.key).dataset.nodeLook]))).toEqual({ core: "working", raised: "working", asked: "working", api: "done", branch: "done", outside: "external", "closed-out": "external", "merged-out": "done", next: "waiting", sleeping: "working", ran: "done", bound: "working", "ran-unknown": "done", launched: "working" });
     // One of three shapes, its word on hover and first in the card's name.
     expect(["next", "core", "api"].map((key) => card(map, key).querySelector("[data-node-mark]")?.getAttribute("aria-label"))).toEqual(["Waiting", "In progress", "Done"]);
     // A worker Hide put to sleep leaves its node in progress, the same ring; only its words name the sleep (B1).
@@ -433,6 +434,8 @@ it("draws each card as its mark, its title, its pull requests, its worker's mode
     // A finished node shows what its pane launched, never the plan marked planned; with no launch known it shows nothing.
     expect([card(map, "ran").querySelector("[data-run]")?.textContent, card(map, "ran").querySelector("[data-run-planned]")]).toEqual(["Sonnet 5.5·low", null]);
     expect(card(map, "ran-unknown").querySelector("[data-run], [data-agent-mark]")).toBeNull();
+    // An unfinished node whose worker Hide knows no launch for (started on its CLI's defaults) keeps the plan, marked planned.
+    expect(card(map, "bound").querySelector("[data-run]")?.getAttribute("title")).toBe("opus·high (planned)");
     // The panel's head follows the same rule.
     await act(async () => card(map, "ran").click());
     expect([map.q('[data-mission-detail="ran"] [data-panel-meta] [data-run]')?.textContent, map.q('[data-mission-detail="ran"] [data-panel-meta] [data-agent-mark]')?.getAttribute("data-agent-mark")]).toEqual(["Sonnet 5.5·low", "codex"]);

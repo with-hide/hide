@@ -125,13 +125,13 @@ export function useRunWords(mission: Mission, paneId: string | null | undefined,
 /**
  * A node's worker as its card and its panel's head draw it (operator,
  * 2026-11-01): the agent and the model and effort its pane was proven
- * launched with; the plan's, marked planned, only while no worker is
- * registered for a node that has not finished, so finished work never
- * shows the plan as what ran. Neither known, nothing.
+ * launched with; the plan's, marked planned, only while the node has not
+ * finished, so finished work never shows the plan as what ran. Neither
+ * known, nothing.
  */
 export function useNodeRun(mission: Mission, node: MissionNode): { run: RunLabel; agent: string | null } | null {
   const row = useWorkerRow(node);
-  const planned = !node.agent_id && node.status !== "done" && node.status !== "dropped";
+  const planned = node.status !== "done" && node.status !== "dropped";
   const run = useRunWords(mission, node.pane_id, node.machine, planned ? node.worker : null);
   if (!run) return null;
   // The mark is the launched agent's own when the launch speaks, never the plan's.
