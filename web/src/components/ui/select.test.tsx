@@ -92,3 +92,25 @@ it("leaves the keyboard on a control focused after the pick when its late hand-b
   expect(closeAutoFocus).toHaveBeenCalledTimes(1);
   expect(document.activeElement).toBe(next);
 });
+
+it("shows an option's description in the open list only, never in the trigger", () => {
+  const container = document.createElement("div");
+  document.body.append(container);
+  const mounted = createRoot(container);
+  root = mounted;
+  act(() => mounted.render(
+    <Select defaultValue="full">
+      <SelectTrigger aria-label="permission"><SelectValue /></SelectTrigger>
+      <SelectContent>
+        <SelectItem value="full" description="claude --dangerously-skip-permissions">Allow everything</SelectItem>
+        <SelectItem value="ask" description="claude">Ask every time</SelectItem>
+      </SelectContent>
+    </Select>,
+  ));
+  const trigger = document.querySelector<HTMLButtonElement>("[aria-label=permission]")!;
+  expect(trigger.textContent).toBe("Allow everything");
+  trigger.focus();
+  act(() => { trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+  const options = [...document.querySelectorAll<HTMLElement>("[role=option]")].map((row) => row.textContent);
+  expect(options).toEqual(["Allow everythingclaude --dangerously-skip-permissions", "Ask every timeclaude"]);
+});

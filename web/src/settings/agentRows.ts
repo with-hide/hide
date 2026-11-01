@@ -125,8 +125,10 @@ export function checkFailedReason(code: string): "agents.checkReason.unreachable
   return "agents.checkReason.failed";
 }
 
-/** The pieces of one agent that a Reinstall would repair, the failed ones first (B13, B20). */
-/** An agent's piece by name; the hook piece is named by what the contract says it is: OpenCode's is a plugin, Pi's and omp's an extension. */
+/**
+ * An agent's piece by name; the hook piece is named by what the contract says it is: OpenCode's is a plugin, Pi's
+ * and omp's an extension. The page shows no piece's name: it names one only in a problem's hover detail.
+ */
 export type AgentPart = "skill" | "hook" | "plugin" | "extension" | "herdr";
 
 export type AgentProblem = { part: AgentPart; piece: KitPiece };
@@ -136,6 +138,7 @@ export function hookPart(agent: KitAgent): "hook" | "plugin" | "extension" {
   return kind === "plugin" || kind === "extension" ? kind : "hook";
 }
 
+/** The pieces of one agent that a Reinstall would repair, the failed ones first (B13, B20). */
 export function agentProblems(agent: KitAgent): AgentProblem[] {
   if (!agent.enabled) return [];
   const pieces: AgentProblem[] = [{ part: "skill", piece: agent.skill }];
@@ -182,15 +185,14 @@ export function agentLeftover(agent: KitAgent): KitPiece | null {
 
 /**
  * The status an agent that is on wears (B16, B19): how many of its sessions
- * run now, or Ready when it is set up and has none. A Basic agent, one that
- * is off and one whose sessions were not read yet wear none.
+ * run now, and nothing when it has none, since a healthy agent says nothing. A
+ * Basic agent, one that is off and one whose sessions were not read yet wear none.
  */
-export type AgentStatus = { kind: "none" } | { kind: "ready" } | { kind: "sessions"; count: number };
+export type AgentStatus = { kind: "none" } | { kind: "sessions"; count: number };
 
 export function agentStatus(agent: KitAgent): AgentStatus {
-  // An agent whose program is gone has no sessions and is never Ready (B9).
-  if (!agent.enabled || agent.partial || agent.sessions == null || agent.availability !== "available") return { kind: "none" };
-  if (agent.sessions === 0) return { kind: "ready" };
+  // An agent whose program is gone has no sessions (B9).
+  if (!agent.enabled || agent.partial || !agent.sessions || agent.availability !== "available") return { kind: "none" };
   return { kind: "sessions", count: agent.sessions };
 }
 

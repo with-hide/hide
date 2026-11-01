@@ -160,8 +160,8 @@ describe("what a row says (B13, B14, B16, B19, B20)", () => {
     expect(agentLeftover(agent("pi", { enabled: true, skill: piece("failed") }))).toBeNull();
   });
 
-  it("says Ready, how many sessions run, and nothing for the rest", () => {
-    expect(agentStatus(agent("codex", { sessions: 0 }))).toEqual({ kind: "ready" });
+  it("says how many sessions run, and nothing for a healthy agent with none or for the rest", () => {
+    expect(agentStatus(agent("codex", { sessions: 0 }))).toEqual({ kind: "none" });
     expect(agentStatus(agent("codex", { sessions: 3 }))).toEqual({ kind: "sessions", count: 3 });
     expect(agentStatus(agent("codex", { enabled: false, sessions: 3 }))).toEqual({ kind: "none" });
     expect(agentStatus(agent("grok", { partial: true, sessions: null }))).toEqual({ kind: "none" });

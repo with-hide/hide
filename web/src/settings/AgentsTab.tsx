@@ -1,5 +1,5 @@
-import { RefreshCwIcon } from "lucide-react";
-import { useState } from "react";
+import { RefreshCwIcon, ShieldIcon } from "lucide-react";
+import { useId, useState } from "react";
 import type { Actions } from "../actions";
 import { Disclosure, Group, Note, Row } from "../components/settings-rows";
 import { Button } from "../components/ui/button";
@@ -94,7 +94,7 @@ function MachineAgents({ machine, actions }: { machine: AgentMachine; actions: A
   const reading = device.kit?.busy === true || device.kit?.checking === true;
   const checkFailed = device.kit?.check_failed ?? null;
   return (
-    <div data-agents-machine-list={device.id}>
+    <div className="@container/agents" data-agents-machine-list={device.id}>
       {machine.blocked === "unavailable" && device.kit?.unavailable ? <Note data-agents-unavailable={device.id} data-kit-unavailable={device.kit.unavailable}>{kitUnavailableText(device.kit.unavailable, t)}</Note> : null}
       {machine.unread && machine.blocked === null ? <Note data-agents-unread={device.id}>{t("agents.reading")}</Note> : null}
       {machine.unlisted && machine.blocked === null ? (
@@ -110,6 +110,8 @@ function MachineAgents({ machine, actions }: { machine: AgentMachine; actions: A
         <>
           <Group
             title={t("agents.installedCount", { count: machine.installed.length })}
+            columns={machine.installed.length > 0 ? <ColumnHeads /> : undefined}
+            note={machine.installed.length > 0 ? <PermissionScope /> : undefined}
             action={
               <Button
                 variant="ghost"
@@ -130,7 +132,6 @@ function MachineAgents({ machine, actions }: { machine: AgentMachine; actions: A
               <AgentRow key={agent.id} device={device} agent={agent} actions={actions} onAct={act} />
             ))}
           </Group>
-          {machine.installed.length > 0 ? <PermissionScope /> : null}
           {checkFailed ? (
             <Note tone="error" data-agents-check-failed={checkFailed}>
               {t("agents.checkFailed", { reason: t(checkFailedReason(checkFailed)) })}
@@ -157,27 +158,42 @@ function MachineAgents({ machine, actions }: { machine: AgentMachine; actions: A
 }
 
 /**
- * When an agent's 권한 applies, under the installed agents and in full view:
- * every start Hide makes, and never an agent the operator types into a
- * terminal, which follows the CLI's own configuration.
+ * The heads of the two columns every installed row ends with, 권한 and 켬,
+ * over the select and the switch. On a narrow sheet a row's controls wrap
+ * under its name, so the heads would point at nothing and are left out.
+ */
+function ColumnHeads() {
+  const { t } = useInterfaceTranslation();
+  return (
+    <div aria-hidden="true" className="hidden justify-end gap-sm border-x border-transparent px-md pb-xs text-caption text-muted-foreground @xl/agents:flex" data-agents-columns="true">
+      <span className="w-(--size-agent-permission-w)">{t("agents.permission.label")}</span>
+      <span className="w-(--size-control) text-center">{t("agents.columns.on")}</span>
+    </div>
+  );
+}
+
+/**
+ * What an agent's 권한 covers, in a box of its own under the installed agents:
+ * every agent Hide starts, an agent another agent started included, and never
+ * one the operator types into a terminal, which follows the CLI's own settings.
  */
 function PermissionScope() {
   const { t } = useInterfaceTranslation();
+  const headingId = useId();
   return (
-    <section className="mb-lg flex flex-col gap-xs" data-agents-permission-scope="true">
-      <h4 className="text-body font-semibold text-subtle-foreground">{t("agents.permission.scopeTitle")}</h4>
-      <p className="flex gap-sm text-body text-foreground">
-        <span aria-hidden="true" className="font-mono text-success">✓</span>
-        <span>
-          <span className="font-semibold">{t("agents.permission.scopeHide")}</span> · {t("agents.permission.scopeHideWhen")}
-        </span>
-      </p>
-      <p className="flex gap-sm text-body text-foreground">
-        <span aria-hidden="true" className="font-mono text-muted-foreground">✕</span>
-        <span>
-          <span className="font-semibold">{t("agents.permission.scopeTyped")}</span> · {t("agents.permission.scopeTypedWhen")}
-        </span>
-      </p>
+    <section className="flex gap-sm rounded-md bg-secondary p-md" aria-labelledby={headingId} data-agents-permission-scope="true">
+      <ShieldIcon aria-hidden="true" className="mt-xxs size-(--size-icon) shrink-0 text-muted-foreground" />
+      <div className="flex min-w-0 flex-col gap-xs">
+        <h4 id={headingId} className="text-subhead font-semibold text-foreground">{t("agents.permission.label")}</h4>
+        <p className="flex gap-sm text-body text-subtle-foreground">
+          <span aria-hidden="true" className="font-mono text-success">✓</span>
+          <span className="min-w-0 break-keep">{t("agents.permission.scopeHide")}</span>
+        </p>
+        <p className="flex gap-sm text-body text-subtle-foreground">
+          <span aria-hidden="true" className="font-mono text-muted-foreground">✕</span>
+          <span className="min-w-0 break-keep">{t("agents.permission.scopeTyped")}</span>
+        </p>
+      </div>
     </section>
   );
 }

@@ -1,6 +1,6 @@
 import { Select as SelectPrimitive } from "radix-ui";
 import { CheckIcon, ChevronDownIcon, ChevronUpIcon } from "lucide-react";
-import { createContext, useContext, useRef, type ComponentProps, type RefObject } from "react";
+import { createContext, useContext, useRef, type ComponentProps, type ReactNode, type RefObject } from "react";
 import { cn } from "../../lib/utils";
 import { useLayerOpen, useReturnFocus } from "./layer";
 import { menuContent, menuItem, menuLabel, menuSeparator } from "./menu-styles";
@@ -85,7 +85,11 @@ function SelectLabel({ className, ...props }: ComponentProps<typeof SelectPrimit
   return <SelectPrimitive.Label data-slot="select-label" className={cn(menuLabel, className)} {...props} />;
 }
 
-function SelectItem({ className, children, ...props }: ComponentProps<typeof SelectPrimitive.Item>) {
+/**
+ * One option. A `description` is a caption line under the option's name inside the open list only: the trigger
+ * shows the name alone, since Radix copies only `ItemText` into the value.
+ */
+function SelectItem({ className, children, description, ...props }: ComponentProps<typeof SelectPrimitive.Item> & { description?: ReactNode }) {
   return (
     <SelectPrimitive.Item
       data-slot="select-item"
@@ -98,7 +102,18 @@ function SelectItem({ className, children, ...props }: ComponentProps<typeof Sel
         </SelectPrimitive.ItemIndicator>
       </span>
       {/* Radix drops ItemText's className, so the row lays its mark beside its name from here, as a menu item does. */}
-      <SelectPrimitive.ItemText data-slot="select-item-text">{children}</SelectPrimitive.ItemText>
+      {description === undefined ? (
+        <SelectPrimitive.ItemText data-slot="select-item-text">{children}</SelectPrimitive.ItemText>
+      ) : (
+        <span className="flex min-w-0 flex-col gap-xxs">
+          <span className="flex min-w-0 items-center gap-sm">
+            <SelectPrimitive.ItemText data-slot="select-item-text">{children}</SelectPrimitive.ItemText>
+          </span>
+          <span className="min-w-0 break-all text-caption text-muted-foreground" data-slot="select-item-description">
+            {description}
+          </span>
+        </span>
+      )}
     </SelectPrimitive.Item>
   );
 }

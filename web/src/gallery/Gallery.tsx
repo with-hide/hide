@@ -42,7 +42,7 @@ type Renderers = { [S in Section]: Record<StateOf<S>, () => ReactNode> };
 
 /** The states that open a layer, rendered in a frame document of their own. */
 const FRAMED: { [S in Section]?: readonly StateOf<S>[] } = {
-  "Select": ["Open"],
+  "Select": ["Open", "Open With Descriptions"],
   "Dropdown Menu": ["Open", "Highlighted", "Disabled Item", "Destructive Item"],
   "Context Menu": ["Open", "Highlighted", "Disabled Item"],
   "Dialog": ["Open", "With Close Button"],
@@ -188,6 +188,7 @@ const renderers: Renderers = {
     "Focus": () => <GallerySelect value="claude" state="focus" />,
     "Disabled": () => <GallerySelect value="claude" disabled />,
     "Open": () => <GallerySelect value="claude" open />,
+    "Open With Descriptions": () => <GallerySelect value="claude" open described />,
   },
   "Checkbox": {
     "Unchecked": () => <LabeledCheckbox />,
@@ -342,15 +343,15 @@ const renderers: Renderers = {
   },
 };
 
-function GallerySelect({ value, open, disabled, state }: { value?: string; open?: boolean; disabled?: boolean; state?: "focus" }) {
+function GallerySelect({ value, open, disabled, state, described }: { value?: string; open?: boolean; disabled?: boolean; state?: "focus"; described?: boolean }) {
   return (
     <Select defaultValue={value} open={open} disabled={disabled}>
       <SelectTrigger aria-label="Agent" data-gallery-state={state}>
         <SelectValue placeholder="Choose an agent" />
       </SelectTrigger>
       <SelectContent>
-        <SelectItem value="claude">Claude Code</SelectItem>
-        <SelectItem value="codex">Codex</SelectItem>
+        <SelectItem value="claude" description={described ? <code className="font-mono">claude</code> : undefined}>Claude Code</SelectItem>
+        <SelectItem value="codex" description={described ? <code className="font-mono">codex</code> : undefined}>Codex</SelectItem>
         <SelectItem value="none" disabled>
           None installed
         </SelectItem>

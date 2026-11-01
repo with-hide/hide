@@ -63,11 +63,11 @@ describe("What changes (B11)", () => {
     ];
     expect(whatChanges(agents, new Set(["claude-code", "codex", "opencode"]), kit)).toEqual({
       rows: [
-        { path: "/home/me/.claude/settings.json", labels: ["claude-code"], part: "hook" },
-        { path: "/home/me/.claude-code/skills/hide", labels: ["claude-code"], part: "skill" },
-        { path: "/home/me/.codex/hooks.json", labels: ["codex"], part: "hook" },
-        { path: "/home/me/.agents/skills/hide/SKILL.md", labels: ["codex", "OpenCode"], part: "skill" },
-        { path: "/home/me/.config/opencode/plugins/hide.js", labels: ["OpenCode"], part: "plugin" },
+        { path: "/home/me/.claude/settings.json", labels: ["claude-code"] },
+        { path: "/home/me/.claude-code/skills/hide", labels: ["claude-code"] },
+        { path: "/home/me/.codex/hooks.json", labels: ["codex"] },
+        { path: "/home/me/.agents/skills/hide/SKILL.md", labels: ["codex", "OpenCode"] },
+        { path: "/home/me/.config/opencode/plugins/hide.js", labels: ["OpenCode"] },
       ],
       cli: "/home/me/.local/bin/hide",
     });
@@ -84,8 +84,8 @@ describe("What changes (B11)", () => {
     const herdr = agent("claude-code", { skill: { state: "off", why: null, location: "/Users/me/.claude/skills/hide" }, herdr: { state: "off", why: null, location: "/Users/me/.config/herdr/integrations/claude" } });
     expect(whatChanges([herdr], new Set(["claude-code"]), kit, "/Users/me")).toEqual({
       rows: [
-        { path: "~/.claude/skills/hide", labels: ["claude-code"], part: "skill" },
-        { path: "~/.config/herdr/integrations/claude", labels: ["claude-code"], part: "herdr" },
+        { path: "~/.claude/skills/hide", labels: ["claude-code"] },
+        { path: "~/.config/herdr/integrations/claude", labels: ["claude-code"] },
       ],
       cli: "~/.local/bin/hide",
     });

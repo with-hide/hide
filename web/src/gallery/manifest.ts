@@ -7,7 +7,7 @@ export const GALLERY = {
   "Input": ["Default", "Placeholder", "Filled", "Focus", "Invalid", "Disabled", "Mono"],
   "Textarea": ["Default", "Placeholder", "Focus", "Invalid", "Disabled", "Bare"],
   "Row Button": ["Default", "Hover", "Focus", "Disabled", "Overlay", "Overlay Hover"],
-  "Select": ["Default", "Placeholder", "Focus", "Disabled", "Open"],
+  "Select": ["Default", "Placeholder", "Focus", "Disabled", "Open", "Open With Descriptions"],
   "Checkbox": ["Unchecked", "Checked", "Indeterminate", "Focus", "Disabled", "Checked Disabled"],
   "Switch": ["Off", "On", "Focus", "Disabled"],
   "Radio Group": ["Default", "Focus", "Disabled"],
