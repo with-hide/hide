@@ -40,12 +40,6 @@ pub const MAX_PANE: usize = 64;
 /// only reads, decides and replaces a file under it.
 pub const LOCK_WAIT: Duration = Duration::from_secs(5);
 
-/// The holder's log event that says it ended but could not write its record,
-/// with the end it meant to write (`reason`, `exit_code`, `left`) and the
-/// `error`; a node that later finds the holder gone reads it from the log
-/// instead of taking the pane for one whose holder was killed.
-pub const UNWRITTEN_EVENT: &str = "holder.record_unwritten";
-
 /// Where a record is in a pane's life.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -98,9 +92,6 @@ pub enum EndReason {
     /// The holder ended without saying why (killed outright, or it crashed),
     /// and what its pane left was ended afterwards.
     HolderLost,
-    /// The holder ended and logged why, but could not write it here; the
-    /// end's detail carries what it logged.
-    Unrecorded,
     /// The record is from another boot of the machine, which ended
     /// everything it named.
     MachineRestarted,
@@ -132,7 +123,6 @@ impl EndReason {
             Self::TreeEndUnconfirmed => "tree_end_unconfirmed",
             Self::HolderFailed => "holder_failed",
             Self::HolderLost => "holder_lost",
-            Self::Unrecorded => "unrecorded",
             Self::MachineRestarted => "machine_restarted",
             Self::StartFailed => "start_failed",
             Self::StartUnconfirmed => "start_unconfirmed",
@@ -424,7 +414,6 @@ mod tests {
             EndReason::TreeEndUnconfirmed,
             EndReason::HolderFailed,
             EndReason::HolderLost,
-            EndReason::Unrecorded,
             EndReason::MachineRestarted,
             EndReason::StartFailed,
             EndReason::StartUnconfirmed,

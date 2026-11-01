@@ -451,7 +451,6 @@ NAMED_LANES = (
     # The vt lane's own scripts; `prepare-vt-inputs.py`, which every Rust lane
     # runs through `verify-cargo.sh`, plans every lane.
     ("scripts/check-vt-build-refusals.sh", {"vt"}),
-    ("scripts/measure-build.py", {"vt"}),
     ("scripts/agent_live_check/*", LIVE_CHECK_LANES | HOLDER_RESTART_LANES),
     ("scripts/agent-live-check.py", LIVE_CHECK_LANES),
     ("web/e2e/shims/claude-shim.c", WEB_E2E_LANES | JOURNEY_LANES),
@@ -468,7 +467,6 @@ NAMED_LANES = (
     ("scripts/agent_journey/opencode_service.py", JOURNEY_LANES | HOLDER_RESTART_LANES),
     ("scripts/holder-restart-check.py", HOLDER_RESTART_LANES),
     ("scripts/holder_owned.py", HOLDER_RESTART_LANES),
-    ("scripts/holder-color-probe.*", HOLDER_RESTART_LANES),
     ("scripts/holder-restart-spawn.mjs", HOLDER_RESTART_LANES),
     ("scripts/agent_journey/*", JOURNEY_LANES),
     ("scripts/agent-journey-check.py", JOURNEY_LANES),

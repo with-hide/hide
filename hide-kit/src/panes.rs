@@ -16,18 +16,19 @@
 //! - Nothing that waits on another process runs under the lock: the start of
 //!   a holder, the end of a tree and a connection to a holder happen outside
 //!   it, and their outcome is written under it after a fresh read.
-//! - A reconcile ends only holders no record names, after it has read their
-//!   own arguments to know they are this state folder's, and ends them whole.
-//!   A record it cannot read, of a format it does not know, of another state
-//!   folder or of a holder version too old to speak to, and a holder that
-//!   refuses or does not answer a connection, are left running and reported
-//!   with the reason, never taken for "no record".
+//! - The records are the only way to a holder: a node starts one only with
+//!   its record's path, and the holder writes itself into that record under
+//!   the lock before it starts its program, so every holder a node started is
+//!   named by a record. A reconcile reads the records and nothing else. A
+//!   record it cannot read, of a format it does not know, of another state
+//!   folder or of a holder version too old to speak to is left as it is and
+//!   reported with the reason, never taken for "no record".
 //!
 //! Diagnostics go to the sink the caller gives (`hide_node::diagnostic!` in
 //! the node), one JSON record per event, naming the pane, the start's
 //! incarnation and the holder's pid, never what a pane's program wrote.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -86,10 +87,6 @@ const CONNECT_LIMIT: Duration = Duration::from_secs(2);
 
 /// How long ending what a lost holder left may take.
 const LEFTOVER_LIMIT: Duration = Duration::from_secs(5);
-
-/// How much of a holder's log is read looking for an end it could not
-/// record.
-const LOG_TAIL: u64 = 256 * 1024;
 
 /// Where diagnostics go: one JSON record each.
 pub type Sink = fn(serde_json::Value);
@@ -201,55 +198,21 @@ pub enum Judgment {
     Pending(PaneRecord),
 }
 
-/// A holder no record names, or what one left, and what was done about it.
-#[derive(Debug)]
-pub struct Orphan {
-    /// The pane its socket names, when one does.
-    pub pane: Option<String>,
-    pub holder: Option<Identity>,
-    pub outcome: OrphanOutcome,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub enum OrphanOutcome {
-    /// Asked to end over its socket; it said why it closed.
-    Terminated(String),
-    /// Unreachable over its socket, so its tree was ended by its pids.
-    Ended,
-    /// Ending it left these processes running.
-    EndUnconfirmed(Vec<u32>),
-    /// Only a socket a killed holder left; removed.
-    StaleSocketRemoved,
-    /// Left running, with the reason it could not be judged or ended.
-    Kept(String),
-    /// Not taken up within the reconcile's budget; the next reconcile takes
-    /// it up.
-    Pending,
-}
-
 /// What a reconcile found and did.
 #[derive(Debug, Default)]
 pub struct Reconciled {
     pub panes: BTreeMap<String, Judgment>,
-    pub orphans: Vec<Orphan>,
     /// Records that could not be listed at all.
     pub failed: Option<String>,
 }
 
 impl Reconciled {
-    /// The panes and orphans left for the next reconcile.
+    /// The panes left for the next reconcile.
     pub fn pending(&self) -> usize {
-        let panes = self
-            .panes
+        self.panes
             .values()
             .filter(|judgment| matches!(judgment, Judgment::Pending(_)))
-            .count();
-        let orphans = self
-            .orphans
-            .iter()
-            .filter(|orphan| orphan.outcome == OrphanOutcome::Pending)
-            .count();
-        panes + orphans
+            .count()
     }
 
     /// Whether everything found was taken up, so no reconcile need follow.
@@ -716,6 +679,12 @@ impl Panes {
             // Ended outside the lock: the record no longer reserves its start,
             // so nothing writes it in meanwhile.
             Ok(FailedStart::Unconfirmed(holder)) => end_holder_tree(*holder).err(),
+            // No record names the pane now, so its socket goes with the
+            // reservation.
+            Ok(FailedStart::Removed) => {
+                self.remove_stale_socket(&reserved.pane, LOCK_RELEASE);
+                None
+            }
             _ => None,
         };
         self.emit(
@@ -918,14 +887,13 @@ impl Panes {
         Ok(next)
     }
 
-    /// Reads every record and every holder this state folder runs, adopts
-    /// what a record names, settles what lost holders left, and ends the
-    /// holders no record names. See the module documentation.
+    /// Reads every record, adopts the holders they name and settles what
+    /// lost holders left. See the module documentation.
     ///
     /// Panes are judged by up to [`RECONCILE_WORKERS`] at once, and none is
     /// taken up after `budget` has passed: a judgment already under way runs
-    /// to its own bound, and what was not taken up is answered `Pending` (an
-    /// orphan `OrphanOutcome::Pending`) for the next reconcile, which the
+    /// to its own bound, and what was not taken up is answered `Pending` for
+    /// the next reconcile, which the
     /// caller asks for while [`Reconciled::is_complete`] says no.
     pub fn reconcile(&self, budget: Duration) -> Reconciled {
         let started = Instant::now();
@@ -939,10 +907,8 @@ impl Panes {
                 return found;
             }
         };
-        let mut named_panes = BTreeSet::new();
         let mut readable = Vec::new();
         for (pane, read) in scan {
-            named_panes.insert(pane.clone());
             match read {
                 Ok(current) => readable.push(current),
                 Err(why) => {
@@ -961,32 +927,12 @@ impl Panes {
             let judgment = judgment.unwrap_or_else(|| Judgment::Pending(current.clone()));
             found.panes.insert(current.pane, judgment);
         }
-        let candidates = self.orphan_candidates(&named_panes, &mut found.orphans);
-        let ended = self.bounded(&candidates, deadline, |candidate| {
-            self.end_orphan(
-                candidate.pane.as_deref(),
-                &candidate.socket,
-                candidate.holder,
-            )
-        });
-        for (candidate, outcome) in candidates.into_iter().zip(ended) {
-            found.orphans.push(Orphan {
-                pane: candidate.pane,
-                holder: candidate.holder,
-                outcome: outcome.unwrap_or(OrphanOutcome::Pending),
-            });
-        }
         self.emit(
             "pane_holder.reconciled",
             json!({
                 "panes": found.panes.len(),
                 "pending": found.pending(),
                 "took_ms": started.elapsed().as_millis() as u64,
-                "orphans": found.orphans.iter().map(|orphan| json!({
-                    "pane": orphan.pane,
-                    "holder": orphan.holder.map(|h| h.pid),
-                    "outcome": format!("{:?}", orphan.outcome),
-                })).collect::<Vec<_>>(),
             }),
         );
         found
@@ -1066,7 +1012,7 @@ impl Panes {
                     self.end_closing(&pane, holder)
                 }
                 Some(holder) if holder.runs() => Judgment::Alive(current.clone()),
-                Some(holder) => self.settle_lost(current, holder),
+                Some(_) => self.settle_lost(current),
                 None => {
                     let age = record::now_unix_ms().saturating_sub(current.reserved_at_unix_ms);
                     if Duration::from_millis(age) < START_LIMIT {
@@ -1102,7 +1048,7 @@ impl Panes {
     fn after_close(&self, pane: &str, holder: Identity, refused: Option<String>) -> Judgment {
         match self.record(pane) {
             Ok(Some(after)) if after.phase == Phase::Ended => Judgment::Ended(after),
-            Ok(Some(after)) if !holder.runs() => self.settle_lost(&after, holder),
+            Ok(Some(after)) if !holder.runs() => self.settle_lost(&after),
             Ok(Some(after)) => Judgment::Closing(
                 after,
                 refused.unwrap_or_else(|| {
@@ -1139,10 +1085,9 @@ impl Panes {
         );
     }
 
-    /// A record whose holder ended without ending it: the end it logged, or
-    /// `holder_lost`; on Unix what its pane's session left is ended by the
+    /// A record whose holder ended without ending it: `holder_lost`; on Unix what its pane's session left is ended by the
     /// program's recorded identity (on Windows the holder's job ended it).
-    fn settle_lost(&self, current: &PaneRecord, holder: Identity) -> Judgment {
+    fn settle_lost(&self, current: &PaneRecord) -> Judgment {
         // A holder that ended its pane since the record was read wrote why.
         match self.record(&current.pane) {
             Ok(Some(now)) if now.phase == Phase::Ended => return Judgment::Ended(now),
@@ -1150,18 +1095,10 @@ impl Panes {
             Ok(_) => return Judgment::Unsettled("the record changed while it was settled".into()),
             Err(error) => return Judgment::Unsettled(error.to_string()),
         }
-        let mut end = self.logged_end(current, holder).unwrap_or_else(|| {
-            End::new(
-                EndReason::HolderLost,
-                "the holder ended without saying why (killed or crashed)",
-            )
-        });
-        // What the holder said it left is looked for again; only what is
-        // still left now keeps the record open.
-        let said_left = std::mem::take(&mut end.left);
-        if !said_left.is_empty() {
-            end.detail = format!("{}; it said it left {said_left:?}", end.detail);
-        }
+        let mut end = End::new(
+            EndReason::HolderLost,
+            "the holder ended without saying why (killed or crashed)",
+        );
         end_leftovers(current, &mut end);
         self.remove_stale_socket(&current.pane, LOCK_RELEASE);
         if end.left.is_empty() {
@@ -1179,52 +1116,6 @@ impl Panes {
                 Err(why) => Judgment::Unsettled(why),
             }
         }
-    }
-
-    /// The end the holder logged it could not record, if it did.
-    fn logged_end(&self, current: &PaneRecord, holder: Identity) -> Option<End> {
-        let log = layout::holder_log(&self.state_dir, &current.pane);
-        let mut aside = log.clone().into_os_string();
-        aside.push(".1");
-        for file in [log, PathBuf::from(aside)] {
-            let Some(text) = tail(&file, LOG_TAIL) else {
-                continue;
-            };
-            for line in text.lines().rev() {
-                let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else {
-                    continue;
-                };
-                // The line of this start's holder: a pane started again logs
-                // into the same file.
-                if event["event"] != record::UNWRITTEN_EVENT
-                    || event["holder"].as_u64() != Some(u64::from(holder.pid))
-                    || event["incarnation"].as_u64() != Some(current.incarnation)
-                {
-                    continue;
-                }
-                let mut end = End::new(
-                    EndReason::Unrecorded,
-                    format!(
-                        "the holder logged {} but could not record it: {}",
-                        event["reason"].as_str().unwrap_or("an end"),
-                        event["error"].as_str().unwrap_or("")
-                    ),
-                );
-                end.exit_code = event["exit_code"]
-                    .as_i64()
-                    .and_then(|code| i32::try_from(code).ok());
-                end.left = event["left"]
-                    .as_array()
-                    .map(|left| {
-                        left.iter()
-                            .filter_map(|pid| pid.as_u64()?.try_into().ok())
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                return Some(end);
-            }
-        }
-        None
     }
 
     /// Writes `current` as ended with `end`, if it has not changed since it
@@ -1319,8 +1210,7 @@ impl Panes {
     }
 
     /// Ends a closing pane's holder: asked over its socket, or, when nothing
-    /// answers there for it, by its pids as an orphan is; then judges what
-    /// is left.
+    /// answers there for it, by its pids; then judges what is left.
     fn end_closing(&self, pane: &str, holder: Identity) -> Judgment {
         match self.terminate(pane, holder) {
             Ok(_) => {
@@ -1340,323 +1230,6 @@ impl Panes {
             Err(NotAsked::Refused(why)) => self.after_close(pane, holder, Some(why)),
         }
     }
-
-    /// The holders this state folder runs that no record names, found by
-    /// the version folders' programs and the sockets in the state folder;
-    /// what cannot be judged is put in `kept` with its reason, and a socket
-    /// file no process holds is removed. Nothing is ended here.
-    fn orphan_candidates(
-        &self,
-        named_panes: &BTreeSet<String>,
-        kept: &mut Vec<Orphan>,
-    ) -> Vec<Candidate> {
-        let panes_dir = layout::holder_panes(&self.state_dir);
-        let mut candidates = Vec::new();
-        let mut sockets_seen = BTreeSet::new();
-        let mut keep = |pane: Option<String>, holder: Option<Identity>, why: String| {
-            kept.push(Orphan {
-                pane,
-                holder,
-                outcome: OrphanOutcome::Kept(why),
-            });
-        };
-        let (processes, unlisted) = self.holder_processes();
-        for why in unlisted {
-            keep(None, None, why);
-        }
-        for (holder, version) in processes {
-            let arguments = match hide_platform::process::arguments(holder.pid) {
-                Ok(arguments) => arguments,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(error) => {
-                    keep(
-                        None,
-                        Some(holder),
-                        format!(
-                            "its arguments could not be read, so its state folder is unknown: {error}"
-                        ),
-                    );
-                    continue;
-                }
-            };
-            let Some(socket) = value_after(&arguments, "--socket") else {
-                continue;
-            };
-            let socket = PathBuf::from(socket);
-            // A folder that is gone is not this state folder's, which exists.
-            match socket
-                .parent()
-                .map(|parent| hide_platform::fs::identity::same_file(parent, &panes_dir))
-            {
-                Some(Ok(true)) => {}
-                None | Some(Ok(false)) => continue,
-                Some(Err(error)) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Some(Err(error)) => {
-                    keep(
-                        None,
-                        Some(holder),
-                        format!(
-                            "its socket's folder could not be compared with this state folder's: {error}"
-                        ),
-                    );
-                    continue;
-                }
-            }
-            let pane = socket
-                .file_name()
-                .and_then(|name| name.to_str())
-                .and_then(|name| name.strip_suffix(".sock"))
-                .map(str::to_owned);
-            sockets_seen.insert(socket.clone());
-            let incarnation = value_after(&arguments, "--incarnation")
-                .and_then(|value| value.to_str()?.parse::<u64>().ok());
-            if let Some(pane) = &pane
-                && self.names(pane, holder, incarnation) != Named::No
-            {
-                continue;
-            }
-            if version < OLDEST_HOLDER_VERSION {
-                keep(
-                    pane,
-                    Some(holder),
-                    format!("it speaks version {version}, older than this build speaks to"),
-                );
-                continue;
-            }
-            candidates.push(Candidate {
-                pane,
-                socket,
-                holder: Some(holder),
-            });
-        }
-        let Ok(entries) = std::fs::read_dir(&panes_dir) else {
-            return candidates;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let Some(pane) = path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .and_then(|name| name.strip_suffix(".sock"))
-                .map(str::to_owned)
-            else {
-                continue;
-            };
-            if named_panes.contains(&pane)
-                || sockets_seen.contains(&path)
-                || !hide_platform::ipc::is_endpoint(&path).unwrap_or(false)
-            {
-                continue;
-            }
-            match hide_platform::ipc::remove_leftover(&path, Duration::ZERO) {
-                Ok(_) => kept.push(Orphan {
-                    pane: Some(pane),
-                    holder: None,
-                    outcome: OrphanOutcome::StaleSocketRemoved,
-                }),
-                // A listener no process scan found: one reachable only
-                // through its socket.
-                Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
-                    candidates.push(Candidate {
-                        pane: Some(pane),
-                        socket: path,
-                        holder: None,
-                    });
-                }
-                Err(error) => kept.push(Orphan {
-                    pane: Some(pane),
-                    holder: None,
-                    outcome: OrphanOutcome::Kept(format!(
-                        "its socket could not be judged: {error}"
-                    )),
-                }),
-            }
-        }
-        candidates
-    }
-
-    /// Ends one holder no record names: over its socket when it answers
-    /// there, by its pids when nothing listens at its socket or the socket is
-    /// another holder's. Anything else leaves it running, with the reason.
-    fn end_orphan(
-        &self,
-        pane: Option<&str>,
-        socket: &Path,
-        holder: Option<Identity>,
-    ) -> OrphanOutcome {
-        let taken = pane.is_some_and(|pane| self.record(pane).is_ok_and(|read| read.is_some()));
-        let reach = if taken {
-            Err(OpenError::Io(std::io::Error::other(
-                "its socket is another pane holder's",
-            )))
-        } else {
-            hide_holder_protocol::open(socket, Vec::new(), Instant::now() + CONNECT_LIMIT)
-        };
-        let outcome = match reach {
-            Ok((mut stream, _)) => {
-                if let (Some(holder), Ok(peer)) = (holder, stream.peer_pid())
-                    && peer != holder.pid
-                {
-                    // Another holder listens at its socket; this one is
-                    // reachable only by its pids.
-                    drop(stream);
-                    return self.end_by_pids(pane, holder);
-                }
-                // Asked under the lock, so a record made for the pane since
-                // the look is seen first.
-                let asked = (|| -> Result<(), String> {
-                    let _lock = self.lock()?;
-                    if let Some(pane) = pane
-                        && self
-                            .record(pane)
-                            .map_err(|error| error.to_string())?
-                            .is_some()
-                    {
-                        return Err("a record names its pane now".to_owned());
-                    }
-                    write_client(&mut stream, &ClientMessage::Terminate)
-                        .map_err(|error| error.to_string())
-                })();
-                match asked {
-                    Err(why) => OrphanOutcome::Kept(why),
-                    Ok(()) => {
-                        stream.set_deadline(Instant::now() + CLOSE_LIMIT);
-                        let answer = loop {
-                            match read_holder(&mut stream) {
-                                Ok(HolderMessage::Closed(closed)) => break Ok(closed),
-                                Ok(_) => {}
-                                Err(error) => break Err(error),
-                            }
-                        };
-                        match answer {
-                            Ok(closed) => {
-                                if let Some(holder) = holder {
-                                    wait_gone(holder, CLOSE_LIMIT);
-                                }
-                                OrphanOutcome::Terminated(closed.reason.name().to_owned())
-                            }
-                            Err(error) => OrphanOutcome::Kept(format!(
-                                "it was asked to end and did not say it had: {error}"
-                            )),
-                        }
-                    }
-                }
-            }
-            Err(OpenError::Refused(closed)) => OrphanOutcome::Kept(format!(
-                "it refused the connection: {}",
-                closed.reason.name()
-            )),
-            Err(OpenError::Unsupported { version }) => OrphanOutcome::Kept(format!(
-                "it speaks version {version}, older than this build speaks to"
-            )),
-            Err(OpenError::Protocol(error)) => {
-                OrphanOutcome::Kept(format!("it answered out of protocol: {error}"))
-            }
-            Err(OpenError::Io(error)) => match holder {
-                Some(holder) if taken || unreachable(&error, socket) => {
-                    self.end_by_pids(pane, holder)
-                }
-                _ => OrphanOutcome::Kept(format!("it could not be reached: {error}")),
-            },
-        };
-        self.emit(
-            "pane_holder.orphan",
-            json!({
-                "pane": pane,
-                "holder": holder.map(|h| h.pid),
-                "outcome": format!("{outcome:?}"),
-            }),
-        );
-        outcome
-    }
-
-    /// Ends a holder no record names, and its pane's tree, by their pids,
-    /// once it is sure no record has named it since.
-    fn end_by_pids(&self, pane: Option<&str>, holder: Identity) -> OrphanOutcome {
-        // Looked at under the lock and ended outside it: a holder writes
-        // itself only into the reservation of its own incarnation, which no
-        // later start reuses, so no record can come to name it meanwhile.
-        {
-            let _lock = match self.lock() {
-                Ok(lock) => lock,
-                Err(why) => return OrphanOutcome::Kept(why),
-            };
-            if let Some(pane) = pane
-                && self.names(pane, holder, None) != Named::No
-            {
-                return OrphanOutcome::Kept("a record names it now".to_owned());
-            }
-        }
-        match end_holder_tree(holder) {
-            Ok(()) => OrphanOutcome::Ended,
-            Err(left) => OrphanOutcome::EndUnconfirmed(left),
-        }
-    }
-
-    /// Whether the pane's record names `holder`, or a start of
-    /// `incarnation` whose holder has not written itself in yet.
-    fn names(&self, pane: &str, holder: Identity, incarnation: Option<u64>) -> Named {
-        match self.record(pane) {
-            Err(_) => Named::Unknown,
-            Ok(None) => Named::No,
-            Ok(Some(current)) => {
-                if current.holder == Some(holder)
-                    || (current.holder.is_none() && Some(current.incarnation) == incarnation)
-                {
-                    Named::Yes
-                } else {
-                    Named::No
-                }
-            }
-        }
-    }
-
-    /// Every holder process run from a version folder under `home`, with
-    /// the protocol version its folder names.
-    fn holder_processes(&self) -> (Vec<(Identity, u16)>, Vec<String>) {
-        let root = layout::holders_root(&self.home);
-        let mut processes = Vec::new();
-        let mut unlisted = Vec::new();
-        let entries = match std::fs::read_dir(&root) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return (processes, unlisted);
-            }
-            Err(error) => {
-                unlisted.push(format!("{} could not be listed: {error}", root.display()));
-                return (processes, unlisted);
-            }
-        };
-        for entry in entries.flatten() {
-            let program = entry.path().join(holders::program_name());
-            let Ok(file) = hide_platform::fs::identity::file_id(&program) else {
-                continue;
-            };
-            let name = entry.file_name().to_string_lossy().into_owned();
-            // A version folder, or one a cleanup claimed; a staging folder
-            // runs nothing.
-            let Some(version) = name
-                .strip_prefix(".removing-")
-                .unwrap_or(&name)
-                .strip_prefix('v')
-                .and_then(|rest| rest.split('-').next())
-                .and_then(|number| number.parse::<u16>().ok())
-            else {
-                continue;
-            };
-            match hide_platform::process::running(&file) {
-                Ok(pids) => processes.extend(
-                    pids.into_iter()
-                        .filter_map(Identity::of)
-                        .map(|holder| (holder, version)),
-                ),
-                Err(error) => unlisted.push(format!(
-                    "the holders of {name} could not be listed: {error}"
-                )),
-            }
-        }
-        (processes, unlisted)
-    }
 }
 
 /// A record file as read: the record, or why it cannot be.
@@ -1669,13 +1242,6 @@ enum NotAsked {
     /// It was reached and refused, answered out of protocol or did not say
     /// it ended.
     Refused(String),
-}
-
-/// A holder, or a socket, no record names, to be ended.
-struct Candidate {
-    pane: Option<String>,
-    socket: PathBuf,
-    holder: Option<Identity>,
 }
 
 /// How an earlier start of a pane stands to a new start of it.
@@ -1711,14 +1277,6 @@ impl FailedStart {
             Self::Unconfirmed(_) => "start_unconfirmed",
         }
     }
-}
-
-#[derive(Debug, Eq, PartialEq)]
-enum Named {
-    Yes,
-    No,
-    /// The record cannot be read: it may name it.
-    Unknown,
 }
 
 /// Whether nothing listens at `socket`: it is gone, or what is there is a
@@ -1830,14 +1388,6 @@ fn wait_gone(process: Identity, limit: Duration) {
     }
 }
 
-/// The word after `flag` in `arguments`.
-fn value_after<'a>(arguments: &'a [OsString], flag: &str) -> Option<&'a OsString> {
-    arguments
-        .iter()
-        .position(|word| word == flag)
-        .and_then(|at| arguments.get(at + 1))
-}
-
 /// The first line `reader` gives within `limit`, without its line end.
 fn first_line(reader: impl std::io::Read + Send + 'static, limit: Duration) -> Option<String> {
     let (sender, heard) = mpsc::channel();
@@ -1851,18 +1401,6 @@ fn first_line(reader: impl std::io::Read + Send + 'static, limit: Duration) -> O
         );
     });
     heard.recv_timeout(limit).ok().flatten()
-}
-
-/// The last `limit` bytes of `path`, as text.
-fn tail(path: &Path, limit: u64) -> Option<String> {
-    use std::io::{Read, Seek, SeekFrom};
-    let mut file = std::fs::File::open(path).ok()?;
-    let length = file.metadata().ok()?.len();
-    file.seek(SeekFrom::Start(length.saturating_sub(limit)))
-        .ok()?;
-    let mut bytes = Vec::new();
-    file.take(limit).read_to_end(&mut bytes).ok()?;
-    Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 /// The state folder's identity as a record's owner: the folder's volume and

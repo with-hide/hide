@@ -1,8 +1,8 @@
 """What a pane holder check started, ended on every path by pid and start
 time (docs/TESTING.md, The holder restart lane).
 
-The restart lane, the holder measurement and the color probe start a node,
-the holders it starts, CLIs and a private Herdr server. Each one is put in an
+The restart lane and the holder measurement start a node, the holders it
+starts, CLIs and a private Herdr server. Each one is put in an
 `Owned` the moment it starts: a child the script started as the child it
 started, a holder by the pane record its node wrote (`holders/records/*.json`
 under the state folder, which names the holder and the pane's program with

@@ -11,7 +11,8 @@ files, a module file its parent declares behind `#[cfg(test)]`, and every
 item behind `#[cfg(test)]`; so are test fixtures and measurement scripts,
 which never ship. What may still speak Herdr directly is listed below by
 file, each with the number of findings it has and the bundle of the
-own-terminal-engine plan that deletes it; a new finding in a listed file
+own-terminal-engine plan that deletes it (docs/ARCHITECTURE.md, The core,
+the shell and Herdr, says what each bundle is); a new finding in a listed file
 fails like one anywhere else, and an entry whose file no longer speaks
 Herdr fails until it is removed.
 """
