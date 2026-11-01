@@ -625,24 +625,20 @@ fn run(shared: &(Mutex<Pending>, Condvar), dir: &Path, book_path: Option<&Path>)
 }
 
 fn write_book(path: &Path, book: &Arc<crate::missions::MissionBook>) -> Result<(), String> {
-    let bytes = crate::missions::encode(book)?;
-    if let Some(parent) = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-    {
-        hide_platform::fs::private::create_dir_all(parent)
-            .map_err(|error| format!("folder could not be prepared: {error}"))?;
-    }
-    hide_platform::fs::atomic::write_file(path, &bytes, hide_platform::fs::Access::Private)
-        .map(|_| ())
-        .map_err(|error| format!("could not be replaced: {error}"))
+    let folder = path.parent().ok_or_else(|| "has no folder".to_owned())?;
+    replace(folder, path, &crate::missions::encode(book)?)
 }
 
 fn write(dir: &Path, path: &Path, log: &EventLog) -> Result<(), String> {
-    let bytes = encode(log)?;
-    hide_platform::fs::private::create_dir_all(dir)
+    replace(dir, path, &encode(log)?)
+}
+
+/// Replaces the file at `path` in `folder`, making the folder first: the
+/// one place the writer puts a history or the book on disk.
+fn replace(folder: &Path, path: &Path, bytes: &[u8]) -> Result<(), String> {
+    hide_platform::fs::private::create_dir_all(folder)
         .map_err(|error| format!("folder could not be prepared: {error}"))?;
-    hide_platform::fs::atomic::write_file(path, &bytes, hide_platform::fs::Access::Private)
+    hide_platform::fs::atomic::write_file(path, bytes, hide_platform::fs::Access::Private)
         .map(|_| ())
         .map_err(|error| format!("could not be replaced: {error}"))
 }
