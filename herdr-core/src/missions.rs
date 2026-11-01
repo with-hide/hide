@@ -302,8 +302,6 @@ pub enum HideAction {
     Attached,
     /// Woke the sleeping worker about its pull request.
     Woke,
-    /// Deleted the done node's build cache (B20); `bytes` says how much.
-    CacheCleared,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -313,9 +311,6 @@ pub struct HideMark {
     pub pr: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub why: Option<FixReason>,
-    /// What a `CacheCleared` freed.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bytes: Option<u64>,
     pub at_unix_ms: u64,
 }
 
@@ -647,10 +642,6 @@ pub struct MissionNode {
     /// The wakes Hide sent the sleeping worker (B10); at most `WOKEN_LIMIT`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub woken: Vec<Woken>,
-    /// Hide deleted the done node's build cache for this finish, or found
-    /// none (D-14, B20); the next finish deletes it again.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub cache_cleared: bool,
 }
 
 /// Causes a node remembers as raised; past this a new cause is refused
@@ -726,11 +717,9 @@ impl MissionNode {
     }
 
     /// The node goes back to work from a finish: a new round for the keys
-    /// of Hide's acts, and its next finish deletes the build cache again
-    /// (B20, B27).
+    /// of Hide's acts (B27).
     pub(crate) fn back_to_work(&mut self) {
         self.round = self.round.saturating_add(1);
-        self.cache_cleared = false;
     }
 }
 
@@ -984,36 +973,6 @@ pub struct ConductorSettings {
     /// Prefer a checker of another company than the node's worker.
     #[serde(default = "default_other_vendor")]
     pub other_vendor: bool,
-    /// `끝난 작업의 빌드 캐시 자동 삭제` (PRD mission-node-simple D-14). A
-    /// setting stored as the earlier `worktree_cleanup` reads `auto` as on
-    /// and `ask` as off.
-    #[serde(
-        default = "default_build_cache_cleanup",
-        alias = "worktree_cleanup",
-        deserialize_with = "build_cache_cleanup"
-    )]
-    pub build_cache_cleanup: bool,
-}
-
-fn default_build_cache_cleanup() -> bool {
-    true
-}
-
-fn build_cache_cleanup<'de, D: serde::Deserializer<'de>>(value: D) -> Result<bool, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Stored {
-        On(bool),
-        Earlier(String),
-    }
-    match Stored::deserialize(value)? {
-        Stored::On(on) => Ok(on),
-        Stored::Earlier(earlier) => match earlier.as_str() {
-            "auto" => Ok(true),
-            "ask" => Ok(false),
-            other => Err(serde::de::Error::unknown_variant(other, &["auto", "ask"])),
-        },
-    }
 }
 
 impl Default for ConductorSettings {
@@ -1024,7 +983,6 @@ impl Default for ConductorSettings {
             candidates: Vec::new(),
             default_strength: Strength::Normal,
             other_vendor: default_other_vendor(),
-            build_cache_cleanup: true,
         }
     }
 }
@@ -1791,7 +1749,6 @@ pub(crate) fn apply_plan(
                 round: 0,
                 hide: None,
                 woken: Vec::new(),
-                cache_cleared: false,
             });
             node.title.clone_from(&input.title);
             node.kind = input.kind;
@@ -3210,11 +3167,10 @@ pub(crate) mod tests {
         assert!(node.resumed_on_these_facts());
         node.prs = vec![7];
         assert!(!node.resumed_on_these_facts());
-        // Back to work, the next finish deletes the build cache again.
+        // Back to work, Hide's acts of the next finish are a new round.
         let mut node = one("b");
-        node.cache_cleared = true;
         node.back_to_work();
-        assert_eq!((node.cache_cleared, node.round), (false, 1));
+        assert_eq!(node.round, 1);
     }
 
     /// A mission created before verification strength keeps the checkers
@@ -3263,29 +3219,5 @@ pub(crate) mod tests {
             purpose: "screens".into(),
         };
         assert!(settings.validate().is_ok());
-    }
-
-    /// The build cache setting starts on; one stored as the earlier
-    /// worktree setting keeps its meaning, and is written back in the new
-    /// form.
-    #[test]
-    fn the_build_cache_setting_starts_on_and_reads_the_earlier_worktree_setting() {
-        let read = |stored: serde_json::Value| {
-            serde_json::from_value::<ConductorSettings>(stored).map(|s| s.build_cache_cleanup)
-        };
-        assert!(read(serde_json::json!({})).unwrap());
-        assert!(read(serde_json::json!({"worktree_cleanup": "auto"})).unwrap());
-        assert!(!read(serde_json::json!({"worktree_cleanup": "ask"})).unwrap());
-        assert!(!read(serde_json::json!({"build_cache_cleanup": false})).unwrap());
-        assert!(read(serde_json::json!({"worktree_cleanup": "never"})).is_err());
-        let written = serde_json::to_value(
-            serde_json::from_value::<ConductorSettings>(
-                serde_json::json!({"worktree_cleanup": "ask"}),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(written["build_cache_cleanup"], serde_json::json!(false));
-        assert!(written.get("worktree_cleanup").is_none());
     }
 }

@@ -1330,11 +1330,11 @@ export type MissionAttentionTo = "conductor" | "operator";
 /** `item`: the mission itself is a Needs You item for it, decided by the core (waits on the operator, no row carries it, the mission still asks, the node is not dropped). */
 export type MissionAttention = { reason: MissionAttentionReason; pr: number | null; to: MissionAttentionTo; since_unix_ms: number; on_row: boolean; item: boolean };
 /** What Hide itself did to a node (`mission_hide_action`, D-03). */
-export type MissionHideAction = "done" | "attached" | "woke" | "cache_cleared";
+export type MissionHideAction = "done" | "attached" | "woke";
 /** Why Hide woke a worker (`mission_fix_reason`, D-13). */
 export type MissionFixReason = "ci_failed" | "conflict" | "changes_requested";
-/** What Hide did to a node last (`HideMark`, D-07, D-15); `bytes` is what a `cache_cleared` freed (B20). */
-export type MissionHideMark = { action: MissionHideAction; pr?: number; why?: MissionFixReason; bytes?: number; at_unix_ms: number };
+/** What Hide did to a node last (`HideMark`, D-07, D-15). */
+export type MissionHideMark = { action: MissionHideAction; pr?: number; why?: MissionFixReason; at_unix_ms: number };
 /** What the operator chose for a node that waits on them (`mission_operator_action`, B15, B16). */
 export type MissionOperatorAction = "done" | "drop" | "attach" | "leave" | "resume";
 /** One of a node's pull requests (`NodePrView`), the current one last. */
@@ -1434,8 +1434,6 @@ export type MissionEvent = {
   /** For `hide`, what Hide did, and for a wake why. */
   hide?: MissionHideAction;
   why?: MissionFixReason;
-  /** For a `hide` that deleted a build cache, what it freed (B20). */
-  bytes?: number;
   /** For `raised` and `raised_to_operator`, why. */
   reason?: MissionAttentionReason;
   /** For `resolved`, what the operator chose. */
@@ -1613,9 +1611,9 @@ export type PlanView = {
 /** The plans the core keeps for the panes on screen, and the plans of the children their steps are handed to, whether or not those panes are shown (`pane_id` empty then). */
 export type PlansSnapshot = { items: PlanView[] };
 
-/** Settings › Conductor (D-31): the cap, the default scope, the worker candidates, a new mission's verification strength, whether its checkers come from another company, and whether a finished node's build cache is deleted (`build_cache_cleanup`, PRD mission-node-simple D-14). */
+/** Settings › Conductor (D-31): the cap, the default scope, the worker candidates, a new mission's verification strength and whether its checkers come from another company. */
 export type ConductorCandidate = { agent: string; model?: string | null; effort?: string | null; purpose: string };
-export type ConductorSettings = { concurrency: number; default_scope: MissionScope; candidates: ConductorCandidate[]; default_strength: MissionStrength; other_vendor: boolean; build_cache_cleanup: boolean };
+export type ConductorSettings = { concurrency: number; default_scope: MissionScope; candidates: ConductorCandidate[]; default_strength: MissionStrength; other_vendor: boolean };
 
 /** The 보기 slot: what it opened, oldest first and the one it shows last, and whether the lane draws it. */
 export type DetailSlot = { items: DetailItem[]; shown: boolean };

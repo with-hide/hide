@@ -40,34 +40,6 @@ pub(super) const RAISE_TO_OPERATOR_MS: u64 = 10 * 60_000;
 /// Mission notices one delivery pass claims (B5); the human notices of the
 /// ledger keep their own cap.
 const MISSION_NOTICE_LIMIT: usize = 8;
-/// Build caches deleted at once, each on its own worker; past it a node
-/// waits for the next evaluation.
-const CACHE_CLEAR_LIMIT: usize = 2;
-/// How long a held build cache waits before it is tried again with nothing
-/// seen to change, for a program in a plain shell pane, which no row tells.
-const CACHE_HOLD_MS: u64 = 10 * 60 * 1000;
-/// Deletions of one finish that fail before Hide stops trying it; each
-/// waits `CACHE_HOLD_MS` after the last.
-const CACHE_CLEAR_ATTEMPTS: u32 = 3;
-
-/// A done node's build cache that waits (B20): what was seen working in its
-/// worktree, read again only when the rows move, and when it is tried again
-/// regardless.
-#[derive(Debug)]
-pub(crate) struct CacheHold {
-    round: u32,
-    device: String,
-    /// The worktree, None for a deletion that failed before one was found.
-    path: Option<String>,
-    /// The panes of the worktree and what each one's agent was doing.
-    facts: Vec<(String, Option<(String, crate::model::AgentStatusCode)>)>,
-    /// The rows' input generation `facts` were last compared at.
-    seen: u64,
-    retry_at: u64,
-    attempts: u32,
-    due: bool,
-}
-
 /// What the last evaluation read, so a tick with nothing moved does
 /// nothing.
 #[derive(Default)]
@@ -80,8 +52,6 @@ pub(crate) struct HealthMadeFrom {
     sleeping: crate::coordination::Sleeping,
     present: Vec<bool>,
     stale: Vec<bool>,
-    /// The held build caches whose time came or whose worktree moved.
-    due_holds: Vec<(String, String)>,
     made: bool,
 }
 
@@ -98,7 +68,6 @@ impl PartialEq for HealthMadeFrom {
             && self.sleeping == other.sleeping
             && self.present == other.present
             && self.stale == other.stale
-            && self.due_holds == other.due_holds
             && self.made == other.made
     }
 }
@@ -364,7 +333,6 @@ fn hide_event(now: u64, node: &str, mark: &HideMark) -> MissionEvent {
     event.hide = Some(mark.action);
     event.pr = mark.pr;
     event.why = mark.why;
-    event.bytes = mark.bytes;
     event
 }
 
@@ -449,7 +417,6 @@ impl Runtime {
                 .iter()
                 .map(|mission| self.mission_stale(mission))
                 .collect(),
-            due_holds: self.due_cache_holds(now),
             made: true,
         };
         if made == self.missions.health_made {
@@ -619,11 +586,6 @@ impl Runtime {
             pulls,
             nodes,
             device_stale: self.mission_stale(mission),
-            clear_cache: self
-                .snapshot
-                .ui_state
-                .conductor_settings
-                .build_cache_cleanup,
         }
     }
 
@@ -682,7 +644,6 @@ impl Runtime {
                 } => {
                     changed |= self.hide_wake(id, node, pr, why, head, now, &mut events);
                 }
-                Act::ClearCache { node } => self.start_cache_clear(id, node),
                 Act::Close => close = true,
             }
         }
@@ -750,7 +711,6 @@ impl Runtime {
             action: HideAction::Attached,
             pr: Some(pr),
             why: None,
-            bytes: None,
             at_unix_ms: now,
         };
         let mut done = super::mission_events::node_events(&before, node, now);
@@ -810,7 +770,6 @@ impl Runtime {
             action: HideAction::Done,
             pr: node.current_pr(),
             why: None,
-            bytes: None,
             at_unix_ms: now,
         };
         let mut done = super::mission_events::node_events(&before, node, now);
@@ -910,7 +869,6 @@ impl Runtime {
             action: HideAction::Woke,
             pr: Some(pr),
             why: Some(why),
-            bytes: None,
             at_unix_ms: now,
         };
         let mut event = hide_event(now, &key, &mark);
@@ -1256,323 +1214,6 @@ impl Runtime {
         self.record_mission_events(&payload.mission, events);
         self.flush_mission_wakes();
         Ok(true)
-    }
-
-    /// Deletes node `at`'s build cache off the lock (B20), at most
-    /// `CACHE_CLEAR_LIMIT` at once; one being deleted is not started again,
-    /// and one past the cap is started by an evaluation after one ends.
-    pub(super) fn start_cache_clear(&mut self, id: &str, at: usize) {
-        let Some(mission) = self.missions.book.get(id) else {
-            return;
-        };
-        let node = &mission.nodes[at];
-        let key = (id.to_owned(), node.key.clone());
-        if self.missions.clearing.contains(&key)
-            || self.missions.clearing.len() >= CACHE_CLEAR_LIMIT
-            || self
-                .missions
-                .cache_holds
-                .get(&key)
-                .is_some_and(|hold| !hold.due)
-        {
-            return;
-        }
-        let Some(branch) = node.branch.clone() else {
-            return;
-        };
-        let round = node.round;
-        let root = mission.project.clone();
-        let device = mission.device_id.clone();
-        let Some(context) = self.worker_context.clone() else {
-            return;
-        };
-        let (Some(engine), Ok(link)) = (self.delivery_engine(&device), self.node_link(&device))
-        else {
-            crate::diagnostic!(json!({
-                "component": "missions", "kind": "mission.cache_unreachable",
-                "mission": id, "node": key.1,
-            }));
-            return;
-        };
-        self.missions.clearing.insert(key.clone());
-        let done = key.clone();
-        let spawned = std::thread::Builder::new()
-            .name("hide-mission-cache".to_owned())
-            .spawn(move || {
-                // A deletion that panics must not hold its place, or the
-                // node's cache could never be deleted again.
-                struct Ending(std::sync::Weak<std::sync::Mutex<Runtime>>, (String, String));
-                impl Drop for Ending {
-                    fn drop(&mut self) {
-                        if std::thread::panicking()
-                            && let Some(runtime) = self.0.upgrade()
-                        {
-                            let mut guard =
-                                runtime.lock().unwrap_or_else(|poison| poison.into_inner());
-                            guard.missions.clearing.remove(&self.1);
-                        }
-                    }
-                }
-                let _ending = Ending(context.runtime.clone(), done.clone());
-                // Named for the node's finish and this start, so the node
-                // can say whether this deletion still runs.
-                let job = format!("{}:{}:{round}:{}", done.0, done.1, super::memory::now_ms());
-                let runtime = context.runtime.clone();
-                let outcome = super::mission_worktree::clear_build_cache(
-                    engine.as_ref(),
-                    link.as_ref(),
-                    &root,
-                    &branch,
-                    &job,
-                    &|| runtime.strong_count() > 0,
-                );
-                let Some(runtime) = context.runtime.upgrade() else {
-                    return;
-                };
-                let mut guard = runtime.lock().unwrap_or_else(|poison| poison.into_inner());
-                guard.cache_clear_done(&done.0, &done.1, round, outcome);
-                drop(guard);
-                context.notifier.notify();
-            });
-        if let Err(error) = spawned {
-            self.missions.clearing.remove(&key);
-            crate::diagnostic!(json!({
-                "component": "missions", "kind": "mission.cache_not_started",
-                "message": error.to_string(),
-            }));
-        }
-    }
-
-    /// Records what deleting a node's build cache came to (B20, B21): what
-    /// it freed is Hide's own line on the node, and a failure goes to the
-    /// log only. A worktree being worked in is held until what works there
-    /// changes (`due_cache_holds`); a failed deletion is held and tried
-    /// again up to `CACHE_CLEAR_ATTEMPTS` times; a result for a finish the
-    /// node no longer has is logged and kept off it.
-    pub(super) fn cache_clear_done(
-        &mut self,
-        id: &str,
-        key: &str,
-        round: u32,
-        outcome: Result<super::mission_worktree::Cleared, String>,
-    ) {
-        use super::mission_worktree::Cleared;
-        let held = (id.to_owned(), key.to_owned());
-        self.missions.clearing.remove(&held);
-        // The next evaluation starts a node that waited past the cap; a
-        // held one it leaves until its hold is due.
-        self.missions.health_made = HealthMadeFrom::default();
-        let now = super::memory::now_ms();
-        crate::diagnostic!(json!({
-            "component": "missions", "kind": "mission.cache_cleared",
-            "mission": id, "node": key,
-            "outcome": match &outcome {
-                Ok(Cleared::Gone) => "gone",
-                Ok(Cleared::ProjectFolder) => "project_folder",
-                Ok(Cleared::Busy { .. }) => "busy",
-                Ok(Cleared::Done { .. }) => "done",
-                Err(_) => "failed",
-            },
-            "reason": outcome.as_ref().err(),
-            "bytes": match &outcome { Ok(Cleared::Done { removed_bytes, .. }) => Some(*removed_bytes), _ => None },
-            "kept": match &outcome { Ok(Cleared::Done { kept, .. }) => Some(kept.clone()), _ => None },
-            "left": match &outcome { Ok(Cleared::Done { left, .. }) => Some(*left), _ => None },
-        }));
-        let device = self
-            .missions
-            .book
-            .get(id)
-            .map(|mission| mission.device_id.clone())
-            .unwrap_or_default();
-        match &outcome {
-            Ok(Cleared::Busy { path }) => {
-                let attempts = self
-                    .missions
-                    .cache_holds
-                    .get(&held)
-                    .map_or(0, |hold| hold.attempts);
-                let facts = self.worktree_facts(&device, path);
-                self.missions.cache_holds.insert(
-                    held,
-                    CacheHold {
-                        round,
-                        device,
-                        path: Some(path.clone()),
-                        facts,
-                        seen: self.agent_scope_cache.input_generation,
-                        retry_at: now + CACHE_HOLD_MS,
-                        attempts,
-                        due: false,
-                    },
-                );
-                return;
-            }
-            Err(_) => {
-                let attempts = self
-                    .missions
-                    .cache_holds
-                    .get(&held)
-                    .map_or(0, |hold| hold.attempts)
-                    + 1;
-                if attempts < CACHE_CLEAR_ATTEMPTS {
-                    self.missions.cache_holds.insert(
-                        held,
-                        CacheHold {
-                            round,
-                            device,
-                            path: None,
-                            facts: Vec::new(),
-                            seen: self.agent_scope_cache.input_generation,
-                            retry_at: now + CACHE_HOLD_MS,
-                            attempts,
-                            due: false,
-                        },
-                    );
-                    return;
-                }
-                self.missions.cache_holds.remove(&held);
-            }
-            Ok(_) => {
-                self.missions.cache_holds.remove(&held);
-            }
-        }
-        let freed = match &outcome {
-            Ok(Cleared::Done { removed_bytes, .. }) if *removed_bytes > 0 => Some(*removed_bytes),
-            _ => None,
-        };
-        let Some(mission) = self.missions.book.get_mut(id) else {
-            return;
-        };
-        let Some(at) = mission.nodes.iter().position(|node| node.key == key) else {
-            return;
-        };
-        let node = &mission.nodes[at];
-        if node.round != round || !crate::mission_health::cache_due(mission, node) {
-            crate::diagnostic!(json!({
-                "component": "missions", "kind": "mission.cache_clear_stale",
-                "mission": id, "node": key,
-            }));
-            return;
-        }
-        let node = &mut mission.nodes[at];
-        // Settled for this finish: deleted, nothing to delete, kept by a
-        // check, or failed past its attempts (B21).
-        node.cache_cleared = true;
-        let mut events = Vec::new();
-        if let Some(bytes) = freed {
-            let mark = HideMark {
-                action: HideAction::CacheCleared,
-                pr: None,
-                why: None,
-                bytes: Some(bytes),
-                at_unix_ms: now,
-            };
-            let mut event = hide_event(now, key, &mark);
-            event.id = Some(act_key(node, "cache"));
-            events.push(event);
-            node.hide = Some(mark);
-        }
-        mission.updated_at_unix_ms = now;
-        self.record_mission_events(id, events);
-    }
-
-    /// The held build caches to try again now, marking each due: its time
-    /// came, or the rows moved and its worktree's panes or their agents no
-    /// longer read as they did. A hold whose finish is gone is dropped.
-    /// Reads the rows only for a hold whose input generation moved.
-    pub(super) fn due_cache_holds(&mut self, now: u64) -> Vec<(String, String)> {
-        if self.missions.cache_holds.is_empty() {
-            return Vec::new();
-        }
-        let generation = self.agent_scope_cache.input_generation;
-        let book = &self.missions.book;
-        self.missions.cache_holds.retain(|(id, key), hold| {
-            book.get(id).is_some_and(|mission| {
-                mission.nodes.iter().any(|node| {
-                    node.key == *key
-                        && node.round == hold.round
-                        && crate::mission_health::cache_due(mission, node)
-                })
-            })
-        });
-        let moved: Vec<((String, String), String, String)> = self
-            .missions
-            .cache_holds
-            .iter()
-            .filter(|(_, hold)| !hold.due && now < hold.retry_at && hold.seen != generation)
-            .filter_map(|(key, hold)| {
-                hold.path
-                    .clone()
-                    .map(|path| (key.clone(), hold.device.clone(), path))
-            })
-            .collect();
-        let read: Vec<_> = moved
-            .into_iter()
-            .map(|(key, device, path)| {
-                let facts = self.worktree_facts(&device, &path);
-                (key, facts)
-            })
-            .collect();
-        for (key, facts) in read {
-            if let Some(hold) = self.missions.cache_holds.get_mut(&key) {
-                hold.seen = generation;
-                hold.due |= facts != hold.facts;
-            }
-        }
-        let mut due: Vec<_> = self
-            .missions
-            .cache_holds
-            .iter_mut()
-            .filter_map(|(key, hold)| {
-                hold.due |= now >= hold.retry_at;
-                hold.due.then(|| key.clone())
-            })
-            .collect();
-        due.sort();
-        due
-    }
-
-    /// The panes of the checkout at `path` on `device`, each with what its
-    /// agent row says it is doing: what a held build cache watches.
-    fn worktree_facts(
-        &self,
-        device: &str,
-        path: &str,
-    ) -> Vec<(String, Option<(String, crate::model::AgentStatusCode)>)> {
-        let path = path.trim_end_matches('/');
-        let (workspaces, agents) = if device == self.node.as_str() {
-            (
-                self.snapshot.navigator.workspaces.as_slice(),
-                self.snapshot.navigator.agents.as_slice(),
-            )
-        } else {
-            match self
-                .snapshot
-                .status
-                .remote
-                .iter()
-                .find(|remote| remote.target_id == device)
-                .and_then(|remote| remote.session.as_ref())
-            {
-                Some(session) => (session.workspaces.as_slice(), session.agents.as_slice()),
-                None => return Vec::new(),
-            }
-        };
-        let mut facts: Vec<_> = workspaces
-            .iter()
-            .flat_map(|workspace| &workspace.checkouts)
-            .filter(|checkout| checkout.path.trim_end_matches('/') == path)
-            .flat_map(|checkout| checkout.tabs.iter().flat_map(|tab| &tab.panes))
-            .map(|pane| {
-                let agent = agents
-                    .iter()
-                    .find(|agent| agent.pane_id == pane.id)
-                    .map(|agent| (agent.activity.clone(), agent.status_code));
-                (pane.id.clone(), agent)
-            })
-            .collect();
-        facts.sort_by(|left, right| left.0.cmp(&right.0));
-        facts
     }
 
     /// Takes the worker wakes whose letter was refused out of the record

@@ -349,11 +349,11 @@ const ATTENTION_CARD = "border-mission-hold ring-2 ring-mission-hold/20";
  * (B30).
  */
 function NodeCard({ mission, node, selected, dimmed, onSelect, actions }: { mission: Mission; node: MissionNode; selected: boolean; dimmed: boolean; onSelect: () => void; actions: Actions }) {
-  const { t, i18n } = useInterfaceTranslation();
+  const { t } = useInterfaceTranslation();
   const look = nodeLook(mission, node);
   const result = cardResult(node, mission.github_stale, t);
   const attention = openAttention(mission, node) ? attentionWords(node, t) : null;
-  const hide = hideWords(mission, node, t, requireInterfaceLanguage(i18n.language));
+  const hide = hideWords(mission, node, t);
   const satellites = satelliteLines(node.criteria);
   const word = markWord(node, look, t);
   const card = (

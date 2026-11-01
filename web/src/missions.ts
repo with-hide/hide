@@ -6,8 +6,6 @@
 
 import type { TFunction } from "i18next";
 import type { MessageKey } from "./i18n/catalogs";
-import { formatBytes } from "./i18n/format";
-import type { InterfaceLanguage } from "./i18n/locale";
 import { PROVIDER_KINDS, type ProviderKind } from "./agentPicker";
 import { agentsByPane } from "./paneAgents";
 import { orderByDependencies } from "./projectBoard";
@@ -624,12 +622,12 @@ export function missionEventsOf(rest: SnapshotRest | null | undefined, missionId
 }
 
 /** An event in words (B20, B31): what happened, and the one line it carried. */
-/** What Hide did, in words: the pull request it was about, or the size a deleted build cache freed (`빌드 캐시 1.2 GB 지움`, B20). */
-function hideAction(action: MissionHideAction, pr: number | null, bytes: number | null, t: TFunction<"translation">, language: InterfaceLanguage): string {
-  return t(`mission.hide.${action}`, { pr: prWords(pr, t), size: bytes === null ? "" : formatBytes(language, bytes) });
+/** What Hide did, in words, with the pull request it was about. */
+function hideAction(action: MissionHideAction, pr: number | null, t: TFunction<"translation">): string {
+  return t(`mission.hide.${action}`, { pr: prWords(pr, t) });
 }
 
-export function eventWords(event: MissionEvent, t: TFunction<"translation">, language: InterfaceLanguage): { what: string; line: string | null } {
+export function eventWords(event: MissionEvent, t: TFunction<"translation">): { what: string; line: string | null } {
   const line = event.line ?? null;
   switch (event.kind) {
     case "planned":
@@ -665,7 +663,7 @@ export function eventWords(event: MissionEvent, t: TFunction<"translation">, lan
     case "strength":
       return { what: t("mission.event.strength", { strength: event.strength ? t(`mission.strength.${event.strength}`) : "" }), line };
     case "hide":
-      return { what: event.hide ? t("mission.hide.mark", { what: hideAction(event.hide, event.pr ?? null, event.bytes ?? null, t, language) }) : t("mission.hide.title"), line: event.why ? `${prWords(event.pr ?? null, t)} ${t(`mission.fix.${event.why}`)}` : line };
+      return { what: event.hide ? t("mission.hide.mark", { what: hideAction(event.hide, event.pr ?? null, t) }) : t("mission.hide.title"), line: event.why ? `${prWords(event.pr ?? null, t)} ${t(`mission.fix.${event.why}`)}` : line };
     case "hide_closed":
       return { what: t("mission.hide.mark", { what: t("mission.hide.closed") }), line };
     case "raised":
@@ -743,13 +741,13 @@ export function attentionWords(node: MissionNode, t: TFunction<"translation">): 
 
 /**
  * What Hide last did to a node and why (B3): `끝 처리함 · 머지 + 기준 3/3`,
- * `깨움 · PR #12 CI 실패`, `PR #13 붙임`, `worktree 정리함`. The card's mark
+ * `깨움 · PR #12 CI 실패`, `PR #13 붙임`. The card's mark
  * says it on hover and the panel reads it; null when Hide did nothing.
  */
-export function hideWords(mission: Mission, node: MissionNode, t: TFunction<"translation">, language: InterfaceLanguage): string | null {
+export function hideWords(mission: Mission, node: MissionNode, t: TFunction<"translation">): string | null {
   const mark = node.hide;
   if (!mark) return null;
-  const what = hideAction(mark.action, mark.pr ?? null, mark.bytes ?? null, t, language);
+  const what = hideAction(mark.action, mark.pr ?? null, t);
   if (mark.action === "woke") return mark.why ? `${what} · ${prWords(mark.pr ?? null, t)} ${t(`mission.fix.${mark.why}`)}` : what;
   if (mark.action !== "done") return what;
   const tally = criteriaTally(mission, node);

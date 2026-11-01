@@ -96,12 +96,6 @@ export function StrengthControl({ settings, send }: Pick<ConductorEdit, "setting
   );
 }
 
-/** Whether Hide deletes a done node's build cache, its code, worktree and panes left as they are (PRD mission-node-simple D-14, B20). */
-export function BuildCacheControl({ settings, send }: Pick<ConductorEdit, "settings" | "send">) {
-  const { t } = useInterfaceTranslation();
-  return <Switch checked={settings.build_cache_cleanup} aria-label={t("conductor.buildCache")} onCheckedChange={(build_cache_cleanup) => send({ build_cache_cleanup })} data-conductor-build-cache={String(settings.build_cache_cleanup)} />;
-}
-
 /** Whether a checker comes from another company than the node's worker. */
 export function OtherVendorControl({ settings, send }: Pick<ConductorEdit, "settings" | "send">) {
   const { t } = useInterfaceTranslation();

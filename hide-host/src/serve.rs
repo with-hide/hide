@@ -1224,20 +1224,6 @@ pub fn handle_with_progress(
             &absolute(&checkout)?,
             &absolute(&common)?,
         )),
-        Call::ClearCacheFolders {
-            job,
-            root,
-            common,
-            folders,
-            walk,
-        } => to_value(crate::cleanup::clear_cache_folders(
-            &job,
-            &absolute(&root)?,
-            &absolute(&common)?,
-            &folders,
-            walk,
-        )),
-        Call::CacheClearRunning { job } => to_value(crate::cleanup::cache_clear_running(&job)),
         Call::DrainTrash {
             common,
             ours,

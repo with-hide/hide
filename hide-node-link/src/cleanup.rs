@@ -35,27 +35,6 @@ pub struct RepositoryDirs {
     pub common_dir: String,
 }
 
-/// What became of one build cache folder of a finished mission node's
-/// checkout ([`crate::protocol::Call::ClearCacheFolders`]). Only `Removed`
-/// frees its bytes; the worst any other outcome costs is a rebuild.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "outcome", rename_all = "snake_case")]
-pub enum CacheFolderOutcome {
-    /// Judged again where it stood, moved aside, judged again as moved, and
-    /// deleted before the answer.
-    Removed,
-    /// Not deleted: `code` names the check it failed (a `FolderRefusal`
-    /// code, `nested_repository`, `tracked_files`, `replaced`, `unverified`,
-    /// `io` or `restore_failed`). A folder that failed after its move is
-    /// moved back; one that cannot be stays in the hold under the
-    /// repository's common Git directory, which nothing deletes, and
-    /// `reason` says where.
-    Kept { code: String, reason: String },
-    /// Passed every check, but its deletion failed (an open file on
-    /// Windows): it waits in the hold, and the next clear deletes it.
-    Left { reason: String },
-}
-
 /// What is left of a cleanup run's look through folders for a nested
 /// repository. The core carries it from one checkout's judgement to the
 /// next, so a run over many big folders is bounded as a whole.

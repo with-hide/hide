@@ -990,9 +990,6 @@ pub(super) struct ConductorSettingsSetPayload {
     pub(super) default_strength: Option<crate::missions::Strength>,
     #[serde(default)]
     pub(super) other_vendor: Option<bool>,
-    /// `끝난 작업의 빌드 캐시 자동 삭제` (PRD mission-node-simple D-14).
-    #[serde(default)]
-    pub(super) build_cache_cleanup: Option<bool>,
 }
 
 /// `mission_answer`: the operator's answer from a mission's decision banner
@@ -4136,9 +4133,6 @@ impl Runtime {
                 }
                 if let Some(other_vendor) = payload.other_vendor {
                     settings.other_vendor = other_vendor;
-                }
-                if let Some(clear) = payload.build_cache_cleanup {
-                    settings.build_cache_cleanup = clear;
                 }
                 self.set_conductor_settings(settings)
             }

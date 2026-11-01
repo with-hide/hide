@@ -14,8 +14,8 @@ use crate::runtime::Runtime;
 use crate::worktree_control::GhPlace;
 use crate::{disk, github};
 use hide_node_link::cleanup::{
-    CacheFolderOutcome, CleanRemoval, FolderJudgments, FolderToJudge, FolderVerdict, PathState,
-    RepositoryDirs, WalkAllowance,
+    CleanRemoval, FolderJudgments, FolderToJudge, FolderVerdict, PathState, RepositoryDirs,
+    WalkAllowance,
 };
 use hide_node_link::disk::{Layer, LayerFolder};
 use hide_node_link::git::GitCommand;
@@ -1467,180 +1467,6 @@ fn empty_cells(
     results
 }
 
-/// How often a build cache clear whose answer did not come in time asks its
-/// node whether the clear still runs.
-const JOB_POLL: Duration = Duration::from_secs(15);
-
-/// Sends `call`, a build cache clear named `job`, and waits for its answer.
-/// One that did not come in time may still be deleting on the node, so this
-/// returns only once the node says the job has ended, asking every `poll`
-/// while `keep_waiting` holds: the caller's place among the clears that run
-/// at once is held until the deletion really ends (engineering #14, #15).
-#[allow(clippy::disallowed_methods)] // a production wait between asks of the node, ended by its answer or the runtime
-fn delete_on_node(
-    node: &dyn NodeLink,
-    job: &str,
-    call: Call,
-    poll: Duration,
-    keep_waiting: &dyn Fn() -> bool,
-) -> Result<Vec<CacheFolderOutcome>, String> {
-    let reason = match call_as(node, call, DELETE_WAIT + NODE_TIMEOUT) {
-        Ok(outcomes) => return Ok(outcomes),
-        Err(crate::node_access::LinkError::Unknown(reason)) => reason,
-        Err(error) => return Err(error.to_string()),
-    };
-    crate::diagnostic!(serde_json::json!({
-        "component": "cleanup", "kind": "cache.clear_unanswered",
-        "job": job, "reason": reason,
-    }));
-    while keep_waiting() {
-        std::thread::sleep(poll);
-        let asked = Call::CacheClearRunning {
-            job: job.to_owned(),
-        };
-        // Unreachable or slow, the node may still be deleting: ask again.
-        if let Ok(false) = call_as::<bool>(node, asked, NODE_TIMEOUT) {
-            break;
-        }
-    }
-    Err(format!(
-        "The node did not answer the build cache deletion in time ({reason})"
-    ))
-}
-
-/// What deleting a finished mission node's build cache came to (PRD
-/// mission-node-simple B20).
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum CacheClear {
-    /// An agent or a program works in the checkout now; nothing was moved.
-    Busy,
-    /// Each measured build cache folder's outcome: the bytes measured of the
-    /// ones deleted, how many were deleted, the kept ones' reason codes, and
-    /// how many were moved aside but not deleted yet.
-    Done {
-        removed_bytes: u64,
-        removed: usize,
-        kept: Vec<String>,
-        left: usize,
-    },
-}
-
-/// Deletes the build cache of one checkout, a mission node's that finished
-/// (PRD mission-node-simple B20): measured now, the checkout read as idle
-/// (`busy`), and then every measured build cache folder handed to the
-/// checkout's node in one call, which judges each again where it stands
-/// and once moved, and deletes it before it answers
-/// (`Call::ClearCacheFolders`). Nothing else in the checkout is touched and
-/// no pane closes; the bytes count only for a folder that is gone.
-pub(crate) fn clear_build_cache(
-    node: &dyn NodeLink,
-    repository: &Path,
-    checkout: &Path,
-    job: &str,
-    keep_waiting: &dyn Fn() -> bool,
-    busy: impl FnOnce(&Path) -> Result<bool, String>,
-) -> Result<CacheClear, String> {
-    let measured = disk::read(
-        node,
-        &disk::DiskRequest {
-            paths: vec![checkout.to_path_buf()],
-            ..Default::default()
-        },
-    );
-    let folders: Vec<LayerFolder> = measured
-        .into_iter()
-        .flat_map(|row| row.folders)
-        .filter(|folder| folder.layer == Layer::BuildCache)
-        .collect();
-    let (mut removed_bytes, mut removed, mut kept, mut left) = (0u64, 0usize, Vec::new(), 0usize);
-    if folders.is_empty() {
-        return Ok(CacheClear::Done {
-            removed_bytes,
-            removed,
-            kept,
-            left,
-        });
-    }
-    if busy(checkout)? {
-        return Ok(CacheClear::Busy);
-    }
-    let call = Call::ClearCacheFolders {
-        job: job.to_owned(),
-        root: checkout.to_string_lossy().into_owned(),
-        common: common_dir(node, repository).to_string_lossy().into_owned(),
-        folders: folders
-            .iter()
-            .map(|folder| folder.path.to_string_lossy().into_owned())
-            .collect(),
-        walk: WalkAllowance {
-            entries: RUN_WALK_ENTRIES,
-            millis: u64::try_from(RUN_WALK_TIME.as_millis()).unwrap_or(u64::MAX),
-        },
-    };
-    let outcomes = delete_on_node(node, job, call, JOB_POLL, keep_waiting)?;
-    if outcomes.len() != folders.len() {
-        return Err(format!(
-            "The node answered {} outcomes for {} folders",
-            outcomes.len(),
-            folders.len()
-        ));
-    }
-    for (folder, outcome) in folders.iter().zip(outcomes) {
-        match outcome {
-            CacheFolderOutcome::Removed => {
-                removed += 1;
-                removed_bytes = removed_bytes.saturating_add(folder.bytes);
-            }
-            CacheFolderOutcome::Kept { code, reason } => {
-                crate::diagnostic!(serde_json::json!({
-                    "component": "cleanup", "kind": "cache.kept",
-                    "checkout": checkout, "folder": folder.path,
-                    "reason_code": code, "reason": reason,
-                }));
-                kept.push(code);
-            }
-            CacheFolderOutcome::Left { reason } => {
-                crate::diagnostic!(serde_json::json!({
-                    "component": "cleanup", "kind": "cache.left",
-                    "checkout": checkout, "folder": folder.path, "reason": reason,
-                }));
-                left += 1;
-            }
-        }
-    }
-    Ok(CacheClear::Done {
-        removed_bytes,
-        removed,
-        kept,
-        left,
-    })
-}
-
-/// Deletes the folders a run set aside in `common`'s trash, waiting up to
-/// `DELETE_WAIT`; how many are left to delete in the background.
-fn drain_trash(node: &dyn NodeLink, common: &Path, ours: &BTreeSet<PathBuf>, id: u64) -> usize {
-    let call = Call::DrainTrash {
-        common: common.to_string_lossy().into_owned(),
-        ours: ours
-            .iter()
-            .map(|entry| entry.to_string_lossy().into_owned())
-            .collect(),
-        wait_ms: u64::try_from(DELETE_WAIT.as_millis()).unwrap_or(u64::MAX),
-    };
-    match call_as::<usize>(node, call, DELETE_WAIT + NODE_TIMEOUT) {
-        Ok(remaining) => remaining,
-        Err(error) => {
-            crate::diagnostic!(serde_json::json!({
-                "component": "cleanup",
-                "kind": "trash.drain_failed",
-                "cleanup_id": id,
-                "error": error.to_string(),
-            }));
-            ours.len()
-        }
-    }
-}
-
 /// Each folder's verdict from the checkout's node, in order, spending what is
 /// left of the run's look through folders; a node that cannot be asked
 /// leaves every folder unverified.
@@ -1943,7 +1769,26 @@ pub fn spawn_confirm(
             );
             // The folders left their checkouts at once; the volume only has
             // its space back once they are deleted.
-            let remaining = drain_trash(node, &common, &ours, id);
+            let call = Call::DrainTrash {
+                common: common.to_string_lossy().into_owned(),
+                ours: ours
+                    .iter()
+                    .map(|entry| entry.to_string_lossy().into_owned())
+                    .collect(),
+                wait_ms: u64::try_from(DELETE_WAIT.as_millis()).unwrap_or(u64::MAX),
+            };
+            let remaining = match call_as::<usize>(node, call, DELETE_WAIT + NODE_TIMEOUT) {
+                Ok(remaining) => remaining,
+                Err(error) => {
+                    crate::diagnostic!(serde_json::json!({
+                        "component": "cleanup",
+                        "kind": "trash.drain_failed",
+                        "cleanup_id": id,
+                        "error": error.to_string(),
+                    }));
+                    ours.len()
+                }
+            };
             if remaining > 0 {
                 answer.message = Some(format!(
                     "{remaining} removed folders are still being deleted in the background"
@@ -1961,72 +1806,6 @@ pub fn spawn_confirm(
 
 #[cfg(test)]
 mod tests {
-
-    /// Review 5 P2-1: a build cache deletion whose answer did not come in
-    /// time holds its place until the node says the job ended, so a third
-    /// deletion cannot start while two still run there.
-    #[test]
-    fn an_unanswered_cache_deletion_holds_its_place_until_the_node_ends_it() {
-        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-        struct Deleting {
-            running: Arc<AtomicBool>,
-            asked: Arc<AtomicUsize>,
-        }
-        impl NodeLink for Deleting {
-            fn call(
-                &self,
-                call: Call,
-                _timeout: Duration,
-            ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
-                match call {
-                    Call::ClearCacheFolders { .. } => Err(crate::node_access::LinkError::Unknown(
-                        "The device did not answer in time".to_owned(),
-                    )),
-                    Call::CacheClearRunning { job } => {
-                        assert_eq!(job, "m:n:0:1");
-                        self.asked.fetch_add(1, Ordering::SeqCst);
-                        Ok(crate::node_access::LinkAnswer::Parsed(serde_json::json!(
-                            self.running.load(Ordering::SeqCst)
-                        )))
-                    }
-                    other => panic!("unexpected call {other:?}"),
-                }
-            }
-        }
-        let running = Arc::new(AtomicBool::new(true));
-        let asked = Arc::new(AtomicUsize::new(0));
-        let node = Deleting {
-            running: Arc::clone(&running),
-            asked: Arc::clone(&asked),
-        };
-        let call = Call::ClearCacheFolders {
-            job: "m:n:0:1".into(),
-            root: "/work/fix".into(),
-            common: "/work/.git".into(),
-            folders: vec!["/work/fix/target".into()],
-            walk: WalkAllowance {
-                entries: 1,
-                millis: 1,
-            },
-        };
-        let (done, ended) = std::sync::mpsc::channel();
-        std::thread::scope(|scope| {
-            scope.spawn(|| {
-                let answer =
-                    delete_on_node(&node, "m:n:0:1", call, Duration::from_millis(5), &|| true);
-                done.send(answer).unwrap();
-            });
-            // The node still deletes: the caller keeps waiting, asked again.
-            while asked.load(Ordering::SeqCst) < 3 {
-                std::thread::yield_now();
-            }
-            assert!(ended.try_recv().is_err(), "returned while the node deleted");
-            running.store(false, Ordering::SeqCst);
-            let answer = ended.recv().unwrap();
-            assert!(answer.is_err_and(|error| error.contains("in time")));
-        });
-    }
-
     use super::*;
     use hide_host::worktrees::{ConfirmedRemoval, RemovalBranch, RemovalStop, remove_confirmed};
 

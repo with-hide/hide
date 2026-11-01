@@ -9476,18 +9476,10 @@ mod wire_enum_tests {
             }
             assert_wire(&contract, "mission_attention_to", &whom);
             checked.insert("mission_attention_to");
-            let actions = [
-                HideAction::Done,
-                HideAction::Attached,
-                HideAction::Woke,
-                HideAction::CacheCleared,
-            ];
+            let actions = [HideAction::Done, HideAction::Attached, HideAction::Woke];
             for variant in actions {
                 match variant {
-                    HideAction::Done
-                    | HideAction::Attached
-                    | HideAction::Woke
-                    | HideAction::CacheCleared => {}
+                    HideAction::Done | HideAction::Attached | HideAction::Woke => {}
                 }
             }
             assert_wire(&contract, "mission_hide_action", &actions);

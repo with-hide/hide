@@ -66,7 +66,6 @@ export const MISSION_TOOL_DEFAULTS: ConductorSettings = {
   default_scope: "pr",
   default_strength: "normal",
   other_vendor: true,
-  build_cache_cleanup: true,
   candidates: [
     { agent: "claude", model: "opus", effort: "high", purpose: "Conductor" },
     { agent: "codex", model: null, effort: null, purpose: "검증" },

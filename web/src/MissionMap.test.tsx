@@ -692,17 +692,16 @@ it("lists only what the operator can do in 내 차례: the decision whose node c
   } finally { await git.unmount(); }
 });
 
-it("puts in a node's panel what waits on whom with its choices, the worker's life, the Conductor's line dimmed once Hide's facts passed it, Hide's record, and 다시 진행 on finished work (PRD mission-node-simple B4, B15-B17, B20)", async () => {
+it("puts in a node's panel what waits on whom with its choices, the worker's life, the Conductor's line dimmed once Hide's facts passed it, Hide's record, and 다시 진행 on finished work (PRD mission-node-simple B4, B15-B17)", async () => {
   const nodes = [
     node("ended", { title: "Holder record", status: "working", line: "fixing the review", agent_runtime: "ended", worker: { agent: "claude", model: "opus", effort: null, effort_auto: false }, attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 50, on_row: false, item: false } }),
-    node("done", { title: "Holder life", status: "done", pr: 1918, pr_state: "merged", line: "waiting on CI", finished_at_unix_ms: 60, hide: { action: "cache_cleared", bytes: 2 * 1024 ** 3, at_unix_ms: 70 } }),
+    node("done", { title: "Holder life", status: "done", pr: 1918, pr_state: "merged", line: "waiting on CI", finished_at_unix_ms: 60, hide: { action: "done", at_unix_ms: 60 } }),
   ];
   const events: MissionEvent[] = [
     { at_unix_ms: 10, kind: "node", node: "ended", status: "working", line: "fixing the review" },
     { at_unix_ms: 20, kind: "node", node: "done", status: "working", line: "waiting on CI" },
     { at_unix_ms: 50, kind: "raised", node: "ended", reason: "worker_ended" },
     { at_unix_ms: 60, kind: "hide", node: "done", hide: "done" },
-    { at_unix_ms: 70, kind: "hide", node: "done", hide: "cache_cleared", bytes: 2 * 1024 ** 3 },
   ];
   const map = await mount({ items: [mission({ nodes })] }, [], [], { mission_events: { mission: "mission-1", events, dropped: 0 } });
   try {
@@ -719,11 +718,11 @@ it("puts in a node's panel what waits on whom with its choices, the worker's lif
     expect([...panel.querySelectorAll<HTMLElement>("[data-panel-hide-event]")].map((row) => row.textContent)).toEqual([expect.stringContaining("! Conductor · Worker ended with work left")]);
     await act(async () => card(map, "done").click());
     const done = map.q('[data-mission-detail="done"]')!;
-    // The mission never removes a worktree; the panel has no worktree row (D-14).
+    // The mission deletes no file; the panel has no worktree row (D-14).
     expect(done.querySelector("[data-panel-worktree]")).toBeNull();
     // Finished work keeps the Conductor's last line, dimmed since Hide finished it after (B4).
     expect(done.querySelector("[data-panel-line-behind]")?.textContent).toBe("waiting on CI");
-    expect([...done.querySelectorAll<HTMLElement>("[data-panel-hide-event]")].map((row) => row.textContent?.replace(/^.*?Hide/, "Hide"))).toEqual(["Hide · Marked done", "Hide · Deleted the build cache · 2.0 GB"]);
+    expect([...done.querySelectorAll<HTMLElement>("[data-panel-hide-event]")].map((row) => row.textContent?.replace(/^.*?Hide/, "Hide"))).toEqual(["Hide · Marked done"]);
     await act(async () => done.querySelector<HTMLElement>("[data-node-resume]")!.click());
     await act(async () => done.querySelector<HTMLElement>("[data-node-resume]")!.click());
     expect(map.events.filter((event) => event.kind === "mission_attention").map((event) => event.payload)).toEqual([{ mission: "mission-1", node: "ended", action: "drop", since_unix_ms: expect.any(Number) }, { mission: "mission-1", node: "done", action: "resume" }]);

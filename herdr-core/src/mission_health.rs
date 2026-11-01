@@ -6,8 +6,8 @@
 //! Certain and reversible work is answered as an act Hide does: a node done
 //! when its pull requests and its lines are, a follow-up pull request of the
 //! node's branch attached, a sleeping worker woken about its pull request,
-//! the mission closed once every node finished, and a done node's build
-//! cache deleted. Anything unclear is raised: a merge with a line missing
+//! and the mission closed once every node finished. It never deletes a
+//! file. Anything unclear is raised: a merge with a line missing
 //! or failed, a worker that ended with work left, a pull request closed with
 //! no other open, one the worker opened that no node holds. Nothing that rests on GitHub is answered while its list is
 //! stale (B24), and nothing at all while the mission's device does not
@@ -49,8 +49,6 @@ pub(crate) struct Facts<'a> {
     pub nodes: Vec<NodeFacts>,
     /// The mission's device does not answer.
     pub device_stale: bool,
-    /// `끝난 작업의 빌드 캐시 자동 삭제` is on (D-14).
-    pub clear_cache: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -74,9 +72,6 @@ pub(crate) enum Act {
         why: FixReason,
         head: Option<String>,
     },
-    /// The done node's build cache is deleted, once per finish (B20). Its
-    /// worktree is never removed.
-    ClearCache { node: usize },
     /// Every node finished: the mission closes (B18).
     Close,
 }
@@ -101,10 +96,6 @@ pub(crate) fn evaluate(mission: &Mission, facts: &Facts) -> Vec<Act> {
             // A follow-up pull request of a closed mission's node opens the
             // mission again with it (B8).
             attach_acts(mission, at, node, pulls, &mut acts);
-        }
-        // A done node's build cache goes after its mission closed too.
-        if facts.clear_cache {
-            cache_acts(mission, at, node, &mut acts);
         }
     }
     // A node Hide finishes in this pass has nothing left to raise.
@@ -342,33 +333,6 @@ fn pr_less_done(mission: &Mission, node: &MissionNode, fact: &NodeFacts) -> bool
         }
 }
 
-/// A done node's build cache is deleted once per finish (B20).
-fn cache_acts(mission: &Mission, at: usize, node: &MissionNode, acts: &mut Vec<Act>) {
-    // A follow-up pull request this pass attaches makes the node work
-    // again: its worktree is the follow-up's (B8).
-    if acts
-        .iter()
-        .any(|act| matches!(act, Act::Attach { node, .. } if *node == at))
-        || !cache_due(mission, node)
-    {
-        return;
-    }
-    acts.push(Act::ClearCache { node: at });
-}
-
-/// Whether `node`'s build cache is due its deletion for this finish: the
-/// node is done, its branch is known, and this finish has not deleted it
-/// yet. Whether its worktree is busy right now is read off the lock, right
-/// before anything is deleted.
-pub(crate) fn cache_due(mission: &Mission, node: &MissionNode) -> bool {
-    matches!(
-        mission.status,
-        MissionStatus::Running | MissionStatus::MergeWait | MissionStatus::Done
-    ) && node.status == NodeStatus::Done
-        && !node.cache_cleared
-        && node.branch.is_some()
-}
-
 /// Whether `pull` is a follow-up of the node on `branch`: of that branch,
 /// from this repository, open, and held by no node (D-10).
 fn joins(mission: &Mission, pull: &PullRequestSnapshot, branch: &str) -> bool {
@@ -392,7 +356,7 @@ fn closes(mission: &Mission, acts: &[Act]) -> bool {
             .reopened_on
             .as_ref()
             .is_none_or(|marks| *marks != mission.node_marks())
-        && acts.iter().all(|act| matches!(act, Act::ClearCache { .. }))
+        && acts.is_empty()
         && mission.nodes.iter().all(|node| {
             node.status.finished()
                 && node
@@ -593,7 +557,6 @@ mod tests {
             pulls,
             nodes,
             device_stale: false,
-            clear_cache: true,
         }
     }
 
@@ -621,7 +584,7 @@ mod tests {
         // The close waits for the pass after the done landed.
         m.nodes[0].status = NodeStatus::Done;
         let acts = evaluate(&m, &facts(Some(&pulls), vec![worker(WorkerLife::Asleep)]));
-        assert_eq!(acts, [Act::ClearCache { node: 0 }, Act::Close]);
+        assert_eq!(acts, [Act::Close]);
         // A person took it back to work: Hide does not finish it again on
         // the same pull request.
         m.nodes[0].status = NodeStatus::Working;
@@ -857,35 +820,6 @@ mod tests {
         );
     }
 
-    /// B20: a done node's build cache is deleted once per finish while the
-    /// setting is on, whatever its pull requests and worker.
-    #[test]
-    fn a_done_nodes_build_cache_is_deleted_once_per_finish() {
-        let mut m = running(&["a"]);
-        m.status = MissionStatus::Done;
-        m.nodes[0].status = NodeStatus::Done;
-        m.nodes[0].prs = vec![7];
-        let open = listed(vec![pull(7, "feat/a", PullRequestBadge::Open)]);
-        for life in [WorkerLife::Running, WorkerLife::Asleep, WorkerLife::Ended] {
-            assert_eq!(
-                evaluate(&m, &facts(Some(&open), vec![worker(life)])),
-                [Act::ClearCache { node: 0 }]
-            );
-        }
-        let mut off = facts(Some(&open), vec![worker(WorkerLife::Ended)]);
-        off.clear_cache = false;
-        assert!(evaluate(&m, &off).is_empty());
-        m.nodes[0].cache_cleared = true;
-        assert!(evaluate(&m, &facts(Some(&open), vec![worker(WorkerLife::Ended)])).is_empty());
-        m.nodes[0].cache_cleared = false;
-        m.nodes[0].status = NodeStatus::Working;
-        m.status = MissionStatus::Running;
-        assert!(
-            !evaluate(&m, &facts(Some(&open), vec![worker(WorkerLife::Running)]))
-                .contains(&Act::ClearCache { node: 0 })
-        );
-    }
-
     /// D-06: only a pull request with nothing for its worker to do waits on
     /// others.
     #[test]
@@ -900,26 +834,20 @@ mod tests {
         assert!(!waits_on_others(&draft));
     }
 
-    /// B8, B20: an open follow-up pull request of a done node's branch
-    /// takes the node back to work in the same pass, and its build cache is
-    /// not deleted there, also once the mission closed.
+    /// B8: an open follow-up pull request of a done node's branch takes the
+    /// node back to work, also once the mission closed.
     #[test]
-    fn a_follow_up_pull_request_keeps_a_done_nodes_build_cache() {
+    fn a_follow_up_pull_request_takes_a_done_node_back_to_work() {
         let mut m = running(&["a"]);
         m.nodes[0].status = NodeStatus::Done;
         m.nodes[0].prs = vec![7];
-        let merged = listed(vec![pull(7, "feat/a", PullRequestBadge::Merged)]);
         let asleep = || vec![worker(WorkerLife::Asleep)];
-        assert!(
-            evaluate(&m, &facts(Some(&merged), asleep())).contains(&Act::ClearCache { node: 0 })
-        );
         let follow = listed(vec![
             pull(7, "feat/a", PullRequestBadge::Merged),
             pull(9, "feat/a", PullRequestBadge::Open),
         ]);
         let acts = evaluate(&m, &facts(Some(&follow), asleep()));
         assert!(acts.contains(&Act::Attach { node: 0, pr: 9 }), "{acts:?}");
-        assert!(!acts.contains(&Act::ClearCache { node: 0 }), "{acts:?}");
         m.status = MissionStatus::Done;
         assert_eq!(
             evaluate(&m, &facts(Some(&follow), asleep())),
@@ -935,7 +863,6 @@ mod tests {
         m.nodes[0].status = NodeStatus::Done;
         m.nodes[0].prs = vec![7];
         m.nodes[0].attention = Some(attention(AttentionReason::CloseRefused, None));
-        m.nodes[0].cache_cleared = true;
         let pulls = listed(vec![pull(7, "feat/a", PullRequestBadge::Merged)]);
         for _ in 0..2 {
             assert_eq!(

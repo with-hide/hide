@@ -443,7 +443,7 @@ function HideRecord({ mission, node, events }: { mission: Mission; node: Mission
   const { t, i18n } = useInterfaceTranslation();
   const language = requireInterfaceLanguage(i18n.language);
   const own = events?.filter((event) => event.node === node.key && HIDE_KINDS.has(event.kind)) ?? [];
-  const mark = hideWords(mission, node, t, language);
+  const mark = hideWords(mission, node, t);
   if (own.length === 0 && !mark) return null;
   const time = (at: number) => formatDateTime(language, at, { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
   return (
@@ -451,7 +451,7 @@ function HideRecord({ mission, node, events }: { mission: Mission; node: Mission
       {own.length > 0 ? (
         <ol className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-md gap-y-xxs text-caption" data-panel-hide-events={own.length}>
           {own.map((event, index) => {
-            const words = eventWords(event, t, language);
+            const words = eventWords(event, t);
             return (
               <li key={index} className="contents" data-panel-hide-event={event.kind}>
                 <span className="text-muted-foreground tabular-nums">{time(event.at_unix_ms)}</span>
@@ -490,7 +490,7 @@ function Events({ node, events }: { node: MissionNode; events: MissionEvent[] | 
       {open ? (
         <ol className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-md gap-y-xxs text-caption" data-flow-events={own.length}>
           {own.map((event, index) => {
-            const words = eventWords(event, t, language);
+            const words = eventWords(event, t);
             return (
               <li key={index} className="contents" data-panel-event={event.kind}>
                 <span className="text-muted-foreground tabular-nums">{time(event.at_unix_ms)}</span>

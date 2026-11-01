@@ -136,7 +136,7 @@ function plan(state: string, now: number): MissionNode[] {
   const review = (minutes: number) => ({ status: "working" as const, started_at_unix_ms: ago(minutes) });
   return [
     node("cause", `${no(1487)} 원인 조사`, { kind: "research", delivery: null, worker: opus("xhigh"), ...done(44, 24), line: "reopen 때 셀 초기화가 먼저 돎", ...finish(own(1, "원인을 재현 단계와 함께 적는다")) }),
-    node("fix-1481", `이슈 ${no(1481)} 수정`, { worker: astra("high"), ...done(40, 14), pr: 1501, pr_state: "mergeable", landing: MERGE_LEFT, stage: 3, hide: state === "no-conductor" ? { action: "cache_cleared", bytes: 1_288_490_189, at_unix_ms: ago(25) } : { action: "done", at_unix_ms: ago(26) }, ...finish(own(1, "빈 목록에서도 필터가 남는다"), line("check", "check", "pass"), ci("pass")) }),
+    node("fix-1481", `이슈 ${no(1481)} 수정`, { worker: astra("high"), ...done(40, 14), pr: 1501, pr_state: "mergeable", landing: MERGE_LEFT, stage: 3, hide: { action: "done", at_unix_ms: ago(26) }, ...finish(own(1, "빈 목록에서도 필터가 남는다"), line("check", "check", "pass"), ci("pass")) }),
     node("fix-1490", `이슈 ${no(1490)} 수정`, {
       worker: astra("medium"), pr: 1505, stage: 3, change: `${no(1483)}은 ${no(1490)}과 같은 원인이라 합침`,
       ...(stack ? { ...done(40, 9), pr_state: "mergeable" as const, landing: MERGE_LEFT } : decision ? { status: "working" as const, started_at_unix_ms: ago(30), pr_state: "failed" as const, attempts: 2, line: "CI 실패 · 시도 2/2", hide: { action: "woke" as const, pr: 1505, why: "ci_failed" as const, at_unix_ms: ago(3) } } : { ...review(30), pr_state: "pending" as const }),
@@ -201,7 +201,7 @@ function history(mission: Mission, now: number): MissionEvent[] {
       events.push({ at_unix_ms: failedAt + MINUTE, kind: "node", node: one.key, status: "working" });
     } else events.push({ at_unix_ms: begun, kind: "node", node: one.key, status: "working" });
     if (one.pr != null) events.push({ at_unix_ms: begun + (end - begun) * 0.4, kind: "pr_opened", node: one.key, pr: one.pr });
-    if (one.hide) events.push({ at_unix_ms: one.hide.at_unix_ms, kind: "hide", node: one.key, hide: one.hide.action, ...(one.hide.pr != null ? { pr: one.hide.pr } : {}), ...(one.hide.why ? { why: one.hide.why } : {}), ...(one.hide.bytes != null ? { bytes: one.hide.bytes } : {}) });
+    if (one.hide) events.push({ at_unix_ms: one.hide.at_unix_ms, kind: "hide", node: one.key, hide: one.hide.action, ...(one.hide.pr != null ? { pr: one.hide.pr } : {}), ...(one.hide.why ? { why: one.hide.why } : {}) });
     if (one.attention) events.push({ at_unix_ms: one.attention.since_unix_ms, kind: one.attention.to === "operator" ? "raised_to_operator" : "raised", node: one.key, reason: one.attention.reason, ...(one.attention.pr != null ? { pr: one.attention.pr } : {}) });
     if (one.finished_at_unix_ms != null && one.status === "done") {
       events.push({ at_unix_ms: one.finished_at_unix_ms, kind: "node", node: one.key, status: one.status });
@@ -268,7 +268,7 @@ export function missionFixture(shown: string, now: number): { mission: Mission; 
       { agent: "claude", model: "Sonnet 5.5", effort: "low", purpose: "리뷰, 문서" },
       { agent: "pi", effort: null, purpose: "짧은 조사" },
       { agent: "grok", effort: null, purpose: "" },
-    ], default_strength: "normal", other_vendor: true, build_cache_cleanup: true } },
+    ], default_strength: "normal", other_vendor: true } },
   } as unknown as SnapshotRest;
   return { mission, rest };
 }

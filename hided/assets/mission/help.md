@@ -202,7 +202,7 @@ Hide looks at the mission whenever a fact it rests on arrives (a GitHub read, a 
 - A new pull request opened from the node's own branch (not a fork) is added to the node; a done node it joins works again.
 - A sleeping worker whose pull request fails CI, conflicts with its base or gets a review asking for changes is woken with a `request` letter naming it, once per pull request, reason and commit.
 - When every node is done or dropped and nothing waits on anyone, Hide closes the mission (`merge_wait` while a pull request or branch is not in main, `done` otherwise), with a report of each node's result, and tells you; `hide mission reopen` opens it again.
-- A done node's build cache (ignored build folders such as `target/`) is deleted when Settings › Conductor `끝난 작업의 빌드 캐시 자동 삭제` is on (the default); its code, branch, worktree and panes stay. Hide never removes a worktree: a merged one is the operator's to remove from the project's disk cleanup.
+- Hide deletes no file: a done node's code, branch, worktree, build cache and panes stay. A merged worktree is the operator's to remove from the project's disk cleanup.
 
 What is not certain is raised on the node to you first, with a letter naming the node and why: a pull request merged while a line is missing or failed, a worker that ended with the node not done, a pull request closed without its merge with no other open, a pull request the worker opened that no node holds, a worker Hide could not wake, and a close Hide could not make.
 Settle it by recording the line, skipping it with its reason, attaching the pull request with `--pr`, setting the node's status or dropping it; that takes the raise off the operator's turn too.
@@ -239,7 +239,7 @@ The operator's words are the controls; there are no buttons.
   Then `hide mission close --as cancelled`. A cancelled mission is over: nothing reopens it.
 - The map's one control for this is `미션 종료` (End mission): it reaches you as an `end_asked` letter from Hide, which is the operator saying "cancel". A mission with no Conductor is cancelled by Hide at once, its pull requests, branches and workers left as they are, so the next one to take a mission finds nothing to undo.
 - A node dropped by a replan: close its pull request with a comment in the operator's language that says it was dropped from the mission and why (`Dropped from the mission: <reason>`) and keep the branch; commit what is not committed in its worktree and leave the worktree where it is, end its worker, and set `--status dropped`.
-- A mission never removes a worktree, and neither do you: the operator removes merged or unused ones from the project's own `머지됨 N → 정리`. Hide deletes only a finished node's build cache.
+- A mission never removes a worktree, and neither do you: the operator removes merged or unused ones from the project's own `머지됨 N → 정리`. Hide deletes no file either.
 - Commit for a worker only in a worktree the mission made, never in a folder the operator made or in the main checkout.
 
 ## 6. Merging

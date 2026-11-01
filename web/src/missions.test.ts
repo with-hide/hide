@@ -507,7 +507,7 @@ describe("a node that waits on someone, and what Hide did (PRD mission-node-simp
     for (const action of contract.mission_operator_action) expect(english).toHaveProperty(`mission.operator.${action}`);
     for (const action of contract.mission_hide_action) expect(english).toHaveProperty(`mission.hide.${action}`);
     for (const why of contract.mission_fix_reason) expect(english).toHaveProperty(`mission.fix.${why}`);
-    for (const kind of contract.mission_event_kind as MissionEvent["kind"][]) expect(eventWords({ at_unix_ms: 1, kind, node: "n" }, t, "en").what).not.toBe("");
+    for (const kind of contract.mission_event_kind as MissionEvent["kind"][]) expect(eventWords({ at_unix_ms: 1, kind, node: "n" }, t).what).not.toBe("");
     expect(attentionWords(node("n", { attention: raised("conductor", "pr_closed", 12) }), t)).toEqual({ who: "Conductor", why: "PR #12 closed without a merge" });
     expect(attentionWords(node("n"), t)).toBeNull();
   });
@@ -532,13 +532,11 @@ describe("a node that waits on someone, and what Hide did (PRD mission-node-simp
   it("says what Hide did last and why", () => {
     const lines = { criteria: [line("c1", "own", { state: "pass" }), line("c2", "own", { state: "pass" }), line("ci", "ci", { state: "skipped" })], criteria_met: 3, criteria_skipped: 1 };
     const merged = node("n", { status: "done", ...lines, prs: [{ number: 11, state: "merged", url: null }, { number: 12, state: "merged", url: null }], hide: { action: "done", at_unix_ms: 5 } });
-    expect(hideWords(mission("m"), merged, t, "en")).toBe("Marked done · merged + criteria 3/3");
-    expect(hideWords(mission("m"), { ...merged, prs: [{ number: 11, state: "mergeable", url: null }] }, t, "en")).toBe("Marked done · PR ready + criteria 3/3");
-    expect(hideWords(mission("m"), node("n", { hide: { action: "woke", pr: 12, why: "ci_failed", at_unix_ms: 5 } }), t, "en")).toBe("Woke the worker · PR #12 CI failed");
-    expect(hideWords(mission("m"), node("n", { hide: { action: "attached", pr: 13, at_unix_ms: 5 } }), t, "en")).toBe("Attached PR #13");
-    expect(hideWords(mission("m"), node("n", { hide: { action: "cache_cleared", bytes: 3 * 1024 ** 3, at_unix_ms: 5 } }), t, "en")).toBe("Deleted the build cache · 3.0 GB");
-    expect(eventWords({ at_unix_ms: 5, kind: "hide", node: "n", hide: "cache_cleared", bytes: 512 * 1024 ** 2 }, t, "en").what).toBe("Hide · Deleted the build cache · 512 MB");
-    expect(hideWords(mission("m"), node("n"), t, "en")).toBeNull();
+    expect(hideWords(mission("m"), merged, t)).toBe("Marked done · merged + criteria 3/3");
+    expect(hideWords(mission("m"), { ...merged, prs: [{ number: 11, state: "mergeable", url: null }] }, t)).toBe("Marked done · PR ready + criteria 3/3");
+    expect(hideWords(mission("m"), node("n", { hide: { action: "woke", pr: 12, why: "ci_failed", at_unix_ms: 5 } }), t)).toBe("Woke the worker · PR #12 CI failed");
+    expect(hideWords(mission("m"), node("n", { hide: { action: "attached", pr: 13, at_unix_ms: 5 } }), t)).toBe("Attached PR #13");
+    expect(hideWords(mission("m"), node("n"), t)).toBeNull();
   });
 
   it("dims the Conductor's line once Hide acted or raised after it was written", () => {
