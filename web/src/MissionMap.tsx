@@ -23,7 +23,7 @@ import { markdownPlainText } from "./markdownPlain";
 import { MissionMapCanvas } from "./MissionMapCanvas";
 import { MissionNodePanel } from "./MissionNodePanel";
 import { MissionTurn } from "./MissionTurn";
-import { markWord, RunText, useNodeRun } from "./missionParts";
+import { markWord, RunText, useNodeRun, useNodeTimes } from "./missionParts";
 import {
   attentionWords,
   defectEdges,
@@ -44,7 +44,7 @@ import {
 } from "./missions";
 import { layerDependencies } from "./projectBoard";
 import { machineName } from "./screenMachine";
-import type { Mission, MissionNode, MissionStatus } from "./snapshot";
+import type { Mission, MissionEvent, MissionNode, MissionStatus } from "./snapshot";
 import { useShellStore } from "./store";
 import type { MessageKey } from "./i18n/catalogs";
 import type { TFunction } from "i18next";
@@ -137,6 +137,8 @@ function MissionBody({ mission, actions, onNode }: { mission: Mission; actions: 
                 <Graph
                   actions={actions}
                   mission={mission}
+                  events={log?.events ?? null}
+                  end={end}
                   selected={selected}
                   onSelect={(key) => {
                     select(selected === key ? null : key);
@@ -274,7 +276,7 @@ function ReportLine({ mission }: { mission: Mission }) {
 
 type GraphCard = { key: string; node: MissionNode | null };
 
-function Graph({ mission, selected, onSelect, actions }: { mission: Mission; selected: string | null; onSelect: (key: string) => void; actions: Actions }) {
+function Graph({ mission, events, end, selected, onSelect, actions }: { mission: Mission; events: MissionEvent[] | null; end: number; selected: string | null; onSelect: (key: string) => void; actions: Actions }) {
   const nodes = mission.nodes;
   const graph = useMemo(() => {
     const shown = new Set(nodes.map((node) => node.key));
@@ -315,7 +317,7 @@ function Graph({ mission, selected, onSelect, actions }: { mission: Mission; sel
       overlay={overlay}
       draw={(card) =>
         card.node ? (
-          <NodeCard key={card.key} mission={mission} node={card.node} actions={actions} selected={selected === card.key} dimmed={lit !== null && !lit.has(card.key)} onSelect={() => onSelect(card.key)} />
+          <NodeCard key={card.key} mission={mission} node={card.node} events={events} end={end} actions={actions} selected={selected === card.key} dimmed={lit !== null && !lit.has(card.key)} onSelect={() => onSelect(card.key)} />
         ) : (
           <ReportCard key={card.key} mission={mission} dimmed={lit !== null && !lit.has(REPORT)} />
         )
@@ -341,17 +343,16 @@ const ATTENTION_CARD = "border-mission-hold ring-2 ring-mission-hold/20";
  * A node on the map (PRD mission-node-simple D-07, B1-B3): its state's mark
  * and border, its title on one line that ends in an ellipsis (the whole
  * title on hover and in its accessible name) with Hide's mark when Hide
- * changed it last, and one line holding its worker's agent mark, model and
- * effort as the panel's head draws them on the left, its pull requests'
- * marks or a direct change's result at the right end, and after them `! 나`
- * or `! Conductor` when it waits on someone to look, its reason on hover.
- * The marks keep their room before the worker's words; a branch gives its
- * room to the words, since a pull request replaces it and the panel holds it.
- * Its times, its finish lines and the Conductor's line are the panel's. The
+ * changed it last; a line holding its worker's agent mark, model and effort
+ * as the panel's head draws them, and how long it has taken; and a line
+ * holding its pull requests' marks or a direct change's result, and after
+ * them `! 나` or `! Conductor` when it waits on someone to look, its reason on
+ * hover. A line with nothing to hold is not drawn. The Conductor's line shows
+ * on hover only; its finish lines are the panel's. The
  * other agents checking it stand beside it as satellites tethered to its
  * right side. Pressing it picks it (B30).
  */
-function NodeCard({ mission, node, selected, dimmed, onSelect, actions }: { mission: Mission; node: MissionNode; selected: boolean; dimmed: boolean; onSelect: () => void; actions: Actions }) {
+function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, actions }: { mission: Mission; node: MissionNode; events: MissionEvent[] | null; end: number; selected: boolean; dimmed: boolean; onSelect: () => void; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const look = nodeLook(mission, node);
   const result = cardResult(node, mission.github_stale, t);
@@ -361,7 +362,7 @@ function NodeCard({ mission, node, selected, dimmed, onSelect, actions }: { miss
   const word = markWord(node, look, t);
   const worker = useNodeRun(node);
   const run = worker?.run ?? null;
-  const yields = resultYields(node);
+  const took = useNodeTimes(mission, node, events, end)?.took ?? null;
   const card = (
     <button
       type="button"
@@ -393,20 +394,23 @@ function NodeCard({ mission, node, selected, dimmed, onSelect, actions }: { miss
     >
       <span className="flex min-w-0 items-center gap-xs">
         <MissionNodeMark look={look} label={word} />
-        <span className={cn("min-w-0 flex-1 truncate text-body font-semibold", (look === "external" || look === "cancelled" || look === "waiting") && "text-muted-foreground", look === "dropped" && "text-muted-foreground line-through")} title={node.title}>
+        <span className={cn("min-w-0 flex-1 truncate text-body font-semibold", (look === "external" || look === "cancelled" || look === "waiting") && "text-muted-foreground", look === "dropped" && "text-muted-foreground line-through")} title={node.line ? undefined : node.title}>
           {node.title}
         </span>
         {hide ? <HideMark words={hide} /> : null}
       </span>
-      {result || run || attention ? (
+      {/* Who works it and how long it has taken have a line of their own, so a long branch or several pull requests never push them out (operator decision 2026-11-02). */}
+      {run || took ? (
+        <span className="flex min-w-0 items-center gap-xxs text-caption text-muted-foreground" data-node-run={run?.from}>
+          {worker?.agent ? <AgentMark kind={worker.agent} /> : null}
+          {run ? <RunText run={run} /> : null}
+          {took ? <span className="shrink-0" data-node-took="true">{run ? "· " : ""}{took}</span> : null}
+        </span>
+      ) : null}
+      {result || attention ? (
         <span className="flex min-w-0 items-center gap-x-xs text-caption text-muted-foreground" data-node-row="true">
-          {/* The worker's agent mark and model on the left take only the room the marks leave, so they truncate away before a mark is pushed out; with no run the empty span still holds the marks at the right. A branch is the exception: the words keep their width and the branch truncates in what is left. */}
-          <span className={cn("flex min-w-0 items-center gap-xxs overflow-hidden", !yields && "flex-1")} data-node-run={run?.from}>
-            {worker?.agent ? <AgentMark kind={worker.agent} /> : null}
-            {run ? <RunText run={run} /> : null}
-          </span>
-          {/* The marks keep one line at the right end; the ones past the card's width leave it rather than overlap, and `!` keeps its place after them (B30). */}
-          {result ? <span className={cn("flex h-lh min-w-0 items-center gap-x-xs overflow-hidden", yields ? "flex-1 justify-end" : "flex-wrap")} data-node-result-yields={yields || undefined}>{result}</span> : null}
+          {/* The marks keep one line; the ones past the card's width leave it rather than overlap, a branch truncates, and `!` keeps its place at the right end (B30). */}
+          <span className="flex h-lh min-w-0 flex-1 flex-wrap items-center gap-x-xs overflow-hidden">{result}</span>
           {attention ? (
             <Hint label={attention.why}>
               <span className="shrink-0 font-semibold text-mission-hold" data-node-attention-tag={node.attention!.reason}>! {attention.who}</span>
@@ -416,13 +420,15 @@ function NodeCard({ mission, node, selected, dimmed, onSelect, actions }: { miss
       ) : null}
     </button>
   );
+  // The Conductor's last line is the hover's, under the whole title, never a line of the card (operator decision 2026-11-02).
+  const shown = node.line ? <Hint label={`${node.title}\n${node.line}`} reveals contentClassName="max-w-(--size-mission-node)">{card}</Hint> : card;
   // The card and its satellites are one box to the layout, the card centred in it, so edges meet the card's middle.
   // An empty column as wide as the satellites' keeps the card in the middle of the box.
-  if (satellites.length === 0) return <div data-dependency-node={node.key} className="flex">{card}</div>;
+  if (satellites.length === 0) return <div data-dependency-node={node.key} className="flex">{shown}</div>;
   return (
     <div data-dependency-node={node.key} className="grid grid-cols-[var(--spacing-xl)_auto_var(--spacing-xl)] items-center">
       <span aria-hidden="true" />
-      {card}
+      {shown}
       {/* 노드 상세 opens the node's panel; it never shuts the panel already open, as a second press on the card does. */}
       <Satellites mission={mission} lines={satellites} dimmed={dimmed} onSelect={() => !selected && onSelect()} actions={actions} />
     </div>
@@ -439,12 +445,6 @@ function HideMark({ words }: { words: string }) {
       </span>
     </Hint>
   );
-}
-
-/** Whether the card's result is a branch, which truncates to leave the worker's words whole; a pull request mark or a commit keeps its room. */
-function resultYields(node: MissionNode): boolean {
-  if (node.kind === "external" && node.external) return !("pr" in node.external);
-  return node.prs.length === 0 && nodeResult(node)?.kind === "branch";
 }
 
 /** What a card names as its result (B1): every pull request's mark in the order the node got them, else a direct change's commit on main or its branch. */

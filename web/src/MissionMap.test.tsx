@@ -421,13 +421,23 @@ it("draws each card as its mark, its title, its pull requests, its worker's mode
     expect(card(map, "sleeping").querySelector("[data-node-mark] svg")?.getAttribute("class")).toContain("animate-spin");
     // Every pull request the node holds is its own PR mark, in the order it got them (D-10).
     expect([...card(map, "core").querySelectorAll<HTMLElement>("[data-node-pr]")].map((mark) => mark.dataset.nodePr)).toEqual(["1703", "1704"]);
-    // The worker's model and effort lead the line, before the marks, as the panel's head words them: the launch kept for its worker, else the plan's marked planned.
-    const row = (key: string) => [...card(map, key).querySelectorAll<HTMLElement>("[data-node-row] > *")].map((part) => (part.dataset.nodeRun ? `run:${part.dataset.nodeRun}` : part.dataset.nodeAttentionTag ? "!" : part.querySelector("[data-node-pr]") ? "marks" : part.childElementCount === 0 ? "empty" : "?"));
-    expect(row("core")).toEqual(["run:plan", "marks"]);
+    // Under the title, a line of the worker's model and effort as the panel's head words them (the launch kept for its worker, else the plan's marked planned), then a line of the marks and `!`; a line with nothing to hold is not drawn.
+    const lines = (key: string) => [...card(map, key).children].slice(1).map((el) => {
+      const part = el as HTMLElement;
+      if (part.hasAttribute("data-node-run")) return `run:${part.dataset.nodeRun}`;
+      if (!part.dataset.nodeRow) return "?";
+      return [...part.children].map((one) => ((one as HTMLElement).dataset.nodeAttentionTag ? "!" : one.querySelector("[data-node-pr]") ? "marks" : one.querySelector("[data-node-branch]") ? "branch" : one.childElementCount === 0 ? "empty" : "?")).join("+");
+    });
+    expect(lines("core")).toEqual(["run:plan", "marks"]);
     expect([card(map, "core").querySelector("[data-run-words]")?.textContent, card(map, "core").querySelector("[data-run-planned]")?.textContent]).toEqual(["opus·high", "(planned)"]);
-    expect(row("launched")).toEqual(["run:launch", "marks", "!"]);
-    // With no run the left stays empty, so the marks and `!` still sit at the right end.
-    expect([row("outside"), row("asked")]).toEqual([["empty", "marks"], ["empty", "!"]]);
+    expect(lines("launched")).toEqual(["run:launch", "marks+!"]);
+    // With no run there is no run line, and `!` still sits at the right end.
+    expect([lines("outside"), lines("asked")]).toEqual([["marks"], ["empty+!"]]);
+    // A long branch has its own line, so the worker's words stay whole beside nothing.
+    expect(lines("on-branch")).toEqual(["run:plan", "branch"]);
+    expect([card(map, "on-branch").querySelector("[data-run-words]")?.textContent, card(map, "on-branch").querySelector("[data-node-row] [data-node-branch]")?.textContent]).toEqual(["opus·xhigh", "feat/engine-own-layout"]);
+    // The Conductor's line is the hover's, under the whole title, so the title drops its own native hover only then.
+    expect([card(map, "core").querySelector("[title='제안 core: 기록·공책·점수·반영']"), card(map, "api").querySelector(`[title="${nodes.find((one) => one.key === "api")!.title}"]`)]).toEqual([null, expect.anything()]);
     expect(card(map, "launched").querySelector("[data-run]")?.textContent).toBe("Opus 5.5·high");
     // The agent mark stands before the model: the plan's agent while planned, the launched agent's once kept (codex here, where the plan said claude).
     expect(["core", "launched"].map((key) => card(map, key).querySelector("[data-node-run] > :first-child")?.getAttribute("data-agent-mark"))).toEqual(["claude", "codex"]);
@@ -461,19 +471,12 @@ it("draws each card as its mark, its title, its pull requests, its worker's mode
     expect(card(map, "api").className).not.toMatch(/border-mission-done/);
     // A direct change shows its branch where a pull request would be, truncated inside the card (B30).
     expect(card(map, "branch").querySelector("[data-node-branch] .truncate")).not.toBeNull();
-    // A branch gives its room to the worker's words, which a pull request mark never does: the words stay whole and the branch truncates after them.
-    expect(row("on-branch")).toEqual(["run:plan", "?"]);
-    expect([card(map, "on-branch").querySelector("[data-run-words]")?.textContent, card(map, "on-branch").querySelector("[data-node-result-yields] [data-node-branch]")?.textContent]).toEqual(["opus·xhigh", "feat/engine-own-layout"]);
-    // Only a branch yields, its own or an outside node's; pull request marks and an outside pull request keep their room, and the words then take what is left.
-    expect(["on-branch", "branch", "core", "outside"].map((key) => card(map, key).querySelector("[data-node-result-yields]") !== null)).toEqual([true, true, false, false]);
-    expect(["on-branch", "core"].map((key) => card(map, key).querySelector("[data-node-run]")?.className.split(" ").includes("flex-1"))).toEqual([false, true]);
-    expect(card(map, "on-branch").querySelector("[data-node-result-yields]")?.className.split(" ")).toEqual(expect.arrayContaining(["flex-1", "justify-end"]));
     // Outside is the node's kind: a dotted border and ↗ in every state; one closed unmerged waits on the Conductor (B12).
     expect(["outside", "closed-out", "merged-out"].map((key) => [card(map, key).className.includes("border-dotted"), card(map, key).querySelector("[data-node-outside]")?.textContent])).toEqual([[true, `↗${"#"}1232`], [true, `↗${"#"}1605`], [true, `↗${"#"}1702`]]);
     expect(card(map, "closed-out").querySelector("[data-node-attention-tag]")?.getAttribute("data-node-attention-tag")).toBe("pr_closed");
     expect(card(map, "merged-out").getAttribute("aria-label")).toBe("Node merged-out · Done · Outside the mission");
     // A long title is one line ending in an ellipsis, the whole of it on hover and in the name (B30).
-    expect(card(map, "core").querySelector("[title='제안 core: 기록·공책·점수·반영']")?.className).toContain("truncate");
+    expect(card(map, "core").querySelector(".truncate")?.textContent).toBe("제안 core: 기록·공책·점수·반영");
   } finally { await map.unmount(); }
 });
 
@@ -521,7 +524,7 @@ it("tethers each agent checking a node to its card's right side as a satellite, 
   } finally { await map.unmount(); }
 });
 
-it("shows in the panel how long a node took from its events, and no number without them or while the device is gone (B4, B28, B35)", async () => {
+it("shows on the card and in the panel how long a node took from its events, and no number without them or while the device is gone (B4, B28, B35)", async () => {
   // The page reads its own clock, so the test holds it.
   const now = Math.floor(Date.now() / 60_000) * 60_000;
   vi.useFakeTimers({ toFake: ["Date"] });
@@ -536,8 +539,8 @@ it("shows in the panel how long a node took from its events, and no number witho
   };
   const map = await mount({ items: [mission({ nodes })] }, [], [], { mission_events: { mission: "mission-1", events, dropped: 0 } });
   try {
-    // The card carries no time; the panel does (D-07).
-    expect(map.q("[data-node-time]")).toBeNull();
+    // The card says it on its run line, as the panel does (operator decision 2026-11-02).
+    expect(["a", "b", "c"].map((key) => card(map, key).querySelector("[data-node-took]")?.textContent ?? null)).toEqual(["1h", "40m", null]);
     expect(await facts(map, "a")).toBe("took 1h");
     expect(await facts(map, "b")).toBe("took 40m");
     // A node with no event that moved it draws no time.
@@ -548,6 +551,7 @@ it("shows in the panel how long a node took from its events, and no number witho
     // The finished node's time stays; the running ones stop, and so does the head's.
     expect(await facts(stale, "a")).toBe("took 1h");
     expect(await facts(stale, "b")).toBeNull();
+    expect(["a", "b"].map((key) => card(stale, key).querySelector("[data-node-took]")?.textContent ?? null)).toEqual(["1h", null]);
     expect(stale.q('[data-mission-stat="time"]')).toBeNull();
   } finally { await stale.unmount(); }
 });
