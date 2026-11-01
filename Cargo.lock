@@ -1098,6 +1098,7 @@ dependencies = [
  "cap-std",
  "flate2",
  "getrandom 0.2.16",
+ "hide-agent-adapter",
  "hide-herdr-client",
  "hide-holder-protocol",
  "hide-host",
