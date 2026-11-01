@@ -10,7 +10,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { expect, test, type Page } from "@playwright/test";
-import { claudeProjects, herdrHasFocus, setFixtureSession, startHerdr, writeFixtureTranscript, type HerdrFixture } from "./herdr-fixture";
+import { CLAUDE_FULL_ACCESS, claudeProjects, herdrHasFocus, setFixtureSession, startHerdr, writeFixtureTranscript, type HerdrFixture } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { herdrGate } from "./herdr-gate";
 import { countSent, screenshot } from "./wire";
@@ -128,6 +128,11 @@ test("Fork agent accepts bare pane keys from another client and opens right of t
     const inputLog = path.join(herdr.root, "fork-input.log");
     await expect.poll(() => fs.existsSync(inputLog) ? fs.readFileSync(inputLog, "utf8") : "", { timeout: 10_000 }).toBe("typed-before-start");
     await expect.poll(() => screenOf(herdr, forked), { timeout: 10_000 }).toContain("FORK_INPUT_READY");
+    // The default 전부 허용 reached the fork whole through the pane's own shell, PowerShell on Windows:
+    // Claude's settings value is JSON, whose quotes a shell could strip.
+    const received = fs.readFileSync(path.join(herdr.root, "fork-argv.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line) as string[]);
+    expect(received).toHaveLength(1);
+    expect(received[0]!.join("\n")).toContain(CLAUDE_FULL_ACCESS.join("\n"));
     const screen = screenOf(herdr, forked);
     expect(screen.slice(0, screen.indexOf("FORK_INPUT_READY"))).not.toContain("typed-before-start");
 

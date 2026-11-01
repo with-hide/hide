@@ -15,17 +15,15 @@ test('the public staged gate carries checker imports and logo registries without
     fs.writeFileSync(path.join(scripts, `${name}.mjs`), 'process.exitCode = 0;\n');
   }
   fs.writeFileSync(path.join(scripts, 'check-web-tokens.mjs'), "import {value} from './token-policy.mjs';\nif (value !== 'staged') throw new Error('wrong token policy');\n");
-  fs.writeFileSync(path.join(scripts, 'check-agent-logos.mjs'), "import fs from 'node:fs';\nfor (const file of ['hide-kit/src/agents.rs', 'hide-ai/src/registry.rs']) {\n if (fs.readFileSync(file, 'utf8') !== 'staged registry') throw new Error('wrong logo registry');\n}\n");
-  for (const name of ['hide-kit', 'hide-ai']) {
-    fs.mkdirSync(path.join(root, name, 'src'), {recursive: true});
-    fs.writeFileSync(path.join(root, name, 'src', name === 'hide-kit' ? 'agents.rs' : 'registry.rs'), 'staged registry');
-  }
+  fs.writeFileSync(path.join(scripts, 'check-agent-logos.mjs'), "import fs from 'node:fs';\nif (fs.readFileSync('hide-kit/src/agents.rs', 'utf8') !== 'staged registry') throw new Error('wrong logo registry');\n");
+  fs.mkdirSync(path.join(root, 'hide-kit', 'src'), {recursive: true});
+  fs.writeFileSync(path.join(root, 'hide-kit', 'src', 'agents.rs'), 'staged registry');
   fs.writeFileSync(path.join(scripts, 'token-policy.mjs'), "export {value} from './token-policy-next.mjs';\n");
   const module = path.join(scripts, 'token-policy-next.mjs');
   fs.writeFileSync(module, "export const value = 'staged';\n");
   const git = args => execFileSync('git', args, {cwd: root, encoding: 'utf8'});
   git(['init', '-q']);
-  git(['add', 'scripts', 'hide-kit', 'hide-ai']);
+  git(['add', 'scripts', 'hide-kit']);
   const index = git(['ls-files', '--stage']);
   fs.writeFileSync(module, "export const value = 'unstaged';\nthrow new Error('unstaged module must not run');\n");
 

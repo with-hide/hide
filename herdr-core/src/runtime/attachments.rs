@@ -1142,7 +1142,7 @@ mod tests {
             serde_json::json!({"agents":[{"id":"a","pane_id":"pane-one","agent":"claude","agent_status":"idle","state_change_seq":1,"lineage_session":"s"}]}),
         )
         .unwrap();
-        runtime.observe_delivery(crate::node::TEST_NODE, &payload, None, None);
+        runtime.observe_delivery_laid(crate::node::TEST_NODE, &payload, None, None);
         let clocks = |runtime: &mut Runtime| {
             let observation = runtime.delivery_observations.get_mut("pane-one").unwrap();
             let read = (

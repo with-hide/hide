@@ -986,6 +986,7 @@ impl Runtime {
                     closed_at_unix_ms: None,
                     wakes: Vec::new(),
                     wake_seq: 0,
+                    round_seq: 0,
                     end_asked_at_unix_ms: None,
                     attention_seq: 0,
                     reopened_on: None,
@@ -1013,7 +1014,13 @@ impl Runtime {
                 // A plan opens nothing in the lane: the map opens only from
                 // the operator's press, and the shell shows a first plan on
                 // the Conductor pane's own chip (PRD mission-pane-chip D-02).
-                let next = crate::missions::apply_plan(&current, &plan, now)?;
+                let mut next = crate::missions::apply_plan(&current, &plan, now)?;
+                let Mission {
+                    nodes, round_seq, ..
+                } = &mut next;
+                for node in nodes.iter_mut() {
+                    super::mission_outside::begin_round(round_seq, current.node(&node.key), node);
+                }
                 let overlaps = crate::missions::overlaps(&self.missions.book, &next);
                 let events = super::mission_events::plan_events(
                     &current,
@@ -1107,6 +1114,11 @@ impl Runtime {
                 }
                 let reads = reads_branch(current.status, &next);
                 let target = self.missions.book.get_mut(&id).ok_or("mission_unknown")?;
+                super::mission_outside::begin_round(
+                    &mut target.round_seq,
+                    Some(&target.nodes[index]),
+                    &mut next,
+                );
                 let changed = target.nodes[index] != next;
                 let events = super::mission_events::node_events(&target.nodes[index], &next, now);
                 target.nodes[index] = next;
@@ -1387,6 +1399,7 @@ impl Runtime {
         target.reopened_on = Some(target.node_marks());
         for node in &mut target.nodes {
             node.in_main = None;
+            node.branch_ahead = None;
         }
         target.updated_at_unix_ms = now;
         Ok(true)

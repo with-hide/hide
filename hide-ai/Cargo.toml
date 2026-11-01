@@ -9,6 +9,7 @@ description = "Provider boundary for Hide's background AI features: transport, a
 name = "hide_ai"
 
 [dependencies]
+hide-agent-adapter = { path = "../hide-agent-adapter" }
 hide-platform = { path = "../hide-platform" }
 jsonschema = { version = "=0.58.6", default-features = false }
 serde = { version = "=1.0.229", features = ["derive"] }

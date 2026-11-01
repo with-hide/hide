@@ -609,6 +609,17 @@ pub struct MissionNode {
     /// while the node stays done.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub in_main: Option<Landed>,
+    /// An outside branch's head when Hide last read it with commits main
+    /// lacks: work of its own, which makes the node done once main holds
+    /// it. A branch only cut from main has none (B19).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch_ahead: Option<String>,
+    /// An outside node's read round, from its mission's `round_seq`: a new
+    /// one each time it names another branch or goes back to work after it
+    /// settled, so a read asked in an earlier round is dropped. Apart from
+    /// `round`, the work round Hide's act keys name.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub outside_round: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verdict: Option<Verdict>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -839,6 +850,10 @@ pub struct Mission {
     /// How many wakes this mission has had; the next one's `seq`.
     #[serde(default)]
     pub wake_seq: u64,
+    /// The last round given to one of its outside nodes
+    /// (`MissionNode::round`), never given again.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub round_seq: u64,
     /// When the operator asked the Conductor to end the mission (`미션
     /// 종료`), until it closes; a second press asks nothing more.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1766,6 +1781,8 @@ pub(crate) fn apply_plan(
                 commit: None,
                 folder: None,
                 in_main: None,
+                branch_ahead: None,
+                outside_round: 0,
                 verdict: None,
                 checks: None,
                 attention: None,
@@ -2393,6 +2410,12 @@ fn convert_before_simple(value: &mut serde_json::Value) -> Result<(), String> {
                 other => return Err(format!("has a node status {other} it does not know")),
             };
             node.insert("status".into(), next.into());
+            // A schema 2 node's `round` is an outside node's read round
+            // (#1961); schema 3 names that `outside_round` and counts the
+            // work rounds in `round` from none.
+            if let Some(round) = node.remove("round") {
+                node.insert("outside_round".into(), round);
+            }
             // In a closed mission too: the failure is the operator's to
             // read, and the mission's Needs You carries it once it asks.
             if status == "failed" {
@@ -2608,6 +2631,7 @@ pub(crate) mod tests {
             closed_at_unix_ms: None,
             wakes: Vec::new(),
             wake_seq: 0,
+            round_seq: 0,
             end_asked_at_unix_ms: None,
             attention_seq: 0,
             reopened_on: None,
@@ -3059,6 +3083,8 @@ pub(crate) mod tests {
         let mut merged = node("m", "review");
         merged["pr"] = serde_json::json!(7);
         merged["pr_seen"] = serde_json::json!({"head": "abc", "merged": true});
+        // An outside read round of schema 2 (#1961) is not a work round.
+        merged["round"] = serde_json::json!(4);
         stored["nodes"] = serde_json::json!([
             merged,
             node("h", "held"),
@@ -3078,6 +3104,7 @@ pub(crate) mod tests {
             panic!("a schema 2 book reads");
         };
         let read = &book.missions[0];
+        assert_eq!((read.nodes[0].outside_round, read.nodes[0].round), (4, 0));
         let statuses: Vec<NodeStatus> = read.nodes.iter().map(|node| node.status).collect();
         assert_eq!(
             statuses,

@@ -293,6 +293,7 @@ fn a_reopened_tab_the_operator_named_is_named_again() {
         .expect("the tab's context");
     let request = crate::recent_closed::reopen::ReopenRequest {
         codex_daemon: Default::default(),
+        permissions: Default::default(),
         item: ClosedItem::Tab {
             key: "reopen".into(),
             context,

@@ -125,7 +125,13 @@ impl Runtime {
         self.set_task_agent_launch(
             id,
             prompt,
-            agent_choice::agent_arguments(agent_kind.as_deref(), model.as_deref(), &[]),
+            agent_choice::agent_arguments(
+                agent_kind.as_deref(),
+                model.as_deref(),
+                &agent_kind
+                    .as_deref()
+                    .map_or_else(Default::default, |kind| self.agent_permission(device, kind)),
+            ),
             hide_agent_adapter::LaunchChoice {
                 model,
                 effort: None,
@@ -200,7 +206,7 @@ impl Runtime {
             .iter()
             .map(|link| link.target.clone())
             .collect();
-        let arguments = agent_choice::agent_arguments(agent_kind.as_deref(), None, &folders);
+        let arguments = agent_choice::directory_arguments(agent_kind.as_deref(), &folders);
         self.extend_task_agent_args(id, arguments);
         if let Some(operation) = self.snapshot.task_operation.as_mut() {
             operation.repository_root = Some(synced.home.clone());

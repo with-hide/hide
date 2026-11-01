@@ -637,9 +637,7 @@ mod antigravity {
     const KEY: &str = "trustedWorkspaces";
 
     pub(super) fn settings_path(home: &Path) -> PathBuf {
-        home.join(".gemini")
-            .join("antigravity-cli")
-            .join("settings.json")
+        crate::antigravity::app_data(home).join("settings.json")
     }
 
     fn entries<'a>(
@@ -716,8 +714,13 @@ mod grok {
     const TRUSTED: &str = "trusted";
     const DECIDED_AT: &str = "decided_at";
 
+    /// In Grok's own folder in the install scope
+    /// (`hide_agent_adapter::HomeScope::Install`), beside Hide's hook file.
     pub(super) fn settings_path(home: &Path) -> PathBuf {
-        home.join(".grok").join("trusted_folders.toml")
+        hide_agent_adapter::AgentId::Grok
+            .adapter()
+            .install_home(home)
+            .join("trusted_folders.toml")
     }
 
     /// Grok's lock on its trust file, held until dropped.

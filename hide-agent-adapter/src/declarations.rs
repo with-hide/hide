@@ -6,6 +6,12 @@ const GROK_CONTEXT_ABSENCE: CapabilityAbsence = CapabilityAbsence {
     would_change: "Prove a model-context delivery path on the real agent, implement it and add installed-host and journey fixtures.",
 };
 
+const OPENCODE_AI_ABSENCE: CapabilityAbsence = CapabilityAbsence {
+    reason: "OpenCode's default agent has every tool and its CLI documents no mode that makes a scripted call read-only, so Hide AI lists it and asks it nothing.",
+    evidence: "docs/AI_PROVIDERS.md#the-text-mode-clis",
+    would_change: "Prove a documented read-only mode against the real CLI and write its backend.",
+};
+
 const RETIRED_CONTEXT_ABSENCE: CapabilityAbsence = CapabilityAbsence {
     reason: "Cursor is retired from active support; only historical conversation reading remains.",
     evidence: "docs/agent-hooks.md",
@@ -247,6 +253,11 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             target: "claude",
             folder: &[".claude"],
         },
+        home_variable: None,
+        ai: Support::Supported(AiProvider {
+            id: "claude",
+            requests: Support::Supported(()),
+        }),
         default_on: true,
         prompt_hook: Some(PromptHook {
             dialect: HookDialect::ClaudeCode,
@@ -337,6 +348,11 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             target: "codex",
             folder: &[".codex"],
         },
+        home_variable: Some("CODEX_HOME"),
+        ai: Support::Supported(AiProvider {
+            id: "codex",
+            requests: Support::Supported(()),
+        }),
         default_on: true,
         prompt_hook: Some(PromptHook {
             dialect: HookDialect::Codex,
@@ -426,6 +442,11 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             target: "grok",
             folder: &[".grok"],
         },
+        home_variable: None,
+        ai: Support::Supported(AiProvider {
+            id: "grok",
+            requests: Support::Supported(()),
+        }),
         default_on: false,
         // The prompt hook records submission and recognizes a bell; its
         // output is discarded. Tool and turn-end hooks carry the letters.
@@ -537,6 +558,11 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             target: "opencode",
             folder: &[".config", "opencode"],
         },
+        home_variable: None,
+        ai: Support::Supported(AiProvider {
+            id: "opencode",
+            requests: Support::Unsupported(OPENCODE_AI_ABSENCE),
+        }),
         default_on: false,
         prompt_hook: Some(PromptHook {
             dialect: HookDialect::OpenCode,
@@ -642,6 +668,11 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             target: "pi",
             folder: &[".pi", "agent"],
         },
+        home_variable: None,
+        ai: Support::Supported(AiProvider {
+            id: "pi",
+            requests: Support::Supported(()),
+        }),
         default_on: false,
         prompt_hook: Some(PromptHook {
             dialect: HookDialect::Pi,
@@ -744,6 +775,11 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             target: "omp",
             folder: &[".omp", "agent"],
         },
+        home_variable: None,
+        ai: Support::Supported(AiProvider {
+            id: "omp",
+            requests: Support::Supported(()),
+        }),
         default_on: false,
         prompt_hook: Some(PromptHook {
             dialect: HookDialect::Omp,
@@ -846,6 +882,11 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             target: "antigravity-cli",
             folder: &[".gemini", "config"],
         },
+        home_variable: None,
+        ai: Support::Supported(AiProvider {
+            id: "antigravity",
+            requests: Support::Supported(()),
+        }),
         // On by default like Claude Code and Codex: the operator's amendment
         // to PRD antigravity-first-class B1/D-14 (2026-10-16).
         default_on: true,
@@ -950,6 +991,8 @@ pub(super) const RETIRED_CURSOR: AgentAdapter = AgentAdapter {
         target: "cursor",
         folder: &[".cursor"],
     },
+    home_variable: None,
+    ai: Support::Unsupported(RETIRED_CONTEXT_ABSENCE),
     default_on: false,
     prompt_hook: None,
     spawn_guard: None,

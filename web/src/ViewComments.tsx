@@ -131,7 +131,8 @@ export function CommentCount({ display }: { display: Pick<ViewDisplaySnapshot, "
 export function PaneViews({ paneId, name, actions }: { paneId: string; name: string; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const opened = useShellStore((s) => workspaceViewOf(s.rest)?.feedback?.opened);
-  const rows = useMemo(() => (opened ?? []).filter((row) => row.pane_id === paneId), [opened, paneId]);
+  // What waits to be looked at leads the list, so the 볼 것 the eye names is the first row (B10).
+  const rows = useMemo(() => (opened ?? []).filter((row) => row.pane_id === paneId).sort((a, b) => Number(b.unseen ?? false) - Number(a.unseen ?? false)), [opened, paneId]);
   if (rows.length === 0) return null;
   const label = t("feedback.views", { count: rows.length });
   const unseen = rows.some((row) => row.unseen);

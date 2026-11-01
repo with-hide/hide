@@ -277,7 +277,7 @@ fn spawner() -> Spawner {
                 "state_change_seq": 1, "lineage_session": actor.session,
             }]}))
             .unwrap();
-        guard.observe_delivery(DEVICE, &observed, None, None);
+        guard.observe_delivery_laid(DEVICE, &observed, None, None);
     }
     let mut state = ledger::Ledger::default();
     crate::coordination::apply(
@@ -538,7 +538,7 @@ fn local_spawner() -> Spawner {
                 "state_change_seq": 1, "lineage_session": actor.session,
             }]}))
             .unwrap();
-        guard.observe_delivery(crate::node::TEST_NODE, &payload, None, None);
+        guard.observe_delivery_laid(crate::node::TEST_NODE, &payload, None, None);
         guard.ingest_kit_report(
             crate::node::TEST_NODE,
             &hide_kit::KitReport {

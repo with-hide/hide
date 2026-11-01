@@ -4574,24 +4574,53 @@ mod tests {
     /// adapter. Every first prompt travels in argv, never as PTY input.
     #[test]
     fn a_first_prompt_travels_as_the_agents_own_argument() {
-        // OpenCode takes no model, so its start names none.
-        for (kind, prompt_flag, extra_roots, model) in [
-            ("claude", "--", true, Some("fixture-model")),
-            ("codex", "--", true, Some("fixture-model")),
-            ("grok", "--", false, Some("fixture-model")),
-            ("opencode", "--prompt", false, None),
-            ("pi", "--", false, Some("fixture-model")),
-            ("omp", "--", true, Some("fixture-model")),
+        // OpenCode takes no model, so its start names none; Pi asks no
+        // permission question, so full access adds nothing to it.
+        for (kind, prompt_flag, extra_roots, model, full_access) in [
+            (
+                "claude",
+                "--",
+                true,
+                Some("fixture-model"),
+                &crate::agent_permission::CLAUDE_FULL_ACCESS[..],
+            ),
+            (
+                "codex",
+                "--",
+                true,
+                Some("fixture-model"),
+                &["--dangerously-bypass-approvals-and-sandbox"],
+            ),
+            (
+                "grok",
+                "--",
+                false,
+                Some("fixture-model"),
+                &["--always-approve"],
+            ),
+            ("opencode", "--prompt", false, None, &["--auto"]),
+            ("pi", "--", false, Some("fixture-model"), &[]),
+            (
+                "omp",
+                "--",
+                true,
+                Some("fixture-model"),
+                &["--auto-approve"],
+            ),
         ] {
             let server = server(vec![
                 shell_ready(),
                 json!({"result":{"type":"agent_started","argv":[],"agent":agent("working")}}),
             ]);
-            let args = crate::runtime::agent_choice::agent_arguments(
+            let mut args = crate::runtime::agent_choice::agent_arguments(
                 Some(kind),
                 model,
-                &["/work/my app".into()],
+                &crate::agent_permission::AgentPermission::Full,
             );
+            args.extend(crate::runtime::agent_choice::directory_arguments(
+                Some(kind),
+                &["/work/my app".into()],
+            ));
             let outcome = launch_with_prompt(
                 &*server,
                 None,
@@ -4618,7 +4647,8 @@ mod tests {
                 ["pane.process_info", "agent.start"],
                 "{kind}"
             );
-            let mut expected: Vec<&str> = model.into_iter().flat_map(|m| ["--model", m]).collect();
+            let mut expected: Vec<&str> = full_access.to_vec();
+            expected.extend(model.into_iter().flat_map(|m| ["--model", m]));
             if extra_roots {
                 expected.extend(["--add-dir", "/work/my app"]);
             }

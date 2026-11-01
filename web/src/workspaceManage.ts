@@ -67,6 +67,7 @@ export type MenuItem = {
   id:
     | "new_worktree"
     | "project_settings"
+    | "rename_project"
     | "new_tab_primary"
     | "reveal_external"
     | "open_in_editor"
@@ -155,7 +156,7 @@ export function projectMenu(workspace: Workspace, host: MenuHost, t: TFunction<"
   const editor = folder ? editorItem(workspace, host, t, true) : [];
   const reveal = revealItem(workspace, host, t, editor.length === 0);
   return [
-    ...(!workspace.is_home ? [{ id: "project_settings" as const, label: t("projectSettings.title"), unavailable: null }] : []),
+    ...(!workspace.is_home ? [{ id: "project_settings" as const, label: t("projectSettings.title"), unavailable: null }, { id: "rename_project" as const, label: t("workspace.menu.renameProject"), unavailable: null }] : []),
     { id: "new_worktree", label: t("workspace.menu.newWorktree"), unavailable: workspace.is_git === false ? t("workspace.unavailable.notGit") : null },
     {
       id: "new_tab_primary",
@@ -259,9 +260,12 @@ function primaryProblem(workspace: Workspace, checkout: Checkout, node: string, 
 /**
  * The checkout row's menu (PRD sidebar-context-menus D-03, D-07, D-09): open
  * it or a tab in it, its pull request while GitHub knows one (PRD
- * checkout-pr-glyph-card D-07), then what describes it, then deleting a
- * linked worktree. Choices stored on this machine and the OS file manager
- * are this computer's only, so a device's checkout lists them disabled.
+ * checkout-pr-glyph-card D-07), then what describes it, then the one removal
+ * that fits the row: a linked worktree is deleted, and a folder's or a main
+ * checkout's row removes its project's registration, so a row whose project
+ * row is not drawn (every checkout under the cleanup fold) can still leave.
+ * Choices stored on this machine and the OS file manager are this computer's
+ * only, so a device's checkout lists them disabled.
  */
 export function checkoutMenu(workspace: Workspace, checkout: Checkout, host: MenuHost, t: TFunction<"translation">, purposeProblem: string | null = null): MenuItem[] {
   const pr = shownPullRequest(checkout);
@@ -282,6 +286,7 @@ export function checkoutMenu(workspace: Workspace, checkout: Checkout, host: Men
   // Never disabled: what deleting would lose is the dialog's to say, with
   // the choice beside it, on any device and before Git has been read.
   if (checkout.is_worktree) items.push({ id: "delete_worktree", label: t("workspace.menu.deleteWorktree"), unavailable: null, separated: true, destructive: true });
+  else items.push({ id: "remove_project", label: t("workspace.menu.removeProject"), unavailable: null, separated: true });
   return items;
 }
 
@@ -307,6 +312,26 @@ export function agentMenu(agent: AgentRow, showChord: string, t: TFunction<"tran
     { id: "copy_session_id", icon: "id", label: t("workspace.menu.copySession"), unavailable: agent.session_id ? null : t("workspace.unavailable.noSession") },
     { id: "close_tab", icon: "close", label: t("workspace.menu.closeTab"), unavailable: null, separated: true },
   ];
+}
+
+/**
+ * A linked worktree whose folder is gone and that Git, having answered for its
+ * repository, no longer lists: only Herdr's panes in the folder keep the row,
+ * so deleting it closes them and asks nothing of Git (the core's
+ * `unlisted_missing_worktree`).
+ */
+export function unlistedWorktree(workspace: Workspace, checkout: Checkout): boolean {
+  return checkout.is_worktree && !checkout.exists && !checkout.worktree && workspace.checkouts.some((row) => row.worktree);
+}
+
+/** What removing an unlisted worktree's row does, as the one line its confirmation shows. */
+export function unlistedRemovalFacts(checkout: Checkout, paneCount: number, t: TFunction<"translation">): string[] {
+  const facts: string[] = [t("workspace.facts.unlisted")];
+  if (paneCount > 0) facts.push(t("workspace.facts.panesClose", { count: paneCount }));
+  const agents = stoppedAgents(checkout, t);
+  if (agents.length > 0) facts.push(t("workspace.facts.stopsNamed", { count: agents.length, names: agents.join(", ") }));
+  facts.push(t("workspace.facts.rowWithPanes"));
+  return facts;
 }
 
 /** The agents deleting a checkout stops: every pane an agent runs in, by the name and state the sidebar shows. */

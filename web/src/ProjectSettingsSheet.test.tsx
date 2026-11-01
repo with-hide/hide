@@ -165,3 +165,25 @@ it("turns the background fetch off and on for the project, on until the operator
     expect(saved()?.auto_fetch).toBe(true);
   });
 });
+
+it("names the project from the first page's name field, refuses a name the core would, and shows the folder's while empty", async () => {
+  await withScene("lang=en", async (sheet) => {
+    const field = () => sheet().querySelector<HTMLInputElement>("[data-project-settings-name-input]")!;
+    const type = async (value: string) => act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(field(), value);
+      field().dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const enter = async () => act(async () => field().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    expect(sheet().querySelector("[data-project-settings-page]")?.getAttribute("data-project-settings-page")).toBe("connections");
+    expect(field().placeholder).toBe(useUiStore.getState().projectSettingsTarget!.root.split("/").pop());
+    await type("x".repeat(65));
+    await enter();
+    expect(sheet().textContent).toContain("Use up to 64 characters");
+    expect(saved()?.name).toBeUndefined();
+    await type("  Client work ");
+    await enter();
+    expect(saved()?.name).toBe("Client work");
+    expect(field().value).toBe("Client work");
+    expect(sheet().textContent).toContain("Saved");
+  });
+});

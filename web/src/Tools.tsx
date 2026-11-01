@@ -99,7 +99,7 @@ export function ToolRail({ actions }: { actions: Actions }) {
   return (
     <nav className="flex w-(--size-tool-rail) shrink-0 flex-col items-center gap-xxs border-l border-border bg-sidebar py-xs" aria-label={t("panes.lane.rail")} data-tool-rail="true">
       <DetailSlotButton actions={actions} pressed={up && drawn.view === "detail"} />
-      <Hint label={views > 0 ? `${t("panes.lane.documents")} · ${scope("documents")}` : t("panes.lane.noDocuments")} shortcut={documentsChord || undefined} side="left">
+      <Hint label={views > 0 ? `${t("panes.lane.documents")} · ${scope("documents")} · ${t("panes.workspace.viewsOpen", { count: views })}` : t("panes.lane.noDocuments")} shortcut={documentsChord || undefined} side="left">
         <button
           type="button"
           aria-pressed={documentsShown}

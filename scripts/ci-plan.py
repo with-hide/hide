@@ -12,6 +12,10 @@ CI definition changes on a pull request exercise every lane, including those two
 No lane takes a macOS runner for anything but what only macOS proves
 (`os-contract-macos`, `desktop-e2e`, `omp-contract`'s SDK boundary, `vt`'s
 macOS build of libghostty-vt, and `package`'s packaged app); the rest of the macOS checks are jobs of `nightly.yml`.
+A pull request runs those macOS jobs only when it changes a macOS path
+(MACOS_PATHS, MACOS_CODE); otherwise the plan drops the macOS-only lanes and
+its `macos` output leaves out the macOS legs of the others, and main's push
+run and the nightly run every macOS job.
 Nightly explicitly owns agy and the journey in its direct calls and removes
 those two internal lanes from its verify plan.
 
@@ -45,6 +49,7 @@ LANES = (
     "os-contract",
     "os-contract-macos",
     "vt",
+    "holder-restart",
     "agy-contract",
     "omp-contract",
     "agent-journey",
@@ -63,10 +68,14 @@ LANES = (
 # nothing else: main's push runs leave it out, the nightly calls
 # `package.yml` itself and a release builds its own. `agent-clis` installs
 # every pinned agent CLI on Linux and Windows for a change to
-# the pin table or its installer and nothing else, since no other path
+# the pin table, its installer or the adapter contract whose full-access
+# flags it finds in each CLI's help, and nothing else, since no other path
 # reaches what it installs; the nightly's and a release's journey install
-# every CLI too.
-FULL_LANES = tuple(lane for lane in LANES if lane not in ("package", "agent-clis"))
+# every CLI too. `holder-restart` installs every pinned CLI too and runs each
+# in a pane holder across a node restart on all three systems, for a change to
+# the holder, the node's holder code, the pins or the lane's own scripts; the
+# nightly runs it on its own.
+FULL_LANES = tuple(lane for lane in LANES if lane not in ("package", "agent-clis", "holder-restart"))
 
 # Crates whose change reaches what differs by operating system: the platform
 # layer, the Herdr client's IPC, the install kit and hooks, and the daemon and
@@ -111,6 +120,10 @@ WSL_CRATE_FILES = ("hided/src/node_cli.rs", "hided/tests/it/wsl_device.rs")
 # code those tests check.
 VT_CRATES = {"hide-vt", "hide-holder", "hide-holder-protocol"}
 VT_CRATE_FILES = ("hide-kit/src/holders.rs", "hide-kit/src/panes.rs")
+# The node's holder code and the node the holder restart lane drives
+# (`holder-restart.yml`); with the holder's crates and VT_CRATE_FILES, the
+# crate paths that plan it.
+HOLDER_NODE_FILES = ("hide-node/src/terminal/holder.rs", "hide-node/examples/holder_node/*")
 
 # The desktop suite drives the web shell and the daemon inside the app, so
 # every web shell file plans `desktop-e2e` beside `web-e2e`: a desktop spec
@@ -246,6 +259,97 @@ def macos_lanes(name):
             and not any(fnmatchcase(name, pattern) for pattern in inputs.get("exclude", ()))}
 
 
+# Whether a pull request takes a macOS runner at all (operator decision
+# 2026-11-01). GitHub's hosted macOS runners are shared by every pull request
+# of the organization, and over the 40 green `pr.yml` runs of 2026-10-31 and
+# 11-01 the macOS jobs ended 24 of them, mostly by waiting for a runner; a
+# pull request therefore runs its macOS jobs only when it changes one of
+# these paths, and main's push run and the nightly run all of them. A macOS
+# break another change causes shows up on main and is fixed before the next
+# release (CONTRIBUTING.md, When main's push run fails).
+#
+# The lanes that run on macOS alone, dropped from a pull request's plan
+# without a macOS path, and the lanes with a macOS leg beside their Linux and
+# Windows ones, which run without it (`pr.yml` reads the plan's `macos`).
+MACOS_ONLY_LANES = ("os-contract-macos", "desktop-e2e")
+MACOS_LEG_LANES = ("vt", "holder-restart", "omp-contract", "package")
+# Each entry is code or CI whose macOS form only a macOS job of a pull
+# request proves. A glob's `*` includes descendants.
+MACOS_PATHS = (
+    # The workflows that define the macOS jobs a pull request runs, and
+    # `pr.yml`, which calls them and picks their runners and legs.
+    ".github/workflows/pr.yml", ".github/workflows/desktop-e2e.yml", ".github/workflows/os-contract.yml",
+    ".github/workflows/vt.yml", ".github/workflows/holder-restart.yml", ".github/workflows/omp-contract.yml",
+    ".github/workflows/package.yml",
+    # Steps every macOS job runs: the Rust and vt caches keyed by system and
+    # `compile (macos)`'s quick release build.
+    ".github/actions/*",
+    # This plan, which decides which macOS jobs run.
+    "scripts/ci-plan.py",
+    # The packaged macOS app, which only `package (macos)` builds and starts:
+    # its signing and notarization, the packager and installers that make the
+    # .app, dmg and zip (their Windows and Linux forms are the package lane's
+    # other jobs), and the entitlements, icon and Swift helper only the .app carries.
+    "desktop/scripts/macos-*.mjs", "desktop/scripts/package.mjs", "desktop/scripts/installers.mjs",
+    "desktop/resources/entitlements/*", "desktop/resources/hide.icns", "desktop/native/*",
+    # The desktop host's macOS forms, which only the macOS desktop suite
+    # runs: the title bar under the traffic lights, the app menu's macOS
+    # items, the notification permission read through the Swift helper, VS
+    # Code found by its bundle, and the update installed from the zip.
+    "desktop/src/main/windowChrome.ts", "desktop/src/main/menu.ts", "desktop/src/main/notificationPermission.ts",
+    "desktop/src/main/editor.ts", "desktop/src/main/updater.ts",
+    # hide-vt's Zig build: the macOS target it maps and the macOS Zig and
+    # inputs it downloads, which `vt (macos)` builds.
+    "hide-vt/build.rs", "hide-vt/build-inputs.json",
+    # The Herdr pin names the macOS asset, which only macOS jobs run.
+    "contracts/herdr-bundle.json",
+)
+# Folders whose macOS form sits in shared files: a file there counts when it
+# holds macOS-only code. `hide-platform` is where each system's form is
+# written once: its process, host, local stream, file and launchd login-item
+# forms and their contract tests carry `target_os = "macos"` and reach `os
+# contract (macOS)` and `omp SDK (macos)`; a file with none (the WSL listing,
+# the Windows listeners, path spelling) is proved on Linux and Windows.
+MACOS_CODE = (("hide-platform/*", re.compile(r'target_os\s*=\s*"macos"')),)
+
+
+def macos_path(status, name, root=ROOT):
+    """Why a changed path makes a pull request run its macOS jobs, or None."""
+    if is_unit_test(name):
+        # Registered desktop unit tests run on Linux and Windows only.
+        return None
+    if status not in ("A", "M", "D"):
+        return f"{status} change, unreadable: {name}"
+    if any(fnmatchcase(name, pattern) for pattern in MACOS_PATHS):
+        return f"macOS path: {name}"
+    for pattern, marker in MACOS_CODE:
+        if fnmatchcase(name, pattern):
+            if status == "D":
+                # A deleted file cannot be read for its code.
+                return f"deleted from a folder with macOS code: {name}"
+            if marker.search((root / name).read_text(encoding="utf-8", errors="replace")):
+                return f"macOS code: {name}"
+    return None
+
+
+def with_macos(result, runs, why):
+    """Record whether the macOS jobs run; without them, drop the macOS-only lanes."""
+    result["macos"] = {"runs": runs, "why": why}
+    if not runs:
+        result["lanes"] = [lane for lane in result["lanes"] if lane not in MACOS_ONLY_LANES]
+        for lane in MACOS_ONLY_LANES:
+            result["reasons"].pop(lane, None)
+    return result
+
+
+def pull_request_macos(result, entries, root=ROOT):
+    """A pull request's plan with its macOS jobs only when it changes a macOS path."""
+    why = [reason for reason in (macos_path(status, name, root) for status, name in entries) if reason]
+    if why:
+        return with_macos(result, True, why)
+    return with_macos(result, False, ["no macOS path changed; main's push run and the nightly run the macOS jobs"])
+
+
 # Paths named here and in READERS are the only ones narrower than "every
 # lane"; a path no rule names still plans every lane. Each entry says who reads the path, and
 # `scripts/tests/test_ci_plan.py` checks the claim where it can be checked.
@@ -271,6 +375,8 @@ POLICY_ONLY = (
     "scripts/check-release-assets.mjs", "scripts/release-draft.mjs", "scripts/premerge-check.py",
     "scripts/merge-order.py", "scripts/pull_requests.py",
     "scripts/pen-*.mjs", "scripts/design-review.mjs", "scripts/web-shell-measure/*",
+    # The pane holder's measurement, run by hand on macOS (docs/PERFORMANCE_TESTING.md).
+    "scripts/holder-perf.py",
     # The design contract's generators, their token map and its checks:
     # `design-contract.yml` runs the checks on every pull request, and what
     # the generators write (`web/src/tokens.css`, the Pen files) is committed
@@ -306,6 +412,9 @@ JOURNEY_LANES = {"agent-journey"}
 # The pinned agent CLIs and their installer: a pin moves in the pull request
 # that installs it on every system (contracts/README.md, Agent CLI pins).
 AGENT_CLI_LANES = {"agent-clis"}
+# The holder restart lane reads the pins, their installer, the fake model and
+# the journey helpers that point each CLI at it, and the xterm it draws on.
+HOLDER_RESTART_LANES = {"holder-restart"}
 # Files inside a crate the journey runs as its own tools: Hide's conversation
 # reader, its Project Memory card writer, the composer judge and Codex's
 # app-server stand-in.
@@ -344,18 +453,30 @@ NAMED_LANES = (
     # runs through `verify-cargo.sh`, plans every lane.
     ("scripts/check-vt-build-refusals.sh", {"vt"}),
     ("scripts/measure-build.py", {"vt"}),
-    ("scripts/agent_live_check/*", LIVE_CHECK_LANES),
+    ("scripts/agent_live_check/*", LIVE_CHECK_LANES | HOLDER_RESTART_LANES),
     ("scripts/agent-live-check.py", LIVE_CHECK_LANES),
     ("web/e2e/shims/claude-shim.c", WEB_E2E_LANES | JOURNEY_LANES),
     ("web/e2e/shims/live-check.h", WEB_E2E_LANES | JOURNEY_LANES),
     # The journey's controller builds the desktop e2e's spawn provider.
     ("web/e2e/shims/spawn-provider.c", WEB_E2E_LANES | JOURNEY_LANES),
     # The pin table's reader, which the installer imports too.
-    ("scripts/agent_journey/clis.py", JOURNEY_LANES | AGENT_CLI_LANES | {"agy-contract"}),
+    ("scripts/agent_journey/clis.py", JOURNEY_LANES | AGENT_CLI_LANES | {"agy-contract"} | HOLDER_RESTART_LANES),
+    ("scripts/agent_journey/fake_lane.py", JOURNEY_LANES | HOLDER_RESTART_LANES),
+    ("scripts/agent_journey/fake_model.py", JOURNEY_LANES | HOLDER_RESTART_LANES),
+    ("scripts/agent_journey/fake_private.py", JOURNEY_LANES | HOLDER_RESTART_LANES),
+    ("scripts/agent_journey/ci.py", JOURNEY_LANES | HOLDER_RESTART_LANES),
+    ("scripts/agent_journey/local.py", JOURNEY_LANES | HOLDER_RESTART_LANES),
+    ("scripts/agent_journey/opencode_service.py", JOURNEY_LANES | HOLDER_RESTART_LANES),
+    ("scripts/holder-restart-check.py", HOLDER_RESTART_LANES),
+    ("scripts/holder_owned.py", HOLDER_RESTART_LANES),
+    ("scripts/holder-color-probe.*", HOLDER_RESTART_LANES),
+    ("scripts/holder-restart-spawn.mjs", HOLDER_RESTART_LANES),
     ("scripts/agent_journey/*", JOURNEY_LANES),
     ("scripts/agent-journey-check.py", JOURNEY_LANES),
     ("scripts/agent-journey-lane.py", JOURNEY_LANES),
-    ("contracts/agent-journey.json", JOURNEY_LANES),
+    # The installer finds each declared full-access flag in its CLI's help,
+    # and the holder restart lane reads the agent table.
+    ("contracts/agent-journey.json", JOURNEY_LANES | AGENT_CLI_LANES | HOLDER_RESTART_LANES),
     ("web/e2e/*", WEB_E2E_LANES),
     ("desktop/e2e/*", DESKTOP_E2E_LANES),
     ("web/playwright.config.ts", {"checks", "web-e2e", "windows-e2e"}),
@@ -388,8 +509,8 @@ NAMED_LANES = (
     ("desktop/scripts/release-binaries.mjs", {"checks"}),
     ("desktop/scripts/smoke-windows-installer.mjs", {"checks"}),
     # The agy contract installs the pinned agy with the same script.
-    ("contracts/agent-clis.json", {"agy-contract"} | AGENT_CLI_LANES),
-    ("scripts/install-agent-clis.py", {"agy-contract"} | AGENT_CLI_LANES),
+    ("contracts/agent-clis.json", {"agy-contract"} | AGENT_CLI_LANES | HOLDER_RESTART_LANES),
+    ("scripts/install-agent-clis.py", {"agy-contract"} | AGENT_CLI_LANES | HOLDER_RESTART_LANES),
 )
 
 
@@ -493,7 +614,9 @@ def classify(path, status, crates, root):
         if crate["name"] in AGY_CRATES:
             lanes.add("agy-contract")
         if crate["name"] in VT_CRATES or path.as_posix() in VT_CRATE_FILES:
-            lanes.add("vt")
+            lanes.update({"vt", "holder-restart"})
+        if any(fnmatchcase(path.as_posix(), pattern) for pattern in HOLDER_NODE_FILES):
+            lanes.add("holder-restart")
         if path.as_posix() in JOURNEY_CRATE_FILES or is_journey_product(path):
             lanes.update(JOURNEY_LANES)
         return lanes, f"crate {crate['name']}: {path}", packages
@@ -746,16 +869,19 @@ def plan(event, base, head, root=ROOT, crates=None, draft=False, last_green=None
         # A draft is not a merge candidate: no lane runs, `aggregate` fails
         # `verify` for it, and marking the pull request ready for review
         # starts the run that plans lanes.
-        return {"full": False, "lanes": [], "rust_packages": [], "reasons": {}, "draft": True}
+        return {"full": False, "lanes": [], "rust_packages": [], "reasons": {}, "draft": True,
+                "macos": {"runs": False, "why": ["draft"]}}
     if crates is None:
         try:
             crates = cargo_crates(root)
         except (subprocess.CalledProcessError, ValueError, KeyError) as error:
             # Without the crate graph no Rust change can be narrowed; the full
             # Rust lane runs the whole workspace and needs no package list.
-            return select([], {}, root, f"crate graph unavailable: {error}")
+            reason = f"crate graph unavailable: {error}"
+            return with_macos(select([], {}, root, reason), True, [reason])
     if event != "pull_request":
-        return select([], crates, root, f"{event}: every lane runs on main")
+        return with_macos(select([], crates, root, f"{event}: every lane runs on main"), True,
+                          [f"{event}: every macOS job runs"])
     try:
         # A pull request's checkout is the merge commit GitHub made; anything
         # else would compare against a parent that is not the base.
@@ -766,25 +892,27 @@ def plan(event, base, head, root=ROOT, crates=None, draft=False, last_green=None
             raise ValueError(f"{head} is not a merge commit")
         entries = changed_entries(base, head, root)
     except (subprocess.CalledProcessError, UnicodeDecodeError, ValueError) as error:
-        return select([], crates, root, f"comparison unavailable: {error_detail(error)}")
+        # Paths that cannot be listed cannot be shown to leave macOS alone.
+        reason = f"comparison unavailable: {error_detail(error)}"
+        return with_macos(select([], crates, root, reason), True, [reason])
     result = select(entries, crates, root)
     result["commits"] = {"base": parents[1], "head": parents[2]}
     # `policy` alone is what a reuse plans; nothing to save.
     if last_green is None or result["lanes"] == ["policy"]:
-        return result
+        return pull_request_macos(result, entries, root)
     try:
         verified = last_green()
         why, delta = still_stands(verified, base, head, entries, crates, root)
     except (NotReused, subprocess.CalledProcessError, OSError, ValueError) as error:
         # Every failure keeps the plan the change itself needs.
         result["reuse"] = {"run": None, "why": error_detail(error)}
-        return result
+        return pull_request_macos(result, entries, root)
     # Never call select with an empty delta: an empty comparison deliberately
     # plans every lane. Preserve the original green anchor even after these
     # checks succeed, so a later run compares with the app code actually tested.
     rerun = select(delta, crates, root) if delta else {"lanes": ["policy"], "rust_packages": [], "reasons": {"policy": []}}
     rerun["reasons"]["policy"].append(f"reuses run {verified['run']}: {why}")
-    return {
+    return pull_request_macos({
         "full": False,
         "lanes": rerun["lanes"],
         "rust_packages": rerun["rust_packages"],
@@ -792,7 +920,7 @@ def plan(event, base, head, root=ROOT, crates=None, draft=False, last_green=None
         "commits": result["commits"],
         "reuse": {"run": verified["run"], "why": why},
         "verified": verified,
-    }
+    }, entries, root)
 
 
 def plan_record(result, number, run_id):
@@ -831,7 +959,7 @@ def nightly_aggregate(needs, lane):
     """Require the selected nightly jobs to succeed, and all others to skip."""
     selected = {"agy-contract-all", "agent-trust-contract-all"}
     if lane != "agy":
-        selected.update({"agent-journey", "desktop-e2e"})
+        selected.update({"agent-journey", "holder-restart", "desktop-e2e"})
     if lane in ("", "all", "macos"):
         selected.update({"web-e2e-macos", "remote-mailbox-macos", "perf"})
     if lane == "windows":
@@ -839,7 +967,7 @@ def nightly_aggregate(needs, lane):
     if lane in ("", "all"):
         selected.update({"verify", "package"})
     jobs = {"web-e2e-macos", "web-e2e-windows", "remote-mailbox-macos", "agy-contract-all",
-            "agent-trust-contract-all", "agent-journey", "desktop-e2e", "perf", "verify", "package"}
+            "agent-trust-contract-all", "agent-journey", "holder-restart", "desktop-e2e", "perf", "verify", "package"}
     if lane not in ("", "all", "linux", "macos", "windows", "agy") or set(needs) != jobs:
         raise ValueError("nightly's lane or needs do not match its job contract")
     errors = []
@@ -863,6 +991,10 @@ def summary(result, runs_url=None):
     if result["rust_packages"]:
         lines.append("")
         lines.append("Rust packages: " + ", ".join(result["rust_packages"]))
+    macos = result["macos"]
+    why = "; ".join(macos["why"][:3]) + (f" (+{len(macos['why']) - 3} more)" if len(macos["why"]) > 3 else "")
+    lines.append("")
+    lines.append(f"macOS jobs: {'run' if macos['runs'] else 'skipped'}: {why}.")
     reuse = result.get("reuse")
     if reuse:
         lines.append("")
@@ -914,6 +1046,7 @@ def main():
                 output.write(f"lanes={json.dumps(result['lanes'])}\n")
                 output.write(f"full={str(result['full']).lower()}\n")
                 output.write(f"draft={str(result.get('draft', False)).lower()}\n")
+                output.write(f"macos={str(result['macos']['runs']).lower()}\n")
                 output.write(f"rust-packages={json.dumps(result['rust_packages'])}\n")
         if os.environ.get("GITHUB_STEP_SUMMARY"):
             with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as output:

@@ -657,6 +657,8 @@ pub(in crate::runtime) fn asleep_observation(actor: Actor) -> Observation {
         thread: None,
         host_scope: None,
         turn: Turn::NotReported,
+        projected: None,
+        observed_generation: 0,
         unreadable: None,
     }
 }

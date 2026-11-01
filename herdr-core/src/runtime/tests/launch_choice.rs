@@ -28,12 +28,26 @@ fn choice(model: &str, effort: &str) -> LaunchChoice {
 }
 
 /// Each kind's resume line and the words its launch choice adds after it.
+/// Each CLI's full-access option, as its help names it (read 2026-11-01):
+/// what a restart adds when the machine saved no 권한 for the agent.
+fn full_access(kind: &str) -> &'static [&'static str] {
+    match kind {
+        "codex" => &["--dangerously-bypass-approvals-and-sandbox"],
+        _ => &crate::agent_permission::CLAUDE_FULL_ACCESS,
+    }
+}
+
+/// A resume with full access, then the choice.
 fn resumed(kind: &str, launch: &[&str]) -> serde_json::Value {
+    resumed_with(kind, full_access(kind), launch)
+}
+
+fn resumed_with(kind: &str, access: &[&str], launch: &[&str]) -> serde_json::Value {
     let resume: &[&str] = match kind {
         "codex" => &["resume", SESSION],
         _ => &["--resume", SESSION],
     };
-    json!([resume, launch].concat())
+    json!([resume, access, launch].concat())
 }
 
 fn event(kind: &str, payload: serde_json::Value) -> Vec<u8> {
@@ -334,7 +348,7 @@ fn a_fork_starts_with_the_model_and_effort_its_source_was_started_with() {
             next_start(&starts),
             (
                 "w-order:t2:fork".to_owned(),
-                json!([resume, words].concat())
+                json!([resume.as_slice(), full_access(kind), &words].concat())
             ),
             "{kind}"
         );
@@ -415,6 +429,7 @@ fn a_closed_agent_takes_its_choice_to_the_pane_its_reopen_makes() {
     runtime.reopen_in_flight = Some("closed".to_owned());
     let request = crate::recent_closed::reopen::ReopenRequest {
         codex_daemon: Default::default(),
+        permissions: Default::default(),
         item,
         workspace_exists: true,
         tab_exists: true,
@@ -627,4 +642,108 @@ fn a_launch_record_survives_a_restart() {
         crate::node::test_devices(),
     );
     assert_eq!(restarted.snapshot().ui_state.pane_launches, saved);
+}
+
+fn set_permission(runtime: &mut Runtime, payload: serde_json::Value) -> bool {
+    runtime.dispatch_json(&event("agent_permission_set", payload))
+}
+
+/// A restart reads the machine's 권한 as it is when the restart is made, not
+/// as it was at the start: 매번 물어보기 adds nothing, and typed options go
+/// after the resume as typed, ahead of the choice.
+#[test]
+fn a_wake_follows_the_permission_saved_now_and_adds_nothing_for_ask() {
+    let words = ["--model", "sonnet", "--effort", "high"];
+    for (permission, access) in [
+        (json!({"mode": "ask"}), vec![]),
+        (
+            json!({"mode": "custom", "text": "--permission-mode acceptEdits"}),
+            vec!["--permission-mode", "acceptEdits"],
+        ),
+        (
+            json!({"mode": "full"}),
+            crate::agent_permission::CLAUDE_FULL_ACCESS.to_vec(),
+        ),
+    ] {
+        let (mut runtime, folder) = started("claude", Some(&choice("sonnet", "high")));
+        let mut payload = json!({"device_id": crate::node::TEST_NODE, "agent": "claude-code"});
+        payload
+            .as_object_mut()
+            .unwrap()
+            .extend(permission.as_object().unwrap().clone());
+        set_permission(&mut runtime, payload);
+        sleep(&mut runtime, &folder, "claude");
+        let (herdr, starts) = starting_herdr("launch-permission-wake");
+        wake(&mut runtime, &herdr);
+        assert_eq!(
+            next_start(&starts),
+            (AGENT.to_owned(), resumed_with("claude", &access, &words)),
+            "{permission}"
+        );
+    }
+}
+
+/// The setting is one choice per agent per machine, saved only where it
+/// differs from full access, and refused for an agent Hide does not start,
+/// a machine that is not registered, or typed text that is not only options.
+#[test]
+fn a_permission_is_kept_per_agent_and_machine_and_refused_when_it_names_nothing_hide_starts() {
+    let (mut runtime, _folder) = started("claude", None);
+    let node = crate::node::TEST_NODE;
+    assert!(set_permission(
+        &mut runtime,
+        json!({"device_id": node, "agent": "codex", "mode": "custom", "text": "--full-auto  -c 'a=b c'"})
+    ));
+    assert_eq!(
+        runtime.agent_permission(node, "codex"),
+        crate::agent_permission::AgentPermission::Custom {
+            text: "--full-auto  -c 'a=b c'".into(),
+            options: vec!["--full-auto".into(), "-c".into(), "a=b c".into()],
+        }
+    );
+    // The same choice again changes nothing.
+    assert!(!set_permission(
+        &mut runtime,
+        json!({"device_id": node, "agent": "codex", "mode": "custom", "text": "--full-auto  -c 'a=b c'"})
+    ));
+    // Back to the default: nothing is saved for it.
+    assert!(set_permission(
+        &mut runtime,
+        json!({"device_id": node, "agent": "codex", "mode": "full"})
+    ));
+    assert!(runtime.snapshot().ui_state.agent_permissions.is_empty());
+    for (payload, kind) in [
+        (
+            json!({"device_id": node, "agent": "terminal", "mode": "ask"}),
+            "agent_permission.unknown_agent",
+        ),
+        (
+            json!({"device_id": "nowhere", "agent": "codex", "mode": "ask"}),
+            "agent_permission.unknown_machine",
+        ),
+        (
+            json!({"device_id": node, "agent": "codex", "mode": "custom", "text": "--a; rm -rf ~"}),
+            "agent_permission.invalid_options",
+        ),
+        (
+            json!({"device_id": node, "agent": "codex", "mode": "ask", "text": "--a"}),
+            "agent_permission.invalid",
+        ),
+    ] {
+        assert!(set_permission(&mut runtime, payload), "{kind}");
+        assert_eq!(
+            runtime
+                .snapshot()
+                .status
+                .last_error
+                .as_ref()
+                .map(|error| error.kind.as_str()),
+            Some(kind)
+        );
+    }
+    assert!(runtime.snapshot().ui_state.agent_permissions.is_empty());
+    assert_eq!(
+        runtime.agent_permission(node, "codex"),
+        crate::agent_permission::AgentPermission::Full
+    );
 }

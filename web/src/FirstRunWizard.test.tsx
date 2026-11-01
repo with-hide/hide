@@ -261,7 +261,8 @@ it("lists under What changes where Hide writes for each agent left on, and the h
   await act(async () => { (document.querySelector("[data-first-run-what-changes]") as HTMLElement).click(); });
   const rows = () => [...document.querySelectorAll("[data-first-run-change]")].map((row) => row.getAttribute("data-first-run-change"));
   expect(rows()).toEqual(["/Users/me/.claude-code/skills/hide", "/Users/me/.codex/skills/hide", "cli"]);
-  expect(document.querySelector('[data-first-run-change="/Users/me/.codex/skills/hide"]')?.textContent).toContain("Codex · Skill");
+  // The path and the agents it is for; no piece is named.
+  expect(document.querySelector('[data-first-run-change="/Users/me/.codex/skills/hide"]')?.textContent).toBe("/Users/me/.codex/skills/hideCodex");
   await act(async () => { tile("codex", "on")!.click(); });
   expect(rows()).toEqual(["/Users/me/.claude-code/skills/hide", "cli"]);
   await unmount();

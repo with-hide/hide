@@ -1162,9 +1162,7 @@ impl Runtime {
                             .router_config()
                             .priority
                             .iter()
-                            .filter_map(|provider| {
-                                hide_agent_adapter::adapter(provider.descriptor().agent)
-                            })
+                            .filter_map(|provider| hide_agent_adapter::adapter(provider.agent()))
                             .map(|row| row.herdr.name.to_owned())
                             .collect()
                     })

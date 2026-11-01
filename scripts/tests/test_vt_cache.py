@@ -23,6 +23,7 @@ USERS = {
     ('pr.yml', 'rust'): False,
     ('pr.yml', 'windows-check'): False,
     ('release.yml', 'test'): False,
+    ('holder-restart.yml', 'restart'): False,
 }
 
 

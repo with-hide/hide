@@ -13,6 +13,8 @@ import { AgentsTab } from "./AgentsTab";
 // The shell's modules reach xterm, which asks jsdom for a canvas it lacks.
 vi.hoisted(() => {
   HTMLCanvasElement.prototype.getContext = () => null;
+  // An open select scrolls its chosen option into view, which jsdom does not draw.
+  Element.prototype.scrollIntoView = () => {};
 });
 
 const piece = (state: KitPiece["state"], cause: string | null = null): KitPiece => ({ state, why: cause ? { cause } : null, location: null });
@@ -88,6 +90,17 @@ async function mount(next: ReturnType<typeof state>) {
 
 const sent = (events: Parameters<DispatchFn>[0][], kind: string) => events.filter((event) => event.kind === kind);
 
+/** The text a sighted operator reads: what is not hidden from view. */
+const visible = (element: Element): string =>
+  [...element.childNodes].map((node) => (node.nodeType === Node.TEXT_NODE ? node.textContent ?? "" : node instanceof HTMLElement && node.hidden ? "" : node instanceof Element ? visible(node) : "")).join("");
+
+/** Opens a select from the keyboard, as Radix takes it in jsdom, and reads each option as it is drawn. */
+async function openMenu(trigger: HTMLElement): Promise<string[]> {
+  trigger.focus();
+  await act(async () => { trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+  return [...document.querySelectorAll<HTMLElement>("[role=option]")].map((option) => option.textContent ?? "");
+}
+
 it("lists the installed agents in the supported order with a switch each, and folds the rest under Not installed with an install link (B8, B9, B12)", async () => {
   const { q, all, text, unmount } = await mount(state([device("local")]));
   expect(all("[data-agent-row]").map((row) => row.getAttribute("data-agent-row"))).toEqual([
@@ -122,7 +135,7 @@ it("lists the installed agents in the supported order with a switch each, and fo
   await older.unmount();
 });
 
-it("shows a status only for an agent that is on: Ready, how many sessions run, and nothing for Partial agents (B16, B19)", async () => {
+it("shows only how many sessions run for an agent that is on, nothing for a healthy one with none, and nothing for Partial agents (B16, B19)", async () => {
   const set = [
     agent("claude-code", { sessions: 2 }),
     agent("codex", { sessions: 0 }),
@@ -130,9 +143,11 @@ it("shows a status only for an agent that is on: Ready, how many sessions run, a
   ];
   const { q, text, unmount } = await mount(state([device("local", { kit: kit(set) })]));
   expect(q('[data-agent-status="local:claude-code:sessions"]')?.textContent).toContain("2 sessions");
-  expect(q('[data-agent-status="local:codex:ready"]')?.textContent).toContain("Ready");
+  // A healthy agent with no session says nothing.
+  expect(q('[data-agent-row="local:codex:on"] [data-agent-status]')).toBeNull();
+  expect(text()).not.toContain("Ready");
   // A count is all a row says about sessions: no list to open and no pane to go to.
-  expect(q('[data-agent-row="local:claude-code:on"] button:not([role="switch"])')).toBeNull();
+  expect(q('[data-agent-row="local:claude-code:on"] button:not([role="switch"]):not([data-agent-permission-select])')).toBeNull();
   expect(text()).not.toContain("connected");
   // Partial: the chip only, on or off, never a count.
   expect(q('[data-agent-partial="grok"]')).not.toBeNull();
@@ -142,13 +157,25 @@ it("shows a status only for an agent that is on: Ready, how many sessions run, a
   await unmount();
 });
 
-it("shows a failed or removed part on its own row with Reinstall, and nowhere else (B13, B20)", async () => {
-  const set = [agent("claude-code", { hook: piece("removed"), herdr: piece("failed", "not_changed") }), agent("codex")];
+it("shows any broken piece as one plain line on its own row with Reinstall, naming the piece only in its hover and description (B13, B20)", async () => {
+  const set = [
+    agent("claude-code", { hook: { state: "removed", why: null, location: "/Users/me/.claude/settings.json" }, herdr: piece("failed", "not_changed") }),
+    agent("codex"),
+    agent("opencode", { skill: piece("outdated") }),
+  ];
   const { q, all, click, events, unmount } = await mount(state([device("local", { kit: kit(set) })]));
   const line = q('[data-agent-problem="local:claude-code"]')!;
-  expect(line.textContent).toContain("Herdr integration: Failed: Hide could not install or change it.");
-  expect(line.textContent).toContain("Hook: Removed");
-  expect(all("[data-agent-problem]")).toHaveLength(1);
+  expect(visible(line)).toBe("✕Disconnected from HideReinstall");
+  const detail = line.getAttribute("title");
+  expect(detail).toContain("Herdr integration: Failed: Hide could not install or change it.");
+  expect(detail).toContain("Hook: Removed · /Users/me/.claude/settings.json");
+  const button = q('[data-hook-reinstall="local:claude-code"]')!;
+  expect(document.getElementById(button.getAttribute("aria-describedby")!)?.textContent).toBe(detail);
+  // A skill or a plugin breaking reads the same.
+  expect(visible(q('[data-agent-problem="local:opencode"]')!)).toBe("!Disconnected from HideReinstall");
+  expect(all("[data-agent-problem]")).toHaveLength(2);
+  // No piece is named anywhere on the page.
+  expect(visible(q("[data-agents-machine-list]")!)).not.toMatch(/Hook|Plugin|Extension|Skill:|Herdr integration/);
   await click(q('[data-hook-reinstall="local:claude-code"]'));
   expect(sent(events, "kit_reinstall")[0]?.payload).toEqual({ device_id: "local", components: [], agents: ["claude-code"] });
   await unmount();
@@ -276,7 +303,7 @@ it("draws no Docs link from a URL a machine reports, whatever its scheme (W7)", 
   await unmount();
 });
 
-it("lists an agent that is on only by default, with no program, as not installed and never Ready (B9)", async () => {
+it("lists an agent that is on only by default, with no program, as not installed (B9)", async () => {
   const set = [agent("claude-code", { availability: "not_installed", enabled: true, chosen: false, sessions: 0 }), agent("codex", { sessions: 0 }), ...SEVEN.slice(2)];
   const { all, text, q, unmount } = await mount(state([device("local", { kit: kit(set) })]));
   expect(all("[data-agent-row]").map((row) => row.getAttribute("data-agent-row"))).toContain("claude-code:not-installed");
@@ -287,7 +314,7 @@ it("lists an agent that is on only by default, with no program, as not installed
   const kept = [agent("claude-code", { availability: "not_installed", enabled: true, chosen: true, sessions: 0 }), ...SEVEN.slice(1)];
   const again = await mount(state([device("local", { kit: kit(kept) })]));
   expect(again.q('[data-agent-row="local:claude-code:on"]')).not.toBeNull();
-  expect(again.q('[data-agent-status="local:claude-code:ready"]')).toBeNull();
+  expect(again.q('[data-agent-row="local:claude-code:on"] [data-agent-status]')).toBeNull();
   await again.unmount();
 });
 
@@ -346,5 +373,69 @@ it("lists the three skills Hide installs, each with its mark, what it is for and
   expect(q('[data-agents-skill="hide-plan"]')?.textContent).toBe("hide-planPut up a plan, get it reviewed and keep it current · hide plan help");
   expect(q('[data-agents-skill="hide-conductor"] svg')?.getAttribute("class")).toContain("lucide-waypoints");
   expect(q('[data-agents-skill="hide-plan"] svg')?.getAttribute("class")).toContain("lucide-list-checks");
+  await unmount();
+});
+
+it("puts each installed agent's permission in its row's 권한 column, full access by default, with the command each choice runs in the open menu", async () => {
+  const set = [agent("claude-code"), agent("codex"), agent("opencode"), agent("pi")];
+  const { q, all, text, unmount } = await mount(state([device("local", { kit: kit(set) })]));
+  // One line per agent: no command on the row until the menu opens.
+  expect(all("[data-agent-permission-command]")).toHaveLength(0);
+  expect(q('[data-agent-row="local:claude-code:on"]')?.querySelector("[data-agent-permission-select]")?.textContent).toBe("Allow everything");
+  // The flag each CLI's --help names (read 2026-11-01), after its program, under its choice.
+  const menu = await openMenu(q('[data-agent-permission-select="local:claude-code"]')!);
+  expect(menu).toEqual(["Allow everythingclaude --dangerously-skip-permissions", "Ask every timeclaude", "Custom…"]);
+  await act(async () => { document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+  expect((await openMenu(q('[data-agent-permission-select="local:codex"]')!))[0]).toBe("Allow everythingcodex --dangerously-bypass-approvals-and-sandbox");
+  await act(async () => { document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+  expect((await openMenu(q('[data-agent-permission-select="local:opencode"]')!))[0]).toBe("Allow everythingopencode --auto");
+  await act(async () => { document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+  // Pi asks nothing, so its column says so and offers no choice.
+  expect(q('[data-agent-permission="local:pi:not-asked"]')?.textContent).toBe("Never asks");
+  expect(q('[data-agent-permission-select="local:pi"]')).toBeNull();
+  // The column heads, and the box under the card that says what the choice covers.
+  expect(q("[data-agents-columns]")?.textContent).toBe("PermissionsOn");
+  expect(q("[data-agents-permission-scope]")?.textContent).toBe(
+    "Permissions✓Applies to every agent Hide starts, including agents another agent starts✕claude or codex typed into a terminal follows the CLI's own settings",
+  );
+  expect(text()).not.toContain("⌘N");
+  await unmount();
+});
+
+it("reads each machine's own permission, adds nothing for Ask every time, and saves typed options once on Enter", async () => {
+  const next = state([device("local", { kit: kit([agent("claude-code"), agent("codex")]) }), device("studio", { kit: kit([agent("claude-code")]) })]);
+  next.rest.ui_state = {
+    agent_permissions: { "claude-code": { mode: "ask" }, codex: { mode: "custom", text: "--full-auto", options: ["--full-auto"] } },
+    device_agent_permissions: {},
+  } as never;
+  const { q, events, unmount } = await mount(next);
+  expect(q('[data-agent-permission="local:claude-code:ask"]')?.textContent).toBe("Ask every time");
+  expect((await openMenu(q('[data-agent-permission-select="local:claude-code"]')!))[1]).toBe("Ask every timeclaude");
+  await act(async () => { document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+  const input = q('[data-agent-permission-input="local:codex"]') as HTMLInputElement;
+  expect(input.value).toBe("--full-auto");
+  expect(input.parentElement?.textContent).toContain("codex");
+  const type = async (value: string) => {
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  };
+  await type("--full-auto --search");
+  await act(async () => { input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+  await act(async () => { input.dispatchEvent(new FocusEvent("focusout", { bubbles: true })); });
+  expect(sent(events, "agent_permission_set").map((event) => event.payload)).toEqual([
+    { device_id: "local", agent: "codex", mode: "custom", text: "--full-auto --search" },
+  ]);
+  await unmount();
+});
+
+it("says why a hook waits in plain words, naming the piece only in its hover (PRD opencode-plugin B14)", async () => {
+  const waiting = { state: "absent" as const, why: { cause: "not_created_yet", value: "~/.config/opencode" }, location: null };
+  const { q, unmount } = await mount(state([device("local", { kit: kit([agent("opencode", { hook: waiting })]) })]));
+  const line = q('[data-agent-hook-wait="local:opencode"]')!;
+  expect(line.textContent).toBe("Hide puts it in once the agent makes this folder: ~/.config/opencode");
+  expect(line.parentElement?.getAttribute("title")).toContain("Plugin");
+  expect(q("[data-agent-problem]")).toBeNull();
   await unmount();
 });

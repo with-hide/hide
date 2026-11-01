@@ -128,7 +128,7 @@ fn visit(runtime: &mut Runtime, tab: &str) {
 
 fn show(runtime: &mut Runtime, session: SessionSnapshotPayload) {
     runtime.ingest_session(Ok(session.clone()));
-    runtime.observe_delivery(crate::node::TEST_NODE, &session, Some("scope"), None);
+    runtime.observe_delivery_laid(crate::node::TEST_NODE, &session, Some("scope"), None);
 }
 
 /// Registrations `agent-1` (the lead) and one per pane of `panes`, each

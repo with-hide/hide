@@ -14,10 +14,11 @@
 use crate::plugin::{Plugin, PluginFile};
 
 /// OpenCode's global configuration folder as Herdr's integration finds it,
-/// `~/.config/opencode` on every system, so Hide's plugin sits beside Herdr's.
+/// `~/.config/opencode` on every system, so Hide's plugin sits beside Herdr's:
+/// the folder OpenCode's declaration names (`hide_agent_adapter`).
 /// OpenCode itself reads `$XDG_CONFIG_HOME/opencode` when that is set; such a
 /// machine loads neither plugin from here (known limitation, shared with Herdr).
-const CONFIG: &[&str] = &[".config", "opencode"];
+const CONFIG: hide_agent_adapter::AgentId = hide_agent_adapter::AgentId::OpenCode;
 
 /// The folder OpenCode 2 loads as one plugin, its halves by their names.
 const FOLDER: &str = "hide-opencode";

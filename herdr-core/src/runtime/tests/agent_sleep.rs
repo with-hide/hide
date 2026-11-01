@@ -674,9 +674,20 @@ fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, op
                 },
                 "11111111-2222-3333-4444-555555555555",
             ];
+            // No saved 권한: each CLI's full-access option (its help,
+            // read 2026-11-01) goes before the choice.
+            let access: &[&str] = match kind {
+                "claude" => &crate::agent_permission::CLAUDE_FULL_ACCESS,
+                "codex" => &["--dangerously-bypass-approvals-and-sandbox"],
+                "opencode" => &["--auto"],
+                "omp" => &["--auto-approve"],
+                "grok" => &["--always-approve"],
+                "agy" => &["--dangerously-skip-permissions"],
+                _ => &[],
+            };
             assert_eq!(
                 params["args"],
-                serde_json::json!([resume.as_slice(), launch_words].concat())
+                serde_json::json!([resume.as_slice(), access, launch_words].concat())
             );
             effects.send("start").unwrap();
             serde_json::json!({"type":"agent_started","argv":[],"agent":{
@@ -2123,7 +2134,7 @@ impl SleepingChild {
                 delivery_agent("reviewer", SLEEPER, "claude", CHILD_NATIVE),
             ])
         };
-        runtime.observe_delivery(&node, &awake(), Some("scope"), None);
+        runtime.observe_delivery_laid(&node, &awake(), Some("scope"), None);
         let mut ledger = crate::delivery::ledger::Ledger::default();
         for (id, pane, parent) in [
             ("agent-1", "lead", None),
@@ -2173,7 +2184,7 @@ impl SleepingChild {
         ledger.validate().unwrap();
         runtime.delivery_ledger = Ok(Arc::new(ledger));
         // Herdr's panes are read once the ledger can judge a pane that left.
-        runtime.observe_delivery(&node, &awake(), Some("scope"), None);
+        runtime.observe_delivery_laid(&node, &awake(), Some("scope"), None);
 
         // The sleep saves the registration it closes the pane under.
         assert!(runtime.begin_dormant_sleep(SLEEPER, 1));
@@ -2242,7 +2253,7 @@ impl SleepingChild {
 
     /// Herdr no longer lists the closed pane.
     fn pane_closed(&self) {
-        self.shared.lock().unwrap().observe_delivery(
+        self.shared.lock().unwrap().observe_delivery_laid(
             &self.node,
             &delivery_panes(vec![delivery_agent("lead", "lead", "codex", "lead-native")]),
             Some("scope"),
@@ -2265,7 +2276,7 @@ impl SleepingChild {
         record.phase = crate::agent_sleep::DormantPhase::Starting;
         record.wake_pane_id = Some(WOKEN.into());
         record.wake_tab_id = Some("w-order:t3".into());
-        runtime.observe_delivery(
+        runtime.observe_delivery_laid(
             &self.node,
             &delivery_panes(vec![
                 delivery_agent("lead", "lead", "codex", "lead-native"),

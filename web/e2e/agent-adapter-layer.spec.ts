@@ -33,10 +33,10 @@ test("Basic chips expose three accessible groups in all four languages and retur
     await expect(list.locator("[data-agent-partial]")).toHaveCount(1);
     for (const id of ["claude-code", "codex", "opencode", "pi", "omp", "antigravity"]) await expect(list.locator(`[data-agent-partial="${id}"]`)).toHaveCount(0);
     for (const [language, word, headings] of [
-      ["en", "Basic", ["Herdr basics", "Session reading", "Multi-agent collaboration"]],
-      ["ko", "기본", ["Herdr 기본 기능", "세션 읽기", "여러 에이전트 협업"]],
-      ["zh-CN", "基础", ["Herdr 基础功能", "会话读取", "多智能体协作"]],
-      ["ja", "基本", ["Herdr の基本機能", "セッションの読み取り", "複数エージェントの連携"]],
+      ["en", "Some features", ["Herdr basics", "Session reading", "Multi-agent collaboration"]],
+      ["ko", "일부 기능", ["Herdr 기본 기능", "세션 읽기", "여러 에이전트 협업"]],
+      ["zh-CN", "部分功能", ["Herdr 基础功能", "会话读取", "多智能体协作"]],
+      ["ja", "一部の機能", ["Herdr の基本機能", "セッションの読み取り", "複数エージェントの連携"]],
     ] as const) {
       for (const theme of ["light", "dark"] as const) {
         await page.locator('[data-settings-tab="general"]').click();

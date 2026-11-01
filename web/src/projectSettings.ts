@@ -9,10 +9,25 @@ export type Guardrails = {
 };
 export type ProjectSettings = {
   version: number; device_id: string; root: string;
+  /** The name the operator gave the project; absent is its folder's. */
+  name?: string;
   repository?: RepositoryConnection; issue_source?: "auto" | "github" | "local";
   new_work?: "checkout" | "worktree"; base_branch?: BaseBranchChoice; auto_fetch?: boolean; guardrails?: Guardrails;
 };
-export type ProjectSettingsPatch = Partial<Pick<ProjectSettings, "repository" | "issue_source" | "new_work" | "base_branch" | "auto_fetch" | "guardrails">>;
+/** `name: ""` gives the project its folder's name back. */
+export type ProjectSettingsPatch = Partial<Pick<ProjectSettings, "name" | "repository" | "issue_source" | "new_work" | "base_branch" | "auto_fetch" | "guardrails">>;
+
+/** The longest name the core keeps, in characters (`project_settings::NAME_LENGTH`). */
+export const PROJECT_NAME_LENGTH = 64;
+
+/** The name the core would store for what was typed: trimmed, "" for the folder's own; null when the core refuses it. */
+export function projectNameDraft(typed: string): string | null {
+  const name = typed.trim();
+  return /\p{Cc}/u.test(name) || [...name].length > PROJECT_NAME_LENGTH ? null : name;
+}
+
+/** The folder a project root names, the name an unnamed project shows; a wire path is spelled with `/` on every system. */
+export const folderName = (root: string): string => root.split("/").filter(Boolean).pop() ?? root;
 
 /** The newest record this build reads and writes; version 1 is the same record without guardrails (PRD agent-guardrails D-23). */
 export const PROJECT_SETTINGS_VERSION = 2;
@@ -49,7 +64,7 @@ function guardPathShaped(path: string): boolean {
 export function refusedForGood(code: string | null | undefined): boolean {
   return code === "project_settings_paths_limit" || code === "project_settings_path_too_long" || code === "project_settings_path_duplicate"
     || code === "project_settings_path_invalid" || code === "project_settings_not_git" || code === "project_settings_base_unknown"
-    || code === "project_settings_invalid_repository" || code === "project_settings_newer_version";
+    || code === "project_settings_invalid_repository" || code === "project_settings_newer_version" || code === "project_settings_name_invalid";
 }
 
 /** The branch the base protection guards: the chosen one, or the remote's default for Auto; null when the project names none (B17). */

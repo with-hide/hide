@@ -182,8 +182,8 @@ impl Fixture {
             "lineage_session": observer.session,
         }]}))
         .unwrap();
-        guard.observe_delivery(crate::node::TEST_NODE, &local, Some("local-scope"), None);
-        guard.observe_delivery(DEVICE, &replica.project(), None, None);
+        guard.observe_delivery_laid(crate::node::TEST_NODE, &local, Some("local-scope"), None);
+        guard.observe_delivery_laid(DEVICE, &replica.project(), None, None);
         let actors = [observer.clone(), remote_actor(MANUAL), remote_actor(CHILD)];
         let mut ledger = ledger::Ledger::default();
         for (index, actor) in actors.into_iter().enumerate() {
@@ -437,7 +437,7 @@ fn retired_same_device_snapshot_preserves_an_overflowed_current_observation() {
     test.runtime
         .lock()
         .unwrap()
-        .observe_delivery(DEVICE, &payload, None, None);
+        .observe_delivery_laid(DEVICE, &payload, None, None);
     let before = coordinator_memory(&test.runtime.lock().unwrap());
     assert_eq!(before["overflow"], json!([DEVICE]));
     assert!(

@@ -125,8 +125,10 @@ export function checkFailedReason(code: string): "agents.checkReason.unreachable
   return "agents.checkReason.failed";
 }
 
-/** The pieces of one agent that a Reinstall would repair, the failed ones first (B13, B20). */
-/** An agent's piece by name; the hook piece is named by what the contract says it is: OpenCode's is a plugin, Pi's and omp's an extension. */
+/**
+ * An agent's piece by name; the hook piece is named by what the contract says it is: OpenCode's is a plugin, Pi's
+ * and omp's an extension. The page shows no piece's name: it names one only in a problem's hover detail.
+ */
 export type AgentPart = "skill" | "hook" | "plugin" | "extension" | "herdr";
 
 export type AgentProblem = { part: AgentPart; piece: KitPiece };
@@ -136,6 +138,7 @@ export function hookPart(agent: KitAgent): "hook" | "plugin" | "extension" {
   return kind === "plugin" || kind === "extension" ? kind : "hook";
 }
 
+/** The pieces of one agent that a Reinstall would repair, the failed ones first (B13, B20). */
 export function agentProblems(agent: KitAgent): AgentProblem[] {
   if (!agent.enabled) return [];
   const pieces: AgentProblem[] = [{ part: "skill", piece: agent.skill }];
@@ -182,14 +185,45 @@ export function agentLeftover(agent: KitAgent): KitPiece | null {
 
 /**
  * The status an agent that is on wears (B16, B19): how many of its sessions
- * run now, or Ready when it is set up and has none. A Basic agent, one that
- * is off and one whose sessions were not read yet wear none.
+ * run now, and nothing when it has none, since a healthy agent says nothing. A
+ * Basic agent, one that is off and one whose sessions were not read yet wear none.
  */
-export type AgentStatus = { kind: "none" } | { kind: "ready" } | { kind: "sessions"; count: number };
+export type AgentStatus = { kind: "none" } | { kind: "sessions"; count: number };
 
 export function agentStatus(agent: KitAgent): AgentStatus {
-  // An agent whose program is gone has no sessions and is never Ready (B9).
-  if (!agent.enabled || agent.partial || agent.sessions == null || agent.availability !== "available") return { kind: "none" };
-  if (agent.sessions === 0) return { kind: "ready" };
+  // An agent whose program is gone has no sessions (B9).
+  if (!agent.enabled || agent.partial || !agent.sessions || agent.availability !== "available") return { kind: "none" };
   return { kind: "sessions", count: agent.sessions };
+}
+
+/**
+ * What Settings › Agents › 권한 offers for an agent: the program and the
+ * options a full-access start adds, from the adapter's declaration; `asks`
+ * false for an agent with no permission question (Pi), and null for one Hide
+ * does not start.
+ */
+export type PermissionOffer = { program: string; fullAccess: string[]; asks: boolean };
+
+export function permissionOffer(agentId: string): PermissionOffer | null {
+  const adapter = agentAdapter(agentId);
+  if (!adapter?.full_access) return null;
+  // The first option is the one that turns the questions off; the rest only keep the CLI from stopping
+  // to confirm it (Claude's warning setting), so the row names the first and leaves the rest to the start.
+  const [shown] = adapter.full_access;
+  return { program: adapter.program, fullAccess: shown ? [...shown] : [], asks: adapter.full_access.length > 0 };
+}
+
+/** One argument as a shell reads it back: bare when it is plain, single-quoted otherwise. */
+function shellWord(word: string): string {
+  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(word) ? word : `'${word.replaceAll("'", `'\\''`)}'`;
+}
+
+/**
+ * The options a start adds after the program for this choice, as the row shows them: for full access
+ * the option that turns the questions off, quoted as a shell would need it.
+ */
+export function permissionOptions(offer: PermissionOffer, permission: { mode: string; text?: string }): string {
+  if (permission.mode === "full") return offer.fullAccess.map(shellWord).join(" ");
+  if (permission.mode === "custom") return permission.text ?? "";
+  return "";
 }

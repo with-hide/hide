@@ -42,7 +42,7 @@ const PENDING_AGE_MS = 10 * 60 * 1000;
 const POLICY = path.join(homedir(), ".hide", "agent-hooks", "guardrails.json");
 // A call naming the Hide global instruction always asks the helper, which refuses its write whatever the guardrails
 // say (PRD memory-self-improve D-07); the name is matched as the helper's guard matches it.
-const GLOBAL_INSTRUCTION = "global-instruction.md";
+const GLOBAL_INSTRUCTION = __HIDE_GLOBAL_INSTRUCTION__;
 const FILE_TOOLS = new Set(["read", "edit", "write", "apply_patch", "multiedit"]);
 // The arguments that name a file; the rest of a write (its content) is not sent.
 const PATH_ARGS = ["filePath", "path", "file_path"];
@@ -50,12 +50,7 @@ const policy = { mtimeMs: -1, size: -1, on: null };
 
 // The state folders the helper's guard knows: the one Hide installed this file for, `HIDE_STATE_DIR`,
 // `$XDG_STATE_HOME/hide` and `~/.hide/state`.
-const STATE_DIRS = [
-  ROUTE[0] === "--state-dir-b64" ? Buffer.from(ROUTE[1], "base64url").toString() : "",
-  process.env.HIDE_STATE_DIR ?? "",
-  process.env.XDG_STATE_HOME ? path.join(process.env.XDG_STATE_HOME, "hide") : "",
-  path.join(homedir(), ".hide", "state"),
-].filter(Boolean);
+const STATE_DIRS = __HIDE_STATE_DIRS__;
 
 /** Whether a shell command can hand a result to the system opener: a word of an opener and a target Hide's View
  * shows, the helper's own byte test (`opener_guard::may_hold_opening`), whose reading of the call decides. */
@@ -65,23 +60,7 @@ function mayOpen(command) {
   return OPENER_WORD.test(command) && VIEWABLE.test(command);
 }
 
-/** Whether `text` can name the Hide global instruction, or the file a link at it points to, which is the one every
- * session is given; names are matched as the helper's guard matches them. */
-function namesGlobal(text) {
-  if (typeof text !== "string") return false;
-  const lower = text.toLowerCase();
-  if (lower.includes(GLOBAL_INSTRUCTION)) return true;
-  return STATE_DIRS.some((dir) => {
-    let target;
-    try {
-      target = readlinkSync(path.join(dir, GLOBAL_INSTRUCTION));
-    } catch {
-      return false;
-    }
-    const name = path.basename(target).toLowerCase();
-    return name !== "" && lower.includes(name);
-  });
-}
+__HIDE_NAMES_GLOBAL__
 
 /** Whether a tool call asks the helper for the guardrails. A policy that is missing or unreadable (`on` is null)
  * does in a Herdr pane, where the helper records why; a session outside one starts no helper for it. */
