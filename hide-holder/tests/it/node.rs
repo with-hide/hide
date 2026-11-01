@@ -724,7 +724,7 @@ fn a_second_node_takes_the_pane_over_and_the_first_does_not_try_again() {
         node.text("t1").contains("hide-ok")
     });
 
-    let second = open_holder(&socket, None).unwrap();
+    let second = open_holder("t1", &socket, None).unwrap();
     let taken = node.reports.wait_state("t1", "taken_over");
     assert_eq!(taken.exit_category.as_deref(), Some("taken_over"));
     assert_eq!(taken.retry_decision, "none");
@@ -1005,4 +1005,53 @@ fn a_starting_node_removes_the_old_version_folders_nothing_runs_from() {
         Some("unsupported_holder_version")
     );
     assert!(holder.process.is_running(), "the older holder was ended");
+}
+
+/// B14 through the node's own transport: a node accepts the holder's
+/// notices, logs a refusal of the program's answers with the pane's id, and
+/// its session of the pane goes on.
+#[test]
+fn a_node_logs_the_answers_its_holder_refused_with_the_pane_and_keeps_the_session() {
+    diagnostics();
+    let home = Home::new();
+    let mut burst = b"\x1b]11;?\x07".repeat(6000);
+    burst.extend_from_slice(b"asked");
+    let script = crate::support::Script::new(&home, vec![b"ready".to_vec(), burst]);
+    let release: OsString = home.path().join("release").into();
+    let holder = script.start_with(&home, &[(crate::support::HOLD_WRITES, &release)]);
+    let transport = open_holder("q1", &holder.socket, None).unwrap();
+    let mut events = transport.events;
+    let (drawn, frames) = channel();
+    thread::spawn(move || {
+        loop {
+            let event = events.next_event();
+            let ended = matches!(event, SessionEvent::Ended { .. });
+            if drawn.send(event).is_err() || ended {
+                return;
+            }
+        }
+    });
+    script.go(1);
+    let refused = wait_diagnostic("pane_holder.answers_refused", |record| {
+        record["pane_id"] == "q1"
+    });
+    assert_eq!(refused["count"], 1, "{refused}");
+    assert!(
+        refused["message"].as_str().unwrap().contains("65536"),
+        "{refused}"
+    );
+    // The session read past the notice: the burst's end is drawn, and the
+    // session did not end.
+    let mut text = Vec::new();
+    let deadline = Instant::now() + HANG_LIMIT;
+    while !text_of(&text).contains("asked") {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match frames.recv_timeout(left).expect("the burst's end was never drawn") {
+            SessionEvent::Frame { bytes, .. } => text.extend_from_slice(&bytes),
+            SessionEvent::Ended { category, message } => {
+                panic!("the session ended ({category}): {message}")
+            }
+            _ => {}
+        }
+    }
 }

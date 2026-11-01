@@ -33,8 +33,8 @@ use std::time::{Duration, Instant};
 
 use hide_holder_protocol::{
     Answer, Ask, Capability, ClientMessage, CloseReason, Closed, Fragment, FrameError, HELLO_LIMIT,
-    HolderMessage, Opening as FirstMessage, Size, Unknown, Welcome, agree, read_client,
-    read_opening, write_holder,
+    HolderMessage, Notice, NoticeReason, Opening as FirstMessage, Size, Unknown, Welcome, agree,
+    read_client, read_opening, write_holder,
 };
 use hide_platform::ipc::{ListenerCloser, LocalListener, LocalStream, ShutdownHandle};
 use hide_platform::process::{Session, SessionEnd};
@@ -77,9 +77,10 @@ const RETURN_FREED_AFTER: Duration = Duration::from_secs(1);
 /// so a pane that redraws a line every second or two does not fill its log.
 const LOGGED_RETURN_BYTES: u64 = 1024 * 1024;
 
-/// The most answer bytes waiting for the program to take them; past it an
-/// answer is dropped and logged, and the program's output goes on being read
-/// (PRD engine-bundle-2-pane-holder D-9, D-17).
+/// The most answer bytes waiting for the program to take them; past it the
+/// answers are refused with a reason, logged and told to the connection
+/// that accepts notices, and the program's output goes on being read (PRD
+/// engine-bundle-2-pane-holder D-9, D-17).
 const ANSWER_QUEUE_CAP: usize = 64 * 1024;
 
 /// The most input bytes waiting for the program to take them; past it the
@@ -99,11 +100,19 @@ const REFUSE_LIMIT: Duration = Duration::from_millis(250);
 /// A release holder never reads it, and the pane's program never gets it.
 const PANIC_ON_INPUT: &str = "HIDE_HOLDER_TEST_PANIC_ON_INPUT";
 
+/// Debug builds only: a holder started with this variable naming a file
+/// writes nothing to its program until that file exists, so a test fills
+/// its input and answer queues to their bounds as a program that reads
+/// nothing would, on every system alike (a Windows console takes all the
+/// input it is given). A release holder never reads it, and the pane's
+/// program never gets it.
+const HOLD_WRITES: &str = "HIDE_HOLDER_TEST_HOLD_WRITES";
+
 /// How much one read of the PTY takes.
 const READ_CHUNK: usize = 64 * 1024;
 
 /// What this holder can send.
-const SENDS: [Capability; 1] = [Capability::Screen];
+const SENDS: [Capability; 2] = [Capability::Screen, Capability::Notices];
 
 enum Event {
     /// A connection whose hello was accepted.
@@ -141,6 +150,9 @@ enum Event {
         code: Option<i32>,
     },
     PtyClosed,
+    /// Something refused while the pane runs on, for the connection that
+    /// holds it.
+    Notice(Notice),
 }
 
 /// What a connection's writer has to do: messages to send first, then the
@@ -198,6 +210,8 @@ impl Outbox {
 struct Connection {
     generation: u64,
     outbox: Arc<Outbox>,
+    /// Whether the node accepts [`Notice`]s.
+    notices: bool,
     shutdown: ShutdownHandle,
     /// Says when the writer has written its last message.
     written: Receiver<()>,
@@ -283,6 +297,10 @@ impl Holder {
         command.env_remove(hide_platform::process::LENT_KEY);
         let panic_on_input = cfg!(debug_assertions) && std::env::var_os(PANIC_ON_INPUT).is_some();
         command.env_remove(PANIC_ON_INPUT);
+        let hold_writes = std::env::var_os(HOLD_WRITES)
+            .filter(|_| cfg!(debug_assertions))
+            .map(PathBuf::from);
+        command.env_remove(HOLD_WRITES);
         #[cfg(unix)]
         let spawned = pair.slave.spawn_command(command);
         #[cfg(windows)]
@@ -334,7 +352,8 @@ impl Holder {
         let answers = Answers {
             writes: writes.clone(),
             queued: Arc::new(AtomicUsize::new(0)),
-            dropping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            refused: Arc::new(Mutex::new(None)),
+            events: sender.clone(),
             log: log.clone(),
         };
 
@@ -357,6 +376,7 @@ impl Holder {
                     &answers_queued,
                     &sender,
                     panic_on_input,
+                    hold_writes.as_deref(),
                 )
             }
         });
@@ -518,6 +538,13 @@ impl Holder {
                     return self.finish(CloseReason::ProgramExited, code, "the program exited");
                 }
                 Event::PtyClosed => self.pty_closed = true,
+                Event::Notice(notice) => {
+                    if let Some(connection) = &self.current
+                        && connection.notices
+                    {
+                        connection.outbox.send(HolderMessage::Notice(notice));
+                    }
+                }
             }
         }
     }
@@ -594,6 +621,7 @@ impl Holder {
         self.current = Some(Connection {
             generation,
             outbox,
+            notices: sends.contains(&Capability::Notices),
             shutdown,
             written,
         });
@@ -974,13 +1002,20 @@ fn spawn_named(name: &str, work: impl FnOnce() + Send + 'static) {
         .unwrap_or_else(|error| panic!("the holder could not start its {name} thread: {error}"));
 }
 
-/// Hands the program's answers to the PTY writer, past their bound
-/// dropping them with a log line for each run of drops.
+/// Hands the program's answers to the PTY writer. Past their bound the
+/// answers of one parse (one read of the PTY, a resize or a theme) are
+/// refused whole, never in part, and every parse after it is too until the
+/// program has taken what waits: the run's first refusal and its end are
+/// each logged with the reason and told to the connection that holds the
+/// pane when it accepts notices.
 #[derive(Clone)]
 struct Answers {
     writes: Sender<PtyWrite>,
     queued: Arc<AtomicUsize>,
-    dropping: Arc<std::sync::atomic::AtomicBool>,
+    /// The answers and bytes refused in this run of refusals, while one
+    /// runs.
+    refused: Arc<Mutex<Option<(u64, u64)>>>,
+    events: Sender<Event>,
     log: Log,
 }
 
@@ -990,23 +1025,61 @@ impl Answers {
             return;
         }
         let length = answers.len();
-        if self.queued.load(Ordering::SeqCst) + length > ANSWER_QUEUE_CAP {
-            if !self.dropping.swap(true, Ordering::SeqCst) {
-                self.log.event(
-                    "holder.answers_dropped",
-                    &[
-                        ("bytes", length.into()),
-                        ("queued", self.queued.load(Ordering::SeqCst).into()),
-                    ],
-                );
+        let mut refused = self.refused.lock().unwrap_or_else(PoisonError::into_inner);
+        let queued = self.queued.load(Ordering::SeqCst);
+        if queued + length > ANSWER_QUEUE_CAP {
+            match refused.as_mut() {
+                Some((count, bytes)) => {
+                    *count += 1;
+                    *bytes += length as u64;
+                }
+                None => {
+                    *refused = Some((1, length as u64));
+                    self.log.event(
+                        "holder.answers_refused",
+                        &[
+                            ("reason", "answer_queue_full".into()),
+                            ("bytes", length.into()),
+                            ("queued", queued.into()),
+                            ("cap", ANSWER_QUEUE_CAP.into()),
+                        ],
+                    );
+                    self.notify(Notice::new(
+                        NoticeReason::AnswersRefused,
+                        1,
+                        length as u64,
+                        format!(
+                            "the program's answers waited past {ANSWER_QUEUE_CAP} bytes ({queued} queued); answers are refused until it reads them"
+                        ),
+                    ));
+                }
             }
             return;
         }
-        self.dropping.store(false, Ordering::SeqCst);
+        if let Some((count, bytes)) = refused.take() {
+            self.log.event(
+                "holder.answers_resumed",
+                &[("refused", count.into()), ("refused_bytes", bytes.into())],
+            );
+            self.notify(Notice::new(
+                NoticeReason::AnswersResumed,
+                count,
+                bytes,
+                format!("{count} answers ({bytes} bytes) were refused while the program did not read them"),
+            ));
+        }
+        drop(refused);
         self.queued.fetch_add(length, Ordering::SeqCst);
         if self.writes.send(PtyWrite::Answers(answers)).is_err() {
             self.queued.fetch_sub(length, Ordering::SeqCst);
         }
+    }
+
+    /// Hands `notice` to the holder's loop, which gives it to the connection
+    /// that holds the pane if that one accepts notices; with no loop left,
+    /// the holder is ending and the log has it.
+    fn notify(&self, notice: Notice) {
+        let _ = self.events.send(Event::Notice(notice));
     }
 }
 
@@ -1055,7 +1128,13 @@ fn write_pty(
     answers_queued: &AtomicUsize,
     events: &Sender<Event>,
     panic_on_input: bool,
+    hold_writes: Option<&std::path::Path>,
 ) {
+    if let Some(release) = hold_writes {
+        while !release.exists() {
+            thread::park_timeout(Duration::from_millis(10));
+        }
+    }
     let mut refused = None;
     for write in writes {
         match write {

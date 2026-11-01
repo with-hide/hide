@@ -178,7 +178,7 @@ impl Attacher for PaneAttacher {
         size: Option<GridSize>,
     ) -> Result<Transport, OpenFailure> {
         match self.known.socket(pane_id) {
-            Some(socket) => open_holder(&socket, size),
+            Some(socket) => open_holder(pane_id, &socket, size),
             None => self.herdr.open_transport(pane_id, mode, size),
         }
     }
@@ -188,14 +188,18 @@ impl Attacher for PaneAttacher {
     }
 }
 
-/// Opens the holder at `socket` as a control session: says hello, accepting
-/// its screen, and resizes it to `size` when that is not the size it has.
-/// A holder holds one connection at a time, so this takes the pane over
-/// from whoever held it.
-pub fn open_holder(socket: &Path, size: Option<GridSize>) -> Result<Transport, OpenFailure> {
+/// Opens the holder of `pane` at `socket` as a control session: says hello,
+/// accepting its screen and its notices, and resizes it to `size` when that
+/// is not the size it has. A holder holds one connection at a time, so this
+/// takes the pane over from whoever held it.
+pub fn open_holder(
+    pane: &str,
+    socket: &Path,
+    size: Option<GridSize>,
+) -> Result<Transport, OpenFailure> {
     let (stream, welcome) = hide_holder_protocol::open(
         socket,
-        vec![Capability::Screen],
+        vec![Capability::Screen, Capability::Notices],
         Instant::now() + OPEN_LIMIT,
     )
     .map_err(open_failure)?;
@@ -215,6 +219,7 @@ pub fn open_holder(socket: &Path, size: Option<GridSize>) -> Result<Transport, O
     let shutdown = stream.shutdown_handle();
     Ok(Transport {
         events: Box::new(HolderEvents {
+            pane: pane.to_owned(),
             stream,
             screen: None,
         }),
@@ -279,8 +284,11 @@ fn message(closed: &Closed) -> String {
 
 /// A holder connection's messages as session events: each fragment is a
 /// frame at the size it was drawn, and its close is the session's end with
-/// the reason the holder named.
+/// the reason the holder named. A notice, something the holder refused while
+/// the pane runs on, goes to the diagnostic log and the session goes on;
+/// the operator can do nothing about it, so nothing reaches the screen.
 struct HolderEvents {
+    pane: String,
     stream: LocalStream,
     /// The epoch and sequence of the last fragment.
     screen: Option<(u64, u64)>,
@@ -288,7 +296,30 @@ struct HolderEvents {
 
 impl SessionEvents for HolderEvents {
     fn next_event(&mut self) -> SessionEvent {
-        match read_holder(&mut self.stream) {
+        loop {
+            if let Some(event) = self.next_message() {
+                return event;
+            }
+        }
+    }
+}
+
+impl HolderEvents {
+    /// The session event the next message is, or `None` for a notice.
+    fn next_message(&mut self) -> Option<SessionEvent> {
+        Some(match read_holder(&mut self.stream) {
+            Ok(HolderMessage::Notice(notice)) => {
+                crate::diagnostic!(json!({
+                    "component": "pane_holder",
+                    "kind": format!("pane_holder.{}", notice.reason.name()),
+                    "pane_id": self.pane,
+                    "reason_code": notice.reason.code(),
+                    "count": notice.count,
+                    "bytes": notice.bytes,
+                    "message": notice.detail,
+                }));
+                return None;
+            }
             Ok(HolderMessage::Fragment(fragment)) => {
                 // A full fragment opens an epoch at 0; every other one is the
                 // next of its epoch. One out of order means the screen this
@@ -299,13 +330,13 @@ impl SessionEvents for HolderEvents {
                     self.screen == Some((fragment.epoch, fragment.seq.wrapping_sub(1)))
                 };
                 if !follows {
-                    return SessionEvent::Ended {
+                    return Some(SessionEvent::Ended {
                         category: "protocol_error",
                         message: format!(
                             "The pane's holder sent fragment {}.{} after {:?}",
                             fragment.epoch, fragment.seq, self.screen
                         ),
-                    };
+                    });
                 }
                 self.screen = Some((fragment.epoch, fragment.seq));
                 SessionEvent::Frame {
@@ -327,7 +358,7 @@ impl SessionEvents for HolderEvents {
                 category: "transport_eof",
                 message: format!("The pane's holder connection ended: {error}"),
             },
-        }
+        })
     }
 }
 
