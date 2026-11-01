@@ -1059,10 +1059,13 @@ export class DesktopHost {
    * reboot nothing else starts one, and hided only reads a missing server as
    * absent. A server that answers is never touched, and neither an unpackaged
    * host nor an explicit HERDR_BIN_PATH override starts anything, so a
-   * development or e2e run keeps the server it made. Every failure goes to the
-   * log and the connect goes ahead, where the shell shows Herdr unreachable.
+   * development or e2e run keeps the server it made. A daemon on the core's
+   * own engine (HIDE_DEV_PANE_HOLDER=1) runs no Herdr, so none is started for
+   * it. Every failure goes to the log and the connect goes ahead, where the
+   * shell shows Herdr unreachable.
    */
   private async ensureHerdrServer(attempt: number): Promise<void> {
+    if (this.env.ownEngine) return;
     const herdr = this.herdr();
     if (herdr.source !== "bundled" || herdr.path === null) return;
     const bin = herdr.path;

@@ -1801,6 +1801,7 @@ mod tests {
             home: directory.to_path_buf(),
             herdr_socket_path: None,
             herdr_bin_path: None,
+            own_engine: false,
             login_shell: None,
             state_dir: directory.to_path_buf(),
             legacy_state_dir: None,

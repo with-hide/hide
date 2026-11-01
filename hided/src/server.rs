@@ -4674,7 +4674,14 @@ pub fn mount(seat: &crate::seat::SeatParts, state: AppState) -> tokio::task::Joi
             clients: Arc::clone(&state.clients),
             last_client_gone: Arc::clone(&state.last_client_gone),
             shutdown,
-            herdr: state.core.engine().cloned(),
+            // The core's own engine is this process's, so it answers while
+            // the daemon runs and keeps nothing alive (PRD
+            // engine-bundle-3-core-owns D-10 gives it its own rule).
+            herdr: state
+                .core
+                .engine()
+                .filter(|engine| engine.own_scope().is_none())
+                .cloned(),
         },
         // Mobile on with a phone paired: the phone may come back at any
         // time and push has to keep going (PRD D-10). The idle clock starts
