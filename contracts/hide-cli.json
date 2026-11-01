@@ -3374,6 +3374,11 @@
                     "required": false,
                     "value": {
                         "type": "text"
+                    },
+                    "value_with": {
+                        "--paste": {
+                            "type": "paste_text"
+                        }
                     }
                 }
             ],
@@ -4930,7 +4935,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:ec5a755fee2a89007ca4c83914b0fa68fe34d9d532637e5a70d60a31b4b0456f",
+    "digest": "sha256:9e1c5513ab797bb47f68f03c09de15a619523070129dca1212266a021a0b144b",
     "envelopes": {
         "agent": {
             "answer": "value",
@@ -4991,6 +4996,7 @@
         "json": "a JSON document of the shape hide mission help or hide plan help shows",
         "key": "non-empty, at most 256 bytes, no control characters, does not start with -",
         "one_of": "one of the listed values",
+        "paste_text": "non-empty, at most 16384 bytes, no control characters but line breaks (LF, CR) and tabs",
         "ratio": "two decimal integers as <passed>/<total>, such as 6/6",
         "session": "non-empty, at most 4096 bytes, no control characters, does not start with -",
         "text": "non-empty, no control characters, does not start with --",
