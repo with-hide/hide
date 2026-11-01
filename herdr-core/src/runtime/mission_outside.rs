@@ -72,11 +72,6 @@ pub(crate) struct Outside {
     /// branch read asked before a reopen proves nothing after it; memory
     /// only, as a read out does not outlive a restart.
     reopens: BTreeMap<String, u64>,
-    /// How often each outside node began a new round while this core runs:
-    /// another branch, or back to work after it settled. An answer asked in
-    /// an earlier round proves nothing, even for the same branch again;
-    /// memory only, for the same reason as `reopens`.
-    rounds: BTreeMap<(String, String), u64>,
 }
 
 impl Outside {
@@ -96,49 +91,6 @@ impl Outside {
         !self.reading.contains(&place)
             && !self.pass.contains_key(&place)
             && !self.pending.contains(&place)
-    }
-
-    /// Starts a new round for each outside node of `mission` that `after`
-    /// names with another branch or puts back to work after it settled:
-    /// what Hide saw of the branch is dropped, and an answer asked before is
-    /// dropped when it comes back. Forgets the missions `book` no longer
-    /// holds, so the map stays within the book's own cap.
-    pub(super) fn begin_rounds(
-        &mut self,
-        mission: &str,
-        before: &[MissionNode],
-        after: &mut [MissionNode],
-        book: &MissionBook,
-    ) {
-        for node in after
-            .iter_mut()
-            .filter(|node| node.kind == NodeKind::External)
-        {
-            let new_round = before
-                .iter()
-                .find(|old| old.key == node.key)
-                .is_none_or(|old| {
-                    old.external != node.external || (settled(old.status) && !settled(node.status))
-                });
-            if !new_round {
-                continue;
-            }
-            node.branch_ahead = None;
-            self.rounds.retain(|(id, _), _| {
-                book.missions.iter().any(|kept| kept.id == *id) || id == mission
-            });
-            *self
-                .rounds
-                .entry((mission.to_owned(), node.key.clone()))
-                .or_default() += 1;
-        }
-    }
-
-    pub(super) fn round_of(&self, mission: &str, node: &str) -> u64 {
-        self.rounds
-            .get(&(mission.to_owned(), node.to_owned()))
-            .copied()
-            .unwrap_or(0)
     }
 
     pub(super) fn reopens_of(&self, mission: &str) -> u64 {
@@ -241,6 +193,28 @@ fn branch_line(found: &Found) -> Option<&'static str> {
     }
 }
 
+/// Starts a new round for `node` when it is an outside node that `before`
+/// (the same key before the change) did not have, named another branch or
+/// held settled while it is back at work now: what Hide saw of its branch
+/// is dropped and it takes the mission's next round from `seq`, never one
+/// given before, so a read asked in an earlier round, or for a node removed
+/// and added again under its key, is dropped when it comes back.
+pub(super) fn begin_round(seq: &mut u64, before: Option<&MissionNode>, node: &mut MissionNode) {
+    if node.kind != NodeKind::External {
+        return;
+    }
+    let new_round = before.is_none_or(|old| {
+        old.kind != NodeKind::External
+            || old.external != node.external
+            || (settled(old.status) && !settled(node.status))
+    });
+    if new_round {
+        *seq += 1;
+        node.round = *seq;
+        node.branch_ahead = None;
+    }
+}
+
 fn settled(status: NodeStatus) -> bool {
     matches!(
         status,
@@ -323,7 +297,7 @@ fn outside_asks(
                     external,
                     ahead: node.branch_ahead.clone(),
                     reopens: outside.reopens_of(&mission.id),
-                    round: outside.round_of(&mission.id, &node.key),
+                    round: node.round,
                 },
             };
             match pull {
@@ -600,12 +574,10 @@ impl Runtime {
                         node.key == ask.node
                             && node.kind == NodeKind::External
                             && node.external.as_ref() == Some(external)
+                            && node.round == *round
                             && !settled(node.status)
                     })
-                    .filter(|_| {
-                        self.missions.outside.reopens_of(&ask.mission) == *reopens
-                            && self.missions.outside.round_of(&ask.mission, &ask.node) == *round
-                    }),
+                    .filter(|_| self.missions.outside.reopens_of(&ask.mission) == *reopens),
                 Watch::Landing {
                     branch,
                     reopens,
@@ -762,26 +734,42 @@ fn read_all(
         )
         .map_err(|error| error.to_string())
     };
-    let reads_branch = asks.iter().any(|ask| {
-        !matches!(
-            ask.watch,
-            Watch::Outside {
-                external: External::Pr(_),
-                ..
-            }
-        )
-    });
-    let mains = if reads_branch {
+    let heads: Vec<Option<Result<String, String>>> = asks
+        .iter()
+        .map(|ask| branch_of(&ask.watch).map(|branch| branch_head(&git, branch)))
+        .collect();
+    // The default branch is read after every head, so a head it does not
+    // hold had commits main lacked when the head was read. Read before, a
+    // main that moved on since would miss a branch cut from its newer tip
+    // and read it ahead. This holds while the default branch only moves
+    // forward; a force-pushed main is out of scope.
+    let mains = if heads.iter().any(Option::is_some) {
         resolve_mains(&git, base)
     } else {
         Ok(Vec::new())
     };
     asks.into_iter()
-        .map(|ask| {
-            let found = read_one(node, &git, github, base, &mains, &ask.watch);
+        .zip(heads)
+        .map(|(ask, head)| {
+            let found = read_one(node, &git, github, base, &mains, head, &ask.watch)
+                .unwrap_or_else(Found::Unread);
             (ask, found)
         })
         .collect()
+}
+
+/// The branch `watch` follows, if any.
+fn branch_of(watch: &Watch) -> Option<&str> {
+    match watch {
+        Watch::Outside {
+            external: External::Branch(name),
+            ..
+        }
+        | Watch::Landing {
+            branch: Some(name), ..
+        } => Some(name),
+        _ => None,
+    }
 }
 
 /// The default branch's commit locally and as last fetched; a repository
@@ -808,47 +796,41 @@ fn resolve_mains(git: &Git, base: &Base) -> Result<Vec<Main>, String> {
     Ok(mains)
 }
 
-/// One node's answer.
+/// One node's answer, with its branch's head as the read found it before
+/// it resolved `mains`.
 fn read_one(
     node: &dyn NodeLink,
     git: &Git,
     github: &Result<crate::github::Where, String>,
     base: &Base,
     mains: &Result<Vec<Main>, String>,
+    head: Option<Result<String, String>>,
     watch: &Watch,
-) -> Found {
-    let mains = || mains.as_deref().map_err(Clone::clone);
-    let answer = match watch {
-        Watch::Outside {
-            external: External::Pr(number),
-            ..
-        } => github.as_ref().map_err(Clone::clone).and_then(|place| {
-            crate::github::pr_standing(node, place, *number).map(|standing| match standing {
-                crate::github::PrStanding::Open => Found::Open,
-                crate::github::PrStanding::Closed => Found::Closed,
-                crate::github::PrStanding::Merged => Found::InMain(None),
-            })
-        }),
-        Watch::Outside {
-            external: External::Branch(name),
-            ahead,
-            ..
-        } => mains().and_then(|mains| outside_branch(git, base, mains, name, ahead.as_deref())),
-        Watch::Landing {
-            branch: Some(name), ..
-        } => mains().and_then(|mains| {
-            let head = branch_head(git, name)?;
-            // A done direct change's branch is its worker's finished work,
-            // so its commit in main is enough.
-            Ok(if held(git, mains, &head)? || merged_pull(base, &head) {
-                Found::InMain(Some(head))
-            } else {
-                Found::Open
-            })
-        }),
-        Watch::Landing { branch: None, .. } => Err("The node names no branch".to_owned()),
-    };
-    answer.unwrap_or_else(Found::Unread)
+) -> Result<Found, String> {
+    if let Watch::Outside {
+        external: External::Pr(number),
+        ..
+    } = watch
+    {
+        let place = github.as_ref().map_err(Clone::clone)?;
+        return crate::github::pr_standing(node, place, *number).map(|standing| match standing {
+            crate::github::PrStanding::Open => Found::Open,
+            crate::github::PrStanding::Closed => Found::Closed,
+            crate::github::PrStanding::Merged => Found::InMain(None),
+        });
+    }
+    let head = head.ok_or("The node names no branch")??;
+    let mains = mains.as_deref().map_err(Clone::clone)?;
+    if let Watch::Outside { ahead, .. } = watch {
+        return outside_branch(git, base, mains, head, ahead.as_deref());
+    }
+    // A done direct change's branch is its worker's finished work, so its
+    // commit in main is enough.
+    Ok(if held(git, mains, &head)? || merged_pull(base, &head) {
+        Found::InMain(Some(head))
+    } else {
+        Found::Open
+    })
 }
 
 /// The commit of `branch`, as this checkout or its last fetch has it.
@@ -910,10 +892,9 @@ fn outside_branch(
     git: &Git,
     base: &Base,
     mains: &[Main],
-    branch: &str,
+    head: String,
     ahead: Option<&str>,
 ) -> Result<Found, String> {
-    let head = branch_head(git, branch)?;
     if merged_pull(base, &head) {
         return Ok(Found::InMain(Some(head)));
     }

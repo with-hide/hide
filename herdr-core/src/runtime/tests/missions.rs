@@ -2697,7 +2697,14 @@ fn an_outside_node_is_done_once_its_pull_request_or_branch_is_in_main() {
     );
 
     let place = (node.to_owned(), PROJECT.to_owned());
-    let round = runtime.missions.outside.round_of("mission-1", "lib");
+    let round = runtime
+        .missions
+        .book
+        .get("mission-1")
+        .unwrap()
+        .node("lib")
+        .unwrap()
+        .round;
     let lib = || Ask {
         mission: "mission-1".into(),
         node: "lib".into(),
@@ -3614,7 +3621,7 @@ fn an_outside_branch_answer_from_an_earlier_round_proves_nothing() {
             external: External::Branch("feat/a".into()),
             ahead: None,
             reopens: runtime.missions.outside.reopens_of("mission-1"),
-            round: runtime.missions.outside.round_of("mission-1", "lib"),
+            round: runtime.missions.book.missions[0].nodes[0].round,
         },
     };
     let seen = |runtime: &Runtime| {
@@ -3626,6 +3633,18 @@ fn an_outside_branch_answer_from_an_earlier_round_proves_nothing() {
 
     command(&mut runtime, "sender", plan("feat/b")).unwrap();
     command(&mut runtime, "sender", plan("feat/a")).unwrap();
+    // A node taken out of the plan and put back gets a round never given.
+    let before = runtime.missions.book.missions[0].nodes[0].round;
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "plan", "plan": {"nodes": [
+            {"key": "other", "title": "other", "kind": "external", "external": {"branch": "feat/a"}},
+        ]}}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", plan("feat/a")).unwrap();
+    assert!(runtime.missions.book.missions[0].nodes[0].round > before);
     runtime.ingest_outside(&place, vec![(late, Found::Ahead("a".repeat(40)))]);
     assert_eq!(seen(&runtime), None);
     assert_eq!(node_view(&runtime, "lib").line, None);
@@ -3679,6 +3698,109 @@ fn an_outside_branch_answer_from_an_earlier_round_proves_nothing() {
     .unwrap();
     runtime.ingest_outside(&place, vec![(late, Found::Ahead("e".repeat(40)))]);
     assert_eq!(seen(&runtime), None);
+}
+
+/// This machine's node, which on its first resolve of `trunk` moves main
+/// on and cuts `topic` again at the new tip before it answers, as another
+/// session can between two git calls of one read.
+struct MovesMain {
+    repo: std::path::PathBuf,
+    host: Host,
+    moved: std::sync::atomic::AtomicBool,
+}
+
+impl crate::node_access::NodeLink for MovesMain {
+    fn call(
+        &self,
+        call: hide_node_link::protocol::Call,
+        timeout: Duration,
+    ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+        let resolves_main = matches!(
+            &call,
+            hide_node_link::protocol::Call::Git {
+                command: hide_node_link::git::GitCommand::RefCommit { name },
+                ..
+            } if name == "trunk"
+        );
+        let answer = crate::node_access::NodeLink::call(&self.host, call, timeout);
+        if resolves_main && !self.moved.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            git_in(
+                &self.repo,
+                &["commit", "-q", "--allow-empty", "-m", "main moves on"],
+            );
+            git_in(&self.repo, &["branch", "-f", "topic", "trunk"]);
+        }
+        answer
+    }
+}
+
+/// Review of #1961, round 2: main moving on, and the outside branch being
+/// cut again at its new tip, between the git calls of one read never reads
+/// the branch ahead, so a later read cannot find that head in main and call
+/// the node done; the branch still has no commit of its own.
+#[test]
+fn a_branch_cut_from_a_main_that_moved_during_the_read_has_no_work_of_its_own() {
+    let folder = tempfile::tempdir().unwrap();
+    let repo = std::fs::canonicalize(folder.path()).unwrap();
+    for args in [
+        &["init", "-q", "-b", "trunk"][..],
+        &["config", "user.name", "Fixture"],
+        &["config", "user.email", "fixture@example.invalid"],
+        &["config", "commit.gpgsign", "false"],
+        &["commit", "-q", "--allow-empty", "-m", "seed"],
+        &["branch", "topic"],
+    ] {
+        git_in(&repo, args);
+    }
+    let root = hide_platform::path::to_wire(&repo).unwrap();
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "plan", "plan": {"nodes": [
+            {"key": "topic", "title": "topic", "kind": "external", "external": {"branch": "topic"}},
+        ]}}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    runtime.missions.book.missions[0].project = root.clone();
+    runtime
+        .worktree_catalog
+        .projects
+        .push(crate::model::ProjectWorktreesSnapshot {
+            root_path: root.clone(),
+            base_branch: Some("trunk".into()),
+            ..Default::default()
+        });
+    let node = MovesMain {
+        repo: repo.clone(),
+        host: Host(hide_host::serve::Env::standalone(Some(repo.clone()))),
+        moved: Default::default(),
+    };
+    let device = crate::node::TEST_NODE;
+
+    for _ in 0..2 {
+        runtime.read_outside_through(device, &root, &node);
+        let read = node_view(&runtime, "topic");
+        assert_eq!((read.status, read.unread), (NodeStatus::Waiting, false));
+        assert!(
+            read.line
+                .unwrap_or_default()
+                .contains("has not seen a commit of its own")
+        );
+    }
+    assert!(node.moved.load(std::sync::atomic::Ordering::SeqCst));
+    assert_eq!(
+        runtime.missions.book.missions[0].nodes[0].branch_ahead,
+        None
+    );
 }
 
 /// verify-screen's finding on #1729: a direct change already in main is

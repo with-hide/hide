@@ -680,6 +680,7 @@ impl Runtime {
                     closed_at_unix_ms: None,
                     wakes: Vec::new(),
                     wake_seq: 0,
+                    round_seq: 0,
                     end_asked_at_unix_ms: None,
                 };
                 crate::diagnostic!(json!({
@@ -705,12 +706,12 @@ impl Runtime {
                 // the operator's press, and the shell shows a first plan on
                 // the Conductor pane's own chip (PRD mission-pane-chip D-02).
                 let mut next = crate::missions::apply_plan(&current, &plan, now)?;
-                self.missions.outside.begin_rounds(
-                    &id,
-                    &current.nodes,
-                    &mut next.nodes,
-                    &self.missions.book,
-                );
+                let Mission {
+                    nodes, round_seq, ..
+                } = &mut next;
+                for node in nodes.iter_mut() {
+                    super::mission_outside::begin_round(round_seq, current.node(&node.key), node);
+                }
                 let overlaps = crate::missions::overlaps(&self.missions.book, &next);
                 let events = super::mission_events::plan_events(
                     &current,
@@ -775,13 +776,12 @@ impl Runtime {
                     next.pr_seen = self.pull_seen(&current.device_id, &current.project, number);
                 }
                 let reads = reads_branch(current.status, &next);
-                self.missions.outside.begin_rounds(
-                    &id,
-                    std::slice::from_ref(&current.nodes[index]),
-                    std::slice::from_mut(&mut next),
-                    &self.missions.book,
-                );
                 let target = self.missions.book.get_mut(&id).ok_or("mission_unknown")?;
+                super::mission_outside::begin_round(
+                    &mut target.round_seq,
+                    Some(&target.nodes[index]),
+                    &mut next,
+                );
                 let changed = target.nodes[index] != next;
                 let events = super::mission_events::node_events(&target.nodes[index], &next, now);
                 target.nodes[index] = next;
