@@ -62,10 +62,7 @@ pub use hide_node_link::protocol::{ShellLaunch, ShellReadiness};
 /// The token the first prompt reports on the pane, and the value it reports.
 pub const PROMPT_TOKEN: &str = "hide_prompt";
 
-/// The token the first prompt also reports when the shell dropped an alias
-/// or a function of an agent program: those programs' names, joined by `,`,
-/// never what the alias or function held.
-pub const UNSHADOWED_TOKEN: &str = "hide_unshadowed";
+pub use hide_node_link::protocol::UNSHADOWED_TOKEN;
 
 /// The variable that names, separated by spaces, the programs whose aliases
 /// and functions an integrated shell drops before its first prompt.
@@ -76,18 +73,10 @@ pub const UNSHADOWED_TOKEN: &str = "hide_unshadowed";
 /// the start line (engine bundle 3), which then runs the program itself.
 const AGENT_PROGRAMS: &str = "HIDE_SHELL_PROGRAMS";
 
-/// The program the pinned Herdr types for each agent Hide starts
-/// (`detect::interactive_agent_executable` in Herdr v0.9.5), which is the
-/// program each adapter declares.
-pub fn agent_programs() -> impl Iterator<Item = &'static str> {
-    hide_agent_adapter::ADAPTERS
-        .iter()
-        .filter(|row| row.start.is_some())
-        .flat_map(|row| row.executables.iter().copied())
-}
-
 fn agent_programs_variable() -> String {
-    agent_programs().collect::<Vec<_>>().join(" ")
+    hide_agent_adapter::start_programs()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[cfg(unix)]

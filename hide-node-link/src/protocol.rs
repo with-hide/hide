@@ -324,6 +324,13 @@ pub enum ShellReadiness {
     Plain,
 }
 
+/// The pane token an integrated shell's first prompt also reports when it
+/// dropped an alias or a function of an agent program: those programs'
+/// names joined by `,`, never what the alias or function held. A transition
+/// path until Hide's own engine types the start line (`hide_host`'s shell
+/// integration).
+pub const UNSHADOWED_TOKEN: &str = "hide_unshadowed";
+
 /// The owning node's exact shell command, environment and readiness policy
 /// ([`Call::ShellIntegration`]), independent of the core machine's shell.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

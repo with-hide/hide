@@ -627,7 +627,7 @@ impl Shell<'_> {
             self.awaits_mark.set(false);
             return Ok(false);
         }
-        let unshadowed = hide_host::shell_integration::UNSHADOWED_TOKEN;
+        let unshadowed = hide_node_link::protocol::UNSHADOWED_TOKEN;
         let tokens = self
             .engine
             .pane_tokens(
@@ -645,15 +645,13 @@ impl Shell<'_> {
     }
 
     /// Records which agent programs' aliases or functions the marked shell
-    /// dropped (`hide_host::shell_integration::UNSHADOWED_TOKEN`, read with
+    /// dropped (`hide_node_link::protocol::UNSHADOWED_TOKEN`, read with
     /// the mark), by name only and only names of agent programs. A transition
     /// path that goes with the shells' loops (`hide_host::shell_integration`).
     fn log_unshadowed(&self, names: &str) {
         let programs: Vec<&str> = names
             .split(',')
-            .filter(|name| {
-                hide_host::shell_integration::agent_programs().any(|known| known == *name)
-            })
+            .filter(|name| hide_agent_adapter::start_programs().any(|known| known == *name))
             .collect();
         crate::diagnostic!(serde_json::json!({
             "component": "agent_start",
@@ -1496,7 +1494,7 @@ mod tests {
     /// program's name, once, and a name that is no agent program is not.
     #[test]
     fn the_programs_a_marked_shell_unshadowed_are_logged_by_name_only() {
-        let token = hide_host::shell_integration::UNSHADOWED_TOKEN;
+        let token = hide_node_link::protocol::UNSHADOWED_TOKEN;
         let herdr = FakeHerdr::start("agent-start-unshadowed", move |method, _| match method {
             "pane.process_info" => process_info(SHELL, &[SHELL]),
             "pane.get" => pane_with(json!({PROMPT_TOKEN: "1", token: "codex,grok,rm -rf"})),

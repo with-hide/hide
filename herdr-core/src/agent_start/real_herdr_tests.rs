@@ -928,14 +928,13 @@ fn an_alias_of_the_program(shell: &str, variable: &str) {
     assert_eq!(
         herdr
             .engine()
-            .pane_token(
+            .pane_tokens(
                 Wait::Each(READ_TIMEOUT),
                 &pane,
-                hide_host::shell_integration::UNSHADOWED_TOKEN
+                &[hide_node_link::protocol::UNSHADOWED_TOKEN]
             )
-            .unwrap()
-            .as_deref(),
-        Some("claude")
+            .unwrap(),
+        [Some("claude".to_owned())]
     );
 }
 

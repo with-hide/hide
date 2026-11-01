@@ -1895,10 +1895,6 @@ pub(crate) fn pane_resize_changed(value: Value) -> Result<bool, String> {
 }
 /// The value of the pane token `token` in a `pane.get` answer, `None` when
 /// the pane carries none.
-pub(crate) fn pane_token(value: Value, token: &str) -> Result<Option<String>, String> {
-    Ok(pane_tokens(value, &[token])?.pop().flatten())
-}
-
 /// The values of `tokens` in a `pane.get` answer, in their order.
 pub(crate) fn pane_tokens(value: Value, tokens: &[&str]) -> Result<Vec<Option<String>>, String> {
     let missing = "pane.get response is missing pane";

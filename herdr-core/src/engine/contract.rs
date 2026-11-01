@@ -185,13 +185,13 @@ pub(crate) fn meets_the_contract(engine: &dyn Engine, folder: &str, stop: impl F
         )
         .expect("a pane token is reported");
     assert_eq!(
-        engine.pane_token(WAIT, &beside, token).unwrap(),
-        Some(pane.clone())
+        engine.pane_tokens(WAIT, &beside, &[token]).unwrap(),
+        [Some(pane.clone())]
     );
     engine
         .report_pane_tokens(WAIT, &beside, &BTreeMap::from([(token.to_owned(), None)]))
         .unwrap();
-    assert_eq!(engine.pane_token(WAIT, &beside, token).unwrap(), None);
+    assert_eq!(engine.pane_tokens(WAIT, &beside, &[token]).unwrap(), [None]);
 
     // A closed pane is gone, and a call about it is refused.
     engine.close_pane(WAIT, &beside).expect("the pane closes");
