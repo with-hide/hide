@@ -3095,7 +3095,8 @@ pub enum PaneLayoutNodeSnapshot {
 }
 
 impl PaneLayoutNodeSnapshot {
-    fn collect_pane_ids<'a>(&'a self, pane_ids: &mut Vec<&'a str>) {
+    /// Every pane of the tree, first to last.
+    pub(crate) fn collect_pane_ids<'a>(&'a self, pane_ids: &mut Vec<&'a str>) {
         match self {
             Self::Pane { pane_id } => pane_ids.push(pane_id),
             Self::Split { first, second, .. } => {

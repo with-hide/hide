@@ -1,4 +1,7 @@
-//! Coordinates Herdr snapshot bootstrap, topology subscriptions, and capability readers.
+//! Coordinates the session's publishes and the capability readers: for
+//! Herdr, the snapshot bootstrap and topology subscription its event
+//! replica applies; for an engine whose changes are pulled, a whole session
+//! read on each wake (`pulled.rs`). Both publish through [`publish_session`].
 
 use super::*;
 use crate::labels::worker::{LabelWorker, ObservedAgent};
@@ -178,6 +181,17 @@ fn run_coordinator(
             return;
         }
     };
+    // An engine that wakes this thread instead of streaming events is read
+    // whole on each wake and published as it is (`pulled.rs`); the Herdr
+    // replica, its subscription and its side reads never run for it.
+    let pulled_engine = {
+        let waker = RepublishWaker {
+            sender: sender.clone(),
+            pending: Arc::clone(&republish_pending),
+        };
+        context.engine.changes(Arc::new(move || waker.wake())) == Changes::Pulled
+    };
+    let mut pulled: Option<super::pulled::PulledSession> = None;
 
     loop {
         if context.runtime.upgrade().is_none() {
@@ -185,7 +199,48 @@ fn run_coordinator(
             return;
         }
 
-        if subscription.is_none() && Instant::now() >= reconnect_at {
+        if pulled_engine && pulled.is_none() && Instant::now() >= reconnect_at {
+            let snapshot_started_at = Instant::now();
+            if !begin_delivery_pane_read(&context) {
+                return;
+            }
+            match super::pulled::PulledSession::read(&context) {
+                Ok(session) => {
+                    if !begin_read_connection(&context, snapshot_started_at) {
+                        return;
+                    }
+                    subscription_generation = subscription_generation.saturating_add(1);
+                    catalog_cache.connection = subscription_generation;
+                    catalog_cache.accepted = None;
+                    catalog_cache.accepted_stale = false;
+                    defer_background_reads = true;
+                    reconnect_delay = RECONNECT_INITIAL_DELAY;
+                    next_operation_tick = Instant::now() + ASYNC_OPERATION_TICK_INTERVAL;
+                    if !publish_session(
+                        &context,
+                        &session,
+                        &mut catalog_cache,
+                        &mut purpose_mirror,
+                        &mut labels,
+                        &mut arrivals,
+                    ) {
+                        return;
+                    }
+                    pulled = Some(session);
+                }
+                Err(error) => {
+                    log_sync_failure(&context, "pulled_read.failed", None, &error);
+                    if !publish_failure(&context, error) {
+                        return;
+                    }
+                    reconnect_at = Instant::now() + reconnect_delay;
+                    reconnect_delay = next_reconnect_delay(reconnect_delay);
+                    defer_background_reads = true;
+                }
+            }
+        }
+
+        if !pulled_engine && subscription.is_none() && Instant::now() >= reconnect_at {
             let has_projection = replica.is_some();
             let snapshot_started_at = Instant::now();
             if !begin_delivery_pane_read(&context) {
@@ -252,7 +307,7 @@ fn run_coordinator(
                     if replica
                         .as_ref()
                         .is_some_and(SessionReplica::ready_to_publish)
-                        && !publish_replica(
+                        && !publish_session(
                             &context,
                             replica.as_mut().unwrap(),
                             &mut catalog_cache,
@@ -339,9 +394,8 @@ fn run_coordinator(
                 take_label_switch(&context, worker)
                     | take_session_rereads(&context, worker)
                     | worker.tick(Instant::now())
-            }) && subscription.is_some()
-                && let Some(current) = replica.as_mut()
-                && !publish_replica(
+            }) && let Some(current) = publish_source(&replica, &pulled, subscription.is_some())
+                && !publish_session(
                     &context,
                     current,
                     &mut catalog_cache,
@@ -389,9 +443,9 @@ fn run_coordinator(
         // while background Memory analysis needs the weekly figure (PRD
         // project-memory-v2 D-10 b).
         let window_attached = window_reads(&context, worktree_reader.as_mut());
-        let run_background_reads =
-            subscription.is_some() && !defer_background_reads && window_attached;
-        let read_usage = subscription.is_some()
+        let connected = subscription.is_some() || pulled.is_some();
+        let run_background_reads = connected && !defer_background_reads && window_attached;
+        let read_usage = connected
             && !defer_background_reads
             && (run_background_reads || read_memory_reads_usage(&context));
         defer_background_reads = false;
@@ -413,7 +467,7 @@ fn run_coordinator(
             {
                 match current.refresh_published_state() {
                     Ok(true) => {
-                        publish_replica(
+                        publish_session(
                             &context,
                             current,
                             &mut catalog_cache,
@@ -462,8 +516,8 @@ fn run_coordinator(
                     }
                 }
                 if rebuild
-                    && let Some(current) = replica.as_mut()
-                    && !publish_replica(
+                    && let Some(current) = publish_source(&replica, &pulled, true)
+                    && !publish_session(
                         &context,
                         current,
                         &mut catalog_cache,
@@ -577,7 +631,7 @@ fn run_coordinator(
         }
 
         let timeout = coordinator_wait(
-            subscription.is_some(),
+            subscription.is_some() || pulled.is_some(),
             reconnect_at,
             next_agent_refresh,
             next_operation_tick,
@@ -588,6 +642,7 @@ fn run_coordinator(
                 // read only; it can safely supersede a move's final drawing
                 // even when another client has since moved or closed it.
                 stop_subscription(&mut subscription);
+                pulled = None;
                 reconnect_at = Instant::now();
                 defer_background_reads = true;
             }
@@ -649,7 +704,7 @@ fn run_coordinator(
                                     return;
                                 }
                                 if outcome.publish
-                                    && !publish_replica(
+                                    && !publish_session(
                                         &context,
                                         current,
                                         &mut catalog_cache,
@@ -820,7 +875,7 @@ fn run_coordinator(
                                 match current.refresh_published_state() {
                                     Ok(changed)
                                         if (changed || requested)
-                                            && !publish_replica(
+                                            && !publish_session(
                                                 &context,
                                                 current,
                                                 &mut catalog_cache,
@@ -872,7 +927,7 @@ fn run_coordinator(
                                         Some(current),
                                         &error,
                                     );
-                                    if !publish_replica(
+                                    if !publish_session(
                                         &context,
                                         current,
                                         &mut catalog_cache,
@@ -923,7 +978,7 @@ fn run_coordinator(
                                     // The stand-in already published what
                                     // this answer confirms (PRD
                                     // grid-ahead-of-herdr D-12).
-                                } else if !publish_replica(
+                                } else if !publish_session(
                                     &context,
                                     current,
                                     &mut catalog_cache,
@@ -963,7 +1018,7 @@ fn run_coordinator(
                         });
                         match settled {
                             Ok(true) => {
-                                if !publish_replica(
+                                if !publish_session(
                                     &context,
                                     current,
                                     &mut catalog_cache,
@@ -998,6 +1053,39 @@ fn run_coordinator(
                 // Cleared before the read, so a wake that lands during the
                 // publish asks for the next one rather than being lost.
                 republish_pending.store(false, Ordering::Release);
+                // A pulled engine woke this thread because its session
+                // changed: the session is read again, whole, and published.
+                if pulled_engine {
+                    if pulled.is_none() {
+                        // Not connected yet; the connect reads it.
+                        continue;
+                    }
+                    match super::pulled::PulledSession::read(&context) {
+                        Ok(session) => {
+                            let current = pulled.insert(session);
+                            if !publish_session(
+                                &context,
+                                &*current,
+                                &mut catalog_cache,
+                                &mut purpose_mirror,
+                                &mut labels,
+                                &mut arrivals,
+                            ) {
+                                return;
+                            }
+                        }
+                        Err(error) => {
+                            log_sync_failure(&context, "pulled_read.failed", None, &error);
+                            pulled = None;
+                            if !publish_failure(&context, error) {
+                                return;
+                            }
+                            reconnect_at = Instant::now() + reconnect_delay;
+                            reconnect_delay = next_reconnect_delay(reconnect_delay);
+                        }
+                    }
+                    continue;
+                }
                 // Hide draws ahead of Herdr only on this machine's Herdr; a
                 // device's coordinator is woken for its hooks' reports, which
                 // its publish lays on (`agent_hooks::facts`). The published
@@ -1006,7 +1094,7 @@ fn run_coordinator(
                 // does not hold the drawing back.
                 if subscription.is_some()
                     && let Some(current) = replica.as_mut()
-                    && !publish_replica(
+                    && !publish_session(
                         &context,
                         current,
                         &mut catalog_cache,
@@ -1027,9 +1115,9 @@ fn run_coordinator(
                         | exchange_pull_requests(&context, worker);
                     hand_memory_receipts(&context, worker);
                     changed
-                }) && subscription.is_some()
-                    && let Some(current) = replica.as_mut()
-                    && !publish_replica(
+                }) && let Some(current) =
+                    publish_source(&replica, &pulled, subscription.is_some())
+                    && !publish_session(
                         &context,
                         current,
                         &mut catalog_cache,
@@ -1306,9 +1394,56 @@ fn stand_in_unconfirmed_cwds(
     Some(stand_ins)
 }
 
-fn publish_replica(
+/// What a publish reads the session from (PRD engine-bundle-3-core-owns
+/// D-3): Herdr's event replica, or the last session a pulled engine
+/// answered (`pulled.rs`). [`publish_session`] is one function for both, so
+/// deleting the replica with Herdr leaves the pulled engine's publish whole.
+pub(super) trait PublishSource {
+    /// Panes whose cwd the engine announced and has not confirmed.
+    fn panes_awaiting_cwd(&self) -> Vec<String>;
+    /// The session the runtime may see, as the sidebar projects it.
+    fn project(&self) -> SessionSnapshotPayload;
+    /// The state behind [`Self::project`].
+    fn published_state(&self) -> &ProjectionState;
+    /// Whether the agents' telemetry is confirmed rather than held over.
+    fn agents_confirmed(&self) -> bool;
+}
+
+impl PublishSource for SessionReplica {
+    fn panes_awaiting_cwd(&self) -> Vec<String> {
+        SessionReplica::panes_awaiting_cwd(self)
+    }
+
+    fn project(&self) -> SessionSnapshotPayload {
+        SessionReplica::project(self)
+    }
+
+    fn published_state(&self) -> &ProjectionState {
+        &self.published_state
+    }
+
+    fn agents_confirmed(&self) -> bool {
+        self.agents_confirmed
+    }
+}
+
+/// The session a publish reads now: the pulled engine's last read, else the
+/// replica while `subscribed` lets it publish.
+fn publish_source<'a>(
+    replica: &'a Option<SessionReplica>,
+    pulled: &'a Option<super::pulled::PulledSession>,
+    subscribed: bool,
+) -> Option<&'a dyn PublishSource> {
+    match (pulled, replica) {
+        (Some(pulled), _) => Some(pulled),
+        (None, Some(replica)) if subscribed => Some(replica),
+        _ => None,
+    }
+}
+
+fn publish_session(
     context: &SessionSyncContext,
-    replica: &mut SessionReplica,
+    replica: &dyn PublishSource,
     catalog_cache: &mut CatalogState,
     purpose_mirror: &mut Option<crate::worktree_control::PurposeMirror>,
     labels: &mut Option<LabelWorker>,
@@ -1324,7 +1459,7 @@ fn publish_replica(
         exchange_pull_requests(context, worker);
         hand_memory_receipts(context, worker);
         take_label_switch(context, worker);
-        observe_labels(worker, replica);
+        observe_labels(worker, replica.published_state());
         worker.overlay()
     });
     // Observe native state from the payload before the overlay is laid on
@@ -1362,7 +1497,7 @@ fn publish_replica(
                 Some(stand_ins) => catalog_cache.stand_ins = stand_ins,
                 None => {
                     catalog_cache.held_for_cwd = true;
-                    if replica.agents_confirmed || catalog_cache.accepted_stale {
+                    if replica.agents_confirmed() || catalog_cache.accepted_stale {
                         return true;
                     }
                     let Some(accepted) = catalog_cache.accepted.as_ref() else {
@@ -1405,7 +1540,7 @@ fn publish_replica(
         });
     }
     if held_state.is_none() {
-        let mut accepted = replica.published_state.clone();
+        let mut accepted = replica.published_state().clone();
         // Cache the cwd actually accepted for each pane, including a
         // confirmed sibling's stand-in, before any label overlay is applied.
         let cwds: HashMap<_, _> = payload
@@ -1419,7 +1554,7 @@ fn publish_replica(
             }
         }
         catalog_cache.accepted = Some(accepted);
-        catalog_cache.accepted_stale = !replica.agents_confirmed;
+        catalog_cache.accepted_stale = !replica.agents_confirmed();
     }
     if let SessionSyncTarget::Remote { target_id, .. } = &context.target {
         if let Some(overlay) = &overlay {
@@ -1441,7 +1576,9 @@ fn publish_replica(
         let turns = crate::runtime::delivery::delivery_turns(&payload);
         let projection = match held_state.as_ref() {
             Some(state) => SessionReplica::project_remote_state(state, target_id, payload),
-            None => replica.project_remote(target_id, payload),
+            None => {
+                SessionReplica::project_remote_state(replica.published_state(), target_id, payload)
+            }
         };
         let (fetched, excluded) = match projection {
             Ok((mut session, excluded)) => {
@@ -1900,8 +2037,7 @@ fn take_session_rereads(context: &SessionSyncContext, worker: &mut LabelWorker) 
 
 /// Hands the worker the agents and the complete pane topology the replica
 /// publishes. Per publish this is one pass over the agents and the panes.
-fn observe_labels(worker: &mut LabelWorker, replica: &SessionReplica) {
-    let state = &replica.published_state;
+fn observe_labels(worker: &mut LabelWorker, state: &ProjectionState) {
     let agents: Vec<ObservedAgent> = state
         .agents
         .iter()
@@ -2847,7 +2983,7 @@ mod focus_readback_order_tests {
             local: hide_node::Local::of_process(),
         }));
         let mut cache = CatalogState::default();
-        assert!(publish_replica(
+        assert!(publish_session(
             &context,
             &mut first.clone(),
             &mut cache,
@@ -2858,7 +2994,7 @@ mod focus_readback_order_tests {
         asked.recv_timeout(Duration::from_secs(30)).unwrap();
         let mut changed = SessionReplica::from_snapshot(&snapshot(&["p1"], "p1", true)).unwrap();
         changed.state.panes[0].cwd = Some("/unverified/new-checkout".to_owned());
-        assert!(publish_replica(
+        assert!(publish_session(
             &context,
             &mut changed,
             &mut cache,
@@ -3002,7 +3138,7 @@ mod focus_readback_order_tests {
                 ..Default::default()
             };
             let publish = |replica: &mut SessionReplica, cache: &mut CatalogState| {
-                assert!(publish_replica(
+                assert!(publish_session(
                     &context,
                     replica,
                     cache,
@@ -3202,7 +3338,7 @@ mod focus_readback_order_tests {
         let context = context_for(&runtime, &herdr);
         let mut cache = CatalogState::default();
         let publish = |replica: &mut SessionReplica, cache: &mut CatalogState| {
-            assert!(publish_replica(
+            assert!(publish_session(
                 &context,
                 replica,
                 cache,
@@ -3380,7 +3516,7 @@ mod focus_readback_order_tests {
         let context = context_for(&runtime, &herdr);
 
         let publish = thread::spawn(move || {
-            publish_replica(
+            publish_session(
                 &context,
                 &mut closed,
                 &mut CatalogState::default(),
@@ -3428,7 +3564,7 @@ mod focus_readback_order_tests {
         let (herdr, asked, release) = holding_herdr("p1");
         let context = context_for(&runtime, &herdr);
 
-        assert!(publish_replica(
+        assert!(publish_session(
             &context,
             &mut moved,
             &mut CatalogState::default(),
