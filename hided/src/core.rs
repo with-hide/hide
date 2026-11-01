@@ -1225,6 +1225,11 @@ fn local_engine(
             // The engine's folders and Git are this machine's, read by a node
             // answering for the core's home as the core's own node does.
             let node = Arc::new(hide_node::Local::new(Some(home.clone())));
+            // The engine opens knowing the operator's agents, so the restore
+            // that starts with it resumes theirs too; a folder that cannot be
+            // read leaves the built-in ones, and the core's read logs why.
+            let definitions = hide_kit::agent_definitions::read(&home)
+                .unwrap_or_else(|_| hide_agent_adapter::definition::Catalog::read(Vec::new()));
             EngineHandle::own(
                 Arc::new(LocalPanes::new(
                     holders,
@@ -1234,6 +1239,7 @@ fn local_engine(
                 node,
                 state_dir.to_path_buf(),
                 home,
+                definitions,
             )
             .map(Some)
         }

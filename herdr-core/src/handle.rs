@@ -784,7 +784,14 @@ impl Core {
         if !check_owner_thread(self, "agent.definitions") {
             return;
         }
-        let changed = lock_recover(&self.runtime).settle_agent_definitions(home, read);
+        let (changed, handoff) = {
+            let mut runtime = lock_recover(&self.runtime);
+            let changed = runtime.settle_agent_definitions(home, read);
+            (changed, runtime.agent_definitions_for_engine())
+        };
+        if let Some((engine, catalog)) = handoff {
+            engine.set_agent_definitions(catalog);
+        }
         if changed {
             notify_change(self);
         }

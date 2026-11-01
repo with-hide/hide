@@ -88,6 +88,20 @@ impl Runtime {
         true
     }
 
+    /// The engine of this machine's session and the definitions it starts,
+    /// recognizes and reads agents by, handed to it off the lock after each
+    /// settle; `None` while the definitions are off or no session runs.
+    pub(crate) fn agent_definitions_for_engine(
+        &self,
+    ) -> Option<(crate::engine::SharedEngine, std::sync::Arc<Catalog>)> {
+        let state = self.agent_definitions.as_ref()?;
+        let live = self.live.as_ref()?;
+        Some((
+            std::sync::Arc::clone(&live.engine),
+            std::sync::Arc::new(state.catalog.clone()),
+        ))
+    }
+
     /// Settings › Agents opened: read the folder again on a worker. Nothing
     /// is read while the definitions are off, or while a read runs.
     pub(super) fn request_agent_definitions(&mut self) -> bool {
@@ -114,10 +128,16 @@ impl Runtime {
                 let Some(runtime) = context.runtime.upgrade() else {
                     return;
                 };
-                let changed = runtime
+                let (changed, handoff) = runtime
                     .lock()
-                    .map(|mut guard| guard.settle_agent_definitions(home, read))
-                    .unwrap_or(false);
+                    .map(|mut guard| {
+                        let changed = guard.settle_agent_definitions(home, read);
+                        (changed, guard.agent_definitions_for_engine())
+                    })
+                    .unwrap_or((false, None));
+                if let Some((engine, catalog)) = handoff {
+                    engine.set_agent_definitions(catalog);
+                }
                 if changed {
                     context.notifier.notify();
                 }

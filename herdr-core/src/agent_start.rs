@@ -140,7 +140,7 @@ pub(crate) const NAME_RELEASE_WAIT: Duration = Duration::from_secs(10);
 pub(crate) const SHELL_STARTING: &str = "shell_starting";
 /// The pane token the integration's first prompt reports
 /// (`hide_host::shell_integration::PROMPT_TOKEN`).
-const PROMPT_TOKEN: &str = "hide_prompt";
+pub(crate) const PROMPT_TOKEN: &str = "hide_prompt";
 /// The most of a screen line a refusal carries.
 const SCREEN_LINE_CHARS: usize = 120;
 

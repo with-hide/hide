@@ -10,9 +10,11 @@ Licensed under the Apache License, Version 2.0.
 Hide changed it: each file says what changed, and hide-vt/PATCHES.md lists
 every change.
 
-hide-holder/src/encode.rs, and parts of hide-holder/src/screen.rs and
-hide-holder/src/pane.rs, are derived from Herdr's src/protocol/render_ansi.rs
-and src/pane/terminal.rs (https://github.com/herdrdev/herdr, release v0.9.5,
+hide-holder/src/encode.rs and hide-holder/src/osc.rs, and parts of
+hide-holder/src/screen.rs, hide-holder/src/pane.rs and
+hide-holder/src/foreground.rs, are derived from Herdr's
+src/protocol/render_ansi.rs, src/pane/osc.rs, src/pane/terminal.rs and
+src/detect/mod.rs (https://github.com/herdrdev/herdr, release v0.9.5,
 commit 2ecf19a).
 Copyright 2025 herdr contributors.
 Licensed under the Apache License, Version 2.0.
@@ -40,6 +42,14 @@ herdr-core/src/engine/own/worktrees.rs from Herdr's src/worktree.rs
 Copyright 2025 herdr contributors.
 Licensed under the Apache License, Version 2.0.
 Hide changed them: each file says what it took and what changed.
+
+herdr-core/src/engine/own/shell_line.rs is derived from Herdr's
+src/platform/mod.rs, src/platform/macos.rs, src/platform/linux.rs,
+src/platform/windows.rs, src/agent_resume.rs and src/terminal/title.rs
+(https://github.com/herdrdev/herdr, release v0.9.5, commit 2ecf19a).
+Copyright 2025 herdr contributors.
+Licensed under the Apache License, Version 2.0.
+Hide changed it: the file says what it took and what changed.
 
 hide-vt links libghostty-vt, which its build downloads from that Herdr release
 (vendor/libghostty-vt: the libghostty-vt source dist of Ghostty commit
