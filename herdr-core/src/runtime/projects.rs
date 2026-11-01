@@ -1,3 +1,4 @@
+use super::worktree_command::{RemovalRefused, RemovalStart};
 use super::*;
 use crate::model::GithubReadOutcome;
 
@@ -2121,34 +2122,116 @@ impl Runtime {
     }
 
     pub(super) fn remove_git_worktree(&mut self, payload: RemoveWorktreePayload) -> bool {
+        match self.start_git_worktree_removal(payload, None) {
+            Ok(RemovalStart::Started(_)) => true,
+            // The same removal is already running: nothing changes.
+            Ok(RemovalStart::Running(_)) => false,
+            Err(refused) => {
+                self.set_error(refused.kind, refused.message, true);
+                true
+            }
+        }
+    }
+
+    /// Starts the removal `payload` asks for through the one gate, receipt
+    /// and close-then-remove worker the delete dialog and `hide workspace
+    /// remove` share. `consent` is the command's own: it judges the listed
+    /// row before anything is recorded, and the dialog passes none because
+    /// its payload already carries the operator's choices.
+    pub(super) fn start_git_worktree_removal(
+        &mut self,
+        mut payload: RemoveWorktreePayload,
+        consent: Option<
+            &dyn Fn(
+                &crate::model::WorktreeSnapshot,
+                &mut RemoveWorktreePayload,
+            ) -> Result<(), RemovalRefused>,
+        >,
+    ) -> Result<RemovalStart, RemovalRefused> {
         if let Some(removal) = self.snapshot.worktree_removal.as_ref()
             && matches!(removal.phase.as_str(), "checking" | "closing" | "removing")
         {
             if removal.checkout_path == payload.checkout_path {
-                return false;
+                return Ok(RemovalStart::Running(removal.id));
             }
-            self.set_error(
+            return Err(RemovalRefused::new(
                 "worktree.remove_busy",
                 format!(
                     "Finish removing {} before deleting another worktree",
                     removal.checkout_path
                 ),
-                true,
-            );
-            return true;
+            ));
         }
-        if let Some(device) = payload
+        let device = payload
             .device_id
             .clone()
-            .filter(|device| device != self.node.as_str())
-        {
-            return self.remove_device_worktree(&device, payload);
+            .filter(|device| device != self.node.as_str());
+        let Some((repository_root, protected_base_branch, worktree)) =
+            self.listed_worktree(device.as_deref(), &payload.checkout_path)
+        else {
+            if let Some((root, branch)) =
+                self.unlisted_missing_worktree(device.as_deref(), &payload.checkout_path)
+            {
+                if let Some(device) = device.as_deref() {
+                    self.device_worktree_target(device)
+                        .map_err(Self::device_unavailable)?;
+                }
+                return Ok(RemovalStart::Started(self.remove_unlisted_worktree(
+                    device.as_deref(),
+                    root,
+                    branch,
+                    payload,
+                )));
+            }
+            match device.as_deref() {
+                Some(device) => {
+                    self.request_device_worktrees(device, true);
+                }
+                None => self.refresh_worktrees(),
+            }
+            return Err(RemovalRefused::new(
+                "worktree.remove_unknown",
+                format!("Worktree is no longer listed: {}", payload.checkout_path),
+            ));
+        };
+        if let Some(consent) = consent {
+            consent(&worktree, &mut payload)?;
         }
-        let target = self.worktree_catalog.projects.iter().find_map(|project| {
+        Self::worktree_removal_allowed(&worktree, &payload)?;
+        if let Some(device) = device.as_deref() {
+            self.device_worktree_target(device)
+                .map_err(Self::device_unavailable)?;
+        }
+        let id = self.begin_worktree_removal(
+            device.as_deref(),
+            repository_root,
+            protected_base_branch,
+            worktree,
+            &payload,
+        );
+        self.start_worktree_preflight(id, device, payload.close_descendant_pane_ids);
+        Ok(RemovalStart::Started(id))
+    }
+
+    fn device_unavailable(message: String) -> RemovalRefused {
+        RemovalRefused::new(
+            "worktree.remove_unavailable",
+            format!("Deleting a worktree on this device needs its connection: {message}"),
+        )
+    }
+
+    /// A linked worktree row Git's last answer lists, with its project's
+    /// root and base branch: this machine's catalog, or a device's.
+    pub(super) fn listed_worktree(
+        &self,
+        device: Option<&str>,
+        checkout_path: &str,
+    ) -> Option<(String, Option<String>, crate::model::WorktreeSnapshot)> {
+        let row = |project: &crate::model::ProjectWorktreesSnapshot| {
             project
                 .worktrees
                 .iter()
-                .find(|worktree| worktree.path == payload.checkout_path)
+                .find(|worktree| worktree.path == checkout_path)
                 .map(|worktree| {
                     (
                         project.root_path.clone(),
@@ -2156,100 +2239,14 @@ impl Runtime {
                         worktree.clone(),
                     )
                 })
-        });
-        let Some((repository_root, protected_base_branch, worktree)) = target else {
-            if let Some((root, branch)) =
-                self.unlisted_missing_worktree(None, &payload.checkout_path)
-            {
-                return self.remove_unlisted_worktree(None, root, branch, payload);
-            }
-            self.set_error(
-                "worktree.remove_unknown",
-                format!("Worktree is no longer listed: {}", payload.checkout_path),
-                true,
-            );
-            self.refresh_worktrees();
-            return true;
         };
-        if !self.worktree_removal_allowed(&worktree, &payload) {
-            return true;
+        match device {
+            Some(device) => self
+                .device_worktrees
+                .get(device)
+                .and_then(|worktrees| worktrees.projects.values().find_map(row)),
+            None => self.worktree_catalog.projects.iter().find_map(row),
         }
-        let id = self.begin_worktree_removal(
-            None,
-            repository_root,
-            protected_base_branch,
-            worktree,
-            &payload,
-        );
-        self.start_worktree_preflight(id, None, payload.close_descendant_pane_ids)
-    }
-
-    /// `remove_worktree` for a device's linked worktree (PRD S5.5 B28, B29):
-    /// the same gate, receipt and phases as this machine's, with the device's
-    /// Herdr closing its panes and its helper rechecking and removing.
-    fn remove_device_worktree(&mut self, device: &str, payload: RemoveWorktreePayload) -> bool {
-        let target = self.device_worktrees.get(device).and_then(|worktrees| {
-            worktrees.projects.values().find_map(|project| {
-                project
-                    .worktrees
-                    .iter()
-                    .find(|worktree| worktree.path == payload.checkout_path)
-                    .map(|worktree| {
-                        (
-                            project.root_path.clone(),
-                            project.base_branch.clone(),
-                            worktree.clone(),
-                        )
-                    })
-            })
-        });
-        let Some((repository_root, protected_base_branch, worktree)) = target else {
-            if let Some((root, branch)) =
-                self.unlisted_missing_worktree(Some(device), &payload.checkout_path)
-            {
-                if let Err(message) = self.device_worktree_target(device) {
-                    self.set_error(
-                        "worktree.remove_unavailable",
-                        format!(
-                            "Deleting a worktree on this device needs its connection: {message}"
-                        ),
-                        true,
-                    );
-                    return true;
-                }
-                return self.remove_unlisted_worktree(Some(device), root, branch, payload);
-            }
-            self.set_error(
-                "worktree.remove_unknown",
-                format!("Worktree is no longer listed: {}", payload.checkout_path),
-                true,
-            );
-            self.request_device_worktrees(device, true);
-            return true;
-        };
-        if !self.worktree_removal_allowed(&worktree, &payload) {
-            return true;
-        }
-        if let Err(message) = self.device_worktree_target(device) {
-            self.set_error(
-                "worktree.remove_unavailable",
-                format!("Deleting a worktree on this device needs its connection: {message}"),
-                true,
-            );
-            return true;
-        }
-        let id = self.begin_worktree_removal(
-            Some(device),
-            repository_root,
-            protected_base_branch,
-            worktree,
-            &payload,
-        );
-        self.start_worktree_preflight(
-            id,
-            Some(device.to_owned()),
-            payload.close_descendant_pane_ids,
-        )
     }
 
     /// The project root and branch of a linked worktree row whose folder is
@@ -2302,7 +2299,7 @@ impl Runtime {
         repository_root: String,
         branch: Option<String>,
         payload: RemoveWorktreePayload,
-    ) -> bool {
+    ) -> u64 {
         self.next_worktree_removal_id = self.next_worktree_removal_id.wrapping_add(1).max(1);
         let id = self.next_worktree_removal_id;
         self.snapshot.worktree_removal = Some(crate::model::WorktreeRemovalSnapshot {
@@ -2331,7 +2328,8 @@ impl Runtime {
             device.map(str::to_owned),
             payload.checkout_path,
             payload.close_descendant_pane_ids,
-        )
+        );
+        id
     }
 
     fn start_worktree_preflight(
@@ -2509,33 +2507,29 @@ impl Runtime {
     /// and a folder whose loss the operator did not accept is refused with
     /// what changed, since the confirmation they saw may be older than the row.
     fn worktree_removal_allowed(
-        &mut self,
         worktree: &crate::model::WorktreeSnapshot,
         payload: &RemoveWorktreePayload,
-    ) -> bool {
+    ) -> Result<(), RemovalRefused> {
         if let Some(blocked) = worktree.deletion_gate.blocked.as_ref() {
-            self.set_error(
+            return Err(RemovalRefused::new(
                 "worktree.remove_blocked",
                 format!("Not deleted: the deletion gate refuses it ({blocked:?})"),
-                true,
-            );
-            return false;
+            ));
         }
         if worktree.ignored_repositories != payload.expected_ignored_repositories {
-            self.set_error("worktree.remove_ignored_changed", "Not deleted: the ignored repository list changed. Refresh and review every repository before choosing Discard.".to_owned(), true);
-            return false;
+            return Err(RemovalRefused::new("worktree.remove_ignored_changed", "Not deleted: the ignored repository list changed. Refresh and review every repository before choosing Discard.".to_owned()));
         }
         if let Some(discard) = worktree.deletion_gate.discard.as_ref()
             && !payload.discard_changes
         {
-            self.set_error(
+            return Err(RemovalRefused::new(
                 "worktree.remove_discard_unconfirmed",
-                format!("Not deleted: deleting it would lose work the operator did not accept losing ({discard:?})"),
-                true,
-            );
-            return false;
+                format!(
+                    "Not deleted: deleting it would lose work the operator did not accept losing ({discard:?})"
+                ),
+            ));
         }
-        true
+        Ok(())
     }
 
     /// Records the confirmed removal the close worker then carries out, with

@@ -66,6 +66,7 @@ mod supervisor;
 pub mod terminal_hub;
 pub mod watch;
 pub mod workspace_cli;
+pub mod worktree_cli;
 
 use std::sync::atomic::{AtomicU64, AtomicUsize};
 use std::sync::{Arc, Mutex};

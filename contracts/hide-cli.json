@@ -2684,6 +2684,38 @@
             },
             "title": "Array_of_Watch",
             "type": "array"
+        },
+        "worktree_removed": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "description": "`hide workspace remove`: the worktree removed, with its Herdr workspace and panes closed first.",
+            "properties": {
+                "branch": {
+                    "description": "Its local branch, when it had one.",
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "branch_result": {
+                    "description": "What became of that branch: `kept` (not asked to go), `deleted`, or `remains` (Git refused to delete it).",
+                    "type": "string"
+                },
+                "removed": {
+                    "description": "The checkout's path, as the command named it.",
+                    "type": "string"
+                },
+                "repository": {
+                    "description": "The repository it was a worktree of.",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "branch_result",
+                "removed",
+                "repository"
+            ],
+            "title": "WorktreeRemoved",
+            "type": "object"
         }
     },
     "commands": [
@@ -3531,6 +3563,55 @@
                 "purpose_invalid",
                 "purpose_too_long",
                 "purpose_no_workspace"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "worktree_removed"
+            ],
+            "arguments": [
+                {
+                    "name": "path",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "workspace remove",
+            "options": [
+                {
+                    "name": "--delete-branch",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "name": "--force",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "worktree_remove_unknown",
+                "worktree_remove_blocked",
+                "worktree_remove_needs_force",
+                "worktree_remove_branch_unmerged",
+                "worktree_remove_branch_kept",
+                "worktree_remove_agent_working",
+                "worktree_remove_own_checkout",
+                "worktree_remove_busy",
+                "worktree_remove_unavailable",
+                "worktree_remove_stopped",
+                "worktree_remove_still_running",
+                "worktree_remove_pane_appeared",
+                "worktree_remove_changed",
+                "worktree_remove_close_failed",
+                "worktree_remove_host_failed",
+                "worktree_remove_result_unknown",
+                "worktree_remove_pending"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -4941,7 +5022,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:e2b2766197ea2610625457648691270613a6e6b069e5ed302db9052b922cdd8c",
+    "digest": "sha256:609966990a9c1e17931abb0578019131faddacedef8b56a685d5eddd042fd442",
     "envelopes": {
         "agent": {
             "answer": "value",
