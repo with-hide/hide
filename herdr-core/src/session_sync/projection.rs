@@ -120,6 +120,8 @@ impl ProjectionState {
                     record: None,
                     hook: None,
                     telemetry_stale: false,
+                    // Laid on from the pane by `project_agents`.
+                    terminal_failed: false,
                     id: agent.name.clone().or_else(|| Some(agent.pane_id.clone())),
                     name: agent.name.clone(),
                     pane_id: Some(agent.pane_id.clone()),
