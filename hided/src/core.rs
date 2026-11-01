@@ -273,6 +273,10 @@ pub struct CoreHandle {
     /// and a phone's read ask it without the owner thread or the runtime
     /// lock. `None` when the daemon runs without a Herdr server.
     engine: Option<EngineHandle>,
+    /// This machine's pane holders, when the core's own engine runs them:
+    /// the daemon lives while one of their panes may still run (PRD
+    /// engine-bundle-3-core-owns D-10).
+    holders: Option<Arc<Holders>>,
     /// What a shutdown ends, taken out by the first one, so a second
     /// shutdown or the `Drop` after it finds nothing left to close.
     running: Mutex<Option<Running>>,
@@ -798,6 +802,7 @@ impl CoreHandle {
             Arc::clone(&outputs) as Arc<dyn OutputSink>,
             Arc::clone(&reports),
         )?;
+        let pane_holders = holders.clone();
         let engine = local_engine(&options, &state_dir, holders, &local)?;
         let terminals = Arc::new(Router::new(
             Arc::clone(&local) as Arc<dyn hide_node_link::terminal::TerminalNode>,
@@ -832,6 +837,7 @@ impl CoreHandle {
             outputs,
             state_dir,
             engine,
+            holders: pane_holders,
             running: Mutex::new(Some(Running { thread, local })),
         })
     }
@@ -882,6 +888,11 @@ impl CoreHandle {
     /// server.
     pub fn engine(&self) -> Option<&EngineHandle> {
         self.engine.as_ref()
+    }
+
+    /// The pane holders of the core's own engine; `None` for Herdr.
+    pub fn pane_holders(&self) -> Option<&Arc<Holders>> {
+        self.holders.as_ref()
     }
 
     /// The engine the core holds for a connected SSH device; see
@@ -1172,14 +1183,16 @@ fn local_engine(
             "{} runs the core's own engine, which takes no Herdr socket",
             crate::env::HIDE_DEV_PANE_HOLDER
         )),
-        (Some(holders), None) => Ok(Some(EngineHandle::own(
+        (Some(holders), None) => EngineHandle::own(
             Arc::new(LocalPanes::new(
                 holders,
                 Arc::clone(service),
                 hide_node::terminal::engine_panes::interactive_shell(),
             )),
-            hide_kit::layout::engine_dir(state_dir),
-        ))),
+            state_dir.to_path_buf(),
+            core_home(options)?,
+        )
+        .map(Some),
         (None, Some(socket)) => Ok(Some(EngineHandle::herdr(hide_node::herdr(
             std::path::Path::new(socket),
         )))),
@@ -1207,12 +1220,7 @@ fn local_terminals(
                 .parent()
                 .ok_or("the app state path has no folder")?
                 .to_path_buf();
-            let home = match options.home.as_ref() {
-                Some(home) => std::path::PathBuf::from(home),
-                None => hide_platform::host::home_dir()
-                    .map_err(|error| format!("pane holders need a home folder: {error}"))?,
-            };
-            Some((home, state_dir))
+            Some((core_home(options)?, state_dir))
         }
     };
     Holders::start_local(
@@ -1223,6 +1231,16 @@ fn local_terminals(
         outputs,
         reports,
     )
+}
+
+/// The account home the core works for: the one the options name, else
+/// the process's.
+fn core_home(options: &CoreOptions) -> Result<std::path::PathBuf, String> {
+    match options.home.as_ref() {
+        Some(home) => Ok(std::path::PathBuf::from(home)),
+        None => hide_platform::host::home_dir()
+            .map_err(|error| format!("pane holders need a home folder: {error}")),
+    }
 }
 
 /// This machine's Herdr, through the official `herdr terminal session`

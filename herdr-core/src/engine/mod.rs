@@ -596,18 +596,24 @@ impl EngineHandle {
         }
     }
 
-    /// The core's own engine, whose panes `holders` run, standing for the
-    /// state folder at `scope` (`hide_kit::layout::engine_dir`). Only a
-    /// daemon with the development switch `HIDE_DEV_PANE_HOLDER` on builds
-    /// it (PRD engine-bundle-3-core-owns D-5).
+    /// The core's own engine, whose panes `holders` run, for the state
+    /// folder `state_dir`: it stands for that folder's engine folder
+    /// (`hide_kit::layout::engine_dir`), saves its session there and lays
+    /// the saved session out again as it opens, and `home` is where it opens
+    /// worktrees and a restored pane whose folder is gone. Only a daemon
+    /// with the development switch `HIDE_DEV_PANE_HOLDER` on builds it (PRD
+    /// engine-bundle-3-core-owns D-5).
     pub fn own(
         holders: Arc<dyn hide_node_link::holders::PaneHolders>,
-        scope: std::path::PathBuf,
-    ) -> Self {
-        Self {
-            engine: Arc::new(own::OwnEngine::new(holders)),
+        state_dir: std::path::PathBuf,
+        home: std::path::PathBuf,
+    ) -> Result<Self, String> {
+        let scope = hide_kit::layout::engine_dir(&state_dir);
+        let engine = own::OwnEngine::open(holders, own::Place { state_dir, home })?;
+        Ok(Self {
+            engine: Arc::new(engine),
             own_scope: Some(scope),
-        }
+        })
     }
 
     /// The folder the core's own engine stands for; `None` for Herdr.
