@@ -862,7 +862,7 @@ function RowActions({ workspace, items, onSelect }: { workspace: Workspace; item
         <EntryDropdown
           label={t("common.entryActions", { name: workspace.label })}
           items={items}
-          onSelect={(id) => id === "project_settings" ? useUiStore.getState().openProjectSettings(settingsTarget(workspace), more.current) : onSelect(id)}
+          onSelect={(id) => id === "project_settings" || id === "rename_project" ? useUiStore.getState().openProjectSettings(settingsTarget(workspace), more.current, id === "rename_project" ? "name" : undefined) : onSelect(id)}
           align="start"
           hint={t("sidebar.moreActionsFor", { name: workspace.label })}
           onOpenChange={setMenuOpen}
@@ -1642,6 +1642,8 @@ function runProjectItem(actions: Actions, workspace: Workspace, item: MenuItem["
   switch (item) {
     case "project_settings":
       return useUiStore.getState().openProjectSettings(settingsTarget(workspace));
+    case "rename_project":
+      return useUiStore.getState().openProjectSettings(settingsTarget(workspace), null, "name");
     case "new_worktree":
       return useUiStore.getState().setWorkspaceDialog({ kind: "new_worktree", workspaceId: workspace.id });
     case "new_tab_primary": {
@@ -1692,6 +1694,8 @@ function runCheckoutItem(actions: Actions, workspace: Workspace, checkout: Check
       return actions.openInEditor(checkout.path);
     case "delete_worktree":
       return useUiStore.getState().setWorkspaceDialog({ kind: "delete_worktree", workspaceId: workspace.id, checkoutId: checkout.id });
+    case "remove_project":
+      return useUiStore.getState().setWorkspaceDialog({ kind: "remove_project", workspaceId: workspace.id });
   }
 }
 

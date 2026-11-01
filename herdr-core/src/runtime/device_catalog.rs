@@ -39,6 +39,10 @@ impl Runtime {
             &self.snapshot.ui_state.workspace_registrations,
             facts,
         );
+        crate::project_settings::apply_names(
+            &self.snapshot.ui_state.project_settings,
+            &mut session.workspaces,
+        );
         let reports_own_facts = self
             .link_origin(target)
             .is_some_and(LinkOrigin::reports_own_facts);

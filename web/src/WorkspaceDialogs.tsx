@@ -37,6 +37,8 @@ import {
   PURPOSE_HARD_LIMIT,
   branchProblem,
   deletionFacts,
+  unlistedRemovalFacts,
+  unlistedWorktree,
   discardConfirmationKey,
   factsLine,
   normalizePurpose,
@@ -136,7 +138,7 @@ export function WorkspaceDialogs({ actions }: { actions: Actions }) {
   if (dialog.kind === "disk_cleanup") return <DiskCleanupSheet key={dialog.workspaceId} actions={actions} workspace={target.workspace} filter={dialog.filter} onClose={close} />;
   if (dialog.kind === "remove_project") return <RemoveProjectDialog actions={actions} workspace={target.workspace} listed={found !== null} onClose={close} />;
   if (dialog.kind === "purpose" && target.checkout) return <PurposeDialog actions={actions} checkout={target.checkout} deviceLabel={deviceLabel(target.workspace)} onClose={close} />;
-  if (dialog.kind === "delete_worktree" && target.checkout) return <DeleteWorktreeDialog actions={actions} deviceId={target.workspace.device_id} checkout={target.checkout} listed={!!found?.checkout} onClose={close} />;
+  if (dialog.kind === "delete_worktree" && target.checkout) return <DeleteWorktreeDialog actions={actions} deviceId={target.workspace.device_id} checkout={target.checkout} unlisted={unlistedWorktree(target.workspace, target.checkout)} listed={!!found?.checkout} onClose={close} />;
   return null;
 }
 
@@ -447,7 +449,7 @@ function PurposeDialog({ actions, checkout, deviceLabel, onClose }: { actions: A
   );
 }
 
-function DeleteWorktreeDialog({ actions, deviceId, checkout, listed, onClose }: { actions: Actions; deviceId: string; checkout: Checkout; listed: boolean; onClose: () => void }) {
+function DeleteWorktreeDialog({ actions, deviceId, checkout, unlisted, listed, onClose }: { actions: Actions; deviceId: string; checkout: Checkout; unlisted: boolean; listed: boolean; onClose: () => void }) {
   const { t } = useInterfaceTranslation();
   const row = checkout.worktree;
   const gate = row?.deletion_gate;
@@ -469,6 +471,8 @@ function DeleteWorktreeDialog({ actions, deviceId, checkout, listed, onClose }: 
   // back under the reason and Delete tries again on the row as it is now.
   const failure = refused ? coreErrorText(refused, t, "workspace.deleteFailed") : removal?.phase === "failed" ? removalNoticeText(removal.notice, removal.phase, t) : null;
   const choosing = !!row && !!gate && !gate.blocked && !inFlight && !finished;
+  // Git no longer lists it and its folder is gone: closing its panes is the whole removal.
+  const choosingUnlisted = unlisted && !inFlight && !finished;
   const branch = row?.branch ?? checkout.branch;
   const needsDiscard = !!gate?.discard;
   const inside = checkout.tabs.flatMap((tab) => tab.panes.map((pane) => pane.id));
@@ -495,7 +499,7 @@ function DeleteWorktreeDialog({ actions, deviceId, checkout, listed, onClose }: 
           <AlertDialogTitle className="break-words">{t("workspace.deleteTitle", { name: branch ?? checkout.label })}</AlertDialogTitle>
           <AlertDialogDescription className="break-all font-mono text-caption text-muted-foreground">{checkout.path}</AlertDialogDescription>
         </AlertDialogHeader>
-        {!row || !gate ? (
+        {(!row || !gate) && !unlisted ? (
           <Status tone="pending" data-delete-reading="true">
             {t("workspace.readingGit")}
           </Status>
@@ -551,7 +555,12 @@ function DeleteWorktreeDialog({ actions, deviceId, checkout, listed, onClose }: 
             ) : null}
           </>
         ) : null}
-        {subtree && (choosing || closingOutside) ? <OutsideAgents actions={actions} subtree={subtree} what="worktree" targetDevice={deviceId} /> : null}
+        {choosingUnlisted ? (
+          <p className="break-words text-body text-subtle-foreground" data-delete-consequences="unlisted">
+            {factsLine(unlistedRemovalFacts(checkout, paneCount, t))}
+          </p>
+        ) : null}
+        {subtree && (choosing || choosingUnlisted || closingOutside) ? <OutsideAgents actions={actions} subtree={subtree} what="worktree" targetDevice={deviceId} /> : null}
         {inFlight ? (
           <Status tone="pending" data-delete-phase={closingOutside ? "closing_outside" : (removal?.phase ?? "requested")}>
             {removal === null || removal.phase === "checking"
@@ -586,6 +595,19 @@ function DeleteWorktreeDialog({ actions, deviceId, checkout, listed, onClose }: 
           ) : choosing && gate ? (
             <Button variant="destructive" disabled={needsDiscard && !discard} onClick={() => confirm(false)} data-delete-confirm="true">
               {deleteButtonText(gate, t)}
+            </Button>
+          ) : choosingUnlisted && subtree ? (
+            <>
+              <Button variant="secondary" onClick={() => confirm(false)} data-delete-confirm="only">
+                {t("workspace.removeRowOnly")}
+              </Button>
+              <Button variant="destructive" disabled={subtree.unknown} onClick={() => confirm(true)} data-delete-confirm="with-outside">
+                {t("workspace.closeAgentsRemove", { count: subtree.ids.length })}
+              </Button>
+            </>
+          ) : choosingUnlisted ? (
+            <Button variant="destructive" onClick={() => confirm(false)} data-delete-confirm="true">
+              {paneCount > 0 ? t("workspace.closePanesRemove", { count: paneCount }) : t("workspace.removeRow")}
             </Button>
           ) : null}
         </AlertDialogFooter>

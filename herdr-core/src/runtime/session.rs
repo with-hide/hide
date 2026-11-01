@@ -445,6 +445,10 @@ impl Runtime {
             &mut workspaces,
             &self.snapshot.ui_state.collapsed_workspace_ids,
         );
+        crate::project_settings::apply_names(
+            &self.snapshot.ui_state.project_settings,
+            &mut workspaces,
+        );
         let projected_agents = project_agents(payload.clone()).agents;
         let listening_ports = self.listening_ports.entries.clone();
 
@@ -5830,6 +5834,10 @@ impl Runtime {
         Self::apply_workspace_expansion(
             &mut workspaces,
             &self.snapshot.ui_state.collapsed_workspace_ids,
+        );
+        crate::project_settings::apply_names(
+            &self.snapshot.ui_state.project_settings,
+            &mut workspaces,
         );
         crate::agent_state::sync_checkout_agent_summaries(
             &mut workspaces,

@@ -789,3 +789,92 @@ fn a_watched_change_reuses_unmoved_worktrees_and_a_failed_read_is_tried_again() 
     });
     assert_eq!(*host.reuse.lock().unwrap(), [false, true, true, false]);
 }
+
+/// A linked worktree whose folder is gone and that Git no longer lists, the
+/// row its panes keep: Git has the project's other rows but this one is
+/// missing and unlisted.
+fn unlisted_worktree_runtime(repo: &Repo, git_answered: bool) -> SharedRuntime {
+    std::fs::remove_dir_all(&repo.linked).unwrap();
+    git(&repo.root, &["worktree", "prune"]);
+    let shared = device_runtime(repo);
+    {
+        let mut runtime = shared.lock().unwrap();
+        let main = runtime.device_worktrees[DEVICE].projects[&repo.root]
+            .worktrees
+            .iter()
+            .find(|row| row.path == repo.root)
+            .cloned()
+            .expect("Git lists the main worktree");
+        let project = &mut runtime.snapshot.status.remote[0]
+            .session
+            .as_mut()
+            .unwrap()
+            .workspaces[0];
+        project.checkouts[0].worktree = git_answered.then_some(main);
+        let mut gone = checkout(
+            &project.id,
+            &format!("remote:{DEVICE}:checkout:w2"),
+            &repo.linked,
+            None,
+        );
+        gone.branch = Some("feature".to_owned());
+        gone.is_worktree = true;
+        gone.exists = false;
+        project.checkouts.push(gone);
+    }
+    shared
+}
+
+#[test]
+fn an_unlisted_missing_worktree_row_is_removed_without_asking_git_and_keeps_its_branch() {
+    let repo = repo();
+    let shared = unlisted_worktree_runtime(&repo, true);
+    dispatch(
+        &shared,
+        "remove_worktree",
+        serde_json::json!({"device_id": DEVICE, "checkout_path": repo.linked, "delete_branch": true}),
+    );
+    wait(&shared, "the unlisted removal to end", |runtime| {
+        runtime
+            .snapshot
+            .worktree_removal
+            .as_ref()
+            .is_some_and(|removal| matches!(removal.phase.as_str(), "finished" | "failed"))
+    });
+    let removal = shared
+        .lock()
+        .unwrap()
+        .snapshot
+        .worktree_removal
+        .clone()
+        .unwrap();
+    assert_eq!(removal.phase, "finished", "{:?}", removal.notice);
+    assert_eq!(
+        removal.notice,
+        Some(crate::model::WorktreeRemovalNotice::Removed {
+            branch: hide_node_link::worktrees::RemovalBranch::Kept
+        })
+    );
+    assert_eq!(last_error(&shared), None);
+    assert_eq!(
+        git(&repo.root, &["branch", "--list", "feature"]).trim(),
+        "feature",
+        "a row Git does not list has no branch for the removal to take"
+    );
+}
+
+#[test]
+fn a_missing_worktree_row_git_has_not_answered_for_is_not_removed() {
+    let repo = repo();
+    let shared = unlisted_worktree_runtime(&repo, false);
+    dispatch(
+        &shared,
+        "remove_worktree",
+        serde_json::json!({"device_id": DEVICE, "checkout_path": repo.linked}),
+    );
+    assert_eq!(
+        last_error(&shared).as_deref(),
+        Some("worktree.remove_unknown")
+    );
+    assert!(shared.lock().unwrap().snapshot.worktree_removal.is_none());
+}
