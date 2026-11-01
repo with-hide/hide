@@ -14,6 +14,7 @@ use hide_herdr_client::{
 };
 use serde_json::Value;
 
+use super::keys::PaneKey;
 use super::{
     AgentLaunch, AgentState, Answer, CreatedWorktree, DeliveryAgent, Engine, EngineError,
     EngineHandle, Env, EventLine, EventReader, EventStream, Gate, Notified, OpenedWorktree,
@@ -822,6 +823,22 @@ impl Engine for HerdrEngine<'_> {
         self.act("pane.send_input", wire::pane_key_params(pane, key), wait)
     }
 
+    fn press_pane_keys(&self, wait: Wait, pane: &str, keys: &[PaneKey]) -> Answer<()> {
+        let names: Vec<&str> = keys.iter().map(|key| herdr_key(*key)).collect();
+        self.act(
+            "pane.send_keys",
+            wire::pane_send_keys_params(pane, &names),
+            wait,
+        )
+    }
+
+    fn paste_text(&self, wait: Wait, pane: &str, text: &str) -> Answer<()> {
+        // `pane.send_input` brackets its text when the pane's program asked
+        // for bracketed paste, as `agent.prompt` does (docs/delivery.md, The
+        // bell line); `pane.send_text` is not documented to.
+        self.act("pane.send_input", wire::pane_paste_params(pane, text), wait)
+    }
+
     fn notify(&self, wait: Wait, title: &str, body: &str) -> Answer<Notified> {
         let answer = self.ask(
             "notification.show",
@@ -1009,6 +1026,23 @@ impl EngineHandle {
     }
 }
 
+/// Herdr's key-combo name for one of Hide's keys (the socket API's
+/// `pane.send_keys`; `esc` is its canonical Escape).
+fn herdr_key(key: PaneKey) -> &'static str {
+    match key {
+        PaneKey::Esc => "esc",
+        PaneKey::Enter => "enter",
+        PaneKey::Tab => "tab",
+        PaneKey::ShiftTab => "shift+tab",
+        PaneKey::Up => "up",
+        PaneKey::Down => "down",
+        PaneKey::Left => "left",
+        PaneKey::Right => "right",
+        PaneKey::Backspace => "backspace",
+        PaneKey::CtrlC => "ctrl+c",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::{BufRead, BufReader};
@@ -1016,6 +1050,26 @@ mod tests {
     use hide_platform::ipc::LocalListener;
 
     use super::*;
+
+    /// Each of Hide's keys has its own Herdr name, so no two keys press the
+    /// same thing, and the call carries them in the order given.
+    #[test]
+    fn each_hide_key_is_pressed_by_its_own_herdr_name_in_order() {
+        let names: std::collections::HashSet<_> = PaneKey::ALL.into_iter().map(herdr_key).collect();
+        assert_eq!(names.len(), PaneKey::ALL.len());
+        let names: Vec<&str> = [PaneKey::Esc, PaneKey::ShiftTab, PaneKey::CtrlC]
+            .into_iter()
+            .map(herdr_key)
+            .collect();
+        assert_eq!(
+            wire::pane_send_keys_params("w1:p2", &names).unwrap(),
+            serde_json::json!({"pane_id":"w1:p2","keys":["esc","shift+tab","ctrl+c"]})
+        );
+        assert_eq!(
+            wire::pane_paste_params("w1:p2", "a\rb").unwrap(),
+            serde_json::json!({"pane_id":"w1:p2","text":"a\rb"})
+        );
+    }
 
     /// A call that reached the engine and was never answered is the one
     /// failure a caller reconciles after; a call that found no engine did

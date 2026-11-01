@@ -36,6 +36,9 @@ pub(crate) struct Observation {
     /// The last input hide routed to this pane: a key, a paste, a phone
     /// write or an agent-find key.
     pub last_input_at_unix_ms: u64,
+    /// When the core last read this agent's state (the observe pass that
+    /// laid it); it holds until a later read changes it.
+    pub observed_at_unix_ms: u64,
     /// The last moment the pane's input was proven submitted: a prompt hook
     /// of the pane's own session, or a phone reply. No key proves it. Input
     /// after it and after `entered_working_at_unix_ms` is an unsent draft.
@@ -328,6 +331,11 @@ impl Runtime {
                     _ => now,
                 },
                 released_input_at_unix_ms: previous.map_or(0, |old| old.released_input_at_unix_ms),
+                observed_at_unix_ms: if agent.telemetry_stale {
+                    previous.map_or(0, |old| old.observed_at_unix_ms)
+                } else {
+                    now
+                },
                 hook_submit_at_unix_ms: previous.map_or(0, |old| old.hook_submit_at_unix_ms),
                 session,
                 thread: super::session_thread::ThreadReference::of(agent),

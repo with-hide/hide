@@ -18,6 +18,7 @@ pub(crate) mod answers;
 #[cfg(test)]
 mod contract;
 pub mod herdr;
+pub mod keys;
 pub(crate) mod tokens;
 
 /// How long a call may wait for the engine and how much of an answer it
@@ -408,6 +409,11 @@ pub(crate) trait Engine: Send + Sync {
     fn submit_text(&self, wait: Wait, pane: &str, text: &str) -> Answer<()>;
     /// Presses one key in a pane.
     fn press_key(&self, wait: Wait, pane: &str, key: &str) -> Answer<()>;
+    /// Presses Hide's `keys` in a pane, in order, in one call.
+    fn press_pane_keys(&self, wait: Wait, pane: &str, keys: &[keys::PaneKey]) -> Answer<()>;
+    /// Puts `text` into a pane as one paste, bracketed when the program in
+    /// the pane asked for bracketed paste, with no Enter after it.
+    fn paste_text(&self, wait: Wait, pane: &str, text: &str) -> Answer<()>;
     /// Shows the operator a notification.
     fn notify(&self, wait: Wait, title: &str, body: &str) -> Answer<Notified>;
 

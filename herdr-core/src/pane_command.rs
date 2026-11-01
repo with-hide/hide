@@ -15,6 +15,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::engine::keys::PaneKey;
 use crate::engine::{EngineError, SharedEngine, Wait};
 
 /// How many of a pane's last lines a read prints when it names none.
@@ -23,6 +24,9 @@ pub const DEFAULT_LINES: u32 = 120;
 pub const LINES_LIMIT: u32 = 2_000;
 /// The most text one `hide pane send` types: a letter's body limit.
 pub const TEXT_LIMIT: usize = crate::delivery::BODY_LIMIT;
+/// The most keys one `hide pane send` presses: enough to walk any menu an
+/// agent draws, few enough that a wrong loop cannot flood a pane.
+pub const KEYS_LIMIT: usize = 32;
 /// The most characters a checkout's purpose takes.
 pub const PURPOSE_CHARS: usize = 40;
 /// The longest command `hide pane open` types: under the fewest bytes of an
@@ -46,11 +50,19 @@ pub enum PaneCommand {
     /// `hide agent read <agent> [--lines N]`: the agent by its name,
     /// registration id or pane, as a letter's target is named.
     AgentRead { agent: String, lines: u32 },
-    /// `hide pane send <pane> <text> [--enter]`.
+    /// `hide pane send <pane> [<text>] [--key <name>]... [--enter]
+    /// [--paste]`: the text, then the keys in order, then Enter.
     Send {
         pane: String,
-        text: String,
+        #[serde(default)]
+        text: Option<String>,
+        #[serde(default)]
+        keys: Vec<PaneKey>,
         enter: bool,
+        /// The text goes in as one paste, line breaks and all, where the
+        /// pane's agent is known to take one (`Runtime::prepare_pane_command`).
+        #[serde(default)]
+        paste: bool,
     },
     /// `hide pane open --beside [--focus] -- <command>`: the words after
     /// `--`, joined by spaces into the line the new pane's shell runs.
@@ -87,15 +99,39 @@ impl PaneCommand {
                 }
                 lines(*count)
             }
-            Self::Send { pane, text, .. } => {
+            Self::Send {
+                pane,
+                text,
+                keys,
+                enter,
+                paste,
+            } => {
                 if !key(pane) {
                     return Err("pane_unavailable");
                 }
-                if text.is_empty() {
-                    return Err("text_empty");
+                match text {
+                    Some(text) => {
+                        if text.is_empty() {
+                            return Err("text_empty");
+                        }
+                        if text.len() > TEXT_LIMIT {
+                            return Err("text_too_long");
+                        }
+                        // A control byte would act as a key the caller did
+                        // not name: an Escape could end a paste early and a
+                        // line break submit part of the text. Only a paste
+                        // carries line breaks and tabs.
+                        let kept = |c: char| *paste && matches!(c, '\n' | '\r' | '\t');
+                        if text.chars().any(|c| c.is_control() && !kept(c)) {
+                            return Err("text_invalid");
+                        }
+                    }
+                    None if *paste => return Err("text_empty"),
+                    None if keys.is_empty() && !enter => return Err("nothing_to_send"),
+                    None => {}
                 }
-                if text.len() > TEXT_LIMIT {
-                    return Err("text_too_long");
+                if keys.len() > KEYS_LIMIT {
+                    return Err("too_many_keys");
                 }
                 Ok(())
             }
@@ -133,6 +169,28 @@ pub fn next_action(code: &str) -> Option<&'static str> {
     Some(match code {
         "lines_out_of_range" => "Pass --lines from 1 to 2000",
         "text_empty" => "Pass the text to type",
+        "nothing_to_send" => "Pass text, one or more --key <name>, or --enter",
+        "text_invalid" => {
+            "Pass one line of text without control characters; for several lines add --paste, and press keys with --key"
+        }
+        "too_many_keys" => {
+            "Press at most 32 keys at a time; split them into several hide pane send calls"
+        }
+        "paste_unsupported" => {
+            "This pane's program is not known to take a paste as one; send one line at a time, with --key enter between lines only if each line should be submitted"
+        }
+        "pane_asleep" => {
+            "The agent in that pane is asleep or waking; send it a letter with hide request send instead"
+        }
+        "composer_not_empty" => {
+            "The agent's input box holds text, which may be a person's draft; nothing was sent. Read the pane with hide pane read, and send text and its keys in one hide pane send"
+        }
+        "keys_not_sent" => {
+            "The text was typed but the keys were not pressed; read the pane with hide pane read before sending again"
+        }
+        "send_unconfirmed" => {
+            "The send was made but its answer was lost, so part or all of it may have landed; read the pane with hide pane read before sending again"
+        }
         "text_too_long" => {
             "Send at most 16 KiB at a time; split the text into several hide pane send calls"
         }
@@ -177,11 +235,16 @@ pub struct PaneRead {
     pub truncated: bool,
 }
 
-/// `hide pane send`: the pane typed into, and whether Enter followed.
+/// `hide pane send`: the pane typed into and what reached it. Each field
+/// says what Herdr took, never what the program in the pane did with it:
+/// `enter_sent` is an Enter written, not a prompt accepted.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct PaneSent {
     pub pane: String,
-    pub submitted: bool,
+    pub text_sent: bool,
+    /// The keys pressed, in order, by the names `--key` takes.
+    pub keys_sent: Vec<PaneKey>,
+    pub enter_sent: bool,
 }
 
 /// `hide pane open`: the pane made beside the caller's, and whether it took
@@ -223,8 +286,10 @@ pub(crate) enum Step {
     Send {
         pane: String,
         raw: String,
-        text: String,
+        text: Option<String>,
+        keys: Vec<PaneKey>,
         enter: bool,
+        paste: bool,
     },
     Open {
         caller: String,
@@ -242,10 +307,18 @@ pub(crate) enum Step {
 pub struct Prepared {
     pub(crate) engine: SharedEngine,
     pub(crate) step: Step,
-    /// The observed pane a send types into, noted as input routed to it only
-    /// once the write completed: a failed or unknown write must not count as
-    /// the answer that allows typed input again (`delivery::typed`).
+    /// The pane a send types into as the core names it: noted as input
+    /// routed to it only once a write was taken, since a failed or unknown
+    /// write must not count as the answer that allows typed input again
+    /// (`delivery::typed`), and the key of its input gate and person check.
     pub(crate) noted: Option<String>,
+    /// The caller's pane, for the send's log record.
+    pub(crate) caller: String,
+    /// Admits a send's write to its pane (`input_gate`).
+    pub(crate) gate: Option<std::sync::Arc<crate::input_gate::PaneInputGate>>,
+    /// The kind of agent a send types into, whose composer is read for a
+    /// person's draft right before the write; none for a pane with no agent.
+    pub(crate) agent_kind: Option<String>,
     pub(crate) runtime: std::sync::Weak<std::sync::Mutex<crate::runtime::Runtime>>,
 }
 
@@ -257,6 +330,9 @@ impl Prepared {
             engine,
             step,
             noted,
+            caller,
+            gate,
+            agent_kind,
             runtime,
         } = self;
         let engine = engine.as_ref();
@@ -276,27 +352,33 @@ impl Prepared {
                 pane,
                 raw,
                 text,
+                keys,
                 enter,
+                paste,
             } => {
-                engine
-                    .send_text(wait, &raw, &text)
-                    .map_err(|error| failed("send", &raw, &error, "pane_unavailable"))?;
-                // The text reached the pane: that is the input, whatever
-                // the Enter after it does.
-                if let (Some(pane), Some(runtime)) = (noted.as_deref(), runtime.upgrade()) {
-                    runtime
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .note_delivery_key(pane, "pane_send");
-                }
-                if enter {
-                    engine
-                        .send_keys(wait, &raw, &["Enter"])
-                        .map_err(|error| failed("enter", &raw, &error, "pane_unavailable"))?;
-                }
+                let send = Send {
+                    engine,
+                    wait,
+                    raw: &raw,
+                    noted: noted.as_deref(),
+                    gate: gate.as_ref(),
+                    agent_kind: agent_kind.as_deref(),
+                    runtime: &runtime,
+                };
+                let outcome = send.run(text.as_deref(), &keys, enter, paste);
+                crate::diagnostic!(
+                    json!({"component":"pane_command","kind":"pane_command.sent",
+                    "caller":caller,"pane_id":noted.as_deref().unwrap_or(&raw),
+                    "text_bytes":text.as_ref().map_or(0, String::len),"keys":keys.len(),
+                    "enter":enter,"paste":paste,
+                    "outcome":outcome.as_ref().err().map_or("sent", String::as_str)})
+                );
+                let (text_sent, pressed) = outcome?;
                 serde_json::to_value(PaneSent {
                     pane,
-                    submitted: enter,
+                    text_sent,
+                    keys_sent: if pressed { keys } else { Vec::new() },
+                    enter_sent: pressed && enter,
                 })
             }
             Step::Open {
@@ -348,6 +430,119 @@ impl Prepared {
     }
 }
 
+/// One `hide pane send`'s writes, in order: the text, then the keys and the
+/// Enter in one call. Never more than one sender writes to a pane at a time,
+/// and the checks that refuse a send run right before its first write.
+struct Send<'a> {
+    engine: &'a dyn crate::engine::Engine,
+    wait: Wait,
+    raw: &'a str,
+    noted: Option<&'a str>,
+    gate: Option<&'a std::sync::Arc<crate::input_gate::PaneInputGate>>,
+    agent_kind: Option<&'a str>,
+    runtime: &'a std::sync::Weak<std::sync::Mutex<crate::runtime::Runtime>>,
+}
+
+/// One lock per stripe of panes, so two senders never interleave their
+/// writes to one pane; a fixed number, so the set never grows with panes.
+static SEND_STRIPES: [std::sync::Mutex<()>; 16] = [const { std::sync::Mutex::new(()) }; 16];
+
+impl Send<'_> {
+    /// Whether the text and then the keys were written, or the refusal's
+    /// code.
+    fn run(
+        &self,
+        text: Option<&str>,
+        keys: &[PaneKey],
+        enter: bool,
+        paste: bool,
+    ) -> Result<(bool, bool), String> {
+        let subject = self.noted.unwrap_or(self.raw);
+        let stripe = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            subject.hash(&mut hasher);
+            (hasher.finish() % SEND_STRIPES.len() as u64) as usize
+        };
+        let _serial = SEND_STRIPES[stripe]
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Held across every write: the pane of an agent being put to sleep
+        // takes nothing, and the sleep waits for a write already admitted.
+        let _admitted = match self.gate {
+            Some(gate) => Some(gate.admit(subject).map_err(|_| "pane_asleep".to_owned())?),
+            None => None,
+        };
+        // A person's draft is judged as a forced letter judges it, by the
+        // agent's composer read now (`composer::forced_clear`). A screen with
+        // no composer to read, such as a trust or menu screen, is the screen
+        // a send exists to answer, so only text read in the composer refuses.
+        if let Some(kind) = self.agent_kind
+            && crate::delivery::composer::forced_clear(self.engine, self.raw, kind)
+                == Err(crate::delivery::composer::NOT_EMPTY)
+        {
+            return Err(crate::delivery::composer::NOT_EMPTY.to_owned());
+        }
+        let mut wrote = false;
+        let text_sent = match text {
+            Some(text) => {
+                let written = if paste {
+                    // As a terminal pastes: each line break a CR, so no
+                    // program reads one as the LF some take for Enter.
+                    let text = text.replace("\r\n", "\r").replace('\n', "\r");
+                    self.engine.paste_text(self.wait, self.raw, &text)
+                } else {
+                    self.engine.send_text(self.wait, self.raw, text)
+                };
+                written.map_err(|error| self.failed("text", &error, "pane_unavailable", wrote))?;
+                wrote = true;
+                self.note();
+                true
+            }
+            None => false,
+        };
+        let mut pressed: Vec<PaneKey> = keys.to_vec();
+        if enter {
+            pressed.push(PaneKey::Enter);
+        }
+        if !pressed.is_empty() {
+            self.engine
+                .press_pane_keys(self.wait, self.raw, &pressed)
+                .map_err(|error| self.failed("keys", &error, "keys_not_sent", wrote))?;
+            if !wrote {
+                self.note();
+            }
+        }
+        Ok((text_sent, !pressed.is_empty()))
+    }
+
+    /// A write Herdr took is input routed to the pane, the answer that lets
+    /// typed input be typed again (`delivery::typed`) and the draft guard's
+    /// clock; a refused or unanswered one is neither.
+    fn note(&self) {
+        if let (Some(pane), Some(runtime)) = (self.noted, self.runtime.upgrade()) {
+            runtime
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .note_delivery_key(pane, "pane_send");
+        }
+    }
+
+    /// A write that failed: refused before anything landed is
+    /// `pane_unavailable`, after the text landed `later`, and with its answer
+    /// lost `send_unconfirmed`.
+    fn failed(&self, step: &str, error: &EngineError, later: &str, wrote: bool) -> String {
+        let code = if error.reply_unknown() {
+            "send_unconfirmed"
+        } else if wrote {
+            later
+        } else {
+            "pane_unavailable"
+        };
+        failed(step, self.raw, error, code)
+    }
+}
+
 /// A failed engine call, logged with the pane or workspace it was about and
 /// never with text, answered by `code`.
 fn failed(step: &str, subject: &str, error: &EngineError, code: &str) -> String {
@@ -395,8 +590,10 @@ mod tests {
         assert_eq!(read(0).check(), Err("lines_out_of_range"));
         let send = |text: String| PaneCommand::Send {
             pane: "w1:p2".into(),
-            text,
+            text: Some(text),
+            keys: Vec::new(),
             enter: false,
+            paste: false,
         };
         assert_eq!(send("x".repeat(16 * 1024)).check(), Ok(()));
         assert_eq!(
@@ -418,6 +615,55 @@ mod tests {
         );
     }
 
+    /// A send is judged whole before anything is written: what it carries,
+    /// its control bytes and its key count.
+    #[test]
+    fn a_send_is_refused_whole_for_what_it_carries_before_any_write() {
+        let send = |text: Option<&str>, keys: usize, enter: bool, paste: bool| {
+            PaneCommand::Send {
+                pane: "w1:p2".into(),
+                text: text.map(str::to_owned),
+                keys: vec![PaneKey::Down; keys],
+                enter,
+                paste,
+            }
+            .check()
+        };
+        assert_eq!(send(None, 0, false, false), Err("nothing_to_send"));
+        assert_eq!(send(None, 0, true, false), Ok(()), "Enter alone");
+        assert_eq!(send(None, 1, false, false), Ok(()), "a key alone");
+        assert_eq!(send(None, KEYS_LIMIT, true, false), Ok(()));
+        assert_eq!(
+            send(None, KEYS_LIMIT + 1, false, false),
+            Err("too_many_keys")
+        );
+        assert_eq!(send(Some("yes"), 1, true, false), Ok(()));
+        // A line break, a tab or an Escape types a key nobody named.
+        for text in ["a\nb", "a\rb", "a\tb", "a\u{1b}b", "\u{1b}[201~"] {
+            assert_eq!(
+                send(Some(text), 0, false, false),
+                Err("text_invalid"),
+                "{text:?}"
+            );
+        }
+        // A paste keeps its line breaks and tabs, never an Escape that
+        // could end it early or another control byte.
+        assert_eq!(send(Some("a\nb\r\n\tc"), 0, false, true), Ok(()));
+        for text in ["a\u{1b}[201~b", "a\u{7}b", "a\u{9b}b"] {
+            assert_eq!(
+                send(Some(text), 0, false, true),
+                Err("text_invalid"),
+                "{text:?}"
+            );
+        }
+        assert_eq!(
+            send(None, 1, false, true),
+            Err("text_empty"),
+            "a paste of nothing"
+        );
+        assert_eq!(send(Some(""), 1, false, false), Err("text_empty"));
+    }
+
     #[test]
     fn every_refusal_a_command_gives_names_its_own_next_step() {
         assert_eq!(next_action("anything_else"), None);
@@ -435,6 +681,14 @@ mod tests {
             "pane_required",
             "pane_open_unconfirmed",
             "shell_not_ready",
+            "nothing_to_send",
+            "text_invalid",
+            "too_many_keys",
+            "paste_unsupported",
+            "pane_asleep",
+            "composer_not_empty",
+            "keys_not_sent",
+            "send_unconfirmed",
         ] {
             assert!(next_action(code).is_some(), "{code}");
         }

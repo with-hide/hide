@@ -227,6 +227,7 @@ mod tests {
             last_submit_at_unix_ms: 0,
             entered_working_at_unix_ms: 0,
             released_input_at_unix_ms: 0,
+            observed_at_unix_ms: 0,
             hook_submit_at_unix_ms: 0,
             session: None,
             thread: None,
