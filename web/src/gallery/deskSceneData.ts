@@ -158,7 +158,7 @@ const chip = (session: DeskSessionRef): DeskSessionChip => ({ ...session, pane_i
 export function handoffItems(now: number): DeskItem[] {
   return [
     { kind: "user", id: 1, text: "@project(~/projects/herdr-ide herdr-ide) mention 버튼 정리하고 PR까지, 갤러리 캡처 라이트·다크 비교, release 노트 초안도 맡겨줘", at_ms: at(now, 15), mentions: [MENTIONS[2]!] },
-    { kind: "reply", mentions: [], agent: "claude", id: 2, text: "스레드 세 개를 띄웠어요. mention 버튼은 PR로 낼 일이라 새 worktree에서 해요.", at_ms: at(now, 15), state: "done", thought_ms: null, steps: NO_STEPS },
+    { kind: "reply", mentions: [], agent: "claude", id: 2, text: "스레드 세 개를 띄울게요.\n\n띄웠어요. mention 버튼은 PR로 낼 일이라 새 worktree에서 해요.", at_ms: at(now, 15), state: "done", thought_ms: null, steps: NO_STEPS },
     { kind: "job", id: 3, job_id: "mention" },
     { kind: "job", id: 4, job_id: "gallery" },
     { kind: "job", id: 5, job_id: "release" },

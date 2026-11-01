@@ -200,7 +200,7 @@ fn next(received: &Receiver<Incoming>) -> Incoming {
 fn text(incoming: Incoming) -> String {
     match incoming {
         Incoming::Notification { params, .. } => match session::read_update(&params) {
-            session::Update::Text(text) => text,
+            session::Update::Text { text, .. } => text,
             other => panic!("not reply text: {other:?}"),
         },
         other => panic!("not a notification: {other:?}"),

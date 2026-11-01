@@ -210,6 +210,8 @@ struct Running {
     /// The startup text the adapter said it writes on its own, until it
     /// arrives; it may land inside the first turn and is not its reply.
     prelude: Option<String>,
+    /// Where the running turn's reply text blocks begin.
+    reply: session::ReplyBlocks,
 }
 
 impl Worker {
@@ -425,6 +427,7 @@ impl Worker {
             Ok(()) => {
                 running.turn = Some(send.tag);
                 running.turn_calls.clear();
+                running.reply = session::ReplyBlocks::default();
             }
             Err(error) => {
                 self.report(Report::TurnEnded {
@@ -554,6 +557,7 @@ impl Worker {
                 turn_calls: Vec::new(),
                 placement: None,
                 prelude: opened.prelude,
+                reply: session::ReplyBlocks::default(),
             },
             opened.resume_failed,
             choices,
@@ -617,14 +621,19 @@ impl Worker {
         };
         match incoming {
             Incoming::Notification { method, params } if method == "session/update" => {
-                match session::read_update(&params) {
-                    // Pi's adapter writes startup lines on its own after the
-                    // session opens, announced in its session answer.
-                    Update::Text(text) if running.prelude.as_deref() == Some(text.as_str()) => {
-                        running.prelude = None;
-                    }
-                    Update::Text(text) => {
-                        if let Some(tag) = running.turn {
+                let update = session::read_update(&params);
+                // Pi's adapter writes startup lines on its own after the
+                // session opens, announced in its session answer.
+                let prelude = matches!(&update, Update::Text { text, .. } if running.prelude.as_deref() == Some(text.as_str()));
+                let piece = if prelude {
+                    None
+                } else {
+                    running.reply.piece(&update)
+                };
+                match update {
+                    Update::Text { .. } if prelude => running.prelude = None,
+                    Update::Text { .. } | Update::Break => {
+                        if let (Some(tag), Some(text)) = (running.turn, piece) {
                             self.report(Report::Text { tag, text });
                         }
                     }
