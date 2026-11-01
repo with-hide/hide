@@ -30,9 +30,12 @@ expect_refusal() {
     printf 'refused as expected: %s\n' "$name"
 }
 
+# The Zig version the pins name, which both Zig refusals must say.
+zig_version=$(python3 -c 'import json; print(json.load(open("hide-vt/build-inputs.json"))["zig"]["version"])')
+
 # A Zig that is not there. ZIG names the compiler for this build only, and
 # its change reruns hide-vt's build script.
-expect_refusal "no Zig" "Zig was not found at" \
+expect_refusal "no Zig" "hide-vt needs Zig $zig_version, and Zig was not found at" \
     env ZIG="$work/no-such-zig" bash scripts/verify-cargo.sh build -p hide-vt
 
 # A Zig of another version.
@@ -48,7 +51,7 @@ case "$(uname -s)" in
         chmod +x "$stand_in"
         ;;
 esac
-expect_refusal "another Zig version" "hide-vt needs Zig 0.16.0, but" \
+expect_refusal "another Zig version" "hide-vt needs Zig $zig_version, but" \
     env ZIG="$stand_in" bash scripts/verify-cargo.sh build -p hide-vt
 
 # A download whose digest differs from its pin: the pins, with this system's
