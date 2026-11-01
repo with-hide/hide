@@ -1059,42 +1059,52 @@ fn resubmit_brief(
             "brief_attempts_spent" => "attempts_spent",
             _ => "reservation_failed",
         })?;
-    match route {
-        None => engine
-            .send_keys(Wait::Small(RPC_TIMEOUT), &observed.raw_pane_id, &["Enter"])
-            .map_err(|_| "prompt_failed")?,
-        Some((target, prepared)) => {
-            let route = crate::coordination::executor::send_brief(
-                engine.as_ref(),
-                (&target, prepared),
-                id,
-                &resubmit.brief,
+    // The reservation saved the route as `lost`; the outcome corrects it. A
+    // correction that is not saved leaves it `lost`, so nothing is sent
+    // again on a failed save (engineering principle 11).
+    let (outcome, sent) = match route {
+        None => match engine.send_keys(Wait::Small(RPC_TIMEOUT), &observed.raw_pane_id, &["Enter"])
+        {
+            Ok(()) => (Some(super::typed::SendRoute::Typed), Ok(())),
+            Err(EngineError::Request(_)) => (None, Err("prompt_failed")),
+            Err(_) => (Some(super::typed::SendRoute::Lost), Err("prompt_failed")),
+        },
+        Some((target, prepared)) => match crate::coordination::executor::send_brief(
+            engine.as_ref(),
+            (&target, prepared),
+            id,
+            &resubmit.brief,
+        ) {
+            Ok(route) => (Some(route), Ok(())),
+            Err(_) => (None, Err("prompt_failed")),
+        },
+    };
+    let mutation = match outcome {
+        Some(route) => crate::coordination::Mutation::Briefed {
+            id: id.to_owned(),
+            route,
+        },
+        None => crate::coordination::Mutation::BriefUnsent { id: id.to_owned() },
+    };
+    let saved = owner
+        .lock()
+        .map_err(|_| "runtime_unavailable".to_owned())
+        .and_then(|guard| guard.hide_delivery(super::typed::INPUT_ROLE))
+        .and_then(|(client, authority, actor)| {
+            client.submit(
+                Effect::Agents {
+                    authority,
+                    actor,
+                    mutation: Box::new(mutation),
+                },
+                PROMPT_TIMEOUT,
             )
-            .map_err(|_| "prompt_failed")?;
-            // How it went decides whether it is ever sent again.
-            if let Some((client, authority, actor)) = owner
-                .lock()
-                .ok()
-                .and_then(|guard| guard.hide_delivery(super::typed::INPUT_ROLE).ok())
-            {
-                let saved = client.submit(
-                    Effect::Agents {
-                        authority,
-                        actor,
-                        mutation: Box::new(crate::coordination::Mutation::Briefed {
-                            id: id.to_owned(),
-                            route,
-                        }),
-                    },
-                    PROMPT_TIMEOUT,
-                );
-                if let Err(code) = saved {
-                    crate::diagnostic!(json!({"component":"delivery",
-                        "kind":"input.route_unsaved","spawn":id,"code":code}));
-                }
-            }
-        }
+        });
+    if let Err(code) = saved {
+        crate::diagnostic!(json!({"component":"delivery",
+            "kind":"input.route_unsaved","spawn":id,"code":code}));
     }
+    sent?;
     crate::diagnostic!(json!({"component":"delivery",
         "kind": if action == Resubmitted::Entered { "input.entered" } else { "input.retyped" },
         "spawn":id,"pane_id":observed.actor.pane_id}));

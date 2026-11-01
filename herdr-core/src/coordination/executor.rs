@@ -1365,7 +1365,22 @@ fn spawn(
                 })?,
             )
             .map_err(|_| "spawn_unavailable")?;
-            let sent = send_brief(engine.as_ref(), (&target, prepared), &reserved.id, &brief)?;
+            let sent = match send_brief(engine.as_ref(), (&target, prepared), &reserved.id, &brief)
+            {
+                Ok(sent) => sent,
+                Err(code) => {
+                    // Nothing was sent: the brief may be typed again.
+                    mutate(
+                        client,
+                        authority,
+                        actor,
+                        Mutation::BriefUnsent {
+                            id: reserved.id.clone(),
+                        },
+                    )?;
+                    return Err(code);
+                }
+            };
             reserved = serde_json::from_value(mutate(
                 client,
                 authority,
