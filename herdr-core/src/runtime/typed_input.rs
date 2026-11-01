@@ -893,4 +893,34 @@ pub(crate) mod tests {
         assert_eq!(work[0].recorded, Some("session"));
         assert!(work[0].notice.is_none());
     }
+
+    /// Claude Code records a pasted brief of four lines or more wrapped as
+    /// pasted content, with an id of its own, in its prompt hook and its
+    /// session file alike (2.1.316): that message is the brief Hide typed.
+    #[test]
+    fn a_brief_claude_code_recorded_as_a_paste_is_its_record() {
+        let (_root, mut runtime, spawn) = spawned_as("claude", false, 1_000);
+        let mut row = crate::sidebar::project_agents(
+            serde_json::from_value(json!({"agents": [
+                {"pane_id": "child", "agent": "claude", "agent_status": "idle", "state_change_seq": 2}
+            ]}))
+            .unwrap(),
+        )
+        .agents
+        .remove(0);
+        let recorded = format!(
+            "\n\n<pasted_content id=\"d974\">\n{}\n</pasted_content id=\"d974\">\n",
+            BRIEF.trim()
+        );
+        row.row_facts = Some(crate::request_view::RowFacts {
+            prompt_digests: vec![hide_agent_hooks::delivery::prompt_digest(&recorded)],
+            ..Default::default()
+        });
+        runtime.snapshot.navigator.agents.push(row);
+        let work = runtime.typed_input_work(1_000 + RECORD_WAIT_MS);
+        assert_eq!(work.len(), 1);
+        assert_eq!(work[0].key, InputKey::Spawn(spawn));
+        assert_eq!(work[0].recorded, Some("session"));
+        assert!(work[0].notice.is_none() && work[0].resubmit.is_none());
+    }
 }

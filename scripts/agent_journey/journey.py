@@ -77,6 +77,23 @@ def prompt(value):
     return "Reply with exactly " + value
 
 
+# The notes a start brief carries ahead of its one request, so the brief has
+# the shape of a real spawn's: markdown of many lines with backticks, past
+# 800 characters. Claude Code 2.1.316 records a paste of four lines or more,
+# or of 800 characters or more, wrapped as pasted content, and a one-line
+# brief never exercised that record (docs/delivery.md, Input an agent did
+# not take). The notes name no token, so the fake model answers the request.
+BRIEF_NOTES = "\n".join(
+    f"- Note {n}: keep `hide agent show` and `--brief-file` as they are; nothing to change here."
+    for n in range(1, 13)
+)
+
+
+def brief(value):
+    """A real CLI's first prompt, typed by Hide as the spawn's brief."""
+    return f"# Journey brief\n\n## Notes\n{BRIEF_NOTES}\n\n## Request\n{prompt(value)}\n"
+
+
 class Journey:
     def __init__(self, runtime, daemon, controller, table, contract_row, repository, record, reader, *,
                  branch, created, sessions, route, composer_judge, model=None, brief_start=True):
@@ -315,7 +332,8 @@ class Journey:
         self.created.append(entry)
         # The first start types Hide's brief, which the agent's own record has
         # to confirm; the untrusted start keeps the agent's prompt argument.
-        args, answer, attempts = self.spawn("journey-" + self.id, self.repository, self.branch, worktree, prompt(first),
+        args, answer, attempts = self.spawn("journey-" + self.id, self.repository, self.branch, worktree,
+                                            brief(first) if self.brief_start else prompt(first),
                                             brief=self.brief_start)
         entry.update(created_branch(self.runtime, self.repository, self.branch, worktree))
         self.record["spawn"] = {"argv": ["hide", *args], "route": self.route,

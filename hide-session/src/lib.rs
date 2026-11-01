@@ -45,6 +45,7 @@ pub mod links;
 mod named_prs;
 mod native_file;
 pub mod opencode;
+pub mod pasted;
 mod refusal;
 pub mod session_activity;
 mod sightings;

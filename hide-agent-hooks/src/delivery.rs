@@ -78,15 +78,26 @@ pub fn read_prompt(payload: &[u8], truncated: bool) -> Result<Prompt, Failure> {
 }
 
 /// What the hook tells the core about the submitted prompt: the SHA-256 of
-/// its canonical text in lowercase hex. Characters above U+FFFF are removed
-/// before trimming: some console readers drop them, including the leading
-/// owl. Every agent and system uses this same identity rule.
+/// its canonical text in lowercase hex. The canonical text is what was typed,
+/// as each agent records it: a prompt that is one paste and nothing else is
+/// the pasted text (`hide_session::pasted`, Claude Code's wrapper), each line
+/// break is one LF (a terminal paste sends CR, and an agent records LF), and
+/// characters above U+FFFF are removed before trimming, since some console
+/// readers drop them, including the leading owl. Every agent and system uses
+/// this same identity rule, on both sides: the hook's prompt and the session
+/// file's message, and the text Hide typed.
 /// Only the core knows which line its
 /// doorbell typed into the pane, so the prompt is the bell exactly when this
 /// matches the digest of that line; the hook never decides it from the text,
 /// and the prompt itself never leaves the hook.
 pub fn prompt_digest(prompt: &str) -> String {
-    let canonical: String = prompt.chars().filter(|&c| c <= '\u{ffff}').collect();
+    let typed = hide_session::pasted::only_pasted(prompt).unwrap_or(prompt);
+    let canonical: String = typed
+        .replace("\r\n", "\n")
+        .chars()
+        .filter(|&c| c <= '\u{ffff}')
+        .map(|c| if c == '\r' { '\n' } else { c })
+        .collect();
     full_prompt_digest(&canonical)
 }
 
@@ -543,6 +554,32 @@ mod tests {
         for prompt in ["abd", "a bc", "Abc", "abc\u{ffff}", "abc\u{fe0f}", "abc한"] {
             assert_ne!(prompt_digest(prompt), abc, "{prompt:?}");
         }
+    }
+
+    #[test]
+    fn a_brief_claude_code_wrapped_as_a_paste_is_the_brief_hide_typed() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/claude-pasted-brief-prompt.json"
+        ))
+        .unwrap();
+        let typed = fixture["typed"].as_str().unwrap();
+        let payload = serde_json::to_vec(&fixture["payload"]).unwrap();
+        let reported = read_prompt(&payload, false).unwrap().digest.unwrap();
+        // The SHA-256 of the brief's own trimmed text, computed apart from
+        // the canonical rule under test.
+        use sha2::{Digest, Sha256};
+        let expected: String = Sha256::digest(typed.trim().as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        assert_eq!(reported, expected);
+        assert!(matches_prompt_digest(typed, &reported));
+        // A terminal paste sends each line break as CR; the agent records LF.
+        assert_eq!(prompt_digest(&typed.replace('\n', "\r")), expected);
+        assert_eq!(prompt_digest(&typed.replace('\n', "\r\n")), expected);
+        // Typed words beside a paste are not the paste.
+        let prompt = fixture["payload"]["prompt"].as_str().unwrap();
+        assert_ne!(prompt_digest(&format!("also {prompt}")), expected);
     }
 
     #[test]
