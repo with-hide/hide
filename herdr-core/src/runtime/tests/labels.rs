@@ -849,7 +849,7 @@ fn the_enter_that_approves_a_waiting_plan_is_the_operators_submit() {
     for status in ["done", "unknown"] {
         let overlay = plan_waiting_overlay(seq);
         let projection = codex_projection(status, seq);
-        runtime.observe_delivery(crate::node::TEST_NODE, &projection, None, Some(&overlay));
+        runtime.observe_delivery_laid(crate::node::TEST_NODE, &projection, None, Some(&overlay));
         runtime.set_label_overlay(overlay);
         runtime.ingest_session(Ok(projection));
         assert_eq!(row(&runtime)["blocked"], true, "{status}");
@@ -859,7 +859,7 @@ fn the_enter_that_approves_a_waiting_plan_is_the_operators_submit() {
     }
     // A prompt Herdr reports is answered, not submitted to.
     let projection = codex_projection("blocked", seq);
-    runtime.observe_delivery(crate::node::TEST_NODE, &projection, None, None);
+    runtime.observe_delivery_laid(crate::node::TEST_NODE, &projection, None, None);
     runtime.ingest_session(Ok(projection));
     let before = enter(&mut runtime);
     assert_eq!(enter(&mut runtime), before, "blocked");

@@ -81,7 +81,7 @@ fn forking() -> Forking {
              "state_change_seq":1,"lineage_session":crate::engine::tokens::session_digest("sender-native")},
         ]}))
         .unwrap();
-        guard.observe_delivery(crate::node::TEST_NODE, &payload, None, None);
+        guard.observe_delivery_laid(crate::node::TEST_NODE, &payload, None, None);
         guard.live = Some(crate::live::LiveContext {
             socket_path: live.socket_path.clone(),
             runtime: Arc::downgrade(&runtime),

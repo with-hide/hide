@@ -1080,13 +1080,7 @@ pub(crate) fn agent_demand(agent: &SessionAgentPayload) -> AgentDemand {
         AgentDemand::None
     } else if agent.label.as_ref().is_some_and(|label| label.blocked) {
         AgentDemand::Error
-    } else if agent
-        .facts
-        .as_ref()
-        .and_then(|facts| facts.user_turn.as_ref())
-        .is_some_and(|turn| turn.kind == hide_session::turns::UserTurnKind::Question)
-        || agent.label.as_ref().is_some_and(|label| label.question)
-    {
+    } else if native_question(agent) || agent.label.as_ref().is_some_and(|label| label.question) {
         AgentDemand::Question
     } else if agent_blocked(agent) {
         AgentDemand::Approval
@@ -1110,30 +1104,77 @@ fn hook_turn(agent: &SessionAgentPayload) -> Option<HookTurn> {
 /// again; one an agent kind reads from its session's current state can,
 /// because Herdr keeps that kind `working` while it waits.
 pub(crate) fn agent_blocked(agent: &SessionAgentPayload) -> bool {
+    approval_prompt(agent) || session_wait(agent)
+}
+
+/// A permission prompt or dialog holds the pane: the hook's `waiting` turn,
+/// or, for a session whose hook has reported no turn, Herdr's blocked
+/// prompt. A hook that reported the turn has said whether it waits on a
+/// permission, so Herdr's blocked prompt is no longer the answer for it.
+fn approval_prompt(agent: &SessionAgentPayload) -> bool {
     if agent.telemetry_stale {
         return false;
     }
-    let hook = hook_turn(agent);
-    if hook == Some(HookTurn::Waiting) {
-        return true;
+    match hook_turn(agent) {
+        Some(turn) => turn == HookTurn::Waiting,
+        None => agent.agent_status.as_deref() == Some("blocked"),
     }
-    let working = match hook {
-        Some(turn) => turn == HookTurn::Working,
-        None => agent.agent_status.as_deref() == Some("working"),
-    };
-    let session_wait = agent
-        .facts
-        .as_ref()
-        .is_some_and(|facts| facts.awaiting_operator)
-        && (!working
+}
+
+/// A native question or plan approval the session read holds for Herdr's
+/// current state, while the activity axis does not say the agent went on
+/// working past it (a kind that waits while it works excepted).
+fn session_wait(agent: &SessionAgentPayload) -> bool {
+    !agent.telemetry_stale
+        && agent
+            .facts
+            .as_ref()
+            .is_some_and(|facts| facts.awaiting_operator)
+        && (agent_activity(agent) != AgentActivity::Working
             || agent
                 .agent
                 .as_deref()
                 .and_then(hide_session::Agent::from_kind)
-                .is_some_and(hide_session::Agent::waits_while_working));
-    // A hook that reported the turn has said it is not waiting on a
-    // permission, so Herdr's blocked prompt is no longer the answer.
-    session_wait || (hook.is_none() && agent.agent_status.as_deref() == Some("blocked"))
+                .is_some_and(hide_session::Agent::waits_while_working))
+}
+
+/// The agent's own native question, read from its session for Herdr's
+/// current state. It holds whatever the activity, since an asynchronous
+/// question stays open while the agent works (Codex
+/// `request_user_input_async`), and the demand axis shows it so.
+fn native_question(agent: &SessionAgentPayload) -> bool {
+    !agent.telemetry_stale
+        && agent
+            .facts
+            .as_ref()
+            .and_then(|facts| facts.user_turn.as_ref())
+            .is_some_and(|turn| turn.kind == hide_session::turns::UserTurnKind::Question)
+}
+
+/// The turn and approval the core decides for one agent, from the same ranks
+/// the row's axes use: the hook first, then the session read, then Herdr.
+/// The screen's axes, the letter doorbell and the tool-letter handover read
+/// this one answer, so a row shown at rest and a letter held as working
+/// cannot disagree (`docs/status-model.md`, Where each axis comes from).
+/// Whether the pane takes input now (Herdr's own blocked prompt, its
+/// readiness, a draft in the composer) is not a turn and is decided apart
+/// from it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct TurnProjection {
+    pub activity: AgentActivity,
+    /// A permission prompt or dialog holds the pane (`approval_prompt`).
+    pub prompt: bool,
+    /// The agent's own native question or a plan approval waits for the
+    /// operator (`native_question`, `session_wait`).
+    pub operator_wait: bool,
+}
+
+pub(crate) fn turn_projection(agent: &SessionAgentPayload) -> TurnProjection {
+    TurnProjection {
+        activity: agent_activity(agent),
+        prompt: approval_prompt(agent),
+        operator_wait: native_question(agent) || session_wait(agent),
+    }
 }
 
 /// The activity axis: the hook's turn first, then Herdr's `agent_status`. A

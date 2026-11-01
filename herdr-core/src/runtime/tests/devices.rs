@@ -123,10 +123,10 @@ fn removing_devices_retires_only_their_pane_reads_and_rejects_late_publications(
     .unwrap();
     let empty: SessionSnapshotPayload =
         serde_json::from_value(serde_json::json!({"agents": []})).unwrap();
-    runtime.observe_delivery(crate::node::TEST_NODE, &payload, Some("local-scope"), None);
+    runtime.observe_delivery_laid(crate::node::TEST_NODE, &payload, Some("local-scope"), None);
     assert!(register_device(&mut runtime, "remaining", "remaining-host"));
     runtime.begin_delivery_pane_read("remaining");
-    runtime.observe_delivery("remaining", &payload, Some("remaining-scope"), None);
+    runtime.observe_delivery_laid("remaining", &payload, Some("remaining-scope"), None);
     let reads = |runtime: &Runtime| {
         runtime
             .delivery_panes
@@ -180,7 +180,7 @@ fn removing_devices_retires_only_their_pane_reads_and_rejects_late_publications(
         ledger.validate().unwrap();
         runtime.delivery_ledger = Ok(Arc::new(ledger.clone()));
         runtime.begin_delivery_pane_read(&id);
-        runtime.observe_delivery(&id, &payload, Some("fixture-scope"), None);
+        runtime.observe_delivery_laid(&id, &payload, Some("fixture-scope"), None);
         assert_eq!(runtime.delivery_panes.len(), baseline.len() + 1);
 
         assert!(dispatch_device(&mut runtime, "remove_device", &id));
@@ -191,7 +191,7 @@ fn removing_devices_retires_only_their_pane_reads_and_rejects_late_publications(
         // A retired coordinator can finish a read before its off-lock join.
         runtime.begin_delivery_pane_read(&id);
         assert_eq!(reads(&runtime), baseline);
-        runtime.observe_delivery(&id, &empty, Some("fixture-scope"), None);
+        runtime.observe_delivery_laid(&id, &empty, Some("fixture-scope"), None);
         assert_eq!(reads(&runtime), baseline);
         assert_eq!(*runtime.delivery_state().unwrap(), ledger);
         assert!(runtime.delivery_registrations_gone().is_empty());

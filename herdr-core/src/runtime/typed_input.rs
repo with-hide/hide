@@ -602,7 +602,7 @@ mod tests {
              "state_change_seq": 2},
         ]}))
         .unwrap();
-        runtime.observe_delivery(TEST_NODE, &payload, None, None);
+        runtime.observe_delivery_laid(TEST_NODE, &payload, None, None);
         let child = runtime.delivery_observations.get_mut("child").unwrap();
         child.status_changed_at_unix_ms = 0;
         child.last_input_at_unix_ms = 0;

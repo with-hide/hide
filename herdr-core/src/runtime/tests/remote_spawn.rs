@@ -261,7 +261,7 @@ fn spawner() -> Spawner {
     runtime
         .lock()
         .unwrap()
-        .observe_delivery(crate::node::TEST_NODE, &payload, None, None);
+        .observe_delivery_laid(crate::node::TEST_NODE, &payload, None, None);
     let started = Arc::new(AtomicBool::new(false));
     let session = Arc::new(Mutex::new(Some("device-child-session".to_owned())));
     let shows = Arc::new(AtomicBool::new(true));
