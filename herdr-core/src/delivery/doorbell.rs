@@ -968,10 +968,32 @@ enum Resubmitted {
     Retyped,
 }
 
+/// What a composer read after an unconfirmed brief's typing leads to: a
+/// brief still showing gets its Enter; an empty composer is typed into only
+/// when someone answered the screen and the agent did not already take the
+/// typing by starting a turn after it (`Resubmit::taken`); typings must be
+/// left either way.
+fn resubmit_action(
+    shows: super::composer::Shows,
+    resubmit: &crate::runtime::typed_input::Resubmit,
+) -> Result<Resubmitted, &'static str> {
+    let action = match shows {
+        super::composer::Shows::Typed => Resubmitted::Entered,
+        super::composer::Shows::Empty if resubmit.taken => return Err("turn_started"),
+        super::composer::Shows::Empty if resubmit.answered => Resubmitted::Retyped,
+        super::composer::Shows::Empty => return Err("unanswered"),
+        super::composer::Shows::Other => return Err(super::composer::NOT_EMPTY),
+    };
+    if !resubmit.left {
+        return Err("attempts_spent");
+    }
+    Ok(action)
+}
+
 /// Reads the composer of spawn `id`'s pane once Herdr reports the same agent
 /// ready for input: still showing the brief, it gets the Enter it lost; empty
-/// after someone answered the screen, the brief is typed again; anything else
-/// holds. Either spends one of the brief's typings, reserved in the ledger
+/// after someone answered the screen, the brief is typed again unless the
+/// agent took it by starting a turn; anything else holds. Either spends one of the brief's typings, reserved in the ledger
 /// first; a refusal before the reservation sends nothing and says why. Text
 /// and Enter on a choice screen can pick an option, which a composer read
 /// showing exactly the brief rules out.
@@ -1013,15 +1035,7 @@ fn resubmit_brief(
             shows == super::composer::Shows::Typed,
         );
     }
-    let action = match shows {
-        super::composer::Shows::Typed => Resubmitted::Entered,
-        super::composer::Shows::Empty if resubmit.answered => Resubmitted::Retyped,
-        super::composer::Shows::Empty => return Err("unanswered"),
-        super::composer::Shows::Other => return Err(super::composer::NOT_EMPTY),
-    };
-    if !resubmit.left {
-        return Err("attempts_spent");
-    }
+    let action = resubmit_action(shows, resubmit)?;
     let (client, authority, actor) = delivery;
     client
         .submit(
@@ -1316,6 +1330,33 @@ fn type_answer(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A brief whose agent started a turn after its typing is never typed
+    /// again into an empty composer, however answered its screen; a
+    /// composer still showing it gets its Enter all the same.
+    #[test]
+    fn a_brief_its_agent_took_by_a_turn_is_entered_but_never_retyped() {
+        use super::super::composer::Shows;
+        let resubmit = |answered, taken| crate::runtime::typed_input::Resubmit {
+            brief: "brief".into(),
+            attempts: 1,
+            left: true,
+            answered,
+            taken,
+        };
+        assert_eq!(
+            resubmit_action(Shows::Empty, &resubmit(true, true)),
+            Err("turn_started")
+        );
+        assert_eq!(
+            resubmit_action(Shows::Typed, &resubmit(true, true)),
+            Ok(Resubmitted::Entered)
+        );
+        assert_eq!(
+            resubmit_action(Shows::Empty, &resubmit(true, false)),
+            Ok(Resubmitted::Retyped)
+        );
+    }
     use crate::delivery::Actor;
     use hide_session::turns::Waiting;
     use serde_json::Value;
