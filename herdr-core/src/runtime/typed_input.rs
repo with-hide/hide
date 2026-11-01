@@ -81,7 +81,7 @@ pub(crate) type InputAsk = (String, u64, AskSubject);
 impl Runtime {
     /// The pane a spawn's agent was started in, as the delivery observations
     /// key it: bare on this machine, in full on a device.
-    fn spawn_pane_id(&self, spawn: &SpawnRecord) -> Option<String> {
+    pub(super) fn spawn_pane_id(&self, spawn: &SpawnRecord) -> Option<String> {
         let pane = spawn.pane.as_deref()?;
         let node = self.node.as_str();
         Some(crate::address::pane_id_on(
@@ -94,7 +94,7 @@ impl Runtime {
     /// The observation of the pane a spawn's agent runs in, while it still
     /// runs the terminal the spawn recorded (a pane id can name another pane
     /// later).
-    fn spawn_observation(&self, spawn: &SpawnRecord) -> Option<&Observation> {
+    pub(super) fn spawn_observation(&self, spawn: &SpawnRecord) -> Option<&Observation> {
         let observation = self
             .delivery_observations
             .get(&self.spawn_pane_id(spawn)?)?;
@@ -559,7 +559,7 @@ fn subject(input: InputKind, typed_input: &TypedInput, held: bool) -> AskSubject
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::sync::Arc;
 
     use serde_json::json;
@@ -571,12 +571,12 @@ mod tests {
     use crate::delivery::typed::{PARENT_GRACE_MS, RECORD_WAIT_MS, REREAD_WAIT_MS};
     use crate::node::TEST_NODE;
 
-    const BRIEF: &str = "Node api: add the call.\nReport by letter.";
+    pub(crate) const BRIEF: &str = "Node api: add the call.\nReport by letter.";
 
     /// A parent in pane `sender` that spawned a Codex into pane `child` with a
     /// brief, typed once at `typed_at`; the Codex has no session yet, as
     /// before its first turn. Returns the runtime and the spawn's id.
-    fn spawned(handoff: bool, typed_at: u64) -> (tempfile::TempDir, Runtime, String) {
+    pub(crate) fn spawned(handoff: bool, typed_at: u64) -> (tempfile::TempDir, Runtime, String) {
         spawned_as("codex", handoff, typed_at)
     }
 

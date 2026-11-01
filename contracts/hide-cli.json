@@ -547,6 +547,457 @@
             "title": "RegisterCheck",
             "type": "object"
         },
+        "agent_show": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "definitions": {
+                "Activity": {
+                    "description": "Whether the agent is running a turn. A state the core cannot read now, a stale read or a device that does not answer, is `unknown`, never `stopped`.",
+                    "enum": [
+                        "working",
+                        "stopped",
+                        "unknown"
+                    ],
+                    "type": "string"
+                },
+                "Actor": {
+                    "properties": {
+                        "device_id": {
+                            "type": "string"
+                        },
+                        "kind": {
+                            "type": "string"
+                        },
+                        "name": {
+                            "type": "string"
+                        },
+                        "pane_id": {
+                            "type": "string"
+                        },
+                        "session": {
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        }
+                    },
+                    "required": [
+                        "pane_id",
+                        "name",
+                        "kind",
+                        "device_id",
+                        "session"
+                    ],
+                    "type": "object"
+                },
+                "AgentState": {
+                    "description": "What an agent is doing now, as the sidebar, `hide agent list` and `hide ps` read it from the core, for a parent deciding what to do about a child.",
+                    "properties": {
+                        "activity": {
+                            "$ref": "#/definitions/Activity"
+                        },
+                        "lifecycle": {
+                            "anyOf": [
+                                {
+                                    "$ref": "#/definitions/Runtime"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "description": "Where the agent is in its life, as `runtime` says; null for a spawn whose agent never registered."
+                        },
+                        "observed_at_unix_ms": {
+                            "description": "When the core last read the agent's state; the state holds until a later read changes it. Absent when the core has never read it.",
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": [
+                                "integer",
+                                "null"
+                            ]
+                        },
+                        "pending_inputs": {
+                            "description": "Input Hide typed into the agent that the agent has not recorded.",
+                            "items": {
+                                "$ref": "#/definitions/PendingInput"
+                            },
+                            "type": "array"
+                        },
+                        "waiting": {
+                            "anyOf": [
+                                {
+                                    "$ref": "#/definitions/Waiting"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "description": "What the agent waits on: null only when the core knows it waits on nothing, `cause: unknown` when it cannot tell."
+                        }
+                    },
+                    "required": [
+                        "activity",
+                        "lifecycle",
+                        "observed_at_unix_ms",
+                        "waiting",
+                        "pending_inputs"
+                    ],
+                    "type": "object"
+                },
+                "Connection": {
+                    "enum": [
+                        "connected",
+                        "disconnected"
+                    ],
+                    "type": "string"
+                },
+                "InputKind": {
+                    "description": "What was typed, for the notice and the row: a spawn's brief or a letter.",
+                    "enum": [
+                        "brief",
+                        "letter"
+                    ],
+                    "type": "string"
+                },
+                "InputPhase": {
+                    "description": "Where one typed input stands: typed and its record not yet owed or arrived, owed and missing, or missing with no typing left.",
+                    "enum": [
+                        "awaiting_record",
+                        "unconfirmed",
+                        "exhausted"
+                    ],
+                    "type": "string"
+                },
+                "Names": {
+                    "properties": {
+                        "tab": {
+                            "$ref": "#/definitions/Outcome"
+                        },
+                        "workspace": {
+                            "$ref": "#/definitions/Outcome"
+                        }
+                    },
+                    "required": [
+                        "workspace",
+                        "tab"
+                    ],
+                    "type": "object"
+                },
+                "Outcome": {
+                    "enum": [
+                        "pending",
+                        "applied",
+                        "preserved",
+                        "failed"
+                    ],
+                    "type": "string"
+                },
+                "PendingInput": {
+                    "description": "One input Hide typed that the agent has not recorded (docs/delivery.md, Input an agent did not take).",
+                    "properties": {
+                        "attempts": {
+                            "format": "uint8",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "kind": {
+                            "$ref": "#/definitions/InputKind"
+                        },
+                        "max_attempts": {
+                            "format": "uint8",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "noticed_at_unix_ms": {
+                            "description": "When its parent or sender was told it is unconfirmed.",
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": [
+                                "integer",
+                                "null"
+                            ]
+                        },
+                        "phase": {
+                            "$ref": "#/definitions/InputPhase"
+                        },
+                        "request_id": {
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
+                        "spawn_id": {
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
+                        "typed_at_unix_ms": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        }
+                    },
+                    "required": [
+                        "kind",
+                        "spawn_id",
+                        "request_id",
+                        "attempts",
+                        "max_attempts",
+                        "phase",
+                        "typed_at_unix_ms",
+                        "noticed_at_unix_ms"
+                    ],
+                    "type": "object"
+                },
+                "Runtime": {
+                    "enum": [
+                        "running",
+                        "asleep",
+                        "ended"
+                    ],
+                    "type": "string"
+                },
+                "WaitCause": {
+                    "description": "The causes an agent waits by: its own demand (docs/status-model.md, Where each axis comes from), a question the core laid on its row, or one of the escalation causes (Delegated escalation).",
+                    "enum": [
+                        "unknown",
+                        "question",
+                        "approval",
+                        "blocked",
+                        "plan_review",
+                        "mission_decision",
+                        "input_unconfirmed",
+                        "draft",
+                        "parent_blocked",
+                        "bell_exhausted",
+                        "undelivered",
+                        "observer_unconfirmed"
+                    ],
+                    "type": "string"
+                },
+                "Waiting": {
+                    "description": "What an agent waits on, by the core's own cause.",
+                    "properties": {
+                        "cause": {
+                            "$ref": "#/definitions/WaitCause"
+                        },
+                        "letter_id": {
+                            "description": "The letter the wait is about.",
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
+                        "on": {
+                            "description": "Who can answer: `operator`, or the registration id of the agent that should (a delegated child's parent). Absent when unknown.",
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
+                        "since_unix_ms": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": [
+                                "integer",
+                                "null"
+                            ]
+                        },
+                        "spawn_id": {
+                            "description": "The spawn whose brief the wait is about.",
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
+                        "text": {
+                            "description": "A short line saying what is asked, when the core has one. Copy for a reader, never a reason to act: `cause` is.",
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        }
+                    },
+                    "required": [
+                        "cause",
+                        "on",
+                        "since_unix_ms",
+                        "letter_id",
+                        "spawn_id",
+                        "text"
+                    ],
+                    "type": "object"
+                },
+                "Watch": {
+                    "properties": {
+                        "activity_failures": {
+                            "format": "uint32",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "first_warning_at_unix_ms": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": [
+                                "integer",
+                                "null"
+                            ]
+                        },
+                        "generation": {
+                            "default": 0,
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "id": {
+                            "type": "string"
+                        },
+                        "last_activity_at_unix_ms": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "last_state_change_seq": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": [
+                                "integer",
+                                "null"
+                            ]
+                        },
+                        "last_status": {
+                            "type": "string"
+                        },
+                        "parent": {
+                            "$ref": "#/definitions/Actor"
+                        },
+                        "status_changed_at_unix_ms": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "target": {
+                            "$ref": "#/definitions/Actor"
+                        },
+                        "warning_count": {
+                            "format": "uint8",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        }
+                    },
+                    "required": [
+                        "id",
+                        "parent",
+                        "target",
+                        "last_activity_at_unix_ms",
+                        "first_warning_at_unix_ms",
+                        "warning_count",
+                        "activity_failures",
+                        "last_status",
+                        "last_state_change_seq",
+                        "status_changed_at_unix_ms",
+                        "generation"
+                    ],
+                    "type": "object"
+                }
+            },
+            "description": "`hide agent show`: the registration and what its agent is doing now.",
+            "properties": {
+                "connection": {
+                    "$ref": "#/definitions/Connection"
+                },
+                "hostScope": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "instance": {
+                    "type": "string"
+                },
+                "machine": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "names": {
+                    "anyOf": [
+                        {
+                            "$ref": "#/definitions/Names"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "description": "Naming has its own receipt; it never changes successful spawn identity."
+                },
+                "origin": {
+                    "description": "The spawner, independently of responsibility; null for ordinary roots.",
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "pane": {
+                    "type": "string"
+                },
+                "parent": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "project": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "registered": {
+                    "type": "boolean"
+                },
+                "runtime": {
+                    "$ref": "#/definitions/Runtime"
+                },
+                "session": {
+                    "type": "string"
+                },
+                "state": {
+                    "$ref": "#/definitions/AgentState"
+                },
+                "watch": {
+                    "anyOf": [
+                        {
+                            "$ref": "#/definitions/Watch"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "description": "The watch on this agent, if one is running."
+                }
+            },
+            "required": [
+                "state",
+                "id",
+                "name",
+                "machine",
+                "hostScope",
+                "session",
+                "instance",
+                "pane",
+                "parent",
+                "origin",
+                "project",
+                "runtime",
+                "connection",
+                "registered",
+                "watch"
+            ],
+            "title": "AgentShow",
+            "type": "object"
+        },
         "confirmed": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "description": "`hide inbox --confirm`.",
@@ -1381,18 +1832,48 @@
         },
         "pane_sent": {
             "$schema": "http://json-schema.org/draft-07/schema#",
-            "description": "`hide pane send`: the pane typed into, and whether Enter followed.",
+            "definitions": {
+                "PaneKey": {
+                    "description": "One key, by the name `hide pane send --key` takes. Every one of them is a non-printing key, so naming it in a log never records what was typed.",
+                    "enum": [
+                        "esc",
+                        "enter",
+                        "tab",
+                        "shift-tab",
+                        "up",
+                        "down",
+                        "left",
+                        "right",
+                        "backspace",
+                        "ctrl-c"
+                    ],
+                    "type": "string"
+                }
+            },
+            "description": "`hide pane send`: the pane typed into and what reached it. Each field says what Herdr took, never what the program in the pane did with it: `enter_sent` is an Enter written, not a prompt accepted.",
             "properties": {
+                "enter_sent": {
+                    "type": "boolean"
+                },
+                "keys_sent": {
+                    "description": "The keys pressed, in order, by the names `--key` takes.",
+                    "items": {
+                        "$ref": "#/definitions/PaneKey"
+                    },
+                    "type": "array"
+                },
                 "pane": {
                     "type": "string"
                 },
-                "submitted": {
+                "text_sent": {
                     "type": "boolean"
                 }
             },
             "required": [
+                "enter_sent",
+                "keys_sent",
                 "pane",
-                "submitted"
+                "text_sent"
             ],
             "title": "PaneSent",
             "type": "object"
@@ -1683,6 +2164,291 @@
                 "purpose"
             ],
             "title": "PurposeSet",
+            "type": "object"
+        },
+        "spawn_show": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "definitions": {
+                "Activity": {
+                    "description": "Whether the agent is running a turn. A state the core cannot read now, a stale read or a device that does not answer, is `unknown`, never `stopped`.",
+                    "enum": [
+                        "working",
+                        "stopped",
+                        "unknown"
+                    ],
+                    "type": "string"
+                },
+                "AgentState": {
+                    "description": "What an agent is doing now, as the sidebar, `hide agent list` and `hide ps` read it from the core, for a parent deciding what to do about a child.",
+                    "properties": {
+                        "activity": {
+                            "$ref": "#/definitions/Activity"
+                        },
+                        "lifecycle": {
+                            "anyOf": [
+                                {
+                                    "$ref": "#/definitions/Runtime"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "description": "Where the agent is in its life, as `runtime` says; null for a spawn whose agent never registered."
+                        },
+                        "observed_at_unix_ms": {
+                            "description": "When the core last read the agent's state; the state holds until a later read changes it. Absent when the core has never read it.",
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": [
+                                "integer",
+                                "null"
+                            ]
+                        },
+                        "pending_inputs": {
+                            "description": "Input Hide typed into the agent that the agent has not recorded.",
+                            "items": {
+                                "$ref": "#/definitions/PendingInput"
+                            },
+                            "type": "array"
+                        },
+                        "waiting": {
+                            "anyOf": [
+                                {
+                                    "$ref": "#/definitions/Waiting"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "description": "What the agent waits on: null only when the core knows it waits on nothing, `cause: unknown` when it cannot tell."
+                        }
+                    },
+                    "required": [
+                        "activity",
+                        "lifecycle",
+                        "observed_at_unix_ms",
+                        "waiting",
+                        "pending_inputs"
+                    ],
+                    "type": "object"
+                },
+                "InputKind": {
+                    "description": "What was typed, for the notice and the row: a spawn's brief or a letter.",
+                    "enum": [
+                        "brief",
+                        "letter"
+                    ],
+                    "type": "string"
+                },
+                "InputPhase": {
+                    "description": "Where one typed input stands: typed and its record not yet owed or arrived, owed and missing, or missing with no typing left.",
+                    "enum": [
+                        "awaiting_record",
+                        "unconfirmed",
+                        "exhausted"
+                    ],
+                    "type": "string"
+                },
+                "PendingInput": {
+                    "description": "One input Hide typed that the agent has not recorded (docs/delivery.md, Input an agent did not take).",
+                    "properties": {
+                        "attempts": {
+                            "format": "uint8",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "kind": {
+                            "$ref": "#/definitions/InputKind"
+                        },
+                        "max_attempts": {
+                            "format": "uint8",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "noticed_at_unix_ms": {
+                            "description": "When its parent or sender was told it is unconfirmed.",
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": [
+                                "integer",
+                                "null"
+                            ]
+                        },
+                        "phase": {
+                            "$ref": "#/definitions/InputPhase"
+                        },
+                        "request_id": {
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
+                        "spawn_id": {
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
+                        "typed_at_unix_ms": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        }
+                    },
+                    "required": [
+                        "kind",
+                        "spawn_id",
+                        "request_id",
+                        "attempts",
+                        "max_attempts",
+                        "phase",
+                        "typed_at_unix_ms",
+                        "noticed_at_unix_ms"
+                    ],
+                    "type": "object"
+                },
+                "Runtime": {
+                    "enum": [
+                        "running",
+                        "asleep",
+                        "ended"
+                    ],
+                    "type": "string"
+                },
+                "SpawnRef": {
+                    "description": "A spawn, by its stable id, and the pane it made.",
+                    "properties": {
+                        "child": {
+                            "description": "The child's registration id once it registered.",
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
+                        "id": {
+                            "type": "string"
+                        },
+                        "intent": {
+                            "type": "string"
+                        },
+                        "kind": {
+                            "type": "string"
+                        },
+                        "machine": {
+                            "description": "The device the child is on when it is not the caller's own.",
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
+                        "name": {
+                            "type": "string"
+                        },
+                        "pane": {
+                            "description": "The pane as `hide pane send` takes it; absent until the spawn made one.",
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        }
+                    },
+                    "required": [
+                        "id",
+                        "intent",
+                        "name",
+                        "kind",
+                        "machine",
+                        "pane",
+                        "child"
+                    ],
+                    "type": "object"
+                },
+                "WaitCause": {
+                    "description": "The causes an agent waits by: its own demand (docs/status-model.md, Where each axis comes from), a question the core laid on its row, or one of the escalation causes (Delegated escalation).",
+                    "enum": [
+                        "unknown",
+                        "question",
+                        "approval",
+                        "blocked",
+                        "plan_review",
+                        "mission_decision",
+                        "input_unconfirmed",
+                        "draft",
+                        "parent_blocked",
+                        "bell_exhausted",
+                        "undelivered",
+                        "observer_unconfirmed"
+                    ],
+                    "type": "string"
+                },
+                "Waiting": {
+                    "description": "What an agent waits on, by the core's own cause.",
+                    "properties": {
+                        "cause": {
+                            "$ref": "#/definitions/WaitCause"
+                        },
+                        "letter_id": {
+                            "description": "The letter the wait is about.",
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
+                        "on": {
+                            "description": "Who can answer: `operator`, or the registration id of the agent that should (a delegated child's parent). Absent when unknown.",
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
+                        "since_unix_ms": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": [
+                                "integer",
+                                "null"
+                            ]
+                        },
+                        "spawn_id": {
+                            "description": "The spawn whose brief the wait is about.",
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
+                        "text": {
+                            "description": "A short line saying what is asked, when the core has one. Copy for a reader, never a reason to act: `cause` is.",
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        }
+                    },
+                    "required": [
+                        "cause",
+                        "on",
+                        "since_unix_ms",
+                        "letter_id",
+                        "spawn_id",
+                        "text"
+                    ],
+                    "type": "object"
+                }
+            },
+            "description": "`hide agent show <spawn id or intent>` for a spawn whose agent has not registered: the spawn and its pane's state.",
+            "properties": {
+                "spawn": {
+                    "$ref": "#/definitions/SpawnRef"
+                },
+                "state": {
+                    "$ref": "#/definitions/AgentState"
+                }
+            },
+            "required": [
+                "spawn",
+                "state"
+            ],
+            "title": "SpawnShow",
             "type": "object"
         },
         "stopped": {
@@ -2026,7 +2792,8 @@
         },
         {
             "answers": [
-                "agent"
+                "agent_show",
+                "spawn_show"
             ],
             "arguments": [
                 {
@@ -2045,12 +2812,15 @@
                     "value": null
                 }
             ],
+            "refusals": [
+                "agent_unavailable"
+            ],
             "repeats_at_most": null,
             "rest": null
         },
         {
             "answers": [
-                "agent"
+                "agent_show"
             ],
             "arguments": [],
             "command": "agent show here",
@@ -2601,15 +3371,53 @@
                 },
                 {
                     "name": "text",
+                    "required": false,
                     "value": {
-                        "type": "body"
+                        "type": "text"
+                    },
+                    "value_with": {
+                        "--paste": {
+                            "type": "paste_text"
+                        }
                     }
                 }
             ],
             "command": "pane send",
+            "needs_one_of": [
+                "text",
+                "--key",
+                "--enter"
+            ],
             "options": [
                 {
+                    "name": "--key",
+                    "repeats_at_most": 32,
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "one_of",
+                        "values": [
+                            "esc",
+                            "enter",
+                            "tab",
+                            "shift-tab",
+                            "up",
+                            "down",
+                            "left",
+                            "right",
+                            "backspace",
+                            "ctrl-c"
+                        ]
+                    }
+                },
+                {
                     "name": "--enter",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "name": "--paste",
                     "required": false,
                     "requires": [],
                     "value": null
@@ -2617,8 +3425,18 @@
             ],
             "refusals": [
                 "pane_required",
+                "nothing_to_send",
+                "text_empty",
+                "text_invalid",
                 "text_too_long",
-                "pane_unavailable"
+                "too_many_keys",
+                "paste_unsupported",
+                "pane_unavailable",
+                "pane_asleep",
+                "composer_not_empty",
+                "keys_not_sent",
+                "send_unconfirmed",
+                "operator_typing"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -4117,7 +4935,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:0edb46d563a8bd136e6eb519f45ee71dece6632ace5bdbfc2c47b13911081aeb",
+    "digest": "sha256:9e1c5513ab797bb47f68f03c09de15a619523070129dca1212266a021a0b144b",
     "envelopes": {
         "agent": {
             "answer": "value",
@@ -4178,6 +4996,7 @@
         "json": "a JSON document of the shape hide mission help or hide plan help shows",
         "key": "non-empty, at most 256 bytes, no control characters, does not start with -",
         "one_of": "one of the listed values",
+        "paste_text": "non-empty, at most 16384 bytes, no control characters but line breaks (LF, CR) and tabs",
         "ratio": "two decimal integers as <passed>/<total>, such as 6/6",
         "session": "non-empty, at most 4096 bytes, no control characters, does not start with -",
         "text": "non-empty, no control characters, does not start with --",

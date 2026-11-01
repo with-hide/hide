@@ -1442,6 +1442,11 @@ fn refusal_answer(reason: String, next_action: &'static str) -> (String, String)
             code.to_owned(),
             format!("{next_action}; {name} conducts it now"),
         ),
+        // A spawn or a send that stopped partway names what it left as a
+        // field of the answer (`refusal_field`), not in the sentence.
+        (code, Some(_)) if refusal_field(&reason).is_some() => {
+            (code.to_owned(), next_action.to_owned())
+        }
         // Only an unknown machine's detail lists the devices to name.
         (code @ "machine_unknown", Some("")) => (
             code.to_owned(),
@@ -1458,6 +1463,21 @@ fn refusal_answer(reason: String, next_action: &'static str) -> (String, String)
         (code, Some(detail)) => (code.to_owned(), format!("{next_action} ({detail})")),
         (_, None) => (reason, next_action.to_owned()),
     }
+}
+
+/// What a refusal of work that stopped partway left, as a field of the
+/// answer: a spawn's `spawn` (`{"id","pane"}`) and a pane send's `sent`
+/// (`{"text_sent","keys_sent","enter_sent"}`).
+fn refusal_field(reason: &str) -> Option<(&'static str, Value)> {
+    let (code, detail) = herdr_core::coordination::split_refusal(reason);
+    let name = if herdr_core::coordination::INCOMPLETE_SPAWN.contains(&code) {
+        "spawn"
+    } else if herdr_core::pane_command::PARTIAL.contains(&code) {
+        "sent"
+    } else {
+        return None;
+    };
+    Some((name, serde_json::from_str(detail?).ok()?))
 }
 
 fn valid_caller_hint(value: &serde_json::Value) -> bool {
@@ -1864,10 +1884,11 @@ async fn scoped_client_loop(
                                     &command_request_id,
                                 )?,
                                 ScopedRequest::Pane(command) => {
-                                    let refusal = |code: String| {
-                                        let next = herdr_core::pane_command::next_action(&code)
-                                            .unwrap_or_else(|| crate::server::delivery_next_action(&code));
-                                        (code, next)
+                                    let refusal = |reason: String| {
+                                        let code = herdr_core::coordination::split_refusal(&reason).0;
+                                        let next = herdr_core::pane_command::next_action(code)
+                                            .unwrap_or_else(|| crate::server::delivery_next_action(code));
+                                        (reason, next)
                                     };
                                     core.prepare_pane(&cap.context.device_id, &cap.pane_id, &cap.context, command)
                                         .and_then(herdr_core::pane_command::Prepared::run)
@@ -2029,8 +2050,13 @@ async fn scoped_client_loop(
                                 json!({"type":"workspace_result","request_id":request_id,"ok":true,"result":result})
                             }
                             Ok(Err((reason, next_action))) => {
+                                let field = refusal_field(&reason);
                                 let (reason, next_action) = refusal_answer(reason, next_action);
-                                json!({"type":"workspace_result","request_id":request_id,"ok":false,"reason":reason,"next_action":next_action})
+                                let mut answer = json!({"type":"workspace_result","request_id":request_id,"ok":false,"reason":reason,"next_action":next_action});
+                                if let Some((name, value)) = field {
+                                    answer[name] = value;
+                                }
+                                answer
                             }
                             Err(_) => {
                                 json!({"type":"workspace_result","request_id":request_id,"ok":false,"reason":"query_unavailable","next_action":"Retry after reconnecting Hide"})
@@ -4827,6 +4853,37 @@ mod tests {
         assert!(key(&too_long, "pane_id").is_err());
         assert!(key(&too_long, "pending_request").is_err());
         assert!(view(&too_long).is_err());
+    }
+
+    /// A spawn or a pane send that stopped partway answers its code and its
+    /// own next step, with what it left (the spawn and pane, or what landed)
+    /// as a field the caller reads, not a sentence.
+    #[test]
+    fn work_that_stopped_partway_names_what_it_left_as_a_field() {
+        let reason =
+            "native_identity_unavailable\u{1f}{\"id\":\"spawn-4\",\"pane\":\"w3:p2\"}".to_owned();
+        assert_eq!(
+            refusal_field(&reason),
+            Some(("spawn", json!({"id": "spawn-4", "pane": "w3:p2"})))
+        );
+        let next = delivery_next_action("native_identity_unavailable");
+        assert_eq!(
+            refusal_answer(reason, next),
+            ("native_identity_unavailable".to_owned(), next.to_owned())
+        );
+        assert_eq!(refusal_field("native_identity_unavailable"), None);
+        assert_eq!(refusal_field("machine_unknown\u{1f}mini"), None);
+        let sent = r#"{"text_sent":true,"keys_sent":[],"enter_sent":false}"#;
+        let partial = format!("operator_typing\u{1f}{sent}");
+        assert_eq!(
+            refusal_field(&partial),
+            Some(("sent", serde_json::from_str(sent).unwrap()))
+        );
+        let next = herdr_core::pane_command::next_action("operator_typing").unwrap();
+        assert_eq!(
+            refusal_answer(partial, next),
+            ("operator_typing".to_owned(), next.to_owned())
+        );
     }
 
     /// A refusal that lists the devices the caller could have named answers

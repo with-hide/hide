@@ -110,8 +110,9 @@ pub(crate) fn standing(
 }
 
 /// Whether unconfirmed `input` may be typed again now: someone answered the
-/// agent's screen since the last typing (input Hide routed to the pane: the
-/// operator's keys or a parent's `hide pane send`), that input has been quiet
+/// agent's screen since the last typing (`Observation::answered_at_unix_ms`:
+/// the operator's keys, a phone reply, or a parent's `hide pane send` that
+/// landed whole, never one that stopped partway), input has been quiet
 /// for the quiet period, the agent rests, and typings are left. Text and
 /// Enter on a choice screen can pick an option, so an unanswered screen is
 /// never typed into again; the composer is read empty right before the
@@ -121,7 +122,7 @@ pub(crate) fn retype_due(input: &TypedInput, observation: &Observation, now: u64
         standing(input, Some(observation), now),
         Standing::Unconfirmed { .. }
     ) && input.attempts < INPUT_ATTEMPTS
-        && observation.last_input_at_unix_ms > input.typed_at_unix_ms
+        && observation.answered_at_unix_ms > input.typed_at_unix_ms
         && composer_readable(observation, now)
 }
 
@@ -178,14 +179,19 @@ pub(crate) fn notice_body(
         (InputKind::Letter, Some(id)) => format!("your letter {id}"),
         (InputKind::Letter, None) => "your letter".to_owned(),
     };
-    let trust = "A trust, permission or login question is the operator's to answer: never accept it \
-                 for them, tell them instead.";
+    // The operator's decision (2026-11-01): an agent may answer another's
+    // screen, approvals included; Hide does not judge consent, and the
+    // operator sets how much agents approve in Settings > Agents.
+    let trust = "Answering a trust or approval screen for it is your call: Hide does not check \
+                 consent, and the operator sets how much agents may approve in Settings > Agents. \
+                 Leave a login to the operator.";
     match source {
         Ok(()) => format!(
             "{agent} has not confirmed {what}: read its screen with `hide pane read {pane}`.\n\
-             Something on its screen may have taken the typed text. Clear a harmless screen (an \
-             update notice, \"press Enter to continue\") with `hide pane send {pane} <keys> \
-             [--enter]`; Hide types it again once the agent is ready.\n{trust}"
+             Something on its screen may have taken the typed text; `hide agent show` names what \
+             it waits on. Answer the screen with `hide pane send {pane} --key <name>` (esc, enter, \
+             up, down, tab, ...) or with text and `--enter`; Hide types it again once the agent \
+             is ready.\n{trust}"
         ),
         Err(reason) => {
             let why = if reason == HOOKS_NOT_CONNECTED {
@@ -227,6 +233,10 @@ mod tests {
             last_submit_at_unix_ms: 0,
             entered_working_at_unix_ms: 0,
             released_input_at_unix_ms: 0,
+            input_generation: 0,
+            pane_send_generation: None,
+            answered_at_unix_ms: input,
+            observed_at_unix_ms: 0,
             hook_submit_at_unix_ms: 0,
             session: None,
             thread: None,

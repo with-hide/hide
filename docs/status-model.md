@@ -459,6 +459,7 @@ Ending registration leaves the tokens until the child pane changes or disappears
 A registration ends by itself when the host's authoritative pane topology stops reporting its pane, as a read record is dropped, and never from an incomplete or stale read ([delivery.md](delivery.md#agent-registration-and-spawning)).
 `hide agent list` then reports it `ended` and `disconnected`, and its name is free on that host.
 An agent Hide put to sleep is not ended: its registration stays, and `hide agent list`, `hide agent show` and `hide ps` all report it `asleep`, `hide agent list` with `disconnected`, until it wakes and runs again ([delivery.md](delivery.md#agent-registration-and-spawning)).
+`hide agent show`'s `state` reads the same row and adds no status: its activity is the row's, its `waiting` cause is the escalation cause, the core-laid question or the agent's own demand the row carries, in that order, and a row the core cannot read now is `unknown`, never stopped ([delivery.md](delivery.md#agent-registration-and-spawning)).
 A relationship is accepted only when both panes still report the recorded session digests; without both digests the child is a root until a complete declaration is written.
 A changed parent session cannot adopt the previous session's children, and an absent parent agent retains the existing orphan presentation.
 A missing or unknown remote machine identity leaves the child a root until its matching device connects.

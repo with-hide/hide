@@ -46,6 +46,19 @@ impl AgentId {
         matches!(self, Self::Omp)
     }
 
+    /// Whether the agent takes a multi-line paste as one paste, never
+    /// sending it partway, on a system (`windows` or not): what the agent
+    /// journey's `composer` cell measured. On Windows Grok reads console keys
+    /// and is never told of a paste, so a pause turns a line break into Enter
+    /// (docs/INSTALL.md, What each system supports); Cursor is retired.
+    pub const fn takes_one_paste(self, windows: bool) -> bool {
+        match self {
+            Self::Grok => !windows,
+            Self::Cursor => false,
+            _ => true,
+        }
+    }
+
     /// Whether the agent's own prompt hook carries the prompt it took, so its
     /// digest is the agent's record of typed input: the hook files of Claude
     /// Code, Codex and Grok, which hand `UserPromptSubmit`'s prompt to Hide's

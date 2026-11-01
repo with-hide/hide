@@ -46,6 +46,9 @@ use hide_platform::ipc::{LocalListener, LocalStream};
 
 static NEXT_FAKE_ID: AtomicUsize = AtomicUsize::new(0);
 
+/// The code a responder answers with to take a request and never answer it.
+pub(crate) const NO_REPLY: &str = "fake_no_reply";
+
 pub(crate) struct FakeHerdr {
     root: PathBuf,
     socket_path: PathBuf,
@@ -72,7 +75,8 @@ impl FakeHerdr {
 
     /// Like [`FakeHerdr::start`], but a request may be refused: `Err((code,
     /// message))` is written as Herdr's error envelope, which the client
-    /// reads as `ApiError::Remote`.
+    /// reads as `ApiError::Remote`, and `Err((NO_REPLY, _))` closes the
+    /// connection unanswered, a reply the client reads as lost.
     pub(crate) fn start_with_errors(
         name: &str,
         respond: impl FnMut(&str, &Value) -> Result<Value, (String, String)> + Send + 'static,
@@ -132,16 +136,22 @@ impl FakeHerdr {
                                     .as_str()
                                     .expect("fake herdr request names a method")
                                     .to_owned();
-                                let response =
-                                    match respond.lock().unwrap()(&method, &request["params"]) {
-                                        Ok(result) => {
-                                            wire::checked_response_fixture(&request["id"], result)
-                                        }
-                                        Err((code, message)) => serde_json::json!({
-                                            "id": request["id"],
-                                            "error": {"code": code, "message": message}
-                                        }),
-                                    };
+                                let answer = respond.lock().unwrap()(&method, &request["params"]);
+                                if matches!(&answer, Err((code, _)) if code == NO_REPLY) {
+                                    // Taken and never answered: the connection
+                                    // closes with the request written.
+                                    requests.lock().unwrap().push(request.clone());
+                                    return;
+                                }
+                                let response = match answer {
+                                    Ok(result) => {
+                                        wire::checked_response_fixture(&request["id"], result)
+                                    }
+                                    Err((code, message)) => serde_json::json!({
+                                        "id": request["id"],
+                                        "error": {"code": code, "message": message}
+                                    }),
+                                };
                                 requests.lock().unwrap().push(request.clone());
                                 writeln!(stream.get_mut(), "{response}")
                                     .expect("write fake herdr response");

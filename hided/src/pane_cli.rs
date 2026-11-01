@@ -3,12 +3,13 @@
 //! its checkout's purpose, through Hide rather than Herdr (PRD
 //! engine-bundle-1 D-5). The daemon runs them (`herdr_core::pane_command`).
 
+use herdr_core::engine::keys::PaneKey;
 use herdr_core::pane_command::{DEFAULT_LINES, PaneCommand};
 use serde_json::json;
 
 use crate::env::Env;
 
-pub const USAGE: &str = "hide pane read <pane> [--lines <n>] [--json]\nhide pane send <pane> <text> [--enter]\nhide pane open --beside [--focus] -- <command>\nhide agent read <agent> [--lines <n>] [--json]\nhide workspace purpose <text>";
+pub const USAGE: &str = "hide pane read <pane> [--lines <n>] [--json]\nhide pane send <pane> [<text>] [--key <name>]... [--enter] [--paste]\nhide pane open --beside [--focus] -- <command>\nhide agent read <agent> [--lines <n>] [--json]\nhide workspace purpose <text>";
 
 /// One parsed command, and whether its read is printed as the answer line.
 #[derive(Debug, Eq, PartialEq)]
@@ -65,24 +66,7 @@ pub fn parse(args: &[String]) -> Result<PaneCli, String> {
     };
     match verb.as_str() {
         "read" => read(rest, |pane, lines| PaneCommand::Read { pane, lines }),
-        "send" => {
-            let (pane, text, enter) = match rest {
-                [pane, text] => (pane, text, false),
-                [pane, text, flag] if flag == "--enter" => (pane, text, true),
-                _ => return Err(USAGE.to_owned()),
-            };
-            if !word(pane) || text.trim().is_empty() {
-                return Err(USAGE.to_owned());
-            }
-            Ok(PaneCli {
-                command: PaneCommand::Send {
-                    pane: pane.clone(),
-                    text: text.clone(),
-                    enter,
-                },
-                json: false,
-            })
-        }
+        "send" => send(rest),
         "open" => {
             let split = rest
                 .iter()
@@ -120,6 +104,54 @@ pub fn parse(args: &[String]) -> Result<PaneCli, String> {
     }
 }
 
+/// `hide pane send <pane> [<text>] [--key <name>]... [--enter] [--paste]`,
+/// the words after `send`: one text at most, each key by its name in order.
+/// What may be sent is the command's own check, so a send of nothing or of
+/// a control character is refused with its reason, not the usage.
+fn send(args: &[String]) -> Result<PaneCli, String> {
+    let [pane, rest @ ..] = args else {
+        return Err(USAGE.to_owned());
+    };
+    if !word(pane) {
+        return Err(USAGE.to_owned());
+    }
+    let mut text = None;
+    let mut keys = Vec::new();
+    let mut enter = false;
+    let mut paste = false;
+    let mut rest = rest.iter();
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "--key" => {
+                let name = rest.next().ok_or_else(|| USAGE.to_owned())?;
+                keys.push(PaneKey::parse(name).ok_or_else(|| {
+                    let known: Vec<&str> = PaneKey::ALL.into_iter().map(PaneKey::name).collect();
+                    format!(
+                        "unknown key for hide pane send: {name} (keys: {})\n{USAGE}",
+                        known.join(" ")
+                    )
+                })?);
+            }
+            "--enter" if !enter => enter = true,
+            "--paste" if !paste => paste = true,
+            flag if flag.starts_with("--") => return Err(USAGE.to_owned()),
+            _ if arg.trim().is_empty() => return Err(USAGE.to_owned()),
+            _ if text.is_none() => text = Some(arg.clone()),
+            _ => return Err(USAGE.to_owned()),
+        }
+    }
+    Ok(PaneCli {
+        command: PaneCommand::Send {
+            pane: pane.clone(),
+            text,
+            keys,
+            enter,
+            paste,
+        },
+        json: false,
+    })
+}
+
 /// `hide agent read …`, the words after `read`.
 pub fn parse_agent_read(args: &[String]) -> Result<PaneCli, String> {
     read(args, |agent, lines| PaneCommand::AgentRead { agent, lines })
@@ -140,13 +172,11 @@ pub fn parse_purpose(args: &[String]) -> Result<PaneCli, String> {
 /// `{"ok":true,"value":…}` or `{"ok":false,"error":{"code","message"}}` with
 /// the step to take, and a non-zero exit for a refusal.
 pub fn run(env: &Env, cli: PaneCli) -> Result<(), String> {
-    let refused = |code: String, message: &str| {
-        println!(
-            "{}",
-            json!({"ok":false,"error":{"code":code,"message":message}})
-        );
+    let refused_with = |code: String, message: &str, answer: &serde_json::Value| {
+        println!("{}", crate::cli::refusal_line(&code, message, answer));
         Err(code)
     };
+    let refused = |code: String, message: &str| refused_with(code, message, &json!({}));
     if let Err(code) = cli.command.check() {
         let message = herdr_core::pane_command::next_action(code).unwrap_or_default();
         return refused(code.to_owned(), message);
@@ -182,7 +212,7 @@ pub fn run(env: &Env, cli: PaneCli) -> Result<(), String> {
                 .or_else(|| herdr_core::pane_command::next_action(&code))
                 .unwrap_or("Retry; the reason is in Hide's diagnostic log")
                 .to_owned();
-            refused(code, &message)
+            refused_with(code, &message, &answer)
         }
         Err(code) => {
             let message = crate::cli::request_next_action(&code);
@@ -236,7 +266,53 @@ mod tests {
         };
         assert!(!sent(&["send", "w1:p2", "ls -la"]));
         assert!(sent(&["send", "w1:p2", "ls -la", "--enter"]));
-        assert!(parse(&words(&["send", "w1:p2"])).is_err());
+        assert!(parse(&words(&["send"])).is_err());
+    }
+
+    /// Keys are taken in the order given, after the text, with or without
+    /// text; a send of nothing parses and the command's check names why it is
+    /// refused, and an unknown key is refused before anything is asked.
+    #[test]
+    fn send_takes_keys_in_order_and_leaves_what_may_be_sent_to_the_check() {
+        assert_eq!(
+            parse(&words(&[
+                "send", "w1:p2", "--key", "down", "--key", "down", "--enter"
+            ]))
+            .unwrap()
+            .command,
+            PaneCommand::Send {
+                pane: "w1:p2".into(),
+                text: None,
+                keys: vec![PaneKey::Down, PaneKey::Down],
+                enter: true,
+                paste: false,
+            }
+        );
+        assert_eq!(
+            parse(&words(&[
+                "send", "w1:p2", "--paste", "a\nb", "--key", "esc"
+            ]))
+            .unwrap()
+            .command,
+            PaneCommand::Send {
+                pane: "w1:p2".into(),
+                text: Some("a\nb".into()),
+                keys: vec![PaneKey::Esc],
+                enter: false,
+                paste: true,
+            }
+        );
+        let nothing = parse(&words(&["send", "w1:p2"])).unwrap();
+        assert_eq!(nothing.command.check(), Err("nothing_to_send"));
+        let newline = parse(&words(&["send", "w1:p2", "a\nb"])).unwrap();
+        assert_eq!(newline.command.check(), Err("text_invalid"));
+        assert!(
+            parse(&words(&["send", "w1:p2", "--key", "escape"]))
+                .unwrap_err()
+                .starts_with("unknown key for hide pane send: escape")
+        );
+        assert!(parse(&words(&["send", "w1:p2", "--key"])).is_err());
+        assert!(parse(&words(&["send", "w1:p2", "one", "two"])).is_err());
     }
 
     #[test]

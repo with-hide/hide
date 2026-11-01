@@ -324,17 +324,12 @@ fn print_answer(result: Result<serde_json::Value, String>) -> Result<(), String>
             Ok(())
         }
         Ok(answer) => {
-            let code = answer["reason"]
+            let line = refused(&answer);
+            println!("{line}");
+            Err(line["error"]["code"]
                 .as_str()
-                .unwrap_or("agent_unavailable")
-                .to_owned();
-            // The daemon's next step is what the caller can act on.
-            let message = answer["next_action"].as_str().unwrap_or(&code);
-            println!(
-                "{}",
-                serde_json::json!({"ok":false,"error":{"code":code,"message":message}})
-            );
-            Err(code)
+                .unwrap_or_default()
+                .to_owned())
         }
         Err(code) => {
             // A command that outlasts the wait may still be running; its
@@ -352,9 +347,32 @@ fn print_answer(result: Result<serde_json::Value, String>) -> Result<(), String>
         }
     }
 }
+/// The refusal line of an answer the daemon refused, with the daemon's next
+/// step, the one the caller can act on.
+fn refused(answer: &serde_json::Value) -> serde_json::Value {
+    let code = answer["reason"].as_str().unwrap_or("agent_unavailable");
+    let message = answer["next_action"].as_str().unwrap_or(code);
+    crate::cli::refusal_line(code, message, answer)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// A spawn refused partway prints its spawn id and pane beside the
+    /// code; any other refusal prints the code and next step only.
+    #[test]
+    fn a_spawn_refused_partway_prints_its_spawn_and_pane() {
+        let spawn = serde_json::json!({"id":"spawn-7","pane":"w3:p2"});
+        assert_eq!(
+            refused(
+                &serde_json::json!({"ok":false,"reason":"brief_not_submitted","next_action":"Run hide agent show spawn-7","spawn":spawn})
+            ),
+            serde_json::json!({"ok":false,"error":{"code":"brief_not_submitted","message":"Run hide agent show spawn-7","spawn":spawn}})
+        );
+        assert_eq!(
+            refused(&serde_json::json!({"ok":false,"reason":"agent_unavailable"})),
+            serde_json::json!({"ok":false,"error":{"code":"agent_unavailable","message":"agent_unavailable"}})
+        );
+    }
     fn line(args: &[&str]) -> Result<Delivery, String> {
         parsed(args).map(|parsed| parsed.command)
     }

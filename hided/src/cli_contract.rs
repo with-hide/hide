@@ -50,6 +50,9 @@ pub enum Input {
     Unsigned,
     /// A JSON document of the shape the command names.
     Json,
+    /// Text that may also carry line breaks (LF, CR) and tabs, and no other
+    /// control character: what `hide pane send --paste` admits.
+    PasteText,
     OneOf(&'static [&'static str]),
 }
 
@@ -66,6 +69,7 @@ impl Input {
             Approval => "approval",
             Unsigned => "unsigned",
             Json => "json",
+            PasteText => "paste_text",
             OneOf(_) => "one_of",
         }
     }
@@ -74,6 +78,11 @@ impl Input {
 pub struct Arg {
     pub name: &'static str,
     pub value: Input,
+    /// False for an argument the command takes without; one left out
+    /// leaves out every argument after it.
+    pub required: bool,
+    /// The option that widens the value it admits, and to what.
+    pub value_with: Option<(&'static str, Input)>,
 }
 
 pub struct Opt {
@@ -85,6 +94,8 @@ pub struct Opt {
     pub requires: &'static [&'static str],
     /// Options this one cannot be combined with.
     pub conflicts: &'static [&'static str],
+    /// For an option given more than once, at most how many times.
+    pub repeats: Option<usize>,
 }
 
 pub struct Spec {
@@ -94,6 +105,9 @@ pub struct Spec {
     pub arguments: &'static [Arg],
     /// When the last argument repeats, at most how many times.
     pub repeats: Option<usize>,
+    /// Arguments and options of which the command needs at least one, its
+    /// forms; empty when it needs none of them in particular.
+    pub needs_one_of: &'static [&'static str],
     pub options: &'static [Opt],
     /// What `--` passes through unread, if the command takes it.
     pub rest: Option<&'static str>,
@@ -112,6 +126,7 @@ const fn required(name: &'static str, value: Input) -> Opt {
         required: true,
         requires: &[],
         conflicts: &[],
+        repeats: None,
     }
 }
 
@@ -122,6 +137,7 @@ const fn optional(name: &'static str, value: Input) -> Opt {
         required: false,
         requires: &[],
         conflicts: &[],
+        repeats: None,
     }
 }
 
@@ -132,6 +148,19 @@ const fn switch(name: &'static str) -> Opt {
         required: false,
         requires: &[],
         conflicts: &[],
+        repeats: None,
+    }
+}
+
+/// An option given up to `most` times.
+const fn repeated(name: &'static str, value: Input, most: usize) -> Opt {
+    Opt {
+        name,
+        value: Some(value),
+        required: false,
+        requires: &[],
+        conflicts: &[],
+        repeats: Some(most),
     }
 }
 
@@ -143,6 +172,7 @@ const fn cleared(name: &'static str, value: Input, conflicts: &'static [&'static
         required: false,
         requires: &[],
         conflicts,
+        repeats: None,
     }
 }
 
@@ -154,6 +184,7 @@ const fn clearing(name: &'static str, conflicts: &'static [&'static str]) -> Opt
         required: false,
         requires: &[],
         conflicts,
+        repeats: None,
     }
 }
 
@@ -167,6 +198,7 @@ const fn spec(
         words,
         arguments,
         repeats: None,
+        needs_one_of: &[],
         options,
         rest: None,
         answers,
@@ -174,19 +206,27 @@ const fn spec(
     }
 }
 
-use Input::{Approval, Body, Commit, Json, Key, OneOf, Ratio, Session, Sha256, Text, Unsigned};
+use Input::{
+    Approval, Body, Commit, Json, Key, OneOf, PasteText, Ratio, Session, Sha256, Text, Unsigned,
+};
 
 const ID: &[Arg] = &[Arg {
     name: "id",
     value: Key,
+    required: true,
+    value_with: None,
 }];
 const TARGET: &[Arg] = &[Arg {
     name: "target",
     value: Key,
+    required: true,
+    value_with: None,
 }];
 const AGENT_ID: &[Arg] = &[Arg {
     name: "id",
     value: Text,
+    required: true,
+    value_with: None,
 }];
 
 pub const COMMANDS: &[Spec] = &[
@@ -213,21 +253,29 @@ pub const COMMANDS: &[Spec] = &[
         &[switch("--json")],
         &["agent_list"],
     ),
-    spec(
-        &["agent", "show"],
-        AGENT_ID,
-        &[switch("--json")],
-        &["agent"],
-    ),
+    // A registration by its id with its agent's state, or a spawn by its id
+    // or the caller's intent: its child's registration once it has one, the
+    // spawn and its pane's state until then. It reads only.
+    Spec {
+        words: &["agent", "show"],
+        arguments: AGENT_ID,
+        repeats: None,
+        needs_one_of: &[],
+        options: &[switch("--json")],
+        rest: None,
+        answers: &["agent_show", "spawn_show"],
+        refusals: &["agent_unavailable"],
+    },
     // The caller's own registration, by its attested pane, device and
     // session; only a pane-bound credential can ask.
     Spec {
         words: &["agent", "show", "here"],
         arguments: &[],
         repeats: None,
+        needs_one_of: &[],
         options: &[switch("--json")],
         rest: None,
-        answers: &["agent"],
+        answers: &["agent_show"],
         refusals: &[
             "agent_pane_required",
             "caller_identity_conflict",
@@ -249,6 +297,7 @@ pub const COMMANDS: &[Spec] = &[
         words: &["agent", "sleep"],
         arguments: AGENT_ID,
         repeats: None,
+        needs_one_of: &[],
         options: &[optional("--actor", Text), switch("--json")],
         rest: None,
         answers: &["agent"],
@@ -280,6 +329,7 @@ pub const COMMANDS: &[Spec] = &[
         words: &["agent", "archive"],
         arguments: AGENT_ID,
         repeats: None,
+        needs_one_of: &[],
         options: &[optional("--actor", Text), switch("--json")],
         rest: None,
         answers: &["agent_archived"],
@@ -306,6 +356,7 @@ pub const COMMANDS: &[Spec] = &[
         words: &["agent", "spawn"],
         arguments: &[],
         repeats: None,
+        needs_one_of: &[],
         options: &[
             optional("--parent", Text),
             optional("--machine", Text),
@@ -369,6 +420,7 @@ pub const COMMANDS: &[Spec] = &[
         words: &["ps"],
         arguments: &[],
         repeats: None,
+        needs_one_of: &[],
         options: &[switch("--all"), switch("--here"), switch("--json")],
         rest: None,
         answers: &["ps"],
@@ -382,6 +434,7 @@ pub const COMMANDS: &[Spec] = &[
         words: &["device", "list"],
         arguments: &[],
         repeats: None,
+        needs_one_of: &[],
         options: &[switch("--json")],
         rest: None,
         answers: &["device_list"],
@@ -392,8 +445,11 @@ pub const COMMANDS: &[Spec] = &[
         arguments: &[Arg {
             name: "ssh_alias",
             value: Key,
+            required: true,
+            value_with: None,
         }],
         repeats: None,
+        needs_one_of: &[],
         options: &[
             optional("--name", Text),
             optional("--socket", Text),
@@ -412,8 +468,11 @@ pub const COMMANDS: &[Spec] = &[
         arguments: &[Arg {
             name: "device_id",
             value: Key,
+            required: true,
+            value_with: None,
         }],
         repeats: None,
+        needs_one_of: &[],
         options: &[switch("--json")],
         rest: None,
         answers: &["device_removed"],
@@ -432,8 +491,11 @@ pub const COMMANDS: &[Spec] = &[
         arguments: &[Arg {
             name: "device_id",
             value: Key,
+            required: true,
+            value_with: None,
         }],
         repeats: None,
+        needs_one_of: &[],
         options: &[switch("--wait"), switch("--json")],
         rest: None,
         answers: &["device_retried"],
@@ -453,8 +515,11 @@ pub const COMMANDS: &[Spec] = &[
         arguments: &[Arg {
             name: "pane",
             value: Key,
+            required: true,
+            value_with: None,
         }],
         repeats: None,
+        needs_one_of: &[],
         options: &[optional("--lines", Unsigned), switch("--json")],
         rest: None,
         answers: &["pane_read"],
@@ -466,22 +531,54 @@ pub const COMMANDS: &[Spec] = &[
             Arg {
                 name: "pane",
                 value: Key,
+                required: true,
+                value_with: None,
             },
+            // No control character, as a key the caller did not name; with
+            // `--paste`, line breaks and tabs too.
             Arg {
                 name: "text",
-                value: Body,
+                value: Text,
+                required: false,
+                value_with: Some(("--paste", PasteText)),
             },
         ],
         repeats: None,
-        options: &[switch("--enter")],
+        // Text, keys or Enter: each key is pressed in order after the text,
+        // then Enter.
+        needs_one_of: &["text", "--key", "--enter"],
+        options: &[
+            repeated(
+                "--key",
+                OneOf(&herdr_core::engine::keys::PaneKey::NAMES),
+                herdr_core::pane_command::KEYS_LIMIT,
+            ),
+            switch("--enter"),
+            switch("--paste"),
+        ],
         rest: None,
         answers: &["pane_sent"],
-        refusals: &["pane_required", "text_too_long", "pane_unavailable"],
+        refusals: &[
+            "pane_required",
+            "nothing_to_send",
+            "text_empty",
+            "text_invalid",
+            "text_too_long",
+            "too_many_keys",
+            "paste_unsupported",
+            "pane_unavailable",
+            "pane_asleep",
+            "composer_not_empty",
+            "keys_not_sent",
+            "send_unconfirmed",
+            "operator_typing",
+        ],
     },
     Spec {
         words: &["pane", "open"],
         arguments: &[],
         repeats: None,
+        needs_one_of: &[],
         options: &[
             Opt {
                 name: "--beside",
@@ -489,6 +586,7 @@ pub const COMMANDS: &[Spec] = &[
                 required: true,
                 requires: &[],
                 conflicts: &[],
+                repeats: None,
             },
             switch("--focus"),
         ],
@@ -510,8 +608,11 @@ pub const COMMANDS: &[Spec] = &[
         arguments: &[Arg {
             name: "agent",
             value: Key,
+            required: true,
+            value_with: None,
         }],
         repeats: None,
+        needs_one_of: &[],
         options: &[optional("--lines", Unsigned), switch("--json")],
         rest: None,
         answers: &["pane_read"],
@@ -527,8 +628,11 @@ pub const COMMANDS: &[Spec] = &[
         arguments: &[Arg {
             name: "text",
             value: Text,
+            required: true,
+            value_with: None,
         }],
         repeats: None,
+        needs_one_of: &[],
         options: &[],
         rest: None,
         answers: &["purpose_set"],
@@ -546,6 +650,7 @@ pub const COMMANDS: &[Spec] = &[
         words: &["request", "send"],
         arguments: TARGET,
         repeats: None,
+        needs_one_of: &[],
         options: &[
             required("--intent", Key),
             required("--body", Body),
@@ -583,6 +688,7 @@ pub const COMMANDS: &[Spec] = &[
                 required: false,
                 requires: &["--session"],
                 conflicts: &["--turn-end"],
+                repeats: None,
             },
             Opt {
                 name: "--turn-end",
@@ -590,6 +696,7 @@ pub const COMMANDS: &[Spec] = &[
                 required: false,
                 requires: &["--session"],
                 conflicts: &["--tool"],
+                repeats: None,
             },
         ],
         &["intake"],
@@ -598,6 +705,7 @@ pub const COMMANDS: &[Spec] = &[
         words: &["inbox", "--confirm"],
         arguments: ID,
         repeats: Some(HOOK_LETTERS),
+        needs_one_of: &[],
         options: &[],
         rest: None,
         answers: &["confirmed"],
@@ -622,6 +730,7 @@ pub const COMMANDS: &[Spec] = &[
                 required: false,
                 requires: &["--expected-generation"],
                 conflicts: &[],
+                repeats: None,
             },
         ],
         &["watch"],
@@ -638,6 +747,7 @@ pub const COMMANDS: &[Spec] = &[
         words: &["mission", "create"],
         arguments: &[],
         repeats: None,
+        needs_one_of: &[],
         options: &[
             required("--title", Text),
             optional("--scope", OneOf(&["pr", "merge"])),
@@ -658,6 +768,7 @@ pub const COMMANDS: &[Spec] = &[
         words: &["mission", "plan"],
         arguments: &[],
         repeats: None,
+        needs_one_of: &[],
         options: &[
             optional("--mission", Key),
             Opt {
@@ -666,6 +777,7 @@ pub const COMMANDS: &[Spec] = &[
                 required: false,
                 requires: &[],
                 conflicts: &["--json"],
+                repeats: None,
             },
             Opt {
                 name: "--json",
@@ -673,6 +785,7 @@ pub const COMMANDS: &[Spec] = &[
                 required: false,
                 requires: &[],
                 conflicts: &["--file"],
+                repeats: None,
             },
         ],
         rest: None,
@@ -697,8 +810,11 @@ pub const COMMANDS: &[Spec] = &[
         arguments: &[Arg {
             name: "node",
             value: Key,
+            required: true,
+            value_with: None,
         }],
         repeats: None,
+        needs_one_of: &[],
         options: &[
             optional("--mission", Key),
             optional("--status", OneOf(crate::mission_cli::STATUSES)),
@@ -744,13 +860,18 @@ pub const COMMANDS: &[Spec] = &[
             Arg {
                 name: "node",
                 value: Key,
+                required: true,
+                value_with: None,
             },
             Arg {
                 name: "line",
                 value: Key,
+                required: true,
+                value_with: None,
             },
         ],
         repeats: None,
+        needs_one_of: &[],
         options: &[
             optional("--mission", Key),
             Opt {
@@ -759,6 +880,7 @@ pub const COMMANDS: &[Spec] = &[
                 required: false,
                 requires: &[],
                 conflicts: &["--fail"],
+                repeats: None,
             },
             Opt {
                 name: "--fail",
@@ -766,6 +888,7 @@ pub const COMMANDS: &[Spec] = &[
                 required: false,
                 requires: &[],
                 conflicts: &["--pass"],
+                repeats: None,
             },
             required("--evidence", Text),
             optional("--summary", Text),
@@ -792,13 +915,18 @@ pub const COMMANDS: &[Spec] = &[
             Arg {
                 name: "node",
                 value: Key,
+                required: true,
+                value_with: None,
             },
             Arg {
                 name: "line",
                 value: Key,
+                required: true,
+                value_with: None,
             },
         ],
         repeats: None,
+        needs_one_of: &[],
         options: &[
             optional("--mission", Key),
             required("--reason", Text),
@@ -819,8 +947,11 @@ pub const COMMANDS: &[Spec] = &[
         arguments: &[Arg {
             name: "node",
             value: Key,
+            required: true,
+            value_with: None,
         }],
         repeats: None,
+        needs_one_of: &[],
         options: &[
             optional("--mission", Key),
             required("--found-by", Key),
@@ -869,6 +1000,7 @@ pub const COMMANDS: &[Spec] = &[
         words: &["mission", "close"],
         arguments: &[],
         repeats: None,
+        needs_one_of: &[],
         options: &[
             optional("--mission", Key),
             required("--as", OneOf(&["done", "merge_wait", "cancelled"])),
@@ -894,6 +1026,7 @@ pub const COMMANDS: &[Spec] = &[
         words: &["mission", "take"],
         arguments: ID,
         repeats: None,
+        needs_one_of: &[],
         options: &[],
         rest: None,
         answers: &["mission"],
@@ -915,6 +1048,7 @@ pub const COMMANDS: &[Spec] = &[
         words: &["plan", "set"],
         arguments: &[],
         repeats: None,
+        needs_one_of: &[],
         options: &[
             Opt {
                 name: "--file",
@@ -922,6 +1056,7 @@ pub const COMMANDS: &[Spec] = &[
                 required: false,
                 requires: &[],
                 conflicts: &["--json"],
+                repeats: None,
             },
             Opt {
                 name: "--json",
@@ -929,6 +1064,7 @@ pub const COMMANDS: &[Spec] = &[
                 required: false,
                 requires: &[],
                 conflicts: &["--file"],
+                repeats: None,
             },
             // `--ask [why]`: the reason may follow as the next word.
             switch("--ask"),
@@ -957,8 +1093,11 @@ pub const COMMANDS: &[Spec] = &[
         arguments: &[Arg {
             name: "key",
             value: Key,
+            required: true,
+            value_with: None,
         }],
         repeats: None,
+        needs_one_of: &[],
         options: &[
             // `done` first: the sample takes the first value, and --pr and
             // --file go with --status done only.
@@ -989,6 +1128,7 @@ pub const COMMANDS: &[Spec] = &[
         words: &["plan", "approve"],
         arguments: &[],
         repeats: None,
+        needs_one_of: &[],
         options: &[],
         rest: None,
         answers: &["plan"],
@@ -998,6 +1138,7 @@ pub const COMMANDS: &[Spec] = &[
         words: &["plan", "drop"],
         arguments: &[],
         repeats: None,
+        needs_one_of: &[],
         options: &[],
         rest: None,
         answers: &["plan"],
@@ -1007,6 +1148,7 @@ pub const COMMANDS: &[Spec] = &[
         words: &["plan", "show"],
         arguments: &[],
         repeats: None,
+        needs_one_of: &[],
         options: &[],
         rest: None,
         answers: &["plan"],
@@ -1080,10 +1222,19 @@ fn value_json(value: Input) -> Value {
 fn command_json(spec: &Spec) -> Value {
     let mut command = json!({
         "command": spec.words.join(" "),
-        "arguments": spec.arguments.iter().map(|argument| json!({
-            "name": argument.name,
-            "value": value_json(argument.value),
-        })).collect::<Vec<_>>(),
+        "arguments": spec.arguments.iter().map(|argument| {
+            let mut value = json!({
+                "name": argument.name,
+                "value": value_json(argument.value),
+            });
+            if !argument.required {
+                value["required"] = json!(false);
+            }
+            if let Some((option, widened)) = argument.value_with {
+                value["value_with"] = json!({option: value_json(widened)});
+            }
+            value
+        }).collect::<Vec<_>>(),
         "repeats_at_most": spec.repeats,
         "options": spec.options.iter().map(|option| {
             let mut value = json!({
@@ -1095,6 +1246,9 @@ fn command_json(spec: &Spec) -> Value {
             if !option.conflicts.is_empty() {
                 value["conflicts"] = json!(option.conflicts);
             }
+            if let Some(most) = option.repeats {
+                value["repeats_at_most"] = json!(most);
+            }
             value
         }).collect::<Vec<_>>(),
         "rest": spec.rest,
@@ -1102,6 +1256,9 @@ fn command_json(spec: &Spec) -> Value {
     });
     if !spec.refusals.is_empty() {
         command["refusals"] = json!(spec.refusals);
+    }
+    if !spec.needs_one_of.is_empty() {
+        command["needs_one_of"] = json!(spec.needs_one_of);
     }
     command
 }
@@ -1124,6 +1281,10 @@ fn body() -> Value {
             "ratio": "two decimal integers as <passed>/<total>, such as 6/6",
             "unsigned": "a decimal integer from 0 to 18446744073709551615",
             "json": "a JSON document of the shape hide mission help or hide plan help shows",
+            "paste_text": format!(
+                "non-empty, at most {} bytes, no control characters but line breaks (LF, CR) and tabs",
+                herdr_core::pane_command::TEXT_LIMIT
+            ),
             "one_of": "one of the listed values",
         },
         // Where each topic's printed line carries the answer and, when the
@@ -1248,6 +1409,7 @@ mod tests {
             Approval => ("approved by the lead", " "),
             Unsigned => ("1", "-1"),
             Json => ("{\"nodes\": []}", "{nodes"),
+            PasteText => ("line one\nline two\tend", "\u{1b}[201~"),
             OneOf(values) => (values[0], "other"),
         };
         (taken.to_owned(), refused.to_owned())
@@ -1304,6 +1466,11 @@ mod tests {
     }
 
     fn takes(argv: &[String]) -> bool {
+        // A pane command's own check runs before anything is asked, as
+        // `pane_cli::run` does: it refuses what the parser leaves to it.
+        if let Ok(CommandKind::Pane(cli)) = parse_args(argv) {
+            return cli.command.check().is_ok();
+        }
         matches!(
             parse_args(argv),
             Ok(CommandKind::Delivery(_)
@@ -1407,6 +1574,121 @@ mod tests {
                 );
             }
         }
+    }
+
+    fn arguments_of(command: &Value) -> &Vec<Value> {
+        command["arguments"].as_array().unwrap()
+    }
+
+    /// A value the exported grammar's value type admits.
+    fn exported_sample(value: &Value) -> String {
+        match value["type"].as_str().unwrap() {
+            "one_of" => value["values"][0].as_str().unwrap().to_owned(),
+            "key" => "k1".to_owned(),
+            "text" => "some text".to_owned(),
+            "body" => "multi\nline body".to_owned(),
+            "paste_text" => "line one\nline two\tend".to_owned(),
+            other => panic!("no sample for {other}"),
+        }
+    }
+
+    /// The forms the exported grammar declares are the ones the CLI takes:
+    /// each of a command's `needs_one_of` alone with its required
+    /// arguments, and none of them refused; an argument marked not required
+    /// left out; a repeated option up to its `repeats_at_most`, and not once
+    /// more; an argument's `value_with` value taken with its option and
+    /// refused without it.
+    #[test]
+    fn the_forms_the_exported_grammar_declares_are_the_ones_the_cli_takes() {
+        let document = document();
+        let mut checked = Vec::new();
+        for command in document["commands"].as_array().unwrap() {
+            let name = command["command"].as_str().unwrap();
+            let forms = command["needs_one_of"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            let options = command["options"].as_array().unwrap();
+            let repeated: Vec<&Value> = options
+                .iter()
+                .filter(|option| option["repeats_at_most"].is_u64())
+                .collect();
+            let widened = arguments_of(command)
+                .iter()
+                .any(|argument| argument["value_with"].is_object());
+            if forms.is_empty() && repeated.is_empty() && !widened {
+                continue;
+            }
+            let mut base = vec!["hide".to_owned()];
+            base.extend(name.split(' ').map(str::to_owned));
+            let arguments = command["arguments"].as_array().unwrap();
+            for argument in arguments
+                .iter()
+                .take_while(|argument| argument["required"] != false)
+            {
+                base.push(exported_sample(&argument["value"]));
+            }
+            let with = |argv: &[String], form: &str| {
+                let mut argv = argv.to_vec();
+                if let Some(option) = options.iter().find(|option| option["name"] == form) {
+                    argv.push(form.to_owned());
+                    if !option["value"].is_null() {
+                        argv.push(exported_sample(&option["value"]));
+                    }
+                } else {
+                    let argument = arguments
+                        .iter()
+                        .find(|argument| argument["name"] == form)
+                        .unwrap_or_else(|| panic!("hide {name}: {form} is no argument or option"));
+                    argv.push(exported_sample(&argument["value"]));
+                }
+                argv
+            };
+            if !forms.is_empty() {
+                assert!(!takes(&base), "hide {name} with none of {forms:?}");
+            }
+            for form in &forms {
+                let argv = with(&base, form.as_str().unwrap());
+                assert!(takes(&argv), "hide {name} {form}: {:?}", parse_args(&argv));
+            }
+            for option in repeated {
+                let flag = option["name"].as_str().unwrap();
+                let most = option["repeats_at_most"].as_u64().unwrap() as usize;
+                let mut argv = base.clone();
+                for _ in 0..most {
+                    argv = with(&argv, flag);
+                }
+                assert!(takes(&argv), "hide {name} {flag} x{most}");
+                assert!(
+                    !takes(&with(&argv, flag)),
+                    "hide {name} {flag} x{}",
+                    most + 1
+                );
+            }
+            for argument in arguments {
+                let Some(widening) = argument["value_with"].as_object() else {
+                    continue;
+                };
+                for (flag, value) in widening {
+                    let mut plain = base.clone();
+                    plain.push(exported_sample(value));
+                    assert!(
+                        !takes(&plain),
+                        "hide {name} {} without {flag}",
+                        argument["name"]
+                    );
+                    let widened = with(&plain, flag);
+                    assert!(
+                        takes(&widened),
+                        "hide {name} {} with {flag}: {:?}",
+                        argument["name"],
+                        parse_args(&widened)
+                    );
+                }
+            }
+            checked.push(name.to_owned());
+        }
+        assert!(checked.contains(&"pane send".to_owned()), "{checked:?}");
     }
 
     /// The flags `hide mission`'s parser reads for each verb are the ones

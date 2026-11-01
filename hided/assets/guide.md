@@ -39,7 +39,7 @@ hide inbox
 hide agent spawn [--parent <here|id>] [--machine <device id>] [--beside] --name <name> --intent <key> --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>]
 hide ps [--all] [--here] [--json]
 hide agent list
-hide agent show <id|here>
+hide agent show <id|here|spawn id|intent>
 hide agent catalog [--machine <device id>]
 hide agent sleep <id> [--actor <id>]
 hide agent archive <id> [--actor <id>]
@@ -50,6 +50,9 @@ hide agent end <id> [--actor <id>]
 
 - See current panes and agents with `hide ps`: one tree of the live panes and the agents in them; `--here` keeps this project, `--all` adds ended registrations, `--json` gives the flat list.
 - `hide agent list` shows the agents Hide knows, with their machine and their `runtime`: `running`, `asleep` while Hide holds one asleep (a `request` or `block` letter wakes it), or `ended`; `hide ps` says the same; `hide agent show here` is your own registration: your id, parent, origin, machine and the watch on you.
+- `hide agent show <id>` adds `state`, what the agent is doing now as the sidebar reads it: `activity` (`working`, `stopped` or `unknown`; a state Hide cannot read now is `unknown`, never ready), `waiting` (null when it waits on nothing; otherwise its `cause`, such as `question`, `approval`, `blocked` or `input_unconfirmed`, and `on`, `operator` or the agent id that should answer) and `pending_inputs` (a brief or letter Hide typed that the agent has not recorded, with its `attempts` and `phase`).
+- A child that never registered is still yours to look at: a spawn that stopped partway answers its code with `spawn` (`id` and `pane`), and `hide agent show <spawn id>`, or the intent you spawned it under, shows that spawn, its pane and its state. Running the same spawn again never starts a second child.
+- A stuck child: read its screen with `hide pane read <pane>`, then answer it with `hide pane send <pane> --key <name>`; Hide types an unconfirmed brief again once the screen is answered. You may answer a trust or approval screen for it when that is within your work: Hide does not check consent, and the operator sets how much agents may approve in Settings > Agents. Leave a login to the operator.
 - `hide agent catalog` lists the agents installed here, their models, efforts and usage, so you can choose `--kind`, `--model` and `--effort`.
 - A child of yours belongs to you: answer its letters, and tell the operator only what they have to decide.
 - `hide agent sleep <id>` puts a resting child of yours (or yourself) to sleep: its process ends, its conversation is kept, and a `request` or `block` letter wakes it; it answers `{"state":"ending"}`, or `asleep` when asked again, and refuses with a reason while the agent works, waits for the operator or is on the operator's screen.
@@ -60,7 +63,7 @@ hide agent end <id> [--actor <id>]
 
 ```
 hide pane read <pane> [--lines <n>] [--json]
-hide pane send <pane> <text> [--enter]
+hide pane send <pane> [<text>] [--key <name>]... [--enter] [--paste]
 hide pane open --beside [--focus] -- <command>
 hide agent read <agent> [--lines <n>] [--json]
 hide workspace purpose <text>
@@ -68,7 +71,10 @@ hide workspace purpose <text>
 
 - A pane is a pane id of your machine, as `hide ps` lists it; an agent is its name, registration id or pane, as a letter's target.
 - A read prints the pane's last 120 lines, unwrapped (`--lines` up to 2000); `--json` prints the answer line instead.
-- `hide pane send` types the text, 16 KiB at most, and presses Enter only with `--enter`. It is input, not a letter: Hide keeps no record of it, so hand an agent work with `hide request send`.
+- `hide pane send` types the text (one line, 16 KiB at most), then presses each `--key` in order (`esc`, `enter`, `tab`, `shift-tab`, `up`, `down`, `left`, `right`, `backspace`, `ctrl-c`, 32 at most), then Enter with `--enter`; keys alone or Enter alone are fine. It answers what landed: `text_sent`, `keys_sent` and `enter_sent`, an Enter written, not a prompt the agent took.
+  `--paste` puts several lines in as one paste, only into an agent known to take one (`paste_unsupported` otherwise, such as Grok on Windows).
+  It is refused with `composer_not_empty` when someone typed into the pane since the agent last took input and its input box still holds text, a draft a person may be writing; a question, approval or review screen no one typed into takes it, and so does text your own earlier send left there. If a typed command and its `--enter` in one send leave the command in the box, as Codex's command menu can, send `--key enter` on its own; `keys_not_sent` says the text landed and the keys did not, `send_unconfirmed` that an answer was lost, and `operator_typing` that someone typed into the pane during the send, which stopped there; each says in `sent` what landed: read the pane before sending again.
+  It is input, not a letter: Hide logs that it happened, never what was typed, and keeps no reply or retry, so hand an agent work with `hide request send`.
 - `hide pane open --beside -- <command>` opens a pane right of yours in your checkout, runs the command there and answers the new pane's id; the command is one line of 1000 bytes at most, and one that needs its shell's own quoting goes as one quoted argument. Your keyboard focus stays where it is unless `--focus`.
 - `hide workspace purpose <text>` sets your checkout's one-line purpose, 40 characters at most, which the sidebar shows.
 - A refusal is one line with its `code` and the step to take: a pane or agent that is not there, a limit passed, or a shell outside a Hide pane.

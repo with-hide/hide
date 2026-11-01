@@ -1334,6 +1334,10 @@ mod tests {
             last_submit_at_unix_ms: NOW - 60_000,
             entered_working_at_unix_ms: NOW - 120_000,
             released_input_at_unix_ms: 0,
+            input_generation: 0,
+            pane_send_generation: None,
+            answered_at_unix_ms: 0,
+            observed_at_unix_ms: 0,
             hook_submit_at_unix_ms: 0,
             session: None,
             thread: None,
@@ -1998,7 +2002,7 @@ mod tests {
                 && first_line.contains("hide pane read recipient"),
             "{first_line}"
         );
-        assert!(notice.body.contains("operator's to answer"));
+        assert!(notice.body.contains("Hide does not check consent"));
         bell.pass(&mut doorbell, late + 1_000);
         assert_eq!(notices(&bell).len(), 1, "a later pass tells nothing more");
         assert_eq!(bell.typed().len(), 1, "nothing is typed again unasked");
