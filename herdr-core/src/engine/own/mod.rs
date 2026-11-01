@@ -51,6 +51,17 @@ const START_COLS: u16 = 80;
 /// The most of a pane's history a read asks its holder for.
 const READ_LINES_CAP: u32 = u16::MAX as u32;
 
+/// The read sources this engine answers, each with the one read a holder
+/// gives: the last rows of its screen and scrollback, soft wraps joined
+/// (`hide_holder_protocol::Ask::Read`). `recent` is therefore unwrapped as
+/// `recent_unwrapped` is, and `visible` reads those same last rows, the
+/// screen's bottom rows among them; a read of exactly the drawn screen comes
+/// with the layout pull request, which knows each pane's rectangle.
+const READ_SOURCES: [&str; 3] = ["recent", "recent_unwrapped", "visible"];
+
+/// The refusal code of a read from a source this engine does not hold.
+const UNKNOWN_SOURCE: &str = "unknown_read_source";
+
 /// The engine and whatever it holds, shared by every gated view of it.
 struct Shared {
     topology: Mutex<Topology>,
@@ -793,8 +804,17 @@ impl<'g> Engine for OwnEngine<'g> {
         unsupported("an agent's session", AGENTS_PR)
     }
 
-    fn read_pane(&self, _wait: Wait, pane: &str, _source: &str, lines: u32) -> Answer<PaneText> {
+    fn read_pane(&self, _wait: Wait, pane: &str, source: &str, lines: u32) -> Answer<PaneText> {
         self.check()?;
+        if !READ_SOURCES.contains(&source) {
+            return Err(EngineError::Refused {
+                code: UNKNOWN_SOURCE.to_owned(),
+                message: format!(
+                    "the core's own engine reads a pane from {}, not {source:?}",
+                    READ_SOURCES.join(", ")
+                ),
+            });
+        }
         self.known(pane)?;
         let lines = u16::try_from(lines.min(READ_LINES_CAP)).unwrap_or(u16::MAX);
         let (text, truncated) = self
@@ -997,7 +1017,7 @@ mod tests {
             Ok(())
         }
         fn read(&self, _: &str, _: u16) -> Result<(String, bool), HolderError> {
-            Ok((String::new(), false))
+            Ok(("rows".to_owned(), false))
         }
         fn processes(&self, _: &str) -> Result<HolderProcesses, HolderError> {
             Err(HolderError::Unreachable("not asked".to_owned()))
@@ -1019,6 +1039,27 @@ mod tests {
                 );
             }
             other => panic!("expected the holder's refusal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_read_answers_the_sources_this_engine_holds_and_refuses_any_other_by_name() {
+        let engine = OwnEngine::new(Arc::new(Holders::default()) as Arc<dyn PaneHolders>);
+        let (_, _, pane) = engine
+            .create_workspace(WAIT, "/w", "w", true, Env::new())
+            .unwrap();
+        for source in ["recent", "recent_unwrapped", "visible"] {
+            assert_eq!(
+                engine.read_pane(WAIT, &pane, source, 20).unwrap().text,
+                "rows"
+            );
+        }
+        match engine.read_pane(WAIT, &pane, "scrollback", 20) {
+            Err(EngineError::Refused { code, message }) => {
+                assert_eq!(code, "unknown_read_source");
+                assert!(message.contains("\"scrollback\""), "{message}");
+            }
+            other => panic!("expected a refusal naming the source, got {other:?}"),
         }
     }
 

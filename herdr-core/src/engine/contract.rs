@@ -70,7 +70,9 @@ fn shows(engine: &dyn Engine, pane: &str, text: &str) {
 }
 
 /// Waits until the pane's shell has drawn something, its prompt, so typed
-/// text reaches a shell that reads it.
+/// text reaches a shell that reads it. `visible` is Herdr's drawn screen and
+/// the own engine's last rows of screen and scrollback, which both hold a
+/// new pane's prompt.
 #[allow(clippy::disallowed_methods)] // a polling helper: it sleeps between observations of a state, bounded by a deadline
 fn prompted(engine: &dyn Engine, pane: &str) {
     let deadline = Instant::now() + SHOWN_WITHIN;
