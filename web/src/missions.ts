@@ -724,11 +724,10 @@ export function missionAsks(missions: readonly Mission[], ids: readonly string[]
   return ids.flatMap((id) => {
     const mission = byId.get(id);
     if (!mission) return [];
+    // The core decides which raises the mission itself carries (`item`), the
+    // same rule its count reads.
     const waiting = mission.nodes
-      .flatMap((node) => {
-        const attention = openAttention(mission, node);
-        return attention?.to === "operator" && !attention.on_row ? [{ node, attention }] : [];
-      })
+      .flatMap((node) => (node.attention?.item ? [{ node, attention: node.attention }] : []))
       .sort((a, b) => a.attention.since_unix_ms - b.attention.since_unix_ms);
     const first = waiting[0];
     return first ? [{ mission, node: first.node, attention: first.attention, more: waiting.length - 1 }] : [];

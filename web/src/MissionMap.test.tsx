@@ -73,7 +73,7 @@ it("reads top down as the head, 내 차례 only when the operator has something 
     expect(empty.q("[data-mission-pill]")?.textContent).toBe("Planning");
     expect(empty.q("[data-mission-turn]")).toBeNull();
   } finally { await empty.unmount(); }
-  const nodes = [node("a", { status: "done" }), node("b", { status: "working", depends_on: ["a"] }), node("c", { status: "working", depends_on: ["a"], attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 1, on_row: false } }), node("d"), node("e", { depends_on: ["b"] }), node("f", { status: "dropped" })];
+  const nodes = [node("a", { status: "done" }), node("b", { status: "working", depends_on: ["a"] }), node("c", { status: "working", depends_on: ["a"], attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 1, on_row: false, item: false } }), node("d"), node("e", { depends_on: ["b"] }), node("f", { status: "dropped" })];
   const running = await mount({ items: [mission({ nodes })] });
   try {
     expect(running.q("[data-mission-pill]")?.textContent).toBe("Running");
@@ -316,7 +316,7 @@ it("offers Take over on the Conductor row when no Conductor holds an open missio
 
 it("offers Take over beside 터미널로 once a raise the live Conductor was asked first reached the operator, starting a new agent rather than resuming its live conversation (PRD mission-node-simple B15)", async () => {
   const conductor = [{ pane_id: "p1", mark: "quiet" } as AgentRow];
-  const asked = (to: "conductor" | "operator") => mission({ conductor: { ...mission().conductor, session: { device_id: "mac", agent: "claude", session_id: "s-1" } }, nodes: [node("a", { status: "working", pr: 7, attention: { reason: "pr_closed", pr: 7, to, since_unix_ms: 1, on_row: false } })] });
+  const asked = (to: "conductor" | "operator") => mission({ conductor: { ...mission().conductor, session: { device_id: "mac", agent: "claude", session_id: "s-1" } }, nodes: [node("a", { status: "working", pr: 7, attention: { reason: "pr_closed", pr: 7, to, since_unix_ms: 1, on_row: false, item: to === "operator" } })] });
   const fresh = await mount({ items: [asked("conductor")] }, [], [], {}, conductor);
   try {
     expect(fresh.q("[data-mission-conductor] [data-mission-takeover]")).toBeNull();
@@ -393,12 +393,12 @@ const card = (map: { q: (selector: string) => HTMLElement | null }, key: string)
 it("draws each card as its mark, its title, its pull requests and `!` with who looks, Hide's mark when Hide changed it, and nothing the panel carries (PRD mission-node-simple B1-B3, D-07)", async () => {
   const nodes = [
     node("core", { title: "제안 core: 기록·공책·점수·반영", status: "working", pr: 1704, prs: [{ number: 1703, state: "merged", url: null }, { number: 1704, state: "mergeable", url: null }], criteria: [line("c1", "own", { state: "pass" }), line("ci", "ci")], criteria_met: 1, criteria_skipped: 0, worker: { agent: "claude", model: "opus", effort: "high", effort_auto: false }, line: "replay 19/31", reopened: 1, change: "split in two" }),
-    node("raised", { status: "working", pr: 1840, pr_state: "merged", attention: { reason: "merged_unproven", pr: 1840, to: "operator", since_unix_ms: 1, on_row: false } }),
-    node("asked", { status: "working", attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 1, on_row: false } }),
+    node("raised", { status: "working", pr: 1840, pr_state: "merged", attention: { reason: "merged_unproven", pr: 1840, to: "operator", since_unix_ms: 1, on_row: false, item: true } }),
+    node("asked", { status: "working", attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 1, on_row: false, item: false } }),
     node("api", { status: "done", pr: 1650, pr_state: "merged", landing: { state: "landed", proof: { by: "merged" } }, hide: { action: "done", at_unix_ms: 1 }, criteria: [line("c1", "own", { state: "pass" })], criteria_met: 1, criteria_skipped: 0 }),
     node("branch", { status: "done", delivery: "direct", branch: "feat/a-very-long-branch-name-for-the-screen-node", landing: { state: "left", action: "join" } }),
     node("outside", { title: "바깥: isolated 앱 실행기 정리", kind: "external", delivery: null, external: { pr: 1232 } }),
-    node("closed-out", { kind: "external", delivery: null, external: { pr: 1605 }, status: "working", attention: { reason: "pr_closed", pr: 1605, to: "conductor", since_unix_ms: 1, on_row: false } }),
+    node("closed-out", { kind: "external", delivery: null, external: { pr: 1605 }, status: "working", attention: { reason: "pr_closed", pr: 1605, to: "conductor", since_unix_ms: 1, on_row: false, item: false } }),
     node("merged-out", { kind: "external", delivery: null, external: { pr: 1702 }, status: "done", landing: { state: "landed", proof: { by: "outside" } } }),
     node("next", { depends_on: ["core", "outside"] }),
     node("sleeping", { status: "working", agent_id: "agent-2", agent_runtime: "asleep" }),
@@ -651,9 +651,9 @@ it("lists only what the operator can do in 내 차례: the decision whose node c
   const raised = { pane_id: "p2", escalation: { cause: "child_blocked", letter_id: null, since_unix_ms: 1, human_notice: true }, request: { verb: "blocked", verb_since_unix_ms: 1, line: "Login expired", end: "blocked", request: null, later_by: null, pull_requests: [] } } as unknown as AgentRow;
   const nodes = [
     node("api", { status: "working", pane_id: "p2" }),
-    node("outside", { kind: "external", delivery: null, external: { pr: 1232 }, status: "working", attention: { reason: "pr_closed", pr: 1232, to: "operator", since_unix_ms: 1, on_row: false } }),
+    node("outside", { kind: "external", delivery: null, external: { pr: 1232 }, status: "working", attention: { reason: "pr_closed", pr: 1232, to: "operator", since_unix_ms: 1, on_row: false, item: true } }),
     // What waits on the Conductor stays on its card.
-    node("waits", { status: "working", attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 1, on_row: false } }),
+    node("waits", { status: "working", attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 1, on_row: false, item: false } }),
   ];
   const map = await mount({ items: [asked({ nodes: [...nodes, node("screen", { title: "API screen", status: "working" })] })] }, [], [], {}, [raised]);
   try {
@@ -694,7 +694,7 @@ it("lists only what the operator can do in 내 차례: the decision whose node c
 
 it("puts in a node's panel what waits on whom with its choices, the worker's life, the Conductor's line dimmed once Hide's facts passed it, Hide's record, and 다시 진행 on finished work (PRD mission-node-simple B4, B15-B17, B20)", async () => {
   const nodes = [
-    node("ended", { title: "Holder record", status: "working", line: "fixing the review", agent_runtime: "ended", worker: { agent: "claude", model: "opus", effort: null, effort_auto: false }, attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 50, on_row: false } }),
+    node("ended", { title: "Holder record", status: "working", line: "fixing the review", agent_runtime: "ended", worker: { agent: "claude", model: "opus", effort: null, effort_auto: false }, attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 50, on_row: false, item: false } }),
     node("done", { title: "Holder life", status: "done", pr: 1918, pr_state: "merged", line: "waiting on CI", finished_at_unix_ms: 60, hide: { action: "cache_cleared", bytes: 2 * 1024 ** 3, at_unix_ms: 70 } }),
   ];
   const events: MissionEvent[] = [
@@ -836,7 +836,7 @@ it("sums up an open mission beside the map until a node is picked: needs a look,
   const nodes = [
     node("api", { title: "API", status: "done", pr: 1901, pr_state: "merged" }),
     node("screen", { title: "Screen", status: "working", depends_on: ["api"], line: "moving tabs", stage: 1 }),
-    node("docs", { title: "Docs", status: "working", depends_on: ["api"], attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 1, on_row: false } }),
+    node("docs", { title: "Docs", status: "working", depends_on: ["api"], attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 1, on_row: false, item: false } }),
     node("demo", { title: "Demo", depends_on: ["screen"] }),
   ];
   const map = await mount({ items: [mission({ nodes, running: 2, cap: 3, decision: "Which order?" })] });

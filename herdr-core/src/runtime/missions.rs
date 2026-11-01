@@ -240,6 +240,11 @@ pub struct AttentionView {
     /// or its worker's. Without one the mission itself is the Needs You
     /// item (PRD mission-node-simple D-19, B14).
     pub on_row: bool,
+    /// The mission itself is a Needs You item for it: it waits on the
+    /// operator with no row to carry it, in a mission that still asks and
+    /// on a node not dropped. The one rule the count and the list read
+    /// (`publish_mission_asks`), never worked out again by the screen.
+    pub item: bool,
 }
 
 /// A spawn admitted as one of a mission's workers: its cap is checked in
@@ -2262,19 +2267,29 @@ impl Runtime {
                     verdict: node.verdict,
                     checks: node.checks,
                     plan: record.and_then(|record| self.worker_plan(&record.machine, &record.pane)),
-                    attention: node.attention.as_ref().map(|attention| AttentionView {
-                        reason: attention.reason,
-                        pr: attention.pr,
-                        to: if attention.operator_at_unix_ms.is_some() {
-                            AttentionTo::Operator
-                        } else {
-                            AttentionTo::Conductor
-                        },
-                        since_unix_ms: attention
-                            .operator_at_unix_ms
-                            .unwrap_or(attention.since_unix_ms),
-                        on_row: attention.operator_at_unix_ms.is_some()
-                            && self.mission_attention_has_row(ledger, mission, node),
+                    attention: node.attention.as_ref().map(|attention| {
+                        let operator = attention.operator_at_unix_ms.is_some();
+                        let on_row =
+                            operator && self.mission_attention_has_row(ledger, mission, node);
+                        AttentionView {
+                            reason: attention.reason,
+                            pr: attention.pr,
+                            to: if operator {
+                                AttentionTo::Operator
+                            } else {
+                                AttentionTo::Conductor
+                            },
+                            since_unix_ms: attention
+                                .operator_at_unix_ms
+                                .unwrap_or(attention.since_unix_ms),
+                            on_row,
+                            // A cancelled mission and a dropped node keep
+                            // their record but ask nothing now.
+                            item: operator
+                                && !on_row
+                                && mission.status.asks()
+                                && node.status != NodeStatus::Dropped,
+                        }
                     }),
                     hide: node.hide.clone(),
                 }
@@ -2535,7 +2550,7 @@ impl Runtime {
                 .nodes
                 .iter()
                 .filter_map(|node| node.attention.as_ref())
-                .filter(|attention| attention.to == AttentionTo::Operator && !attention.on_row)
+                .filter(|attention| attention.item)
                 .map(|attention| attention.since_unix_ms)
                 .min();
             if let Some(since) = oldest {

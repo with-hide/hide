@@ -5106,6 +5106,33 @@ fn a_mission_no_row_carries_is_counted_in_its_devices_needs_you() {
     assert_eq!(after, (vec!["mission-1".to_owned()], 1, 1));
     // Counted once however often it is published.
     assert_eq!(counted(&mut runtime).1, after_overview);
+
+    // Review 5 P2-3: cancelled, the mission keeps its record and asks
+    // nothing: the count and the list are both empty, and stay so after a
+    // restart reads the same book.
+    assert!(runtime.mission_end_event("mission-1"));
+    assert_eq!(mission_status(&runtime), MissionStatus::Cancelled);
+    let kept = &runtime.missions.book.get("mission-1").unwrap().nodes;
+    assert!(kept.iter().any(|node| node.attention.is_some()));
+    let (asks, overview, needs_you, on_device) = counted(&mut runtime);
+    assert!(asks.is_empty(), "{asks:?}");
+    assert_eq!((overview, needs_you), (0, 0));
+    assert_eq!(on_device.unwrap(), (Vec::<String>::new(), 0, 0));
+    assert!(
+        runtime.snapshot.missions.items[0]
+            .nodes
+            .iter()
+            .filter_map(|node| node.attention.as_ref())
+            .all(|attention| !attention.item)
+    );
+    let book = runtime.missions.book.clone();
+    drop(runtime);
+    let restarted = conducting();
+    let mut runtime = restarted.runtime.lock().unwrap();
+    runtime.missions.book = book;
+    let (asks, overview, _, _) = counted(&mut runtime);
+    assert!(asks.is_empty(), "{asks:?}");
+    assert_eq!(overview, 0);
 }
 
 /// PRD mission-node-simple B14, review 4 P1-2: a raise that reached the

@@ -154,7 +154,7 @@ describe("the Conductor pane's chip (PRD mission-pane-chip B2, B10)", () => {
   });
 });
 
-const raised = (to: "conductor" | "operator", reason: MissionAttention["reason"] = "worker_ended", pr: number | null = null): MissionAttention => ({ reason, pr, to, since_unix_ms: 10, on_row: false });
+const raised = (to: "conductor" | "operator", reason: MissionAttention["reason"] = "worker_ended", pr: number | null = null): MissionAttention => ({ reason, pr, to, since_unix_ms: 10, on_row: false, item: to === "operator" });
 
 describe("a node's state colour (PRD mission-node-simple D-01, D-02, B5)", () => {
   it("reads each status as waiting, in progress or done, a node someone has to look at in the decision colour, a blocked node waiting and a cancelled mission's unfinished node cancelled", () => {
@@ -513,7 +513,7 @@ describe("a node that waits on someone, and what Hide did (PRD mission-node-simp
   });
 
   it("draws the missions the device scope names as Needs You items, in its order, each with its oldest node no row carries (PRD mission-node-simple D-19, B14)", () => {
-    const waiting = (since: number, onRow: boolean): MissionAttention => ({ ...raised("operator", "pr_closed", 7), since_unix_ms: since, on_row: onRow });
+    const waiting = (since: number, onRow: boolean): MissionAttention => ({ ...raised("operator", "pr_closed", 7), since_unix_ms: since, on_row: onRow, item: !onRow });
     const orphan = mission("a", { nodes: [node("late", { status: "working", attention: waiting(30, false) }), node("carried", { status: "working", attention: waiting(5, true) }), node("early", { status: "working", attention: waiting(20, false) })] });
     const other = mission("b", { nodes: [node("n", { status: "working", attention: waiting(40, false) })] });
     const unnamed = mission("c", { nodes: [node("n", { status: "working", attention: waiting(1, false) })] });

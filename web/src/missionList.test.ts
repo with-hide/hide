@@ -31,9 +31,9 @@ describe("the group a mission stands in (B5) and the rail's number (D-08)", () =
   it("puts an open mission with anything in its 내 차례 there, whatever its state", () => {
     expect(group(mission("m", { decision: "Which order?" }))).toBe("turn");
     expect(group(mission("m", { conductor: { pane_id: "p1", name: "c", agent_kind: "claude", session: null, present: false, takes_answers: true } }))).toBe("turn");
-    expect(group(mission("m", { nodes: [node("x", { kind: "external", status: "working", attention: { reason: "pr_closed", pr: 3, to: "operator", since_unix_ms: 1, on_row: false } })] }))).toBe("turn");
+    expect(group(mission("m", { nodes: [node("x", { kind: "external", status: "working", attention: { reason: "pr_closed", pr: 3, to: "operator", since_unix_ms: 1, on_row: false, item: true } })] }))).toBe("turn");
     // What waits on the Conductor is not the operator's yet.
-    expect(group(mission("m", { nodes: [node("x", { status: "working", attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 1, on_row: false } })] }))).not.toBe("turn");
+    expect(group(mission("m", { nodes: [node("x", { status: "working", attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 1, on_row: false, item: false } })] }))).not.toBe("turn");
     expect(group(mission("m", { status: "merge_wait", nodes: [node("x", { status: "done", pr: 3, pr_state: "mergeable", landing: { state: "left", action: "merge" } })], landing_order: ["x"] }))).toBe("turn");
     const raised = { escalation: { cause: "bell_exhausted" } } as unknown as AgentRow;
     expect(group(mission("m", { nodes: [node("x", { status: "working", pane_id: "p9" })] }), (n) => (n.pane_id === "p9" ? raised : null))).toBe("turn");
