@@ -2985,7 +2985,7 @@ mod focus_readback_order_tests {
         let mut cache = CatalogState::default();
         assert!(publish_session(
             &context,
-            &mut first.clone(),
+            &first.clone(),
             &mut cache,
             &mut None,
             &mut None,
@@ -2996,7 +2996,7 @@ mod focus_readback_order_tests {
         changed.state.panes[0].cwd = Some("/unverified/new-checkout".to_owned());
         assert!(publish_session(
             &context,
-            &mut changed,
+            &changed,
             &mut cache,
             &mut None,
             &mut None,
@@ -3510,7 +3510,7 @@ mod focus_readback_order_tests {
         let runtime = runtime_with(&first);
         // The operator's pane p3 closed, and Herdr's focus moved to p2 by
         // itself, which Hide may follow only after reading it back.
-        let mut closed = SessionReplica::from_snapshot(&snapshot(&["p1", "p2"], "p2", true))
+        let closed = SessionReplica::from_snapshot(&snapshot(&["p1", "p2"], "p2", true))
             .expect("closed snapshot");
         let (herdr, asked, release) = holding_herdr("p2");
         let context = context_for(&runtime, &herdr);
@@ -3518,7 +3518,7 @@ mod focus_readback_order_tests {
         let publish = thread::spawn(move || {
             publish_session(
                 &context,
-                &mut closed,
+                &closed,
                 &mut CatalogState::default(),
                 &mut None,
                 &mut None,
@@ -3558,7 +3558,7 @@ mod focus_readback_order_tests {
         let first = SessionReplica::from_snapshot(&snapshot(&["p1", "p2"], "p1", false))
             .expect("first snapshot");
         let runtime = runtime_with(&first);
-        let mut moved =
+        let moved =
             SessionReplica::from_snapshot(&snapshot(&["p1", "p2"], "p2", false)).expect("moved");
         // Herdr's own answer still names p1: the stream's p2 was stale.
         let (herdr, asked, release) = holding_herdr("p1");
@@ -3566,7 +3566,7 @@ mod focus_readback_order_tests {
 
         assert!(publish_session(
             &context,
-            &mut moved,
+            &moved,
             &mut CatalogState::default(),
             &mut None,
             &mut None,
