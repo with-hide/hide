@@ -3272,7 +3272,7 @@ A permission waits behind earlier desktop input in the pane hold and controller 
 A pane without a control attach is allowed: the permit changes neither attachment, grid nor focus, and the existing Herdr write still decides whether that pane exists and can take the input.
 Permission is not delivery acknowledgment: `input_result.ok` becomes true only after Herdr answers `pane.send_input`; a discarded holder, a refused permit or a permission wait past 35 seconds returns `input_refused` before any write, keeps the phone's text and releases its request-id claim for a deliberate retry.
 A failed Herdr write retains the existing uncertain-outcome rule, so a repeated id never sends it twice.
-At most 64 permission callbacks wait per node or device link; the existing holder timer expires reservations in every creation or pane holder at 35 seconds, shutdown drops waiters, and the device writer wakes at that deadline to forget unanswered callbacks even without further input.
+At most 64 permission callbacks wait per node or device link; the existing holder timer expires reservations in every creation or pane holder at 35 seconds (`INPUT_PERMIT_MAX_WAIT` in `hide-node-link`, which the core's and the phone's waits share), shutdown drops waiters, and the device writer wakes at that deadline to forget unanswered callbacks even without further input.
 Creation requests currently belong only to the core machine, so a remote device node does not hold phone input for a fork; its permission still preserves the controller write order and answers pane closure or sleep.
 The callback only hands its answer to the waiting phone worker or device uplink; it never calls back into the node, takes the Runtime mutex or performs I/O, and adds no resident worker or timer.
 

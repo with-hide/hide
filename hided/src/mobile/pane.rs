@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 use herdr_core::engine::{EngineError, EngineHandle};
-use hide_node_link::terminal::{InputPermitError, TerminalNode};
+use hide_node_link::terminal::{InputPermitError, TerminalNode, wait_for_input_permit};
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -115,20 +115,11 @@ pub fn wait_for_input(
         Input::Key("enter" | "esc" | "ctrl+c") => 1,
         Input::Key(_) => return Err(PaneError::InputRefused),
     };
-    let (reply, result) = std::sync::mpsc::channel();
-    terminals.input_permit(
-        core_pane_id,
-        bytes,
-        Box::new(move |outcome| {
-            let _ = reply.send(outcome);
-        }),
-    );
-    match result.recv_timeout(Duration::from_secs(35)) {
-        Ok(Ok(())) => {}
-        Ok(Err(InputPermitError::Asleep)) => return Err(PaneError::Asleep),
-        Ok(Err(_)) | Err(_) => return Err(PaneError::InputRefused),
+    match wait_for_input_permit(terminals, core_pane_id, bytes) {
+        Ok(()) => Ok(()),
+        Err(InputPermitError::Asleep) => Err(PaneError::Asleep),
+        Err(_) => Err(PaneError::InputRefused),
     }
-    Ok(())
 }
 
 pub fn send(engine: &EngineHandle, pane_id: &str, input: Input<'_>) -> Result<(), PaneError> {

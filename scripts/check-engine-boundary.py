@@ -19,6 +19,9 @@ import pathlib
 import re
 import sys
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import rust_scan  # noqa: E402
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 # The Rust crates that ship, and the desktop host.
@@ -150,90 +153,16 @@ def implementation(relative: str) -> bool:
 
 def test_only(path: pathlib.Path) -> bool:
     relative = path.relative_to(ROOT).as_posix()
-    name = path.name
     return (
-        name == "tests.rs"
-        or name.endswith("_tests.rs")
-        or "/tests/" in f"/{relative}"
-        or re.search(r"\.(test|spec)\.tsx?$", name) is not None
+        rust_scan.test_file(relative)
+        or re.search(r"\.(test|spec)\.tsx?$", path.name) is not None
         or "/__tests__/" in f"/{relative}"
     )
 
 
-def blank(match: re.Match) -> str:
-    return re.sub(r"[^\n]", " ", match.group(0))
-
-
-def strip_comments(text: str) -> str:
-    """Blanks comments, keeping line numbers and string literals: a Herdr
-    program is often named by the variable a string literal reads."""
-    pattern = re.compile(
-        r"(?<![A-Za-z0-9_])b?r(#*)\".*?\"\1"
-        r"|b?\"(?:\\.|[^\"\\])*\""
-        r"|/\*.*?\*/"
-        r"|//[^\n]*",
-        re.S,
-    )
-    return pattern.sub(
-        lambda match: match.group(0) if match.group(0).lstrip("br#").startswith('"') else blank(match),
-        text,
-    )
-
-
-def strip_literals(text: str) -> str:
-    """Blanks string literals too, so a path in a message is not code."""
-    pattern = re.compile(
-        r"b?'(?:\\(?:x[0-9a-fA-F]{2}|u\{[0-9a-fA-F]{1,6}\}|.)|[^'\\\n])'"
-        r"|(?<![A-Za-z0-9_])b?r(#*)\".*?\"\1"
-        r"|b?\"(?:\\.|[^\"\\])*\"",
-        re.S,
-    )
-    return pattern.sub(blank, text)
-
-
 def test_modules() -> set:
     """Module files a parent declares behind `#[cfg(test)]`."""
-    found = set()
-    declaration = re.compile(
-        r"#\[cfg\((?:all\()?test\b[^\]]*\]\s*(?:#\[[^\]]*\]\s*)*(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;"
-    )
-    for tree in trees():
-        for parent in tree.rglob("*.rs"):
-            text = strip_literals(strip_comments(parent.read_text()))
-            directory = (
-                parent.parent if parent.name in ("lib.rs", "mod.rs", "main.rs") else parent.with_suffix("")
-            )
-            for match in declaration.finditer(text):
-                for candidate in (directory / f"{match.group(1)}.rs", directory / match.group(1) / "mod.rs"):
-                    if candidate.exists():
-                        found.add(candidate.relative_to(ROOT).as_posix())
-    return found
-
-
-def strip_test_items(text: str) -> str:
-    """Blanks every item behind `#[cfg(test)]`, keeping line numbers."""
-    out = list(text)
-    for match in re.finditer(r"#\[cfg\((all\()?test\b[^\]]*\]", text):
-        start, position, depth, end = match.start(), match.end(), 0, None
-        while position < len(text):
-            char = text[position]
-            if char == "{":
-                depth += 1
-            elif char == "}":
-                depth -= 1
-                if depth == 0:
-                    end = position + 1
-                    break
-            elif char == ";" and depth == 0:
-                end = position + 1
-                break
-            position += 1
-        if end is None:
-            continue
-        for index in range(start, end):
-            if out[index] != "\n":
-                out[index] = " "
-    return "".join(out)
+    return rust_scan.test_modules(ROOT, trees())
 
 
 def program_context(lines: list, index: int) -> str:
@@ -250,8 +179,8 @@ def program_context(lines: list, index: int) -> str:
 
 
 def rust_findings(relative: str, text: str) -> list:
-    production = strip_test_items(strip_comments(text))
-    code = strip_literals(production).splitlines()
+    production = rust_scan.strip_test_items(rust_scan.strip(text, keep_literals=True))
+    code = rust_scan.strip(production).splitlines()
     named = production.splitlines()
     found = []
     for number, line in enumerate(code, 1):
@@ -264,7 +193,7 @@ def rust_findings(relative: str, text: str) -> list:
 
 
 def ts_findings(relative: str, text: str) -> list:
-    code = strip_comments(text).splitlines()
+    code = rust_scan.strip(text, keep_literals=True).splitlines()
     found = []
     for number, line in enumerate(code, 1):
         for pattern, advice in TS_BANNED:

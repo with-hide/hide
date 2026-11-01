@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 pub(super) const LIMIT: usize = 64;
-pub(super) const MAX_AGE: Duration = Duration::from_secs(35);
+pub(super) const MAX_AGE: Duration = hide_node_link::terminal::INPUT_PERMIT_MAX_WAIT;
 
 struct Pending {
     expires: Instant,

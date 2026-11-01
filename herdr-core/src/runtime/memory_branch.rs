@@ -7,11 +7,11 @@
 //! tracker (`memory_promotion::track_promotions`) reads each waiting batch
 //! here, off the lock, and the operator's decisions run here on a worker.
 
-use super::branch_decision::{self, BranchPlace};
+use super::branch_decision::{self, BranchPlace, ReadyReading};
 use super::memory_promotion::{PromotionStart, Retire};
 use super::*;
 use crate::node::NodeId;
-use crate::suggestions::lifecycle::{AttemptPurpose, BranchFileSummary, BranchSummary};
+use crate::suggestions::lifecycle::{AttemptPurpose, BranchSummary};
 use hide_memory::{BatchPurpose, MemoryStore, Promotion, PromotionState};
 use hide_node_link::branch::BranchFacts;
 use serde_json::json;
@@ -127,7 +127,7 @@ fn read_stopped(
     read: &mut BatchesRead,
 ) -> Result<bool, String> {
     let mut moved = false;
-    let summary = summary(&place.base, &facts);
+    let summary = branch_decision::summary(&place.base, &facts);
     let placed = check
         .cards
         .iter()
@@ -269,67 +269,41 @@ fn read_ready(
         }
         Ok(moved)
     };
-    if facts.merged == Some(true) {
-        let moved = settle(PromotionState::Merged, store)?;
-        log_batch(check, "promotion.batch_merged", "merged");
-        read.merged.push((
-            retire_of(place),
-            check
-                .cards
-                .iter()
-                .filter_map(|(_, promotion)| promotion.agent_id.clone())
-                .collect(),
-        ));
-        return Ok(moved);
-    }
-    if !facts.exists {
-        if facts.merged == Some(false) {
+    match branch_decision::read_ready(&place.base, &facts) {
+        ReadyReading::Merged => {
+            let moved = settle(PromotionState::Merged, store)?;
+            log_batch(check, "promotion.batch_merged", "merged");
+            read.merged.push((
+                retire_of(place),
+                check
+                    .cards
+                    .iter()
+                    .filter_map(|(_, promotion)| promotion.agent_id.clone())
+                    .collect(),
+            ));
+            Ok(moved)
+        }
+        ReadyReading::Discarded => {
             log_batch(check, "promotion.batch_discarded", "deleted");
-            return settle(PromotionState::Dismissed, store);
+            settle(PromotionState::Dismissed, store)
         }
-        return Ok(false);
-    }
-    if let Some(summary) = summary(&place.base, &facts) {
-        if check.tip.as_deref() != Some(summary.tip.as_str()) {
-            store
-                .set_promotion_batch_branch(
-                    &check.project_id,
-                    &check.branch,
-                    check.purpose,
-                    Some(&summary.tip),
-                )
-                .map_err(|error| error.to_string())?;
+        ReadyReading::Ready(summary) => {
+            if check.tip.as_deref() != Some(summary.tip.as_str()) {
+                store
+                    .set_promotion_batch_branch(
+                        &check.project_id,
+                        &check.branch,
+                        check.purpose,
+                        Some(&summary.tip),
+                    )
+                    .map_err(|error| error.to_string())?;
+            }
+            read.facts
+                .push(((check.project_id.clone(), check.branch.clone()), summary));
+            Ok(false)
         }
-        read.facts
-            .push(((check.project_id.clone(), check.branch.clone()), summary));
+        ReadyReading::Unchanged => Ok(false),
     }
-    Ok(false)
-}
-
-/// What a branch holds, when it holds anything.
-fn summary(base: &str, facts: &BranchFacts) -> Option<BranchSummary> {
-    let tip = facts
-        .tip
-        .clone()
-        .filter(|_| facts.exists && facts.ahead > 0)?;
-    Some(BranchSummary {
-        base: base.to_owned(),
-        tip,
-        ahead: facts.ahead,
-        files: facts
-            .files
-            .iter()
-            .map(|file| BranchFileSummary {
-                path: file.path.clone(),
-                added: file.added,
-                removed: file.removed,
-                binary: file.binary,
-            })
-            .collect(),
-        files_total: facts.files_total,
-        added: facts.added,
-        removed: facts.removed,
-    })
 }
 
 fn retire_of(place: &BranchPlace) -> Retire {
@@ -1089,5 +1063,114 @@ mod tests {
         let (_, promotion) = store.promotions("q").unwrap().remove(0);
         assert_eq!(promotion.state, PromotionState::Failed);
         assert!(read.merged.is_empty());
+    }
+
+    #[test]
+    fn a_ready_batch_settles_merged_or_dismissed_and_keeps_the_tip_it_was_read_at() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut store = MemoryStore::open(&folder.path().join("memory.sqlite3")).unwrap();
+        let ready_check = |store: &mut MemoryStore, project: &str, agent: &str| {
+            store
+                .ensure_project(
+                    project,
+                    Path::new(&format!("/checkouts/{project}")),
+                    "test-node",
+                )
+                .unwrap();
+            seed(store, project, "Devices lists ssh config Hosts");
+            let started = running(Some(agent), 1_000);
+            let branch = started.branch.clone().unwrap();
+            store
+                .set_promotion_batch(project, &branch, &[(1, started.clone())])
+                .unwrap();
+            let ready = Promotion {
+                state: PromotionState::Ready,
+                ..started
+            };
+            store.set_promotion(project, 1, &ready).unwrap();
+            BatchCheck {
+                branch,
+                tip: Some("abc123".into()),
+                ..check(project, vec![(1, ready)])
+            }
+        };
+        let place = |check: &BatchCheck| BranchPlace {
+            node: check.node.clone(),
+            project_id: check.project_id.clone(),
+            root: check.root.clone(),
+            branch: check.branch.clone(),
+            base: "main".into(),
+        };
+        let state =
+            |store: &MemoryStore, project: &str| store.promotions(project).unwrap()[0].1.state;
+
+        // Its commit reached the base: the cards merge, and the agent and
+        // worktree retire as a merged pull request's do.
+        let merged = ready_check(&mut store, "p", "agent-1");
+        let mut read = BatchesRead::default();
+        let facts = BranchFacts {
+            merged: Some(true),
+            ..empty_branch()
+        };
+        assert!(
+            read_ready(
+                &merged,
+                &place(&merged),
+                facts,
+                &mut store,
+                2_000,
+                &mut read
+            )
+            .unwrap()
+        );
+        assert_eq!(state(&store, "p"), PromotionState::Merged);
+        assert_eq!(read.merged.len(), 1);
+        assert_eq!(read.merged[0].0.branch, merged.branch);
+        assert_eq!(read.merged[0].1, ["agent-1"]);
+        assert!(read.facts.is_empty());
+
+        // Gone without reaching the base: the cards are dismissed, nothing retires.
+        let discarded = ready_check(&mut store, "q", "agent-2");
+        let mut read = BatchesRead::default();
+        let facts = BranchFacts {
+            exists: false,
+            ..empty_branch()
+        };
+        assert!(
+            read_ready(
+                &discarded,
+                &place(&discarded),
+                facts,
+                &mut store,
+                2_000,
+                &mut read
+            )
+            .unwrap()
+        );
+        assert_eq!(state(&store, "q"), PromotionState::Dismissed);
+        assert!(read.merged.is_empty());
+
+        // Still ready with a new commit: the cards wait for the operator,
+        // and the batch keeps the commit it was read at.
+        let moved = ready_check(&mut store, "r", "agent-3");
+        let mut read = BatchesRead::default();
+        let facts = BranchFacts {
+            tip: Some("def456".into()),
+            ahead: 1,
+            ..empty_branch()
+        };
+        assert!(!read_ready(&moved, &place(&moved), facts, &mut store, 2_000, &mut read).unwrap());
+        assert_eq!(state(&store, "r"), PromotionState::Ready);
+        assert_eq!(read.facts.len(), 1);
+        assert_eq!(read.facts[0].1.tip, "def456");
+        assert_eq!(
+            store
+                .promotion_batch_branch("r", &moved.branch)
+                .unwrap()
+                .unwrap()
+                .tip
+                .as_deref(),
+            Some("def456")
+        );
     }
 }

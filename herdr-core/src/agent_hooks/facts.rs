@@ -41,8 +41,9 @@ use crate::sidebar::{SessionAgentPayload, SessionSnapshotPayload};
 /// The panes the core keeps facts for. A pane leaves when its pane closes or
 /// its agent ends, so this bounds panes whose agents never appeared to Herdr.
 pub(crate) const PANE_LIMIT: usize = 1024;
-/// The sessions one pane keeps; the one heard from least recently goes first.
-pub(crate) const SESSIONS_PER_PANE: usize = 8;
+/// The sessions one pane keeps, the same number the hook's own file keeps;
+/// the one heard from least recently goes first.
+pub(crate) use hide_agent_hooks::counters::SESSIONS_PER_PANE;
 const READ_CAP: u64 = 4 * 1024 * 1024;
 const SCHEMA_VERSION: u32 = 1;
 
