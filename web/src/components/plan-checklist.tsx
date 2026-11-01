@@ -63,9 +63,15 @@ export function PlanChecklist({ plan, popover = false, openPane }: { plan: PlanV
             )}
           >
             <StepMark step={step} current={now} />
-            <span className="min-w-0 flex-1 break-words">
-              {step.title}
-              {step.delegation && step.status !== "done" ? <ChildNow step={step} /> : null}
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="break-words">{step.title}</span>
+              {/* A handed step's agent goes on a line of its own, so the title is never cut for it. */}
+              {step.delegation ? (
+                <span className="flex min-w-0 items-center gap-xxs text-micro text-muted-foreground" data-step-child-line="true">
+                  <ChildTag delegation={step.delegation} openPane={openPane} />
+                  {step.status !== "done" ? <ChildNow step={step} /> : null}
+                </span>
+              ) : null}
             </span>
             {step.changed ? (
               <Hint label={step.change ?? t("plan.changed")}>
@@ -75,7 +81,6 @@ export function PlanChecklist({ plan, popover = false, openPane }: { plan: PlanV
               </Hint>
             ) : null}
             <StepTail step={step} now={now} />
-            {step.delegation ? <ChildTag delegation={step.delegation} openPane={openPane} /> : null}
           </li>
         );
       })}
@@ -134,12 +139,12 @@ export function DelegationWord({ word }: { word: StepMarkWord }) {
   return <span className={cn("shrink-0 text-micro", WORD_TONE[word])} data-step-delegation={word}>{t(`plan.delegation.${word}`)}</span>;
 }
 
-/** ` · <the child's current step>` after a handed step's title, from the child's own plan; nothing while the child has no plan (B28, B32). */
+/** `· <the child's current step>` after a handed step's agent, under its title, from the child's own plan; nothing while the child has no plan (B28, B32). */
 function ChildNow({ step }: { step: PlanStep }) {
   const child = useShellStore((s) => childPlanOf(s.rest, step));
   const now = childNow(child);
   if (!now) return null;
-  return <span className="text-muted-foreground" data-step-child-now="true"> · {now.step}</span>;
+  return <span className="min-w-0 truncate" data-step-child-now="true">· {now.step}</span>;
 }
 
 /**

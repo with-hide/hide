@@ -28,6 +28,9 @@ const STATE_WORD: Record<Exclude<ConductorState, "gone" | "unknown">, MessageKey
 
 const STATE_TONE: Partial<Record<ConductorState, string>> = { working: "text-mission-working", deciding: "text-mission-hold" };
 
+/** The row under a work page's head that names who does the work: a mission's Conductor, a plan's own session. */
+export const OWNER_ROW = "mx-md mb-sm flex min-w-0 items-center gap-sm rounded-md border border-border bg-card px-sm py-xs text-body";
+
 export function ConductorRow({ mission, actions }: { mission: Mission; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const local = useShellStore((s) => s.agents);
@@ -37,7 +40,7 @@ export function ConductorRow({ mission, actions }: { mission: Mission; actions: 
   // Only the launch Hide proved for the Conductor's pane names its model; the plan names none for it.
   const run = useRunWords(mission, mission.conductor.pane_id, mission.device_id, null);
   if (!state) return null;
-  const frame = "mx-md mb-sm flex min-w-0 items-center gap-sm rounded-md border border-border bg-card px-sm py-xs text-body";
+  const frame = OWNER_ROW;
   if (state === "gone") {
     return (
       <div className={frame} data-mission-conductor="gone">

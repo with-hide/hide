@@ -12,9 +12,7 @@ export const plansEnglish = {
   "plan.now": "Now: {{step}} ({{progress}})",
   "plan.steps": "Steps {{count}}",
   "plan.updated": "updated {{elapsed}} ago",
-  "plan.finished": "Plan finished",
   "plan.finishedWord": "Finished",
-  "plan.finishedBanner": "Finished",
   "plan.reviewBanner": "Waiting for review · answer in the conversation",
   "plan.toConversation": "Go to conversation",
   "plan.gone": "This session has no plan now",
@@ -58,6 +56,8 @@ export const plansEnglish = {
   "plan.delegation.noPlan": "Working without a plan",
   "plan.chipNow": "Plan {{progress}}, now {{step}}",
   "plan.steplist": "Plan steps",
+  "plan.side.left": "Left",
+  "plan.side.handed": "Handed to",
 } as const;
 
 const ko: Catalog<typeof plansEnglish> = {
@@ -69,9 +69,7 @@ const ko: Catalog<typeof plansEnglish> = {
   "plan.now": "지금: {{step}} ({{progress}})",
   "plan.steps": "{{count}}단계",
   "plan.updated": "{{elapsed}} 전 갱신",
-  "plan.finished": "계획 끝남",
   "plan.finishedWord": "끝남",
-  "plan.finishedBanner": "끝남",
   "plan.reviewBanner": "검토 기다림 · 대화에서 답하세요",
   "plan.toConversation": "대화로",
   "plan.gone": "이 세션에는 지금 계획이 없어요",
@@ -115,6 +113,8 @@ const ko: Catalog<typeof plansEnglish> = {
   "plan.delegation.noPlan": "계획 없이 일하고 있어요",
   "plan.chipNow": "계획 {{progress}}, 지금 {{step}}",
   "plan.steplist": "계획 단계",
+  "plan.side.left": "남긴 것",
+  "plan.side.handed": "맡긴 일",
 };
 
 const zh: Catalog<typeof plansEnglish> = {
@@ -126,9 +126,7 @@ const zh: Catalog<typeof plansEnglish> = {
   "plan.now": "现在：{{step}}（{{progress}}）",
   "plan.steps": "{{count}} 步",
   "plan.updated": "{{elapsed}}前更新",
-  "plan.finished": "计划完成",
   "plan.finishedWord": "完成",
-  "plan.finishedBanner": "完成",
   "plan.reviewBanner": "等待审查 · 请在对话中回答",
   "plan.toConversation": "前往对话",
   "plan.gone": "此会话目前没有计划",
@@ -172,6 +170,8 @@ const zh: Catalog<typeof plansEnglish> = {
   "plan.delegation.noPlan": "没有计划，直接在做",
   "plan.chipNow": "计划 {{progress}}，当前 {{step}}",
   "plan.steplist": "计划步骤",
+  "plan.side.left": "产出",
+  "plan.side.handed": "已委派",
 };
 
 const ja: Catalog<typeof plansEnglish> = {
@@ -183,9 +183,7 @@ const ja: Catalog<typeof plansEnglish> = {
   "plan.now": "今: {{step}} ({{progress}})",
   "plan.steps": "{{count}}ステップ",
   "plan.updated": "{{elapsed}}前に更新",
-  "plan.finished": "計画完了",
   "plan.finishedWord": "完了",
-  "plan.finishedBanner": "完了",
   "plan.reviewBanner": "レビュー待ち · 会話で答えてください",
   "plan.toConversation": "会話へ",
   "plan.gone": "このセッションには今計画がありません",
@@ -229,6 +227,8 @@ const ja: Catalog<typeof plansEnglish> = {
   "plan.delegation.noPlan": "計画なしで作業中",
   "plan.chipNow": "計画 {{progress}}、いま {{step}}",
   "plan.steplist": "計画の段階",
+  "plan.side.left": "残したもの",
+  "plan.side.handed": "任せた仕事",
 };
 
 export const plansCatalogs = { en: plansEnglish, ko, "zh-CN": zh, ja } satisfies Catalogs<typeof plansEnglish>;

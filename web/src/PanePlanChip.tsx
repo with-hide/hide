@@ -9,7 +9,9 @@ import { cn } from "./lib/utils";
 import { paneChildren } from "./paneChildren";
 import { usePaneAgents } from "./PaneHeaderBand";
 import { PlanChecklist } from "./components/plan-checklist";
-import { PlanSummaryLine } from "./PlanMap";
+import { PlanPill, planState } from "./PlanMap";
+import { formatElapsed, useElapsed } from "./components/elapsed";
+import { requireInterfaceLanguage } from "./i18n/locale";
 import { handedPanes, planCells, planCount, planOfPane, planProposed, stepOf } from "./plans";
 import type { PlanView } from "./snapshot";
 import { shellDragging } from "./shellDrag";
@@ -65,36 +67,69 @@ export function PanePlanChip({ paneId, actions }: { paneId: string; actions: Act
         data-pane-plan={paneId}
         {...chip.content}
       >
-        <div className="flex min-w-0 flex-col [word-break:keep-all]">
-          <div className="flex min-w-0 items-center gap-xs px-sm pt-sm">
-            <span className="min-w-0 flex-1"><PlanSummaryLine plan={plan} /></span>
-            <button
-              type="button"
-              className="flex shrink-0 items-center gap-xxs rounded-xs px-xs py-xxs text-primary outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring"
-              onClick={() => {
-                close();
-                actions.openPlan(plan.session);
-              }}
-              data-pane-plan-large="true"
-            >
-              {t("plan.large")}
-              <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />
-            </button>
-          </div>
-          <div className="px-xs py-sm">
-            <PlanChecklist
-              plan={plan}
-              popover
-              openPane={(child) => {
-                close();
-                actions.openAgent(child);
-              }}
-            />
-          </div>
-          <Delegated paneId={paneId} plan={plan} />
-        </div>
+        <PlanPopoverBody
+          paneId={paneId}
+          plan={plan}
+          onLarge={() => {
+            close();
+            actions.openPlan(plan.session);
+          }}
+          openPane={(child) => {
+            close();
+            actions.openAgent(child);
+          }}
+        />
       </PopoverContent>
     </Popover>
+  );
+}
+
+/**
+ * The popover's body (B3, B7), headed as the plan's page is: its state pill,
+ * a cell per step, `n/m` and `크게 ›`; then the checklist, and a foot with the
+ * direct children no step is handed to and when the plan last moved, or how
+ * long a finished one took.
+ */
+export function PlanPopoverBody({ paneId, plan, onLarge, openPane }: { paneId: string; plan: PlanView; onLarge: () => void; openPane: (paneId: string) => void }) {
+  const { t } = useInterfaceTranslation();
+  const proposed = planProposed(plan);
+  return (
+    <div className="flex min-w-0 flex-col [word-break:keep-all]" data-plan-popover={planState(plan)}>
+      <div className="flex min-w-0 items-center gap-sm px-sm pt-sm">
+        <PlanPill plan={plan} />
+        <ProgressCells tones={planCells(plan)} size="head" />
+        <span className="shrink-0 font-semibold tabular-nums text-foreground" data-plan-count="true">
+          {proposed ? t("plan.steps", { count: plan.progress.total }) : planCount(plan)}
+        </span>
+        <button
+          type="button"
+          className="flex shrink-0 items-center gap-xxs rounded-xs px-xs py-xxs text-primary outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring"
+          onClick={onLarge}
+          data-pane-plan-large="true"
+        >
+          {t("plan.large")}
+          <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />
+        </button>
+      </div>
+      <div className="px-xs py-sm">
+        <PlanChecklist plan={plan} popover openPane={openPane} />
+      </div>
+      <PlanFoot paneId={paneId} plan={plan} />
+    </div>
+  );
+}
+
+/** `맡긴 일 N · 끝남 k` and `3분 전 갱신`, or `1시간 걸림` once finished. */
+function PlanFoot({ paneId, plan }: { paneId: string; plan: PlanView }) {
+  const { t, i18n } = useInterfaceTranslation();
+  const finished = plan.progress.finished;
+  const updated = useElapsed(finished ? null : plan.updated_at_unix_ms);
+  const when = finished ? t("plan.took", { elapsed: formatElapsed(requireInterfaceLanguage(i18n.language), plan.updated_at_unix_ms - plan.created_at_unix_ms) }) : updated ? t("plan.updated", { elapsed: updated }) : null;
+  return (
+    <div className="mx-sm flex min-w-0 items-baseline gap-sm border-t border-border pb-sm pt-xs text-micro text-muted-foreground" data-plan-foot="true">
+      <Delegated paneId={paneId} plan={plan} />
+      {when ? <span className="ml-auto shrink-0" data-plan-summary-when="true">{when}</span> : null}
+    </div>
   );
 }
 
@@ -225,9 +260,9 @@ function Delegated({ paneId, plan }: { paneId: string; plan: PlanView }) {
   // A device that does not answer leaves the finished count unknown, so it is not said.
   const done = unavailable ? 0 : children.filter((child) => child.group === "done").length;
   return (
-    <p className="flex items-baseline gap-xs px-sm pb-sm text-micro font-medium text-muted-foreground" data-pane-plan-children={children.length}>
+    <span className="flex min-w-0 items-baseline gap-xs font-medium" data-pane-plan-children={children.length}>
       {t("sessionWork.delegatedCount", { count: children.length })}
       {done > 0 ? <span className="font-normal">· {t("plan.childrenDone", { count: done })}</span> : null}
-    </p>
+    </span>
   );
 }

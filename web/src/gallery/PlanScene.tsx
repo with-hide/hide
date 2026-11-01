@@ -9,8 +9,8 @@ import { createActions } from "../actions";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { useFollowInterfaceLanguage } from "../i18n/translator";
 import { requireInterfaceLanguage } from "../i18n/locale";
-import { PlanChecklist } from "../components/plan-checklist";
-import { PlanMap, PlanSummaryLine } from "../PlanMap";
+import { PlanMap } from "../PlanMap";
+import { PlanPopoverBody } from "../PanePlanChip";
 import type { PlanDelegation, PlanStep, PlanView, SnapshotRest, WorkSession } from "../snapshot";
 import { useShellStore } from "../store";
 
@@ -111,9 +111,8 @@ export function PlanScene({ params }: { params: URLSearchParams }) {
   return (
     <TooltipProvider>
       <div style={{ width }} className="flex h-full min-w-0 gap-lg bg-background p-lg text-foreground" data-gallery-scene="plan" data-plan-scene={state}>
-        <div className="flex w-(--size-pr-popover) shrink-0 flex-col self-start rounded-md border border-border bg-popover text-caption [word-break:keep-all]" data-plan-scene-popover="true">
-          <div className="px-sm pt-sm"><PlanSummaryLine plan={shown} /></div>
-          <div className="px-xs py-sm"><PlanChecklist plan={shown} popover /></div>
+        <div className="flex w-(--size-pr-popover) shrink-0 flex-col self-start rounded-md border border-border bg-popover text-caption" data-plan-scene-popover="true">
+          <PlanPopoverBody paneId={shown.pane_id} plan={shown} onLarge={() => undefined} openPane={() => undefined} />
         </div>
         <div className="flex min-h-0 min-w-0 flex-1 flex-col rounded-md border border-border">
           <PlanMap session={SESSION} actions={actions} />

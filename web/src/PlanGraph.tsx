@@ -61,8 +61,11 @@ function StepFace({ plan, step, open }: { plan: PlanView; step: PlanStep; open: 
       data-step-current={current || undefined}
       className={cn(
         "flex w-(--size-mission-node) min-w-0 flex-col gap-xxs rounded-md border border-border bg-card px-sm py-xs text-left",
+        // The mission map's card looks (PRD mission-map-git-criteria B26): finished work a faint green surface, work now the working colour, a report or a block the decision colour.
+        step.status === "done" && "bg-mission-done/10",
         step.waiting && "border-dashed border-muted-foreground bg-transparent",
-        current && "border-agent-working",
+        current && "border-mission-working ring-2 ring-mission-working/20",
+        (word === "reported" || word === "blocked") && "border-mission-hold ring-2 ring-mission-hold/20",
         step.status === "dropped" && "opacity-(--opacity-dimmed)",
         open && "ring-1 ring-primary",
       )}
