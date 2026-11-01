@@ -20,10 +20,17 @@ pub(crate) enum Cleared {
     /// The branch is checked out in the Project's own folder, which is the
     /// operator's and is not touched.
     ProjectFolder,
-    /// An agent or a program works in it now; it is tried again later.
-    Busy,
+    /// An agent or a program works in the worktree at `path` now, read
+    /// before the measurement or right before the deletion: nothing moved,
+    /// and it is held until what works there changes.
+    Busy { path: String },
     /// What the deletion came to.
-    Cell(crate::worktree_cleanup::CellResult),
+    Done {
+        removed_bytes: u64,
+        removed: usize,
+        kept: Vec<String>,
+        left: usize,
+    },
 }
 
 /// Whether an agent or a program works in the folder `path` now: an agent
@@ -69,21 +76,25 @@ pub(super) fn clear_build_cache(
         return Ok(Cleared::ProjectFolder);
     }
     if busy_in(engine, &path)? {
-        return Ok(Cleared::Busy);
+        return Ok(Cleared::Busy { path });
     }
-    Ok(Cleared::Cell(crate::worktree_cleanup::clear_build_cache(
+    match crate::worktree_cleanup::clear_build_cache(
         node,
         Path::new(repo),
         Path::new(&path),
-        |folder| {
-            let folder = folder.to_string_lossy();
-            Ok(
-                busy_in(engine, &folder)?.then_some(crate::worktree_cleanup::InUse {
-                    code: "agent_working",
-                    name: None,
-                    port: None,
-                }),
-            )
-        },
-    )))
+        |folder| busy_in(engine, &folder.to_string_lossy()),
+    )? {
+        crate::worktree_cleanup::CacheClear::Busy => Ok(Cleared::Busy { path }),
+        crate::worktree_cleanup::CacheClear::Done {
+            removed_bytes,
+            removed,
+            kept,
+            left,
+        } => Ok(Cleared::Done {
+            removed_bytes,
+            removed,
+            kept,
+            left,
+        }),
+    }
 }

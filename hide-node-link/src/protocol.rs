@@ -279,7 +279,11 @@ use crate::error::HostError;
 /// ACP session updates, newest, before a page or forward from one
 /// (`Call::SessionThread`; PRD session-docs-and-assistant B25). A helper on
 /// 65 would refuse it, so it is refused at Hello and upgraded.
-pub const PROTOCOL_VERSION: u32 = 66;
+/// 67: a node deletes a finished mission node's build cache folders itself,
+/// judging each again where it stands and once moved, in one call
+/// (`Call::ClearCacheFolders`; PRD mission-node-simple B20). A helper on 66
+/// would refuse it, so it is refused at Hello and upgraded.
+pub const PROTOCOL_VERSION: u32 = 67;
 
 /// What agy's index held in a checkout before Hide typed `/fork`
 /// ([`Call::AntigravityForkMark`]).
@@ -727,6 +731,17 @@ pub enum Call {
         root: String,
         checkout: String,
         common: String,
+    },
+    /// Deletes a finished mission node's build cache `folders` in the
+    /// checkout at `root`, one at a time (PRD mission-node-simple B20): each
+    /// is judged again where it stands, moved into the trash under `common`,
+    /// judged again as moved, and deleted before the answer; anything in
+    /// doubt is kept. Answers one `cleanup::CacheFolderOutcome` per folder.
+    ClearCacheFolders {
+        root: String,
+        common: String,
+        folders: Vec<String>,
+        walk: crate::cleanup::WalkAllowance,
     },
     /// Deletes what waits in the trash under `common`, waiting up to
     /// `wait_ms` for `ours`; answers how many of them remain.
@@ -1196,6 +1211,7 @@ impl Call {
             | Self::JudgeFolders { .. }
             | Self::SetAsideFolder { .. }
             | Self::WorktreeRemoveClean { .. }
+            | Self::ClearCacheFolders { .. }
             | Self::DrainTrash { .. }
             | Self::RepositoryClone { .. }
             | Self::Git { .. }

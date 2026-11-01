@@ -14,8 +14,8 @@ use crate::runtime::Runtime;
 use crate::worktree_control::GhPlace;
 use crate::{disk, github};
 use hide_node_link::cleanup::{
-    CleanRemoval, FolderJudgments, FolderToJudge, FolderVerdict, PathState, RepositoryDirs,
-    WalkAllowance,
+    CacheFolderOutcome, CleanRemoval, FolderJudgments, FolderToJudge, FolderVerdict, PathState,
+    RepositoryDirs, WalkAllowance,
 };
 use hide_node_link::disk::{Layer, LayerFolder};
 use hide_node_link::git::GitCommand;
@@ -1467,18 +1467,36 @@ fn empty_cells(
     results
 }
 
+/// What deleting a finished mission node's build cache came to (PRD
+/// mission-node-simple B20).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CacheClear {
+    /// An agent or a program works in the checkout now; nothing was moved.
+    Busy,
+    /// Each measured build cache folder's outcome: the bytes measured of the
+    /// ones deleted, how many were deleted, the kept ones' reason codes, and
+    /// how many were moved aside but not deleted yet.
+    Done {
+        removed_bytes: u64,
+        removed: usize,
+        kept: Vec<String>,
+        left: usize,
+    },
+}
+
 /// Deletes the build cache of one checkout, a mission node's that finished
-/// (PRD mission-node-simple B20): measured now, then emptied as a chosen
-/// cell is, each folder judged again and the checkout read as idle right
-/// before it moves (`in_use_now`), and the moved folders deleted. Nothing
-/// else in the checkout is touched and no pane closes.
+/// (PRD mission-node-simple B20): measured now, the checkout read as idle
+/// (`busy`), and then every measured build cache folder handed to the
+/// checkout's node in one call, which judges each again where it stands
+/// and once moved, and deletes it before it answers
+/// (`Call::ClearCacheFolders`). Nothing else in the checkout is touched and
+/// no pane closes; the bytes count only for a folder that is gone.
 pub(crate) fn clear_build_cache(
     node: &dyn NodeLink,
     repository: &Path,
     checkout: &Path,
-    in_use_now: impl FnMut(&Path) -> Result<Option<InUse>, String>,
-) -> CellResult {
-    let path = checkout.to_string_lossy().into_owned();
+    busy: impl FnOnce(&Path) -> Result<bool, String>,
+) -> Result<CacheClear, String> {
     let measured = disk::read(
         node,
         &disk::DiskRequest {
@@ -1491,30 +1509,68 @@ pub(crate) fn clear_build_cache(
         .flat_map(|row| row.folders)
         .filter(|folder| folder.layer == Layer::BuildCache)
         .collect();
+    let (mut removed_bytes, mut removed, mut kept, mut left) = (0u64, 0usize, Vec::new(), 0usize);
     if folders.is_empty() {
-        return cell_result(&path, Layer::BuildCache, "skipped", 0, 0, None);
+        return Ok(CacheClear::Done {
+            removed_bytes,
+            removed,
+            kept,
+            left,
+        });
     }
-    let common = common_dir(node, repository);
-    let folders = HashMap::from([(checkout.to_path_buf(), folders)]);
-    let run = CellRun {
-        node,
-        id: 0,
-        workspace_id: "",
-        common: &common,
-        folders: &folders,
-    };
-    let mut moved = BTreeSet::new();
-    let cell = CellChoice {
-        path: path.clone(),
-        layer: Layer::BuildCache,
-    };
-    let result = empty_cells(&run, &[cell], in_use_now, &mut moved, |_| {})
-        .pop()
-        .unwrap_or_else(|| cell_result(&path, Layer::BuildCache, "skipped", 0, 0, None));
-    if !moved.is_empty() {
-        drain_trash(node, &common, &moved, 0);
+    if busy(checkout)? {
+        return Ok(CacheClear::Busy);
     }
-    result
+    let call = Call::ClearCacheFolders {
+        root: checkout.to_string_lossy().into_owned(),
+        common: common_dir(node, repository).to_string_lossy().into_owned(),
+        folders: folders
+            .iter()
+            .map(|folder| folder.path.to_string_lossy().into_owned())
+            .collect(),
+        walk: WalkAllowance {
+            entries: RUN_WALK_ENTRIES,
+            millis: u64::try_from(RUN_WALK_TIME.as_millis()).unwrap_or(u64::MAX),
+        },
+    };
+    let outcomes: Vec<CacheFolderOutcome> =
+        call_as(node, call, DELETE_WAIT + NODE_TIMEOUT).map_err(|error| error.to_string())?;
+    if outcomes.len() != folders.len() {
+        return Err(format!(
+            "The node answered {} outcomes for {} folders",
+            outcomes.len(),
+            folders.len()
+        ));
+    }
+    for (folder, outcome) in folders.iter().zip(outcomes) {
+        match outcome {
+            CacheFolderOutcome::Removed => {
+                removed += 1;
+                removed_bytes = removed_bytes.saturating_add(folder.bytes);
+            }
+            CacheFolderOutcome::Kept { code, reason } => {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "cleanup", "kind": "cache.kept",
+                    "checkout": checkout, "folder": folder.path,
+                    "reason_code": code, "reason": reason,
+                }));
+                kept.push(code);
+            }
+            CacheFolderOutcome::Left { reason } => {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "cleanup", "kind": "cache.left",
+                    "checkout": checkout, "folder": folder.path, "reason": reason,
+                }));
+                left += 1;
+            }
+        }
+    }
+    Ok(CacheClear::Done {
+        removed_bytes,
+        removed,
+        kept,
+        left,
+    })
 }
 
 /// Deletes the folders a run set aside in `common`'s trash, waiting up to

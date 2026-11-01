@@ -4759,7 +4759,9 @@ fn a_raise_is_on_a_row_only_while_a_row_shown_carries_it() {
     runtime.raise_to_operator(now + 10 * 60 * 1000);
     let shown = |runtime: &mut Runtime| {
         runtime.snapshot_delta_payload(0);
-        let on_row = node_view(runtime, "fix").attention.map(|attention| attention.on_row);
+        let on_row = node_view(runtime, "fix")
+            .attention
+            .map(|attention| attention.on_row);
         let device = runtime
             .snapshot
             .navigator
@@ -4786,7 +4788,10 @@ fn a_raise_is_on_a_row_only_while_a_row_shown_carries_it() {
     working[0].activity = "working".into();
     runtime.lay_plan_reviews(crate::node::TEST_NODE, &mut working);
     runtime.snapshot.navigator.agents = working;
-    assert_eq!(shown(&mut runtime), (Some(false), vec!["mission-1".to_owned()]));
+    assert_eq!(
+        shown(&mut runtime),
+        (Some(false), vec!["mission-1".to_owned()])
+    );
     assert_eq!(runtime.claim_mission_notices().len(), 1, "told once");
 
     // The Conductor gone, a worker whose registration stands with no row
@@ -4822,11 +4827,17 @@ fn a_raise_is_on_a_row_only_while_a_row_shown_carries_it() {
         .unwrap()
         .agent_id = Some("agent-2".into());
     runtime.save_missions();
-    assert_eq!(shown(&mut runtime), (Some(false), vec!["mission-1".to_owned()]));
+    assert_eq!(
+        shown(&mut runtime),
+        (Some(false), vec!["mission-1".to_owned()])
+    );
 
     // With no registration either, it stays the mission's own item.
     runtime.delivery_ledger = Ok(Arc::new(crate::delivery::ledger::Ledger::default()));
-    assert_eq!(shown(&mut runtime), (Some(false), vec!["mission-1".to_owned()]));
+    assert_eq!(
+        shown(&mut runtime),
+        (Some(false), vec!["mission-1".to_owned()])
+    );
 }
 
 /// The fix node of `running_criteria_mission`, its pull request 7 merged
@@ -5197,15 +5208,12 @@ fn a_build_cache_result_lands_once_and_only_on_the_finish_it_was_for() {
     mission.nodes[0].status = NodeStatus::Done;
     mission.nodes[0].branch = Some("fix/bug".into());
     let freed = |bytes: u64| {
-        Ok(Cleared::Cell(crate::worktree_cleanup::CellResult {
-            path: "/work/fix".into(),
-            layer: "build_cache",
-            outcome: "removed",
-            bytes,
-            folders: 1,
-            reason_code: None,
-            reason: None,
-        }))
+        Ok(Cleared::Done {
+            removed_bytes: bytes,
+            removed: 1,
+            kept: Vec::new(),
+            left: 0,
+        })
     };
     let cache_events = |runtime: &Runtime| {
         runtime.missions.events.get("mission-1").map_or(0, |log| {
@@ -5215,9 +5223,22 @@ fn a_build_cache_result_lands_once_and_only_on_the_finish_it_was_for() {
                 .count()
         })
     };
-    // Busy: nothing is recorded and the finish is tried again.
-    runtime.cache_clear_done("mission-1", "fix", 0, Ok(Cleared::Busy));
+    // Busy: nothing is recorded and the finish waits on a hold.
+    runtime.cache_clear_done(
+        "mission-1",
+        "fix",
+        0,
+        Ok(Cleared::Busy {
+            path: "/work/fix".into(),
+        }),
+    );
     assert!(!runtime.missions.book.get("mission-1").unwrap().nodes[0].cache_cleared);
+    assert!(
+        runtime
+            .missions
+            .cache_holds
+            .contains_key(&("mission-1".into(), "fix".into()))
+    );
     runtime.cache_clear_done("mission-1", "fix", 0, freed(4096));
     let node = &runtime.missions.book.get("mission-1").unwrap().nodes[0];
     assert!(node.cache_cleared);
@@ -5252,6 +5273,76 @@ fn a_build_cache_result_lands_once_and_only_on_the_finish_it_was_for() {
             .clearing
             .contains(&("mission-1".into(), "fix".into()))
     );
+}
+
+/// PRD mission-node-simple B20, review 4 P2-2: a build cache found busy,
+/// before measuring or at the host's last check, waits on one hold that is
+/// read again only when the panes or agents of its worktree change, or when
+/// its time comes; a failed deletion is tried again up to its cap.
+#[test]
+fn a_busy_build_cache_waits_until_its_worktree_changes_and_a_failure_retries_to_a_cap() {
+    use crate::runtime::mission_worktree::Cleared;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    mission.status = MissionStatus::Running;
+    mission.nodes[0].status = NodeStatus::Done;
+    mission.nodes[0].branch = Some("fix/bug".into());
+    let key: (String, String) = ("mission-1".into(), "fix".into());
+    let now = crate::runtime::memory::now_ms();
+    runtime.snapshot_delta_payload(0);
+    let busy = Cleared::Busy {
+        path: PROJECT.into(),
+    };
+    runtime.cache_clear_done("mission-1", "fix", 0, Ok(busy));
+    assert!(!runtime.missions.book.get("mission-1").unwrap().nodes[0].cache_cleared);
+    // Nothing moved: the hold is not due, however often it is asked.
+    assert!(runtime.due_cache_holds(now).is_empty());
+    runtime.agent_scope_cache.input_generation += 1;
+    assert!(
+        runtime.due_cache_holds(now).is_empty(),
+        "rows that moved elsewhere leave the hold as it was"
+    );
+    // An agent appears in a pane of that worktree: the hold is due.
+    runtime.snapshot.navigator.agents = vec![conductor_row()];
+    runtime.agent_scope_cache.input_generation += 1;
+    assert_eq!(runtime.due_cache_holds(now), vec![key.clone()]);
+    // A new busy answer holds it again; its time alone makes it due.
+    runtime.cache_clear_done(
+        "mission-1",
+        "fix",
+        0,
+        Ok(Cleared::Busy {
+            path: PROJECT.into(),
+        }),
+    );
+    assert!(runtime.due_cache_holds(now).is_empty());
+    assert_eq!(
+        runtime.due_cache_holds(now + 10 * 60 * 1000),
+        vec![key.clone()]
+    );
+    // A failure is tried again twice more, then the finish is settled.
+    runtime.missions.cache_holds.clear();
+    for attempt in 1..3 {
+        runtime.cache_clear_done("mission-1", "fix", 0, Err("unreachable".into()));
+        assert!(
+            runtime.missions.cache_holds.contains_key(&key),
+            "attempt {attempt} waits for another"
+        );
+        assert!(!runtime.missions.book.get("mission-1").unwrap().nodes[0].cache_cleared);
+    }
+    runtime.cache_clear_done("mission-1", "fix", 0, Err("unreachable".into()));
+    assert!(!runtime.missions.cache_holds.contains_key(&key));
+    let node = &runtime.missions.book.get("mission-1").unwrap().nodes[0];
+    assert!(node.cache_cleared);
+    assert_eq!(node.hide, None, "a failure records no deletion");
 }
 
 /// PRD mission-node-simple B28: with every letter slot taken a new wake is

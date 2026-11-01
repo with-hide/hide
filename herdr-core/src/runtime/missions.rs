@@ -317,6 +317,12 @@ pub(crate) struct MissionRuntime {
     /// meanwhile has the result kept off it. Memory only: a restart deletes
     /// again for a node whose result was not saved.
     pub(super) clearing: std::collections::HashSet<(String, String)>,
+    /// The done nodes whose build cache waits, by mission and node: a
+    /// worktree something works in, or a deletion that failed (B20). Tried
+    /// again only once what works there changes or its time comes, so a
+    /// tick with nothing moved starts nothing. Memory only and bounded by
+    /// the missions' nodes; a restart tries each once more.
+    pub(super) cache_holds: HashMap<(String, String), super::mission_health::CacheHold>,
     /// The projects, by device and path, a worker's letter or a Conductor's
     /// node change asked to read again (D-09, B23), kept until that read is
     /// asked. Memory only: a restart reads every project anew.
