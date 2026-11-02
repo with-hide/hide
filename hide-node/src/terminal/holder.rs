@@ -120,7 +120,7 @@ pub fn device_switch() -> Result<(), String> {
 }
 
 /// How long opening a holder's connection may take: its connect and its
-/// hello's answer.
+/// hello's answer, a screen's or a watch's (`watch.rs`).
 const OPEN_LIMIT: Duration = Duration::from_secs(5);
 
 /// How long one question to a holder may take.

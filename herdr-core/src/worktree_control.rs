@@ -1372,24 +1372,13 @@ fn start_task_agent(
                     let node = pane_node
                         .as_ref()
                         .ok_or_else(|| "agent_start.terminal_device_unavailable".to_owned())?;
-                    // The core's own engine proves the pane by its record;
-                    // Herdr's is asked of the node that holds its socket.
-                    let actual: hide_node_link::panes::PaneIdentity = match engine.inspect_pane(
-                        crate::engine::Wait::Each(Duration::from_secs(5)),
+                    let actual = crate::node_access::pane_terminal(
+                        engine.as_ref(),
+                        node.as_ref(),
                         &binding.pane_id,
-                    ) {
-                        Some(answer) => {
-                            answer.map_err(|_| "agent_start.terminal_unchecked".to_owned())?
-                        }
-                        None => crate::node_access::call_as(
-                            node.as_ref(),
-                            hide_node_link::protocol::Call::PaneInspect {
-                                pane_id: binding.pane_id.clone(),
-                            },
-                            Duration::from_secs(5),
-                        )
-                        .map_err(|_| "agent_start.terminal_unchecked".to_owned())?,
-                    };
+                        Duration::from_secs(5),
+                    )
+                    .map_err(|_| "agent_start.terminal_unchecked".to_owned())?;
                     if binding.pane_id != expected.pane_id || actual != binding.identity {
                         return Err("agent_start.terminal_changed".into());
                     }

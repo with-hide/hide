@@ -126,7 +126,7 @@ struct Shared {
 
 /// The most panes whose facts wait to enter the topology: a node's cap of
 /// holders.
-const EARLY_FACTS_CAP: usize = 128;
+const EARLY_FACTS_CAP: usize = hide_kit::panes::HOLDER_CAP;
 
 /// One hold of the topology's lock. As it ends, a change of the tab the
 /// keyboard's workspace shows is recorded as a move, so the session reports
@@ -1636,11 +1636,7 @@ impl<'g> Engine for OwnEngine<'g> {
         )?;
         // The longest of the shells' lines, so the start is bounded as the
         // shell it meets will type it.
-        let line = [shell_line::Shell::Posix, shell_line::Shell::PowerShell]
-            .into_iter()
-            .filter_map(|shell| shell_line::command(&argv, shell))
-            .map(|line| line.len() + 1)
-            .max()
+        let line = shell_line::longest(|shell| shell_line::command(&argv, shell))
             .ok_or_else(|| format!("the {} start cannot be typed into a shell", definition.id))?;
         Ok(PreparedStart::new(launch, line))
     }

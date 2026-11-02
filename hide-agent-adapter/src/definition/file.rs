@@ -9,10 +9,15 @@ use serde::Deserialize;
 
 /// The schema this build reads.
 pub const SCHEMA: u32 = 1;
-/// The most words a start or a resume adds after the program's name, and
-/// their total size: Herdr's resume command limits, less the program.
-const MAX_WORDS: usize = 63;
-const MAX_WORD_BYTES: usize = 8 * 1024;
+/// The most words a line typed into a pane's shell holds, its program
+/// included, and the most bytes its words hold: Herdr's resume command
+/// limits (`validate_resume_argv`). A definition's words are checked
+/// against them here and the line a start or resume types against them in
+/// the core's own engine (`engine/own/shell_line.rs`, `check_resume`).
+pub const LINE_WORDS: usize = 64;
+pub const LINE_BYTES: usize = 8 * 1024;
+/// The most words a start or a resume adds after the program's name.
+const MAX_WORDS: usize = LINE_WORDS - 1;
 const SESSION: &str = "{session}";
 
 #[derive(Debug, Deserialize)]
@@ -220,11 +225,7 @@ fn check_executables(name: &str, executables: &[String]) -> Result<(), String> {
     }) {
         return Err(format!("{name}: program {bad:?} is not a file name"));
     }
-    let plain = !first.starts_with('-')
-        && first
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'));
-    if !plain {
+    if !is_plain_command(first) {
         return Err(format!(
             "{name}: the first program {first:?} is started by name and must be a plain command name"
         ));
@@ -236,15 +237,12 @@ fn check_executables(name: &str, executables: &[String]) -> Result<(), String> {
 /// command rules (no control character, no apostrophe, 64 words and 8 KiB
 /// with the program), and `{session}` exactly where the field takes it.
 fn check_words(name: &str, field: &str, words: &[String], sessions: usize) -> Result<(), String> {
-    if words.len() > MAX_WORDS || words.iter().map(String::len).sum::<usize>() > MAX_WORD_BYTES {
+    if words.len() > MAX_WORDS || words.iter().map(String::len).sum::<usize>() > LINE_BYTES {
         return Err(format!(
-            "{name}: {field} holds more than {MAX_WORDS} words or {MAX_WORD_BYTES} bytes"
+            "{name}: {field} holds more than {MAX_WORDS} words or {LINE_BYTES} bytes"
         ));
     }
-    if words
-        .iter()
-        .any(|word| word.contains('\'') || word.chars().any(char::is_control))
-    {
+    if !words.iter().all(|word| is_typable_word(word)) {
         return Err(format!(
             "{name}: {field} holds an apostrophe or a control character"
         ));
@@ -279,6 +277,23 @@ fn home_parts(name: &str, home: &str) -> Result<Vec<String>, String> {
             "{name}: home {home:?} is not a folder under the home folder, written ~/<folder>"
         )),
     }
+}
+
+/// Whether `program` can be typed as a command by its name in every shell a
+/// pane runs: letters, digits, `_`, `-` and `.`, not starting with `-`
+/// (shells disagree on how to run a quoted path).
+pub fn is_plain_command(program: &str) -> bool {
+    !program.is_empty()
+        && !program.starts_with('-')
+        && program
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+}
+
+/// Whether `word` can be typed into a pane's shell inside the quotes every
+/// shell's start line puts it in: no control character and no apostrophe.
+pub fn is_typable_word(word: &str) -> bool {
+    !word.contains('\'') && !word.chars().any(char::is_control)
 }
 
 #[cfg(test)]

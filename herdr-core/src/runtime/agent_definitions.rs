@@ -132,19 +132,7 @@ impl Runtime {
                 let Some(runtime) = context.runtime.upgrade() else {
                     return;
                 };
-                let (changed, handoff) = runtime
-                    .lock()
-                    .map(|mut guard| {
-                        let changed = guard.settle_agent_definitions(home, read);
-                        (changed, guard.agent_definitions_for_engine())
-                    })
-                    .unwrap_or((false, None));
-                if let Some((engines, catalog)) = handoff {
-                    for engine in engines {
-                        engine.set_agent_definitions(Arc::clone(&catalog));
-                    }
-                }
-                if changed {
+                if settle_and_hand_off(&runtime, home, read) {
                     context.notifier.notify();
                 }
             });
@@ -160,4 +148,28 @@ impl Runtime {
         }
         false
     }
+}
+
+/// Lays a read of the definition folder on the core and hands the settled
+/// set to every engine off the runtime lock, as every engine call is made;
+/// whether the snapshot changed. The one sequence a read takes, whether the
+/// daemon handed it in (`Core::set_agent_definitions`) or a worker made it
+/// (`request_agent_definitions`). A poisoned lock settles nothing.
+pub(crate) fn settle_and_hand_off(
+    runtime: &Mutex<Runtime>,
+    home: PathBuf,
+    read: Result<Catalog, String>,
+) -> bool {
+    let Ok(mut guard) = runtime.lock() else {
+        return false;
+    };
+    let changed = guard.settle_agent_definitions(home, read);
+    let handoff = guard.agent_definitions_for_engine();
+    drop(guard);
+    if let Some((engines, catalog)) = handoff {
+        for engine in engines {
+            engine.set_agent_definitions(Arc::clone(&catalog));
+        }
+    }
+    changed
 }

@@ -77,6 +77,21 @@ impl LocalPanes {
             shell,
         }
     }
+
+    /// The panes of `holders` on the account `home` belongs to: a pane with
+    /// no program of its own runs the account's shell with Hide's
+    /// integration, as the node prepares it for a tab. What this machine's
+    /// engine and a device's node both run.
+    pub fn for_account(holders: Arc<Holders>, service: Arc<Service>, home: PathBuf) -> Self {
+        Self::new(
+            holders,
+            service,
+            PaneShell::Account {
+                home,
+                user: hide_host::shell_integration::UserShell::of_process(),
+            },
+        )
+    }
 }
 
 impl PaneHolders for LocalPanes {
@@ -311,7 +326,10 @@ impl PaneHolders for LocalPanes {
 fn shell_after_notice(shell: &[OsString], notice: &str) -> Vec<OsString> {
     let line: String = notice.chars().filter(|c| !c.is_control()).collect();
     if cfg!(windows) {
-        let write = format!("Write-Host '{}'", line.replace('\'', "''"));
+        let write = format!(
+            "Write-Host {}",
+            hide_shell::quote::powershell_single_quoted(&line)
+        );
         let mut program = shell.to_vec();
         // A shell started with a command of its own (the integration's)
         // writes the line first, in that same command.

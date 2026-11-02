@@ -819,17 +819,7 @@ impl Core {
         if !check_owner_thread(self, "agent.definitions") {
             return;
         }
-        let (changed, handoff) = {
-            let mut runtime = lock_recover(&self.runtime);
-            let changed = runtime.settle_agent_definitions(home, read);
-            (changed, runtime.agent_definitions_for_engine())
-        };
-        if let Some((engines, catalog)) = handoff {
-            for engine in engines {
-                engine.set_agent_definitions(Arc::clone(&catalog));
-            }
-        }
-        if changed {
+        if crate::runtime::settle_and_hand_off(&self.runtime, home, read) {
             notify_change(self);
         }
     }

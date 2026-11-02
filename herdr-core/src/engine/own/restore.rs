@@ -93,8 +93,11 @@ pub(super) fn start(engine: OwnEngine<'static>, saved: BTreeSet<String>) -> Resu
             let resumes = engine.restore(&saved);
             gate.finish();
             // Calls that make panes no longer wait for these: each agent
-            // waits for its own shell, one pane after another.
-            engine.resume_agents(&resumes);
+            // waits for its own shell, one pane after another. The resumes
+            // hold the engine only while each one runs, so an engine its
+            // owner let go (a device's, with its link) ends them.
+            let engine = std::sync::Arc::downgrade(&engine.shared);
+            OwnEngine::resume_agents(&engine, &resumes);
         })
         .map(|_| ())
         .map_err(|error| format!("the session restore thread could not start: {error}"))
@@ -467,17 +470,29 @@ impl OwnEngine<'static> {
     /// Types each of `resumes` into its pane, one pane after another, each
     /// once its shell is ready; one that cannot be typed leaves its pane a
     /// shell and logs why.
-    pub(super) fn resume_agents(&self, resumes: &[Resume]) {
-        // A restarted pane runs the shell a pane with no program runs: it
-        // marks its first prompt when that is the integration's, and the
-        // resume waits for the mark as a start into a tab the core just
-        // opened with it does.
-        let shell = ShellStart::of_tab(true, self.shared.holders.shell_launch().as_ref());
+    pub(super) fn resume_agents(engine: &std::sync::Weak<super::Shared>, resumes: &[Resume]) {
+        let mut shell = None;
         for resume in resumes {
-            if self.check().is_err() {
+            let Some(shared) = engine.upgrade() else {
+                return;
+            };
+            let engine = OwnEngine {
+                shared,
+                gates: Vec::new(),
+            };
+            if engine.check().is_err() {
                 return;
             }
-            match self.resume_agent(resume, shell.clone()) {
+            // A restarted pane runs the shell a pane with no program runs: it
+            // marks its first prompt when that is the integration's, and the
+            // resume waits for the mark as a start into a tab the core just
+            // opened with it does.
+            let shell = shell
+                .get_or_insert_with(|| {
+                    ShellStart::of_tab(true, engine.shared.holders.shell_launch().as_ref())
+                })
+                .clone();
+            match engine.resume_agent(resume, shell) {
                 Ok(()) => crate::diagnostic!(serde_json::json!({
                     "component": "own_engine",
                     "kind": "agent.resumed",
@@ -501,12 +516,10 @@ impl OwnEngine<'static> {
     /// agent as started and types its resume.
     fn resume_agent(&self, resume: &Resume, shell: ShellStart) -> Result<(), String> {
         // The longest of the shells' lines, as a start is bounded.
-        let longest = [Shell::Posix, Shell::PowerShell]
-            .into_iter()
-            .filter_map(|shell| shell_line::resume_command(&resume.argv, &resume.shown, shell))
-            .map(|line| line.len() + 1)
-            .max()
-            .ok_or_else(|| "the resume names no program".to_owned())?;
+        let longest = shell_line::longest(|shell| {
+            shell_line::resume_command(&resume.argv, &resume.shown, shell)
+        })
+        .ok_or_else(|| "the resume names no program".to_owned())?;
         let node = self.node().ok().map(|node| &**node as &dyn NodeLink);
         crate::agent_start::wait_for_shell(
             self,

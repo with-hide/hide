@@ -34,8 +34,9 @@ use hide_node_link::holders::{
 use hide_platform::ipc::{LocalStream, ShutdownHandle};
 use serde_json::json;
 
-/// How long opening a watch may take: its connect and its answer.
-const OPEN_LIMIT: Duration = Duration::from_secs(5);
+/// How long opening a watch may take, its connect and its answer: as long
+/// as any connection to a holder.
+use super::OPEN_LIMIT;
 
 /// How long one rule set may take to reach a holder.
 const WRITE_LIMIT: Duration = Duration::from_secs(5);
