@@ -809,7 +809,19 @@ export function liveHandoff(fixture: Pick<HerdrFixture, "bin" | "env">): void {
  * binds sockets named from the config folder, and the macOS temp folder is
  * too long for a Unix socket path. Windows has no such limit and no handoff.
  */
-export async function startHerdr({ agents = true, shortRoot = false, readiness = "interactive" }: { agents?: boolean; shortRoot?: boolean; readiness?: "registered" | "interactive" } = {}): Promise<HerdrFixture> {
+type HerdrOptions = { agents?: boolean; shortRoot?: boolean; readiness?: "registered" | "interactive" };
+
+/** A private server with no workspace in it: `startHerdr({ empty: true })`. */
+export type HerdrServer = Omit<HerdrFixture, "workspace" | "tab" | "panes" | "inputLogs" | "ready">;
+
+/**
+ * A private pinned Herdr server. By default it holds one focused workspace of
+ * two panes, each running the `claude` shim as an agent; `empty` starts it
+ * with none, for a fixture that makes its panes through the daemon.
+ */
+export function startHerdr(options?: HerdrOptions): Promise<HerdrFixture>;
+export function startHerdr(options: { empty: true }): Promise<HerdrServer>;
+export async function startHerdr({ agents = true, shortRoot = false, readiness = "interactive", empty = false }: HerdrOptions & { empty?: boolean } = {}): Promise<HerdrFixture | HerdrServer> {
   const bin = herdrBinary();
   const version = execFileSync(bin, ["--version"], { encoding: "utf8" }).trim().split(/\s+/)[1];
   const pinned = pinnedHerdrVersion();
@@ -926,6 +938,32 @@ export async function startHerdr({ agents = true, shortRoot = false, readiness =
     };
     const workspaces = snapshot.result?.snapshot?.workspaces ?? [];
     if (workspaces.length !== 0) throw new Error("private herdr server already has workspaces");
+    const restart = async (beforeStart?: () => void) => {
+      const owned = process.platform === "win32" && server.pid ? windowsProcessTree(server.pid) : [];
+      const result = spawnSync(bin, ["server", "stop"], { env, timeout: 10_000 });
+      if (result.status !== 0) throw new Error(`private server stop failed: ${result.stderr}`);
+      await waitFor(() => server.exitCode !== null || server.signalCode !== null, "private server exit before cold restore");
+      if (process.platform === "win32") endWindowsProcesses(owned, root);
+      beforeStart?.();
+      server = launchServer();
+      await waitFor(() => {
+        if (spawnFailed) throw spawnFailed;
+        return fs.existsSync(socket);
+      }, "private cold-restored server socket");
+    };
+    const addAfterStop = (cleanup: () => void) => {
+      if (stopped) cleanup();
+      else afterStop.push(cleanup);
+    };
+    // An empty server: what runs in it is made through the daemon, as the
+    // web shell makes it (`engine-fixture.ts`).
+    if (empty) {
+      return {
+        bin, socket, env, root, fixturePath, shell: paneShellOf(env),
+        run: (args) => herdr(env, bin, args),
+        stop, restart, afterStop: addAfterStop,
+      };
+    }
 
     const inputLogs: [string, string] = [path.join(root, "input-one.log"), path.join(root, "input-two.log")];
     // A focused workspace of two panes side by side.
@@ -1071,23 +1109,8 @@ export async function startHerdr({ agents = true, shortRoot = false, readiness =
       },
       stop,
       ready,
-      restart: async (beforeStart) => {
-        const owned = process.platform === "win32" && server.pid ? windowsProcessTree(server.pid) : [];
-        const result = spawnSync(bin, ["server", "stop"], { env, timeout: 10_000 });
-        if (result.status !== 0) throw new Error(`private server stop failed: ${result.stderr}`);
-        await waitFor(() => server.exitCode !== null || server.signalCode !== null, "private server exit before cold restore");
-        if (process.platform === "win32") endWindowsProcesses(owned, root);
-        beforeStart?.();
-        server = launchServer();
-        await waitFor(() => {
-          if (spawnFailed) throw spawnFailed;
-          return fs.existsSync(socket);
-        }, "private cold-restored server socket");
-      },
-      afterStop: (cleanup) => {
-        if (stopped) cleanup();
-        else afterStop.push(cleanup);
-      },
+      restart,
+      afterStop: addAfterStop,
     };
   } catch (error) {
     throw afterCleanup(error, stop);
