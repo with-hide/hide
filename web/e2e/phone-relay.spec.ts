@@ -218,6 +218,7 @@ test("hosted push registers and removes only the device scope while keeping the 
   await page.getByRole("button", { name: relay.pairing.name, exact: true }).click();
   await page.getByRole("button", { name: "Remove device", exact: true }).click();
   await page.getByRole("button", { name: "Remove device", exact: true }).last().click();
+  await expect(page).toHaveURL(relay.origin + "/");
   await expect(page.getByRole("button", { name: "Connect another device" })).toBeVisible();
   await expect.poll(scopes).toEqual(["/"]);
 });
