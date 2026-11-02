@@ -54,6 +54,13 @@ async function drive(page: Page, daemon: Daemon, control: HidedControl, panes: s
   for (const pane of panes) await expect(paneView(page, pane)).toHaveAttribute("data-transport", "controlling");
   await expect(tabTitle(page, target.tab)).toBeVisible();
   await expect(tabTitle(page, shown)).toHaveAttribute("aria-selected", "true");
+  // The page takes a tab as a drop target only once its pane's terminal is live or was never attached (paneMove.ts).
+  let state = "unlisted";
+  await control.until((rest: Rest) => {
+    const row = ((rest.terminal as { panes?: { pane_id: string; transport_state: string }[] } | undefined)?.panes ?? []).find((pane) => pane.pane_id === target.pane);
+    state = row?.transport_state ?? "unlisted";
+    return ["unlisted", "connected", "controlling", "observing", "idle", "released"].includes(state) || undefined;
+  }, `the destination pane ${target.pane} a drop target`, 30_000).catch((error: unknown) => { throw new Error(`${String(error)}; its terminal stayed ${state}`); });
   return { daemon, control, panes, target, sent, payloads, completed };
 }
 
