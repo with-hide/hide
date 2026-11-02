@@ -25,7 +25,15 @@ use std::time::{Duration, Instant};
 
 use super::Handle;
 
-/// How long a wait sleeps between two tries.
+/// How long a wait sleeps after its first try; each later sleep is twice
+/// the one before, up to [`POLL`]. The locks taken this way are held
+/// briefly (a pane record's change is a read and a replace, about 0.2 ms),
+/// and a flat 20 ms sleep made each start that met another one's hold pay
+/// 20 ms for it: a restore starts eight pane holders at once, each writing
+/// its record three times under one lock.
+const FIRST_POLL: Duration = Duration::from_millis(1);
+
+/// The longest a wait sleeps between two tries.
 const POLL: Duration = Duration::from_millis(20);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -59,8 +67,9 @@ pub enum Waited {
     Cancelled,
 }
 
-/// Locks `file`, trying again every few milliseconds until `within` has
-/// passed or `cancelled` says to stop. A `within` of zero is one try. The
+/// Locks `file`, trying again after [`FIRST_POLL`] and then twice as long
+/// each time, up to [`POLL`], until `within` has passed or `cancelled` says
+/// to stop. A `within` of zero is one try. The
 /// lock is held on the descriptor, so the file is kept open for as long as
 /// the lock is.
 #[allow(clippy::disallowed_methods)] // a production wait, not test code
@@ -71,6 +80,7 @@ pub fn lock_file(
     cancelled: &dyn Fn() -> bool,
 ) -> io::Result<Waited> {
     let deadline = Instant::now() + within;
+    let mut pause = FIRST_POLL;
     loop {
         if attempt(&file, mode)? {
             return Ok(Waited::Locked(Lock { file }));
@@ -81,7 +91,8 @@ pub fn lock_file(
         if Instant::now() >= deadline {
             return Ok(Waited::TimedOut);
         }
-        std::thread::sleep(POLL);
+        std::thread::sleep(pause);
+        pause = (pause * 2).min(POLL);
     }
 }
 

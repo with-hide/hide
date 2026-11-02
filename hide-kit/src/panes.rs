@@ -68,6 +68,14 @@ pub const START_LIMIT: Duration = Duration::from_secs(10);
 /// its terminal's drain (5 s) and its last message.
 pub const CLOSE_LIMIT: Duration = Duration::from_secs(20);
 
+/// Whether `path` was last written before `booted`. A file whose time
+/// cannot be read is not known to be old.
+fn written_before(path: &Path, booted: std::time::SystemTime) -> bool {
+    std::fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .is_ok_and(|written| written < booted)
+}
+
 /// How many incarnations a process takes from the folder's file at once
 /// ([`Panes::next_incarnation`]).
 const INCARNATIONS_TAKEN: u64 = 64;
@@ -313,7 +321,7 @@ impl Panes {
             Err(error) if error.kind() == std::io::ErrorKind::Unsupported => None,
             Err(error) => return Err(format!("this boot could not be named: {error}")),
         };
-        Ok(Self {
+        let panes = Self {
             home: home.to_owned(),
             state_dir: state_dir.to_owned(),
             owner,
@@ -321,7 +329,101 @@ impl Panes {
             sink,
             names: holders::VersionNames::default(),
             incarnations: Mutex::new(0..0),
-        })
+        };
+        panes.mend_after_a_crash()?;
+        Ok(panes)
+    }
+
+    /// Mends what a machine that stopped mid-write leaves, before anything
+    /// reads the records. A record and the incarnation counter are replaced
+    /// whole (`hide_platform::fs::atomic::write_file`) and flushed to the
+    /// device but not past its cache, since a pane record need not outlive
+    /// the machine: after a power loss every holder it names is gone too.
+    /// What the device then kept may be an empty or cut-off file, or an
+    /// older one, and none of it may stop the panes starting again:
+    ///
+    /// - a record that cannot be parsed and was last written before this
+    ///   boot began names nothing that runs (no process outlives its boot),
+    ///   so it is set aside (`pane_holder.record_set_aside`) and its pane
+    ///   starts again as one with no record; one written in this boot, or of
+    ///   a format this build does not know (a newer build's), is left as it
+    ///   is and reported, as before, since its holder may run;
+    /// - an older readable record is one of an earlier boot, which the
+    ///   reconcile ends `machine_restarted` without touching what it names;
+    /// - a counter that cannot be read, or that is behind an incarnation a
+    ///   record holds, is moved past every one of them
+    ///   (`pane_holder.incarnations_mended`), so no start takes a number a
+    ///   record still names.
+    fn mend_after_a_crash(&self) -> Result<(), String> {
+        let booted = match hide_platform::process::boot_time() {
+            Ok(booted) => booted,
+            Err(error) => {
+                // Without the boot's start nothing is known to be old:
+                // every record is left as it is, as before.
+                self.emit(
+                    "pane_holder.mend_skipped",
+                    json!({ "reason": format!("this boot's start could not be read: {error}") }),
+                );
+                return Ok(());
+            }
+        };
+        let _lock = self.lock()?;
+        let records = layout::pane_records(&self.state_dir);
+        let entries = std::fs::read_dir(&records)
+            .map_err(|error| format!("{} could not be listed: {error}", records.display()))?;
+        let mut highest = 0_u64;
+        for entry in entries {
+            let entry = entry
+                .map_err(|error| format!("{} could not be listed: {error}", records.display()))?;
+            let path = entry.path();
+            if path.extension().is_none_or(|extension| extension != "json") {
+                continue;
+            }
+            match record::read(&path) {
+                Ok(Some(found)) => highest = highest.max(found.incarnation),
+                Ok(None) => {}
+                Err(Unreadable::Corrupt(why)) if written_before(&path, booted) => {
+                    std::fs::remove_file(&path).map_err(|error| {
+                        format!("{} could not be set aside: {error}", path.display())
+                    })?;
+                    self.emit(
+                        "pane_holder.record_set_aside",
+                        json!({
+                            "pane": path.file_stem().map(|stem| stem.to_string_lossy().into_owned()),
+                            "reason": "written before this boot and cannot be parsed",
+                            "detail": why,
+                        }),
+                    );
+                }
+                Err(_) => {}
+            }
+        }
+        let counter = layout::pane_incarnations(&self.state_dir);
+        let next = match std::fs::read_to_string(&counter) {
+            Ok(text) => text.trim().parse::<u64>().ok(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(1),
+            Err(error) => {
+                return Err(format!("{} could not be read: {error}", counter.display()));
+            }
+        };
+        let floor = highest.saturating_add(1);
+        if next.is_none_or(|next| next < floor) {
+            if next.is_none() && !written_before(&counter, booted) {
+                // Damaged in this boot: not a crash's, so not ours to mend.
+                return Ok(());
+            }
+            hide_platform::fs::atomic::write_file(
+                &counter,
+                floor.to_string().as_bytes(),
+                hide_platform::fs::Access::Private,
+            )
+            .map_err(|error| format!("{} could not be written: {error}", counter.display()))?;
+            self.emit(
+                "pane_holder.incarnations_mended",
+                json!({ "found": next, "next": floor }),
+            );
+        }
+        Ok(())
     }
 
     /// The identity this state folder's records name as their owner.

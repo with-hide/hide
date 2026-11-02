@@ -512,6 +512,95 @@ fn a_record_of_an_earlier_boot_ends_nothing_it_names() {
     assert!(named.program.is_running());
 }
 
+/// After a power loss the device may keep a pane record empty, cut off or
+/// older than the last write, and the incarnation counter the same way,
+/// since a record is flushed to the device but not past its cache (a pane
+/// record need not outlive the machine: its holder dies with it). None of
+/// that may stop the panes starting again: a node that opens the folder
+/// sets the unparseable records written before this boot aside, ends the
+/// older readable one as of an earlier boot, moves the counter past every
+/// incarnation a record holds, and every pane then starts as new. A record
+/// damaged in this boot is no crash's and is left as it is, refusing its
+/// pane as before, since its holder may run.
+#[test]
+fn records_a_power_loss_left_empty_cut_off_or_old_do_not_stop_the_panes_starting() {
+    let folder = Folder::new();
+    let records = layout::pane_records(&folder.state);
+    let before_boot = std::time::UNIX_EPOCH + Duration::from_secs(1_000_000_000);
+    let age = |path: &Path| {
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(before_boot)
+            .unwrap();
+    };
+
+    let mut old = folder.reserved("old", Phase::Running);
+    old.boot = Some("an-earlier-boot".to_owned());
+    old.incarnation = 500;
+    folder.write(&old);
+    let whole = serde_json::to_vec(&old).unwrap();
+    std::fs::write(records.join("empty.json"), b"").unwrap();
+    std::fs::write(records.join("cut.json"), &whole[..whole.len() / 2]).unwrap();
+    std::fs::write(layout::pane_incarnations(&folder.state), b"").unwrap();
+    for name in ["old.json", "empty.json", "cut.json", "next"] {
+        age(&records.join(name));
+    }
+    // Damaged in this boot: not a crash's.
+    std::fs::write(records.join("fresh.json"), b"").unwrap();
+
+    let reopened = Panes::open(folder.home.path(), &folder.state, sink).unwrap();
+    assert!(!records.join("empty.json").exists());
+    assert!(!records.join("cut.json").exists());
+    assert!(
+        records.join("fresh.json").exists(),
+        "a record of this boot is left"
+    );
+    let set_aside: Vec<_> = folder
+        .events("pane_holder.record_set_aside")
+        .into_iter()
+        .map(|event| event["pane"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(set_aside.len(), 2, "{set_aside:?}");
+    assert!(set_aside.contains(&"empty".to_owned()) && set_aside.contains(&"cut".to_owned()));
+    let next: u64 = std::fs::read_to_string(layout::pane_incarnations(&folder.state))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert!(
+        next > 500,
+        "the counter is past every incarnation a record holds: {next}"
+    );
+
+    let found = reopened.reconcile(RECONCILE_BUDGET);
+    let Some(Judgment::Ended(ended)) = found.panes.get("old") else {
+        panic!("{found:?}");
+    };
+    // Windows names no boot, so there the record's holder is found gone.
+    let expected = if cfg!(unix) {
+        EndReason::MachineRestarted
+    } else {
+        EndReason::HolderLost
+    };
+    assert_eq!(end_reason(ended), expected);
+
+    for pane in ["empty", "cut", "old"] {
+        let started = match reopened.start(&folder.request(pane, shell(), Vec::new()), &source()) {
+            Ok(Started::Started(record)) => record,
+            other => panic!("{pane} did not start: {other:?}"),
+        };
+        assert!(started.incarnation > 500, "{pane}: {}", started.incarnation);
+        assert_eq!(started.phase, Phase::Running);
+    }
+    match reopened.start(&folder.request("fresh", shell(), Vec::new()), &source()) {
+        Err(StartRefusal::RecordUnreadable(_)) => {}
+        other => panic!("a record damaged in this boot refuses its pane: {other:?}"),
+    }
+    std::fs::remove_file(records.join("fresh.json")).unwrap();
+}
+
 /// A reconcile takes up no pane past its budget and leaves the rest to the
 /// next one; panes are judged several at once, so many lost holders do not
 /// add up one after another.
