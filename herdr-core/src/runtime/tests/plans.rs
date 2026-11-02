@@ -669,7 +669,7 @@ fn a_step_is_handed_to_a_child_only_after_its_earlier_steps_and_the_review() {
         "plan_review_pending"
     );
     command(&mut runtime, &sender, json!({"verb": "approve"})).unwrap();
-    // Settings › Conductor's candidates hold a plan's children as a
+    // Settings › Mission's candidates hold a plan's children as a
     // mission's workers.
     runtime.snapshot.ui_state.conductor_settings.candidates =
         vec![serde_json::from_value(json!({"agent": "claude"})).unwrap()];

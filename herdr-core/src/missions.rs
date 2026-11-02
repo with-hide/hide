@@ -47,7 +47,7 @@ pub use crate::dag::NODE_LIMIT;
 pub const CAP_LIMIT: u8 = 16;
 /// The concurrency cap a fresh install starts with (D-08).
 pub const DEFAULT_CAP: u8 = 4;
-/// Worker candidates in Settings › Conductor (D-31).
+/// Worker candidates in Settings › Mission (D-31).
 pub const CANDIDATE_LIMIT: usize = 16;
 /// Dependencies one node may name.
 const DEPENDENCY_LIMIT: usize = 16;
@@ -839,7 +839,7 @@ pub struct Mission {
     pub status: MissionStatus,
     pub scope: MissionScope,
     pub cap: u8,
-    /// Settings › Conductor's worker candidates when the mission was
+    /// Settings › Mission's worker candidates when the mission was
     /// created (D-34, B48); a book written before them has none, which
     /// admits any agent.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -849,7 +849,7 @@ pub struct Mission {
     /// names. None for a mission from before it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strength: Option<Strength>,
-    /// Settings › Conductor's choice of a checker from another company when
+    /// Settings › Mission's choice of a checker from another company when
     /// the mission was created; none for a mission from before it, whose
     /// `checkers` say it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1028,8 +1028,9 @@ impl crate::dag::Node for NodeInput {
     }
 }
 
-/// Settings › Conductor (D-31): the values a new plan starts from. A plan
-/// changed in conversation keeps its own values (B3, B48).
+/// Settings › Mission (D-31): the values a new plan starts from. A plan
+/// changed in conversation keeps its own values (B3, B48); the cleanup of
+/// merged worktrees applies to every mission at once.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConductorSettings {
@@ -1045,6 +1046,11 @@ pub struct ConductorSettings {
     /// Prefer a checker of another company than the node's worker.
     #[serde(default = "default_other_vendor")]
     pub other_vendor: bool,
+    /// Remove a done node's worktree once its pull request merged, when the
+    /// tree is clean and nothing runs in it (`runtime/mission_cleanup.rs`).
+    /// Read live by every mission; a value kept before it reads as on.
+    #[serde(default = "default_clean_merged")]
+    pub clean_merged: bool,
 }
 
 impl Default for ConductorSettings {
@@ -1055,6 +1061,7 @@ impl Default for ConductorSettings {
             candidates: Vec::new(),
             default_strength: Strength::Normal,
             other_vendor: default_other_vendor(),
+            clean_merged: default_clean_merged(),
         }
     }
 }
@@ -1071,7 +1078,7 @@ pub enum Strength {
     Thorough,
 }
 
-/// The review and verify defaults Settings › Conductor kept before
+/// The review and verify defaults Settings › Mission kept before
 /// verification strength, read only for the operator's choice of another
 /// company; every other field of theirs is left behind.
 #[derive(Deserialize)]
@@ -1097,6 +1104,10 @@ impl Default for StoredCheck {
 }
 
 fn default_other_vendor() -> bool {
+    true
+}
+
+fn default_clean_merged() -> bool {
     true
 }
 

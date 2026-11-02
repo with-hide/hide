@@ -60,12 +60,13 @@ export function missionToolMissions(workspace: string, path: string, now: number
   ];
 }
 
-/** Settings › Conductor's values as the defaults show them. */
+/** Settings › Mission's values as the defaults show them. */
 export const MISSION_TOOL_DEFAULTS: ConductorSettings = {
   concurrency: 3,
   default_scope: "pr",
   default_strength: "normal",
   other_vendor: true,
+  clean_merged: true,
   candidates: [
     { agent: "claude", model: "opus", effort: "high", purpose: "Conductor" },
     { agent: "codex", model: null, effort: null, purpose: "검증" },

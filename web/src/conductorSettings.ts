@@ -1,4 +1,4 @@
-// The rules behind Settings › Conductor (PRD software-factory-conductor D-31,
+// The rules behind Settings › Mission (PRD software-factory-conductor D-31,
 // B48): the choices the page offers and the value each edit sends. The
 // core checks the value before it keeps it (`ConductorSettings::validate`);
 // these mirror its bounds so the page never offers what it would refuse.
@@ -16,7 +16,7 @@ export const CAP_CHOICES: readonly number[] = Array.from({ length: CAP_LIMIT }, 
 export const STRENGTHS: readonly MissionStrength[] = ["fast", "normal", "thorough"];
 
 /** What the core keeps before the operator changed anything. */
-export const DEFAULT_CONDUCTOR: ConductorSettings = { concurrency: 4, default_scope: "pr", candidates: [], default_strength: "normal", other_vendor: true };
+export const DEFAULT_CONDUCTOR: ConductorSettings = { concurrency: 4, default_scope: "pr", candidates: [], default_strength: "normal", other_vendor: true, clean_merged: true };
 
 /** The start kind a candidate names, as the start panel lists it; null for an agent Hide cannot start. */
 export function candidateAgent(agent: string): ProviderKind | null {

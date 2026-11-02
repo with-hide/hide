@@ -23,7 +23,7 @@ import { useErrorSince } from "../errorSince";
 import { composingKey } from "../keys";
 
 // The Conductor defaults' controls (PRD software-factory-conductor D-31, B48,
-// B49), shared by Settings › Conductor and the Mission tool's defaults (PRD
+// B49), shared by Settings › Mission and the Mission tool's defaults (PRD
 // mission-tool D-03, B9): one value, the same edit events and the same
 // refusal words, each place laying the controls out at its own width. Every
 // edit sends the field it changes; the core checks the result and keeps it,
@@ -49,7 +49,7 @@ export function useConductorEdit(actions: Actions): ConductorEdit {
   return { settings, send, error };
 }
 
-/** A refused edit, in Settings › Conductor's words, where it was made. */
+/** A refused edit, in Settings › Mission's words, where it was made. */
 export function ConductorError({ error }: { error: CoreError | null }) {
   const { t } = useInterfaceTranslation();
   if (!error) return null;
@@ -102,6 +102,12 @@ export function OtherVendorControl({ settings, send }: Pick<ConductorEdit, "sett
   return <Switch checked={settings.other_vendor} aria-label={t("conductor.otherVendor")} onCheckedChange={(other_vendor) => send({ other_vendor })} data-conductor-other-vendor={String(settings.other_vendor)} />;
 }
 
+/** Whether a done node's worktree is removed once its pull request merged, when it is clean and nothing runs in it. */
+export function CleanMergedControl({ settings, send }: Pick<ConductorEdit, "settings" | "send">) {
+  const { t } = useInterfaceTranslation();
+  return <Switch checked={settings.clean_merged} aria-label={t("conductor.cleanMerged")} onCheckedChange={(clean_merged) => send({ clean_merged })} data-conductor-clean-merged={String(settings.clean_merged)} />;
+}
+
 /** One more candidate, off at the limit with why. */
 export function CandidateAdd({ settings, send }: Pick<ConductorEdit, "settings" | "send">) {
   const { t } = useInterfaceTranslation();
@@ -117,7 +123,7 @@ export function CandidateAdd({ settings, send }: Pick<ConductorEdit, "settings" 
   );
 }
 
-/** Every candidate's row, each edit sending the whole list as Settings › Conductor does. */
+/** Every candidate's row, each edit sending the whole list as Settings › Mission does. */
 export function CandidateRows({ settings, send, layout }: Pick<ConductorEdit, "settings" | "send"> & { layout: CandidateLayout }) {
   return (
     <>

@@ -6,7 +6,7 @@
 // (PRD mission-pane-chip B11, B12), the map follows each change of the
 // record, a card opens its node's panel and Escape lets it go without
 // closing the lane (PRD mission-map-git-criteria B25, B28, B30, B31), and
-// Settings › Conductor keeps the cap the next `hide mission settings` reads.
+// Settings › Mission keeps the cap the next `hide mission settings` reads.
 
 import { expect, test, type Page } from "@playwright/test";
 import { spawnSync } from "node:child_process";
@@ -164,7 +164,7 @@ test("the Conductor's first plan shows on its pane, the map follows the record, 
     await expect(map).toBeVisible();
     await expect(map.locator("[data-mission-node]")).toHaveCount(4);
 
-    // The map head's gear opens the rail's Mission tool on its defaults, Settings › Conductor's own
+    // The map head's gear opens the rail's Mission tool on its defaults, Settings › Mission's own
     // controls, which write the cap the Conductor reads (PRD mission-tool B9).
     await map.locator("[data-detail-conductor-settings]").click();
     const sheet = page.locator('[data-mission-tool-page="settings"]');

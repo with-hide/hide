@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { addCandidate, candidateAgent, CANDIDATE_LIMIT, CAP_CHOICES, DEFAULT_CONDUCTOR, effortsOf, replaceCandidate } from "./conductorSettings";
 
-// Settings › Conductor's value (PRD software-factory-conductor D-31, B48, B49).
+// Settings › Mission's value (PRD software-factory-conductor D-31, B48, B49).
 
 describe("Conductor settings", () => {
   it("offers the cap the core accepts, 1 to 16, and no more candidates than it keeps", () => {
