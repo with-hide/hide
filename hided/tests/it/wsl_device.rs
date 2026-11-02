@@ -15,7 +15,7 @@
 //!
 //! `HIDE_E2E_WSL_DISTRO` names the distribution and `HIDE_E2E_WSL_PACKAGES`
 //! the folder holding `hided-linux-x86_64`, `hide-linux-x86_64`,
-//! `hide-agent-hooks-linux-x86_64` and `herdr-linux-x86_64`.
+//! `hide-agent-hooks-linux-x86_64`, `hide-holder-linux-x86_64` and `herdr-linux-x86_64`.
 #![cfg(windows)]
 
 use std::io::{BufRead, Read, Write};
@@ -982,4 +982,83 @@ fn a_link_owner_that_is_killed() {
     println!("owner connected");
     let _ = std::io::stdin().read_line(&mut String::new());
     panic!("the owner is killed, never let go");
+}
+
+/// A WSL distribution on the core's own engine (PRD engine-bundle-3-core-owns
+/// D-22): the Linux holder goes in with the helper and no Herdr does, and a
+/// pane started by the node link's pane requests runs in it. It runs after
+/// the other walks, on the account they made, and stops the distribution.
+#[test]
+#[ignore = "a real WSL 2 distribution of the runner's own; the windows wsl lane sets it up"]
+fn a_wsl_own_engine_device_runs_its_panes_in_holders_with_no_herdr() {
+    use hide_node_link::holders::{HolderStart, PaneHolders};
+
+    let distro = std::env::var("HIDE_E2E_WSL_DISTRO").expect("set HIDE_E2E_WSL_DISTRO");
+    as_root(
+        &distro,
+        &format!(
+            "pkill -KILL -u {USER} 2>/dev/null; userdel -r -f {USER} 2>/dev/null; useradd -m -s /bin/bash {USER}"
+        ),
+    );
+    set_registry(&distribution_id(&distro), "RunOOBE", 0);
+    set_default_user(&distro, USER);
+    let sink = Arc::new(Sink::default());
+    let connector = connector(sink.clone()).with_engine(hide_node::ssh::DeviceEngine::Holders);
+    let transport = connector.wsl_transport("wsl-own", &distro).unwrap();
+    let (connected, _closed) = establish(&*transport, &consent(None), Wake::Allowed);
+    let connected = connected.unwrap_or_else(|error| panic!("connection: {error}"));
+    assert!(
+        connected.node.terminals.is_ok(),
+        "the holders did not start: {:?}",
+        connected.node.terminals.as_ref().err()
+    );
+    let home = connected
+        .node
+        .hello
+        .home
+        .clone()
+        .expect("the node names its home");
+    let link = Arc::clone(&connected.node.host);
+    let panes = hide_node_link::link_panes::LinkPanes::new(
+        Arc::clone(&link),
+        Arc::new(|record| println!("pane record: {record}")),
+    );
+    panes.recovered(Duration::from_secs(10)).unwrap();
+    panes
+        .start(&HolderStart {
+            pane: "wsl-own-pane".to_owned(),
+            program: Some(vec![
+                "/bin/sh".to_owned(),
+                "-c".to_owned(),
+                "printf 'own_%s\\n' wsl; exec sleep 600".to_owned(),
+            ]),
+            cwd: home,
+            env: Vec::new(),
+            rows: 24,
+            cols: 80,
+            notice: None,
+        })
+        .unwrap();
+    wait_for("the holder pane's output", || {
+        panes
+            .read("wsl-own-pane", 20)
+            .ok()
+            .filter(|(text, _)| text.contains("own_wsl"))
+            .map(drop)
+    });
+    let herdr = as_root(
+        &distro,
+        &format!(
+            "find /home/{USER} -name 'herdr*' 2>/dev/null; pgrep -u {USER} -f '[h]erdr' || true"
+        ),
+    );
+    assert!(
+        herdr.trim().is_empty(),
+        "Herdr reached the distribution: {herdr}"
+    );
+    panes.terminate("wsl-own-pane").unwrap();
+    drop(panes);
+    link.close("test ended");
+    drop(connected);
+    stop(&distro);
 }

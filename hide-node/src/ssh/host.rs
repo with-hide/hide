@@ -221,7 +221,7 @@ impl HelperPackages {
         arch: &str,
         engine: DeviceEngine,
     ) -> Result<Payload, EstablishError> {
-        let payload = self.payload(os, arch)?;
+        let (payload, bundled) = self.kit(os, arch)?;
         match engine {
             DeviceEngine::Herdr => Ok(payload),
             // No Herdr goes to the device, and the holder goes beside the
@@ -230,15 +230,22 @@ impl HelperPackages {
             // could run no pane.
             DeviceEngine::Holders => {
                 let mut payload = payload.without_herdr();
-                let holder = self.find_named(HOLDER_NAME, os, arch).map_err(|()| {
-                    EstablishError::Unsupported(format!(
-                        "This Hide build does not include the pane holder for {} {arch}; the core's own engine cannot run this device's panes",
-                        platform_label(os)
-                    ))
-                })?;
-                payload
-                    .files
-                    .push(read_package(HOLDER_NAME, &holder).map_err(EstablishError::Install)?);
+                // A release's device kit carries the holder for a device of
+                // another system; a build's own system, or a developer's
+                // folder, has it beside the helper.
+                let holder = match bundled {
+                    Some(holder) => holder,
+                    None => {
+                        let holder = self.find_named(HOLDER_NAME, os, arch).map_err(|()| {
+                            EstablishError::Unsupported(format!(
+                                "This Hide build does not include the pane holder for {} {arch}; the core's own engine cannot run this device's panes",
+                                platform_label(os)
+                            ))
+                        })?;
+                        read_package(HOLDER_NAME, &holder).map_err(EstablishError::Install)?
+                    }
+                };
+                payload.files.push(holder);
                 Ok(payload)
             }
         }
@@ -250,6 +257,14 @@ impl HelperPackages {
     /// build does not carry is left out and named, and the kit on the device
     /// reports it as missing from the build.
     pub(super) fn payload(&self, os: &str, arch: &str) -> Result<Payload, EstablishError> {
+        self.kit(os, arch).map(|(payload, _)| payload)
+    }
+
+    /// [`HelperPackages::payload`], and the pane holder when it came with a
+    /// release's device kit, which carries it beside the programs a device
+    /// on its Herdr is sent; a build's own files leave the holder unread
+    /// until a device of the core's own engine asks for it.
+    fn kit(&self, os: &str, arch: &str) -> Result<(Payload, Option<Package>), EstablishError> {
         // Existing native and developer-provided artifacts keep their lookup
         // rule. Only a missing foreign helper goes to the release cache. This
         // runs on the connection worker, never under the runtime mutex, and
@@ -258,13 +273,13 @@ impl HelperPackages {
             && (os != std::env::consts::OS || arch != std::env::consts::ARCH)
             && device_bundles::supported(os, arch)
         {
-            return device_bundles::payload(self.directory.as_deref(), os, arch).map_err(
-                |reason| EstablishError::Download {
+            return device_bundles::payload(self.directory.as_deref(), os, arch)
+                .map(|(payload, holder)| (payload, Some(holder)))
+                .map_err(|reason| EstablishError::Download {
                     os: os.to_owned(),
                     arch: arch.to_owned(),
                     reason,
-                },
-            );
+                });
         }
         let helper = self.find(os, arch).map_err(EstablishError::Unsupported)?;
         let helper = read_package(HELPER_NAME, &helper).map_err(EstablishError::Install)?;
@@ -294,7 +309,7 @@ impl HelperPackages {
                 Err(reason) => payload.missing.push(reason),
             }
         }
-        Ok(payload)
+        Ok((payload, None))
     }
 
     /// A file or a folder named `name`, by the helper's rule.

@@ -2401,7 +2401,8 @@ The operator's keys and a pane's screen output never take these requests: they r
 
 The core opens a device's engine once its node is ready (`Runtime::open_own_device_engine`, `herdr-core/src/runtime/own_devices.rs`), off the runtime lock, with its session in `<state>/engine/devices/<id>` (`hide_kit::layout::device_engine_dir`, which takes only a plain id), and lets it go with the link, which saves it.
 Every new link starts a new node, which finds the holders that ran on, and the new engine lays the saved session out around them as this machine's does, so a pane keeps its id and its process across a node's restart (`hided/tests/it/device_own_engine.rs`, in the remote mailbox lane).
-A Linux device dialed from a Mac, and a WSL distribution from a Windows PC, need a Linux holder that neither the app nor the release's device kit carries yet, so on this engine they connect nothing and say why ([INSTALL.md](INSTALL.md#what-each-system-supports)).
+A Linux device dialed from a Mac, and a WSL distribution from a Windows PC, get the Linux holder from the release's device kit, which carries it beside the helper ([BUILD.md](BUILD.md#device-helper-release-bundles)); a local build has no published kit and a developer folder supplies `hide-holder-linux-<arch>` instead.
+`hided/tests/it/wsl_device.rs`'s own-engine walk runs a pane in a holder inside a real WSL 2 distribution with no Herdr there.
 
 #### Agents on the core's own engine
 
@@ -2536,7 +2537,7 @@ The server on the device's registered socket is handed over whenever it runs an 
 A package that provides Herdr for the device's system and processor uploads it with the helper into `<helper root>/herdr/<digest prefix>/herdr`, beside the build folders and not in one, so a build that changes only the helper finds it in place and a new pin is uploaded once per device (`hide-node/src/ssh/bootstrap.rs`, `install`); the build folder names its copy in `herdr.pin`, which the build's digest covers, and a core update never carries it.
 The Mac app carries native Apple Silicon programs and a small `device-bundles.json` manifest for Linux x64 and Linux ARM64.
 Intel Mac devices are unsupported because the app ships for Apple Silicon only; the platform probe reports this before selecting any helper.
-On first connection to a foreign platform, the existing connection worker downloads the four-program bundle from the public release matching the app's version, verifies its archive and program hashes, sizes, types and executable headers, and reads its payload from the private bounded cache at `hide_kit::layout::device_bundle_cache`.
+On first connection to a foreign platform, the existing connection worker downloads the five-program bundle (the pane holder sent only to a device of the core's own engine) from the public release matching the app's version, verifies its archive and program hashes, sizes, types and executable headers, and reads its payload from the private bounded cache at `hide_kit::layout::device_bundle_cache`.
 Download, verification and cache access run outside `Mutex<Runtime>` with a 60-second HTTP deadline and a five-second cache-lock deadline; there is no new resident worker or per-tick work.
 Two platform slots hold at most one kit each, with a single staging folder, bounded at 1024 MiB including compressed and expanded work in progress.
 Cached payload bytes are read while holding the cache lock, so an app update cannot evict another connection's reader.

@@ -51,9 +51,9 @@ class ReleaseAssetsTest(unittest.TestCase):
             data = f"device archive fixture {platform}".encode()
             (self.directory / name).write_bytes(data)
             platforms[platform] = {"asset": name, "size": len(data), "sha256": hashlib.sha256(data).hexdigest(),
-                                   "files": {name: {"size": 64, "sha256": "a" * 64} for name in ["hided", "hide", "hide-agent-hooks", "herdr"]}}
+                                   "files": {name: {"size": 64, "sha256": "a" * 64} for name in ["hided", "hide", "hide-agent-hooks", "hide-holder", "herdr"]}}
         (self.directory / "device-bundles.json").write_text(json.dumps({
-            "format": 1, "version": tag[1:], "commit": "1" * 40, "order": "42", "platforms": platforms}))
+            "format": 2, "version": tag[1:], "commit": "1" * 40, "order": "42", "platforms": platforms}))
         for info, files in updates.items():
             self.write_update_info(info, tag[1:], files)
 
