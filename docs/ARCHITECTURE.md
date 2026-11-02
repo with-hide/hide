@@ -3363,6 +3363,9 @@ Memory retires its own worktrees through the ordinary `Call::WorktreeRetire` mac
 
 ### The mobile companion
 
+The shared relay library and its WASM boundary are specified in [RELAY_PROTOCOL.md](RELAY_PROTOCOL.md).
+It is available for transport integration; the current transport behavior below is unchanged by adding that library.
+
 Phone transport, pairing, conversation reads and delivery live in `hided/src/mobile/`; status projection and notification transitions belong to `herdr-core/src/agent_state/`.
 `Runtime::remote_herdr_api` lends the Herdr API connection the core already holds for a connected SSH device.
 Mobile is off until the operator turns it on in Settings > Mobile, and it is kept in `mobile.json` beside the daemon's state (the switch, the push mode, the serve entry hided added, and the VAPID key), written through a temporary file at mode 0600.

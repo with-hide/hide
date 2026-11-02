@@ -235,6 +235,11 @@ GitHub's merge queue was turned on 2026-10-05 and off again the next day: with t
 Its ruleset is kept disabled and `verify` no longer runs on a merge group.
 Runner capacity has to grow before the queue can help: on 2026-10-07 all 20 jobs were in use for 427 minutes, and between 13:00 and 19:00 KST a full `verify` run took a median 23.9 minutes, 10.7 of them waiting for a runner (read from each job's created and started times).
 
+## Relay protocol gate
+
+Changes to `hide-relay-protocol/` or its build/check scripts run `bash scripts/check-relay-protocol.sh` and `bash scripts/verify-web.sh relay-protocol typecheck` locally, in addition to the Rust and web gates their diff selects.
+The [relay contract](docs/RELAY_PROTOCOL.md) owns the native/WASM vectors, cross-decryption, limits and QR assertions; the reusable `relay-protocol` workflow proves the platform forms in CI.
+
 ## CI gates
 
 Every required check exists because something once went wrong without it.
