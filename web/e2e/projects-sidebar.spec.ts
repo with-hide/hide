@@ -7,7 +7,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { startFixture, type AgentFixture } from "./engine-fixture";
-import { closePane, openProject, openWorktree, viewPane, withControl, type OpenedProject } from "./daemon-actions";
+import { closePane, focusTab, newTab, openProject, openWorktree, viewPane, withControl, type OpenedProject } from "./daemon-actions";
 import { agentReading, elsewhereTab, finishUnseenTurn, labelAgentPane, setAgentAsking, setAgentState, spawnChild, startAgentIn, startAgentInProject } from "./fixture-agents";
 import { continueFixtureTranscript } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
@@ -685,7 +685,7 @@ test("projects without agents fold under No agents, and only a working agent bri
     daemon = await startHided(fixture, "projects-no-agents");
     const live = daemon;
     const quietPane = (await projectAt(fixture, live, quietDir, null)).pane;
-    const busyPane = (await projectAt(fixture, live, repoAt(fixture, "busy-repo"), "빌드 고치기")).pane;
+    const { pane: busyPane, project: busyProject } = await projectAt(fixture, live, repoAt(fixture, "busy-repo"), "빌드 고치기");
     await open(page, daemon);
 
     // B1: the agentless project is counted in the fold after the projects with agents, and not drawn.
@@ -731,6 +731,18 @@ test("projects without agents fold under No agents, and only a working agent bri
     await expect(weight).toHaveCSS("color", await toneOf("--foreground"));
     await expect(quiet.locator("[data-project-weight]")).toHaveAttribute("data-project-weight", "quiet");
 
+    // Exercise an agentless pane outside the five-tab attach window, as a
+    // project left in the background can be when the operator starts an agent.
+    await withControl(live, async (control) => {
+      for (let index = 0; index < 6; index += 1) {
+        const tab = await newTab(control, busyProject, `background-${index}`);
+        await focusTab(control, busyProject, tab.tab);
+      }
+      await control.until((snapshot) => {
+        const pane = (snapshot.terminal as { panes: { pane_id: string; transport_state: string }[] }).panes.find((pane) => pane.pane_id === quietPane);
+        return !pane || pane.transport_state === "released";
+      }, "the background shell outside the attach window");
+    });
     // B2: an agent started in the folded project takes it out of the fold, which goes with its last project.
     await startAgentIn(fixture, live, quietPane);
     await expect(fold).toHaveCount(0, { timeout: 20_000 });

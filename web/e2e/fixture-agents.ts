@@ -109,6 +109,7 @@ export async function finishUnseenTurn(fixture: AgentFixture, daemon: Pick<Daemo
  */
 export async function startAgentIn(fixture: EngineServer, daemon: Pick<Daemon, "origin" | "token">, pane: string, session?: string): Promise<AgentRow> {
   const row = await withControl(daemon, async (control) => {
+    await preparePaneInput(control, pane);
     sendKeys(control, pane, "claude\r");
     return control.until((rest) => agentIn(rest, pane), `an agent in ${pane}`, 30_000);
   });
