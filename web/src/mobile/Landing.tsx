@@ -7,7 +7,7 @@ export function Landing({ children, note }: { children: ReactNode; note?: ReactN
     <main className="phone-safe-top phone-safe-bottom flex min-h-full flex-col px-xl">
       <div className="pt-lg text-headline font-semibold text-foreground">hide</div>
       <div className="flex flex-1 flex-col items-center justify-center gap-lg py-xxxl text-center">{children}</div>
-      {note ? <div className="pb-lg text-center text-body leading-relaxed text-muted-foreground">{note}</div> : null}
+      {note ? <div className="break-keep pb-lg text-center text-body leading-relaxed text-muted-foreground wrap-anywhere">{note}</div> : null}
     </main>
   );
 }
