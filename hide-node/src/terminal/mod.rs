@@ -1487,10 +1487,12 @@ impl Inner {
         let refused_at_cap = entry.lifecycle.state == "unavailable"
             && entry.lifecycle.exit_category.as_deref() == Some("attach_limit");
         // An attempt made before the pane's holder was started could not
-        // reach it; the attach its holder's start asks for goes now rather
-        // than on that attempt's retry clock. A pane that never gets a
+        // reach it, whether it already failed or is still on its way to
+        // failing; the attach its holder's start asks for goes now rather
+        // than on that attempt's retry clock (a late answer of the earlier
+        // generation is dropped). A pane that never gets a
         // holder (closed, or its holder ended) stays on that clock.
-        let holder_arrived = entry.lifecycle.state == "unavailable"
+        let holder_arrived = matches!(entry.lifecycle.state, "unavailable" | "starting")
             && !entry.attempted_as_holder
             && shared.attacher.keeps_own_size(pane);
         let allowed = entry.session.is_none()
@@ -1812,9 +1814,11 @@ impl Inner {
         // A pane attached with no size takes the one its transport found;
         // a size its transport already has is not sent again, since a
         // holder resizes its PTY on every resize it is sent.
+        // A view that arrived while the session opened is the grid an
+        // attach after it would have asked for, as `start_session` reads it.
         if entry.size.is_none() {
-            entry.size = found_size;
-            entry.size_from_holder = true;
+            entry.size = entry.view.or(found_size);
+            entry.size_from_holder = entry.view.is_none();
         }
         if mode == Mode::Control
             && let Some(size) = entry.size
