@@ -2107,6 +2107,13 @@ mod tests {
     #[derive(Default)]
     struct Holders {
         refuse: AtomicBool,
+        /// One pane whose holder does not start, every other one starting.
+        refuse_pane: Mutex<Option<String>>,
+        /// Starts under way now and the most that ever were at once.
+        starting: (
+            std::sync::atomic::AtomicUsize,
+            std::sync::atomic::AtomicUsize,
+        ),
         /// The next start says which pane it starts on the first and waits
         /// on the second before it answers.
         hold: Mutex<
@@ -2128,6 +2135,25 @@ mod tests {
     }
 
     impl Holders {
+        /// A start as the node answers it, once counted.
+        fn start_now(&self, start: &HolderStart) -> Result<(), HolderError> {
+            let hold = self.hold.lock().unwrap().take();
+            if let Some((began, go)) = hold {
+                began.send(start.pane.clone()).unwrap();
+                go.recv().unwrap();
+            }
+            let refused = self.refuse.load(Ordering::Acquire)
+                || self.refuse_pane.lock().unwrap().as_deref() == Some(start.pane.as_str());
+            if refused {
+                return Err(HolderError::Refused {
+                    code: "holder_start_failed".to_owned(),
+                    message: format!("pane {}: the holder program is missing", start.pane),
+                });
+            }
+            self.started.lock().unwrap().push(start.clone());
+            Ok(())
+        }
+
         fn found(recovery: HolderRecovery) -> Arc<Self> {
             let holders = Arc::new(Self::default());
             holders.hand(recovery);
@@ -2196,20 +2222,13 @@ mod tests {
 
     impl PaneHolders for Holders {
         fn start(&self, start: &HolderStart) -> Result<(), HolderError> {
-            let hold = self.hold.lock().unwrap().take();
-            if let Some((began, go)) = hold {
-                began.send(start.pane.clone()).unwrap();
-                go.recv().unwrap();
-            }
-            if self.refuse.load(Ordering::Acquire) {
-                return Err(HolderError::Refused {
-                    code: "holder_start_failed".to_owned(),
-                    message: format!("pane {}: the holder program is missing", start.pane),
-                });
-            }
-            self.started.lock().unwrap().push(start.clone());
-            Ok(())
+            let now = self.starting.0.fetch_add(1, Ordering::AcqRel) + 1;
+            self.starting.1.fetch_max(now, Ordering::AcqRel);
+            let answer = self.start_now(start);
+            self.starting.0.fetch_sub(1, Ordering::AcqRel);
+            answer
         }
+
         fn terminate(&self, pane: &str) -> Result<(), HolderError> {
             self.ended.lock().unwrap().push(pane.to_owned());
             Ok(())
@@ -2608,6 +2627,73 @@ mod tests {
             .map(|(id, _)| id)
             .collect();
         assert_eq!(panes, vec![pane]);
+    }
+
+    /// A reboot starts the saved panes again, at most [`restore::STARTS_AT_ONCE`]
+    /// at a time: one whose holder does not start keeps its place marked
+    /// with why, which the session gives as its `restore_error` (the screen's
+    /// card that its terminal could not start, with a close), and every
+    /// other pane starts all the same.
+    #[test]
+    fn a_reboot_starts_every_saved_pane_but_marks_the_one_whose_holder_failed() {
+        let root = tempfile::tempdir().unwrap();
+        let place = place(root.path());
+        let kept = root.path().join("kept");
+        for dir in [&home(&place), &kept] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let first =
+            OwnEngine::open(Holders::found(HolderRecovery::default()), place.clone()).unwrap();
+        let (workspace, _, pane) = first
+            .create_workspace(WAIT, &wire(&kept), "w", true, Env::new())
+            .unwrap();
+        let mut panes = vec![pane.clone()];
+        for _ in 0..11 {
+            let (_, tab) = first
+                .create_tab(WAIT, &workspace, &wire(&kept), "t", false, Env::new())
+                .unwrap();
+            panes.push(tab);
+        }
+        settles("the first daemon's panes started", || {
+            first.topology().panes().all(|(_, pane)| !pane.starting)
+        });
+        drop(first);
+
+        // After the reboot nothing of them runs; one pane's holder refuses.
+        let refused = panes[5].clone();
+        let holders = Arc::new(Holders::default());
+        *holders.refuse_pane.lock().unwrap() = Some(refused.clone());
+        let next =
+            OwnEngine::open(Arc::clone(&holders) as Arc<dyn PaneHolders>, place.clone()).unwrap();
+        holders.hand(HolderRecovery::default());
+        next.restored().unwrap();
+
+        let started: std::collections::BTreeSet<String> = holders
+            .started()
+            .into_iter()
+            .map(|start| start.pane)
+            .collect();
+        let others: std::collections::BTreeSet<String> =
+            panes.iter().filter(|id| **id != refused).cloned().collect();
+        assert_eq!(started, others, "every other pane started");
+        assert!(holders.starting.1.load(Ordering::Acquire) <= restore::STARTS_AT_ONCE);
+        let session = next.session(WAIT).unwrap();
+        let error = |id: &str| {
+            session
+                .panes
+                .iter()
+                .find(|projected| projected.pane_id == id)
+                .map(|projected| projected.restore_error.clone())
+        };
+        let why = error(&refused).expect("the refused pane keeps its place");
+        assert!(
+            why.as_deref()
+                .is_some_and(|why| why.contains("the holder program is missing")),
+            "{why:?}"
+        );
+        for id in &others {
+            assert_eq!(error(id), Some(None), "{id} runs");
+        }
     }
 
     fn moves(engine: &OwnEngine<'_>) -> (Vec<String>, Option<(String, bool)>) {

@@ -123,7 +123,9 @@ impl std::error::Error for DurableWriteError {
 }
 
 /// Writes `contents` to `path` whole or not at all: the bytes go to a file
-/// beside it, are flushed, and replace `path` in one step. Parent sync and
+/// beside it, are flushed to the device (`fsync`; on macOS not the
+/// `F_FULLFSYNC` that also empties the device's cache, which is
+/// [`write_file_durable`]'s barrier), and replace `path` in one step. Parent sync and
 /// temporary cleanup are best effort. A replacement error does not promise
 /// the old destination is unchanged on every system.
 /// Returns the identity of the file now at `path`.
@@ -233,7 +235,10 @@ fn write(
             if matches!(mode, WriteMode::Durable) {
                 os_faults::fail(os_faults::Point::FileSync)?;
             }
-            file.sync_all()?;
+            match mode {
+                WriteMode::Visibility => sys::flush(&file)?,
+                WriteMode::Durable => file.sync_all()?,
+            }
             let id = identity::file_id_of(&file)?;
             drop(file);
             Ok(id)
@@ -423,6 +428,22 @@ mod sys {
         Ok(())
     }
 
+    /// The flush a visible replacement pays for its file: `fsync`, which
+    /// hands the bytes to the device, and not `sync_all`, which on macOS is
+    /// `F_FULLFSYNC` and also empties the device's cache. That barrier is
+    /// [`super::write_file_durable`]'s; here it cost about 5 ms a write
+    /// against 0.2 ms (measured on this project's Mac, one writer or eight),
+    /// and a pane holder's start writes its record three times under one
+    /// lock, so a restore of 66 panes queued about a second of it.
+    pub(super) fn flush(file: &fs::File) -> io::Result<()> {
+        // SAFETY: the descriptor belongs to `file`, which outlives the call.
+        if unsafe { libc::fsync(std::os::fd::AsRawFd::as_raw_fd(file)) } == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    }
+
     pub(super) fn sync_dir(dir: &impl Handle) -> io::Result<()> {
         // A folder handle that cannot be flushed (cap-std's `O_PATH` one) is
         // reopened readable first.
@@ -592,6 +613,11 @@ mod sys {
 
     use super::{Access, Handle};
     use crate::fs::{path_of, wide};
+
+    /// `FlushFileBuffers`, the one flush Windows has.
+    pub(super) fn flush(file: &fs::File) -> io::Result<()> {
+        file.sync_all()
+    }
 
     pub(super) fn create_temporary(
         path: &Path,

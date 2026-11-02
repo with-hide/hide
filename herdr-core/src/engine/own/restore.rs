@@ -62,7 +62,7 @@ const FOLDER_WAIT: Duration = Duration::from_secs(10);
 
 /// How many holders a restore starts at once, so a large session coming
 /// back after a reboot does not start every shell together.
-const STARTS_AT_ONCE: usize = 8;
+pub(super) const STARTS_AT_ONCE: usize = 8;
 
 /// The name of the tab running holders the saved session does not place
 /// are gathered in.
