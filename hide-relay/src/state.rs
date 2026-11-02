@@ -63,6 +63,14 @@ struct Room {
     next_connection: u32,
     phones: HashMap<u32, u64>,
 }
+impl Room {
+    fn phone(&self, connection: u32) -> Result<Option<u64>, Rejection> {
+        if connection == 0 || connection > self.next_connection {
+            return Err(invalid());
+        }
+        Ok(self.phones.get(&connection).copied())
+    }
+}
 struct Usage {
     started: Duration,
     bytes: u64,
@@ -203,14 +211,14 @@ impl State {
         let (room, target) = match self.role(id)? {
             Role::Phone(room, connection) if connection == frame.connection => {
                 let device = self.rooms.get(&room).ok_or(invalid())?.device;
-                (room, device)
+                (room, Some(device))
             }
             Role::Device(room) => {
-                let peer = *self
+                let peer = self
                     .rooms
                     .get(&room)
-                    .and_then(|r| r.phones.get(&frame.connection))
-                    .ok_or(invalid())?;
+                    .ok_or(invalid())?
+                    .phone(frame.connection)?;
                 (room, peer)
             }
             _ => return Err(invalid()),
@@ -236,20 +244,29 @@ impl State {
         }
         usage.bytes += size;
         self.peer_mut(id)?.bytes += size;
-        self.send(target, Message::Binary(bytes.into()))
+        match target {
+            Some(target) => self.send(target, Message::Binary(bytes.into())),
+            // A response may race the phone's departure. IDs are never reused,
+            // so a retired peer is distinct from a foreign/future peer.
+            None => self.control(
+                id,
+                ServerMessage::PeerLeft {
+                    connection: frame.connection,
+                },
+            ),
+        }
     }
 
     pub fn close_phone(&mut self, id: u64, connection: u32) -> Result<Vec<Event>, Rejection> {
         let target = match self.role(id)? {
-            Role::Device(room) => *self
-                .rooms
-                .get(&room)
-                .and_then(|r| r.phones.get(&connection))
-                .ok_or(invalid())?,
-            Role::Phone(_, own) if own == connection => id,
+            Role::Device(room) => self.rooms.get(&room).ok_or(invalid())?.phone(connection)?,
+            Role::Phone(_, own) if own == connection => Some(id),
             _ => return Err(invalid()),
         };
-        Ok(self.remove(target, End::PeerClosed))
+        Ok(match target {
+            Some(target) => self.remove(target, End::PeerClosed),
+            None => Vec::new(), // Closing an already retired peer is complete.
+        })
     }
 
     pub fn role(&self, id: u64) -> Result<Role, Rejection> {

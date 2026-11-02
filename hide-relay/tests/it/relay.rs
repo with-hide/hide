@@ -60,6 +60,20 @@ async fn pairs_multiple_phones_and_forwards_opaque_messages_in_both_directions()
         ServerMessage::PeerLeft { connection }
     );
     closed(&mut phone, 1000).await;
+    // A response already being prepared must not tear down the device and its
+    // other phones when the destination departs first.
+    let late = device_noise
+        .send_message(b"late response")
+        .unwrap()
+        .remove(0);
+    device.send(Message::Binary(late.into())).await.unwrap();
+    assert_eq!(
+        control(&mut device).await,
+        ServerMessage::PeerLeft { connection }
+    );
+    send(&mut device, ClientMessage::Close { connection }).await;
+    device.send(Message::Ping(vec![1].into())).await.unwrap();
+    assert_eq!(next(&mut device).await, Message::Pong(vec![1].into()));
     let mut replacement = fixture.socket("192.0.2.2").await;
     assert!(join(&mut replacement, &hello.room, &mut device).await > other_id);
     exchange(

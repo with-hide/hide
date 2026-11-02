@@ -331,6 +331,9 @@ async fn session(mut socket: Socket, mut admission: Admission) {
             }
         }
     };
+    // An owner-initiated close can race an input already selected for reading.
+    // Its published reason remains authoritative after membership is removed.
+    let end = (*admission.end.borrow_and_update()).unwrap_or(end);
     if let End::Refused(error) = end {
         shared.rejected(Some(id), error);
     }

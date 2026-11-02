@@ -65,6 +65,8 @@ Health requests do not use WebSocket admission or IP-rate budget.
 A refusal closes its sending socket, leaving unrelated sockets intact; closing the room's owning device necessarily disconnects that room's phones too.
 If a recipient's output queue is full, the sender is refused rather than retaining more ciphertext; if a device cannot receive `peer_left`, it is disconnected so it cannot keep a ghost peer.
 No frame is silently dropped while its sending connection remains successful.
+A device response racing an already closed phone is charged to the room budget and answered with `peer_left`, without closing the device or delivering to a replacement phone.
+Closing that retired peer again is idempotent; zero and never-issued connection IDs remain routing violations.
 
 These caps bound the service's memory and initial free-service budget, not a measured production throughput promise.
 Four maximum-size queued frames across 512 sockets occupy at most 128 MiB of payload; receive/write buffers and task metadata add to that budget.
