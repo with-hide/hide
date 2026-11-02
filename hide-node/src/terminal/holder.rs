@@ -31,9 +31,9 @@ use std::time::{Duration, Instant};
 
 use hide_holder_protocol::record::{EndReason, PaneRecord};
 use hide_holder_protocol::{
-    Answer, Ask, Capability, ClientMessage, CloseReason, Closed, HolderMessage, MAX_INPUT,
-    Modifiers, OLDEST_HOLDER_VERSION, OpenError, PROTOCOL_VERSION, Scroll, Size, read_holder,
-    write_client,
+    Answer, Ask, Capability, ClientMessage, CloseReason, Closed, HolderMessage, Key, MAX_INPUT,
+    MAX_KEYS, MAX_PASTE, Modifiers, OLDEST_HOLDER_VERSION, OpenError, PROTOCOL_VERSION, Scroll,
+    Size, read_holder, write_client,
 };
 use hide_kit::holders::{FOLDERS_CAP, Pruned, Source};
 use hide_kit::panes::{
@@ -57,6 +57,7 @@ use super::session::{
 mod watch;
 
 use watch::Watches;
+pub(super) use watch::too_old;
 
 /// The development switch that lets a node run pane holders.
 ///
@@ -234,10 +235,11 @@ fn open_watched(
 ) -> Result<Transport, OpenFailure> {
     let (stream, welcome) = hide_holder_protocol::open(
         socket,
-        vec![Capability::Screen, Capability::Notices],
+        vec![Capability::Screen, Capability::Notices, Capability::Keys],
         Instant::now() + OPEN_LIMIT,
     )
     .map_err(open_failure)?;
+    let reads_keys = welcome.sends.contains(&Capability::Keys);
     let found = GridSize {
         rows: welcome.size.rows,
         cols: welcome.size.cols,
@@ -260,6 +262,7 @@ fn open_watched(
             ends,
         }),
         writer: Some(Box::new(writer)),
+        reads_keys,
         kept: None,
         // After the release has been written (or a second passed), a
         // reader still waiting on a holder that never answered it is let go.
@@ -425,6 +428,22 @@ impl SessionWriter for HolderWriter {
     fn input(&mut self, bytes: &[u8]) -> std::io::Result<()> {
         for chunk in bytes.chunks(MAX_INPUT) {
             write_client(&mut self.stream, &ClientMessage::Input(chunk.to_vec()))?;
+        }
+        Ok(())
+    }
+
+    /// A paste past one message's bound goes as several, each wrapped for
+    /// the program's paste mode on its own.
+    fn paste(&mut self, text: &[u8]) -> std::io::Result<()> {
+        for chunk in text.chunks(MAX_PASTE) {
+            write_client(&mut self.stream, &ClientMessage::Paste(chunk.to_vec()))?;
+        }
+        Ok(())
+    }
+
+    fn keys(&mut self, keys: &[Key]) -> std::io::Result<()> {
+        for chunk in keys.chunks(MAX_KEYS) {
+            write_client(&mut self.stream, &ClientMessage::Key(chunk.to_vec()))?;
         }
         Ok(())
     }
@@ -718,6 +737,14 @@ impl Holders {
     /// [`Holders::read`] asks.
     pub fn processes(&self, pane: &str) -> Result<Answer, OpenError> {
         self.ask(pane, Ask::Processes)
+    }
+
+    /// The pane's record, read under no lock: a reader sees one whole
+    /// record, as each change replaces it atomically.
+    pub fn record(&self, pane: &str) -> Result<Option<PaneRecord>, String> {
+        self.panes
+            .record(&holder_pane(pane))
+            .map_err(|why| why.to_string())
     }
 
     /// Asks in the version the pane's record says its holder speaks, so a

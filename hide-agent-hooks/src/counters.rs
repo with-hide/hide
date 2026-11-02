@@ -2,7 +2,7 @@
 //!
 //! A hook script is stateless: it is started fresh for every event and knows
 //! only its environment. The count therefore lives here, keyed by
-//! `$HERDR_PANE_ID`, one record per session the pane's hooks heard from, and
+//! the pane the environment names ([`crate::pane::from_env`]), one record per session the pane's hooks heard from, and
 //! is reported to the core after the events that change it
 //! ([`crate::report`]; PRD D-53, PRD engine-bundle-1 D-7).
 //!

@@ -1126,6 +1126,7 @@ dependencies = [
  "hide-agent-hooks",
  "hide-ai",
  "hide-herdr-client",
+ "hide-holder-protocol",
  "hide-kit",
  "hide-platform",
  "hide-project",

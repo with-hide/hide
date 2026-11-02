@@ -34,7 +34,11 @@ pub const HOME: &str = host::HOME_VARIABLE;
 pub const HIDE_OPEN_COMMAND: &str = "HIDE_OPEN_COMMAND";
 pub const HIDE_HOST_HELPER_ROOT: &str = "HIDE_HOST_HELPER_ROOT";
 pub const HIDE_HOST_CLI_DIR: &str = "HIDE_HOST_CLI_DIR";
-pub const HERDR_PANE_ID: &str = "HERDR_PANE_ID";
+/// The pane a process runs in: a pane on the core's own engine names itself
+/// `HIDE_PANE_ID`, a Herdr pane `HERDR_PANE_ID`, read in that order
+/// (`hide_agent_hooks::pane`).
+pub const HIDE_PANE_ID: &str = hide_agent_hooks::pane::HIDE_PANE_ID;
+pub const HERDR_PANE_ID: &str = hide_agent_hooks::pane::HERDR_PANE_ID;
 pub const HIDE_CAP_REF: &str = "HIDE_CAP_REF";
 pub const HIDE_TAILSCALE_BIN: &str = "HIDE_TAILSCALE_BIN";
 pub const HIDE_MACHINE_ID: &str = host::MACHINE_ID_VARIABLE;
@@ -167,6 +171,12 @@ pub const REGISTRY: &[EnvKey] = &[
         required: false,
         format: "absolute path, or a path under the device's home spelled `~/...`, with no `.` or `..` segment",
         absent_behavior: "Each consented device links `hide` in ~/.local/bin to the command installed beside its helper, when that name is free or already Hide's link; a different value is a different consent scope, so every device asks again (isolated verification sets it to a temporary folder so no test writes the account's own ~/.local/bin)",
+    },
+    EnvKey {
+        key: HIDE_PANE_ID,
+        required: false,
+        format: "the pane id; the core's own engine sets it in every pane it runs (development switch HIDE_DEV_PANE_HOLDER)",
+        absent_behavior: "HERDR_PANE_ID names the pane instead; with neither, pane-scoped Workspace commands refuse because the caller cannot identify a pane",
     },
     EnvKey {
         key: HERDR_PANE_ID,
@@ -571,16 +581,18 @@ fn resolve(mut read: impl FnMut(&str) -> Option<String>) -> (Env, Vec<EnvError>)
         }
         other => other,
     };
-    let pane_id = match read(HERDR_PANE_ID) {
-        Some(value) if value.is_empty() => {
-            errors.push(EnvError {
-                key: HERDR_PANE_ID,
-                kind: "empty",
-            });
-            None
+    // A pane names itself by one variable, `HIDE_PANE_ID` first; a name set
+    // empty is an error of its own key, never read as the other's.
+    let mut pane_id = None;
+    for key in [HIDE_PANE_ID, HERDR_PANE_ID] {
+        match read(key) {
+            Some(value) if value.is_empty() => errors.push(EnvError { key, kind: "empty" }),
+            Some(value) => {
+                pane_id.get_or_insert(value);
+            }
+            None => {}
         }
-        other => other,
-    };
+    }
     let tailscale_bin = match read(HIDE_TAILSCALE_BIN) {
         Some(value)
             if !Path::new(&value).is_absolute() || value.bytes().any(|b| b.is_ascii_control()) =>
@@ -786,6 +798,7 @@ mod tests {
         (HIDE_VITE_ORIGIN, "http://example.com:1"),
         (HERDR_SOCKET_PATH, ""),
         (HERDR_PANE_ID, ""),
+        (HIDE_PANE_ID, ""),
         (HIDE_HOST_HELPER_ROOT, "relative"),
         (HIDE_TAILSCALE_BIN, "relative"),
         (HIDE_DEV_PANE_HOLDER, "yes"),

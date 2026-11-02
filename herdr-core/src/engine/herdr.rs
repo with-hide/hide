@@ -910,6 +910,7 @@ impl Engine for HerdrEngine<'_> {
             pane_id: current,
             terminal_id,
             shell_pid,
+            shell_started: None,
         })
     }
 

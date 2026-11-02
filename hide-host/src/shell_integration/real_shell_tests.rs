@@ -339,3 +339,40 @@ fn outside_herdr_each_shell_says_its_folder_on_its_screen() {
         assert!(!screen.contains("\u{1b}]7;"), "{variable}: {screen:?}");
     }
 }
+
+/// Bash 5.1 runs each element of a `PROMPT_COMMAND` array: the user's own
+/// elements all still run, in their order, and the folder is said after
+/// all of them, not inside the first.
+#[test]
+#[ignore = "needs bash 5.1 or later: set HIDE_TEST_BASH_BIN and run with --ignored"]
+fn outside_herdr_bash_keeps_every_prompt_command_the_user_set() {
+    let home = tempfile::tempdir().unwrap();
+    let home = home.path().canonicalize().unwrap();
+    let rc = "user_one() { echo one >> \"$HOME/log\"; }\nuser_two() { echo two >> \"$HOME/log\"; echo user-two-ran; }\nPROMPT_COMMAND=(user_one user_two)\n";
+    for name in [".bashrc", ".bash_profile"] {
+        std::fs::write(home.join(name), rc).unwrap();
+    }
+    let bin = shell("HIDE_TEST_BASH_BIN");
+    let launch = install(&home.join("hide"), &user(&bin, None))
+        .unwrap()
+        .unwrap();
+    let mut args: Vec<&str> = launch.command[1..].iter().map(String::as_str).collect();
+    args.push("-i");
+    let ((log, _), screen) = run_in(
+        Pane::Own,
+        &bin,
+        &args,
+        &home,
+        &launch.env,
+        "echo after >> \"$HOME/log\"\nexit\n",
+    );
+    assert!(log.starts_with("one\ntwo\nafter\none\ntwo\n"), "{log:?}");
+    let said = screen
+        .find(&format!("\u{1b}]7;file://{}\u{7}", home.display()))
+        .unwrap_or_else(|| panic!("the folder was not said: {screen:?}"));
+    let two = screen.find("user-two-ran").expect("user_two ran");
+    assert!(
+        two < said,
+        "the folder was said before user_two: {screen:?}"
+    );
+}

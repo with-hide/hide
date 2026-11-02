@@ -10,12 +10,12 @@ Licensed under the Apache License, Version 2.0.
 Hide changed it: each file says what changed, and hide-vt/PATCHES.md lists
 every change.
 
-hide-holder/src/encode.rs and hide-holder/src/osc.rs, and parts of
-hide-holder/src/screen.rs, hide-holder/src/pane.rs and
-hide-holder/src/foreground.rs, are derived from Herdr's
-src/protocol/render_ansi.rs, src/pane/osc.rs, src/pane/terminal.rs and
-src/detect/mod.rs (https://github.com/herdrdev/herdr, release v0.9.5,
-commit 2ecf19a).
+hide-holder/src/encode.rs, hide-holder/src/osc.rs and
+hide-holder/src/pane_env.rs, and parts of hide-holder/src/screen.rs,
+hide-holder/src/pane.rs and hide-holder/src/foreground.rs, are derived from
+Herdr's src/protocol/render_ansi.rs, src/pane/osc.rs, src/pane.rs,
+src/pane/terminal.rs, src/pane/input.rs and src/detect/mod.rs
+(https://github.com/herdrdev/herdr, release v0.9.5, commit 2ecf19a).
 Copyright 2025 herdr contributors.
 Licensed under the Apache License, Version 2.0.
 Hide changed them: each file says what it took and what changed.

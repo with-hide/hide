@@ -14,16 +14,16 @@ use std::sync::Arc;
 
 use hide_host::shell_integration::{ShellLaunch, ShellReadiness, UserShell};
 
-use hide_holder_protocol::{Answer, Appearance, CloseReason, Foreground, OpenError, Size, Theme};
-use hide_kit::panes::{CloseError, StartRefusal, StartRequest, Started};
-use hide_node_link::holders::{
-    HolderError, HolderForeground, HolderProcesses, HolderRecovery, HolderStart, PaneEnded,
-    PaneFactsSink, PaneHolders, ScreenRules, StyledRead, UNSUPPORTED_HOLDER,
-};
-use hide_node_link::terminal::{KeyTarget, TerminalNode};
-
 use super::Service;
 use super::holder::Holders;
+use super::input::Typed;
+use hide_holder_protocol::record::Phase;
+use hide_holder_protocol::{Answer, Appearance, Foreground, OpenError, Size, Theme};
+use hide_kit::panes::{CloseError, StartRefusal, StartRequest, Started};
+use hide_node_link::holders::{
+    HolderError, HolderForeground, HolderProcesses, HolderProof, HolderRecovery, HolderStart,
+    PaneEnded, PaneFactsSink, PaneHolders, PaneInput, ScreenRules, StyledRead, UNSUPPORTED_HOLDER,
+};
 
 /// This machine's holders and the service that shows their screens.
 pub struct LocalPanes {
@@ -126,7 +126,10 @@ impl PaneHolders for LocalPanes {
             pane: start.pane.clone(),
             program,
             cwd,
-            // The shell's own variables, then the caller's.
+            // The shell's own variables, then the caller's, then the pane's
+            // own name for itself, which no caller's variable replaces (PRD
+            // engine-bundle-3-core-owns D-9): the holder removes every
+            // Herdr variable, so a process in the pane names this pane alone.
             env: env
                 .into_iter()
                 .chain(
@@ -135,6 +138,10 @@ impl PaneHolders for LocalPanes {
                         .iter()
                         .map(|(name, value)| (OsString::from(name), OsString::from(value))),
                 )
+                .chain([(
+                    OsString::from(hide_node_link::holders::PANE_ID_VARIABLE),
+                    OsString::from(&start.pane),
+                )])
                 .collect(),
             size,
             // The screen's colors reach a holder by a theme message once a
@@ -199,18 +206,15 @@ impl PaneHolders for LocalPanes {
             Ok(Answer::Processes { .. }) => Err(HolderError::Unreachable(format!(
                 "pane {pane}'s holder answered a styled read with its processes"
             ))),
-            // A holder built before styled reads reads the ask as a first
-            // message it does not know.
-            Err(OpenError::Refused(closed)) if closed.reason == CloseReason::HelloInvalid => {
-                Err(HolderError::Refused {
+            Err(error) => Err(match super::holder::too_old(&error) {
+                Some(version) => HolderError::Refused {
                     code: UNSUPPORTED_HOLDER,
                     message: format!(
-                        "pane {pane}'s holder was built before styled reads: {}",
-                        closed.detail
+                        "pane {pane}'s holder (protocol {version}) was built before styled reads"
                     ),
-                })
-            }
-            Err(error) => Err(ask_error(error)),
+                },
+                None => ask_error(error),
+            }),
         }
     }
 
@@ -235,9 +239,39 @@ impl PaneHolders for LocalPanes {
         }
     }
 
-    fn input(&self, pane: &str, bytes: Vec<u8>) -> Result<(), HolderError> {
+    fn proof(&self, pane: &str) -> Result<HolderProof, HolderError> {
+        let record = self
+            .holders
+            .record(pane)
+            .map_err(|why| HolderError::Unreachable(format!("pane {pane}'s record: {why}")))?
+            .ok_or_else(|| HolderError::NoPane(format!("pane {pane} has no record")))?;
+        match (record.phase, record.program, record.end) {
+            (Phase::Running, Some(program), None) => Ok(HolderProof {
+                incarnation: record.incarnation,
+                program: program.pid,
+                started: program.started,
+            }),
+            (phase, _, _) => Err(HolderError::Refused {
+                code: "pane_not_running",
+                message: format!("pane {pane}'s record is {phase:?}, not running"),
+            }),
+        }
+    }
+
+    fn input(&self, pane: &str, input: PaneInput) -> Result<(), HolderError> {
+        self.service.type_input(pane, typed(input));
+        Ok(())
+    }
+
+    fn letter(
+        &self,
+        pane: &str,
+        body: PaneInput,
+        submit: PaneInput,
+        gap: std::time::Duration,
+    ) -> Result<(), HolderError> {
         self.service
-            .key(KeyTarget::Pane(pane.to_owned()), bytes, super::unix_ms());
+            .type_letter(pane, typed(body), typed(submit), gap);
         Ok(())
     }
 
@@ -304,6 +338,15 @@ fn shell_after_notice(shell: &[OsString], notice: &str) -> Vec<OsString> {
     ];
     program.extend(shell.iter().cloned());
     program
+}
+
+/// The engine's input in the service's words.
+fn typed(input: PaneInput) -> Typed {
+    match input {
+        PaneInput::Bytes(bytes) => Typed::Bytes(bytes),
+        PaneInput::Paste(text) => Typed::Paste(text),
+        PaneInput::Keys(keys) => Typed::Keys(keys),
+    }
 }
 
 fn start_refusal(refusal: StartRefusal) -> HolderError {

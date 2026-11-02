@@ -940,12 +940,7 @@ pub fn attest_local(
     core: &CoreHandle,
 ) -> Result<Attestation, &'static str> {
     let mut attestation = inspect_pane(pane_id, engine, core)?;
-    let Binding::Pane { shell_pid, .. } = &attestation.binding else {
-        return Err("pane_unavailable");
-    };
-    if !descends_from(peer, *shell_pid) {
-        return Err("caller_not_in_pane");
-    }
+    caller_in_pane(peer, &attestation.binding)?;
     // Preserve only the caller reference just proved, so inherited CLI
     // hints can be normalized after validation resolves its current route.
     attestation.pane_id = pane_id.to_owned();
@@ -961,19 +956,49 @@ fn inspect_pane(
     core: &CoreHandle,
 ) -> Result<Attestation, &'static str> {
     let proof = engine.pane_identity(pane_id, Instant::now() + PANE_PROOF_TIMEOUT)?;
-    let shell_started = process_start(proof.shell_pid).ok_or("pane_unavailable")?;
+    let binding = proved_shell(&proof)?;
     let context = core
         .workspace_query(core.node().as_str(), &proof.pane_id, Query::Info)
         .map_err(|_| "pane_not_connected")?;
     Ok(Attestation {
         pane_id: proof.pane_id,
         context: context.context,
-        binding: Binding::Pane {
-            terminal_id: proof.terminal_id,
-            shell_pid: proof.shell_pid,
-            shell_started,
-        },
+        binding,
     })
+}
+
+/// The pane's shell as the system knows it now, bound by its start time. The
+/// core's own engine names when the shell started, from the pane's record
+/// (PRD engine-bundle-3-core-owns D-9): a pid the system has given another
+/// process since is not that pane's shell, and is refused `pane_changed`.
+fn proved_shell(proof: &herdr_core::engine::PaneProof) -> Result<Binding, &'static str> {
+    let shell_started = process_start(proof.shell_pid).ok_or("pane_unavailable")?;
+    if proof
+        .shell_started
+        .is_some_and(|recorded| recorded != shell_started)
+    {
+        return Err("pane_changed");
+    }
+    Ok(Binding::Pane {
+        terminal_id: proof.terminal_id.clone(),
+        shell_pid: proof.shell_pid,
+        shell_started,
+    })
+}
+
+/// Whether the process `peer` runs in the pane `binding` proves: it is the
+/// pane's shell or descends from it, however deep (an agent the shell runs,
+/// and a `hide` command that agent runs), the way a Herdr pane's caller is
+/// found.
+fn caller_in_pane(peer: i32, binding: &Binding) -> Result<(), &'static str> {
+    let Binding::Pane { shell_pid, .. } = binding else {
+        return Err("pane_unavailable");
+    };
+    if descends_from(peer, *shell_pid) {
+        Ok(())
+    } else {
+        Err("caller_not_in_pane")
+    }
 }
 
 pub use hide_node::pane_proof::{
@@ -1263,6 +1288,88 @@ mod tests {
                 shell_started: 9,
             },
         }
+    }
+
+    /// A pane's shell running an agent that runs `hide`: the shell's pid and
+    /// the `hide` stand-in's, ended when dropped.
+    #[cfg(unix)]
+    struct PaneTree {
+        shell: std::process::Child,
+        command: i32,
+    }
+
+    #[cfg(unix)]
+    impl PaneTree {
+        fn start() -> Self {
+            use std::io::BufRead;
+            // The shell (outer `sh`) runs an agent (inner `sh`) in its
+            // foreground, which runs a command (`sleep`) and says its pid.
+            let mut shell = std::process::Command::new("/bin/sh")
+                .arg("-c")
+                .arg("/bin/sh -c 'sleep 30 & echo $!; wait'; :")
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("a shell starts");
+            let mut line = String::new();
+            std::io::BufReader::new(shell.stdout.take().unwrap())
+                .read_line(&mut line)
+                .unwrap();
+            Self {
+                command: line.trim().parse().expect("the command's pid"),
+                shell,
+            }
+        }
+
+        fn shell(&self) -> i32 {
+            i32::try_from(self.shell.id()).unwrap()
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for PaneTree {
+        fn drop(&mut self) {
+            let _ = std::process::Command::new("kill")
+                .arg(self.command.to_string())
+                .status();
+            let _ = self.shell.kill();
+            let _ = self.shell.wait();
+        }
+    }
+
+    /// PRD engine-bundle-3-core-owns B28, B29: a process anywhere under the
+    /// pane's shell is that pane's caller, as under a Herdr pane; a process
+    /// outside it that names the pane is refused, and a shell pid the record
+    /// gives another start time than the system's is a reused pid, refused.
+    #[cfg(unix)]
+    #[test]
+    fn a_pane_s_caller_is_any_descendant_of_its_recorded_shell_and_nothing_else() {
+        let tree = PaneTree::start();
+        let proof = |shell_started| herdr_core::engine::PaneProof {
+            pane_id: "w1:p1".to_owned(),
+            terminal_id: "w1:p1".to_owned(),
+            shell_pid: tree.shell(),
+            shell_started,
+        };
+        let recorded = process_start(tree.shell()).expect("the shell runs");
+
+        let binding = proved_shell(&proof(Some(recorded))).expect("the recorded shell is proved");
+        assert_eq!(caller_in_pane(tree.command, &binding), Ok(()));
+        assert_eq!(caller_in_pane(tree.shell(), &binding), Ok(()));
+        let outside = i32::try_from(std::process::id()).unwrap();
+        assert_eq!(
+            caller_in_pane(outside, &binding),
+            Err("caller_not_in_pane"),
+            "the shell's parent names the pane but does not run in it"
+        );
+
+        assert_eq!(
+            proved_shell(&proof(Some(recorded + 1))),
+            Err("pane_changed"),
+            "a pid whose start the record does not name is another process"
+        );
+        // Herdr names only the pid; the system's start time binds it.
+        assert!(proved_shell(&proof(None)).is_ok());
     }
 
     fn device_grant(node: &str, link: &RemoteHost) -> RemoteGrant {

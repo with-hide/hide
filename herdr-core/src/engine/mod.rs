@@ -185,6 +185,15 @@ pub(crate) trait Engine: Send + Sync {
     /// recognizes and reads them by. Herdr knows its own agents and ignores
     /// it.
     fn set_agent_definitions(&self, _catalog: Arc<hide_agent_adapter::definition::Catalog>) {}
+    /// The session the hook of the `kind` agent in `pane` reported, proved
+    /// to come from that pane (PRD engine-bundle-3-core-owns D-9, D-16): an
+    /// engine that starts and resumes agents itself keeps it as the pane's
+    /// agent's session, saved with the pane, so a reboot resumes that
+    /// conversation. Herdr learns a pane's session from its own integration
+    /// and ignores it.
+    fn hook_session(&self, _pane: &str, _kind: &str, _session: &str) -> Answer<()> {
+        Ok(())
+    }
 
     // The session as a whole.
 
@@ -454,6 +463,18 @@ pub(crate) trait Engine: Send + Sync {
     /// Whose pane an inherited caller reference names now, and that pane's
     /// shell and terminal: the proof a pane's process asks a credential on.
     fn pane_identity(&self, wait: Wait, pane: &str) -> Answer<PaneProof>;
+    /// The pane's terminal and shell as this engine itself proves them, what
+    /// a start checks it types into the pane it chose (PRD
+    /// engine-bundle-3-core-owns D-9): the core's own engine reads the
+    /// pane's record. Herdr answers `None` and leaves it to the node that
+    /// holds its socket (`Call::PaneInspect`), as before.
+    fn inspect_pane(
+        &self,
+        _wait: Wait,
+        _pane: &str,
+    ) -> Option<Answer<hide_node_link::panes::PaneIdentity>> {
+        None
+    }
 
     // Agents.
 
@@ -517,9 +538,33 @@ pub(crate) trait Engine: Send + Sync {
 pub(crate) struct Gate<'a> {
     pub(crate) before: Arc<GateCheck<'a>>,
     pub(crate) at_send: Arc<GateCheck<'a>>,
+    /// Told the id of a pane a call makes before anything runs in it, on
+    /// an engine that names a pane before it starts one ([`Placement`]).
+    pub(crate) placement: Option<Arc<dyn Placement + 'a>>,
 }
 
 type GateCheck<'a> = dyn Fn() -> Result<(), EngineError> + Send + Sync + 'a;
+
+/// What a caller records against a pane a gated call makes, before the pane
+/// runs anything (PRD engine-bundle-3-core-owns D-11): a spawn's record names
+/// its pane before the pane's program starts, so no pane runs that its
+/// record does not name, and none is named that never ran.
+///
+/// The core's own engine names a pane when it reserves its id and calls
+/// [`Placement::place`] after it let go of its topology lock and before it
+/// starts the pane's holder, outside every lock: the topology lock reserves
+/// the id alone, `place` takes whatever lock its record needs (the runtime's,
+/// for a spawn's record) and lets it go, and only then does the holder
+/// start. A holder that does not start is [`Placement::withdraw`]n in the
+/// same call. Herdr names a pane only once it runs, so it never places one
+/// and the caller records the pane after the call, as before (D-2).
+pub(crate) trait Placement: Send + Sync {
+    /// Records `pane`; a refusal leaves the pane unmade and is the call's.
+    fn place(&self, pane: &str) -> Result<(), EngineError>;
+    /// Takes back what [`Placement::place`] recorded for `pane`, whose
+    /// program did not start.
+    fn withdraw(&self, pane: &str);
+}
 
 impl<'a> Gate<'a> {
     pub(crate) fn new(
@@ -529,6 +574,7 @@ impl<'a> Gate<'a> {
         Self {
             before: Arc::new(before),
             at_send: Arc::new(at_send),
+            placement: None,
         }
     }
 
@@ -538,6 +584,16 @@ impl<'a> Gate<'a> {
         Self {
             before: Arc::clone(&check),
             at_send: check,
+            placement: None,
+        }
+    }
+
+    /// No check, and `placement` told each pane a call makes.
+    pub(crate) fn placing(placement: impl Placement + 'a) -> Self {
+        Self {
+            before: Arc::new(|| Ok(())),
+            at_send: Arc::new(|| Ok(())),
+            placement: Some(Arc::new(placement)),
         }
     }
 }

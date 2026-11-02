@@ -12,7 +12,11 @@
 //! answers an ask, a reader and a screen writer per accepted connection, and
 //! a reader and a facts writer for the one watch that follows the pane
 //! ([`crate::watch`]). Every decision is made on the thread that runs
-//! [`Holder::run`], from one event queue.
+//! [`Holder::run`], from one event queue, except the program's input: a
+//! connection's reader encodes every message that becomes input and hands
+//! it to the PTY writer itself, in the order the connection sent it, so a
+//! key wakes one thread fewer and nothing on the run thread holds it up
+//! (PRD engine-bundle-3-core-owns D-12a).
 //!
 //! The screen is pulled, not pushed: the PTY reader only marks it changed,
 //! and the connection's writer draws the screen as it is when it can write,
@@ -114,8 +118,9 @@ const HOLD_WRITES: &str = "HIDE_HOLDER_TEST_HOLD_WRITES";
 /// How much one read of the PTY takes.
 const READ_CHUNK: usize = 64 * 1024;
 
-/// What this holder can send.
-const SENDS: [Capability; 2] = [Capability::Screen, Capability::Notices];
+/// What this holder can send, and what it reads beyond version 1's input
+/// ([`Capability::Keys`]).
+const SENDS: [Capability; 3] = [Capability::Screen, Capability::Notices, Capability::Keys];
 
 /// What this holder sends on a watch.
 const WATCH_SENDS: [Capability; 1] = [Capability::Facts];
@@ -127,9 +132,16 @@ enum Event {
         version: u16,
         sends: Vec<Capability>,
     },
+    /// What a connection asks of the run thread: all it sends but the
+    /// program's input, which its reader hands the PTY writer itself.
     Message {
         generation: u64,
-        message: ClientMessage,
+        message: Control,
+    },
+    /// A connection's input passed [`INPUT_QUEUE_CAP`] waiting bytes.
+    InputQueueFull {
+        generation: u64,
+        queued: usize,
     },
     /// A connection's stream ended or failed.
     Gone {
@@ -165,6 +177,143 @@ enum Event {
     /// Something refused while the pane runs on, for the connection that
     /// holds it.
     Notice(Notice),
+}
+
+/// What a connection sends that is not the program's input.
+enum Control {
+    Resize(hide_holder_protocol::Size),
+    Theme(hide_holder_protocol::Theme),
+    Redraw,
+    Release,
+    Terminate,
+}
+
+/// What a connection's reader needs to turn the program's input into PTY
+/// writes itself, off the run thread: every message that becomes input goes
+/// to the one PTY writer in the order the connection sent it, encoded for
+/// the pane's settings at that moment under the pane's lock (PRD
+/// engine-bundle-3-core-owns D-12a).
+#[derive(Clone)]
+struct InputPath {
+    /// The generation of the connection that holds the pane, 0 for none. A
+    /// reader holds it from its check until its input is queued, and a
+    /// takeover or a close changes it only between two of them, so input is
+    /// queued exactly when the run thread would have taken it: what a
+    /// connection sent before another took the pane over is written, what
+    /// it sent after is not.
+    holding: Arc<Mutex<u64>>,
+    pane: Arc<Mutex<Pane>>,
+    writes: Sender<PtyWrite>,
+    queued: Arc<AtomicUsize>,
+    events: Sender<Event>,
+    log: Log,
+}
+
+/// What a reader does after one input message.
+enum Taken {
+    /// Read on.
+    Next,
+    /// The connection is to be closed: its input passed the cap.
+    Full,
+}
+
+impl InputPath {
+    fn holding(&self) -> MutexGuard<'_, u64> {
+        self.holding.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn taken_over(&self, generation: u64) {
+        *self.holding() = generation;
+    }
+
+    fn let_go(&self) {
+        *self.holding() = 0;
+    }
+
+    /// Encodes `message` for the pane's settings now and hands its bytes to
+    /// the PTY writer, putting the screen back at the bottom as typing does,
+    /// when `generation` still holds the pane. The lock order is the
+    /// generation, then the pane.
+    fn take(&self, generation: u64, outbox: &Outbox, message: ClientMessage) -> Taken {
+        let holding = self.holding();
+        if *holding != generation {
+            return Taken::Next;
+        }
+        let (bytes, moved) = {
+            let mut pane = self.pane.lock().unwrap_or_else(PoisonError::into_inner);
+            let encoded = match &message {
+                ClientMessage::Input(_) => Ok(None),
+                ClientMessage::Paste(text) => pane.paste(text).map(Some),
+                ClientMessage::Mouse(mouse) => pane.mouse(mouse),
+                ClientMessage::Key(keys) => pane.keys(keys).map(Some),
+                ClientMessage::Scroll(scroll) => match pane.scroll(scroll) {
+                    Ok(Wheel::Input(bytes)) => Ok(Some(bytes)),
+                    // The screen moved, or did not: nothing for the program.
+                    Ok(Wheel::Moved) => {
+                        drop(pane);
+                        outbox.changed();
+                        return Taken::Next;
+                    }
+                    Ok(Wheel::Still) => return Taken::Next,
+                    Err(error) => Err(error),
+                },
+                _ => unreachable!("a reader hands over only the program's input"),
+            };
+            let bytes = match (encoded, message) {
+                (Ok(None), ClientMessage::Input(bytes)) => bytes,
+                (Ok(Some(bytes)), _) => bytes,
+                // The program tracks no mouse: nothing to send.
+                (Ok(None), _) => return Taken::Next,
+                (Err(error), message) => {
+                    drop(pane);
+                    self.log.event(
+                        "holder.input_unencoded",
+                        &[
+                            ("what", input_name(&message).into()),
+                            ("error", error.to_string().into()),
+                        ],
+                    );
+                    return Taken::Next;
+                }
+            };
+            let moved = pane.scroll_to_bottom();
+            (bytes, moved)
+        };
+        if moved {
+            outbox.changed();
+        }
+        let length = bytes.len();
+        // Held to the end, so the takeover waits for this input to be queued.
+        let _holding = holding;
+        let queued = self.queued.load(Ordering::SeqCst);
+        if queued + length > INPUT_QUEUE_CAP {
+            let _ = self
+                .events
+                .send(Event::InputQueueFull { generation, queued });
+            return Taken::Full;
+        }
+        self.queued.fetch_add(length, Ordering::SeqCst);
+        if self
+            .writes
+            .send(PtyWrite::Input { generation, bytes })
+            .is_err()
+        {
+            // The writer's thread is gone, which only a panic does, and a
+            // panic ends the holder.
+            self.queued.fetch_sub(length, Ordering::SeqCst);
+        }
+        Taken::Next
+    }
+}
+
+fn input_name(message: &ClientMessage) -> &'static str {
+    match message {
+        ClientMessage::Paste(_) => "paste",
+        ClientMessage::Mouse(_) => "mouse",
+        ClientMessage::Scroll(_) => "scroll",
+        ClientMessage::Key(_) => "key",
+        _ => "input",
+    }
 }
 
 /// What a connection's writer has to do: messages to send first, then the
@@ -284,8 +433,7 @@ pub struct Holder {
     outbox: Arc<Mutex<Option<Arc<Outbox>>>>,
     /// One more for each full fragment, across connections.
     epochs: Arc<AtomicU64>,
-    writes: Sender<PtyWrite>,
-    input_queued: Arc<AtomicUsize>,
+    input: InputPath,
     answers: Answers,
     current: Option<Connection>,
     generation: u64,
@@ -330,12 +478,9 @@ impl Holder {
             .map_err(|error| format!("the PTY could not be opened: {error}"))?;
         let mut command = CommandBuilder::from_argv(config.program.clone());
         command.cwd(&config.cwd);
-        // The terminal the program writes to is the holder's, an xterm with
-        // 256 colors and true color, which it says as a Herdr pane does,
-        // whatever the environment it was started from held (an app opened
-        // from the Dock has no TERM).
-        command.env("TERM", "xterm-256color");
-        command.env("COLORTERM", "truecolor");
+        // The terminal the program writes to is the holder's, and nothing
+        // else's: no Herdr pane, outer terminal or parent agent (D-9).
+        crate::pane_env::apply(&mut command);
         command.env_remove(hide_platform::process::LENT_KEY);
         let panic_on_input = cfg!(debug_assertions) && std::env::var_os(PANIC_ON_INPUT).is_some();
         command.env_remove(PANIC_ON_INPUT);
@@ -411,15 +556,23 @@ impl Holder {
             let answers = answers.clone();
             move || read_pty(reader, &pane, &marks, &answers, &sender)
         });
+        let input = InputPath {
+            holding: Arc::new(Mutex::new(0)),
+            pane: pane.clone(),
+            writes,
+            queued: input_queued,
+            events: sender.clone(),
+            log: log.clone(),
+        };
         spawn_named("pty-writer", {
-            let input_queued = input_queued.clone();
+            let input = input.clone();
             let answers_queued = answers.queued.clone();
             let sender = sender.clone();
             move || {
                 write_pty(
                     writer,
                     &writes_rx,
-                    &input_queued,
+                    &input,
                     &answers_queued,
                     &sender,
                     panic_on_input,
@@ -478,8 +631,7 @@ impl Holder {
             sender,
             outbox,
             epochs: Arc::new(AtomicU64::new(0)),
-            writes,
-            input_queued,
+            input,
             answers,
             current: None,
             generation: 0,
@@ -520,23 +672,29 @@ impl Holder {
                         continue;
                     }
                     match message {
-                        ClientMessage::Input(bytes) => self.input(bytes),
-                        ClientMessage::Paste(text) => self.paste(&text),
-                        ClientMessage::Mouse(mouse) => self.mouse(&mouse),
-                        ClientMessage::Scroll(scroll) => self.scroll(&scroll),
-                        ClientMessage::Resize(size) => self.resize(size),
-                        ClientMessage::Theme(theme) => self.theme(&theme),
-                        ClientMessage::Redraw => {
+                        Control::Resize(size) => self.resize(size),
+                        Control::Theme(theme) => self.theme(&theme),
+                        Control::Redraw => {
                             if let Some(connection) = &self.current {
                                 connection.outbox.redraw();
                             }
                         }
-                        ClientMessage::Release => {
+                        Control::Release => {
                             self.close_current(Closed::new(CloseReason::Released, "released"));
                         }
-                        ClientMessage::Terminate => {
+                        Control::Terminate => {
                             return self.finish(CloseReason::Terminated, None, "asked to end");
                         }
+                    }
+                }
+                Event::InputQueueFull { generation, queued } => {
+                    if self.current_generation() == Some(generation) {
+                        self.log
+                            .event("holder.input_queue_full", &[("queued", queued.into())]);
+                        self.close_current(Closed::new(
+                            CloseReason::InputQueueFull,
+                            format!("more than {INPUT_QUEUE_CAP} input bytes waited"),
+                        ));
                     }
                 }
                 Event::Gone { generation, error } => {
@@ -634,6 +792,9 @@ impl Holder {
     fn take_over(&mut self, stream: LocalStream, version: u16, sends: Vec<Capability>) {
         self.generation += 1;
         let generation = self.generation;
+        // Before anything of the new connection is read: what the one it
+        // replaces sends from here on is dropped.
+        self.input.taken_over(generation);
         if let Some(previous) = self.current.take() {
             self.publish(None);
             self.log.event(
@@ -689,7 +850,9 @@ impl Holder {
         });
         spawn_named("connection-reader", {
             let sender = self.sender.clone();
-            move || read_connection(stream, generation, &sender)
+            let input = self.input.clone();
+            let outbox = outbox.clone();
+            move || read_connection(stream, generation, &sender, &input, &outbox)
         });
         self.current = Some(Connection {
             generation,
@@ -825,6 +988,7 @@ impl Holder {
 
     fn close_current(&mut self, closed: Closed) {
         if let Some(connection) = self.current.take() {
+            self.input.let_go();
             self.publish(None);
             self.log.event(
                 "holder.connection_closed",
@@ -846,76 +1010,6 @@ impl Holder {
         if let Some(connection) = &self.current {
             connection.outbox.changed();
         }
-    }
-
-    /// Bytes for the program from the connection that holds the pane, which
-    /// put the screen back at the bottom as typing does.
-    fn input(&mut self, bytes: Vec<u8>) {
-        let Some(generation) = self.current_generation() else {
-            return;
-        };
-        if self.pane().scroll_to_bottom() {
-            self.screen_changed();
-        }
-        let length = bytes.len();
-        if self.input_queued.load(Ordering::SeqCst) + length > INPUT_QUEUE_CAP {
-            self.log.event(
-                "holder.input_queue_full",
-                &[("queued", self.input_queued.load(Ordering::SeqCst).into())],
-            );
-            self.close_current(Closed::new(
-                CloseReason::InputQueueFull,
-                format!("more than {INPUT_QUEUE_CAP} input bytes waited"),
-            ));
-            return;
-        }
-        self.input_queued.fetch_add(length, Ordering::SeqCst);
-        if self
-            .writes
-            .send(PtyWrite::Input { generation, bytes })
-            .is_err()
-        {
-            // The writer's thread is gone, which only a panic does, and a
-            // panic ends the holder.
-            self.input_queued.fetch_sub(length, Ordering::SeqCst);
-        }
-    }
-
-    fn paste(&mut self, text: &[u8]) {
-        let encoded = self.pane().paste(text);
-        match encoded {
-            Ok(bytes) => self.input(bytes),
-            Err(error) => self.meaning_failed("paste", &error),
-        }
-    }
-
-    fn mouse(&mut self, mouse: &hide_holder_protocol::Mouse) {
-        let encoded = self.pane().mouse(mouse);
-        match encoded {
-            Ok(Some(bytes)) => self.input(bytes),
-            // The program tracks no mouse: nothing to send.
-            Ok(None) => {}
-            Err(error) => self.meaning_failed("mouse", &error),
-        }
-    }
-
-    fn scroll(&mut self, scroll: &hide_holder_protocol::Scroll) {
-        let wheel = self.pane().scroll(scroll);
-        match wheel {
-            Ok(Wheel::Input(bytes)) => self.input(bytes),
-            Ok(Wheel::Moved) => self.screen_changed(),
-            Ok(Wheel::Still) => {}
-            Err(error) => self.meaning_failed("scroll", &error),
-        }
-    }
-
-    /// The parser could not say what the pane's settings are, which no input
-    /// of the node's causes: logged, and the request dropped.
-    fn meaning_failed(&self, what: &str, error: &hide_vt::Error) {
-        self.log.event(
-            "holder.input_unencoded",
-            &[("what", what.into()), ("error", error.to_string().into())],
-        );
     }
 
     fn theme(&mut self, theme: &hide_holder_protocol::Theme) {
@@ -1045,6 +1139,7 @@ impl Holder {
         // reads the same end in the record.
         self.write_end(&closed);
         if let Some(connection) = self.current.take() {
+            self.input.let_go();
             self.publish(None);
             connection.close(closed.clone());
         }
@@ -1376,7 +1471,7 @@ fn read_pty(
 fn write_pty(
     mut writer: Box<dyn std::io::Write + Send>,
     writes: &Receiver<PtyWrite>,
-    input_queued: &AtomicUsize,
+    input: &InputPath,
     answers_queued: &AtomicUsize,
     events: &Sender<Event>,
     panic_on_input: bool,
@@ -1404,7 +1499,7 @@ fn write_pty(
                         error: error.to_string(),
                     });
                 }
-                input_queued.fetch_sub(bytes.len(), Ordering::SeqCst);
+                input.queued.fetch_sub(bytes.len(), Ordering::SeqCst);
             }
             PtyWrite::Answers(bytes) => {
                 // A PTY that refuses answers refuses everything; the pane's
@@ -1614,15 +1709,40 @@ impl ScreenWriter {
     }
 }
 
-fn read_connection(mut stream: LocalStream, generation: u64, events: &Sender<Event>) {
+/// Reads a connection until it ends: the program's input goes to the PTY
+/// writer from here, everything else to the run thread.
+fn read_connection(
+    mut stream: LocalStream,
+    generation: u64,
+    events: &Sender<Event>,
+    input: &InputPath,
+    outbox: &Outbox,
+) {
     loop {
         match read_client(&mut stream) {
             Ok(message) => {
-                let ends = matches!(message, ClientMessage::Release | ClientMessage::Terminate);
+                let control = match message {
+                    ClientMessage::Resize(size) => Control::Resize(size),
+                    ClientMessage::Theme(theme) => Control::Theme(theme),
+                    ClientMessage::Redraw => Control::Redraw,
+                    ClientMessage::Release => Control::Release,
+                    ClientMessage::Terminate => Control::Terminate,
+                    input_message @ (ClientMessage::Input(_)
+                    | ClientMessage::Paste(_)
+                    | ClientMessage::Mouse(_)
+                    | ClientMessage::Scroll(_)
+                    | ClientMessage::Key(_)) => {
+                        match input.take(generation, outbox, input_message) {
+                            Taken::Next => continue,
+                            Taken::Full => return,
+                        }
+                    }
+                };
+                let ends = matches!(control, Control::Release | Control::Terminate);
                 if events
                     .send(Event::Message {
                         generation,
-                        message,
+                        message: control,
                     })
                     .is_err()
                     || ends

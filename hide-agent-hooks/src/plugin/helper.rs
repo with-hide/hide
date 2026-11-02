@@ -221,9 +221,7 @@ fn answer(value: &Value) {
 }
 
 fn pane() -> Option<String> {
-    std::env::var("HERDR_PANE_ID")
-        .ok()
-        .filter(|value| !value.is_empty())
+    hide_agent_hooks::pane::from_env()
 }
 
 fn session(input: &Input) -> Option<String> {

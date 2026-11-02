@@ -262,7 +262,7 @@ impl Watches {
             vec![Capability::Facts],
             Instant::now() + OPEN_LIMIT,
         );
-        if let Some(version) = too_old(&opened) {
+        if let Some(version) = sends_no_facts(&opened) {
             self.unsupported(pane, Some(generation), version);
             return Ended::Told;
         }
@@ -347,12 +347,12 @@ impl Ended {
     }
 }
 
-/// The version of a holder too old to send facts, as its answer to a watch
-/// says: it read the opening as a first message it does not know, or opened
-/// the watch without facts. The one place a node judges that.
-fn too_old(opened: &Result<(LocalStream, Watching), OpenError>) -> Option<u16> {
-    match opened {
-        Err(OpenError::Refused(closed))
+/// The version of a holder built before what a node opened a connection for,
+/// as its refusal says: it read the opening, a watch or an ask, as a first
+/// message it does not know. The one place a node judges that.
+pub(in crate::terminal) fn too_old(error: &OpenError) -> Option<u16> {
+    match error {
+        OpenError::Refused(closed)
             if matches!(
                 closed.reason,
                 CloseReason::HelloInvalid | CloseReason::ProtocolError
@@ -360,8 +360,17 @@ fn too_old(opened: &Result<(LocalStream, Watching), OpenError>) -> Option<u16> {
         {
             Some(closed.version)
         }
-        Ok((_, watching)) if !watching.sends.contains(&Capability::Facts) => Some(watching.version),
         _ => None,
+    }
+}
+
+/// The version of a holder too old to send facts, as its answer to a watch
+/// says: [`too_old`] for the opening, or a watch opened without facts.
+fn sends_no_facts(opened: &Result<(LocalStream, Watching), OpenError>) -> Option<u16> {
+    match opened {
+        Err(error) => too_old(error),
+        Ok((_, watching)) if !watching.sends.contains(&Capability::Facts) => Some(watching.version),
+        Ok(_) => None,
     }
 }
 

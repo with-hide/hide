@@ -3,13 +3,20 @@
 //! standard streams, so a holder started without a file logs nothing, and a
 //! file it cannot open fails its start.
 
+use std::cell::Cell;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, PoisonError, TryLockError};
+use std::sync::{Arc, Mutex, PoisonError};
 
 /// How large the file grows before it is set aside as `<file>.1`, replacing
 /// the one before, so a holder that lives for weeks keeps two files at most.
 const MAX_LOG_BYTES: u64 = 1024 * 1024;
+
+thread_local! {
+    /// Whether this thread holds the log now, writing one line: a panic hook
+    /// on it must not wait for the log it holds itself.
+    static HOLDS_LOG: Cell<bool> = const { Cell::new(false) };
+}
 
 #[derive(Clone)]
 pub struct Log(Option<Arc<Mutex<Sink>>>);
@@ -52,18 +59,21 @@ impl Log {
     pub fn event(&self, event: &str, fields: &[(&str, serde_json::Value)]) {
         let Some(sink) = &self.0 else { return };
         let mut sink = sink.lock().unwrap_or_else(PoisonError::into_inner);
+        HOLDS_LOG.set(true);
         sink.write(event, fields);
+        HOLDS_LOG.set(false);
     }
 
-    /// As [`Log::event`], for a panic hook: it never waits for the log, since
-    /// the thread that panicked may hold it, and then writes nothing.
+    /// As [`Log::event`], for a panic hook. A thread that panicked while it
+    /// wrote a line holds the log and writes nothing here; any other waits
+    /// for the line another thread is writing, which takes nothing else, so
+    /// a panic on one thread is not lost to a line another logs at once.
     pub fn event_now(&self, event: &str, fields: &[(&str, serde_json::Value)]) {
         let Some(sink) = &self.0 else { return };
-        let mut sink = match sink.try_lock() {
-            Ok(sink) => sink,
-            Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
-            Err(TryLockError::WouldBlock) => return,
-        };
+        if HOLDS_LOG.get() {
+            return;
+        }
+        let mut sink = sink.lock().unwrap_or_else(PoisonError::into_inner);
         sink.write(event, fields);
     }
 }

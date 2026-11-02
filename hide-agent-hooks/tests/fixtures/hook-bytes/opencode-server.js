@@ -1,4 +1,4 @@
-// hide-opencode-server@5 sha256=56c70fa7846568a8f18f438be3dccec4f5aa9f499b503507610e29002b0fa83c
+// hide-opencode-server@6 sha256=b6893a9ee3023ff0eba29cca73c466595544721690c329433741f0b3a4e36b84
 // Hide's OpenCode 2 plugin, its server half, written by Hide's install kit (hide-agent-hooks).
 // An edit is kept and shown as edited in Settings; Reinstall puts Hide's back.
 // OpenCode 2 runs one server for every terminal attached to it, so this half is never any pane's: what needs the
@@ -38,9 +38,9 @@ const PENDING_LIMIT = 16;
 const PENDING_AGE_MS = 10 * 60 * 1000;
 // Any spelling of the reminder tag OpenCode's model reads as one, opening or closing.
 const REMINDER_TAG = /<(\s*\/?\s*system-reminder)/gi;
-// The variables that make a process a Herdr pane's: the shared server inherited them from whichever terminal
+// The variables that make a process a pane's: the shared server inherited them from whichever terminal
 // started it, so a helper this half starts never carries them.
-const PANE_VARIABLES = ["HERDR_ENV", "HERDR_PANE_ID", "HERDR_SOCKET_PATH", "HIDE_CAP_REF"];
+const PANE_VARIABLES = ["HIDE_PANE_ID", "HERDR_ENV", "HERDR_PANE_ID", "HERDR_SOCKET_PATH", "HIDE_CAP_REF"];
 
 // The question and answer between the halves, on OpenCode's plugin RPC. The server half asks one terminal by the
 // id it attached with (`client`), or, for a prompt in a session no terminal attached yet, any terminal that shows
@@ -134,6 +134,12 @@ function fileArgs(args) {
   return named;
 }
 
+// A pane Hide manages: one on the core's own engine names itself HIDE_PANE_ID first, a Herdr pane by its three
+// variables (`hide_agent_hooks::pane`, the rule the helper and the CLI share).
+function inPane(env) {
+  return Boolean(env.HIDE_PANE_ID) || (env.HERDR_ENV === "1" && Boolean(env.HERDR_PANE_ID) && Boolean(env.HERDR_SOCKET_PATH));
+}
+
 export function helperPresent() {
   try {
     return statSync(HELPER).isFile();
@@ -142,9 +148,9 @@ export function helperPresent() {
   }
 }
 
-/** Whether `env` is a Herdr pane Hide manages, with the helper in place. */
+/** Whether `env` is a pane Hide manages, with the helper in place. */
 export function managed(env) {
-  return env.HERDR_ENV === "1" && Boolean(env.HERDR_PANE_ID) && Boolean(env.HERDR_SOCKET_PATH) && helperPresent();
+  return inPane(env) && helperPresent();
 }
 
 /**

@@ -1,6 +1,6 @@
 //! Participant registration and child creation use the daemon's same durable
 //! store and pane capability as the mailbox.
-use crate::env::{self, Env};
+use crate::env::Env;
 use herdr_core::{coordination::Command, delivery::Command as Delivery};
 use std::collections::BTreeMap;
 pub const USAGE: &str = "hide agent register [--check] [--machine <device id>] --host-scope <scope> --session <session> --instance <terminal> --name <name> --pane <pane> [--parent <id>] [--project <path>]\nhide agent list\nhide agent show <id|here>\nhide agent end <id> [--actor <id>]\nhide agent sleep <id> [--actor <id>]\nhide agent archive <id> [--actor <id>]\nhide agent catalog [--machine <device id>]\nhide agent spawn [--parent <here|id>] [--machine <device id>] [--beside] --name <name> (--intent <key> | --plan-node <key>) --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>] [-- <native args>]";
@@ -308,7 +308,7 @@ pub fn with_brief(mut command: Delivery, brief: String) -> Delivery {
 pub fn run(env: &Env, command: Delivery) -> Result<(), String> {
     let result = (|| {
         let mut credential = crate::workspace_cli::Credential::acquire(env)?;
-        let hint = std::env::var(env::HERDR_PANE_ID).ok();
+        let hint = env.pane_id.clone();
         crate::workspace_cli::request_delivery(&mut credential, command, hint.as_deref())
     })();
     print_answer(result)

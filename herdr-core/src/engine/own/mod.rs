@@ -30,7 +30,9 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::Duration;
 
 use hide_node_link::NodeLink;
-use hide_node_link::holders::{HolderError, HolderStart, PaneFacts, PaneHolders, StyledRead};
+use hide_node_link::holders::{
+    HolderError, HolderKey, HolderStart, PaneFacts, PaneHolders, PaneInput, StyledRead,
+};
 
 use super::keys::PaneKey;
 use super::{
@@ -473,6 +475,49 @@ impl OwnEngine<'_> {
             .map_err(holder_error)
     }
 
+    /// Starts the holder of `pane`, whose id this call just reserved, once
+    /// every gate's [`super::Placement`] has recorded it (PRD
+    /// engine-bundle-3-core-owns D-11). The order is the locks' order and
+    /// never overlaps: the topology lock was let go once the id was reserved
+    /// (the caller's block ended), a placement takes the lock its record
+    /// needs (the runtime's, for a spawn) and lets it go, and the holder
+    /// starts outside every lock. A placement that refuses leaves the pane
+    /// unmade; a holder that does not start withdraws every placement in this
+    /// same call, so no record names a pane that never ran.
+    fn start_placed(
+        &self,
+        pane: &str,
+        program: Option<&[String]>,
+        cwd: &str,
+        env: Env,
+    ) -> Result<(), EngineError> {
+        let placements: Vec<_> = self
+            .gates
+            .iter()
+            .filter_map(|gate| gate.placement.as_ref())
+            .collect();
+        for (at, placement) in placements.iter().enumerate() {
+            if let Err(error) = placement.place(pane) {
+                for placed in &placements[..at] {
+                    placed.withdraw(pane);
+                }
+                return Err(error);
+            }
+        }
+        if let Err(error) = self.start_pane(pane, program, cwd, env, None) {
+            self.withdraw(pane);
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// Takes back every gate's placement of `pane`, which will not run.
+    fn withdraw(&self, pane: &str) {
+        for placement in self.gates.iter().filter_map(|gate| gate.placement.as_ref()) {
+            placement.withdraw(pane);
+        }
+    }
+
     /// Ends the holders of `panes`, every one asked even when one fails:
     /// the first failure, if any. A holder already gone is ended.
     fn end_panes(&self, panes: &[String]) -> Result<(), EngineError> {
@@ -522,7 +567,7 @@ impl OwnEngine<'_> {
             topology.reserve_tab(workspace)?
         };
         let (tab, pane) = &reserved;
-        self.start_pane(pane, program, cwd, env.clone(), None)?;
+        self.start_placed(pane, program, cwd, env.clone())?;
         let added = self.topology().add_tab(
             workspace,
             (tab, pane),
@@ -533,6 +578,7 @@ impl OwnEngine<'_> {
         if let Err(error) = added {
             // The workspace closed while the pane started.
             let _ = self.end_panes(std::slice::from_ref(pane));
+            self.withdraw(pane);
             return Err(error);
         }
         self.changed();
@@ -563,7 +609,7 @@ impl OwnEngine<'_> {
             let (workspace, _) = topology.pane_place(target)?;
             (topology.reserve_pane(&workspace)?, cwd)
         };
-        self.start_pane(&pane, None, &cwd, env.clone(), None)?;
+        self.start_placed(&pane, None, &cwd, env.clone())?;
         let added = self.topology().add_split(
             target,
             direction,
@@ -575,6 +621,7 @@ impl OwnEngine<'_> {
         if let Err(error) = added {
             // The pane beside it closed while this one started.
             let _ = self.end_panes(std::slice::from_ref(&pane));
+            self.withdraw(&pane);
             return Err(error);
         }
         self.changed();
@@ -661,8 +708,16 @@ impl OwnEngine<'_> {
     }
 
     fn type_bytes(&self, pane: &str, bytes: Vec<u8>) -> Answer<()> {
+        self.type_input(pane, PaneInput::Bytes(bytes))
+    }
+
+    /// Types into the pane through its holder, in order with every other
+    /// key typed there; a paste and named keys are encoded by the holder for
+    /// the program's modes when they are written (PRD
+    /// engine-bundle-3-core-owns D-21).
+    fn type_input(&self, pane: &str, input: PaneInput) -> Answer<()> {
         self.known(pane)?;
-        self.shared.holders.input(pane, bytes).map_err(holder_error)
+        self.shared.holders.input(pane, input).map_err(holder_error)
     }
 
     fn processes(&self, pane: &str) -> Answer<PaneProcessGroup> {
@@ -745,21 +800,24 @@ fn delivery_of(
     }
 }
 
-const IDENTITY_PR: &str = "pane identity pull request";
+/// What brings a find's scroll of the screen: the holder saying and moving
+/// its screen's scroll position (PRD engine-bundle-3-core-owns D-21).
+const SCROLL_POSITION: &str = "holder's scroll position capability";
 
-/// The bytes a key sends to a program that has asked for no key mode.
-fn key_bytes(key: PaneKey) -> &'static [u8] {
+/// Hide's key as the holder names it; the holder encodes it for the
+/// program's keyboard modes, as Herdr encodes a named key for its pane.
+fn holder_key(key: PaneKey) -> HolderKey {
     match key {
-        PaneKey::Esc => b"\x1b",
-        PaneKey::Enter => b"\r",
-        PaneKey::Tab => b"\t",
-        PaneKey::ShiftTab => b"\x1b[Z",
-        PaneKey::Up => b"\x1b[A",
-        PaneKey::Down => b"\x1b[B",
-        PaneKey::Right => b"\x1b[C",
-        PaneKey::Left => b"\x1b[D",
-        PaneKey::Backspace => b"\x7f",
-        PaneKey::CtrlC => b"\x03",
+        PaneKey::Esc => HolderKey::Escape,
+        PaneKey::Enter => HolderKey::Enter,
+        PaneKey::Tab => HolderKey::Tab,
+        PaneKey::ShiftTab => HolderKey::ShiftTab,
+        PaneKey::Up => HolderKey::Up,
+        PaneKey::Down => HolderKey::Down,
+        PaneKey::Left => HolderKey::Left,
+        PaneKey::Right => HolderKey::Right,
+        PaneKey::Backspace => HolderKey::Backspace,
+        PaneKey::CtrlC => HolderKey::CtrlC,
     }
 }
 
@@ -814,6 +872,34 @@ impl<'g> Engine for OwnEngine<'g> {
             }
         }
         self.changed();
+    }
+
+    fn hook_session(&self, pane: &str, kind: &str, session: &str) -> Answer<()> {
+        self.check()?;
+        let catalog = self.shared.definitions.get();
+        let definition =
+            agents::definition(&catalog, kind).ok_or_else(|| EngineError::Refused {
+                code: "unknown_agent".to_owned(),
+                message: format!("no agent definition names {kind}"),
+            })?;
+        // Only the agent the pane runs takes it: a session the operator's
+        // own hook started in the pane's environment (`claude -p` from a
+        // Stop hook) is another agent's, and the engine already knows the
+        // pane runs no agent of that kind.
+        let runs = self
+            .topology()
+            .pane(pane)?
+            .agent
+            .as_ref()
+            .is_some_and(|agent| agent.kind == definition.id);
+        if runs
+            && self
+                .topology()
+                .set_agent_session(pane, &definition.id, session)?
+        {
+            self.changed();
+        }
+        Ok(())
     }
 
     fn session(&self, _wait: Wait) -> Answer<ProjectionState> {
@@ -881,7 +967,7 @@ impl<'g> Engine for OwnEngine<'g> {
         self.check()?;
         self.restored()?;
         let reserved = self.topology().reserve_workspace();
-        self.start_pane(&reserved.pane, None, cwd, env.clone(), None)?;
+        self.start_placed(&reserved.pane, None, cwd, env.clone())?;
         self.topology().add_workspace(
             &reserved,
             label,
@@ -1289,7 +1375,7 @@ impl<'g> Engine for OwnEngine<'g> {
         _offset_from_bottom: u64,
     ) -> Answer<Option<crate::find::pane::PaneScroll>> {
         self.check()?;
-        unsupported("a scroll", IDENTITY_PR)
+        unsupported("a scroll", SCROLL_POSITION)
     }
 
     fn report_pane_tokens(
@@ -1367,37 +1453,36 @@ impl<'g> Engine for OwnEngine<'g> {
 
     fn send_keys(&self, _wait: Wait, pane: &str, keys: &[&str]) -> Answer<()> {
         self.check()?;
-        let mut bytes = Vec::new();
-        for key in keys {
-            bytes.extend_from_slice(key_bytes(named_key(key)?));
-        }
-        self.type_bytes(pane, bytes)
+        let keys = keys
+            .iter()
+            .map(|key| named_key(key).map(holder_key))
+            .collect::<Answer<_>>()?;
+        self.type_input(pane, PaneInput::Keys(keys))
     }
 
+    /// The text as it is, then Enter encoded for the program's keyboard
+    /// modes, as Herdr submits text.
     fn submit_text(&self, _wait: Wait, pane: &str, text: &str) -> Answer<()> {
         self.check()?;
-        let mut bytes = text.as_bytes().to_vec();
-        bytes.extend_from_slice(key_bytes(PaneKey::Enter));
-        self.type_bytes(pane, bytes)
+        self.type_bytes(pane, text.as_bytes().to_vec())?;
+        self.type_input(pane, PaneInput::Keys(vec![HolderKey::Enter]))
     }
 
     fn press_key(&self, _wait: Wait, pane: &str, key: &str) -> Answer<()> {
         self.check()?;
-        self.type_bytes(pane, key_bytes(named_key(key)?).to_vec())
+        let key = holder_key(named_key(key)?);
+        self.type_input(pane, PaneInput::Keys(vec![key]))
     }
 
     fn press_pane_keys(&self, _wait: Wait, pane: &str, keys: &[PaneKey]) -> Answer<()> {
         self.check()?;
-        let bytes = keys
-            .iter()
-            .flat_map(|key| key_bytes(*key).iter().copied())
-            .collect();
-        self.type_bytes(pane, bytes)
+        let keys = keys.iter().copied().map(holder_key).collect();
+        self.type_input(pane, PaneInput::Keys(keys))
     }
 
-    fn paste_text(&self, _wait: Wait, _pane: &str, _text: &str) -> Answer<()> {
+    fn paste_text(&self, _wait: Wait, pane: &str, text: &str) -> Answer<()> {
         self.check()?;
-        unsupported("a paste", IDENTITY_PR)
+        self.type_input(pane, PaneInput::Paste(text.as_bytes().to_vec()))
     }
 
     fn notify(&self, _wait: Wait, _title: &str, _body: &str) -> Answer<Notified> {
@@ -1460,9 +1545,44 @@ impl<'g> Engine for OwnEngine<'g> {
         Ok(pane.to_owned())
     }
 
-    fn pane_identity(&self, _wait: Wait, _pane: &str) -> Answer<PaneProof> {
+    fn pane_identity(&self, _wait: Wait, pane: &str) -> Answer<PaneProof> {
         self.check()?;
-        unsupported("a pane's proof", IDENTITY_PR)
+        // The pane's record names the start that runs and its program, with
+        // the time the system gave that program (D-9): a pid the system
+        // reused since does not match it. A pane id never moves on this
+        // engine, so the pane named is the pane proved.
+        self.known(pane)?;
+        let proof = self.shared.holders.proof(pane).map_err(holder_error)?;
+        Ok(PaneProof {
+            pane_id: pane.to_owned(),
+            terminal_id: pane.to_owned(),
+            shell_pid: i32::try_from(proof.program).map_err(|_| {
+                refused(
+                    "pane_not_running",
+                    format!(
+                        "pane {pane}'s program pid {} is out of range",
+                        proof.program
+                    ),
+                )
+            })?,
+            shell_started: Some(proof.started),
+        })
+    }
+
+    fn inspect_pane(
+        &self,
+        wait: Wait,
+        pane: &str,
+    ) -> Option<Answer<hide_node_link::panes::PaneIdentity>> {
+        Some(self.pane_identity(wait, pane).and_then(|proof| {
+            Ok(hide_node_link::panes::PaneIdentity {
+                terminal_id: proof.terminal_id,
+                shell_pid: proof.shell_pid,
+                shell_started: proof.shell_started.ok_or_else(|| {
+                    refused("pane_not_running", format!("pane {pane} has no start"))
+                })?,
+            })
+        }))
     }
 
     fn prepare_start(&self, launch: AgentLaunch) -> Result<PreparedStart, String> {
@@ -1628,15 +1748,24 @@ impl<'g> Engine for OwnEngine<'g> {
         };
         // Herdr's `agent.prompt`: the text as one paste when the program
         // takes bracketed paste, then Enter a moment later, so a program that
-        // reads a fast Enter as part of the paste still submits.
-        let bytes = if paste {
-            [b"\x1b[200~", text.as_bytes(), b"\x1b[201~"].concat()
+        // reads a fast Enter as part of the paste still submits. Typed as a
+        // letter, so the operator's keys typed meanwhile wait until the
+        // Enter was handed over instead of landing inside it (D-13).
+        let body = if paste {
+            PaneInput::Paste(text.as_bytes().to_vec())
         } else {
-            text.as_bytes().to_vec()
+            PaneInput::Bytes(text.as_bytes().to_vec())
         };
-        self.type_bytes(&pane, bytes)?;
-        std::thread::sleep(PROMPT_SUBMIT_DELAY);
-        self.type_bytes(&pane, b"\r".to_vec())
+        self.known(&pane)?;
+        self.shared
+            .holders
+            .letter(
+                &pane,
+                body,
+                PaneInput::Keys(vec![HolderKey::Enter]),
+                PROMPT_SUBMIT_DELAY,
+            )
+            .map_err(holder_error)
     }
 
     fn create_worktree(
@@ -1799,8 +1928,37 @@ mod tests {
                 .clone()
                 .ok_or_else(|| HolderError::Unreachable("not asked".to_owned()))
         }
-        fn input(&self, pane: &str, bytes: Vec<u8>) -> Result<(), HolderError> {
-            self.typed.0.lock().unwrap().push((pane.to_owned(), bytes));
+        fn proof(&self, _: &str) -> Result<hide_node_link::holders::HolderProof, HolderError> {
+            // Every pane's program is this test's own process.
+            let program = std::process::id();
+            Ok(hide_node_link::holders::HolderProof {
+                incarnation: 1,
+                program,
+                started: hide_platform::process::start_time(program)
+                    .map_err(|error| HolderError::Unreachable(error.to_string()))?,
+            })
+        }
+        fn input(&self, pane: &str, input: PaneInput) -> Result<(), HolderError> {
+            self.typed
+                .0
+                .lock()
+                .unwrap()
+                .push((pane.to_owned(), shown(input)));
+            self.typed.1.notify_all();
+            Ok(())
+        }
+        fn letter(
+            &self,
+            pane: &str,
+            body: PaneInput,
+            submit: PaneInput,
+            _gap: Duration,
+        ) -> Result<(), HolderError> {
+            let mut letter = b"<letter>".to_vec();
+            letter.extend(shown(body));
+            letter.extend(shown(submit));
+            letter.extend(b"</letter>");
+            self.typed.0.lock().unwrap().push((pane.to_owned(), letter));
             self.typed.1.notify_all();
             Ok(())
         }
@@ -1871,6 +2029,122 @@ mod tests {
             }
             other => panic!("expected a refusal naming the source, got {other:?}"),
         }
+    }
+
+    /// What a placement saw: each call, in order, with whether the pane's
+    /// holder had been asked to start by then and whether the topology could
+    /// be read meanwhile.
+    struct Placed {
+        engine: Arc<OwnEngine<'static>>,
+        holders: Arc<Holders>,
+        refuse: bool,
+        seen: Arc<Mutex<Vec<(String, bool, bool)>>>,
+    }
+
+    impl super::super::Placement for Placed {
+        fn place(&self, pane: &str) -> Result<(), EngineError> {
+            let started = self
+                .holders
+                .started
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|start| start.pane == pane);
+            // Another thread reads the topology while the placement runs: a
+            // placement made under the topology lock would hold it up.
+            let (sent, read) = std::sync::mpsc::channel();
+            let engine = Arc::clone(&self.engine);
+            std::thread::spawn(move || {
+                let _ = sent.send(engine.focused_workspace(WAIT).is_ok());
+            });
+            let topology_free = read.recv_timeout(Duration::from_secs(2)).unwrap_or(false);
+            self.seen
+                .lock()
+                .unwrap()
+                .push((format!("place {pane}"), started, topology_free));
+            if self.refuse {
+                return Err(refused(
+                    "spawn_refused",
+                    "the record took no pane".to_owned(),
+                ));
+            }
+            Ok(())
+        }
+
+        fn withdraw(&self, pane: &str) {
+            self.seen
+                .lock()
+                .unwrap()
+                .push((format!("withdraw {pane}"), false, true));
+        }
+    }
+
+    /// PRD engine-bundle-3-core-owns D-11, B30: a pane a gated call makes is
+    /// placed after its id is reserved and the topology lock let go, and
+    /// before its holder starts; a holder that does not start withdraws it
+    /// in the same call, and a placement refused starts nothing.
+    #[test]
+    fn a_new_pane_is_placed_off_the_topology_lock_before_its_holder_starts() {
+        let holders = Arc::new(Holders::default());
+        let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+        let (_, _, first) = engine
+            .create_workspace(WAIT, "/w", "w", true, Env::new())
+            .unwrap();
+        let handle = Arc::new(OwnEngine {
+            shared: Arc::clone(&engine.shared),
+            gates: Vec::new(),
+        });
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let placing = |refuse| {
+            engine.gated(Gate::placing(Placed {
+                engine: Arc::clone(&handle),
+                holders: Arc::clone(&holders),
+                refuse,
+                seen: Arc::clone(&seen),
+            }))
+        };
+
+        let split = placing(false)
+            .split_beside(WAIT, &first, None, Env::new())
+            .expect("the split is made");
+        assert_eq!(
+            seen.lock().unwrap().drain(..).collect::<Vec<_>>(),
+            [(format!("place {split}"), false, true)],
+            "placed before its holder started, with the topology free"
+        );
+        assert!(
+            holders
+                .started
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|start| start.pane == split)
+        );
+
+        holders.refuse.store(true, Ordering::Release);
+        refused_for_the_holder(placing(false).split_beside(WAIT, &first, None, Env::new()));
+        let seen_now: Vec<_> = seen.lock().unwrap().drain(..).collect();
+        let [(placed, false, true), (withdrawn, _, _)] = seen_now.as_slice() else {
+            panic!("expected a placement and its withdrawal, got {seen_now:?}");
+        };
+        assert_eq!(
+            placed.trim_start_matches("place "),
+            withdrawn.trim_start_matches("withdraw "),
+            "the pane that did not start is the one withdrawn"
+        );
+        holders.refuse.store(false, Ordering::Release);
+
+        let before = holders.started.lock().unwrap().len();
+        match placing(true).split_beside(WAIT, &first, None, Env::new()) {
+            Err(EngineError::Refused { code, .. }) => assert_eq!(code, "spawn_refused"),
+            other => panic!("expected the placement's refusal, got {other:?}"),
+        }
+        assert_eq!(
+            holders.started.lock().unwrap().len(),
+            before,
+            "nothing starts in a pane the record refused"
+        );
+        assert_eq!(engine.pane_folders(WAIT).unwrap().len(), 2);
     }
 
     #[test]
@@ -2336,6 +2610,19 @@ mod tests {
     /// Every pane's typed bytes, in order.
     type Typed = Vec<(String, Vec<u8>)>;
 
+    /// Input as the double records it: bytes as they are, a paste and named
+    /// keys by name, since the holder encodes those.
+    fn shown(input: PaneInput) -> Vec<u8> {
+        match input {
+            PaneInput::Bytes(bytes) => bytes,
+            PaneInput::Paste(text) => [b"<paste>".as_slice(), &text, b"</paste>"].concat(),
+            PaneInput::Keys(keys) => keys
+                .iter()
+                .flat_map(|key| format!("<{key:?}>").into_bytes())
+                .collect(),
+        }
+    }
+
     /// What was typed into `pane`, in order.
     fn typed_into(typed: &[(String, Vec<u8>)], pane: &str) -> String {
         typed
@@ -2487,7 +2774,7 @@ mod tests {
         assert!(
             holders
                 .typed(&pane)
-                .ends_with("\u{1b}[200~a\nb\u{1b}[201~\r"),
+                .ends_with("<letter><paste>a\nb</paste><Enter></letter>"),
             "{:?}",
             holders.typed(&pane)
         );
@@ -2578,5 +2865,75 @@ mod tests {
         );
         let reader = next.delivery_agent(WAIT, "reader").unwrap();
         assert_eq!(reader.pane_id, gemini, "the resumed agent keeps its name");
+    }
+
+    /// D-7: a pane whose holder outlived the daemon keeps its program, but
+    /// the resume the daemon typed may never have reached its shell (the
+    /// daemon ended first). Its shell at its prompt resumes the conversation
+    /// again, once; a pane whose agent runs is left as it is.
+    #[test]
+    fn an_adopted_pane_whose_shell_is_at_its_prompt_resumes_its_agent_again() {
+        let root = tempfile::tempdir().unwrap();
+        let place = place(root.path());
+        let folder = root.path().join("repo");
+        for dir in [&place.home, &folder] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let first_holders = Holders::found(HolderRecovery::default());
+        first_holders.idle_shell(41, "zsh");
+        let first = OwnEngine::open(
+            Arc::clone(&first_holders) as Arc<dyn PaneHolders>,
+            place.clone(),
+        )
+        .unwrap();
+        let (_, _, claude) = first
+            .create_workspace(WAIT, &wire(&folder), "w", true, Env::new())
+            .unwrap();
+        first
+            .report_agent_session(WAIT, &claude, "claude", "s-1", 1)
+            .unwrap();
+        drop(first);
+        let reopen = |processes: HolderProcesses| {
+            let holders = Arc::new(Holders::default());
+            *holders.processes.lock().unwrap() = Some(processes);
+            let engine =
+                OwnEngine::open(Arc::clone(&holders) as Arc<dyn PaneHolders>, place.clone())
+                    .unwrap();
+            holders.hand(HolderRecovery {
+                present: vec![claude.clone()],
+                ..HolderRecovery::default()
+            });
+            engine.restored().unwrap();
+            (holders, engine)
+        };
+
+        // The agent runs in its terminal's foreground: nothing is typed.
+        let (running, engine) = reopen(HolderProcesses {
+            shell: 52,
+            foreground: Some(hide_node_link::holders::HolderForeground {
+                group: 60,
+                members: vec![(60, "claude".to_owned())],
+            }),
+        });
+        assert_eq!(running.typed(&claude), "");
+        drop(engine);
+
+        let (idle, _engine) = reopen(HolderProcesses {
+            shell: 52,
+            foreground: Some(hide_node_link::holders::HolderForeground {
+                group: 52,
+                members: vec![(52, "zsh".to_owned())],
+            }),
+        });
+        assert!(
+            idle.wait_typed(&claude)
+                .starts_with("claude --resume s-1 || printf"),
+            "{:?}",
+            idle.typed(&claude)
+        );
+        assert!(
+            idle.started().is_empty(),
+            "the adopted pane keeps its shell"
+        );
     }
 }

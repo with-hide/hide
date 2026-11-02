@@ -37,6 +37,7 @@ mod holder;
 mod log;
 mod osc;
 mod pane;
+mod pane_env;
 mod record;
 mod screen;
 mod watch;

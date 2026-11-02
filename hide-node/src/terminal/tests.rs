@@ -1834,6 +1834,158 @@ fn side_channel_waiters_are_bounded_and_node_close_refuses_them() {
     }
 }
 
+/// Reads the session's input until `count` bytes came, in order.
+fn input_bytes(opened: &Opened, count: usize) -> Vec<u8> {
+    let mut written = Vec::new();
+    while written.len() < count {
+        written.extend(opened.next_input());
+    }
+    written
+}
+
+/// PRD engine-bundle-3-core-owns D-13, B31: keys the operator types while
+/// the core's own engine types a letter wait until its submit was handed
+/// over, then follow it in the order typed; none lands inside the letter.
+#[test]
+fn keys_typed_during_a_letter_follow_its_submit_in_order() {
+    let harness = harness(RetryPolicy::Automatic);
+    let opened = harness.controlling("w1:p1");
+    thread::scope(|scope| {
+        let letter = scope.spawn(|| {
+            harness.service.type_letter(
+                "w1:p1",
+                Typed::Bytes(b"letter".to_vec()),
+                Typed::Bytes(b"\r".to_vec()),
+                Duration::from_millis(300),
+            );
+        });
+        assert_eq!(input_bytes(&opened, b"letter".len()), b"letter");
+        harness.key("w1:p1", b"x");
+        harness.key("w1:p1", b"y\r");
+        letter.join().unwrap();
+    });
+    assert_eq!(input_bytes(&opened, b"\rxy\r".len()), b"\rxy\r");
+    // The held keys are the operator's, reported as typed once written.
+    let typed = harness.report_where(|report| matches!(report, TerminalReport::Input { .. }));
+    assert!(matches!(typed, TerminalReport::Input { .. }), "{typed:?}");
+}
+
+/// A letter begun while another is typed into the same pane shares its
+/// hold: a key typed during the first is kept and written once the last
+/// letter has been submitted.
+#[test]
+fn keys_held_for_a_letter_are_kept_when_another_letter_begins_and_follow_the_last_submit() {
+    let harness = harness(RetryPolicy::Automatic);
+    let opened = harness.controlling("w1:p1");
+    let letter = |body: &'static [u8], gap: u64| {
+        harness.service.type_letter(
+            "w1:p1",
+            Typed::Bytes(body.to_vec()),
+            Typed::Bytes(b"\r".to_vec()),
+            Duration::from_millis(gap),
+        );
+    };
+    thread::scope(|scope| {
+        let first = scope.spawn(|| letter(b"a", 300));
+        assert_eq!(input_bytes(&opened, 1), b"a");
+        harness.key("w1:p1", b"x");
+        let second = scope.spawn(|| letter(b"b", 600));
+        assert_eq!(input_bytes(&opened, 1), b"b");
+        first.join().unwrap();
+        second.join().unwrap();
+    });
+    assert_eq!(input_bytes(&opened, b"\r\rx".len()), b"\r\rx");
+}
+
+/// A sleeping agent's pane takes none of the operator's keys, but the core's
+/// own engine types the agent's quit key and its resume line there while the
+/// sleep record holds the pane asleep, and they are written.
+#[test]
+fn the_engines_typing_reaches_a_sleeping_pane_and_the_operators_keys_do_not() {
+    let harness = harness(RetryPolicy::Automatic);
+    let opened = harness.controlling("w1:p1");
+    harness.service.control(TerminalControl::Asleep {
+        pane: "w1:p1".into(),
+        asleep: true,
+    });
+    harness.key("w1:p1", b"lost");
+    harness
+        .service
+        .type_input("w1:p1", Typed::Bytes(b"\x03".to_vec()));
+    harness
+        .service
+        .type_input("w1:p1", Typed::Bytes(b"claude --resume s\r".to_vec()));
+    let typed = b"\x03claude --resume s\r";
+    assert_eq!(input_bytes(&opened, typed.len()), typed);
+    harness.service.control(TerminalControl::Asleep {
+        pane: "w1:p1".into(),
+        asleep: false,
+    });
+    harness.key("w1:p1", b"kept");
+    assert_eq!(opened.next_input(), b"kept");
+}
+
+/// The core's own engine typing a command is not the operator typing: no
+/// key of it is reported, so the first report is the operator's own key.
+#[test]
+fn the_engines_typing_is_not_reported_as_the_operators() {
+    let harness = harness(RetryPolicy::Automatic);
+    let opened = harness.controlling("w1:p1");
+    harness
+        .service
+        .type_input("w1:p1", Typed::Bytes(b"ls\r".to_vec()));
+    assert_eq!(opened.next_input(), b"ls\r");
+    harness.key("w1:p1", b"x");
+    assert_eq!(opened.next_input(), b"x");
+    let first = harness.report_where(|report| matches!(report, TerminalReport::Input { .. }));
+    assert!(
+        matches!(
+            first,
+            TerminalReport::Input {
+                submitted: false,
+                ..
+            }
+        ),
+        "{first:?}"
+    );
+}
+
+/// A pane whose tab left the last shown has no session; the engine's input
+/// attaches it again and is written once the session opens.
+#[test]
+fn the_engines_typing_into_a_released_pane_attaches_it_and_is_written() {
+    let harness = harness(RetryPolicy::Automatic);
+    let _first = harness.controlling("w1:p1");
+    harness.service.control(TerminalControl::Release {
+        pane: "w1:p1".into(),
+        message: "detached".into(),
+    });
+    harness.state("w1:p1", "released");
+    harness
+        .service
+        .type_input("w1:p1", Typed::Bytes(b"resume\r".to_vec()));
+    let again = harness.opened();
+    assert_eq!(input_bytes(&again, b"resume\r".len()), b"resume\r");
+}
+
+/// Named keys go only to a transport that encodes them; another refuses
+/// them with why, sends nothing, and keeps its session.
+#[test]
+fn named_keys_for_a_session_that_does_not_read_them_are_refused_with_why() {
+    let harness = harness(RetryPolicy::Automatic);
+    let opened = harness.controlling("w1:p1");
+    harness
+        .service
+        .type_input("w1:p1", Typed::Keys(vec![hide_holder_protocol::Key::Enter]));
+    let refused = harness.report_where(|report| matches!(report, TerminalReport::Error { .. }));
+    assert!(
+        matches!(&refused, TerminalReport::Error { kind, .. } if kind == "terminal.unsupported_holder"),
+        "{refused:?}"
+    );
+    harness.key("w1:p1", b"x");
+    assert_eq!(opened.next_input(), b"x");
+}
+
 /// The grid a holder in [`HolderPanes`] runs at until it is told another.
 const HOLDER_SIZE: GridSize = GridSize { rows: 24, cols: 80 };
 /// The grid the screen draws the pane at, and the core saved for it.

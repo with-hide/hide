@@ -1,13 +1,15 @@
 //! Input and answers through a real PTY (PRD engine-bundle-2-pane-holder
-//! D-8, D-9, B3, B5, B6): bytes go to the program as they are, a paste, a
-//! pointer event and a wheel are encoded for the program's modes at that
-//! moment, and the program's questions are answered once each, in order,
+//! D-8, D-9, B3, B5, B6; engine-bundle-3-core-owns D-12a, D-21): bytes go
+//! to the program as they are, a paste, a pointer event, a wheel and a named
+//! key are encoded for the program's modes at that moment, all in the order
+//! sent, and the program's questions are answered once each, in order,
 //! whether or not a node is connected. The program records everything it is
 //! sent; its terminal is raw, so nothing is echoed or changed on the way.
 
 #[cfg(unix)]
 use hide_holder_protocol::{
-    Appearance, ClientMessage, Modifiers, Mouse, MouseAction, MouseButton, Rgb, Scroll, Theme,
+    Appearance, Capability, ClientMessage, Key, Modifiers, Mouse, MouseAction, MouseButton, Rgb,
+    Scroll, Theme,
 };
 
 use crate::support::{Home, Script, wait_until};
@@ -47,10 +49,12 @@ fn input_reaches_the_program_as_sent_or_encoded_for_its_modes() {
             b"\x1b[?2004lmode-plain".to_vec(),
             b"\x1b[?1000h\x1b[?1006hmode-mouse".to_vec(),
             b"\x1b[?1000l\x1b[?1006l\x1b[?1049h\x1b[?1007hmode-alternate".to_vec(),
+            b"\x1b[?1049l\x1b[?1hmode-cursor".to_vec(),
+            b"\x1b[>1umode-keys".to_vec(),
         ],
     );
     let holder = script.start(&home);
-    let mut connection = holder.open();
+    let mut connection = holder.open_accepting(vec![Capability::Screen, Capability::Keys]);
     let mut expected = Vec::new();
 
     connection.wait_for_drawn("mode-paste");
@@ -90,6 +94,38 @@ fn input_reaches_the_program_as_sent_or_encoded_for_its_modes() {
     connection.send(wheel(-1)).unwrap();
     connection.send(wheel(1)).unwrap();
     expected.extend_from_slice(b"\x1b[B\x1b[A");
+    script.wait_heard(&expected);
+
+    // Named keys, between typed bytes, in the order sent: the arrow in
+    // application cursor mode, Escape and Ctrl+C under the keyboard protocol
+    // the program turned on.
+    assert!(
+        connection.welcome.sends.contains(&Capability::Keys),
+        "{:?}",
+        connection.welcome.sends
+    );
+    script.go(4);
+    connection.wait_for_drawn("mode-cursor");
+    connection
+        .send(ClientMessage::Input(b"x".to_vec()))
+        .unwrap();
+    connection
+        .send(ClientMessage::Key(vec![Key::Up, Key::Escape]))
+        .unwrap();
+    expected.extend_from_slice(b"x\x1bOA\x1b");
+    script.wait_heard(&expected);
+    script.go(5);
+    connection.wait_for_drawn("mode-keys");
+    connection
+        .send(ClientMessage::Key(vec![Key::Escape, Key::CtrlC]))
+        .unwrap();
+    connection
+        .send(ClientMessage::Paste(b"y".to_vec()))
+        .unwrap();
+    connection
+        .send(ClientMessage::Key(vec![Key::Enter]))
+        .unwrap();
+    expected.extend_from_slice(b"\x1b[27u\x1b[99;5uy\r");
     script.wait_heard(&expected);
 }
 

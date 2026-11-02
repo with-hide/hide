@@ -257,10 +257,7 @@ fn keep_context(result: &Value) {
     else {
         return;
     };
-    let Some(pane) = std::env::var("HERDR_PANE_ID")
-        .ok()
-        .filter(|pane| !pane.is_empty())
-    else {
+    let Some(pane) = hide_agent_hooks::pane::from_env() else {
         return;
     };
     let written = hide_platform::host::home_dir()

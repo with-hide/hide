@@ -340,7 +340,7 @@ impl OwnEngine<'_> {
     ) -> Answer<(String, String, String)> {
         self.restored()?;
         let reserved = self.topology().reserve_workspace();
-        self.start_pane(&reserved.pane, None, checkout, Env::new(), None)?;
+        self.start_placed(&reserved.pane, None, checkout, Env::new())?;
         {
             let mut topology = self.topology();
             topology.add_workspace(

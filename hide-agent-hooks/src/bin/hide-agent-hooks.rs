@@ -200,7 +200,7 @@ fn run_observation_hook(arguments: &[String], started: Instant) -> Option<(Vec<u
     {
         return None;
     }
-    std::env::var_os("HERDR_PANE_ID")?;
+    hide_agent_hooks::pane::from_env()?;
     let home = home_directory()?;
     let Some((payload, truncated)) = read_stdin_before_deadline(started + GUARD_PAYLOAD_BUDGET)
     else {
@@ -341,7 +341,7 @@ fn basic_turn_event(
     let Some((payload, truncated)) = payload else {
         return (None, None);
     };
-    if !std::env::var("HERDR_PANE_ID").is_ok_and(|pane| !pane.is_empty()) {
+    if !hide_agent_hooks::pane::from_env().is_some() {
         return (None, None);
     }
     let result = (|| match event {
@@ -417,7 +417,7 @@ fn basic_tool_call(
         };
         return (Some(answer), None);
     }
-    let in_pane = std::env::var("HERDR_PANE_ID").is_ok_and(|value| !value.is_empty());
+    let in_pane = hide_agent_hooks::pane::from_env().is_some();
     if !in_pane || dialect.adapter().tool_letters.is_none() {
         return (None, None);
     }
@@ -674,7 +674,7 @@ fn antigravity_prompt(home: &std::path::Path, conversation: &str, started: Insta
 /// due, a failed ask or a pane the helper is not in answer nothing, and agy
 /// runs the call as it would.
 fn antigravity_tool_gap(home: &std::path::Path, conversation: &str, started: Instant) {
-    let in_pane = std::env::var("HERDR_PANE_ID").is_ok_and(|value| !value.is_empty());
+    let in_pane = hide_agent_hooks::pane::from_env().is_some();
     if !in_pane {
         return;
     }
@@ -868,9 +868,7 @@ fn guard_refusal(
 ) -> Option<String> {
     use hide_agent_hooks::spawn_guard as guard;
 
-    let pane = std::env::var("HERDR_PANE_ID")
-        .ok()
-        .filter(|value| !value.is_empty());
+    let pane = hide_agent_hooks::pane::from_env();
     let home = home_directory();
     // No agent writes the Hide global instruction, in any session or project
     // (PRD memory-self-improve D-07); only a payload naming it, or the file a
@@ -1270,10 +1268,7 @@ fn report_pane(
     counted: bool,
     deadline: Instant,
 ) {
-    let Some(pane_id) = std::env::var("HERDR_PANE_ID")
-        .ok()
-        .filter(|value| !value.is_empty())
-    else {
+    let Some(pane_id) = hide_agent_hooks::pane::from_env() else {
         return;
     };
     let Some(agent) = who.agent else { return };
@@ -1338,10 +1333,7 @@ fn report_recorded_turn(arguments: &[String], payload: Option<&(Vec<u8>, bool)>,
     else {
         return;
     };
-    let Some(pane_id) = std::env::var("HERDR_PANE_ID")
-        .ok()
-        .filter(|value| !value.is_empty())
-    else {
+    let Some(pane_id) = hide_agent_hooks::pane::from_env() else {
         return;
     };
     let session = payload

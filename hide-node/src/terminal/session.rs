@@ -15,6 +15,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use hide_holder_protocol::Key;
 use hide_node_link::terminal::GridSize;
 use hide_platform::process::OwnedChild;
 use serde_json::json;
@@ -88,6 +89,11 @@ pub trait SessionEvents: Send {
 /// returns.
 pub trait SessionWriter: Send {
     fn input(&mut self, bytes: &[u8]) -> io::Result<()>;
+    /// Pasted text, which the transport wraps for the pane's paste mode.
+    fn paste(&mut self, text: &[u8]) -> io::Result<()>;
+    /// Named keys, which the transport encodes for the pane's keyboard
+    /// modes; only a session whose [`Transport::reads_keys`] is sent them.
+    fn keys(&mut self, keys: &[Key]) -> io::Result<()>;
     fn resize(&mut self, size: GridSize) -> io::Result<()>;
     /// Asks for the whole screen again at `size`, the size the session
     /// runs at: the next frame is full.
@@ -118,6 +124,9 @@ pub struct Transport {
     pub cleanup: Cleanup,
     /// The pane's size as the transport found it, when it says.
     pub size: Option<GridSize>,
+    /// Whether the writer encodes named keys ([`SessionWriter::keys`]): a
+    /// holder that names `Capability::Keys`.
+    pub reads_keys: bool,
 }
 
 impl Transport {
@@ -140,6 +149,7 @@ impl Transport {
             kept: kept.map(|stdin| Box::new(stdin) as Box<dyn Send>),
             cleanup,
             size: None,
+            reads_keys: false,
         }
     }
 }
@@ -176,6 +186,17 @@ impl LineWriter {
 impl SessionWriter for LineWriter {
     fn input(&mut self, bytes: &[u8]) -> io::Result<()> {
         self.line(&protocol::input_line(bytes))
+    }
+
+    /// Only the core's own engine types a paste, never into a Herdr
+    /// session.
+    fn paste(&mut self, _text: &[u8]) -> io::Result<()> {
+        Err(io::Error::other("a Herdr session takes no paste"))
+    }
+
+    /// Never sent: a Herdr session does not read named keys.
+    fn keys(&mut self, _keys: &[Key]) -> io::Result<()> {
+        Err(io::Error::other("a Herdr session takes no named keys"))
     }
 
     fn resize(&mut self, size: GridSize) -> io::Result<()> {
@@ -408,6 +429,10 @@ pub(super) enum WriterCommand {
         bytes: Vec<u8>,
         written: Option<Written>,
     },
+    /// Pasted text, counted by its length.
+    Paste(Vec<u8>),
+    /// Named keys, each counted as one byte.
+    Keys(Vec<Key>),
     Resize(GridSize),
     Redraw(GridSize),
     /// Writes nothing; tells `written` once what was sent before it was
@@ -429,7 +454,8 @@ impl WriterCommand {
     fn cost(&self) -> usize {
         match self {
             Self::Scroll { .. } | Self::Resize(_) | Self::Redraw(_) => CONTROL_LINE_COST,
-            Self::Input { bytes, .. } => bytes.len(),
+            Self::Input { bytes, .. } | Self::Paste(bytes) => bytes.len(),
+            Self::Keys(keys) => keys.len(),
             Self::Barrier(_) | Self::Release { .. } => 0,
         }
     }
@@ -459,6 +485,8 @@ pub(super) enum WriteRefused {
     /// refused paste.
     Full,
     Failed(String),
+    /// The transport does not take what was sent, which is not sent.
+    Unsupported(String),
 }
 
 impl WriteRefused {
@@ -468,7 +496,7 @@ impl WriteRefused {
                 "Pane {pane} is not taking input; {} KiB already wait unwritten, so this input was not sent",
                 MAX_UNWRITTEN_INPUT_BYTES / 1024
             ),
-            Self::Failed(message) => message.clone(),
+            Self::Failed(message) | Self::Unsupported(message) => message.clone(),
         }
     }
 }
@@ -495,6 +523,8 @@ pub(super) struct Session {
     /// Its child counted live until the reaper has seen it exit.
     child: Option<ChildHold>,
     pane_id: String,
+    /// [`Transport::reads_keys`].
+    reads_keys: bool,
 }
 
 impl Session {
@@ -514,6 +544,7 @@ impl Session {
             kept,
             cleanup,
             size: _,
+            reads_keys,
         } = transport;
         let unwritten = Arc::new(Unwritten::default());
         let writer = match (mode, writer) {
@@ -539,6 +570,7 @@ impl Session {
                 cleanup,
                 child: None,
                 pane_id: pane_id.to_owned(),
+                reads_keys,
             },
             events,
         ))
@@ -581,6 +613,25 @@ impl Session {
 
     pub(super) fn write(&self, bytes: &[u8]) -> Result<(), WriteRefused> {
         self.send(WriterCommand::input(bytes))
+    }
+
+    /// Pasted text, which the transport wraps for the pane's paste mode.
+    pub(super) fn paste(&self, text: Vec<u8>) -> Result<(), WriteRefused> {
+        self.send(WriterCommand::Paste(text))
+    }
+
+    /// Named keys, which the transport encodes for the pane's keyboard
+    /// modes; refused, with nothing sent, by a transport that does not read
+    /// them (a holder built before named keys, PRD engine-bundle-3-core-owns
+    /// D-21).
+    pub(super) fn keys(&self, keys: Vec<Key>) -> Result<(), WriteRefused> {
+        if !self.reads_keys {
+            return Err(WriteRefused::Unsupported(format!(
+                "Pane {}'s holder was built before named keys; they were not sent",
+                self.pane_id
+            )));
+        }
+        self.send(WriterCommand::Keys(keys))
     }
 
     /// [`Session::write`], telling `written` once the bytes reached the
@@ -716,6 +767,8 @@ fn spawn_session_writer(
                     WriterCommand::Input { bytes, written } => {
                         (writer.input(&bytes), None, written)
                     }
+                    WriterCommand::Paste(text) => (writer.paste(&text), None, None),
+                    WriterCommand::Keys(keys) => (writer.keys(&keys), None, None),
                     WriterCommand::Resize(size) => (writer.resize(size), None, None),
                     WriterCommand::Redraw(size) => (writer.redraw(size), None, None),
                     WriterCommand::Barrier(written) => (writer.flush(), None, Some(written)),

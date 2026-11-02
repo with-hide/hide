@@ -1,10 +1,12 @@
 // Partly derived from Herdr v0.9.5 (https://github.com/herdrdev/herdr, commit
 // 2ecf19a), src/pane/terminal.rs: the wheel's routing and
-// `ghostty_recent_read_range`.
+// `ghostty_recent_read_range`; and src/pane/input.rs: the key event a named
+// key is encoded from (`ghostty_key_event_from_terminal_key`).
 // Copyright 2025 herdr contributors. Licensed under the Apache License,
 // Version 2.0; see NOTICE at the repository root.
 // Changed by Hide: a wheel arrives as lines with an optional cell instead of
-// a terminal event, and a read is cut to the protocol's byte bound.
+// a terminal event, a read is cut to the protocol's byte bound, and a key
+// arrives by one of Hide's ten names instead of as a terminal event.
 
 //! The pane's parsed terminal and everything read from it or written for
 //! it: the program's output and the answers to its questions, the screen a
@@ -19,8 +21,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use hide_holder_protocol::{
-    Answer, Appearance, MAX_READ_BYTES, Modifiers, Mouse, MouseAction, MouseButton, Scroll, Size,
-    Theme,
+    Answer, Appearance, Key, MAX_READ_BYTES, Modifiers, Mouse, MouseAction, MouseButton, Scroll,
+    Size, Theme,
 };
 use hide_vt::{ActiveScreen, DefaultColor, RgbColor, Terminal};
 
@@ -332,6 +334,43 @@ impl Pane {
         hide_vt::encode_paste(text, bracketed)
     }
 
+    /// Named keys as the program asked to be told of them now: an arrow in
+    /// application cursor mode, Escape under a keyboard protocol. Built as
+    /// Herdr builds a named key's event for its pane (`encode_terminal_key`),
+    /// with macOS Option kept as Alt; none of these keys is a chord Herdr's
+    /// legacy-shell table changes.
+    pub fn keys(&self, keys: &[Key]) -> Result<Vec<u8>, hide_vt::Error> {
+        use hide_vt::ffi;
+        let mut encoder = hide_vt::KeyEncoder::new()?;
+        encoder.set_from_terminal(&self.terminal);
+        encoder.set_macos_option_as_alt(true);
+        let mut bytes = Vec::new();
+        for key in keys {
+            let (code, mods, letter) = match key {
+                Key::Escape => (ffi::GhosttyKey_GHOSTTY_KEY_ESCAPE, 0, None),
+                Key::Enter => (hide_vt::KEY_ENTER, 0, None),
+                Key::Tab => (ffi::GhosttyKey_GHOSTTY_KEY_TAB, 0, None),
+                Key::ShiftTab => (ffi::GhosttyKey_GHOSTTY_KEY_TAB, hide_vt::MOD_SHIFT, None),
+                Key::Up => (hide_vt::KEY_UP, 0, None),
+                Key::Down => (hide_vt::KEY_DOWN, 0, None),
+                Key::Left => (hide_vt::KEY_LEFT, 0, None),
+                Key::Right => (hide_vt::KEY_RIGHT, 0, None),
+                Key::Backspace => (ffi::GhosttyKey_GHOSTTY_KEY_BACKSPACE, 0, None),
+                Key::CtrlC => (ffi::GhosttyKey_GHOSTTY_KEY_C, hide_vt::MOD_CTRL, Some('c')),
+            };
+            let mut event = hide_vt::KeyEvent::new()?;
+            event.set_action(ffi::GhosttyKeyAction_GHOSTTY_KEY_ACTION_PRESS);
+            event.set_key(code);
+            event.set_mods(mods);
+            if let Some(letter) = letter {
+                event.set_unshifted_codepoint(u32::from(letter));
+                event.set_utf8(letter.encode_utf8(&mut [0; 4]));
+            }
+            bytes.extend(encoder.encode(&event)?);
+        }
+        Ok(bytes)
+    }
+
     /// A pointer event as the program asked to be told of it, or `None` when
     /// it tracks no mouse, or asked for pixels, which are not known.
     pub fn mouse(&self, mouse: &Mouse) -> Result<Option<Vec<u8>>, hide_vt::Error> {
@@ -620,6 +659,36 @@ mod tests {
         )
         .unwrap();
         String::from_utf8(answers).unwrap()
+    }
+
+    #[test]
+    fn a_named_key_is_typed_as_the_program_asked_for_keys_now() {
+        let mut pane = pane();
+        let every = [
+            Key::Escape,
+            Key::Enter,
+            Key::Tab,
+            Key::ShiftTab,
+            Key::Up,
+            Key::Down,
+            Key::Left,
+            Key::Right,
+            Key::Backspace,
+            Key::CtrlC,
+        ];
+        assert_eq!(
+            pane.keys(&every).unwrap(),
+            b"\x1b\r\t\x1b[Z\x1b[A\x1b[B\x1b[D\x1b[C\x7f\x03"
+        );
+        // Application cursor keys, then a keyboard protocol that reports
+        // Escape and Ctrl+C unambiguously.
+        answers(&mut pane, &[b"\x1b[?1h"]);
+        assert_eq!(pane.keys(&[Key::Up, Key::Enter]).unwrap(), b"\x1bOA\r");
+        answers(&mut pane, &[b"\x1b[>1u"]);
+        assert_eq!(
+            pane.keys(&[Key::Escape, Key::CtrlC]).unwrap(),
+            b"\x1b[27u\x1b[99;5u"
+        );
     }
 
     #[test]

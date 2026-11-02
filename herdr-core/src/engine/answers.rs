@@ -243,6 +243,11 @@ pub struct PaneProof {
     pub pane_id: String,
     pub terminal_id: String,
     pub shell_pid: i32,
+    /// When the engine recorded the shell starting, as the system's process
+    /// start time reads: the core's own engine keeps it in the pane's record,
+    /// so a shell pid the system gave another process is refused. `None`
+    /// from Herdr, which names only the pid.
+    pub shell_started: Option<u64>,
 }
 
 /// Whether a notification showed: `Err` names why the engine showed none.

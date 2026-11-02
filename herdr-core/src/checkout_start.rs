@@ -28,23 +28,38 @@ pub(super) struct Control<'a> {
     pub check: &'a dyn Fn() -> Result<(), String>,
 }
 
+/// How long a pane's identity is waited for, by the engine or its node.
+const INSPECT_WAIT: Duration = Duration::from_secs(5);
+
 fn uncertain(message: &str) -> ControlFailure {
     ControlFailure::Ambiguous(message.to_owned())
 }
 
 fn inspect(control: &Control<'_>, pane: &str) -> Result<PaneIdentity, ControlFailure> {
     (control.check)().map_err(ControlFailure::Ambiguous)?;
+    // The core's own engine proves the pane by its record; Herdr's is asked
+    // of the node that holds its socket.
+    if let Some(answer) = control
+        .engine
+        .inspect_pane(crate::engine::Wait::Each(INSPECT_WAIT), pane)
+    {
+        return answer.map_err(|error| match error {
+            EngineError::Refused { .. } => {
+                ControlFailure::Definite("agent_start.terminal_unchecked".into())
+            }
+            _ => uncertain("agent_start.terminal_unchecked"),
+        });
+    }
     crate::node_access::call_as(
         control.node,
         Call::PaneInspect {
             pane_id: pane.to_owned(),
         },
-        Duration::from_secs(5),
+        INSPECT_WAIT,
     )
     .map_err(|error| match error {
-        // A node with no Herdr server names no pane's shell at all (the
-        // core's own engine, until pane identity lands): nothing can ever
-        // confirm the start, so it fails for certain.
+        // A node with no Herdr server names no pane's shell at all: nothing
+        // can ever confirm the start, so it fails for certain.
         LinkError::Refused(refusal) if refusal.code == ErrorCode::Unsupported => {
             ControlFailure::Definite("agent_start.terminal_unchecked".into())
         }
