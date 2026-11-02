@@ -53,7 +53,7 @@ it("opens the practice window on chapter 0, and its × tells the core to close i
   window.hideHost = { kind: "electron", platform: "darwin", openPractice } as never;
   const { container, events, unmount } = await render({});
   await act(async () => container.querySelector<HTMLButtonElement>("[data-practice-invite-open]")!.click());
-  expect(openPractice).toHaveBeenCalledWith(expect.any(String), "overview");
+  expect(openPractice).toHaveBeenCalledWith(expect.any(String), "mission");
   expect(events).toEqual([]);
   await act(async () => container.querySelector<HTMLButtonElement>("[data-practice-invite-close]")!.click());
   expect(events).toEqual([{ schema_version: 2, kind: "practice_invite_close", payload: {} }]);

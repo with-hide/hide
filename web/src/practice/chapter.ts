@@ -13,9 +13,11 @@ export type PracticeDrag = { from: string; to: string; edge: "left" | "right" | 
 /**
  * What the learner would type: `text` into the terminal of the pane `pane`,
  * then ⏎, or `text` into the field `input` marks (a palette's search box),
- * where the palette answers as it is typed and ⏎ stays the palette's.
+ * where the palette answers as it is typed and ⏎ stays the palette's. A pane's
+ * words may instead be a catalog key (`words`), read when they are typed, so
+ * the example is in the learner's language.
  */
-export type PracticeTyping = { pane: string; text: string } | { input: string; text: string };
+export type PracticeTyping = { pane: string; text: string } | { pane: string; words: string } | { input: string; text: string };
 
 /** A menu opened by right-clicking what `at` marks, then each of `path` pressed in turn: a submenu, then its item. */
 export type PracticeMenu = { at: string; path: string[] };

@@ -1,4 +1,4 @@
-// Chapter 7: asking an agent to plan a bigger change first, opening the plan
+// Chapter 8: asking an agent to plan a bigger change first, opening the plan
 // from its pane's chip, reading it large in the 보기 slot, and approving it in
 // the conversation, after which the agent starts on the first step.
 
@@ -13,7 +13,7 @@ const say = (text: string) => ({ type: { pane: LEAD, text } });
 
 export default chapter<PlanModel>({
   id: "plan",
-  number: 7,
+  number: 8,
   version: 1,
   world: PLAN_WORLD,
   quest: true,

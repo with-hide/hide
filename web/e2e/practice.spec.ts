@@ -235,11 +235,11 @@ test("the bubble's Exit closes the practice from any step, keeping where the cha
 
 test("the first chapter ends by asking what next, and Use Hide now closes the practice", async ({ page }) => {
   await withPractice(page, async (practice) => {
-    await practice.locator('[data-practice-hub-chapter="overview"] [data-practice-play]').click();
-    const layer = practice.locator('[data-practice-chapter="overview"] [data-practice-layer]');
-    await pressTo(practice, "overview", Number(await layer.getAttribute("data-practice-steps")) - 1);
+    await practice.locator('[data-practice-hub-chapter="mission"] [data-practice-play]').click();
+    const layer = practice.locator('[data-practice-chapter="mission"] [data-practice-layer]');
+    await pressTo(practice, "mission", Number(await layer.getAttribute("data-practice-steps")) - 1);
     await practice.keyboard.press("Enter");
-    const choice = practice.locator('[data-practice-chapter="overview"] [data-practice-choice]');
+    const choice = practice.locator('[data-practice-chapter="mission"] [data-practice-choice]');
     await expect(choice.locator("[data-practice-choice-way]")).toHaveCount(3);
     await clickClosingItsPage(choice.locator('[data-practice-choice-way="leave"]'));
   });
@@ -294,7 +294,7 @@ test("the sidebar's invitation brings the open practice window forward on chapte
     await expect(invite).toBeVisible();
     await page.bringToFront();
     await page.locator("[data-practice-invite-open]").click();
-    await expect(practice.locator('[data-practice-chapter="overview"]')).toBeVisible({ timeout: 20_000 });
+    await expect(practice.locator('[data-practice-chapter="mission"]')).toBeVisible({ timeout: 20_000 });
     expect(page.context().pages()).toHaveLength(2);
     await expect(invite).toHaveCount(0);
     await page.reload();

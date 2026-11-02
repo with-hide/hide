@@ -1,6 +1,6 @@
 import type { Catalog, Catalogs } from "../../schema";
 
-// Chapter 1's words (`practice/chapters/screen.ts`).
+// Chapter 2's words (`practice/chapters/screen.ts`).
 const en = {
   "practice.screen.title": "Split and move the screen",
   "practice.screen.summary": "Split, zoom, close and reopen an agent, move a pane, open a tab",
@@ -39,7 +39,7 @@ const en = {
   "practice.screen.tab.kick": "New tab",
   "practice.screen.tab.title": "Other work goes in a new tab",
   "practice.screen.tab.text": "Each tab keeps its own split.",
-  "practice.screen.end.kick": "End of chapter 1",
+  "practice.screen.end.kick": "End of chapter 2",
   "practice.screen.end.title": "The list on the left followed along",
   "practice.screen.end.text": "Project › main › tab › pane. Press any of them to go there.",
 };
@@ -82,7 +82,7 @@ const ko = {
   "practice.screen.tab.kick": "새 탭",
   "practice.screen.tab.title": "다른 일은 새 탭에서",
   "practice.screen.tab.text": "탭마다 따로 나눠 둘 수 있어요.",
-  "practice.screen.end.kick": "1편 끝",
+  "practice.screen.end.kick": "2편 끝",
   "practice.screen.end.title": "왼쪽 목록이 따라 바뀌었어요",
   "practice.screen.end.text": "프로젝트 › main › 탭 › pane 순서로 보여요. 눌러서 바로 갈 수 있어요.",
 } satisfies Catalog<typeof en>;
@@ -125,7 +125,7 @@ const zhCN = {
   "practice.screen.tab.kick": "新标签页",
   "practice.screen.tab.title": "别的工作放到新标签页",
   "practice.screen.tab.text": "每个标签页可以各自拆分。",
-  "practice.screen.end.kick": "第 1 章完",
+  "practice.screen.end.kick": "第 2 章完",
   "practice.screen.end.title": "左边的列表也跟着变了",
   "practice.screen.end.text": "项目 › main › 标签页 › 窗格。点一下就能直接过去。",
 } satisfies Catalog<typeof en>;
@@ -168,7 +168,7 @@ const ja = {
   "practice.screen.tab.kick": "新しいタブ",
   "practice.screen.tab.title": "別の作業は新しいタブで",
   "practice.screen.tab.text": "タブごとに別々に分けておけます。",
-  "practice.screen.end.kick": "第 1 章 おわり",
+  "practice.screen.end.kick": "第 2 章 おわり",
   "practice.screen.end.title": "左のリストも一緒に変わりました",
   "practice.screen.end.text": "プロジェクト › main › タブ › ペインの順に並びます。押せばすぐ移れます。",
 } satisfies Catalog<typeof en>;

@@ -35,12 +35,12 @@ ${ZONES}
 .pc-bubble p{margin:0;font-size:var(--text-subhead);line-height:1.55;color:var(--practice-mute)}
 .pc-via{margin-top:var(--spacing-sm);font-size:var(--text-body);color:var(--practice-mute);display:flex;gap:var(--spacing-sm);align-items:center;flex-wrap:wrap}
 .pc-row{display:flex;align-items:center;gap:var(--spacing-sm);margin-top:var(--spacing-md)}
-.pc-dots{display:flex;gap:var(--spacing-xs);margin-right:auto}
+.pc-dots{display:flex;gap:var(--spacing-xs);margin-right:auto;min-width:0;overflow:hidden}
 .pc-dots i{width:var(--size-tab-status-dot);height:var(--size-tab-status-dot);border-radius:var(--radius-xl);background:var(--practice-line);transition:all .3s}
 .pc-dots i.on{width:var(--spacing-lg);background:var(--practice-accent)}
 .pc-dots i.done{background:color-mix(in srgb,var(--practice-accent) 55%,var(--practice-line))}
-.pc-go{font:inherit;font-size:var(--text-subhead);font-weight:600;border:0;border-radius:var(--radius-lg);padding:var(--spacing-sm) var(--spacing-md);background:var(--practice-accent);color:var(--practice-ink);cursor:pointer;display:flex;gap:var(--spacing-sm);align-items:center}
-.pc-back{font:inherit;font-size:var(--text-body);border:0;background:none;color:var(--practice-mute);cursor:pointer;padding:var(--spacing-xs)}
+.pc-go{font:inherit;font-size:var(--text-subhead);font-weight:600;border:0;border-radius:var(--radius-lg);padding:var(--spacing-sm) var(--spacing-md);background:var(--practice-accent);color:var(--practice-ink);cursor:pointer;display:flex;gap:var(--spacing-sm);align-items:center;white-space:nowrap;flex:none}
+.pc-back{font:inherit;font-size:var(--text-body);border:0;background:none;color:var(--practice-mute);cursor:pointer;padding:var(--spacing-xs);white-space:nowrap;flex:none}
 .pc-back:hover,.pc-exit:hover{color:var(--practice-text)}
 .pc-exit{font:inherit;font-size:var(--text-body);border:0;background:none;color:var(--practice-mute);cursor:pointer;padding:var(--spacing-xs);margin-left:calc(var(--spacing-xs) * -1)}
 .pc-go.pc-sub{background:color-mix(in srgb,var(--practice-ink) 8%,transparent)}

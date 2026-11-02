@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import "../chapters";
 import chapter from "../chapters/mission";
 import type { CoreEvent } from "../world";
 import { CONDUCTOR, MISSION_WORLD, type MissionModel } from "./mission";
@@ -11,7 +12,7 @@ const answer = (payload: Record<string, unknown>): CoreEvent => ({ kind: "missio
 const running = () => MISSION_WORLD.apply(MISSION_WORLD.initial(), typedInto(CONDUCTOR, "a mission\r"))!;
 const missionIn = (model: MissionModel) => MISSION_WORLD.snapshot(model, Date.now()).rest.missions!.items[0]!;
 
-describe("chapter 8's decision, answered on the map's banner (UI_BEHAVIOR, Practice window)", () => {
+describe("chapter 0's decision, answered on the map's banner (UI_BEHAVIOR, Practice window)", () => {
   it("asks with the Conductor's choices and the one it recommends", () => {
     const question = missionIn(running()).question!;
     expect(question.options!.length).toBeGreaterThan(1);

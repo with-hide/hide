@@ -85,7 +85,7 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
       rest: { ...rest, ui_state }, agents, connection: "live", focusedPaneId: focused, usage: usage ? { nodes: [usage] } : null,
       fileIndex: frames?.fileIndex ?? null, editor: frames?.editor ?? null, documents: frames?.documents ?? NO_DOCUMENTS,
       sessionWorkSearch: frames?.sessionWorkSearch ?? null, sessionRecord: frames?.sessionRecord ?? null, linkPanel: frames?.linkPanel ?? null,
-      listings: frames?.listings ?? NO_LISTINGS, changes: frames?.changes ?? null, memory: frames?.memory ?? null,
+      listings: frames?.listings ?? NO_LISTINGS, changes: frames?.changes ?? null, memory: frames?.memory ?? null, suggestions: frames?.suggestions ?? null,
     });
   }, [chapter, model, operator]);
 

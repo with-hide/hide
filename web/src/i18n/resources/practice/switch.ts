@@ -1,6 +1,6 @@
 import type { Catalog, Catalogs } from "../../schema";
 
-// Chapter 2's words (`practice/chapters/switch.ts`).
+// Chapter 3's words (`practice/chapters/switch.ts`).
 const en = {
   "practice.switch.title": "Go back and forth fast",
   "practice.switch.summary": "The last agent, the last project, a file by name",
@@ -19,7 +19,7 @@ const en = {
   "practice.switch.pick.kick": "The project's files",
   "practice.switch.pick.title": "Type a few letters, then ⏎",
   "practice.switch.pick.text": "↑ and ↓ choose a file and ⏎ opens it. If Esc closed the list, ⏎ brings it back.",
-  "practice.switch.end.kick": "End of chapter 2",
+  "practice.switch.end.kick": "End of chapter 3",
   "practice.switch.end.title": "The file opens on the right",
   "practice.switch.end.text": "The agent keeps working beside it.",
 };
@@ -42,7 +42,7 @@ const ko = {
   "practice.switch.pick.kick": "이 프로젝트의 파일",
   "practice.switch.pick.title": "몇 글자 치고 ⏎",
   "practice.switch.pick.text": "↑ ↓로 고르고 ⏎로 열어요. Esc로 목록을 닫았다면 ⏎로 다시 열어요.",
-  "practice.switch.end.kick": "2편 끝",
+  "practice.switch.end.kick": "3편 끝",
   "practice.switch.end.title": "파일은 오른쪽에 열려요",
   "practice.switch.end.text": "에이전트는 옆에서 그대로 작업해요.",
 } satisfies Catalog<typeof en>;
@@ -65,7 +65,7 @@ const zhCN = {
   "practice.switch.pick.kick": "这个项目的文件",
   "practice.switch.pick.title": "输入几个字母，再按 ⏎",
   "practice.switch.pick.text": "↑ ↓ 选择文件，⏎ 打开。如果按 Esc 关掉了列表，按 ⏎ 再打开。",
-  "practice.switch.end.kick": "第 2 章完",
+  "practice.switch.end.kick": "第 3 章完",
   "practice.switch.end.title": "文件在右侧面板打开",
   "practice.switch.end.text": "智能体在旁边继续工作。",
 } satisfies Catalog<typeof en>;
@@ -88,7 +88,7 @@ const ja = {
   "practice.switch.pick.kick": "このプロジェクトのファイル",
   "practice.switch.pick.title": "何文字か入力して ⏎",
   "practice.switch.pick.text": "↑ ↓ で選び、⏎ で開きます。Esc で一覧を閉じたら、⏎ でもう一度開きます。",
-  "practice.switch.end.kick": "第 2 章 おわり",
+  "practice.switch.end.kick": "第 3 章 おわり",
   "practice.switch.end.title": "ファイルは右のレーンに開きます",
   "practice.switch.end.text": "エージェントは隣でそのまま作業を続けます。",
 } satisfies Catalog<typeof en>;

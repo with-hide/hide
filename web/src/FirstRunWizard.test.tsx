@@ -120,7 +120,7 @@ it("practice first ends the wizard and opens the practice window on chapter 0", 
   const { events, unmount } = await mount(startStep());
   await act(async () => way("practice").click());
   expect(navigation(events)).toEqual([{ from: "project" }]);
-  expect(openPractice).toHaveBeenCalledWith(expect.any(String), "overview");
+  expect(openPractice).toHaveBeenCalledWith(expect.any(String), "mission");
   await unmount();
 });
 

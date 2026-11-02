@@ -5,9 +5,9 @@
 // path of anyone's.
 
 import type { AgentGroup, AgentLayout } from "../../agentLayout";
-import type { AgentScope, AgentTreeScope } from "../../agentScope";
+import type { AgentScope, AgentTreeScope, ProjectTasksScope } from "../../agentScope";
 import type { PaneMoveIntent } from "../../paneMove";
-import type { AgentRow, AgentState, AsyncOperation, Checkout, LayoutNode, SnapshotRest, Workspace } from "../../snapshot";
+import type { AgentRow, AgentState, AsyncOperation, Checkout, LayoutNode, SnapshotRest, SuggestionsSection, Workspace } from "../../snapshot";
 import type { CoreEvent, WorldSnapshot } from "../world";
 
 export type PracticeTab = { id: string; name: string | null; root: LayoutNode; focused: string; zoomed: boolean };
@@ -554,4 +554,24 @@ export function counted(rest: SnapshotRest, as: "seen" | "needs_you", count = 1)
       },
     })),
   }));
+}
+
+/** Every agent scope in `rest` listing `tasks`, the sidebar's 태스크 list, as the core puts them on each scope. */
+export function withTasks(rest: SnapshotRest, tasks: ProjectTasksScope): SnapshotRest {
+  return everyScope(rest, (scope) => ({ ...scope, tasks }));
+}
+
+/**
+ * The Hide AI tool's 제안 section for `workspaceId` with Hide AI on and nothing
+ * to choose: the tool draws its tabs only once this section is read, so a world
+ * that shows the Memory tool sends it beside the Memory section.
+ */
+export function hideAiOn(workspaceId: string): SuggestionsSection {
+  return {
+    project: {
+      workspace_id: workspaceId, loading: false, unavailable: null, enabled: true, intro_seen: true, status: "idle", ai: "ready", github: "connected",
+      settings: { suggestions_enabled: true, quantity: "normal", apply_mode: "confirm", signals: [], dismissed: [] },
+      rows: [], counts: { suggestions: 0, rail: 0 },
+    },
+  };
 }

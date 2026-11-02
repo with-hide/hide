@@ -1,4 +1,4 @@
-// Chapter 1's world: one invented project with one Claude agent at work in
+// Chapter 2's world: one invented project with one Claude agent at work in
 // its only tab, answering splits, focus, zoom, pane moves, tabs and groups,
 // and closing a pane and reopening it the way the core's recent-close stack does.
 

@@ -1,6 +1,6 @@
 import type { Catalog, Catalogs } from "../../schema";
 
-// Chapter 0's words (`practice/chapters/overview.ts`).
+// Chapter 1's words (`practice/chapters/overview.ts`).
 const en = {
   "practice.overview.title": "At a glance",
   "practice.overview.summary": "The three parts of the screen, and what each is for",
@@ -18,7 +18,7 @@ const en = {
   "practice.overview.search.text": "Sessions, pull requests and files, from one field.",
   "practice.overview.center.kick": "② Where work happens",
   "practice.overview.center.title": "The terminals your agents work in",
-  "practice.overview.center.text": "Split them into tabs and panes to keep agents side by side. You'll split one yourself in chapter 1.",
+  "practice.overview.center.text": "Split them into tabs and panes to keep agents side by side. You'll split one yourself in chapter 2.",
   "practice.overview.lane.kick": "③ The project and its work",
   "practice.overview.lane.title": "How the project is going right now",
   "practice.overview.lane.text": "Sessions, pull requests, worktrees and cost on one board.",
@@ -33,7 +33,7 @@ const en = {
   "practice.overview.devices.text": "Agents running on another Mac or a server gather on the same screen.",
   "practice.overview.end.kick": "That's the tour",
   "practice.overview.end.title": "That was a look around the screen",
-  "practice.overview.end.text": "Next, choose whether to use Hide now or keep practicing.",
+  "practice.overview.end.text": "Go on to the next chapter, or pick the ones you need from the list.",
 };
 
 const ko = {
@@ -53,7 +53,7 @@ const ko = {
   "practice.overview.search.text": "세션, PR, 파일까지 한 칸에서 찾아요.",
   "practice.overview.center.kick": "② 일하는 곳",
   "practice.overview.center.title": "에이전트가 일하는 터미널",
-  "practice.overview.center.text": "탭과 pane으로 나눠 여러 에이전트를 나란히 둬요. 직접 나누는 건 1편에서.",
+  "practice.overview.center.text": "탭과 pane으로 나눠 여러 에이전트를 나란히 둬요. 직접 나누는 건 2편에서.",
   "practice.overview.lane.kick": "③ 프로젝트와 그 작업",
   "practice.overview.lane.title": "지금 프로젝트가 어떻게 돌아가는지",
   "practice.overview.lane.text": "세션, PR, 워크트리, 비용이 한 판에 모여요.",
@@ -68,7 +68,7 @@ const ko = {
   "practice.overview.devices.text": "다른 Mac이나 서버에서 도는 에이전트도 같은 화면에 모여요.",
   "practice.overview.end.kick": "다 봤어요",
   "practice.overview.end.title": "여기까지가 화면 둘러보기예요",
-  "practice.overview.end.text": "이제 바로 써 볼지, 이어서 연습할지 골라요.",
+  "practice.overview.end.text": "다음 장으로 가거나, 장 목록에서 필요한 것만 골라요.",
 } satisfies Catalog<typeof en>;
 
 const zhCN = {
@@ -88,7 +88,7 @@ const zhCN = {
   "practice.overview.search.text": "会话、PR、文件，都在一个框里查找。",
   "practice.overview.center.kick": "② 工作区",
   "practice.overview.center.title": "智能体工作的终端",
-  "practice.overview.center.text": "用标签页和窗格把多个智能体并排放置。第 1 章里你会亲手拆分。",
+  "practice.overview.center.text": "用标签页和窗格把多个智能体并排放置。第 2 章里你会亲手拆分。",
   "practice.overview.lane.kick": "③ 项目与工作",
   "practice.overview.lane.title": "项目现在进展如何",
   "practice.overview.lane.text": "会话、PR、工作树、费用一目了然。",
@@ -103,7 +103,7 @@ const zhCN = {
   "practice.overview.devices.text": "在其他 Mac 或服务器上运行的智能体也汇集在同一个屏幕。",
   "practice.overview.end.kick": "看完了",
   "practice.overview.end.title": "界面导览到此结束",
-  "practice.overview.end.text": "接下来选择直接使用 Hide，还是继续练习。",
+  "practice.overview.end.text": "继续下一章，或在章节列表里只选你需要的。",
 } satisfies Catalog<typeof en>;
 
 const ja = {
@@ -123,7 +123,7 @@ const ja = {
   "practice.overview.search.text": "セッション、PR、ファイルまでひとつの欄で探せます。",
   "practice.overview.center.kick": "② 作業するところ",
   "practice.overview.center.title": "エージェントが作業するターミナル",
-  "practice.overview.center.text": "タブとペインに分けて、複数のエージェントを並べます。自分で分けるのは第 1 章で。",
+  "practice.overview.center.text": "タブとペインに分けて、複数のエージェントを並べます。自分で分けるのは第 2 章で。",
   "practice.overview.lane.kick": "③ プロジェクトとその作業",
   "practice.overview.lane.title": "プロジェクトがいまどう進んでいるか",
   "practice.overview.lane.text": "セッション、PR、ワークツリー、費用がひとつの画面に並びます。",
@@ -138,7 +138,7 @@ const ja = {
   "practice.overview.devices.text": "別の Mac やサーバーで動くエージェントも同じ画面に集まります。",
   "practice.overview.end.kick": "ひと通り見ました",
   "practice.overview.end.title": "画面めぐりはここまでです",
-  "practice.overview.end.text": "このまま Hide を使うか、練習を続けるかを選びます。",
+  "practice.overview.end.text": "次の章へ進むか、章の一覧から必要なものだけ選びます。",
 } satisfies Catalog<typeof en>;
 
 export default { en, ko, "zh-CN": zhCN, ja } satisfies Catalogs<typeof en>;

@@ -1,4 +1,4 @@
-// Chapter 8's world: one Claude agent the learner hands a job of several pull
+// Chapter 0's world: one Claude agent the learner hands a job of several pull
 // requests as a mission, so it conducts it (`hide-mission`). Whatever words
 // the learner sends play the next part of the script, since a practice
 // understands no words. The first words are the mission: the Conductor plans
@@ -6,11 +6,18 @@
 // one decision (`hide mission decide`) with its choices, which its row asks as
 // any agent asks. A choice pressed on the map's banner, an answer written
 // there, or the next words said to the Conductor answer it: the Conductor
-// folds one node into another, clears the decision and goes on.
+// folds one node into another, clears the decision and goes on, and the
+// Project's Memory keeps what was decided. The sidebar turns to its 태스크
+// list and the lane shows the Memory tool as the core would on their events.
+// Every word the world shows is in the learner's language
+// (`practice.mission.world.*`), since this is the chapter a newcomer meets first.
 
-import type { AgentRow, AgentState, DetailItem, Mission, MissionNode, PaneHeader } from "../../snapshot";
+import type { MessageKey } from "../../i18n/catalogs";
+import { clientI18n } from "../../i18n/translator";
+import { nextSidebarLens, type AgentRow, type AgentState, type DetailItem, type MemorySection, type Mission, type MissionNode, type PaneHeader, type SidebarLens } from "../../snapshot";
 import type { CoreEvent, PracticeWorld, WorldSnapshot } from "../world";
-import { agent, applyDesk, counted, deskSnapshot, keyText, shellScreen, typed, withLineage, type DeskModel, type PracticePlace } from "./kit";
+import type { ProjectTasksScope } from "../../agentScope";
+import { agent, applyDesk, counted, deskSnapshot, hideAiOn, keyText, shellScreen, typed, withLineage, withTasks, type DeskModel, type PracticePlace } from "./kit";
 
 const PLACE: PracticePlace = { project: "hide-practice", label: "hide-practice", branch: "main" };
 
@@ -20,10 +27,13 @@ export const WORKER = "wk";
 const WORKER_TAB = "t2";
 
 const MISSION_ID = "practice-mission";
-const TITLE = "Payment retries";
-const DECISION = "Fold the retry docs into the backoff PR?";
+
+/** One of the world's words in the learner's language. */
+const say = (key: string, values?: Record<string, string | number>) => clientI18n.t(`practice.mission.world.${key}` as MessageKey, values as never) as string;
+const title = () => say("title");
+const decision = () => say("decision");
 /** The decision's choices, as `hide mission decide --option` gives them; the first is the one recommended. */
-const OPTIONS = ["Yes, fold the docs into the backoff PR", "No, keep the docs as their own PR"];
+const options = () => [say("option1"), say("option2")];
 
 /** 0 before the mission, 1 once it runs and a decision waits, 2 once the decision is answered and the plan changed. */
 export type MissionStage = 0 | 1 | 2;
@@ -42,7 +52,17 @@ export type MissionModel = {
   detailShown: boolean;
   /** The core's count of lane calls; an open in the 보기 slot is one, which brings an unpinned lane up. */
   laneCalls: number;
+  /** Which list the sidebar shows (`sidebar_lens_set`). */
+  lens: SidebarLens;
+  /** Whether the lane shows the Project's Memory tool beside the 보기 slot. */
+  memory: boolean;
 };
+
+/** Whether the sidebar shows its 태스크 list. */
+export const showsTasks = (model: MissionModel) => model.lens === "tasks";
+
+/** Whether the lane shows the Memory tool. */
+export const showsMemory = (model: MissionModel) => model.memory;
 
 /** Whether the 보기 slot shows this chapter's mission map in front. */
 export function missionInSlot(model: MissionModel): boolean {
@@ -73,8 +93,8 @@ function asking(row: AgentRow, since: number): AgentRow {
     chip_tone: tone("warning", false), mark_tone: tone("warning", false), bucket: "turn", attention_rank: 1, link_rank: 0, search_tone: "attention", subtree: "waiting", link: "question",
     verb: "answer", tree_rank: 0, request_since: since,
     session: { group: "needs_you", line: null, unfinished: false },
-    ask: { verb: "answer", what: DECISION, more: 0 },
-    line: { text: DECISION, mode: "request", tone: tone("warning", false) },
+    ask: { verb: "answer", what: decision(), more: 0 },
+    line: { text: decision(), mode: "request", tone: tone("warning", false) },
   };
   return {
     ...row, state, group: "needs_you", mark: "turn", status_code: "question", demand: "question", activity: "idle", emphasized: true, unread: true,
@@ -83,14 +103,14 @@ function asking(row: AgentRow, since: number): AgentRow {
 }
 
 const conductorRow = (spec: Pick<AgentRow, "group" | "mark" | "status_code"> & { elapsed: string }) =>
-  agent({ pane_id: CONDUCTOR, identity_label: TITLE, agent_kind: "claude", activity: spec.status_code === "working" ? "working" : "idle", ...spec });
+  agent({ pane_id: CONDUCTOR, identity_label: title(), agent_kind: "claude", activity: spec.status_code === "working" ? "working" : "idle", ...spec });
 
 const COUNTS = (working: number) => ({ error: 0, approval: 0, question: 0, working, done: 0 });
 
 /** The worker on the backoff node: delegated by the Conductor, in a tab of its own off the strip. */
 function workerRow(): AgentRow {
   const row: AgentRow = {
-    ...agent({ pane_id: WORKER, identity_label: "Back off between retries", agent_kind: "codex", group: "working", mark: "going", status_code: "working", activity: "working", elapsed: "2m" }),
+    ...agent({ pane_id: WORKER, identity_label: say("node.backoff"), agent_kind: "codex", group: "working", mark: "going", status_code: "working", activity: "working", elapsed: "2m" }),
     delegated: true, lineage_parent_pane_id: CONDUCTOR, lineage_path_pane_ids: [CONDUCTOR], lineage_depth: 1,
   };
   row.state = { ...row.state, root: false };
@@ -100,7 +120,7 @@ function workerRow(): AgentRow {
 function initial(): MissionModel {
   const conductor = resting(conductorRow({ group: "seen", mark: "quiet", status_code: "idle", elapsed: "8m" }));
   const desk: DeskModel = {
-    panes: [{ id: CONDUCTOR, agent: conductor, title: TITLE }],
+    panes: [{ id: CONDUCTOR, agent: conductor, title: title() }],
     tabs: [{ id: "t1", name: null, root: { type: "pane", pane_id: CONDUCTOR }, focused: CONDUCTOR, zoomed: false }],
     groups: [{ id: null, name: null, tabs: ["t1"] }],
     selectedGroup: null,
@@ -109,7 +129,7 @@ function initial(): MissionModel {
     nextId: 3,
     operations: [],
   };
-  return { desk, stage: 0, draft: "", said: [], startedAt: Date.now(), detail: [], detailShown: false, laneCalls: 0 };
+  return { desk, stage: 0, draft: "", said: [], startedAt: Date.now(), detail: [], detailShown: false, laneCalls: 0, lens: "projects", memory: false };
 }
 
 /** The desk with the Conductor's row changed by `change`. */
@@ -149,26 +169,26 @@ function nodes(model: MissionModel): MissionNode[] {
   const answered = model.stage >= 2;
   return [
     {
-      ...NODE, key: "config", title: "Read the retry count from settings", status: "done",
+      ...NODE, key: "config", title: say("node.config"), status: "done",
       worker: { agent: "codex", model: "gpt-5.5", effort: "medium" },
       pr: 21, prs: [{ number: 21, state: "mergeable", url: PR_URL(21) }], pr_state: "mergeable", landing: { state: "left", action: "merge" }, pr_url: PR_URL(21), branch: "practice/retry-config", stage: 3,
-      line: "CI passed · reviewed", review: "Approved by a second agent",
+      line: say("configLine"), review: say("configReview"),
       started_at_unix_ms: at - 9 * minute, finished_at_unix_ms: at - 2 * minute,
     },
     {
-      ...NODE, key: "backoff", title: "Back off between retries", status: "working",
+      ...NODE, key: "backoff", title: say("node.backoff"), status: "working",
       worker: { agent: "codex", model: "gpt-5.5", effort: "high", effort_auto: true },
       agent_id: "agent-2", pane_id: WORKER, branch: "practice/retry-backoff",
       ...(answered
-        ? { pr: 22, prs: [{ number: 22, state: "pending" as const, url: PR_URL(22) }], pr_state: "pending" as const, pr_url: PR_URL(22), stage: 2, line: "Adding the retry docs to the PR", change: "Took in the docs node, on the operator's word" }
-        : { stage: 1, line: "Adding exponential backoff to retry.ts" }),
+        ? { pr: 22, prs: [{ number: 22, state: "pending" as const, url: PR_URL(22) }], pr_state: "pending" as const, pr_url: PR_URL(22), stage: 2, line: say("backoffLineAfter"), change: say("backoffChange") }
+        : { stage: 1, line: say("backoffLine") }),
       started_at_unix_ms: at - 9 * minute,
     },
     {
-      ...NODE, key: "docs", title: "Document the retry settings", depends_on: ["backoff"],
+      ...NODE, key: "docs", title: say("node.docs"), depends_on: ["backoff"],
       status: answered ? "dropped" : "planned",
       worker: { agent: "claude", model: "sonnet", effort: "low" },
-      change: answered ? "Folded into Back off between retries" : null,
+      change: answered ? say("docsChange") : null,
     },
   ];
 }
@@ -177,13 +197,13 @@ function mission(model: MissionModel): Mission | null {
   if (model.stage === 0) return null;
   const now = Date.now();
   return {
-    id: MISSION_ID, title: TITLE, workspace_id: PLACE.project, project: PLACE.label, checkout_path: `/work/${PLACE.project}`, device_id: "local",
+    id: MISSION_ID, title: title(), workspace_id: PLACE.project, project: PLACE.label, checkout_path: `/work/${PLACE.project}`, device_id: "local",
     status: "running", scope: "pr", cap: 2, exempt: false, strength: "normal", other_vendor: true,
     // No session: this practice keeps no record to open.
-    conductor: { pane_id: CONDUCTOR, name: TITLE, agent_kind: "claude", session: null, present: true, takes_answers: true },
+    conductor: { pane_id: CONDUCTOR, name: title(), agent_kind: "claude", session: null, present: true, takes_answers: true },
     nodes: nodes(model), merge_order: ["config", "backoff"], landing_order: ["config"], stack_waiting: 0, check: "pnpm test", github: "practice-bot",
-    decision: model.stage === 1 ? DECISION : null,
-    question: model.stage === 1 ? { key: 1, why: "Both change docs/retries.md, so two PRs would conflict.", options: OPTIONS, recommend: 1, node: "docs", asked_at_unix_ms: model.startedAt } : null,
+    decision: model.stage === 1 ? decision() : null,
+    question: model.stage === 1 ? { key: 1, why: say("why"), options: options(), recommend: 1, node: "docs", asked_at_unix_ms: model.startedAt } : null,
     answer: null, answer_failed: null, delay: null, report: null,
     created_at_unix_ms: model.startedAt - 10 * 60_000, started_at_unix_ms: model.startedAt - 9 * 60_000, closed_at_unix_ms: null,
     running: 1, stale: false, github_stale: false, github_read_at_unix_ms: now,
@@ -232,8 +252,8 @@ function submit(model: MissionModel): MissionModel {
  */
 function answerLine(model: MissionModel, payload: Record<string, unknown>): string | null {
   if (model.stage !== 1 || payload.mission !== MISSION_ID || payload.key !== 1) return null;
-  const answer = typeof payload.option === "number" ? OPTIONS[payload.option - 1] : typeof payload.text === "string" ? payload.text.trim() : undefined;
-  return answer ? `[Decision answer] ${DECISION} → ${answer}` : null;
+  const answer = typeof payload.option === "number" ? options()[payload.option - 1] : typeof payload.text === "string" ? payload.text.trim() : undefined;
+  return answer ? say("answerLine", { question: decision(), answer }) : null;
 }
 
 // --- The events --------------------------------------------------------------------------
@@ -260,6 +280,17 @@ function apply(model: MissionModel, event: CoreEvent): MissionModel | null {
       return model.detail.length ? { ...model, detail: [], detailShown: false } : null;
     case "detail_show":
       return model.detail.length ? { ...model, detailShown: p.shown === true } : null;
+    case "sidebar_lens_set": {
+      const lens = (p.lens as SidebarLens | undefined) ?? nextSidebarLens(model.lens);
+      return lens === model.lens ? null : { ...model, lens };
+    }
+    // The Memory tool shown, by its rail icon, ⇧⌘L or from elsewhere; the lane put away or another tool shown takes it down.
+    case "project_memory_navigate":
+      return p.workspace_id === PLACE.project && !model.memory ? { ...model, memory: true } : null;
+    case "workspace_view": {
+      const memory = p.tool === "memory" ? true : p.open === false || "tool" in p ? false : model.memory;
+      return memory === model.memory ? null : { ...model, memory };
+    }
     default: {
       const desk = applyDesk(model.desk, event);
       return desk ? { ...model, desk } : null;
@@ -271,7 +302,7 @@ function apply(model: MissionModel, event: CoreEvent): MissionModel | null {
 
 /** The Conductor pane's head as the core sends it: at rest, asking on its second row, or at work on the answer. */
 function conductorHeader(model: MissionModel): PaneHeader {
-  if (model.stage === 1) return { working: false, notice: null, band: { kind: "answer", reason: DECISION, since_unix_ms: model.startedAt, read: false, action: null, more: 0 } };
+  if (model.stage === 1) return { working: false, notice: null, band: { kind: "answer", reason: decision(), since_unix_ms: model.startedAt, read: false, action: null, more: 0 } };
   if (model.stage === 2) return { working: true, notice: null, band: null, request: { text: model.said.at(-1)!, images: 0 } };
   return { working: false, notice: null, band: null };
 }
@@ -280,7 +311,7 @@ function snapshot(model: MissionModel, nowMs: number): WorldSnapshot {
   const drawn = deskSnapshot([{ place: PLACE, model: model.desk }], PLACE.project, nowMs);
   // Once the mission runs, its worker is drawn under the Conductor; the Conductor rests before it and asks while the decision waits.
   const lineage = model.stage >= 1 ? withLineage(drawn.rest, CONDUCTOR, [WORKER]) : drawn.rest;
-  const base = model.stage === 2 ? lineage : counted(lineage, model.stage === 1 ? "needs_you" : "seen");
+  const base = withTasks(model.stage === 2 ? lineage : counted(lineage, model.stage === 1 ? "needs_you" : "seen"), tasks(model, nowMs));
   const shown = model.detailShown && model.detail.length > 0;
   const current = mission(model);
   const headers: Record<string, PaneHeader> = { [CONDUCTOR]: conductorHeader(model) };
@@ -290,10 +321,45 @@ function snapshot(model: MissionModel, nowMs: number): WorldSnapshot {
     rest: {
       ...base,
       missions: { items: current ? [current] : [] },
-      ui_state: { ...base.ui_state!, detail: { items: model.detail, shown } },
-      // Opening the 보기 slot opens the lane, as the core does on `detail_open`.
-      workspace_view: { ...base.workspace_view!, open: shown, lane_called: model.laneCalls, lane_calls: model.laneCalls, lane_called_side: "view" },
+      ui_state: { ...base.ui_state!, sidebar_lens: model.lens, detail: { items: model.detail, shown } },
+      // Opening the 보기 slot opens the lane, as the core does on `detail_open`; the Memory tool stands beside it.
+      workspace_view: { ...base.workspace_view!, open: shown || model.memory, tool: model.memory ? "memory" : null, lane_called: model.laneCalls, lane_calls: model.laneCalls, lane_called_side: "view" },
       terminal: { headers },
+      // Hide AI on, so the Memory tool reads as it does for an operator who keeps one.
+      status: { ...base.status, background_ai: { enabled: true, provider: "claude", chosen: true, agent_summary: true, providers: [], unavailable_reason: null } },
+    },
+    frames: { memory: memory(model, nowMs), suggestions: hideAiOn(PLACE.project) },
+  };
+}
+
+/** The 태스크 list's one task: the Conductor with its worker, in 내 차례 while the decision waits. */
+function tasks(model: MissionModel, nowMs: number): ProjectTasksScope {
+  const state = model.stage === 1 ? "needs_you" as const : model.stage === 2 ? "working" as const : "resting" as const;
+  const members = model.stage >= 1 ? [CONDUCTOR, WORKER] : [CONDUCTOR];
+  const recency = new Date(nowMs).toISOString();
+  return { cards: [{ root: CONDUCTOR, state, members, checkouts: [`${PLACE.project}:${PLACE.branch}`], recency, stage: 1 }], needs_you: model.stage === 1 ? 1 : 0, recency };
+}
+
+// --- The Project's Memory ------------------------------------------------------------------
+
+const DAY_MS = 24 * 60 * 60_000;
+
+/**
+ * What the Project's Memory keeps: two older memories, and once the decision is
+ * answered the one Hide AI made of it, newest first, from the operator's own words.
+ */
+function memory(model: MissionModel, nowMs: number): MemorySection {
+  type Card = [kind: "decision" | "rule" | "lesson", key: string, ageMs: number, mine: number];
+  const decided: Card[] = model.stage >= 2 ? [["decision", "memoryNew", 60_000, 1]] : [];
+  const cards: Card[] = [...decided, ["lesson", "memoryLesson", 3 * DAY_MS, 0], ["rule", "memoryRule", 6 * DAY_MS, 1]];
+  return {
+    project: {
+      workspace_id: PLACE.project, unavailable: null, loading: false, enabled: true, capacity_reached: false, evicted_cards: 0, evicted_through_unix_ms: null,
+      rows: cards.map(([kind, key, ageMs, mine], index) => ({
+        number: cards.length - index, title: say(key), kind, human_source_count: mine, provided_session_count: index, pull_count: index, updated_at_unix_ms: nowMs - ageMs, verifying: false, promotion: null,
+      })),
+      questions: [], analysis: "idle", consent_required: false, usable_cards: cards.length, checking_card: null, check_resume_at_unix_ms: null,
+      forgotten: null, pending_action: null, expanded: null, search: null,
     },
   };
 }
@@ -318,32 +384,32 @@ function conductorScreen(model: MissionModel, cols: number): string {
     "",
     `${CLAUDE}✻${RESET} ${BOLD}Claude Code${RESET}`,
     `  ${DIM}~/${PLACE.project} · ${PLACE.branch}${RESET}`,
-    ...said("How do payment retries work now?"),
-    "● src/payment/retry.ts tries three times, one second apart.",
+    ...said(say("warmupAsk")),
+    `● ${say("warmupAnswer")}`,
   ];
   if (model.stage >= 1) {
     rows.push(
       ...said(model.said[0]!),
-      ...ran(`hide mission create --title "${TITLE}"`, "Mission made"),
-      ...ran("hide mission plan --file plan.json", "3 nodes · up to 2 workers at once"),
-      "● The plan is on my pane's chip. Starting as you said:",
-      ...ran("hide agent spawn --parent here …", "Started 2 workers, each in its own tab"),
-      ...ran("hide mission node config --pr 21 --status done", `${GREEN}#21${RESET} Read the retry count from settings · CI passed`),
+      ...ran(`hide mission create --title "${title()}"`, say("made")),
+      ...ran("hide mission plan --file plan.json", say("planned")),
+      `● ${say("onChip")}`,
+      ...ran("hide agent spawn --parent here …", say("started")),
+      ...ran("hide mission node config --pr 21 --status done", `${GREEN}#21${RESET} ${say("node.config")} · ${say("ciPassed")}`),
       "",
-      `● ${YELLOW}One thing to decide:${RESET} backoff and the docs change the same file.`,
-      `  ${DECISION}`,
-      ...ran("hide mission decide --option … --recommend 1", "Asked on the map"),
+      `● ${YELLOW}${say("decideHead")}${RESET} ${say("decideWhy")}`,
+      `  ${decision()}`,
+      ...ran("hide mission decide --option … --recommend 1", say("asked")),
     );
   }
   if (model.stage >= 2) {
     rows.push(
       ...said(model.said[1]!),
-      ...ran("hide mission plan --file plan.json", "docs dropped · folded into backoff"),
-      ...ran("hide mission decide --clear", "Decision cleared"),
-      "● Done. The backoff worker writes the docs into #22.",
+      ...ran("hide mission plan --file plan.json", say("folded")),
+      ...ran("hide mission decide --clear", say("cleared")),
+      `● ${say("doneLine")}`,
     );
-    for (const later of model.said.slice(2)) rows.push(...said(later), "● Noted. I'll tell you when the plan changes.");
-    rows.push("", `${CLAUDE}✻ Waiting on 1 worker… ${DIM}(esc to interrupt)${RESET}`);
+    for (const later of model.said.slice(2)) rows.push(...said(later), `● ${say("noted")}`);
+    rows.push("", `${CLAUDE}✻ ${say("waiting")} ${DIM}(esc to interrupt)${RESET}`);
   }
   rows.push("", rule(cols), `${DIM}>${RESET} ${model.draft}`, rule(cols));
   return rows.join("\r\n");
@@ -357,11 +423,11 @@ function workerScreen(model: MissionModel): string {
     `${DIM}│${RESET} ${DIM}~/${PLACE.project}-backoff${RESET}           ${DIM}│${RESET}`,
     `${DIM}╰──────────────────────────────╯${RESET}`,
     "",
-    `${CODEX}›${RESET} Node backoff of mission "${TITLE}": back off exponentially between retries`,
+    `${CODEX}›${RESET} ${say("brief", { title: title() })}`,
     "",
     `${DIM}•${RESET} ${BOLD}Edited${RESET} src/payment/retry.ts`,
   ];
-  if (model.stage >= 2) rows.push("", `${CODEX}›${RESET} ${YELLOW}🦉  Letter from ${TITLE}${RESET}`, "  Write the retry docs into this PR too.", "", `${DIM}•${RESET} ${BOLD}Opened${RESET} #22 · adding docs/retries.md`);
+  if (model.stage >= 2) rows.push("", `${CODEX}›${RESET} ${YELLOW}🦉  ${say("letterFrom", { title: title() })}${RESET}`, `  ${say("letterBody")}`, "", `${DIM}•${RESET} ${BOLD}Opened${RESET} #22 · ${say("opened")}`);
   return rows.join("\r\n");
 }
 

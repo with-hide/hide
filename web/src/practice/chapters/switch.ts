@@ -1,4 +1,4 @@
-// Chapter 2: going back and forth fast: the agent pane used before, the
+// Chapter 3: going back and forth fast: the agent pane used before, the
 // project used before, and a file found by name.
 
 import { chapter } from "../chapter";
@@ -6,7 +6,7 @@ import { SWITCH_WORLD, type SwitchModel } from "../worlds/switch";
 
 export default chapter<SwitchModel>({
   id: "switch",
-  number: 2,
+  number: 3,
   version: 2,
   world: SWITCH_WORLD,
   quest: true,

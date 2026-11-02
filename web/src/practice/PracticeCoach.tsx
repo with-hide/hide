@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { hostKind, keySystem } from "../host";
 import { useInterfaceTranslation } from "../i18n/client";
+import { clientI18n } from "../i18n/translator";
 import type { MessageKey } from "../i18n/catalogs";
 import { commandLabel } from "../shortcutLabels";
 import { hostChord, hostRegistry, isCycleCommand, releaseModifier, type CommandId } from "../shortcuts";
@@ -133,7 +134,7 @@ const LETTER_MS = 90;
 function typeInto(typing: PracticeTyping, pace: number): Promise<void> {
   if ("input" in typing) return typeInField(typing.input, typing.text, pace);
   if (!terminalFor(typing.pane)) throw new Error(`Practice step types into ${typing.pane}, which has no terminal on screen`);
-  pasteText(typing.pane, `\x15${typing.text}`);
+  pasteText(typing.pane, `\x15${"words" in typing ? clientI18n.t(typing.words as MessageKey) as string : typing.text}`);
   return new Promise((resolve) => window.setTimeout(() => {
     pasteText(typing.pane, "\r");
     resolve();
@@ -306,7 +307,7 @@ const fieldFilled = (selector: string | null) => !!selector && !!document.queryS
 
 /** Whether the field `selector` marks holds all the words `step` types into it. */
 function wordsIn(selector: string, step: PracticeStep): boolean {
-  const words = step.gesture && "type" in step.gesture ? step.gesture.type.text : "";
+  const words = step.gesture && "type" in step.gesture && "input" in step.gesture.type ? step.gesture.type.text : "";
   return document.querySelector<HTMLInputElement>(selector)?.value === words;
 }
 
