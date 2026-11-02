@@ -310,7 +310,7 @@ async fn connect(
                     Some(Ok(Message::Text(text))) => match ServerMessage::decode(&text)? {
                         ServerMessage::PeerJoined { connection } => {
                             if peers.contains_key(&connection) { return Err(LinkError::Closed); }
-                            if peers.len() >= MAX_PEERS {
+                            if peers.len() >= MAX_PEERS || tasks.len() >= MAX_PEERS {
                                 diagnostic(Some(connection), "connection_limit");
                                 Some(Message::Text(ClientMessage::Close { connection }.encode()?.into()))
                             } else {
