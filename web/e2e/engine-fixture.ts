@@ -24,15 +24,7 @@ import { installAgentRunner, reportedMarker, type AgentPaneFixture, type AgentRu
 export type HideRunner = (args: string[], run?: AgentRun) => Promise<HideAnswer>;
 import { afterCleanup, ownUntilWorkerExit } from "./worker-owned";
 import { enterWorkspace } from "./wire";
-
-export type E2eEngine = "herdr" | "own";
-
-/** The engine HIDE_E2E_ENGINE names; unset is `herdr`, anything else fails the run. */
-export function e2eEngine(): E2eEngine {
-  const value = process.env.HIDE_E2E_ENGINE ?? "herdr";
-  if (value === "herdr" || value === "own") return value;
-  throw new Error(`HIDE_E2E_ENGINE must be herdr or own, not ${JSON.stringify(value)}`);
-}
+import { e2eEngine, type E2eEngine } from "./e2e-engine";
 
 /** What the daemon runs its panes on, and the private root the run's files live under. */
 export type EngineServer = DaemonEngine & {

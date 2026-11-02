@@ -10,7 +10,8 @@
 
 import { expect, test } from "@playwright/test";
 import { agentIn, sendKeys, withControl } from "./daemon-actions";
-import { e2eEngine, startFixture } from "./engine-fixture";
+import { e2eEngine } from "./e2e-engine";
+import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 
 test.skip(e2eEngine() !== "own", "Herdr takes a pane's session from its own integration, not from Hide's hook");

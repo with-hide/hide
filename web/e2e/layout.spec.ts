@@ -6,7 +6,8 @@
 
 import { expect, test, type Page } from "@playwright/test";
 import { chord } from "./chords";
-import { e2eEngine, openLayout, startLayoutStack, type LayoutStack } from "./engine-fixture";
+import { e2eEngine } from "./e2e-engine";
+import { openLayout, startLayoutStack, type LayoutStack } from "./engine-fixture";
 import { corePaneFocus } from "./daemon-actions";
 import { countSent, screenshot } from "./wire";
 
