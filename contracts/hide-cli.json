@@ -4470,7 +4470,10 @@
                 "mission_checker_is_worker",
                 "mission_checker_unknown",
                 "mission_external_invalid",
-                "mission_machine_node_refused"
+                "mission_machine_node_refused",
+                "mission_machine_unavailable",
+                "mission_projects_loading",
+                "mission_machine_no_repository"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -5126,7 +5129,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:40ec8c0888b27d22159731f1b7e295fbc87560b5bbfdc080f9eb788d5755636f",
+    "digest": "sha256:f29c8ccfed5394b770dbfcd28461f8a26518815e5ab549f48021c683306db2ed",
     "envelopes": {
         "agent": {
             "answer": "value",
