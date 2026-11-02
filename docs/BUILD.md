@@ -552,6 +552,7 @@ Its source guard does not establish that the repository setting is on; verify it
 `bash scripts/build-relay-wasm.sh` builds `hide-relay-protocol` for `wasm32-unknown-unknown` from source.
 The compiler comes from the root `rust-toolchain.toml`; the script installs that toolchain's WASM standard library and the exact `wasm-bindgen-cli` version matching `Cargo.lock`, with `--locked` CLI dependencies.
 Compiler output, binding tools and their build output all stay inside this worktree's `target/`.
+The crate retains `rlib` and `cdylib` outputs to use one standard Cargo build path for native and WASM; native verification also links the small cdylib, while consumers link the rlib.
 Generated browser bindings and `relay_bg.wasm` land in ignored `hide-relay-protocol/pkg/`; no compiled binary or third-party CDN script is committed.
 The library is excluded from hakari's native workspace feature union because the union includes operating-system dependencies that cannot compile for WASM; its own direct dependencies and target features remain locked.
 

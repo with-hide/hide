@@ -843,9 +843,10 @@ The nightly's `report` job (`scripts/ci-flaky-report.py --nightly`) is the one w
 ## Mobile relay protocol
 
 `bash scripts/check-relay-protocol.sh` is the native/WASM interoperability gate, described in [RELAY_PROTOCOL.md](RELAY_PROTOCOL.md#build-and-evidence).
-Its single Rust integration binary runs identically under native cargo and `wasm-bindgen-test-runner`, including the pinned official cacophony NK vector and fatal-error/fragment-only QR cases.
+Its single Rust integration binary and one private malformed-chunk unit test run under native cargo and `wasm-bindgen-test-runner`, including the pinned official cacophony NK vector and fatal-error/fragment-only QR cases.
 The TypeScript test uses the production WASM bindings against a native Rust stdio peer, verifies both directions through a 256 KiB serialized message and owns the peer through success, failure and worker exit.
 The peer accepts at most eight bounded lines, starts no children and exits on stdin EOF; a 30-second guard detects a hang, never schedules expected ordering.
 The `relay-protocol` lane runs on Linux and Windows and includes macOS when the PR plan requests macOS coverage; main's full plan includes it.
 Crate changes and its build/check scripts select this lane, while general build definitions and lockfiles retain full coverage.
+Each job restores the workspace dependency set through the shared Rust cache action without saving; WASM and binding-tool build outputs are outside that native dependency cache.
 Its three platform jobs account for the increase in the maximum job count above.

@@ -1,13 +1,13 @@
 use hide_relay_protocol::{
     Error,
-    frame::{Frame, Kind, MAX_FRAME, MAX_PAYLOAD, MAX_PLAINTEXT},
+    frame::{Frame, Kind, MAX_FRAME, MAX_PAYLOAD},
     noise::{NoiseKeypair, Session},
 };
 
 fn pair() -> (Session, Session) {
     let key = NoiseKeypair::generate().unwrap();
-    let mut phone = Session::initiator(&key.public, 7).unwrap();
-    let mut device = Session::responder(&key.secret, 7).unwrap();
+    let mut phone = Session::initiator(&key.public_key(), 7).unwrap();
+    let mut device = Session::responder(&key, 7).unwrap();
     let first = phone.write_handshake().unwrap();
     assert_eq!(first.len(), 54);
     device.read_handshake(&first).unwrap();
@@ -22,14 +22,21 @@ fn pair() -> (Session, Session) {
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 fn bidirectional_payloads_and_exact_envelope_cap() {
     let (mut phone, mut device) = pair();
-    let plaintext = vec![42; MAX_PLAINTEXT];
-    let encrypted = phone.encrypt(&plaintext).unwrap();
+    let plaintext = vec![42; 65_506];
+    let encrypted = phone.send_message(&plaintext).unwrap().remove(0);
     assert_eq!(encrypted.len(), 65_536);
-    assert_eq!(device.decrypt(&encrypted).unwrap(), plaintext);
-    let reply = device.encrypt(b"credential accepted").unwrap();
-    assert_eq!(phone.decrypt(&reply).unwrap(), b"credential accepted");
-    assert_eq!(phone.encrypt(&vec![0; 65_515]), Err(Error::SizeLimit));
-    assert_eq!(phone.encrypt(b"retry"), Err(Error::SessionClosed));
+    assert_eq!(
+        device.recv_message(&encrypted, 0).unwrap().unwrap(),
+        plaintext
+    );
+    let reply = device
+        .send_message(b"credential accepted")
+        .unwrap()
+        .remove(0);
+    assert_eq!(
+        phone.recv_message(&reply, 0).unwrap().unwrap(),
+        b"credential accepted"
+    );
     assert_eq!(
         Frame {
             kind: Kind::Transport,
@@ -46,16 +53,16 @@ fn bidirectional_payloads_and_exact_envelope_cap() {
 fn tampering_replay_reordering_and_wrong_envelopes_end_sessions() {
     for fault in 0..5 {
         let (mut phone, mut device) = pair();
-        let mut frame = phone.encrypt(b"private reply").unwrap();
+        let mut frame = phone.send_message(b"private reply").unwrap().remove(0);
         match fault {
             0 => {
                 *frame.last_mut().unwrap() ^= 1;
             }
             1 => {
-                device.decrypt(&frame).unwrap();
+                device.recv_message(&frame, 0).unwrap();
             }
             2 => {
-                frame = phone.encrypt(b"out of order").unwrap();
+                frame = phone.send_message(b"out of order").unwrap().remove(0);
             }
             3 => {
                 frame[5] = 8;
@@ -65,9 +72,9 @@ fn tampering_replay_reordering_and_wrong_envelopes_end_sessions() {
             }
             _ => unreachable!(),
         }
-        assert!(device.decrypt(&frame).is_err());
-        assert_eq!(device.decrypt(&frame), Err(Error::SessionClosed));
-        assert_eq!(device.encrypt(b"retry"), Err(Error::SessionClosed));
+        assert!(device.recv_message(&frame, 0).is_err());
+        assert_eq!(device.recv_message(&frame, 0), Err(Error::SessionClosed));
+        assert_eq!(device.send_message(b"retry"), Err(Error::SessionClosed));
     }
 }
 
@@ -76,9 +83,9 @@ fn tampering_replay_reordering_and_wrong_envelopes_end_sessions() {
 fn handshake_authenticates_key_and_connection_without_carrying_user_data() {
     let key = NoiseKeypair::generate().unwrap();
     let other = NoiseKeypair::generate().unwrap();
-    for (public, connection) in [(other.public, 7), (key.public, 8)] {
+    for (public, connection) in [(other.public_key(), 7), (key.public_key(), 8)] {
         let mut phone = Session::initiator(&public, connection).unwrap();
-        let mut device = Session::responder(&key.secret, 7).unwrap();
+        let mut device = Session::responder(&key, 7).unwrap();
         assert!(
             device
                 .read_handshake(&phone.write_handshake().unwrap())
@@ -86,11 +93,11 @@ fn handshake_authenticates_key_and_connection_without_carrying_user_data() {
         );
         assert_eq!(device.write_handshake(), Err(Error::SessionClosed));
     }
-    let mut phone = Session::initiator(&key.public, 7).unwrap();
-    assert_eq!(phone.encrypt(b"credential"), Err(Error::InvalidState));
+    let mut phone = Session::initiator(&key.public_key(), 7).unwrap();
+    assert_eq!(phone.send_message(b"credential"), Err(Error::InvalidState));
     assert_eq!(phone.write_handshake(), Err(Error::SessionClosed));
-    let mut a = Session::initiator(&key.public, 7).unwrap();
-    let mut b = Session::initiator(&key.public, 7).unwrap();
+    let mut a = Session::initiator(&key.public_key(), 7).unwrap();
+    let mut b = Session::initiator(&key.public_key(), 7).unwrap();
     assert_ne!(a.write_handshake().unwrap(), b.write_handshake().unwrap());
 }
 
@@ -155,20 +162,27 @@ fn messages_are_bounded_ordered_and_expire_without_extending_the_deadline() {
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 #[cfg_attr(not(target_arch = "wasm32"), test)]
-fn authenticated_malformed_chunks_are_fatal() {
-    use hide_relay_protocol::noise::MAX_MESSAGE;
-    for (total, offset, data) in [
-        (MAX_MESSAGE + 1, 0, vec![]),
-        (3, 1, vec![1, 2]),
-        (3, 0, vec![1]),
-        (0, 0, vec![1]),
-    ] {
-        let (mut phone, mut device) = pair();
-        let mut chunk = (total as u32).to_be_bytes().to_vec();
-        chunk.extend_from_slice(&(offset as u32).to_be_bytes());
-        chunk.extend_from_slice(&data);
-        let frame = phone.encrypt(&chunk).unwrap();
-        assert!(device.recv_message(&frame, 0).is_err());
-        assert_eq!(device.send_message(b"retry"), Err(Error::SessionClosed));
-    }
+fn persisted_noise_scalar_restores_the_independent_vector_public_key() {
+    let vector: serde_json::Value =
+        serde_json::from_str(include_str!("../fixtures/cacophony-nk.json")).unwrap();
+    let raw: [u8; 32] = hex::decode(vector["resp_static"].as_str().unwrap())
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let key = NoiseKeypair::from_secret(&raw).unwrap();
+    assert_eq!(hex::encode(key.public_key()), vector["init_remote_static"]);
+    assert_eq!(*key.secret(), raw);
+    let mut phone = Session::initiator(&key.public_key(), 7).unwrap();
+    let mut device = Session::responder(&key, 7).unwrap();
+    device
+        .read_handshake(&phone.write_handshake().unwrap())
+        .unwrap();
+    phone
+        .read_handshake(&device.write_handshake().unwrap())
+        .unwrap();
+    let frame = phone.send_message(b"restored device").unwrap().remove(0);
+    assert_eq!(
+        device.recv_message(&frame, 0).unwrap().unwrap(),
+        b"restored device"
+    );
 }
