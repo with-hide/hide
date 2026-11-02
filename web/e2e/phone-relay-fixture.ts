@@ -79,11 +79,13 @@ export async function startPhoneRelay(port = 0) {
   const credential = "test-phone-credential";
   const vapid = createECDH("prime256v1"); vapid.generateKeys();
   const received: Record<string, unknown>[] = [];
+  const appliedInputs: string[] = [];
   const plaintext: string[] = [];
   const errors: string[] = [];
   const active = new Map<number, WebSocket>();
   let nextConnection = 1;
-  const state = { protocol: 1, offline: false, refusal: "", sleeping: false, push: false };
+  const state = { protocol: 1, offline: false, refusal: "", sleeping: false, push: false, dropInputReply: false };
+  const wire = { binaryFrames: 0 };
   const groups = (): ServerFrame => ({ type: "agents", interface_language: null, color_theme: null, groups: [
     { group: "needs_you", count: 1, agents: [{ ...agent, ...(state.sleeping ? { sleep: { state: "sleeping", since_unix_ms: 1 } } : {}) } as PhoneAgent] },
     { group: "working", count: 2, agents: [] },
@@ -121,7 +123,12 @@ export async function startPhoneRelay(port = 0) {
       await send(id, { type: "conversation", device_id: agent.device_id, pane_id: agent.pane_id, state: "ok", mode: "reset", messages: [{ id: 1, who: "agent", text: "The encrypted connection is ready.", truncated: false, at_ms: 1 }], before: null });
       await send(id, { type: "rows", device_id: agent.device_id, pane_id: agent.pane_id, state: "ok", text: "terminal output from device", lines: 1, more: false });
     } else if (data.type === "push_subscription") await send(id, { type: "push_state", notifications: "on" });
-    else if (data.type === "input") await send(id, { type: "input_result", request_id: String(data.request_id), ok: true, reason: null });
+    else if (data.type === "input") {
+      appliedInputs.push(String(data.text ?? data.key));
+      // The device applied the input, but the acknowledgement never reaches the phone.
+      if (state.dropInputReply) { state.offline = true; active.get(id)?.close(); return; }
+      await send(id, { type: "input_result", request_id: String(data.request_id), ok: true, reason: null });
+    }
     else if (data.type === "start_sheet" && data.open) await send(id, { type: "start_catalog", targets: [{ id: "home:test-device", device_id: "test-device", place: null, device_label: null, connected: true }], core_platform: "macos aarch64", kinds: [{ id: "claude", models: [] }], remembered: { kind: "claude", models: {} } });
     else if (data.type === "start_agent") await send(id, { type: "start_result", request_id: String(data.request_id), ok: true, reason: null, device_id: agent.device_id, pane_id: agent.pane_id });
     else if (data.type === "wake_agent") { state.sleeping = false; await send(id, { type: "sleep_result", request_id: String(data.request_id), sleep_id: `${agent.device_id}|${agent.pane_id}`, ok: true, reason: null }); await send(id, groups()); }
@@ -144,6 +151,7 @@ export async function startPhoneRelay(port = 0) {
         active.set(id, ws);
         ws.send(JSON.stringify({ type: "joined", connection: id, phone_protocol: state.protocol }));
       } else {
+        wire.binaryFrames++;
         if (id === null) throw new Error("missing join");
         const reply = await peer.call({ op: "receive", connection: id, frame: Buffer.from(bytes as Buffer).toString("base64url") });
         if (ws.readyState === WebSocket.OPEN) for (const frame of reply.frames) ws.send(Buffer.from(frame, "base64url"));
@@ -156,7 +164,7 @@ export async function startPhoneRelay(port = 0) {
   try {
     await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(port, "127.0.0.1", resolve); });
     const actualPort = (server.address() as { port: number }).port;
-    return { relayEndpoints: new Map([[pairing.room, `ws://127.0.0.1:${actualPort}/ws`]]), origin: `http://127.0.0.1:${actualPort}`, wsUrl: `ws://127.0.0.1:${actualPort}/ws`, qr: peer.qr, pairing, credential, received, plaintext, errors, state,
+    return { relayEndpoints: new Map([[pairing.room, `ws://127.0.0.1:${actualPort}/ws`]]), origin: `http://127.0.0.1:${actualPort}`, wsUrl: `ws://127.0.0.1:${actualPort}/ws`, qr: peer.qr, pairing, credential, received, appliedInputs, plaintext, errors, state, wire,
       disconnect: () => { for (const socket of active.values()) socket.close(); },
       stop: async () => { for (const socket of relay.clients) socket.terminate(); relay.close(); server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve())); await peer.stop(); },
     };

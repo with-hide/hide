@@ -48,7 +48,7 @@ export const mobileRelayCatalogs = {
     "mobile.relay.storage": "기기 목록을 저장하지 못했어요. 브라우저 저장소를 허용한 뒤 다시 시도하세요.",
     "mobile.relay.busy": "지금 연결이 많아요 · 잠시 뒤 다시 시도해요",
     "mobile.relay.remove": "기기 지우기",
-    "mobile.relay.removeConfirm": "이 폰에서 {{name}}을 지울까요? 다시 연결하려면 새 QR이 필요해요.",
+    "mobile.relay.removeConfirm": "{{name}}: 이 폰에서 연결을 지울까요? 다시 연결하려면 새 QR이 필요해요.",
     "mobile.relay.connecting": "연결 중…",
     "mobile.relay.loadError": "폰 앱을 불러오지 못했어요. 다시 시도하세요.",
     "mobile.relay.retry": "다시 시도",

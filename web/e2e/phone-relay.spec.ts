@@ -78,17 +78,53 @@ test("host picker reports counts, reconnects without repeating a reply and route
   await expect(page.getByText("Needs you 1 · Working 2", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Connect another device" })).toBeVisible();
   await page.keyboard.press("Escape");
+  await page.locator('[data-phone-agent="test-device|pane-one"]').click();
+  await expect(page.getByText("The encrypted connection is ready.", { exact: true })).toBeVisible();
   await page.clock.install();
-  relay.state.offline = true; relay.disconnect();
+  relay.state.dropInputReply = true;
+  await page.locator("[data-phone-reply]").fill("Apply this reply once");
+  await page.locator("[data-phone-send]").click();
+  await expect.poll(() => relay.received.filter((frame) => frame.type === "input").length).toBe(1);
   await expect(page.locator("[data-phone-unreachable]")).toContainText("Hide turned off or is asleep");
   await expect(page.locator("[data-phone-unreachable]")).not.toContainText("Tailscale");
   relay.state.offline = false;
   await page.clock.fastForward(15_000);
-  await expect(page.locator('[data-phone-connected="true"]')).toBeVisible();
+  await expect(page.locator("[data-phone-reply]")).toBeEnabled();
+  await expect(page.locator("[data-phone-unreachable]")).toHaveCount(0);
+  expect(relay.appliedInputs).toEqual(["Apply this reply once"]);
   await page.goto(`${relay.origin}/?host=${relay.pairing.room}&open=test-device%7Cpane-one`);
   await expect(page.locator('[data-phone-detail="test-device|pane-one"]')).toBeVisible();
-  expect(relay.received.filter((frame) => frame.type === "input")).toHaveLength(0);
+  expect(relay.received.filter((frame) => frame.type === "input")).toMatchObject([{ text: "Apply this reply once" }]);
+  expect(relay.appliedInputs).toEqual(["Apply this reply once"]);
 });
+
+for (const surface of ["root", "picker"]) {
+  test(`the ${surface} refuses a saved device's changed protocol before Noise or authentication`, async ({ page, relay }) => {
+    const second = await startPhoneRelay();
+    relay.relayEndpoints.set(second.pairing.room, second.wsUrl);
+    try {
+      await pair(page, relay);
+      await page.goto("about:blank");
+      relay.state.protocol = 9;
+      relay.received.length = relay.plaintext.length = relay.wire.binaryFrames = 0;
+      if (surface === "root") await page.goto(relay.origin);
+      else {
+        await page.goto(relay.origin + "/" + new URL(second.qr).hash);
+        await page.getByRole("button", { name: "Connect", exact: true }).click();
+        await expect(page.locator('[data-phone-connected="true"]')).toBeVisible();
+        await page.getByRole("button", { name: second.pairing.name, exact: true }).click();
+      }
+      await expect.poll(() => relay.plaintext.length).toBeGreaterThan(0);
+      await expect(page.getByText("Phone app 1 · Device 9", { exact: true })).toBeVisible();
+      expect(relay.wire.binaryFrames).toBe(0);
+      expect(relay.received).toEqual([]);
+      await page.getByRole("button", { name: /Phone app 1 · Device 9/ }).click();
+      await expect(page.getByRole("heading", { name: `Update Hide on ${relay.pairing.name}` })).toBeVisible();
+      expect(relay.wire.binaryFrames).toBe(0);
+      expect(relay.received).toEqual([]);
+    } finally { await page.goto("about:blank"); await second.stop(); }
+  });
+}
 
 test("unsupported device shows both protocol versions and lets the user choose another", async ({ page, relay }) => {
   relay.state.protocol = 9;

@@ -1,5 +1,6 @@
 import { NoiseSession, encodeClient, decodeServer } from "../../../hide-relay-protocol/web";
 import { keyBytes, relayReady, RELAY_URL } from "./relayRuntime";
+import { PHONE_PROTOCOL } from "./phoneVersion";
 
 /** The application's socket boundary, shared by direct WebSocket and encrypted relay. */
 export interface PhoneSocket {
@@ -23,7 +24,7 @@ export class RelaySocket implements PhoneSocket {
   private timer: ReturnType<typeof setInterval> | null = null;
   private openedAt = performance.now();
 
-  constructor(private host: { room: string; noiseKey: string }, private version: (protocol: number) => boolean,
+  constructor(private host: { room: string; noiseKey: string }, private versionMismatch: (protocol: number) => void,
     private refused: (reason: string) => void) {
     void relayReady().then(() => this.open()).catch(() => this.fail("crypto_unavailable"));
   }
@@ -41,7 +42,11 @@ export class RelaySocket implements PhoneSocket {
           if (control.type === "refused") return this.fail(control.reason);
           if (control.type === "peer_left") return this.close();
           if (control.type !== "joined" || this.noise) throw new Error("invalid_control");
-          if (!this.version(control.phone_protocol)) return this.close();
+          // Every app-frame consumer, including list observers, uses this exact contract.
+          if (control.phone_protocol !== PHONE_PROTOCOL) {
+            this.versionMismatch(control.phone_protocol);
+            return this.close();
+          }
           this.noise = NoiseSession.initiator(keyBytes(this.host.noiseKey), control.connection);
           ws.send(this.noise.write_handshake());
           return;
