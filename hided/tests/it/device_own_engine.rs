@@ -253,7 +253,7 @@ fn a_device_of_the_own_engine_runs_no_herdr_and_its_pane_outlives_the_node() -> 
             .map_err(|error| anyhow::anyhow!("{error:?}"))
     };
     let proof = start(PANE, "printf 'own_%s\\n' device; exec sleep 600".to_owned())?;
-    device.started.push(proof.clone());
+    device.started.push(proof);
 
     // A caller in a pane is proved by the pane's holder record: the node
     // checks the caller descends from the program the record names and
@@ -270,7 +270,7 @@ fn a_device_of_the_own_engine_runs_no_herdr_and_its_pane_outlives_the_node() -> 
         socket.display()
     );
     let asker = start(ASKER, ask)?;
-    device.started.push(asker.clone());
+    device.started.push(asker);
     wait_for("the asker's credential", || {
         Ok(Device::screen(&panes, ASKER)?
             .contains("answer True")

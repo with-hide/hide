@@ -9,8 +9,7 @@
 //! until the node answers or its bound passes, so none is made under the
 //! runtime lock.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::Duration;
 
 use crate::holders::{
@@ -51,8 +50,10 @@ struct Inner {
     diagnose: Diagnose,
     sinks: Mutex<Sinks>,
     /// Raised when the engine lets go of these holders: the watch answers
-    /// its next report with false and ends.
-    stopped: AtomicBool,
+    /// its next report with false and ends, and a watch waiting to open
+    /// again is woken by `stop` and ends.
+    stopped: Mutex<bool>,
+    stop: Condvar,
 }
 
 #[derive(Default)]
@@ -72,7 +73,8 @@ impl LinkPanes {
                 link,
                 diagnose,
                 sinks: Mutex::default(),
-                stopped: AtomicBool::new(false),
+                stopped: Mutex::new(false),
+                stop: Condvar::new(),
             }),
         }
     }
@@ -135,20 +137,29 @@ impl LinkPanes {
 
 impl Drop for LinkPanes {
     fn drop(&mut self) {
-        self.inner.stopped.store(true, Ordering::Release);
+        *self
+            .inner
+            .stopped
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = true;
+        self.inner.stop.notify_all();
     }
 }
 
 impl Inner {
+    fn stopped(&self) -> bool {
+        *self.stopped.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// Holds a pane watch open on the node until the engine lets go or the
     /// link ends, opening it again when it ends any other way.
     fn follow(&self) {
-        while !self.stopped.load(Ordering::Acquire) && self.link.closed_reason().is_none() {
+        while !self.stopped() && self.link.closed_reason().is_none() {
             let mut undecoded = None;
             let ended = self
                 .link
                 .call_with_progress(Call::PaneWatch, WATCH_SPAN, &mut |report| {
-                    if self.stopped.load(Ordering::Acquire) {
+                    if self.stopped() {
                         return false;
                     }
                     match serde_json::from_value::<PaneWatchReport>(report) {
@@ -162,7 +173,7 @@ impl Inner {
                         }
                     }
                 });
-            if self.stopped.load(Ordering::Acquire) {
+            if self.stopped() {
                 return;
             }
             let reason = match (undecoded, ended) {
@@ -175,7 +186,14 @@ impl Inner {
                 "kind": "pane_watch.ended",
                 "reason": reason,
             }));
-            std::thread::sleep(WATCH_RETRY);
+            let stopped = self.stopped.lock().unwrap_or_else(PoisonError::into_inner);
+            let (stopped, _) = self
+                .stop
+                .wait_timeout_while(stopped, WATCH_RETRY, |stopped| !*stopped)
+                .unwrap_or_else(PoisonError::into_inner);
+            if *stopped {
+                return;
+            }
         }
     }
 

@@ -269,6 +269,8 @@ mod tests {
     #[derive(Default)]
     struct Holders {
         facts: Mutex<Option<PaneFactsSink>>,
+        /// Told when a watch hands its facts sink.
+        given: std::sync::Condvar,
         ends: Mutex<Option<PaneEnded>>,
     }
 
@@ -320,6 +322,7 @@ mod tests {
         }
         fn watch_facts(&self, sink: PaneFactsSink) {
             *self.facts.lock().unwrap() = Some(sink);
+            self.given.notify_all();
         }
         fn set_rules(&self, _: &str, _: Option<ScreenRules>) -> Result<(), HolderError> {
             Ok(())
@@ -471,12 +474,16 @@ mod tests {
                 go_on
             })
         });
-        let facts = loop {
-            if let Some(facts) = holders.facts.lock().unwrap().clone() {
-                break facts;
-            }
-            std::thread::sleep(Duration::from_millis(5));
-        };
+        let (given, _) = holders
+            .given
+            .wait_timeout_while(
+                holders.facts.lock().unwrap(),
+                Duration::from_secs(5),
+                |facts| facts.is_none(),
+            )
+            .unwrap();
+        let facts = given.clone().expect("the watch hands its facts sink");
+        drop(given);
         facts("w1:p1", &titled("one"));
         let told = loop {
             match reports.recv_timeout(Duration::from_secs(5)).unwrap() {
