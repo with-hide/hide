@@ -1897,7 +1897,13 @@ fn holder_harness() -> (Harness, Arc<HolderPanes>) {
     });
     struct Shared(Arc<HolderPanes>);
     impl Attacher for Shared {
-        fn open(&self, pane: &str, mode: Mode, rows: u16, cols: u16) -> Result<SessionParts, String> {
+        fn open(
+            &self,
+            pane: &str,
+            mode: Mode,
+            rows: u16,
+            cols: u16,
+        ) -> Result<SessionParts, String> {
             self.0.open(pane, mode, rows, cols)
         }
         fn open_transport(
