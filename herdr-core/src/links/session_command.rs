@@ -133,6 +133,10 @@ pub struct DeviceFacts {
     pub local: bool,
     /// Since when it has not answered; none while it is connected.
     pub unreachable_since_unix_ms: Option<u64>,
+    /// Connected, but Hide has not yet read every checkout its Herdr shows,
+    /// so the repository of a Project there may still be unknown and the
+    /// Project left out of the scope until it is read.
+    pub reading: bool,
 }
 
 /// What the runtime hands a `hide session` command, copied under its lock.
@@ -365,7 +369,19 @@ fn resolve(
     if held.is_empty() {
         return Err(not_found());
     }
+    let reading = held.iter().any(|session| {
+        scope
+            .devices
+            .iter()
+            .any(|device| device.reading && device.id == session.device_id)
+    });
     let mut inside: Vec<_> = held.into_iter().filter(|s| members.contains(s)).collect();
+    if inside.is_empty() && reading {
+        return Err(no(
+            "device_reading",
+            "Hide is still reading that device's checkouts, so its Project is not known yet; retry in a minute",
+        ));
+    }
     if inside.is_empty() {
         return Err(no(
             "other_project",
@@ -498,6 +514,14 @@ fn list(
         "limit": limit,
         "sessions": sessions,
         "more": page.more,
+        // Their Projects may be missing until the read lands, said rather
+        // than drawn as a list that holds them all.
+        "reading_devices": scope
+            .devices
+            .iter()
+            .filter(|device| device.reading)
+            .map(|device| json!({"id": device.id, "label": device.label}))
+            .collect::<Vec<_>>(),
     }))
 }
 
@@ -1156,12 +1180,14 @@ mod tests {
                     label: None,
                     local: true,
                     unreachable_since_unix_ms: None,
+                    reading: false,
                 },
                 DeviceFacts {
                     id: "mini".into(),
                     label: Some("mini".into()),
                     local: false,
                     unreachable_since_unix_ms: Some(NOW - 5 * 60_000),
+                    reading: false,
                 },
             ],
             nodes: vec![("local".into(), node)],
@@ -1321,6 +1347,41 @@ mod tests {
             .repositories
             .insert("app-mini".into(), "acme/fork".into());
         assert!(!listed(&other).contains(&"s-mini".to_owned()));
+    }
+
+    #[test]
+    fn a_device_still_being_read_is_said_rather_than_its_sessions_refused_as_another_projects() {
+        let (_state, mut scope) = fixture();
+        scope.repositories.remove("app-mini");
+        let mini = scope.devices.iter_mut().find(|d| d.id == "mini").unwrap();
+        mini.unreachable_since_unix_ms = None;
+        mini.reading = true;
+        let answer = list(&scope, None, None);
+        assert!(!ids(&answer).contains(&"s-mini".to_owned()));
+        assert_eq!(
+            answer["reading_devices"],
+            json!([{"id": "mini", "label": "mini"}])
+        );
+        let refused = |scope: &SessionScope| {
+            run_with(
+                scope,
+                SessionCommand::Record {
+                    id: "s-mini".into(),
+                },
+            )
+            .unwrap_err()
+            .0
+        };
+        assert_eq!(refused(&scope), "device_reading");
+        // Once read, a clone of another repository is another Project's.
+        scope
+            .devices
+            .iter_mut()
+            .find(|d| d.id == "mini")
+            .unwrap()
+            .reading = false;
+        assert_eq!(refused(&scope), "other_project");
+        assert_eq!(list(&scope, None, None)["reading_devices"], json!([]));
     }
 
     #[test]

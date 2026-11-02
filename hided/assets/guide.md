@@ -147,7 +147,7 @@ hide session read <id> --request <n> | --from <n> [--events <n>] [--json]
 ```
 
 - When the operator asks you to look through past work, narrow it in three steps instead of opening session files: `list` to scan one line per session (the last 7 days and 50 sessions unless you ask for more, 200 at most), `record` to read the one you picked as its session record shows it, and `read` only for the few requests whose exact words or tool output you need.
-- The scope is the Project of your checkout and the connected devices' checkouts of the same repository (the one each checkout's `origin` names), with every session they delegated; another Project's session is refused with `other_project`.
+- The scope is the Project of your checkout and the connected devices' checkouts of the same repository (the one each checkout's `origin` names), with every session they delegated; another Project's session is refused with `other_project`, and one on a device Hide is still reading with `device_reading`, which a retry a minute later answers.
 - A session is named by its agent id (`agent-N`) or its native session id; `record` numbers its requests from 1, and `read <id> --request <n>` reads the raw events around request `n`, `--from <n>` goes on from event `n` (16 events unless `--events` asks, 40 at most, and the answer names the next `--from`).
 - Every line says where its words come from: `[AI 요약]` is Hide AI's summary, `[원문]` what was sent or recorded as it was; check a summary against `read` before you rely on it.
 - `read` masks credentials, refuses a session file whose path looks like a credential file (`credential_path_refused`) and a disconnected device (`device_unavailable`); read the record instead. Nothing here changes the operator's screen.
