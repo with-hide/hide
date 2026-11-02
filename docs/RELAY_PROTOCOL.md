@@ -26,6 +26,100 @@ A connection is a nonzero u32, unique for the lifetime of the device's relay soc
 `close {connection}`, `peer_left {connection}` and `refused {reason}` carry no user content.
 The relay owns allocation, authorization to route each connection, room/phone limits, deadlines, frame-rate/traffic limits and teardown.
 
+`hide-relay` implements that owner as a memory-only server: WebSocket `/ws` and `GET /health` (`200`, `ok\n`).
+It has no database, state files, phone credentials or Noise session keys.
+The device socket owns the room and its phone sockets; its departure closes those phones with `device_offline`.
+A phone departure or device `close {connection}` removes just that peer and sends the device `peer_left`.
+The device also receives `peer_left` after its own `close`; connection numbers never repeat during that device socket's lifetime.
+An unknown or foreign connection number is an `invalid_message` routing violation, so callers must stop sending for a peer they close.
+
+### Which side detects an attack
+
+The relay verifies the device's challenge proof and rejects malformed envelopes and unauthorized routing.
+It cannot authenticate the opaque Noise payload: tamper and replay are detected by the receiving endpoint's `Session`, which permanently fails that session.
+The device endpoint logs its content-free integrity diagnostic and sends `close {connection}`; a phone endpoint closes its socket.
+The relay then releases that peer and records `peer_closed`, without claiming to know why the endpoint closed it.
+The server's integration journey sends tampered and replayed ciphertext through real sockets, observes the device endpoint reject it, then checks this close path while another phone continues exchanging encrypted messages.
+Knowing a room hash grants no phone credential: the endpoint must still complete Noise and check phone authorization inside the encrypted channel.
+
+### Server budgets and refusals
+
+`hide-relay/src/limits.rs` is the numeric authority; the standalone binary uses its constants, and a library embedding may only lower them.
+
+| Budget | Production cap | `refused.reason` | Log `cap` |
+| --- | --- | --- | --- |
+| Concurrent admitted WebSockets, pending device proof included | 512 | `connection_limit` | `connections` |
+| Phones in one room | 4 | `room_limit` | `phones_per_room` |
+| New WebSockets per source IP in a fixed 60-second window | 60 | `rate_limit` | `connections_per_ip` |
+| Complete binary envelope | Protocol `MAX_FRAME`, 65,536 bytes | `frame_limit` | `frame_size` |
+| Control message | Protocol `MAX_CONTROL`, 2,048 bytes | `frame_limit` | `control_size` |
+| Forwarded bytes per room, both directions including binary headers and handshakes | 1 GiB in a 24-hour window | `daily_limit` | `bytes_per_room_per_day` |
+| Unexpired IP / room accounting entries | 4,096 each | `rate_limit` / `connection_limit` | `ip_records` / `room_records` |
+| Data output per socket, including an in-progress write | 8 frames | `connection_limit` | `outbound_queue` |
+| Control output per socket, including reserved phone departures | 16 messages | `connection_limit` | `control_queue` |
+
+A window starts at that IP's first attempt or the room's first admission, using monotonic uptime, and resets on the first operation at or after its end.
+Room usage survives the last disconnect for the rest of that window; reconnecting cannot reset it.
+At most 32 additional TCP tasks perform HTTP handshakes or deliver refusals, each with an 8 KiB HTTP buffer, 32 headers and a five-second deadline; beyond that task bound the listener applies backpressure before accepting another socket.
+The WebSocket limit is enforced before reserving room state, but a valid upgrade receives a `refused` message before close so a browser can read the reason.
+Health requests do not use WebSocket admission or IP-rate budget.
+A refusal closes its sending socket, leaving unrelated sockets intact; closing the room's owning device necessarily disconnects that room's phones too.
+If a phone recipient's data queue is full, that phone is refused and removed; the device receives `peer_left`, and other phones remain live.
+If a phone fills the device's data queue, the sending phone is refused; an unauthenticated burst cannot evict the device.
+Control messages have sixteen independently reserved slots, so data cannot exhaust lifecycle capacity; library embeddings may lower this through `Limits::queued_controls`.
+Each successful join reserves its eventual `peer_left` slot before inserting the phone; new joins are refused when those slots run out.
+One bounded FIFO merges data and control while preserving `peer_joined`, data and `peer_left` order; permits remain held through each write.
+If the device itself cannot receive data or `peer_left`, it is disconnected so it cannot keep a ghost peer.
+Undeliverable data is reported by the peer departure; it is never retained for a replacement connection.
+The room budget charges received valid envelopes before delivery, including a full or retired destination, so receiver failure cannot make ingress free.
+A device response racing an already closed phone is charged to the room budget and answered with `peer_left`, without closing the device or delivering to a replacement phone.
+A retired ID may therefore produce `peer_left` again; clients must treat repeated notifications as idempotent.
+Closing that retired peer again is idempotent; zero and never-issued connection IDs remain routing violations.
+
+These caps bound the service's memory and initial free-service budget, not a measured production throughput promise.
+Eight maximum-size data frames across 512 sockets occupy at most 256 MiB of payload; sixteen protocol-bounded control messages per socket add at most 16 MiB.
+Receive buffers and task metadata add to that budget.
+Every binary forward parses one bounded envelope, charges one room counter, and queues it for one recipient; there is no room broadcast or background sweep.
+Admission alone prunes the bounded accounting tables; there is no per-frame full-table scan.
+
+### Socket lifetime and client recovery
+
+The first routing hello and device proof must complete within ten seconds of WebSocket establishment.
+The binary expires admitted sockets after 90 seconds without incoming traffic; a library embedding may lower this idle timeout through `Limits` but cannot raise or disable it; clients keep them alive with a ping or an encrypted application heartbeat well before that deadline.
+Each socket write has a five-second deadline, and its registration is released before a final close write is attempted.
+A failed or expired write records `write_timeout` and attempts a `timeout` refusal with close code `1008`; it is not a cap event.
+An exhausted shutdown deadline records `shutdown_timeout` without a cap field.
+Every refusal half-closes TCP and discards at most `MAX_FRAME + 14` unread bytes within that same deadline.
+If pipelined input fills that discard budget, the socket stays half-closed until the deadline so the peer can read the refusal before unread input causes a reset; no further input is retained or consumed.
+Restart stops acceptance, closes admitted sockets with code `1012` (`restart`), clears every room and counter and drains or aborts all owned tasks within sixteen seconds.
+An HTTP upgrade already in progress may instead see a failed upgrade or `timeout`; it must reconnect too.
+
+| Close code | Meaning | Client action |
+| --- | --- | --- |
+| 1000 | Peer was closed | Discard its Noise session; reconnect only while the feature still wants it |
+| 1008 | Admission, envelope, routing or timeout refusal | Read the preceding `refused.reason`; discard state and correct the cause before a fresh handshake |
+| 1012 | Server restarting | Reconnect with jittered backoff and a new admission and Noise session |
+| 1013 | A budget was crossed | Read `refused.reason`, show the limit state and retry with jittered backoff |
+
+An EOF or failed upgrade also requires a fresh connection; the server retains no resumable session or queued message.
+Clients own reconnect backoff and application intent deduplication; relay restart alone cannot prove an answer is applied once.
+
+### Logs and deployment boundary
+
+The binary writes JSON lines to stderr with only `event`, optional validated `room` hash, optional byte `size`, and optional `cap` name.
+`peer_closed` includes the bytes received for forwarding; refusals name their category and cap, never a wire object or underlying exception.
+No IP address, key, credential, URL, application payload or close reason supplied by a peer is logged.
+A disconnected stderr collector does not panic connection tasks; deployment must monitor its collector too.
+The relay itself retains no log files; deployment owns the stderr collector, seven-day retention and alerts on `cap_exceeded`, `server_failed` and missing health responses.
+Those collection and alert settings are deployment work, not established by running the binary locally.
+
+TLS terminates at the deployment's reverse proxy.
+By default IP budgets use the TCP peer and ignore all forwarding headers.
+With `--trusted-proxy <IP>`, only that exact peer must supply one `X-Real-IP` value containing a single valid address; missing, duplicate, malformed or chained addresses are refused.
+The proxy must overwrite this header with the real client address and must not append or pass through a caller's value.
+IPv4-mapped IPv6 addresses are canonicalized for accounting; native IPv6 addresses share their /64 attempt budget and accounting entry.
+Do not put multiple callers behind a proxy without this explicit trust setting: they would share the proxy IP's budget.
+
 ## Encrypted frames and messages
 
 Every binary WebSocket message is exactly one envelope: wire version u8 (1), kind u8 (1 handshake, 2 transport), connection u32 big-endian, then Noise bytes.

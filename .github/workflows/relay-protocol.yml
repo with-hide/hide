@@ -5,6 +5,9 @@ on:
       include-macos:
         type: boolean
         default: true
+    secrets:
+      HIDE_ISSUES_APP_KEY:
+        required: false
 permissions:
   contents: read
 jobs:
@@ -39,3 +42,27 @@ jobs:
         run: |
           bash scripts/verify-web.sh install --ignore-scripts
           bash scripts/verify-web.sh relay-protocol typecheck
+      - name: Install cargo-nextest
+        run: bash scripts/install-nextest.sh
+      - name: Real relay sockets, caps and endpoint integrity
+        run: |
+          bash scripts/verify-cargo.sh nextest --profile ci -p hide-relay
+          bash scripts/verify-cargo.sh clippy -p hide-relay --all-targets -- -D warnings
+      - name: Mint the development issues token
+        id: issues-token
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.HIDE_ISSUES_APP_CLIENT_ID }}
+          private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
+          owner: with-hide
+          repositories: hide,hide-private
+      - name: Report flaky and failed tests
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ steps.issues-token.outputs.token }}
+        run: python3 scripts/ci-flaky-report.py --suite rust --junit target/nextest/ci/junit*.xml
