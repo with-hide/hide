@@ -30,9 +30,12 @@
 //! Input comes in two kinds (PRD engine-bundle-2-pane-holder D-8): bytes
 //! already encoded ([`ClientMessage::Input`]), written as they are, and
 //! requests that mean something ([`ClientMessage::Paste`],
-//! [`ClientMessage::Mouse`], [`ClientMessage::Scroll`]), which the holder
-//! encodes for the pane's settings at that moment. Nothing guesses from
-//! bytes what they were.
+//! [`ClientMessage::Mouse`], [`ClientMessage::Scroll`], and
+//! [`ClientMessage::Key`] to a holder that names [`Capability::Keys`]),
+//! which the holder encodes for the pane's settings at that moment. Nothing
+//! guesses from bytes what they were. Every message that becomes the
+//! program's input is written in the order the connection sent it (PRD
+//! engine-bundle-3-core-owns D-12).
 //!
 //! A fragment is display-only ANSI (D-7): it never turns on mouse reports,
 //! bracketed paste, a keyboard protocol or focus reports, and never asks the
@@ -79,6 +82,9 @@ pub const MAX_FRAGMENT: usize = 4 * 1024 * 1024;
 /// The most bytes one frame carries, kind byte included: a fragment and its
 /// header.
 pub const MAX_FRAME: usize = MAX_FRAGMENT + 1024;
+
+/// The most keys one [`ClientMessage::Key`] carries.
+pub const MAX_KEYS: usize = 256;
 
 /// The most bytes a [`Hello`] frame carries.
 pub const MAX_HELLO: usize = 4 * 1024;
@@ -153,6 +159,7 @@ mod kind {
     pub const MOUSE: u8 = 0x12;
     pub const SCROLL: u8 = 0x13;
     pub const THEME: u8 = 0x14;
+    pub const KEY: u8 = 0x15;
     /// A first message, like [`HELLO`].
     pub const ASK: u8 = 0x18;
     /// A first message, like [`HELLO`]: a connection that follows the facts.
@@ -180,6 +187,10 @@ pub enum Capability {
     Notices,
     /// The holder sends the pane's [`Facts`] on a watch connection.
     Facts,
+    /// The holder reads [`ClientMessage::Key`]; a node sends it only to a
+    /// holder whose welcome names this, since an older holder reads it as a
+    /// message it does not know and closes the connection.
+    Keys,
     /// A capability this build does not know, kept by name so a side can
     /// answer with the ones it does.
     Other(String),
@@ -191,6 +202,7 @@ impl Capability {
             Self::Screen => "screen",
             Self::Notices => "notices",
             Self::Facts => "facts",
+            Self::Keys => "keys",
             Self::Other(name) => name,
         }
     }
@@ -200,6 +212,7 @@ impl Capability {
             "screen" => Self::Screen,
             "notices" => Self::Notices,
             "facts" => Self::Facts,
+            "keys" => Self::Keys,
             other => Self::Other(other.to_owned()),
         }
     }
@@ -812,6 +825,58 @@ pub enum Answer {
     },
 }
 
+/// A key by its name, which the holder encodes for the program's keyboard
+/// settings at that moment (PRD engine-bundle-3-core-owns D-21): an arrow in
+/// application cursor mode, Escape under a keyboard protocol, as Herdr
+/// encodes a named key for its pane.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Key {
+    Escape,
+    Enter,
+    Tab,
+    ShiftTab,
+    Up,
+    Down,
+    Left,
+    Right,
+    Backspace,
+    CtrlC,
+}
+
+impl Key {
+    const ALL: [Self; 10] = [
+        Self::Escape,
+        Self::Enter,
+        Self::Tab,
+        Self::ShiftTab,
+        Self::Up,
+        Self::Down,
+        Self::Left,
+        Self::Right,
+        Self::Backspace,
+        Self::CtrlC,
+    ];
+
+    fn code(self) -> u8 {
+        match self {
+            Self::Escape => 0,
+            Self::Enter => 1,
+            Self::Tab => 2,
+            Self::ShiftTab => 3,
+            Self::Up => 4,
+            Self::Down => 5,
+            Self::Left => 6,
+            Self::Right => 7,
+            Self::Backspace => 8,
+            Self::CtrlC => 9,
+        }
+    }
+
+    fn from_code(code: u8) -> Option<Self> {
+        Self::ALL.into_iter().find(|key| key.code() == code)
+    }
+}
+
 /// What a node sends.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ClientMessage {
@@ -822,6 +887,9 @@ pub enum ClientMessage {
     Paste(Vec<u8>),
     Mouse(Mouse),
     Scroll(Scroll),
+    /// Keys pressed in order, at most [`MAX_KEYS`], to a holder that names
+    /// [`Capability::Keys`].
+    Key(Vec<Key>),
     Resize(Size),
     Theme(Theme),
     /// The next fragment is full: the node lost track of the screen.
@@ -1120,6 +1188,13 @@ pub fn write_client(writer: &mut impl Write, message: &ClientMessage) -> io::Res
             payload.push(scroll.modifiers.0);
             write_frame(writer, kind::SCROLL, &payload)
         }
+        ClientMessage::Key(keys) => {
+            if keys.len() > MAX_KEYS {
+                return Err(too_long("keys", keys.len(), MAX_KEYS));
+            }
+            let payload: Vec<u8> = keys.iter().map(|key| key.code()).collect();
+            write_frame(writer, kind::KEY, &payload)
+        }
         ClientMessage::Resize(size) => {
             let mut payload = size.rows.to_le_bytes().to_vec();
             payload.extend_from_slice(&size.cols.to_le_bytes());
@@ -1295,6 +1370,17 @@ pub fn read_client(reader: &mut impl Read) -> Result<ClientMessage, FrameError> 
             cell: payload.cell()?,
             modifiers: Modifiers(payload.u8()?),
         }),
+        kind::KEY => {
+            let codes = payload.rest_bounded("keys", MAX_KEYS)?;
+            let keys = codes
+                .into_iter()
+                .map(|code| {
+                    Key::from_code(code)
+                        .ok_or_else(|| FrameError::Malformed(format!("an unknown key {code}")))
+                })
+                .collect::<Result<_, _>>()?;
+            ClientMessage::Key(keys)
+        }
         kind::RESIZE => ClientMessage::Resize(payload.size()?),
         kind::THEME => ClientMessage::Theme(Theme::take(&mut payload)?),
         kind::REDRAW => ClientMessage::Redraw,
@@ -2017,6 +2103,7 @@ mod tests {
                 cell: None,
                 modifiers: Modifiers::default(),
             }),
+            ClientMessage::Key(Key::ALL.to_vec()),
             ClientMessage::Resize(Size {
                 rows: 40,
                 cols: 120,
