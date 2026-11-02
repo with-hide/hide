@@ -1,3 +1,11 @@
+// Partly derived from Herdr v0.9.5 (https://github.com/herdrdev/herdr,
+// commit 2ecf19a), the shell quoting in src/platform/{macos,linux,mod}.rs,
+// extracted from herdr-core/src/engine/own/shell_line.rs.
+// Copyright 2025 herdr contributors. Licensed under the Apache License,
+// Version 2.0; see NOTICE at the repository root.
+// Changed by Hide: shared single-quote escaping, with PowerShell's four
+// typographic quote characters handled alongside the ASCII apostrophe.
+
 //! How a word is written so that a shell reads it back unchanged: the one
 //! single-quoting rule each shell family gets, shared by the hooks' installed
 //! commands (`hide-agent-hooks`), the core's own engine's start and resume
