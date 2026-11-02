@@ -15,6 +15,7 @@ Only a pane-bound caller is accepted: a checkout-bound caller (a plain terminal,
 A pane hint cannot replace that binding: a pane-bound caller whose hint names another pane is refused `caller_identity_conflict`, and an absent, ambiguous or changed occupant returns an explicit error.
 Each queued command revalidates the caller's pane against the prepared Workspace and checkout context before applying or saving; a moved checkout returns `caller_context_changed`.
 Mailbox callers and new recipients require a positive native-session binding; a missing binding returns `native_identity_required`.
+The development engine's first-session reporting gap for Pi, omp, OpenCode, Grok and Cursor remains with bundle 4 PR A (`b4-transition`); an agent appearing in the pane list does not prove that its mailbox identity is available ([agent-hooks.md](agent-hooks.md#which-session-is-the-panes)).
 Two missing native references in the same pane never authorize retained mail.
 A live pane move may change Herdr's public pane address while keeping the same native terminal and session.
 The registration stores the terminal identity separately from its address; a unique fresh observation on the same device and Herdr scope with the same native session and agent kind continues that registration, letters, watches and spawn receipt in one ledger transaction.
