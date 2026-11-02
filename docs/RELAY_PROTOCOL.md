@@ -35,7 +35,8 @@ The parser rejects unknown versions/kinds, zero connections, short payloads and 
 
 The protocol is exactly `Noise_NK_25519_ChaChaPoly_BLAKE2b` using locked `snow` 0.10.0 on native and WASM targets.
 The prologue is ASCII `hide-mobile-relay/v1` followed by NUL and the connection's four-byte big-endian number.
-The phone initiates with the QR's raw X25519 public key and hided responds with the matching raw secret.
+The phone initiates with the QR's raw X25519 public key and hided responds with a matching `NoiseKeypair`, generated fresh or restored explicitly with `NoiseKeypair::from_secret`.
+Its fields are private and `Session::responder` cannot accept an Ed25519 seed directly.
 Each handshake message has exactly 48 Noise bytes, with an empty application payload: no credential, pairing code or user data travels in a handshake.
 Only the responder is authenticated by NK; hided must check the existing phone credential or one-time pairing code in the first decrypted application message before accepting requests.
 Ephemeral keys are random on every new session; deterministic ephemerals exist only inside the published-vector test.
@@ -49,18 +50,21 @@ Only one incomplete receive message exists per session, capped at 256 KiB, and i
 The socket owner calls `check_timeout(monotonic_ms)` from its timer even when no further frames arrive, using the same monotonic clock as `recv_message` (WASM takes bigint milliseconds).
 A missing middle frame fails Noise's next ordered nonce; a missing final frame fails the timer.
 Oversize, wrong connection/kind, malformed chunk, backwards clock, timeout, replay, out-of-order data or authentication failure permanently closes the session; callers close the associated socket and discard the object.
-Never retry an operation on that session, reset its nonce, or mix the low-level `encrypt`/`decrypt` frame API with the application-message API.
+Never retry an operation on that session or reset its nonce.
+Raw frame encryption is crate-private; callers have only the application-message path.
 
 Work is linear in bytes, with one encryption/decryption per frame and at most five frames for a maximum message.
 There is no fan-out, background task or retained send queue in the library.
 Raw private-key buffers and incomplete plaintext buffers use zeroizing storage; this is not a claim that all internal library or JavaScript engine copies are erased.
+The browser ABI exposes only the initiator, empty handshake, application-message send/receive/timeout/close, QR decoding, control-message validation and connection routing ID.
 The implementation has conformance tests, not an independent cryptographic audit.
 
 ## QR v2
 
 The only accepted URL is `https://app.withhide.dev/#pair=<base64url JSON>` with no query string or alternative origin/path.
-The JSON is `{v:2, device_key, noise_key, room, code}`: both public keys are raw 32-byte base64url values, and the one-time code is 16 random bytes in the same encoding.
-The Ed25519 public key, X25519 public key, room and code all appear after `#`, so an HTTP request contains none of them.
+The JSON is `{v:2, name, device_key, noise_key, room, code}`: both public keys are raw 32-byte base64url values, and the one-time code is 16 random bytes in the same encoding.
+The display name, Ed25519 public key, X25519 public key, room and code all appear after `#`, so an HTTP request contains none of them.
+`name` is nonblank UTF-8 plain text of at most 128 bytes, with control characters rejected; the phone renders it through an escaped text binding or `textContent`, never `innerHTML`, before connecting.
 The decoder caps the URL at 1024 bytes, validates lengths/version/room derivation and rejects a zero Noise public key.
 Pairing-code generation, expiry and single consumption remain hided's phone-admission responsibility.
 The phone loader must clear the fragment after parsing and must never log or persist the full URL or decoded code.

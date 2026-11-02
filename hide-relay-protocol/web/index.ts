@@ -1,7 +1,7 @@
 // Import after build-relay-wasm.sh. Vite includes relay_bg.wasm as a local asset;
 // init accepts its same-origin URL or bytes, never a third-party crypto script.
-export { default, initSync, NoiseSession, encode_frame, frame_connection, frame_kind, frame_payload } from '../pkg/relay.js';
-import { client_message, server_message, decode_qr, encode_qr } from '../pkg/relay.js';
+export { default, initSync, NoiseSession, frame_connection } from '../pkg/relay.js';
+import { client_message, server_message, decode_qr } from '../pkg/relay.js';
 
 export interface DeviceHello {
   version: 1;
@@ -25,6 +25,7 @@ export type ServerMessage =
   | { type: 'refused'; reason: Refusal };
 export interface PairingQr {
   v: 2;
+  name: string;
   device_key: string;
   noise_key: string;
   room: string;
@@ -36,4 +37,3 @@ export const decodeClient = (text: string): ClientMessage => JSON.parse(client_m
 export const encodeServer = (value: ServerMessage): string => server_message(JSON.stringify(value));
 export const decodeServer = (text: string): ServerMessage => JSON.parse(server_message(text)) as ServerMessage;
 export const decodeQr = (url: string): PairingQr => JSON.parse(decode_qr(url)) as PairingQr;
-export const encodeQr = (value: PairingQr): string => encode_qr(JSON.stringify(value));

@@ -5,7 +5,7 @@ import { createInterface } from 'node:readline';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { ownUntilWorkerExit } from '../../web/e2e/worker-owned.ts';
-import { initSync, NoiseSession, decodeQr, encodeQr, encodeClient, decodeClient, encodeServer, decodeServer, frame_connection } from '../web/index.ts';
+import { initSync, NoiseSession, decodeQr, encodeClient, decodeClient, encodeServer, decodeServer, frame_connection } from '../web/index.ts';
 
 initSync({ module: await readFile(new URL('../pkg/relay_bg.wasm', import.meta.url)) });
 const executable = new URL(`../../target/debug/examples/cross_peer${process.platform === 'win32' ? '.exe' : ''}`, import.meta.url);
@@ -28,7 +28,7 @@ try {
   const qr = decodeQr(url);
   assert.equal(new URL(url).origin + new URL(url).pathname, 'https://app.withhide.dev/');
   assert.equal(new URL(url).search, '');
-  assert.equal(encodeQr(qr), url);
+  assert.equal(qr.name, '기기 <img src=x onerror=alert(1)>');
   assert.throws(() => decodeQr(url.replace('#pair=', '?pair=')));
   const hello = { type: 'phone' as const, version: 1 as const, room: qr.room };
   assert.deepEqual(decodeClient(encodeClient(hello)), hello);
@@ -41,7 +41,6 @@ try {
     return Buffer.from(await line(), 'base64url');
   };
   phone.read_handshake(await exchange(phone.write_handshake()));
-  assert.equal(phone.is_transport(), true);
   let last: Buffer | undefined;
   for (const plaintext of [Buffer.from('phone credential'), Buffer.alloc(256 * 1024, 42), Buffer.alloc(0)]) {
     for (const frame of phone.send_message(plaintext)) {
