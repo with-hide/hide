@@ -55,7 +55,8 @@ Knowing a room hash grants no phone credential: the endpoint must still complete
 | Control message | Protocol `MAX_CONTROL`, 2,048 bytes | `frame_limit` | `control_size` |
 | Forwarded bytes per room, both directions including binary headers and handshakes | 1 GiB in a 24-hour window | `daily_limit` | `bytes_per_room_per_day` |
 | Unexpired IP / room accounting entries | 4,096 each | `rate_limit` / `connection_limit` | `ip_records` / `room_records` |
-| Pending output per socket | 8 frames | `connection_limit` | `outbound_queue` |
+| Data output per socket, including an in-progress write | 8 frames | `connection_limit` | `outbound_queue` |
+| Control output per socket, including reserved phone departures | 16 messages | `connection_limit` | `control_queue` |
 
 A window starts at that IP's first attempt or the room's first admission, using monotonic uptime, and resets on the first operation at or after its end.
 Room usage survives the last disconnect for the rest of that window; reconnecting cannot reset it.
@@ -63,7 +64,11 @@ At most 32 additional TCP tasks perform HTTP handshakes or deliver refusals, eac
 The WebSocket limit is enforced before reserving room state, but a valid upgrade receives a `refused` message before close so a browser can read the reason.
 Health requests do not use WebSocket admission or IP-rate budget.
 A refusal closes its sending socket, leaving unrelated sockets intact; closing the room's owning device necessarily disconnects that room's phones too.
-If a recipient's output queue is full, that recipient is refused and removed; the device receives `peer_left` for a slow phone, and other phones remain live.
+If a phone recipient's data queue is full, that phone is refused and removed; the device receives `peer_left`, and other phones remain live.
+If a phone fills the device's data queue, the sending phone is refused; an unauthenticated burst cannot evict the device.
+Control messages have sixteen independently reserved slots, so data cannot exhaust lifecycle capacity.
+Each successful join reserves its eventual `peer_left` slot before inserting the phone; new joins are refused when those slots run out.
+One bounded FIFO merges data and control while preserving `peer_joined`, data and `peer_left` order; permits remain held through each write.
 If the device itself cannot receive data or `peer_left`, it is disconnected so it cannot keep a ghost peer.
 Undeliverable data is reported by the peer departure; it is never retained for a replacement connection.
 The room budget charges received valid envelopes before delivery, including a full or retired destination, so receiver failure cannot make ingress free.
@@ -71,18 +76,20 @@ A device response racing an already closed phone is charged to the room budget a
 Closing that retired peer again is idempotent; zero and never-issued connection IDs remain routing violations.
 
 These caps bound the service's memory and initial free-service budget, not a measured production throughput promise.
-Eight maximum-size queued frames across 512 sockets occupy at most 256 MiB of payload; receive/write buffers and task metadata add to that budget.
+Eight maximum-size data frames across 512 sockets occupy at most 256 MiB of payload; sixteen protocol-bounded control messages per socket add at most 16 MiB.
+Receive buffers and task metadata add to that budget.
 Every binary forward parses one bounded envelope, charges one room counter, and queues it for one recipient; there is no room broadcast or background sweep.
 Admission alone prunes the bounded accounting tables; there is no per-frame full-table scan.
 
 ### Socket lifetime and client recovery
 
 The first routing hello and device proof must complete within ten seconds of WebSocket establishment.
-Admitted sockets expire after 90 seconds without incoming traffic; clients keep them alive with a ping or an encrypted application heartbeat well before that deadline.
+The binary expires admitted sockets after 90 seconds without incoming traffic; a library embedding may lower this idle timeout through `Limits` but cannot raise or disable it; clients keep them alive with a ping or an encrypted application heartbeat well before that deadline.
 Each socket write has a five-second deadline, and its registration is released before a final close write is attempted.
 A failed or expired write records `write_timeout` and attempts a `timeout` refusal with close code `1008`; it is not a cap event.
 An exhausted shutdown deadline records `shutdown_timeout` without a cap field.
-An oversize refusal half-closes TCP and discards at most `MAX_FRAME + 14` unread bytes within that same deadline, so a reset caused by unread payload does not erase the refusal for a bounded oversize frame.
+Every refusal half-closes TCP and discards at most `MAX_FRAME + 14` unread bytes within that same deadline.
+If pipelined input fills that discard budget, the socket stays half-closed until the deadline so the peer can read the refusal before unread input causes a reset; no further input is retained or consumed.
 Restart stops acceptance, closes admitted sockets with code `1012` (`restart`), clears every room and counter and drains or aborts all owned tasks within sixteen seconds.
 An HTTP upgrade already in progress may instead see a failed upgrade or `timeout`; it must reconnect too.
 

@@ -824,20 +824,21 @@ async fn control_size_and_unexpected_or_replayed_proof_have_specific_refusals() 
 
 #[tokio::test]
 async fn idle_connection_expires_with_a_timeout_and_no_cap_event() {
-    let mut fixture = Fixture::start(Limits::default()).await;
+    let mut fixture = Fixture::start(Limits {
+        idle_timeout: Duration::from_secs(1),
+        ..Limits::default()
+    })
+    .await;
     let mut device = fixture.socket("192.0.2.1").await;
     register(&mut device, &DeviceKey::from_seed(&[36; 32])).await;
-    // This uses the production 90-second timer and a real socket, not a
-    // test-only runtime feature or an assertion against an internal deadline.
+    // The embedding lowers the same timer the binary uses; production caps
+    // remain the ceiling, and the assertion observes the real socket refusal.
     use futures_util::StreamExt;
-    let message = timeout(
-        hide_relay::limits::IDLE_TIMEOUT + Duration::from_secs(5),
-        device.next(),
-    )
-    .await
-    .unwrap()
-    .unwrap()
-    .unwrap();
+    let message = timeout(Duration::from_secs(5), device.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
     let Message::Text(text) = message else {
         panic!("timeout refusal")
     };
@@ -880,4 +881,146 @@ async fn restart_waits_for_an_incomplete_http_handshake_and_exits_cleanly() {
             .iter()
             .any(|e| e.event == "shutdown_timeout")
     );
+}
+
+#[tokio::test]
+async fn an_unauthenticated_phone_burst_cannot_evict_the_device_or_hide_peer_left() {
+    use futures_util::StreamExt;
+    let mut fixture = Fixture::start(Limits::default()).await;
+    let mut device = fixture.socket_with_small_receive_window("192.0.2.1").await;
+    let hello = register(&mut device, &DeviceKey::from_seed(&[38; 32])).await;
+    let mut good = fixture.socket("192.0.2.2").await;
+    let good_id = join(&mut good, &hello.room, &mut device).await;
+    let (mut good_noise, mut good_device) = noise(&mut good, &mut device, good_id).await;
+    let mut attacker = fixture.socket("192.0.2.3").await;
+    let attack_id = join(&mut attacker, &hello.room, &mut device).await;
+    // The attacker knows only the room hash and has never completed Noise.
+    // Keep the device unread while sending bounded hostile handshake traffic.
+    let frame = Frame {
+        kind: Kind::Handshake,
+        connection: attack_id,
+        payload: &vec![0; MAX_FRAME - 6],
+    }
+    .encode()
+    .unwrap();
+    let (mut sender, mut receiver) = attacker.split();
+    let message = {
+        let burst = async {
+            for _ in 0..1024 {
+                if sender
+                    .send(Message::Binary(frame.clone().into()))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+            std::future::pending::<()>().await;
+        };
+        tokio::pin!(burst);
+        tokio::select! {
+            message = timeout(Duration::from_secs(15), receiver.next()) => message.unwrap().unwrap().unwrap(),
+            _ = &mut burst => unreachable!(),
+        }
+    };
+    let Message::Text(text) = message else {
+        panic!("attacker refusal")
+    };
+    assert_eq!(
+        ServerMessage::decode(&text).unwrap(),
+        ServerMessage::Refused {
+            reason: Refusal::ConnectionLimit
+        }
+    );
+    let Message::Close(Some(close)) = timeout(Duration::from_secs(15), receiver.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap()
+    else {
+        panic!("attacker close")
+    };
+    assert_eq!(u16::from(close.code), 1013);
+    fixture.cap("outbound_queue");
+    // Churning unauthenticated joins must leave reserved departure capacity
+    // for every accepted phone even while the device's write is blocked.
+    let mut churn = Vec::new();
+    let mut control_refused = false;
+    for host in 10..30 {
+        let mut phone = fixture.socket(&format!("192.0.2.{host}")).await;
+        send(
+            &mut phone,
+            ClientMessage::Phone {
+                version: 1,
+                room: hello.room.clone(),
+            },
+        )
+        .await;
+        match control(&mut phone).await {
+            ServerMessage::Joined { connection, .. } => {
+                churn.push(connection);
+                send(&mut phone, ClientMessage::Close { connection }).await;
+                closed(&mut phone, 1000).await;
+            }
+            ServerMessage::Refused {
+                reason: Refusal::ConnectionLimit,
+            } => {
+                closed(&mut phone, 1013).await;
+                control_refused = true;
+                break;
+            }
+            message => panic!("unexpected join response {message:?}"),
+        }
+    }
+    assert!(
+        control_refused,
+        "bounded lifecycle queue must refuse new joins"
+    );
+    fixture.cap("control_queue");
+    // Drain already forwarded attack frames; lifecycle metadata still arrives
+    // after that data, before the healthy phone's next frame.
+    loop {
+        match next(&mut device).await {
+            Message::Binary(frame) => {
+                assert_eq!(Frame::decode(&frame).unwrap().connection, attack_id)
+            }
+            Message::Text(text) => {
+                assert_eq!(
+                    ServerMessage::decode(&text).unwrap(),
+                    ServerMessage::PeerLeft {
+                        connection: attack_id
+                    }
+                );
+                break;
+            }
+            message => panic!("device was not kept live {message:?}"),
+        }
+    }
+    for connection in churn {
+        assert_eq!(
+            control(&mut device).await,
+            ServerMessage::PeerJoined { connection }
+        );
+        assert_eq!(
+            control(&mut device).await,
+            ServerMessage::PeerLeft { connection }
+        );
+    }
+    exchange(
+        &mut good,
+        &mut device,
+        &mut good_noise,
+        &mut good_device,
+        b"healthy phone still sends",
+    )
+    .await;
+    exchange(
+        &mut device,
+        &mut good,
+        &mut good_device,
+        &mut good_noise,
+        b"device still sends",
+    )
+    .await;
+    fixture.stop().await;
 }

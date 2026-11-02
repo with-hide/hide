@@ -11,6 +11,7 @@ pub const MAX_IP_RECORDS: usize = 4096;
 pub const MAX_ROOM_RECORDS: usize = 4096;
 pub const MAX_PENDING_HTTP: usize = 32;
 pub const MAX_QUEUED_FRAMES: usize = 8;
+pub const MAX_QUEUED_CONTROLS: usize = 16;
 /// Discard at most one bounded frame plus the largest WebSocket header on refusal.
 pub const MAX_CLOSE_DRAIN_BYTES: usize = MAX_FRAME + 14;
 pub const HTTP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -23,6 +24,7 @@ pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(16);
 /// An embedding may lower the production budgets, never remove or raise them.
 #[derive(Clone, Copy)]
 pub struct Limits {
+    pub idle_timeout: Duration,
     pub connections: usize,
     pub phones_per_room: usize,
     pub connections_per_ip: usize,
@@ -33,6 +35,7 @@ pub struct Limits {
 impl Default for Limits {
     fn default() -> Self {
         Self {
+            idle_timeout: IDLE_TIMEOUT,
             connections: MAX_CONNECTIONS,
             phones_per_room: MAX_PHONES_PER_ROOM,
             connections_per_ip: MAX_CONNECTIONS_PER_IP,
@@ -44,7 +47,9 @@ impl Default for Limits {
 }
 impl Limits {
     pub(crate) fn valid(self) -> bool {
-        self.connections > 0
+        !self.idle_timeout.is_zero()
+            && self.idle_timeout <= IDLE_TIMEOUT
+            && self.connections > 0
             && self.connections <= MAX_CONNECTIONS
             && self.phones_per_room > 0
             && self.phones_per_room <= MAX_PHONES_PER_ROOM

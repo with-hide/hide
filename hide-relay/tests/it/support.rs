@@ -17,7 +17,7 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    net::{TcpListener, TcpStream},
+    net::{TcpListener, TcpSocket, TcpStream},
     sync::oneshot,
     task::JoinHandle,
     time::timeout,
@@ -87,6 +87,21 @@ impl Fixture {
         .unwrap()
         .unwrap()
         .0
+    }
+    pub async fn socket_with_small_receive_window(&self, ip: &str) -> Socket {
+        let socket = TcpSocket::new_v4().unwrap();
+        socket.set_recv_buffer_size(1024).unwrap();
+        let stream = socket.connect(self.address).await.unwrap();
+        let mut request = format!("ws://{}/ws", self.address)
+            .into_client_request()
+            .unwrap();
+        request
+            .headers_mut()
+            .insert("x-real-ip", ip.parse().unwrap());
+        tokio_tungstenite::client_async(request, MaybeTlsStream::Plain(stream))
+            .await
+            .unwrap()
+            .0
     }
     pub async fn stop(&mut self) {
         self.stop.take().unwrap().send(()).unwrap();

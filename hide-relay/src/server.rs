@@ -1,7 +1,7 @@
 use crate::{
     event::Event,
     limits::*,
-    state::{End, Rejection, State},
+    state::{End, Outbound, Rejection, State},
 };
 use futures_util::{SinkExt, StreamExt};
 use hide_relay_protocol::admission::{
@@ -47,6 +47,7 @@ struct Shared {
     state: Mutex<State>,
     clock: Clock,
     events: EventSink,
+    idle_timeout: Duration,
 }
 impl Shared {
     fn emit(&self, events: Vec<Event>) {
@@ -82,7 +83,7 @@ impl Drop for Registration {
 }
 struct Admission {
     registration: Registration,
-    output: mpsc::Receiver<Message>,
+    output: mpsc::Receiver<Outbound>,
     end: watch::Receiver<Option<End>>,
 }
 struct Upgrade {
@@ -123,6 +124,7 @@ impl Relay {
                 state: Mutex::new(State::new(limits)),
                 clock: Arc::new(clock),
                 events: Arc::new(events),
+                idle_timeout: limits.idle_timeout,
             }),
             limits,
             trusted_proxy,
@@ -191,7 +193,7 @@ async fn connection(stream: TcpStream, remote: IpAddr, proxy: Option<IpAddr>, sh
             match create_response_with_body(&request, || Full::new(Bytes::new())) {
                 Ok(response) => {
                     let admission = client_ip(&request, remote, proxy).and_then(|ip| {
-                        let (tx, output) = mpsc::channel(MAX_QUEUED_FRAMES);
+                        let (tx, output) = mpsc::channel(MAX_QUEUED_FRAMES + MAX_QUEUED_CONTROLS);
                         let (end_tx, end) = watch::channel(None);
                         let id =
                             state
@@ -305,12 +307,14 @@ async fn session(mut socket: Socket, mut admission: Admission) {
                 break End::Refused(Rejection::new(Refusal::Timeout, if admitted { "idle_timeout" } else { "admission_timeout" }));
             }
             outgoing = admission.output.recv() => {
-                let Some(message) = outgoing else {
+                let Some(outbound) = outgoing else {
                     // Removing a peer closes its queue after publishing its end.
                     // Either receiver may wake first; retain the published reason.
                     break (*admission.end.borrow_and_update()).expect("closed peer queue carries its end");
                 };
-                if !matches!(timeout(WRITE_TIMEOUT, socket.send(message)).await, Ok(Ok(()))) {
+                // Hold the class-specific slot through the write as well.
+                let _capacity = outbound.capacity;
+                if !matches!(timeout(WRITE_TIMEOUT, socket.send(outbound.message)).await, Ok(Ok(()))) {
                     break End::Refused(Rejection::new(Refusal::Timeout, "write_timeout"));
                 }
             }
@@ -328,7 +332,7 @@ async fn session(mut socket: Socket, mut admission: Admission) {
                     _ => Err(Rejection::new(Refusal::InvalidMessage, "invalid_message")),
                 };
                 if let Err(error) = result { break End::Refused(error); }
-                if admitted { deadline = tokio::time::Instant::now() + IDLE_TIMEOUT; }
+                if admitted { deadline = tokio::time::Instant::now() + shared.idle_timeout; }
                 // Flush automatic WebSocket pong responses with the same write bound.
                 if !matches!(timeout_at(deadline.min(tokio::time::Instant::now() + WRITE_TIMEOUT), socket.flush()).await, Ok(Ok(()))) {
                     break End::Refused(Rejection::new(Refusal::Timeout, "write_timeout"));
@@ -390,8 +394,7 @@ fn control(
             return Err(Rejection::new(Refusal::InvalidProof, "replayed_admission"));
         }
         ClientMessage::Phone { room, .. } if !*admitted && pending.is_none() => {
-            let events = shared.state.lock().unwrap().join(id, room)?;
-            shared.emit(events);
+            shared.state.lock().unwrap().join(id, room)?;
             *admitted = true;
         }
         ClientMessage::Close { connection } if *admitted => {
@@ -410,13 +413,7 @@ fn control(
 
 async fn finish(socket: &mut Socket, end: End) {
     let deadline = tokio::time::Instant::now() + WRITE_TIMEOUT;
-    let oversized = matches!(
-        end,
-        End::Refused(Rejection {
-            cap: Some("frame_size"),
-            ..
-        })
-    );
+    let refused = matches!(end, End::Refused(_));
     let (code, reason) = match end {
         End::Restart => (CloseCode::Restart, "restart"),
         End::PeerClosed => (CloseCode::Normal, "peer_closed"),
@@ -446,14 +443,20 @@ async fn finish(socket: &mut Socket, end: End) {
         }))),
     )
     .await;
-    if oversized {
-        // The parser rejects the length before reading its payload. Dropping a
-        // TCP socket with unread bytes can reset it and erase the refusal. Send
-        // FIN, then discard a bounded remainder within the same write deadline.
+    if refused {
+        // An offender may already have pipelined its next frame. Dropping TCP
+        // with unread bytes can reset it and erase the refusal. Send FIN and
+        // discard a bounded remainder within the same write deadline. If that
+        // budget fills, keep the half-closed socket until the deadline so the
+        // reader can receive the refusal without us consuming unlimited input.
         let _ = timeout_at(deadline, async {
             socket.get_mut().shutdown().await?;
             let mut remaining = socket.get_mut().take(MAX_CLOSE_DRAIN_BYTES as u64);
-            tokio::io::copy(&mut remaining, &mut tokio::io::sink()).await
+            let discarded = tokio::io::copy(&mut remaining, &mut tokio::io::sink()).await?;
+            if discarded == MAX_CLOSE_DRAIN_BYTES as u64 {
+                tokio::time::sleep_until(deadline).await;
+            }
+            Ok::<_, io::Error>(())
         })
         .await;
     }

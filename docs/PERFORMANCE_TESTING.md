@@ -259,7 +259,8 @@ B27's bar is the no-protection call's p95 at or under 15 ms on macOS; report the
 
 ## Resident work cost review
 
-The standalone `hide-relay` listener owns at most 512 admitted sockets plus 32 HTTP/refusal tasks, with eight queued frames per admitted connection and no idle polling worker.
+The standalone `hide-relay` listener owns at most 512 admitted sockets plus 32 HTTP/refusal tasks, with eight data frames and sixteen independently reserved control slots per admitted connection and no idle polling worker.
+The slots include active writes and reserved departure notifications; one bounded FIFO preserves ordering, and an accepted phone reserves its departure before joining.
 Each received binary frame performs one bounded protocol parse, one short state lock, constant-time room/peer lookups and quota accounting, then queues the unchanged bytes to one recipient.
 Admission prunes at most 4,096 IP records; authenticated registration prunes at most 4,096 retained room budgets.
 Connect/disconnect metadata goes only to the owning device, and losing that device closes at most four phones.

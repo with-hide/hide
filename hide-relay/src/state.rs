@@ -3,8 +3,8 @@ use hide_relay_protocol::{
     admission::{DeviceHello, Refusal, ServerMessage},
     frame::Frame,
 };
-use std::{collections::HashMap, net::IpAddr, time::Duration};
-use tokio::sync::{mpsc, watch};
+use std::{collections::HashMap, net::IpAddr, sync::Arc, time::Duration};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, watch};
 use tokio_tungstenite::tungstenite::Message;
 
 #[derive(Clone, Copy, Debug)]
@@ -51,9 +51,18 @@ impl Role {
         }
     }
 }
+pub(crate) struct Outbound {
+    pub message: Message,
+    // Separate budgets reserve lifecycle capacity while one FIFO preserves
+    // PeerJoined-before-data and data-before-PeerLeft ordering.
+    pub capacity: OwnedSemaphorePermit,
+}
 struct Peer {
     role: Role,
-    output: mpsc::Sender<Message>,
+    output: mpsc::Sender<Outbound>,
+    data_capacity: Arc<Semaphore>,
+    control_capacity: Arc<Semaphore>,
+    departure_capacity: Option<OwnedSemaphorePermit>,
     end: watch::Sender<Option<End>>,
     bytes: u64,
 }
@@ -106,7 +115,7 @@ impl State {
         &mut self,
         ip: IpAddr,
         now: Duration,
-        output: mpsc::Sender<Message>,
+        output: mpsc::Sender<Outbound>,
         end: watch::Sender<Option<End>>,
     ) -> Result<u64, Rejection> {
         if self.stopping {
@@ -146,6 +155,9 @@ impl State {
             Peer {
                 role: Role::Pending,
                 output,
+                data_capacity: Arc::new(Semaphore::new(MAX_QUEUED_FRAMES)),
+                control_capacity: Arc::new(Semaphore::new(MAX_QUEUED_CONTROLS)),
+                departure_capacity: None,
                 end,
                 bytes: 0,
             },
@@ -185,7 +197,7 @@ impl State {
         self.control(id, ServerMessage::Registered)
     }
 
-    pub fn join(&mut self, id: u64, room: String) -> Result<Vec<Event>, Rejection> {
+    pub fn join(&mut self, id: u64, room: String) -> Result<(), Rejection> {
         let entry = self
             .rooms
             .get_mut(&room)
@@ -197,22 +209,34 @@ impl State {
             .next_connection
             .checked_add(1)
             .ok_or(Rejection::cap(Refusal::RoomLimit, "connection_ids"))?;
-        entry.next_connection = connection;
         let device = entry.device;
         let protocol = entry.protocol;
+        // A failed announcement refuses the joining socket without changing
+        // membership or consuming a connection ID on the device.
+        // Reserve the departure too: repeated joins/leaves cannot consume the
+        // last slot needed to tell the device an existing phone went away.
+        let departure = self
+            .peers
+            .get(&device)
+            .ok_or(invalid())?
+            .control_capacity
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| Rejection::cap(Refusal::ConnectionLimit, "control_queue"))?;
+        self.control(device, ServerMessage::PeerJoined { connection })?;
+        let entry = self.rooms.get_mut(&room).ok_or(invalid())?;
+        entry.next_connection = connection;
         entry.phones.insert(connection, id);
-        self.peer_mut(id)?.role = Role::Phone(room, connection);
-        if let Err(error) = self.control(device, ServerMessage::PeerJoined { connection }) {
-            return Ok(self.remove(device, End::Refused(error)));
-        }
+        let peer = self.peer_mut(id)?;
+        peer.role = Role::Phone(room, connection);
+        peer.departure_capacity = Some(departure);
         self.control(
             id,
             ServerMessage::Joined {
                 connection,
                 phone_protocol: protocol,
             },
-        )?;
-        Ok(Vec::new())
+        )
     }
 
     pub fn forward(
@@ -222,7 +246,9 @@ impl State {
         now: Duration,
     ) -> Result<Vec<Event>, Rejection> {
         let frame = Frame::decode(&bytes).map_err(crate::protocol_error)?;
-        let (room, target) = match self.role(id)? {
+        let role = self.role(id)?;
+        let sending_phone = matches!(role, Role::Phone(..));
+        let (room, target) = match role {
             Role::Phone(room, connection) if connection == frame.connection => {
                 let device = self.rooms.get(&room).ok_or(invalid())?.device;
                 (room, Some(device))
@@ -261,8 +287,10 @@ impl State {
         match target {
             Some(target) => match self.send(target, Message::Binary(bytes.into())) {
                 Ok(()) => Ok(Vec::new()),
-                // Backpressure belongs to the recipient. Closing it publishes
-                // PeerLeft to the device without penalizing a healthy sender.
+                // A phone cannot evict the device by flooding its queue. Its
+                // refusal releases membership and queues PeerLeft separately.
+                Err(error) if sending_phone => Err(error),
+                // A slow phone cannot evict the sending device either.
                 Err(error) => Ok(self.remove(target, End::Refused(error))),
             },
             // A response may race the phone's departure. IDs are never reused,
@@ -302,12 +330,19 @@ impl State {
         self.peers.get_mut(&id).ok_or(invalid())
     }
     fn send(&self, id: u64, message: Message) -> Result<(), Rejection> {
-        self.peers
-            .get(&id)
-            .ok_or(invalid())?
-            .output
-            .try_send(message)
-            .map_err(|_| Rejection::cap(Refusal::ConnectionLimit, "outbound_queue"))
+        let peer = self.peers.get(&id).ok_or(invalid())?;
+        let (capacity, cap) = if matches!(message, Message::Binary(_)) {
+            (&peer.data_capacity, "outbound_queue")
+        } else {
+            (&peer.control_capacity, "control_queue")
+        };
+        let capacity = capacity
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| Rejection::cap(Refusal::ConnectionLimit, cap))?;
+        peer.output
+            .try_send(Outbound { message, capacity })
+            .map_err(|_| Rejection::cap(Refusal::ConnectionLimit, cap))
     }
     pub fn control(&self, id: u64, message: ServerMessage) -> Result<(), Rejection> {
         self.send(
@@ -317,7 +352,7 @@ impl State {
     }
 
     pub fn remove(&mut self, id: u64, end: End) -> Vec<Event> {
-        let Some(peer) = self.peers.remove(&id) else {
+        let Some(mut peer) = self.peers.remove(&id) else {
             return Vec::new();
         };
         peer.end.send_replace(Some(end));
@@ -347,8 +382,27 @@ impl State {
                 if let Some(entry) = self.rooms.get_mut(&room) {
                     entry.phones.remove(&connection);
                     let device = entry.device;
-                    if let Err(error) = self.control(device, ServerMessage::PeerLeft { connection })
-                    {
+                    let capacity = peer
+                        .departure_capacity
+                        .take()
+                        .expect("admitted phone reserves departure");
+                    let result = ServerMessage::PeerLeft { connection }
+                        .encode()
+                        .map_err(crate::protocol_error)
+                        .and_then(|text| {
+                            self.peers
+                                .get(&device)
+                                .ok_or(invalid())?
+                                .output
+                                .try_send(Outbound {
+                                    message: Message::Text(text.into()),
+                                    capacity,
+                                })
+                                .map_err(|_| {
+                                    Rejection::cap(Refusal::ConnectionLimit, "control_queue")
+                                })
+                        });
+                    if let Err(error) = result {
                         // A device that cannot receive lifecycle metadata must
                         // reconnect: keeping it alive would leave a ghost peer.
                         events.extend(self.remove(device, End::Refused(error)));
