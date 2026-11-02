@@ -2,7 +2,7 @@ import type { PairedHost } from "./hosts";
 import type { ServerFrame } from "./protocol";
 import { RelaySocket } from "./relaySocket";
 
-export type Presence = { online: boolean; needs?: number; working?: number; lastSeen: number | null };
+export type Presence = { online: boolean; needs?: number; working?: number; lastSeen: number | null; protocolMismatch?: number };
 
 /** One list observer, owned by a visible picker; no commands or retained payloads. */
 export function watchHost(host: PairedHost, changed: (presence: Presence) => void): () => void {
@@ -16,7 +16,8 @@ export function watchHost(host: PairedHost, changed: (presence: Presence) => voi
     if (ended) return;
     let heard = Date.now();
     let denied = false;
-    const ws = new RelaySocket(host, () => true, () => undefined);
+    let protocolMismatch: number | undefined;
+    const ws = new RelaySocket(host, (protocol) => { denied = true; protocolMismatch = protocol; }, () => undefined);
     socket = ws;
     ws.onopen = () => ws.send(JSON.stringify({ client_kind: "phone", token: host.credential }));
     ws.onmessage = (event) => {
@@ -40,7 +41,7 @@ export function watchHost(host: PairedHost, changed: (presence: Presence) => voi
     timer = setTimeout(health, 10_000);
     ws.onclose = () => {
       clear(); socket = null;
-      changed({ online: false, lastSeen });
+      changed({ online: false, lastSeen, protocolMismatch });
       if (!ended && !denied) timer = setTimeout(open, Math.min(10_000, 1000 * 2 ** Math.min(attempt++, 4)) * (0.75 + Math.random() * 0.5));
     };
   };

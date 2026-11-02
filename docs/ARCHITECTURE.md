@@ -3415,6 +3415,8 @@ An unsupported number stays on the update screen with the phone and device proto
 Corrupt records and storage refusal are visible failures; QR codes and conversation content are never persisted.
 The QR fragment is cleared synchronously before WASM initialization and relay access; its name is escaped React text, truncated to one line on the landing screen.
 `relaySocket.ts` is the socket boundary used by the existing connection and command code: the shared WASM crate performs Noise NK, then the first encrypted message carries `{client_kind:"phone", pair}` or `{client_kind:"phone", token}`.
+This boundary compares the relay's phone protocol with its own bundle before starting Noise, for both the main connection and every presence observer.
+A mismatch closes without a handshake, credential or app frame; the main connection returns to the loader, while a list observer stops retrying and gives its row both versions and a loader action.
 The direct `/m/` socket keeps its existing handshake and UI.
 A relay socket owns its handshake deadline, chunk deadline check, and Noise memory; closing disposes all of them, and the browser send buffer is capped at 1 MiB with no retained application send queue.
 Reconnection keeps the existing command request identities and adds jitter; no action is automatically replayed by the transport.

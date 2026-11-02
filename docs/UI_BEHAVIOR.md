@@ -3484,6 +3484,8 @@ Expired and already-used codes retain the device's existing `code_expired` wordi
 An unsupported device shows `<device>의 Hide를 업데이트해 주세요`, the available phone app and device protocol versions, and 다른 기기 고르기.
 
 In the hosted app, the header's device name opens a picker with each saved device's connection dot, 내 차례 and 작업 중 counts, or its last successful contact when offline.
+A device whose protocol differs from the open bundle shows a warning dot and both versions instead of counts; selecting it asks the root loader for its matching bundle or update guidance.
+Neither the root list nor a bundle's picker authenticates to an incompatible device to read its status.
 Choosing another device replaces the page and closes the old connection; drafts and pending actions do not move between devices.
 다른 기기 연결 opens the camera scanner inside the installed app, with a QR-link paste alternative when camera permission is unavailable.
 The browser holds at most sixteen devices and reports its limit or a failed storage write inline.

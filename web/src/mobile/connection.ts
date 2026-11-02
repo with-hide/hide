@@ -225,11 +225,9 @@ function connect(): void {
   if (!pairCode && !credential) return;
   const first = pairCode ? { client_kind: "phone", pair: pairCode } : { client_kind: "phone", token: credential };
   let refused = false;
-  const ws: PhoneSocket = relayHost ? new RelaySocket(relayHost, (protocol) => {
-    if (protocol === PHONE_PROTOCOL) return true;
+  const ws: PhoneSocket = relayHost ? new RelaySocket(relayHost, () => {
     stopped = true;
     window.location.replace(`/?host=${encodeURIComponent(relayHost!.room)}`);
-    return false;
   }, (reason) => {
     if (["connection_limit", "room_limit", "rate_limit", "daily_limit", "frame_limit"].includes(reason)) patch({ relayError: "busy" });
     else if (reason === "unsupported_version") { stopped = true; patch({ screen: "version" }); }
