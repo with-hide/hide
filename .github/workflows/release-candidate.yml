@@ -1,5 +1,5 @@
-# Manual unsigned preparation only. No tag, release or signing credential is
-# written here; a consumer must verify this successful main run and receipt,
+# Manual unsigned preparation, with the phone site deployed first. No tag,
+# release or signing credential is written here; a consumer must verify this successful main run and receipt,
 # and that the verify run the receipt names concluded success, which this
 # workflow waits to start but not to finish.
 name: release candidate
@@ -72,13 +72,56 @@ jobs:
           # The called workflows' steps come from this dispatch revision but
           # run on public_sha's checkout, so a step added after public_sha
           # would reach files the source does not have.
-          if ! git diff --quiet "$PUBLIC_SHA" HEAD -- .github/workflows/package.yml .github/workflows/device-helpers.yml .github/workflows/agent-journey.yml; then
-            echo "::error::package.yml, device-helpers.yml or agent-journey.yml changed on main after $PUBLIC_SHA; choose a newer public_sha"
+          if ! git diff --quiet "$PUBLIC_SHA" HEAD -- .github/workflows/package.yml .github/workflows/device-helpers.yml .github/workflows/agent-journey.yml scripts/phone-release.mjs; then
+            echo "::error::candidate build or phone deployment steps changed on main after $PUBLIC_SHA; choose a newer public_sha"
             exit 1
           fi
 
-  packages:
+  phone:
+    name: publish phone bundle
     needs: validate
+    if: ${{ github.repository == 'with-hide/hide' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: phone-production
+    # All versions share the read/retain/upload boundary. Never cancel an upload.
+    concurrency:
+      group: phone-production
+      cancel-in-progress: false
+    env:
+      PHONE_VERCEL_TOKEN: ${{ secrets.PHONE_VERCEL_TOKEN }}
+      PHONE_VERCEL_ORG_ID: ${{ secrets.PHONE_VERCEL_ORG_ID }}
+      PHONE_VERCEL_PROJECT_ID: ${{ secrets.PHONE_VERCEL_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.public_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Require main CI and the phone deployment secrets
+        run: node scripts/phone-release.mjs check
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - name: Build this source's phone bundle
+        run: |
+          bash scripts/verify-web.sh install
+          bash scripts/verify-web.sh web build:phone
+      - name: Retain every published protocol and stage the new bundle
+        env:
+          PUBLIC_SHA: ${{ inputs.public_sha }}
+        run: node scripts/phone-release.mjs prepare "$PUBLIC_SHA" web/phone-dist agents/runs/phone-release
+      - name: Upload only the CI-built static site
+        timeout-minutes: 10
+        run: npx --yes vercel@50.1.3 deploy --prebuilt --prod --yes --cwd agents/runs/phone-release --token "$PHONE_VERCEL_TOKEN"
+      - name: Require the production bytes and security policy before releasing
+        run: node scripts/phone-release.mjs confirm agents/runs/phone-release
+
+  packages:
+    needs: [validate, phone]
     uses: ./.github/workflows/package.yml
     with:
       version: ${{ inputs.tag }}
@@ -96,7 +139,7 @@ jobs:
   # same binaries, which the receipt checks the same way.
   macos-binaries:
     name: compile (macos)
-    needs: validate
+    needs: [validate, phone]
     runs-on: ${{ inputs.macos_runner == 'hosted' && fromJSON('["macos-15"]') || fromJSON('["self-hosted","macOS","ARM64","hide-candidate"]') }}
     timeout-minutes: 60
     env:
@@ -160,7 +203,7 @@ jobs:
   # build again, so every artifact the publisher takes stays one attempt's.
   # The run, which the publisher requires to succeed, still needs the journey.
   receipt:
-    needs: [validate, packages, macos-binaries]
+    needs: [validate, phone, packages, macos-binaries]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
