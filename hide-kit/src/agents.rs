@@ -10,7 +10,7 @@
 //!
 //! Three things a row can turn on for an agent the operator switched on:
 //!
-//! - Hide's skill stubs ([`SKILLS`]: `hide`, `hide-conductor` and `hide-plan`;
+//! - Hide's skill stubs ([`SKILLS`]: `hide`, `hide-mission` and `hide-plan`;
 //!   [`RETIRED_SKILLS`] are taken out), in the folder the agent reads
 //!   ([`SkillDir`]); the folder is shared by every agent that reads it, so
 //!   the stubs stay while any of them is on;
@@ -238,15 +238,13 @@ pub const GUIDE_SKILL: Skill = Skill {
 };
 
 /// The Conductor's stub: a mission of agents, which `hide mission help`
-/// owns. Version 1 had a plain description that Pi's strict front matter
-/// dropped (`Skill::text`); it is an older version of this stub, replaced by
-/// the marker rule like any other. Version 3 names the decision's choices
-/// and the node results (PRD mission-plan-visibility B34).
-pub const CONDUCTOR_SKILL: Skill = Skill {
-    name: "hide-conductor",
+/// owns, named after that command. Builds up to 1.1 wrote it as
+/// `hide-conductor` (versions 1 to 3), which [`RETIRED_SKILLS`] takes out.
+pub const MISSION_SKILL: Skill = Skill {
+    name: "hide-mission",
     description: "Conduct a mission of agents in Hide: plan it with the operator, start the workers, replan, report. Use when the operator asks for a mission or for several PRs carried as a group.",
     body: "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, run `hide mission help` and follow what it prints: it is the Conductor's contract, with the commands, how to cut the mission into nodes and brief each worker, the cap and the candidates, replanning on the operator's words, asking the operator a decision with choices they can answer from the map, whose answer arrives in your conversation as their own message, recording a direct change's commit and a verify node's verdict, merging, the report and taking a mission over.",
-    version: 3,
+    version: 1,
 };
 
 /// An agent's own plan (PRD hide-plan D-16), which `hide plan help` owns.
@@ -260,27 +258,73 @@ pub const PLAN_SKILL: Skill = Skill {
 /// Every stub Hide writes; each skill folder holds all of them. A new stub
 /// is one more entry here and nothing else: the observe, write and remove
 /// passes read the array.
-pub const SKILLS: [Skill; 3] = [GUIDE_SKILL, CONDUCTOR_SKILL, PLAN_SKILL];
+pub const SKILLS: [Skill; 3] = [GUIDE_SKILL, MISSION_SKILL, PLAN_SKILL];
 
 /// A stub an earlier build wrote and this one takes out, by its exact text:
 /// a file that differs in any byte was edited by the operator and stays.
 #[derive(Clone, Copy, Debug)]
 pub struct RetiredSkill {
     pub name: &'static str,
-    /// The whole file as that build wrote it.
-    pub text: &'static str,
+    /// Each whole file as an earlier build wrote it.
+    pub texts: &'static [&'static str],
 }
 
-/// `hide-browser` version 1, whose guide `hide guide` now routes to.
-pub const RETIRED_SKILLS: [RetiredSkill; 1] = [RetiredSkill {
-    name: "hide-browser",
-    text: concat!(
-        "---\nname: hide-browser\n",
-        "description: Read and drive a browser display inside Hide. Use when a task involves a web page, a local app in a browser tab, or checking what a page shows.\n",
-        "---\n\n<!-- hide-skill@1: written by Hide; remove it from Settings, Agents -->\n\n",
-        "Run `hide browser help` and follow what it prints. It explains how to open a page, read it by refs, check a change with `--diff`, and what to do when a command fails.\n",
-    ),
-}];
+/// The front matter and marker every `hide-conductor` version shares up to
+/// its description.
+macro_rules! conductor_head {
+    ($description:literal, $version:literal) => {
+        concat!(
+            "---\nname: hide-conductor\ndescription: ",
+            $description,
+            "\n---\n\n<!-- hide-skill@",
+            $version,
+            ": written by Hide; remove it from Settings, Agents -->\n\n"
+        )
+    };
+}
+
+/// `hide-browser` version 1, whose guide `hide guide` now routes to, and
+/// `hide-conductor` versions 1 to 3, renamed `hide-mission` (2026-11-02).
+/// The `hide-conductor` entries can go once no supported install can still
+/// hold one: when the oldest build that may update in place writes
+/// `hide-mission`.
+pub const RETIRED_SKILLS: [RetiredSkill; 2] = [
+    RetiredSkill {
+        name: "hide-browser",
+        texts: &[concat!(
+            "---\nname: hide-browser\n",
+            "description: Read and drive a browser display inside Hide. Use when a task involves a web page, a local app in a browser tab, or checking what a page shows.\n",
+            "---\n\n<!-- hide-skill@1: written by Hide; remove it from Settings, Agents -->\n\n",
+            "Run `hide browser help` and follow what it prints. It explains how to open a page, read it by refs, check a change with `--diff`, and what to do when a command fails.\n",
+        )],
+    },
+    RetiredSkill {
+        name: "hide-conductor",
+        texts: &[
+            concat!(
+                conductor_head!(
+                    "Run a mission in Hide as its Conductor: plan the work with the operator, start the agents that do it, follow their pull requests, and report. Use when the operator gives you a goal to carry out with several agents, or asks you to take over a mission.",
+                    1
+                ),
+                "Run `hide mission help` and follow what it prints. It explains how to plan a mission with the operator, start and follow its workers, change the plan when told, merge, report, and take over a mission whose Conductor is gone.\n",
+            ),
+            concat!(
+                conductor_head!(
+                    "\"Conduct a mission of agents in Hide: plan it with the operator, start the workers, replan, report. Use when the operator asks for a mission or for several PRs carried as a group.\"",
+                    2
+                ),
+                "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, run `hide mission help` and follow what it prints: it is the Conductor's contract, with the commands, how to cut the mission into nodes and brief each worker, the cap and the candidates, replanning on the operator's words, merging, the report and taking a mission over.\n",
+            ),
+            concat!(
+                conductor_head!(
+                    "\"Conduct a mission of agents in Hide: plan it with the operator, start the workers, replan, report. Use when the operator asks for a mission or for several PRs carried as a group.\"",
+                    3
+                ),
+                "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, run `hide mission help` and follow what it prints: it is the Conductor's contract, with the commands, how to cut the mission into nodes and brief each worker, the cap and the candidates, replanning on the operator's words, asking the operator a decision with choices they can answer from the map, whose answer arrives in your conversation as their own message, recording a direct change's commit and a verify node's verdict, merging, the report and taking a mission over.\n",
+            ),
+        ],
+    },
+];
 
 /// The marker line of a stub, which proves Hide wrote it and says which
 /// text it was. A file without it is the operator's and is never touched.
@@ -456,7 +500,7 @@ pub(crate) fn login_shell() -> Option<PathBuf> {
 impl Skill {
     /// The text of the stub. The description is a quoted YAML string: a
     /// plain one ends at its first `: `, and a strict reader such as Pi's
-    /// then drops the whole skill (version 1's `hide-conductor`).
+    /// then drops the whole skill (`hide-conductor` version 1).
     pub(crate) fn text(self) -> String {
         // A JSON string is a YAML double-quoted scalar.
         let description = serde_json::Value::from(self.description).to_string();
@@ -577,7 +621,7 @@ impl RetiredSkill {
     fn observe_in(self, root: &Path) -> Result<RetiredObserved, String> {
         let path = self.file_in(root);
         match std::fs::read_to_string(&path) {
-            Ok(text) if text == self.text => Ok(RetiredObserved::Unedited),
+            Ok(text) if self.texts.contains(&text.as_str()) => Ok(RetiredObserved::Unedited),
             Ok(text) if skill_marker_version(&text).is_some() => Ok(RetiredObserved::Edited),
             Ok(_) => Ok(RetiredObserved::NotHides),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {

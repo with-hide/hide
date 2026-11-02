@@ -1,5 +1,5 @@
 // Chapter 8's world: one Claude agent the learner hands a job of several pull
-// requests as a mission, so it conducts it (`hide-conductor`). Whatever words
+// requests as a mission, so it conducts it (`hide-mission`). Whatever words
 // the learner sends play the next part of the script, since a practice
 // understands no words. The first words are the mission: the Conductor plans
 // it, starts its workers in tabs of their own, one node finishes, and it asks

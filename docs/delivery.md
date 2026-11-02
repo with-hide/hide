@@ -965,7 +965,7 @@ Like `hide agent catalog`, it needs the running daemon and a Hide credential but
 
 ## Missions
 
-A Conductor's mission (PRD software-factory-conductor) is a record the core keeps in `~/.hide/state/missions.json` and changes only on `hide mission` commands from the Conductor's own pane; `hide mission help` is the Conductor's guide, which the `hide-conductor` skill the kit installs points at, as do `hide guide`, the `hide` skill and the session guidance ([agent-hooks.md](agent-hooks.md#what-the-kit-puts-down)); the help owns the commands and the Conductor's judgment around them (how to cut a mission, what a worker's brief says, the report's four parts).
+A Conductor's mission (PRD software-factory-conductor) is a record the core keeps in `~/.hide/state/missions.json` and changes only on `hide mission` commands from the Conductor's own pane; `hide mission help` is the Conductor's guide, which the `hide-mission` skill the kit installs points at, as do `hide guide`, the `hide` skill and the session guidance ([agent-hooks.md](agent-hooks.md#what-the-kit-puts-down)); the help owns the commands and the Conductor's judgment around them (how to cut a mission, what a worker's brief says, the report's four parts).
 Only a pane-bound credential can ask, refused `agent_pane_required` otherwise, and a pane conducts at most one open mission (`mission_already_conducting`).
 A mission belongs to the repository Project of the checkout it was created in (`mission_project_unknown`); asked before the machine's projects are first read, it is refused `mission_projects_loading`, and a retry a few seconds later goes through.
 Every other pane is refused `mission_not_conductor`, and a closed or cancelled mission refuses changes (`mission_closed`, `mission_cancelled`).

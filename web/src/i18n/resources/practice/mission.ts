@@ -2,7 +2,7 @@ import type { Catalog, Catalogs } from "../../schema";
 
 // Chapter 8's words (`practice/chapters/mission.ts`).
 const en = {
-  "practice.mission.title": "Mission · hide-conductor",
+  "practice.mission.title": "Mission · hide-mission",
   "practice.mission.summary": "Hand a Conductor a job of several PRs, read the big map, answer its one decision",
   "practice.mission.intro.kick": "A job of several PRs",
   "practice.mission.intro.title": "Hand it over whole, as a mission",
@@ -10,7 +10,7 @@ const en = {
   "practice.mission.ask.quest": "Hand over a mission",
   "practice.mission.ask.kick": "Hand over a mission",
   "practice.mission.ask.title": "Say what the job is",
-  "practice.mission.ask.text": "Here any words start the mission. In Hide, the hide-conductor skill makes the plan, starts the workers and keeps the map.",
+  "practice.mission.ask.text": "Here any words start the mission. In Hide, the hide-mission skill makes the plan, starts the workers and keeps the map.",
   "practice.mission.chip.kick": "The mission is running",
   "practice.mission.chip.title": "The mission chip on the pane's head",
   "practice.mission.chip.text": "Nodes done of those planned, with ! while a decision waits for you. A first plan opens its summary once, if you are looking at this pane; point at the chip to see it again.",
@@ -31,7 +31,7 @@ const en = {
 };
 
 const ko = {
-  "practice.mission.title": "미션 · hide-conductor",
+  "practice.mission.title": "미션 · hide-mission",
   "practice.mission.summary": "Conductor에게 여러 PR짜리 일 맡기기, 큰 지도 보기, 판단 하나 답하기",
   "practice.mission.intro.kick": "PR 여러 개짜리 일",
   "practice.mission.intro.title": "미션으로 통째로 맡겨요",
@@ -39,7 +39,7 @@ const ko = {
   "practice.mission.ask.quest": "미션 맡기기",
   "practice.mission.ask.kick": "미션 맡기기",
   "practice.mission.ask.title": "할 일을 말하기",
-  "practice.mission.ask.text": "연습에서는 어떤 말을 보내도 미션이 시작돼요. Hide에서는 hide-conductor 스킬이 계획을 세우고 작업자를 띄우고 지도를 관리해요.",
+  "practice.mission.ask.text": "연습에서는 어떤 말을 보내도 미션이 시작돼요. Hide에서는 hide-mission 스킬이 계획을 세우고 작업자를 띄우고 지도를 관리해요.",
   "practice.mission.chip.kick": "미션이 돌아가요",
   "practice.mission.chip.title": "터미널 위쪽의 미션 칩",
   "practice.mission.chip.text": "계획한 노드 중 끝난 수예요. 내 판단을 기다릴 때는 앞에 !가 붙어요. 첫 계획은 이 pane을 보고 있을 때 요약을 한 번 열어요. 다시 보려면 칩에 마우스를 올리세요.",
@@ -60,7 +60,7 @@ const ko = {
 } satisfies Catalog<typeof en>;
 
 const zhCN = {
-  "practice.mission.title": "任务 · hide-conductor",
+  "practice.mission.title": "任务 · hide-mission",
   "practice.mission.summary": "把多个 PR 的工作交给 Conductor，查看大任务图，回答一个决定",
   "practice.mission.intro.kick": "要分好几个 PR 的工作",
   "practice.mission.intro.title": "作为任务整个交出去",
@@ -68,7 +68,7 @@ const zhCN = {
   "practice.mission.ask.quest": "交出任务",
   "practice.mission.ask.kick": "交出任务",
   "practice.mission.ask.title": "说出要做的事",
-  "practice.mission.ask.text": "练习中发什么都会开始任务。在 Hide 中，hide-conductor 技能做计划、启动执行者并维护任务图。",
+  "practice.mission.ask.text": "练习中发什么都会开始任务。在 Hide 中，hide-mission 技能做计划、启动执行者并维护任务图。",
   "practice.mission.chip.kick": "任务在进行",
   "practice.mission.chip.title": "窗格顶部的任务标记",
   "practice.mission.chip.text": "显示计划中已完成的节点数，等你决定时前面加 !。你正看着这个窗格时，第一份计划会打开一次摘要；指向标记可再次查看。",
@@ -89,7 +89,7 @@ const zhCN = {
 } satisfies Catalog<typeof en>;
 
 const ja = {
-  "practice.mission.title": "ミッション · hide-conductor",
+  "practice.mission.title": "ミッション · hide-mission",
   "practice.mission.summary": "Conductorに複数PRの仕事を任せる・大きなマップを見る・判断を1つ答える",
   "practice.mission.intro.kick": "PRが何本にもなる仕事",
   "practice.mission.intro.title": "ミッションとしてまるごと任せます",
@@ -97,7 +97,7 @@ const ja = {
   "practice.mission.ask.quest": "ミッションを任せる",
   "practice.mission.ask.kick": "ミッションを任せる",
   "practice.mission.ask.title": "やることを伝える",
-  "practice.mission.ask.text": "練習ではどんな言葉でもミッションが始まります。Hideではhide-conductorスキルが計画を立て、ワーカーを起動し、マップを保ちます。",
+  "practice.mission.ask.text": "練習ではどんな言葉でもミッションが始まります。Hideではhide-missionスキルが計画を立て、ワーカーを起動し、マップを保ちます。",
   "practice.mission.chip.kick": "ミッションが進んでいます",
   "practice.mission.chip.title": "ペイン上部のミッションチップ",
   "practice.mission.chip.text": "計画のうち終わったノード数です。判断待ちのときは前に ! が付きます。このペインを見ているとき、最初の計画が概要を一度開きます。もう一度見るにはチップを指します。",

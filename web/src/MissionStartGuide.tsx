@@ -22,8 +22,8 @@ export function MissionStartGuide() {
         <Dot tone="bg-mission-hold" text={t("missionTool.dot.decide")} />
       </ul>
       <div className="flex w-full min-w-0 flex-col gap-xxs rounded-md border border-border bg-background px-sm py-xs font-mono text-caption" data-mission-start-calls="true">
-        <Call kind="claude" call="/hide-conductor" runtime={t("missionTool.claudeCode")} />
-        <Call kind="codex" call="$hide-conductor" runtime={t("missionTool.codex")} />
+        <Call kind="claude" call="/hide-mission" runtime={t("missionTool.claudeCode")} />
+        <Call kind="codex" call="$hide-mission" runtime={t("missionTool.codex")} />
       </div>
       <p className="break-keep text-center text-caption text-muted-foreground">{t("missionTool.where")}</p>
     </div>
