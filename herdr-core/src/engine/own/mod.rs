@@ -66,7 +66,8 @@ pub(crate) const UNSUPPORTED: &str = "own_engine_unsupported";
 const START_ROWS: u16 = 24;
 const START_COLS: u16 = 80;
 
-/// The most of a pane's history a read asks its holder for.
+/// The most rows a read hands the node, which bounds it again to what a
+/// holder answers (`Holders::read`, truncated past it).
 const READ_LINES_CAP: u32 = u16::MAX as u32;
 
 /// The read sources this engine answers, each with the one read a holder

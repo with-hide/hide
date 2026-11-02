@@ -148,9 +148,7 @@ test("Cmd+F in a focused pane opens that pane's find bar, not the document's, an
   });
 });
 
-// Herdr only until the own engine's pane find reads within its holder's bound: the core asks for 10000 rows
-// and the holder refuses (`ask_invalid`, 1 to 2000), so the find bar shows "pane.read failed" instead of a count.
-test("the find bar steps through matches with Enter and Shift+Enter and counts from 1 @herdr", async ({ page }) => {
+test("the find bar steps through matches with Enter and Shift+Enter and counts from 1", async ({ page }) => {
   await dockedWithDocument(page, "pane-find-count", async ({ focused, sent, last }) => {
     await page.keyboard.press(chord("find_in_pane"));
     const bar = page.locator("[data-find-bar]");

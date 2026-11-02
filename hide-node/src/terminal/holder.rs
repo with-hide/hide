@@ -716,8 +716,12 @@ impl Holders {
     }
 
     /// The pane's last `lines` rows, on a connection of its own that leaves
-    /// the screen connection and its scroll position as they are.
+    /// the screen connection and its scroll position as they are. A holder
+    /// answers at most [`hide_holder_protocol::MAX_READ_LINES`] rows, so a
+    /// longer ask (a pane search reads up to 10,000) reads that many, marked
+    /// truncated when older rows exist, instead of being refused.
     pub fn read(&self, pane: &str, lines: u16) -> Result<Answer, OpenError> {
+        let lines = lines.min(hide_holder_protocol::MAX_READ_LINES);
         self.ask(pane, Ask::Read { lines })
     }
 
@@ -728,7 +732,9 @@ impl Holders {
             pane,
             match rows {
                 None => Ask::Screen,
-                Some(lines) => Ask::Rows { lines },
+                Some(lines) => Ask::Rows {
+                    lines: lines.min(hide_holder_protocol::MAX_READ_LINES),
+                },
             },
         )
     }
