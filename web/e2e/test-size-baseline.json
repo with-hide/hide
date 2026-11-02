@@ -20,9 +20,9 @@
       "lines": 163,
       "expect": 58
     },
-    "mobile.spec.ts::Settings > Mobile to a paired phone: list, detail, reply, quick keys, push rules and revoke @herdr": {
-      "lines": 323,
-      "expect": 114
+    "mobile.spec.ts::Settings > Mobile to a paired phone: list, detail, reply, quick keys, push rules and revoke": {
+      "lines": 322,
+      "expect": 113
     },
     "palette.spec.ts::⌘K lists results by kind with a detail beside them, and the sidebar Search icon opens the same palette": {
       "lines": 120,

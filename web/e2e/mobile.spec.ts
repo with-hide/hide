@@ -356,7 +356,7 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
 
     // The agent's conversation: Herdr reports one's Claude session, whose
     // transcript holds 70 turns with tool output and injected context among them.
-    const transcript = path.join(daemon.home, ".claude", "projects", "-fixture", `${SESSION}.jsonl`);
+    const transcript = path.join(claudeProjects(fixture), "e2e", `${SESSION}.jsonl`);
     fs.mkdirSync(path.dirname(transcript), { recursive: true });
     const turns = Array.from({ length: 70 }, (_, index) => turn(index % 2 === 0 ? "user" : "assistant", `turn ${String(index).padStart(2, "0")}`, index));
     // The first request carries what the fixture provider answers, so the
