@@ -651,6 +651,8 @@ The memory of panes no screen shows and the sum of holders' memory are recorded 
 
 Rows are measured under the load as it is (R), and key latency alone (rows 6 to 9 at one pane and at 128 panes) also under a standing load L of 28 busy processes, which `holder-perf.py --load 28` starts beside the path and ends with the round, so both paths meet the same load whatever else the machine runs.
 The app's engine RSS is judged by the per-holder bound above, never against the Herdr server's.
+Row 31 also records the engine's total RSS in `resources-after-topology.json`, one sample from the existing resource collector after it reads the surviving holder roots or the private Herdr server tree.
+That sum is recorded only; `memory-after-topology.json` still supplies the hided and Chrome RSS comparison.
 The numbers belong to the run record; this document keeps the method, not a verdict.
 
 ### The nightly performance lane

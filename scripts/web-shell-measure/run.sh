@@ -523,6 +523,11 @@ if [[ "$scenario" == topology ]]; then
   # Only a build that records stage times writes these lines.
   python3 "$measure_dir/summarize.py" timing "$hide_state/Logs/core.jsonl" > "$MEASURE_RUN_DIR/timing-summary.json"
   python3 "$measure_dir/memory.py" after-topology "$chrome_pid" "$hided_pid" "$MEASURE_CDP_PORT" > "$MEASURE_RUN_DIR/memory-after-topology.json"
+  # Topology created and closed panes: read the surviving engine roots now,
+  # then record their tree RSS beside the hided/Chrome comparison (row 31).
+  if [[ "$engine" == own ]]; then resource_engine="engine:$(node "$pane_holders" roots "$hide_state")";
+  else resource_engine="engine:$server_pid"; fi
+  MEASURE_RESOURCE_SECONDS=1 python3 "$measure_dir/resources.py" "$hided_pid" "$resource_engine" "$chrome_pid" > "$MEASURE_RUN_DIR/resources-after-topology.json"
   cat "$MEASURE_RUN_DIR/echo-summary.json" "$MEASURE_RUN_DIR/topology-summary.json" "$MEASURE_RUN_DIR/save-summary.json"
   note 'measurement complete; cleaning up owned processes'
   exit 0
