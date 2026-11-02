@@ -120,11 +120,11 @@ export MEASURE_HIDE_STATE="$hide_state"
 note() { printf 'measure: %s\n' "$*"; }
 # The own engine's pane holders outlive the daemon by design, so the run owns
 # them by the pid each record in its state folder names, with the e2e
-# fixture's rule (web/e2e/pane-holders.mjs): `holder_pids` lists the holders
+# fixture's rule (web/e2e/pane-holders.mjs, through holders.mjs): `holder_pids` lists the holders
 # and their programs, `end_holders` ends them (failing when one still runs),
 # `holders_left` prints what still runs from the run's holder folder (nothing,
 # on a clean end: leaked holders once used up every PTY).
-pane_holders="$MEASURE_WORKTREE/web/e2e/pane-holders.mjs"
+pane_holders="$measure_dir/holders.mjs"
 holder_pids() { node "$pane_holders" pids "$hide_state"; }
 end_holders() { node "$pane_holders" end "$hide_state"; }
 holders_left() { node "$pane_holders" left "$hide_state" || true; }

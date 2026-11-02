@@ -10,17 +10,12 @@
 // tree as the caller lists it now. A holder ends its program when it goes (the
 // pane's terminal hangs up). Leaked holders once used up every PTY of the
 // machine, so a clean end leaves nothing that names the state folder.
-//
-// usage: node pane-holders.mjs pids <state>   the holders and programs, one pid a line
-//        node pane-holders.mjs end <state>    ends them; exits 1 naming what still runs
-//        node pane-holders.mjs left <state>   what still names <state>/holders; exits 1 if any
-// Plain JavaScript so the measurement's shell scripts run it with Node.
+// Plain JavaScript so the measurement runs it with Node; it has no
+// `import.meta`, since the desktop suite's loader compiles it as CommonJS.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import console from "node:console";
 import process from "node:process";
-import { pathToFileURL } from "node:url";
 
 export const HOLDER_END_MS = 10_000;
 
@@ -93,24 +88,3 @@ export function endPaneHolders(stateDir, { endTree } = {}) {
   if (strays.length > 0) throw new Error(`processes of ${stateDir} still run after its holders ended: ${strays.join("; ")}`);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1])).href) {
-  const [mode, stateDir] = process.argv.slice(2);
-  if (!stateDir || !["pids", "end", "left"].includes(mode)) {
-    console.error("usage: pane-holders.mjs pids|end|left <state folder>");
-    process.exit(2);
-  }
-  try {
-    if (mode === "pids") {
-      for (const row of ownedHolders(stateDir)) console.log([row.holder, row.program].filter((pid) => pid !== undefined).join("\n"));
-    } else if (mode === "end") {
-      endPaneHolders(stateDir);
-    } else {
-      const strays = holderStrays(stateDir);
-      for (const line of strays) console.log(line);
-      if (strays.length > 0) process.exit(1);
-    }
-  } catch (error) {
-    console.error(error.message);
-    process.exit(1);
-  }
-}
