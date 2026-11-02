@@ -1293,6 +1293,8 @@ A waiting root intentionally keeps its hollow row glyph with a working tone, and
 `agent_state/turn.rs::push` owns the effective notification state and transition ledger; hided keeps pairing, push encryption, transport and delivery policy.
 A read root question clears the server’s effective push state, while the phone’s existing open-page rule keeps its notification while the demand remains.
 The phone reads the core’s `holds_notification` value, and `emphasized` controls its compact title.
+When a new turn's read finishes before that pane's previous analysis, the label worker keeps one entry in its existing analysis queue and reconsiders the current turn after the old result lands.
+The old result cannot release the new turn's notice, and the new turn needs no further read to receive its judgment (`labels::notification_tests::a_late_analysis_cannot_release_the_next_turns_notice`).
 The projection and push regression tests remain in `hided/src/mobile/{projection,push}.rs`, exercising the same public core functions the transport calls.
 The desktop app's agent notifications run the same transitions on their own ledger (`hided/src/desktop_notices.rs`, PRD first-run-onboarding D-09), so a desktop notification and a phone push agree on what is new without either one's seed or mode moving the other.
 A Hide AI row for a home is on the phone's list, and in these transitions, only while it is in Needs You, so the notification follows the group: one notice when it enters, none when the home's turn changes inside it, and none for its progress (PRD hide-ai-work-home B2, B10); the phone opens the agent's detail from it.

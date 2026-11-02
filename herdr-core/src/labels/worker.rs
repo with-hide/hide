@@ -2203,10 +2203,10 @@ impl LabelWorker {
                 return false;
             }
         }
-        if self.analysis_in_flight.as_deref() == Some(pane_id) {
-            return false;
-        }
         if self.analysis_in_flight.is_some() {
+            // A newer read can finish before this pane's older analysis.
+            // Reconsider it when that analysis lands, just like another
+            // pane; otherwise no further read may wake the owed turn.
             if !self.waiting.iter().any(|id| id == pane_id) {
                 self.waiting.push_back(pane_id.to_owned());
             }

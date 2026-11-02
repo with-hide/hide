@@ -291,6 +291,18 @@ fn a_late_analysis_cannot_release_the_next_turns_notice() {
         ..done
     };
     observe(&mut worker, &next);
+    // Finish the new turn's read while the previous analysis is held. The
+    // next analysis must remain owed even when no later read wakes it.
+    drain_until(&mut worker, &woken, |worker| {
+        worker.reader_idle()
+            && shown_facts(worker, &next).is_some_and(|facts| {
+                facts
+                    .operator_request
+                    .iter()
+                    .chain(facts.other_request.iter())
+                    .any(|request| request.text == "결과도 정리해줘")
+            })
+    });
     assert!(notices.observe(&projection(&worker, &next)).0.is_empty());
     harness
         .backend
