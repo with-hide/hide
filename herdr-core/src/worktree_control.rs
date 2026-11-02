@@ -1593,6 +1593,7 @@ fn launch_agent(
     // Herdr would type the command into the pane's shell and wait for an
     // agent that can never appear; say so before asking it. A device's PATH
     // is not this machine's, so there its Herdr answers for it.
+    let mut form = None;
     if let Some(node) = agent_node {
         match crate::node_access::call_as::<Option<StartForm>>(
             node,
@@ -1601,7 +1602,7 @@ fn launch_agent(
             },
             AGENT_CHECK_TIMEOUT,
         ) {
-            Ok(Some(_)) => {}
+            Ok(Some(answered)) => form = Some(answered),
             Ok(None) => {
                 return Launch::Failed(AgentFailure::with_detail(
                     "agent_start.not_installed",
@@ -1616,34 +1617,30 @@ fn launch_agent(
             }
         }
     }
-    // The first prompt rides the start as the agent's own argument
-    // (`start_prompt`); nothing types it, so a start that cannot carry it
-    // fails with the reason and the surface keeps the text. A start through
-    // `cmd.exe` carries it too, as before the spawn's brief learned to be
-    // typed there: `cmd.exe` may rewrite its `%` and `"` (docs/INSTALL.md).
+    // The first prompt is typed once the agent's screen is drawn, the same
+    // for every agent on every system, and rides the start only where the
+    // agent declares the launch prompt and the start is its own program
+    // (docs/delivery.md, The input ladder): a device's start, whose form
+    // this machine did not read, and a start through `cmd.exe` are typed.
+    let mut typed = None;
     if let Some(prompt) = prompt {
+        let launches = form == Some(StartForm::Program)
+            && hide_agent_adapter::adapter(kind).is_some_and(|row| row.launch_prompt());
         match crate::start_prompt::carried(kind, &args, prompt) {
-            Ok(words) => args.extend(words),
+            Ok(words) if launches => args.extend(words),
             Err(crate::start_prompt::Refusal::Prompt(detail)) => {
                 return Launch::Failed(AgentFailure::with_detail(
                     "agent_start.invalid_prompt",
                     detail,
                 ));
             }
-            Err(crate::start_prompt::Refusal::Start(detail)) => {
-                return Launch::Failed(AgentFailure::with_detail(
-                    "agent_start.prompt_not_carried",
-                    format!(
-                        "The first prompt cannot ride this start: {detail}. Start the agent without it and send it once the agent runs."
-                    ),
-                ));
-            }
+            _ => typed = Some(prompt),
         }
     }
     let name = crate::fork::task_agent_name(kind, pane_id);
     let start = match engine.prepare_start(crate::engine::AgentLaunch {
         pane_id: pane_id.to_owned(),
-        name,
+        name: name.clone(),
         kind: kind.to_owned(),
         args,
         codex_daemon,
@@ -1666,7 +1663,9 @@ fn launch_agent(
         Duration::from_millis(AGENT_START_TIMEOUT_MS + 5_000),
         check,
     ) {
-        Ok(_) => Launch::Started,
+        Ok(_) => typed.map_or(Launch::Started, |prompt| {
+            type_first_prompt(engine, id, pane_id, kind, &name, prompt)
+        }),
         Err(StartError::Herdr(EngineError::Answer(message))) => {
             Launch::Unknown(AgentFailure::with_detail(
                 "agent_start.unconfirmed",
@@ -1696,6 +1695,49 @@ fn launch_agent(
             "agent_start.unconfirmed",
             format!("Herdr did not confirm the agent start ({error})"),
         )),
+    }
+}
+
+/// Types a started agent's first prompt once its screen takes input, the
+/// typed rung's one typing (`ladder::typed_only`). A task start has no retype
+/// and no notice: the operator is looking at the tab they opened. An agent
+/// that never takes input, or a typing that failed, is the start's failure,
+/// told on the task's surface with nothing started again, since the agent
+/// runs (`agent_start.prompt_not_typed`).
+fn type_first_prompt(
+    engine: &dyn Engine,
+    id: u64,
+    pane_id: &str,
+    kind: &str,
+    name: &str,
+    prompt: &str,
+) -> Launch {
+    use crate::delivery::ladder::{self, Delivered, InputTarget, NotReady};
+    let failed = |detail: String| {
+        crate::diagnostic!(json!({
+            "component": "task_operation", "kind": "agent.prompt_not_typed", "id": id,
+            "pane_id": pane_id, "agent_kind": kind, "detail": detail,
+        }));
+        Launch::Unknown(AgentFailure::with_detail(
+            "agent_start.prompt_not_typed",
+            format!("The agent started, but its first prompt was not typed ({detail})"),
+        ))
+    };
+    if let Err(not) = ladder::ready(engine, pane_id, name, crate::coordination::BRIEF_READY_WAIT) {
+        return failed(match not {
+            NotReady::Request(detail) | NotReady::Unread(detail) | NotReady::Late(detail) => detail,
+        });
+    }
+    let target = InputTarget {
+        kind: kind.to_owned(),
+        pane_id: pane_id.to_owned(),
+        raw_pane_id: pane_id.to_owned(),
+        session: None,
+        node: None,
+    };
+    match ladder::typed_only().deliver(engine, &target, prompt) {
+        Delivered::Sent(_) => Launch::Started,
+        Delivered::NotYet(cause) | Delivered::Lost(cause) => failed(cause.to_owned()),
     }
 }
 
@@ -4556,12 +4598,12 @@ mod tests {
     }
 
     /// The installed CLI help fixes these expectations independently of the
-    /// adapter. Every first prompt travels in argv, never as PTY input, as
-    /// one word no option parser can take for an option: a prompt that
-    /// starts with `-` after `--`, and joined to OpenCode's `--prompt=`,
-    /// which OpenCode 2.0.29 reads `--prompt -x` as a missing value of.
+    /// adapter. A first prompt rides the start, after `--` so one that starts
+    /// with `-` is never read as an option, only for an agent that declares
+    /// the launch prompt; OpenCode's and Pi's is typed once the agent takes
+    /// input, with the same start otherwise.
     #[test]
-    fn a_first_prompt_travels_as_the_agents_own_argument() {
+    fn a_first_prompt_rides_the_start_only_where_the_agent_declares_it() {
         // OpenCode takes no model, so its start names none; Pi asks no
         // permission question, so full access adds nothing to it.
         for (kind, prompt, extra_roots, model, full_access) in [
@@ -4586,20 +4628,8 @@ mod tests {
                 Some("fixture-model"),
                 &["--always-approve"],
             ),
-            (
-                "opencode",
-                &["--prompt=-fix the tests"][..],
-                false,
-                None,
-                &["--auto"],
-            ),
-            (
-                "pi",
-                &["--", "-fix the tests"][..],
-                false,
-                Some("fixture-model"),
-                &[],
-            ),
+            ("opencode", &[][..], false, None, &["--auto"]),
+            ("pi", &[][..], false, Some("fixture-model"), &[]),
             (
                 "omp",
                 &["--", "-fix the tests"][..],
@@ -4608,10 +4638,15 @@ mod tests {
                 &["--auto-approve"],
             ),
         ] {
-            let server = server(vec![
+            let typed = prompt.is_empty();
+            let mut replies = vec![
                 shell_ready(),
                 json!({"result":{"type":"agent_started","argv":[],"agent":agent("working")}}),
-            ]);
+            ];
+            if typed {
+                replies.extend(typed_replies(kind));
+            }
+            let server = server(replies);
             let mut args = crate::runtime::agent_choice::agent_arguments(
                 Some(kind),
                 model,
@@ -4642,11 +4677,12 @@ mod tests {
                 "{kind}: {outcome:?}"
             );
             let requests = requests_of(&server);
-            assert_eq!(
-                methods_of(&requests),
-                ["pane.process_info", "agent.start"],
-                "{kind}"
-            );
+            let mut methods = vec!["pane.process_info", "agent.start"];
+            if typed {
+                methods.extend(["agent.get", "agent.prompt"]);
+                assert_eq!(requests[3]["params"]["text"], "-fix the tests", "{kind}");
+            }
+            assert_eq!(methods_of(&requests), methods, "{kind}");
             let mut expected: Vec<&str> = full_access.to_vec();
             expected.extend(model.into_iter().flat_map(|m| ["--model", m]));
             if extra_roots {
@@ -4978,35 +5014,90 @@ mod tests {
         }
     }
 
-    /// On Windows a start through `cmd.exe` still carries its first prompt,
-    /// which nothing would type: `cmd.exe` may rewrite its `%` and `"`
-    /// (docs/INSTALL.md), but the start goes on as before.
+    /// What Herdr answers after a start whose first prompt is typed: the
+    /// agent ready for input under the name the task gave it, then the
+    /// typing taken.
+    fn typed_replies(kind: &str) -> [Value; 2] {
+        let mut ready = agent("idle");
+        ready["agent"] = json!(kind);
+        ready["name"] = json!(crate::fork::task_agent_name(kind, "w1:p1"));
+        [
+            json!({"result":{"type":"agent_info","agent":ready}}),
+            json!({"result":{"type":"agent_prompted","agent":agent("working")}}),
+        ]
+    }
+
+    fn codex_start(prompt: &str) -> PendingAgentStart {
+        PendingAgentStart {
+            resume_reference: None,
+            resume_scope: None,
+            pane_id: "w1:p1".into(),
+            kind: "codex".into(),
+            prompt: Some(prompt.into()),
+            args: Vec::new(),
+            codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
+            shell: crate::agent_start::ShellStart::Plain,
+            made_worktree: None,
+        }
+    }
+
+    /// A start this machine cannot prove carries no first prompt: one through
+    /// `cmd.exe` (Windows' batch file, npm's shim), which reads the start line
+    /// again, and a device's, whose start form this machine did not read. The
+    /// agent starts without it and the prompt is typed once, whole, after its
+    /// screen takes input.
     #[test]
-    fn a_first_prompt_rides_a_batch_start_too() {
+    fn a_first_prompt_is_typed_after_the_screen_where_the_start_is_not_proven() {
+        let batch = Starts(StartForm::Batch);
+        for node in [Some(&batch as &dyn crate::node_access::NodeLink), None] {
+            let mut replies = vec![
+                shell_ready(),
+                json!({"result":{"type":"agent_started","argv":[],"agent":agent("working")}}),
+            ];
+            replies.extend(typed_replies("codex"));
+            let server = server(replies);
+            let outcome = launch_with_prompt(
+                &*server,
+                node,
+                7,
+                codex_start("50% done, say \"hi\"\nthen stop"),
+            );
+            assert!(matches!(outcome, TaskAgentOutcome::Started), "{outcome:?}");
+            let requests = requests_of(&server);
+            assert_eq!(
+                methods_of(&requests),
+                [
+                    "pane.process_info",
+                    "agent.start",
+                    "agent.get",
+                    "agent.prompt"
+                ]
+            );
+            // The start carries no argument, so Herdr is sent none.
+            assert_eq!(requests[1]["params"]["args"], Value::Null);
+            assert_eq!(
+                requests[3]["params"]["text"],
+                "50% done, say \"hi\"\nthen stop"
+            );
+        }
+    }
+
+    /// A first prompt Herdr did not type is the start's failure on the task's
+    /// surface, settled rather than offered again: the agent runs, and a
+    /// Retry would start a second one.
+    #[test]
+    fn a_first_prompt_that_was_not_typed_settles_the_start_as_unconfirmed() {
         let server = server(vec![
             shell_ready(),
             json!({"result":{"type":"agent_started","argv":[],"agent":agent("working")}}),
+            typed_replies("codex")[0].clone(),
+            json!({"error":{"code":"invalid_params","message":"bad text"}}),
         ]);
-        let outcome = launch_with_prompt(
-            &*server,
-            Some(&Starts(StartForm::Batch)),
-            7,
-            PendingAgentStart {
-                resume_reference: None,
-                resume_scope: None,
-                pane_id: "w1:p1".into(),
-                kind: "codex".into(),
-                prompt: Some("fix it".into()),
-                args: Vec::new(),
-                codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
-                shell: crate::agent_start::ShellStart::Plain,
-                made_worktree: None,
-            },
-        );
-        assert!(matches!(outcome, TaskAgentOutcome::Started), "{outcome:?}");
-        let requests = requests_of(&server);
-        assert_eq!(methods_of(&requests), ["pane.process_info", "agent.start"]);
-        assert_eq!(requests[1]["params"]["args"], json!(["--", "fix it"]));
+        let outcome = launch_with_prompt(&*server, None, 7, codex_start("go"));
+        let TaskAgentOutcome::Unknown(failure) = outcome else {
+            panic!("expected an unconfirmed start, got {outcome:?}");
+        };
+        assert_eq!(failure.reason, "agent_start.prompt_not_typed");
     }
 
     /// The host's own git answering for a real repository on this machine.

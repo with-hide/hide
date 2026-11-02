@@ -323,33 +323,15 @@ fn wait_native_identity(
 /// (`BRIEF_READY_WAIT`), the moment the spawn's brief may be typed. An agent
 /// that never takes input in that time is `brief_not_submitted`: nothing was
 /// typed, and the same command waits again.
-#[allow(clippy::disallowed_methods)] // a production wait on Herdr's readiness, bounded by the deadline
 fn brief_ready(engine: &dyn Engine, spawn: &str, pane: &str, name: &str) -> Result<(), String> {
-    let deadline = Instant::now() + super::BRIEF_READY_WAIT;
-    loop {
-        let agent = match engine.delivery_agent(Wait::Each(Duration::from_secs(5)), pane) {
-            Err(EngineError::Request(message)) => return Err(message),
-            agent => agent.map_err(|error| {
-                brief_refused(spawn, pane, "brief.agent_unread", error.to_string())
-            })?,
-        };
-        if agent.pane_id == pane && agent.name == name && agent.readiness.accepts_input() {
-            return Ok(());
+    use crate::delivery::ladder::NotReady;
+    crate::delivery::ladder::ready(engine, pane, name, super::BRIEF_READY_WAIT).map_err(|not| {
+        match not {
+            NotReady::Request(message) => message,
+            NotReady::Unread(detail) => brief_refused(spawn, pane, "brief.agent_unread", detail),
+            NotReady::Late(detail) => brief_refused(spawn, pane, "brief.agent_not_ready", detail),
         }
-        if Instant::now() >= deadline {
-            return Err(brief_refused(
-                spawn,
-                pane,
-                "brief.agent_not_ready",
-                format!(
-                    "readiness {:?} after {:?}",
-                    agent.readiness,
-                    super::BRIEF_READY_WAIT
-                ),
-            ));
-        }
-        std::thread::sleep(Duration::from_millis(250));
-    }
+    })
 }
 
 /// How a machine starts `kind`'s program (`Call::AgentInstalled`): `None`
