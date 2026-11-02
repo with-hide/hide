@@ -1,0 +1,205 @@
+// What a spec does to the daemon's workspaces, tabs and panes on either
+// engine (PRD engine-bundle-3-core-owns D-24): each is the one event the web
+// shell sends for the operator's action (Add project, New tab, Split, Close,
+// a click on a pane or a tab, the start panel's start) and is read back from
+// the snapshot the daemon publishes, never from an engine's CLI, so a spec
+// says the same thing on Herdr and on the core's own engine.
+
+import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { expect } from "@playwright/test";
+import { toPage } from "../../desktop/src/main/wirePath";
+import { connectControl, type HidedControl, type Rest } from "./hided-control.mjs";
+import type { Daemon } from "./hided-fixture";
+import { paneProgramLine, type PaneShell } from "./herdr-fixture";
+
+type LayoutNode = { type: "pane"; pane_id: string } | { type: "split"; first: LayoutNode; second: LayoutNode };
+type PaneLayout = { tab_id: string; focused_pane_id: string | null; zoomed: boolean; root: LayoutNode };
+type NavigatorWorkspace = { id: string; path: string; label?: string; checkouts: { id: string; path?: string; agent_groups?: { groups: { tabs: string[] }[] } }[] };
+
+/** Runs `use` on a connection of its own to `daemon`, closed whatever happens. */
+export async function withControl<T>(daemon: Pick<Daemon, "origin" | "token">, use: (control: HidedControl) => Promise<T>): Promise<T> {
+  const control = await connectControl(daemon);
+  try {
+    return await use(control);
+  } finally {
+    control.close();
+  }
+}
+
+/** Types `text` into `pane` as the operator's keys. */
+export function sendKeys(control: HidedControl, pane: string, text: string): void {
+  control.send("key", { pane_id: pane, bytes_base64: Buffer.from(text, "utf8").toString("base64") });
+}
+
+/** The panes of a layout, first to last. */
+export function layoutPanes(node: LayoutNode): string[] {
+  return node.type === "pane" ? [node.pane_id] : [...layoutPanes(node.first), ...layoutPanes(node.second)];
+}
+
+/** The layout the snapshot publishes for `tab`, if it has one. */
+export function tabLayout(rest: Rest, tab: string): PaneLayout | undefined {
+  return ((rest.pane_layouts ?? []) as PaneLayout[]).find((layout) => layout.tab_id === tab);
+}
+
+/** The panes of `tab`, first to last; empty while the snapshot has no layout for it. */
+export function tabPanes(rest: Rest, tab: string): string[] {
+  const layout = tabLayout(rest, tab);
+  return layout ? layoutPanes(layout.root) : [];
+}
+
+/** The tab whose layout holds `pane`. */
+export function tabOfPane(rest: Rest, pane: string): string | undefined {
+  return ((rest.pane_layouts ?? []) as PaneLayout[]).find((layout) => layoutPanes(layout.root).includes(pane))?.tab_id;
+}
+
+/** The pane the core holds focused, as the snapshot names it. */
+export function corePaneFocus(rest: Rest): string | null {
+  return ((rest.focused ?? null) as { pane_id?: string } | null)?.pane_id ?? null;
+}
+
+/** The tab the core shows, as the snapshot names it. */
+export function shownTab(rest: Rest): string | null {
+  return ((rest.tab ?? null) as { id?: string } | null)?.id ?? null;
+}
+
+/** The workspaces the navigator lists. */
+function workspacesOf(rest: Rest): NavigatorWorkspace[] {
+  return ((rest.navigator as { workspaces?: NavigatorWorkspace[] } | undefined)?.workspaces ?? []);
+}
+
+/** The checkout `folder` names in the navigator, with its tabs in order. */
+export function checkoutAt(rest: Rest, folder: string): { workspace: string; checkout: string; tabs: string[] } | undefined {
+  const workspace = workspacesOf(rest).find((row) => row.path === folder);
+  const checkout = workspace?.checkouts[0];
+  if (!workspace || !checkout) return undefined;
+  return { workspace: workspace.id, checkout: checkout.id, tabs: checkout.agent_groups?.groups.flatMap((group) => group.tabs) ?? [] };
+}
+
+/** The tabs of `workspace` the navigator lists, in order. */
+export function tabsOf(rest: Rest, workspace: string): string[] | undefined {
+  const row = workspacesOf(rest).find((candidate) => candidate.id === workspace);
+  return row?.checkouts.flatMap((checkout) => checkout.agent_groups?.groups.flatMap((group) => group.tabs) ?? []);
+}
+
+type AreaNode = { area: { id: string; displays: { id: string }[] } } | { split: { first: AreaNode; second: AreaNode } } | Record<string, unknown>;
+type AgentAreas = { root: AreaNode; group_id?: string | null };
+
+/** The Agent area of the workspace in front that shows `tab`, as the start panel's target names it. */
+export function areaShowing(rest: Rest, tab: string): { group_id: string | null; area_id: string } | undefined {
+  const layout = ((rest.workspace_view ?? null) as { agent_layout?: AgentAreas | null } | null)?.agent_layout;
+  if (!layout) return undefined;
+  const find = (node: AreaNode): string | undefined => {
+    if ("area" in node && node.area) {
+      const area = node.area as { id: string; displays: { id: string }[] };
+      return area.displays.some((display) => display.id === tab) ? area.id : undefined;
+    }
+    for (const child of Object.values(node)) {
+      if (child && typeof child === "object") {
+        const found = find(child as AreaNode);
+        if (found) return found;
+      }
+    }
+    return undefined;
+  };
+  const area = find(layout.root);
+  return area ? { group_id: layout.group_id ?? null, area_id: area } : undefined;
+}
+
+/** The fields of a sidebar agent row (`navigator.agents`) a spec reads. */
+export type AgentRow = {
+  pane_id: string;
+  agent_kind?: string | null;
+  status_code?: string | null;
+  activity?: string | null;
+  blocked?: boolean;
+  unread?: boolean;
+  session_id?: string | null;
+  identity_label?: string | null;
+};
+
+/** The agent row the snapshot lists for `pane`, once an agent runs there. */
+export function agentIn(rest: Rest, pane: string): AgentRow | undefined {
+  const agents = ((rest.navigator as { agents?: AgentRow[] } | undefined)?.agents ?? []);
+  return agents.find((row) => row.pane_id === pane && row.agent_kind);
+}
+
+/** A project the daemon opened: its checkout, the checkout's first tab and that tab's shell. */
+export type OpenedProject = { folder: string; workspace: string; checkout: string; tab: string; pane: string };
+
+/**
+ * Adds the folder `dir` as a project, as Add project does once the operator
+ * confirmed a folder outside HOME, and waits for its checkout's first tab
+ * and shell. `dir` must exist.
+ */
+export async function openProject(control: HidedControl, dir: string, label: string): Promise<OpenedProject> {
+  const folder = toPage(fs.realpathSync.native(dir));
+  control.send("create_workspace", { path: folder, label, initialize_git: false, confirmed_outside_home: folder });
+  return control.until((rest) => {
+    const checkout = checkoutAt(rest, folder);
+    const tab = checkout?.tabs[0];
+    const pane = tab ? tabPanes(rest, tab)[0] : undefined;
+    return checkout && tab && pane ? { folder, workspace: checkout.workspace, checkout: checkout.checkout, tab, pane } : undefined;
+  }, `the project ${folder} with its first tab`, 30_000);
+}
+
+/** A new tab in `checkout`, as New tab makes it, and its shell. */
+export async function newTab(control: HidedControl, at: { workspace: string; checkout: string }, label: string): Promise<{ tab: string; pane: string }> {
+  const before = await control.until((rest) => tabsOf(rest, at.workspace), `the tabs of ${at.workspace}`);
+  control.send("create_tab", { workspace_id: at.workspace, checkout_id: at.checkout, label, request_id: `e2e-${crypto.randomUUID()}` });
+  return control.until((rest) => {
+    const tab = tabsOf(rest, at.workspace)?.find((id) => !before.includes(id));
+    const pane = tab ? tabPanes(rest, tab)[0] : undefined;
+    return tab && pane ? { tab, pane } : undefined;
+  }, `a new tab in ${at.workspace}`, 30_000);
+}
+
+/**
+ * Splits `tab` with a new pane at `cwd` (a folder in the page's spelling),
+ * running `command` or the shell, as Split does; returns the new pane.
+ */
+export async function splitPane(control: HidedControl, tab: string, cwd: string, { direction = "right", command = null }: { direction?: "right" | "down"; command?: string | null } = {}): Promise<string> {
+  const before = await control.until((rest) => tabLayout(rest, tab) ? tabPanes(rest, tab) : undefined, `the layout of ${tab}`);
+  control.send("create_pane", { tab_id: tab, cwd, command, direction, request_id: `e2e-${crypto.randomUUID()}` });
+  return control.until((rest) => tabPanes(rest, tab).find((pane) => !before.includes(pane)), `a new pane in ${tab}`, 30_000);
+}
+
+/** Closes `pane` as the operator's confirmed Close does, and waits until no layout holds it. */
+export async function closePane(control: HidedControl, pane: string): Promise<void> {
+  control.send("close_pane", { pane_id: pane, confirmed: true });
+  await control.until((rest) => tabOfPane(rest, pane) === undefined || undefined, `the close of ${pane}`, 30_000);
+}
+
+/** Gives `pane` the keyboard as the operator's click does, and waits until the core holds it there. */
+export async function focusPane(control: HidedControl, pane: string): Promise<void> {
+  control.send("focus_pane", { pane_id: pane, origin: "operator" });
+  await control.until((rest) => corePaneFocus(rest) === pane || undefined, `the focus of ${pane}`, 30_000);
+}
+
+/** Shows `tab` of `at` as a click on its tab does, and waits until the core shows it. */
+export async function focusTab(control: HidedControl, at: { workspace: string; checkout: string }, tab: string): Promise<void> {
+  control.send("focus_tab", { workspace_id: at.workspace, checkout_id: at.checkout, tab_id: tab });
+  await control.until((rest) => shownTab(rest) === tab || undefined, `${tab} shown`, 30_000);
+}
+
+/**
+ * Runs `argv` in the shell of `pane`, typed at its prompt as an agent in that
+ * tab would run it, and returns its exit status once the shell has written
+ * it. Output goes to `<root>/<name>.out` and `<name>.err`; `name` is unique
+ * per call.
+ */
+export async function runInPane(
+  fixture: { root: string; shell: PaneShell },
+  daemon: Pick<Daemon, "origin" | "token">,
+  pane: string,
+  name: string,
+  program: { env?: Record<string, string>; argv: string[]; stdout?: boolean },
+): Promise<{ status: number; stdout: string; stderr: string }> {
+  const files = { stdout: path.join(fixture.root, `${name}.out`), stderr: path.join(fixture.root, `${name}.err`), status: path.join(fixture.root, `${name}.status`) };
+  const line = paneProgramLine(fixture.shell, { env: program.env, argv: program.argv, stdout: program.stdout ? files.stdout : undefined, stderr: files.stderr, status: files.status });
+  await withControl(daemon, async (control) => sendKeys(control, pane, `${line}\r`));
+  const read = (file: string): string => (fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "");
+  await expect.poll(() => /^\d+/.test(read(files.status)), { message: `${name} to finish in pane ${pane}; stderr ${read(files.stderr)}`, timeout: 20_000 }).toBe(true);
+  return { status: Number.parseInt(read(files.status), 10), stdout: read(files.stdout), stderr: read(files.stderr) };
+}

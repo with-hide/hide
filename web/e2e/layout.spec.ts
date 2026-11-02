@@ -7,7 +7,8 @@
 
 import { expect, test, type Page } from "@playwright/test";
 import { chord } from "./chords";
-import { corePaneFocus, e2eEngine, openLayout, startLayoutStack, type LayoutStack } from "./engine-fixture";
+import { e2eEngine, openLayout, startLayoutStack, type LayoutStack } from "./engine-fixture";
+import { corePaneFocus } from "./daemon-actions";
 import { countSent, screenshot } from "./wire";
 
 test.describe.configure({ timeout: 90_000 });

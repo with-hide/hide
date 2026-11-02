@@ -570,8 +570,8 @@ export function declareParent(fixture: Pick<HerdrFixture, "bin" | "env">, child:
  * agent's session from that report, never from the start's arguments, so
  * the engine-neutral fixture (`engine-fixture.ts`) declares it on Herdr.
  */
-export function declareAgentSession(server: Pick<HerdrFixture, "env" | "bin">, pane: string, sessionId: string): void {
-  declareFixtureSession(server.env, server.bin, pane, "claude", sessionId);
+export function declareAgentSession(server: Pick<HerdrFixture, "env" | "bin">, pane: string, sessionId: string, replacing = false): void {
+  declareFixtureSession(server.env, server.bin, pane, "claude", sessionId, replacing);
 }
 
 export function setFixtureSession(fixture: HerdrFixture, pane: string, sessionId: string): void {
