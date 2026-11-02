@@ -110,6 +110,9 @@ pub const MAX_CONTROL_RUNNING: usize = hide_host::serve::CONTROL_CONCURRENCY;
 /// Background Git work ([`Call::is_background`]) running at once, on a lane
 /// of its own at both ends.
 pub const MAX_BACKGROUND_RUNNING: usize = hide_host::serve::BACKGROUND_CONCURRENCY;
+/// The core's engine asking the node's pane holders ([`Call::is_pane`])
+/// running at once, on a lane of their own at both ends.
+pub const MAX_PANE_RUNNING: usize = hide_host::serve::PANE_CONCURRENCY;
 pub const MAX_QUEUED: usize = 32;
 
 /// This program, which a device runs in its node role (`hided node serve`,
@@ -469,8 +472,9 @@ impl fmt::Debug for RemoteHost {
 /// requests (PRD S5.5 D-15). Once the connection is draining or closed it
 /// admits nothing new, and a request still waiting is refused rather than
 /// sent, because nothing went out for it (B52). A link has three: one for
-/// machine calls, one for link control (`Call::is_control`) and one for
-/// background Git work (`Call::is_background`).
+/// machine calls, one for link control (`Call::is_control`), one for
+/// background Git work (`Call::is_background`) and one for the core's engine
+/// asking the node's pane holders (`Call::is_pane`).
 struct Gate {
     state: Mutex<Admission>,
     changed: Condvar,
@@ -596,6 +600,9 @@ struct Inner {
     /// Admission for background Git work, which never takes a machine
     /// call's place.
     background_gate: Gate,
+    /// Admission for the pane holders' requests, which never wait behind
+    /// machine calls nor take their place.
+    pane_gate: Gate,
     next_id: AtomicU64,
     /// Checkout roots this connection has opened, pinned to the directory
     /// they named then.
@@ -626,6 +633,8 @@ impl Inner {
             &self.control_gate
         } else if call.is_background() {
             &self.background_gate
+        } else if call.is_pane() {
+            &self.pane_gate
         } else {
             &self.gate
         }
@@ -636,6 +645,7 @@ impl Inner {
         self.gate.stop(reason);
         self.control_gate.stop(reason);
         self.background_gate.stop(reason);
+        self.pane_gate.stop(reason);
     }
 }
 
@@ -679,6 +689,7 @@ impl RemoteHost {
                 gate: Gate::new(MAX_RUNNING),
                 control_gate: Gate::new(MAX_CONTROL_RUNNING),
                 background_gate: Gate::new(MAX_BACKGROUND_RUNNING),
+                pane_gate: Gate::new(MAX_PANE_RUNNING),
                 next_id: AtomicU64::new(1),
                 roots: Mutex::new(HashMap::new()),
                 terminals: std::sync::OnceLock::new(),
@@ -1036,6 +1047,7 @@ impl NodeLink for RemoteHost {
                 host.inner.gate.wait_idle(deadline);
                 host.inner.control_gate.wait_idle(deadline);
                 host.inner.background_gate.wait_idle(deadline);
+                host.inner.pane_gate.wait_idle(deadline);
                 host.close(&drained);
             });
         if let Err(error) = spawned {
@@ -2172,6 +2184,7 @@ fn start_reader(
         gate: Gate::new(MAX_RUNNING),
         control_gate: Gate::new(MAX_CONTROL_RUNNING),
         background_gate: Gate::new(MAX_BACKGROUND_RUNNING),
+                pane_gate: Gate::new(MAX_PANE_RUNNING),
         next_id: AtomicU64::new(1),
         roots: Mutex::new(HashMap::new()),
         terminals: std::sync::OnceLock::new(),

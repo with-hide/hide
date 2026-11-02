@@ -1055,7 +1055,7 @@ fn a_node_tells_its_panes_facts_read_by_the_rules_its_holder_reads() {
     });
     assert!(matches!(
         node.holders().set_rules("unknown", None),
-        Err(HolderError::NoPane(_))
+        Err(HolderError::NoPane { .. })
     ));
 
     let later = Arc::new(Told::default());

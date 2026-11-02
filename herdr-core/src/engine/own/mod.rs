@@ -82,15 +82,17 @@ const READ_SOURCES: [&str; 3] = ["recent", "recent_unwrapped", "visible"];
 const UNKNOWN_SOURCE: &str = "unknown_read_source";
 
 /// Where a daemon's engine keeps its session and finds its home: the
-/// state folder its saved session lives in (`hide_kit::layout::
-/// engine_session`), the home a restored pane whose folder is gone opens in
-/// and new worktrees go under, and the node of the machine its panes run on,
-/// which reads that machine's folders and runs its Git, since the core
-/// touches no machine (PRD core-host-node D-21).
+/// engine folder on the core's machine its saved session lives in
+/// (`hide_kit::layout::engine_dir`, or a device's,
+/// `hide_kit::layout::device_engine_dir`), the home of the machine its panes
+/// run on, in the wire spelling, which a restored pane whose folder is gone
+/// opens in and new worktrees go under, and that machine's node, which reads
+/// its folders and runs its Git, since the core touches no machine (PRD
+/// core-host-node D-21).
 #[derive(Clone)]
 pub(crate) struct Place {
-    pub(crate) state_dir: PathBuf,
-    pub(crate) home: PathBuf,
+    pub(crate) engine_dir: PathBuf,
+    pub(crate) home: String,
     pub(crate) node: Arc<dyn NodeLink>,
     /// The agent definitions the operator's folder held when the daemon
     /// started, so a restore resumes their agents before the core's first
@@ -185,8 +187,8 @@ impl OwnEngine<'static> {
     /// change, and laid out again around what `holders` found running as
     /// soon as the node says what that is, on a thread of its own.
     pub(crate) fn open(holders: Arc<dyn PaneHolders>, place: Place) -> Result<Self, String> {
-        let path = hide_kit::layout::engine_session(&place.state_dir);
-        let backups = hide_kit::layout::engine_backups(&place.state_dir);
+        let path = hide_kit::layout::engine_session_in(&place.engine_dir);
+        let backups = hide_kit::layout::engine_backups_in(&place.engine_dir);
         let topology = restore::read(&path, &backups);
         let saved = topology.panes().map(|(id, _)| id.to_owned()).collect();
         let engine = Self::with(topology, holders, Some(place), false)?;
@@ -344,7 +346,7 @@ impl OwnEngine<'_> {
     }
 
     /// The home this engine opens worktrees and lost folders under.
-    fn home(&self) -> Result<PathBuf, EngineError> {
+    fn home(&self) -> Result<String, EngineError> {
         self.shared
             .place
             .as_ref()
@@ -524,7 +526,7 @@ impl OwnEngine<'_> {
         let mut first = None;
         for pane in panes {
             match self.shared.holders.terminate(pane) {
-                Ok(()) | Err(HolderError::NoPane(_)) => {}
+                Ok(()) | Err(HolderError::NoPane { .. }) => {}
                 Err(error) => {
                     crate::diagnostic!(serde_json::json!({
                         "component": "own_engine",
@@ -741,7 +743,7 @@ impl OwnEngine<'_> {
 /// not have is the refusal a pane the engine does not have is.
 fn holder_error(error: HolderError) -> EngineError {
     match error {
-        HolderError::NoPane(message) => EngineError::Refused {
+        HolderError::NoPane { message: message } => EngineError::Refused {
             code: "pane_not_found".to_owned(),
             message,
         },
@@ -749,7 +751,7 @@ fn holder_error(error: HolderError) -> EngineError {
             code: code.to_owned(),
             message,
         },
-        HolderError::Unreachable(message) => EngineError::Transport(message),
+        HolderError::Unreachable { message: message } => EngineError::Transport(message),
     }
 }
 
@@ -1904,7 +1906,7 @@ mod tests {
         fn start(&self, start: &HolderStart) -> Result<(), HolderError> {
             if self.refuse.load(Ordering::Acquire) {
                 return Err(HolderError::Refused {
-                    code: "holder_start_failed",
+                    code: "holder_start_failed".to_owned(),
                     message: format!("pane {}: the holder program is missing", start.pane),
                 });
             }
@@ -1926,7 +1928,7 @@ mod tests {
                 .lock()
                 .unwrap()
                 .clone()
-                .ok_or_else(|| HolderError::Unreachable("not asked".to_owned()))
+                .ok_or_else(|| HolderError::Unreachable { message: "not asked".to_owned() })
         }
         fn proof(&self, _: &str) -> Result<hide_node_link::holders::HolderProof, HolderError> {
             // Every pane's program is this test's own process.
@@ -1935,7 +1937,7 @@ mod tests {
                 incarnation: 1,
                 program,
                 started: hide_platform::process::start_time(program)
-                    .map_err(|error| HolderError::Unreachable(error.to_string()))?,
+                    .map_err(|error| HolderError::Unreachable { message: error.to_string() })?,
             })
         }
         fn input(&self, pane: &str, input: PaneInput) -> Result<(), HolderError> {
@@ -1989,7 +1991,7 @@ mod tests {
                 .wait_timeout_while(found, timeout, |found| found.is_none())
                 .unwrap();
             found.clone().ok_or(HolderError::Refused {
-                code: "recovery_unfinished",
+                code: "recovery_unfinished".to_owned(),
                 message: "not handed".to_owned(),
             })
         }

@@ -472,21 +472,68 @@ pub fn engine_dir(state_dir: &Path) -> PathBuf {
 /// D-6): its workspaces, tabs, pane trees and panes, read once when the
 /// daemon starts and replaced whole after every change.
 pub fn engine_session(state_dir: &Path) -> PathBuf {
-    engine_dir(state_dir).join("session.json")
+    engine_session_in(&engine_dir(state_dir))
 }
 
 /// Where a saved session the engine could not read is kept, the newest
 /// three, rather than deleted.
 pub fn engine_backups(state_dir: &Path) -> PathBuf {
-    engine_dir(state_dir).join("backups")
+    engine_backups_in(&engine_dir(state_dir))
+}
+
+/// The saved session of the engine whose folder is `engine_dir`, this
+/// machine's or a device's.
+pub fn engine_session_in(engine_dir: &Path) -> PathBuf {
+    engine_dir.join("session.json")
+}
+
+/// Where the engine whose folder is `engine_dir` keeps a saved session it
+/// could not read.
+pub fn engine_backups_in(engine_dir: &Path) -> PathBuf {
+    engine_dir.join("backups")
+}
+
+/// The folder of the core's own engine for the device `device`, in the
+/// core's state folder (PRD engine-bundle-3-core-owns D-22): the core keeps
+/// each machine's session, a device's as its own, and the device keeps only
+/// its panes' holders. Refused for an id that is not one folder name.
+pub fn device_engine_dir(state_dir: &Path, device: &str) -> Result<PathBuf, String> {
+    let plain = !device.is_empty()
+        && device.len() <= 128
+        && !device.starts_with('.')
+        && device
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'));
+    if !plain {
+        return Err(format!(
+            "the device id {device:?} is not one folder name, so its engine has no folder"
+        ));
+    }
+    Ok(engine_dir(state_dir).join("devices").join(device))
 }
 
 /// Where the core's own engine makes a repository's worktree named `name`
-/// (PRD engine-bundle-3-core-owns D-28): `~/.hide/worktrees/<repo>/<name>`.
-/// A worktree another engine made elsewhere (Herdr's `~/.herdr/worktrees`)
-/// stays where it is and is opened by its path.
-pub fn engine_worktree(home: &Path, repo: &str, name: &str) -> PathBuf {
-    hide_home(home).join("worktrees").join(repo).join(name)
+/// (PRD engine-bundle-3-core-owns D-28): `~/.hide/worktrees/<repo>/<name>`
+/// under `home`, the wire spelling of the home of the machine the worktree
+/// is on, which may be another machine's. A worktree another engine made
+/// elsewhere (Herdr's `~/.herdr/worktrees`) stays where it is and is opened
+/// by its path.
+pub fn engine_worktree(
+    home: &str,
+    repo: &str,
+    name: &str,
+) -> Result<String, hide_platform::path::PathError> {
+    let relative = hide_platform::path::RelPath::parse(&format!(".hide/worktrees/{repo}/{name}"))?;
+    Ok(hide_platform::path::wire_join(home, &relative))
+}
+
+/// The state folder of a device's node, where the pane holders it runs for
+/// a core on another machine keep their records, sockets and logs (PRD
+/// engine-bundle-3-core-owns D-22): apart from the account's own Hide state
+/// folder, so a Hide running on the device itself and the node its core
+/// started never reconcile each other's panes.
+pub fn device_node_state(home: &Path) -> PathBuf {
+    hide_home(home).join("device-node")
 }
 
 /// The folder a state folder's holders listen and log in, one socket and

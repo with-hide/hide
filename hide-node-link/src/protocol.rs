@@ -285,7 +285,13 @@ use crate::error::HostError;
 /// 68: a node hands input to a running agent through the agent's own way
 /// in (`Call::Deliver`). A helper on 67 would refuse it, so it is refused
 /// at Hello and upgraded.
-pub const PROTOCOL_VERSION: u32 = 68;
+/// 69: a node runs its machine's panes in pane holders for the core's own
+/// engine, with no Herdr (`Call::HoldersStart`), and answers that engine's
+/// starts, ends, asks and input (`Call::Pane`) and follows its panes
+/// (`Call::PaneWatch`) on a lane of their own (PRD engine-bundle-3-core-owns
+/// D-22). A helper on 68 would refuse all three, so it is refused at Hello
+/// and upgraded.
+pub const PROTOCOL_VERSION: u32 = 69;
 
 /// What agy's index held in a checkout before Hide typed `/fork`
 /// ([`Call::AntigravityForkMark`]).
@@ -1044,6 +1050,31 @@ pub enum Call {
     PaneInspect {
         pane_id: String,
     },
+    /// Starts this node's pane holders and the terminal service that shows
+    /// their screens, over the node's own state folder, so the core's own
+    /// engine runs the machine's panes with no Herdr (PRD
+    /// engine-bundle-3-core-owns D-22): from then on the link's terminal
+    /// lines reach that service, [`Call::Pane`] its holders, and a pane's
+    /// `hide` is proved by the pane's holder record on the node's pane
+    /// service, whose bootstrap socket it answers with
+    /// ([`crate::panes::PanesStarted`]). Asking again while they run changes
+    /// nothing; a node whose terminals run on its Herdr refuses it, since
+    /// one node runs one engine's panes.
+    HoldersStart,
+    /// One request of the core's engine to this node's pane holders (start,
+    /// end, ask, input), answered with a [`crate::holders::PaneAnswer`].
+    /// The core's own node and a device's answer it the same way, so the
+    /// engine of any machine reaches its panes by the machine's node alone.
+    Pane {
+        call: crate::holders::PaneCall,
+    },
+    /// Follows this node's panes, reporting a
+    /// [`crate::holders::PaneWatchReport`] for each pane's facts and each
+    /// pane whose program exited, and at least every
+    /// [`crate::holders::PANE_WATCH_QUIET`], until the caller answers a
+    /// report with false; the call then answers nothing. A newer watch
+    /// takes the place of an older one.
+    PaneWatch,
     /// Base64 bytes for the `hide` command on `stream`; answered once they
     /// are written to it.
     StreamWrite {
@@ -1123,7 +1154,16 @@ impl Call {
     /// finish (the Git watch). A link that drains stops these; any other
     /// call, a clone included, settles to its own result.
     pub fn runs_until_stopped(&self) -> bool {
-        matches!(self, Self::GitWatch { .. })
+        matches!(self, Self::GitWatch { .. } | Self::PaneWatch)
+    }
+
+    /// Whether this request is the core's engine asking the node's pane
+    /// holders: a start waits up to its holder's ten seconds and a restore
+    /// asks eight at once, so both ends run them on a lane of their own,
+    /// [`crate::holders::PANE_LANE`] wide, and they never hold a file read
+    /// or a Git call behind them, nor wait behind one.
+    pub fn is_pane(&self) -> bool {
+        matches!(self, Self::Pane { .. } | Self::PaneWatch | Self::HoldersStart)
     }
 
     /// Whether this request is link control rather than machine work: a
@@ -1244,6 +1284,9 @@ impl Call {
             | Self::TerminalsStart { .. }
             | Self::PaneProofAnswer { .. }
             | Self::PaneInspect { .. }
+            | Self::HoldersStart
+            | Self::Pane { .. }
+            | Self::PaneWatch
             | Self::StreamWrite { .. }
             | Self::StreamClose { .. }
             | Self::LinkOpen { .. }
