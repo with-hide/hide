@@ -308,8 +308,8 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     const frames: string[] = [];
     phone.on("websocket", (socket) => socket.on("framereceived", (frame) => frames.push(String(frame.payload))));
     await phone.goto(pairUrl);
-    await expect(phone.getByRole("heading", { name: "Connect to mac" })).toBeVisible();
-    await expect(phone.getByText("The code expires in 5 minutes. If it expires, reopen the QR code on your Mac.")).toBeVisible();
+    await expect(phone.getByRole("heading", { name: "mac", exact: true })).toBeVisible();
+    await expect(phone.getByText("QR expires in 5 minutes. Reopen it on your device if it expires.")).toBeVisible();
     await screenshot(phone, "mobile-phone-pair");
     await phone.locator('[data-phone-pair="true"]').tap();
     await expect(phone.locator('[data-phone-connected="true"]')).toBeVisible({ timeout: 20_000 });
