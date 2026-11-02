@@ -59,6 +59,7 @@ mod memory_branch;
 pub(crate) mod memory_evidence;
 pub(crate) mod memory_promotion;
 mod memory_verify;
+mod mission_cleanup;
 pub(crate) mod mission_criteria;
 pub(crate) mod mission_events;
 mod mission_health;
@@ -116,6 +117,7 @@ mod view_sessions;
 mod workspace_control;
 mod workspace_view;
 mod worktree_command;
+mod worktree_retire;
 
 pub(crate) use fetch::{FetchJob, RemoteCheck};
 pub use hosts::WorkspaceRemoteRoute;
@@ -2169,7 +2171,7 @@ impl Runtime {
                     ),
                     persistence::UnrecognizedField::ConductorSettings => (
                         "ui_state.conductor_settings_unknown",
-                        "The stored Settings > Conductor was not recognized; the defaults were used",
+                        "The stored Settings > Mission was not recognized; the defaults were used",
                     ),
                     persistence::UnrecognizedField::AgentPermissions => (
                         "ui_state.agent_permissions_unknown",

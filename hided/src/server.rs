@@ -1393,7 +1393,7 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
             "Hide knows no project of the mission's GitHub repository on that machine: register a checkout of it there as a project, or wait while GitHub is still being read for that project or for the mission's own (its pull requests show once it is), then run the same command again with --repo naming it; or leave out --machine"
         }
         "mission_candidate_refused" => {
-            "The worker is none of the operator's candidates in Settings > Conductor; run hide mission settings and start it as one of them (its agent, its fixed model or the CLI's default, its fixed effort)"
+            "The worker is none of the operator's candidates in Settings > Mission; run hide mission settings and start it as one of them (its agent, its fixed model or the CLI's default, its fixed effort)"
         }
         "codex_capability_unknown" => {
             "Hide has not read whether that machine's Codex runs a shared server; ask the operator to press Check again in Settings > Agents for that machine, then run the same command again with the same intent"

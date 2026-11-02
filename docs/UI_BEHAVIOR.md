@@ -1298,7 +1298,7 @@ A mission belongs to the front project when it was made in that project's Worksp
 With no mission in the project the tool is the start guide: a moving picture of a mission (the Conductor, three workers side by side, one decision, a check beside each part as it finishes, purple then green, two checking the demo, then main), `한 번 말하면, 여럿이 나눠서 끝까지`, three dots (나란히 일하고, 다른 모델이 검증, 판단만 나에게), the `/hide-mission` and `$hide-mission` calls, `아무 에이전트 터미널에서 부르면 여기에 미션이 생겨요`, and under it the defaults in three lines (동시에, 어디까지, 검증) with `바꾸기 ›`; there is no field and no example prompt (B3).
 The picture loops in about ten seconds and runs only while it is on screen in a window that shows; with reduced motion it is one finished frame; its colours are the mission tokens in both themes (B4).
 `+` unfolds the same guide above the list; `+` again or its `✕` folds it (B8).
-⚙, `바꾸기 ›` and the map head's ⚙ open the tool on its defaults: Settings › Conductor's own controls and values (how many at once, how far, the check strength, the cross-check, the candidates), `새 미션부터 적용`, and `완료` back to the list; a refused edit shows Settings › Conductor's words in place (B9).
+⚙, `바꾸기 ›` and the map head's ⚙ open the tool on its defaults: Settings › Mission's own controls and values (how many at once, how far, the check strength, the cross-check, the candidates), `새 미션부터 적용`, and `완료` back to the list; a refused edit shows Settings › Mission's words in place (B9).
 A mission record that cannot be read is one line, `미션 기록을 읽지 못했어요`, and the reason goes to the diagnostic log (B10).
 
 ## Terminal image attachment boundary
@@ -1706,7 +1706,7 @@ A hidden list draws no rows, the elapsed clock updates only its own text, and th
 
 The lane has one 보기 slot per window, which holds a pull request's card, a session's record or a mission's map and belongs to no checkout and no Agent tab, so changing either leaves it as it was (PRD sidebar-task-lens D-50, B48).
 Whatever opens a card or a record opens it there, in front of the documents in the lane's viewing column, and the Workspace in front, its Agent tab, the tool column and the keyboard stay (B14, B15, B50; PRD lane-two-columns B9); no `PR #N` or record tab appears among the documents.
-Its head reads `←`, the item's mark and name (`PR #N · <project>`, `기록 · <title>` or `미션 · <title>`), `↗` (GitHub) on a card, a gear on a map that opens Settings › Conductor, and `✕` (B47); a card's mark is its PR mark, in its state's icon and colour, here and on the rail.
+Its head reads `←`, the item's mark and name (`PR #N · <project>`, `기록 · <title>` or `미션 · <title>`), `↗` (GitHub) on a card, a gear on a map (hint `미션 설정`, Mission settings) that opens Settings › Mission, and `✕` (B47); a card's mark is its PR mark, in its state's icon and colour, here and on the rail.
 The head keeps the lane's surface and what the slot holds sits on the page's background, a card and a record alike, as the 보기 screens draw it.
 Opening another item puts it in front, and `←` steps back through the ones opened before, at most 20, the oldest leaving first; `✕` empties the slot and the viewing column goes back to what stood under it: the documents when they showed before the slot came forward, else the column closes, the lane closing with it when there is no tool column (PRD lane-two-columns B13; operator decision 2026-10-24).
 A slot that opens a closed lane, whatever the lane held when ⌘E or Escape closed it, stands alone, so its `✕` closes the lane again.
@@ -3443,11 +3443,13 @@ A device that still waits after it was sent the choice is logged once (`first_ru
 Under `Continue`, one line names the agent Hide AI will use: the first agent in that fixed order that is switched on in the step and signed in (`firstRunAgent` in `web/src/hideAi.ts`, "Hide AI uses Claude Code", `Hide AI가 쓰는 에이전트: Claude Code`), read from this machine's rows of `status.background_ai.providers[].state`, which the step asks the core to probe while it is open; with no such agent the line is absent, and it follows each flip of a tile (PRD settings-cleanup D-18, B45, B46).
 An agent installed later appears in these rows off and is never turned on by a pass.
 
-### Conductor
+### Mission
 
-Settings › Conductor, in the machine group after Hide AI, keeps what a Conductor plans with on this machine (PRD software-factory-conductor D-31, B48, B49).
+Settings › Mission (`미션`; the tab was named Conductor until the skill and the map became hide-mission), in the machine group after Hide AI, keeps what a Conductor plans with on this machine (PRD software-factory-conductor D-31, B48, B49).
 `동시 실행 상한` is how many agents one mission runs at once, reviewers and verifiers included and the Conductor not counted, from 1 to 16; `기본 범위` is how far a mission goes when the operator does not say, up to ready pull requests or through the merge.
-Settings › Conductor has no cleanup item: a mission deletes no file, and a done node's worktree and build cache stay until the project's disk cleanup (`머지됨 N → 정리`) removes them when the operator chooses ([delivery.md: What Hide settles in a mission by itself](delivery.md#what-hide-settles-in-a-mission-by-itself)).
+`머지되면 작업 공간 정리` (Clean up a worktree once merged), right under them and on by default, is a switch with one line under it: `PR이 머지된 갈래의 워크트리와 빌드 캐시를 지워요. 고치던 파일이 남아 있거나 쓰는 중이면 그대로 둬요.`
+On, a done node whose pull request GitHub reports merged has that branch's worktree removed with its build cache when its tree is clean and no agent pane or running program is in it, the branch always kept; a worktree that holds changes or is in use stays, is named in the diagnostic log and stays in the project's disk cleanup (`머지됨 N → 정리`), and nothing is removed while GitHub's answer is missing ([delivery.md: What Hide settles in a mission by itself](delivery.md#what-hide-settles-in-a-mission-by-itself)).
+Off, missions delete nothing. Unlike the values below, the switch applies to every mission at once, a running or closed one included.
 `작업자 후보` lists the agents a Conductor chooses workers from, at most 16: each row's agent, its model from the start panel's list (disabled with why when that list cannot be read), its effort automatic or fixed, and what it is for; an agent this machine has not installed is dimmed with `설치 안 됨`.
 With no candidates the Conductor chooses among the installed agents; with some, Hide refuses a worker that is none of them (`mission_candidate_refused`, [delivery.md: Missions](delivery.md#missions)).
 `검증` holds two controls, and the checkers come from the candidates above.

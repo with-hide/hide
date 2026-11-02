@@ -1,4 +1,4 @@
-// The real mission page and Settings › Conductor over invented values (PRD
+// The real mission page and Settings › Mission over invented values (PRD
 // software-factory-conductor, mission-map-git-criteria), one state per
 // `state` parameter: plan, running (every card look: working, review with its
 // checkers, done with a merge left, in main, outside, reopened by a defect),
@@ -26,6 +26,7 @@ import { useEffect, useLayoutEffect, useMemo } from "react";
 import { AgentMark } from "../AgentMark";
 import { createActions } from "../actions";
 import { TooltipProvider } from "../components/ui/tooltip";
+import { useInterfaceTranslation } from "../i18n/client";
 import { useFollowInterfaceLanguage } from "../i18n/translator";
 import { requireInterfaceLanguage } from "../i18n/locale";
 import { MissionMap } from "../MissionMap";
@@ -280,7 +281,7 @@ export function missionFixture(shown: string, now: number): { mission: Mission; 
       { agent: "claude", model: "Sonnet 5.5", effort: "low", purpose: "리뷰, 문서" },
       { agent: "pi", effort: null, purpose: "짧은 조사" },
       { agent: "grok", effort: null, purpose: "" },
-    ], default_strength: "normal", other_vendor: true } },
+    ], default_strength: "normal", other_vendor: true, clean_merged: true } },
   } as unknown as SnapshotRest;
   return { mission, rest };
 }
@@ -297,6 +298,12 @@ export function withMissionAsk(rest: SnapshotRest, deviceId: string, now: number
     agent_scope: { ...device.agent_scope, mission_asks: [mission.id], overview_needs_you: device.agent_scope.overview_needs_you + 1, groups: { ...device.agent_scope.groups, needs_you: device.agent_scope.groups.needs_you + 1 } },
   });
   return { ...rest, missions: fixture.missions, navigator: { ...rest.navigator!, devices: devices ?? [] } };
+}
+
+/** The page's title as the Settings sheet draws it above the tab. */
+function SettingsPageTitle() {
+  const { t } = useInterfaceTranslation();
+  return <h2 className="mb-lg truncate text-headline font-semibold">{t("settings.tabs.conductor")}</h2>;
 }
 
 export function MissionScene({ params }: { params: URLSearchParams }) {
@@ -339,7 +346,7 @@ export function MissionScene({ params }: { params: URLSearchParams }) {
     <TooltipProvider>
       <div style={{ width }} className="flex h-full min-w-0 flex-col bg-background text-foreground" data-gallery-scene="mission" data-mission-scene={state}>
         {state === "settings" ? (
-          <div className="p-xl"><ConductorTab actions={actions} /></div>
+          <div className="p-xl"><SettingsPageTitle /><ConductorTab actions={actions} /></div>
         ) : pane ? (
           <div className="flex h-(--size-pane-header) min-w-0 items-center gap-xs border-b border-border bg-muted px-sm text-caption" data-mission-scene-pane="true">
             <AgentMark kind="claude" />

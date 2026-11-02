@@ -973,7 +973,7 @@ pub(super) struct IssueSourceSetPayload {
     pub(super) source: String,
 }
 
-/// `conductor_settings_set`: the fields of Settings › Conductor one edit
+/// `conductor_settings_set`: the fields of Settings › Mission one edit
 /// changes (PRD software-factory-conductor D-31, B48); an absent field keeps
 /// its value, so two edits sent before the first one's echo do not undo each
 /// other.
@@ -990,6 +990,8 @@ pub(super) struct ConductorSettingsSetPayload {
     pub(super) default_strength: Option<crate::missions::Strength>,
     #[serde(default)]
     pub(super) other_vendor: Option<bool>,
+    #[serde(default)]
+    pub(super) clean_merged: Option<bool>,
 }
 
 /// `mission_answer`: the operator's answer from a mission's decision banner
@@ -4142,6 +4144,9 @@ impl Runtime {
                 if let Some(other_vendor) = payload.other_vendor {
                     settings.other_vendor = other_vendor;
                 }
+                if let Some(clean_merged) = payload.clean_merged {
+                    settings.clean_merged = clean_merged;
+                }
                 self.set_conductor_settings(settings)
             }
             Event::MissionAnswer(payload) => self.mission_answer_event(
@@ -4615,7 +4620,7 @@ impl Runtime {
                     // Settings › Issues owns these through their own events.
                     project_issue_sources: current.project_issue_sources,
                     issue_settings: current.issue_settings,
-                    // Settings › Conductor owns it through its own event.
+                    // Settings › Mission owns it through its own event.
                     conductor_settings: current.conductor_settings,
                     agent_permissions: current.agent_permissions,
                     device_agent_permissions: current.device_agent_permissions,

@@ -419,6 +419,7 @@ impl Runtime {
             made: true,
         };
         if made == self.missions.health_made {
+            self.drive_mission_cleanup(false);
             return false;
         }
         self.missions.health_made = made;
@@ -442,6 +443,8 @@ impl Runtime {
         // A raise with no Conductor to wait on, or whose Conductor just
         // left, reaches the operator now rather than at the minute (D-08).
         changed |= self.raise_to_operator(now);
+        // A node this evaluation finished is looked at in the same pass.
+        self.drive_mission_cleanup(true);
         changed
     }
 

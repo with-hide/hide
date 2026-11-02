@@ -227,7 +227,7 @@ struct StoredUiState {
     project_issue_sources: BTreeMap<String, String>,
     #[serde(default)]
     issue_settings: StoredIssueSettings,
-    /// Absent in a store written before Settings › Conductor, which loads
+    /// Absent in a store written before Settings › Mission, which loads
     /// the defaults. Kept as a value, as `detail` is, so one this build
     /// cannot read or refuses loads the defaults instead of making the whole
     /// store unreadable.
@@ -316,7 +316,7 @@ pub enum UnrecognizedField {
     Detail,
     /// Records of the Overview map's choices; the ones that read loaded.
     OverviewGraph,
-    /// Settings › Conductor; the defaults were used.
+    /// Settings › Mission; the defaults were used.
     ConductorSettings,
     /// An agent's 권한 in Settings › Agents; 매번 물어보기 was used for it.
     AgentPermissions,
@@ -895,8 +895,7 @@ pub fn save(
             default_agent: None,
         },
         conductor_settings: Some(
-            serde_json::to_value(&state.conductor_settings)
-                .expect("Settings › Conductor serializes"),
+            serde_json::to_value(&state.conductor_settings).expect("Settings › Mission serializes"),
         ),
         agent_start: Some(state.agent_start.clone()),
         agent_permissions: (!state.agent_permissions.is_empty()).then(|| {
@@ -1799,7 +1798,7 @@ mod tests {
         assert_eq!(capped.practice.len(), PRACTICE_CHAPTER_LIMIT);
     }
 
-    /// Settings › Conductor survives a relaunch, and a value this build
+    /// Settings › Mission survives a relaunch, and a value this build
     /// cannot read (a later build's field, a cap out of range) loads the
     /// defaults and says so while every other stored choice still loads.
     /// A 권한 survives a save, and one this build cannot read asks every
@@ -1916,7 +1915,7 @@ mod tests {
         }
     }
 
-    /// Settings › Conductor kept before verification strength reads as
+    /// Settings › Mission kept before verification strength reads as
     /// `normal`, its toggle off only where the operator had turned another
     /// company off for the review or the verify default.
     #[test]
@@ -1954,6 +1953,33 @@ mod tests {
                 "{checkers}"
             );
         }
+    }
+
+    /// Settings › Mission kept before the cleanup switch, in either stored
+    /// shape, reads with the switch on, and the switch off survives a save.
+    #[test]
+    fn mission_settings_from_before_the_cleanup_switch_read_it_on() {
+        for settings in [
+            r#"{"concurrency":3,"default_scope":"merge","candidates":[],"default_strength":"fast","other_vendor":false}"#,
+            r#"{"concurrency":3,"default_scope":"merge","candidates":[],"checkers":{}}"#,
+        ] {
+            let stored = format!(
+                r#"{{"schema_version":1,"expanded_paths":[],"selected_path":null,"selected_pane_id":null,
+                "conductor_settings":{settings}}}"#
+            );
+            let (state, _sizes, disposition) = decode(stored.as_bytes());
+            assert_eq!(disposition, LoadDisposition::Loaded, "{settings}");
+            assert_eq!(state.conductor_settings.concurrency, 3, "{settings}");
+            assert!(state.conductor_settings.clean_merged, "{settings}");
+        }
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("state.json");
+        let mut state = UiStateSnapshot::default();
+        state.conductor_settings.clean_merged = false;
+        save(&path, &state, &PaneTerminalSizes::new()).expect("persist the settings");
+        let (restored, _sizes, disposition) = load(&path);
+        assert_eq!(disposition, LoadDisposition::Loaded);
+        assert!(!restored.conductor_settings.clean_merged);
     }
 
     #[test]

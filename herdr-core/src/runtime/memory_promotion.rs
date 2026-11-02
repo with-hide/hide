@@ -11,6 +11,7 @@
 //! repository itself.
 
 use super::branch_decision::TRACK_INTERVAL_MS;
+use super::worktree_retire::{agents_listed, panes_in, worktree_path};
 use super::*;
 use crate::delivery::HIDE_MEMORY_ROLE;
 use crate::model::{
@@ -1501,33 +1502,6 @@ fn fail_start(
     Ok(())
 }
 
-/// The worktree of `branch` in the repository at `repo`, `None` when there
-/// is none.
-pub(super) fn worktree_path(
-    engine: &dyn crate::engine::Engine,
-    repo: &str,
-    branch: &str,
-) -> Result<Option<String>, String> {
-    engine
-        .worktree_path(READ_WAIT, repo, branch)
-        .map_err(String::from)
-}
-
-/// How long one of Herdr's reads here may take.
-const READ_WAIT: crate::engine::Wait = crate::engine::Wait::Each(std::time::Duration::from_secs(5));
-
-/// Every agent Herdr runs now.
-pub(super) fn agents_listed(
-    engine: &dyn crate::engine::Engine,
-) -> Result<Vec<crate::session_sync::ProjectedAgent>, String> {
-    engine.agents(READ_WAIT).map_err(|error| match error {
-        crate::engine::EngineError::Answer(_) | crate::engine::EngineError::Protocol { .. } => {
-            "agent.list is malformed".to_owned()
-        }
-        error => error.to_string(),
-    })
-}
-
 /// Releases what a failed attempt made (engineering principle 14): its
 /// worktree, the workspace and panes in it, and its branch, when the branch
 /// holds no commit of its own and the worktree nothing uncommitted. One that
@@ -1710,8 +1684,9 @@ pub(super) enum Retired {
 
 /// Retires a settled attempt (PRD hide-ai-work-home D-18, D-24, engineering
 /// principle 14): its agent's panes close, then its worktree is removed when
-/// the tree is clean and no other agent or running program is in it. The
-/// branch always stays, for the merge or the operator to reuse. What
+/// the tree is clean and no other agent or running program is in it
+/// (`worktree_retire::retire_worktree`, which a mission's merged nodes share).
+/// The branch always stays, for the merge or the operator to reuse. What
 /// happened is logged; a worktree that stays says why.
 pub(super) fn retire_attempt(
     engine: &dyn crate::engine::Engine,
@@ -1720,97 +1695,15 @@ pub(super) fn retire_attempt(
     own: &[String],
     noticed: bool,
 ) -> Retired {
-    use hide_node_link::git::GitCommand;
-    use hide_node_link::protocol::Call;
-    const NODE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
-    let repo = retire.root.as_str();
-    let mut at = None;
-    let result = (|| -> Result<(Retired, &'static str), String> {
-        let Some(path) = worktree_path(engine, repo, &retire.branch)? else {
-            return Ok((Retired::Done, "gone"));
-        };
-        at = Some(path.clone());
-        // The branch checked out in the Project's own folder is the
-        // operator's, never an attempt's worktree.
-        if path.trim_end_matches('/') == repo.trim_end_matches('/') {
-            return Ok((Retired::Kept, "the Project's own folder"));
-        }
-        let agents = agents_listed(engine)?;
-        let panes = panes_in(engine, &path)?;
-        let (attempt, others): (Vec<_>, Vec<_>) = agents
-            .iter()
-            .filter(|agent| panes.contains(&agent.pane_id))
-            .partition(|agent| own.contains(&agent.pane_id));
-        // The attempt's agent ends first, whatever else keeps the worktree.
-        let attempt = attempt
-            .into_iter()
-            .map(|agent| agent.pane_id.clone())
-            .collect::<Vec<_>>();
-        crate::worktree_control::close_checkout_panes(
-            engine,
-            node,
-            &[],
-            &attempt,
-            crate::worktree_control::ProcessWait::for_folder_removal(true),
-            crate::worktree_control::CONFIRM_TIMEOUT,
-        )?;
-        if !others.is_empty() {
-            return Ok((Retired::Kept, "another agent works in it"));
-        }
-        // Idle shells close with the worktree; a program running in one
-        // keeps it.
-        let remaining = panes
-            .into_iter()
-            .filter(|pane| !attempt.contains(pane))
-            .collect::<Vec<_>>();
-        for pane in &remaining {
-            let held = engine
-                .pane_processes(READ_WAIT, pane)
-                .map_err(String::from)?;
-            if !held.foreground_pids.is_empty() && !held.shell_holds_terminal() {
-                return Ok((Retired::Kept, "a program is running in it"));
-            }
-        }
-        let status = crate::node_access::call_as::<String>(
-            node,
-            Call::Git {
-                root: path.clone(),
-                command: GitCommand::Status,
-            },
-            NODE_TIMEOUT,
-        )
-        .map_err(|error| error.to_string())?;
-        if !status.trim().is_empty() {
-            return Ok((Retired::Kept, "it holds uncommitted changes"));
-        }
-        crate::worktree_control::close_checkout_panes(
-            engine,
-            node,
-            std::slice::from_ref(&path),
-            &remaining,
-            crate::worktree_control::ProcessWait::for_folder_removal(true),
-            crate::worktree_control::CONFIRM_TIMEOUT,
-        )?;
-        crate::node_access::call_as::<()>(
-            node,
-            Call::WorktreeRetire {
-                root: repo.to_owned(),
-                checkout: path,
-                branch: retire.branch.clone(),
-                discard: false,
-            },
-            NODE_TIMEOUT,
-        )
-        .map_err(|error| error.to_string())?;
-        Ok((Retired::Done, "removed"))
-    })();
-    let (retired, outcome, reason) = match &result {
-        Ok((retired, reason)) if *reason == "removed" || *reason == "gone" => {
-            (*retired, *reason, None)
-        }
-        Ok((retired, reason)) => (*retired, "kept", Some((*reason).to_owned())),
-        Err(reason) => (Retired::Failed, "failed", Some(reason.clone())),
+    use super::worktree_retire::Outcome;
+    let retirement =
+        super::worktree_retire::retire_worktree(engine, node, &retire.root, &retire.branch, own);
+    let retired = match retirement.outcome {
+        Outcome::Gone | Outcome::Removed => Retired::Done,
+        Outcome::Kept(_) => Retired::Kept,
+        Outcome::Failed(_) => Retired::Failed,
     };
+    let (outcome, reason) = retirement.logged();
     // A refusal that repeats is written once, not on every check.
     if retired != Retired::Failed || !noticed {
         crate::diagnostic!(json!({
@@ -1818,41 +1711,12 @@ pub(super) fn retire_attempt(
             "kind": "promotion.worktree_retired",
             "project_id": retire.project_id,
             "branch": retire.branch,
-            "path": at,
+            "path": retirement.path,
             "outcome": outcome,
             "reason": reason,
         }));
     }
     retired
-}
-
-/// The panes Herdr runs in the folder `path` or below it.
-/// Whether `cwd` is `path` or below it, however either spells its end: a
-/// pane missed here would be taken for no one's, and its folder removed.
-fn within(cwd: &str, path: &str) -> bool {
-    let (cwd, path) = (cwd.trim_end_matches('/'), path.trim_end_matches('/'));
-    cwd == path
-        || cwd
-            .strip_prefix(path)
-            .is_some_and(|rest| rest.starts_with('/'))
-}
-
-pub(super) fn panes_in(
-    engine: &dyn crate::engine::Engine,
-    path: &str,
-) -> Result<Vec<String>, String> {
-    let snapshot = engine.session(READ_WAIT).map_err(|error| match error {
-        crate::engine::EngineError::Answer(_) | crate::engine::EngineError::Protocol { .. } => {
-            "snapshot_unavailable".to_owned()
-        }
-        error => error.to_string(),
-    })?;
-    Ok(snapshot
-        .panes
-        .into_iter()
-        .filter(|pane| pane.cwd.as_deref().is_some_and(|cwd| within(cwd, path)))
-        .map(|pane| pane.pane_id)
-        .collect())
 }
 
 /// Records the agent a spawn answered on its attempt; false when the write
@@ -3728,17 +3592,6 @@ pub(super) mod tests {
                 .iter()
                 .any(|(pane, _)| pane == "w2:p1")
         );
-    }
-
-    /// A folder's panes are those in it or below it, and a sibling that only
-    /// shares the name's start is not, whatever the spelling of the end.
-    #[test]
-    fn a_pane_is_within_a_folder_only_at_a_path_boundary() {
-        assert!(within("/r/wt", "/r/wt"));
-        assert!(within("/r/wt/", "/r/wt"));
-        assert!(within("/r/wt/docs", "/r/wt/"));
-        assert!(!within("/r/wt-other", "/r/wt"));
-        assert!(!within("/r", "/r/wt"));
     }
 
     /// A machine that is away holds no slot, and an attempt not tried yet goes
