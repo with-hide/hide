@@ -312,13 +312,15 @@ if name == 'playwright' and '--list' in args:
         result = self.workflow_step("web-e2e.yml", "e2e", "End-to-end",
                                     RUNNER_TEMP=str(self.root),
                                     HIDE_E2E_SCREENSHOT_DIR=str(self.root / "screenshots"),
-                                    GREP="", SHARD="1/2")
+                                    GREP="", GREP_INVERT="@herdr", SHARD="1/2")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.tool_calls("node", "web"), [["scripts/build-phone.mjs"]])
         calls = self.tool_calls("playwright", "web")
         self.assertEqual(len(calls), 3)
         self.assertTrue(all("--list" in call for call in calls[:2]))
         self.assertNotIn("--list", calls[-1])
+        # The own engine's lane leaves out the tests that look at Herdr itself, in its lists and its run.
+        self.assertTrue(all("--grep-invert" in call and "@herdr" in call for call in calls))
 
     def test_desktop_execution_always_builds_and_propagates_prerequisite_and_test_failures(self):
         self.enable_package_scripts()
