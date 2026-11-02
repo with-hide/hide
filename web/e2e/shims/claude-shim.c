@@ -287,7 +287,12 @@ static int agent_pane_runner(int argc, char **argv) {
     arguments[i] = passed[i - 1];
   }
   arguments[argc] = NULL;
-  _wexecv(executable, arguments);
+  /* Windows exec starts another process and ends this one. Keep this
+     ancestor alive while the runner calls Hide: the kernel can prove its
+     path back to the pane's shell only through live parents. The fixture's
+     process-tree owner ends both on teardown. */
+  intptr_t status = _wspawnv(_P_WAIT, executable, arguments);
+  if (status >= 0) exit((int)status);
 #else
   /* The runner gets the launch's arguments, so a resume keeps its conversation. */
   char *arguments[18] = { runner };
