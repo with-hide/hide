@@ -1486,7 +1486,7 @@ fn launch_with_prompt_checked(
     };
     if let Some(prompt) = prompt {
         match prompt_argument(&prompt) {
-            Ok(argument) => args.extend([dialect.prompt_flag().to_owned(), argument]),
+            Ok(argument) => args.extend(dialect.prompt_arguments(&argument)),
             Err(message) => {
                 return TaskAgentOutcome::Failed(AgentFailure::with_detail(
                     "agent_start.invalid_prompt",
@@ -4581,38 +4581,53 @@ mod tests {
     }
 
     /// The installed CLI help fixes these expectations independently of the
-    /// adapter. Every first prompt travels in argv, never as PTY input.
+    /// adapter. Every first prompt travels in argv, never as PTY input, as
+    /// one word no option parser can take for an option: a prompt that
+    /// starts with `-` after `--`, and joined to OpenCode's `--prompt=`,
+    /// which OpenCode 2.0.29 reads `--prompt -x` as a missing value of.
     #[test]
     fn a_first_prompt_travels_as_the_agents_own_argument() {
         // OpenCode takes no model, so its start names none; Pi asks no
         // permission question, so full access adds nothing to it.
-        for (kind, prompt_flag, extra_roots, model, full_access) in [
+        for (kind, prompt, extra_roots, model, full_access) in [
             (
                 "claude",
-                "--",
+                &["--", "-fix the tests"][..],
                 true,
                 Some("fixture-model"),
                 &crate::agent_permission::CLAUDE_FULL_ACCESS[..],
             ),
             (
                 "codex",
-                "--",
+                &["--", "-fix the tests"][..],
                 true,
                 Some("fixture-model"),
                 &crate::agent_permission::CODEX_FULL_ACCESS[..],
             ),
             (
                 "grok",
-                "--",
+                &["--", "-fix the tests"][..],
                 false,
                 Some("fixture-model"),
                 &["--always-approve"],
             ),
-            ("opencode", "--prompt", false, None, &["--auto"]),
-            ("pi", "--", false, Some("fixture-model"), &[]),
+            (
+                "opencode",
+                &["--prompt=-fix the tests"][..],
+                false,
+                None,
+                &["--auto"],
+            ),
+            (
+                "pi",
+                &["--", "-fix the tests"][..],
+                false,
+                Some("fixture-model"),
+                &[],
+            ),
             (
                 "omp",
-                "--",
+                &["--", "-fix the tests"][..],
                 true,
                 Some("fixture-model"),
                 &["--auto-approve"],
@@ -4640,7 +4655,7 @@ mod tests {
                     resume_scope: None,
                     pane_id: "w1:p1".into(),
                     kind: kind.into(),
-                    prompt: Some("fix the tests".into()),
+                    prompt: Some("-fix the tests".into()),
                     args,
                     codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
                     shell: crate::agent_start::ShellStart::Plain,
@@ -4662,7 +4677,7 @@ mod tests {
             if extra_roots {
                 expected.extend(["--add-dir", "/work/my app"]);
             }
-            expected.extend([prompt_flag, "fix the tests"]);
+            expected.extend(prompt.iter().copied());
             assert_eq!(requests[1]["params"]["args"], json!(expected), "{kind}");
             assert_eq!(requests[1]["params"]["kind"], kind);
         }

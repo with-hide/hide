@@ -2383,13 +2383,7 @@ pub(super) fn spawn_hide_agent(
     start: &PromotionStart,
     spawn: &HideSpawn,
 ) -> Result<String, String> {
-    let dialect = hide_agent_adapter::adapter(&start.kind)
-        .and_then(|row| row.start)
-        .ok_or("agent_not_startable")?;
-    let args = vec![
-        dialect.prompt_flag().to_owned(),
-        crate::worktree_control::prompt_argument(&spawn.prompt)?,
-    ];
+    let args = start_arguments(&start.kind, &spawn.prompt)?;
     let view = crate::coordination::run(
         start.client.clone(),
         crate::delivery::worker::Authority {
@@ -2420,6 +2414,15 @@ pub(super) fn spawn_hide_agent(
         .as_str()
         .map(str::to_owned)
         .ok_or_else(|| "spawn_answer_unreadable".to_owned())
+}
+
+/// The native arguments that give a start of `kind` its first prompt, as
+/// one word in the agent's own form (`LaunchDialect::prompt_form`).
+fn start_arguments(kind: &str, prompt: &str) -> Result<Vec<String>, String> {
+    let dialect = hide_agent_adapter::adapter(kind)
+        .and_then(|row| row.start)
+        .ok_or("agent_not_startable")?;
+    Ok(dialect.prompt_arguments(&crate::worktree_control::prompt_argument(prompt)?))
 }
 
 /// What every start of a Project's promotions begins its intent with: the
@@ -4082,6 +4085,14 @@ pub(super) mod tests {
         }
         assert!(!prompt.contains("open one PR"), "a batch commits and stops");
         assert!(crate::worktree_control::prompt_argument(&prompt).is_ok());
+        // A first prompt that starts with `-` stays one word no CLI reads as
+        // an option: OpenCode 2.0.29 prints its help and exits on
+        // `--prompt -x`, and starts on `--prompt=-x`.
+        assert_eq!(
+            super::start_arguments("opencode", "-x\tstep").unwrap(),
+            ["--prompt=-x    step"]
+        );
+        assert_eq!(super::start_arguments("codex", "-x").unwrap(), ["--", "-x"]);
         assert!(
             super::prompt(
                 &[7],

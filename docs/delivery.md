@@ -490,7 +490,11 @@ An agent's own way in runs on the node of the machine whose pane runs the agent 
 | Claude Code | launch prompt, typed | none Hide can use: its messaging socket holds a message for a session Hide starts (below) | yes | yes | yes |
 | Codex | launch prompt, `codex queue`, typed | `codex queue --thread <session> --message=<text>` with the account's Codex, its durable queue for the session, which the running TUI takes as a turn; the text is one argument, since Codex 0.166.0 reads `--message -x` as a missing value (exit 2) | yes | yes | yes |
 | Antigravity | launch prompt, typed | none Hide can address: its language server takes a message only with a start flag of its own and a port read from its log | yes | yes | yes |
-| every other agent | typed | none declared | yes | yes | yes |
+| Grok | launch prompt, typed | none declared | yes | yes | yes |
+| OpenCode | launch prompt, typed | none declared; its start takes the prompt joined to its option, `--prompt=<text>`, since OpenCode 2.0.29 reads `--prompt -x` as a missing value, prints its help and exits 0 | yes | yes | yes |
+| omp | launch prompt, typed | none declared | yes | yes | yes |
+| Pi | typed | none: Pi 1.0.4 holds a start prompt, but reads one that starts with `@` as a file to attach, `--` or not, and exits 1 when there is none, so its brief is typed rather than changed or split by its first character | yes | yes | yes |
+| Cursor | typed | none declared | yes | yes | yes |
 
 The launch prompt carries only a spawn's brief, as the agent's start argument, and only for an agent measured to hold it through its own start screens; every later input goes through the next rung.
 Measured 2026-11-01 on macOS with an isolated HOME, a private terminal server and the fake model:
@@ -505,11 +509,20 @@ Measured 2026-11-01 on macOS with an isolated HOME, a private terminal server an
   Hide starts its agents with full access, so a letter written there waited for review instead of running; Hide attests nothing it cannot prove and changes no setting of the operator's, so Claude Code's later input is typed until Claude Code offers a way in for such a session.
 - Antigravity 1.4.12 holds `-i <prompt>` through its trust dialog and records the U+2028 form in its transcript.
 
+Measured 2026-11-02 the same way, each CLI under a sandbox that refuses to open a browser, with prompts of Hide's own form that start with `-` or `@`, hold raw tabs and line breaks, or are 16,350 bytes long:
+
+- Grok 1.0.70 holds `-- <prompt>` through its folder trust question and submits it once after "Yes" ("No, quit" exits with nothing submitted); the pinned 1.0.52 shows no trust question; its prompt hook records every form exactly, the 16 KiB one included, and a prompt that is a subcommand's name (`version`) stays a prompt.
+- OpenCode 2.0.29 shows no screen at a new folder's start and records `--prompt=<prompt>` exactly in its session database, `@` included; `--prompt -x` as two words prints its help and exits 0, which a first prompt or a promoted Memory card that started with `-` met before this change too.
+- omp 18.7.0 holds `-- <prompt>` through its five-step first-run setup and under its update notice, submits it once and records every form exactly, attaching the file an `@` names while keeping the text whole.
+- Pi 1.0.4 holds `-- <prompt>` through every answer to its folder trust question and records it exactly, but `@README.md …` as one word is read as a file path and the start exits 1, `--` or not.
+- No agent submitted a launched prompt twice, and each draws Hide's U+2028 line breaks as spaces, so a brief of many lines shows as one line in its screen while its record keeps the breaks.
+
 A launched brief is never typed or typed again: the spawn records it as launched (`BriefLaunched`, `brief_input.route` `launch`) before it starts the agent, so answering the start screen cannot send it twice, and it is taken once the agent records it.
 The argument carries line breaks as U+2028 and a tab as four spaces (`worktree_control::prompt_argument`); Codex and agy record it as given and Claude Code with LF, and the one canonical rule the brief and every record are read by drops line breaks, U+2028 and U+2029 included, and reads a tab as four spaces ([Recognizing the bell](#recognizing-the-bell)), so each record is the brief.
 Until then its child shows as waiting to its parent, and the parent's notice says the start holds the brief and submits it once its screen is answered.
 A spawn whose arguments already carry a prompt, or whose brief the prompt argument refuses (a control character, past 64 KiB), types it as before (`brief.launch_refused`).
 A brief is at most 16 KiB, inside every system's command line, Windows' 32,767 characters included, and a start line past the terminal's canonical limit waits for the shell's line editor ([ARCHITECTURE.md](ARCHITECTURE.md)).
+The agent journey's `start` cell launches a 16 KiB brief that starts with `-` and its `launch_brief` cell one that starts with `@`, each over lines and tabs, for every agent that declares the launch prompt, on Linux, macOS and Windows, and each requires the agent's own record to be the brief, once; the daily agent canary runs them against each CLI's latest release ([VERIFICATION.md](VERIFICATION.md#the-agent-canary)).
 A launch prompt and a `codex queue` message are command-line arguments: the text is in the process's argument list while it runs, readable by the account's own processes, and the start line, typed into the pane's shell, is kept in that shell's history as any command the operator runs there is.
 
 ### Input an agent did not take

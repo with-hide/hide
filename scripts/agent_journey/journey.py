@@ -112,6 +112,33 @@ def brief(value):
     return f"# Journey brief\n\n## Notes\n{BRIEF_NOTES}\n\n## Request\n{prompt(value)}\n"
 
 
+# A brief's cap in bytes (herdr-core `delivery::BODY_LIMIT`, `invalid_brief`).
+BRIEF_CAP = 16 * 1024
+
+
+def long_brief(value):
+    """A brief an agent's start carries as its prompt argument, of the forms
+    a command line and an option parser can take apart: it starts with `-`,
+    holds tabs and many lines, and is as long as a brief may be, its request
+    last, so a start that cut it, read it as options or submitted it twice
+    shows in the agent's record (cells.record_verdict)."""
+    head = "-JOURNEY brief, not an option\tof the agent\n\n## Notes\n"
+    tail = f"\n\n## Request\n{prompt(value)}\n"
+    line = "- Note:\tkeep `hide agent show` and `--brief-file` as they are; nothing to change here.\n"
+    room = BRIEF_CAP - len((head + tail).encode())
+    notes = (line * (room // len(line.encode()) + 1)).encode()[:room].decode()
+    text = head + notes + tail
+    assert len(text.encode()) == BRIEF_CAP, len(text.encode())
+    return text
+
+
+def at_brief(value):
+    """A launched brief that starts with `@` and a file of the repository,
+    which Pi 1.0.4 reads as a file to attach (so Pi types its brief) and omp
+    attaches, over lines and a tab."""
+    return f"@README.md is the repository's one file.\n\tIt needs no change.\n\n{prompt(value)}\n"
+
+
 class Journey:
     def __init__(self, runtime, daemon, controller, table, contract_row, repository, record, reader, *,
                  branch, created, sessions, route, composer_judge, model=None, brief_start=True):
@@ -297,6 +324,7 @@ class Journey:
 
     STEP_CELLS = {"start": ("start", "reply"), "letter": ("letter",), "sleep_wake": ("sleep_wake",),
                   "resume": ("resume",), "untrusted": ("start_untrusted",)}
+    # A step whose cell is named by the step, as `launch_brief`'s, needs no entry.
 
     def step(self, name, *args):
         """Runs one step; a transport failure or a bound it reached fails the
@@ -331,7 +359,7 @@ class Journey:
         if brief:
             args.extend(["--brief", prompt_text])
         else:
-            args.extend(["--", self.row["prompt_flag"], prompt_text])
+            args.extend(["--", *(part.replace("{}", prompt_text) for part in self.row["prompt_form"])])
         attempts = []
         end = time.monotonic() + SPAWN_SECONDS
         while True:
@@ -352,10 +380,14 @@ class Journey:
         # Named before the spawn, so a spawn that raises or is stopped still leaves its branch to the cleanup.
         entry = {"branch": self.branch, "start": None, "worktree": str(worktree)}
         self.created.append(entry)
-        # The first start types Hide's brief, which the agent's own record has
-        # to confirm; the untrusted start keeps the agent's prompt argument.
+        # The first start hands Hide's brief to the agent, which its own
+        # record has to confirm: as the start's prompt argument where the
+        # agent declares that, at a brief's whole length, and typed otherwise;
+        # the untrusted start keeps the agent's prompt argument.
+        launched = self.own_rungs and self.launches()
+        sent = long_brief(first) if launched else brief(first)
         args, answer, attempts = self.spawn("journey-" + self.id, self.repository, self.branch, worktree,
-                                            brief(first) if self.brief_start else prompt(first),
+                                            sent if self.brief_start else prompt(first),
                                             brief=self.brief_start)
         entry.update(created_branch(self.runtime, self.repository, self.branch, worktree))
         self.record["spawn"] = {"argv": ["hide", *args], "route": self.route,
@@ -383,14 +415,52 @@ class Journey:
         if self.brief_start:
             spawn_record = self.spawn_record("journey-" + self.id)
             self.record["start"]["brief_input"] = (spawn_record or {}).get("brief_input")
-            launched = self.own_rungs and (self.row.get("input") or [None])[0] == "launch_prompt"
             checks.append(cells.brief_verdict(spawn_record, launched))
+            if launched:
+                checks.append(cells.record_verdict(read, sent, first))
         evidence = self.evidence("start", self.record["start"])
         verdict = cells.start_verdict(*checks)
         if not self.settle("start", verdict, evidence):
             return
         self.record["reply"] = {"token": first, "read": read}
         self.settle("reply", cells.reply_verdict(read, self.session, first), self.evidence("reply", self.record["reply"]))
+
+    def launches(self):
+        """Whether the agent's start carries a brief (its ladder's first rung)."""
+        return (self.row.get("input") or [None])[0] == "launch_prompt"
+
+    def launch_brief(self, repository):
+        """A brief that starts with `@`, in a start of its own in a worktree
+        of a repository the account never trusted: the start carries it once,
+        past any screen of the agent's, and the agent records it exactly."""
+        if not cells.measurable(self.table, self.id, "launch_brief"):
+            return
+        value = token()
+        name = "journey-launch-" + self.id
+        worktree = self.runtime.probe / "worktrees-launch" / self.id
+        sent = at_brief(value)
+        args, answer, attempts = self.spawn(name, repository, name, worktree, sent, brief=True)
+        record = {"argv": ["hide", *args], "answers": attempts}
+        self.record["launch_brief"] = record
+        spawned = cells.spawn_verdict(answer)
+        saved_pane, saved = self.pane, (self.agent, self.session, self.reference, self.checkout)
+        self.pane = (answer.get("value") or {}).get("pane") or self.pane_of(answer)
+        self.opened.append(self.pane)
+        try:
+            if spawned[0] != cells.PASS:
+                self.settle("launch_brief", spawned, self.evidence("launch-brief", record))
+                return
+            self.agent, self.session, self.checkout = answer["value"]["id"], answer["value"]["session"], worktree.resolve()
+            self.reference = None
+            turn, read, record["activities"] = self.wait_turn(0, value)
+            spawn_record = self.spawn_record(name)
+            record["brief_input"], record["read"] = (spawn_record or {}).get("brief_input"), read
+            self.settle("launch_brief", cells.start_verdict(spawned, turn, cells.brief_verdict(spawn_record, True),
+                                                            cells.record_verdict(read, sent, value)),
+                        self.evidence("launch-brief", record))
+        finally:
+            self.pane = saved_pane
+            self.agent, self.session, self.reference, self.checkout = saved
 
     def spawn_record(self, intent):
         """The spawn's record in the candidate's delivery ledger once its brief

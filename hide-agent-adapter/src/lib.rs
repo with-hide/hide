@@ -473,16 +473,43 @@ impl LaunchDialect {
         }
     }
 
-    /// The first interactive prompt is an argument, held by the native CLI
-    /// through startup questions. OpenCode's positional argument is a project;
-    /// agy takes the prompt of an interactive session only through `-i`
-    /// (`--prompt-interactive`), a bare argument being refused.
-    pub const fn prompt_flag(self) -> &'static str {
+    /// How the first interactive prompt is given at the start, `{}`
+    /// replaced by the prompt, which the native CLI holds through its own
+    /// start screens. The prompt is always one word, after a word that ends
+    /// the options or joined to its option, so a prompt that starts with `-`
+    /// is never read as an option. OpenCode's positional argument is a
+    /// project, and OpenCode 2.0.29 reads `--prompt -x` as a missing value
+    /// (it prints its help and exits 0, measured 2026-11-02), so it takes
+    /// `--prompt=<prompt>`; agy takes the prompt of an interactive session
+    /// only through `-i` (`--prompt-interactive`), a bare argument being
+    /// refused.
+    pub const fn prompt_form(self) -> &'static [&'static str] {
         match self {
-            Self::OpenCode => "--prompt",
-            Self::Antigravity => "-i",
-            _ => "--",
+            Self::OpenCode => &["--prompt={}"],
+            Self::Antigravity => &["-i", "{}"],
+            _ => &["--", "{}"],
         }
+    }
+
+    /// The words a start adds to carry `prompt`, in [`Self::prompt_form`].
+    pub fn prompt_arguments(self, prompt: &str) -> Vec<String> {
+        self.prompt_form()
+            .iter()
+            .map(|part| part.replace("{}", prompt))
+            .collect()
+    }
+
+    /// Whether native arguments already give the start a prompt: they hold
+    /// the end of options, or the prompt's own option, alone or joined.
+    pub fn carries_prompt(self, args: &[String]) -> bool {
+        let option = self.prompt_form()[0].trim_end_matches("={}");
+        args.iter().any(|arg| {
+            arg == "--"
+                || arg == option
+                || arg
+                    .strip_prefix(option)
+                    .is_some_and(|rest| rest.starts_with('='))
+        })
     }
 
     /// Verified launch dialects that accept repeated extra permission roots.
@@ -536,12 +563,13 @@ impl LaunchDialect {
     /// before it starts the agent there: the question would otherwise hold a
     /// delegated child that nobody is watching (PRD antigravity-first-class
     /// D-08; Claude Code 2.1.302 and Codex 0.163.0 ask the same, measured
-    /// 2026-10-17, and Grok 1.0.67, measured 2026-10-23; docs/agent-hooks.md,
+    /// 2026-10-17, Grok 1.0.67, measured 2026-10-23, and Pi 1.0.4 in a folder
+    /// with project files it loads, measured 2026-11-02; docs/agent-hooks.md,
     /// Folder trust for the worktrees Hide makes).
     pub const fn trusts_worktrees(self) -> bool {
         matches!(
             self,
-            Self::Claude | Self::Codex | Self::Antigravity | Self::Grok
+            Self::Claude | Self::Codex | Self::Antigravity | Self::Grok | Self::Pi
         )
     }
 
@@ -859,11 +887,15 @@ pub enum InputRung {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AgentApi {
     /// A spawn's brief as the start's prompt argument
-    /// ([`LaunchDialect::prompt_flag`]), which the CLI holds through its own
+    /// ([`LaunchDialect::prompt_form`]), which the CLI holds through its own
     /// start screens and submits after them: Codex 0.166.0 through "Hooks
     /// need review", Claude Code 2.1.316 and agy 1.4.12 through their folder
-    /// trust question (measured 2026-11-01). Only a fresh start's first input
-    /// takes it.
+    /// trust question (measured 2026-11-01), Grok 1.0.70 through its folder
+    /// trust question and omp 18.7.0 through its first-run setup and update
+    /// notice, and OpenCode 2.0.29, which shows no start screen (measured
+    /// 2026-11-02). Pi 1.0.4 holds it too, but reads a prompt that starts
+    /// with `@` as a file to attach and exits when there is none, so it does
+    /// not declare it. Only a fresh start's first input takes it.
     LaunchPrompt,
     /// `codex queue --thread <session> --message=<text>`: the session's own
     /// durable queue, which the running TUI takes as a turn once it rests

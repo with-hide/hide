@@ -370,6 +370,40 @@ class BriefRecord(unittest.TestCase):
         self.assertEqual(cells.brief_verdict({"brief_input": typed}, launched=True)[0], cells.FAIL)
 
 
+class LaunchedBriefRecord(unittest.TestCase):
+    BRIEF = "-first line\twith a tab\n@second line\n\nReply with exactly JOURNEY-0000A001\n"
+
+    def read(self, *texts):
+        return {"session": "s", "events": [{"role": "user", "kind": "human", "text": text} for text in texts]
+                + [{"role": "assistant", "text": "JOURNEY-0000A001"}]}
+
+    def test_a_launched_brief_passes_when_the_agent_recorded_it_once_in_any_line_break_form(self):
+        # The start line carries U+2028 and four spaces (prompt_argument); an
+        # agent records them as given, or as LF (Claude Code) or CRLF.
+        started = self.BRIEF.replace("\n", "\u2028").replace("\t", "    ")
+        for recorded in (started, self.BRIEF, self.BRIEF.replace("\n", "\r\n")):
+            self.assertEqual(cells.record_verdict(self.read("context", recorded), self.BRIEF, "JOURNEY-0000A001")[0],
+                             cells.PASS, recorded)
+
+    def test_a_second_submit_a_cut_or_a_change_fails(self):
+        twice = cells.record_verdict(self.read(self.BRIEF, self.BRIEF), self.BRIEF, "JOURNEY-0000A001")
+        self.assertEqual(twice, (cells.FAIL, "the agent recorded the brief 2 times, not once"))
+        self.assertEqual(cells.record_verdict(self.read(), self.BRIEF, "JOURNEY-0000A001")[0], cells.FAIL)
+        for changed in (self.BRIEF[1:], self.BRIEF.replace("\n", " "), "Attached file\n" + self.BRIEF):
+            verdict = cells.record_verdict(self.read(changed), self.BRIEF, "JOURNEY-0000A001")
+            self.assertEqual(verdict[0], cells.FAIL, changed)
+            self.assertIn("differs from it at character", verdict[1])
+        self.assertEqual(cells.record_verdict({"error": "gone"}, self.BRIEF, "JOURNEY-0000A001")[0], cells.FAIL)
+
+    def test_the_long_brief_starts_with_a_dash_and_fills_the_cap(self):
+        from agent_journey.journey import BRIEF_CAP, at_brief, long_brief
+        text = long_brief("JOURNEY-0000A001")
+        self.assertEqual(len(text.encode()), BRIEF_CAP)
+        self.assertTrue(text.startswith("-") and "\t" in text and text.count("\n") > 100)
+        self.assertTrue(text.rstrip().endswith("Reply with exactly JOURNEY-0000A001"))
+        self.assertTrue(at_brief("JOURNEY-0000A001").startswith("@README.md "))
+
+
 class InputRung(unittest.TestCase):
     CODEX = ["launch_prompt", "codex_queue", "typed"]
     CLAUDE = ["launch_prompt", "typed"]

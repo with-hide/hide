@@ -363,14 +363,14 @@ fn brief_refused(spawn: &str, pane: &str, kind: &str, detail: String) -> String 
 /// once the agent runs: an agent that does not hold a launch prompt through
 /// its start screens, native arguments that already give one, or a brief
 /// the command line cannot carry (`worktree_control::prompt_argument`).
-fn launch_prompt(kind: &str, args: &[String], brief: &str) -> Option<[String; 2]> {
+fn launch_prompt(kind: &str, args: &[String], brief: &str) -> Option<Vec<String>> {
     let row = hide_agent_adapter::adapter(kind).filter(|row| row.launch_prompt())?;
-    let flag = row.start?.prompt_flag();
-    if args.iter().any(|arg| arg == flag || arg == "--") {
+    let dialect = row.start?;
+    if dialect.carries_prompt(args) {
         return None;
     }
     match crate::worktree_control::prompt_argument(brief) {
-        Ok(argument) => Some([flag.to_owned(), argument]),
+        Ok(argument) => Some(dialect.prompt_arguments(&argument)),
         Err(detail) => {
             crate::diagnostic!(json!({
                 "component": "spawn", "kind": "brief.launch_refused", "agent_kind": kind,

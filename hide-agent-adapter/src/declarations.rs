@@ -515,7 +515,12 @@ pub const ADAPTERS: &[AgentAdapter] = &[
                 style: Style::Italic,
             }],
         }),
-        input: TYPED_ONLY,
+        // Grok 1.0.70 holds `-- <prompt>` through its folder trust question,
+        // and 1.0.52 shows none (measured 2026-11-02).
+        input: &[
+            InputRung::AgentApi(AgentApi::LaunchPrompt),
+            InputRung::Typed,
+        ],
         start: Some(LaunchDialect::Grok),
         find: None,
         usage: UsageDeclaration {
@@ -625,7 +630,12 @@ pub const ADAPTERS: &[AgentAdapter] = &[
                 style: Style::Rgb(128, 128, 128),
             }],
         }),
-        input: TYPED_ONLY,
+        // OpenCode 2.0.29 takes `--prompt=<prompt>` at a start with no
+        // screen before it (measured 2026-11-02).
+        input: &[
+            InputRung::AgentApi(AgentApi::LaunchPrompt),
+            InputRung::Typed,
+        ],
         start: Some(LaunchDialect::OpenCode),
         find: None,
         usage: UsageDeclaration {
@@ -732,6 +742,9 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             trailer: 0,
             empty: &[],
         }),
+        // Pi 1.0.4 holds `-- <prompt>` through its folder trust question,
+        // but reads one that starts with `@` as a file and exits when there
+        // is none, `--` or not (measured 2026-11-02), so its brief is typed.
         input: TYPED_ONLY,
         start: Some(LaunchDialect::Pi),
         find: None,
@@ -841,7 +854,12 @@ pub const ADAPTERS: &[AgentAdapter] = &[
                 style: Style::Any,
             }],
         }),
-        input: TYPED_ONLY,
+        // omp 18.7.0 holds `-- <prompt>` through its first-run setup and its
+        // update notice (measured 2026-11-02).
+        input: &[
+            InputRung::AgentApi(AgentApi::LaunchPrompt),
+            InputRung::Typed,
+        ],
         start: Some(LaunchDialect::Omp),
         find: None,
         usage: UsageDeclaration {
