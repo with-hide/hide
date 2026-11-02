@@ -285,6 +285,8 @@ It is how an agent hands another agent input since Hide stopped teaching Herdr's
 
 The bell line names `hide inbox` for a kind the doorbell does not ring on its own, whose prompt hook then takes the letter as it takes any prompt's.
 The residual is the [external-input race](#safe-intake-and-manual-fallback) every bell has: a key that lands between the second read and the bell's submission.
+On the core's own engine (`HIDE_DEV_PANE_HOLDER=1`) that race is closed from the submission on: the bell is typed as a letter (`PaneHolders::letter`), and the operator's keys typed into the pane from the line until its Enter was handed over are held, 64 KiB and 3 s at most, and written after the Enter in the order typed, so none lands inside the line and none is lost (PRD engine-bundle-3-core-owns D-13, B31); text already in the composer still refuses or defers the letter on both engines as above, and Hide never clears it.
+Either engine records the letter delivered only once the agent's own record shows it took it ([Input an agent did not take](#input-an-agent-did-not-take)); unconfirmed, it stays pending and is tried again at the agent's next rest.
 
 ### The bell line
 

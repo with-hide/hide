@@ -196,7 +196,7 @@ What the core keeps besides the turn (runtime, version, session and counts) is s
 A Herdr handoff or restart loses none of this, because Herdr holds none of it (D-8).
 A core that starts with no `hook-facts.json` takes the pane records below as its facts once and saves them, so an agent that last reported to Herdr before the update stays connected.
 
-Each pane's records live in `~/.hide/agent-hooks/panes/`, one file per `$HERDR_PANE_ID`.
+Each pane's records live in `~/.hide/agent-hooks/panes/`, one file per pane id, `$HIDE_PANE_ID` on the core's own engine and `$HERDR_PANE_ID` on Herdr; every reader of a pane's id reads `HIDE_PANE_ID` first (`hide_agent_hooks::pane`).
 The file holds a record per session, at most eight, the session heard from last at the end: the counts, the hook version and adapter id of the helper that wrote it, the session id the hook's input named, and the turn its last report said, so a tool event reports only a turn it moves.
 A file an earlier helper wrote, with one record, is read as that record, and an event that changed no record leaves the file unwritten.
 A pane Herdr has stopped listing has its file swept on the next session bootstrap.
@@ -554,7 +554,7 @@ Each file's first line, `// <hide-opencode-plugin|hide-opencode-server|hide-open
 The current plugin, server and TUI payload versions are 11, 5 and 3; Pi and omp use extension version 12.
 OpenCode's configuration folder is never created: with no `~/.config/opencode` the row reads Absent and says OpenCode has not created it yet, and only the `plugins/` folder inside an existing one and Hide's `hide-opencode/` inside that are made.
 
-On OpenCode 1.x the plugin does nothing outside a pane Hide manages: with no `HERDR_ENV=1`, `HERDR_PANE_ID` and `HERDR_SOCKET_PATH`, or no helper at its path, it registers no hook and starts no process, so OpenCode in an ordinary terminal runs as if the file were not there.
+On OpenCode 1.x the plugin does nothing outside a pane Hide manages: with neither `HIDE_PANE_ID` (a pane of the core's own engine) nor `HERDR_ENV=1`, `HERDR_PANE_ID` and `HERDR_SOCKET_PATH` (a Herdr pane), or no helper at its path, it registers no hook and starts no process, so OpenCode in an ordinary terminal runs as if the file were not there.
 Inside one it uses three hooks, each calling `hide-agent-hooks opencode <start|prompt|confirm|tool|subagents|turn>` with one JSON object on stdin and one answered on stdout; the helper always exits 0 and a failure answers `{}`:
 
 - `chat.message` adds Hide's text to a root session's prompt as one synthetic text part wrapped in `<system-reminder>`: the session guidance (the same text the `SessionStart` hook gives, read once when OpenCode loads the plugin) on the session's first prompt, then Project Memory under Claude Code's rules (the session-start index with the first prompt's cards on the first prompt, the prompt's cards after), then the pane's waiting letters ([docs/delivery.md](delivery.md)).
@@ -618,7 +618,7 @@ It is written on Windows too: on a `windows-latest` runner on 2026-10-11, Pi 1.0
 A session file counts as saved when it is absolute in either system's spelling (`path.posix.isAbsolute` or `path.win32.isAbsolute`, the check Herdr's own Pi integration makes), so the same string is judged alike on every system; a relative path is an unsaved session.
 The agent's own folder (`~/.pi/agent`, `~/.omp/agent`) is never created, and only those default folders get the file: an omp profile or a `PI_CODING_AGENT_DIR` folder gets none.
 
-The extension does nothing outside a Herdr pane (no `HERDR_ENV=1`, `HERDR_PANE_ID` and `HERDR_SOCKET_PATH`), in an agent started from another Pi's or omp's shell (`PI_SESSION_ID`, `OMPCODE=1`, which those hosts set for every shell they start), or with no helper at its path; like OpenCode's plugin it does not ask whether a Hide daemon owns that Herdr, and the helper answers `{}` when none does.
+The extension does nothing outside a pane Hide manages (neither `HIDE_PANE_ID` nor `HERDR_ENV=1`, `HERDR_PANE_ID` and `HERDR_SOCKET_PATH`), in an agent started from another Pi's or omp's shell (`PI_SESSION_ID`, `OMPCODE=1`, which those hosts set for every shell they start), or with no helper at its path; like OpenCode's plugin it does not ask whether a Hide daemon owns that Herdr, and the helper answers `{}` when none does.
 Its guidance and letters go only to the pane's own agent, the host's TUI (`ctx.mode` `tui`): both hosts' RPC modes report a UI too but draw nothing in the pane, and another program there may start one, so they, print runs, unsaved sessions and omp's subagents, which run in the same process with their own binding of the module, get none.
 The spawn guard holds for every session in the pane; Pi and omp question tools keep their native behavior.
 It names the session by its file, as Herdr's integration does, which a deep checkout makes longer than 250 bytes; the helper, the CLI and the daemon take a session of up to 4096 bytes for a letter pull (`hide_agent_hooks::delivery::SESSION_LIMIT`), and an agent registration keeps the same ([delivery.md: Agent registration and spawning](delivery.md#agent-registration-and-spawning)).
