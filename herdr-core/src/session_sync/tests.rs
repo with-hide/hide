@@ -83,6 +83,7 @@ fn remote_session_sync_accepts_responses_after_the_local_read_deadline() {
         herdr.engine(),
         Weak::new(),
         ChangeNotifier::noop(),
+        std::sync::Arc::new(hide_node::Local::of_process()),
     );
     let (sender, _messages) = channel();
     let connected = subscription::connect(&context, &sender, &mut 0, false)
@@ -130,6 +131,7 @@ fn a_refused_subscription_reads_the_protocol_the_server_pings_with() {
             herdr.engine(),
             Weak::new(),
             ChangeNotifier::noop(),
+            std::sync::Arc::new(hide_node::Local::of_process()),
         );
         let (sender, _messages) = channel();
         let Err(error) = subscription::connect(&context, &sender, &mut 0, false) else {

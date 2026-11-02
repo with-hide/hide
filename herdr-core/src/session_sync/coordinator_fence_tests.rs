@@ -248,6 +248,7 @@ impl Fixture {
             self.herdr.engine(),
             Arc::downgrade(&self.runtime),
             ChangeNotifier::noop(),
+            std::sync::Arc::new(hide_node::Local::of_process()),
         )
     }
 

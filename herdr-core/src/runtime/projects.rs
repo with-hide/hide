@@ -3795,19 +3795,18 @@ impl Runtime {
             .copied()
     }
 
-    /// The pull requests and issues of a node's repositories, read for
+    /// The pull requests and issues of a device's repositories, read for
     /// `request`: its rows carry them, as this machine's do, and a failed
-    /// read keeps the previous ones.
+    /// read keeps the previous ones. A device this core dials reads the
+    /// same; only a node's rows show its issues (`project_node_issues`).
     pub(crate) fn ingest_device_github(
         &mut self,
         device_id: &str,
         request: &crate::github::GithubRequest,
         github: crate::model::GithubSnapshot,
     ) -> bool {
-        if !self
-            .link_origin(device_id)
-            .is_some_and(LinkOrigin::reports_own_facts)
-        {
+        // A late answer for a device removed meanwhile lands nowhere.
+        if self.link_origin(device_id).is_none() {
             return false;
         }
         let (repositories, _) = self.node_github_repositories(device_id);
