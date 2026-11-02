@@ -3382,7 +3382,7 @@ Memory retires its own worktrees through the ordinary `Call::WorktreeRetire` mac
 ### The mobile companion
 
 The shared relay library and its WASM boundary are specified in [RELAY_PROTOCOL.md](RELAY_PROTOCOL.md).
-It is available for transport integration; the current transport behavior below is unchanged by adding that library.
+The hosted phone uses its WASM initiator; the device transport is integrated separately.
 
 Phone transport, pairing, conversation reads and delivery live in `hided/src/mobile/`; status projection and notification transitions belong to `herdr-core/src/agent_state/`.
 `Runtime::remote_herdr_api` lends the Herdr API connection the core already holds for a connected SSH device.
@@ -3403,9 +3403,37 @@ A request that arrives through `tailscale serve` (a forwarded-for or Tailscale i
 Every handshake has ten seconds to send its first frame.
 
 The phone app is a static shell and a data channel, kept apart.
+
+`web/src/mobile/loader.tsx` is the small start page for `app.withhide.dev`; `web/src/mobile/main.tsx` is the same phone UI served directly at `/m/` and as a versioned relay bundle.
+`pnpm --dir web build:phone` writes `web/phone-dist/`: the root `index.html`, `protocols.json`, root manifest and `/sw.js`, shared icons, and `/p/<PHONE_PROTOCOL>/index.html` with its own hashed assets.
+`PHONE_PROTOCOL` is declared in `web/src/mobile/phoneVersion.ts`; deployment retains older numbered directories and lists the available numbers in `protocols.json`.
+The root reads only the relay's `phone_protocol` metadata and opens that exact supported bundle, never a closest or newest fallback.
+A paired device that is offline can open its saved protocol bundle and let the shared connection retry; a changed version returns through the loader.
+An unsupported number stays on the update screen with the phone and device protocol versions.
+
+`hosts.ts` owns one bounded browser storage record: at most sixteen paired devices, each with its room, plain-text display name, QR-authenticated Noise public key, credential, last protocol and last successful contact.
+Corrupt records and storage refusal are visible failures; QR codes and conversation content are never persisted.
+The QR fragment is cleared synchronously before WASM initialization and relay access; its name is escaped React text, truncated to one line on the landing screen.
+`relaySocket.ts` is the socket boundary used by the existing connection and command code: the shared WASM crate performs Noise NK, then the first encrypted message carries `{client_kind:"phone", pair}` or `{client_kind:"phone", token}`.
+The direct `/m/` socket keeps its existing handshake and UI.
+A relay socket owns its handshake deadline, chunk deadline check, and Noise memory; closing disposes all of them, and the browser send buffer is capped at 1 MiB with no retained application send queue.
+Reconnection keeps the existing command request identities and adds jitter; no action is automatically replayed by the transport.
+The host picker opens at most one extra read-only connection per other saved device only while its list is visible; it authenticates for counts but never opens an agent detail or sends an action.
+The in-app scanner uses bundled `jsqr`, one camera and at most 640 by 640 pixels at four scans per second; hiding or leaving it stops every track and timer.
+
+The hosted manifest starts at `/` so an installed app can add another device in its own storage.
+The same `/sw.js` is registered once at `/` for the shell and once at `/push/<room>/` per saved device for push, since each device owns a different VAPID key.
+Removing a device unsubscribes and unregisters its exact push scope before removing its credential; it never unregisters the root worker returned by an ancestor-scope lookup.
+A notification retains the registration's room and opens `/?host=<room>&open=<device_id>|<pane_id>`, which selects the correct bundle and agent.
+Only static responses and translated notification words are cached, never device data; the shell cache is bounded to 128 entries and old shell versions are removed on activation.
+The app build embeds a strict CSP allowing same-origin scripts and `wasm-unsafe-eval`, same-origin assets and the declared relay WebSocket; there are no external scripts, analytics, login or payment paths.
+`VITE_HIDE_RELAY_URL` is the only public build override: a credential-free WSS URL, or a loopback WS URL for isolated development.
+Physical iPhone home-screen storage, camera and multi-registration push delivery require device verification; emulated viewport and service-worker tests do not prove those OS boundaries.
+
+The direct Tailscale shell remains as follows.
 `/m/` serves `mobile.html`, and `/m/manifest.webmanifest`, `/m/sw.js` and the icons come from `web/public/m/` through the same static route as the desktop shell's `/assets`; the page, the service worker and the manifest are served `no-cache`.
 The service worker caches only that shell, so the app opens without a network and shows its unreachable line.
-Pairing, the agent list, an agent's conversation, a pane's rows, replies, keys, starts and the push subscription travel on `/ws` only; the phone calls no other HTTP path.
+Pairing, the agent list, an agent's conversation, a pane's rows, replies, keys, starts and the push subscription travel on `/ws` only; HTTP fetches carry only static shell assets and the hosted protocol manifest.
 The first frame decides the client: `{client_kind: "phone", token}` for a paired phone or `{client_kind: "phone", pair, name}` to pair; a phone counts toward `MAX_CLIENTS`, and a refusal sends `{type: "refused", reason}` (`code_expired`, `phone_limit`, `revoked`, `mobile_off`) and closes with 4001.
 Every frame to a phone goes through `mobile::phone::encode`, the one place a relay would wrap in end-to-end encryption.
 

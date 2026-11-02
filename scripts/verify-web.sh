@@ -21,6 +21,11 @@ cd "$(dirname "$0")/.."
 
 . scripts/toolchain-env.sh
 
+# The phone imports the shared WASM ABI in every web typecheck/build.
+if [[ $# == 0 || ( "${1:-}" == web && "${2:-}" != playwright-install ) ]]; then
+    bash scripts/build-relay-wasm.sh
+fi
+
 # Explicit CI modes retain step boundaries and their own failure outcomes.
 if (( $# > 0 )); then
     if [[ "$1" == install ]]; then
@@ -50,8 +55,12 @@ if (( $# > 0 )); then
         *) printf 'unknown verification package: %s\n' "$package" >&2; exit 2 ;;
     esac
     case "$action" in
-        typecheck|lint|test|build) exec pnpm --dir "$directory" "$action" "$@" ;;
+        typecheck|lint|test|build|build:phone) exec pnpm --dir "$directory" "$action" "$@" ;;
         e2e)
+            if [[ "$package" == web ]]; then
+                bash scripts/verify-cargo.sh build -p hide-relay-protocol --example phone_peer
+                pnpm --dir web build:phone
+            fi
             if [[ "$package" == desktop ]]; then
                 pnpm --dir "$directory" build
             fi
@@ -91,6 +100,7 @@ for package in web desktop; do
     # Web build already typechecks before bundling. Desktop's esbuild does not.
     if [[ "$package" == web ]]; then
         pnpm --dir "$package" build
+        pnpm --dir "$package" build:phone
     else
         pnpm --dir "$package" typecheck
     fi

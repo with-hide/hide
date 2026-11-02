@@ -26,6 +26,16 @@ import {
 import { mayHaveStarted, selectionOf, startFailure, startProblem } from "./start";
 import { CLOSED_SHEET, applyFrame, patch, usePhone, type StartSheet } from "./store";
 import { forgetPush, syncPush } from "./push";
+import { RelaySocket, type PhoneSocket } from "./relaySocket";
+import { hostedPhone, PHONE_PROTOCOL, takePairing } from "./relayRuntime";
+import { readHosts, saveHost, forgetHost, type PairedHost } from "./hosts";
+import type { PairingQr } from "../../../hide-relay-protocol/web";
+
+let relayHost: PairedHost | null = null;
+let relayPair: PairingQr | null = null;
+export const currentHost = () => relayHost;
+function storageFailed(): void { patch({ relayError: "storage" }); }
+
 
 const CREDENTIAL_KEY = "hide.phone.credential";
 const RETRY_MS = [1000, 2000, 4000, 8000, 10000];
@@ -45,6 +55,13 @@ function storedCredential(): string | null {
 }
 
 function storeCredential(credential: string | null): void {
+  if (hostedPhone()) {
+    try {
+      if (relayHost && credential) { relayHost = { ...relayHost, credential }; saveHost(localStorage, relayHost); }
+      else if (relayHost) forgetHost(localStorage, relayHost.room);
+    } catch { storageFailed(); }
+    return;
+  }
   try {
     if (credential) window.localStorage.setItem(CREDENTIAL_KEY, credential);
     else window.localStorage.removeItem(CREDENTIAL_KEY);
@@ -55,7 +72,7 @@ function storeCredential(credential: string | null): void {
   window.history.replaceState(null, "", `${window.location.pathname}${hash}`);
 }
 
-let socket: WebSocket | null = null;
+let socket: PhoneSocket | null = null;
 let credential: string | null = null;
 let pairCode: string | null = null;
 let attempt = 0;
@@ -85,7 +102,7 @@ function failPendingSleep(): void {
  * comes back to the foreground. One timer, re-armed for what is left of the
  * wait, so a frame costs one timestamp and no timer.
  */
-type Watch = { ws: WebSocket; ready: boolean; heardAt: number; askedAt: number | null; timer: number | null };
+type Watch = { ws: PhoneSocket; ready: boolean; heardAt: number; askedAt: number | null; timer: number | null };
 let watch: Watch | null = null;
 let pingCounter = 0;
 
@@ -98,7 +115,7 @@ function armWatch(w: Watch, ms: number): void {
   w.timer = window.setTimeout(() => checkWatch(w), ms);
 }
 
-function startWatch(ws: WebSocket): void {
+function startWatch(ws: PhoneSocket): void {
   stopWatch();
   const w: Watch = { ws, ready: false, heardAt: Date.now(), askedAt: null, timer: null };
   watch = w;
@@ -146,7 +163,7 @@ function checkWatch(w: Watch): void {
 }
 
 /** Gives up a socket hided no longer answers, without waiting for the browser to close it. */
-function lose(ws: WebSocket): void {
+function lose(ws: PhoneSocket): void {
   if (socket !== ws) return;
   ws.onopen = ws.onmessage = ws.onclose = null;
   try {
@@ -176,8 +193,8 @@ function socketUrl(): string {
 
 export function send(message: PhoneMessage): boolean {
   if (!socket || socket.readyState !== WebSocket.OPEN || !usePhone.getState().connected) return false;
-  socket.send(JSON.stringify(message));
-  return true;
+  try { socket.send(JSON.stringify(message)); return true; }
+  catch { if (socket) lose(socket); return false; }
 }
 
 function scheduleRetry(): void {
@@ -187,7 +204,7 @@ function scheduleRetry(): void {
   retryTimer = window.setTimeout(() => {
     retryTimer = null;
     connect();
-  }, delay);
+  }, hostedPhone() ? delay! * (0.75 + Math.random() * 0.5) : delay);
 }
 
 /** Retries at once when the phone comes back (network, foreground). */
@@ -208,7 +225,15 @@ function connect(): void {
   if (!pairCode && !credential) return;
   const first = pairCode ? { client_kind: "phone", pair: pairCode } : { client_kind: "phone", token: credential };
   let refused = false;
-  const ws = new WebSocket(socketUrl());
+  const ws: PhoneSocket = relayHost ? new RelaySocket(relayHost, (protocol) => {
+    if (protocol === PHONE_PROTOCOL) return true;
+    stopped = true;
+    window.location.replace(`/?host=${encodeURIComponent(relayHost!.room)}`);
+    return false;
+  }, (reason) => {
+    if (["connection_limit", "room_limit", "rate_limit", "daily_limit", "frame_limit"].includes(reason)) patch({ relayError: "busy" });
+    else if (reason === "unsupported_version") { stopped = true; patch({ screen: "version" }); }
+  }) : new WebSocket(socketUrl());
   socket = ws;
   startWatch(ws);
   ws.onopen = () => ws.send(JSON.stringify(first));
@@ -227,12 +252,18 @@ function connect(): void {
     }
     if (frame.type === "paired") {
       pairCode = null;
+      relayPair = null;
       credential = frame.credential;
       storeCredential(frame.credential);
     }
     if (frame.type === "pong") return;
     if (frame.type === "hello") {
       attempt = 0;
+      if (relayHost) {
+        relayHost = { ...relayHost, name: frame.mac_name || relayHost.name, lastSeen: Date.now() };
+        patch({ relayError: usePhone.getState().relayError === "loadError" ? "loadError" : null });
+        storeCredential(credential);
+      }
       if (watch) watch.ready = true;
       applyFrame(frame);
       reopenDetail();
@@ -253,6 +284,10 @@ function connect(): void {
       return;
     }
     applyFrame(frame);
+    if (frame.type === "paired" && hostedPhone()) {
+      try { patch({ installHint: localStorage.getItem("hide.phone.installed-hint") !== "seen" }); }
+      catch { storageFailed(); }
+    }
     if (frame.type === "agents") {
       openPending();
       openStarted();
@@ -264,7 +299,7 @@ function connect(): void {
 }
 
 /** The socket is gone, closed or given up: the screen says so and the retries go on (B23). */
-function settleLoss(ws: WebSocket, refused: boolean): void {
+function settleLoss(ws: PhoneSocket, refused: boolean): void {
   if (socket === ws) socket = null;
   stopWatch();
   const state = usePhone.getState();
@@ -513,14 +548,15 @@ function onStartResult(frame: Extract<ServerFrame, { type: "start_result" }>): v
 /** The user tapped Connect on the pairing screen (B11). */
 export function pairNow(): void {
   const pair = usePhone.getState().pair;
-  if (!pair) return;
-  pairCode = pair.code;
+  if (!pair && !relayPair) return;
+  pairCode = relayPair?.code ?? pair!.code;
   stopped = false;
   connect();
 }
 
 /** Reads the page address and starts: pair, reconnect, or show how to pair (B11-B13). */
 export function start(): void {
+  if (hostedPhone()) { void startRelay(); return; }
   const fragment = parseFragment(window.location.hash);
   window.addEventListener("online", wake);
   // A socket outlives a lost network until a ping goes unanswered; the phone
@@ -548,4 +584,45 @@ export function start(): void {
   // Opened without a network, the list is not blank: the unreachable line shows at once (B23).
   if (!navigator.onLine) patch({ unreachable: true });
   connect();
+}
+
+
+async function startRelay(): Promise<void> {
+  try {
+    try { relayPair = await takePairing(); }
+    catch { patch({ screen: "unpaired", relayError: "qrError" }); return; }
+    const query = new URLSearchParams(window.location.search);
+    const tag = query.get("open");
+    if (tag) {
+      const { open } = parseFragment(`#open=${encodeURIComponent(tag)}`);
+      if (open) patch({ pendingOpen: open });
+    }
+    if (relayPair) {
+      relayHost = { room: relayPair.room, noiseKey: relayPair.noise_key, name: relayPair.name,
+        credential: "", protocol: PHONE_PROTOCOL, lastSeen: null };
+      patch({ screen: "pair", macName: relayPair.name });
+      if (query.get("connect") === "1") pairNow();
+    } else {
+      relayHost = readHosts(localStorage).find((host) => host.room === query.get("host")) ?? null;
+      if (!relayHost) { window.location.replace("/"); return; }
+      credential = relayHost.credential;
+      patch({ screen: "app", macName: relayHost.name, unreachable: !navigator.onLine });
+      connect();
+    }
+    window.addEventListener("online", wake);
+    window.addEventListener("offline", () => { if (socket) lose(socket); });
+    document.addEventListener("visibilitychange", () => { if (!hidden()) wake(); });
+    window.addEventListener("pagehide", stop);
+    window.addEventListener("pageshow", (event) => { if (event.persisted) window.location.reload(); });
+  } catch { patch({ screen: "unpaired", relayError: "storage" }); }
+}
+
+/** End timers and sockets before a host switch; no pending command crosses hosts. */
+export function stop(): void {
+  stopped = true;
+  if (retryTimer !== null) window.clearTimeout(retryTimer);
+  retryTimer = null;
+  clearSleepTimer();
+  stopWatch();
+  if (socket) { socket.onopen = socket.onmessage = socket.onclose = null; socket.close(); socket = null; }
 }
