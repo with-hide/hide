@@ -84,7 +84,7 @@ async function hide(host: Host, ...args: string[]): Promise<{ ok?: boolean; resu
 
 type Hidden = { customType: string; content: string; display: boolean; details: { hide: string } };
 
-// Herdr only until the Pi and omp stand-ins (`pi-omp-host.ts`) report a session the own engine takes: they announce through Herdr's CLI and read HERDR_PANE_ID, and with both patched the own engine lists the pi and omp agents but their pane keeps no session (`hide inbox` answers native_identity_required).
+// Herdr only: 새 엔진 첫 세션 보고는 묶음 4 PR A(b4-transition). The installed Pi/omp extensions do not bind a session at session_start yet; changing only the stand-in transport leaves hide inbox without a native identity.
 test("a letter rides each agent's next prompt as a hidden message and is confirmed only once the host wrote it @herdr", async ({ page }) => {
   const stack = await start("pi-omp-letter");
   try {
@@ -123,7 +123,7 @@ test("a letter rides each agent's next prompt as a hidden message and is confirm
   }
 });
 
-// Herdr only until the Pi and omp stand-ins (`pi-omp-host.ts`) report a session the own engine takes: they announce through Herdr's CLI and read HERDR_PANE_ID, and with both patched the own engine lists the pi and omp agents but their pane keeps no session (`hide inbox` answers native_identity_required).
+// Herdr only: 새 엔진 첫 세션 보고는 묶음 4 PR A(b4-transition). The installed Pi/omp extensions do not bind a session at session_start yet; changing only the stand-in transport leaves hide inbox without a native identity.
 test("a shell call that starts an agent through Herdr is refused with the spawn guard's reason, and others run @herdr", async () => {
   const stack = await start("pi-omp-guard");
   try {
@@ -143,7 +143,7 @@ test("a shell call that starts an agent through Herdr is refused with the spawn 
   }
 });
 
-// Herdr only until the Pi and omp stand-ins (`pi-omp-host.ts`) report a session the own engine takes: they announce through Herdr's CLI and read HERDR_PANE_ID, and with both patched the own engine lists the pi and omp agents but their pane keeps no session (`hide inbox` answers native_identity_required).
+// Herdr only: 새 엔진 첫 세션 보고는 묶음 4 PR A(b4-transition). The installed Pi/omp extensions do not bind a session at session_start yet; changing only the stand-in transport leaves hide inbox without a native identity.
 test("omp's subagents move the pane's counts in the snapshot, and their prompts take no letters @herdr", async ({ page }) => {
   const stack = await start("pi-omp-counts");
   try {

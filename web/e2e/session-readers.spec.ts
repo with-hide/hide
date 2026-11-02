@@ -78,7 +78,7 @@ async function disableAgentSummaries(page: Page): Promise<void> {
 
 // The last column is the option the default 전부 허용 adds to every restart; Pi never asks and has none.
 for (const [kind, id, initialTitle, resumeFlag, fullAccess] of [["pi", PI_ID, PI_TITLE, "--session", []], ["omp", OMP_ID, OMP_TITLE, "--resume", ["--auto-approve"]], ["grok", GROK_ID, GROK_TITLE, "--resume", ["--always-approve"]]] as const) {
-// Herdr only until the own engine gives a native-file agent's pane its session: the writer reports it through Herdr's integration (`report-agent-session`), and typed as a plain start on the own engine the pane lists the agent with no session, so no title or question is read.
+// Herdr only: 새 엔진 첫 세션 보고는 묶음 4 PR A(b4-transition). These native writers bind their initial session through Herdr report-agent-session; the own engine needs the corresponding native integration boundary.
 test(`${kind} native title and durable sleep wake the exact conversation in a fresh pane @herdr`, async ({ page }) => {
   let agents: QuestionRow[] = [];
   page.on("websocket", (socket) => socket.on("framereceived", (frame) => {
@@ -162,7 +162,7 @@ test(`${kind} native title and durable sleep wake the exact conversation in a fr
 }
 
 for (const refusal of ["override", "duplicate"] as const) {
-// Herdr only until the own engine gives a native-file agent's pane its session: the writer reports it through Herdr's integration (`report-agent-session`), and typed as a plain start on the own engine the pane lists the agent with no session, so its goal is never read.
+// Herdr only: 새 엔진 첫 세션 보고는 묶음 4 PR A(b4-transition). These native writers bind their initial session through Herdr report-agent-session; the own engine needs the corresponding native integration boundary.
 test(`Cursor ${refusal} root retains its historical goal while retired Sleep refuses to close its pane @herdr`, async ({ page }) => {
   const herdr = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
@@ -219,7 +219,7 @@ test(`Cursor ${refusal} root retains its historical goal while retired Sleep ref
 });
 }
 
-// Herdr only until the own engine gives a native-file agent's pane its session: the writer reports it through Herdr's integration (`report-agent-session`), and typed as a plain start on the own engine the pane lists the agent with no session, so the phone has no conversation to read.
+// Herdr only: 새 엔진 첫 세션 보고는 묶음 4 PR A(b4-transition). These native writers bind their initial session through Herdr report-agent-session; the own engine needs the corresponding native integration boundary.
 test("Cursor phone reads native message units and omits an unrecorded time @herdr", async ({ browser, page }) => {
   const herdr = await startFixture({ agents: false });
   const tailscale = new FakeTailscale();
@@ -268,7 +268,7 @@ test("Cursor phone reads native message units and omits an unrecorded time @herd
   if (errors.length) throw new AggregateError(errors, "Cursor phone fixture or cleanup failed");
 });
 
-// Herdr only: the OpenCode double reports its session and every state change through Herdr's OpenCode integration (`report-agent`, `report-agent-session`) and the test reads Herdr's `agent list`; the own engine's OpenCode path is Hide's plugin (`opencode-plugin.spec.ts`).
+// Herdr only: 새 엔진 첫 세션 보고는 묶음 4 PR A(b4-transition). These native writers bind their initial session through Herdr report-agent-session; the own engine needs the corresponding native integration boundary.
 test("OpenCode's root session titles its row, waits on its question and wakes by id in a fresh pane @herdr", async ({ page }) => {
   let agents: QuestionRow[] = [];
   page.on("websocket", (socket) => socket.on("framereceived", (frame) => {
