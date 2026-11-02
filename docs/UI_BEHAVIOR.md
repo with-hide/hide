@@ -2861,6 +2861,7 @@ In the grass, Up and Down move one day and Left and Right move a week; in the ba
 Home and End reach the visible range's ends.
 Changing period clears the preview, keeps a pinned date within the new range and otherwise returns to today.
 A day change keeps the closed detail row and grass geometry stable; expanded token categories wrap at the available width.
+The summary's cost and new tokens stay on one line, shrinking only when the text size makes them wider than their half of the row, because a value that wrapped would move the hovered day out from under the pointer.
 Hovering a weekly limit outlines the recent seven days, and a five-hour limit outlines today; leaving removes that outline.
 Only the chosen seven or thirty date buttons are mounted, and closing the popover removes them.
 
