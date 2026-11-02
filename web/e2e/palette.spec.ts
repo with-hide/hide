@@ -10,8 +10,9 @@
 import { expect, test, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
-import { startFixture } from "./engine-fixture";
+import { startFixture, type AgentFixture } from "./engine-fixture";
 import { labelAgentPane, setAgentState } from "./fixture-agents";
+import type { FixtureLabel } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { countSent, screenshot } from "./wire";
 import { chord } from "./chords";
@@ -23,6 +24,34 @@ function headings(page: Page) {
   return page.locator('[data-palette="Search"] [cmdk-group-heading]');
 }
 
+
+/**
+ * The same daemon started again with its saved Workspace choice gone: the
+ * setup chose the Workspace, so a page would open on it, and the screen under
+ * test is the one with nothing in front.
+ */
+async function withoutSavedChoice(daemon: Daemon): Promise<Daemon> {
+  return daemon.restart((stateDir) => {
+    const file = path.join(stateDir, "workspace-views.json");
+    const saved = JSON.parse(fs.readFileSync(file, "utf8")) as { workspaces: { last_used_unix_ms: number }[] };
+    for (const workspace of saved.workspaces) workspace.last_used_unix_ms = 0;
+    fs.writeFileSync(file, JSON.stringify(saved));
+  });
+}
+
+/** Opens the restarted daemon's page through a blank page, so the new token mounts a new connection. */
+async function openAfterRestart(page: Page, daemon: Daemon): Promise<void> {
+  await page.goto("about:blank");
+  await page.goto(`${daemon.origin}/#token=${daemon.token}`);
+}
+
+/** Labels the agent in `pane` on the turn it is in: its session is taken while it works, and it works again for the line to show. */
+async function labelWorking(fixture: AgentFixture, daemon: Daemon, pane: string, label: FixtureLabel): Promise<void> {
+  await setAgentState(daemon, pane, "working");
+  await labelAgentPane(fixture, daemon, pane, label);
+  await setAgentState(daemon, pane, "working");
+}
+
 test("⌘K lists results by kind with a detail beside them, and the sidebar Search icon opens the same palette", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   const fixture = await startFixture();
@@ -30,23 +59,13 @@ test("⌘K lists results by kind with a detail beside them, and the sidebar Sear
   try {
     daemon = await startHided(fixture, "palette");
     const [one, two] = fixture.panes;
-    // The setup chose the Workspace, so a page would open on it; the screen under test is the one with nothing in front, which a daemon whose saved choice is gone opens on.
-    daemon = await daemon.restart((stateDir) => {
-      const file = path.join(stateDir, "workspace-views.json");
-      const saved = JSON.parse(fs.readFileSync(file, "utf8")) as { workspaces: { last_used_unix_ms: number }[] };
-      for (const workspace of saved.workspaces) workspace.last_used_unix_ms = 0;
-      fs.writeFileSync(file, JSON.stringify(saved));
-    });
+    daemon = await withoutSavedChoice(daemon);
     const last = new Map<string, Record<string, unknown>>();
     const sent = countSent(page, last);
-    await page.goto("about:blank");
-    await page.goto(`${daemon.origin}/#token=${daemon.token}`);
+    await openAfterRestart(page, daemon);
     // One sidebar exposes the project and its root agents.
     await expect(page.locator('[data-sidebar="projects"]')).toBeVisible();
-    // The label lands on the turn the agent is in: its session is taken while it works, and it works again for the line to show.
-    await setAgentState(daemon, one, "working");
-    await labelAgentPane(fixture, daemon, one, { task: "Agent one", progress: "팔레트 그룹 검증 중" });
-    await setAgentState(daemon, one, "working");
+    await labelWorking(fixture, daemon, one, { task: "Agent one", progress: "팔레트 그룹 검증 중" });
     // A tree row is one line (agent-hierarchy-screens B14): the label's title says it landed.
     await expect(page.locator(`nav[data-sidebar] [data-pane="${one}"] [data-agent-title]`)).toHaveText("Agent one", { timeout: 20_000 });
 

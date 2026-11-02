@@ -20,9 +20,9 @@
       "lines": 163,
       "expect": 58
     },
-    "mobile.spec.ts::Settings > Mobile to a paired phone: list, detail, reply, quick keys, push rules and revoke": {
+    "mobile.spec.ts::Settings > Mobile to a paired phone: list, detail, reply, quick keys, push rules and revoke @herdr": {
       "lines": 323,
-      "expect": 115
+      "expect": 114
     },
     "palette.spec.ts::⌘K lists results by kind with a detail beside them, and the sidebar Search icon opens the same palette": {
       "lines": 120,
@@ -36,9 +36,9 @@
       "lines": 221,
       "expect": 72
     },
-    "s6.spec.ts::Main, Overview and a Workspace with its lane, tools and delegated child": {
-      "lines": 245,
-      "expect": 87
+    "s6.spec.ts::Main, Overview and a Workspace with its lane and tools": {
+      "lines": 200,
+      "expect": 70
     },
     "s7.spec.ts::Open to the side shows one document twice: edits and Korean input reach both, each keeps its place, and closing keeps unsaved text": {
       "lines": 143,

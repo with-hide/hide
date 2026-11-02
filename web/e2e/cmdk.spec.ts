@@ -196,6 +196,16 @@ function searches(log: string): { prs: number; issues: number } {
   return { prs: lines.filter((line) => line.startsWith("search prs ")).length, issues: lines.filter((line) => line.startsWith("search issues ")).length };
 }
 
+/** The project's own checkout and its worktree each run a titled agent; the worktree's pane. */
+async function titledAgents(fixture: Awaited<ReturnType<typeof startEngine>>, daemon: Daemon, repo: string, worktree: string): Promise<string> {
+  return withControl(daemon, async (control) => {
+    const main = await openProject(control, repo, "repo");
+    const front = await openWorktree(control, worktree);
+    await startAgentInProject(fixture, daemon, main, { task: "메인 체크아웃 정리" });
+    return (await startAgentInProject(fixture, daemon, front, { task: "이동 팔레트 구현" })).pane;
+  });
+}
+
 test("⌘K relates the agent in front to its issue and pull request, finds them by #number, and searches GitHub only from its own row", async ({ page, context }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   const herdr = await startEngine();
@@ -218,13 +228,7 @@ test("⌘K relates the agent in front to its issue and pull request, finds them 
     // The page connects first: the core lists a linked worktree of a project while a page shows it.
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await expect(page.locator("[data-main-screen]")).toBeVisible({ timeout: 20_000 });
-    // The project's own checkout and the worktree each run a titled agent.
-    const agent = await withControl(daemon, async (control) => {
-      const main = await openProject(control, repo, "repo");
-      const front = await openWorktree(control, worktree);
-      await startAgentInProject(herdr, daemon!, main, { task: "메인 체크아웃 정리" });
-      return (await startAgentInProject(herdr, daemon!, front, { task: "이동 팔레트 구현" })).pane;
-    });
+    const agent = await titledAgents(herdr, daemon, repo, worktree);
     await page.locator(`[data-checkout][aria-label^="${BRANCH}"]`).first().click();
     await expect(page.locator("[data-workspace-screen]")).toBeVisible();
     await focusAgent(page, agent);

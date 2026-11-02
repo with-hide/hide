@@ -32,7 +32,7 @@ test("Recent Panels crosses checkouts onto a display and a tab; Recent Projects 
     // keeps its tab label and the neutral mark. The page shows neither pane
     // yet, so each is sized on this connection, which types the program too.
     fs.copyFileSync(path.join(herdr.root, "bin", fixtureExecutable("claude")), path.join(herdr.root, "bin", fixtureExecutable("codex")));
-    const beta = await withControl(daemon, async (control) => {
+    const { tab: betaTab, pane: betaPane } = await withControl(daemon, async (control) => {
       const run = async (pane: string, program: string) => {
         viewPane(control, pane);
         sendKeys(control, pane, `${program}\r`);
@@ -43,7 +43,6 @@ test("Recent Panels crosses checkouts onto a display and a tab; Recent Projects 
       await run((await newTab(control, herdr, "solo")).pane, "claude");
       return beta;
     });
-    const betaTab = beta.tab;
     const last = new Map<string, Record<string, unknown>>();
     const sent = countSent(page, last);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
@@ -142,7 +141,6 @@ test("Recent Panels crosses checkouts onto a display and a tab; Recent Projects 
     // The Agent area's ⌥` crosses projects: the keyboard in beta's Codex,
     // then in the pane the fixture opens on, and the first candidate is
     // beta's pane, which one focus_pane brings back with its project.
-    const betaPane = beta.pane;
     await (await showProjectRow(page, page.locator("[data-project]", { hasText: "beta" }).locator("[data-checkout]").first())).click();
     await expect(canvas).toHaveAttribute("data-canvas", betaTab);
     await page.locator(`[data-pane-view="${betaPane}"]`).click();
