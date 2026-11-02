@@ -303,7 +303,13 @@ mod tests {
         fn input(&self, _: &str, _: PaneInput) -> Result<(), HolderError> {
             Ok(())
         }
-        fn letter(&self, _: &str, _: PaneInput, _: PaneInput, _: Duration) -> Result<(), HolderError> {
+        fn letter(
+            &self,
+            _: &str,
+            _: PaneInput,
+            _: PaneInput,
+            _: Duration,
+        ) -> Result<(), HolderError> {
             Ok(())
         }
         fn recovered(&self, _: Duration) -> Result<HolderRecovery, HolderError> {
@@ -346,7 +352,12 @@ mod tests {
             })
         );
         assert!(matches!(
-            answered(&slot, PaneCall::Terminate { pane: "w1:p2".to_owned() }),
+            answered(
+                &slot,
+                PaneCall::Terminate {
+                    pane: "w1:p2".to_owned()
+                }
+            ),
             Err(HolderError::NoPane { .. })
         ));
         let read = answered(
@@ -364,9 +375,17 @@ mod tests {
                 truncated: true,
             }
         );
-        let proof = answered(&slot, PaneCall::Proof { pane: "w1:p1".to_owned() }).unwrap();
+        let proof = answered(
+            &slot,
+            PaneCall::Proof {
+                pane: "w1:p1".to_owned(),
+            },
+        )
+        .unwrap();
         assert_eq!(
-            serde_json::from_value::<HolderProof>(proof).unwrap().program,
+            serde_json::from_value::<HolderProof>(proof)
+                .unwrap()
+                .program,
             41
         );
     }
@@ -377,8 +396,8 @@ mod tests {
     fn a_node_without_holders_refuses_pane_requests() {
         let refused = answer(&PaneSlot::default(), PaneCall::ShellLaunch).unwrap_err();
         assert_eq!(refused.code, ErrorCode::Unsupported);
-        let refused = watch(&PaneSlot::default(), &AtomicBool::new(false), &mut |_| true)
-            .unwrap_err();
+        let refused =
+            watch(&PaneSlot::default(), &AtomicBool::new(false), &mut |_| true).unwrap_err();
         assert_eq!(refused.code, ErrorCode::Unsupported);
     }
 

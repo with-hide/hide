@@ -80,7 +80,8 @@ impl Fixture {
             super::super::DeviceEngine::Herdr,
             None,
             None,
-        ).unwrap()
+        )
+        .unwrap()
     }
 
     fn calls(&self) -> Vec<String> {

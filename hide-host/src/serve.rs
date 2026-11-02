@@ -66,9 +66,7 @@ pub trait Terminals: Send + Sync {
     /// and answers those holders for the core's own engine (PRD
     /// engine-bundle-3-core-owns D-22); asked again, it answers the same
     /// holders. A service already running on a Herdr refuses it.
-    fn start_holders(
-        &self,
-    ) -> Result<Arc<dyn hide_node_link::holders::PaneHolders>, String> {
+    fn start_holders(&self) -> Result<Arc<dyn hide_node_link::holders::PaneHolders>, String> {
         Err("This node's terminals cannot run pane holders".to_owned())
     }
     /// One terminal line from the core, its newline removed.

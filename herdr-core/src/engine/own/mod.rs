@@ -1963,7 +1963,9 @@ mod tests {
                 .lock()
                 .unwrap()
                 .clone()
-                .ok_or_else(|| HolderError::Unreachable { message: "not asked".to_owned() })
+                .ok_or_else(|| HolderError::Unreachable {
+                    message: "not asked".to_owned(),
+                })
         }
         fn proof(&self, _: &str) -> Result<hide_node_link::holders::HolderProof, HolderError> {
             // Every pane's program is this test's own process.
@@ -1971,8 +1973,11 @@ mod tests {
             Ok(hide_node_link::holders::HolderProof {
                 incarnation: 1,
                 program,
-                started: hide_platform::process::start_time(program)
-                    .map_err(|error| HolderError::Unreachable { message: error.to_string() })?,
+                started: hide_platform::process::start_time(program).map_err(|error| {
+                    HolderError::Unreachable {
+                        message: error.to_string(),
+                    }
+                })?,
             })
         }
         fn input(&self, pane: &str, input: PaneInput) -> Result<(), HolderError> {

@@ -488,13 +488,14 @@ impl DialedTransport for WslDevice {
         // Only a Herdr that does not answer needs the kit before the
         // services start; otherwise the core runs its pass after ready. A
         // distribution of the core's own engine has no Herdr to ask.
-        let herdr_answers = own || hide_herdr_client::request_with_connector(
-            &host.herdr_connector(),
-            "session.snapshot",
-            json!({}),
-            HERDR_CHECK_TIMEOUT,
-        )
-        .is_ok();
+        let herdr_answers = own
+            || hide_herdr_client::request_with_connector(
+                &host.herdr_connector(),
+                "session.snapshot",
+                json!({}),
+                HERDR_CHECK_TIMEOUT,
+            )
+            .is_ok();
         let kit = (!herdr_answers).then(|| {
             stage("kit");
             call_as::<hide_kit::KitReport>(

@@ -2279,7 +2279,7 @@ fn start_reader(
         gate: Gate::new(MAX_RUNNING),
         control_gate: Gate::new(MAX_CONTROL_RUNNING),
         background_gate: Gate::new(MAX_BACKGROUND_RUNNING),
-                pane_gate: Gate::new(MAX_PANE_RUNNING),
+        pane_gate: Gate::new(MAX_PANE_RUNNING),
         next_id: AtomicU64::new(1),
         roots: Mutex::new(HashMap::new()),
         terminals: std::sync::OnceLock::new(),
@@ -3096,6 +3096,53 @@ mod tests {
         let other = packages.payload(os, other_arch).unwrap();
         assert!(other.herdr.is_none());
         assert!(!other.files.iter().any(|file| file.relative == "herdr.pin"));
+    }
+
+    /// A device whose panes run on its Herdr gets exactly what it got before
+    /// the core had its own engine, even from a build that carries the
+    /// holder; a device of the core's own engine gets the holder and no
+    /// Herdr, and a build without the holder connects nothing.
+    #[cfg(unix)]
+    #[test]
+    fn only_a_device_of_the_own_engine_gets_the_holder_in_place_of_herdr() {
+        let directory = tempfile::tempdir().unwrap();
+        let (os, arch) = (std::env::consts::OS, std::env::consts::ARCH);
+        write(&directory.path().join(HELPER_NAME), b"helper", 0o755);
+        write(&directory.path().join(HERDR_NAME), b"pinned herdr", 0o755);
+        let packages = HelperPackages::new(Some(directory.path().to_path_buf()));
+        let before = packages.payload(os, arch).unwrap();
+        assert!(matches!(
+            packages.payload_for(os, arch, DeviceEngine::Holders),
+            Err(EstablishError::Unsupported(_))
+        ));
+
+        write(&directory.path().join(HOLDER_NAME), b"holder", 0o755);
+        let herdr = packages.payload_for(os, arch, DeviceEngine::Herdr).unwrap();
+        let names = |payload: &Payload| {
+            payload
+                .files
+                .iter()
+                .map(|file| (file.relative.clone(), file.bytes.len()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names(&herdr), names(&before));
+        assert_eq!(herdr.version(), before.version());
+        assert_eq!(
+            herdr.herdr.as_ref().map(|file| &file.digest),
+            before.herdr.as_ref().map(|file| &file.digest)
+        );
+
+        let own = packages
+            .payload_for(os, arch, DeviceEngine::Holders)
+            .unwrap();
+        assert!(own.herdr.is_none());
+        assert!(own.files.iter().any(|file| file.relative == HOLDER_NAME));
+        assert!(
+            !own.files
+                .iter()
+                .any(|file| file.relative == hide_kit::device_herdr::HERDR_PIN)
+        );
+        assert_ne!(own.version(), before.version());
     }
 
     /// Any change to any part is a new version folder on the device, so a

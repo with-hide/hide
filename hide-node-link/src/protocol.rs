@@ -1163,7 +1163,10 @@ impl Call {
     /// [`crate::holders::PANE_LANE`] wide, and they never hold a file read
     /// or a Git call behind them, nor wait behind one.
     pub fn is_pane(&self) -> bool {
-        matches!(self, Self::Pane { .. } | Self::PaneWatch | Self::HoldersStart)
+        matches!(
+            self,
+            Self::Pane { .. } | Self::PaneWatch | Self::HoldersStart
+        )
     }
 
     /// Whether this request is link control rather than machine work: a

@@ -527,8 +527,10 @@ impl Panes {
             {
                 return Err("invalid_request".to_owned());
             }
-            let pane =
-                started.source.inspect(&request.pane_id).and_then(|identity| {
+            let pane = started
+                .source
+                .inspect(&request.pane_id)
+                .and_then(|identity| {
                     if pane_peer::descends_from(peer, identity.shell_pid) {
                         Ok(identity)
                     } else {

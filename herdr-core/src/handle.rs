@@ -321,7 +321,11 @@ impl Core {
         lock_recover(&runtime).set_terminals(terminals);
         // A core on its own engine runs the devices it dials on it too (PRD
         // engine-bundle-3-core-owns D-22).
-        if own_engine.as_ref().and_then(|engine| engine.own_scope()).is_some() {
+        if own_engine
+            .as_ref()
+            .and_then(|engine| engine.own_scope())
+            .is_some()
+        {
             lock_recover(&runtime).run_devices_on_own_engine(
                 std::path::Path::new(&options.app_state_path)
                     .parent()

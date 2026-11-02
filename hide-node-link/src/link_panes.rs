@@ -106,7 +106,11 @@ impl LinkPanes {
     /// the engine asks to be told of them.
     fn watch(&self, set: impl FnOnce(&mut Sinks)) {
         let start = {
-            let mut sinks = self.inner.sinks.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut sinks = self
+                .inner
+                .sinks
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
             set(&mut sinks);
             !std::mem::replace(&mut sinks.watching, true)
         };
@@ -141,10 +145,9 @@ impl Inner {
     fn follow(&self) {
         while !self.stopped.load(Ordering::Acquire) && self.link.closed_reason().is_none() {
             let mut undecoded = None;
-            let ended = self.link.call_with_progress(
-                Call::PaneWatch,
-                WATCH_SPAN,
-                &mut |report| {
+            let ended = self
+                .link
+                .call_with_progress(Call::PaneWatch, WATCH_SPAN, &mut |report| {
                     if self.stopped.load(Ordering::Acquire) {
                         return false;
                     }
@@ -158,8 +161,7 @@ impl Inner {
                             false
                         }
                     }
-                },
-            );
+                });
             if self.stopped.load(Ordering::Acquire) {
                 return;
             }

@@ -177,9 +177,9 @@ impl PaneHolders for LocalPanes {
     fn terminate(&self, pane: &str) -> Result<(), HolderError> {
         match self.holders.terminate(&self.service, pane) {
             Ok(_) => Ok(()),
-            Err(CloseError::NoRecord) => Err(HolderError::NoPane { message: format!(
-                "pane {pane} has no holder on this machine"
-            ) }),
+            Err(CloseError::NoRecord) => Err(HolderError::NoPane {
+                message: format!("pane {pane} has no holder on this machine"),
+            }),
             Err(error) => Err(HolderError::Refused {
                 code: "holder_close_failed".to_owned(),
                 message: error.to_string(),
@@ -190,9 +190,9 @@ impl PaneHolders for LocalPanes {
     fn read(&self, pane: &str, lines: u16) -> Result<(String, bool), HolderError> {
         match self.holders.read(pane, lines).map_err(ask_error)? {
             Answer::Text { text, truncated } => Ok((text, truncated)),
-            Answer::Processes { .. } => Err(HolderError::Unreachable { message: format!(
-                "pane {pane}'s holder answered a read with its processes"
-            ) }),
+            Answer::Processes { .. } => Err(HolderError::Unreachable {
+                message: format!("pane {pane}'s holder answered a read with its processes"),
+            }),
         }
     }
 
@@ -203,9 +203,9 @@ impl PaneHolders for LocalPanes {
         };
         match self.holders.read_styled(pane, rows) {
             Ok(Answer::Text { text, truncated }) => Ok((text, truncated)),
-            Ok(Answer::Processes { .. }) => Err(HolderError::Unreachable { message: format!(
-                "pane {pane}'s holder answered a styled read with its processes"
-            ) }),
+            Ok(Answer::Processes { .. }) => Err(HolderError::Unreachable {
+                message: format!("pane {pane}'s holder answered a styled read with its processes"),
+            }),
             Err(error) => Err(match super::holder::too_old(&error) {
                 Some(version) => HolderError::Refused {
                     code: UNSUPPORTED_HOLDER.to_owned(),
@@ -233,9 +233,9 @@ impl PaneHolders for LocalPanes {
                     Foreground::Unknown(_) => None,
                 },
             }),
-            Answer::Text { .. } => Err(HolderError::Unreachable { message: format!(
-                "pane {pane}'s holder answered a process ask with text"
-            ) }),
+            Answer::Text { .. } => Err(HolderError::Unreachable {
+                message: format!("pane {pane}'s holder answered a process ask with text"),
+            }),
         }
     }
 
@@ -243,8 +243,12 @@ impl PaneHolders for LocalPanes {
         let record = self
             .holders
             .record(pane)
-            .map_err(|why| HolderError::Unreachable { message: format!("pane {pane}'s record: {why}") })?
-            .ok_or_else(|| HolderError::NoPane { message: format!("pane {pane} has no record") })?;
+            .map_err(|why| HolderError::Unreachable {
+                message: format!("pane {pane}'s record: {why}"),
+            })?
+            .ok_or_else(|| HolderError::NoPane {
+                message: format!("pane {pane} has no record"),
+            })?;
         match (record.phase, record.program, record.end) {
             (Phase::Running, Some(program), None) => Ok(HolderProof {
                 incarnation: record.incarnation,
@@ -368,8 +372,12 @@ fn start_refusal(refusal: StartRefusal) -> HolderError {
 fn ask_error(error: OpenError) -> HolderError {
     match error {
         OpenError::Io(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            HolderError::NoPane { message: error.to_string() }
+            HolderError::NoPane {
+                message: error.to_string(),
+            }
         }
-        error => HolderError::Unreachable { message: error.to_string() },
+        error => HolderError::Unreachable {
+            message: error.to_string(),
+        },
     }
 }
