@@ -332,22 +332,35 @@ impl Runtime {
         true
     }
 
+    /// Each session an archive closed and still holds, with its archive's
+    /// time: what session search and `hide session` mark archived.
+    pub(super) fn archived_sessions(&self) -> impl Iterator<Item = (SessionIdentity, u64)> + '_ {
+        self.snapshot
+            .ui_state
+            .session_archive
+            .records
+            .values()
+            .flat_map(|record| {
+                record
+                    .held()
+                    .filter(|member| member.closed)
+                    .filter_map(move |member| {
+                        Some((
+                            SessionIdentity {
+                                device_id: member.machine.clone(),
+                                agent: session_agent(&member.kind)?.into(),
+                                session_id: member.native_session_id.clone(),
+                            },
+                            record.archived_at_unix_ms,
+                        ))
+                    })
+            })
+    }
+
     fn session_search_presence(&self) -> Vec<SessionSearchPresence> {
         let mut states = BTreeMap::new();
-        for archive in self.snapshot.ui_state.session_archive.records.values() {
-            for member in archive.held().filter(|member| member.closed) {
-                let Some(kind) = session_agent(&member.kind) else {
-                    continue;
-                };
-                states.insert(
-                    SessionIdentity {
-                        device_id: member.machine.clone(),
-                        agent: kind.into(),
-                        session_id: member.native_session_id.clone(),
-                    },
-                    "archived".to_owned(),
-                );
-            }
+        for (session, _) in self.archived_sessions() {
+            states.insert(session, "archived".to_owned());
         }
         let sources = std::iter::once((self.node.as_str(), &self.snapshot.navigator.agents)).chain(
             self.snapshot

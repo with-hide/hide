@@ -35,7 +35,7 @@ impl Runtime {
         self.project_session_state_at(at) | self.refresh_agent_scopes()
     }
 
-    fn session_rows(&self) -> impl Iterator<Item = &SidebarAgentSnapshot> {
+    pub(super) fn session_rows(&self) -> impl Iterator<Item = &SidebarAgentSnapshot> {
         self.snapshot.navigator.agents.iter().chain(
             self.snapshot
                 .status
@@ -590,7 +590,9 @@ impl Runtime {
 
     /// The session every row hosts, on its own machine, in
     /// [`Self::session_rows`] order: this machine's rows, then each device's.
-    fn session_row_identities(&self) -> Vec<Option<crate::links::ledger::SessionIdentity>> {
+    pub(super) fn session_row_identities(
+        &self,
+    ) -> Vec<Option<crate::links::ledger::SessionIdentity>> {
         let identity = |device: &str, row: &SidebarAgentSnapshot| {
             Some(crate::links::ledger::SessionIdentity {
                 device_id: device.to_owned(),
@@ -681,17 +683,29 @@ impl Runtime {
         }
         let mut next = crate::links::ledger::SessionRecordSnapshot::clone(held);
         if let Some(record) = next.record.as_mut() {
-            let capped = sources.lay_groups(record, &recorded);
-            if capped != family::Capped::default() {
-                crate::diagnostic!(serde_json::json!({
-                    "component": "session", "kind": "record_pulls.capacity",
-                    "session_id": record.session.session_id, "omitted": capped.omitted,
-                    "limit": family::PULL_LIMIT, "lineage_capped": capped.lineage,
-                    "session_limit": family::SESSION_LIMIT,
-                }));
-            }
+            lay_record_pulls(&sources, record, &recorded);
         }
         self.snapshot.session_record = Some(Arc::new(next));
+    }
+
+    /// `record` with its `PR` sections laid as the screen's record lays
+    /// them, for `hide session record`, which never touches the screen's
+    /// record slot (PRD agent-session-read D-08, B16).
+    pub(crate) fn laid_record_pulls(
+        &self,
+        mut record: crate::links::ledger::SessionRecord,
+    ) -> crate::links::ledger::SessionRecord {
+        use crate::agent_state::work::family;
+        let sessions = self.session_row_identities();
+        let tree = family::Recorded::from_record(&record);
+        let recorded = [&self.recorded_pulls, &tree];
+        let sources = family::Sources::new(
+            self.session_rows(),
+            &sessions,
+            std::iter::once(&self.github).chain(self.device_github.values()),
+        );
+        lay_record_pulls(&sources, &mut record, &recorded);
+        record
     }
 
     pub(super) fn sync_session_state(&mut self) -> bool {
@@ -753,5 +767,24 @@ impl Runtime {
         // The queued resolutions resolve their rows, which only a second
         // projection shows.
         self.project_session_state() || changed
+    }
+}
+
+/// Lays a record's `PR` sections and logs a list past either cap as it is
+/// laid.
+fn lay_record_pulls(
+    sources: &crate::agent_state::work::family::Sources<'_>,
+    record: &mut crate::links::ledger::SessionRecord,
+    recorded: &[&crate::agent_state::work::family::Recorded],
+) {
+    use crate::agent_state::work::family;
+    let capped = sources.lay_groups(record, recorded);
+    if capped != family::Capped::default() {
+        crate::diagnostic!(serde_json::json!({
+            "component": "session", "kind": "record_pulls.capacity",
+            "session_id": record.session.session_id, "omitted": capped.omitted,
+            "limit": family::PULL_LIMIT, "lineage_capped": capped.lineage,
+            "session_limit": family::SESSION_LIMIT,
+        }));
     }
 }
