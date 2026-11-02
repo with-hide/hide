@@ -120,6 +120,9 @@ pub(super) struct Pane {
     pub(super) env: BTreeMap<String, String>,
     /// The agent the pane runs and its session, saved for a restore.
     pub(super) agent: Option<PaneAgent>,
+    /// The latest hook report that arrived before foreground detection.
+    /// Never saved; a pane owns at most one and drops it when it ends.
+    pending_session: Option<(String, String)>,
     /// What its holder last said of it.
     pub(super) live: PaneLive,
     /// Why no holder runs the pane, once a restore could not start one.
@@ -1638,7 +1641,7 @@ impl Topology {
     ) -> Result<agents::Applied, EngineError> {
         let mut seq = self.agent_seq;
         let held = self.pane_mut(pane)?;
-        let applied = agents::apply(
+        let mut applied = agents::apply(
             catalog,
             &mut held.cwd,
             &mut held.agent,
@@ -1646,6 +1649,13 @@ impl Topology {
             facts,
             &mut seq,
         );
+        if let Some(agent) = held.agent.as_mut()
+            && let Some((kind, session)) = held.pending_session.take()
+            && agent.kind == kind
+        {
+            applied.changed |= agent.session.as_ref() != Some(&session);
+            agent.session = Some(session);
+        }
         self.agent_seq = seq;
         Ok(applied)
     }
@@ -1685,8 +1695,29 @@ impl Topology {
 
     /// Records that the engine typed `agent`'s start into `pane`.
     pub(super) fn start_agent(&mut self, pane: &str, agent: PaneAgent) -> Result<(), EngineError> {
-        self.pane_mut(pane)?.agent = Some(agent);
+        let held = self.pane_mut(pane)?;
+        held.pending_session = None;
+        held.agent = Some(agent);
         Ok(())
+    }
+
+    /// A hook cannot claim another kind of agent. Before detection, keep
+    /// only its latest report until the pane's foreground identifies it.
+    pub(super) fn hook_session(
+        &mut self,
+        pane: &str,
+        kind: &str,
+        session: &str,
+    ) -> Result<bool, EngineError> {
+        let held = self.pane_mut(pane)?;
+        match held.agent.as_ref() {
+            Some(agent) if agent.kind == kind => self.set_agent_session(pane, kind, session),
+            Some(_) => Ok(false),
+            None => {
+                held.pending_session = Some((kind.to_owned(), session.to_owned()));
+                Ok(false)
+            }
+        }
     }
 
     /// Records the session the `kind` agent in `pane` runs: on the agent the
@@ -1699,6 +1730,7 @@ impl Topology {
         session: &str,
     ) -> Result<bool, EngineError> {
         let held = self.pane_mut(pane)?;
+        held.pending_session = None;
         match held.agent.as_mut() {
             Some(agent) if agent.kind == kind => {
                 let changed = agent.session.as_deref() != Some(session);

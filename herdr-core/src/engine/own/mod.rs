@@ -952,20 +952,9 @@ impl<'g> Engine for OwnEngine<'g> {
                 code: "unknown_agent".to_owned(),
                 message: format!("no agent definition names {kind}"),
             })?;
-        // Only the agent the pane runs takes it: a session the operator's
-        // own hook started in the pane's environment (`claude -p` from a
-        // Stop hook) is another agent's, and the engine already knows the
-        // pane runs no agent of that kind.
-        let runs = self
+        if self
             .topology()
-            .pane(pane)?
-            .agent
-            .as_ref()
-            .is_some_and(|agent| agent.kind == definition.id);
-        if runs
-            && self
-                .topology()
-                .set_agent_session(pane, &definition.id, session)?
+            .hook_session(pane, &definition.id, session)?
         {
             self.changed();
         }
@@ -2809,6 +2798,58 @@ mod tests {
         assert_eq!(listed[0].name.as_deref(), Some("worker"));
         assert_eq!(listed[0].agent_status.as_deref(), Some("done"));
         assert_eq!(engine.pane_agent_status(WAIT, &pane).unwrap(), "done");
+    }
+
+    /// A typed agent can report its first session before the holder has
+    /// recognized its program. Neither ordering loses the native identity.
+    #[test]
+    fn a_hook_session_waits_for_its_agent_without_claiming_another_agent() {
+        use hide_node_link::holders::ScreenState;
+        for report_first in [true, false] {
+            let holders = Arc::new(Holders::default());
+            let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+            let (_, _, pane) = engine
+                .create_workspace(WAIT, "/w", "w", true, Env::new())
+                .unwrap();
+            if report_first {
+                engine.hook_session(&pane, "claude-code", "first").unwrap();
+                engine.hook_session(&pane, "claude-code", "latest").unwrap();
+                assert!(engine.agents(WAIT).unwrap().is_empty());
+            }
+            holders.say(&pane, &running("claude", ScreenState::Working));
+            if !report_first {
+                engine.hook_session(&pane, "claude-code", "latest").unwrap();
+            }
+            let session = || engine.agents(WAIT).unwrap()[0].agent_session.clone();
+            assert_eq!(session().unwrap().value, "latest");
+            engine.hook_session(&pane, "gemini", "nested").unwrap();
+            assert_eq!(session().unwrap().value, "latest");
+            holders.say(&pane, &PaneFacts::default());
+            holders.say(&pane, &running("claude", ScreenState::Working));
+            assert!(
+                session().is_none(),
+                "an ended agent's report is not replayed"
+            );
+            holders.say(&pane, &PaneFacts::default());
+            engine
+                .hook_session(&pane, "gemini", "early-other-kind")
+                .unwrap();
+            holders.say(&pane, &running("claude", ScreenState::Working));
+            assert!(
+                session().is_none(),
+                "detection discards a different kind's report"
+            );
+            holders.say(&pane, &PaneFacts::default());
+            holders.say(&pane, &running("gemini", ScreenState::Working));
+            assert!(
+                session().is_none(),
+                "a discarded report cannot reach a later agent"
+            );
+            holders.say(&pane, &PaneFacts::default());
+            engine.hook_session(&pane, "claude", "closing").unwrap();
+            engine.close_pane(WAIT, &pane).unwrap();
+            assert!(engine.hook_session(&pane, "claude", "too-late").is_err());
+        }
     }
 
     /// B19: the folder, title and first prompt the holder reads follow the
