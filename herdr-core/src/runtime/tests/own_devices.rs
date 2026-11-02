@@ -72,7 +72,7 @@ fn ready(
         .is_ok()
         .then(|| Arc::new(super::RecordedTerminals::default()) as Arc<_>);
     let mut connected = established(node, terminals);
-    connected.node.hello.home = Some("/home/me".to_owned());
+    connected.node.hello.home = Some("/srv/account".to_owned());
     if let Err(reason) = holders {
         connected.node.terminals = Err(reason);
     }
@@ -174,7 +174,7 @@ fn an_engine_opened_for_a_replaced_attempt_is_not_installed() {
         DEVICE,
         Arc::new(HolderNode::default()),
         state.path(),
-        "/home/me".to_owned(),
+        "/srv/account".to_owned(),
         Arc::new(hide_agent_adapter::definition::Catalog::read(Vec::new())),
     )
     .map(|engine| Arc::new(engine) as crate::engine::SharedEngine);

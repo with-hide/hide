@@ -1049,7 +1049,7 @@ fn a_wsl_own_engine_device_runs_its_panes_in_holders_with_no_herdr() {
     let herdr = as_root(
         &distro,
         &format!(
-            "find /home/{USER} -name 'herdr*' 2>/dev/null; pgrep -u {USER} -f '[h]erdr' || true"
+            "find ~{USER} -name 'herdr*' 2>/dev/null; pgrep -u {USER} -f '[h]erdr' || true"
         ),
     );
     assert!(
