@@ -1,5 +1,9 @@
 use futures_util::{SinkExt, StreamExt};
-use hide_relay::{Relay, event::Event, limits::Limits};
+use hide_relay::{
+    Relay,
+    event::Event,
+    limits::{Limits, SHUTDOWN_TIMEOUT},
+};
 use hide_relay_protocol::{
     admission::{ClientMessage, DeviceHello, DeviceKey, ServerMessage},
     noise::{NoiseKeypair, Session},
@@ -36,6 +40,9 @@ impl Fixture {
         Self::at(limits, "127.0.0.1:0".parse().unwrap()).await
     }
     pub async fn at(limits: Limits, address: SocketAddr) -> Self {
+        Self::with_proxy(limits, address, true).await
+    }
+    pub async fn with_proxy(limits: Limits, address: SocketAddr, trusted: bool) -> Self {
         let listener = TcpListener::bind(address).await.unwrap();
         let address = listener.local_addr().unwrap();
         let events = Arc::new(Mutex::new(Vec::new()));
@@ -44,7 +51,7 @@ impl Fixture {
         let time = clock.clone();
         let relay = Relay::with_clock(
             limits,
-            Some(address.ip()),
+            trusted.then_some(address.ip()),
             move |event| {
                 let mut log = log.lock().unwrap();
                 assert!(log.len() < 20_000, "bounded fixture event capture");
@@ -83,11 +90,14 @@ impl Fixture {
     }
     pub async fn stop(&mut self) {
         self.stop.take().unwrap().send(()).unwrap();
-        timeout(Duration::from_secs(15), self.task.take().unwrap())
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap();
+        timeout(
+            SHUTDOWN_TIMEOUT + Duration::from_secs(1),
+            self.task.take().unwrap(),
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
     }
     pub fn cap(&self, name: &str) {
         assert!(

@@ -38,14 +38,23 @@ async fn pairs_multiple_phones_and_forwards_opaque_messages_in_both_directions()
         b"private pairing credential, never log",
     )
     .await;
-    exchange(
-        &mut device,
-        &mut phone,
-        &mut device_noise,
-        &mut phone_noise,
-        &vec![42; 256 * 1024],
-    )
-    .await;
+    // Send a complete maximum-size message before the phone reads any frame.
+    let plaintext = vec![42; 256 * 1024];
+    let frames = device_noise.send_message(&plaintext).unwrap();
+    assert_eq!(frames.len(), 5);
+    for frame in &frames {
+        device
+            .send(Message::Binary(frame.clone().into()))
+            .await
+            .unwrap();
+    }
+    let mut received = None;
+    for frame in frames {
+        let forwarded = binary(&mut phone).await;
+        assert_eq!(forwarded, frame);
+        received = phone_noise.recv_message(&forwarded, 0).unwrap();
+    }
+    assert_eq!(received.unwrap(), plaintext);
     exchange(
         &mut other,
         &mut device,
@@ -630,4 +639,245 @@ async fn production_capacity_keeps_128_rooms_live_and_refuses_only_socket_513() 
             closed(&mut phone, 1012).await;
         }
     }
+}
+
+#[tokio::test]
+async fn a_nonreading_phone_is_removed_without_closing_the_device_or_other_phone() {
+    let mut fixture = Fixture::start(Limits::default()).await;
+    let mut device = fixture.socket("192.0.2.1").await;
+    let hello = register(&mut device, &DeviceKey::from_seed(&[31; 32])).await;
+    let mut slow = fixture.socket("192.0.2.2").await;
+    let slow_id = join(&mut slow, &hello.room, &mut device).await;
+    let (_, mut slow_device) = noise(&mut slow, &mut device, slow_id).await;
+    let mut good = fixture.socket("192.0.2.3").await;
+    let good_id = join(&mut good, &hello.room, &mut device).await;
+    let (mut good_noise, mut good_device) = noise(&mut good, &mut device, good_id).await;
+    let mut departed = false;
+    for _ in 0..1024 {
+        let frame = slow_device
+            .send_message(&[42; 32 * 1024])
+            .unwrap()
+            .remove(0);
+        device.send(Message::Binary(frame.into())).await.unwrap();
+        // The pong acknowledges that the server read this input, and drains
+        // device lifecycle metadata while the slow phone never reads at all.
+        device.send(Message::Ping(vec![1].into())).await.unwrap();
+        loop {
+            match next(&mut device).await {
+                Message::Text(text) => {
+                    assert_eq!(
+                        ServerMessage::decode(&text).unwrap(),
+                        ServerMessage::PeerLeft {
+                            connection: slow_id
+                        }
+                    );
+                    departed = true;
+                }
+                Message::Pong(_) => break,
+                message => panic!("unexpected device message {message:?}"),
+            }
+        }
+        if departed {
+            break;
+        }
+    }
+    assert!(
+        departed,
+        "bounded traffic must retire a non-reading destination"
+    );
+    fixture.cap("outbound_queue");
+    exchange(
+        &mut good,
+        &mut device,
+        &mut good_noise,
+        &mut good_device,
+        b"other phone still sends",
+    )
+    .await;
+    exchange(
+        &mut device,
+        &mut good,
+        &mut good_device,
+        &mut good_noise,
+        b"device still sends",
+    )
+    .await;
+    // Resume reads only after the server has reported this phone's departure.
+    loop {
+        match next(&mut slow).await {
+            Message::Binary(_) => {}
+            Message::Text(text) => {
+                assert_eq!(
+                    ServerMessage::decode(&text).unwrap(),
+                    ServerMessage::Refused {
+                        reason: Refusal::ConnectionLimit
+                    }
+                );
+                break;
+            }
+            message => panic!("missing slow-peer refusal {message:?}"),
+        }
+    }
+    closed(&mut slow, 1013).await;
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn ipv6_host_rotation_shares_the_subnet_budget_but_other_subnets_do_not() {
+    let mut fixture = Fixture::start(Limits {
+        connections_per_ip: 1,
+        ..Limits::default()
+    })
+    .await;
+    let mut first = fixture.socket("2001:db8:1:2::1").await;
+    register(&mut first, &DeviceKey::from_seed(&[32; 32])).await;
+    let mut rotated = fixture.socket("2001:db8:1:2:ffff::2").await;
+    refused(&mut rotated, Refusal::RateLimit).await;
+    closed(&mut rotated, 1013).await;
+    let mut different = fixture.socket("2001:db8:1:3::1").await;
+    register(&mut different, &DeviceKey::from_seed(&[33; 32])).await;
+    fixture.cap("connections_per_ip");
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn untrusted_forwarding_headers_cannot_change_the_tcp_peer_budget() {
+    let mut fixture = Fixture::with_proxy(
+        Limits {
+            connections_per_ip: 1,
+            ..Limits::default()
+        },
+        "127.0.0.1:0".parse().unwrap(),
+        false,
+    )
+    .await;
+    let mut first = fixture.socket("not an address").await;
+    register(&mut first, &DeviceKey::from_seed(&[34; 32])).await;
+    let mut forged = fixture.socket("192.0.2.99").await;
+    refused(&mut forged, Refusal::RateLimit).await;
+    closed(&mut forged, 1013).await;
+    fixture.cap("connections_per_ip");
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn control_size_and_unexpected_or_replayed_proof_have_specific_refusals() {
+    let mut fixture = Fixture::start(Limits::default()).await;
+    let key = DeviceKey::from_seed(&[35; 32]);
+    let mut device = fixture.socket("192.0.2.1").await;
+    let hello = DeviceHello::new(&key.public_key(), 7).unwrap();
+    send(
+        &mut device,
+        ClientMessage::Device {
+            hello: hello.clone(),
+        },
+    )
+    .await;
+    let ServerMessage::Challenge { challenge } = control(&mut device).await else {
+        panic!("challenge")
+    };
+    let signature = key.sign(&hello, &challenge).unwrap();
+    send(
+        &mut device,
+        ClientMessage::Proof {
+            signature: signature.clone(),
+        },
+    )
+    .await;
+    assert_eq!(control(&mut device).await, ServerMessage::Registered);
+    send(
+        &mut device,
+        ClientMessage::Proof {
+            signature: signature.clone(),
+        },
+    )
+    .await;
+    refused(&mut device, Refusal::InvalidProof).await;
+    closed(&mut device, 1008).await;
+    let mut unexpected = fixture.socket("192.0.2.2").await;
+    send(&mut unexpected, ClientMessage::Proof { signature }).await;
+    refused(&mut unexpected, Refusal::InvalidProof).await;
+    closed(&mut unexpected, 1008).await;
+    let mut oversize = fixture.socket("192.0.2.3").await;
+    oversize
+        .send(Message::Text(
+            "x".repeat(hide_relay_protocol::admission::MAX_CONTROL + 1)
+                .into(),
+        ))
+        .await
+        .unwrap();
+    refused(&mut oversize, Refusal::FrameLimit).await;
+    closed(&mut oversize, 1013).await;
+    fixture.cap("control_size");
+    fixture.stop().await;
+    for name in ["unexpected_proof", "replayed_admission"] {
+        assert!(
+            fixture
+                .events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|e| e.event == name && e.cap.is_none())
+        );
+    }
+}
+
+#[tokio::test]
+async fn idle_connection_expires_with_a_timeout_and_no_cap_event() {
+    let mut fixture = Fixture::start(Limits::default()).await;
+    let mut device = fixture.socket("192.0.2.1").await;
+    register(&mut device, &DeviceKey::from_seed(&[36; 32])).await;
+    // This uses the production 90-second timer and a real socket, not a
+    // test-only runtime feature or an assertion against an internal deadline.
+    use futures_util::StreamExt;
+    let message = timeout(
+        hide_relay::limits::IDLE_TIMEOUT + Duration::from_secs(5),
+        device.next(),
+    )
+    .await
+    .unwrap()
+    .unwrap()
+    .unwrap();
+    let Message::Text(text) = message else {
+        panic!("timeout refusal")
+    };
+    assert_eq!(
+        ServerMessage::decode(&text).unwrap(),
+        ServerMessage::Refused {
+            reason: Refusal::Timeout
+        }
+    );
+    closed(&mut device, 1008).await;
+    fixture.stop().await;
+    assert!(
+        fixture
+            .events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|e| e.event == "idle_timeout" && e.cap.is_none())
+    );
+}
+
+#[tokio::test]
+async fn restart_waits_for_an_incomplete_http_handshake_and_exits_cleanly() {
+    let mut fixture = Fixture::start(Limits::default()).await;
+    let mut slow = TcpStream::connect(fixture.address).await.unwrap();
+    slow.write_all(b"GET /ws HTTP/1.1\r\nHost: localhost\r\n")
+        .await
+        .unwrap();
+    let mut device = fixture.socket("192.0.2.1").await;
+    register(&mut device, &DeviceKey::from_seed(&[37; 32])).await;
+    fixture.stop().await;
+    closed(&mut device, 1012).await;
+    let mut byte = [0];
+    assert_eq!(slow.read(&mut byte).await.unwrap(), 0);
+    assert!(
+        !fixture
+            .events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|e| e.event == "shutdown_timeout")
+    );
 }

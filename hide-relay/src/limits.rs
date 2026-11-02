@@ -10,13 +10,15 @@ pub use hide_relay_protocol::frame::MAX_FRAME;
 pub const MAX_IP_RECORDS: usize = 4096;
 pub const MAX_ROOM_RECORDS: usize = 4096;
 pub const MAX_PENDING_HTTP: usize = 32;
-pub const MAX_QUEUED_FRAMES: usize = 4;
+pub const MAX_QUEUED_FRAMES: usize = 8;
 /// Discard at most one bounded frame plus the largest WebSocket header on refusal.
 pub const MAX_CLOSE_DRAIN_BYTES: usize = MAX_FRAME + 14;
 pub const HTTP_TIMEOUT: Duration = Duration::from_secs(5);
 pub const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 pub const IDLE_TIMEOUT: Duration = Duration::from_secs(90);
-pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(6);
+// HTTP response, upgrade and final close can each consume their deadline.
+// This also covers a session write followed by its final close write.
+pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(16);
 
 /// An embedding may lower the production budgets, never remove or raise them.
 #[derive(Clone, Copy)]

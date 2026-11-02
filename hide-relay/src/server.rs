@@ -55,7 +55,13 @@ impl Shared {
         }
     }
     fn rejected(&self, id: Option<u64>, error: Rejection) {
-        let room = id.and_then(|id| self.state.lock().unwrap().room(id));
+        let state = self.state.lock().unwrap();
+        // Owner removal already logged the refusal with the room identity.
+        if id.is_some_and(|id| state.role(id).is_err()) {
+            return;
+        }
+        let room = id.and_then(|id| state.room(id));
+        drop(state);
         (self.events)(Event::new(error.event, room, error.cap));
     }
 }
@@ -167,11 +173,7 @@ impl Relay {
         if !matches!(drained, Ok(Ok(()))) {
             tasks.abort_all();
             while tasks.join_next().await.is_some() {}
-            (self.shared.events)(Event::new(
-                "shutdown_timeout",
-                None,
-                Some("shutdown_deadline"),
-            ));
+            (self.shared.events)(Event::new("shutdown_timeout", None, None));
             return Err(io::Error::other("shutdown_incomplete"));
         }
         result
@@ -309,13 +311,16 @@ async fn session(mut socket: Socket, mut admission: Admission) {
                     break (*admission.end.borrow_and_update()).expect("closed peer queue carries its end");
                 };
                 if !matches!(timeout(WRITE_TIMEOUT, socket.send(message)).await, Ok(Ok(()))) {
-                    break End::Refused(Rejection::cap(Refusal::Timeout, "write_deadline"));
+                    break End::Refused(Rejection::new(Refusal::Timeout, "write_timeout"));
                 }
             }
             incoming = socket.next() => {
                 let result = match incoming {
                     Some(Ok(Message::Text(text))) => control(&shared, id, &text, &mut pending, &mut admitted),
-                    Some(Ok(Message::Binary(bytes))) if admitted => shared.state.lock().unwrap().forward(id, bytes.to_vec(), (shared.clock)()),
+                    Some(Ok(Message::Binary(bytes))) if admitted => {
+                        let result = shared.state.lock().unwrap().forward(id, bytes.to_vec(), (shared.clock)());
+                        result.map(|events| shared.emit(events))
+                    },
                     Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => Ok(()),
                     Some(Ok(Message::Close(_))) | None => break End::PeerClosed,
                     Some(Err(tungstenite::Error::Capacity(_))) => Err(Rejection::cap(Refusal::FrameLimit, "frame_size")),
@@ -326,7 +331,7 @@ async fn session(mut socket: Socket, mut admission: Admission) {
                 if admitted { deadline = tokio::time::Instant::now() + IDLE_TIMEOUT; }
                 // Flush automatic WebSocket pong responses with the same write bound.
                 if !matches!(timeout_at(deadline.min(tokio::time::Instant::now() + WRITE_TIMEOUT), socket.flush()).await, Ok(Ok(()))) {
-                    break End::Refused(Rejection::cap(Refusal::Timeout, "write_deadline"));
+                    break End::Refused(Rejection::new(Refusal::Timeout, "write_timeout"));
                 }
             }
         }
@@ -385,7 +390,8 @@ fn control(
             return Err(Rejection::new(Refusal::InvalidProof, "replayed_admission"));
         }
         ClientMessage::Phone { room, .. } if !*admitted && pending.is_none() => {
-            shared.state.lock().unwrap().join(id, room)?;
+            let events = shared.state.lock().unwrap().join(id, room)?;
+            shared.emit(events);
             *admitted = true;
         }
         ClientMessage::Close { connection } if *admitted => {

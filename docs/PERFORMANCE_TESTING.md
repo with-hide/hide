@@ -259,12 +259,12 @@ B27's bar is the no-protection call's p95 at or under 15 ms on macOS; report the
 
 ## Resident work cost review
 
-The standalone `hide-relay` listener owns at most 512 admitted sockets plus 32 HTTP/refusal tasks, with four queued frames per admitted connection and no idle polling worker.
+The standalone `hide-relay` listener owns at most 512 admitted sockets plus 32 HTTP/refusal tasks, with eight queued frames per admitted connection and no idle polling worker.
 Each received binary frame performs one bounded protocol parse, one short state lock, constant-time room/peer lookups and quota accounting, then queues the unchanged bytes to one recipient.
 Admission prunes at most 4,096 IP records; authenticated registration prunes at most 4,096 retained room budgets.
 Connect/disconnect metadata goes only to the owning device, and losing that device closes at most four phones.
 No filesystem, subprocess, socket await or log sink runs under the state lock.
-The listener owns and joins every task on shutdown, with five-second writes and a six-second shutdown deadline before abort-and-reap; cancellation drops the same task set and registration guards.
+The listener owns and joins every task on shutdown, with five-second writes and a sixteen-second shutdown deadline before abort-and-reap; cancellation drops the same task set and registration guards.
 The [relay contract](RELAY_PROTOCOL.md#server-budgets-and-refusals) lists every quota, refusal and retained-data bound, and `hide-relay/tests/it` proves the loopback service behavior.
 These are code bounds and functional assertions, not measured throughput, RSS or latency guarantees.
 

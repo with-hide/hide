@@ -112,6 +112,12 @@ impl State {
         if self.stopping {
             return Err(Rejection::new(Refusal::Timeout, "server_stopping"));
         }
+        // An IPv6 client controls addresses within its /64; rotating host bits
+        // must not bypass the attempt budget or fill the address table.
+        let ip = match ip.to_canonical() {
+            IpAddr::V6(ip) => IpAddr::V6((u128::from(ip) & (u128::MAX << 64)).into()),
+            ip => ip,
+        };
         // Fixed windows, retained across reconnects. Expired records are removed
         // only at admission, never by a background sweep or on a data frame.
         self.rates
@@ -179,7 +185,7 @@ impl State {
         self.control(id, ServerMessage::Registered)
     }
 
-    pub fn join(&mut self, id: u64, room: String) -> Result<(), Rejection> {
+    pub fn join(&mut self, id: u64, room: String) -> Result<Vec<Event>, Rejection> {
         let entry = self
             .rooms
             .get_mut(&room)
@@ -196,17 +202,25 @@ impl State {
         let protocol = entry.protocol;
         entry.phones.insert(connection, id);
         self.peer_mut(id)?.role = Role::Phone(room, connection);
-        self.control(device, ServerMessage::PeerJoined { connection })?;
+        if let Err(error) = self.control(device, ServerMessage::PeerJoined { connection }) {
+            return Ok(self.remove(device, End::Refused(error)));
+        }
         self.control(
             id,
             ServerMessage::Joined {
                 connection,
                 phone_protocol: protocol,
             },
-        )
+        )?;
+        Ok(Vec::new())
     }
 
-    pub fn forward(&mut self, id: u64, bytes: Vec<u8>, now: Duration) -> Result<(), Rejection> {
+    pub fn forward(
+        &mut self,
+        id: u64,
+        bytes: Vec<u8>,
+        now: Duration,
+    ) -> Result<Vec<Event>, Rejection> {
         let frame = Frame::decode(&bytes).map_err(crate::protocol_error)?;
         let (room, target) = match self.role(id)? {
             Role::Phone(room, connection) if connection == frame.connection => {
@@ -245,15 +259,22 @@ impl State {
         usage.bytes += size;
         self.peer_mut(id)?.bytes += size;
         match target {
-            Some(target) => self.send(target, Message::Binary(bytes.into())),
+            Some(target) => match self.send(target, Message::Binary(bytes.into())) {
+                Ok(()) => Ok(Vec::new()),
+                // Backpressure belongs to the recipient. Closing it publishes
+                // PeerLeft to the device without penalizing a healthy sender.
+                Err(error) => Ok(self.remove(target, End::Refused(error))),
+            },
             // A response may race the phone's departure. IDs are never reused,
             // so a retired peer is distinct from a foreign/future peer.
-            None => self.control(
-                id,
-                ServerMessage::PeerLeft {
-                    connection: frame.connection,
-                },
-            ),
+            None => self
+                .control(
+                    id,
+                    ServerMessage::PeerLeft {
+                        connection: frame.connection,
+                    },
+                )
+                .map(|()| Vec::new()),
         }
     }
 
@@ -303,6 +324,13 @@ impl State {
         let mut event = Event::new("peer_closed", peer.role.room().map(str::to_owned), None);
         event.size = Some(peer.bytes);
         let mut events = vec![event];
+        if let End::Refused(error) = end {
+            events.push(Event::new(
+                error.event,
+                peer.role.room().map(str::to_owned),
+                error.cap,
+            ));
+        }
         match peer.role {
             Role::Pending => {}
             Role::Device(room) => {
@@ -323,7 +351,6 @@ impl State {
                     {
                         // A device that cannot receive lifecycle metadata must
                         // reconnect: keeping it alive would leave a ghost peer.
-                        events.push(Event::new(error.event, Some(room), error.cap));
                         events.extend(self.remove(device, End::Refused(error)));
                     }
                 }

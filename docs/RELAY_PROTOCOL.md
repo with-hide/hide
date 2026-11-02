@@ -55,7 +55,7 @@ Knowing a room hash grants no phone credential: the endpoint must still complete
 | Control message | Protocol `MAX_CONTROL`, 2,048 bytes | `frame_limit` | `control_size` |
 | Forwarded bytes per room, both directions including binary headers and handshakes | 1 GiB in a 24-hour window | `daily_limit` | `bytes_per_room_per_day` |
 | Unexpired IP / room accounting entries | 4,096 each | `rate_limit` / `connection_limit` | `ip_records` / `room_records` |
-| Pending output per socket | 4 frames | `connection_limit` | `outbound_queue` |
+| Pending output per socket | 8 frames | `connection_limit` | `outbound_queue` |
 
 A window starts at that IP's first attempt or the room's first admission, using monotonic uptime, and resets on the first operation at or after its end.
 Room usage survives the last disconnect for the rest of that window; reconnecting cannot reset it.
@@ -63,13 +63,15 @@ At most 32 additional TCP tasks perform HTTP handshakes or deliver refusals, eac
 The WebSocket limit is enforced before reserving room state, but a valid upgrade receives a `refused` message before close so a browser can read the reason.
 Health requests do not use WebSocket admission or IP-rate budget.
 A refusal closes its sending socket, leaving unrelated sockets intact; closing the room's owning device necessarily disconnects that room's phones too.
-If a recipient's output queue is full, the sender is refused rather than retaining more ciphertext; if a device cannot receive `peer_left`, it is disconnected so it cannot keep a ghost peer.
-No frame is silently dropped while its sending connection remains successful.
+If a recipient's output queue is full, that recipient is refused and removed; the device receives `peer_left` for a slow phone, and other phones remain live.
+If the device itself cannot receive data or `peer_left`, it is disconnected so it cannot keep a ghost peer.
+Undeliverable data is reported by the peer departure; it is never retained for a replacement connection.
+The room budget charges received valid envelopes before delivery, including a full or retired destination, so receiver failure cannot make ingress free.
 A device response racing an already closed phone is charged to the room budget and answered with `peer_left`, without closing the device or delivering to a replacement phone.
 Closing that retired peer again is idempotent; zero and never-issued connection IDs remain routing violations.
 
 These caps bound the service's memory and initial free-service budget, not a measured production throughput promise.
-Four maximum-size queued frames across 512 sockets occupy at most 128 MiB of payload; receive/write buffers and task metadata add to that budget.
+Eight maximum-size queued frames across 512 sockets occupy at most 256 MiB of payload; receive/write buffers and task metadata add to that budget.
 Every binary forward parses one bounded envelope, charges one room counter, and queues it for one recipient; there is no room broadcast or background sweep.
 Admission alone prunes the bounded accounting tables; there is no per-frame full-table scan.
 
@@ -78,8 +80,10 @@ Admission alone prunes the bounded accounting tables; there is no per-frame full
 The first routing hello and device proof must complete within ten seconds of WebSocket establishment.
 Admitted sockets expire after 90 seconds without incoming traffic; clients keep them alive with a ping or an encrypted application heartbeat well before that deadline.
 Each socket write has a five-second deadline, and its registration is released before a final close write is attempted.
+A failed or expired write records `write_timeout` and attempts a `timeout` refusal with close code `1008`; it is not a cap event.
+An exhausted shutdown deadline records `shutdown_timeout` without a cap field.
 An oversize refusal half-closes TCP and discards at most `MAX_FRAME + 14` unread bytes within that same deadline, so a reset caused by unread payload does not erase the refusal for a bounded oversize frame.
-Restart stops acceptance, closes admitted sockets with code `1012` (`restart`), clears every room and counter and drains or aborts all owned tasks within six seconds.
+Restart stops acceptance, closes admitted sockets with code `1012` (`restart`), clears every room and counter and drains or aborts all owned tasks within sixteen seconds.
 An HTTP upgrade already in progress may instead see a failed upgrade or `timeout`; it must reconnect too.
 
 | Close code | Meaning | Client action |
@@ -97,6 +101,7 @@ Clients own reconnect backoff and application intent deduplication; relay restar
 The binary writes JSON lines to stderr with only `event`, optional validated `room` hash, optional byte `size`, and optional `cap` name.
 `peer_closed` includes the bytes received for forwarding; refusals name their category and cap, never a wire object or underlying exception.
 No IP address, key, credential, URL, application payload or close reason supplied by a peer is logged.
+A disconnected stderr collector does not panic connection tasks; deployment must monitor its collector too.
 The relay itself retains no log files; deployment owns the stderr collector, seven-day retention and alerts on `cap_exceeded`, `server_failed` and missing health responses.
 Those collection and alert settings are deployment work, not established by running the binary locally.
 
@@ -104,7 +109,7 @@ TLS terminates at the deployment's reverse proxy.
 By default IP budgets use the TCP peer and ignore all forwarding headers.
 With `--trusted-proxy <IP>`, only that exact peer must supply one `X-Real-IP` value containing a single valid address; missing, duplicate, malformed or chained addresses are refused.
 The proxy must overwrite this header with the real client address and must not append or pass through a caller's value.
-IPv4-mapped IPv6 addresses are canonicalized for accounting.
+IPv4-mapped IPv6 addresses are canonicalized for accounting; native IPv6 addresses share their /64 attempt budget and accounting entry.
 Do not put multiple callers behind a proxy without this explicit trust setting: they would share the proxy IP's budget.
 
 ## Encrypted frames and messages

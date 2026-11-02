@@ -7,8 +7,11 @@ use hide_relay::{
 use std::io::Write;
 
 fn log(event: Event) {
-    let line = serde_json::to_string(&event).expect("static event serialization");
-    writeln!(std::io::stderr().lock(), "{line}").expect("relay log unavailable");
+    if let Ok(line) = serde_json::to_string(&event) {
+        // A failed collector cannot tear down unrelated socket tasks. The
+        // deployment supervises this stderr sink independently of the relay.
+        let _ = writeln!(std::io::stderr().lock(), "{line}");
+    }
 }
 
 #[tokio::main]
