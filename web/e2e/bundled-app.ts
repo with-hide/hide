@@ -23,7 +23,7 @@ import "./worker-owned";
 // Both suites run from their package folder (`web`, `desktop`), one below the repository.
 const DEBUG = path.resolve("..", "target", "debug");
 const BUNDLES = path.join(DEBUG, "e2e-apps");
-const BINARIES = ["hided", "hide", "hide-agent-hooks"];
+const BINARIES = ["hided", "hide", "hide-agent-hooks", "hide-holder"];
 
 /** `plain` is the build alone; `herdr` also carries the fixture's pinned Herdr, as a packaged app does. */
 export type Bundle = "plain" | "herdr";
