@@ -19,7 +19,7 @@ import { openProject, openWorktree, withControl } from "./daemon-actions";
 import { startAgentInProject } from "./fixture-agents";
 import { startHided, type Daemon } from "./hided-fixture";
 import { fixtureProgram } from "./platform-fixture";
-import { chooseTheme, countSent, rest, rowGeometry, screenshot } from "./wire";
+import { chooseTheme, countSent, enterWorkspace, rest, rowGeometry, screenshot } from "./wire";
 import { toPage } from "../../desktop/src/main/wirePath";
 import { quietFor } from "./wait";
 import { initGithubRepository } from "./github-remote";
@@ -287,9 +287,11 @@ test("a checkout's card names the checkout by its real path", { tag: "@platform"
 
     daemon = await startHided(herdr, "checkout-path");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
-    await workspaceAt(herdr, daemon, repo, "메인 체크아웃 정리");
-    await workspaceAt(herdr, daemon, worktree, "PR 카드 구현", true);
-    await expect(page.locator("[data-main-screen]")).toBeVisible({ timeout: 20_000 });
+    await withControl(daemon, async (control) => {
+      await openProject(control, repo, "repo");
+      await openWorktree(control, worktree);
+    });
+    await enterWorkspace(page, "repo");
 
     const project = page.locator("[data-project]").filter({ has: page.locator("[data-project-row]", { hasText: /^repo/ }) });
     const plain = page.locator('[data-checkout-card="plain"]');
