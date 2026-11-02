@@ -22,7 +22,7 @@ import { claudeProjects, startHerdr, writeFixtureTranscript } from "./herdr-fixt
 import { waitForTerminal } from "./group-start-helper";
 import { startHided, type Daemon } from "./hided-fixture";
 import { toPage } from "../../desktop/src/main/wirePath";
-import { rest, screenshot } from "./wire";
+import { enterWorkspace, rest, screenshot, showProjectRow } from "./wire";
 import { chord, commandLabel } from "./chords";
 
 test.describe.configure({ timeout: 180_000 });
@@ -177,7 +177,14 @@ test("Pin registers and pins a project Herdr shows without a registration @herdr
     await expect(page.locator("[data-main-screen]")).toBeVisible({ timeout: 20_000 });
     const row = page.locator("[data-project]").filter({ has: page.locator("[data-project-row]", { hasText: /^repo/ }) }).locator("[data-project-menu]").first();
     await expect(page.locator('[data-section="pinned"]')).toHaveCount(0);
-    const menu = await openMenu(page, row, "repo actions");
+    // Startup can select either project. Make the other one current so this
+    // unregistered shell project is folded, then reach Pin through that fold.
+    await enterWorkspace(page, "fixture");
+    const fold = page.locator("[data-no-agent-projects]");
+    await expect(fold).toBeVisible();
+    if (await fold.getAttribute("aria-expanded") === "true") await fold.click();
+    await expect(row).toHaveCount(0);
+    const menu = await openMenu(page, await showProjectRow(page, row), "repo actions");
     await menu.locator('[data-menu-item="pin"]').click();
     await expect(page.locator('[data-section="pinned"]')).toHaveText(/Pinned · 1/);
     await expect(page.locator("[data-project-row]", { hasText: /^repo/ })).toHaveCount(1);
