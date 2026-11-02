@@ -925,13 +925,7 @@ impl Runtime {
         &self,
         workspace: &WorkspaceSnapshot,
     ) -> Option<&crate::model::GithubProjectSnapshot> {
-        if workspace.device_id == self.node.as_str() {
-            self.github.project(&workspace.path)
-        } else {
-            self.device_github
-                .get(&workspace.device_id)?
-                .project(&workspace.path)
-        }
+        self.github_project_on(&workspace.device_id, &workspace.path)
     }
 
     pub(super) fn link_parent_facts(&self) -> Vec<ParentFact> {

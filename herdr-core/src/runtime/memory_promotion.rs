@@ -634,11 +634,7 @@ impl Runtime {
         node: &NodeId,
         root: &str,
     ) -> Option<&GithubProjectSnapshot> {
-        if *node == self.node {
-            self.github.project(root)
-        } else {
-            self.device_github.get(node.as_str())?.project(root)
-        }
+        self.github_project_on(node.as_str(), root)
     }
 
     /// Resolve the confirmed target from existing node-owned Git facts,

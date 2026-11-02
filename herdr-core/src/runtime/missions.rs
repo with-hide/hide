@@ -1593,22 +1593,12 @@ impl Runtime {
         &self,
         mission: &Mission,
     ) -> Option<&crate::model::GithubProjectSnapshot> {
-        let github = if mission.device_id == self.node.as_str() {
-            Some(&self.github)
-        } else {
-            self.device_github.get(&mission.device_id)
-        };
-        github?.project(&mission.project)
+        self.github_project_on(&mission.device_id, &mission.project)
     }
 
     fn pull_seen(&self, device: &str, project: &str, number: u32) -> Option<PrSeen> {
-        let github = if device == self.node.as_str() {
-            Some(&self.github)
-        } else {
-            self.device_github.get(device)
-        };
-        let pull = github?
-            .project(project)
+        let pull = self
+            .github_project_on(device, project)
             .filter(|project| !project.status.stale)?
             .pull_requests
             .iter()
@@ -2246,13 +2236,7 @@ impl Runtime {
     /// The mission's device does not answer, so its map shows the last
     /// value (B20).
     pub(super) fn mission_stale(&self, mission: &Mission) -> bool {
-        mission.device_id != self.node.as_str()
-            && !self
-                .snapshot
-                .status
-                .remote
-                .iter()
-                .any(|remote| remote.target_id == mission.device_id && remote.state == "connected")
+        !self.device_answers(&mission.device_id)
     }
 
     fn view_mission(
@@ -2262,14 +2246,7 @@ impl Runtime {
         sleeping: &crate::coordination::Sleeping,
         ledger: Option<&crate::delivery::ledger::Ledger>,
     ) -> MissionView {
-        let on_core = mission.device_id == self.node.as_str();
-        let github = if on_core {
-            self.github.project(&mission.project)
-        } else {
-            self.device_github
-                .get(&mission.device_id)
-                .and_then(|github| github.project(&mission.project))
-        };
+        let github = self.github_project_on(&mission.device_id, &mission.project);
         let blocked = mission.blocked();
         let nodes = mission
             .nodes

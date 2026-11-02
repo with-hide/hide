@@ -336,15 +336,6 @@ impl Runtime {
             .collect()
     }
 
-    /// The pull request list this core last read for `project` on `device`.
-    fn listed_pulls(&self, device: &str, project: &str) -> Option<&GithubProjectSnapshot> {
-        if device == self.node.as_str() {
-            self.github.project(project)
-        } else {
-            self.device_github.get(device)?.project(project)
-        }
-    }
-
     /// Follows the outside nodes of `device`'s missions in `project`, with
     /// the stored pull request list. Returns whether a mission changed.
     pub(crate) fn follow_outside_stored(&mut self, device: &str, project: &str) -> bool {
@@ -353,7 +344,7 @@ impl Runtime {
             &self.missions.outside,
             device,
             project,
-            self.listed_pulls(device, project),
+            self.github_project_on(device, project),
         );
         self.follow_outside(device, project, found, asks)
     }
@@ -412,7 +403,7 @@ impl Runtime {
         let branch = listed.and_then(|listed| listed.base_branch.clone());
         let base = Base {
             merged_heads: crate::worktrees::merged_heads(
-                self.listed_pulls(device, project),
+                self.github_project_on(device, project),
                 branch.as_deref(),
             ),
             branch,
@@ -435,7 +426,7 @@ impl Runtime {
             &self.missions.outside,
             device,
             project,
-            self.listed_pulls(device, project),
+            self.github_project_on(device, project),
         );
         let (github, base) = self.outside_places(device, project);
         answers.extend(read_all(link, project, &github, &base, asks));
