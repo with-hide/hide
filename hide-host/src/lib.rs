@@ -38,6 +38,7 @@ pub mod link_bridge;
 pub mod list;
 pub mod mutate;
 pub mod opencode_fork;
+pub mod pane_holders;
 pub mod pane_peer;
 pub mod panes;
 pub mod ports;

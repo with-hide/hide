@@ -168,7 +168,7 @@ fn fixture(entries: &[(&str, tar::EntryType, Vec<u8>)]) -> (Manifest, Vec<u8>) {
             "asset": format!("hide-device-{platform}-1.2.3.tar.gz"), "sha256": hex_digest(&bytes), "size": bytes.len(), "files": files,
         }));
     }
-    let manifest = serde_json::from_value(serde_json::json!({"format": 1, "version": "1.2.3", "commit": "a".repeat(40), "order": "42", "platforms": platforms})).unwrap();
+    let manifest = serde_json::from_value(serde_json::json!({"format": FORMAT, "version": "1.2.3", "commit": "a".repeat(40), "order": "42", "platforms": platforms})).unwrap();
     (manifest, bytes)
 }
 
@@ -187,13 +187,18 @@ fn a_verified_download_is_reused_offline_and_corruption_is_repaired_before_uploa
     let (manifest, archive) = kit();
     manifest.validate().unwrap();
     let server = Release::serve(200, archive);
-    let first = load(&manifest, "linux-aarch64", home.path(), &server.base()).unwrap();
-    assert_eq!(first.files.len(), 4); // three programs plus the Herdr pin
+    let (first, holder) = load(&manifest, "linux-aarch64", home.path(), &server.base()).unwrap();
+    // A device on its Herdr is sent what it was before the kit carried the
+    // holder: three programs and the Herdr pin; the holder is apart.
+    assert_eq!(first.files.len(), 4);
     assert_eq!(first.files.iter().filter(|file| file.executable).count(), 3);
+    assert!(!first.files.iter().any(|file| file.relative == HOLDER));
+    assert_eq!(holder.relative, HOLDER);
+    assert!(holder.executable);
     assert!(first.missing.is_empty());
     assert!(first.herdr.as_ref().unwrap().executable);
     assert_eq!(server.hits(), 1);
-    let second = load(
+    let (second, _) = load(
         &manifest,
         "linux-aarch64",
         home.path(),
@@ -203,7 +208,7 @@ fn a_verified_download_is_reused_offline_and_corruption_is_repaired_before_uploa
     assert_eq!(first.version(), second.version());
     let root = hide_kit::layout::device_bundle_cache(home.path());
     fs::write(root.join("linux-aarch64/hide-linux-aarch64"), "corrupt").unwrap();
-    let repaired = load(&manifest, "linux-aarch64", home.path(), &server.base()).unwrap();
+    let (repaired, _) = load(&manifest, "linux-aarch64", home.path(), &server.base()).unwrap();
     assert_eq!(first.version(), repaired.version());
     assert_eq!(server.hits(), 2);
     assert!(!root.join("staging").exists());
@@ -298,7 +303,7 @@ fn manifest_rejects_wrong_release_names_missing_parts_and_resource_overruns() {
 fn a_local_build_fails_on_the_device_path_without_attempting_a_release_download() {
     let directory = tempfile::tempdir().unwrap();
     let (manifest, _) = kit();
-    let mut value = serde_json::json!({"format": 1, "version": "1.2.3-main.abcdef0", "commit": manifest.commit, "order": manifest.order, "platforms": {}});
+    let mut value = serde_json::json!({"format": FORMAT, "version": "1.2.3-main.abcdef0", "commit": manifest.commit, "order": manifest.order, "platforms": {}});
     let mut platforms = serde_json::Map::new();
     for platform in PLATFORMS {
         let files: BTreeMap<_, _> = PROGRAMS

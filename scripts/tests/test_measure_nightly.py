@@ -16,7 +16,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 NIGHTLY = ROOT / "scripts" / "web-shell-measure" / "nightly.py"
-ECHO_CHECK = "key echo under agent churn: invalid measurement"
+ECHO_CHECK = "key echo at operator scale: invalid measurement"
 FIXTURE_CHECK = "fixture: not the lane's topology at operator scale"
 
 

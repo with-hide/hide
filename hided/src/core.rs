@@ -1240,15 +1240,10 @@ fn local_engine(
         )),
         (Some(holders), None) => {
             let home = core_home(options)?;
-            // The engine's folders and Git are this machine's, read by a node
-            // answering for the core's home as the core's own node does.
-            let node = Arc::new(hide_node::Local::new(Some(home.clone())));
-            // The engine opens knowing the operator's agents, so the restore
-            // that starts with it resumes theirs too; a folder that cannot be
-            // read leaves the built-in ones, and the core's read logs why.
-            let definitions = hide_kit::agent_definitions::read(&home)
-                .unwrap_or_else(|_| hide_agent_adapter::definition::Catalog::read(Vec::new()));
-            EngineHandle::own(
+            // The engine's folders, Git and pane holders are this machine's,
+            // asked of a node answering for the core's home as the core's own
+            // node does, by the same requests a device's node answers.
+            let node = Arc::new(hide_node::Local::new(Some(home.clone())).with_panes(
                 // A pane with no program of its own runs the account's shell
                 // with Hide's integration, as the node prepares it for a tab.
                 Arc::new(LocalPanes::new(
@@ -1259,12 +1254,13 @@ fn local_engine(
                         user: hide_host::shell_integration::UserShell::of_process(),
                     },
                 )),
-                node,
-                state_dir.to_path_buf(),
-                home,
-                definitions,
-            )
-            .map(Some)
+            ));
+            // The engine opens knowing the operator's agents, so the restore
+            // that starts with it resumes theirs too; a folder that cannot be
+            // read leaves the built-in ones, and the core's read logs why.
+            let definitions = hide_kit::agent_definitions::read(&home)
+                .unwrap_or_else(|_| hide_agent_adapter::definition::Catalog::read(Vec::new()));
+            EngineHandle::own(node, state_dir.to_path_buf(), home, definitions).map(Some)
         }
         (None, Some(socket)) => Ok(Some(EngineHandle::herdr(hide_node::herdr(
             std::path::Path::new(socket),
@@ -1395,7 +1391,20 @@ fn owner_loop(
             .unwrap_or_else(|| std::path::PathBuf::from("herdr")),
     )
     .with_pane_events(panes)
-    .with_terminals(Arc::clone(&terminals) as Arc<dyn DeviceSink>);
+    .with_terminals(Arc::clone(&terminals) as Arc<dyn DeviceSink>)
+    // A core on its own engine runs every device's panes on it too, in pane
+    // holders the device's node runs, and puts no Herdr on the device (PRD
+    // engine-bundle-3-core-owns D-22).
+    .with_engine(
+        match own_engine
+            .as_ref()
+            .and_then(EngineHandle::own_scope)
+            .is_some()
+        {
+            true => hide_node::ssh::DeviceEngine::Holders,
+            false => hide_node::ssh::DeviceEngine::Herdr,
+        },
+    );
     // This PC's WSL distributions are devices too (PRD wsl-device D-01);
     // there is no WSL to reach on any other system.
     let devices = match hide_node::ssh::host::wsl::WslAccess::of_this_pc() {

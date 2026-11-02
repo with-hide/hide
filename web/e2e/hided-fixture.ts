@@ -9,7 +9,16 @@ import path from "node:path";
 import { linkFixtureTranscripts, type HerdrFixture } from "./herdr-fixture";
 import { ownUntilWorkerExit } from "./worker-owned";
 import { bundledExecutable, linkBundle } from "./bundled-app";
+import { endPaneHolders } from "./pane-holders.mjs";
 import { endWindowsProcesses, fixtureExecutable, fixtureHomeEnv, fixtureLoginShellPath, fixtureOpenCommand, inheritedFixtureEnv, windowsProcessTree, type WindowsProcess } from "./platform-fixture";
+
+/**
+ * What a fixture daemon runs its panes on: a private Herdr server (`socket`
+ * and `bin`), or, with neither, the core's own engine over pane holders, the
+ * development switch `HIDE_DEV_PANE_HOLDER` on (`engine-fixture.ts`).
+ * `daemonEnv` is laid over the daemon's environment before a spec's own.
+ */
+export type DaemonEngine = Pick<HerdrFixture, "root" | "fixturePath" | "afterStop"> & { socket?: string; bin?: string; daemonEnv?: NodeJS.ProcessEnv };
 
 /**
  * `restart` stops the daemon and starts it again on the same state directory
@@ -76,7 +85,7 @@ export function stopDaemon(child: ChildProcess, binary: string, env: NodeJS.Proc
  * `bundledHerdr` runs a bundled daemon from the bundle that also carries the fixture's pinned Herdr, so the
  * kit installs and removes agents' Herdr integrations with it, as a packaged app does.
  */
-export async function startHided(herdr: HerdrFixture, label = "s2", homeOverride?: string, extraEnv: NodeJS.ProcessEnv = {}, bundled = false, options: { seedHideAi?: boolean; bundledHerdr?: boolean } = {}): Promise<Daemon> {
+export async function startHided(herdr: DaemonEngine, label = "s2", homeOverride?: string, extraEnv: NodeJS.ProcessEnv = {}, bundled = false, options: { seedHideAi?: boolean; bundledHerdr?: boolean } = {}): Promise<Daemon> {
   // The daemon places pane-bootstrap.sock below this directory. Keep the
   // fixture root short enough for macOS's Unix socket path limit.
   const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "hde-")));
@@ -93,6 +102,7 @@ export async function startHided(herdr: HerdrFixture, label = "s2", homeOverride
     fs.mkdirSync(path.dirname(aiFile), { recursive: true });
     fs.writeFileSync(aiFile, JSON.stringify({ provider: "claude" }));
   }
+  if (options.bundledHerdr && !herdr.bin) throw new Error("a bundle with the pinned Herdr needs a Herdr fixture");
   const bundle = options.bundledHerdr ? "herdr" : "plain";
   if (bundled) linkBundle(bundle, options.bundledHerdr ? herdr.bin : undefined);
   return launch(herdr, label, dir, home, "0", extraEnv, bundled ? bundledExecutable("hided", bundle) : undefined);
@@ -107,7 +117,7 @@ export function aiSettingsFile(home: string): string {
 /** 100 ms ticks a started daemon is given to write its state file and answer /health: 30 s, three times the product's own bound. */
 const START_WAIT_TICKS = 300;
 
-async function launch(herdr: HerdrFixture, label: string, dir: string, home: string, port: string, extraEnv: NodeJS.ProcessEnv, bundledAt?: string): Promise<Daemon> {
+async function launch(herdr: DaemonEngine, label: string, dir: string, home: string, port: string, extraEnv: NodeJS.ProcessEnv, bundledAt?: string): Promise<Daemon> {
   const env = inheritedFixtureEnv();
   const statePath = path.join(dir, "hide", "hided.json");
   fs.rmSync(statePath, { force: true });
@@ -119,14 +129,15 @@ async function launch(herdr: HerdrFixture, label: string, dir: string, home: str
     HIDE_KEEP_ALIVE: "1",
     HIDE_PORT: port,
     HIDED_UI_DIR: path.resolve("dist"),
-    HERDR_SOCKET_PATH: herdr.socket,
-    HERDR_BIN_PATH: herdr.bin,
+    // The core's own engine takes no Herdr: a socket beside its switch fails the daemon's start.
+    ...(herdr.socket ? { HERDR_SOCKET_PATH: herdr.socket, HERDR_BIN_PATH: herdr.bin } : { HIDE_DEV_PANE_HOLDER: "1" }),
     // Catalog discovery probes every provider on hided's PATH, so use the
     // same controlled shim and system tools as the private Herdr server.
     // Specs adding a shim prepend it to this path through extraEnv.
     PATH: herdr.fixturePath,
     // `open_external` must not launch a GUI application on the runner.
     HIDE_OPEN_COMMAND: fixtureOpenCommand(herdr.root),
+    ...herdr.daemonEnv,
     ...extraEnv,
   };
   const child = spawnDaemon(binary, daemonEnv);
@@ -187,8 +198,12 @@ async function launch(herdr: HerdrFixture, label: string, dir: string, home: str
   };
   // The directory goes only after the daemon's end is confirmed: one that
   // throws keeps it, named in the error.
+  // The own engine's pane holders outlive a daemon by design, so a restart
+  // keeps them for the next daemon to adopt, and only the fixture's end
+  // ends them, after the daemon and before its folders go.
   const { stop, disown } = ownUntilWorkerExit(() => {
     end();
+    if (!herdr.socket) endPaneHolders(path.join(dir, "hide"), process.platform === "win32" ? { endTree: (pid) => endWindowsProcesses(windowsProcessTree(pid)) } : {});
     herdr.afterStop(removeDir);
   });
   // The product itself gives a started daemon `HEALTHY_WITHIN` (10 s, `hided/src/cli.rs`) to answer

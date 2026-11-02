@@ -81,7 +81,7 @@ fn give_loop(pending: &Shared, holders: &dyn PaneHolders) {
             let agent = rules.as_ref().map(|rules| rules.agent.clone());
             match holders.set_rules(&pane, rules) {
                 // A pane that closed meanwhile has no holder to give them to.
-                Ok(()) | Err(HolderError::NoPane(_)) => {}
+                Ok(()) | Err(HolderError::NoPane { .. }) => {}
                 Err(error) => crate::diagnostic!(serde_json::json!({
                     "component": "own_engine",
                     "kind": "pane.rules_not_given",

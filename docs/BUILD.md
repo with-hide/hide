@@ -197,7 +197,7 @@ A cold build on an Apple M-series Mac took 46 s with a peak of 1.07 GB in the Zi
 
 `scripts/verify-cargo.sh` prepares the inputs before every mode that can build hide-vt (`test`, `lint`, `release`, and a scoped mode naming `--workspace`, `-p hide-vt` or `-p hide-holder`), which does nothing when they are ready.
 When the preparation fails, as it does without a network the first time, the command stops before cargo with the reason and the command to run where ziglang.org, github.com, codeberg.org and deps.files.ghostty.org are reachable.
-`release` builds the pane holder, which every package carries and which links hide-vt, so packaging prepares the inputs, Zig included, as a test does; `cli` builds no hide-vt and needs no Zig, and no device kit carries libghostty-vt yet.
+`release` builds the pane holder, which every package carries and which links hide-vt, so packaging prepares the inputs, Zig included, as a test does; `cli` builds no hide-vt and needs no Zig; a Linux device kit carries the pane holder, so `device-helpers.mjs build` prepares them too.
 The Mac mini's release jobs therefore prepare the inputs as its verify job `vt (macos)` does, in each job's own hide-vt input folder ([The Mac mini CI runner](#the-mac-mini-ci-runner)), and a job that finds that folder empty downloads them first, about 415 MB with Zig, before it compiles.
 
 In CI, `.github/actions/vt-cache` restores the prepared folder, keyed by the pin file, system and architecture, and Zig's caches, keyed by the pin file, `hide-vt/build.rs` (which fixes the target mapping and the `ReleaseFast` optimize mode), system and architecture.
@@ -357,8 +357,8 @@ Never redirect a release target directory.
 
 | Artifact | Download into this checkout | Contents |
 | --- | --- | --- |
-| `hide-device-helper-linux-x86_64` | `desktop/out/device-helpers/linux-x86_64/` | `hided`, `hide`, `hide-agent-hooks`, `manifest.json` |
-| `hide-device-helper-linux-aarch64` | `desktop/out/device-helpers/linux-aarch64/` | same four files |
+| `hide-device-helper-linux-x86_64` | `desktop/out/device-helpers/linux-x86_64/` | `hided`, `hide`, `hide-agent-hooks`, `hide-holder`, `manifest.json` |
+| `hide-device-helper-linux-aarch64` | `desktop/out/device-helpers/linux-aarch64/` | same five files |
 
 Each producer manifest records platform, source commit, version, build order and each helper's SHA-256.
 `package.yml` resolves one identity with `desktop/scripts/build-identity.mjs` and calls the producer on every call, beside the Windows and Linux packages; a [release candidate](#unsigned-release-candidates) keeps both artifacts for the private publisher.
@@ -374,13 +374,14 @@ Downloaded artifacts need not retain executable mode bits.
 
 Before building the native app, or before assembling it from compiled binaries, `prepareDeviceBundles` copies the helpers and pinned Herdr into private worktree staging.
 Linux bytes remain unchanged; only the native Mac app follows the existing Developer ID signing and notarization path.
-It hashes the final files and builds one gzip-compressed USTAR archive per platform, containing exactly four regular entries at its root: `hided`, `hide`, `hide-agent-hooks`, `herdr`.
+It hashes the final files and builds one gzip-compressed USTAR archive per platform, containing exactly five regular entries at its root: `hided`, `hide`, `hide-agent-hooks`, `hide-holder`, `herdr`.
+The pane holder is sent only to a device of the core's own engine (PRD engine-bundle-3-core-owns D-22, `HelperPackages::payload_for`); a device on its Herdr is sent the other four, exactly as before the kit carried the holder, so only the one cached download grows by the holder's size.
 No paths, links, extended attributes or PAX records belong in an archive.
 The archive's name is `hide-device-<platform>-<app-version>.tar.gz`, without a leading `v` in the version.
-The uncompressed four-file total and the compressed archive are each capped at 256 MiB.
+The uncompressed five-file total and the compressed archive are each capped at 256 MiB.
 
-`device-bundles.json` has `format: 1`, `version`, full `commit`, decimal string `order`, and `platforms` keyed by the two Linux platform names above.
-Each platform records `asset`, archive `sha256`, archive `size` in bytes, and `files` keyed by the four program names, each with its final `sha256` and `size`.
+`device-bundles.json` has `format: 2` (format 1 had no holder; an app reads only its own release's manifest, so no build reads both), `version`, full `commit`, decimal string `order`, and `platforms` keyed by the two Linux platform names above.
+Each platform records `asset`, archive `sha256`, archive `size` in bytes, and `files` keyed by the five program names, each with its final `sha256` and `size`.
 Hashes are lowercase SHA-256 hex.
 The app ships this small manifest; the Mac package's `desktop/out/release/` receives a copy and both archives alongside the installers and updater files, and the Windows package publishes neither, so each archive is a release asset once.
 `desktop/out/device-bundles/` keeps the intermediate output, never anything under `/tmp`.

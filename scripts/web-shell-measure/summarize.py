@@ -9,6 +9,8 @@ usage: summarize.py echo [--max-p95-ms N] <echo-*.json...>
        summarize.py timing <core.jsonl>        -> per operation stage times from pane_op.timing lines,
                                                   with Herdr's share and Hide's (layout event to sent)
        summarize.py resources <resources.json> -> hided's median one-second CPU and its largest RSS
+       summarize.py saves <save-watch.json> <topology.json>
+                                             -> layout writes and bytes per group, and writes per operation
 """
 import argparse
 import json
@@ -238,7 +240,26 @@ def topology(path):
                 "max": max(values) if values else None,
             }
         result[kind] = row
-    return {"load": doc.get("load"), "rounds": doc.get("rounds"), "operations": result}
+    return {"load": doc.get("load"), "rounds": doc.get("rounds"), "operations_made": doc.get("operations"), "operations": result}
+
+
+def saves(watch_path, topology_path):
+    """The layout saves of one topology run (perf-gate row 29): what the
+    daemon's screen saves and the engine's own session file wrote, per group
+    and together, and the writes per operation the rounds made."""
+    watch = json.loads(Path(watch_path).read_text())
+    operations = json.loads(Path(topology_path).read_text()).get("operations")
+    totals = watch.get("totals") or {}
+    writes = sum(row["writes"] for row in totals.values())
+    return {
+        "method": watch.get("method"),
+        "seconds": watch.get("seconds"),
+        "groups": totals,
+        "writes": writes,
+        "bytes": sum(row["bytes"] for row in totals.values()),
+        "operations": operations,
+        "writes_per_operation": writes / operations if operations else None,
+    }
 
 
 def stats(values):
@@ -271,8 +292,9 @@ def timing(path):
             entry = json.loads(line)
         except json.JSONDecodeError:
             continue
-        record = entry.get("event", entry)
-        if record.get("kind") != "pane_op.timing":
+        # A line's `event` is the record when it is an object; some lines carry a string there.
+        record = entry.get("event") if isinstance(entry.get("event"), dict) else entry
+        if not isinstance(record, dict) or record.get("kind") != "pane_op.timing":
             continue
         records.setdefault(record["op"], []).append(record)
     result = {}
@@ -305,6 +327,8 @@ if __name__ == "__main__":
         result = timing(sys.argv[2])
     elif kind == "resources":
         result = resources(sys.argv[2])
+    elif kind == "saves":
+        result = saves(sys.argv[2], sys.argv[3])
     else:
         result = frames(sys.argv[2])
     print(json.dumps(result, indent=2, allow_nan=False))

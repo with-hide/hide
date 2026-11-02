@@ -159,11 +159,12 @@ impl OwnEngine<'_> {
             Some(path) => path.to_owned(),
             None => {
                 let home = self.home()?;
-                wire(&hide_kit::layout::engine_worktree(
-                    &home,
-                    &repository.repo_name,
-                    &path_slug(branch),
-                ))?
+                hide_kit::layout::engine_worktree(&home, &repository.repo_name, &path_slug(branch))
+                    .map_err(|error| {
+                        EngineError::Request(format!(
+                            "no worktree folder for {branch} under {home}: {error}"
+                        ))
+                    })?
             }
         };
         // As the core reads a branch elsewhere: a refusal is a branch that is

@@ -29,6 +29,7 @@ pub mod home;
 pub mod index;
 pub mod input;
 pub mod link;
+pub mod link_panes;
 pub mod list;
 pub mod mutate;
 pub mod panes;

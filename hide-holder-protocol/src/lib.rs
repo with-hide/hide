@@ -829,7 +829,8 @@ pub enum Answer {
 /// settings at that moment (PRD engine-bundle-3-core-owns D-21): an arrow in
 /// application cursor mode, Escape under a keyboard protocol, as Herdr
 /// encodes a named key for its pane.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Key {
     Escape,
     Enter,

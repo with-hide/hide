@@ -663,6 +663,8 @@ jobs:
       lane: linux
       runner: ubuntu-latest
       herdr-platform: linux-x86_64
+      # The tests bundle 3 has moved onto the core's own engine, once more on it.
+      own-engine: true
       # Median per test from twenty successful main runs, 2026-10-26..28:
       # 385 Linux tests total 3851.3 s; five shards plan at most 770.3 s,
       # six at most 641.9 s. Six is the smallest count within 720 s.
