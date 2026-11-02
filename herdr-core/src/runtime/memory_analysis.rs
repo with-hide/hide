@@ -3665,6 +3665,8 @@ mod tests {
         locator: PathBuf,
         /// The session's records: the operator's rule, then the receipt.
         lines: Vec<Value>,
+        /// Session time relative to the same wall clock the store ranks by.
+        at: u64,
         database: PathBuf,
         home: PathBuf,
         project_id: String,
@@ -3681,12 +3683,22 @@ mod tests {
     }
 
     const SESSION: &str = "claude-memory-pass";
+    const DAY_MS: u64 = 86_400_000;
+
+    fn timestamp(at: u64) -> String {
+        jiff::Timestamp::from_millisecond(at as i64)
+            .unwrap()
+            .to_string()
+    }
 
     impl Fixture {
         /// A Project with Memory on and one card, and a Claude Code session in
         /// it whose first line is the operator's rule and whose second carries
         /// a prompt hook's signed receipt for that card.
         fn new() -> Self {
+            // Keep learned words younger than the seed as real time passes.
+            // Ten days also leaves room for the OMP fork's earlier history.
+            let at = now_ms() - 10 * DAY_MS;
             let temp = tempfile::tempdir().unwrap();
             let home = temp.path().join("home");
             let root = temp.path().join("project");
@@ -3717,7 +3729,7 @@ mod tests {
                         content_hash: "seed".to_owned(),
                         // Old enough to rank below what a test learns, young enough not
                         // to age on the first walk.
-                        created_at_unix_ms: now_ms() - 29 * 86_400_000,
+                        created_at_unix_ms: at - 19 * DAY_MS,
                     },
                     &[Candidate {
                         text: "Keep the hook under 100 ms".to_owned(),
@@ -3747,16 +3759,16 @@ mod tests {
             );
             let lines = [
                 json!({"type": "user", "sessionId": SESSION, "cwd": checkout,
-                    "timestamp": "2026-10-11T00:00:00Z", "origin": {"kind": "human"},
+                    "timestamp": timestamp(at), "origin": {"kind": "human"},
                     "message": {"role": "user", "content": "Always run tests with nextest before a merge"}}),
                 json!({"type": "user", "sessionId": SESSION, "cwd": checkout,
-                    "timestamp": "2026-10-11T00:00:00Z", "origin": {"kind": "human"},
+                    "timestamp": timestamp(at), "origin": {"kind": "human"},
                     "message": {"role": "user", "content": "Keep commits small"}}),
                 json!({"type": "user", "sessionId": SESSION, "cwd": checkout,
-                    "timestamp": "2026-10-11T00:00:00Z", "origin": {"kind": "human"},
+                    "timestamp": timestamp(at), "origin": {"kind": "human"},
                     "message": {"role": "user", "content": "Never force-push main"}}),
                 json!({"type": "attachment", "sessionId": SESSION, "cwd": checkout,
-                    "timestamp": "2026-10-11T00:00:01Z",
+                    "timestamp": timestamp(at + 1_000),
                     "attachment": {"type": "hook_additional_context", "hookEvent": "UserPromptSubmit",
                         "hookName": "UserPromptSubmit", "content": [receipt]}}),
             ];
@@ -3765,6 +3777,7 @@ mod tests {
                 root,
                 locator,
                 lines: lines.to_vec(),
+                at,
                 database,
                 home,
                 project_id: identity.id,
@@ -4093,15 +4106,15 @@ mod tests {
 
     #[test]
     fn creation_classifies_new_decision_conflicts_with_no_initial_reverification() {
-        for (date, verdict, authority) in [
+        for (day_offset, verdict, authority) in [
             (None, "differs", hide_memory::DocumentAuthority::Ask),
             (
-                Some("2026-10-10T00:00:00Z"),
+                Some(-1),
                 "correction",
                 hide_memory::DocumentAuthority::CardNewer,
             ),
             (
-                Some("2026-10-12T00:00:00Z"),
+                Some(1),
                 "correction",
                 hide_memory::DocumentAuthority::CardNewer,
             ),
@@ -4117,7 +4130,13 @@ mod tests {
                 "Run tests with the ordinary runner before a merge.\n",
             )
             .unwrap();
-            if let Some(date) = date {
+            if let Some(day_offset) = day_offset {
+                let date = timestamp(
+                    fixture
+                        .at
+                        .checked_add_signed(day_offset * DAY_MS as i64)
+                        .unwrap(),
+                );
                 for args in [
                     vec!["init", "-q"],
                     vec!["add", "AGENTS.md"],
@@ -4138,8 +4157,8 @@ mod tests {
                         .current_dir(&fixture.root)
                         .env("GIT_CONFIG_GLOBAL", "/dev/null")
                         .env("GIT_CONFIG_NOSYSTEM", "1")
-                        .env("GIT_AUTHOR_DATE", date)
-                        .env("GIT_COMMITTER_DATE", date)
+                        .env("GIT_AUTHOR_DATE", &date)
+                        .env("GIT_COMMITTER_DATE", &date)
                         .status()
                         .unwrap();
                     assert!(status.success());
@@ -4323,7 +4342,7 @@ mod tests {
         let checkout = fixture.root.to_string_lossy().into_owned();
         let user = |text: &str| {
             json!({"type": "user", "sessionId": SESSION, "cwd": checkout,
-                "timestamp": "2026-10-11T00:00:00Z", "origin": {"kind": "human"},
+                "timestamp": timestamp(fixture.at), "origin": {"kind": "human"},
                 "message": {"role": "user", "content": text}})
         };
         fixture.write(&[
@@ -4399,7 +4418,7 @@ mod tests {
         let checkout = fixture.root.to_string_lossy().into_owned();
         let user = |text: &str| {
             json!({"type": "user", "sessionId": SESSION, "cwd": checkout,
-                "timestamp": "2026-10-11T00:00:00Z", "origin": {"kind": "human"},
+                "timestamp": timestamp(fixture.at), "origin": {"kind": "human"},
                 "message": {"role": "user", "content": text}})
         };
         let typed = "Always run tests with nextest before a merge";
@@ -4514,7 +4533,7 @@ mod tests {
             format!(
                 "{}\n",
                 json!({"type": "user", "sessionId": SESSION, "cwd": fixture.root,
-                    "timestamp": "2026-10-11T00:01:00Z", "origin": {"kind": "human"},
+                    "timestamp": timestamp(fixture.at + 60_000), "origin": {"kind": "human"},
                     "message": {"role": "user", "content": "And lint before tests"}})
             )
             .as_bytes(),
@@ -4583,7 +4602,7 @@ mod tests {
             format!(
                 "{}\n",
                 json!({"type": "user", "sessionId": SESSION, "cwd": fixture.root,
-                    "timestamp": "2026-10-11T00:01:00Z", "origin": {"kind": "human"},
+                    "timestamp": timestamp(fixture.at + 60_000), "origin": {"kind": "human"},
                     "message": {"role": "user", "content": "And lint before tests"}})
             )
             .as_bytes(),
@@ -4694,7 +4713,7 @@ mod tests {
         let mut lines = fixture.lines.clone();
         lines.push(
             json!({"type": "user", "sessionId": SESSION, "cwd": fixture.root,
-            "timestamp": "2026-10-11T00:02:00Z", "origin": {"kind": "human"},
+            "timestamp": timestamp(fixture.at + 120_000), "origin": {"kind": "human"},
             "message": {"role": "user", "content": "Thanks"}}),
         );
         fixture.write(&lines);
@@ -5936,7 +5955,7 @@ mod tests {
         fixture.fail_with(None);
         let mut lines = fixture.lines.clone();
         lines.push(json!({"type": "user", "sessionId": SESSION,
-            "cwd": fixture.root.to_string_lossy(), "timestamp": "2026-10-11T00:01:00Z",
+            "cwd": fixture.root.to_string_lossy(), "timestamp": timestamp(fixture.at + 60_000),
             "origin": {"kind": "human"},
             "message": {"role": "user", "content": "Prefer small pull requests"}}));
         fixture.write(&lines);
@@ -6281,7 +6300,7 @@ mod tests {
         fixture.fail_with(None);
         let mut lines = fixture.lines.clone();
         lines.push(json!({"type": "user", "sessionId": SESSION,
-            "cwd": fixture.root.to_string_lossy(), "timestamp": "2026-10-11T00:01:00Z",
+            "cwd": fixture.root.to_string_lossy(), "timestamp": timestamp(fixture.at + 60_000),
             "origin": {"kind": "human"},
             "message": {"role": "user", "content": "Prefer small pull requests"}}));
         fixture.write(&lines);
@@ -7069,11 +7088,11 @@ mod tests {
         // operator's rule and the agent's reply, before the receipt.
         let fixture = Fixture::new();
         let screenshot = json!({"type": "user", "sessionId": SESSION, "cwd": fixture.root,
-            "timestamp": "2026-10-11T00:00:02Z",
+            "timestamp": timestamp(fixture.at + 2_000),
             "message": {"role": "user", "content": [{"type": "tool_result",
                 "tool_use_id": "toolu_1", "content": "x".repeat(300 * 1024)}]}});
         let reply = json!({"type": "assistant", "sessionId": SESSION, "cwd": fixture.root,
-            "timestamp": "2026-10-11T00:00:03Z",
+            "timestamp": timestamp(fixture.at + 3_000),
             "message": {"role": "assistant",
                 "content": [{"type": "text", "text": "Nextest runs before every merge"}]}});
         // The operator's three lines keep the session above the short-session
@@ -7156,7 +7175,7 @@ mod tests {
         let mut lines = fixture.lines.clone();
         lines.push(
             json!({"type": "user", "sessionId": SESSION, "cwd": fixture.root,
-            "timestamp": "2026-10-11T00:01:00Z", "origin": {"kind": "human"},
+            "timestamp": timestamp(fixture.at + 60_000), "origin": {"kind": "human"},
             "message": {"role": "user", "content": "And lint before tests"}}),
         );
         fixture.write(&lines);
@@ -7473,7 +7492,7 @@ mod tests {
             ["analyzing", "learned one"]
         );
 
-        let forked_at = 1_791_680_400_000; // 2026-10-11T01:00:00Z
+        let forked_at = fixture.at + 3_600_000;
         let mut store = fixture.store();
         let mut rival = |session: &str, relation| {
             let words = format!("Keep commits small, said in {session}");
@@ -7530,7 +7549,7 @@ mod tests {
 
         let mut copied = fixture.lines[0].clone();
         copied["sessionId"] = json!(FORK);
-        copied["timestamp"] = json!("2026-10-11T01:00:00Z");
+        copied["timestamp"] = json!(timestamp(forked_at));
         let mut lines = vec![copied];
         let mut offsets = vec![0];
         if let Some(words) = said_after {
@@ -7618,17 +7637,17 @@ mod tests {
             .join(hide_session::OMP_SESSIONS)
             .join(format!("-tmp-{}", relative.replace(['/', '\\', ':'], "-")));
         std::fs::create_dir_all(&folder).unwrap();
-        let said = |at: &str| {
+        let said = |at: u64| {
             let mut line = template[2].clone();
-            line["timestamp"] = json!(at);
+            line["timestamp"] = json!(timestamp(at));
             line["message"]["content"] =
                 json!([{"type": "text", "text": "Run tests with nextest before a merge"}]);
             line
         };
-        let write = |id: &str, opened: &str, records: Vec<Value>| -> Vec<u64> {
+        let write = |id: &str, opened: u64, records: Vec<Value>| -> Vec<u64> {
             let mut header = template[1].clone();
             header["id"] = json!(id);
-            header["timestamp"] = json!(opened);
+            header["timestamp"] = json!(timestamp(opened));
             header["cwd"] = json!(fixture.root);
             let mut body = format!("{}\n{header}\n", template[0]);
             let mut offsets = Vec::new();
@@ -7641,19 +7660,13 @@ mod tests {
         };
         // The fork's name sorts before its parent's, so only its later start
         // tells which session said the words first.
+        let parent_at = fixture.at - 8 * DAY_MS;
         let parent = write(
             "omp-parent-z",
-            "2026-10-03T01:00:00.000Z",
-            vec![
-                said("2026-10-03T01:00:00.000Z"),
-                said("2026-10-20T01:00:00.000Z"),
-            ],
+            parent_at,
+            vec![said(parent_at), said(parent_at + 17 * DAY_MS)],
         );
-        let fork = write(
-            "omp-fork-a",
-            "2026-10-04T01:00:00.000Z",
-            vec![said("2026-10-03T01:00:00.000Z")],
-        );
+        let fork = write("omp-fork-a", parent_at + DAY_MS, vec![said(parent_at)]);
         let answer = |offsets: &[u64], relation: &str, target: Value| {
             fixture.push(json!({
                 "candidates": [{
@@ -7688,7 +7701,7 @@ mod tests {
             ["analyzing", "analyzed"]
         );
         // A rival said once, between the parent's two times.
-        let rival_at = 1_791_680_400_000; // 2026-10-11T01:00:00Z
+        let rival_at = parent_at + 8 * DAY_MS;
         fixture
             .store()
             .apply_candidates(
