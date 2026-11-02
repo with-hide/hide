@@ -10,6 +10,7 @@ export interface PairedHost {
 export const HOSTS_KEY = "hide.phone.hosts.v1";
 export const MAX_HOSTS = 16;
 const KEY = /^[A-Za-z0-9_-]{43}$/;
+const pushWorkers = new Map<string, Promise<ServiceWorkerRegistration>>();
 
 export function readHosts(storage: Pick<Storage, "getItem">): PairedHost[] {
   const raw = storage.getItem(HOSTS_KEY);
@@ -49,8 +50,23 @@ export function forgetHost(storage: Storage, room: string): void {
   storage.setItem(HOSTS_KEY, JSON.stringify(readHosts(storage).filter((h) => h.room !== room)));
 }
 
-export async function removeHost(room: string): Promise<void> {
+/** One registration request per saved device, shared by words, notices and subscription. */
+export function registerHostPush(room: string): Promise<ServiceWorkerRegistration> {
+  if (!readHosts(localStorage).some((host) => host.room === room)) return Promise.reject(new Error("host_not_saved"));
+  const existing = pushWorkers.get(room);
+  if (existing) return existing;
+  if (pushWorkers.size >= MAX_HOSTS) return Promise.reject(new Error("host_limit"));
+  const pending = navigator.serviceWorker.register("/sw.js", { scope: `/push/${room}/` })
+    .catch((error) => { pushWorkers.delete(room); throw error; });
+  pushWorkers.set(room, pending);
+  return pending;
+}
+
+export async function removeHostPush(room: string): Promise<void> {
   if ("serviceWorker" in navigator) {
+    // A removal waits for its admitted registration; it cannot leave a late worker behind.
+    const pending = pushWorkers.get(room);
+    if (pending) await pending.catch(() => undefined);
     const worker = await navigator.serviceWorker.getRegistration(`/push/${room}/`);
     if (worker && new URL(worker.scope).pathname === `/push/${room}/`) {
       await (await worker.pushManager.getSubscription())?.unsubscribe();
@@ -58,7 +74,12 @@ export async function removeHost(room: string): Promise<void> {
     }
     if ("caches" in window) await (await caches.open("hide-phone-words")).delete(`/push/${room}/words.json`);
   }
+}
+
+export async function removeHost(room: string): Promise<void> {
+  await removeHostPush(room);
   forgetHost(localStorage, room);
+  pushWorkers.delete(room);
 }
 
 export function bundlePath(protocol: number, supported: readonly number[]): string | null {

@@ -11,6 +11,7 @@ import { staleTags, type AgentGroup } from "./protocol";
 import { patch, usePhone } from "./store";
 import { send, currentHost } from "./connection";
 import { hostedPhone } from "./relayRuntime";
+import { registerHostPush, removeHostPush } from "./hosts";
 
 export function pushSupported(): boolean {
   return "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
@@ -34,7 +35,7 @@ async function registration(): Promise<ServiceWorkerRegistration | null> {
     const host = currentHost();
     if (hostedPhone()) {
       if (!host || usePhone.getState().relayError === "storage") return null;
-      const worker = await navigator.serviceWorker.register("/sw.js", { scope: `/push/${host.room}/` });
+      const worker = await registerHostPush(host.room);
       if (worker.active) return worker;
       const pending = worker.installing ?? worker.waiting;
       if (!pending) return null;
@@ -123,10 +124,9 @@ export async function forgetPush(): Promise<void> {
   if (!("serviceWorker" in navigator)) return;
   const host = currentHost();
   try {
-    const worker = hostedPhone() && host ? await navigator.serviceWorker.getRegistration(`/push/${host.room}/`) : await registration();
-    if (hostedPhone() && (!host || !worker || new URL(worker.scope).pathname !== `/push/${host.room}/`)) return;
+    if (hostedPhone()) { if (host) await removeHostPush(host.room); return; }
+    const worker = await registration();
     await (await worker?.pushManager.getSubscription())?.unsubscribe();
-    if (hostedPhone() && worker && !(await worker.unregister())) patch({ relayError: "storage" });
   } catch {
     if (hostedPhone()) patch({ relayError: "storage" });
   }
