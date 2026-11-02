@@ -223,7 +223,7 @@ def reader_entries(name):
 # OMP keeps whole crates: its public SDK contract uses hide-ai and hide-platform.
 # A new/unknown input still takes the full fallback below, never a silent skip.
 MACOS_LANE_INPUTS = {
-    "relay-protocol": {"paths": ("hide-relay-protocol/*", "scripts/build-relay-wasm.sh", "scripts/check-relay-protocol.sh")},
+    "relay-protocol": {"paths": ("hide-relay-protocol/*", "hide-relay/*", "scripts/build-relay-wasm.sh", "scripts/check-relay-protocol.sh")},
     "desktop-e2e": {
         "paths": (
             "desktop/src/*", "desktop/static/*", "desktop/e2e/*",
@@ -285,7 +285,7 @@ MACOS_LEG_LANES = ("relay-protocol", "vt", "holder-restart", "omp-contract", "pa
 # Each entry is code or CI whose macOS form only a macOS job of a pull
 # request proves. A glob's `*` includes descendants.
 MACOS_PATHS = (
-    "hide-relay-protocol/*", "scripts/build-relay-wasm.sh", "scripts/check-relay-protocol.sh",
+    "hide-relay-protocol/*", "hide-relay/*", "scripts/build-relay-wasm.sh", "scripts/check-relay-protocol.sh",
     ".github/workflows/relay-protocol.yml",
     # The workflows that define the macOS jobs a pull request runs, and
     # `pr.yml`, which calls them and picks their runners and legs.
@@ -634,7 +634,7 @@ def classify(path, status, crates, root):
             lanes.add("agy-contract")
         if crate["name"] in VT_CRATES or path.as_posix() in VT_CRATE_FILES:
             lanes.update({"vt", "holder-restart"})
-        if crate["name"] == "hide-relay-protocol":
+        if crate["name"] in ("hide-relay-protocol", "hide-relay"):
             lanes.add("relay-protocol")
         if any(fnmatchcase(path.as_posix(), pattern) for pattern in HOLDER_NODE_FILES):
             lanes.add("holder-restart")

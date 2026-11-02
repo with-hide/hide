@@ -30,14 +30,7 @@ impl Runtime {
     ) -> Result<Value, String> {
         let machine = machine.unwrap_or(device);
         let on_core = machine == self.node.as_str();
-        if !on_core
-            && !self
-                .snapshot
-                .status
-                .remote
-                .iter()
-                .any(|remote| remote.target_id == machine && remote.state == "connected")
-        {
+        if !self.device_answers(machine) {
             return Err(
                 if self
                     .snapshot

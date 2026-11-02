@@ -43,6 +43,11 @@ See [the build input](BUILD.md#product-analytics-build-input) and [Settings](UI_
 
 ## State placement and publication
 
+The standalone `hide-relay` service owns its room membership, connection routing, admission windows and byte counters in one memory-only state object.
+It does not link the core, read a credential store or persist state; protocol endpoints alone own Noise keys and ciphertext authentication.
+Its listener owns every connection task, each task owns its registration and bounded output queue, and dropping or stopping the service retires them all.
+[RELAY_PROTOCOL.md](RELAY_PROTOCOL.md#server-budgets-and-refusals) owns the refusal, restart and resource bounds, with real socket regressions in `hide-relay/tests/it`.
+
 The front Workspace's Git header is ephemeral core state (`runtime/checkout_git.rs`), projected only into that device/path's `workspace_view.git`, never persisted or inferred from visibility-gated Changes rows.
 The existing Changes pump drives two single-flight `BackgroundRead` readers (`checkout_git.rs`): one owning-node `Call::CheckoutGit` for the whole checkout, and one core-node exact-SHA GitHub read using fixed allowlisted arguments.
 Changing the target or channel advances a generation; ingests compare that identity and the CI repository and complete ordered SHA list before publishing, while a HEAD change immediately clears the preceding CI result.
