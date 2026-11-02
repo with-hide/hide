@@ -5919,10 +5919,13 @@ fn a_node_that_cannot_remember_a_cause_does_not_raise_it() {
 }
 
 const DEVICE: &str = "mini";
-const DEVICE_ROOT: &str = "/Users/far/fixture";
+const DEVICE_ROOT: &str = "/Users/example/fixture";
 
 /// `DEVICE`'s link in `state`, its Herdr session showing `workspaces`.
-fn device_status(state: &str, workspaces: Vec<WorkspaceSnapshot>) -> crate::model::RemoteStatusSnapshot {
+fn device_status(
+    state: &str,
+    workspaces: Vec<WorkspaceSnapshot>,
+) -> crate::model::RemoteStatusSnapshot {
     crate::model::RemoteStatusSnapshot {
         target_id: DEVICE.into(),
         state: state.into(),
@@ -6041,7 +6044,8 @@ fn a_worker_on_another_machine_starts_only_for_a_pull_request_change_of_the_same
             )
             .map(|admission| admission.map(|admission| admission.mission))
     };
-    let refused = |runtime: &Runtime, intent: &str| admit(runtime, Some(DEVICE), intent).unwrap_err();
+    let refused =
+        |runtime: &Runtime, intent: &str| admit(runtime, Some(DEVICE), intent).unwrap_err();
 
     // A direct change's branch would stay there, and a research node
     // answers on the project's machine.
@@ -6051,15 +6055,24 @@ fn a_worker_on_another_machine_starts_only_for_a_pull_request_change_of_the_same
             ("mission_machine_node_refused", Some(node))
         );
     }
-    assert_eq!(refused(&runtime, "mission-1:fix"), "mission_machine_unavailable");
+    assert_eq!(
+        refused(&runtime, "mission-1:fix"),
+        "mission_machine_unavailable"
+    );
     runtime
         .snapshot
         .status
         .remote
         .push(device_status("disconnected", Vec::new()));
-    assert_eq!(refused(&runtime, "mission-1:fix"), "mission_machine_unavailable");
+    assert_eq!(
+        refused(&runtime, "mission-1:fix"),
+        "mission_machine_unavailable"
+    );
     runtime.snapshot.status.remote[0] = device_status("connected", Vec::new());
-    assert_eq!(refused(&runtime, "mission-1:fix"), "mission_projects_loading");
+    assert_eq!(
+        refused(&runtime, "mission-1:fix"),
+        "mission_projects_loading"
+    );
     runtime
         .device_worktrees
         .insert(DEVICE.into(), Default::default());
@@ -6079,7 +6092,10 @@ fn a_worker_on_another_machine_starts_only_for_a_pull_request_change_of_the_same
         .device_github
         .insert(DEVICE.into(), repository_read(DEVICE_ROOT, Some("R_1")));
     let mission = Some("mission-1".to_owned());
-    assert_eq!(admit(&runtime, Some(DEVICE), "mission-1:fix").unwrap(), mission);
+    assert_eq!(
+        admit(&runtime, Some(DEVICE), "mission-1:fix").unwrap(),
+        mission
+    );
     assert_eq!(
         admit(&runtime, Some(DEVICE), "mission-1:review-fix").unwrap(),
         mission,
@@ -6123,7 +6139,10 @@ fn an_agent_on_another_machine_is_bound_only_to_a_pull_request_change_node() {
     register(&mut runtime, far_agent("agent-9", "w2:p0").1);
     let bind = |node: &str, patch: Value| json!({"op": "node", "node": node, "patch": patch});
 
-    for patch in [json!({"agent_id": "agent-9"}), json!({"reviewer": "agent-9"})] {
+    for patch in [
+        json!({"agent_id": "agent-9"}),
+        json!({"reviewer": "agent-9"}),
+    ] {
         assert_eq!(
             crate::coordination::split_refusal(
                 &command(&mut runtime, "sender", bind("land", patch)).unwrap_err()
@@ -6135,7 +6154,10 @@ fn an_agent_on_another_machine_is_bound_only_to_a_pull_request_change_node() {
     command(
         &mut runtime,
         "sender",
-        bind("land", json!({"agent_id": "agent-2", "reviewer": "agent-3"})),
+        bind(
+            "land",
+            json!({"agent_id": "agent-2", "reviewer": "agent-3"}),
+        ),
     )
     .unwrap();
     command(
@@ -6202,7 +6224,13 @@ fn a_check_recorded_on_another_machine_holds_against_that_machines_checkout() {
             None,
             "fix",
             "check",
-            (true, "cargo test passed".into(), None, Some(HEAD.into()), false),
+            (
+                true,
+                "cargo test passed".into(),
+                None,
+                Some(HEAD.into()),
+                false,
+            ),
             1,
         )
         .unwrap();

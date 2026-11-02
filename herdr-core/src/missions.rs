@@ -696,14 +696,25 @@ impl MissionNode {
 
     /// The machine and path of the checkout the node's check command last
     /// ran in; a folder recorded without its machine is on `mission_device`.
-    pub(crate) fn check_folder<'a>(&'a self, mission_device: &'a str) -> Option<(&'a str, &'a str)> {
+    pub(crate) fn check_folder<'a>(
+        &'a self,
+        mission_device: &'a str,
+    ) -> Option<(&'a str, &'a str)> {
         let path = self.folder.as_deref()?;
-        Some((self.folder_device.as_deref().unwrap_or(mission_device), path))
+        Some((
+            self.folder_device.as_deref().unwrap_or(mission_device),
+            path,
+        ))
     }
 
     /// Records the checkout the check command ran in; answers whether it
     /// is another one than before.
-    pub(crate) fn set_check_folder(&mut self, mission_device: &str, device: &str, path: &str) -> bool {
+    pub(crate) fn set_check_folder(
+        &mut self,
+        mission_device: &str,
+        device: &str,
+        path: &str,
+    ) -> bool {
         let moved = self.check_folder(mission_device) != Some((device, path));
         self.folder = Some(path.to_owned());
         self.folder_device = Some(device.to_owned());
