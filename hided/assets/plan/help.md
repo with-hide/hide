@@ -24,6 +24,13 @@ hide agent spawn --parent here --plan-node <key> --name <name> --kind <kind> --r
 - Approval is spoken: when the operator agrees in the conversation, run `hide plan approve`; asked to change it, send the fixed plan with `set --json '<plan>' --ask` (file writes are refused while it waits); told not to do it, `hide plan drop`.
 - Replanning on your own is fine: `set` again with `--reason`; changed steps are marked, the approval stays, and a done step keeps its evidence and the agent that did it.
 
+## As a mission node's worker
+- The node is your goal and the plan is the steps inside it: put it up before code when your brief asks, or whenever the node takes three steps or more; a one-commit node needs none.
+- Do not restate the node as a step, and do not copy its finish lines: record those with `hide mission record` as your brief says, since a done step records nothing on the mission.
+- Use no `--ask`: your Conductor reads the plan, and the operator sees it in the node's panel on the mission map.
+- Keep the steps current: `working` when you start one, `done` when it ends, `set` again with `--reason` when the work changes shape.
+- Hand no step: a mission's worker starts no agents (`plan_delegate_not_permitted`).
+
 ## Handing a step to another agent
 - When the operator asks for the work split across agents, or a step is worth it: a step that delivers something (a spec, a change, a PR, a review, a verification) and can be done without your context goes to another Hide agent; research and searches stay with your own subagents, which are not on the map. Do most steps yourself.
 - Hand it with `hide agent spawn --parent here --plan-node <key> ...` and a brief that says what to deliver, where, and to report when done. Mark a step you mean to hand with `"delegate": true` so the map shows it as one to hand. The spawn is refused while the steps it waits on are unfinished, while the plan waits for review (`plan_review_pending`), and for an agent outside Settings > Conductor's worker candidates (`plan_candidate_refused`). Running the same spawn again returns the same agent.
