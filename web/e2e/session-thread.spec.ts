@@ -67,7 +67,7 @@ test("a Claude pane's record reads as a thread, follows what the session writes,
   }
 });
 
-// Herdr only: the Pi pane's session file reaches Hide as Herdr's pi integration report (`report-agent-session`), which the fixture's Pi, with no Hide extension, has no other way to send.
+// Herdr only: bundle 4 PR A (b4-transition) owns Pi's first-session report. The fixture binds it through Herdr's `report-agent-session`, with no Hide extension.
 test("a Pi pane's record reads as a thread, follows what the session writes, and takes the input box's words @herdr", async ({ page }) => {
   const { thread, words } = watchThread(page);
   const herdr = await startHerdr({ agents: false });
