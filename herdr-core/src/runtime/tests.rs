@@ -98,6 +98,9 @@ mod observed_start;
 #[path = "tests/operator_focus.rs"]
 mod operator_focus;
 mod overview_graph;
+#[path = "tests/own_devices.rs"]
+mod own_devices;
+#[path = "tests/pane_geometry.rs"]
 mod pane_geometry;
 pub(super) mod pane_move;
 mod plans;

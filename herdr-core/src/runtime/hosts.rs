@@ -1080,17 +1080,24 @@ impl Runtime {
                 host.problem = None;
                 host.sign_in = None;
                 // A device of the core's own engine has its engine opened on
-                // this link, to be let go with it.
+                // this link, to be let go with it, once its node runs its
+                // holders; a node whose holders did not start runs no pane,
+                // so its row says why and no engine asks it for any.
                 if self
                     .device_registration(device_id)
                     .is_some_and(|registration| self.device_on_own_engine(registration))
                 {
-                    self.open_own_device_engine(
-                        device_id,
-                        generation,
-                        Arc::clone(&node.host),
-                        node.hello.home.clone(),
-                    );
+                    match &node.terminals {
+                        Ok(_) => self.open_own_device_engine(
+                            device_id,
+                            generation,
+                            Arc::clone(&node.host),
+                            node.hello.home.clone(),
+                        ),
+                        Err(reason) => {
+                            self.own_device_holders_unstarted(device_id, reason);
+                        }
+                    }
                 }
                 self.set_host_phase(
                     device_id,

@@ -157,12 +157,17 @@ impl Queue {
             return;
         }
         let mut waiting = self.waiting.lock().unwrap_or_else(PoisonError::into_inner);
-        push(
-            &mut waiting,
-            PaneWatchReport::Ended {
-                pane: pane.to_owned(),
-            },
+        let told = waiting.reports.iter().any(
+            |waiting| matches!(waiting, PaneWatchReport::Ended { pane: theirs } if theirs == pane),
         );
+        if !told {
+            push(
+                &mut waiting,
+                PaneWatchReport::Ended {
+                    pane: pane.to_owned(),
+                },
+            );
+        }
         drop(waiting);
         self.arrived.notify_one();
     }
@@ -189,16 +194,28 @@ impl Queue {
 }
 
 /// Keeps `report` waiting; past the cap the oldest facts make room, and when
-/// only ends wait, the oldest end does, which is counted as facts are.
+/// only ends wait, new facts are dropped, both counted. An end is never
+/// dropped, since the engine learns of it nowhere else while the link
+/// lasts: ends wait one per pane, so they are bounded by the panes the node
+/// ran while the watcher did not read, which needs that same engine to
+/// start them.
 fn push(waiting: &mut Waiting, report: PaneWatchReport) {
     if waiting.reports.len() >= PANE_WATCH_CAP {
         let oldest_facts = waiting
             .reports
             .iter()
-            .position(|waiting| matches!(waiting, PaneWatchReport::Facts { .. }))
-            .unwrap_or(0);
-        waiting.reports.remove(oldest_facts);
-        waiting.dropped += 1;
+            .position(|waiting| matches!(waiting, PaneWatchReport::Facts { .. }));
+        match (oldest_facts, &report) {
+            (Some(oldest), _) => {
+                waiting.reports.remove(oldest);
+                waiting.dropped += 1;
+            }
+            (None, PaneWatchReport::Facts { .. }) => {
+                waiting.dropped += 1;
+                return;
+            }
+            (None, _) => {}
+        }
     }
     waiting.reports.push_back(report);
 }
@@ -456,6 +473,31 @@ mod tests {
                 pane: "w1:p0".to_owned()
             }
         );
+        assert_eq!(dropped, 1);
+    }
+
+    /// A queue full of ends keeps every end and drops new facts.
+    #[test]
+    fn a_watch_full_of_ends_keeps_them_and_drops_new_facts() {
+        let queue = Queue::default();
+        for pane in 0..PANE_WATCH_CAP {
+            queue.ended(&format!("w1:p{pane}"));
+        }
+        queue.ended("w1:p0");
+        queue.facts("w2:p1", &titled("t"));
+        queue.ended("w3:p1");
+        let mut ends = 0;
+        let mut dropped = 0;
+        loop {
+            let (report, gone) = queue.next();
+            dropped += gone;
+            match report {
+                PaneWatchReport::Ended { .. } => ends += 1,
+                PaneWatchReport::Quiet => break,
+                PaneWatchReport::Facts { .. } => panic!("facts past a full queue of ends"),
+            }
+        }
+        assert_eq!(ends, PANE_WATCH_CAP + 1);
         assert_eq!(dropped, 1);
     }
 

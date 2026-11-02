@@ -1059,7 +1059,8 @@ pub enum Call {
     /// service, whose bootstrap socket it answers with
     /// ([`crate::panes::PanesStarted`]). Asking again while they run changes
     /// nothing; a node whose terminals run on its Herdr refuses it, since
-    /// one node runs one engine's panes.
+    /// one node runs one engine's panes. Only a device's link carries it:
+    /// the core's own node is given its holders when it is made.
     HoldersStart,
     /// One request of the core's engine to this node's pane holders (start,
     /// end, ask, input), answered with a [`crate::holders::PaneAnswer`].

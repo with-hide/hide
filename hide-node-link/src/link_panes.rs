@@ -176,6 +176,18 @@ impl Inner {
             if self.stopped() {
                 return;
             }
+            // A node that refuses the watch refuses it for as long as its
+            // link lasts (it runs no holders), so asking again would only
+            // repeat the refusal; the next link's engine asks anew.
+            if let (None, Err(LinkError::Refused(error))) = (&undecoded, &ended) {
+                (self.diagnose)(serde_json::json!({
+                    "component": "pane_watch",
+                    "kind": "pane_watch.refused",
+                    "code": error.code.as_str(),
+                    "reason": error.message,
+                }));
+                return;
+            }
             let reason = match (undecoded, ended) {
                 (Some(error), _) => format!("a report in an unexpected shape: {error}"),
                 (None, Ok(_)) => "the node ended the watch".to_owned(),
@@ -229,9 +241,20 @@ impl PaneHolders for LinkPanes {
     }
 
     fn shell_launch(&self) -> Option<ShellLaunch> {
-        self.answer::<Option<ShellLaunch>>(PaneCall::ShellLaunch, ASK_WAIT)
-            .ok()
-            .flatten()
+        // The trait answers no failure here: a node that cannot say how its
+        // shells start is told apart in the log, and the start goes on as
+        // for a shell with no integration.
+        match self.answer::<Option<ShellLaunch>>(PaneCall::ShellLaunch, ASK_WAIT) {
+            Ok(launch) => launch,
+            Err(error) => {
+                (self.inner.diagnose)(serde_json::json!({
+                    "component": "pane_holders",
+                    "kind": "pane_holders.shell_launch_unread",
+                    "error": format!("{error:?}"),
+                }));
+                None
+            }
+        }
     }
 
     fn terminate(&self, pane: &str) -> Result<(), HolderError> {

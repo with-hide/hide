@@ -1296,15 +1296,6 @@ pub fn handle_with_progress(
         }
         Call::Pane { call } => crate::pane_holders::answer(&env.panes, call),
         Call::PaneWatch => crate::pane_holders::watch(&env.panes, &env.stop, progress),
-        // The core's own node is given its holders when it is made; a
-        // device's node starts them in its serve loop.
-        Call::HoldersStart => match env.panes.holders() {
-            Some(_) => Ok(Value::Null),
-            None => Err(HostError::new(
-                ErrorCode::Unsupported,
-                "This node runs no pane holders",
-            )),
-        },
         Call::GitWatch { common_dirs } => {
             let common_dirs = common_dirs
                 .iter()
@@ -1689,7 +1680,11 @@ pub fn handle_with_progress(
         Call::SessionStat { path, scope } => session_read(env, &path, scope.as_ref(), |path| {
             crate::sessions::stat(path).map_err(|e| e.to_string())
         }),
+        // The core's own node is given its holders when it is made; a
+        // device's node starts them in its serve loop, answering the pane
+        // socket its panes' `hide` asks on.
         Call::PanesStart { .. }
+        | Call::HoldersStart
         | Call::TerminalsStart { .. }
         | Call::PaneProofAnswer { .. }
         | Call::PaneInspect { .. }

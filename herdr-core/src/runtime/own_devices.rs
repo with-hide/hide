@@ -86,12 +86,18 @@ impl Runtime {
                     return;
                 };
                 // An engine not installed is let go after the lock, where its
-                // last save is written.
-                let (changed, unused) = match runtime.lock() {
-                    Ok(mut guard) => guard.install_own_device_engine(&device, generation, opened),
+                // last save is written, and so are the coordinators the
+                // install retired, whose end takes the lock.
+                let (changed, unused, retired) = match runtime.lock() {
+                    Ok(mut guard) => {
+                        let (changed, unused) =
+                            guard.install_own_device_engine(&device, generation, opened);
+                        (changed, unused, guard.take_retired_remote_syncs())
+                    }
                     Err(_) => return,
                 };
                 drop(runtime);
+                drop(retired);
                 drop(unused);
                 if changed {
                     context.notifier.notify();
@@ -111,7 +117,7 @@ impl Runtime {
     /// starts its session's coordinator, unless the device moved on since:
     /// removed, or another attempt began. Answers whether the screen changed
     /// and the engine when it was not taken.
-    fn install_own_device_engine(
+    pub(super) fn install_own_device_engine(
         &mut self,
         device_id: &str,
         generation: u64,
@@ -152,16 +158,37 @@ impl Runtime {
             context.notifier.clone(),
         ));
         let (sync, changed) = self.spawn_remote_sync(&registration, Arc::clone(&engine));
-        if let Some(connection) = self.remote_connections.get_mut(device_id)
-            && let Some(retired) = std::mem::replace(&mut connection.sync, sync)
-        {
-            self.retired_remote_syncs.push(retired);
-        }
+        // A coordinator is never dropped here: its end joins a thread that
+        // takes this lock, so one with no connection to hold it, or the one
+        // it replaces, is retired and ended off the lock.
+        let retired = match self.remote_connections.get_mut(device_id) {
+            Some(connection) => std::mem::replace(&mut connection.sync, sync),
+            None => sync,
+        };
+        self.retired_remote_syncs.extend(retired);
         // The engine's definitions follow the core's later reads too.
         if let Some(state) = self.agent_definitions.as_ref() {
             engine.set_agent_definitions(Arc::new(state.catalog.clone()));
         }
         (changed, None)
+    }
+
+    /// The device's node is ready but its holders did not start (`reason`):
+    /// no engine opens on that link, and the device's row reads why until a
+    /// new link starts them.
+    pub(super) fn own_device_holders_unstarted(&mut self, device_id: &str, reason: &str) -> bool {
+        crate::diagnostic!(serde_json::json!({
+            "component": "own_devices",
+            "kind": "device_engine.holders_unstarted",
+            "target": device_id,
+            "message": reason,
+        }));
+        self.ingest_remote_session(
+            device_id,
+            Err(live::SessionFetchError::Unreachable(format!(
+                "This device's pane holders did not start: {reason}"
+            ))),
+        )
     }
 
     /// The device's link ended: its engine and the coordinator of its
@@ -189,15 +216,20 @@ impl Runtime {
         )
     }
 
-    /// The engines whose definitions follow the core's reads: this
-    /// machine's and every device's on the core's own engine.
+    /// The engines of the devices on the core's own engine, whose
+    /// definitions follow the core's reads as this machine's do; a device
+    /// that dials the core keeps its Herdr, which reads its own.
     pub(crate) fn own_device_engines(&self) -> Vec<crate::engine::SharedEngine> {
         if self.own_devices.is_none() {
             return Vec::new();
         }
         self.remote_controls
-            .values()
-            .map(live::RemoteControlContext::engine)
+            .iter()
+            .filter(|(device_id, _)| {
+                self.device_registration(device_id)
+                    .is_some_and(|registration| self.device_on_own_engine(registration))
+            })
+            .map(|(_, control)| live::RemoteControlContext::engine(control))
             .collect()
     }
 }

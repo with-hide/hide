@@ -1,0 +1,199 @@
+//! A dialed device on the core's own engine (PRD engine-bundle-3-core-owns
+//! D-22): its engine opens on a ready link whose node runs its holders, only
+//! for the attempt that is still the device's, and goes with the link.
+
+use super::device_kit::{DEVICE, established};
+use super::*;
+use crate::node_access::{LinkAnswer, LinkError, NodeLink};
+use hide_node_link::holders::{HolderRecovery, PaneCall};
+use hide_node_link::protocol::Call;
+use std::sync::{Arc, Mutex};
+
+/// A device's node that runs holders and has no pane: it answers what an
+/// engine asks while it opens and refuses its watch, which no test needs.
+#[derive(Default)]
+struct HolderNode {
+    asked: Mutex<Vec<String>>,
+    closed: Mutex<Option<String>>,
+}
+
+impl NodeLink for HolderNode {
+    fn call(&self, call: Call, _timeout: Duration) -> Result<LinkAnswer, LinkError> {
+        let answer: hide_node_link::holders::PaneAnswer = match call {
+            Call::Pane {
+                call: PaneCall::Recovered { .. },
+            } => Ok(serde_json::to_value(HolderRecovery {
+                closed: Vec::new(),
+                ended: Vec::new(),
+                present: Vec::new(),
+            })
+            .unwrap()),
+            Call::Pane {
+                call: PaneCall::ShellLaunch,
+            } => Ok(serde_json::Value::Null),
+            other => {
+                self.asked.lock().unwrap().push(format!("{other:?}"));
+                return Err(LinkError::Refused(hide_node_link::error::HostError::new(
+                    hide_node_link::error::ErrorCode::Unsupported,
+                    "the test's node answers no such call",
+                )));
+            }
+        };
+        Ok(LinkAnswer::Parsed(serde_json::to_value(answer).unwrap()))
+    }
+
+    fn closed_reason(&self) -> Option<String> {
+        self.closed.lock().unwrap().clone()
+    }
+
+    fn close(&self, reason: &str) {
+        *self.closed.lock().unwrap() = Some(reason.to_owned());
+    }
+}
+
+/// A core whose devices run on its own engine, with the dialed device
+/// `DEVICE` registered, keeping their sessions under `state`.
+fn own_runtime(state: &std::path::Path) -> SharedRuntime {
+    let shared = super::device_kit::with_consent(None);
+    shared
+        .lock()
+        .unwrap()
+        .run_devices_on_own_engine(state.to_path_buf());
+    shared
+}
+
+/// The device's ready connection over `node`, its node answering for a home
+/// and running its holders when `holders` is `Ok`.
+fn ready(
+    node: Arc<HolderNode>,
+    holders: Result<(), String>,
+) -> hide_node_link::device::Established {
+    let terminals = holders
+        .is_ok()
+        .then(|| Arc::new(super::RecordedTerminals::default()) as Arc<_>);
+    let mut connected = established(node, terminals);
+    connected.node.hello.home = Some("/home/me".to_owned());
+    if let Err(reason) = holders {
+        connected.node.terminals = Err(reason);
+    }
+    connected
+}
+
+fn connect(shared: &Mutex<Runtime>, connected: hide_node_link::device::Established) -> u64 {
+    let mut runtime = shared.lock().unwrap();
+    runtime.start_device_host(DEVICE, hosts::HostAttempt::Background);
+    let generation = runtime.device_host_generation(DEVICE);
+    runtime.ingest_host_established(DEVICE, generation, Ok(hosts::HostReady::Dialed(connected)));
+    generation
+}
+
+/// Waits, bounded, until the device's own engine is installed or not.
+#[allow(clippy::disallowed_methods)] // a polling helper: the engine opens on a worker the test cannot join
+fn wait_engine(shared: &Mutex<Runtime>, installed: bool) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while shared.lock().unwrap().own_device_engines().len() != usize::from(installed) {
+        assert!(
+            Instant::now() < deadline,
+            "the device's own engine was never {}",
+            if installed { "installed" } else { "let go" }
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn row_message(shared: &Mutex<Runtime>) -> Option<String> {
+    shared
+        .lock()
+        .unwrap()
+        .snapshot()
+        .status
+        .remote
+        .iter()
+        .find(|row| row.target_id == DEVICE)
+        .and_then(|row| row.message.clone())
+}
+
+#[test]
+fn a_ready_device_gets_its_own_engine_which_goes_with_its_link() {
+    let state = tempfile::tempdir().unwrap();
+    let shared = own_runtime(state.path());
+    let node = Arc::new(HolderNode::default());
+    let generation = connect(&shared, ready(Arc::clone(&node), Ok(())));
+    wait_engine(&shared, true);
+    assert!(
+        hide_kit::layout::device_engine_dir(state.path(), DEVICE)
+            .unwrap()
+            .starts_with(state.path()),
+        "the device's session is kept in the core's state folder"
+    );
+
+    let changed = shared.lock().unwrap().ingest_host_closed(
+        DEVICE,
+        generation,
+        "the network dropped".to_owned(),
+    );
+    assert!(changed);
+    wait_engine(&shared, false);
+}
+
+#[test]
+fn a_device_whose_holders_did_not_start_opens_no_engine_and_says_why() {
+    let state = tempfile::tempdir().unwrap();
+    let shared = own_runtime(state.path());
+    let node = Arc::new(HolderNode::default());
+    connect(
+        &shared,
+        ready(
+            Arc::clone(&node),
+            Err("the holder program could not start".to_owned()),
+        ),
+    );
+    assert!(shared.lock().unwrap().own_device_engines().is_empty());
+    let message = row_message(&shared).expect("the row says why");
+    assert!(
+        message.contains("pane holders did not start")
+            && message.contains("the holder program could not start"),
+        "{message}"
+    );
+    assert!(
+        node.asked.lock().unwrap().is_empty(),
+        "no engine asked the node: {:?}",
+        node.asked.lock().unwrap()
+    );
+}
+
+/// An engine that finished opening after its attempt was replaced is
+/// handed back to be let go off the lock, not installed on the newer link.
+#[test]
+fn an_engine_opened_for_a_replaced_attempt_is_not_installed() {
+    let state = tempfile::tempdir().unwrap();
+    let shared = own_runtime(state.path());
+    let generation = connect(&shared, ready(Arc::new(HolderNode::default()), Ok(())));
+    wait_engine(&shared, true);
+    let late = crate::engine::own::open_device(
+        DEVICE,
+        Arc::new(HolderNode::default()),
+        state.path(),
+        "/home/me".to_owned(),
+        Arc::new(hide_agent_adapter::definition::Catalog::read(Vec::new())),
+    )
+    .map(|engine| Arc::new(engine) as crate::engine::SharedEngine);
+    let (changed, unused) =
+        shared
+            .lock()
+            .unwrap()
+            .install_own_device_engine(DEVICE, generation + 1, late);
+    assert!(!changed);
+    assert!(unused.is_some(), "the late engine was not handed back");
+    assert_eq!(shared.lock().unwrap().own_device_engines().len(), 1);
+    drop(unused);
+}
+
+/// With the switch off a dialed device's panes stay on its Herdr.
+#[test]
+fn a_core_on_herdr_opens_no_device_engine() {
+    let shared = super::device_kit::with_consent(None);
+    connect(&shared, ready(Arc::new(HolderNode::default()), Ok(())));
+    assert!(shared.lock().unwrap().own_device_engines().is_empty());
+    assert!(shared.lock().unwrap().own_devices.is_none());
+}
