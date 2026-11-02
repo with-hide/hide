@@ -336,8 +336,8 @@ fn write_record(agent: Agent, home: &Path, record: &[Recorded]) -> Result<(), In
 pub(crate) enum Added {
     /// Hide wrote the entry.
     New,
-    /// The agent already trusted the folder, so the entry stays the
-    /// operator's and Hide records nothing.
+    /// The agent already decides the folder (trusted, or Pi's saved "Do not
+    /// trust"), so the entry stays the operator's and Hide records nothing.
     Present,
 }
 
@@ -1076,22 +1076,21 @@ mod pi {
         LockFolder::take(PathBuf::from(path), settings, "Pi")
     }
 
-    /// The nearest decision Pi reads for `key`: the folder's own entry, else
-    /// the nearest folder above it that has one, with that folder.
-    fn nearest<'a>(decisions: &Map<String, Value>, key: &'a str) -> Option<(&'a str, bool)> {
-        Path::new(key).ancestors().find_map(|folder| {
-            let folder = folder.to_str()?;
-            decisions
-                .get(folder)
-                .and_then(Value::as_bool)
-                .map(|trusted| (folder, trusted))
-        })
+    /// Whether Pi reads a decision for `key`: the folder's own entry, or the
+    /// nearest folder above it that has one, trusted or not (`null` is none).
+    fn decided(decisions: &Map<String, Value>, key: &str) -> bool {
+        Path::new(key)
+            .ancestors()
+            .filter_map(Path::to_str)
+            .any(|folder| decisions.get(folder).is_some_and(Value::is_boolean))
     }
 
     /// Records `key` as trusted unless Pi already decides it, and takes out
-    /// the entries in `gone` in the same write. A folder the operator answered
-    /// "Do not trust" for in Pi, the worktree or a folder above it, is
-    /// refused, never overridden.
+    /// the entries in `gone` in the same write. A folder the operator
+    /// answered for in Pi, the worktree or a folder above it, is left as it
+    /// is, "Do not trust" included: Pi asks nothing once a decision is saved
+    /// and starts as it would without Hide, so Hide writes nothing and the
+    /// start goes on.
     pub(super) fn add(
         home: &Path,
         key: &str,
@@ -1103,17 +1102,8 @@ mod pi {
         let mut document = read_document(&settings)?
             .unwrap_or_else(|| HookDocument::new(Value::Object(Map::new())));
         let decisions = root_object(&mut document, &settings, Agent::Pi)?;
-        match nearest(decisions, key) {
-            Some((_, true)) => return Ok(Added::Present),
-            Some((folder, false)) => {
-                return Err(InstallFailure::Refused {
-                    path: settings.display().to_string(),
-                    detail: format!(
-                        "Pi marks {folder} not trusted; trust it in Pi, or start the agent there yourself"
-                    ),
-                });
-            }
-            None => {}
+        if decided(decisions, key) {
+            return Ok(Added::Present);
         }
         remember()?;
         take_out(decisions, gone);

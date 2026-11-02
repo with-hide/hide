@@ -837,16 +837,12 @@ fn pi_s_own_answer_for_the_worktree_or_a_folder_above_stays_the_operator_s() {
     assert_eq!(std::fs::read_to_string(&settings).unwrap(), trusted);
     assert!(recorded(Agent::Pi, home.path()).is_empty());
 
-    // "Do not trust" for it is refused, never overridden.
+    // "Do not trust" for it is never overridden, and the start goes on as
+    // it would without Hide: Pi asks nothing once a decision is saved.
     let refused_above =
         serde_json::to_string_pretty(&serde_json::json!({ &above: false })).unwrap();
     std::fs::write(&settings, &refused_above).unwrap();
-    let refused = trust_worktree(Agent::Pi, home.path(), &linked, none()).unwrap_err();
-    assert!(
-        refused.message().contains("Pi marks") && refused.message().contains(&above),
-        "{}",
-        refused.message()
-    );
+    trust_worktree(Agent::Pi, home.path(), &linked, none()).unwrap();
     assert_eq!(std::fs::read_to_string(&settings).unwrap(), refused_above);
     assert!(recorded(Agent::Pi, home.path()).is_empty());
 
