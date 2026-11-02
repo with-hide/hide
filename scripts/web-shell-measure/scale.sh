@@ -7,7 +7,7 @@
 # Each other workspace is its own Git checkout, so the catalog has as many
 # projects as workspaces. Agents are reported with `herdr pane report-agent`;
 # output starts only after the idle observation, with one Python printer per pane.
-# Usage (from run.sh, inside the isolated environment):
+# Usage (from hided/tests/it/support/remote_delivery/responsive.rs, beside a private Herdr server; run.sh makes its topology with fixture.mjs):
 #   scale.sh build <scale>    -> writes scale.json
 #   scale.sh drive           -> starts the configured printers
 #   scale.sh churn            -> flips one agent's state every 2 s, forever

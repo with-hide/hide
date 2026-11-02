@@ -61,6 +61,8 @@ pub struct Connector {
     /// This PC's WSL, whose distributions are devices too (PRD wsl-device
     /// D-01); none where there is none.
     wsl: Option<host::wsl::WslAccess>,
+    /// The engine every device's panes run on.
+    engine: host::DeviceEngine,
 }
 
 impl Connector {
@@ -80,7 +82,16 @@ impl Connector {
             terminals: None,
             herdr_program: PathBuf::from("herdr"),
             wsl: None,
+            engine: host::DeviceEngine::Herdr,
         }
+    }
+
+    /// Runs every device's panes on `engine`: the core's own engine over the
+    /// device node's pane holders, for a core with the development switch
+    /// on, and the device's Herdr otherwise.
+    pub fn with_engine(mut self, engine: host::DeviceEngine) -> Self {
+        self.engine = engine;
+        self
     }
 
     /// Reaches WSL distributions through `access`: this PC's WSL, or a
@@ -192,6 +203,7 @@ impl DeviceConnector for Connector {
             herdr,
             askpass: self.askpass.clone(),
             packages: self.packages.clone(),
+            engine: self.engine,
             panes,
             terminals,
             link: Arc::default(),
@@ -207,6 +219,7 @@ impl DeviceConnector for Connector {
             distro,
             access,
             self.packages.clone(),
+            self.engine,
             panes,
             terminals,
         )?))
@@ -239,6 +252,7 @@ pub struct SshDevice {
     herdr: HerdrChoice,
     askpass: Option<PathBuf>,
     packages: HelperPackages,
+    engine: host::DeviceEngine,
     panes: Option<PaneHook>,
     terminals: Option<TerminalHook>,
     /// The link the latest attempt started, which carries the device's
@@ -437,7 +451,7 @@ impl DialedTransport for SshDevice {
                     observed: Box::new(identity),
                 });
             }
-            let payload = self.packages.payload(&facts.os, &facts.arch)?;
+            let payload = self.packages.payload_for(&facts.os, &facts.arch, self.engine)?;
             stage("install");
             let installed = bootstrap::install(&mut *pipe, &consent.helper_root, &facts.home, &payload)?;
             stage("start");
@@ -482,14 +496,21 @@ impl DialedTransport for SshDevice {
         }
         host.take_readers(hello.protocol, readers)
             .map_err(EstablishError::Helper)?;
-        let socket = hello
-            .herdr_socket
-            .clone()
-            .ok_or_else(|| "the device's helper bridges no Herdr socket".to_owned());
+        let socket = match self.engine {
+            host::DeviceEngine::Herdr => hello
+                .herdr_socket
+                .clone()
+                .ok_or_else(|| "the device's helper bridges no Herdr socket".to_owned()),
+            host::DeviceEngine::Holders => {
+                Err("the device's panes run on the core's own engine".to_owned())
+            }
+        };
         // Only a Herdr that does not answer needs the kit before the services
         // start; otherwise the core runs its pass after ready. A named
-        // session is attached only, never started by a connection's kit.
-        let unanswered = self.herdr == HerdrChoice::Account
+        // session is attached only, never started by a connection's kit. A
+        // device of the core's own engine has no Herdr to ask.
+        let unanswered = self.engine == host::DeviceEngine::Herdr
+            && self.herdr == HerdrChoice::Account
             && hide_herdr_client::request_with_connector(
                 &host.herdr_connector(),
                 "session.snapshot",
@@ -516,15 +537,23 @@ impl DialedTransport for SshDevice {
             .map(Box::new)
             .map_err(|error| error.to_string())
         });
-        if self.panes.is_some() {
-            stage("panes");
-            host::start_panes_at(socket.clone(), &host);
-        }
-        let terminals = match self.terminals.clone() {
-            None => Err("this process takes no device terminals".to_owned()),
-            Some(hook) => {
-                stage("terminals");
-                host::start_terminals_at(socket.clone(), &host, hook)
+        let terminals = match self.engine {
+            host::DeviceEngine::Herdr => {
+                if self.panes.is_some() {
+                    stage("panes");
+                    host::start_panes_at(socket.clone(), &host);
+                }
+                match self.terminals.clone() {
+                    None => Err("this process takes no device terminals".to_owned()),
+                    Some(hook) => {
+                        stage("terminals");
+                        host::start_terminals_at(socket.clone(), &host, hook)
+                    }
+                }
+            }
+            host::DeviceEngine::Holders => {
+                stage("holders");
+                host::start_holders_at(&host, self.terminals.clone())
             }
         };
         // The link is the core's from here, which closes it its own way: a

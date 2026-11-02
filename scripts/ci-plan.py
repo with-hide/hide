@@ -619,8 +619,10 @@ def classify(path, status, crates, root):
         # Every crate compiles into the Windows workspace `windows check` builds.
         lanes = {"rust", "windows-check"}
         # The web suite drives hided, so a crate it links reaches it; the
-        # desktop suite drives it too, and main's full run runs that one.
-        if "hided" in packages:
+        # desktop suite drives it too, and main's full run runs that one. The
+        # suite's own-engine job runs each pane in the holder beside hided,
+        # which hided does not link, so a crate the holder links reaches it too.
+        if packages & {"hided", "hide-holder"}:
             lanes.add("web-e2e")
         if packages & MAILBOX_CRATES:
             lanes.add("remote-mailbox")

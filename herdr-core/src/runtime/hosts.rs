@@ -1079,6 +1079,26 @@ impl Runtime {
                 let host = self.device_host_entry(device_id);
                 host.problem = None;
                 host.sign_in = None;
+                // A device of the core's own engine has its engine opened on
+                // this link, to be let go with it, once its node runs its
+                // holders; a node whose holders did not start runs no pane,
+                // so its row says why and no engine asks it for any.
+                if self
+                    .device_registration(device_id)
+                    .is_some_and(|registration| self.device_on_own_engine(registration))
+                {
+                    match &node.terminals {
+                        Ok(_) => self.open_own_device_engine(
+                            device_id,
+                            generation,
+                            Arc::clone(&node.host),
+                            node.hello.home.clone(),
+                        ),
+                        Err(reason) => {
+                            self.own_device_holders_unstarted(device_id, reason);
+                        }
+                    }
+                }
                 self.set_host_phase(
                     device_id,
                     HostPhase::Ready {
@@ -1283,6 +1303,10 @@ impl Runtime {
             device_id,
             &format!("The device helper disconnected: {reason}"),
         );
+        self.retire_own_device_engine(
+            device_id,
+            &format!("The device helper disconnected: {reason}"),
+        );
         self.drop_queued_codex_daemon_off(device_id);
         if self.device_machine_ids.remove(device_id).is_some() {
             self.refresh_agent_lineage();
@@ -1308,6 +1332,7 @@ impl Runtime {
             }
         }
         self.end_device_terminals(device_id, reason);
+        self.retire_own_device_engine(device_id, reason);
         self.refresh_pane_headers();
         self.drop_queued_codex_daemon_off(device_id);
         if self.device_machine_ids.remove(device_id).is_some() {

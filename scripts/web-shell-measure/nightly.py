@@ -11,7 +11,7 @@ than a copy of it. It writes the run's record to <record.json>, the same
 figures as a table on stdout and on $GITHUB_STEP_SUMMARY when Actions sets
 one, and exits 1 when:
 - the fixture is not the lane's: another scenario, scale or browser mode, or
-  a private server whose topology is not the one scale.sh asked for;
+  a session whose topology is not the one fixture.mjs asked for;
 - a measurement is invalid by summarize.py's contract; or
 - a measurement is missing, because the run stopped before it.
 The first two are the record's `failures`, which `ci-flaky-report.py
@@ -79,7 +79,7 @@ def echo(run, failures):
     result = summarize.echo([str(path)])
     (trial,) = result["trials"]
     if not result["valid"]:
-        failures.append({"name": "key echo under agent churn: invalid measurement", "error": "; ".join(trial["errors"])})
+        failures.append({"name": "key echo at operator scale: invalid measurement", "error": "; ".join(trial["errors"])})
     keep = ("count", "p50_ms", "p95_ms", "p99_ms", "max_ms", "errors", "load")
     return {"valid": result["valid"], "pass": result["pass"], "threshold_ms": result["threshold_ms"],
             **{key: trial[key] for key in keep}}
@@ -160,10 +160,10 @@ def table(record):
     lines = [
         f"### Performance: {record['lane']}, {record['date']}", "", verdict, "",
         f"Fixture: {fixture.get('workspaces')} workspaces, {fixture.get('tabs')} tabs, {fixture.get('panes')} panes, "
-        f"{fixture.get('agents_reported')} agents ({fixture.get('printing_targets')} printing, one changing state every 2 s); "
+        f"{fixture.get('printing_targets')} printing, {fixture.get('agents_reported')} agents reported; "
         f"{ident['chrome_version']} headless; {ident['herdr_version']}; hided {str(ident['hided_sha256'])[:12]}; "
         f"driver {ident['driver_sha256'][:12]}; image {ident['runner_image'] or 'not a hosted runner'}; {ident['load']}", "",
-        "| Key echo under agent churn | n | p50 | p95 | p99 | max | verdict |",
+        "| Key echo at operator scale | n | p50 | p95 | p99 | max | verdict |",
         "| --- | ---: | ---: | ---: | ---: | ---: | --- |",
         f"| renderer keydown to xterm write | {echo_row.get('count', '-')} | {ms(echo_row.get('p50_ms'))} | "
         f"{ms(echo_row.get('p95_ms'))} | {ms(echo_row.get('p99_ms'))} | {ms(echo_row.get('max_ms'))} | "
@@ -187,7 +187,7 @@ def table(record):
         "",
         "| Idle, one-second samples | n | hided CPU median | p95 | hided tree RSS max | hided alone RSS max |",
         "| --- | ---: | ---: | ---: | ---: | ---: |",
-        f"| before any churn | {idle.get('samples', '-')} | {percent(idle.get('hided_cpu_median_percent'))} | "
+        f"| before any printing | {idle.get('samples', '-')} | {percent(idle.get('hided_cpu_median_percent'))} | "
         f"{percent(idle.get('hided_cpu_p95_percent'))} | {mib(idle.get('hided_rss_max_kb'))} | {mib(idle.get('hided_self_rss_max_kb'))} |",
         "",
         f"Memory, settled then after topology: hided {mib(settled.get('hided_rss_kb'))} then {mib(after.get('hided_rss_kb'))}, "

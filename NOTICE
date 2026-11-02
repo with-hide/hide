@@ -1,6 +1,16 @@
 hide
 Copyright 2026 Grab Lee
 
+hide is licensed under the Functional Source License, Version 1.1, ALv2
+Future License (FSL-1.1-ALv2), in LICENSE, from the first release after
+1.1.1 on. Each release becomes available under the Apache License,
+Version 2.0, two years after it is published. Releases up to and including
+1.1.1 remain under the Apache License, Version 2.0.
+
+The files named below are derived from other projects and keep the license
+they came under, together with Hide's changes to them; FSL does not apply to
+them.
+
 This product includes software from these projects.
 
 hide-vt/ is derived from Herdr's crates/ghostty-vt

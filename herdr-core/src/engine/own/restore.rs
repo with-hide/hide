@@ -324,10 +324,7 @@ impl OwnEngine<'static> {
                 }
             }
             if !orphans.is_empty() {
-                let cwd = home
-                    .as_deref()
-                    .and_then(|home| hide_platform::path::to_wire(home).ok())
-                    .unwrap_or_default();
+                let cwd = home.clone().unwrap_or_default();
                 let gathered = orphans
                     .iter()
                     .map(|id| (id.clone(), Pane::new(&cwd, None)))
@@ -387,7 +384,7 @@ impl OwnEngine<'static> {
         &self,
         restarts: &[Restart],
         plans: &BTreeMap<String, Plan>,
-        home: Option<&Path>,
+        home: Option<&str>,
     ) -> (Vec<(String, String)>, Vec<Resume>) {
         let next = Mutex::new(restarts.iter());
         let failures = Mutex::new(Vec::new());
@@ -566,7 +563,7 @@ impl OwnEngine<'static> {
     /// A node that cannot answer is not read as a folder that is gone: the
     /// shell starts in its folder, and a start that fails there marks the
     /// pane with why.
-    fn start_folder(&self, cwd: &str, home: Option<&Path>) -> (String, Option<String>) {
+    fn start_folder(&self, cwd: &str, home: Option<&str>) -> (String, Option<String>) {
         let found = self
             .node()
             .map_err(|error| error.to_string())
@@ -580,8 +577,7 @@ impl OwnEngine<'static> {
                 )
                 .map_err(|error| error.to_string())
             });
-        let home_cwd = home.and_then(|home| hide_platform::path::to_wire(home).ok());
-        match (found, home_cwd) {
+        match (found, home.map(str::to_owned)) {
             (Ok(None), Some(home_cwd)) => (
                 home_cwd,
                 Some(format!(

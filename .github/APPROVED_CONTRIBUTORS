@@ -1,5 +1,6 @@
 # GitHub usernames that may open pull requests besides maintainers, one per line.
 # Maintainers curate it from trusted prior work; it is not an application program.
 # Being listed permits a pull request; it grants no maintainer authority and approves no feature scope.
+# Each person agrees once to CONTRIBUTING.md, License of contributions, in a comment the commit adding them links.
 Yolohyo
 zzsza

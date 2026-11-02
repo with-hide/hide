@@ -33,6 +33,12 @@ jobs:
         with:
           set: workspace
           save: false
+      # hide-vt's Zig inputs and caches, which the vt lane saves: the pane
+      # holder a distribution of the core's own engine runs links hide-vt.
+      - uses: ./.github/actions/vt-cache
+        timeout-minutes: 5
+        with:
+          save: false
       - name: Install zsh
         # The Herdr fetch script is zsh, which the Linux image lacks. The
         # mirror can stall (web-e2e.yml), so apt retries and gives up on a
@@ -44,7 +50,9 @@ jobs:
           sudo apt-get install -y --no-install-recommends zsh
       - name: Build the Linux programs
         timeout-minutes: 20
-        run: bash scripts/verify-cargo.sh cli
+        run: |
+          bash scripts/verify-cargo.sh cli
+          bash scripts/verify-cargo.sh build -p hide-holder --bin hide-holder
       - name: Fetch the pinned Linux Herdr
         id: herdr
         timeout-minutes: 5
@@ -61,7 +69,7 @@ jobs:
         run: |
           kit="$RUNNER_TEMP/wsl-kit"
           mkdir -p "$kit"
-          for name in hided hide hide-agent-hooks; do
+          for name in hided hide hide-agent-hooks hide-holder; do
             cp "target/debug/$name" "$kit/$name-linux-x86_64"
             strip "$kit/$name-linux-x86_64"
           done
@@ -121,7 +129,7 @@ jobs:
           HIDE_E2E_WSL_PACKAGES: ${{ runner.temp }}/wsl-kit
         # The test prints the WSL version and install counts it saw. Both
         # walks own the one distribution, so they run one after the other.
-        run: bash scripts/verify-cargo.sh nextest --profile ci -p hided --test it -E 'test(=wsl_device::a_wsl_distribution_connects_works_and_ends_with_its_link) | test(=wsl_device::a_wsl_device_keeps_a_windows_drive_project_its_page_and_hide_ai_across_a_reconnect)' --run-ignored only --test-threads 1 --success-output immediate
+        run: bash scripts/verify-cargo.sh nextest --profile ci -p hided --test it -E 'test(=wsl_device::a_wsl_distribution_connects_works_and_ends_with_its_link) | test(=wsl_device::a_wsl_device_keeps_a_windows_drive_project_its_page_and_hide_ai_across_a_reconnect) | test(=wsl_device::a_wsl_own_engine_device_runs_its_panes_in_holders_with_no_herdr)' --run-ignored only --test-threads 1 --success-output immediate
       - name: Mint the development issues token
         # Development issues live in with-hide/hide-private (docs/TESTING.md,
         # Flaky tests); one App token reads this run here and files there. A run
