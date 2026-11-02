@@ -21,8 +21,9 @@ use hide_holder_protocol::record::Phase;
 use hide_holder_protocol::{Answer, Appearance, Foreground, OpenError, Size, Theme};
 use hide_kit::panes::{CloseError, StartRefusal, StartRequest, Started};
 use hide_node_link::holders::{
-    HolderError, HolderForeground, HolderProcesses, HolderProof, HolderRecovery, HolderStart,
-    PaneEnded, PaneFactsSink, PaneHolders, PaneInput, ScreenRules, StyledRead, UNSUPPORTED_HOLDER,
+    HolderError, HolderForeground, HolderProcesses, HolderProof, HolderRecovery, HolderScroll,
+    HolderStart, PaneEnded, PaneFactsSink, PaneHolders, PaneInput, ScreenRules, StyledRead,
+    UNSUPPORTED_HOLDER,
 };
 
 /// This machine's holders and the service that shows their screens.
@@ -205,9 +206,7 @@ impl PaneHolders for LocalPanes {
     fn read(&self, pane: &str, lines: u16) -> Result<(String, bool), HolderError> {
         match self.holders.read(pane, lines).map_err(ask_error)? {
             Answer::Text { text, truncated } => Ok((text, truncated)),
-            Answer::Processes { .. } => Err(HolderError::Unreachable {
-                message: format!("pane {pane}'s holder answered a read with its processes"),
-            }),
+            other => Err(misanswered(pane, "a read", &other)),
         }
     }
 
@@ -218,18 +217,30 @@ impl PaneHolders for LocalPanes {
         };
         match self.holders.read_styled(pane, rows) {
             Ok(Answer::Text { text, truncated }) => Ok((text, truncated)),
-            Ok(Answer::Processes { .. }) => Err(HolderError::Unreachable {
-                message: format!("pane {pane}'s holder answered a styled read with its processes"),
+            Ok(other) => Err(misanswered(pane, "a styled read", &other)),
+            Err(error) => Err(newer_ask_error(pane, "styled reads", error)),
+        }
+    }
+
+    fn read_visible(&self, pane: &str) -> Result<String, HolderError> {
+        match self.holders.read_visible(pane) {
+            Ok(Answer::Text { text, .. }) => Ok(text),
+            Ok(other) => Err(misanswered(pane, "a visible read", &other)),
+            Err(error) => Err(newer_ask_error(pane, "visible reads", error)),
+        }
+    }
+
+    fn scroll(&self, pane: &str, to: Option<u64>) -> Result<HolderScroll, HolderError> {
+        match self.holders.scroll(pane, to) {
+            Ok(Answer::Scroll {
+                offset_from_bottom,
+                max_offset_from_bottom,
+            }) => Ok(HolderScroll {
+                offset_from_bottom,
+                max_offset_from_bottom,
             }),
-            Err(error) => Err(match super::holder::too_old(&error) {
-                Some(version) => HolderError::Refused {
-                    code: UNSUPPORTED_HOLDER.to_owned(),
-                    message: format!(
-                        "pane {pane}'s holder (protocol {version}) was built before styled reads"
-                    ),
-                },
-                None => ask_error(error),
-            }),
+            Ok(other) => Err(misanswered(pane, "a scroll", &other)),
+            Err(error) => Err(newer_ask_error(pane, "scroll asks", error)),
         }
     }
 
@@ -248,9 +259,7 @@ impl PaneHolders for LocalPanes {
                     Foreground::Unknown(_) => None,
                 },
             }),
-            Answer::Text { .. } => Err(HolderError::Unreachable {
-                message: format!("pane {pane}'s holder answered a process ask with text"),
-            }),
+            other => Err(misanswered(pane, "a process ask", &other)),
         }
     }
 
@@ -384,6 +393,30 @@ fn start_refusal(refusal: StartRefusal) -> HolderError {
     HolderError::Refused {
         code: code.to_owned(),
         message: refusal.to_string(),
+    }
+}
+
+/// A holder that answered an ask with another ask's answer.
+fn misanswered(pane: &str, ask: &str, answer: &Answer) -> HolderError {
+    let what = match answer {
+        Answer::Text { .. } => "text",
+        Answer::Processes { .. } => "its processes",
+        Answer::Scroll { .. } => "its scroll position",
+    };
+    HolderError::Unreachable {
+        message: format!("pane {pane}'s holder answered {ask} with {what}"),
+    }
+}
+
+/// An ask's failure, refused [`UNSUPPORTED_HOLDER`] when the holder was
+/// built before `asks` were added.
+fn newer_ask_error(pane: &str, asks: &str, error: OpenError) -> HolderError {
+    match super::holder::too_old(&error) {
+        Some(version) => HolderError::Refused {
+            code: UNSUPPORTED_HOLDER.to_owned(),
+            message: format!("pane {pane}'s holder (protocol {version}) was built before {asks}"),
+        },
+        None => ask_error(error),
     }
 }
 

@@ -29,8 +29,7 @@ async function keyboardPane(page: Page): Promise<string | null> {
 }
 
 // @platform: Keys reach an agent pane's PTY through the platform's engine.
-// Herdr only until the pane holder reports and moves its screen's scroll position: the own engine refuses a find's scroll of the screen (`own_engine_unsupported`, ARCHITECTURE.md), so the bar finds the match and the screen stays at the bottom.
-test("Cmd+F scrolls the focused pane to a match above the screen @herdr", { tag: "@platform" }, async ({ page }) => {
+test("Cmd+F scrolls the focused pane to a match above the screen", { tag: "@platform" }, async ({ page }) => {
   await page.setViewportSize({ width: 1680, height: 900 });
   const fixture = await startFixture({ agents: false });
   let daemon: Daemon | null = null;

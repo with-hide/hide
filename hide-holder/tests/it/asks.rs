@@ -1,8 +1,9 @@
 //! Questions a node asks on a connection of their own (PRD
-//! engine-bundle-2-pane-holder D-11, D-18, B9, B16): the pane's recent text
-//! and its processes, answered without taking the screen connection over or
-//! moving the screen's scroll position, and refused with a reason past their
-//! bounds.
+//! engine-bundle-2-pane-holder D-11, D-18, B9, B16): the pane's recent text,
+//! its processes and its scroll position, answered without taking the screen
+//! connection over or moving the screen's scroll position, except a scroll
+//! to, which moves the screen the holding connection is shown, and refused
+//! with a reason past their bounds.
 
 use std::time::Instant;
 
@@ -197,4 +198,80 @@ fn a_styled_read_keeps_the_color_the_program_wrote_and_a_plain_read_does_not() {
             CloseReason::AskInvalid
         );
     }
+}
+
+fn scroll(holder: &Holder, question: Ask) -> Answer {
+    ask(
+        &holder.socket,
+        question,
+        PROTOCOL_VERSION,
+        Instant::now() + HANG_LIMIT,
+    )
+    .unwrap()
+}
+
+#[test]
+fn a_scroll_ask_says_where_the_screen_is_and_a_scroll_to_moves_the_screen_shown() {
+    let home = Home::new();
+    let lines: String = (0..300).map(|line| format!("line-{line:04}\r\n")).collect();
+    let script = Script::new(&home, vec![format!("{lines}marker-end").into_bytes()]);
+    let holder = script.start(&home);
+    let mut connection = holder.open();
+    connection.wait_for_drawn("marker-end");
+
+    // At the bottom, with the 300 rows and the script's own above it.
+    let Answer::Scroll {
+        offset_from_bottom: 0,
+        max_offset_from_bottom: max,
+    } = scroll(&holder, Ask::Scroll)
+    else {
+        panic!("the screen is not at the bottom");
+    };
+    assert!(max >= 277, "{max}");
+    let at = |offset_from_bottom| Answer::Scroll {
+        offset_from_bottom,
+        max_offset_from_bottom: max,
+    };
+
+    let before = connection.fragments.len();
+    assert_eq!(
+        scroll(
+            &holder,
+            Ask::ScrollTo {
+                offset_from_bottom: 10
+            }
+        ),
+        at(10)
+    );
+    wait_until("the scrolled screen", || {
+        connection.drain();
+        connection.fragments.len() > before
+    });
+    let shown = draw(&[fragments_after(b"", (80, 24), &connection.fragments)]);
+    let lines = &shown[0].lines;
+    assert!(
+        lines.first().is_some_and(|line| line.contains("line-0267")),
+        "{lines:?}"
+    );
+    assert!(
+        lines.last().is_some_and(|line| line.contains("line-0290")),
+        "{lines:?}"
+    );
+    assert_eq!(scroll(&holder, Ask::Scroll), at(10));
+    // Past the top is the top.
+    assert_eq!(
+        scroll(
+            &holder,
+            Ask::ScrollTo {
+                offset_from_bottom: u64::MAX
+            }
+        ),
+        at(max)
+    );
+    assert!(connection.closed.is_none(), "{:?}", connection.closed);
+    assert_eq!(
+        holder.open().welcome.generation,
+        2,
+        "an ask took the pane over"
+    );
 }

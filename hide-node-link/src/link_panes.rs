@@ -13,8 +13,9 @@ use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::Duration;
 
 use crate::holders::{
-    HolderError, HolderProcesses, HolderProof, HolderRecovery, HolderStart, PaneCall, PaneEnded,
-    PaneFactsSink, PaneHolders, PaneInput, PaneText, PaneWatchReport, ScreenRules, StyledRead,
+    HolderError, HolderProcesses, HolderProof, HolderRecovery, HolderScroll, HolderStart, PaneCall,
+    PaneEnded, PaneFactsSink, PaneHolders, PaneInput, PaneText, PaneWatchReport, ScreenRules,
+    StyledRead,
 };
 use crate::link::{LinkAnswer, LinkError, NodeLink};
 use crate::protocol::{Call, ShellLaunch};
@@ -286,6 +287,26 @@ impl PaneHolders for LinkPanes {
             ASK_WAIT,
         )?;
         Ok((text.text, text.truncated))
+    }
+
+    fn read_visible(&self, pane: &str) -> Result<String, HolderError> {
+        let text: PaneText = self.answer(
+            PaneCall::ReadVisible {
+                pane: pane.to_owned(),
+            },
+            ASK_WAIT,
+        )?;
+        Ok(text.text)
+    }
+
+    fn scroll(&self, pane: &str, to: Option<u64>) -> Result<HolderScroll, HolderError> {
+        self.answer(
+            PaneCall::Scroll {
+                pane: pane.to_owned(),
+                to,
+            },
+            ASK_WAIT,
+        )
     }
 
     fn processes(&self, pane: &str) -> Result<HolderProcesses, HolderError> {

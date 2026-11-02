@@ -291,7 +291,12 @@ use crate::error::HostError;
 /// (`Call::PaneWatch`) on a lane of their own (PRD engine-bundle-3-core-owns
 /// D-22). A helper on 68 would refuse all three, so it is refused at Hello
 /// and upgraded.
-pub const PROTOCOL_VERSION: u32 = 69;
+/// 70: a node answers where a holder pane's screen is in its scrollback and
+/// moves it (`holders::PaneCall::Scroll`), so the core's own engine routes a
+/// pane search and shows its matches as Herdr's `pane.get` and
+/// `pane.scroll` let it. A helper on 69 would refuse the ask, so it is
+/// refused at Hello and upgraded.
+pub const PROTOCOL_VERSION: u32 = 70;
 
 /// What agy's index held in a checkout before Hide typed `/fork`
 /// ([`Call::AntigravityForkMark`]).

@@ -489,6 +489,41 @@ impl Pane {
         true
     }
 
+    /// Where the screen is in its scrollback, in rows above the bottom
+    /// (Herdr's `pane.get` scroll metrics).
+    pub fn scroll_position(&self) -> Result<Answer, hide_vt::Error> {
+        let (offset_from_bottom, max_offset_from_bottom) = self.position()?;
+        Ok(Answer::Scroll {
+            offset_from_bottom,
+            max_offset_from_bottom,
+        })
+    }
+
+    /// Moves the screen to `offset_from_bottom` rows above the bottom, past
+    /// the top clamped to it (Herdr's `pane.scroll`); answers where it is
+    /// then and whether it moved.
+    pub fn scroll_to(&mut self, offset_from_bottom: u64) -> Result<(Answer, bool), hide_vt::Error> {
+        let (before, max) = self.position()?;
+        let target = offset_from_bottom.min(max);
+        if target == 0 {
+            self.terminal.scroll_viewport_bottom();
+        } else {
+            // Both fit an isize: the scrollback is bounded by its bytes.
+            self.terminal
+                .scroll_viewport_delta(before as isize - target as isize);
+        }
+        let moved = self.position()?.0 != before;
+        Ok((self.scroll_position()?, moved))
+    }
+
+    /// The screen's rows above the bottom of its scrollback, and the most
+    /// it can be.
+    fn position(&self) -> Result<(u64, u64), hide_vt::Error> {
+        let bar = self.terminal.scrollbar()?;
+        let max = bar.total.saturating_sub(bar.len);
+        Ok((max.saturating_sub(bar.offset) as u64, max as u64))
+    }
+
     /// The last `lines` rows as text with soft wraps joined (Herdr's recent
     /// unwrapped read), cut from the oldest side to [`MAX_READ_BYTES`]. The
     /// screen's scroll position is not touched: rows are read by their place
@@ -496,6 +531,24 @@ impl Pane {
     pub fn read(&self, lines: u16) -> Result<Answer, hide_vt::Error> {
         let (text, truncated) = self.recent_text(usize::from(lines))?;
         Ok(Answer::Text { text, truncated })
+    }
+
+    /// The rows the screen shows now, wherever the screen connection
+    /// scrolled it, as text with soft wraps joined (Herdr's `visible` read),
+    /// cut as a read is. The scroll position is not touched.
+    pub fn read_visible(&self) -> Result<Answer, hide_vt::Error> {
+        let rows = self.terminal.rows()?;
+        let cols = self.terminal.cols()?;
+        if rows == 0 || cols == 0 {
+            return Ok(Answer::Text {
+                text: String::new(),
+                truncated: false,
+            });
+        }
+        let text =
+            self.terminal
+                .read_text_viewport((0, 0), (cols - 1, u32::from(rows - 1)), false)?;
+        Ok(styled(text, false))
     }
 
     /// The rows the screen shows now, wherever the screen connection
@@ -873,6 +926,39 @@ mod tests {
         assert!(matches!(pane.scroll(&wheel(3)).unwrap(), Wheel::Moved));
         assert!(pane.scroll_to_bottom());
         assert!(!pane.scroll_to_bottom());
+    }
+
+    fn at(offset_from_bottom: u64, max_offset_from_bottom: u64) -> Answer {
+        Answer::Scroll {
+            offset_from_bottom,
+            max_offset_from_bottom,
+        }
+    }
+
+    #[test]
+    fn the_scroll_position_counts_rows_above_the_bottom_and_a_scroll_to_moves_what_the_screen_shows()
+     {
+        let mut pane = pane();
+        assert_eq!(pane.scroll_position().unwrap(), at(0, 0));
+        // 60 rows and the cursor's on a screen of 24: 37 rows above it.
+        let lines: String = (0..60).map(|row| format!("row {row}\r\n")).collect();
+        answers(&mut pane, &[lines.as_bytes()]);
+        assert_eq!(pane.scroll_position().unwrap(), at(0, 37));
+        pane.scroll(&wheel(3)).unwrap();
+        assert_eq!(pane.scroll_position().unwrap(), at(3, 37));
+        assert_eq!(pane.scroll_to(10).unwrap(), (at(10, 37), true));
+        // The screen shows rows 27 to 50 now.
+        let Answer::Text { text, .. } = pane.read_visible().unwrap() else {
+            panic!("a visible read answers text");
+        };
+        assert!(
+            text.starts_with("row 27\n") && text.contains("row 50"),
+            "{text}"
+        );
+        assert!(!text.contains("row 51"), "{text}");
+        assert_eq!(pane.scroll_to(10).unwrap(), (at(10, 37), false));
+        assert_eq!(pane.scroll_to(u64::MAX).unwrap(), (at(37, 37), true));
+        assert_eq!(pane.scroll_to(0).unwrap(), (at(0, 37), true));
     }
 
     #[test]

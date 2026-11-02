@@ -739,6 +739,25 @@ impl Holders {
         )
     }
 
+    /// The rows the pane's screen shows now, as text, as [`Holders::read`]
+    /// asks.
+    pub fn read_visible(&self, pane: &str) -> Result<Answer, OpenError> {
+        self.ask(pane, Ask::Visible)
+    }
+
+    /// Where the pane's screen is in its scrollback, after moving it to `to`
+    /// rows above the bottom when asked; the holder sends the connection
+    /// that holds the screen the moved screen.
+    pub fn scroll(&self, pane: &str, to: Option<u64>) -> Result<Answer, OpenError> {
+        self.ask(
+            pane,
+            match to {
+                None => Ask::Scroll,
+                Some(offset_from_bottom) => Ask::ScrollTo { offset_from_bottom },
+            },
+        )
+    }
+
     /// The pane's shell and the processes in its terminal's foreground, as
     /// [`Holders::read`] asks.
     pub fn processes(&self, pane: &str) -> Result<Answer, OpenError> {

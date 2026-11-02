@@ -60,6 +60,14 @@ pub struct HolderRecovery {
     pub present: Vec<String>,
 }
 
+/// Where a pane's screen is in its scrollback, in rows above the bottom
+/// (Herdr's `pane.get` scroll metrics).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct HolderScroll {
+    pub offset_from_bottom: u64,
+    pub max_offset_from_bottom: u64,
+}
+
 /// The processes a pane's terminal holds: its program, which is the shell
 /// of a shell pane, and the foreground process group with its members'
 /// names, or none when the system cannot say.
@@ -289,6 +297,16 @@ pub trait PaneHolders: Send + Sync {
     /// were left out; a holder built before styled reads is refused
     /// [`UNSUPPORTED_HOLDER`].
     fn read_styled(&self, pane: &str, read: StyledRead) -> Result<(String, bool), HolderError>;
+    /// The rows the pane's screen shows now, wherever it is scrolled to,
+    /// as text with soft wraps joined (Herdr's `visible` read); a holder
+    /// built before visible reads is refused [`UNSUPPORTED_HOLDER`].
+    fn read_visible(&self, pane: &str) -> Result<String, HolderError>;
+    /// Where the pane's screen is in its scrollback, after moving it to
+    /// `to` rows above the bottom when asked (Herdr's `pane.get` and
+    /// `pane.scroll`); the connection that holds the screen is sent the
+    /// moved screen. A holder built before scroll asks is refused
+    /// [`UNSUPPORTED_HOLDER`].
+    fn scroll(&self, pane: &str, to: Option<u64>) -> Result<HolderScroll, HolderError>;
     /// The pane's program and its terminal's foreground processes.
     fn processes(&self, pane: &str) -> Result<HolderProcesses, HolderError>;
     /// Which start of the pane runs now and the program it runs, as the
@@ -352,6 +370,10 @@ pub enum PaneCall {
     Read { pane: String, lines: u16 },
     /// [`PaneHolders::read_styled`]; answers a [`PaneText`].
     ReadStyled { pane: String, read: StyledRead },
+    /// [`PaneHolders::read_visible`]; answers a [`PaneText`].
+    ReadVisible { pane: String },
+    /// [`PaneHolders::scroll`]; answers a [`HolderScroll`].
+    Scroll { pane: String, to: Option<u64> },
     /// [`PaneHolders::processes`]; answers [`HolderProcesses`].
     Processes { pane: String },
     /// [`PaneHolders::proof`]; answers a [`HolderProof`].

@@ -93,6 +93,13 @@ fn ask(holders: &dyn PaneHolders, call: PaneCall) -> PaneAnswer {
         PaneCall::Terminate { pane } => holders.terminate(&pane).and_then(value),
         PaneCall::Read { pane, lines } => holders.read(&pane, lines).and_then(text),
         PaneCall::ReadStyled { pane, read } => holders.read_styled(&pane, read).and_then(text),
+        PaneCall::ReadVisible { pane } => holders.read_visible(&pane).and_then(|text| {
+            value(PaneText {
+                text,
+                truncated: false,
+            })
+        }),
+        PaneCall::Scroll { pane, to } => holders.scroll(&pane, to).and_then(value),
         PaneCall::Processes { pane } => holders.processes(&pane).and_then(value),
         PaneCall::Proof { pane } => holders.proof(&pane).and_then(value),
         PaneCall::Input { pane, input } => holders.input(&pane, input).and_then(value),
@@ -277,8 +284,8 @@ pub fn watch(
 mod tests {
     use super::*;
     use hide_node_link::holders::{
-        HolderProcesses, HolderProof, HolderRecovery, HolderStart, PaneEnded, PaneFactsSink,
-        PaneInput, ScreenRules, StyledRead,
+        HolderProcesses, HolderProof, HolderRecovery, HolderScroll, HolderStart, PaneEnded,
+        PaneFactsSink, PaneInput, ScreenRules, StyledRead,
     };
 
     /// Holders that refuse every start under a code of their own and
@@ -307,6 +314,12 @@ mod tests {
             Ok((format!("{lines} rows"), true))
         }
         fn read_styled(&self, _: &str, _: StyledRead) -> Result<(String, bool), HolderError> {
+            unreachable!()
+        }
+        fn read_visible(&self, _: &str) -> Result<String, HolderError> {
+            unreachable!()
+        }
+        fn scroll(&self, _: &str, _: Option<u64>) -> Result<HolderScroll, HolderError> {
             unreachable!()
         }
         fn processes(&self, _: &str) -> Result<HolderProcesses, HolderError> {

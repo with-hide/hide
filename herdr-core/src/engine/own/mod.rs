@@ -17,10 +17,8 @@
 //! ([`rules`]). A daemon's engine saves its session after every change
 //! ([`store`]) and, as it opens, lays the saved session out again around the
 //! holders that ran on, starts the rest again and resumes their agents
-//! ([`restore`]), so a pane keeps its id across a restart and a reboot. What
-//! a later bundle 3 pull request brings (pane identity, scrolling, paste)
-//! answers a refusal under [`UNSUPPORTED`] that names it, never a silent
-//! default. Only a daemon with the development
+//! ([`restore`]), so a pane keeps its id across a restart and a reboot.
+//! Only a daemon with the development
 //! switch `HIDE_DEV_PANE_HOLDER` on builds this engine (D-5).
 
 use std::collections::BTreeMap;
@@ -31,7 +29,8 @@ use std::time::Duration;
 
 use hide_node_link::NodeLink;
 use hide_node_link::holders::{
-    HolderError, HolderKey, HolderStart, PaneFacts, PaneHolders, PaneInput, StyledRead,
+    HolderError, HolderKey, HolderScroll, HolderStart, PaneFacts, PaneHolders, PaneInput,
+    StyledRead, UNSUPPORTED_HOLDER,
 };
 
 use super::keys::PaneKey;
@@ -58,9 +57,6 @@ mod worktrees;
 
 use topology::{Closed, Pane, Topology, refused};
 
-/// The refusal code of a call this engine does not answer yet.
-pub(crate) const UNSUPPORTED: &str = "own_engine_unsupported";
-
 /// The size a pane starts at before a screen draws it; the first screen
 /// that attaches it resizes it to the rectangle drawn for it.
 const START_ROWS: u16 = 24;
@@ -70,13 +66,12 @@ const START_COLS: u16 = 80;
 /// holder answers (`Holders::read`, truncated past it).
 const READ_LINES_CAP: u32 = u16::MAX as u32;
 
-/// The read sources this engine answers, each with the one read a holder
-/// gives: the last rows of its screen and scrollback, soft wraps joined
-/// (`hide_holder_protocol::Ask::Read`). `recent` is therefore unwrapped as
-/// `recent_unwrapped` is, and `visible` reads those same last rows, the
-/// screen's bottom rows among them; a read of exactly the drawn screen is
-/// not answered yet: the screen's size is the attached client's, which the
-/// engine does not hold.
+/// The read sources this engine answers, soft wraps joined: `recent` and
+/// `recent_unwrapped` the last rows of the screen and its scrollback
+/// (`hide_holder_protocol::Ask::Read`), so `recent` is unwrapped as
+/// `recent_unwrapped` is, and `visible` the rows the screen shows now,
+/// wherever it is scrolled to (`Ask::Visible`), which a find measures its
+/// scroll against.
 const READ_SOURCES: [&str; 3] = ["recent", "recent_unwrapped", "visible"];
 
 /// The refusal code of a read from a source this engine does not hold.
@@ -791,14 +786,11 @@ fn holder_error(error: HolderError) -> EngineError {
     }
 }
 
-/// The refusal of a call a later bundle 3 pull request answers.
-fn unsupported<T>(call: &str, brought_by: &str) -> Answer<T> {
-    Err(EngineError::Refused {
-        code: UNSUPPORTED.to_owned(),
-        message: format!(
-            "the core's own engine does not answer {call} yet; the {brought_by} brings it"
-        ),
-    })
+fn pane_scroll(scroll: HolderScroll) -> crate::find::pane::PaneScroll {
+    crate::find::pane::PaneScroll {
+        offset_from_bottom: scroll.offset_from_bottom,
+        max_offset_from_bottom: scroll.max_offset_from_bottom,
+    }
 }
 
 /// How long a prompt waits before its Enter, as Herdr's `agent.prompt`
@@ -837,10 +829,6 @@ fn delivery_of(
         ),
     }
 }
-
-/// What brings a find's scroll of the screen: the holder saying and moving
-/// its screen's scroll position (PRD engine-bundle-3-core-owns D-21).
-const SCROLL_POSITION: &str = "holder's scroll position capability";
 
 /// Hide's key as the holder names it; the holder encodes it for the
 /// program's keyboard modes, as Herdr encodes a named key for its pane.
@@ -1438,26 +1426,37 @@ impl<'g> Engine for OwnEngine<'g> {
             .to_owned())
     }
 
+    /// Where the holder's screen is in its scrollback. A holder built
+    /// before scroll asks reports none, as a Herdr pane with no scroll
+    /// metrics does, so a find on it opens the agent's own search.
     fn pane_scroll(
         &self,
         _wait: Wait,
         pane: &str,
     ) -> Answer<Option<crate::find::pane::PaneScroll>> {
         self.check()?;
-        // The holder keeps the scroll of its screen connection and reports
-        // none here.
         self.known(pane)?;
-        Ok(None)
+        match self.shared.holders.scroll(pane, None) {
+            Ok(scroll) => Ok(Some(pane_scroll(scroll))),
+            Err(HolderError::Refused { code, .. }) if code == UNSUPPORTED_HOLDER => Ok(None),
+            Err(error) => Err(holder_error(error)),
+        }
     }
 
     fn scroll_pane(
         &self,
         _wait: Wait,
-        _pane: &str,
-        _offset_from_bottom: u64,
+        pane: &str,
+        offset_from_bottom: u64,
     ) -> Answer<Option<crate::find::pane::PaneScroll>> {
         self.check()?;
-        unsupported("a scroll", SCROLL_POSITION)
+        self.known(pane)?;
+        let scroll = self
+            .shared
+            .holders
+            .scroll(pane, Some(offset_from_bottom))
+            .map_err(holder_error)?;
+        Ok(Some(pane_scroll(scroll)))
     }
 
     fn report_pane_tokens(
@@ -1508,6 +1507,17 @@ impl<'g> Engine for OwnEngine<'g> {
             });
         }
         self.known(pane)?;
+        if source == "visible" {
+            let text = self
+                .shared
+                .holders
+                .read_visible(pane)
+                .map_err(holder_error)?;
+            return Ok(PaneText {
+                text,
+                truncated: false,
+            });
+        }
         let lines = u16::try_from(lines.min(READ_LINES_CAP)).unwrap_or(u16::MAX);
         let (text, truncated) = self
             .shared
@@ -2020,6 +2030,14 @@ mod tests {
         fn read_styled(&self, _: &str, read: StyledRead) -> Result<(String, bool), HolderError> {
             Ok((format!("\u{1b}[1m{read:?}\u{1b}[0m"), false))
         }
+        fn read_visible(&self, _: &str) -> Result<String, HolderError> {
+            Ok("screen".to_owned())
+        }
+        fn scroll(&self, _: &str, _: Option<u64>) -> Result<HolderScroll, HolderError> {
+            Err(HolderError::Unreachable {
+                message: "not asked".to_owned(),
+            })
+        }
         fn processes(&self, _: &str) -> Result<HolderProcesses, HolderError> {
             self.processes
                 .lock()
@@ -2120,12 +2138,16 @@ mod tests {
         let (_, _, pane) = engine
             .create_workspace(WAIT, "/w", "w", true, Env::new())
             .unwrap();
-        for source in ["recent", "recent_unwrapped", "visible"] {
+        for source in ["recent", "recent_unwrapped"] {
             assert_eq!(
                 engine.read_pane(WAIT, &pane, source, 20).unwrap().text,
                 "rows"
             );
         }
+        assert_eq!(
+            engine.read_pane(WAIT, &pane, "visible", 20).unwrap().text,
+            "screen"
+        );
         match engine.read_pane(WAIT, &pane, "scrollback", 20) {
             Err(EngineError::Refused { code, message }) => {
                 assert_eq!(code, "unknown_read_source");

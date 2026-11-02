@@ -604,6 +604,7 @@ impl Holder {
             ending: ending.clone(),
             log: log.clone(),
             pane: pane.clone(),
+            outbox: outbox.clone(),
             shell: program,
             master: master.clone(),
         };
@@ -1773,6 +1774,9 @@ struct AcceptSide {
     ending: Arc<Mutex<Option<Closed>>>,
     log: Log,
     pane: Arc<Mutex<Pane>>,
+    /// The screen of the connection that holds the pane, which a scroll ask
+    /// marks changed.
+    outbox: Arc<Mutex<Option<Arc<Outbox>>>>,
     shell: u32,
     master: PtyMaster,
 }
@@ -1856,6 +1860,7 @@ impl AcceptSide {
                 ending: self.ending.clone(),
                 log: self.log.clone(),
                 pane: self.pane.clone(),
+                outbox: self.outbox.clone(),
                 shell: self.shell,
                 master: self.master.clone(),
             };
@@ -1895,11 +1900,25 @@ struct Asked {
     ending: Arc<Mutex<Option<Closed>>>,
     log: Log,
     pane: Arc<Mutex<Pane>>,
+    outbox: Arc<Mutex<Option<Arc<Outbox>>>>,
     shell: u32,
     master: PtyMaster,
 }
 
 impl Asked {
+    /// Marks the holding connection's screen changed, when a connection
+    /// holds the pane.
+    fn screen_changed(&self) {
+        let outbox = self
+            .outbox
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        if let Some(outbox) = outbox {
+            outbox.changed();
+        }
+    }
+
     fn ended(&self) -> Option<Closed> {
         self.ending
             .lock()
@@ -1986,7 +2005,9 @@ impl Asked {
     }
 
     /// Answers one ask and closes; the connection that holds the pane, and
-    /// the screen's scroll position, stay as they were (D-11, D-18).
+    /// the screen's scroll position, stay as they were (D-11, D-18), except
+    /// that a scroll-to moves the screen and sends the holding connection
+    /// the moved screen.
     fn answer(&self, stream: &LocalStream, ask: Ask) {
         let deadline = Instant::now() + HELLO_LIMIT;
         if let Some(closed) = self.ended() {
@@ -2016,6 +2037,34 @@ impl Asked {
                 .unwrap_or_else(PoisonError::into_inner)
                 .read_rows(lines)
                 .map_err(|error| format!("the screen could not be read: {error}")),
+            Ask::Visible => self
+                .pane
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .read_visible()
+                .map_err(|error| format!("the screen could not be read: {error}")),
+            Ask::Scroll => self
+                .pane
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .scroll_position()
+                .map_err(|error| format!("the scroll position could not be read: {error}")),
+            Ask::ScrollTo { offset_from_bottom } => {
+                let moved = self
+                    .pane
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .scroll_to(offset_from_bottom);
+                match moved {
+                    Ok((answer, moved)) => {
+                        if moved {
+                            self.screen_changed();
+                        }
+                        Ok(answer)
+                    }
+                    Err(error) => Err(format!("the screen could not be scrolled: {error}")),
+                }
+            }
             Ask::Processes => Ok(crate::ask::processes(
                 self.shell,
                 self.master.group(),
