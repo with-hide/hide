@@ -2006,20 +2006,35 @@ fn a_pane_with_no_holder_or_whose_holder_refused_is_not_attached_again_by_a_late
     // Closed while no daemon ran: its holder is never started.
     harness.attach("w1:p1", Some(VIEW));
     harness.state("w1:p1", "unavailable");
-    harness.attach("w1:p1", None);
-    harness.attach("w1:p1", Some(VIEW));
     // Its holder is known but the attach to it fails: the pane is over.
     panes.holders.lock().unwrap().insert("w1:p2".into());
     *harness.refuse.refuse.lock().unwrap() = Some("the holder ended".into());
     harness.attach("w1:p2", None);
     harness.state("w1:p2", "unavailable");
-    harness.attach("w1:p2", None);
     *harness.refuse.refuse.lock().unwrap() = None;
+    harness.attach("w1:p1", None);
+    harness.attach("w1:p1", Some(VIEW));
     harness.attach("w1:p2", None);
-    assert!(
-        harness.opened.recv_timeout(WAIT / 10).is_err(),
-        "a pane with no holder to reach was attached again"
-    );
+    harness.attach("w1:p2", Some(VIEW));
+    // A pane whose holder was started, attached after them: the service
+    // takes controls and hands their reports over in order, so any session
+    // the attaches above started is reported before this one starts.
+    panes.holders.lock().unwrap().insert("w1:p3".into());
+    harness.attach("w1:p3", None);
+    loop {
+        match harness.report_where(|report| matches!(report, TerminalReport::State { .. })) {
+            TerminalReport::State { pane, state } if pane == "w1:p3" => {
+                assert_eq!(state.state, "starting");
+                break;
+            }
+            TerminalReport::State { pane, state } => assert!(
+                !matches!(state.state.as_str(), "starting" | "controlling"),
+                "{pane} with no holder to reach was attached again: {state:?}"
+            ),
+            _ => unreachable!(),
+        }
+    }
+    assert_eq!(harness.opened().pane, "w1:p3");
 }
 
 #[test]
