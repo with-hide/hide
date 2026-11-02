@@ -470,8 +470,14 @@ class Journey:
             turn, read, record["activities"] = self.wait_turn(0, value)
             spawn_record = self.spawn_record(name)
             record["brief_input"], record["read"] = (spawn_record or {}).get("brief_input"), read
-            self.settle("launch_brief", cells.start_verdict(spawned, turn, cells.brief_verdict(spawn_record, rides_start()),
-                                                            cells.record_verdict(read, sent, value)),
+            # A launched brief is the agent's own record line for line; a
+            # typed one is confirmed by Hide's canonical rule, which an agent's
+            # screen may reflow (Grok on Windows drops its line breaks, omp
+            # draws a tab as three spaces).
+            checks = [spawned, turn, cells.brief_verdict(spawn_record, rides_start())]
+            if rides_start():
+                checks.append(cells.record_verdict(read, sent, value))
+            self.settle("launch_brief", cells.start_verdict(*checks),
                         self.evidence("launch-brief", record))
         finally:
             self.pane = saved_pane
