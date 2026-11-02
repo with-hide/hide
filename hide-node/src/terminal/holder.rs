@@ -152,13 +152,6 @@ enum Holder {
 }
 
 impl Known {
-    fn socket(&self, pane: &str) -> Option<PathBuf> {
-        match self.lock().get(pane) {
-            Some(Holder::Running(socket)) => Some(socket.clone()),
-            Some(Holder::Starting) | None => None,
-        }
-    }
-
     /// The socket of `pane`'s holder, waiting until `deadline` for a start
     /// under way: a pane is drawn, and its view attaches, while its holder
     /// starts (the core's own engine answers a new tab or split first), and
