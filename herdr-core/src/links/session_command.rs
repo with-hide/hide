@@ -956,6 +956,14 @@ fn read_refusal(failure: ReadFailure) -> Refusal {
         ReadFailure::Link(LinkError::Busy) => {
             no("read_timeout", "The device is busy; retry in a moment")
         }
+        // The node names a file that is no longer there by its reason; its
+        // code is the generic `io` (`hide-host` `session_file`).
+        ReadFailure::Link(LinkError::Refused(error)) if error.message == "session_file_missing" => {
+            no(
+                "session_file_missing",
+                "The session's file is gone; read what the record kept with hide session record",
+            )
+        }
         ReadFailure::Link(LinkError::Refused(error)) => match error.code {
             ErrorCode::NotFound => no(
                 "session_file_missing",
@@ -1191,9 +1199,10 @@ mod tests {
                 panic!("only conversation reads");
             };
             if path.ends_with("s-child.jsonl") {
+                // As `hide-host` answers a file that is no longer there.
                 return Err(LinkError::Refused(HostError::new(
-                    ErrorCode::NotFound,
-                    "gone",
+                    ErrorCode::Io,
+                    "session_file_missing",
                 )));
             }
             let events: Vec<hide_session::ConversationEvent> = (0..30)
