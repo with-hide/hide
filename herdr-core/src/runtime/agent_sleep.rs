@@ -520,12 +520,15 @@ impl Runtime {
                 } else {
                     self.persist_ui_state();
                     self.refresh_sleep_rows_of(pane_id);
-                    // An engine that stopped listing the agent before its end
-                    // landed published the session while the record was still
-                    // ending, which draws no row; this machine's session is
-                    // read again so the sleeping row is drawn from the record.
-                    // A node's session draws it on its next report.
-                    if crate::address::pane_device(pane_id).is_none() {
+                    // The core's own engine stopped listing the agent before
+                    // its end landed and published the session while the
+                    // record was still ending, which draws no row, and it
+                    // publishes again only on a change; its session is read
+                    // again so the sleeping row is drawn from the record. A
+                    // node's session draws it on its next report. Herdr's
+                    // replica can still list the agent here, and its event
+                    // stream brings the session that no longer does.
+                    if self.runs_own_engine() && crate::address::pane_device(pane_id).is_none() {
                         self.request_republish();
                     }
                 }

@@ -93,6 +93,8 @@ fn asleep() -> (Runtime, String) {
 #[test]
 fn a_sleep_whose_agent_left_the_session_before_its_end_landed_draws_its_row_on_the_next_read() {
     let (mut runtime, _) = live_tab_order_runtime(CHECKOUT);
+    let state = tempfile::tempdir().unwrap();
+    runtime.run_devices_on_own_engine(state.path().to_path_buf());
     runtime.ingest_session(Ok(session(Some(4))));
     runtime.dispatch_json(&event(
         "agent_sleep",
@@ -116,6 +118,23 @@ fn a_sleep_whose_agent_left_the_session_before_its_end_landed_draws_its_row_on_t
     );
     runtime.ingest_session(Ok(session(None)));
     assert_eq!(row(&runtime)["sleep"]["state"], "sleeping");
+}
+
+// Herdr's replica can still list the agent when its sleep ends, and its
+// event stream brings the session that no longer does: the end asks for no
+// read of its own there.
+#[test]
+fn a_sleep_end_on_herdr_asks_for_no_session_read() {
+    let (mut runtime, _) = live_tab_order_runtime(CHECKOUT);
+    runtime.ingest_session(Ok(session(Some(4))));
+    runtime.dispatch_json(&event(
+        "agent_sleep",
+        serde_json::json!({"pane_id": SLEEPER}),
+    ));
+    runtime.ingest_session(Ok(session(None)));
+    runtime.take_republish_request();
+    assert!(runtime.ingest_agent_sleep_end(SLEEPER, Ok(4)));
+    assert!(!runtime.take_republish_request());
 }
 
 /// The generic dormant owner is exercised with a proven fixture session;
