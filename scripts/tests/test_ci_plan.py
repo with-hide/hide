@@ -838,8 +838,10 @@ def runner_jobs(block):
     """How many runner jobs one `pr.yml` job starts: a reusable workflow starts its own."""
     if "uses: ./.github/workflows/web-e2e.yml" in block:
         shards = int(re.search(r"\n      shards: (\d+)", block).group(1))
+        # The core's own engine runs the same tests over as many shards again.
+        engines = 2 if "\n      own-engine: true" in block else 1
         # With more than one shard parallel daemon and web builds precede them.
-        return shards + (2 if shards > 1 else 0)
+        return shards * engines + (2 if shards > 1 else 0)
     if "uses: ./.github/workflows/desktop-e2e.yml" in block:
         # Each shard builds in place.
         return int(re.search(r"\n      shards: (\d+)", block).group(1))
@@ -970,8 +972,11 @@ class Workflows(unittest.TestCase):
         # WSL link crosses. The vt lane's three legs, planned only for a change
         # to hide-vt's build, add three. The holder restart lane's three legs,
         # planned only for a change to the holder, the node's holder code, the
-        # agent pins or the lane's scripts, add three.
-        self.assertLessEqual(most, 41, "a run starts more jobs than the suites and native SDK contracts need")
+        # agent pins or the lane's scripts, add three. The core's own engine
+        # runs the web suite over as many shards again as Herdr's, on Linux
+        # and Windows, until the Herdr lane goes with Herdr (PRD
+        # engine-bundle-3-core-owns D-24): seven more.
+        self.assertLessEqual(most, 48, "a run starts more jobs than the suites and native SDK contracts need")
         testing = (ROOT / "docs/TESTING.md").read_text()
         self.assertIn(f"starts at most {most} jobs", testing)
 

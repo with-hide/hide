@@ -376,14 +376,14 @@ jobs:
         run: |
           python3 scripts/ci-flaky-report.py --suite web --playwright web/e2e-report.json \
             --history-record agents/runs/ci-test-history \
-            --job-name "web e2e ${{ inputs.lane }}${{ matrix.engine == 'own' && ' own engine' || format(' {0}/{1}', matrix.shard, inputs.shards) }}"
+            --job-name "web e2e ${{ inputs.lane }}${{ matrix.engine == 'own' && ' own engine' || '' }} ${{ matrix.shard }}/${{ inputs.shards }}"
       - name: Keep this job attempt's test report
         continue-on-error: true
         timeout-minutes: 2
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
-          name: ci-test-history-web-${{ inputs.lane }}-${{ matrix.engine == 'own' && 'own' || matrix.shard }}-attempt-${{ github.run_attempt }}
+          name: ci-test-history-web-${{ inputs.lane }}-${{ matrix.engine }}-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
           path: agents/runs/ci-test-history/
           if-no-files-found: error
           retention-days: 7
@@ -398,7 +398,7 @@ jobs:
         if: ${{ failure() || steps.flaky.outputs.flaky == 'true' }}
         uses: actions/upload-artifact@v7
         with:
-          name: hide-web-e2e-logs-${{ inputs.lane }}-${{ matrix.engine == 'own' && 'own' || matrix.shard }}-attempt-${{ github.run_attempt }}
+          name: hide-web-e2e-logs-${{ inputs.lane }}-${{ matrix.engine }}-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/hide-e2e
             web/test-results

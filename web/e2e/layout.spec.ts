@@ -2,8 +2,7 @@
 // engine HIDE_E2E_ENGINE names (PRD engine-bundle-3-core-owns D-14, D-24,
 // B37): each test starts its own checkout of two shell panes made through
 // the daemon (`engine-fixture.ts`), so the same body runs on the pinned
-// Herdr and on the core's own engine. `@own` puts a test in the own engine's
-// lane (`web-e2e.yml`, `engine: own`); the Herdr lane runs every test.
+// Herdr and on the core's own engine.
 
 import { expect, test, type Page } from "@playwright/test";
 import { chord } from "./chords";
@@ -79,7 +78,7 @@ async function programSize(page: Page, pane: string, marker: string): Promise<{ 
   return { rows: Number(rows), cols: Number(cols) };
 }
 
-test("⌘D splits the focused pane, a divider drag sends one resize_pane, and ⌥⇧W closes the focused idle pane without a confirmation", { tag: ["@platform", "@own"] }, async ({ page }) => {
+test("⌘D splits the focused pane, a divider drag sends one resize_pane, and ⌥⇧W closes the focused idle pane without a confirmation", { tag: "@platform" }, async ({ page }) => {
   const open = await startOpen(page);
   try {
     const { sent } = open;
@@ -121,7 +120,7 @@ test("⌘D splits the focused pane, a divider drag sends one resize_pane, and �
   }
 });
 
-test("of three panes the focused one is outlined, and zoom hides the other two behind a chip", { tag: ["@platform", "@own"] }, async ({ page }) => {
+test("of three panes the focused one is outlined, and zoom hides the other two behind a chip", { tag: "@platform" }, async ({ page }) => {
   const open = await startOpen(page);
   try {
     const { sent } = open;
@@ -151,7 +150,7 @@ test("of three panes the focused one is outlined, and zoom hides the other two b
   }
 });
 
-test("a right-click focuses its pane and opens the terminal menu, whose Zoom pane fills the canvas", { tag: ["@platform", "@own"] }, async ({ page }) => {
+test("a right-click focuses its pane and opens the terminal menu, whose Zoom pane fills the canvas", { tag: "@platform" }, async ({ page }) => {
   const open = await startOpen(page);
   try {
     const { stack, sent } = open;
@@ -212,7 +211,7 @@ async function newTab(page: Page, { stack, sent }: Open): Promise<string> {
   return tab;
 }
 
-test("New tab opens a terminal in front, a tab click switches back, and its close control closes it", { tag: ["@platform", "@own"] }, async ({ page }) => {
+test("New tab opens a terminal in front, a tab click switches back, and its close control closes it", { tag: "@platform" }, async ({ page }) => {
   const open = await startOpen(page);
   try {
     const { stack, sent } = open;
@@ -236,7 +235,7 @@ test("New tab opens a terminal in front, a tab click switches back, and its clos
   }
 });
 
-test("Reopen closed tab gives back the tab just closed with a working shell", { tag: ["@platform", "@own"] }, async ({ page }) => {
+test("Reopen closed tab gives back the tab just closed with a working shell", { tag: "@platform" }, async ({ page }) => {
   const open = await startOpen(page);
   try {
     const { stack, sent } = open;
@@ -268,7 +267,7 @@ test("Reopen closed tab gives back the tab just closed with a working shell", { 
   }
 });
 
-test("a narrower window reaches each pane's program as a narrower terminal", { tag: ["@platform", "@own"] }, async ({ page }) => {
+test("a narrower window reaches each pane's program as a narrower terminal", { tag: "@platform" }, async ({ page }) => {
   const open = await startOpen(page);
   try {
     const { stack } = open;
