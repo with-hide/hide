@@ -56,6 +56,7 @@ use super::session::{
 
 mod watch;
 
+pub(super) use watch::too_old;
 use watch::Watches;
 
 /// The development switch that lets a node run pane holders.

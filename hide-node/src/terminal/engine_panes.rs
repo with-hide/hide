@@ -18,7 +18,7 @@ use super::Service;
 use super::holder::Holders;
 use super::input::Typed;
 use hide_holder_protocol::record::Phase;
-use hide_holder_protocol::{Answer, Appearance, CloseReason, Foreground, OpenError, Size, Theme};
+use hide_holder_protocol::{Answer, Appearance, Foreground, OpenError, Size, Theme};
 use hide_kit::panes::{CloseError, StartRefusal, StartRequest, Started};
 use hide_node_link::holders::{
     HolderError, HolderForeground, HolderProcesses, HolderProof, HolderRecovery, HolderStart,
@@ -206,18 +206,15 @@ impl PaneHolders for LocalPanes {
             Ok(Answer::Processes { .. }) => Err(HolderError::Unreachable(format!(
                 "pane {pane}'s holder answered a styled read with its processes"
             ))),
-            // A holder built before styled reads reads the ask as a first
-            // message it does not know.
-            Err(OpenError::Refused(closed)) if closed.reason == CloseReason::HelloInvalid => {
-                Err(HolderError::Refused {
+            Err(error) => Err(match super::holder::too_old(&error) {
+                Some(version) => HolderError::Refused {
                     code: UNSUPPORTED_HOLDER,
                     message: format!(
-                        "pane {pane}'s holder was built before styled reads: {}",
-                        closed.detail
+                        "pane {pane}'s holder (protocol {version}) was built before styled reads"
                     ),
-                })
-            }
-            Err(error) => Err(ask_error(error)),
+                },
+                None => ask_error(error),
+            }),
         }
     }
 
