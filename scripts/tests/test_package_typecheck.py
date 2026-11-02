@@ -52,10 +52,12 @@ class PackageTypecheck(unittest.TestCase):
         pnpm = self.bin / "pnpm"
         pnpm.write_text(
             '#!/bin/sh\n'
-            'cd web || exit 25\n'
+            'if [ "$1" = --dir ]; then cd "$2" || exit 25; shift 2; fi\n'
             'case "$*" in\n'
-            '  "--dir web build") script=$(node -p "require(\'./package.json\').scripts.build"); exec sh -c "$script" ;;\n'
-            '  "--dir web bundle") script=$(node -p "require(\'./package.json\').scripts.bundle"); exec sh -c "$script" ;;\n'
+            # The real ABI preparation and its failure boundary are exercised
+            # by test_ci_verification_entrypoints; here pnpm stands in for it.
+            '  "prepare:relay") exit 0 ;;\n'
+            '  build|bundle|typecheck) script=$(node -p "require(\'./package.json\').scripts[process.argv[1]]" "$1"); exec sh -c "$script" ;;\n'
             '  *) echo "unexpected package command" >&2; exit 25 ;;\n'
             'esac\n'
         )

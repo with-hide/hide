@@ -4,16 +4,17 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc --noEmit && pnpm bundle",
-    "bundle": "vite build",
+    "dev": "pnpm prepare:relay && vite",
+    "build": "pnpm typecheck && pnpm bundle",
+    "bundle": "pnpm prepare:relay && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "pnpm prepare:relay && tsc --noEmit",
     "lint": "eslint src e2e && node scripts/check-e2e-test-size.mjs e2e",
     "gen:types": "node scripts/gen-types.mjs",
-    "test": "vitest run",
-    "e2e": "pnpm build && playwright test",
-    "build:phone": "node scripts/build-phone.mjs"
+    "test": "pnpm prepare:relay && vitest run",
+    "e2e": "pnpm build && bash ../scripts/verify-web.sh web e2e",
+    "build:phone": "pnpm prepare:relay && node scripts/build-phone.mjs",
+    "prepare:relay": "bash ../scripts/build-relay-wasm.sh"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.1",

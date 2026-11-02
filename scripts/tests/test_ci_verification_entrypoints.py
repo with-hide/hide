@@ -25,12 +25,14 @@ class EntryPoints(unittest.TestCase):
         (self.root / "scripts").mkdir()
         self.bin = self.root / "bin"
         self.bin.mkdir()
-        for name in ["verify-cargo.sh", "verify-web.sh", "toolchain-env.sh"]:
+        for name in ["verify-cargo.sh", "verify-web.sh", "toolchain-env.sh", "build-relay-wasm.sh"]:
             shutil.copyfile(ROOT / "scripts" / name, self.root / "scripts" / name)
-        for name in ["cargo", "pnpm", "rustc"]:
+        for name in ["cargo", "pnpm", "rustc", "rustup"]:
             file = self.bin / name
             file.write_text("#!/usr/bin/env python3\n"
                             "import json, os, sys\n"
+                            "if os.path.basename(sys.argv[0]) == os.environ.get('FAIL_PROGRAM'):\n"
+                            " sys.exit(23)\n"
                             "with open(os.environ['RECORD'], 'a') as f:\n"
                             " f.write(json.dumps({'argv': [os.path.basename(sys.argv[0]), *sys.argv[1:]], 'cwd': os.getcwd(), 'env': dict(os.environ)})+'\\n')\n"
                             "if sys.argv[1:] == ['--version']:\n"
@@ -38,6 +40,25 @@ class EntryPoints(unittest.TestCase):
                             " sys.exit(0)\n"
                             "sys.exit(int(os.environ.get('FAIL_COMMAND', '0')))\n")
             file.chmod(0o755)
+        # Run the actual WASM preparation script with external compilers and
+        # the binding generator replaced. The generated ABI must exist before
+        # a web consumer starts, even for the packager's bundle-only path.
+        (self.root / "Cargo.lock").write_text('[[package]]\nname = "wasm-bindgen"\nversion = "0.0.0-fixture"\n')
+        generator = self.root / "target/relay-tools/bin/wasm-bindgen"
+        generator.parent.mkdir(parents=True)
+        generator.write_text('''#!/usr/bin/env python3
+import os, pathlib, sys
+if sys.argv[1:] == ['--version']:
+    print('wasm-bindgen 0.0.0-fixture')
+    sys.exit(0)
+if os.environ.get('FAIL_PROGRAM') == 'wasm-bindgen':
+    sys.exit(23)
+output = pathlib.Path(sys.argv[sys.argv.index('--out-dir') + 1])
+output.mkdir(parents=True, exist_ok=True)
+for name in ('relay.js', 'relay.d.ts', 'relay_bg.wasm'):
+    (output / name).write_text('fixture')
+''')
+        generator.chmod(0o755)
         # hide-vt's preparation, standing in for the download: it records each
         # call and fails on demand (scripts/prepare-vt-inputs.py).
         (self.root / "scripts" / "prepare-vt-inputs.py").write_text(
@@ -81,6 +102,9 @@ with open(os.environ['RECORD'], 'a') as record:
     record.write(json.dumps({'argv': [name, *args], 'cwd': os.getcwd()}) + '\\n')
 if name == os.environ.get('FAIL_PROGRAM'):
     sys.exit(23)
+if name in ('tsc', 'vite', 'vitest') and pathlib.Path.cwd().name == 'web':
+    if not pathlib.Path('../hide-relay-protocol/pkg/relay_bg.wasm').is_file():
+        sys.exit('web consumer started without the relay ABI')
 if name == 'pnpm':
     if args[0] == 'install':
         sys.exit(0)
@@ -187,10 +211,15 @@ if name == 'playwright' and '--list' in args:
             left, right = (one(job, uses=action) for job in (build, e2e))
             self.assertEqual(left["uses"], right["uses"])
             self.assertEqual(left.get("with", {}), right.get("with", {}))
-        for name in ("Install web dependencies", "Build the web shell"):
+        for name in ("Install web dependencies", "Prepare the relay WebAssembly", "Build the web shell"):
             left, right = (one(job, name=name) for job in (build, e2e))
             self.assertEqual(left["run"], right["run"])
             self.assertEqual(left.get("env", {}), right.get("env", {}))
+        for job in (build, e2e):
+            prepare = one(job, name="Prepare the relay WebAssembly")
+            shell = one(job, name="Build the web shell")
+            self.assertLess(job["steps"].index(prepare), job["steps"].index(shell))
+            self.assertEqual(shell["timeout-minutes"], 5)
         self.assertNotIn("if", one(build, name="Build the web shell"))
         self.assertEqual(one(e2e, name="Build the web shell")["if"], "${{ inputs.shards == 1 }}")
         upload = one(build, name="Keep the web shell for the shards")
@@ -274,6 +303,23 @@ if name == 'playwright' and '--list' in args:
                     self.assertIn("--test-list", calls[-1])
                 self.record.unlink()
 
+    def test_web_shard_discovers_twice_and_prepares_phone_once(self):
+        self.enable_package_scripts()
+        shutil.copyfile(ROOT / "scripts/e2e-shard.py", self.root / "scripts/e2e-shard.py")
+        (self.root / "web/e2e").mkdir()
+        (self.root / "web/e2e/shard-durations.json").write_text(
+            json.dumps({"a.spec.ts › one": 1, "a.spec.ts › two": 1}))
+        result = self.workflow_step("web-e2e.yml", "e2e", "End-to-end",
+                                    RUNNER_TEMP=str(self.root),
+                                    HIDE_E2E_SCREENSHOT_DIR=str(self.root / "screenshots"),
+                                    GREP="", SHARD="1/2")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.tool_calls("node", "web"), [["scripts/build-phone.mjs"]])
+        calls = self.tool_calls("playwright", "web")
+        self.assertEqual(len(calls), 3)
+        self.assertTrue(all("--list" in call for call in calls[:2]))
+        self.assertNotIn("--list", calls[-1])
+
     def test_desktop_execution_always_builds_and_propagates_prerequisite_and_test_failures(self):
         self.enable_package_scripts()
         # No receipt or pre-existing output is required for a safe direct run.
@@ -288,10 +334,27 @@ if name == 'playwright' and '--list' in args:
 
     def test_discovery_never_builds_or_executes_tests_and_propagates_failures(self):
         self.enable_package_scripts()
-        result = self.run_entry("verify-web.sh", "desktop", "e2e-list", "--grep", "one", FAIL_PROGRAM="playwright")
-        self.assertEqual(result.returncode, 23, result.stderr)
-        self.assertFalse(self.tool_calls("node", "desktop"))
-        self.assertEqual(self.tool_calls("playwright", "desktop"), [["test", "--list", "--grep", "one"]])
+        for package in ("web", "desktop"):
+            with self.subTest(package=package):
+                self.record.unlink(missing_ok=True)
+                result = self.run_entry("verify-web.sh", package, "e2e-list", "--grep", "one", FAIL_PROGRAM="playwright")
+                self.assertEqual(result.returncode, 23, result.stderr)
+                self.assertFalse(self.tool_calls("node", package))
+                self.assertFalse(self.tool_calls("cargo", self.root.name))
+                self.assertEqual(self.tool_calls("playwright", package), [["test", "--list", "--grep", "one"]])
+
+    def test_bundle_only_packaging_prepares_abi_and_stops_on_preparation_failure(self):
+        self.enable_package_scripts()
+        for fail in ("cargo", "wasm-bindgen", ""):
+            with self.subTest(fail=fail):
+                shutil.rmtree(self.root / "hide-relay-protocol", ignore_errors=True)
+                self.record.unlink(missing_ok=True)
+                result = subprocess.run(["pnpm", "--dir", "web", "bundle"], cwd=self.root,
+                                        env={**self.env, "FAIL_PROGRAM": fail},
+                                        capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 23 if fail else 0, result.stderr)
+                self.assertEqual(self.tool_calls("vite", "web"), [] if fail else [["build"]])
+                self.assertFalse(self.tool_calls("tsc", "web"))
 
     def test_the_toolchain_is_named_on_stderr_before_cargo_runs(self):
         result = self.run_entry("verify-cargo.sh", "metadata", "--format-version", "1")
@@ -343,22 +406,26 @@ if name == 'playwright' and '--list' in args:
                          [["fmt", "--all", "--check"], ["clippy", "--locked", "--workspace", "--all-targets", "--", "-D", "warnings"]])
 
     def test_web_scoped_step_forwards_playwright_failure_and_package(self):
-        result = self.run_entry("verify-web.sh", "web", "e2e", "--shard=1/4", FAIL_COMMAND="19")
-        self.assertEqual(result.returncode, 19)
-        self.assertEqual(self.records()[0]["argv"], ["--dir", "web", "exec", "playwright", "test", "--shard=1/4"])
+        self.enable_package_scripts()
+        result = self.run_entry("verify-web.sh", "web", "e2e", "--shard=1/4", FAIL_PROGRAM="playwright")
+        self.assertEqual(result.returncode, 23, result.stderr)
+        self.assertEqual(self.tool_calls("playwright", "web"), [["test", "--shard=1/4"]])
+        self.assertEqual(self.tool_calls("node", "web"), [["scripts/build-phone.mjs"]])
+
+    def test_desktop_packaging_modes_reach_the_packager(self):
         self.assertEqual(self.run_entry("verify-web.sh", "desktop", "package").returncode, 0)
-        self.assertEqual(self.records()[1]["argv"], ["--dir", "desktop", "package"])
+        self.assertEqual(self.records()[0]["argv"], ["--dir", "desktop", "package"])
         # The macOS lane's two halves: the release binaries alone, then the host build and the app from them.
         self.assertEqual(self.run_entry("verify-web.sh", "desktop", "package", "compile").returncode, 0)
-        self.assertEqual(self.records()[2]["argv"], ["--dir", "desktop", "exec", "node", "scripts/package.mjs", "compile"])
+        self.assertEqual(self.records()[1]["argv"], ["--dir", "desktop", "exec", "node", "scripts/package.mjs", "compile"])
         self.assertEqual(self.run_entry("verify-web.sh", "desktop", "package", "assemble").returncode, 0)
-        self.assertEqual(self.records()[3]["argv"], ["--dir", "desktop", "package", "assemble"])
+        self.assertEqual(self.records()[2]["argv"], ["--dir", "desktop", "package", "assemble"])
 
     def test_web_install_is_locked_and_invalid_package_actions_fail(self):
         self.assertEqual(self.run_entry("verify-web.sh", "install", "--ignore-scripts").returncode, 0)
         self.assertEqual(self.records()[0]["argv"], ["install", "--frozen-lockfile", "--ignore-scripts"])
         for args in [("install", "--no-frozen-lockfile"), ("elsewhere", "test"),
-                     ("web", "package"), ("web", "test:e2e"), ("retired", "e2e"), ("desktop", "unknown"),
+                     ("web", "package"), ("desktop", "bundle"), ("desktop", "build:phone"), ("web", "test:e2e"), ("retired", "e2e"), ("desktop", "unknown"),
                      ("desktop", "package", "sign"), ("desktop", "package", "compile", "assemble")]:
             with self.subTest(args=args):
                 self.assertEqual(self.run_entry("verify-web.sh", *args).returncode, 2)
