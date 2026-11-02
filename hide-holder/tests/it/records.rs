@@ -14,7 +14,8 @@ use hide_holder_protocol::record::{self, EndReason, Identity, PaneRecord, Phase,
 use hide_holder_protocol::{PROTOCOL_VERSION, Size};
 use hide_kit::layout;
 use hide_kit::panes::{
-    HOLDER_CAP, Judgment, Panes, RECONCILE_BUDGET, START_LIMIT, StartRefusal, StartRequest, Started,
+    ENDED_KEPT, HOLDER_CAP, Judgment, Panes, RECONCILE_BUDGET, START_LIMIT, StartRefusal,
+    StartRequest, Started,
 };
 
 use crate::role::GO;
@@ -302,6 +303,8 @@ fn starts_at_once_stop_at_the_cap_and_say_so() {
     for number in 0..HOLDER_CAP - 2 {
         folder.write(&folder.reserved(&format!("f{number}"), Phase::Running));
     }
+    // An unreadable record may still name a live holder and spends a slot.
+    std::fs::write(layout::pane_record(&folder.state, "f0"), b"{").unwrap();
     let source = source();
     let requests: Vec<StartRequest> = (0..4)
         .map(|number| folder.request(&format!("a{number}"), shell(), Vec::new()))
@@ -331,6 +334,31 @@ fn starts_at_once_stop_at_the_cap_and_say_so() {
         logged.iter().all(|event| event["reason"] == "holder_cap"),
         "{logged:?}"
     );
+}
+
+/// A directory at the file-count boundary still has room when its records
+/// are ended. Admission counts their states, retains only the newest ended
+/// reasons, and treats an unreadable record as a possibly live holder.
+#[test]
+fn ended_records_at_the_capacity_boundary_leave_room_and_keep_their_retention_bound() {
+    let folder = Folder::new();
+    for number in 0..=ENDED_KEPT {
+        let mut ended = folder.reserved(&format!("e{number}"), Phase::Ended);
+        let mut end = record::End::new(EndReason::ProgramExited, "ended");
+        end.at_unix_ms = number as u64 + 1;
+        ended.end = Some(end);
+        folder.write(&ended);
+    }
+    std::fs::write(layout::pane_record(&folder.state, "unreadable"), b"{").unwrap();
+    let running = folder.start(&folder.request("fresh", shell(), Vec::new()));
+    assert_eq!(running.phase, Phase::Running);
+    assert_eq!(folder.panes.live().unwrap(), 2);
+    assert!(folder.panes.record("e0").unwrap().is_none());
+    for number in 1..=ENDED_KEPT {
+        assert_eq!(folder.record(&format!("e{number}")).phase, Phase::Ended);
+    }
+    assert!(folder.panes.record("unreadable").is_err());
+    folder.panes.close("fresh").unwrap();
 }
 
 #[test]

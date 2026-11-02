@@ -514,7 +514,16 @@ impl Panes {
                 Err(error) => return Err(StartRefusal::RecordUnreadable(error)),
                 Ok(None) => {}
             }
-            let count = self.count_live().map_err(StartRefusal::Failed)?;
+            let paths = self.record_paths().map_err(StartRefusal::Failed)?;
+            // Each record names at most one live or ended pane. Below both
+            // bounds even treating every file as live proves admission, and
+            // no ended record can need pruning. At either bound read the
+            // records as before, including unreadable ones in the live count.
+            let count = if paths.len() < HOLDER_CAP && paths.len() <= ENDED_KEPT {
+                paths.len()
+            } else {
+                self.count_live(&Self::read_records(paths))
+            };
             if count >= HOLDER_CAP {
                 self.emit(
                     "pane_holder.start_refused",
@@ -969,16 +978,15 @@ impl Panes {
     /// above zero (PRD engine-bundle-3-core-owns D-10).
     pub fn live(&self) -> Result<usize, String> {
         let _lock = self.lock()?;
-        self.count_live()
+        Ok(self.count_live(&self.scan()?))
     }
 
     /// The records not ended, and the ones that cannot be read, which may
     /// name a holder. Ended records past [`ENDED_KEPT`] go, oldest first.
-    fn count_live(&self) -> Result<usize, String> {
-        let scan = self.scan()?;
+    fn count_live(&self, scan: &[(String, RecordRead)]) -> usize {
         let mut live = 0;
         let mut ended = Vec::new();
-        for (pane, read) in &scan {
+        for (pane, read) in scan {
             match read {
                 Ok(record) if record.phase == Phase::Ended => ended.push((
                     record.end.as_ref().map_or(0, |end| end.at_unix_ms),
@@ -1007,11 +1015,29 @@ impl Panes {
                 );
             }
         }
-        Ok(live)
+        live
     }
 
     /// Every record file, by pane, read. The caller holds the lock.
     fn scan(&self) -> Result<Vec<(String, RecordRead)>, String> {
+        Ok(Self::read_records(self.record_paths()?))
+    }
+
+    fn read_records(paths: Vec<(String, PathBuf)>) -> Vec<(String, RecordRead)> {
+        paths
+            .into_iter()
+            .map(|(pane, path)| {
+                let read = record::read(&path).and_then(|found| {
+                    found.ok_or(Unreadable::Corrupt("removed while read".into()))
+                });
+                (pane, read)
+            })
+            .collect()
+    }
+
+    /// Lists under the records lock, with the same bound for an admission
+    /// and a full scan. Counting names alone never understates live panes.
+    fn record_paths(&self) -> Result<Vec<(String, PathBuf)>, String> {
         let dir = layout::pane_records(&self.state_dir);
         let entries = std::fs::read_dir(&dir)
             .map_err(|error| format!("{} could not be listed: {error}", dir.display()))?;
@@ -1028,9 +1054,7 @@ impl Panes {
                     dir.display()
                 ));
             }
-            let read = record::read(&entry.path())
-                .and_then(|found| found.ok_or(Unreadable::Corrupt("removed while read".into())));
-            scan.push((pane.to_owned(), read));
+            scan.push((pane.to_owned(), entry.path()));
         }
         scan.sort_by(|left, right| left.0.cmp(&right.0));
         Ok(scan)
