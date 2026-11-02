@@ -1676,6 +1676,12 @@ impl LinkStore {
         Ok(record)
     }
 
+    /// The record's top state of `session` alone, as [`LinkStore::ledger_record`]
+    /// reads it, without the tree: `hide session list`'s state column.
+    pub fn ledger_status(&self, session: &SessionIdentity) -> Result<Option<RecordStatus>, String> {
+        Ok(status_of(&self.turn_rows(session)?))
+    }
+
     /// The session's judged turns, oldest first.
     fn turn_rows(&self, session: &SessionIdentity) -> Result<Vec<TurnRow>, String> {
         let mut statement = self

@@ -120,6 +120,9 @@ pub enum CommandKind {
     },
     /// `hide links`: a read of the link record (PRD link-graph D-19).
     Links(herdr_core::links::query::LinksQuery),
+    /// `hide session list|record|read`: the Project's sessions, narrowed in
+    /// three steps (PRD agent-session-read D-01).
+    Session(crate::session_cli::Cli),
     /// `hide memory show|search|add|forget|undo|placed|building|unbuilt|outdated|skipped|stale|release`
     /// (PRD project-memory-v2 D-03, D-11; PRD memory-stale-cards).
     Memory(herdr_core::memory_command::MemoryCommand),
@@ -176,6 +179,7 @@ fn topic_usage(topic: &str) -> Option<String> {
         "mission" => usage(crate::mission_cli::USAGE),
         "plan" => usage(crate::plan_cli::USAGE),
         "links" => LINKS_USAGE.to_owned(),
+        "session" => usage(crate::session_cli::USAGE),
         "memory" => MEMORY_USAGE.to_owned(),
         "browser" => BROWSER_USAGE.to_owned(),
         "file" => FILE_USAGE.to_owned(),
@@ -219,12 +223,13 @@ fn help_text() -> String {
         "hide browser open <url-or-path> [--wait] [--request-id <id>]\nhide browser connect [--display <id>]\nhide browser snapshot|click|fill|type|press|hover|drag|scroll|wait|screenshot|eval|console|network <display> ...\nhide browser help",
         "hide view list [--session <id|here>]\nhide view status <view-id>\nhide view select <view-id> [--request-id <id>]\nhide view close <view-id> [--request-id <id>]\nhide view split <view-id> --area <area-id> --edge left|right|up|down [--request-id <id>]\nhide view move <view-id> --area <area-id> --index <n> [--request-id <id>]",
         LINKS_USAGE.trim_start_matches("usage: "),
+        crate::session_cli::USAGE,
         MEMORY_USAGE.trim_start_matches("usage: "),
     ] {
         text.push_str(&indent(lines));
     }
     text.push_str(
-        "\nA command's name wins over a folder of the same name: hide status is the command, hide ./status opens the folder status.\nOn a connected device, hide <path> works in a Hide pane there or in a plain ssh shell as the account Hide connects with, and brings Hide's window to that device's folder.\n\nCommands that act on the operator's screen (workspace, file, diff, view, browser) need Hide's window open and a pane or shell inside a registered checkout.\nThey never start Hide.\nhide links needs only that pane or shell and a running Hide, and reads the project it is in unless --all-projects is given.\nhide memory reads, adds to and forgets from that project's Project Memory, which Hide keeps for the projects of its own device and of every linked device with a Memory reader.\nhide memory release ends a hold that an agent's stale report put on a card.\nhide memory recheck has a card checked again, out of every hook until the check ends; an agent may ask only for a card its conversation was given.\nRun in a Hide shell pane with no agent, it also lets that card's text be reported stale once more.\n",
+        "\nA command's name wins over a folder of the same name: hide status is the command, hide ./status opens the folder status.\nOn a connected device, hide <path> works in a Hide pane there or in a plain ssh shell as the account Hide connects with, and brings Hide's window to that device's folder.\n\nCommands that act on the operator's screen (workspace, file, diff, view, browser) need Hide's window open and a pane or shell inside a registered checkout.\nThey never start Hide.\nhide links needs only that pane or shell and a running Hide, and reads the project it is in unless --all-projects is given.\nhide session needs the same and reads the sessions of the project it is in and of the connected devices' checkouts of its GitHub repository: list to scan one line per session, record to read one as its session record shows it, read for a few raw events around one request.\nhide memory reads, adds to and forgets from that project's Project Memory, which Hide keeps for the projects of its own device and of every linked device with a Memory reader.\nhide memory release ends a hold that an agent's stale report put on a card.\nhide memory recheck has a card checked again, out of every hook until the check ends; an agent may ask only for a card its conversation was given.\nRun in a Hide shell pane with no agent, it also lets that card's text be reported stale once more.\n",
     );
     text
 }
@@ -448,6 +453,9 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
         Some("diff") => parse_open(iter, false),
         Some("view") => parse_view(iter),
         Some("links") => parse_links(iter),
+        Some("session") => crate::session_cli::parse(iter)
+            .map(CommandKind::Session)
+            .map_err(|reason| wrong(reason, crate::session_cli::USAGE)),
         Some("memory") => parse_memory(iter),
         // Every command's name is matched above, so a word that names none
         // is a folder (`hide ./status` reaches a folder named like one).
@@ -824,6 +832,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
                     | CommandKind::BrowserPage(_)
                     | CommandKind::WorkspaceAction { .. }
                     | CommandKind::Links(_)
+                    | CommandKind::Session(_)
                     | CommandKind::Memory(_)
             ) =>
         {
@@ -1012,6 +1021,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
             workspace_action(&env, action, request_id.as_deref())
         }
         CommandKind::Links(query) => links(&env, &query),
+        CommandKind::Session(cli) => crate::session_cli::run(&env, &cli),
         CommandKind::Memory(command) => memory(&env, &command),
     }
 }

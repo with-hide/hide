@@ -56,6 +56,7 @@ pub mod screen_event;
 pub mod screen_sign_in;
 pub mod seat;
 pub mod server;
+pub mod session_cli;
 pub mod shell_exec;
 pub mod spawn;
 pub mod state_file;

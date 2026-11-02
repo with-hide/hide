@@ -26,6 +26,9 @@ use std::time::Duration;
 
 #[path = "ledger_store.rs"]
 mod ledger;
+#[path = "session_store.rs"]
+mod session_reads;
+pub use session_reads::{ListedSession, SessionFile, SessionPage};
 
 const SCHEMA_VERSION: i64 = 14;
 
