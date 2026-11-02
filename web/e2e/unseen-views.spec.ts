@@ -2,7 +2,9 @@ import { expect, test, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 import { agentPane } from "./agent-pane";
+import { withControl } from "./daemon-actions";
 import { startFixture } from "./engine-fixture";
+import { dumpOnFailure } from "./failure-dump";
 import { startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace, screenshot } from "./wire";
 
@@ -70,7 +72,12 @@ test("an agent's open the operator has not looked at waits on its row until the 
     await page.locator(`[data-pane-view="${other}"] .xterm-screen`).click();
     await expect(page.locator(`[data-pane-view="${other}"]`)).toHaveAttribute("data-focused", "true");
     await hide(["file", "open", "plan.md"]);
-    await expect(mark).toHaveAttribute("data-agent-status-mark", "look");
+    await dumpOnFailure("unseen plan", async () => ({
+      focused: await page.locator('[data-pane-view][data-focused="true"]').getAttribute("data-pane-view"),
+      front: await front(page).getAttribute("aria-label"),
+      row: await row.textContent(),
+      snapshot: await withControl(daemon!, (control) => control.until((rest) => rest, "the failure snapshot")),
+    }), () => expect(mark).toHaveAttribute("data-agent-status-mark", "look"));
     await page.locator(`[data-pane-view="${pane}"] button[data-pane-status-mark="look"]`).click();
     await expect(front(page)).toHaveAttribute("aria-label", /\/plan\.md/);
     await expect(mark).not.toHaveAttribute("data-agent-status-mark", "look");

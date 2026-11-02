@@ -6,6 +6,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { mod } from "./chords";
 import { sendKeys, withControl } from "./daemon-actions";
 import { startFixture } from "./engine-fixture";
+import { dumpOnFailure } from "./failure-dump";
 import { startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace } from "./wire";
 
@@ -48,7 +49,14 @@ test("a selection stays on the text it covers when the wheel scrolls the pane @h
     // Scrolled up, the selection moves down with its text.
     await page.mouse.move(cell(20, 10).x, cell(20, 10).y);
     await page.mouse.wheel(0, -3 * (screen.height / grid.rows));
-    await expect.poll(() => paneText(page, pane), { timeout: 10_000 }).not.toBe(textBefore);
+    await dumpOnFailure("first wheel", async () => ({
+      before: textBefore,
+      after: await paneText(page, pane),
+      selection: await selection(page, pane),
+      grid: await page.evaluate((id) => window.__hideProbe?.paneGrid(id) ?? null, pane),
+      focused: await page.locator('[data-pane-view][data-focused="true"]').getAttribute("data-pane-view"),
+      snapshot: await withControl(daemon!, (control) => control.until((rest) => rest, "the failure snapshot")),
+    }), () => expect.poll(() => paneText(page, pane), { timeout: 10_000 }).not.toBe(textBefore));
     await expect.poll(() => selection(page, pane)).toBe(before);
 
     // Scrolled back down, it returns with the text.
