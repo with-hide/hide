@@ -3,7 +3,7 @@ import wasmUrl from "../../../hide-relay-protocol/pkg/relay_bg.wasm?url";
 
 let ready: Promise<unknown> | undefined;
 export function relayReady(): Promise<unknown> {
-  return ready ??= init({ module_or_path: wasmUrl });
+  return ready ??= init({ module_or_path: wasmUrl }).catch((error) => { ready = undefined; throw error; });
 }
 
 /** The fragment is removed before loading WASM or doing any network work. */
