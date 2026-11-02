@@ -31,7 +31,14 @@ else
     esac
     return "$__hide_status"
   }
-  PROMPT_COMMAND="${PROMPT_COMMAND:+$PROMPT_COMMAND
+  # Bash 5.1 runs each element of a PROMPT_COMMAND array, which the user's
+  # may be, so the folder is said by an element of its own after theirs;
+  # an older bash runs one string.
+  if ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 1))); then
+    PROMPT_COMMAND+=(__hide_cwd)
+  else
+    PROMPT_COMMAND="${PROMPT_COMMAND:+$PROMPT_COMMAND
 }__hide_cwd"
+  fi
   builtin printf '\033]133;A\007'
 fi
