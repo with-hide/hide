@@ -73,6 +73,7 @@ If the device itself cannot receive data or `peer_left`, it is disconnected so i
 Undeliverable data is reported by the peer departure; it is never retained for a replacement connection.
 The room budget charges received valid envelopes before delivery, including a full or retired destination, so receiver failure cannot make ingress free.
 A device response racing an already closed phone is charged to the room budget and answered with `peer_left`, without closing the device or delivering to a replacement phone.
+A retired ID may therefore produce `peer_left` again; clients must treat repeated notifications as idempotent.
 Closing that retired peer again is idempotent; zero and never-issued connection IDs remain routing violations.
 
 These caps bound the service's memory and initial free-service budget, not a measured production throughput promise.

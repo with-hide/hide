@@ -382,10 +382,17 @@ impl State {
                 if let Some(entry) = self.rooms.get_mut(&room) {
                     entry.phones.remove(&connection);
                     let device = entry.device;
-                    let capacity = peer
-                        .departure_capacity
-                        .take()
-                        .expect("admitted phone reserves departure");
+                    let Some(capacity) = peer.departure_capacity.take() else {
+                        events.push(Event::new("departure_capacity_missing", Some(room), None));
+                        events.extend(self.remove(
+                            device,
+                            End::Refused(Rejection::new(
+                                Refusal::InvalidMessage,
+                                "lifecycle_failed",
+                            )),
+                        ));
+                        return events;
+                    };
                     let result = ServerMessage::PeerLeft { connection }
                         .encode()
                         .map_err(crate::protocol_error)
