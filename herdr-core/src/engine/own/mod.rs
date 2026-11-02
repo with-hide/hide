@@ -859,6 +859,50 @@ fn holder_key(key: PaneKey) -> HolderKey {
     }
 }
 
+/// What `send_keys` types for `keys`, in their order: a named key for the
+/// holder to encode, and as bytes a single character (`/`) or a Ctrl chord
+/// of a letter (`ctrl+o`, its control byte), which Herdr's `send_keys` takes
+/// too and an agent's own search is opened with (`crate::agent_find`).
+/// Adjacent bytes go as one input; the holder writes its inputs in order.
+fn typed_keys(keys: &[&str]) -> Answer<Vec<PaneInput>> {
+    let mut typed: Vec<PaneInput> = Vec::new();
+    for key in keys {
+        if let Ok(named) = named_key(key) {
+            match typed.last_mut() {
+                Some(PaneInput::Keys(run)) => run.push(holder_key(named)),
+                _ => typed.push(PaneInput::Keys(vec![holder_key(named)])),
+            }
+            continue;
+        }
+        let bytes = typed_bytes(key).ok_or_else(|| EngineError::Refused {
+            code: "unknown_key".to_owned(),
+            message: format!("the core's own engine presses no key named {key:?}"),
+        })?;
+        match typed.last_mut() {
+            Some(PaneInput::Bytes(run)) => run.extend(bytes),
+            _ => typed.push(PaneInput::Bytes(bytes)),
+        }
+    }
+    Ok(typed)
+}
+
+/// The bytes of a single character, or the control byte of a Ctrl chord of
+/// a letter (`ctrl+o` or `ctrl-o`).
+fn typed_bytes(key: &str) -> Option<Vec<u8>> {
+    let mut chars = key.chars();
+    if let (Some(single), None) = (chars.next(), chars.next()) {
+        return Some(single.to_string().into_bytes());
+    }
+    let lower = key.trim().to_ascii_lowercase();
+    let letter = lower
+        .strip_prefix("ctrl+")
+        .or_else(|| lower.strip_prefix("ctrl-"))?;
+    match letter.as_bytes() {
+        [letter @ b'a'..=b'z'] => Some(vec![letter & 0x1f]),
+        _ => None,
+    }
+}
+
 /// A key a caller names, by Hide's name or Herdr's (`ctrl+c`, `escape`).
 fn named_key(name: &str) -> Answer<PaneKey> {
     let spelled = name.trim().to_ascii_lowercase().replace('+', "-");
@@ -1491,11 +1535,10 @@ impl<'g> Engine for OwnEngine<'g> {
 
     fn send_keys(&self, _wait: Wait, pane: &str, keys: &[&str]) -> Answer<()> {
         self.check()?;
-        let keys = keys
-            .iter()
-            .map(|key| named_key(key).map(holder_key))
-            .collect::<Answer<_>>()?;
-        self.type_input(pane, PaneInput::Keys(keys))
+        for input in typed_keys(keys)? {
+            self.type_input(pane, input)?;
+        }
+        Ok(())
     }
 
     /// The text as it is, then Enter encoded for the program's keyboard
@@ -1840,6 +1883,28 @@ impl<'g> Engine for OwnEngine<'g> {
 
 #[cfg(test)]
 mod tests {
+    // An agent's own search opens with `ctrl+o` and `/` (`crate::agent_find`):
+    // the own engine types them as the bytes Herdr would, in order with the
+    // named keys around them.
+    #[test]
+    fn send_keys_types_a_character_and_a_ctrl_letter_in_order_with_named_keys() {
+        use super::{HolderKey, PaneInput, typed_keys};
+        assert_eq!(
+            typed_keys(&["ctrl+o", "/"]).unwrap(),
+            vec![PaneInput::Bytes(vec![0x0f, b'/'])]
+        );
+        assert_eq!(
+            typed_keys(&["escape", "x", "ctrl-c", "enter"]).unwrap(),
+            vec![
+                PaneInput::Keys(vec![HolderKey::Escape]),
+                PaneInput::Bytes(b"x".to_vec()),
+                PaneInput::Keys(vec![HolderKey::CtrlC, HolderKey::Enter]),
+            ]
+        );
+        assert!(typed_keys(&["f13"]).is_err());
+        assert!(typed_keys(&["ctrl+1"]).is_err());
+    }
+
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Condvar, Mutex};
 
