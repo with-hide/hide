@@ -1,3 +1,4 @@
+import { skipOwnWindowsAgentStart } from "./own-windows-agent-start";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
@@ -43,6 +44,7 @@ async function closeOverview(page: import("@playwright/test").Page) {
 }
 
 test("@platform a native session's record groups its requests by goal flow and keeps its PRs, children and asks through search and summaries off", async ({ page }) => {
+  skipOwnWindowsAgentStart();
   const herdr = await startFixture({ family: true });
   let daemon: Daemon | undefined;
   try {
@@ -213,6 +215,7 @@ test("a report letter is a dim line in the record and the question it wakes wait
 });
 
 test("@platform 백로그로 saves a local memo without publishing and 되돌리기 restores the missed work", async ({ page }) => {
+  skipOwnWindowsAgentStart();
   const herdr = await startFixture({ agents: false });
   let daemon: Daemon | undefined;
   try {
@@ -254,6 +257,7 @@ test("@platform 백로그로 saves a local memo without publishing and 되돌리
 });
 
 test("@platform ⌘⇧M adds a backlog issue from the terminal and hands the keyboard back", async ({ page }) => {
+  skipOwnWindowsAgentStart();
   const herdr = await startFixture();
   let daemon: Daemon | undefined;
   try {
@@ -333,6 +337,7 @@ async function openMissed(page: import("@playwright/test").Page, pane: string, g
 }
 
 test("@platform local missed-work adds survive a repository edit and keep the session origin", async ({ page }) => {
+  skipOwnWindowsAgentStart();
   const herdr = await startFixture({ agents: false });
   let daemon: Daemon | undefined;
   try {
@@ -366,6 +371,7 @@ test("@platform local missed-work adds survive a repository edit and keep the se
 });
 
 test("@platform a local missed-work add finishes while GitHub is unavailable and survives A-to-B-to-A edits", async ({ page }) => {
+  skipOwnWindowsAgentStart();
   const herdr = await startFixture({ agents: false });
   let daemon: Daemon | undefined;
   try {
@@ -391,6 +397,7 @@ test("@platform a local missed-work add finishes while GitHub is unavailable and
 });
 
 test("@platform a migrated session with an unknown original repository can retain its missed work locally", async ({ page }) => {
+  skipOwnWindowsAgentStart();
   const herdr = await startFixture({ agents: false });
   let daemon: Daemon | undefined;
   try {

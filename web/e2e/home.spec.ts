@@ -1,3 +1,4 @@
+import { skipOwnWindowsAgentStart } from "./own-windows-agent-start";
 // This Mac's Home (PRD home-device-rail B16-B18, B21) against a private
 // engine and hided: the sidebar has no Home row (sidebar-titlebar-refresh B11),
 // so Home is reached from the start panel, whose start aimed at Home makes
@@ -160,6 +161,7 @@ test("Home stays selected when its empty registration is listed before its first
 
 // @platform: The link Home makes to a project: a symbolic link on macOS and Linux, a junction on Windows.
 test("Home's ~/hide holds a link to each registered project", { tag: "@platform" }, async ({ page }) => {
+  skipOwnWindowsAgentStart();
   await inOpenedHome(page, async (home, root) => {
     const link = path.join(home, "fixture");
     expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);

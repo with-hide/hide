@@ -1,3 +1,4 @@
+import { skipOwnWindowsAgentStart } from "./own-windows-agent-start";
 // Closing an agent that spawned others (PRD close-agent-subtree): the close
 // sheet lists the descendants, Escape sends nothing, Enter closes the whole
 // subtree deepest first with the target last, and Close only leaves the
@@ -344,6 +345,7 @@ function git(cwd: string, args: string[]): string {
 
 // @platform: Process ownership: which processes belong to a checkout, read through libproc on macOS and /proc on Linux.
 test("Delete worktree closes the agents its checkout spawned outside it before the folder goes", { tag: "@platform" }, async ({ page }) => {
+  skipOwnWindowsAgentStart();
   await page.setViewportSize({ width: 1400, height: 900 });
   const fixture = await startFixture({ family: true });
   let daemon: Daemon | null = null;

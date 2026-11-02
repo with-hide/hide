@@ -1,3 +1,4 @@
+import { skipOwnWindowsAgentStart } from "./own-windows-agent-start";
 // The S7 View areas on an isolated engine and hided (PRD
 // workspace-views-layout B1-B22): a click previews a file in the last used
 // area and a double click, Keep open or the first edit pins it (B1-B3); Open
@@ -316,6 +317,7 @@ const LONG = Array.from({ length: 300 }, (_, index) => `line ${String(index + 1)
 
 // @platform: Korean composed through the browser's input-method path, and a save refused by file mode.
 test("Open to the side shows one document twice: edits and Korean input reach both, each keeps its place, and closing keeps unsaved text", { tag: "@platform" }, async ({ page }) => {
+  skipOwnWindowsAgentStart();
   await page.setViewportSize({ width: 1920, height: 1080 });
   const stack = await startStack(page, "s7-beside", { "shared.txt": LONG, "other.txt": "other\n", "keep.txt": "keep on disk\n" });
   const shared = `${stack.root}/shared.txt`;
@@ -334,8 +336,7 @@ test("Open to the side shows one document twice: edits and Korean input reach bo
     await expect(left).toContainText("line 001");
     await expect(right).toContainText("line 001");
 
-    // An edit in one view shows in the other, and the first edit pins every
-    // view of the document (B2, B4).
+    // Editing either view updates and pins both views of the document (B2, B4).
     await right.click();
     await page.keyboard.press("ControlOrMeta+Home");
     await page.keyboard.press("End");

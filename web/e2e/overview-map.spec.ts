@@ -1,3 +1,4 @@
+import { skipOwnWindowsAgentStart } from "./own-windows-agent-start";
 // PRD overview-main-map B1, B13, B14, B17, B21, B22, B23, B25, B26: the private
 // runtime supplies identity and topology; the camera stays local to the mounted
 // force map, while hiding, folding and dropped places are the core's.
@@ -19,6 +20,7 @@ async function drag(page: Page, handle: Locator, dx: number, dy: number) {
 }
 
 test("@platform Overview restores its exact current session and keeps map movement local", async ({ page }) => {
+  skipOwnWindowsAgentStart();
   const herdr = await startFixture();
   let daemon: Daemon | undefined;
   try {

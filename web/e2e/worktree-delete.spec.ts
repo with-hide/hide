@@ -1,3 +1,4 @@
+import { skipOwnWindowsAgentStart } from "./own-windows-agent-start";
 // Delete worktree… on a worktree that would lose work: the menu item is
 // enabled, the dialog names the dirt, the unmerged commit and the agent it
 // stops, Delete waits for the discard checkbox, and with both boxes ticked
@@ -277,6 +278,7 @@ function git(cwd: string, args: string[]): string {
 
 // @platform: Deleting a worktree stops an agent's processes and removes its folder.
 test("a dirty worktree with an unmerged branch and an agent is deleted once both boxes are ticked", { tag: "@platform" }, async ({ page }) => {
+  skipOwnWindowsAgentStart();
   await page.setViewportSize({ width: 1400, height: 900 });
   const fixture = await startFixture({ agents: false });
   let daemon: Daemon | null = null;

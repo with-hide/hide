@@ -1,3 +1,4 @@
+import { skipOwnWindowsAgentStart } from "./own-windows-agent-start";
 import { expect, test, type CDPSession, type Page } from "@playwright/test";
 import fs from "node:fs";
 import { corePaneFocus, withControl } from "./daemon-actions";
@@ -253,6 +254,7 @@ test("rapid pane clicks coalesce behind one request @herdr", { tag: "@platform" 
 });
 
 test("keys typed after rapid pane clicks reach the last pane", { tag: "@platform" }, async ({ page }) => {
+  skipOwnWindowsAgentStart();
   const fixture = await startFixture();
   const focusFrames = observeFocusFrames(page);
   let daemon: Daemon | undefined;
