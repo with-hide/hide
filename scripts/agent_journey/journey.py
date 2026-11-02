@@ -49,12 +49,30 @@ TOOL_LETTER = ("this agent takes a letter only at a tool call its model makes wh
                "or a bell whose turn can take it")
 LETTER_BODY = "Reply with exactly the token on the next line of this letter.\n"
 LETTER_PROMPT = "Reply with exactly the token on the second line of the letter attached to this prompt."
+# The prompt of the turn a busy letter waits behind: the fake model holds a
+# turn whose prompt carries its hold mark (fake_model.HOLD_MARK).
+HELD_PROMPT = "Reply with exactly {} (journey-hold)"
+# How long a held turn takes to read working on the row.
+WORKING_SECONDS = 30
+# How long a picker stays open after the letter is sent, so the bell's rung
+# meets it open.
+PICKER_SECONDS = 10
+# The picker the operator opens with a slash command, in every agent the
+# menu cell is declared for.
+PICKER_COMMAND = "/model"
+# How long the menu cell waits for Hide to have checked the agent's composer
+# before it opens the picker: the core checks a version once the pane has
+# rested `INPUT_QUIET_MS` (30 s) after a turn its prompt hook saw, on a pass
+# at most every 5 s (herdr-core/src/delivery/composer.rs). Without that
+# check a letter held on the closed picker has nothing to release it until
+# the next turn.
+COMPOSER_CHECK_SECONDS = 60
 # The cells each measured by a module of its own, judging what Hide shows.
 MEASURES = {module.CELL: module.measure for module in (kit, memory, composer, fork, title, usage)}
 # The steps of one agent's journey in order, each from the state the last
 # left: the cells that only read what Hide shows come where that state is,
 # the fork before Sleep so its source still runs the session it copies.
-STEPS = ("start", "integration", "guidance_memory", "letter", "composer", "fork", "sleep_wake", "resume", "title", "usage")
+STEPS = ("start", "integration", "guidance_memory", "letter", "letter_busy", "letter_menu", "composer", "fork", "sleep_wake", "resume", "title", "usage")
 
 
 def created_branch(runtime, repository, branch, worktree):
@@ -101,6 +119,10 @@ class Journey:
         # The real CLIs start on Hide's brief, which their own record has to
         # confirm; the stand-ins imitate only the agent's prompt argument.
         self.brief_start = brief_start
+        # A stand-in has no way in of its own (its Codex refuses `codex
+        # queue`), so only a real CLI's input is
+        # held to the rungs its agent declares.
+        self.own_rungs = brief_start
         self.table, self.row, self.repository = table, contract_row, repository
         self.record, self.reader = record, reader
         # `journey_composer`, which judges a screen by the adapter's composer declaration.
@@ -361,7 +383,8 @@ class Journey:
         if self.brief_start:
             spawn_record = self.spawn_record("journey-" + self.id)
             self.record["start"]["brief_input"] = (spawn_record or {}).get("brief_input")
-            checks.append(cells.brief_verdict(spawn_record))
+            launched = self.own_rungs and (self.row.get("input") or [None])[0] == "launch_prompt"
+            checks.append(cells.brief_verdict(spawn_record, launched))
         evidence = self.evidence("start", self.record["start"])
         verdict = cells.start_verdict(*checks)
         if not self.settle("start", verdict, evidence):
@@ -402,6 +425,7 @@ class Journey:
         before = len(self.conversation().get("events", []))
         value = token()
         since = self.daemon.mark(self.pane)
+        log = self.log_mark()
         sent = self.controller.hide(["request", "send", self.agent, "--intent", "journey-letter-" + self.id,
                                      "--kind", "report", "--body", LETTER_BODY + value])
         record = {"form": form, "token": value, "sent": sent, "shown": []}
@@ -428,8 +452,162 @@ class Journey:
         else:
             read = self.conversation()
         record["read"] = {**read, "events": read.get("events", [])[before:]} if "events" in read else read
-        self.settle("letter", cells.with_turn(cells.letter_verdict(shown, record["read"], self.session, value), turn),
-                    self.evidence("letter", record))
+        record["rungs"] = self.rungs_since(log)
+        verdict = cells.with_turn(cells.letter_verdict(shown, record["read"], self.session, value), turn)
+        self.settle("letter", self.with_rung(verdict, record["rungs"]), self.evidence("letter", record))
+
+    def with_rung(self, verdict, records):
+        """A bell's verdict with the rung that carried it (cells.rung_verdict)."""
+        if verdict[0] != cells.PASS or not self.own_rungs:
+            return verdict
+        rung = cells.rung_verdict(self.row.get("input") or [], records)
+        return (cells.PASS, verdict[1] + "; " + rung[1]) if rung[0] == cells.PASS else rung
+
+    def log_mark(self):
+        """Where the candidate core's log stands, for the rung lines after it."""
+        try:
+            return (self.runtime.state / "Logs" / "core.jsonl").stat().st_size
+        except OSError:
+            return 0
+
+    def rungs_since(self, mark):
+        """The core's input ladder lines for this pane written after `mark`
+        (cells.RUNG_KINDS); a log the core rotated meanwhile is read whole."""
+        return [record for record in self.core_lines(mark) if record.get("kind") in cells.RUNG_KINDS
+                and self.pane in (record.get("pane_id"), record.get("raw_pane_id"))]
+
+    def core_lines(self, mark=0):
+        """The core's log records written after `mark`; a log the core
+        rotated meanwhile is read whole."""
+        path = self.runtime.state / "Logs" / "core.jsonl"
+        try:
+            with open(path, "rb") as stream:
+                size = stream.seek(0, os.SEEK_END)
+                stream.seek(mark if mark <= size else 0)
+                text = stream.read().decode(errors="replace")
+        except OSError:
+            return []
+        found = []
+        for line in text.splitlines():
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(record, dict):
+                found.append(record)
+        return found
+
+    def composer_checked(self):
+        """Wait, up to COMPOSER_CHECK_SECONDS, until Hide has passed the
+        composer check of this agent's version; the check record, or None."""
+        end = time.monotonic() + COMPOSER_CHECK_SECONDS
+        while True:
+            check = cells.composer_check(self.core_lines(), self.id)
+            if check is not None or time.monotonic() >= end:
+                return check
+            if self.runtime.owner.cancelled.wait(2):
+                raise ProcessError("run_cancelled")
+
+    def send_now(self, intent, value, record):
+        """`hide request send --now` of a letter whose second line is `value`;
+        the letter's id, or None with the cell's failure settled."""
+        sent = self.controller.hide(["request", "send", self.agent, "--intent", intent, "--kind", "report",
+                                     "--now", "--body", LETTER_BODY + value])
+        record["sent"] = sent
+        if sent.get("ok") is not True:
+            return None
+        return sent["result"]["id"]
+
+    def letter_busy(self):
+        """A letter sent with --now while the agent works on a turn the
+        fake model holds: that turn keeps its own answer, and the letter
+        goes in once, after it, through the agent's declared rung."""
+        if not cells.measurable(self.table, self.id, "letter_busy"):
+            return
+        record = {"shown": []}
+        self.record["letter_busy"] = record
+        held, value = token(), token()
+        record.update(held=held, token=value)
+        since = self.daemon.mark(self.pane)
+        if not self.type_prompt(record, HELD_PROMPT.format(held)):
+            self.settle("letter_busy", (cells.FAIL, "the pane's terminal never took this screen's keys (transport "
+                                        + " -> ".join(map(str, record["terminal"])) + ")"),
+                        self.evidence("letter_busy", record))
+            return
+        end = time.monotonic() + WORKING_SECONDS
+        while not any(activity == "working" for activity, _ in self.daemon.activities(self.pane, since)):
+            if time.monotonic() > end:
+                self.settle("letter_busy", (cells.FAIL, "the held turn never read working"),
+                            self.evidence("letter_busy", record))
+                return
+            if self.runtime.owner.cancelled.wait(TURN_POLL_SECONDS):
+                raise ProcessError("run_cancelled")
+        log = self.log_mark()
+        letter = self.send_now("journey-letter-busy-" + self.id, value, record)
+        if letter is None:
+            self.settle("letter_busy", (cells.FAIL, "hide request send refused: "
+                                        + ": ".join(filter(None, cells.refusal(record["sent"])))),
+                        self.evidence("letter_busy", record))
+            return
+        record["sent_at_ms"] = int(time.time() * 1000)
+        turn, read, record["activities"] = self.wait_turn(since, value, seconds=LETTER_SECONDS)
+        record["turn"] = turn
+        shown = self.shown(letter, record, lambda shown: shown.get("state") == "delivered", CONFIRM_SECONDS)
+        record["read"] = read
+        record["rungs"] = self.rungs_since(log)
+        verdict = cells.with_turn(cells.busy_letter_verdict(shown, read, self.session, held, value), turn)
+        self.settle("letter_busy", self.with_rung(verdict, record["rungs"]), self.evidence("letter_busy", record))
+
+    def letter_menu(self):
+        """A letter sent with --now while the agent's own picker is open:
+        the picker takes nothing of it, and once the operator closes the
+        picker (Esc) the letter is delivered once and answered."""
+        if not cells.measurable(self.table, self.id, "letter_menu"):
+            return
+        record = {"shown": []}
+        self.record["letter_menu"] = record
+        # A letter held on the picker is released when Hide reads the
+        # composer empty after it closes, which Hide does only for a version
+        # whose composer it has checked; the cell starts from that settled
+        # pane, never from whatever moment the cell before it ended on.
+        record["composer_check"] = self.composer_checked()
+        if record["composer_check"] is None:
+            self.settle("letter_menu", (cells.FAIL, "Hide had not checked this version's composer within "
+                                        f"{COMPOSER_CHECK_SECONDS} s at rest, so no letter held on the picker "
+                                        "could be released"), self.evidence("letter_menu", record))
+            return
+        value = record["token"] = token()
+        before = len(self.conversation().get("events", []))
+        since = self.daemon.mark(self.pane)
+        if not self.type_prompt(record, PICKER_COMMAND):
+            self.settle("letter_menu", (cells.FAIL, "the pane's terminal never took this screen's keys (transport "
+                                        + " -> ".join(map(str, record["terminal"])) + ")"),
+                        self.evidence("letter_menu", record))
+            return
+        self.runtime.owner.cancelled.wait(3)
+        _, record["picker"], _ = self.runtime.command(["pane", "read", self.pane, "--source", "visible"], check=False)
+        log = self.log_mark()
+        letter = self.send_now("journey-letter-menu-" + self.id, value, record)
+        if letter is None:
+            self.settle("letter_menu", (cells.FAIL, "hide request send refused: "
+                                        + ": ".join(filter(None, cells.refusal(record["sent"])))),
+                        self.evidence("letter_menu", record))
+            return
+        if self.runtime.owner.cancelled.wait(PICKER_SECONDS):
+            raise ProcessError("run_cancelled")
+        _, record["picker_after"], _ = self.runtime.command(["pane", "read", self.pane, "--source", "visible"],
+                                                            check=False)
+        self.daemon.dispatch("key", {"pane_id": self.pane, "bytes_base64": base64.b64encode(b"\x1b").decode()})
+        turn, read, record["activities"] = self.wait_turn(since, value, lambda _events: before, seconds=LETTER_SECONDS)
+        record["turn"] = turn
+        shown = self.shown(letter, record, lambda shown: shown.get("state") == "delivered", CONFIRM_SECONDS)
+        record["read"] = {**read, "events": read.get("events", [])[before:]} if "events" in read else read
+        record["rungs"] = self.rungs_since(log)
+        if shown.get("state") != "delivered":
+            # A letter left pending would ring into the cells after this one.
+            record["cancelled"] = self.controller.hide(["request", "cancel", letter])
+        verdict = cells.with_turn(cells.menu_letter_verdict(shown, read, self.session, value, before), turn)
+        self.settle("letter_menu", self.with_rung(verdict, record["rungs"]), self.evidence("letter_menu", record))
 
     def prompt_letter(self, letter, record, before, since, value):
         """The letter rides the next prompt, as it would the operator's: it

@@ -91,15 +91,24 @@ pub fn prompt_digest(prompt: &str) -> String {
 
 /// What was typed, as each agent records it: Claude Code's record of a paste
 /// reads as the text that was pasted (`hide_session::pasted::typed_text`),
-/// and line breaks (CR and LF) and characters above U+FFFF are removed before
-/// trimming. A terminal paste sends each line break as CR, an agent records
-/// LF, and Grok on Windows takes the paste without them; some console readers
-/// drop characters above U+FFFF, including the leading owl.
+/// line breaks (CR, LF, U+2028 and U+2029) and characters above U+FFFF are
+/// removed, and a tab reads as four spaces, before trimming. A terminal paste
+/// sends each line break as CR, an agent records LF, and Grok on Windows
+/// takes the paste without them; a start's prompt argument carries its line
+/// breaks as U+2028 and its tabs as four spaces
+/// (`worktree_control::prompt_argument`), which Codex and agy record as
+/// given and Claude Code with LF; some console readers drop characters
+/// above U+FFFF, including the leading owl.
 pub fn canonical_prompt(prompt: &str) -> String {
-    let canonical: String = hide_session::pasted::typed_text(prompt)
-        .chars()
-        .filter(|&c| c <= '\u{ffff}' && c != '\r' && c != '\n')
-        .collect();
+    let mut canonical = String::with_capacity(prompt.len());
+    for c in hide_session::pasted::typed_text(prompt).chars() {
+        match c {
+            '\r' | '\n' | '\u{2028}' | '\u{2029}' => {}
+            '\t' => canonical.push_str("    "),
+            c if c > '\u{ffff}' => {}
+            c => canonical.push(c),
+        }
+    }
     canonical.trim().to_owned()
 }
 
@@ -566,6 +575,32 @@ mod tests {
         for prompt in ["abd", "a bc", "Abc", "abc\u{ffff}", "abc\u{fe0f}", "abc한"] {
             assert_ne!(prompt_digest(prompt), abc, "{prompt:?}");
         }
+    }
+
+    /// A start's prompt argument carries line breaks as U+2028 and a tab as
+    /// four spaces; Codex records it as given and Claude Code with LF, and
+    /// each record is the brief Hide launched.
+    #[test]
+    fn a_launched_brief_with_a_tab_is_recognized_in_each_agents_record() {
+        let brief = "# Brief\n\tstep one\nReport by letter.";
+        // What the start carried, as `worktree_control::prompt_argument`
+        // writes it.
+        let argument = "# Brief\u{2028}    step one\u{2028}Report by letter.";
+        let claude = "# Brief\n    step one\nReport by letter.";
+        for record in [argument, claude] {
+            assert!(
+                matches_prompt_digest(brief, &prompt_digest(record)),
+                "{record:?}"
+            );
+            assert!(
+                ends_with_typed(&format!("27;1$y{record}"), brief),
+                "{record:?}"
+            );
+        }
+        assert!(!matches_prompt_digest(
+            brief,
+            &prompt_digest("# Brief\n  step one\nReport by letter.")
+        ));
     }
 
     #[test]

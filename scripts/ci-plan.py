@@ -177,6 +177,12 @@ READERS = (
     ("hided/src/", {"rust"}, {"herdr-core"}),
     # web/e2e/s2, s3 and s7 import the wire path conversion.
     ("desktop/src/main/wirePath.ts", {"checks", "web-e2e", "windows-e2e"}, set()),
+    # web/e2e/markdown-html.spec.ts opens the repository README with its logo
+    # and hero picture and asserts what they draw (#1994 broke main by
+    # changing the hero with no web-e2e run).
+    ("README.md", {"web-e2e"}, set()),
+    ("design/brand/hide-icon-blinking.svg", {"web-e2e"}, set()),
+    ("site/assets/video/kick-conductor.gif", {"web-e2e"}, set()),
     # web/src/settings.test.ts, theme.test.ts and web/e2e/theme.spec.ts read the tokens.
     ("design/tokens.json", {"checks", "web-e2e"}, set()),
     # web/src/shortcutsDoc.test.ts checks the guide's chord table.

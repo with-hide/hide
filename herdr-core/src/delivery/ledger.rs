@@ -124,6 +124,10 @@ pub struct Letter {
     /// prompt confirms it (`delivery::typed`). Null until a bell was typed.
     #[serde(default)]
     pub bell_typed_at_unix_ms: Option<u64>,
+    /// How the last bell was sent (`delivery::ladder`), which words its
+    /// unconfirmed notice; the recipient's record confirms it either way.
+    #[serde(default)]
+    pub bell_route: super::typed::SendRoute,
     /// The bell whose unconfirmed notice the sender was sent, 0 for none.
     #[serde(default)]
     pub input_noticed: u8,
@@ -303,6 +307,7 @@ impl Letter {
             confirmed_at_unix_ms: (self.state != State::Pending || self.handed).then_some(0),
             noticed: self.input_noticed,
             noticed_at_unix_ms: self.input_noticed_at_unix_ms,
+            route: self.bell_route,
         })
     }
 
