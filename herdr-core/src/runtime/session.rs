@@ -5077,8 +5077,14 @@ impl Runtime {
             kind: operation.agent_kind.clone()?,
             prompt: launch.and_then(|launch| launch.prompt.clone()),
             args: launch.map(|launch| launch.args.clone()).unwrap_or_default(),
-            codex_daemon: self
-                .codex_daemon(operation.device_id.as_deref().unwrap_or(self.node.as_str())),
+            // A kit answer belongs to the intent only for a start that uses
+            // it. Learning about Codex must not supersede another agent.
+            codex_daemon: if crate::codex_launch::needs_kit_answer(operation.agent_kind.as_deref()?)
+            {
+                self.codex_daemon(operation.device_id.as_deref().unwrap_or(self.node.as_str()))
+            } else {
+                Default::default()
+            },
             shell: self
                 .task_pane_shell
                 .clone()

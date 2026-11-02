@@ -3754,6 +3754,18 @@ fn a_task_agent_start_reports_apart_from_the_creation_it_follows() {
             made_worktree: None,
         })
     );
+    // A concurrent kit inspection can learn about Codex while this Claude
+    // start is in flight. That does not change the intent the worker admitted.
+    let admitted = runtime.pending_task_agent_start(id);
+    runtime.set_kit_state(
+        crate::node::TEST_NODE,
+        crate::model::KitSnapshot {
+            codex_daemon: Some(true),
+            ..Default::default()
+        },
+    );
+    assert_eq!(runtime.pending_task_agent_start(id), admitted);
+
     // An acknowledgement while the agent is still starting keeps the slot.
     runtime.acknowledge_task_operation(id);
     assert!(runtime.snapshot().task_operation.is_some());
