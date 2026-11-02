@@ -594,11 +594,18 @@ pub struct MissionNode {
     /// A direct change's commit on main (B22, B33).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub commit: Option<String>,
-    /// The checkout the node's check command last passed or failed in, on
-    /// the mission's machine: its head now is what the line is compared
-    /// with, whoever works the node then (B7, D-16).
+    /// The checkout on the mission's machine the node's check command last
+    /// passed or failed in: its head now is what the line is compared with,
+    /// whoever works the node then (B7, D-16). Read through `check_folder`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub folder: Option<String>,
+    /// The machine and path of the checkout on another machine the check
+    /// command last ran in, in place of `folder`, which then stays empty: a
+    /// build from before workers ran elsewhere does not know this field, so
+    /// it reads the check as open, never a device's path as one on the
+    /// mission's machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_folder: Option<(String, String)>,
     /// The proof that a direct change's branch is in main, which a mission
     /// waiting for its branches waits on (B17, B18): of that branch only,
     /// while the node stays done.
@@ -677,6 +684,49 @@ impl MissionNode {
     /// The node's current pull request: the last one it holds.
     pub fn current_pr(&self) -> Option<u32> {
         self.prs.last().copied()
+    }
+
+    /// Whether the node's worker and checkers may run on another machine
+    /// than the mission's: only a change that reaches main through a pull
+    /// request, whose work GitHub carries back. A direct change's branch
+    /// would stay on that machine, and a research or verify node answers
+    /// on the mission's.
+    pub fn runs_elsewhere(&self) -> bool {
+        self.kind == NodeKind::Change && self.delivery == Some(Delivery::Pr)
+    }
+
+    /// The machine and path of the checkout the node's check command last
+    /// ran in: `folder` on `mission_device`, or `remote_folder`.
+    pub(crate) fn check_folder<'a>(
+        &'a self,
+        mission_device: &'a str,
+    ) -> Option<(&'a str, &'a str)> {
+        match &self.remote_folder {
+            Some((device, path)) => Some((device, path)),
+            None => Some((mission_device, self.folder.as_deref()?)),
+        }
+    }
+
+    /// Records the checkout the check command ran in, `folder` on the
+    /// mission's machine and `remote_folder` on another; answers whether it
+    /// is another one than before.
+    pub(crate) fn set_check_folder(
+        &mut self,
+        mission_device: &str,
+        device: &str,
+        path: &str,
+    ) -> bool {
+        let moved = self.check_folder(mission_device) != Some((device, path));
+        let remote = device != mission_device;
+        self.folder = (!remote).then(|| path.to_owned());
+        self.remote_folder = remote.then(|| (device.to_owned(), path.to_owned()));
+        moved
+    }
+
+    /// Forgets the checkout the check command ran in.
+    pub(crate) fn clear_check_folder(&mut self) {
+        self.folder = None;
+        self.remote_folder = None;
     }
 
     pub fn seen(&self, number: u32) -> Option<&PrSeen> {
@@ -1760,6 +1810,7 @@ pub(crate) fn apply_plan(
                 pr_seen: Vec::new(),
                 commit: None,
                 folder: None,
+                remote_folder: None,
                 in_main: None,
                 branch_ahead: None,
                 outside_round: 0,
@@ -2206,7 +2257,16 @@ pub fn next_action(code: &str) -> &'static str {
             "Give --evidence with the one line the result rests on: the command and what it printed, or what the review read"
         }
         "mission_checkout_unknown" => {
-            "Record the check command from a pane in the checkout it ran in, on the mission's machine: Hide holds the line against that checkout's later commits"
+            "Record the check command from a pane in the checkout it ran in: Hide holds the line against that checkout's later commits"
+        }
+        "mission_machine_unavailable" => {
+            "That agent's machine is not connected: reconnect it in Settings > Devices and bind again, or bind an agent that runs on the project's machine"
+        }
+        "mission_machine_no_repository" => {
+            "Hide knows no project of the mission's GitHub repository on that agent's machine: register a checkout of it there as a project, or wait while GitHub is still being read for that project or for the mission's own, then bind again"
+        }
+        "mission_machine_node_refused" => {
+            "On another machine than the project's, a mission runs only a pull-request change node's worker and its checkers: start this node's worker or checker on the project's machine, or bind one that runs there"
         }
         "mission_skip_reason_missing" => "Give the reason with --reason <text>",
         "mission_criteria_protected" => {
@@ -2228,7 +2288,7 @@ pub fn next_action(code: &str) -> &'static str {
             "Wait for a worker to finish (end its registration with hide agent end <id>) and retry; a start that failed stops counting after 10 minutes"
         }
         "mission_projects_loading" => {
-            "Retry in a few seconds; Hide is still reading this machine's projects"
+            "Retry in a few seconds; Hide is still reading that machine's projects"
         }
         "mission_project_unknown" => {
             "Run the command from a pane in a checkout of a registered project"

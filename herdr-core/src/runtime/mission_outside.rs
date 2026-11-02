@@ -393,14 +393,9 @@ impl Runtime {
         project: &str,
     ) -> (Result<crate::github::Where, String>, Base) {
         let machine = (device != self.node.as_str()).then_some(device);
-        let listed = match machine {
-            None => self.worktree_catalog.project(project),
-            Some(device) => self
-                .device_worktrees
-                .get(device)
-                .and_then(|listed| listed.projects.get(project)),
-        };
-        let branch = listed.and_then(|listed| listed.base_branch.clone());
+        let branch = self
+            .project_worktrees_on(device, project)
+            .and_then(|listed| listed.base_branch.clone());
         let base = Base {
             merged_heads: crate::worktrees::merged_heads(
                 self.github_project_on(device, project),
