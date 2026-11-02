@@ -13,9 +13,10 @@ pub struct JourneyAdapter {
     /// The agent's own folder in its HOME, whose presence tells the kit the
     /// agent is set up there, as a CLI that has run once leaves it.
     pub home_folder: &'static [&'static str],
-    /// What separates the spawn's native arguments from its first prompt;
-    /// absent for an agent Hide cannot start.
-    pub prompt_flag: Option<&'static str>,
+    /// The words that give a start its first prompt, `{}` replaced by the
+    /// prompt (`LaunchDialect::prompt_form`); absent for an agent Hide cannot
+    /// start.
+    pub prompt_form: Option<&'static [&'static str]>,
     /// How the start command takes a model, `{}` replaced by the value;
     /// empty when the agent takes none.
     pub model_flag: &'static [&'static str],
@@ -151,6 +152,12 @@ pub struct JourneyCells {
     pub start: bool,
     /// Started in a folder the account never trusted.
     pub start_untrusted: bool,
+    /// A brief that the start carries as its prompt argument
+    /// (`AgentApi::LaunchPrompt`), of the forms a command line and an option
+    /// parser can take apart: many lines, a tab, a first character `-` or
+    /// `@`, up to the brief's cap, recorded by the agent once and exactly,
+    /// and never typed.
+    pub launch_brief: bool,
     /// The first turn's reply, read by Hide's conversation reader.
     pub reply: bool,
     /// Herdr's own integration reports the session.
@@ -208,6 +215,7 @@ pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
         let cells = JourneyCells {
             start,
             start_untrusted: start,
+            launch_brief: start && row.launch_prompt(),
             reply: start && row.conversation.is_some(),
             integration: start,
             guidance_memory: context_cell(row),
@@ -222,7 +230,7 @@ pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
             usage: start && matches!(row.usage.tokens, super::usage::Support::Supported(_)),
         };
         // The turns a run starts: the first prompt in the trusted and the
-        // never-trusted start, the question about the Memory card the start
+        // never-trusted start, the launch brief's start, the question about the Memory card the start
         // gave, the letter, the prompt typed into the fork (an agent that
         // tells its session only at its first turn, as Codex does, is
         // registered as a fork only then, and the operator types into a fork
@@ -230,9 +238,11 @@ pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
         // what Hide shows of those turns and start none; the composer cell
         // types text it never submits.
         // The busy letter starts two: the turn it waits behind and its own.
+        // The launch brief starts one, in a start of its own.
         let turns = [
             start,
             cells.start_untrusted,
+            cells.launch_brief,
             cells.guidance_memory,
             cells.letter,
             cells.letter_busy,
@@ -277,7 +287,7 @@ pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
             herdr_kind: row.herdr.name,
             herdr_source: row.herdr.session_source(),
             home_folder: row.folder,
-            prompt_flag: row.start.map(|start| start.prompt_flag()),
+            prompt_form: row.start.map(|start| start.prompt_form()),
             model_flag: row.start.map_or(&[], |start| start.options().model),
             full_access_flag: row
                 .start

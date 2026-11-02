@@ -34,6 +34,7 @@ fn test_env(keep_alive: bool) -> (tempfile::TempDir, Env) {
         pane_id: None,
         // A missing path: no test here reaches a real Tailscale.
         tailscale_bin: Some(dir.path().join("no-tailscale")),
+        relay_url: "ws://127.0.0.1:9/ws".to_owned(),
         search_path: None,
     };
     (dir, env)

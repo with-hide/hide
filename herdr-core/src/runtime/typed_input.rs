@@ -898,7 +898,10 @@ pub(crate) mod tests {
         if launched {
             apply(
                 &mut ledger,
-                Mutation::BriefLaunched { id: spawn.clone() },
+                Mutation::BriefLaunched {
+                    id: spawn.clone(),
+                    words: vec!["--".into(), "brief".into()],
+                },
                 typed_at,
             );
         } else {

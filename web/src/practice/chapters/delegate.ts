@@ -1,4 +1,4 @@
-// Chapter 4: three ways to hand work to another agent, all by saying it to the
+// Chapter 5: three ways to hand work to another agent, all by saying it to the
 // lead: a child it starts and keeps talking to, an open agent it finds by what
 // it does, and an agent named by the name and ID the lead pane's @ types in.
 
@@ -10,7 +10,7 @@ const say = (text: string) => ({ type: { pane: LEAD, text } });
 
 export default chapter<DelegateModel>({
   id: "delegate",
-  number: 4,
+  number: 5,
   version: 2,
   world: DELEGATE_WORLD,
   quest: true,

@@ -1,4 +1,4 @@
-// Chapter 2's world: two invented projects, an app with two agents in two
+// Chapter 3's world: two invented projects, an app with two agents in two
 // tabs and its docs with one, answering the moves between them: a pane
 // chosen from the recent order, a project brought forward, and a file found
 // with ⌘P and opened in the lane's View.
@@ -150,7 +150,7 @@ function move(model: SwitchModel, event: CoreEvent): SwitchModel | null {
       return { ...model, front: place.project, opened: { project: place.project, path: path.slice(pathOf(place).length + 1) }, calls: model.calls + 1 };
     }
     default: {
-      // Splits, zoom, tabs and groups act on the desk in front, as chapter 1 taught them.
+      // Splits, zoom, tabs and groups act on the desk in front, as chapter 2 taught them.
       const shown = model.desks.find((one) => one.place.project === model.front)!;
       const next = applyDesk(shown.model, event);
       return next ? withDesk(model, shown.place.project, next) : null;

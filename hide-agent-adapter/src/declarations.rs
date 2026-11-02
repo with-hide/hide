@@ -515,7 +515,12 @@ pub const ADAPTERS: &[AgentAdapter] = &[
                 style: Style::Italic,
             }],
         }),
-        input: TYPED_ONLY,
+        // Grok 1.0.70 holds `-- <prompt>` through its folder trust question,
+        // and 1.0.52 shows none (measured 2026-11-02).
+        input: &[
+            InputRung::AgentApi(AgentApi::LaunchPrompt),
+            InputRung::Typed,
+        ],
         start: Some(LaunchDialect::Grok),
         find: None,
         usage: UsageDeclaration {
@@ -625,6 +630,11 @@ pub const ADAPTERS: &[AgentAdapter] = &[
                 style: Style::Rgb(128, 128, 128),
             }],
         }),
+        // OpenCode 2.0.29 submits a `--prompt=<prompt>` as soon as its model
+        // list arrives, without waiting for the configuration that names the
+        // operator's model, so a start that loses that race sends the prompt
+        // to the first model of the list, its own free hosted one (macOS
+        // agent journey, run 41415065150, 2026-11-02); its brief is typed.
         input: TYPED_ONLY,
         start: Some(LaunchDialect::OpenCode),
         find: None,
@@ -732,6 +742,9 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             trailer: 0,
             empty: &[],
         }),
+        // Pi 1.0.4 holds `-- <prompt>` through its folder trust question,
+        // but reads one that starts with `@` as a file and exits when there
+        // is none, `--` or not (measured 2026-11-02), so its brief is typed.
         input: TYPED_ONLY,
         start: Some(LaunchDialect::Pi),
         find: None,
@@ -841,7 +854,12 @@ pub const ADAPTERS: &[AgentAdapter] = &[
                 style: Style::Any,
             }],
         }),
-        input: TYPED_ONLY,
+        // omp 18.7.0 holds `-- <prompt>` through its first-run setup and its
+        // update notice (measured 2026-11-02).
+        input: &[
+            InputRung::AgentApi(AgentApi::LaunchPrompt),
+            InputRung::Typed,
+        ],
         start: Some(LaunchDialect::Omp),
         find: None,
         usage: UsageDeclaration {

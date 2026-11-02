@@ -1,4 +1,4 @@
-// Chapter 6's world: one invented project with an agent at work beside the
+// Chapter 7's world: one invented project with an agent at work beside the
 // right lane. It answers the lane opening and closing, showing a tool and
 // its pin, as the core's `workspace_view` does, and the Explorer's folds,
 // and sends what the lane's tools read: the project's 현황 and 할 일 with two
@@ -12,7 +12,7 @@ import { TOOLS, type Tool } from "../../laneTools";
 import type { ChangesSnapshot, MemoryRow, MemorySection, PullRequest, Workspace } from "../../snapshot";
 import type { DirectoryList } from "../../store";
 import type { CoreEvent, PracticeWorld, WorldSnapshot } from "../world";
-import { agent, applyDesk, deskSnapshot, oneTabDesk, shellScreen, type DeskModel, type PracticePane, type PracticePlace } from "./kit";
+import { agent, applyDesk, deskSnapshot, hideAiOn, oneTabDesk, shellScreen, type DeskModel, type PracticePane, type PracticePlace } from "./kit";
 
 const PLACE: PracticePlace = { project: "hide-practice", label: "hide-practice", branch: "main" };
 const ROOT = `/work/${PLACE.project}`;
@@ -171,7 +171,7 @@ function snapshot(model: ProjectModel, nowMs: number): WorldSnapshot {
       status: { ...base.rest.status, background_ai: { enabled: true, provider: "claude", chosen: true, agent_summary: true, providers: [], unavailable_reason: null } },
     },
     usage: usage(nowMs),
-    frames: { listings: listings(), changes: changes(), memory: memory(nowMs) },
+    frames: { listings: listings(), changes: changes(), memory: memory(nowMs), suggestions: hideAiOn(PLACE.project) },
   };
 }
 

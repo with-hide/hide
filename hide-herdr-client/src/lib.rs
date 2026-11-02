@@ -189,13 +189,17 @@ pub enum ApiError {
         message: String,
     },
     Malformed(String),
+    /// The answer passed the reader's limit, in bytes.
+    TooLarge(usize),
 }
 
 impl ApiError {
     pub fn code(&self) -> Option<&str> {
         match self {
             Self::Remote { code, .. } => Some(code),
-            Self::NotRunning(_) | Self::Transport(_) | Self::Malformed(_) => None,
+            Self::NotRunning(_) | Self::Transport(_) | Self::Malformed(_) | Self::TooLarge(_) => {
+                None
+            }
         }
     }
 
@@ -215,6 +219,7 @@ impl fmt::Display for ApiError {
                 formatter.write_str(message)
             }
             Self::Remote { code, message } => write!(formatter, "{code}: {message}"),
+            Self::TooLarge(limit) => write!(formatter, "the answer is larger than {limit} bytes"),
         }
     }
 }
@@ -339,13 +344,87 @@ fn request_small_response_at_deadline(
     deadline: Instant,
     strict_connect: bool,
 ) -> Result<Value, ApiError> {
-    let remaining = || {
-        deadline
-            .checked_duration_since(Instant::now())
-            .filter(|left| !left.is_zero())
-            .ok_or_else(|| ApiError::Transport("request deadline expired".to_owned()))
-    };
-    remaining()?;
+    let (mut stream, request_id) =
+        send_by_deadline(connector, method, params, deadline, strict_connect)?;
+    let line = stream.read_line_with_timeout(remaining(deadline)?)?;
+    remaining(deadline)?;
+    response_result(decode_response(&line)?, &request_id)
+}
+
+/// The most bytes of Herdr's answer to `pane.process_info` a reader takes.
+/// The answer lists every foreground process with its `argv` and its
+/// `cmdline`, so its size is the pane's programs' arguments, each held once
+/// per wrapper process and twice per process: a Codex Hide started from npm
+/// with a 16 KiB brief answered past the 64 KiB small-answer cap, and every
+/// pane proof of it failed (the agent journey, 2026-11-02). One MiB holds
+/// Hide's longest start, a 64 KiB first prompt, four times over with every
+/// character escaped; a pane past it is refused as too large and logged.
+pub const PROCESS_INFO_ANSWER_LIMIT: usize = 1024 * 1024;
+
+/// A one-shot request whose answer may be up to `limit` bytes, read in
+/// chunks, since nothing follows it on the connection; connection (when
+/// `strict_connect`), write and read share `deadline`. An answer past `limit`
+/// is [`ApiError::TooLarge`].
+pub fn request_bounded_until(
+    connector: &dyn ApiConnector,
+    method: &str,
+    params: Value,
+    deadline: Instant,
+    strict_connect: bool,
+    limit: usize,
+) -> Result<Value, ApiError> {
+    let (mut stream, request_id) =
+        send_by_deadline(connector, method, params, deadline, strict_connect)?;
+    let mut line = Vec::new();
+    let mut chunk = [0_u8; 16 * 1024];
+    loop {
+        stream.set_read_timeout(Some(remaining(deadline)?))?;
+        let read = match stream.read(&mut chunk) {
+            Ok(0) => {
+                return Err(ApiError::Transport(
+                    "response ended before its line".to_owned(),
+                ));
+            }
+            Ok(read) => read,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => {
+                return Err(ApiError::Transport(format!(
+                    "response could not be read: {error}"
+                )));
+            }
+        };
+        let end = chunk[..read].iter().position(|byte| *byte == b'\n');
+        line.extend_from_slice(&chunk[..end.map_or(read, |end| end + 1)]);
+        if line.len() > limit {
+            return Err(ApiError::TooLarge(limit));
+        }
+        if end.is_some() {
+            break;
+        }
+    }
+    remaining(deadline)?;
+    let line = String::from_utf8(line)
+        .map_err(|error| ApiError::Malformed(format!("response was not UTF-8: {error}")))?;
+    response_result(decode_response(&line)?, &request_id)
+}
+
+fn remaining(deadline: Instant) -> Result<Duration, ApiError> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .filter(|left| !left.is_zero())
+        .ok_or_else(|| ApiError::Transport("request deadline expired".to_owned()))
+}
+
+/// Connects (within `deadline` when `strict_connect`) and writes one request
+/// before `deadline`; answers the stream and the request's id.
+fn send_by_deadline(
+    connector: &dyn ApiConnector,
+    method: &str,
+    params: Value,
+    deadline: Instant,
+    strict_connect: bool,
+) -> Result<(Box<dyn ApiStream>, String), ApiError> {
+    remaining(deadline)?;
     let request_id = format!("herdr-core:{method}");
     let mut stream = if strict_connect {
         connector.connect_until(deadline)?
@@ -357,7 +436,7 @@ fn request_small_response_at_deadline(
     request.push(b'\n');
     let mut pending = request.as_slice();
     while !pending.is_empty() {
-        stream.set_write_timeout(Some(remaining()?))?;
+        stream.set_write_timeout(Some(remaining(deadline)?))?;
         match stream.write(pending) {
             Ok(0) => {
                 return Err(ApiError::Transport(
@@ -373,9 +452,7 @@ fn request_small_response_at_deadline(
             }
         }
     }
-    let line = stream.read_line_with_timeout(remaining()?)?;
-    remaining()?;
-    response_result(decode_response(&line)?, &request_id)
+    Ok((stream, request_id))
 }
 
 /// Sends one request with a caller-selected correlation id.
@@ -739,6 +816,51 @@ mod tests {
             }
             .reply_unknown()
         );
+    }
+
+    #[test]
+    fn a_bounded_answer_past_the_small_cap_is_read_whole_and_one_past_its_limit_is_too_large() {
+        let root = tempfile::tempdir().unwrap();
+        let socket = root.path().join("peer.sock");
+        let listener = LocalListener::bind(&socket).unwrap();
+        // A process list whose arguments hold a 16 KiB prompt five times.
+        let argv = "x".repeat(16 * 1024);
+        let answer = |argv: &str| {
+            let argv = vec![argv; 5];
+            let result = json!({"process_info":{"shell_pid":7,"foreground_processes":
+                [{"pid":8,"name":"codex","argv":argv}]}});
+            format!(
+                "{}\n",
+                json!({"id":"herdr-core:pane.process_info","result":result})
+            )
+        };
+        let lines = [answer(&argv), answer(&"y".repeat(200 * 1024))];
+        let server = std::thread::spawn(move || {
+            for line in lines {
+                let mut stream = listener.accept().unwrap();
+                read_request(&mut stream);
+                // The reader closes once the answer passes its limit.
+                let _ = stream.write_all(line.as_bytes());
+            }
+        });
+        let ask = |limit| {
+            request_bounded_until(
+                &LocalSocketConnector::new(&socket),
+                "pane.process_info",
+                json!({"pane_id":"w1:p1"}),
+                Instant::now() + Duration::from_secs(5),
+                true,
+                limit,
+            )
+        };
+        let read = ask(PROCESS_INFO_ANSWER_LIMIT).expect("past 64 KiB, within the limit");
+        assert_eq!(read["process_info"]["shell_pid"], 7);
+        assert_eq!(
+            read["process_info"]["foreground_processes"][0]["argv"][4],
+            argv
+        );
+        assert_eq!(ask(512 * 1024).unwrap_err(), ApiError::TooLarge(512 * 1024));
+        server.join().unwrap();
     }
 
     #[test]

@@ -39,7 +39,7 @@ impl NodeLink for ShellNode {
             }
             Call::AgentInstalled { name } => {
                 assert_eq!(name, "codex");
-                Ok(json!(true).into())
+                Ok(json!("program").into())
             }
             other => Err(LinkError::Unknown(format!(
                 "unexpected node call: {other:?}"

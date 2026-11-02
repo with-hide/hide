@@ -1,4 +1,4 @@
-// Chapter 3: following agents. The task list's states, a pane head, the turn
+// Chapter 4: following agents. The task list's states, a pane head, the turn
 // card under the operator's request, a child opened from the head and the way
 // back to its parent, and the whole team on the Overview's map.
 
@@ -9,7 +9,7 @@ const LEAD = '[data-pane-view="lead"]';
 
 export default chapter<FollowModel>({
   id: "follow",
-  number: 3,
+  number: 4,
   version: 2,
   world: FOLLOW_WORLD,
   quest: true,

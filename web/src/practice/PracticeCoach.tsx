@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { hostKind, keySystem } from "../host";
 import { useInterfaceTranslation } from "../i18n/client";
+import { clientI18n } from "../i18n/translator";
 import type { MessageKey } from "../i18n/catalogs";
 import { commandLabel } from "../shortcutLabels";
 import { hostChord, hostRegistry, isCycleCommand, releaseModifier, type CommandId } from "../shortcuts";
@@ -133,7 +134,7 @@ const LETTER_MS = 90;
 function typeInto(typing: PracticeTyping, pace: number): Promise<void> {
   if ("input" in typing) return typeInField(typing.input, typing.text, pace);
   if (!terminalFor(typing.pane)) throw new Error(`Practice step types into ${typing.pane}, which has no terminal on screen`);
-  pasteText(typing.pane, `\x15${typing.text}`);
+  pasteText(typing.pane, `\x15${"words" in typing ? clientI18n.t(typing.words as MessageKey) as string : typing.text}`);
   return new Promise((resolve) => window.setTimeout(() => {
     pasteText(typing.pane, "\r");
     resolve();
@@ -306,7 +307,7 @@ const fieldFilled = (selector: string | null) => !!selector && !!document.queryS
 
 /** Whether the field `selector` marks holds all the words `step` types into it. */
 function wordsIn(selector: string, step: PracticeStep): boolean {
-  const words = step.gesture && "type" in step.gesture ? step.gesture.type.text : "";
+  const words = step.gesture && "type" in step.gesture && "input" in step.gesture.type ? step.gesture.type.text : "";
   return document.querySelector<HTMLInputElement>(selector)?.value === words;
 }
 
@@ -406,6 +407,10 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
     if (step.command && !shellLayerOpen(useUiStore.getState())) setFlash(commandLabel(step.command));
     if (step.done?.(model)) done();
   }, [done, model, step]);
+  // A step that waits on the world's own beat is over at once when the beat came while an earlier step was up.
+  useEffect(() => {
+    if (step.wait && step.done?.(current.current)) done();
+  }, [done, step]);
   useEffect(() => {
     if (!flash) return undefined;
     const timer = window.setTimeout(() => setFlash(null), 900);
@@ -457,7 +462,7 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
   const perform = useCallback(() => {
     // ⏎ while a performed step's result is shown moves on without waiting out the rest.
     if (settle.current) return settle.current.move();
-    if (playing.current === step) return;
+    if (playing.current === step || step.wait) return;
     if (!acts(step)) return advance();
     performed.current = step;
     // A field the step types into is opened first by the step's command: ⌘K, then the words.
@@ -544,15 +549,16 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
     : step.gesture && "type" in step.gesture ? say("practice.via.type")
     : step.gesture && "menu" in step.gesture ? say("practice.via.menu")
     : step.gesture && "pick" in step.gesture ? say("practice.via.pick") : null;
-  const go = last ? say("practice.finish") : acts(step) ? say("practice.try") : say("practice.next");
-  const place = besideLayer(bubblePlace(ring, step.side, size), layerBox, size);
+  const go = last ? say("practice.finish") : step.wait ? say("practice.waiting") : acts(step) ? say("practice.try") : say("practice.next");
+  // The quest card sits in the lower left; the bubble moves clear of it, then of an open palette or menu.
+  const place = besideLayer(clearOf(bubblePlace(ring, step.side, size), rectOf(chapter.quest ? "[data-practice-quest]" : null), size), layerBox, size);
   const title = say(`practice.${chapter.id}.title`);
 
   return (
     // The guide is not part of the screen it teaches, so a press on its bubble or card is no press on the screen: the
     // keyboard stays in the pane that held it, so a chord the step presses (⌘W, ⌃⇥) acts there, as the learner's own
     // key does afterwards, and a popover or menu the screen has open stays open, as the next step may point into it.
-    <div className="pc-layer" data-practice-layer data-keyboard-stays="true" onPointerDown={(event) => event.stopPropagation()} onMouseDown={(event) => event.preventDefault()} data-practice-step={step.id} data-practice-index={index} data-practice-steps={chapter.steps.length} data-practice-ended={ended || undefined} data-practice-settling={settling || undefined}>
+    <div className="pc-layer" data-practice-layer data-keyboard-stays="true" onPointerDown={(event) => event.stopPropagation()} onMouseDown={(event) => event.preventDefault()} data-practice-step={step.id} data-practice-index={index} data-practice-steps={chapter.steps.length} data-practice-ended={ended || undefined} data-practice-settling={settling || undefined} data-practice-waiting={(step.wait && !ended) || undefined}>
       <style>{COACH_CSS}</style>
       {/* What the coach points with, all of it stepping aside while the shell's palette or switcher is up; the chord, marks and hand still sit above the bubble (`z-index` in the style). */}
       {ended ? (chapter.id === FIRST_CHAPTER && next ? <ChoiceCard chapter={chapter} next={next} say={say} onNext={finish} onRestart={onRestart} onHub={onHub} onLeave={onLeave} /> : <EndCard chapter={chapter} next={next} title={title} say={say} onFinish={finish} onRestart={onRestart} onHub={onHub} />) : palette ? null : (
@@ -613,6 +619,17 @@ function bubblePlace(ring: Rect | null, side: PracticeStep["side"], size: { w: n
     return { x, y: clampY(ring.y + ring.h + 22), arrow: { left: Math.max(16, Math.min(w - 32, ring.x + ring.w / 2 - x - 8)), top: -8 } };
   }
   return { x: clampX(ring.x + 60), y: clampY(ring.y + Math.min(ring.h * 0.3, 260)), arrow: null };
+}
+
+/** The bubble lifted above the quest card it would cover, or set beside it when there is no room above; its arrow goes, since it no longer points from where it was. */
+function clearOf(place: Placement, card: Rect | null, size: { w: number; h: number }): Placement {
+  if (!card) return place;
+  const { w, h } = size;
+  const covers = place.x < card.x + card.w && place.x + w > card.x && place.y < card.y + card.h && place.y + h > card.y;
+  if (!covers) return place;
+  const above = card.y - h - 16;
+  if (above >= 40) return { x: place.x, y: above, arrow: null };
+  return { x: Math.min(window.innerWidth - w - 16, card.x + card.w + 16), y: place.y, arrow: null };
 }
 
 /** The bubble moved beside an open palette or menu it would cover, on whichever side has room. */

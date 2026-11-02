@@ -14,7 +14,7 @@ import { useInterfaceTranslation } from "./i18n/client";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { Button } from "./components/ui/button";
 import { Switch } from "./components/ui/switch";
-import { Group, Note, Row, Status } from "./components/settings-rows";
+import { Disclosure, Group, Note, Row, Status } from "./components/settings-rows";
 import {
   checklistView,
   codeCountdown,
@@ -53,13 +53,53 @@ export function MobileTab({ actions }: { actions: Actions }) {
         >
           <Switch checked={mobile.enabled} onCheckedChange={(next) => actions.setMobileEnabled(next)} aria-label={t("mobileSetup.enable")} data-mobile-switch="true" />
         </Row>
-        {mobile.enabled ? <Checks state={mobile} /> : null}
+        {(mobile.enabled || mobile.exposure === "failed") && mobile.method === "relay" ? <RelayConnection state={mobile} actions={actions} /> : null}
         {/* A removal that failed at switch-off stays on screen until it is finished (B7). */}
-        {mobile.enabled || mobile.exposure === "failed" ? <Pairing state={mobile} actions={actions} /> : null}
+        {mobile.method === "relay" && mobile.enabled && mobile.exposure === "exposed" ? <Pairing state={mobile} actions={actions} /> : null}
+        <Disclosure title={t("mobileSetup.relay.advanced")}>
+          <Row label={t("mobileSetup.relay.tailscale")}>
+            <Switch checked={mobile.method === "tailscale"} aria-label={t("mobileSetup.relay.tailscale")}
+              onCheckedChange={(direct) => actions.setMobileMethod(direct ? "tailscale" : "relay")} />
+          </Row>
+          {mobile.method === "tailscale" && mobile.enabled ? <Checks state={mobile} /> : null}
+          {mobile.method === "tailscale" && (mobile.enabled || mobile.exposure === "failed") ? <Pairing state={mobile} actions={actions} /> : null}
+        </Disclosure>
       </Group>
       {mobile.phones.length > 0 ? <Phones state={mobile} actions={actions} /> : null}
     </div>
   );
+}
+
+/** Relay status is one row, including refusals. It never opens an alert. */
+function RelayConnection({ state, actions }: { state: MobileState; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  const machine = useShellStore((s) => coreMachineName(s.rest?.navigator?.devices, t));
+  const status = state.relay.state;
+  const outdated = state.relay.reason === "unsupported_version";
+  const refusal = {
+    connection_limit: "mobileSetup.relay.connectionLimit",
+    room_limit: "mobileSetup.relay.roomLimit",
+    rate_limit: "mobileSetup.relay.rateLimit",
+    frame_limit: "mobileSetup.relay.frameLimit",
+    daily_limit: "mobileSetup.relay.dailyLimit",
+    room_occupied: "mobileSetup.relay.occupied",
+    unsupported_version: "mobileSetup.relay.outdated",
+  } as const;
+  const reason = state.relay.reason as keyof typeof refusal;
+  const text = state.failure && status === "connected" ? t("mobileSetup.relay.cleanupFailed")
+    : state.failure ? exposureLine({ ...state, exposure: "failed" }, machine, t)?.text
+    : status === "connected" ? t("mobileSetup.relay.connected")
+    : status === "retrying" ? t("mobileSetup.relay.retrying")
+    : status === "key_unavailable" ? t("mobileSetup.relay.keyUnavailable")
+    : status === "refused" ? t(refusal[reason] ?? "mobileSetup.relay.refused")
+    : t("mobileSetup.relay.connecting");
+  const retry = status === "retrying" || status === "refused" || status === "key_unavailable";
+  return <Row data-mobile-connection={status}
+    label={<Status tone={state.failure || retry ? "warn" : status === "connected" ? "ok" : "pending"}>{text}</Status>}
+    detail={<span className="text-body text-muted-foreground">{t("mobileSetup.relay.encrypted")}</span>}>
+    {outdated ? <Button variant="secondary" size="sm" onClick={() => actions.openSettings("about")}>{t("mobileSetup.relay.update")}</Button>
+      : retry ? <Button variant="secondary" size="sm" onClick={() => actions.retryMobile()}>{t("mobileSetup.relay.retry")}</Button> : null}
+  </Row>;
 }
 
 /** One ready line when Tailscale is set up, otherwise only the steps that need the operator (B57). */
@@ -113,7 +153,7 @@ function useSinceFrame(frame: MobileState, tickMs: number, live: boolean): numbe
   return Math.max(0, now - arrived);
 }
 
-function QrCode({ text, expired }: { text: string; expired: boolean }) {
+function QrCode({ text }: { text: string }) {
   const { t } = useInterfaceTranslation();
   const cells = useMemo(() => {
     const code = qrcode(0, "M");
@@ -128,17 +168,17 @@ function QrCode({ text, expired }: { text: string; expired: boolean }) {
     }
     return { count, path: dark.join("") };
   }, [text]);
-  const quiet = 2;
+  const quiet = 4;
   return (
     <svg
       role="img"
       aria-label={t("mobileSetup.qr")}
       viewBox={`${-quiet} ${-quiet} ${cells.count + quiet * 2} ${cells.count + quiet * 2}`}
-      className={`size-(--size-mobile-qr) shrink-0 rounded-lg bg-qr-background${expired ? " opacity-(--opacity-disabled)" : ""}`}
+      className="size-(--size-mobile-qr) shrink-0 rounded-lg"
       data-mobile-qr={text}
-      data-mobile-qr-expired={expired ? "true" : undefined}
       shapeRendering="crispEdges"
     >
+      <rect x={-quiet} y={-quiet} width={cells.count + quiet * 2} height={cells.count + quiet * 2} className="fill-qr-background" />
       <path d={cells.path} className="fill-qr-foreground" />
     </svg>
   );
@@ -179,7 +219,7 @@ function Pairing({ state, actions }: { state: MobileState; actions: Actions }) {
         label={
           <span className="flex min-w-0 flex-col gap-xxs">
             <span>{t("mobileSetup.pair")}</span>
-            <span className="text-body text-muted-foreground">{t("mobileSetup.pairDescription")}</span>
+            <span className="text-body text-muted-foreground">{t(state.method === "relay" ? "mobileSetup.relay.pairDescription" : "mobileSetup.pairDescription")}</span>
           </span>
         }
       >
@@ -193,9 +233,9 @@ function Pairing({ state, actions }: { state: MobileState; actions: Actions }) {
           </Button>
         )}
       </Row>
-      {state.qr ? (
+      {state.qr && !expired ? (
         <div className="flex flex-wrap items-center gap-xl px-md py-lg" data-mobile-pairing="ready">
-          <QrCode text={state.qr} expired={expired} />
+          <QrCode text={state.qr} />
           <div className="flex min-w-0 flex-1 flex-col gap-sm">
             <span className="text-headline font-semibold text-foreground">{t("mobileSetup.scan")}</span>
             <span className="text-subhead text-muted-foreground">{t("mobileSetup.scanDescription")}</span>
