@@ -129,10 +129,14 @@ pub(super) struct Pane {
     /// once it forked). Whoever takes the pane out meanwhile leaves its
     /// holder to that call, which ends it once it finds the pane gone.
     /// Kept in memory only.
-    pub(super) starting: bool,
+    pub(super) starting: Option<std::sync::Arc<super::starts::Starting>>,
 }
 
 impl Pane {
+    pub(super) fn is_starting(&self) -> bool {
+        self.starting.as_ref().is_some_and(|start| start.pending())
+    }
+
     pub(super) fn new(cwd: &str, label: Option<&str>) -> Self {
         Self {
             cwd: cwd.to_owned(),
@@ -148,11 +152,15 @@ impl Pane {
         label: Option<&str>,
         command: Option<&[String]>,
         env: &BTreeMap<String, String>,
-    ) -> Self {
-        Self {
-            starting: true,
-            ..Self::started(cwd, label, command, env)
-        }
+    ) -> (Self, std::sync::Arc<super::starts::Starting>) {
+        let starting = std::sync::Arc::default();
+        (
+            Self {
+                starting: Some(std::sync::Arc::clone(&starting)),
+                ..Self::started(cwd, label, command, env)
+            },
+            starting,
+        )
     }
 
     /// A pane started with `command` and `env`, which its export gives back.

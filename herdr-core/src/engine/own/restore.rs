@@ -40,6 +40,7 @@ use hide_node_link::protocol::Call;
 
 use super::agents::{self, PaneAgent};
 use super::shell_line::{self, Shell};
+use super::starts::STARTS_AT_ONCE;
 use super::store::{self, Read};
 use super::topology::{Pane, Topology};
 use super::{Env, OwnEngine};
@@ -59,10 +60,6 @@ pub(super) const BOUND: Duration = Duration::from_secs(180);
 /// How long the restore waits for the node to say whether a saved pane's
 /// folder is still there.
 const FOLDER_WAIT: Duration = Duration::from_secs(10);
-
-/// How many holders a restore starts at once, so a large session coming
-/// back after a reboot does not start every shell together.
-pub(super) const STARTS_AT_ONCE: usize = 8;
 
 /// The name of the tab running holders the saved session does not place
 /// are gathered in.
@@ -91,10 +88,17 @@ pub(super) fn start(engine: OwnEngine<'static>, saved: BTreeSet<String>) -> Resu
         .spawn(move || {
             let gate = engine.restore_gate();
             let resumes = engine.restore(&saved);
-            gate.finish();
-            // Calls that make panes no longer wait for these: each agent
-            // waits for its own shell, one pane after another.
-            engine.resume_agents(&resumes);
+            if resumes.is_empty() {
+                // No worker retains the engine past this gate. A caller
+                // may immediately drop it and reopen its completed save.
+                drop(engine);
+                gate.finish();
+            } else {
+                gate.finish();
+                // Calls that make panes no longer wait for these: each
+                // agent waits for its own shell, one pane after another.
+                engine.resume_agents(&resumes);
+            }
         })
         .map(|_| ())
         .map_err(|error| format!("the session restore thread could not start: {error}"))

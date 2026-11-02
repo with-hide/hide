@@ -52,6 +52,7 @@ pub(crate) mod layout;
 mod restore;
 mod rules;
 mod shell_line;
+mod starts;
 mod store;
 mod topology;
 mod worktrees;
@@ -104,6 +105,7 @@ pub(crate) struct Place {
 struct Shared {
     topology: Arc<Mutex<Topology>>,
     holders: Arc<dyn PaneHolders>,
+    starts: Arc<starts::Starts>,
     wake: Mutex<Option<Wake>>,
     stopped: AtomicBool,
     place: Option<Place>,
@@ -278,6 +280,7 @@ impl OwnEngine<'static> {
                 topology: Arc::new(Mutex::new(topology)),
                 rules: rules::RulesWorker::start(Arc::clone(&holders))?,
                 holders,
+                starts: Arc::default(),
                 wake: Mutex::default(),
                 stopped: AtomicBool::new(false),
                 place,
@@ -498,6 +501,8 @@ impl OwnEngine<'_> {
         env: Env,
         notice: Option<&str>,
     ) -> Result<(), EngineError> {
+        let mut turn = self.shared.starts.reserve()?;
+        turn.enter()?;
         start_holder(&*self.shared.holders, pane, program, cwd, env, notice)
     }
 
@@ -563,14 +568,15 @@ impl OwnEngine<'_> {
         program: Option<&[String]>,
         cwd: &str,
         env: Env,
+        starting: Arc<starts::Starting>,
     ) -> Result<(), EngineError> {
         let started = self.start_pane(pane, program, cwd, env, None);
-        let why = started.as_ref().err().map(ToString::to_string);
         let settled = settle_start(
             &self.shared.topology,
             &*self.shared.holders,
             pane,
-            why.as_deref(),
+            &starting,
+            &started,
             OnFailure::TakeOut,
         );
         if settled == Settled::Failed {
@@ -598,37 +604,51 @@ impl OwnEngine<'_> {
     /// the pane's terminal could not start and offers to close it), and
     /// logs `pane.start_failed`; a call whose outcome hangs on the start (a
     /// spawn's placement, a tab it replaces) uses [`Self::start_drawn`].
-    /// Each start runs on a thread of its own that ends with it, within the
-    /// holder's start bound (`hide_kit::panes::START_LIMIT`); one that
-    /// cannot be made starts the holder here.
-    fn start_after_answer(&self, pane: &str, program: Option<&[String]>, cwd: &str, env: Env) {
-        // The topology and the holders, and the engine only weakly, to
-        // publish a pane taken out: the thread is never the engine's last
-        // owner, so an engine let go while a start runs ends and saves at
-        // once, and the holder runs on as every holder outlives its daemon
-        // (D-10), for the next restore to gather.
+    /// Starts share the restore's admission gate: eight run and eight
+    /// wait at most, admitted before a thread is made. An admission or
+    /// thread failure marks the pane just like a holder start failure.
+    fn start_after_answer(
+        &self,
+        pane: &str,
+        program: Option<&[String]>,
+        cwd: &str,
+        env: Env,
+        starting: Arc<starts::Starting>,
+    ) {
         let topology = Arc::clone(&self.shared.topology);
         let holders = Arc::clone(&self.shared.holders);
         let shared = Arc::downgrade(&self.shared);
+        let turn = self.shared.starts.reserve();
         let (pane, program, cwd) = (
             pane.to_owned(),
             program.map(<[String]>::to_vec),
             cwd.to_owned(),
         );
-        let start = move || {
-            let started = start_holder(&*holders, &pane, program.as_deref(), &cwd, env, None);
-            let Err(error) = started else {
-                settle_start(&topology, &*holders, &pane, None, OnFailure::Mark);
-                return;
+        let start = move |admission: Result<starts::Turn, EngineError>| {
+            // Keep admission until this thread finishes publishing too.
+            let mut admission = admission;
+            let started = match &mut admission {
+                Ok(turn) => turn.enter().and_then(|()| {
+                    start_holder(&*holders, &pane, program.as_deref(), &cwd, env, None)
+                }),
+                Err(error) => Err(error.clone()),
             };
-            let why = error.to_string();
-            crate::diagnostic!(serde_json::json!({
-                "component": "own_engine",
-                "kind": "pane.start_failed",
-                "pane_id": pane,
-                "message": why,
-            }));
-            let settled = settle_start(&topology, &*holders, &pane, Some(&why), OnFailure::Mark);
+            let settled = settle_start(
+                &topology,
+                &*holders,
+                &pane,
+                &starting,
+                &started,
+                OnFailure::Mark,
+            );
+            if let Err(error) = started {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "own_engine",
+                    "kind": "pane.start_failed",
+                    "pane_id": pane,
+                    "message": error.to_string(),
+                }));
+            }
             if settled == Settled::Failed
                 && let Some(shared) = shared.upgrade()
             {
@@ -639,29 +659,39 @@ impl OwnEngine<'_> {
                 .changed();
             }
         };
-        let starting = Arc::new(Mutex::new(Some(start)));
+        let turn = match turn {
+            Ok(turn) => turn,
+            Err(error) => {
+                start(Err(error));
+                return;
+            }
+        };
+        // Admission bounds both active and waiting threads. They hold no
+        // engine, so daemon shutdown still saves without waiting on a node.
+        let pending = Arc::new(Mutex::new(Some((start, turn))));
         let spawned = std::thread::Builder::new()
             .name("hide-own-engine-pane-start".into())
             .spawn({
-                let starting = Arc::clone(&starting);
+                let pending = Arc::clone(&pending);
                 move || {
-                    let start = starting
+                    if let Some((start, turn)) = pending
                         .lock()
                         .unwrap_or_else(PoisonError::into_inner)
-                        .take();
-                    if let Some(start) = start {
-                        start();
+                        .take()
+                    {
+                        start(Ok(turn));
                     }
                 }
             });
-        if spawned.is_err() {
-            let start = starting
+        if let Err(error) = spawned
+            && let Some((start, _turn)) = pending
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
-                .take();
-            if let Some(start) = start {
-                start();
-            }
+                .take()
+        {
+            start(Err(EngineError::Transport(format!(
+                "the holder start thread could not start: {error}"
+            ))));
         }
     }
 
@@ -677,7 +707,7 @@ impl OwnEngine<'_> {
         remove: impl FnOnce(&mut Topology) -> R,
     ) -> Result<R, EngineError> {
         let starting = |topology: &Topology, pane: &String| {
-            topology.pane(pane).is_ok_and(|pane| pane.starting)
+            topology.pane(pane).is_ok_and(|pane| pane.is_starting())
         };
         let (left, now): (Vec<String>, Vec<String>) = {
             let topology = self.topology();
@@ -741,13 +771,10 @@ impl OwnEngine<'_> {
         };
         let (tab, pane) = &reserved;
         self.place(pane)?;
-        let added = self.topology().add_tab(
-            workspace,
-            (tab, pane),
-            label,
-            Pane::starting(cwd, pane_label, program, &env),
-            focus,
-        );
+        let (drawn, starting) = Pane::starting(cwd, pane_label, program, &env);
+        let added = self
+            .topology()
+            .add_tab(workspace, (tab, pane), label, drawn, focus);
         if let Err(error) = added {
             // The workspace closed since the id was reserved.
             self.withdraw(pane);
@@ -755,9 +782,9 @@ impl OwnEngine<'_> {
         }
         self.changed();
         if replace.is_some() || self.places() {
-            self.start_drawn(pane, program, cwd, env)?;
+            self.start_drawn(pane, program, cwd, env, starting)?;
         } else {
-            self.start_after_answer(pane, program, cwd, env);
+            self.start_after_answer(pane, program, cwd, env, starting);
         }
         if let Some(replace) = replace {
             self.close_tab_now(replace)?;
@@ -787,14 +814,10 @@ impl OwnEngine<'_> {
             (topology.reserve_pane(&workspace)?, cwd)
         };
         self.place(&pane)?;
-        let added = self.topology().add_split(
-            target,
-            direction,
-            ratio,
-            &pane,
-            Pane::starting(&cwd, None, None, &env),
-            focus,
-        );
+        let (drawn, starting) = Pane::starting(&cwd, None, None, &env);
+        let added = self
+            .topology()
+            .add_split(target, direction, ratio, &pane, drawn, focus);
         if let Err(error) = added {
             // The pane beside it closed since the id was reserved.
             self.withdraw(&pane);
@@ -802,9 +825,9 @@ impl OwnEngine<'_> {
         }
         self.changed();
         if self.places() {
-            self.start_drawn(&pane, None, &cwd, env)?;
+            self.start_drawn(&pane, None, &cwd, env, starting)?;
         } else {
-            self.start_after_answer(&pane, None, &cwd, env);
+            self.start_after_answer(&pane, None, &cwd, env, starting);
         }
         Ok(pane)
     }
@@ -877,8 +900,18 @@ impl OwnEngine<'_> {
         self.topology().pane(pane).map(|_| ())
     }
 
+    /// Reads wait for the start already represented by this pane, outside
+    /// the topology lock. Its actual refusal is kept for later readers too.
+    fn ready(&self, pane: &str) -> Result<(), EngineError> {
+        let starting = self.topology().pane(pane)?.starting.clone();
+        if let Some(starting) = starting {
+            starting.wait()?;
+        }
+        self.known(pane)
+    }
+
     fn read_styled(&self, pane: &str, read: StyledRead) -> Answer<PaneText> {
-        self.known(pane)?;
+        self.ready(pane)?;
         let (text, truncated) = self
             .shared
             .holders
@@ -901,7 +934,7 @@ impl OwnEngine<'_> {
     }
 
     fn processes(&self, pane: &str) -> Answer<PaneProcessGroup> {
-        self.known(pane)?;
+        self.ready(pane)?;
         let processes = self.shared.holders.processes(pane).map_err(holder_error)?;
         let (group, members) = match processes.foreground {
             Some(foreground) => (Some(foreground.group), foreground.members),
@@ -917,8 +950,6 @@ impl OwnEngine<'_> {
     }
 }
 
-/// A holder's failure in the engine boundary's words: a pane the node does
-/// not have is the refusal a pane the engine does not have is.
 /// Ends the holders of `panes`, every one asked even when one fails: the
 /// first failure, if any. A holder already gone is ended.
 fn end_holders(holders: &dyn PaneHolders, panes: &[String]) -> Result<(), EngineError> {
@@ -972,15 +1003,17 @@ fn settle_start(
     topology: &Mutex<Topology>,
     holders: &dyn PaneHolders,
     pane: &str,
-    failed: Option<&str>,
+    starting: &starts::Starting,
+    result: &Result<(), EngineError>,
     on_failure: OnFailure,
 ) -> Settled {
+    let failed = result.as_ref().err().map(ToString::to_string);
     let kept = {
         let mut topology = Held(topology.lock().unwrap_or_else(PoisonError::into_inner));
+        starting.finish(result.clone());
         match topology.pane_mut(pane) {
             Ok(drawn) => {
-                drawn.starting = false;
-                match (failed, on_failure) {
+                match (failed.as_deref(), on_failure) {
                     (None, _) => {}
                     (Some(why), OnFailure::Mark) => drawn.failed = Some(why.to_owned()),
                     (Some(_), OnFailure::TakeOut) => {
@@ -1026,6 +1059,8 @@ fn start_holder(
         .map_err(holder_error)
 }
 
+/// A holder's failure in the engine boundary's words: a pane the node does
+/// not have is the refusal a pane the engine does not have is.
 fn holder_error(error: HolderError) -> EngineError {
     match error {
         HolderError::NoPane { message } => EngineError::Refused {
@@ -1711,7 +1746,7 @@ impl<'g> Engine for OwnEngine<'g> {
                 ),
             });
         }
-        self.known(pane)?;
+        self.ready(pane)?;
         let lines = u16::try_from(lines.min(READ_LINES_CAP)).unwrap_or(u16::MAX);
         let (text, truncated) = self
             .shared
@@ -1837,7 +1872,7 @@ impl<'g> Engine for OwnEngine<'g> {
         // the time the system gave that program (D-9): a pid the system
         // reused since does not match it. A pane id never moves on this
         // engine, so the pane named is the pane proved.
-        self.known(pane)?;
+        self.ready(pane)?;
         let proof = self.shared.holders.proof(pane).map_err(holder_error)?;
         Ok(PaneProof {
             pane_id: pane.to_owned(),
@@ -2594,6 +2629,86 @@ mod tests {
     }
 
     #[test]
+    fn new_panes_share_the_start_limit_and_report_overflow_and_start_failures() {
+        struct HeldStarts(Vec<std::sync::mpsc::Sender<()>>);
+        impl Drop for HeldStarts {
+            fn drop(&mut self) {
+                for go in self.0.drain(..) {
+                    let _ = go.send(());
+                }
+            }
+        }
+        let holders = Arc::new(Holders::default());
+        holders.idle_shell(42, "sh");
+        let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+        let (workspace, _, first) = engine
+            .create_workspace(WAIT, "/w", "w", true, Env::new())
+            .unwrap();
+        let mut held = HeldStarts(Vec::new());
+        let mut panes = Vec::new();
+        for _ in 0..8 {
+            let (began, starting) = std::sync::mpsc::channel();
+            let (go, wait) = std::sync::mpsc::channel();
+            *holders.hold.lock().unwrap() = Some((began, wait));
+            held.0.push(go);
+            let (_, pane) = engine
+                .create_tab(WAIT, &workspace, "/w", "held", false, Env::new())
+                .unwrap();
+            assert_eq!(
+                starting.recv_timeout(Duration::from_secs(10)).unwrap(),
+                pane
+            );
+            panes.push(pane);
+        }
+        for _ in 0..8 {
+            panes.push(
+                engine
+                    .create_tab(WAIT, &workspace, "/w", "queued", false, Env::new())
+                    .unwrap()
+                    .1,
+            );
+        }
+        let overflow = engine.split_beside(WAIT, &first, None, Env::new()).unwrap();
+        let error = engine.pane_processes(WAIT, &overflow).unwrap_err();
+        assert_eq!(error.code(), Some("holder_start_queue_full"));
+        assert!(engine.session(WAIT).unwrap().panes.iter().any(|pane| {
+            pane.pane_id == overflow
+                && pane.restore_error.as_deref() == Some(error.to_string().as_str())
+        }));
+        // A synchronous creation uses this same gate, including restores.
+        let error = engine
+            .create_workspace(WAIT, "/other", "other", false, Env::new())
+            .unwrap_err();
+        assert_eq!(error.code(), Some("holder_start_queue_full"));
+        drop(held);
+        for pane in panes {
+            assert_eq!(
+                engine.pane_processes(WAIT, &pane).unwrap().shell_pid,
+                Some(42)
+            );
+        }
+        assert_eq!(holders.starting.1.load(Ordering::Acquire), 8);
+
+        holders.refuse.store(true, Ordering::Release);
+        let failed = engine.split_beside(WAIT, &first, None, Env::new()).unwrap();
+        let expected = EngineError::Refused {
+            code: "holder_start_failed".to_owned(),
+            message: format!("pane {failed}: the holder program is missing"),
+        };
+        assert_eq!(engine.pane_processes(WAIT, &failed).unwrap_err(), expected);
+        assert_eq!(
+            engine.read_pane(WAIT, &failed, "recent", 10).unwrap_err(),
+            expected
+        );
+        assert_eq!(engine.read_screen(WAIT, &failed).unwrap_err(), expected);
+        assert_eq!(engine.pane_identity(WAIT, &failed).unwrap_err(), expected);
+        assert_eq!(
+            engine.foreground_program(WAIT, &failed).unwrap_err(),
+            expected
+        );
+    }
+
+    #[test]
     fn a_pane_whose_holder_cannot_start_is_refused_with_its_reason_and_leaves_nothing() {
         let holders = Arc::new(Holders::default());
         let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
@@ -2629,7 +2744,7 @@ mod tests {
         assert_eq!(panes, vec![pane]);
     }
 
-    /// A reboot starts the saved panes again, at most [`restore::STARTS_AT_ONCE`]
+    /// A reboot starts the saved panes again, at most [`starts::STARTS_AT_ONCE`]
     /// at a time: one whose holder does not start keeps its place marked
     /// with why, which the session gives as its `restore_error` (the screen's
     /// card that its terminal could not start, with a close), and every
@@ -2648,14 +2763,18 @@ mod tests {
             .create_workspace(WAIT, &wire(&kept), "w", true, Env::new())
             .unwrap();
         let mut panes = vec![pane.clone()];
-        for _ in 0..11 {
+        for _ in 0..127 {
             let (_, tab) = first
                 .create_tab(WAIT, &workspace, &wire(&kept), "t", false, Env::new())
                 .unwrap();
+            first.read_pane(WAIT, &tab, "recent", 1).unwrap();
             panes.push(tab);
         }
         settles("the first daemon's panes started", || {
-            first.topology().panes().all(|(_, pane)| !pane.starting)
+            first
+                .topology()
+                .panes()
+                .all(|(_, pane)| !pane.is_starting())
         });
         drop(first);
 
@@ -2676,7 +2795,7 @@ mod tests {
         let others: std::collections::BTreeSet<String> =
             panes.iter().filter(|id| **id != refused).cloned().collect();
         assert_eq!(started, others, "every other pane started");
-        assert!(holders.starting.1.load(Ordering::Acquire) <= restore::STARTS_AT_ONCE);
+        assert!(holders.starting.1.load(Ordering::Acquire) <= starts::STARTS_AT_ONCE);
         let session = next.session(WAIT).unwrap();
         let error = |id: &str| {
             session
@@ -2971,7 +3090,10 @@ mod tests {
         // A program exits only once its holder runs, and these start after
         // their answers.
         settles("the new panes' holders started", || {
-            engine.topology().panes().all(|(_, pane)| !pane.starting)
+            engine
+                .topology()
+                .panes()
+                .all(|(_, pane)| !pane.is_starting())
         });
         let exited = holders
             .ends

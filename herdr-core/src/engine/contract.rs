@@ -469,6 +469,68 @@ fn the_own_engine_meets_the_engine_contract() {
     meets_the_contract(&built.engine, &built.folder, || built.stop());
 }
 
+/// A caller may inspect a tab or split as soon as creation answers. Each
+/// first read crosses the real node and holder, without a readiness poll.
+#[test]
+#[ignore = "needs the built pane holder: HIDE_TEST_HOLDER_BIN"]
+fn newly_answered_panes_can_be_read_without_waiting_for_another_event() {
+    struct Running(BuiltHolders);
+    impl Drop for Running {
+        fn drop(&mut self) {
+            self.0.stop();
+        }
+    }
+    let running = Running(BuiltHolders::start());
+    let built = &running.0;
+    let engine = &built.engine;
+    let (workspace, _, first) = engine
+        .create_workspace(WAIT, &built.folder, "reads", true, BTreeMap::new())
+        .unwrap();
+    for split in [false, true] {
+        for read in 0..5 {
+            let pane = if split {
+                engine
+                    .split_beside(WAIT, &first, None, BTreeMap::new())
+                    .unwrap()
+            } else {
+                engine
+                    .create_tab(
+                        WAIT,
+                        &workspace,
+                        &built.folder,
+                        "read",
+                        false,
+                        BTreeMap::new(),
+                    )
+                    .unwrap()
+                    .1
+            };
+            match read {
+                0 => assert!(
+                    engine
+                        .pane_processes(WAIT, &pane)
+                        .unwrap()
+                        .shell_pid
+                        .is_some()
+                ),
+                1 => {
+                    engine.read_pane(WAIT, &pane, "recent", 10).unwrap();
+                }
+                2 => {
+                    engine.read_screen(WAIT, &pane).unwrap();
+                }
+                3 => {
+                    engine.foreground_program(WAIT, &pane).unwrap();
+                }
+                _ => {
+                    engine.pane_identity(WAIT, &pane).unwrap();
+                }
+            }
+            engine.close_pane(WAIT, &pane).unwrap();
+        }
+    }
+}
+
 /// PRD engine-bundle-3-core-owns B28, D-9: a pane on the core's own engine
 /// names itself `HIDE_PANE_ID` and no Herdr pane, says its terminal is
 /// Hide's, and its proof names the shell its record holds, by the start time
