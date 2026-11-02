@@ -32,6 +32,11 @@ test("a ready Mac is one line, the QR waits for Show QR, and the push dropdown o
     await expect(page.locator('[data-mobile-pairing]')).toHaveCount(0);
     expect(tailscale.calls()).toBe("");
 
+    // Direct connection is an explicit choice under Advanced; opening it still makes no code.
+    await tab.getByText("Advanced · Connect directly with Tailscale", { exact: true }).click();
+    await tab.getByRole("switch", { name: "Use Tailscale", exact: true }).click();
+    await expect(tab.getByRole("switch", { name: "Use Tailscale", exact: true })).toHaveAttribute("aria-checked", "true");
+
     // B57: every check passes, so one line stands where the steps were, and no step shows.
     await page.locator('[data-mobile-switch="true"]').click();
     await expect(page.locator('[data-mobile-ready="true"]')).toContainText("Tailscale is ready", { timeout: 20_000 });

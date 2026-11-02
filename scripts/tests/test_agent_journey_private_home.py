@@ -237,6 +237,12 @@ class PrivateHome(unittest.TestCase):
         self.assertEqual(json.loads((self.root / 'pi/.pi/agent/models.json').read_text())
                          ['providers']['journey']['apiKey'], '${JOURNEY_FAKE_KEY}')
         self.assertIn('env_key = "JOURNEY_FAKE_KEY"', (self.root / 'grok/.grok/config.toml').read_text())
+        # OpenCode may use no provider but the fake: one start took its free
+        # hosted model over the configured one.
+        opencode = next((self.root / 'opencode').rglob('opencode.json'))
+        self.assertEqual(json.loads(opencode.read_text())['policies'],
+                         [{'action': 'provider.use', 'resource': '*', 'effect': 'deny'},
+                          {'action': 'provider.use', 'resource': 'journey', 'effect': 'allow'}])
 
 
 class ApiKey(unittest.TestCase):

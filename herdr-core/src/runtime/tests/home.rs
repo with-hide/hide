@@ -29,6 +29,9 @@ impl NodeLink for HomeHost {
             Call::HomeSync { projects } => hide_host::home::sync(&self.user_home, &projects)
                 .map(|synced| LinkAnswer::Parsed(serde_json::to_value(synced).unwrap()))
                 .map_err(LinkError::Refused),
+            // The device starts its agent's program itself, so a first
+            // prompt rides the start.
+            Call::AgentInstalled { .. } => Ok(LinkAnswer::Parsed(serde_json::json!("program"))),
             other => Err(LinkError::Unknown(format!("not faked: {other:?}"))),
         };
         self.writing.fetch_sub(1, Ordering::SeqCst);

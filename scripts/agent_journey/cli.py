@@ -213,7 +213,11 @@ def repository(runtime, name):
     private_directory(path)
     git(runtime, ["init", "-q", "-b", "main"], path)
     write_private(path / "README.md", b"Disposable repository of one agent journey run.\n")
-    git(runtime, ["add", "README.md"], path)
+    # A project file Pi 1.0.4 loads, so Pi asks whether to trust a folder of
+    # this repository unless Hide recorded its trust (docs/agent-hooks.md).
+    private_directory(path / ".pi")
+    write_private(path / ".pi/settings.json", b"{}\n")
+    git(runtime, ["add", "README.md", ".pi/settings.json"], path)
     git(runtime, ["-c", "user.name=Journey", "-c", "user.email=journey@invalid", "commit", "-qm", "Journey baseline"], path)
     return path
 
@@ -703,6 +707,9 @@ def main(argv=None):
                     # No later cell types into the agent's earlier panes.
                     journey.close()
                     journey.step("untrusted", untrusted)
+                # A start of its own; no later cell types into it.
+                journey.close()
+                journey.step("launch_brief", untrusted)
                 agent["requests"] = journey.requests()
                 if fake:
                     # What a provider would have been asked; the session files may not show each one.

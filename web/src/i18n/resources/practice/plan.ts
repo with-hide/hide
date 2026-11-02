@@ -1,6 +1,6 @@
 import type { Catalog, Catalogs } from "../../schema";
 
-// Chapter 7's words (`practice/chapters/plan.ts`).
+// Chapter 8's words (`practice/chapters/plan.ts`).
 const en = {
   "practice.plan.title": "Plan first",
   "practice.plan.summary": "Ask for a plan, open its steps from the chip, approve it in the conversation",
@@ -25,7 +25,7 @@ const en = {
   "practice.plan.approve.kick": "Review and go",
   "practice.plan.approve.title": "Say what to change, or go",
   "practice.plan.approve.text": "Here any answer approves it. In Hide the agent approves it when you agree, then starts on step 1.",
-  "practice.plan.end.kick": "End of chapter 7",
+  "practice.plan.end.kick": "End of chapter 8",
   "practice.plan.end.title": "The chip follows the steps",
   "practice.plan.end.text": "The current step shows under the title. A finished plan stays in the session's record.",
 };
@@ -54,7 +54,7 @@ const ko = {
   "practice.plan.approve.kick": "검토하고 진행",
   "practice.plan.approve.title": "고칠 곳을 말하거나, 진행하라고 하기",
   "practice.plan.approve.text": "연습에서는 어떤 답이든 승인돼요. Hide에서는 내가 동의하면 에이전트가 직접 승인하고 1단계부터 시작해요.",
-  "practice.plan.end.kick": "7편 끝",
+  "practice.plan.end.kick": "8편 끝",
   "practice.plan.end.title": "칩이 진행을 따라가요",
   "practice.plan.end.text": "지금 하는 단계가 제목 아래에 보여요. 끝난 계획은 세션 기록에 남아요.",
 } satisfies Catalog<typeof en>;
@@ -83,7 +83,7 @@ const zhCN = {
   "practice.plan.approve.kick": "审查后开始",
   "practice.plan.approve.title": "说要改什么，或让它开始",
   "practice.plan.approve.text": "练习中任何回答都会批准。在 Hide 中，你同意后智能体自己批准，从第 1 步开始。",
-  "practice.plan.end.kick": "第 7 章完",
+  "practice.plan.end.kick": "第 8 章完",
   "practice.plan.end.title": "标记跟着进度走",
   "practice.plan.end.text": "当前步骤显示在标题下方。完成的计划留在会话记录里。",
 } satisfies Catalog<typeof en>;
@@ -112,7 +112,7 @@ const ja = {
   "practice.plan.approve.kick": "レビューして進める",
   "practice.plan.approve.title": "直すところを言うか、進めてと言う",
   "practice.plan.approve.text": "練習ではどの返事でも承認されます。Hideではあなたが同意するとエージェントが自分で承認し、ステップ1から始めます。",
-  "practice.plan.end.kick": "第 7 章 おわり",
+  "practice.plan.end.kick": "第 8 章 おわり",
   "practice.plan.end.title": "チップが進み具合を追います",
   "practice.plan.end.text": "今のステップはタイトルの下に出ます。終わった計画はセッションの記録に残ります。",
 } satisfies Catalog<typeof en>;

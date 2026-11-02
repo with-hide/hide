@@ -1,6 +1,6 @@
 import type { Catalog, Catalogs } from "../../schema";
 
-// Chapter 3's words (`practice/chapters/follow.ts`).
+// Chapter 4's words (`practice/chapters/follow.ts`).
 const en = {
   "practice.follow.title": "Follow your agents",
   "practice.follow.summary": "Task states, the pane header, the conversation card, children and the team map",
@@ -39,7 +39,7 @@ const en = {
   "practice.follow.map.kick": "Overview",
   "practice.follow.map.title": "Who started whom",
   "practice.follow.map.text": "Lines join each parent to its children, and the agents waiting for you to You. The color of each mark says how it stands.",
-  "practice.follow.end.kick": "End of chapter 3",
+  "practice.follow.end.kick": "End of chapter 4",
   "practice.follow.end.title": "You can follow any agent now",
   "practice.follow.end.text": "The list, the header, the card, a child and back. Esc closes the agent's panel, then the Overview.",
 };
@@ -82,7 +82,7 @@ const ko = {
   "practice.follow.map.kick": "개요",
   "practice.follow.map.title": "누가 누구를 시작했는지",
   "practice.follow.map.text": "선은 부모와 자식을 잇고, 나를 기다리는 에이전트를 ‘나’에 이어요. 표시의 색이 상태예요.",
-  "practice.follow.end.kick": "3편 끝",
+  "practice.follow.end.kick": "4편 끝",
   "practice.follow.end.title": "이제 어떤 에이전트든 따라갈 수 있어요",
   "practice.follow.end.text": "목록, 헤더, 대화 카드, 자식, 그리고 부모로. Esc를 누르면 에이전트 패널이, 한 번 더 누르면 개요가 닫혀요.",
 } satisfies Catalog<typeof en>;
@@ -125,7 +125,7 @@ const zhCN = {
   "practice.follow.map.kick": "概览",
   "practice.follow.map.title": "谁启动了谁",
   "practice.follow.map.text": "线条连接父智能体和子智能体，等你的智能体会连到“我”。标记的颜色就是状态。",
-  "practice.follow.end.kick": "第 3 章完",
+  "practice.follow.end.kick": "第 4 章完",
   "practice.follow.end.title": "现在你可以跟进任何智能体了",
   "practice.follow.end.text": "列表、标题栏、对话卡片、子智能体，再回到父智能体。按 Esc 先关闭智能体面板，再按一次关闭概览。",
 } satisfies Catalog<typeof en>;
@@ -168,7 +168,7 @@ const ja = {
   "practice.follow.map.kick": "概要",
   "practice.follow.map.title": "誰が誰を始めたか",
   "practice.follow.map.text": "線が親と子をつなぎ、あなたを待つエージェントは「自分」につながります。印の色が状態を表します。",
-  "practice.follow.end.kick": "第 3 章 おわり",
+  "practice.follow.end.kick": "第 4 章 おわり",
   "practice.follow.end.title": "どのエージェントでも追いかけられます",
   "practice.follow.end.text": "リスト、ヘッダー、会話カード、子エージェント、そして親へ。Esc でエージェントのパネルを、もう一度で概要を閉じます。",
 } satisfies Catalog<typeof en>;

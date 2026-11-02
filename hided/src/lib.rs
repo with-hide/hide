@@ -518,6 +518,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         state_dir: env.state_dir.clone(),
         home: env.home.clone(),
         port,
+        relay_url: env.relay_url.clone(),
         cli: mobile::tailscale::CliSource {
             pinned: env.tailscale_bin.clone(),
             search_path: env.search_path.clone(),

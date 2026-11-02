@@ -9,8 +9,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use hide_herdr_client::{
-    ApiConnector, ApiError, request_small_response, request_small_response_strict_until,
-    request_with_connector,
+    ApiConnector, ApiError, PROCESS_INFO_ANSWER_LIMIT, request_bounded_until,
+    request_small_response, request_small_response_strict_until, request_with_connector,
 };
 use serde_json::Value;
 
@@ -160,6 +160,35 @@ impl HerdrEngine<'_> {
         read(self.ask(method, params, wait)?).map_err(EngineError::Answer)
     }
 
+    /// Herdr's `pane.process_info` answer for `pane`, read within `wait` and
+    /// up to [`PROCESS_INFO_ANSWER_LIMIT`]: its size is the pane's programs'
+    /// arguments, which the 64 KiB small-answer cap does not bound. A pane
+    /// past the limit is logged and refused, never read in part.
+    fn process_info(&self, pane: &str, wait: Wait) -> Result<Value, EngineError> {
+        let (deadline, strict) = match wait {
+            Wait::Each(timeout) | Wait::Small(timeout) => (Instant::now() + timeout, false),
+            Wait::By(deadline) => (deadline, true),
+        };
+        let params = wire::pane_process_info_params(pane).map_err(EngineError::Request)?;
+        request_bounded_until(
+            self.connector.as_ref(),
+            "pane.process_info",
+            params,
+            deadline,
+            strict,
+            PROCESS_INFO_ANSWER_LIMIT,
+        )
+        .map_err(|error| {
+            if let ApiError::TooLarge(limit) = error {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "engine", "kind": "pane.process_info_too_large",
+                    "pane_id": pane, "limit": limit,
+                }));
+            }
+            from_api(error)
+        })
+    }
+
     /// [`Self::ask`] for a call whose answer says nothing beyond success.
     fn act(&self, method: &str, params: Result<Value, String>, wait: Wait) -> Answer<()> {
         self.ask(method, params, wait).map(drop)
@@ -229,6 +258,7 @@ pub(crate) fn from_api(error: ApiError) -> EngineError {
         ApiError::Transport(message) => EngineError::Transport(message),
         ApiError::Remote { code, message } => EngineError::Refused { code, message },
         ApiError::Malformed(message) => EngineError::Malformed(message),
+        error @ ApiError::TooLarge(_) => EngineError::Malformed(error.to_string()),
     }
 }
 
@@ -857,21 +887,11 @@ impl Engine for HerdrEngine<'_> {
     }
 
     fn pane_processes(&self, wait: Wait, pane: &str) -> Answer<PaneProcessGroup> {
-        self.call(
-            "pane.process_info",
-            wire::pane_process_info_params(pane),
-            wait,
-            wire::pane_process_group,
-        )
+        wire::pane_process_group(self.process_info(pane, wait)?).map_err(EngineError::Answer)
     }
 
     fn foreground_program(&self, wait: Wait, pane: &str) -> Answer<Option<String>> {
-        self.call(
-            "pane.process_info",
-            wire::pane_process_info_params(pane),
-            wait,
-            |answer| wire::foreground_process(answer, pane),
-        )
+        wire::foreground_process(self.process_info(pane, wait)?, pane).map_err(EngineError::Answer)
     }
 
     fn resumed_session(
@@ -880,12 +900,8 @@ impl Engine for HerdrEngine<'_> {
         pane: &str,
         agent: hide_session::Agent,
     ) -> Answer<Option<(String, String)>> {
-        self.call(
-            "pane.process_info",
-            wire::pane_process_info_params(pane),
-            wait,
-            |answer| wire::resumed_session_reference(answer, pane, agent),
-        )
+        wire::resumed_session_reference(self.process_info(pane, wait)?, pane, agent)
+            .map_err(EngineError::Answer)
     }
 
     fn current_pane(&self, wait: Wait, pane: &str) -> Answer<String> {
@@ -899,12 +915,8 @@ impl Engine for HerdrEngine<'_> {
 
     fn pane_identity(&self, wait: Wait, pane: &str) -> Answer<PaneProof> {
         let current = self.current_pane(wait, pane)?;
-        let shell_pid = self.call(
-            "pane.process_info",
-            wire::pane_process_info_params(&current),
-            proof_stage(wait)?,
-            wire::pane_shell_pid,
-        )?;
+        let shell_pid = wire::pane_shell_pid(self.process_info(&current, proof_stage(wait)?)?)
+            .map_err(EngineError::Answer)?;
         let terminal_id = self.pane_terminal(proof_stage(wait)?, &current)?;
         Ok(PaneProof {
             pane_id: current,

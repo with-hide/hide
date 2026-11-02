@@ -13,6 +13,7 @@ const DAY = 24 * 60 * 60 * 1000;
 
 function state(overrides: Partial<MobileState>): MobileState {
   return {
+    method: "tailscale", relay: { state: "connected" },
     enabled: true,
     exposure: "blocked",
     checklist: { installed: "ok", logged_in: "failed", https: "waiting", host_name: null },

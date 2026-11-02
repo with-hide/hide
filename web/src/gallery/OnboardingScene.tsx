@@ -163,6 +163,7 @@ const HOME = "/Users/me";
 
 /** Phone access off, no phone paired, push only while the app is closed: the daemon's `mobile` frame on a fresh Mac. */
 const SCENE_MOBILE: MobileState = {
+  method: "relay", relay: { state: "off" },
   enabled: false,
   exposure: "off",
   checklist: null,

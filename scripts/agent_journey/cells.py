@@ -34,7 +34,7 @@ def assistant_after(events, after=0):
     return any(event.get("role") == "assistant" for event in events[after:])
 
 # The contract's cell names in table order (contracts/agent-journey.json).
-CELLS = ("start", "start_untrusted", "reply", "integration", "guidance_memory", "letter",
+CELLS = ("start", "start_untrusted", "launch_brief", "reply", "integration", "guidance_memory", "letter",
          "letter_busy", "letter_menu", "composer", "sleep_wake", "resume", "fork", "title", "usage")
 # A cell that cannot be measured until another one passed: a fork, a title
 # and usage need a conversation with an answer in it.
@@ -186,6 +186,36 @@ def brief_verdict(spawn, launched=False):
                       else "the brief rode the start, though the agent declares no launch prompt")
     how = "its start's prompt" if launched else "its one typing"
     return PASS, f"brief recorded by the agent {max(0, confirmed - at) / 1000:.1f} s after {how}"
+
+
+def as_started(text):
+    """`text` as an agent's record of a start's prompt argument may give it:
+    each line break, which the start line carries as U+2028 and an agent
+    records as given, as LF or as CRLF, read as LF, and each tab as the four
+    spaces the start line gives it (`worktree_control::prompt_argument`).
+    Nothing else changes, so a record that lost, added or moved a character
+    differs."""
+    return (text.replace("\r\n", "\n").replace("\u2028", "\n").replace("\t", "    ")).strip()
+
+
+def record_verdict(read, brief, token):
+    """The agent's own record of a brief it was started with: exactly one
+    message of the person carries the brief's token, and it is the brief
+    itself, line for line (`as_started`), so a second submit, a brief the
+    CLI cut or took apart as options or files, or one it wrapped, fails."""
+    if "error" in read:
+        return FAIL, "Hide's reader could not read the session: " + read["error"]
+    messages = [event.get("text") or "" for event in read.get("events", [])
+                if event.get("role") == "user" and event.get("kind", "human") == "human"
+                and token in (event.get("text") or "")]
+    if len(messages) != 1:
+        return FAIL, f"the agent recorded the brief {len(messages)} times, not once"
+    recorded, sent = as_started(messages[0]), as_started(brief)
+    if recorded != sent:
+        at = next((i for i, (a, b) in enumerate(zip(recorded, sent)) if a != b), min(len(recorded), len(sent)))
+        return FAIL, (f"the agent's record of the brief differs from it at character {at} of {len(sent)} "
+                      f"(recorded {recorded[max(0, at - 20):at + 20]!r}, sent {sent[max(0, at - 20):at + 20]!r})")
+    return PASS, f"the agent recorded the brief once and exactly, {len(brief.encode())} bytes"
 
 
 # The core's log lines for a rung of the input ladder (herdr-core/src/delivery/ladder.rs).

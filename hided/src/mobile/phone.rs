@@ -33,7 +33,7 @@ use super::{InputState, Mobile, PhoneMeta, Reservation};
 /// How often an open detail reads its pane again.
 const DETAIL_INTERVAL: Duration = Duration::from_secs(1);
 /// The largest frame a phone may send.
-const MAX_FRAME: usize = 16 * 1024;
+pub(super) const MAX_FRAME: usize = 16 * 1024;
 /// The close code for a refused phone: the PWA shows why from the frame before it.
 const CLOSE_REFUSED: u16 = 4001;
 /// How often a live phone is pinged; the browser answers on its own.
@@ -49,9 +49,15 @@ const SEND_LIMIT: Duration = Duration::from_secs(10);
 
 /// Sends one message; false when the socket failed or stalled past
 /// `SEND_LIMIT`, and the connection should end.
-async fn send(socket: &mut WebSocket, message: Message, phone_id: &str) -> bool {
+async fn send(socket: &mut Socket, message: Message, phone_id: &str) -> bool {
     match tokio::time::timeout(SEND_LIMIT, socket.send(message)).await {
-        Ok(result) => result.is_ok(),
+        Ok(Ok(())) => true,
+        Ok(Err(())) => {
+            herdr_core::diagnostic!(
+                json!({"component":"mobile_phone", "kind":"phone.send_failed", "phone_id":phone_id})
+            );
+            false
+        }
         Err(_) => {
             herdr_core::diagnostic!(json!({
                 "component": "mobile_phone", "kind": "phone.stalled", "phone_id": phone_id,
@@ -61,9 +67,126 @@ async fn send(socket: &mut WebSocket, message: Message, phone_id: &str) -> bool 
     }
 }
 
-/// The one function every frame to a phone passes through.
-pub fn encode(frame: &Value) -> Message {
-    Message::Text(frame.to_string().into())
+/// The one function every application frame to a phone passes through.
+/// Relay messages leave this boundary only as authenticated ciphertext.
+fn encode(
+    frame: &Value,
+    session: Option<&mut hide_relay_protocol::noise::Session>,
+) -> Result<Vec<Message>, hide_relay_protocol::Error> {
+    let text = frame.to_string();
+    match session {
+        Some(session) => Ok(session
+            .send_message(text.as_bytes())?
+            .into_iter()
+            .map(|bytes| Message::Binary(bytes.into()))
+            .collect()),
+        None => Ok(vec![Message::Text(text.into())]),
+    }
+}
+
+async fn send_frame(socket: &mut Socket, frame: &Value, phone_id: &str) -> bool {
+    let session = match socket {
+        Socket::Direct(_) => None,
+        Socket::Relay(relay) => Some(&mut relay.session),
+    };
+    let messages = match encode(frame, session) {
+        Ok(messages) => messages,
+        Err(reason) => {
+            herdr_core::diagnostic!(
+                json!({"component":"mobile_phone", "kind":"phone.encode_failed", "phone_id":phone_id, "reason":reason.to_string()})
+            );
+            return false;
+        }
+    };
+    for message in messages {
+        if !send(socket, message, phone_id).await {
+            return false;
+        }
+    }
+    true
+}
+
+pub(super) enum Socket {
+    Direct(Box<WebSocket>),
+    Relay(Box<RelaySocket>),
+}
+pub(super) struct RelaySocket {
+    session: hide_relay_protocol::noise::Session,
+    incoming: mpsc::Receiver<Vec<u8>>,
+    outgoing: mpsc::Sender<super::relay::Output>,
+    clock: tokio::time::Instant,
+    timer: tokio::time::Interval,
+    connection: u32,
+}
+impl Socket {
+    pub(super) fn relay(
+        session: hide_relay_protocol::noise::Session,
+        incoming: mpsc::Receiver<Vec<u8>>,
+        outgoing: mpsc::Sender<super::relay::Output>,
+        connection: u32,
+    ) -> Self {
+        let mut timer = tokio::time::interval(Duration::from_secs(1));
+        timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        Self::Relay(Box::new(RelaySocket {
+            session,
+            incoming,
+            outgoing,
+            clock: tokio::time::Instant::now(),
+            timer,
+            connection,
+        }))
+    }
+    async fn send(&mut self, message: Message) -> Result<(), ()> {
+        match self {
+            Self::Direct(socket) => socket.send(message).await.map_err(|_| ()),
+            Self::Relay(relay) => match message {
+                Message::Binary(bytes) => relay
+                    .outgoing
+                    .try_send(super::relay::Output::Frame {
+                        connection: relay.connection,
+                        bytes: bytes.to_vec(),
+                    })
+                    .map_err(|_| ()),
+                // Relay liveness uses the phone protocol's JSON ping. Closing the
+                // serving task tells the supervisor to send the routing close.
+                Message::Ping(_) | Message::Close(_) => Ok(()),
+                _ => Err(()),
+            },
+        }
+    }
+    pub(super) async fn recv(&mut self) -> Option<Result<Message, ()>> {
+        match self {
+            Self::Direct(socket) => socket.recv().await.map(|result| result.map_err(|_| ())),
+            Self::Relay(relay) => loop {
+                let result = tokio::select! {
+                    incoming = relay.incoming.recv() => {
+                        let bytes = incoming?;
+                        relay.session.recv_message(&bytes, relay.clock.elapsed().as_millis() as u64)
+                    },
+                    _ = relay.timer.tick() => {
+                        relay.session.check_timeout(relay.clock.elapsed().as_millis() as u64).map(|()| None)
+                    },
+                };
+                match result {
+                    Ok(Some(bytes)) => {
+                        return Some(
+                            String::from_utf8(bytes)
+                                .map(|text| Message::Text(text.into()))
+                                .map_err(|_| ()),
+                        );
+                    }
+                    Ok(None) => {}
+                    Err(reason) => {
+                        herdr_core::diagnostic!(
+                            json!({"component":"mobile_relay", "kind":"phone.cipher_refused",
+                            "connection":relay.connection, "reason":reason.to_string()})
+                        );
+                        return Some(Err(()));
+                    }
+                }
+            },
+        }
+    }
 }
 
 fn refusal_logged(kind: &str, phone_id: Option<&str>, reason: &str) {
@@ -72,10 +195,10 @@ fn refusal_logged(kind: &str, phone_id: Option<&str>, reason: &str) {
     }));
 }
 
-async fn refuse(socket: &mut WebSocket, reason: &str) {
-    let refusal = encode(&json!({"type": "refused", "reason": reason}));
+async fn refuse(socket: &mut Socket, reason: &str) {
+    let refusal = json!({"type": "refused", "reason": reason});
     let _ = tokio::time::timeout(SEND_LIMIT, async {
-        let _ = socket.send(refusal).await;
+        let _ = send_frame(socket, &refusal, "unadmitted").await;
         let _ = socket
             .send(Message::Close(Some(CloseFrame {
                 code: CLOSE_REFUSED,
@@ -407,7 +530,24 @@ fn request_id_of(message: &Value) -> Option<&str> {
 
 /// Serves a phone after the daemon counted it toward `MAX_CLIENTS`.
 pub async fn serve(
-    mut socket: WebSocket,
+    socket: WebSocket,
+    first: Value,
+    mobile: Arc<Mobile>,
+    connection: u64,
+    user_agent: String,
+) {
+    serve_socket(
+        Socket::Direct(Box::new(socket)),
+        first,
+        mobile,
+        connection,
+        user_agent,
+    )
+    .await;
+}
+
+pub(super) async fn serve_socket(
+    mut socket: Socket,
     first: Value,
     mobile: Arc<Mobile>,
     connection: u64,
@@ -449,23 +589,27 @@ pub async fn serve(
     // Registered before anything is sent, then checked again: a revoke or a
     // switch-off that lands in between closes this socket like any other.
     let close = mobile.register(connection, &phone.id);
+    struct Registration(Arc<Mobile>, u64);
+    impl Drop for Registration {
+        fn drop(&mut self) {
+            self.0.unregister(self.1);
+        }
+    }
+    let _registration = Registration(Arc::clone(&mobile), connection);
     if let Err(reason) = mobile.still_admitted(&phone.id) {
         refuse(&mut socket, reason).await;
-        mobile.unregister(connection);
         return;
     }
     if let Some(paired) = paired
-        && !send(&mut socket, encode(&paired), &phone.id).await
+        && !send_frame(&mut socket, &paired, &phone.id).await
     {
-        mobile.unregister(connection);
         return;
     }
     run(&mut socket, &mobile, connection, &phone.id, close).await;
-    mobile.unregister(connection);
 }
 
 async fn run(
-    socket: &mut WebSocket,
+    socket: &mut Socket,
     mobile: &Arc<Mobile>,
     connection: u64,
     phone_id: &str,
@@ -498,7 +642,7 @@ async fn run(
         agents_frame(&projection.borrow_and_update()),
     ];
     for frame in &first {
-        if !send(socket, encode(frame), phone_id).await {
+        if !send_frame(socket, frame, phone_id).await {
             return;
         }
     }
@@ -512,20 +656,20 @@ async fn run(
             changed = projection.changed() => {
                 if changed.is_err() { return; }
                 let frame = agents_frame(&projection.borrow_and_update());
-                if !send(socket, encode(&frame), phone_id).await { return; }
+                if !send_frame(socket, &frame, phone_id).await { return; }
             }
             changed = meta.changed() => {
                 if changed.is_err() { return; }
                 let frame = meta_frame(&meta.borrow_and_update());
-                if !send(socket, encode(&frame), phone_id).await { return; }
+                if !send_frame(socket, &frame, phone_id).await { return; }
             }
             changed = catalog.changed() => {
                 if changed.is_err() { return; }
                 let frame = catalog.borrow_and_update().frame();
-                if open.sheet && !send(socket, encode(&frame), phone_id).await { return; }
+                if open.sheet && !send_frame(socket, &frame, phone_id).await { return; }
             }
             Some(frame) = frames.recv() => {
-                if !send(socket, encode(&frame), phone_id).await { return; }
+                if !send_frame(socket, &frame, phone_id).await { return; }
             }
             _ = ping.tick() => {
                 if heard.elapsed() >= SILENT_LIMIT {
@@ -559,7 +703,7 @@ async fn run(
                 let current = Arc::clone(&projection.borrow());
                 let reply = handle(mobile, connection, phone_id, &message, &mut open, &frames_tx, &current).await;
                 if let Some(reply) = reply
-                    && !send(socket, encode(&reply), phone_id).await
+                    && !send_frame(socket, &reply, phone_id).await
                 {
                     return;
                 }
@@ -930,56 +1074,78 @@ async fn input(
     let writer = Arc::clone(mobile);
     let text = text.map(str::to_owned);
     let herdr_key = herdr_key.and_then(pane::herdr_key);
-    // `attempted` is whether the write reached Herdr at all.
-    let (attempted, result) = tokio::task::spawn_blocking(move || {
-        let input = match (&text, herdr_key) {
-            (Some(text), _) => Input::Reply(text),
-            (None, Some(key)) => Input::Key(key),
-            (None, None) => unreachable!("validated above"),
-        };
-        if let Err(error) = pane::wait_for_input(writer.terminals(), &core_pane_id, &input) {
-            return (false, Err(error));
+    // The blocking write owns settlement even if its async caller is cancelled.
+    // A panic or a queued closure dropped at shutdown conservatively settles Uncertain.
+    struct Settlement {
+        mobile: Arc<Mobile>,
+        phone_id: String,
+        request_id: String,
+        state: Option<InputState>,
+    }
+    impl Drop for Settlement {
+        fn drop(&mut self) {
+            self.mobile
+                .settle_input(&self.phone_id, &self.request_id, self.state);
         }
-        // Asked here, at the write, and held until it returns: a reply queued
-        // while the agent was awake is refused if its pane has closed since,
-        // and a sleep that starts now waits for this write to land first. The
-        // phone's own list may be a second behind either way.
-        let _admission = match writer.admit_input(&core_pane_id) {
-            Ok(admission) => admission,
-            Err(error) => return (false, Err(error)),
+    }
+    let mut settlement = Settlement {
+        mobile: Arc::clone(mobile),
+        phone_id: phone_id.to_owned(),
+        request_id: request_id.to_owned(),
+        state: Some(InputState::Uncertain),
+    };
+    let (certain, result) = tokio::task::spawn_blocking(move || {
+        let (attempted, result) = (|| {
+            let input = match (&text, herdr_key) {
+                (Some(text), _) => Input::Reply(text),
+                (None, Some(key)) => Input::Key(key),
+                (None, None) => unreachable!("validated above"),
+            };
+            if let Err(error) = pane::wait_for_input(writer.terminals(), &core_pane_id, &input) {
+                return (false, Err(error));
+            }
+            // Asked here, at the write, and held until it returns: a reply queued
+            // while the agent was awake is refused if its pane has closed since,
+            // and a sleep that starts now waits for this write to land first. The
+            // phone's own list may be a second behind either way.
+            let _admission = match writer.admit_input(&core_pane_id) {
+                Ok(admission) => admission,
+                Err(error) => return (false, Err(error)),
+            };
+            let engine = match writer.engine(&device_id) {
+                Ok(engine) => engine,
+                Err(error) => return (false, Err(error)),
+            };
+            let reply = matches!(input, Input::Reply(_));
+            // Before the write, so the doorbell cannot judge the pane clean
+            // while the key is landing; a refused write only holds the pane.
+            writer.note_input(&core_pane_id);
+            let sent = pane::send(&engine, &pane_id, input);
+            if reply && sent.is_ok() {
+                writer.note_submit(&core_pane_id);
+            }
+            (true, sent)
+        })();
+        // A refusal before the write, or a definitive gone/refused answer,
+        // releases the id. Every ambiguous write keeps it reserved.
+        let certain = !attempted
+            || matches!(
+                result,
+                Err(PaneError::Gone
+                    | PaneError::DeviceUnreachable
+                    | PaneError::InputRefused
+                    | PaneError::Asleep)
+            );
+        settlement.state = match &result {
+            Ok(()) => Some(InputState::Written),
+            Err(_) if certain => None,
+            Err(_) => Some(InputState::Uncertain),
         };
-        let engine = match writer.engine(&device_id) {
-            Ok(engine) => engine,
-            Err(error) => return (false, Err(error)),
-        };
-        let reply = matches!(input, Input::Reply(_));
-        // Before the write, so the doorbell cannot judge the pane clean
-        // while the key is landing; a refused write only holds the pane.
-        writer.note_input(&core_pane_id);
-        let sent = pane::send(&engine, &pane_id, input);
-        if reply && sent.is_ok() {
-            writer.note_submit(&core_pane_id);
-        }
-        (true, sent)
+        drop(settlement);
+        (certain, result)
     })
     .await
-    .unwrap_or_else(|error| (true, Err(PaneError::Unavailable(error.to_string()))));
-    // Nothing reached Herdr, or Herdr says the pane is gone: nothing was
-    // written and the id may be sent again. Any other failure may have landed.
-    let certain = !attempted
-        || matches!(
-            result,
-            Err(PaneError::Gone
-                | PaneError::DeviceUnreachable
-                | PaneError::InputRefused
-                | PaneError::Asleep)
-        );
-    let settled = match &result {
-        Ok(()) => Some(InputState::Written),
-        Err(_) if certain => None,
-        Err(_) => Some(InputState::Uncertain),
-    };
-    mobile.settle_input(phone_id, request_id, settled);
+    .unwrap_or_else(|error| (false, Err(PaneError::Unavailable(error.to_string()))));
     match result {
         Ok(()) => {
             herdr_core::diagnostic!(json!({
@@ -1063,6 +1229,7 @@ mod tests {
             state_dir: directory.join("state"),
             home: directory.to_path_buf(),
             port: 0,
+            relay_url: crate::env::RELAY_URL.to_owned(),
             cli: super::super::tailscale::CliSource {
                 pinned: None,
                 search_path: None,
@@ -1072,7 +1239,8 @@ mod tests {
             input_gate: Arc::clone(gate),
             renderers: Arc::default(),
             start_demand: Arc::default(),
-            open: tokio::sync::watch::channel(true).1,
+            // These tests drive the phone boundary directly, never a network supervisor.
+            open: tokio::sync::watch::channel(false).1,
             desktop: Arc::default(),
         })
     }
@@ -1092,29 +1260,137 @@ mod tests {
         answer["reason"].as_str()
     }
 
+    use hide_node_link::terminal::{
+        GridSize, InputPermitError, InputPermitReply, KeyTarget, TerminalControl, TerminalNode,
+        TerminalRoutes,
+    };
+    struct Pending(tokio::sync::mpsc::UnboundedSender<InputPermitReply>);
+    impl TerminalNode for Pending {
+        fn input_permit(&self, pane: &str, _: usize, reply: InputPermitReply) {
+            assert_eq!(pane, "w1:p1");
+            assert!(self.0.send(reply).is_ok());
+        }
+        fn control(&self, _: TerminalControl) {}
+        fn key(&self, _: KeyTarget, _: Vec<u8>, _: u64) {
+            panic!("no raw phone keys");
+        }
+        fn view(&self, _: &str, _: GridSize, _: bool) {
+            panic!("no phone attach");
+        }
+        fn redraw(&self, _: &str) {
+            panic!("no phone redraw");
+        }
+    }
+
     #[tokio::test]
-    async fn refused_permissions_allow_retry_and_waiting_permissions_do_not_block_sleep() {
-        use hide_node_link::terminal::{
-            GridSize, InputPermitError, InputPermitReply, KeyTarget, TerminalControl, TerminalNode,
-            TerminalRoutes,
-        };
-        struct Pending(tokio::sync::mpsc::UnboundedSender<InputPermitReply>);
-        impl TerminalNode for Pending {
-            fn input_permit(&self, pane: &str, _: usize, reply: InputPermitReply) {
-                assert_eq!(pane, "w1:p1");
-                assert!(self.0.send(reply).is_ok());
-            }
-            fn control(&self, _: TerminalControl) {}
-            fn key(&self, _: KeyTarget, _: Vec<u8>, _: u64) {
-                panic!("no raw phone keys");
-            }
-            fn view(&self, _: &str, _: GridSize, _: bool) {
-                panic!("no phone attach");
-            }
-            fn redraw(&self, _: &str) {
-                panic!("no phone redraw");
+    async fn a_relay_connection_lost_during_input_does_not_leave_the_retry_in_flight() {
+        use hide_relay_protocol::noise::{NoiseKeypair, Session};
+        async fn connect(
+            mobile: Arc<Mobile>,
+            credential: &str,
+            id: u32,
+        ) -> (
+            tokio::task::JoinHandle<()>,
+            mpsc::Sender<Vec<u8>>,
+            mpsc::Receiver<super::super::relay::Output>,
+            Session,
+        ) {
+            let key = NoiseKeypair::generate().unwrap();
+            let mut responder = Session::responder(&key, id).unwrap();
+            let mut initiator = Session::initiator(&key.public_key(), id).unwrap();
+            responder
+                .read_handshake(&initiator.write_handshake().unwrap())
+                .unwrap();
+            initiator
+                .read_handshake(&responder.write_handshake().unwrap())
+                .unwrap();
+            let (incoming, rx) = mpsc::channel(8);
+            let (tx, outgoing) = mpsc::channel(32);
+            let socket = Socket::relay(responder, rx, tx, id);
+            let auth = json!({"client_kind":"phone", "token":credential});
+            let task = tokio::spawn(serve_socket(
+                socket,
+                auth,
+                mobile,
+                u64::from(id),
+                String::new(),
+            ));
+            (task, incoming, outgoing, initiator)
+        }
+        async fn send(tx: &mpsc::Sender<Vec<u8>>, session: &mut Session, input: &Value) {
+            for frame in session.send_message(input.to_string().as_bytes()).unwrap() {
+                tx.send(frame).await.unwrap();
             }
         }
+        let directory = tempfile::tempdir().unwrap();
+        let gate = Arc::new(herdr_core::input_gate::PaneInputGate::default());
+        let mobile = mobile_with(directory.path(), &gate);
+        let (asked, mut pending) = tokio::sync::mpsc::unbounded_channel();
+        mobile
+            .config
+            .core
+            .terminals
+            .install_device("mini", Arc::new(Pending(asked)));
+        let listed = super::super::projection::project(
+            &json!({
+                "navigator":{"agents":[]}, "status":{"remote":[{"target_id":"mini","state":"connected","session":{
+                    "agents":[{"pane_id":"remote:mini:pane:w1:p1","group":"seen","mark":"quiet","identity_label":"Review","agent_kind":"pi","status_code":"idle","demand":"none"}]
+                }}]}
+            }),
+            "test-node",
+        );
+        mobile.projection.send_replace(Arc::new(listed));
+        let code = {
+            let mut inner = mobile.lock();
+            inner.settings.enabled = true;
+            inner.exposure = super::super::Exposure::Relay;
+            inner.phones.new_code(super::super::now_ms());
+            inner.phones.code().unwrap().0.to_owned()
+        };
+        let (_, credential) = mobile.pair(&code, "Phone").unwrap();
+        let input = json!({"type":"input","request_id":"same-intent","device_id":"mini","pane_id":"remote:mini:pane:w1:p1","text":"yes"});
+        let (first, tx, _rx, mut phone) = connect(Arc::clone(&mobile), &credential, 1).await;
+        send(&tx, &mut phone, &input).await;
+        let permission = tokio::time::timeout(Duration::from_secs(20), pending.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        // This is the cancellation the relay owner performs on link loss.
+        first.abort();
+        assert!(first.await.unwrap_err().is_cancelled());
+        drop(tx);
+        permission(Err(InputPermitError::Discarded));
+        let (second, tx, mut rx, mut phone) = connect(Arc::clone(&mobile), &credential, 2).await;
+        send(&tx, &mut phone, &input).await;
+        let mut retried_writes = 0;
+        tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                tokio::select! {
+                    permission = pending.recv() => {
+                        retried_writes += 1;
+                        permission.unwrap()(Err(InputPermitError::Discarded));
+                    }
+                    frame = rx.recv() => {
+                        let Some(super::super::relay::Output::Frame { bytes, .. }) = frame else { panic!("relay phone closed"); };
+                        if let Some(plain) = phone.recv_message(&bytes, 0).unwrap() {
+                            let answer: Value = serde_json::from_slice(&plain).unwrap();
+                            if answer["type"] != "input_result" { continue; }
+                            if answer["reason"] == "in_flight" { send(&tx, &mut phone, &input).await; continue; }
+                            assert_eq!(answer["reason"], "input_refused");
+                            break;
+                        }
+                    }
+                }
+            }
+        }).await.expect("the retry receives the settled refusal, not permanent in_flight");
+        assert_eq!(retried_writes, 1);
+        second.abort();
+        let _ = second.await;
+        mobile.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn refused_permissions_allow_retry_and_waiting_permissions_do_not_block_sleep() {
         let directory = tempfile::tempdir().unwrap();
         let gate = Arc::new(herdr_core::input_gate::PaneInputGate::default());
         let mobile = mobile_with(directory.path(), &gate);

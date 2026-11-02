@@ -42,6 +42,7 @@ fn env(dir: &Path, tailscale: &Path) -> Env {
         host_cli_dir: None,
         pane_id: None,
         tailscale_bin: Some(tailscale.to_path_buf()),
+        relay_url: "ws://127.0.0.1:9/ws".to_owned(),
         search_path: None,
     }
 }
@@ -86,6 +87,14 @@ async fn renderer(running: &hided::RunningDaemon) -> Socket {
     socket
         .send(Message::Text(
             json!({"token": running.token, "schema_version": 2, "client_kind": "desktop"})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    socket
+        .send(Message::Text(
+            json!({"schema_version":2,"kind":"mobile_method","payload":{"method":"tailscale"}})
                 .to_string()
                 .into(),
         ))

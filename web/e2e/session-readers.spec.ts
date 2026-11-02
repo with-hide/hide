@@ -236,6 +236,9 @@ test("Cursor phone reads native message units and omits an unrecorded time @herd
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await page.locator("[data-open-settings]").click();
     await page.locator('[data-settings-tab="mobile"]').click();
+    await page.getByText("Advanced · Connect directly with Tailscale", { exact: true }).click();
+    await page.getByRole("switch", { name: "Use Tailscale", exact: true }).click();
+    await expect(page.getByRole("switch", { name: "Use Tailscale", exact: true })).toHaveAttribute("aria-checked", "true");
     await page.locator('[data-mobile-switch="true"]').click();
     await expect(page.locator('[data-mobile-ready="true"]')).toBeVisible({ timeout: 30_000 });
     await page.locator('[data-mobile-show-code="true"]').click();

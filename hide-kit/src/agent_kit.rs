@@ -286,6 +286,10 @@ fn remove_guidance(target: &KitTarget, agent: GuidanceAgent) -> RemoveOutcome {
 
 // --- OpenCode's plugin, Pi's and omp's extension ---------------------------------
 
+/// Takes the plugin out, with the folder trust Hide recorded for the
+/// worktrees it started the agent in (Pi's, `Plugin::trust`), as switching
+/// the agent off does (docs/agent-hooks.md, Folder trust for the worktrees
+/// Hide makes).
 fn remove_plugin(target: &KitTarget, dialect: PluginDialect) -> RemoveOutcome {
     match plugin::of(dialect).remove(&target.home) {
         Ok(true) => RemoveOutcome::Removed,

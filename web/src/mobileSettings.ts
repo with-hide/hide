@@ -14,6 +14,8 @@ export type StepState = "ok" | "failed" | "waiting";
 /** The daemon's `mobile` frame (hided/src/mobile/mod.rs `frame_value`). */
 export type MobileState = {
   enabled: boolean;
+  method: "relay" | "tailscale";
+  relay: { state: "off" | "connecting" | "connected" | "retrying" | "refused" | "key_unavailable"; reason?: string };
   exposure: "off" | "checking" | "blocked" | "foreign" | "failed" | "exposed";
   checklist: { installed: StepState; logged_in: StepState; https: StepState; host_name: string | null } | null;
   download_url: string;

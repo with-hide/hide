@@ -176,7 +176,12 @@ async function openMobileSettings(page: Page, daemon: Daemon): Promise<void> {
   await expect(page.locator("[data-sidebar-overview]")).toBeVisible({ timeout: 20_000 });
   await page.keyboard.press(chord("settings"));
   await page.locator('[data-settings-tab="mobile"]').click();
-  await expect(page.locator('[data-mobile-tab="true"]')).toBeVisible();
+  const tab = page.locator('[data-mobile-tab="true"]');
+  await expect(tab).toBeVisible();
+  await tab.getByText("Advanced · Connect directly with Tailscale", { exact: true }).click();
+  const direct = tab.getByRole("switch", { name: "Use Tailscale", exact: true });
+  if (await direct.getAttribute("aria-checked") === "false") await direct.click();
+  await expect(direct).toHaveAttribute("aria-checked", "true");
 }
 
 /** Show QR: the one action that makes a pairing code; opening the tab makes none (B58). */
@@ -192,6 +197,7 @@ async function choosePush(page: Page, mode: "off" | "app_closed" | "always"): Pr
   await expect(page.locator(`[data-push-detail="${mode}"]`)).toBeVisible();
   await page.locator('[data-settings-tab="mobile"]').click();
   await expect(page.locator('[data-mobile-tab="true"]')).toBeVisible();
+  await page.getByText("Advanced · Connect directly with Tailscale", { exact: true }).click();
 }
 
 /** The push mode Settings > Notifications shows, read there before returning to Mobile. */
@@ -200,6 +206,7 @@ async function expectPush(page: Page, label: string): Promise<void> {
   await expect(page.locator("[data-push-select]")).toHaveText(label);
   await page.locator('[data-settings-tab="mobile"]').click();
   await expect(page.locator('[data-mobile-tab="true"]')).toBeVisible();
+  await page.getByText("Advanced · Connect directly with Tailscale", { exact: true }).click();
 }
 
 /** The QR's `#pair=...` fragment, opened on this loopback daemon instead of the ts.net address. */
@@ -261,7 +268,6 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     await openMobileSettings(page, daemon);
     const toggle = page.locator('[data-mobile-switch="true"]');
     await expect(toggle).toHaveAttribute("aria-checked", "false");
-    await expect(page.locator('[data-mobile-tab="true"]')).toContainText("Over Tailscale, only inside your tailnet.");
     await expect(page.locator("[data-push-select]")).toHaveCount(0);
     await expectPush(page, "Off");
     expect(tailscale.calls()).toBe("");

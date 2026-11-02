@@ -6,7 +6,10 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use hide_herdr_client::{ApiConnector, LocalSocketConnector, request_small_response_strict_until};
+use hide_herdr_client::{
+    ApiConnector, ApiError, LocalSocketConnector, PROCESS_INFO_ANSWER_LIMIT, request_bounded_until,
+    request_small_response_strict_until,
+};
 use hide_platform::process;
 use serde_json::{Value, json};
 
@@ -88,13 +91,20 @@ fn inspect_address_until(
     }
     let connector = LocalSocketConnector::new(socket);
     let pane_id = current_address(&connector, pane_id, deadline)?;
-    let process = request_small_response_strict_until(
+    // Its size is the pane's programs' arguments, past the small-answer cap
+    // when an agent was started on a long prompt.
+    let process = request_bounded_until(
         &connector,
         "pane.process_info",
         json!({"pane_id":pane_id}),
         stage_deadline(deadline)?,
+        true,
+        PROCESS_INFO_ANSWER_LIMIT,
     )
-    .map_err(|_| "pane_unavailable")?;
+    .map_err(|error| match error {
+        ApiError::TooLarge(_) => "pane_process_info_too_large",
+        _ => "pane_unavailable",
+    })?;
     let shell = process
         .pointer("/process_info/shell_pid")
         .and_then(Value::as_u64)

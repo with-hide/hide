@@ -47,7 +47,12 @@ impl NodeLink for Node {
             Call::Repository { .. } => Value::Null,
             Call::AgentInstalled { name } => {
                 assert_eq!(name, "codex");
-                json!(self.installed.load(Ordering::SeqCst))
+                // How the device starts it, or null when it is not there.
+                if self.installed.load(Ordering::SeqCst) {
+                    json!("program")
+                } else {
+                    Value::Null
+                }
             }
             Call::ShellIntegration if self.integrated.load(Ordering::SeqCst) => {
                 json!({"command": ["/bin/zsh", "-l"], "readiness": "integrated", "env": {"ZDOTDIR": "/hide/zsh"}})

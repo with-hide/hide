@@ -412,7 +412,7 @@ def cell(row, binaries, run):
         if record["pin"] is not None and not record["pin"]["matches"]:
             raise Failed(f"{kind} {record['version']} is not the pinned {record['pin']['version']}")
         first, second = token(), token()
-        argv = [str(launch), row["prompt_flag"], prompt(first)]
+        argv = [str(launch), *(part.replace("{}", prompt(first)) for part in row["prompt_form"])]
         if WINDOWS:
             # A .cmd launcher runs under cmd.exe, which a ConPTY start does not add.
             argv = [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/c", *argv]

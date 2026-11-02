@@ -45,6 +45,7 @@ pub fn split_refusal(refusal: &str) -> (&str, Option<&str>) {
             | "mission_checkers_invalid"
             | "mission_checker_is_worker"
             | "mission_external_invalid"
+            | "mission_machine_node_refused"
             | "mission_nodes_unfinished"
             | "plan_invalid"
             | "plan_order_refused"
@@ -598,6 +599,12 @@ pub struct SpawnRecord {
     /// on every record written before typed input was confirmed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub brief_input: Option<crate::delivery::typed::TypedInput>,
+    /// The words the spawn's start added to carry its brief, saved with
+    /// `BriefLaunched` before the first start: a start typed again carries
+    /// these same words, never a decision made again. Empty for a brief that
+    /// rides no start, and on a record an earlier build wrote.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub launch_words: Vec<String>,
     /// The child's pane was split beside the caller's (`Command::Spawn::
     /// beside`), part of the intent. Delegated-child relocation leaves the
     /// child of such a spawn in the caller's tab.
@@ -661,9 +668,11 @@ pub(crate) enum Mutation {
     /// The spawn's brief rides its start as the start's prompt argument
     /// (`AgentApi::LaunchPrompt`), saved before the start is typed: the
     /// brief counts as submitted, its one sending is spent, and it is never
-    /// typed or typed again (`delivery::ladder`).
+    /// typed or typed again (`delivery::ladder`). `words` are what the start
+    /// adds to carry it, kept from the first such mutation on.
     BriefLaunched {
         id: String,
+        words: Vec<String>,
     },
     /// The agent recorded the brief: its prompt hook's digest, or the user
     /// message in its session file. Hide's own identity reports it.
@@ -1409,6 +1418,7 @@ pub(crate) fn apply(
                 brief: brief.clone(),
                 briefed: false,
                 brief_input: None,
+                launch_words: Vec::new(),
                 beside: *beside,
                 reserved_at_unix_ms: now,
             };
@@ -1514,7 +1524,7 @@ pub(crate) fn apply(
                 crate::delivery::typed::SendRoute::Typed;
             Ok(json!(record))
         }
-        Mutation::BriefLaunched { id } => {
+        Mutation::BriefLaunched { id, words } => {
             let parent = ledger
                 .spawns
                 .iter()
@@ -1544,6 +1554,7 @@ pub(crate) fn apply(
                 input.typed_at_unix_ms = now;
                 input.first_typed_at_unix_ms = now;
                 input.route = crate::delivery::typed::SendRoute::Launch;
+                record.launch_words = words.clone();
             }
             record.briefed = true;
             Ok(json!(record))
@@ -3405,7 +3416,10 @@ mod tests {
                 apply(
                     &mut ledger,
                     &actor,
-                    &Mutation::BriefLaunched { id: spawn.clone() },
+                    &Mutation::BriefLaunched {
+                        id: spawn.clone(),
+                        words: vec!["--".into(), "brief".into()],
+                    },
                     3,
                 )
                 .unwrap();

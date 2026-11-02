@@ -1,4 +1,4 @@
-// Chapter 0's world: the introduction site's hero window (a lead, the agent
+// Chapter 1's world: the introduction site's hero window (a lead, the agent
 // asking to merge, and the Project tool beside them), which shows all three
 // parts of the screen with work in them. Its snapshot is `../data/tour.json`,
 // kept as the core would send it with each time written as how long before

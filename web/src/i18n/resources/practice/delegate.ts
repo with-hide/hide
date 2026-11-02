@@ -1,6 +1,6 @@
 import type { Catalog, Catalogs } from "../../schema";
 
-// Chapter 4's words (`practice/chapters/delegate.ts`).
+// Chapter 5's words (`practice/chapters/delegate.ts`).
 const en = {
   "practice.delegate.title": "Hand work to other agents",
   "practice.delegate.summary": "To a child, to an open agent, by name and ID",
@@ -36,7 +36,7 @@ const en = {
   "practice.delegate.send.kick": "C · Say the work",
   "practice.delegate.send.title": "Add what to do and send it",
   "practice.delegate.send.text": "A request with the ID goes to that agent alone, even when names look alike. Dragging its row from the list onto the terminal, or Copy name and ID from its menu, puts in the same ID.",
-  "practice.delegate.end.kick": "End of chapter 4",
+  "practice.delegate.end.kick": "End of chapter 5",
   "practice.delegate.end.title": "Three ways, all by saying it",
   "practice.delegate.end.text": "A child for work you follow, a letter to an open agent, @ when you need to be sure.",
 };
@@ -76,7 +76,7 @@ const ko = {
   "practice.delegate.send.kick": "C · 할 일 말하기",
   "practice.delegate.send.title": "할 일을 덧붙여 보내요",
   "practice.delegate.send.text": "ID가 든 요청은 이름이 비슷해도 그 에이전트에게만 가요. 목록의 에이전트 줄을 터미널에 끌어 놓거나, 메뉴의 이름·ID 복사로도 같은 ID가 들어가요.",
-  "practice.delegate.end.kick": "4편 끝",
+  "practice.delegate.end.kick": "5편 끝",
   "practice.delegate.end.title": "세 가지 모두 말로 시켜요",
   "practice.delegate.end.text": "지켜볼 일은 자식에게, 열린 에이전트에게는 편지로, 확실해야 할 땐 @로.",
 } satisfies Catalog<typeof en>;
@@ -116,7 +116,7 @@ const zhCN = {
   "practice.delegate.send.kick": "C · 说出要做的事",
   "practice.delegate.send.title": "补上要做的事再发送",
   "practice.delegate.send.text": "带 ID 的请求只会交给那个智能体，名字相近也不会弄错。把列表里它的那一行拖到终端上，或用菜单里的“复制名称和 ID”，也会填进同样的 ID。",
-  "practice.delegate.end.kick": "第 4 章完",
+  "practice.delegate.end.kick": "第 5 章完",
   "practice.delegate.end.title": "三种方法，都是说出来",
   "practice.delegate.end.text": "要跟进的工作交给子智能体，已打开的智能体用信件，需要确定时用 @。",
 } satisfies Catalog<typeof en>;
@@ -156,7 +156,7 @@ const ja = {
   "practice.delegate.send.kick": "C · 仕事を伝える",
   "practice.delegate.send.title": "やることを足して送ります",
   "practice.delegate.send.text": "ID入りの依頼は、名前が似ていてもそのエージェントだけに届きます。リストの行をターミナルにドラッグしても、メニューの「名前と ID をコピー」でも、同じ ID が入ります。",
-  "practice.delegate.end.kick": "第 4 章 おわり",
+  "practice.delegate.end.kick": "第 5 章 おわり",
   "practice.delegate.end.title": "3つとも、言うだけです",
   "practice.delegate.end.text": "見守る仕事は子エージェントに、開いているエージェントにはレターで、確実にしたいときは @ で。",
 } satisfies Catalog<typeof en>;

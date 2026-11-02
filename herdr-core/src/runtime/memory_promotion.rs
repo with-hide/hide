@@ -2380,13 +2380,6 @@ pub(super) fn spawn_hide_agent(
     start: &PromotionStart,
     spawn: &HideSpawn,
 ) -> Result<String, String> {
-    let dialect = hide_agent_adapter::adapter(&start.kind)
-        .and_then(|row| row.start)
-        .ok_or("agent_not_startable")?;
-    let args = vec![
-        dialect.prompt_flag().to_owned(),
-        crate::worktree_control::prompt_argument(&spawn.prompt)?,
-    ];
     let view = crate::coordination::run(
         start.client.clone(),
         crate::delivery::worker::Authority {
@@ -2406,9 +2399,12 @@ pub(super) fn spawn_hide_agent(
             repo: start.repo.clone(),
             branch: spawn.branch.clone(),
             path: None,
-            args,
+            args: Vec::new(),
             launch: start.launch.clone(),
-            brief: None,
+            // The prompt is the spawn's brief, so it rides the start where the
+            // start carries it and is typed where it does not
+            // (`start_prompt`), like every brief.
+            brief: Some(spawn.prompt.clone()),
             task: Some(spawn.task.clone()),
             beside: false,
         },
@@ -4078,7 +4074,9 @@ pub(super) mod tests {
             assert!(prompt.contains(step), "{step}");
         }
         assert!(!prompt.contains("open one PR"), "a batch commits and stops");
-        assert!(crate::worktree_control::prompt_argument(&prompt).is_ok());
+        // It is the spawn's brief, which a brief's limit takes whole.
+        assert!(prompt.len() <= crate::delivery::BODY_LIMIT && !prompt.trim().is_empty());
+        assert!(crate::start_prompt::prompt_argument(&prompt).is_ok());
         assert!(
             super::prompt(
                 &[7],
