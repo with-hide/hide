@@ -124,6 +124,12 @@ pub(super) struct Pane {
     pub(super) live: PaneLive,
     /// Why no holder runs the pane, once a restore could not start one.
     pub(super) failed: Option<String>,
+    /// Its holder is being started by the call that drew it (a new tab or
+    /// split is drawn before its holder starts, as Herdr's pane exists
+    /// once it forked). Whoever takes the pane out meanwhile leaves its
+    /// holder to that call, which ends it once it finds the pane gone.
+    /// Kept in memory only.
+    pub(super) starting: bool,
 }
 
 impl Pane {
@@ -132,6 +138,20 @@ impl Pane {
             cwd: cwd.to_owned(),
             label: label.map(str::to_owned),
             ..Self::default()
+        }
+    }
+
+    /// A pane drawn before its holder starts, with `command` and `env`: its
+    /// `starting` field says so.
+    pub(super) fn starting(
+        cwd: &str,
+        label: Option<&str>,
+        command: Option<&[String]>,
+        env: &BTreeMap<String, String>,
+    ) -> Self {
+        Self {
+            starting: true,
+            ..Self::started(cwd, label, command, env)
         }
     }
 

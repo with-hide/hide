@@ -565,7 +565,8 @@ pub fn pane_records_lock(state_dir: &Path) -> PathBuf {
     pane_records(state_dir).join(".lock")
 }
 
-/// The next start's incarnation, which no earlier start of the folder had.
+/// The next incarnation no process has taken from the folder yet, which no
+/// earlier start of the folder had.
 pub fn pane_incarnations(state_dir: &Path) -> PathBuf {
     pane_records(state_dir).join("next")
 }

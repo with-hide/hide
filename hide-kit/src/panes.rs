@@ -68,6 +68,10 @@ pub const START_LIMIT: Duration = Duration::from_secs(10);
 /// its terminal's drain (5 s) and its last message.
 pub const CLOSE_LIMIT: Duration = Duration::from_secs(20);
 
+/// How many incarnations a process takes from the folder's file at once
+/// ([`Panes::next_incarnation`]).
+const INCARNATIONS_TAKEN: u64 = 64;
+
 /// How many panes a reconcile judges at once.
 pub const RECONCILE_WORKERS: usize = 8;
 
@@ -289,6 +293,11 @@ pub struct Panes {
     owner: String,
     boot: Option<String>,
     sink: Sink,
+    /// The version folder names this process took (`holders::prepare`).
+    names: holders::VersionNames,
+    /// Incarnations this process took from the folder's file and has not
+    /// given yet ([`Panes::next_incarnation`]).
+    incarnations: Mutex<std::ops::Range<u64>>,
 }
 
 impl Panes {
@@ -310,6 +319,8 @@ impl Panes {
             owner,
             boot,
             sink,
+            names: holders::VersionNames::default(),
+            incarnations: Mutex::new(0..0),
         })
     }
 
@@ -354,10 +365,12 @@ impl Panes {
         request: &StartRequest,
         source: &holders::Source,
     ) -> Result<Started, StartRefusal> {
+        let begun = Instant::now();
         record::check_pane(&request.pane).map_err(StartRefusal::InvalidPane)?;
         let spec = spec_of(request);
-        let reservation =
-            holders::prepare(&self.home, PROTOCOL_VERSION, source).map_err(StartRefusal::Failed)?;
+        let reservation = holders::prepare(&self.home, PROTOCOL_VERSION, source, &self.names)
+            .map_err(StartRefusal::Failed)?;
+        let prepared = begun.elapsed();
         let version_folder = reservation
             .dir
             .file_name()
@@ -426,7 +439,12 @@ impl Panes {
             })?;
             break reserved;
         };
-        let started = self.start_holder(request, &reservation, &reserved);
+        let stages = StartStages {
+            begun,
+            prepared,
+            reserved: begun.elapsed(),
+        };
+        let started = self.start_holder(request, &reservation, &reserved, &stages);
         drop(reservation);
         started.map(Started::Started).map_err(StartRefusal::Failed)
     }
@@ -540,6 +558,7 @@ impl Panes {
         request: &StartRequest,
         reservation: &holders::Reservation,
         reserved: &PaneRecord,
+        stages: &StartStages,
     ) -> Result<PaneRecord, String> {
         let pane = &request.pane;
         let mut command = ResidentCommand::new(&reservation.program);
@@ -585,6 +604,7 @@ impl Panes {
             }
         };
         drop(writer);
+        let spawned = stages.begun.elapsed();
         let holder = Identity::of(resident.pid);
         if resident.outer_job {
             self.emit(
@@ -594,6 +614,7 @@ impl Panes {
         }
         match first_line(reader, START_LIMIT) {
             Report::Line(line) if line.starts_with("ready ") => {
+                let ready = stages.begun.elapsed();
                 let _lock = self.lock()?;
                 match record::read(&layout::pane_record(&self.state_dir, pane)) {
                     // A program that exits at once may have ended the pane
@@ -614,6 +635,11 @@ impl Panes {
                                 "incarnation": written.incarnation,
                                 "holder": resident.pid,
                                 "job": job,
+                                "prepared_ms": millis(stages.prepared),
+                                "reserved_ms": millis(stages.reserved),
+                                "spawned_ms": millis(spawned),
+                                "ready_ms": millis(ready),
+                                "took_ms": millis(stages.begun.elapsed()),
                             }),
                         );
                         Ok(written)
@@ -904,24 +930,43 @@ impl Panes {
 
     /// The next incarnation, kept in a file of its own so a pane forgotten
     /// and started again never has an earlier start's number. The caller
-    /// holds the lock.
+    /// holds the lock. The file is moved on by [`INCARNATIONS_TAKEN`] at a
+    /// time and this process gives those out itself, so one start in that
+    /// many writes it rather than every start: each write is flushed, and
+    /// it stood in front of every new pane. A number is never given twice,
+    /// whichever process takes the next ones, and one taken but not given
+    /// (the process ended) is simply never used.
     fn next_incarnation(&self) -> Result<u64, String> {
-        let path = layout::pane_incarnations(&self.state_dir);
-        let next = match std::fs::read_to_string(&path) {
-            Ok(text) => text
-                .trim()
-                .parse::<u64>()
-                .map_err(|_| format!("{} does not hold a number", path.display()))?,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => 1,
-            Err(error) => return Err(format!("{} could not be read: {error}", path.display())),
-        };
-        hide_platform::fs::atomic::write_file(
-            &path,
-            (next + 1).to_string().as_bytes(),
-            hide_platform::fs::Access::Private,
-        )
-        .map_err(|error| format!("{} could not be written: {error}", path.display()))?;
-        Ok(next)
+        let mut taken = self
+            .incarnations
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if taken.is_empty() {
+            let path = layout::pane_incarnations(&self.state_dir);
+            let next = match std::fs::read_to_string(&path) {
+                Ok(text) => text
+                    .trim()
+                    .parse::<u64>()
+                    .map_err(|_| format!("{} does not hold a number", path.display()))?,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => 1,
+                Err(error) => {
+                    return Err(format!("{} could not be read: {error}", path.display()));
+                }
+            };
+            let end = next
+                .checked_add(INCARNATIONS_TAKEN)
+                .ok_or_else(|| format!("{} holds no next number", path.display()))?;
+            hide_platform::fs::atomic::write_file(
+                &path,
+                end.to_string().as_bytes(),
+                hide_platform::fs::Access::Private,
+            )
+            .map_err(|error| format!("{} could not be written: {error}", path.display()))?;
+            *taken = next..end;
+        }
+        taken
+            .next()
+            .ok_or_else(|| "no incarnation was taken".to_owned())
     }
 
     /// Reads every record, adopts the holders they name and settles what
@@ -1279,6 +1324,22 @@ enum NotAsked {
     /// It was reached and refused, answered out of protocol or did not say
     /// it ended.
     Refused(String),
+}
+
+/// When a start reached each of its steps, for its `pane_holder.started`
+/// event: the version folder found or made, the record reserved under the
+/// lock, then (in `start_holder`) the holder process started and its
+/// `ready` read. A new tab or split on the core's own engine is answered
+/// once the start returns, so these are where its time goes.
+struct StartStages {
+    begun: Instant,
+    prepared: Duration,
+    reserved: Duration,
+}
+
+/// `elapsed` in milliseconds to a tenth, as the diagnostics give times.
+fn millis(elapsed: Duration) -> f64 {
+    (elapsed.as_secs_f64() * 10_000.0).round() / 10.0
 }
 
 /// How an earlier start of a pane stands to a new start of it.

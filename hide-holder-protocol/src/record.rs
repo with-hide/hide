@@ -4,7 +4,7 @@
 //!
 //! The record, not the node, is a holder's owner: a node reserves it before
 //! the holder starts, the holder writes itself into it before it starts the
-//! pane's program and once it runs, and writes why the pane ended before it
+//! pane's program and once more when it runs, and writes why the pane ended before it
 //! exits, whether or not a node is connected. A node that starts again reads
 //! the records to tell the holders it may adopt from the ones nobody owns.
 //! In a later bundle the core takes this contract over unchanged, so the

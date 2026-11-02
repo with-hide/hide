@@ -296,8 +296,7 @@ impl OwnEngine<'_> {
             ));
         }
         let panes = self.topology().workspace_panes(workspace)?;
-        self.end_panes(&panes)?;
-        match self.topology().remove_workspace(workspace) {
+        match self.end_and_remove(&panes, |topology| topology.remove_workspace(workspace))? {
             // Its last pane closed it while the holders ended.
             Ok(()) | Err(EngineError::Refused { .. }) => {}
             Err(error) => return Err(error),
