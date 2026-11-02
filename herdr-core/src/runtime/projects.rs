@@ -3747,6 +3747,47 @@ impl Runtime {
         read.generation
     }
 
+    /// What GitHub last answered for the project at `root` on `device`,
+    /// stale or not: this machine's reader's for its own, a node's read
+    /// (`device_github`) for one of a node's; a device this core does not
+    /// read has none. The one place a caller picks between the two.
+    pub(super) fn github_project_on(
+        &self,
+        device: &str,
+        root: &str,
+    ) -> Option<&crate::model::GithubProjectSnapshot> {
+        if device == self.node.as_str() {
+            self.github.project(root)
+        } else {
+            self.device_github.get(device)?.project(root)
+        }
+    }
+
+    /// Asks the pull requests of `root` on `device` again once its last
+    /// read is `older_than` old: this machine's through the look rule, a
+    /// node's, read with this machine's login, through its next read.
+    /// Answers whether nothing is left to wait for: asked, or never to be
+    /// asked; false while the last read is too young or still out.
+    pub(super) fn ask_pull_requests_on(
+        &mut self,
+        device: &str,
+        root: &str,
+        now: std::time::Instant,
+        older_than: std::time::Duration,
+    ) -> bool {
+        if device == self.node.as_str() {
+            return self.read_when_asked(root, now, older_than) != LookRead::Later;
+        }
+        let young = self
+            .device_github_reads
+            .get(&(device.to_owned(), root.to_owned()))
+            .is_some_and(|read| now.duration_since(read.asked_at) < older_than);
+        if !young {
+            self.refresh_device_pull_requests(device, root);
+        }
+        !young
+    }
+
     /// The generation of the last answered read of a node's repository.
     pub(super) fn device_github_read(&self, device_id: &str, root: &str) -> Option<u64> {
         self.device_github_read_generation

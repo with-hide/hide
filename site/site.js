@@ -1,4 +1,4 @@
-// Page motion: one-time reveals and the owls' loops, the hero peek's and the closing owl's.
+// Page motion: one-time reveals and the owls' loops, the section owls' and the closing owl's.
 // Under reduced motion the reveals show at once and every owl holds its still frame.
 
 const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;

@@ -23,6 +23,8 @@
       "integration": true,
       "guidance_memory": true,
       "letter": true,
+      "letter_busy": true,
+      "letter_menu": false,
       "composer": true,
       "sleep_wake": true,
       "resume": true,
@@ -31,9 +33,13 @@
       "usage": true
     },
     "letter": "bell",
+    "input": [
+      "launch_prompt",
+      "typed"
+    ],
     "wake": "pane",
     "title": "automatic",
-    "request_budget": 18,
+    "request_budget": 24,
     "fake_home": {
       "status": "proven",
       "key_env": "ANTHROPIC_API_KEY",
@@ -76,6 +82,8 @@
       "integration": true,
       "guidance_memory": true,
       "letter": true,
+      "letter_busy": true,
+      "letter_menu": true,
       "composer": true,
       "sleep_wake": true,
       "resume": true,
@@ -84,9 +92,14 @@
       "usage": true
     },
     "letter": "bell",
+    "input": [
+      "launch_prompt",
+      "codex_queue",
+      "typed"
+    ],
     "wake": "pane",
     "title": "automatic",
-    "request_budget": 18,
+    "request_budget": 27,
     "fake_home": {
       "status": "proven",
       "key_env": "JOURNEY_FAKE_KEY",
@@ -128,6 +141,8 @@
       "integration": true,
       "guidance_memory": false,
       "letter": true,
+      "letter_busy": true,
+      "letter_menu": false,
       "composer": true,
       "sleep_wake": true,
       "resume": true,
@@ -136,9 +151,12 @@
       "usage": true
     },
     "letter": "bell",
+    "input": [
+      "typed"
+    ],
     "wake": "sleeping_session",
     "title": "automatic",
-    "request_budget": 20,
+    "request_budget": 28,
     "fake_home": {
       "status": "proven",
       "key_env": "JOURNEY_FAKE_KEY",
@@ -176,6 +194,8 @@
       "integration": true,
       "guidance_memory": true,
       "letter": true,
+      "letter_busy": false,
+      "letter_menu": false,
       "composer": true,
       "sleep_wake": true,
       "resume": true,
@@ -184,6 +204,9 @@
       "usage": true
     },
     "letter": "next_prompt",
+    "input": [
+      "typed"
+    ],
     "wake": "sleeping_session",
     "title": "automatic",
     "request_budget": 18,
@@ -228,6 +251,8 @@
       "integration": true,
       "guidance_memory": true,
       "letter": true,
+      "letter_busy": false,
+      "letter_menu": false,
       "composer": true,
       "sleep_wake": true,
       "resume": true,
@@ -236,6 +261,9 @@
       "usage": true
     },
     "letter": "next_prompt",
+    "input": [
+      "typed"
+    ],
     "wake": "sleeping_session",
     "title": {
       "named": "/name"
@@ -282,6 +310,8 @@
       "integration": true,
       "guidance_memory": true,
       "letter": true,
+      "letter_busy": false,
+      "letter_menu": false,
       "composer": true,
       "sleep_wake": true,
       "resume": true,
@@ -290,6 +320,9 @@
       "usage": true
     },
     "letter": "next_prompt",
+    "input": [
+      "typed"
+    ],
     "wake": "sleeping_session",
     "title": "automatic",
     "request_budget": 18,
@@ -335,6 +368,8 @@
       "integration": true,
       "guidance_memory": true,
       "letter": true,
+      "letter_busy": false,
+      "letter_menu": false,
       "composer": true,
       "sleep_wake": true,
       "resume": true,
@@ -343,6 +378,10 @@
       "usage": true
     },
     "letter": "next_prompt",
+    "input": [
+      "launch_prompt",
+      "typed"
+    ],
     "wake": "pane",
     "title": "automatic",
     "request_budget": 18,

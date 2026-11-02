@@ -16,7 +16,6 @@ use serde::Deserialize;
 use serde_json::json;
 
 use super::Runtime;
-use super::projects::LookRead;
 use crate::mission_events::{EventKind, MissionEvent};
 use crate::mission_health::{Act, Facts, NodeFacts, WorkerLife, evaluate};
 use crate::missions::{
@@ -1273,21 +1272,7 @@ impl Runtime {
         }
         let due: Vec<(String, String)> = self.missions.reads_due.iter().cloned().collect();
         for (device, path) in due {
-            let asked = if device == self.node.as_str() {
-                self.read_when_asked(&path, now, MISSION_READ_AFTER) != LookRead::Later
-            } else {
-                // A device's repository is read with this machine's login;
-                // its next read is asked once the last is old enough.
-                let young = self
-                    .device_github_reads
-                    .get(&(device.clone(), path.clone()))
-                    .is_some_and(|read| now.duration_since(read.asked_at) < MISSION_READ_AFTER);
-                if !young {
-                    self.refresh_device_pull_requests(&device, &path);
-                }
-                !young
-            };
-            if asked {
+            if self.ask_pull_requests_on(&device, &path, now, MISSION_READ_AFTER) {
                 self.missions.reads_due.remove(&(device, path));
             }
         }

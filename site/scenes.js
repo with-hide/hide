@@ -1,8 +1,8 @@
 // The page's moving parts: the Hide AI switch, which flips by itself until the visitor presses it; the browser
 // story, where the spec opens, then the page, then the agent's pointer presses its button; a letter crossing the
-// machine map; and the Overview map's recording over its still. Under reduced motion, and without script, the
-// switch rests on, the browser story shows its last step, the map of machines holds its first letter and the
-// Overview map shows its still; each plays only while it is on screen and the tab is visible.
+// machine map; and the three films over their stills. Under reduced motion, and without script, the switch rests
+// on, the browser story shows its last step, the map of machines holds its first letter and each film shows its
+// still; each plays only while it is on screen and the tab is visible.
 
 (() => {
   const ai = document.querySelector(".ai-switch");
@@ -10,6 +10,18 @@
   let pressed = false;
   const flip = (on) => { ai.dataset.on = String(on); toggle.setAttribute("aria-checked", String(on)); };
   toggle?.addEventListener("click", () => { pressed = true; flip(ai.dataset.on !== "true"); });
+
+  // ---- Hide AI's slides: a press shows that slide and stops the turning for good. ----
+  const slides = document.querySelector(".slides");
+  const slideButtons = slides ? [...slides.querySelectorAll(".sl-tabs button")] : [];
+  let slidesPressed = false;
+  let onSlide = () => {};
+  const showSlide = (index) => {
+    slides.dataset.slide = String(index);
+    slideButtons.forEach((button, i) => button.setAttribute("aria-pressed", String(i === index)));
+    onSlide(index);
+  };
+  slideButtons.forEach((button, i) => button.addEventListener("click", () => { slidesPressed = true; showSlide(i); }));
 
   if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
 
@@ -146,18 +158,74 @@
     });
   }
 
-  // ---- The team: the Overview map's recording plays over its still, in the visitor's color scheme. ----
-  const map = document.querySelector(".map-video");
-  if (map) {
-    const light = window.matchMedia("(prefers-color-scheme: light)");
-    // H.264 where the browser has it, VP9 where it does not (Chromium builds without the licensed codecs).
-    const kind = map.canPlayType('video/mp4; codecs="avc1.640028"') ? ".mp4" : ".webm";
-    map.addEventListener("playing", () => { map.hidden = false; });
-    whileSeen(map.parentElement, () => {
-      const source = (light.matches ? map.dataset.light : map.dataset.dark) + kind;
-      if (map.getAttribute("src") !== source) { map.hidden = true; map.src = source; }
-      map.play().catch(() => {});
-      return () => map.pause();
+  // ---- The films: each plays over its still while it is on screen and the tab is visible. ----
+  // H.264 where the browser has it, VP9 where it does not (Chromium builds without the licensed codecs).
+  const load = (film) => {
+    const source = film.dataset.src + (film.canPlayType('video/mp4; codecs="avc1.640028"') ? ".mp4" : ".webm");
+    if (film.getAttribute("src") !== source) film.src = source;
+  };
+  document.querySelectorAll(".film-video").forEach((film) => {
+    film.addEventListener("playing", () => { film.hidden = false; });
+    if (film.dataset.follow) return;
+    whileSeen(film.parentElement, () => {
+      load(film);
+      film.play().catch(() => {});
+      return () => film.pause();
+    });
+  });
+
+  // ---- Chapters: the playing chapter fills its bar; a press jumps the film to that chapter. ----
+  document.querySelectorAll(".chapters").forEach((chapters) => {
+    const film = chapters.querySelector(".film-video");
+    const tabs = [...chapters.querySelectorAll(".ch-tabs button")].map((button) => ({ button, bar: button.querySelector(".ch-bar"), at: Number(button.dataset.at), to: Number(button.dataset.to) }));
+    tabs.forEach(({ button, at }) => button.addEventListener("click", () => {
+      load(film);
+      film.currentTime = at;
+      film.play().catch(() => {});
+    }));
+    whileSeen(chapters, () => {
+      let frame = 0;
+      const draw = () => {
+        const now = film.currentTime;
+        tabs.forEach(({ button, bar, at, to }) => {
+          const inside = now >= at && now < to;
+          button.setAttribute("aria-current", String(inside));
+          bar.style.transform = `scaleX(${inside ? (now - at) / (to - at) : 0})`;
+        });
+        frame = requestAnimationFrame(draw);
+      };
+      draw();
+      return () => cancelAnimationFrame(frame);
+    });
+  });
+
+  // ---- Hide AI's slides turn by themselves while on screen until the first press; the memory film plays on its slide. ----
+  if (slides) {
+    const memory = slides.querySelector(".film-video");
+    const HOLD = [6500, 6500, 6500, 16000];
+    let seen = false;
+    onSlide = (index) => {
+      const mine = index === 3 && seen;
+      if (mine) { load(memory); memory.currentTime = 0; memory.play().catch(() => {}); } else memory.pause();
+    };
+    whileSeen(slides, () => {
+      seen = true;
+      let index = Number(slides.dataset.slide);
+      let frame = 0;
+      let since = performance.now();
+      onSlide(index);
+      const tick = (now) => {
+        const bar = slideButtons[index].querySelector(".ch-bar");
+        if (slidesPressed) { slideButtons.forEach((b) => { b.querySelector(".ch-bar").style.transform = "scaleX(0)"; }); index = Number(slides.dataset.slide); }
+        else {
+          const done = (now - since) / HOLD[index];
+          bar.style.transform = `scaleX(${Math.min(done, 1)})`;
+          if (done >= 1) { bar.style.transform = "scaleX(0)"; index = (index + 1) % slideButtons.length; since = now; showSlide(index); }
+        }
+        frame = requestAnimationFrame(tick);
+      };
+      frame = requestAnimationFrame(tick);
+      return () => { seen = false; cancelAnimationFrame(frame); memory.pause(); };
     });
   }
 })();

@@ -674,6 +674,77 @@ fn a_missions_pull_request_wakes_its_conductor_once_per_change() {
     assert_eq!(status(&runtime, "mission-1"), MissionStatus::Done);
 }
 
+/// A mission whose project is on another device shows that device's pull
+/// request, as GitHub answered for that device's project, never this
+/// machine's read of the same path, and its map is stale only while the
+/// device does not answer.
+#[test]
+fn a_mission_on_another_device_shows_that_devices_pull_request() {
+    const DEVICE: &str = "mbp";
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"pr": 7}}),
+    )
+    .unwrap();
+    runtime.missions.book.missions[0].device_id = DEVICE.into();
+    runtime.github = github(vec![pull(7, "a1", PullRequestBadge::Open, None)], false);
+    let mut on_device = pull(7, "b2", PullRequestBadge::Merged, None);
+    on_device.url = "https://github.com/acme/device/pull/7".into();
+    runtime
+        .device_github
+        .insert(DEVICE.into(), github(vec![on_device], false));
+    let fix = |runtime: &Runtime| {
+        let view = runtime.mission_view_of("mission-1").unwrap();
+        let node = view
+            .nodes
+            .into_iter()
+            .find(|node| node.key == "fix")
+            .unwrap();
+        (node.pr_url, view.stale)
+    };
+
+    assert_eq!(
+        fix(&runtime),
+        (
+            Some("https://github.com/acme/device/pull/7".to_owned()),
+            true
+        ),
+        "the device's read, stale while the device does not answer"
+    );
+    runtime
+        .snapshot
+        .status
+        .remote
+        .push(crate::model::RemoteStatusSnapshot {
+            target_id: DEVICE.into(),
+            state: "connected".into(),
+            message: None,
+            herdr_version: None,
+            session: None,
+            files: crate::model::RemoteFileListSnapshot::idle(),
+            catalog: Default::default(),
+            unreachable_since_unix_ms: None,
+        });
+    assert_eq!(
+        fix(&runtime),
+        (
+            Some("https://github.com/acme/device/pull/7".to_owned()),
+            false
+        )
+    );
+}
+
 /// A Conductor conducts one open mission, which its commands and starts
 /// mean when they name none: a change to a done one while it conducts
 /// another tells it, and neither that change nor `reopen` opens a second.

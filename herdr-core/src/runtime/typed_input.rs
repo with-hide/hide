@@ -131,7 +131,7 @@ impl Runtime {
     }
 
     /// Queues the store's record that the brief of spawn `id` was taken.
-    fn post_brief_confirmed(&self, id: &str, by: &'static str) {
+    pub(crate) fn post_brief_confirmed(&self, id: &str, by: &'static str) {
         let posted =
             self.hide_delivery(typed::INPUT_ROLE)
                 .and_then(|(client, authority, actor)| {
@@ -294,19 +294,24 @@ impl Runtime {
                         &observation.actor.pane_id,
                         None,
                         source,
+                        input.route,
                     ),
                     attempt: input.attempts,
                     target,
                 });
             // The composer is read at rest only: what a working agent draws
             // there is its own.
-            let resubmit =
-                (spawn.briefed && typed::composer_readable(observation, now)).then(|| Resubmit {
-                    brief: brief.clone(),
-                    attempts: input.attempts,
-                    left: input.attempts < typed::INPUT_ATTEMPTS,
-                    answered: source.is_ok() && typed::retype_due(input, observation, now),
-                });
+            // A launch prompt is held by the agent's start and never typed
+            // again, so answering its screen cannot send it twice.
+            let resubmit = (spawn.briefed
+                && input.route.sends_again()
+                && typed::composer_readable(observation, now))
+            .then(|| Resubmit {
+                brief: brief.clone(),
+                attempts: input.attempts,
+                left: input.attempts < typed::INPUT_ATTEMPTS,
+                answered: source.is_ok() && typed::retype_due(input, observation, now),
+            });
             if notice.is_some() || resubmit.is_some() {
                 work.push(InputWork {
                     key: InputKey::Spawn(spawn.id.clone()),
@@ -372,6 +377,7 @@ impl Runtime {
                         &observation.actor.pane_id,
                         Some(&letter.id),
                         self.input_source(&letter.recipient.kind, &observation.actor.pane_id),
+                        input.route,
                     ),
                     attempt: input.attempts,
                     target,
@@ -777,15 +783,17 @@ pub(crate) mod tests {
         handoff: bool,
         typed_at: u64,
     ) -> (tempfile::TempDir, Runtime, String) {
-        spawned_with(kind, BRIEF, handoff, typed_at)
+        spawned_with(kind, BRIEF, handoff, typed_at, false)
     }
 
-    /// [`spawned_as`] with `brief` typed.
+    /// [`spawned_as`] with `brief` typed, or with `launched`, carried by the
+    /// start's prompt argument.
     fn spawned_with(
         kind: &str,
         brief: &str,
         handoff: bool,
         typed_at: u64,
+        launched: bool,
     ) -> (tempfile::TempDir, Runtime, String) {
         let root = tempfile::tempdir().unwrap();
         let (runtime, _, _, _) = crate::runtime::delivery::tests::fixture(root.path());
@@ -887,18 +895,80 @@ pub(crate) mod tests {
         ] {
             apply(&mut ledger, mutation, 1);
         }
-        apply(
-            &mut ledger,
-            Mutation::BriefTyping { id: spawn.clone() },
-            typed_at,
-        );
-        apply(
-            &mut ledger,
-            Mutation::Briefed { id: spawn.clone() },
-            typed_at,
-        );
+        if launched {
+            apply(
+                &mut ledger,
+                Mutation::BriefLaunched { id: spawn.clone() },
+                typed_at,
+            );
+        } else {
+            apply(
+                &mut ledger,
+                Mutation::BriefTyping { id: spawn.clone() },
+                typed_at,
+            );
+            apply(
+                &mut ledger,
+                Mutation::Briefed {
+                    id: spawn.clone(),
+                    route: Default::default(),
+                },
+                typed_at,
+            );
+        }
         runtime.publish_delivery(Arc::new(ledger), false);
         (root, runtime, spawn)
+    }
+
+    /// A brief that rode the start's prompt argument is never typed: while
+    /// its child sits unrecorded at a start screen its parent hears that
+    /// the start holds it, and answering that screen has nothing typed.
+    #[test]
+    fn a_launched_brief_is_never_typed_and_its_parent_hears_the_start_holds_it() {
+        const T: u64 = 100_000;
+        let (_root, mut runtime, spawn) = spawned_with("codex", BRIEF, false, T, true);
+        assert_eq!(input_of(&runtime, &spawn).route, typed::SendRoute::Launch);
+        runtime.typed_input_work(T + RECORD_WAIT_MS);
+        let at = T + RECORD_WAIT_MS + REREAD_WAIT_MS;
+        let work = runtime.typed_input_work(at);
+        assert_eq!(work.len(), 1);
+        let notice = work[0].notice.as_ref().expect("the parent is told");
+        assert!(notice.body.starts_with(
+            "worker has not taken its brief yet: read its screen with `hide pane read child`."
+        ));
+        assert!(notice.body.contains("Hide never types the brief"));
+        assert!(work[0].resubmit.is_none(), "nothing is read to retype");
+
+        runtime.note_delivery_key_at("child", at + 1_000);
+        let quiet = at + 1_000 + crate::delivery::INPUT_QUIET_MS;
+        assert!(
+            runtime
+                .typed_input_work(quiet)
+                .iter()
+                .all(|work| work.resubmit.is_none()),
+            "an answered screen has nothing typed"
+        );
+        assert_eq!(input_of(&runtime, &spawn).attempts, 1);
+    }
+
+    /// A launched brief's record is the prompt argument as the agent kept
+    /// it, line breaks as U+2028 and a tab as four spaces (Codex, agy): the
+    /// same canonical rule reads it as the brief, so it is taken.
+    #[test]
+    fn a_launched_brief_with_a_tab_is_taken_by_the_record_of_its_argument() {
+        const T: u64 = 100_000;
+        let brief = "Steps:\n\tadd the call\nReport by letter.";
+        let (_root, mut runtime, _) = spawned_with("codex", brief, false, T, true);
+        record_request(
+            &mut runtime,
+            "child",
+            "codex",
+            "Steps:\u{2028}    add the call\u{2028}Report by letter.",
+            T + 1_000,
+        );
+        let work = runtime.typed_input_work(T + 1_000);
+        assert_eq!(work.len(), 1);
+        assert_eq!(work[0].recorded, Some("session"));
     }
 
     /// The agent row of `pane` whose session file's newest message from
@@ -1410,7 +1480,8 @@ pub(crate) mod tests {
             (at + CLOCK_SLACK_MS + 1, sender.clone(), false),
             (at - 500, json!({"kind": "operator"}), false),
         ] {
-            let (_root, mut runtime, spawn) = spawned_with("antigravity", typed, false, typed_at);
+            let (_root, mut runtime, spawn) =
+                spawned_with("antigravity", typed, false, typed_at, false);
             let mut row = crate::sidebar::project_agents(
                 serde_json::from_value(json!({"agents": [
                     {"pane_id": "child", "agent": "antigravity", "agent_status": "idle", "state_change_seq": 2}
@@ -1453,7 +1524,8 @@ pub(crate) mod tests {
         let typed = fixture["typed"].as_str().unwrap();
         let record = &fixture["record"];
         let at = record["at_unix_ms"].as_u64().unwrap();
-        let (_root, mut runtime, spawn) = spawned_with("antigravity", typed, false, at - 500);
+        let (_root, mut runtime, spawn) =
+            spawned_with("antigravity", typed, false, at - 500, false);
         let retyped = at + CLOCK_SLACK_MS + 10_000;
         let mut ledger = (**runtime.delivery_ledger.as_ref().unwrap()).clone();
         crate::coordination::apply(

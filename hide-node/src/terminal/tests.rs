@@ -1985,3 +1985,245 @@ fn named_keys_for_a_session_that_does_not_read_them_are_refused_with_why() {
     harness.key("w1:p1", b"x");
     assert_eq!(opened.next_input(), b"x");
 }
+
+/// The grid a holder in [`HolderPanes`] runs at until it is told another.
+const HOLDER_SIZE: GridSize = GridSize { rows: 24, cols: 80 };
+/// The grid the screen draws the pane at, and the core saved for it.
+const VIEW: GridSize = GridSize {
+    rows: 44,
+    cols: 109,
+};
+
+/// Panes as a node with holders and no Herdr opens them: a pane whose holder
+/// was started keeps its own size, attached at [`HOLDER_SIZE`] unless a size
+/// is named, and every other pane is refused, as a daemon on the core's own
+/// engine refuses a pane whose holder it has not started yet.
+struct HolderPanes {
+    fake: Arc<FakeAttacher>,
+    holders: Mutex<HashSet<String>>,
+    /// Holds the next attempt, once it says it began, until the test lets
+    /// it answer.
+    gate: Mutex<Option<(Sender<()>, Receiver<()>)>>,
+}
+
+impl HolderPanes {
+    /// Holds the next attempt: the first end hears it begin, the second
+    /// lets it answer.
+    fn hold_next(&self) -> (Receiver<()>, Sender<()>) {
+        let (began, beginning) = channel();
+        let (answer, answered) = channel();
+        *self.gate.lock().unwrap() = Some((began, answered));
+        (beginning, answer)
+    }
+}
+
+impl Attacher for HolderPanes {
+    fn open(&self, _: &str, _: Mode, _: u16, _: u16) -> Result<SessionParts, String> {
+        Err("This daemon runs without a Herdr server".into())
+    }
+
+    fn open_transport(
+        &self,
+        pane: &str,
+        mode: Mode,
+        size: Option<GridSize>,
+    ) -> Result<Transport, OpenFailure> {
+        // Whether the holder was started when the attempt began.
+        let held = self.keeps_own_size(pane);
+        let gate = self.gate.lock().unwrap().take();
+        if let Some((began, answered)) = gate {
+            began.send(()).unwrap();
+            answered
+                .recv_timeout(WAIT)
+                .expect("the test let the attempt answer");
+        }
+        if !held {
+            return Err(OpenFailure::retried(
+                "This daemon runs without a Herdr server".into(),
+            ));
+        }
+        let size = size.unwrap_or(HOLDER_SIZE);
+        let parts = self
+            .fake
+            .open(pane, mode, size.rows, size.cols)
+            .map_err(OpenFailure::retried)?;
+        let mut transport = Transport::lines(parts, mode);
+        transport.size = Some(size);
+        Ok(transport)
+    }
+
+    fn keeps_own_size(&self, pane: &str) -> bool {
+        self.holders.lock().unwrap().contains(pane)
+    }
+}
+
+/// A harness over [`HolderPanes`] that never retries on its own, so an
+/// attach that opens is one a control asked for.
+fn holder_harness() -> (Harness, Arc<HolderPanes>) {
+    let (opened_tx, opened) = channel();
+    let (reports_tx, reports) = channel();
+    let fake = Arc::new(FakeAttacher {
+        opened: Mutex::new(opened_tx),
+        refuse: Mutex::new(None),
+    });
+    let panes = Arc::new(HolderPanes {
+        fake: Arc::clone(&fake),
+        holders: Mutex::new(HashSet::new()),
+        gate: Mutex::new(None),
+    });
+    struct Shared(Arc<HolderPanes>);
+    impl Attacher for Shared {
+        fn open(
+            &self,
+            pane: &str,
+            mode: Mode,
+            rows: u16,
+            cols: u16,
+        ) -> Result<SessionParts, String> {
+            self.0.open(pane, mode, rows, cols)
+        }
+        fn open_transport(
+            &self,
+            pane: &str,
+            mode: Mode,
+            size: Option<GridSize>,
+        ) -> Result<Transport, OpenFailure> {
+            self.0.open_transport(pane, mode, size)
+        }
+        fn keeps_own_size(&self, pane: &str) -> bool {
+            self.0.keeps_own_size(pane)
+        }
+    }
+    let outputs = Arc::new(Outputs::default());
+    let service = Service::start(
+        Box::new(Shared(Arc::clone(&panes))),
+        Arc::clone(&outputs) as Arc<dyn OutputSink>,
+        Arc::new(Reports(Mutex::new(reports_tx))),
+        RetryPolicy::Manual,
+    )
+    .unwrap();
+    let harness = Harness {
+        service,
+        opened,
+        reports,
+        outputs,
+        refuse: fake,
+    };
+    (harness, panes)
+}
+
+#[test]
+fn a_holder_pane_its_node_attached_before_a_view_drew_it_takes_the_view_s_grid() {
+    // A daemon that starts again after every process ended: the restore
+    // starts the pane's shell, its node attaches it at the holder's size,
+    // and only then does the page draw it, at the grid the core saved and
+    // so never sends as a resize.
+    let (harness, panes) = holder_harness();
+    panes.holders.lock().unwrap().insert("w1:p1".into());
+    harness.attach("w1:p1", None);
+    let opened = harness.opened();
+    assert_eq!(opened.size, HOLDER_SIZE);
+    harness.state("w1:p1", "controlling");
+    harness.service.view("w1:p1", VIEW, true);
+    let resize = opened.next_line();
+    assert_eq!(
+        (&resize["type"], &resize["rows"], &resize["cols"]),
+        (&json!("terminal.resize"), &json!(44), &json!(109))
+    );
+    opened.frame(VIEW, true, b"fixture % ");
+    let written = harness.wait_written(1);
+    assert_eq!(written[0].0, "w1:p1");
+    assert!(written[0].1.ends_with(b"fixture % "), "{written:?}");
+}
+
+#[test]
+fn a_holder_started_after_its_attach_was_refused_attaches_at_once_at_the_core_s_size() {
+    // The core asks for the pane from the saved layout before the restore
+    // has started its shell: that attempt is refused. The holder's start
+    // then attaches the pane now, at the size the core named, not at the
+    // holder's.
+    let (harness, panes) = holder_harness();
+    harness.attach("w1:p1", Some(VIEW));
+    harness.state("w1:p1", "unavailable");
+    panes.holders.lock().unwrap().insert("w1:p1".into());
+    harness.attach("w1:p1", None);
+    let opened = harness.opened();
+    assert_eq!(opened.size, VIEW);
+    harness.state("w1:p1", "controlling");
+}
+
+#[test]
+fn a_pane_with_no_holder_or_whose_holder_refused_is_not_attached_again_by_a_later_attach() {
+    let (harness, panes) = holder_harness();
+    // Closed while no daemon ran: its holder is never started.
+    harness.attach("w1:p1", Some(VIEW));
+    harness.state("w1:p1", "unavailable");
+    // Its holder is known but the attach to it fails: the pane is over.
+    panes.holders.lock().unwrap().insert("w1:p2".into());
+    *harness.refuse.refuse.lock().unwrap() = Some("the holder ended".into());
+    harness.attach("w1:p2", None);
+    harness.state("w1:p2", "unavailable");
+    *harness.refuse.refuse.lock().unwrap() = None;
+    harness.attach("w1:p1", None);
+    harness.attach("w1:p1", Some(VIEW));
+    harness.attach("w1:p2", None);
+    harness.attach("w1:p2", Some(VIEW));
+    // A pane whose holder was started, attached after them: the service
+    // takes controls and hands their reports over in order, so any session
+    // the attaches above started is reported before this one starts.
+    panes.holders.lock().unwrap().insert("w1:p3".into());
+    harness.attach("w1:p3", None);
+    loop {
+        match harness.report_where(|report| matches!(report, TerminalReport::State { .. })) {
+            TerminalReport::State { pane, state } if pane == "w1:p3" => {
+                assert_eq!(state.state, "starting");
+                break;
+            }
+            TerminalReport::State { pane, state } => assert!(
+                !matches!(state.state.as_str(), "starting" | "controlling"),
+                "{pane} with no holder to reach was attached again: {state:?}"
+            ),
+            _ => unreachable!(),
+        }
+    }
+    assert_eq!(harness.opened().pane, "w1:p3");
+}
+
+#[test]
+fn a_view_that_arrives_while_a_holder_pane_opens_is_the_grid_it_takes() {
+    // The page draws the pane after its node asked for the holder and
+    // before the holder answered: the view's grid is the one the pane
+    // takes, as an attach after the view would have.
+    let (harness, panes) = holder_harness();
+    panes.holders.lock().unwrap().insert("w1:p1".into());
+    let (began, answer) = panes.hold_next();
+    harness.attach("w1:p1", None);
+    began.recv_timeout(WAIT).expect("the holder was asked for");
+    harness.service.view("w1:p1", VIEW, true);
+    answer.send(()).unwrap();
+    let opened = harness.opened();
+    assert_eq!(opened.size, HOLDER_SIZE);
+    let resize = opened.next_line();
+    assert_eq!(
+        (&resize["type"], &resize["rows"], &resize["cols"]),
+        (&json!("terminal.resize"), &json!(44), &json!(109))
+    );
+}
+
+#[test]
+fn a_holder_started_while_its_refused_attach_is_still_on_its_way_attaches_at_once() {
+    // The core's attempt, made before the holder was started, has not been
+    // refused yet when the holder's start asks for the pane: the pane
+    // attaches now, not once that attempt fails and its retry clock runs.
+    let (harness, panes) = holder_harness();
+    let (began, answer) = panes.hold_next();
+    harness.attach("w1:p1", Some(VIEW));
+    began.recv_timeout(WAIT).expect("the attempt began");
+    harness.state("w1:p1", "starting");
+    panes.holders.lock().unwrap().insert("w1:p1".into());
+    harness.attach("w1:p1", None);
+    let opened = harness.opened();
+    assert_eq!(opened.size, VIEW);
+    harness.state("w1:p1", "controlling");
+    answer.send(()).unwrap();
+}

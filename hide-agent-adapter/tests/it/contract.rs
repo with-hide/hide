@@ -670,3 +670,58 @@ fn cursor_is_retired_from_active_support_and_launches() {
     assert_eq!(SessionFormat::Cursor.adapter().id, "cursor");
     assert_eq!(AgentId::Antigravity.adapter().id, "antigravity");
 }
+
+/// Every agent declares its input ladder (`docs/delivery.md`, The input
+/// ladder): the rungs Hide tries in order, ending with the typing every
+/// agent takes, with an agent's own API only on that agent and a launch
+/// prompt only for an agent Hide starts.
+#[test]
+fn every_agent_declares_an_input_ladder_that_ends_typed() {
+    use hide_agent_adapter::{AgentApi, InputRung};
+    for row in ADAPTERS.iter().chain(std::iter::once(
+        hide_agent_adapter::AgentId::Cursor.adapter(),
+    )) {
+        assert_eq!(
+            row.input.last(),
+            Some(&InputRung::Typed),
+            "{}: a ladder ends with Typed",
+            row.id
+        );
+        assert_eq!(
+            row.input
+                .iter()
+                .filter(|rung| **rung == InputRung::Typed)
+                .count(),
+            1,
+            "{}: Typed is the last rung only",
+            row.id
+        );
+        let mut seen = BTreeSet::new();
+        for rung in row.input {
+            assert!(
+                seen.insert(format!("{rung:?}")),
+                "{}: {rung:?} declared twice",
+                row.id
+            );
+            let InputRung::AgentApi(api) = rung else {
+                continue;
+            };
+            if let Some(agent) = api.agent() {
+                assert_eq!(agent, row.key, "{}: {api:?} is another agent's", row.id);
+            }
+            if *api == AgentApi::LaunchPrompt {
+                assert!(
+                    row.start.is_some(),
+                    "{}: a launch prompt needs a start",
+                    row.id
+                );
+                assert_eq!(
+                    row.input.first(),
+                    Some(rung),
+                    "{}: the launch prompt is the first rung",
+                    row.id
+                );
+            }
+        }
+    }
+}

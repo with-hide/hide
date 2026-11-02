@@ -688,7 +688,7 @@ As measured on 2026-10-30:
 | Pi | `pi-acp` (registry `pi-acp`), a separate package |
 | omp | built in, `omp acp`; not in the registry |
 | Grok | built in, `grok agent stdio` (registry `grok-build`); the top-level `grok --help` does not name ACP |
-| Antigravity | `agy_acp_server.par` (registry `antigravity-acp`), a separate program Google publishes for macOS, Linux and Windows, not part of the `agy` CLI |
+| Antigravity | built in since 1.4.12 as `agy acp` (`Antigravity ACP Server`, measured 2026-11-01); before it `agy_acp_server.par` (registry `antigravity-acp`), a separate program Google publishes for macOS, Linux and Windows |
 
 `session/load` is not a read-only way to look at a session: on 2026-10-30 claude-agent-acp 0.97.0 appended a `cost-state` record and codex-acp 2.3.0 a `thread_settings_applied` record to the session file it loaded, and codex-acp refuses to load a sub-agent's session without its parent.
 Replay quality differs by server: pi-acp 0.0.34 replayed tool calls titled only `bash`, `read` or `edit`, with no input, location, diff or command output, all of which Pi's own session file keeps.

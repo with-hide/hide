@@ -397,6 +397,14 @@ int main(int argc, char **argv) {
   _setmode(1, _O_BINARY);
 #endif
   if (getenv("HIDE_E2E_LIVE_CHECK")) return live_check(argc, argv);
+  /* `codex queue` hands a running session a message (docs/delivery.md, The
+     input ladder). The stand-in keeps no queue its running copy could take,
+     so it refuses as a Codex without the command does, and Hide types the
+     input instead; the fake-model lane measures the real queue. */
+  if (run_as_codex(argv[0]) && argc > 1 && strcmp(argv[1], "queue") == 0) {
+    fputs("error: unrecognized subcommand 'queue'\n", stderr);
+    return 2;
+  }
   for (int i = 1; i < argc; i++) {
     if (strcmp(argv[i], "--json-schema") == 0 || (i == 1 && strcmp(argv[i], "auth") == 0)) return provider(argc, argv);
     if (i == 1 && strcmp(argv[i], "-p") == 0 && has_option(argc, argv, "--system-prompt")) return provider(argc, argv);

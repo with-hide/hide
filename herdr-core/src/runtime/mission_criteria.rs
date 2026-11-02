@@ -31,13 +31,7 @@ impl Runtime {
     /// The pull request list of the mission's project as the last GitHub
     /// read that was not stale has it.
     pub(super) fn mission_pulls(&self, mission: &Mission) -> Option<&GithubProjectSnapshot> {
-        let github = if mission.device_id == self.node.as_str() {
-            Some(&self.github)
-        } else {
-            self.device_github.get(&mission.device_id)
-        };
-        github?
-            .project(&mission.project)
+        self.github_project_on(&mission.device_id, &mission.project)
             .filter(|project| !project.status.stale && project.pull_requests_read)
     }
 

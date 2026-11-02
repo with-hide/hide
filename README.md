@@ -13,6 +13,7 @@
   <a href="https://github.com/with-hide/hide/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/with-hide/hide?label=release&color=B9FF66&labelColor=0D191B"></a>
   <a href="LICENSE"><img alt="Apache License 2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
   <img alt="macOS, Windows and Linux" src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey">
+  <a href="https://discord.gg/h6zme5kybD"><img alt="Join the hide Discord" src="https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white"></a>
   <a href="https://herdr.dev"><img alt="Built on Herdr" src="https://img.shields.io/badge/built%20on-Herdr-B9FF66?labelColor=0D191B"></a>
 </p>
 
@@ -20,15 +21,13 @@
   <a href="https://withhide.dev"><strong>Download</strong></a> ·
   <a href="https://withhide.dev">Website</a> ·
   <a href="docs/README.md">Docs</a> ·
+  <a href="https://discord.gg/h6zme5kybD">Discord</a> ·
   <a href="https://github.com/with-hide/hide/discussions">Discussions</a> ·
   <a href="CONTRIBUTING.md">Contributing</a>
 </p>
 
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: light)" srcset="site/assets/shots/hero-light.webp">
-    <img src="site/assets/shots/hero-dark.webp" alt="The hide window. The sidebar raises the two agents that need an answer above the project tree. A lead splitting the work and the agent asking to merge two pull requests run side by side, and the Project tool beside them counts the sessions, pull requests, worktrees and the week's cost, with the project's to-do list under them.">
-  </picture>
+  <img src="site/assets/video/kick-conductor.gif" width="960" alt="A Conductor plans a six-step mission, then each step flies out to a worker on This Mac, linux-box or mac-mini: Claude Code, Codex, Antigravity and Grok. One agent asks a question, you answer it, and every step ends in a pull request.">
 </p>
 
 You run several coding agents at once, and someone has to keep track of them.
@@ -292,6 +291,7 @@ pnpm --dir desktop dev              # the desktop app, unpackaged, against this 
 
 ## Community and support
 
+- **Chat with the team and other users:** [Discord](https://discord.gg/h6zme5kybD)
 - **Questions:** [Discussions Q&A](https://github.com/with-hide/hide/discussions/categories/q-a)
 - **Feature requests:** [the feature request form](https://github.com/with-hide/hide/issues/new?template=feature_request.yml)
 - **Open-ended ideas:** [Discussions Ideas](https://github.com/with-hide/hide/discussions/categories/ideas)
