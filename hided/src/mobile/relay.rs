@@ -21,10 +21,7 @@ use tokio_tungstenite::{
     tungstenite::{Message, protocol::WebSocketConfig},
 };
 
-use super::{
-    Mobile, phone,
-    store::{Method, RelayKeys},
-};
+use super::{Mobile, phone, store::RelayKeys};
 
 const DEADLINE: Duration = Duration::from_secs(10);
 /// One budget from peer arrival through Noise and the first credential message.
@@ -125,14 +122,6 @@ fn diagnostic(connection: Option<u32>, reason: &str) {
     }));
 }
 
-fn desired(mobile: &Mobile) -> bool {
-    let inner = mobile.lock();
-    inner.settings.enabled
-        && inner.settings.method == Method::Relay
-        && inner.settings.serve.is_none()
-        && *mobile.config.open.borrow()
-}
-
 /// Equal jitter, exponential to a 30-second ceiling. No retained retry queue.
 fn backoff(attempt: u32) -> Result<Duration, Error> {
     let ceiling = (1000_u64 << attempt.min(5)).min(30_000);
@@ -154,7 +143,7 @@ pub async fn supervise(mobile: Arc<Mobile>) {
         if *stopping.borrow() {
             break;
         }
-        if !desired(&mobile) {
+        if !mobile.relay_desired() {
             tokio::select! {
                 _ = changes.changed() => {},
                 _ = open.changed(), if open.has_changed().is_ok() => {},
@@ -164,7 +153,7 @@ pub async fn supervise(mobile: Arc<Mobile>) {
             continue;
         }
         let keys = match mobile.relay_keys() {
-            Ok(keys) => Arc::new(keys),
+            Ok(keys) => keys,
             Err(()) => {
                 mobile.relay_state(State::KeyUnavailable);
                 tokio::select! {
@@ -258,7 +247,7 @@ async fn connect(
     // A method change cancels this future, including the wait.
     {
         let _reconciling = mobile.reconcile_lock.lock().await;
-        if !desired(mobile) {
+        if !mobile.relay_desired() {
             return Err(LinkError::Closed);
         }
     }
@@ -404,7 +393,7 @@ async fn serve(
         let Some(Ok(axum::extract::ws::Message::Text(text))) = first else {
             return Err(Error::InvalidMessage);
         };
-        if text.len() > 16 * 1024 {
+        if text.len() > phone::MAX_FRAME {
             return Err(Error::SizeLimit);
         }
         let first = serde_json::from_str(&text).map_err(|_| Error::InvalidMessage)?;

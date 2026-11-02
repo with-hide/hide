@@ -55,7 +55,7 @@ pub struct MobileSettings {
     #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
-    pub method: Method,
+    pub method: Option<Method>,
     /// The last verified direct scope, retained after removing our Serve entry.
     #[serde(default)]
     pub last_tailnet: Option<String>,
@@ -76,6 +76,19 @@ pub enum Method {
     #[default]
     Relay,
     Tailscale,
+}
+
+impl MobileSettings {
+    /// Keep an existing direct setup on upgrade; only a new setup defaults to relay.
+    pub fn method(&self) -> Method {
+        self.method.unwrap_or_else(|| {
+            if self.serve.is_some() || self.last_tailnet.is_some() {
+                Method::Tailscale
+            } else {
+                Method::Relay
+            }
+        })
+    }
 }
 
 /// Different key types, persisted only through the private settings writer.

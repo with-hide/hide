@@ -136,3 +136,15 @@ it.each([
   }
   await unmount();
 });
+
+it("keeps a direct cleanup failure in the connection line while relay pairing remains available", async () => {
+  const { container, q, unmount } = await mount(frame({
+    method: "relay", relay: { state: "connected" }, checklist: null,
+    failure: { step: "remove", message: "Tailscale CLI unavailable" },
+  }));
+  expect(container.querySelectorAll("[data-mobile-connection]")).toHaveLength(1);
+  expect(container.querySelector("[data-mobile-connection]")?.textContent).not.toContain("Connected · Hide relay");
+  expect(q('[data-mobile-show-code="true"]')).not.toBeNull();
+  expect(container.querySelector('[role="alert"], [role="dialog"]')).toBeNull();
+  await unmount();
+});

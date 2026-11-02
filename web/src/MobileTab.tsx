@@ -86,7 +86,8 @@ function RelayConnection({ state, actions }: { state: MobileState; actions: Acti
     unsupported_version: "mobileSetup.relay.outdated",
   } as const;
   const reason = state.relay.reason as keyof typeof refusal;
-  const text = state.exposure === "failed" ? exposureLine(state, machine, t)?.text
+  const text = state.failure && status === "connected" ? t("mobileSetup.relay.cleanupFailed")
+    : state.failure ? exposureLine({ ...state, exposure: "failed" }, machine, t)?.text
     : status === "connected" ? t("mobileSetup.relay.connected")
     : status === "retrying" ? t("mobileSetup.relay.retrying")
     : status === "key_unavailable" ? t("mobileSetup.relay.keyUnavailable")
@@ -94,7 +95,7 @@ function RelayConnection({ state, actions }: { state: MobileState; actions: Acti
     : t("mobileSetup.relay.connecting");
   const retry = status === "retrying" || status === "refused" || status === "key_unavailable";
   return <Row data-mobile-connection={status}
-    label={<Status tone={status === "connected" ? "ok" : retry ? "warn" : "pending"}>{text}</Status>}
+    label={<Status tone={state.failure || retry ? "warn" : status === "connected" ? "ok" : "pending"}>{text}</Status>}
     detail={<span className="text-body text-muted-foreground">{t("mobileSetup.relay.encrypted")}</span>}>
     {outdated ? <Button variant="secondary" size="sm" onClick={() => actions.openSettings("about")}>{t("mobileSetup.relay.update")}</Button>
       : retry ? <Button variant="secondary" size="sm" onClick={() => actions.retryMobile()}>{t("mobileSetup.relay.retry")}</Button> : null}

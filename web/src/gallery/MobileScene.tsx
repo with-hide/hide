@@ -13,10 +13,10 @@ function fixture(state: string): MobileState {
   const qr = `https://app.withhide.dev/#pair=${btoa(JSON.stringify({v:2,name:"Home computer",device_key:"A".repeat(43),noise_key:"B".repeat(43),room:"C".repeat(43),code:"D".repeat(22)}))}`;
   return {
     enabled: state !== "off", method: "relay",
-    exposure: ["connected", "qr", "phones"].includes(state) ? "exposed" : state === "off" ? "off" : "checking",
+    exposure: ["connected", "qr", "phones", "cleanup"].includes(state) ? "exposed" : state === "off" ? "off" : "checking",
     relay: { state: reason ? "refused" : state === "retrying" ? "retrying" : state === "off" ? "off" : state === "connecting" ? "connecting" : "connected", reason },
     checklist: null, download_url: "https://tailscale.com/download", admin_url: "https://login.tailscale.com/admin/dns",
-    foreign_target: null, failure: null, url: "https://app.withhide.dev/", qr: state === "qr" ? qr : null,
+    foreign_target: null, failure: state === "cleanup" ? {step:"remove",message:"Tailscale CLI unavailable"} : null, url: "https://app.withhide.dev/", qr: state === "qr" ? qr : null,
     code_expires_at_ms: state === "qr" ? now + 300_000 : null,
     phones: state === "phones" ? [{id:"gallery-phone",name:"iPhone",last_seen_ms:now,connected:true,notifications:"on",revoke_at_ms:now+604800000}] : [],
     max_phones:4, push_mode:"off", now_ms:now,

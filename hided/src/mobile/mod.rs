@@ -100,6 +100,8 @@ struct Inner {
     exposure: Exposure,
     checklist: Option<Checklist>,
     relay_state: relay::State,
+    relay_keys: Option<Arc<relay::Keys>>,
+    relay_cleanup_failure: Option<String>,
     /// Renderer connections with Settings > Mobile open.
     observers: HashSet<u64>,
     /// Tags of agents made Seen since each phone's last push (PRD D-21).
@@ -109,6 +111,15 @@ struct Inner {
     /// An exposed Mobile's last pass could not read Tailscale; one such miss
     /// keeps the exposure, the next one in a row drops it.
     missed_check: bool,
+}
+
+impl Inner {
+    fn relay_desired(&self, open: bool) -> bool {
+        self.settings.enabled
+            && self.settings.method() == Method::Relay
+            && self.settings.serve.is_none()
+            && open
+    }
 }
 
 /// Where one input request id stands.
@@ -215,6 +226,7 @@ impl Mobile {
 
     pub fn start(config: Config) -> Arc<Self> {
         let mut settings: MobileSettings = store::read(&store::settings_path(&config.state_dir));
+        settings.method = Some(settings.method());
         if settings.last_tailnet.is_none() {
             settings.last_tailnet = settings.serve.as_ref().map(|serve| serve.dns_name.clone());
         }
@@ -243,7 +255,7 @@ impl Mobile {
             store::phones_path(&config.state_dir),
             settings.last_tailnet.as_deref(),
         );
-        if settings.method == Method::Relay {
+        if settings.method() == Method::Relay {
             phones.set_scope(Some(PhoneOrigin::Relay));
         }
         let exposure = if settings.enabled {
@@ -259,6 +271,8 @@ impl Mobile {
                 exposure,
                 checklist: None,
                 relay_state: relay::State::Off,
+                relay_keys: None,
+                relay_cleanup_failure: None,
                 observers: HashSet::new(),
                 pending_clear: HashMap::new(),
                 inputs: HashMap::new(),
@@ -328,10 +342,15 @@ impl Mobile {
         );
     }
 
-    fn relay_keys(&self) -> Result<relay::Keys, ()> {
+    fn relay_keys(&self) -> Result<Arc<relay::Keys>, ()> {
         let mut inner = self.lock();
+        if let Some(keys) = &inner.relay_keys {
+            return Ok(Arc::clone(keys));
+        }
         if let Some(stored) = &inner.settings.relay_keys {
-            return relay::Keys::load(stored).map_err(|_| ());
+            let keys = Arc::new(relay::Keys::load(stored).map_err(|_| ())?);
+            inner.relay_keys = Some(Arc::clone(&keys));
+            return Ok(keys);
         }
         let (keys, stored) = relay::Keys::generate().map_err(|_| ())?;
         let mut settings = inner.settings.clone();
@@ -341,16 +360,18 @@ impl Mobile {
             return Err(());
         }
         inner.settings = settings;
+        let keys = Arc::new(keys);
+        inner.relay_keys = Some(Arc::clone(&keys));
         Ok(keys)
+    }
+
+    fn relay_desired(&self) -> bool {
+        self.lock().relay_desired(*self.config.open.borrow())
     }
 
     fn relay_state(&self, state: relay::State) {
         let mut inner = self.lock();
-        if !inner.settings.enabled
-            || inner.settings.method != Method::Relay
-            || inner.settings.serve.is_some()
-            || inner.relay_state == state
-        {
+        if !inner.relay_desired(*self.config.open.borrow()) || inner.relay_state == state {
             return;
         }
         inner.exposure = if state == relay::State::Connected {
@@ -493,17 +514,12 @@ impl Mobile {
             .then(|| inner.phones.code())
             .flatten()
             .filter(|(_, expiry)| now_ms() < *expiry);
-        let qr = if inner.settings.method == Method::Relay {
+        let qr = if inner.settings.method() == Method::Relay {
             code.and_then(|(code, _)| {
-                inner
-                    .settings
-                    .relay_keys
-                    .as_ref()
-                    .and_then(|stored| relay::Keys::load(stored).ok())
-                    .and_then(|keys| {
-                        keys.qr(code, self.config.host_name.as_deref().unwrap_or("Hide"))
-                            .ok()
-                    })
+                inner.relay_keys.as_ref().and_then(|keys| {
+                    keys.qr(code, self.config.host_name.as_deref().unwrap_or("Hide"))
+                        .ok()
+                })
             })
         } else {
             match (&dns, code) {
@@ -541,15 +557,15 @@ impl Mobile {
             .collect();
         json!({
             "enabled": inner.settings.enabled,
-            "method": inner.settings.method,
+            "method": inner.settings.method(),
             "relay": inner.relay_state.value(),
             "exposure": exposure,
             "checklist": checklist,
             "download_url": tailscale::DOWNLOAD_URL,
             "admin_url": tailscale::ADMIN_DNS_URL,
             "foreign_target": foreign,
-            "failure": failure,
-            "url": if inner.settings.method == Method::Relay { Some(hide_relay_protocol::qr::APP_URL.to_owned()) }
+            "failure": failure.or_else(|| inner.relay_cleanup_failure.as_ref().map(|message| json!({"step":"remove", "message":message}))),
+            "url": if inner.settings.method() == Method::Relay { Some(hide_relay_protocol::qr::APP_URL.to_owned()) }
                 else { dns.as_ref().map(|dns| format!("https://{dns}")) },
             "qr": qr,
             "code_expires_at_ms": code.map(|(_, expires)| expires),
@@ -563,7 +579,7 @@ impl Mobile {
     fn set_origin(&self, dns_name: Option<&str>) {
         if let Some(dns_name) = dns_name {
             let mut inner = self.lock();
-            if inner.settings.method != Method::Tailscale {
+            if inner.settings.method() != Method::Tailscale {
                 return;
             }
             inner.phones.set_origin(dns_name);
@@ -593,7 +609,7 @@ impl Mobile {
             let inner = self.lock();
             (
                 inner.settings.enabled,
-                inner.settings.method,
+                inner.settings.method(),
                 inner.settings.serve.clone(),
             )
         };
@@ -606,14 +622,17 @@ impl Mobile {
             }
             let removal = match (record, program.as_deref()) {
                 (Some(record), Some(program)) => self.remove_recorded(program, &record).await,
-                (Some(_), None) => Err((
-                    "remove",
-                    "the tailscale CLI is gone; hide's serve entry may remain".to_owned(),
-                )),
+                (Some(_), None) => {
+                    let message =
+                        "the tailscale CLI is gone; hide's serve entry may remain".to_owned();
+                    self.set_record(None);
+                    self.lock().relay_cleanup_failure = Some(message.clone());
+                    Err(("remove", message))
+                }
                 (None, _) => Ok(()),
             };
             let mut inner = self.lock();
-            if !inner.settings.enabled || inner.settings.method == Method::Relay {
+            if !inner.settings.enabled || inner.settings.method() == Method::Relay {
                 // A removal that failed stays on screen while the switch is
                 // off, and the background pass tries it again (PRD B6).
                 inner.exposure = match removal {
@@ -728,7 +747,7 @@ impl Mobile {
     fn settle(&self, exposure: Exposure, checklist: Option<Checklist>) {
         {
             let mut inner = self.lock();
-            if !inner.settings.enabled || inner.settings.method != Method::Tailscale {
+            if !inner.settings.enabled || inner.settings.method() != Method::Tailscale {
                 return;
             }
             if !matches!(exposure, Exposure::Exposed { .. }) {
@@ -1007,11 +1026,11 @@ impl Mobile {
             let (observed, owed) = {
                 let inner = self.lock();
                 let observed = inner.settings.enabled
-                    && inner.settings.method == Method::Tailscale
+                    && inner.settings.method() == Method::Tailscale
                     && !inner.observers.is_empty();
                 // While on, the minute pass also catches what changed under an
                 // exposed entry (a Funnel turned on, the entry removed by hand).
-                let owed = (inner.settings.enabled && inner.settings.method == Method::Tailscale)
+                let owed = (inner.settings.enabled && inner.settings.method() == Method::Tailscale)
                     || inner.settings.serve.is_some();
                 (observed, owed)
             };
@@ -1097,13 +1116,8 @@ impl Mobile {
     ) -> Result<Value, &'static str> {
         let mut payload = push::payload(notice, clear);
         let inner = self.lock();
-        if inner.settings.method == Method::Relay {
-            let stored = inner
-                .settings
-                .relay_keys
-                .as_ref()
-                .ok_or("relay_key_unavailable")?;
-            let keys = relay::Keys::load(stored).map_err(|_| "relay_key_unavailable")?;
+        if inner.settings.method() == Method::Relay {
+            let keys = inner.relay_keys.as_ref().ok_or("relay_key_unavailable")?;
             payload["room"] = json!(keys.room());
         }
         Ok(payload)
@@ -1271,10 +1285,10 @@ impl Mobile {
                 };
                 {
                     let mut inner = self.lock();
-                    if inner.settings.method == method {
+                    if inner.settings.method() == method {
                         return Ok(());
                     }
-                    inner.settings.method = method;
+                    inner.settings.method = Some(method);
                     let scope = match method {
                         Method::Relay => Some(PhoneOrigin::Relay),
                         Method::Tailscale => inner
@@ -1285,12 +1299,17 @@ impl Mobile {
                     };
                     inner.phones.set_scope(scope);
                     inner.checklist = None;
+                    inner.relay_cleanup_failure = None;
                     inner.exposure = if inner.settings.enabled {
                         Exposure::Checking
                     } else {
                         Exposure::Off
                     };
-                    inner.relay_state = relay::State::Connecting;
+                    inner.relay_state = if method == Method::Relay && inner.settings.enabled {
+                        relay::State::Connecting
+                    } else {
+                        relay::State::Off
+                    };
                     self.save_settings(&inner);
                 }
                 self.set_origin(None);
@@ -1301,7 +1320,9 @@ impl Mobile {
                 tokio::spawn(async move { mobile.reconcile().await });
             }
             "mobile_retry" => {
-                self.relay_changed();
+                if self.lock().relay_state != relay::State::Connected {
+                    self.relay_changed();
+                }
             }
             "mobile_observe" => {
                 let observing = payload

@@ -3386,7 +3386,9 @@ hided uses it for signed device admission, Noise responder sessions and QR v2; t
 
 Phone transport, pairing, conversation reads and delivery live in `hided/src/mobile/`; status projection and notification transitions belong to `herdr-core/src/agent_state/`.
 `Runtime::remote_herdr_api` lends the Herdr API connection the core already holds for a connected SSH device.
-Mobile is off until the operator turns it on in Settings > Mobile, and it is kept in `mobile.json` beside the daemon's state (the switch, selected method, push mode, owned serve entry, VAPID key, device signing seed and Noise static key), written through a temporary file at mode 0600.
+Mobile is off until the operator turns it on in Settings > Mobile, and it is kept in `mobile.json` beside the daemon's state (the switch, selected method, last direct scope, push mode, owned serve entry, VAPID key, device signing seed and Noise static key), written through a temporary file at mode 0600.
+An older file without a method keeps Tailscale when it has a Serve record or last tailnet; a new setup defaults to relay.
+The relay keys are decoded once per daemon and shared by admission, QR and push payloads.
 
 The default transport is `mobile/relay.rs`: one outbound WebSocket to `wss://relay.withhide.dev/ws`, with the validated `HIDE_RELAY_URL` override for tests and development (plaintext `ws` is loopback-only).
 The supervisor owns that socket and at most eight phone tasks; switching off, changing method, closing the move gate or shutting down cancels the link and joins its phone tasks.
@@ -3396,8 +3398,11 @@ Admission and sends have ten-second deadlines; each phone has one ten-second bud
 The link pings every twenty seconds and closes after sixty seconds without a response.
 Each Noise receiver polls `check_timeout` once per second even without input; a ciphertext authentication failure, replay or unfinished chunk assembly closes only that phone and logs no content.
 A lost link reconnects with equal jitter, from 0.5-1 second up to 15-30 seconds, with no retained transport retry queue.
-The existing per-phone input request ledger survives link loss, and an already dispatched write settles after its phone task ends, so a repeated reply keeps its written, in-flight or uncertain result.
+The existing per-phone input request ledger survives link loss; input work runs beside the socket and is not aborted with it.
+The blocking write itself owns a settlement guard, so cancellation of even its async waiter cannot leave a request permanently in flight; a panic settles uncertain.
+The reconnecting phone reads the written, in-flight, refused or uncertain outcome without repeating an ambiguous write.
 A method change waits for any Tailscale exposure in progress and its owned entry's removal before the relay can connect.
+If the Tailscale CLI is gone, the obsolete ownership record is dropped and relay may connect, while the connection line retains the cleanup failure for the current daemon session.
 
 Tailscale remains the advanced direct method, and `mobile/tailscale.rs` is the only file that knows its CLI.
 It finds the CLI at `HIDE_TAILSCALE_BIN`, then the macOS app bundle's `/Applications/Tailscale.app/Contents/MacOS/Tailscale`, then `tailscale` on PATH, and reads `tailscale status --json` for the backend state, `Self.DNSName`, `Self.HostName`, MagicDNS and `CertDomains`; every command runs with a fifteen-second bound.

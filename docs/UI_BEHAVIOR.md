@@ -3480,8 +3480,10 @@ Every value is the core's `status.background_ai`; the tab sends `ai_settings` ev
 
 Mobile is a page of Settings' machine group, after Hide AI.
 Its switch, 폰에서 Hide 열기, is off at first; the default method is Hide's Tokyo relay, without a login, account or payment step.
+An upgraded setup that already used Tailscale keeps its method and paired phones until the operator changes it.
 While off, no relay link or phone connection remains and retry cannot create one.
 The one connection row shows 연결 중…, 연결됨 · Hide 중계 (도쿄), 중계에 닿지 않아요 · 다시 시도 중 with 지금 다시, 이 Hide가 너무 오래됐어요 with 업데이트, or the relay's capacity refusal reason.
+A removed Tailscale CLI cannot block relay pairing; its unfinished cleanup stays in this same row while the connected relay's QR remains available.
 The update action opens Settings > About; failures stay in this row without a banner or popup.
 A one-line note says the phone and Hide encrypt the content and the relay cannot read it.
 When connected, 폰 연결하기 offers QR 보기; opening the page makes no code and voids none.

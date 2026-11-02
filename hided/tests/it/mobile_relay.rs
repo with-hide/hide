@@ -226,6 +226,11 @@ async fn relay_pairs_encrypts_reconnects_scopes_revokes_and_stops() {
     })
     .await;
     assert!(listed["qr"].is_null(), "single use code");
+    // Retry must not cancel a healthy link; the new QR fences the renderer
+    // command before the original encrypted session answers the next ping.
+    event(&mut shell, "mobile_retry", json!({})).await;
+    event(&mut shell, "mobile_show_code", json!({})).await;
+    state(&mut shell, |s| s["qr"].is_string()).await;
     send(&mut device, &mut first, json!({"type":"ping","id":1})).await;
     receive(&mut device, &mut first, "pong").await;
     // Replay is rejected by hided, without bringing the relay link down.
@@ -354,6 +359,61 @@ async fn relay_pairs_encrypts_reconnects_scopes_revokes_and_stops() {
             .await
             .is_err()
     );
+    running.stop();
+}
+
+#[tokio::test]
+async fn an_upgrade_keeps_a_direct_setup_and_a_new_setup_chooses_relay() {
+    for (settings, expected) in [
+        (json!({}), "relay"),
+        (json!({"last_tailnet":"fixture.ts.net"}), "tailscale"),
+        (
+            json!({"serve":{"dns_name":"fixture.ts.net","port":1234,"added_at":1}}),
+            "tailscale",
+        ),
+        (
+            json!({"method":"relay","last_tailnet":"fixture.ts.net"}),
+            "relay",
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("state")).unwrap();
+        std::fs::write(dir.path().join("state/mobile.json"), settings.to_string()).unwrap();
+        let running = hided::start_daemon(env(dir.path(), 9)).await.unwrap();
+        let mut shell = shell(&running).await;
+        assert_eq!(state(&mut shell, |_| true).await["method"], expected);
+        running.stop();
+    }
+}
+
+#[tokio::test]
+async fn a_missing_tailscale_cli_does_not_block_relay_and_keeps_the_cleanup_warning() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("state")).unwrap();
+    std::fs::write(
+        dir.path().join("state/mobile.json"),
+        json!({
+            "enabled":true,"method":"relay",
+            "serve":{"dns_name":"fixture.ts.net","port":1234,"added_at":1},
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let running = hided::start_daemon(env(dir.path(), listener.local_addr().unwrap().port()))
+        .await
+        .unwrap();
+    let mut shell = shell(&running).await;
+    let _device = accept(&listener).await;
+    let connected = state(&mut shell, |s| s["relay"]["state"] == "connected").await;
+    assert_eq!(connected["failure"]["step"], "remove");
+    event(&mut shell, "mobile_show_code", json!({})).await;
+    assert!(state(&mut shell, |s| s["qr"].is_string()).await["qr"].is_string());
+    let saved: Value =
+        serde_json::from_slice(&std::fs::read(dir.path().join("state/mobile.json")).unwrap())
+            .unwrap();
+    assert!(saved["serve"].is_null());
+    assert_eq!(saved["last_tailnet"], "fixture.ts.net");
     running.stop();
 }
 
