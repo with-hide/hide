@@ -251,10 +251,13 @@ export async function runInPaneKeepingFocus(
   program: { env?: Record<string, string>; argv: string[]; stdout?: boolean },
 ): Promise<{ status: number; stdout: string; stderr: string }> {
   const gate = path.join(fixture.root, `${name}.gate`);
+  const arrived = `${gate}.arrived`;
+  fs.rmSync(arrived, { force: true });
   const wait = [
     'const fs = require("node:fs");',
     'const { spawnSync } = require("node:child_process");',
     "const [program, ...args] = process.argv.slice(1);",
+    `fs.writeFileSync(${JSON.stringify(arrived)}, "");`,
     waitForInputGate(gate),
     'process.exit(spawnSync(program, args, { stdio: "inherit" }).status ?? 1);',
   ].join(" ");
@@ -264,11 +267,12 @@ export async function runInPaneKeepingFocus(
       running = runInPane(fixture, daemon, pane, name, { ...program, argv: [process.execPath, "-e", wait, ...program.argv] });
       // Keep an early process failure observed while the focus barrier waits.
       void running.catch(() => undefined);
-    }));
+    }, arrived));
     fs.writeFileSync(gate, "");
     return await running!;
   } finally {
     fs.rmSync(gate, { force: true });
+    fs.rmSync(arrived, { force: true });
   }
 }
 
@@ -281,11 +285,32 @@ export function waitForInputGate(gate: string, deadlineMs = 30_000): string {
 }
 
 /** Restore the keyboard after a fixture trigger reaches its pane, before releasing that command's gate. */
-export async function restoreFocusAfterInput(control: HidedControl, pane: string, trigger: () => void | Promise<void>): Promise<void> {
+export async function restoreFocusAfterInput(control: HidedControl, pane: string, trigger: () => void | Promise<void>, arrived: string): Promise<void> {
   const before = await control.until((rest) => corePaneFocus(rest) ?? undefined, "the focused pane", 20_000);
+  await preparePaneInput(control, pane);
   await trigger();
-  await control.until((rest) => corePaneFocus(rest) === pane || undefined, `the fixture input to reach ${pane}`, 20_000);
-  if (before !== pane) await focusPane(control, before);
+  // Key input's transient focus can be overwritten by an engine snapshot.
+  // The process reaching its gate proves the input was actually consumed.
+  await expect.poll(() => fs.existsSync(arrived), { message: `the fixture input to reach ${pane}`, timeout: 20_000 }).toBe(true);
+  await focusPane(control, before);
+}
+
+/** Attach a hidden fixture terminal before sending synthetic input, keeping the operator's selection. */
+export async function preparePaneInput(control: HidedControl, pane: string): Promise<void> {
+  const state = await control.until((rest) => ({ focus: corePaneFocus(rest), ready: terminalReady(rest, pane) }), "the fixture terminal state");
+  if (state.ready) return;
+  await showTabOf(control, pane);
+  viewPane(control, pane);
+  await control.until((rest) => terminalReady(rest, pane) || undefined, `${pane} controlling its terminal`, 20_000);
+  if (state.focus && state.focus !== pane) {
+    await showTabOf(control, state.focus);
+    await focusPane(control, state.focus);
+  }
+}
+
+function terminalReady(rest: Rest, pane: string): boolean {
+  const terminals = (rest.terminal as { panes?: { pane_id: string; transport_state: string }[] } | undefined)?.panes;
+  return terminals?.some((entry) => entry.pane_id === pane && entry.transport_state === "controlling") ?? false;
 }
 
 /**

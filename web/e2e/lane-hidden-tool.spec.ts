@@ -30,6 +30,9 @@ test("folded documents kept behind the tool column show nothing through them", a
     const hide = path.resolve("..", "target", "debug", fixtureExecutable("hide"));
     const ran = await runInPaneKeepingFocus(herdr, daemon, herdr.panes[0], "cli-1", { env: { HIDE_STATE_DIR: daemon.stateDir }, argv: [hide, "file", "open", "a.md"] });
     expect(ran.status, ran.stderr).toBe(0);
+    // The command came from a background pane; explicitly show its document
+    // before testing that the operator can fold it again.
+    await showDocuments(page);
     const selected = page.locator('[data-view-tab-bar] [role="tab"][aria-selected="true"]');
     await expect(selected).toHaveAttribute("aria-label", /\/a\.md/);
     const close = selected.locator("button[aria-label]").last();

@@ -13,7 +13,7 @@ import path from "node:path";
 import { expect } from "@playwright/test";
 import { reportedMarker } from "./agent-pane";
 import { claudeProjects, declareAgentSession, writeFixtureTranscript, type FixtureLabel } from "./herdr-fixture";
-import { agentIn, checkoutAt, closePane, focusTab, newTab, sendKeys, tabPanes, withControl, type AgentRow, type OpenedProject } from "./daemon-actions";
+import { agentIn, checkoutAt, closePane, focusTab, newTab, preparePaneInput, sendKeys, tabPanes, withControl, type AgentRow, type OpenedProject } from "./daemon-actions";
 import type { Daemon } from "./hided-fixture";
 import type { AgentFixture, EngineServer } from "./engine-fixture";
 
@@ -37,6 +37,7 @@ function reads(row: AgentRow | undefined, state: AgentState): boolean {
  */
 export async function setAgentState(daemon: Pick<Daemon, "origin" | "token">, pane: string, state: AgentState): Promise<AgentRow> {
   return withControl(daemon, async (control) => {
+    await preparePaneInput(control, pane);
     const now = await control.until((rest) => agentIn(rest, pane), `an agent in ${pane}`, 20_000);
     const clear = now.blocked ? "\x1b[2J\x1b[H" : "";
     const screen = state === "working"
@@ -216,6 +217,7 @@ export async function takeOverSession(fixture: AgentFixture, daemon: Pick<Daemon
  */
 export async function setAgentAsking(daemon: Pick<Daemon, "origin" | "token">, pane: string): Promise<AgentRow> {
   return withControl(daemon, async (control) => {
+    await preparePaneInput(control, pane);
     await control.until((rest) => agentIn(rest, pane), `an agent in ${pane}`, 20_000);
     sendKeys(control, pane, "\x1b]0;✳ Claude Code\x07");
     return control.until((rest) => {

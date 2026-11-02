@@ -217,6 +217,10 @@ When the behavior depends on the order of two events, the test fixes that order;
   `desktop/e2e/session-labels.spec.ts` is the reference for the session boundary.
   Recorded native-format blobs keep their historical label marker; `claude-shim.c` fits the controlled provider response to the requested START or END schema, supplying an empty `work` judgment for an older marker that carries none and, for START and END, a summary of the newest request the input lists as owed.
   Work-ledger journeys name their work explicitly through `labelMarker`; the adapter does not replace an existing work judgment.
+- Synthetic input to a hidden pane first waits for its terminal to be controlling (`preparePaneInput` in `web/e2e/daemon-actions.ts`), retaining the fixture's previous selection.
+  A command that must run after focus is restored writes its arrival marker before waiting on its gate; the fixture waits for that marker, restores focus, then releases the gate.
+  A transient focus snapshot does not prove the program consumed the input.
+  `agentPane` also waits for the reported native session to appear on the core's agent row before handing the caller its command runner; a reporter file alone does not prove the core knows that identity.
 
 ### Operating-system differences belong to one fixture helper
 

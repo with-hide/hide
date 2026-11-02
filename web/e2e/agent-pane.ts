@@ -15,7 +15,7 @@ import { connectStateDir } from "./hided-control.mjs";
 import { fixtureExecutable } from "./platform-fixture";
 import { copyFixtureShim } from "./shims/build";
 import { configureSpawnProvider, writeSessionReporter } from "./spawn-provider";
-import { restoreFocusAfterInput, waitForInputGate } from "./daemon-actions";
+import { agentIn, focusPane, restoreFocusAfterInput, waitForInputGate } from "./daemon-actions";
 
 /** One `hide` command's exit status and standard output. */
 export type HideAnswer = { status: number; out: string };
@@ -44,8 +44,17 @@ export async function typeInto(stateDir: string, pane: string, text: string): Pr
  */
 export async function agentPane(fixture: AgentPaneFixture, stateDir: string, pane: string): Promise<(args: string[], run?: AgentRun) => Promise<HideAnswer>> {
   const run = agentRunner(fixture, stateDir, pane);
-  await typeInto(stateDir, pane, "claude\r");
-  await expect.poll(() => fs.existsSync(reportedMarker(fixture.root, pane)), { message: `${pane} runs a Claude Code agent that reported its session`, timeout: 20_000 }).toBe(true);
+  const control = await connectStateDir(stateDir);
+  try {
+    await focusPane(control, pane);
+    await typeInto(stateDir, pane, "claude\r");
+    const marker = reportedMarker(fixture.root, pane);
+    await expect.poll(() => fs.existsSync(marker), { message: `${pane} ran its session reporter`, timeout: 20_000 }).toBe(true);
+    const session = fs.readFileSync(marker, "utf8");
+    await control.until((rest) => agentIn(rest, pane)?.session_id === session || undefined, `${pane} on its reported native session`, 20_000);
+  } finally {
+    control.close();
+  }
   return run;
 }
 
@@ -80,12 +89,14 @@ export function installAgentRunner(fixture: AgentPaneFixture, stateDir: string, 
   const output = path.join(root, "agent-pane-output.json");
   const completed = path.join(root, "agent-pane-command.status");
   const gate = path.join(root, "agent-pane-command.gate");
+  const arrived = `${gate}.arrived`;
   const driver = path.join(root, "agent-pane-driver.cjs");
   // Both suites run from their package folder (`web`, `desktop`), one below the repository.
   const hide = path.resolve("..", "target", "debug", fixtureExecutable("hide"));
   fs.writeFileSync(driver, `
 const fs = require("node:fs");
 const { spawnSync } = require("node:child_process");
+fs.writeFileSync(${JSON.stringify(arrived)}, "");
 ${waitForInputGate(gate, 15_000)}
 const { args, program, input, env } = JSON.parse(fs.readFileSync(${JSON.stringify(command)}, "utf8"));
 const ran = spawnSync(program ?? ${JSON.stringify(hide)}, args, {
@@ -100,9 +111,10 @@ fs.writeFileSync(${JSON.stringify(output)}, JSON.stringify({ status: ran.status 
     fs.rmSync(completed, { force: true });
     fs.rmSync(output, { force: true });
     fs.rmSync(gate, { force: true });
+    fs.rmSync(arrived, { force: true });
     const control = await connectStateDir(stateDir);
     try {
-      await restoreFocusAfterInput(control, pane, () => typeInto(stateDir, pane, "!"));
+      await restoreFocusAfterInput(control, pane, () => typeInto(stateDir, pane, "!"), arrived);
       fs.writeFileSync(gate, "");
     } finally {
       control.close();
