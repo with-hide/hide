@@ -9,6 +9,7 @@ use crate::delivery::{
 use crate::engine::{Engine, EngineError, Wait};
 use crate::runtime::delivery::CoordinationContext;
 use crate::session_sync::ProjectedAgent;
+use hide_node_link::protocol::StartForm;
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -351,6 +352,24 @@ fn brief_ready(engine: &dyn Engine, spawn: &str, pane: &str, name: &str) -> Resu
     }
 }
 
+/// How the pane's machine starts the agent's program
+/// (`Call::AgentStartForm`), asked only for a brief that would ride the
+/// start; an answer the node did not give is the reason it gave.
+fn start_form(
+    node: Option<&dyn crate::node_access::NodeLink>,
+    kind: &str,
+) -> Result<Option<StartForm>, String> {
+    let node = node.ok_or("no machine runs the pane")?;
+    crate::node_access::call_as(
+        node,
+        hide_node_link::protocol::Call::AgentStartForm {
+            name: hide_agent_adapter::canonical_kind(kind).to_owned(),
+        },
+        TARGET_CHECK_TIMEOUT,
+    )
+    .map_err(|error| format!("the pane's machine did not say how the agent starts ({error})"))
+}
+
 fn brief_refused(spawn: &str, pane: &str, kind: &str, detail: String) -> String {
     crate::diagnostic!(json!({
         "component": "spawn", "kind": kind, "spawn": spawn, "pane_id": pane, "detail": detail,
@@ -362,14 +381,34 @@ fn brief_refused(spawn: &str, pane: &str, kind: &str, detail: String) -> String 
 /// argument (`AgentApi::LaunchPrompt`), or `None` where the brief is sent
 /// once the agent runs: an agent that does not hold a launch prompt through
 /// its start screens, native arguments that already give one, or a brief
-/// the command line cannot carry (`worktree_control::prompt_argument`).
-fn launch_prompt(kind: &str, args: &[String], brief: &str) -> Option<Vec<String>> {
+/// the command line cannot carry (`worktree_control::prompt_argument`), or
+/// cannot carry through `cmd.exe` when the pane's machine runs the agent's
+/// program that way (`form`, `worktree_control::batch_carries`). A form the
+/// node could not tell is the error it answered, and the brief is typed.
+fn launch_prompt(
+    kind: &str,
+    args: &[String],
+    brief: &str,
+    form: Result<Option<StartForm>, String>,
+) -> Option<Vec<String>> {
     let row = hide_agent_adapter::adapter(kind).filter(|row| row.launch_prompt())?;
     let dialect = row.start?;
     if dialect.carries_prompt(args) {
         return None;
     }
-    match crate::worktree_control::prompt_argument(brief) {
+    let carried = crate::worktree_control::prompt_argument(brief).and_then(|argument| {
+        match form? {
+            Some(StartForm::Batch) => {
+                crate::worktree_control::batch_carries(&argument).map_err(|reason| {
+                    format!("the start runs through cmd.exe: the brief is {reason}")
+                })?
+            }
+            Some(StartForm::Program) => {}
+            None => return Err("the agent is not on the PATH of the pane's machine".to_owned()),
+        }
+        Ok(argument)
+    });
+    match carried {
         Ok(argument) => Some(dialect.prompt_arguments(&argument)),
         Err(detail) => {
             crate::diagnostic!(json!({
@@ -1284,8 +1323,9 @@ fn spawn(
                         .as_ref()
                         .is_some_and(|input| input.route == SendRoute::Launch)
             });
-            if let Some(prompt) = launched.and_then(|brief| launch_prompt(kind, &start_args, brief))
-            {
+            if let Some(prompt) = launched.and_then(|brief| {
+                launch_prompt(kind, &start_args, brief, start_form(node.as_deref(), kind))
+            }) {
                 reserved = serde_json::from_value(mutate(
                     client,
                     authority,
@@ -2063,6 +2103,38 @@ fn overridden_later(kind: &str, name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use hide_node_link::protocol::StartForm;
+
+    /// A brief rides the start only where the pane's machine said the start
+    /// carries it whole: through `cmd.exe` (a Windows batch file, npm's shim)
+    /// a brief past its line, or with a character it reads as its own, is
+    /// typed, and so is one whose start form the node could not tell.
+    #[test]
+    fn a_brief_rides_the_start_only_where_the_start_carries_it_whole() {
+        let launch = |brief: &str, form: Result<Option<StartForm>, String>| {
+            super::launch_prompt("opencode", &[], brief, form)
+        };
+        let program = || Ok(Some(StartForm::Program));
+        let batch = || Ok(Some(StartForm::Batch));
+        let long = format!("-{}", "x ".repeat(4 * 1024));
+        assert_eq!(
+            launch("-go\tnow", program()).unwrap(),
+            ["--prompt=-go    now"]
+        );
+        assert_eq!(
+            launch(&long, program()).unwrap(),
+            [format!("--prompt={long}")]
+        );
+        assert_eq!(launch("@a & b", batch()).unwrap(), ["--prompt=@a & b"]);
+        for typed in [&long[..], "50% done", "say \"hi\"", "a&b", "a^b"] {
+            assert_eq!(launch(typed, batch()), None, "{typed}");
+        }
+        assert_eq!(launch("go", Ok(None)), None);
+        assert_eq!(launch("go", Err("link_lost".into())), None);
+        // An agent that does not hold a launch prompt never takes one.
+        assert_eq!(super::launch_prompt("pi", &[], "go", program()), None);
+    }
+
     #[test]
     fn a_full_access_option_the_spawn_names_itself_is_left_to_the_spawn_with_its_value() {
         let full = crate::agent_permission::CLAUDE_FULL_ACCESS;

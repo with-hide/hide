@@ -16,7 +16,7 @@ import time
 
 from agent_live_check.processes import ProcessError
 from agent_live_check.protection import write_private
-from agent_live_check.system import git, same_path
+from agent_live_check.system import WINDOWS, git, same_path
 
 from . import cells, composer, fork, kit, memory, provider_limit, title, usage
 from .requests import model_requests
@@ -114,6 +114,17 @@ def brief(value):
 
 # A brief's cap in bytes (herdr-core `delivery::BODY_LIMIT`, `invalid_brief`).
 BRIEF_CAP = 16 * 1024
+# The most characters a prompt argument holds when Windows starts the agent
+# through cmd.exe (herdr-core `worktree_control::BATCH_PROMPT_UNITS`), as it
+# starts every agent of this journey there: its launcher is a .cmd file
+# (agent_live_check.system.launcher), as npm's shim of a CLI is.
+BATCH_PROMPT_UNITS = 6 * 1024
+
+
+def rides_start(text):
+    """Whether Hide carries `text` as the start's prompt on this system,
+    rather than typing it: on Windows only within what cmd.exe carries."""
+    return not WINDOWS or len(text.encode("utf-16-le")) // 2 <= BATCH_PROMPT_UNITS
 
 
 def long_brief(value):
@@ -384,8 +395,9 @@ class Journey:
         # record has to confirm: as the start's prompt argument where the
         # agent declares that, at a brief's whole length, and typed otherwise;
         # the untrusted start keeps the agent's prompt argument.
-        launched = self.own_rungs and self.launches()
-        sent = long_brief(first) if launched else brief(first)
+        long = self.own_rungs and self.launches()
+        sent = long_brief(first) if long else brief(first)
+        launched = long and rides_start(sent)
         args, answer, attempts = self.spawn("journey-" + self.id, self.repository, self.branch, worktree,
                                             sent if self.brief_start else prompt(first),
                                             brief=self.brief_start)

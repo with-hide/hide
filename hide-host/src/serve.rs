@@ -1351,6 +1351,15 @@ pub fn handle_with_progress(
         Call::AgentInstalled { name } => {
             to_value(hide_ai::resolve_binary(Path::new(&name)).is_some())
         }
+        Call::AgentStartForm { name } => {
+            to_value(hide_ai::resolve_binary(Path::new(&name)).map(|program| {
+                if hide_platform::programs::runs_through_cmd(&program) {
+                    crate::protocol::StartForm::Batch
+                } else {
+                    crate::protocol::StartForm::Program
+                }
+            }))
+        }
         Call::AntigravityForkMark { source, cwd } => {
             let home = env.home("antigravity_fork_home_unavailable")?;
             let cwd = antigravity_fork_cwd(&cwd)?;

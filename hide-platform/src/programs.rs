@@ -535,6 +535,22 @@ impl Program {
     }
 }
 
+/// Whether Windows runs `path` through `cmd.exe`, as it runs a batch file
+/// (`.cmd`, `.bat`: npm's shim of every CLI it installs is one). `cmd.exe`
+/// reads the whole command line again, at most 8,191 characters of it,
+/// expands `%` in it and reads `"` and, outside quotes, `& | < > ^` as its
+/// own, so an argument that holds them does not reach the program as it was
+/// given. No program elsewhere is started that way.
+pub fn runs_through_cmd(path: &Path) -> bool {
+    cfg!(windows)
+        && path
+            .extension()
+            .and_then(OsStr::to_str)
+            .is_some_and(|extension| {
+                extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat")
+            })
+}
+
 /// The folders installers put a CLI in that a daemon's `PATH` may not reach.
 fn usual_install_folders(home: &Path) -> [PathBuf; 9] {
     [

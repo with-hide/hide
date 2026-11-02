@@ -285,7 +285,23 @@ use crate::error::HostError;
 /// 68: a node hands input to a running agent through the agent's own way
 /// in (`Call::Deliver`). A helper on 67 would refuse it, so it is refused
 /// at Hello and upgraded.
-pub const PROTOCOL_VERSION: u32 = 68;
+/// 69: a node says how a start of an agent's CLI carries its arguments
+/// (`Call::AgentStartForm`), so a brief `cmd.exe` would cut or rewrite is
+/// typed instead. A helper on 68 would refuse it, so it is refused at Hello
+/// and upgraded.
+pub const PROTOCOL_VERSION: u32 = 69;
+
+/// How a start of an agent's CLI carries its arguments on the machine that
+/// runs it ([`Call::AgentStartForm`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StartForm {
+    /// The program itself takes them, each whole.
+    Program,
+    /// Windows runs the program through `cmd.exe`, a batch file such as
+    /// npm's shim (`hide_platform::programs::runs_through_cmd`).
+    Batch,
+}
 
 /// What agy's index held in a checkout before Hide typed `/fork`
 /// ([`Call::AntigravityForkMark`]).
@@ -847,6 +863,12 @@ pub enum Call {
     AgentInstalled {
         name: String,
     },
+    /// How a start of the agent CLI named `name` on the node carries its
+    /// arguments, a [`StartForm`], or null when it is not on the node's
+    /// `PATH`: asked before a spawn's brief rides the start as its prompt.
+    AgentStartForm {
+        name: String,
+    },
     /// What agy's index holds in `cwd` before Hide types `/fork` into a
     /// pane that resumed `source`, an [`AntigravityForkMark`]
     /// (`hide_session::antigravity::fork_mark`).
@@ -1215,6 +1237,7 @@ impl Call {
             | Self::Git { .. }
             | Self::TerminateGroup { .. }
             | Self::AgentInstalled { .. }
+            | Self::AgentStartForm { .. }
             | Self::AntigravityForkMark { .. }
             | Self::AntigravityFork { .. }
             | Self::OpenCodeFork { .. }
