@@ -954,6 +954,56 @@ pub(crate) mod tests {
         assert_eq!(input_of(&runtime, &spawn).attempts, 1);
     }
 
+    /// A launched brief is owed its record from the moment its agent takes
+    /// input, as a typed brief from its typing: a cold start that took
+    /// twenty seconds raises no notice, and the wait then runs as before.
+    #[test]
+    fn a_launched_brief_whose_agent_is_ready_late_raises_no_notice() {
+        const T: u64 = 100_000;
+        const READY: u64 = T + 20_000;
+        let (_root, mut runtime, spawn) = spawned_with("codex", BRIEF, false, T, true);
+        let parent = Actor {
+            pane_id: "sender".into(),
+            name: "sender".into(),
+            kind: "codex".into(),
+            device_id: TEST_NODE.into(),
+            session: crate::engine::tokens::session_digest("parent-native"),
+        };
+        let mut ledger = (**runtime.delivery_ledger.as_ref().unwrap()).clone();
+        crate::coordination::apply(
+            &mut ledger,
+            &parent,
+            &Mutation::BriefLaunched {
+                id: spawn.clone(),
+                words: Vec::new(),
+            },
+            READY,
+        )
+        .unwrap();
+        runtime.publish_delivery(Arc::new(ledger), false);
+        let input = input_of(&runtime, &spawn);
+        assert_eq!(
+            (input.typed_at_unix_ms, input.first_typed_at_unix_ms),
+            (READY, T)
+        );
+        runtime.typed_input_work(T + RECORD_WAIT_MS);
+        assert!(
+            runtime
+                .typed_input_work(T + RECORD_WAIT_MS + REREAD_WAIT_MS)
+                .iter()
+                .all(|work| work.notice.is_none()),
+            "no notice counted from the spawn"
+        );
+        runtime.typed_input_work(READY + RECORD_WAIT_MS);
+        assert!(
+            runtime
+                .typed_input_work(READY + RECORD_WAIT_MS + REREAD_WAIT_MS)
+                .iter()
+                .any(|work| work.notice.is_some()),
+            "the wait runs from the agent's readiness"
+        );
+    }
+
     /// A launched brief's record is the prompt argument as the agent kept
     /// it, line breaks as U+2028 and a tab as four spaces (Codex, agy): the
     /// same canonical rule reads it as the brief, so it is taken.

@@ -152,6 +152,11 @@ fn herdr(name: &str) -> FakeHerdr {
         }}),
         "agent.start" => json!({"type": "agent_started", "argv": [], "agent": agent("idle")}),
         "agent.prompt" => json!({"type": "agent_prompted", "agent": agent("working")}),
+        "agent.get" => {
+            let mut started = agent("idle");
+            started["name"] = json!(crate::fork::task_agent_name("codex", "w4:p1"));
+            json!({"type": "agent_info", "agent": started})
+        }
         "pane.focus" => {
             assert_eq!(params["pane_id"], "w4:p1");
             json!({"type":"pane_info", "pane": agent("idle")})
@@ -253,8 +258,8 @@ fn operation(shared: &Arc<Mutex<Runtime>>) -> crate::model::TaskOperationSnapsho
 
 /// B18, B22, B38, D-08, D-26: the first start in a device's Home makes
 /// `~/hide` there with a link per registered project, registers Home pinned,
-/// and starts the agent on that device with the model, every linked folder
-/// and its first prompt as its own arguments.
+/// and starts the agent on that device with the model and every linked
+/// folder as its own arguments, typing its first prompt once it takes input.
 #[test]
 fn a_device_home_start_makes_home_then_starts_the_agent_with_its_folders() {
     let machine = machine();
@@ -367,14 +372,16 @@ fn a_device_home_start_makes_home_then_starts_the_agent_with_its_folders() {
         expected.push("--add-dir".to_owned());
         expected.push(folder);
     }
-    expected.push("--".to_owned());
-    expected.push("tidy the notes".to_owned());
     assert_eq!(start["args"], json!(expected));
     assert_eq!(start["kind"], "codex");
-    assert!(
-        calls.iter().all(|(method, _)| method != "agent.prompt"),
-        "the prompt is the agent's own argument, never typed"
-    );
+    // This machine did not read how the device starts the agent, so its
+    // first prompt is typed once the agent takes input, never carried.
+    let typed: Vec<_> = calls
+        .iter()
+        .filter(|(method, _)| method == "agent.prompt")
+        .map(|(_, params)| params["text"].clone())
+        .collect();
+    assert_eq!(typed, [json!("tidy the notes")]);
     let created = calls
         .iter()
         .find(|(method, _)| method == "workspace.create")

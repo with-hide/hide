@@ -669,7 +669,9 @@ pub(crate) enum Mutation {
     /// (`AgentApi::LaunchPrompt`), saved before the start is typed: the
     /// brief counts as submitted, its one sending is spent, and it is never
     /// typed or typed again (`delivery::ladder`). `words` are what the start
-    /// adds to carry it, kept from the first such mutation on.
+    /// adds to carry it, kept from the first such mutation on. Saved again
+    /// once the started agent takes input, it starts the clock its record is
+    /// owed by (`typed_at_unix_ms`) there, the launched brief's typing.
     BriefLaunched {
         id: String,
         words: Vec<String>,
@@ -1555,6 +1557,8 @@ pub(crate) fn apply(
                 input.first_typed_at_unix_ms = now;
                 input.route = crate::delivery::typed::SendRoute::Launch;
                 record.launch_words = words.clone();
+            } else if input.confirmed_at_unix_ms.is_none() {
+                input.typed_at_unix_ms = now;
             }
             record.briefed = true;
             Ok(json!(record))
