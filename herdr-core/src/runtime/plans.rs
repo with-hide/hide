@@ -1110,11 +1110,15 @@ impl Runtime {
         ledger: Option<&crate::delivery::ledger::Ledger>,
         agent: &str,
     ) -> ChildPlace {
-        let Some(record) =
-            ledger.and_then(|ledger| ledger.agents.iter().find(|record| record.id == agent))
-        else {
-            return (None, None);
-        };
+        match ledger.and_then(|ledger| ledger.agents.iter().find(|record| record.id == agent)) {
+            Some(record) => self.record_place(record),
+            None => (None, None),
+        }
+    }
+
+    /// Where a registration is now: its pane while its row is shown, and its
+    /// session, read from the row or else from the registration itself.
+    fn record_place(&self, record: &crate::coordination::AgentRecord) -> ChildPlace {
         let row = (!record.ended)
             .then(|| {
                 self.machine_agents(&record.machine).iter().find(|row| {
@@ -1588,14 +1592,16 @@ impl Runtime {
         self.snapshot.plans.items = items;
     }
 
-    /// The plan of the worker in `pane` on `machine`, for a mission node's
-    /// card and detail (D-17, D-18).
-    pub(super) fn worker_plan(&self, machine: &str, pane: &str) -> Option<PlanView> {
-        let agent = self.machine_agents(machine).iter().find(|agent| {
-            crate::address::same_pane(self.node.as_str(), machine, &agent.pane_id, pane)
-        })?;
-        let session = row_session(machine, agent)?;
-        Some(self.plan_view(self.plans.book.get(&session)?, &agent.pane_id))
+    /// The plan of a mission node's worker, for its card and detail (D-17,
+    /// D-18): found by its registration's session, so a finished node whose
+    /// pane closed keeps the plan while the book still holds it.
+    pub(super) fn worker_plan(
+        &self,
+        record: &crate::coordination::AgentRecord,
+    ) -> Option<PlanView> {
+        let (pane, session) = self.record_place(record);
+        let plan = self.plans.book.get(&session?)?;
+        Some(self.plan_view(plan, pane.as_deref().unwrap_or(&record.pane)))
     }
 }
 
