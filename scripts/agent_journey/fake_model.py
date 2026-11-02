@@ -44,6 +44,12 @@ TOKEN = re.compile(r"JOURNEY-[0-9A-F]{8}")
 MEMORY_BLOCK = re.compile(r"<hide-memory-(index|context)\b.*?</hide-memory-\1>", re.S)
 MEMORY_INDEX = re.compile(r"<hide-memory-index\b.*?</hide-memory-index>", re.S)
 MODEL = "journey-model"
+# A turn whose prompt carries this mark is answered only after HOLD_SECONDS,
+# so the agent reads working long enough for input to reach it mid-turn
+# (the journey's `letter_busy` cell). Only the turn's own request waits: a
+# title request asks for JSON and is answered at once.
+HOLD_MARK = "journey-hold"
+HOLD_SECONDS = 20
 # A request body past this is refused: a journey turn sends tens of KiB.
 MAX_BODY = 8 * 1024 * 1024
 # Roles whose text is the model's own; a token there was answered already.
@@ -128,6 +134,11 @@ def instance(shape, text):
     if kind == "boolean":
         return False
     return shape.get("minimum", 0)
+
+
+def held(request):
+    """Whether the request answers a turn whose prompt asks to be held."""
+    return schema(request) is None and HOLD_MARK in "\n".join(strings(latest(request)))
 
 
 def reply(request):
@@ -272,6 +283,8 @@ class Handler(BaseHTTPRequestHandler):
         if not self.admitted(generation):
             return
         text, token = reply(request)
+        if generation and held(request):
+            time.sleep(HOLD_SECONDS)
         streamed = bool(request.get("stream")) or "streamGenerateContent" in path or "alt=sse" in self.path
         self.record(kind=path.rsplit("/", 1)[-1], model=request.get("model"), stream=streamed, generation=generation,
                     answered=token if token != "OK" else None, schema=text != token)

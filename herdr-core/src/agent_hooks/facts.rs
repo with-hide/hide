@@ -344,6 +344,30 @@ impl HookFacts {
         tokens
     }
 
+    /// What the session that speaks for `pane`'s agent of `runtime`
+    /// reported, chosen as a projection chooses it ([`bound`]), with
+    /// `lineage` the digest of the session Herdr names for the agent
+    /// (`engine::tokens::session_digest`, the actor's `session`): its id.
+    /// `None` while that session did not report there, so a nested session
+    /// the pane's agent started never answers for it.
+    pub(crate) fn reported_session(
+        &self,
+        pane: &str,
+        runtime: &str,
+        lineage: &str,
+    ) -> Option<String> {
+        // Only the session Herdr names for the pane is addressed: another
+        // session the pane's hooks reported (a nested run, an agent that
+        // ended there) is never sent the pane's input.
+        let fact = self.panes.get(pane)?.sessions.iter().rev().find(|fact| {
+            fact.runtime == runtime
+                && fact.session.as_deref().is_some_and(|kept| {
+                    crate::engine::tokens::session_digest(kept).as_deref() == Some(lineage)
+                })
+        })?;
+        fact.session.clone()
+    }
+
     fn save(&self) {
         if let Some(file) = &self.file {
             file.save(self.panes.clone());
@@ -513,6 +537,47 @@ mod tests {
             session_start: false,
             waiting: None,
         }
+    }
+
+    fn started(runtime: &str, session: &str) -> HookStatusReport {
+        HookStatusReport {
+            runtime: runtime.to_owned(),
+            session_start: true,
+            ..report(Some(session), None)
+        }
+    }
+
+    /// The input ladder's address for a pane is the session Herdr names
+    /// there, never a nested `codex exec` that started later in the same
+    /// pane and reported its own.
+    #[test]
+    fn the_panes_own_session_is_its_address() {
+        let mut facts = HookFacts::default();
+        facts.record("w1:p1", &started("codex", "s-pane")).unwrap();
+        facts.record("w1:p1", &started("codex", "s-exec")).unwrap();
+        let lineage = crate::engine::tokens::session_digest("s-pane").unwrap();
+        assert_eq!(
+            facts.reported_session("w1:p1", "codex", &lineage),
+            Some("s-pane".to_owned())
+        );
+        assert_eq!(
+            facts.reported_session("w1:p1", "claude-code", &lineage),
+            None
+        );
+        assert_eq!(facts.reported_session("w1:p9", "codex", &lineage), None);
+    }
+
+    /// A pane whose hooks reported only a nested session, never the one
+    /// Herdr names for the pane, has no address: the pane's input never
+    /// reaches the nested session, even though it reported last.
+    #[test]
+    fn only_a_nested_session_reported_gives_the_pane_no_address() {
+        let mut facts = HookFacts::default();
+        facts
+            .record("w1:p1", &started("codex", "s-nested"))
+            .unwrap();
+        let lineage = crate::engine::tokens::session_digest("s-pane").unwrap();
+        assert_eq!(facts.reported_session("w1:p1", "codex", &lineage), None);
     }
 
     fn payload(session: &str) -> SessionSnapshotPayload {

@@ -35,11 +35,11 @@ def assistant_after(events, after=0):
 
 # The contract's cell names in table order (contracts/agent-journey.json).
 CELLS = ("start", "start_untrusted", "reply", "integration", "guidance_memory", "letter",
-         "composer", "sleep_wake", "resume", "fork", "title", "usage")
+         "letter_busy", "letter_menu", "composer", "sleep_wake", "resume", "fork", "title", "usage")
 # A cell that cannot be measured until another one passed: a fork, a title
 # and usage need a conversation with an answer in it.
 PREREQUISITE = {"reply": "start", "integration": "start", "guidance_memory": "start", "letter": "start",
-                "composer": "start", "sleep_wake": "start", "resume": "sleep_wake", "fork": "reply", "title": "reply", "usage": "reply"}
+                "letter_busy": "letter", "letter_menu": "letter", "composer": "start", "sleep_wake": "start", "resume": "sleep_wake", "fork": "reply", "title": "reply", "usage": "reply"}
 
 # Agents the operator took out of the journey (PRD D-45): every cell reads
 # excluded with the reason, never fail or not measured, and counts nowhere.
@@ -166,7 +166,7 @@ def spawn_verdict(answer):
     return PASS, "registered, running, connected, native session " + str(view["session"])
 
 
-def brief_verdict(spawn):
+def brief_verdict(spawn, launched=False):
     """The spawn's brief, confirmed by the agent's own record (its prompt hook
     or the person's message in its session file) at the first typing
     (docs/delivery.md, Input an agent did not take). `spawn` is the spawn's
@@ -179,7 +179,79 @@ def brief_verdict(spawn):
         return FAIL, f"the agent never recorded its brief (typed {attempts or 0} time(s))"
     if attempts != 1:
         return FAIL, f"the brief was recorded only after {attempts} typings"
-    return PASS, f"brief recorded by the agent {max(0, confirmed - at) / 1000:.1f} s after its one typing"
+    # An agent whose ladder starts with the launch prompt is handed its
+    # brief by its start, never typed (docs/delivery.md, The input ladder).
+    if launched != (typed.get("route") == "launch"):
+        return FAIL, ("the brief was typed, though the agent declares the launch prompt" if launched
+                      else "the brief rode the start, though the agent declares no launch prompt")
+    how = "its start's prompt" if launched else "its one typing"
+    return PASS, f"brief recorded by the agent {max(0, confirmed - at) / 1000:.1f} s after {how}"
+
+
+# The core's log lines for a rung of the input ladder (herdr-core/src/delivery/ladder.rs).
+RUNG_KINDS = ("input.rung", "input.rung_unavailable", "input.rung_lost")
+
+
+def rung_verdict(declared, records):
+    """A letter's bell took the first rung after the launch prompt the
+    agent declares (`declared`, the contract's `input`), as the core's log
+    lines for the pane (`records`) say."""
+    ladder = [rung for rung in declared if rung != "launch_prompt"]
+    if not ladder:
+        return FAIL, "the agent declares no input rung"
+    rung = ladder[0]
+    used = [record.get("rung") for record in records if record.get("kind") == "input.rung"]
+    if rung in used:
+        return PASS, "carried by " + rung
+    reasons = "; ".join(str(record.get("reason")) for record in records
+                        if record.get("kind") in ("input.rung_unavailable", "input.rung_lost"))
+    return FAIL, f"not carried by {rung}, its declared rung" + (f" ({reasons})" if reasons else
+                                                                  f" (the log names {used or 'none'})")
+
+
+def busy_letter_verdict(shown, read, session, held, token):
+    """A letter sent while the agent worked on a held turn: that turn ends
+    with its own answer, and the letter is delivered after one bell and
+    answered after it."""
+    if not isinstance(shown, dict):
+        return FAIL, "hide request show gave no letter"
+    if shown.get("state") != "delivered":
+        return FAIL, "letter state is " + str(shown.get("state")) + ", not delivered"
+    if shown.get("bell_attempts") != 1:
+        return FAIL, f"the letter took {shown.get('bell_attempts')} bells, not one"
+    if "error" in read:
+        return FAIL, "Hide's reader could not read the session: " + read["error"]
+    events = read.get("events", [])
+    held_at = next((index for index, event in enumerate(events)
+                    if event.get("role") == "assistant" and held in (event.get("text") or "")), None)
+    if held_at is None:
+        return FAIL, "the turn the letter waited behind never answered " + held
+    verdict = reply_verdict(read, session, token, held_at + 1)
+    if verdict[0] != PASS:
+        return verdict[0], verdict[1] + " after the held turn's answer"
+    return PASS, "delivered after the held turn, which kept its answer; " + verdict[1]
+
+
+def composer_check(records, agent):
+    """The core's last passed composer check of `agent` among its log
+    `records` (`composer.version_checked` read empty), or None."""
+    passed = [record for record in records if record.get("kind") == "composer.version_checked"
+              and record.get("agent") == agent and record.get("verdict") == "empty"]
+    return passed[-1] if passed else None
+
+
+def menu_letter_verdict(shown, read, session, token, after):
+    """A letter sent while a picker of the agent's own was open is delivered
+    after one bell and answered from `after` on: a bell line the picker took
+    as its choice starts no turn, so it would ring again or never answer."""
+    if not isinstance(shown, dict):
+        return FAIL, "hide request show gave no letter"
+    if shown.get("state") != "delivered":
+        return FAIL, "letter state is " + str(shown.get("state")) + ", not delivered"
+    if shown.get("bell_attempts") != 1:
+        return FAIL, f"the letter took {shown.get('bell_attempts')} bells, not one"
+    verdict = reply_verdict(read, session, token, after)
+    return (PASS, "delivered past the picker; " + verdict[1]) if verdict[0] == PASS else verdict
 
 
 def answer_of(events, token, after=0):
@@ -271,9 +343,13 @@ def bell_turn(events, bell_line):
     # which a console reader may drop. Compare the whole prompt; a prefix
     # proves no bell turn.
     def canonical(text):
-        # Trim Unicode White_Space. Python's default strip also removes the
-        # four C0 separators U+001C..U+001F, which remain part of the prompt.
-        return "".join(char for char in text if ord(char) <= 0xffff and char not in "\r\n").strip(
+        # hide_agent_hooks::delivery::canonical_prompt: line breaks (CR, LF,
+        # U+2028, U+2029) and characters above U+FFFF removed, a tab read as
+        # four spaces. Trim Unicode White_Space. Python's default strip also
+        # removes the four C0 separators U+001C..U+001F, which remain part of
+        # the prompt.
+        return "".join("    " if char == "\t" else char for char in text
+                       if ord(char) <= 0xffff and char not in "\r\n\u2028\u2029").strip(
             "\t\n\v\f\r \u0085\u00a0\u1680"
             "\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a"
             "\u2028\u2029\u202f\u205f\u3000")

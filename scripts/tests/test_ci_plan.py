@@ -102,6 +102,10 @@ class Selection(unittest.TestCase):
         self.assertIn("herdr-core", plan("hided/src/core.rs")["rust_packages"])
         self.assertTrue({"web-e2e", "windows-e2e"} <= set(plan("desktop/src/main/wirePath.ts")["lanes"]))
         self.assertTrue({"checks", "web-e2e"} <= set(plan("design/tokens.json")["lanes"]))
+        # The README e2e spec reads the README, its logo and its hero picture.
+        for path in ("README.md", "design/brand/hide-icon-blinking.svg", "site/assets/video/kick-conductor.gif"):
+            with self.subTest(path=path):
+                self.assertIn("web-e2e", plan(path)["lanes"])
         # A guide a test reads is more than documentation.
         self.assertEqual(plan("docs/UI_BEHAVIOR.md")["lanes"], ["policy", "checks"])
         guide = plan("docs/AI_PROVIDERS.md")

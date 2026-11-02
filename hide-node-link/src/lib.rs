@@ -27,6 +27,7 @@ pub mod git;
 pub mod holders;
 pub mod home;
 pub mod index;
+pub mod input;
 pub mod link;
 pub mod list;
 pub mod mutate;
