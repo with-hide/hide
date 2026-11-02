@@ -3488,6 +3488,10 @@ Every value is the core's `status.background_ai`; the tab sends `ai_settings` ev
 
 ## Mobile companion
 
+The default connection works the same way on macOS, Windows and Linux: enable Mobile, show the QR and scan it with the phone camera.
+The phone and the computer are the only endpoints that can read their messages; Hide's relay cannot read the content it forwards.
+No Hide account, login, payment or Tailscale setup appears in this connection flow.
+
 The hosted phone app at `app.withhide.dev` and the advanced Tailscale app at `/m/` share every list, detail and command screen.
 The hosted start page shows the paired-device list; choosing a device opens the bundle matching its phone protocol at `/p/<n>/`.
 A QR opens a single-line, escaped `<device name>에 연결`, a line about viewing and replying to agents, the encryption assurance, 연결, and the existing five-minute expiry guidance.

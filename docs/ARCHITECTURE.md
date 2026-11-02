@@ -3386,6 +3386,13 @@ Memory retires its own worktrees through the ordinary `Call::WorktreeRetire` mac
 
 ### The mobile companion
 
+On macOS, Windows and Linux, turn on Mobile in Settings and scan its QR with the phone camera to open `app.withhide.dev`.
+No Tailscale installation, Hide account or payment is needed for the default relay connection.
+The phone and the computer encrypt their messages before sending them through Hide's relay in Tokyo.
+The relay passes those encrypted messages between them and cannot read conversations, commands or phone credentials; it sees routing identifiers, connection times and traffic sizes.
+The computer must remain awake and connected; the relay stores no messages to deliver later.
+Tailscale remains an advanced direct option, with its system support recorded in [INSTALL.md](INSTALL.md#what-each-system-supports).
+
 The shared relay library and its WASM boundary are specified in [RELAY_PROTOCOL.md](RELAY_PROTOCOL.md).
 The hosted phone uses its WASM initiator.
 hided uses it for signed device admission, Noise responder sessions and QR v2; the phone credential is checked only inside the established encrypted session.
@@ -3429,6 +3436,8 @@ The phone app is a static shell and a data channel, kept apart.
 `web/src/mobile/loader.tsx` is the small start page for `app.withhide.dev`; `web/src/mobile/main.tsx` is the same phone UI served directly at `/m/` and as a versioned relay bundle.
 `pnpm --dir web build:phone` writes `web/phone-dist/`: the root `index.html`, `protocols.json`, root manifest and `/sw.js`, shared icons, and `/p/<PHONE_PROTOCOL>/index.html` with its own hashed assets.
 `PHONE_PROTOCOL` is declared in `web/src/mobile/phoneVersion.ts`; deployment retains older numbered directories and lists the available numbers in `protocols.json`.
+Only main's release-candidate CI deploys that site, before preparing the desktop release; a failed phone upload or production check stops the candidate and therefore the private publisher.
+[BUILD.md](BUILD.md#the-hosted-phone-release) owns retention, deployment secrets, CSP and the production check.
 The root reads only the relay's `phone_protocol` metadata and opens that exact supported bundle, never a closest or newest fallback.
 A paired device that is offline can open its saved protocol bundle and let the shared connection retry; a changed version returns through the loader.
 An unsupported number stays on the update screen with the phone and device protocol versions.
