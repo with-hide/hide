@@ -1,5 +1,7 @@
 use super::{AgentRecord, Command, Mutation, SpawnRecord, resolve_actor, view};
 use crate::agent_start::ShellStart;
+use crate::delivery::ladder::{Delivered, InputTarget, Prepared};
+use crate::delivery::typed::SendRoute;
 use crate::delivery::{
     Actor,
     worker::{Authority, Client, Effect},
@@ -356,34 +358,66 @@ fn brief_refused(spawn: &str, pane: &str, kind: &str, detail: String) -> String 
     "brief_not_submitted".to_owned()
 }
 
-/// Types `brief` into `pane` through Herdr's `agent.prompt`, the one
-/// submission path the doorbell uses too. Its typing was reserved first
-/// (`Mutation::BriefTyping`), and success only means the text reached the
-/// pane: the agent's own record confirms it (`delivery::typed`). A
-/// submission Herdr refuses is `brief_not_submitted`.
-pub(crate) fn type_brief(
-    engine: &dyn Engine,
-    spawn: &str,
-    pane: &str,
-    brief: &str,
-) -> Result<(), String> {
-    match engine.prompt_agent(Wait::Each(Duration::from_secs(10)), pane, brief) {
-        Ok(()) => {}
-        Err(EngineError::Request(message)) => return Err(message),
-        Err(error) => {
-            return Err(brief_refused(
-                spawn,
-                pane,
-                "brief.prompt_refused",
-                error.to_string(),
-            ));
+/// The words a fresh start of `kind` adds to carry `brief` as its prompt
+/// argument (`AgentApi::LaunchPrompt`), or `None` where the brief is sent
+/// once the agent runs: an agent that does not hold a launch prompt through
+/// its start screens, native arguments that already give one, or a brief
+/// the command line cannot carry (`worktree_control::prompt_argument`).
+fn launch_prompt(kind: &str, args: &[String], brief: &str) -> Option<[String; 2]> {
+    let row = hide_agent_adapter::adapter(kind).filter(|row| row.launch_prompt())?;
+    let flag = row.start?.prompt_flag();
+    if args.iter().any(|arg| arg == flag || arg == "--") {
+        return None;
+    }
+    match crate::worktree_control::prompt_argument(brief) {
+        Ok(argument) => Some([flag.to_owned(), argument]),
+        Err(detail) => {
+            crate::diagnostic!(json!({
+                "component": "spawn", "kind": "brief.launch_refused", "agent_kind": kind,
+                "detail": detail,
+            }));
+            None
         }
     }
+}
+
+/// Sends `brief` down its prepared route, the one submission path the
+/// doorbell uses too. Its typing was reserved first (`Mutation::BriefTyping`),
+/// and the route it answers is saved after (`Mutation::Briefed`); the
+/// agent's own record confirms it (`delivery::typed`). A send whose answer
+/// was lost answers `SendRoute::Lost`, so the brief counts as sent and no
+/// retry of the spawn sends it again (engineering principle 11). A send
+/// that sent nothing is `brief_not_submitted`, and the typing it reserved
+/// stays spent.
+pub(crate) fn send_brief(
+    engine: &dyn Engine,
+    (target, prepared): (&InputTarget, Prepared),
+    spawn: &str,
+    brief: &str,
+) -> Result<SendRoute, String> {
+    let route = match prepared.deliver(engine, target, brief) {
+        Delivered::Sent(route) => route,
+        Delivered::Lost(code) => {
+            crate::diagnostic!(json!({
+                "component": "spawn", "kind": "brief.send_lost", "spawn": spawn,
+                "pane_id": target.raw_pane_id, "code": code,
+            }));
+            return Ok(SendRoute::Lost);
+        }
+        Delivered::NotYet(code) => {
+            return Err(brief_refused(
+                spawn,
+                &target.raw_pane_id,
+                "brief.prompt_refused",
+                code.to_owned(),
+            ));
+        }
+    };
     crate::diagnostic!(json!({
-        "component": "spawn", "kind": "brief.submitted", "spawn": spawn, "pane_id": pane,
-        "bytes": brief.len(),
+        "component": "spawn", "kind": "brief.submitted", "spawn": spawn,
+        "pane_id": target.raw_pane_id, "bytes": brief.len(), "route": route,
     }));
-    Ok(())
+    Ok(route)
 }
 
 /// The actor of `agent` on `device`; `on_node` when that device is the core's
@@ -1226,6 +1260,35 @@ fn spawn(
                 }));
             }
             close_unstarted_attempts(engine.as_ref(), &*state(client)?, &reserved, &observed);
+            let mut start_args = with_permission(kind, &permissions, start_args);
+            // A fresh start carries the brief as its prompt argument where
+            // the agent holds that through its own start screens
+            // (`AgentApi::LaunchPrompt`): saved first, so a start typed again
+            // carries it again and nothing ever types it.
+            let launched = reserved.brief.as_deref().filter(|_| {
+                !reserved.briefed
+                    || reserved
+                        .brief_input
+                        .as_ref()
+                        .is_some_and(|input| input.route == SendRoute::Launch)
+            });
+            if let Some(prompt) = launched.and_then(|brief| launch_prompt(kind, &start_args, brief))
+            {
+                reserved = serde_json::from_value(mutate(
+                    client,
+                    authority,
+                    actor,
+                    Mutation::BriefLaunched {
+                        id: reserved.id.clone(),
+                    },
+                )?)
+                .map_err(|_| "spawn_unavailable")?;
+                start_args.extend(prompt);
+                crate::diagnostic!(json!({
+                    "component": "spawn", "kind": "brief.launched", "spawn": reserved.id,
+                    "pane_id": pane,
+                }));
+            }
             crate::live::start_agent(
                 engine.as_ref(),
                 node.as_deref(),
@@ -1234,7 +1297,7 @@ fn spawn(
                 shell,
                 name,
                 kind,
-                with_permission(kind, &permissions, start_args),
+                start_args,
                 codex_daemon,
             )?;
             reserved = serde_json::from_value(mutate(
@@ -1265,33 +1328,80 @@ fn spawn(
                 }
             }
             brief_ready(engine.as_ref(), &reserved.id, pane, name)?;
-            // Saved before it is typed, so a typing a crash interrupts is
+            let pane_key = if on_node {
+                pane.to_owned()
+            } else {
+                crate::address::scoped_pane_id(&child_device, pane)
+            };
+            // The session Herdr names for the agent now, read off the lock:
+            // until it names one, the brief is typed.
+            let lineage = engine
+                .delivery_agent(Wait::Each(Duration::from_secs(5)), pane)
+                .ok()
+                .and_then(|agent| agent.session);
+            let target = {
+                let runtime = client.runtime.upgrade().ok_or("delivery_unavailable")?;
+                let guard = runtime.lock().map_err(|_| "delivery_unavailable")?;
+                guard.input_target_for(&pane_key, pane, kind, &child_device, lineage.as_deref())
+            };
+            let prepared = crate::delivery::ladder::prepare(&target);
+            // Saved before it is sent, so a send a crash interrupts is
             // counted and never repeated blindly (engineering #11).
-            reserved = serde_json::from_value(
-                mutate(
-                    client,
-                    authority,
-                    actor,
-                    Mutation::BriefTyping {
-                        id: reserved.id.clone(),
-                    },
-                )
-                .map_err(|code| {
-                    if code == "brief_attempts_spent" {
-                        brief_refused(&reserved.id, pane, "brief.attempts_spent", code)
-                    } else {
-                        code
+            let reservation = mutate(
+                client,
+                authority,
+                actor,
+                Mutation::BriefTyping {
+                    id: reserved.id.clone(),
+                },
+            );
+            let sent = match reservation {
+                // An earlier attempt's send may have arrived and its outcome
+                // was never saved: this spawn answers as that one would
+                // have, sent and unconfirmed, and the agent's own record
+                // decides (`hide agent show` says which).
+                Err(code) if code == "brief_send_lost" => {
+                    crate::diagnostic!(json!({
+                        "component": "spawn", "kind": "brief.send_unconfirmed",
+                        "spawn": reserved.id, "pane_id": pane,
+                    }));
+                    SendRoute::Lost
+                }
+                Err(code) if code == "brief_attempts_spent" => {
+                    return Err(brief_refused(
+                        &reserved.id,
+                        pane,
+                        "brief.attempts_spent",
+                        code,
+                    ));
+                }
+                Err(code) => return Err(code),
+                Ok(value) => {
+                    reserved = serde_json::from_value(value).map_err(|_| "spawn_unavailable")?;
+                    match send_brief(engine.as_ref(), (&target, prepared), &reserved.id, &brief) {
+                        Ok(sent) => sent,
+                        Err(code) => {
+                            // Nothing was sent: the brief may be typed again.
+                            mutate(
+                                client,
+                                authority,
+                                actor,
+                                Mutation::BriefUnsent {
+                                    id: reserved.id.clone(),
+                                },
+                            )?;
+                            return Err(code);
+                        }
                     }
-                })?,
-            )
-            .map_err(|_| "spawn_unavailable")?;
-            type_brief(engine.as_ref(), &reserved.id, pane, &brief)?;
+                }
+            };
             reserved = serde_json::from_value(mutate(
                 client,
                 authority,
                 actor,
                 Mutation::Briefed {
                     id: reserved.id.clone(),
+                    route: sent,
                 },
             )?)
             .map_err(|_| "spawn_unavailable")?;

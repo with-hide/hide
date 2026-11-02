@@ -282,7 +282,10 @@ use crate::error::HostError;
 /// 67: a node adds a worktree for the core's own engine
 /// (`git::GitCommand::WorktreeAdd`; PRD engine-bundle-3-core-owns D-28). A
 /// helper on 66 would refuse it, so it is refused at Hello and upgraded.
-pub const PROTOCOL_VERSION: u32 = 67;
+/// 68: a node hands input to a running agent through the agent's own way
+/// in (`Call::Deliver`). A helper on 67 would refuse it, so it is refused
+/// at Hello and upgraded.
+pub const PROTOCOL_VERSION: u32 = 68;
 
 /// What agy's index held in a checkout before Hide typed `/fork`
 /// ([`Call::AntigravityForkMark`]).
@@ -898,6 +901,14 @@ pub enum Call {
     LineInput {
         pid: u32,
     },
+    /// Hands `text` to a running agent through its own way in
+    /// (`input::InputChannel`), on the machine whose pane runs it; answers
+    /// an [`crate::input::Delivery`] and never types into the pane
+    /// (`docs/delivery.md`, The input ladder).
+    Deliver {
+        channel: crate::input::InputChannel,
+        text: String,
+    },
     /// Measures each of `paths` (`disk::DiskUsage`), reporting each one as
     /// it finishes and answering them all. The entries of `shared_git` are
     /// a repository's shared Git directory, measured as one size.
@@ -1212,6 +1223,7 @@ impl Call {
             | Self::ProcessStarts { .. }
             | Self::ProcessDescendants { .. }
             | Self::LineInput { .. }
+            | Self::Deliver { .. }
             | Self::DiskUsage { .. }
             | Self::ListeningPorts
             | Self::VolumeFree { .. }
