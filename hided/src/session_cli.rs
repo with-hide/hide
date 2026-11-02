@@ -277,6 +277,7 @@ fn draw_list(value: &Value) -> String {
     let mut text = String::new();
     if sessions.is_empty() {
         let _ = writeln!(text, "{period} 세션 없음");
+        reading_lines(value, &mut text);
         return text;
     }
     let _ = writeln!(
@@ -318,7 +319,23 @@ fn draw_list(value: &Value) -> String {
     if let Some(more) = value["more"].as_u64().filter(|more| *more > 0) {
         let _ = writeln!(text, "{more}개 더 있음");
     }
+    reading_lines(value, &mut text);
     text
+}
+
+/// A connected device Hide has not finished reading may still hold sessions
+/// of this Project the list could not place yet.
+fn reading_lines(value: &Value, text: &mut String) {
+    for device in value["reading_devices"].as_array().into_iter().flatten() {
+        let name = device["label"]
+            .as_str()
+            .or_else(|| device["id"].as_str())
+            .unwrap_or("-");
+        let _ = writeln!(
+            text,
+            "{name} 체크아웃을 아직 읽는 중 · 그 장치 세션은 빠졌을 수 있음"
+        );
+    }
 }
 
 fn draw_state(now: u64, state: &Value) -> String {
@@ -669,6 +686,14 @@ mod tests {
             &json!({"verb": "list", "since_ms": 7 * 24 * 60 * 60 * 1000_u64, "sessions": [], "more": 0}),
         );
         assert_eq!(text, "최근 7일 세션 없음\n");
+        let reading = draw(
+            &json!({"verb": "list", "since_ms": 7 * 24 * 60 * 60 * 1000_u64, "sessions": [], "more": 0,
+                "reading_devices": [{"id": "mini", "label": "Mac mini"}]}),
+        );
+        assert_eq!(
+            reading,
+            "최근 7일 세션 없음\nMac mini 체크아웃을 아직 읽는 중 · 그 장치 세션은 빠졌을 수 있음\n"
+        );
     }
 
     #[test]
