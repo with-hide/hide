@@ -65,7 +65,10 @@ pub fn split_refusal(refusal: &str) -> (&str, Option<&str>) {
             | "pane_busy"),
             detail,
         )) => (code, Some(detail)),
-        Some((code, detail)) if crate::worktree_command::DETAILED.contains(&code) => {
+        Some((code, detail))
+            if crate::worktree_command::DETAILED.contains(&code)
+                || crate::links::session_command::DETAILED.contains(&code) =>
+        {
             (code, Some(detail))
         }
         _ => (refusal, None),

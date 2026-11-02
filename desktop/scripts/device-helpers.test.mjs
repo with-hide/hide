@@ -24,7 +24,7 @@ function artifacts() {
     bytes.writeUInt16LE(3, 16);
     bytes.writeUInt16LE(platform === "linux-x86_64" ? 62 : 183, 18);
     const files = {};
-    for (const name of ["hided", "hide", "hide-agent-hooks"]) {
+    for (const name of ["hided", "hide", "hide-agent-hooks", "hide-holder"]) {
       fs.writeFileSync(path.join(folder, name), bytes);
       files[name] = createHash("sha256").update(bytes).digest("hex");
     }
@@ -67,14 +67,14 @@ describe("bundles one run made, as a package takes them", () => {
 });
 
 describe("Mac device helper inputs", () => {
-  it("publishes separate four-program archives and a small manifest of their final bytes", () => {
+  it("publishes separate five-program archives and a small manifest of their final bytes", () => {
     const root = artifacts();
     const herdr = Object.fromEntries(["linux-x86_64", "linux-aarch64"].map((p) => [p, path.join(root, p, "hided")]));
     const out = path.join(root, "bundles");
     const file = prepareDeviceBundles(root, identity, out, herdr);
     expect(fs.statSync(file).size).toBeLessThan(16 * 1024);
     const manifest = JSON.parse(fs.readFileSync(file, "utf8"));
-    expect(manifest).toMatchObject({ format: 1, ...identity });
+    expect(manifest).toMatchObject({ format: 2, ...identity });
     expect(Object.keys(manifest.platforms).sort()).toEqual(["linux-aarch64", "linux-x86_64"]);
     for (const [platform, bundle] of Object.entries(manifest.platforms)) {
       expect(bundle.asset).toBe(`hide-device-${platform}-1.2.3.tar.gz`);
@@ -82,16 +82,16 @@ describe("Mac device helper inputs", () => {
       expect(bundle.sha256).toBe(createHash("sha256").update(archive).digest("hex"));
       expect(bundle.size).toBe(archive.length);
       expect(execFileSync("tar", ["-tzf", bundle.asset], { cwd: out, encoding: "utf8" }).trim().split("\n").sort())
-        .toEqual(["hide", "hide-agent-hooks", "hided", "herdr"].sort());
+        .toEqual(["hide", "hide-agent-hooks", "hide-holder", "hided", "herdr"].sort());
       expect(Object.values(bundle.files).every((f) => f.size === 64 && /^[0-9a-f]{64}$/.test(f.sha256))).toBe(true);
     }
     expect(fs.readdirSync(out).sort()).toEqual(["device-bundles.json", ...Object.values(manifest.platforms).map((b) => b.asset)].sort());
   });
-  it("offers all six Linux kit programs under names the SSH payload can select", () => {
+  it("offers all eight Linux kit programs under names the SSH payload can select", () => {
     const files = deviceHelperResources(artifacts(), identity).map(([name]) => name);
     expect(files.sort()).toEqual([
-      "hided-linux-x86_64", "hide-linux-x86_64", "hide-agent-hooks-linux-x86_64",
-      "hided-linux-aarch64", "hide-linux-aarch64", "hide-agent-hooks-linux-aarch64",
+      "hided-linux-x86_64", "hide-linux-x86_64", "hide-agent-hooks-linux-x86_64", "hide-holder-linux-x86_64",
+      "hided-linux-aarch64", "hide-linux-aarch64", "hide-agent-hooks-linux-aarch64", "hide-holder-linux-aarch64",
     ].sort());
   });
 

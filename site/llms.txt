@@ -1,6 +1,6 @@
 # hide
 
-> hide is the multi-agent IDE for people: Claude Code, Codex, Antigravity, OpenCode, Grok, Pi and omp run in real Herdr panes, start, watch and write to each other, and only what needs a person reaches the operator. Free and Apache 2.0 licensed, on macOS, Windows and Linux.
+> hide is the multi-agent IDE for people: Claude Code, Codex, Antigravity, OpenCode, Grok, Pi and omp run in real Herdr panes, start, watch and write to each other, and only what needs a person reaches the operator. Free and fair source (FSL), on macOS, Windows and Linux.
 
 An agent inside hide runs `hide guide` for how to work there and `hide --help` for every command.
 Each link below is the current Markdown source on the main branch.

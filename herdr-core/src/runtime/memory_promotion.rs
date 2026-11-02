@@ -360,7 +360,7 @@ impl Runtime {
             authority,
             actor,
             repo: repo.to_owned(),
-            repository: self.promotion_repository(node, repo),
+            repository: self.project_repository(node.as_str(), repo),
             machine: (*node != self.node).then(|| node.as_str().to_owned()),
             kind,
             launch,
@@ -637,24 +637,21 @@ impl Runtime {
         self.github_project_on(node.as_str(), root)
     }
 
-    /// Resolve the confirmed target from existing node-owned Git facts,
+    /// The repository the Project at `root` on `device` is connected to,
+    /// else the one its own `origin` names, from node-owned Git facts,
     /// without I/O under the runtime lock or a later provider response.
-    pub(super) fn promotion_repository(&self, node: &NodeId, root: &str) -> Option<String> {
+    pub(super) fn project_repository(&self, device: &str, root: &str) -> Option<String> {
         if let Some(crate::project_settings::RepositoryConnection::Repository { repository }) =
-            crate::project_settings::get(
-                &self.snapshot.ui_state.project_settings,
-                node.as_str(),
-                root,
-            )
-            .and_then(|record| record.repository.as_ref())
+            crate::project_settings::get(&self.snapshot.ui_state.project_settings, device, root)
+                .and_then(|record| record.repository.as_ref())
         {
             return Some(repository.clone());
         }
-        if *node == self.node {
+        if self.node == device {
             self.worktree_catalog.project(root)?.repository.clone()
         } else {
             self.device_worktrees
-                .get(node.as_str())?
+                .get(device)?
                 .projects
                 .get(root)?
                 .repository
@@ -1053,7 +1050,7 @@ fn track_promotions(
                     let original_target = promotion
                         .repository
                         .as_deref()
-                        .zip(guard.promotion_repository(node, root).as_deref())
+                        .zip(guard.project_repository(node.as_str(), root).as_deref())
                         .is_some_and(|(original, current)| original.eq_ignore_ascii_case(current));
                     let (verdict, changed) = if original_target {
                         guard.promotion_catalog_verdict(&key, node, root)

@@ -384,6 +384,34 @@ pub fn request_links(
     })
 }
 
+/// `hide session`: a read of the Project's sessions, answered without a
+/// shell. A `read` may wait for a device's node for the minute D-14 gives
+/// it, and the exchange waits a little past that for the refusal.
+pub fn request_session(
+    credential: &mut Credential,
+    command: &herdr_core::links::session_command::SessionCommand,
+) -> Result<Value, String> {
+    let timeout = match command {
+        herdr_core::links::session_command::SessionCommand::Read { .. } => {
+            herdr_core::links::session_command::READ_TIMEOUT + Duration::from_secs(15)
+        }
+        _ => Duration::from_secs(30),
+    };
+    credential.run(|path, after| {
+        let reference = read_reference(path)?;
+        let request_id = fresh_request_id()?;
+        run_exchange_within(
+            path,
+            &reference,
+            json!({"type":"session","request_id":request_id,"command":command}),
+            &request_id,
+            false,
+            timeout,
+            after,
+        )
+    })
+}
+
 /// `hide memory`: answered without a shell. An `add` asks the provider, so
 /// it has the minute B8 gives it; it writes nothing after its own deadline,
 /// and running it again adds nothing twice.

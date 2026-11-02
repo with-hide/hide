@@ -69,6 +69,7 @@ mod op_timing;
 mod operations;
 pub(crate) mod output_language;
 mod overview_graph;
+mod own_devices;
 mod pane_command;
 pub(crate) mod pane_move;
 mod pane_move_preview;
@@ -88,6 +89,7 @@ mod rename;
 mod request_view;
 mod session;
 mod session_archive;
+mod session_command;
 mod session_state;
 mod session_thread;
 mod snapshot_delta;
@@ -1988,6 +1990,9 @@ pub struct Runtime {
     /// The operator's agent definition files as last read; `None` while the
     /// development switch is off, which reads none (`agent_definitions`).
     agent_definitions: Option<agent_definitions::AgentDefinitions>,
+    /// Set when the devices this core dials run on its own engine, the
+    /// development switch on (`own_devices`); `None` runs them on Herdr.
+    own_devices: Option<own_devices::OwnDevices>,
     herdr_profiles_job: Option<herdr_profiles::HerdrProfilesJob>,
     herdr_profile_endpoints: BTreeMap<String, Result<String, String>>,
     /// The connection attempt each first-run Connect started, by device and
@@ -2620,6 +2625,7 @@ impl Runtime {
             next_ssh_hosts_id: 0,
             ssh_hosts_job: None,
             agent_definitions: None,
+            own_devices: None,
             herdr_profiles_job: None,
             herdr_profile_endpoints: BTreeMap::new(),
             first_run_attempts: BTreeMap::new(),

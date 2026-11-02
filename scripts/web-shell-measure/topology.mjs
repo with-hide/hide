@@ -1,19 +1,22 @@
 #!/usr/bin/env node
 // Pane topology latency on the product web shell (PRD instant-pane-topology
 // D-15, B23): split, zoom, unzoom, pane close and new tab, each started by the
-// operator's own chord, plus a tab switch by click (B24).
+// operator's own chord, plus a tab switch by click (B24), and a window resize
+// (PRD engine-bundle-3-core-owns B43, perf-gate row 27): the page's width set
+// with CDP `Emulation.setDeviceMetricsOverride`, 1280 to 1100 and back.
 //
 // Keys reach the page as CDP `Input.dispatchKeyEvent`, which Chrome delivers
 // as an ordinary renderer keydown to the focused terminal, so they take the
 // web shell's own keydown path (`keyboard.ts`, the browser chords of
 // `shortcuts.ts`); a click is an element click in the page.
 // Every time is the page's own clock:
-// - `key_ms`: the first keydown of the chord (a capture listener), or the click.
+// - `key_ms`: the first keydown of the chord (a capture listener), the click,
+//   or, for a resize, the moment before the width is set.
 // - `screen_ms`: the first animation frame whose DOM shows the change (the
 //   pane count, the zoom flag or the shown tab moved).
 // - `frame_ms`: the first animation frame after that in which the terminal
 //   the change is about shows it: a new pane's terminal has text, or the
-//   resized pane's xterm has a new grid.
+//   resized pane's xterm has a new grid; for a resize, every shown pane's.
 // Prints JSON samples; summarize.py topology reads them.
 import { spawnSync } from "node:child_process";
 import { connectPage } from "./cdp.mjs";
@@ -49,7 +52,7 @@ await page.evaluate(`(() => {
   const panes = () => [...(canvas()?.querySelectorAll("[data-pane-view]") ?? [])].map((el) => el.dataset.paneView);
   const focused = () => document.querySelector('[data-pane-view][data-focused="true"]')?.dataset.paneView ?? null;
   const grid = (id) => { const g = window.__hideProbe.paneGrid(id); return g ? g.cols + "x" + g.rows : null; };
-  const look = () => ({ tab: canvas()?.dataset.canvas ?? null, zoomed: canvas()?.dataset.zoomed === "true", panes: panes(), focused: focused() });
+  const look = () => ({ tab: canvas()?.dataset.canvas ?? null, zoomed: canvas()?.dataset.zoomed === "true", panes: panes(), focused: focused(), width: Math.round(canvas()?.getBoundingClientRect().width ?? 0) });
   window.__topology = {
     look,
     grid,
@@ -70,6 +73,7 @@ await page.evaluate(`(() => {
             else if (kind === "close") moved = seen.panes.length === before.panes.length - 1;
             else if (kind === "zoom" || kind === "unzoom") moved = seen.zoomed !== before.zoomed;
             else if (kind === "new_tab" || kind === "switch") moved = seen.tab !== null && seen.tab !== before.tab && seen.panes.length > 0;
+            else if (kind === "resize") moved = seen.width !== before.width;
             if (moved) {
               screen = now;
               if (kind === "split") subject = seen.panes.find((id) => !before.panes.includes(id));
@@ -82,6 +86,7 @@ await page.evaluate(`(() => {
             let shown = false;
             if (kind === "split" || kind === "new_tab") shown = window.__hideProbe.paneText(subject).trim().length > 0;
             else if (kind === "switch") shown = grid(subject) !== null;
+            else if (kind === "resize") shown = seen.panes.every((id) => grid(id) !== null && grid(id) !== beforeGrids[id]);
             else shown = grid(subject) !== null && grid(subject) !== beforeGrids[subject];
             if (shown) return resolve({ key_ms: state.keyAt, screen_ms: screen, frame_ms: now, subject, after: look() });
           }
@@ -119,7 +124,17 @@ async function focusPane(id) {
   throw new Error(`pane ${id} did not take focus`);
 }
 
+/** The page's width, as a window of that width lays it out; the window itself stays 1280 wide. */
+async function resizeTo(width) {
+  const height = await page.evaluate("window.innerHeight");
+  await page.evaluate("window.__topology.markClick(); true");
+  await page.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 0, mobile: false });
+}
+
 const samples = [];
+// Operations the rounds made without timing them (the new tab's close), for
+// the saves per operation the save watch divides by.
+let unsampled = 0;
 async function measure(kind, start) {
   const before = await look();
   await page.evaluate("window.__topology.arm()");
@@ -186,6 +201,7 @@ for (let round = 0; round < rounds; round += 1) {
   // Close the new tab's only pane so every round starts at the same scale.
   await focusPane(opened.subject);
   await press(CHORDS.close);
+  unsampled += 1;
   const gone = Date.now() + 5000;
   while ((await look()).tab === opened.after.tab) {
     if (Date.now() > gone) throw new Error(`new tab ${opened.after.tab} did not close`);
@@ -201,9 +217,12 @@ for (let round = 0; round < rounds; round += 1) {
     await page.evaluate(`(() => { window.__topology.markClick(); document.querySelector('[data-agent-tab-bar] [data-tab="${measuredTab}"]').click(); return true; })()`);
   });
   await backToMeasuredTab();
+  await measure("resize", () => resizeTo(1100));
+  await measure("resize", () => resizeTo(1280));
 }
+await page.send("Emulation.clearDeviceMetricsOverride", {});
 page.close();
 console.log(JSON.stringify({
-  method: "page clock; key_ms = first keydown of the chord (CDP Input.dispatchKeyEvent, delivered as a renderer keydown to the focused terminal and handled by the web shell's keydown path) or the tab click; screen = first animation frame whose DOM shows the change; frame = first animation frame after it in which the subject terminal shows it (text in a new pane, a new grid in a resized one); nearest-rank percentiles computed by summarize.py topology",
-  load, pane_id: paneId, rounds, zoom_only: zoomOnly, samples,
+  method: "page clock; key_ms = first keydown of the chord (CDP Input.dispatchKeyEvent, delivered as a renderer keydown to the focused terminal and handled by the web shell's keydown path), the tab click, or the moment before a resize's CDP Emulation.setDeviceMetricsOverride; screen = first animation frame whose DOM shows the change; frame = first animation frame after it in which the subject terminal shows it (text in a new pane, a new grid in a resized one); nearest-rank percentiles computed by summarize.py topology",
+  load, pane_id: paneId, rounds, zoom_only: zoomOnly, operations: samples.length + unsampled, samples,
 }, null, 2));

@@ -1499,6 +1499,9 @@ enum ScopedRequest {
     Delivery(Box<herdr_core::delivery::Command>, Option<String>),
     /// `hide links`: a read of the link record, which needs no shell.
     Links(herdr_core::links::query::LinksQuery),
+    /// `hide session list|record|read`: a read of the Project's sessions,
+    /// which needs no shell.
+    Session(herdr_core::links::session_command::SessionCommand),
     /// `hide memory`: Project Memory's own store, which needs no shell.
     Memory(herdr_core::memory_command::MemoryCommand),
     /// `hide workspace memory`: a hook's Project Memory, which needs no
@@ -1549,6 +1552,7 @@ impl ScopedRequest {
             self,
             Self::Delivery(..)
                 | Self::Links(..)
+                | Self::Session(..)
                 | Self::Memory(..)
                 | Self::MemoryHook(..)
                 | Self::Mission(..)
@@ -1635,6 +1639,11 @@ async fn scoped_client_loop(
                         .ok()
                         .filter(|query| query.target.valid())
                         .map(ScopedRequest::Links),
+                        Some("session") => serde_json::from_value::<
+                            herdr_core::links::session_command::SessionCommand,
+                        >(value["command"].clone())
+                        .ok()
+                        .map(ScopedRequest::Session),
                         Some("delivery") => {
                             herdr_core::delivery::Command::from_wire(value["command"].clone())
                                 .ok()
@@ -1831,6 +1840,13 @@ async fn scoped_client_loop(
                                     ))?;
                                     herdr_core::links::query::run(&scope, &query, own.as_ref())
                                         .map_err(|(reason, next_action)| (reason.to_owned(), next_action))?
+                                }
+                                ScopedRequest::Session(command) => {
+                                    let scope = core.session_scope(&cap.context).ok_or((
+                                        "links_unavailable".to_owned(),
+                                        "Retry; the reason is in Hide's diagnostic log",
+                                    ))?;
+                                    herdr_core::links::session_command::run(&scope, &command, core.as_ref())?
                                 }
                                 ScopedRequest::Memory(command) => {
                                     core.prepare_memory(&cap.context.device_id, &cap.pane_id, &cap.context, command)
@@ -5272,6 +5288,12 @@ mod tests {
             all_projects: false,
         });
         assert!(!links.needs_renderer());
+        assert!(
+            !ScopedRequest::Session(herdr_core::links::session_command::SessionCommand::Record {
+                id: "s-1".into()
+            })
+            .needs_renderer()
+        );
         assert!(
             !ScopedRequest::Memory(herdr_core::memory_command::MemoryCommand::Show { number: 1 })
                 .needs_renderer()

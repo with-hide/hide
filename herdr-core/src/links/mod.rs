@@ -14,6 +14,7 @@
 pub mod ledger;
 pub mod observation;
 pub mod query;
+pub mod session_command;
 pub mod store;
 pub mod worker;
 

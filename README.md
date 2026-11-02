@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/with-hide/hide/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/with-hide/hide?label=release&color=B9FF66&labelColor=0D191B"></a>
-  <a href="LICENSE"><img alt="Apache License 2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
+  <a href="LICENSE"><img alt="Functional Source License 1.1" src="https://img.shields.io/badge/license-FSL--1.1--ALv2-blue"></a>
   <img alt="macOS, Windows and Linux" src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey">
   <a href="https://discord.gg/h6zme5kybD"><img alt="Join the hide Discord" src="https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white"></a>
   <a href="https://herdr.dev"><img alt="Built on Herdr" src="https://img.shields.io/badge/built%20on-Herdr-B9FF66?labelColor=0D191B"></a>
@@ -301,5 +301,8 @@ pnpm --dir desktop dev              # the desktop app, unpackaged, against this 
 
 ## License
 
-hide is licensed under the [Apache License 2.0](LICENSE); [NOTICE](NOTICE) carries its copyright notice.
+hide is fair source under the [Functional Source License 1.1, ALv2 Future License](LICENSE) (FSL-1.1-ALv2).
+You may use, change and redistribute it for any purpose except offering others a commercial product or service that competes with hide, and using it in your own work, including at a company, is always allowed.
+Each release becomes available under the Apache License 2.0 two years after it is published, and releases up to and including 1.1.1 remain under the Apache License 2.0.
+[NOTICE](NOTICE) carries the copyright notice and the files derived from Herdr and other projects, which keep their own licenses.
 The bundled Herdr and other third-party components keep their own licenses, listed in [THIRD_PARTY_NOTICES](desktop/resources/THIRD_PARTY_NOTICES).

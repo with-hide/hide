@@ -63,19 +63,7 @@ impl Read {
     }
 }
 
-/// Which events of a session to read.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SessionWindow {
-    /// `count` events centred on the first event at or after this time.
-    Around {
-        at_unix_ms: u64,
-        count: u32,
-    },
-    From {
-        from: u32,
-        count: u32,
-    },
-}
+pub use crate::session_excerpt::SessionWindow;
 
 /// What a read tool answers, before the guard redacts and bounds it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -134,24 +122,10 @@ pub(crate) fn readable_path(path: &str) -> Result<(), &'static str> {
     }
     hide_platform::path::RelPath::parse(path).map_err(|_| "invalid_path")?;
     let mut names = path.split('/');
-    if names.any(|name| name == ".git" || hide_memory::sensitive_path(name)) {
+    if names.any(crate::session_excerpt::credential_name) {
         return Err("credential_file");
     }
     Ok(())
-}
-
-/// Text as it may leave the machine: credentials masked, at most `bytes`
-/// long and cut on a character. Answers whether anything was cut.
-pub(crate) fn egress(text: &str, bytes: usize) -> (String, bool) {
-    let redacted = hide_memory::redact(text).text;
-    if redacted.len() <= bytes {
-        return (redacted, false);
-    }
-    let mut end = bytes;
-    while !redacted.is_char_boundary(end) {
-        end -= 1;
-    }
-    (redacted[..end].to_owned(), true)
 }
 
 fn line(text: &str) -> String {
@@ -175,7 +149,7 @@ pub(crate) fn fulfil(
         Ok(excerpt) => {
             let mut limit = policy::READ_RESULT_BYTES.min(budget);
             loop {
-                let (text, cut) = egress(&excerpt.text, limit);
+                let (text, cut) = crate::session_excerpt::egress(&excerpt.text, limit);
                 let value = json!({
                     "read": shown,
                     "text": text,

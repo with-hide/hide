@@ -249,7 +249,7 @@ impl Runtime {
                 return;
             }
         };
-        let repository = self.promotion_repository(node, &order.location.path);
+        let repository = self.project_repository(node.as_str(), &order.location.path);
         // The ready branch's own agent ends before another takes the branch.
         let end_first = order
             .previous_agent
@@ -1001,7 +1001,7 @@ impl Runtime {
         let repository = attempt
             .repository
             .clone()
-            .or_else(|| self.promotion_repository(node, root));
+            .or_else(|| self.project_repository(node.as_str(), root));
         let pull = self
             .promotion_catalog(node, root)
             .and_then(|catalog| attempt_pull_request(catalog, attempt, repository.as_deref()))

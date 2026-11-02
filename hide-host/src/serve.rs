@@ -37,6 +37,12 @@ pub const CONTROL_CONCURRENCY: usize = 4;
 /// per device and admits as many.
 pub const BACKGROUND_CONCURRENCY: usize = 2;
 
+/// The core's engine asking the node's pane holders (`Call::is_pane`: a
+/// start, which waits for its holder, and the pane watch, held for as long
+/// as the engine runs), on workers of their own, so they never take a
+/// machine call's worker nor wait behind one; the core admits as many.
+pub const PANE_CONCURRENCY: usize = hide_node_link::holders::PANE_LANE;
+
 /// Requests waiting for a worker. The core admits at most [`CONCURRENCY`]
 /// at once, so this fills only behind calls the core stopped waiting for; a
 /// request past it is answered busy, and the reader never waits, so a cancel
@@ -56,6 +62,13 @@ pub trait Terminals: Send + Sync {
     /// Starts the service for the Herdr at `herdr_socket`; starting it again
     /// while it runs changes nothing.
     fn start(&self, herdr_socket: &str) -> Result<(), String>;
+    /// Starts the service over the node's own pane holders, with no Herdr,
+    /// and answers those holders for the core's own engine (PRD
+    /// engine-bundle-3-core-owns D-22); asked again, it answers the same
+    /// holders. A service already running on a Herdr refuses it.
+    fn start_holders(&self) -> Result<Arc<dyn hide_node_link::holders::PaneHolders>, String> {
+        Err("This node's terminals cannot run pane holders".to_owned())
+    }
     /// One terminal line from the core, its newline removed.
     fn line(&self, line: &[u8]);
     /// The next line to send up, newline included, waiting for one; `None`
@@ -265,6 +278,7 @@ fn serve_in(
     let (sender, receiver) = mpsc::sync_channel::<Request>(QUEUED);
     let (control_sender, control_receiver) = mpsc::sync_channel::<Request>(QUEUED);
     let (background_sender, background_receiver) = mpsc::sync_channel::<Request>(QUEUED);
+    let (pane_sender, pane_receiver) = mpsc::sync_channel::<Request>(QUEUED);
     // Only the workers hold the receivers. A worker stops when its answer
     // cannot be written, which means the SSH channel is gone; once the last
     // one of a lane has stopped, the next request's send fails and the
@@ -272,6 +286,7 @@ fn serve_in(
     let receiver = Arc::new(Mutex::new(receiver));
     let control_receiver = Arc::new(Mutex::new(control_receiver));
     let background_receiver = Arc::new(Mutex::new(background_receiver));
+    let pane_receiver = Arc::new(Mutex::new(pane_receiver));
     let result = std::thread::scope(|scope| {
         if let Some(terminals) = terminals {
             let output = &output;
@@ -291,7 +306,8 @@ fn serve_in(
             .chain(std::iter::repeat_n(
                 &background_receiver,
                 BACKGROUND_CONCURRENCY,
-            ));
+            ))
+            .chain(std::iter::repeat_n(&pane_receiver, PANE_CONCURRENCY));
         for receiver in lanes {
             let receiver = Arc::clone(receiver);
             let output = &output;
@@ -318,6 +334,34 @@ fn serve_in(
                                 .start(scope, output, bridges, &herdr_socket)
                                 .and_then(to_value),
                             Err(error) => Err(HostError::new(ErrorCode::Io, error.to_string())),
+                        },
+                        // One node runs one engine's panes: its holders,
+                        // started once, take the place of its Herdr's
+                        // terminals, and its pane requests reach them.
+                        // A pane's `hide` is proved by the holders' records
+                        // from then on, answered with the bootstrap socket it
+                        // asks on, as `PanesStart` answers it for a Herdr.
+                        Call::HoldersStart => match (terminals, bridges) {
+                            (Some(terminals), Ok(bridges)) => terminals
+                                .start_holders()
+                                .map_err(|message| HostError::new(ErrorCode::Io, message))
+                                .and_then(|holders| {
+                                    env.panes.fill(holders);
+                                    panes.start_for(
+                                        scope,
+                                        output,
+                                        bridges,
+                                        crate::panes::PaneSource::Holders(env.panes.clone()),
+                                    )
+                                })
+                                .and_then(to_value),
+                            (None, _) => Err(HostError::new(
+                                ErrorCode::Unsupported,
+                                "This node runs no terminal service",
+                            )),
+                            (_, Err(error)) => {
+                                Err(HostError::new(ErrorCode::Io, error.to_string()))
+                            }
                         },
                         Call::TerminalsStart { herdr_socket } => match terminals {
                             Some(terminals) => terminals
@@ -451,6 +495,7 @@ fn serve_in(
         drop(receiver);
         drop(control_receiver);
         drop(background_receiver);
+        drop(pane_receiver);
         if heartbeat {
             let output = &output;
             let input_ended = &input_ended;
@@ -472,7 +517,7 @@ fn serve_in(
         }
         let result = read_requests(
             input,
-            [&sender, &control_sender, &background_sender],
+            [&sender, &control_sender, &background_sender, &pane_sender],
             &output,
             &running,
             terminals,
@@ -482,6 +527,7 @@ fn serve_in(
         drop(sender);
         drop(control_sender);
         drop(background_sender);
+        drop(pane_sender);
         // The connection is gone: the terminal sessions end with it, so no
         // attach child outlives the link that asked for it (D-20, B20).
         if let Some(terminals) = terminals {
@@ -570,10 +616,10 @@ fn label_socket(
 }
 
 /// Reads requests and hands each to its lane: `[machine, control,
-/// background]`.
+/// background, pane]`.
 fn read_requests(
     mut input: impl BufRead,
-    [sender, control_sender, background_sender]: [&mpsc::SyncSender<Request>; 3],
+    [sender, control_sender, background_sender, pane_sender]: [&mpsc::SyncSender<Request>; 4],
     output: &Mutex<impl Write>,
     running: &Mutex<HashMap<u64, bool>>,
     terminals: Option<&dyn Terminals>,
@@ -660,6 +706,8 @@ fn read_requests(
             control_sender
         } else if request.call.is_background() {
             background_sender
+        } else if request.call.is_pane() {
+            pane_sender
         } else {
             sender
         };
@@ -912,6 +960,9 @@ pub struct Env {
     /// The socket of the Herdr this node's link bridges, which its Hello
     /// names; none for a node that bridges none.
     pub bridged_herdr: Option<PathBuf>,
+    /// The node's pane holders, once it runs them for the core's own engine
+    /// (`Call::Pane`, `Call::PaneWatch`).
+    pub panes: crate::pane_holders::PaneSlot,
 }
 
 /// The AI backends a node answering for this process keeps, shared by every
@@ -978,6 +1029,7 @@ impl Env {
             state: std::env::var_os("HOME")
                 .map(|home| hide_kit::layout::state_dir_from_process(Path::new(&home))),
             bridged_herdr: None,
+            panes: Default::default(),
         }
     }
 
@@ -995,6 +1047,7 @@ impl Env {
             worktrees: Arc::default(),
             state: None,
             bridged_herdr: None,
+            panes: Default::default(),
         }
     }
 
@@ -1241,6 +1294,8 @@ pub fn handle_with_progress(
                 &mut |report| serde_json::to_value(report).map_or(true, &mut *progress),
             ))
         }
+        Call::Pane { call } => crate::pane_holders::answer(&env.panes, call),
+        Call::PaneWatch => crate::pane_holders::watch(&env.panes, &env.stop, progress),
         Call::GitWatch { common_dirs } => {
             let common_dirs = common_dirs
                 .iter()
@@ -1623,7 +1678,11 @@ pub fn handle_with_progress(
         Call::SessionStat { path, scope } => session_read(env, &path, scope.as_ref(), |path| {
             crate::sessions::stat(path).map_err(|e| e.to_string())
         }),
+        // The core's own node is given its holders when it is made; a
+        // device's node starts them in its serve loop, answering the pane
+        // socket its panes' `hide` asks on.
         Call::PanesStart { .. }
+        | Call::HoldersStart
         | Call::TerminalsStart { .. }
         | Call::PaneProofAnswer { .. }
         | Call::PaneInspect { .. }

@@ -17,10 +17,12 @@
 //! second node that says hello takes it over, and this node's session ends
 //! `taken_over`, which is never tried again on its own (B9). A holder that
 //! speaks a version older than [`OLDEST_HOLDER_VERSION`] is reported
-//! `unsupported_holder_version` and left running (B10). Only the local node
-//! runs holders in this bundle: a device's node runs under a job its
-//! `OwnedChild` start made, which a holder cannot break away from on
-//! Windows, and devices carry no holder yet ([`device_switch`]).
+//! `unsupported_holder_version` and left running (B10). A device's node
+//! runs holders only when the core that dialed it asks
+//! (`Call::HoldersStart`, PRD engine-bundle-3-core-owns D-22), never by its
+//! own environment's switch ([`device_switch`]); a Windows device runs none,
+//! since its node runs under a job its `OwnedChild` start made, which a
+//! holder cannot break away from.
 
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
@@ -101,19 +103,17 @@ impl Switch {
     }
 }
 
-/// A device's node never runs holders in this bundle. With the switch on it
-/// says so in the diagnostic log and opens its panes through Herdr: a
-/// device's node runs inside the job object its `OwnedChild` start made,
-/// which on Windows allows no breakaway, so a holder could not outlive it,
-/// and a device carries no holder until its kit does. A value the switch
-/// does not take fails the device's terminal start, as it fails the local
-/// daemon's.
+/// A device's node whose core runs its panes on Herdr opens them through
+/// Herdr whatever its own environment's switch says: the core that dialed
+/// it chooses its engine (`Call::HoldersStart`), so with the switch on here
+/// it says so in the diagnostic log. A value the switch does not take fails
+/// the device's terminal start, as it fails the local daemon's.
 pub fn device_switch() -> Result<(), String> {
     if Switch::from_env()? == Switch::On {
         crate::diagnostic!(json!({
             "component": "pane_holder",
             "kind": "pane_holder.device_node_unsupported",
-            "message": "a device's node does not run pane holders in this bundle; its panes open through Herdr",
+            "message": "a device's node runs pane holders only when its core asks; its panes open through Herdr",
         }));
     }
     Ok(())

@@ -167,6 +167,7 @@ mod tests {
             herdr.engine(),
             Arc::downgrade(&runtime),
             ChangeNotifier::noop(),
+            std::sync::Arc::new(hide_node::Local::of_process()),
         );
         let mut reader = ProcessReader::new(&context);
         let cancelled = Arc::clone(&reader.cancelled);

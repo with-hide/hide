@@ -12,9 +12,11 @@
 # shells with mounted xterm instances.
 # `topology` (PRD instant-pane-topology D-15) adds a second tab to the
 # measured workspace and, with MEASURE_SCALE=operator or double, fills the
-# server to that scale (scale.sh); it then records idle resources, one echo
-# trial under the scale's agent churn, and the split, zoom, close, new tab
-# and tab switch latencies (topology.mjs), and skips the frame window.
+# session to that scale (fixture.mjs, which reports no agents and starts the
+# scale's printing panes); it then records idle resources, one echo trial,
+# and the split, zoom, close, new tab, tab switch and resize latencies
+# (topology.mjs) while it counts the layout saves (save-watch.py), and skips
+# the frame window.
 # `keys` (PRD core-host-node-terminal D-07, D-08, B2, B4, B5, B19, B21) is
 # the measured pane and four splits in one tab, five attached panes: idle
 # resources for MEASURE_IDLE_SECONDS (60), the screen key echo idle
@@ -50,6 +52,20 @@
 # machine's panes as the core sees them; after them, the key echo and key
 # count run on the device's pane of the core's own fixture checkout
 # (MEASURE_CORE_FIXTURE), with the core stopped when the run ends.
+# `restore` (PRD engine-bundle-3-core-owns B44, perf-gate row 30) builds the
+# topology fixture, opens the page on it, kills every process the run started
+# with SIGKILL (the daemon, the Herdr server or every pane holder, and every
+# pane's shell), confirms none runs, starts them again and times the tabs, the
+# front tab's panes and every shell coming back (restore.mjs).
+# MEASURE_ENGINE (PRD engine-bundle-3-core-owns D-15) picks what runs the
+# panes of `topology` and `restore`: `herdr` (the default), the private pinned
+# Herdr server, or `own`, the core's own engine, the same hided started with
+# HIDE_DEV_PANE_HOLDER=1 and no Herdr, over the `hide-holder` beside it. Both
+# make their fixture the same way, with the web shell's events on the
+# daemon's WebSocket (fixture.mjs), type through the page (type.mjs, CDP), and
+# watch the saved layout while the topology rounds run (save-watch.py), so a
+# pair of runs differs only in the switch. The other scenarios run on Herdr
+# only, with the fixture the Herdr CLI makes.
 # MEASURE_HIDED_BIN measures another hided build, such as a baseline, with
 # the same fixture.
 # Needs: the pinned herdr (HERDR_BIN_PATH or PATH), Google Chrome,
@@ -70,22 +86,48 @@ case "${2:-}" in
 esac
 measure_dir="$(cd "$(dirname "$0")" && pwd)"
 source "$measure_dir/isolated-env.sh"
-trap 'rmdir "$MEASURE_SOCKET_DIR"' EXIT
+trap 'rmdir "$MEASURE_SOCKET_DIR/state" 2>/dev/null; rmdir "$MEASURE_SOCKET_DIR"' EXIT
 scenario="${MEASURE_SCENARIO:-single}"
-case "$scenario" in single|multi|keys|device|remote-core|areas2|areas3|topology) ;; *) echo "MEASURE_SCENARIO must be single, multi, keys, device, remote-core, areas2, areas3 or topology" >&2; exit 2;; esac
+case "$scenario" in single|multi|keys|device|remote-core|areas2|areas3|topology|restore) ;; *) echo "MEASURE_SCENARIO must be single, multi, keys, device, remote-core, areas2, areas3, topology or restore" >&2; exit 2;; esac
+engine="${MEASURE_ENGINE:-herdr}"
+case "$engine" in herdr|own) ;; *) echo "MEASURE_ENGINE must be herdr or own" >&2; exit 2;; esac
+# The topology and the restore are made through the daemon on either engine.
+neutral=false
+[[ "$scenario" != topology && "$scenario" != restore ]] || neutral=true
+[[ "$engine" == herdr ]] || $neutral || { echo "MEASURE_ENGINE=own measures only MEASURE_SCENARIO=topology or restore" >&2; exit 2; }
 scale="${MEASURE_SCALE:-none}"
 case "$scale" in none|operator|double) ;; *) echo "MEASURE_SCALE must be none, operator or double" >&2; exit 2;; esac
-[[ "$scale" == none || "$scenario" == topology ]] || { echo "MEASURE_SCALE needs MEASURE_SCENARIO=topology" >&2; exit 2; }
+[[ "$scale" == none ]] || $neutral || { echo "MEASURE_SCALE needs MEASURE_SCENARIO=topology or restore" >&2; exit 2; }
 [[ "$scenario" != device && "$scenario" != remote-core ]] || source "$measure_dir/device-guard.sh"
 screen_node="${MEASURE_SCREEN_NODE:-measure-screen}"
 core_started=false
 chrome_bin="${MEASURE_CHROME_BIN:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
 hided_bin="${MEASURE_HIDED_BIN:-$MEASURE_WORKTREE/target/release/hided}"
 [[ -x "$hided_bin" ]] || { echo "build target/release/hided first: pnpm --dir web build, then the release build described in docs/BUILD.md" >&2; exit 1; }
+# The own engine's node starts each pane's holder from the one beside hided.
+[[ "$engine" == herdr || -x "$(dirname "$hided_bin")/hide-holder" ]] || { echo "MEASURE_ENGINE=own needs hide-holder beside $hided_bin" >&2; exit 1; }
 [[ -x "$chrome_bin" ]] || { echo "Chrome not found at $chrome_bin" >&2; exit 1; }
 pids=()
 server_started=false
+# The daemon's state folder sits in the run's short socket folder while the
+# run lasts, since the own engine's holder sockets live under it and the run
+# folder's path is longer than a Unix socket address takes (a link is refused
+# as not private); both engines get it, and the end moves it into the run
+# folder as isolated/hide-state.
+hide_state="$MEASURE_SOCKET_DIR/state"
+mkdir -m 700 "$hide_state"
+export MEASURE_HIDE_STATE="$hide_state"
 note() { printf 'measure: %s\n' "$*"; }
+# The own engine's pane holders outlive the daemon by design, so the run owns
+# them by the pid each record in its state folder names, with the e2e
+# fixture's rule (web/e2e/pane-holders.mjs, through holders.mjs): `holder_pids` lists the holders
+# and their programs, `end_holders` ends them (failing when one still runs),
+# `holders_left` prints what still runs from the run's holder folder (nothing,
+# on a clean end: leaked holders once used up every PTY).
+pane_holders="$measure_dir/holders.mjs"
+holder_pids() { node "$pane_holders" pids "$hide_state"; }
+end_holders() { node "$pane_holders" end "$hide_state"; }
+holders_left() { node "$pane_holders" left "$hide_state" || true; }
 operator_counts() {
   if $isolated_headless; then
     printf '{"observed":false,"reason":"isolated-headless mode never reads the operator socket"}\n' > "$MEASURE_RUN_DIR/operator-$1.json"
@@ -94,6 +136,7 @@ operator_counts() {
   fi
 }
 cleanup() {
+  local cleanup_status=0
   trap - EXIT INT TERM
   set +e
   kill_owned() {
@@ -108,19 +151,28 @@ cleanup() {
     rm -f "$HERDR_SOCKET_PATH" "$HERDR_SOCKET_PATH.agent" "${HERDR_SOCKET_PATH%.sock}-client.sock" "$HERDR_SOCKET_PATH.hide-label-generator.lock"
   fi
   for pid in "${pids[@]:-}"; do [[ -n "$pid" ]] && wait "$pid" 2>/dev/null; done
+  if [[ "$engine" == own ]]; then
+    # A holder left running fails the run, so a battery of runs stops there.
+    end_holders || cleanup_status=1
+    left="$(holders_left)"
+    [[ -z "$left" ]] || { printf 'pane holder processes left running:\n%s\n' "$left" >&2; cleanup_status=1; }
+  fi
   if $core_started; then
     # A core left running on the device is said where the run is read.
     bash "$measure_dir/core-host.sh" stop > "$MEASURE_RUN_DIR/core-stop.txt" 2>&1 \
       || echo "the device's core was not stopped; see $MEASURE_RUN_DIR/core-stop.txt" >&2
   fi
+  rmdir "$MEASURE_PRIVATE/hide-state" && mv "$hide_state" "$MEASURE_PRIVATE/hide-state"
   rmdir "$MEASURE_SOCKET_DIR"
   {
     for pid in "${pids[@]:-}" "${server_pid:-}"; do
       [[ -n "$pid" ]] || continue
       ps -p "$pid" -o pid=,ppid=,comm= || printf '%s exited\n' "$pid"
     done
+    [[ "$engine" != own ]] || printf 'holders left: %s\n' "$(holders_left | wc -l | tr -d ' ')"
   } > "$MEASURE_RUN_DIR/cleanup-processes.txt"
   operator_counts after
+  (( cleanup_status == 0 )) || exit "$cleanup_status"
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
@@ -170,6 +222,12 @@ JS
   done
 }
 reset_fixture() {
+  if $neutral; then
+    # Typed through the page on either engine, as the operator types.
+    node "$measure_dir/type.mjs" "$MEASURE_CDP_PORT" "$MEASURE_PANE_ID" --interrupt 'printf "\033c"; stty -echo -icanon; cat'
+    sleep 0.8
+    return
+  fi
   "$HERDR_BIN_PATH" pane send-keys "$MEASURE_PANE_ID" ctrl+c >/dev/null
   sleep 0.3
   "$HERDR_BIN_PATH" pane run "$MEASURE_PANE_ID" 'printf "\033c"; stty -echo -icanon; cat' >/dev/null
@@ -207,74 +265,72 @@ if [[ ! -f "$measure_checkout/.git" ]]; then
   git -C "$MEASURE_FIXTURE" worktree add --quiet -b measure-worktree "$measure_checkout"
 fi
 export MEASURE_FIXTURE="$measure_checkout"
-env HOME="$MEASURE_PRIVATE/home" "$HERDR_BIN_PATH" server >"$MEASURE_RUN_DIR/logs/herdr-server.log" 2>&1 &
-server_pid=$!
-server_started=true
-deadline=$((SECONDS+20)); until [[ -S "$HERDR_SOCKET_PATH" ]]; do (( SECONDS < deadline )) || { echo 'socket did not appear' >&2; exit 1; }; sleep 0.1; done
-workspaces="$("$HERDR_BIN_PATH" api snapshot | python3 -c 'import json,sys; d=json.load(sys.stdin); r=d.get("result") or d; s=r.get("snapshot") or r; print(len(s.get("workspaces") or []))')"
-[[ "$workspaces" == "0" ]] || { echo "private server already has $workspaces workspaces" >&2; exit 1; }
-created="$("$HERDR_BIN_PATH" workspace create --cwd "$MEASURE_FIXTURE" --label measure --focus)"
-export MEASURE_PANE_ID="$("$HERDR_BIN_PATH" api snapshot | python3 "$measure_dir/pane-id.py")"
-measure_workspace="$(printf %s "$created" | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["workspace"]["workspace_id"])')"
-measure_tab="$(printf %s "$created" | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["tab"]["tab_id"])')"
-# The current checkout-owner contract requires an explicit owner before
-# Hide can reuse this fixture's existing workspace and cat pane.
-# With the core elsewhere this machine's checkout is a device's, and its
-# owner's mark names this machine's node.
-owner_device=local
-[[ "$scenario" != remote-core ]] || owner_device="$screen_node"
-measure_owner="$(OWNER_DEVICE="$owner_device" python3 -c 'import hashlib,os; print(hashlib.sha256((os.environ["OWNER_DEVICE"]+"\0"+os.path.realpath(os.environ["MEASURE_FIXTURE"])).encode()).hexdigest()[:32])')"
-"$HERDR_BIN_PATH" workspace report-metadata "$measure_workspace" --source performance-fixture --token "hide_owner=$measure_owner" --token purpose="Isolated performance fixture" >/dev/null
-wait_prompt() {
-  # The pane shell has printed its fixed prompt before it takes a command.
-  local deadline=$((SECONDS+20))
-  until "$HERDR_BIN_PATH" pane read "$1" --source visible --format text 2>/dev/null | grep -q 'fixture %'; do
-    (( SECONDS < deadline )) || { echo "pane $1 prompt did not appear" >&2; exit 1; }
-    sleep 0.1
-  done
+start_server() {
+  env HOME="$MEASURE_PRIVATE/home" "$HERDR_BIN_PATH" server >>"$MEASURE_RUN_DIR/logs/herdr-server.log" 2>&1 &
+  server_pid=$!
+  server_started=true
+  local deadline=$((SECONDS+20)); until [[ -S "$HERDR_SOCKET_PATH" ]]; do (( SECONDS < deadline )) || { echo 'socket did not appear' >&2; exit 1; }; sleep 0.1; done
 }
-wait_prompt "$MEASURE_PANE_ID"
-"$HERDR_BIN_PATH" pane run "$MEASURE_PANE_ID" 'stty -echo -icanon; cat' >/dev/null
-extra_panes=()
-extra_tabs=()
-if [[ "$scenario" == multi || "$scenario" == keys || "$scenario" == remote-core ]]; then
-  # Four splits beside the measured pane, alternating direction so the tree
-  # nests, and (multi) four more tabs; none of it takes focus from the
-  # measured pane.
-  split_from="$MEASURE_PANE_ID"
-  for direction in right down right down; do
-    split_pane="$("$HERDR_BIN_PATH" pane split "$split_from" --direction "$direction" --no-focus | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["pane"]["pane_id"])')"
-    extra_panes+=("$split_pane")
-    split_from="$split_pane"
-  done
+# The own engine runs no server: the daemon's node starts each pane's holder.
+if [[ "$engine" == herdr ]]; then
+  start_server
+  workspaces="$("$HERDR_BIN_PATH" api snapshot | python3 -c 'import json,sys; d=json.load(sys.stdin); r=d.get("result") or d; s=r.get("snapshot") or r; print(len(s.get("workspaces") or []))')"
+  [[ "$workspaces" == "0" ]] || { echo "private server already has $workspaces workspaces" >&2; exit 1; }
 fi
-if [[ "$scenario" == multi ]]; then
-  for label in two three four five; do
-    extra_tab="$("$HERDR_BIN_PATH" tab create --workspace "$measure_workspace" --cwd "$MEASURE_FIXTURE" --label "$label" --no-focus | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["tab"]["tab_id"])')"
-    extra_tabs+=("$extra_tab")
-  done
-  for pane in "${extra_panes[@]}"; do wait_prompt "$pane"; done
-fi
-
-if [[ "$scenario" == areas* ]]; then
-  for ((area=1; area<${scenario#areas}; area++)); do
-    created="$("$HERDR_BIN_PATH" tab create --workspace "$measure_workspace" --cwd "$MEASURE_FIXTURE" --label "area-$area" --no-focus)"
-    extra_tabs+=("$(printf %s "$created" | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["tab"]["tab_id"])')")
-    extra_panes+=("$(printf %s "$created" | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["root_pane"]["pane_id"])')")
-  done
-  for pane in "${extra_panes[@]}"; do wait_prompt "$pane"; done
-fi
-
-if [[ "$scenario" == topology ]]; then
-  created="$("$HERDR_BIN_PATH" tab create --workspace "$measure_workspace" --cwd "$MEASURE_FIXTURE" --label switch --no-focus)"
-  export MEASURE_SWITCH_TAB="$(printf %s "$created" | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["tab"]["tab_id"])')"
-  wait_prompt "$(printf %s "$created" | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["root_pane"]["pane_id"])')"
-  if [[ "$scale" != none ]]; then
-    note "filling the private server to the $scale scale"
-    bash "$measure_dir/scale.sh" build "$scale"
+if ! $neutral; then
+  created="$("$HERDR_BIN_PATH" workspace create --cwd "$MEASURE_FIXTURE" --label measure --focus)"
+  export MEASURE_PANE_ID="$("$HERDR_BIN_PATH" api snapshot | python3 "$measure_dir/pane-id.py")"
+  measure_workspace="$(printf %s "$created" | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["workspace"]["workspace_id"])')"
+  measure_tab="$(printf %s "$created" | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["tab"]["tab_id"])')"
+  # The current checkout-owner contract requires an explicit owner before
+  # Hide can reuse this fixture's existing workspace and cat pane.
+  # With the core elsewhere this machine's checkout is a device's, and its
+  # owner's mark names this machine's node.
+  owner_device=local
+  [[ "$scenario" != remote-core ]] || owner_device="$screen_node"
+  measure_owner="$(OWNER_DEVICE="$owner_device" python3 -c 'import hashlib,os; print(hashlib.sha256((os.environ["OWNER_DEVICE"]+"\0"+os.path.realpath(os.environ["MEASURE_FIXTURE"])).encode()).hexdigest()[:32])')"
+  "$HERDR_BIN_PATH" workspace report-metadata "$measure_workspace" --source performance-fixture --token "hide_owner=$measure_owner" --token purpose="Isolated performance fixture" >/dev/null
+  wait_prompt() {
+    # The pane shell has printed its fixed prompt before it takes a command.
+    local deadline=$((SECONDS+20))
+    until "$HERDR_BIN_PATH" pane read "$1" --source visible --format text 2>/dev/null | grep -q 'fixture %'; do
+      (( SECONDS < deadline )) || { echo "pane $1 prompt did not appear" >&2; exit 1; }
+      sleep 0.1
+    done
+  }
+  wait_prompt "$MEASURE_PANE_ID"
+  "$HERDR_BIN_PATH" pane run "$MEASURE_PANE_ID" 'stty -echo -icanon; cat' >/dev/null
+  extra_panes=()
+  extra_tabs=()
+  if [[ "$scenario" == multi || "$scenario" == keys || "$scenario" == remote-core ]]; then
+    # Four splits beside the measured pane, alternating direction so the tree
+    # nests, and (multi) four more tabs; none of it takes focus from the
+    # measured pane.
+    split_from="$MEASURE_PANE_ID"
+    for direction in right down right down; do
+      split_pane="$("$HERDR_BIN_PATH" pane split "$split_from" --direction "$direction" --no-focus | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["pane"]["pane_id"])')"
+      extra_panes+=("$split_pane")
+      split_from="$split_pane"
+    done
   fi
-fi
+  if [[ "$scenario" == multi ]]; then
+    for label in two three four five; do
+      extra_tab="$("$HERDR_BIN_PATH" tab create --workspace "$measure_workspace" --cwd "$MEASURE_FIXTURE" --label "$label" --no-focus | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["tab"]["tab_id"])')"
+      extra_tabs+=("$extra_tab")
+    done
+    for pane in "${extra_panes[@]}"; do wait_prompt "$pane"; done
+  fi
 
+  if [[ "$scenario" == areas* ]]; then
+    for ((area=1; area<${scenario#areas}; area++)); do
+      created="$("$HERDR_BIN_PATH" tab create --workspace "$measure_workspace" --cwd "$MEASURE_FIXTURE" --label "area-$area" --no-focus)"
+      extra_tabs+=("$(printf %s "$created" | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["tab"]["tab_id"])')")
+      extra_panes+=("$(printf %s "$created" | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["root_pane"]["pane_id"])')")
+    done
+    for pane in "${extra_panes[@]}"; do wait_prompt "$pane"; done
+  fi
+
+fi
 hided_env=()
 if [[ "$scenario" == device ]]; then
   [[ -n "${MEASURE_DEVICE_ID:-}" ]] || { echo "the device scenario needs MEASURE_DEVICE_ID" >&2; exit 2; }
@@ -307,8 +363,8 @@ if [[ "$scenario" == remote-core ]]; then
   echo "core_bin=${MEASURE_CORE_BIN:-$hided_bin}" >> "$MEASURE_RUN_DIR/identity.txt"
   echo "core_sha256=$(shasum -a 256 "${MEASURE_CORE_BIN:-$hided_bin}" | awk '{print $1}')" >> "$MEASURE_RUN_DIR/identity.txt"
   # The placement record a move writes (layer 5), naming the core.
-  chmod 700 "$MEASURE_PRIVATE/hide-state"
-  MEASURE_SCREEN_STATE="$MEASURE_PRIVATE/hide-state" python3 -c '
+  chmod 700 "$hide_state"
+  MEASURE_SCREEN_STATE="$hide_state" python3 -c '
 import json, os
 record = {"alias": os.environ["MEASURE_DEVICE_ALIAS"], "node": os.environ["MEASURE_CORE_NODE"],
           "program": os.environ["MEASURE_CORE_PROGRAM"], "state_dir": os.environ["MEASURE_CORE_STATE"]}
@@ -319,17 +375,43 @@ with open(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f
   hided_env=(HIDE_MACHINE_ID="$screen_node")
 fi
 
+if $neutral; then
+  # Every pane's shell, on either engine, touches one file as it reads its rc
+  # file (the restore's `shells_ms`), and a shell started in a printing
+  # pane's folder waits on its FIFO until `fixture.mjs drive`, then prints in
+  # the foreground: a background job would outlive its pane (fixture.mjs).
+  export MEASURE_READY_DIR="$MEASURE_RUN_DIR/shell-ready"
+  mkdir -p "$MEASURE_READY_DIR"
+  cat >> "$MEASURE_PRIVATE/home/.zshrc" <<ZSHRC
+: >| "$MEASURE_READY_DIR/\$\$"
+[[ -p .measure-go ]] && { read -r _ < .measure-go; /usr/bin/python3 -u -c 'import time,collections; collections.deque(((print("fixture output %08d" % i, flush=True),time.sleep(0.05)) for i in range(20000)),maxlen=0)'; }
+ZSHRC
+fi
+# The own engine takes no Herdr: a socket beside its switch fails the daemon.
+[[ "$engine" == herdr ]] || hided_env+=(-u HERDR_SOCKET_PATH -u HERDR_BIN_PATH HIDE_DEV_PANE_HOLDER=1)
 # Product hided (release, embedded web/dist) on the private socket.
-spawn_owned hided env HOME="$MEASURE_PRIVATE/home" HIDE_STATE_DIR="$MEASURE_PRIVATE/hide-state" HIDE_KEEP_ALIVE=1 HIDE_PORT=0 ${hided_env[@]+"${hided_env[@]}"} "$hided_bin"
-hided_pid=$owned_pid
-deadline=$((SECONDS+20)); until [[ -f "$MEASURE_PRIVATE/hide-state/hided.json" ]]; do (( SECONDS < deadline )) || { echo 'hided state file missing' >&2; exit 1; }; sleep 0.1; done
-hided_port="$(python3 -c "import json;print(json.load(open('$MEASURE_PRIVATE/hide-state/hided.json'))['port'])")"
-hided_token="$(python3 -c "import json;print(json.load(open('$MEASURE_PRIVATE/hide-state/hided.json'))['token'])")"
+start_hided() {
+  rm -f "$hide_state/hided.json"
+  spawn_owned "hided${1:-}" env ${hided_env[@]+"${hided_env[@]}"} HOME="$MEASURE_PRIVATE/home" HIDE_STATE_DIR="$hide_state" HIDE_KEEP_ALIVE=1 HIDE_PORT=0 "$hided_bin"
+  hided_pid=$owned_pid
+}
+start_hided
+deadline=$((SECONDS+20)); until [[ -f "$hide_state/hided.json" ]]; do (( SECONDS < deadline )) || { echo 'hided state file missing' >&2; exit 1; }; sleep 0.1; done
+hided_port="$(python3 -c "import json;print(json.load(open('$hide_state/hided.json'))['port'])")"
+hided_token="$(python3 -c "import json;print(json.load(open('$hide_state/hided.json'))['token'])")"
 wait_url "http://127.0.0.1:$hided_port/health"
 page_url="http://127.0.0.1:$hided_port/?probe=1#token=$hided_token"
 # A node-role hided's page names the machine it runs on, as `hide connect`
 # hands it to the window.
 [[ "$scenario" != remote-core ]] || page_url+="&node=$screen_node"
+if $neutral; then
+  note "$engine: making the $scale fixture with the web shell's events"
+  node "$measure_dir/fixture.mjs" build "$scale" > "$MEASURE_RUN_DIR/fixture-build.json"
+  export MEASURE_PANE_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pane"])' "$MEASURE_RUN_DIR/fixture.json")"
+  export MEASURE_SWITCH_TAB="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["switch_tab"])' "$MEASURE_RUN_DIR/fixture.json")"
+  measure_tab="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["tab"])' "$MEASURE_RUN_DIR/fixture.json")"
+  echo "engine=$engine" >> "$MEASURE_RUN_DIR/identity.txt"
+fi
 
 port_file="$MEASURE_RUN_DIR/chrome-profile/DevToolsActivePort"
 [[ ! -e "$port_file" ]] || { echo 'stale CDP port file; use a new run directory' >&2; exit 2; }
@@ -362,8 +444,12 @@ if [[ "$scenario" == remote-core ]]; then
   echo "screen_pane=$screen_pane" >> "$MEASURE_RUN_DIR/identity.txt"
 fi
 wait_js "$(cat "$measure_dir/open-fixture.js")"
+# The fixture made the switch target last, which a new tab brings to the
+# front; the measured tab is shown again by its click, as the operator would.
+! $neutral || wait_js "(() => { const canvas = () => document.querySelector('[data-canvas]')?.dataset.canvas; const tab = document.querySelector('[data-agent-tab-bar] [data-tab=\"$measure_tab\"]'); if (tab && canvas() !== '$measure_tab') tab.click(); return canvas() === '$measure_tab'; })()"
 echo_pane="${screen_pane:-$MEASURE_PANE_ID}"
 wait_js "window.__hideProbe?.paneId() === '$echo_pane'"
+! $neutral || wait_js "(window.__hideProbe?.paneText('$echo_pane') ?? '').includes('fixture %')"
 sleep 2
 if [[ "$scenario" == areas* ]]; then
   for tab in "${extra_tabs[@]}"; do
@@ -395,24 +481,69 @@ cat "$MEASURE_RUN_DIR/page.json"
 # before the echo trials and again after the driven window.
 python3 "$measure_dir/memory.py" settled "$chrome_pid" "$hided_pid" "$MEASURE_CDP_PORT" > "$MEASURE_RUN_DIR/memory-settled.json"
 cat "$MEASURE_RUN_DIR/memory-settled.json"
-python3 "$measure_dir/resources.py" "$hided_pid" "$server_pid" "$chrome_pid" > "$MEASURE_RUN_DIR/resources-idle.json"
+python3 "$measure_dir/resources.py" "$hided_pid" "${server_pid:-0}" "$chrome_pid" > "$MEASURE_RUN_DIR/resources-idle.json"
+
+# What each engine saves its layout in, for the save watch (save-watch.py):
+# the daemon's screen saves on both, and the Herdr server's session or the
+# own engine's saved session.
+save_groups=("hide=$hide_state/core-state.json" "hide=$hide_state/workspace-views.json")
+if [[ "$engine" == herdr ]]; then save_groups+=("herdr=$XDG_CONFIG_HOME/herdr"); else save_groups+=("engine=$hide_state/engine"); fi
 
 if [[ "$scenario" == topology ]]; then
-  if [[ "$scale" != none ]]; then
-    bash "$measure_dir/scale.sh" drive
-    spawn_owned churn bash "$measure_dir/scale.sh" churn
-  fi
+  [[ "$scale" == none ]] || node "$measure_dir/fixture.mjs" drive
   reset_fixture
-  note "echo under the scale's agent churn (50 samples)"
+  note "echo at the $scale scale (50 samples)"
   MEASURE_ECHO_REPEATS=50 node "$measure_dir/key-echo.mjs" > "$MEASURE_RUN_DIR/echo-1.json"
   python3 "$measure_dir/summarize.py" echo "$MEASURE_RUN_DIR/echo-1.json" > "$MEASURE_RUN_DIR/echo-summary.json"
-  note "topology: ${MEASURE_TOPOLOGY_ROUNDS:-20} rounds of split, zoom, unzoom, close, new tab and tab switch"
+  note "topology: ${MEASURE_TOPOLOGY_ROUNDS:-20} rounds of split, zoom, unzoom, close, new tab, tab switch and resize"
+  spawn_owned save-watch python3 "$measure_dir/save-watch.py" "${save_groups[@]}"
+  save_pid=$owned_pid
   node "$measure_dir/topology.mjs" > "$MEASURE_RUN_DIR/topology.json"
+  kill -TERM "$save_pid"
+  wait "$save_pid" || true
+  cp "$MEASURE_RUN_DIR/logs/save-watch.log" "$MEASURE_RUN_DIR/save-watch.json"
   python3 "$measure_dir/summarize.py" topology "$MEASURE_RUN_DIR/topology.json" > "$MEASURE_RUN_DIR/topology-summary.json"
+  python3 "$measure_dir/summarize.py" saves "$MEASURE_RUN_DIR/save-watch.json" "$MEASURE_RUN_DIR/topology.json" > "$MEASURE_RUN_DIR/save-summary.json"
   # Only a build that records stage times writes these lines.
-  python3 "$measure_dir/summarize.py" timing "$MEASURE_PRIVATE/hide-state/Logs/core.jsonl" > "$MEASURE_RUN_DIR/timing-summary.json"
+  python3 "$measure_dir/summarize.py" timing "$hide_state/Logs/core.jsonl" > "$MEASURE_RUN_DIR/timing-summary.json"
   python3 "$measure_dir/memory.py" after-topology "$chrome_pid" "$hided_pid" "$MEASURE_CDP_PORT" > "$MEASURE_RUN_DIR/memory-after-topology.json"
-  cat "$MEASURE_RUN_DIR/echo-summary.json" "$MEASURE_RUN_DIR/topology-summary.json"
+  cat "$MEASURE_RUN_DIR/echo-summary.json" "$MEASURE_RUN_DIR/topology-summary.json" "$MEASURE_RUN_DIR/save-summary.json"
+  note 'measurement complete; cleaning up owned processes'
+  exit 0
+fi
+
+if [[ "$scenario" == restore ]]; then
+  # Every process the run started for the panes, listed before any is killed:
+  # the daemon, then the Herdr server or each holder, and all they run.
+  descendants() { local pid; for pid in $(pgrep -P "$1"); do printf '%s\n' "$pid"; descendants "$pid"; done; }
+  victims=("$hided_pid")
+  if [[ "$engine" == herdr ]]; then
+    victims+=("$server_pid")
+    while read -r pid; do victims+=("$pid"); done < <(descendants "$server_pid")
+  else
+    while read -r pid; do victims+=("$pid"); while read -r child; do victims+=("$child"); done < <(descendants "$pid"); done < <(holder_pids)
+  fi
+  printf '%s\n' "${victims[@]}" | sort -u > "$MEASURE_RUN_DIR/restore-victims.txt"
+  note "restore: killing $(wc -l < "$MEASURE_RUN_DIR/restore-victims.txt" | tr -d ' ') processes with SIGKILL"
+  printf 'about:blank' | node "$measure_dir/navigate.mjs" "$MEASURE_CDP_PORT"
+  xargs kill -KILL < "$MEASURE_RUN_DIR/restore-victims.txt" 2>/dev/null || true
+  wait "$hided_pid" 2>/dev/null || true
+  [[ "$engine" != herdr ]] || wait "$server_pid" 2>/dev/null || true
+  deadline=$((SECONDS + 10))
+  until ! xargs ps -o pid= -p < "$MEASURE_RUN_DIR/restore-victims.txt" >/dev/null 2>&1; do
+    (( SECONDS < deadline )) || { echo "restore: killed processes still run: $(xargs ps -o pid=,command= -p < "$MEASURE_RUN_DIR/restore-victims.txt")" >&2; exit 1; }
+    sleep 0.05
+  done
+  [[ "$engine" == herdr ]] || [[ -z "$(holders_left)" ]] || { echo "restore: holders still run: $(holders_left)" >&2; exit 1; }
+  rm -f "$HERDR_SOCKET_PATH" "${HERDR_SOCKET_PATH%.sock}-client.sock"
+  export MEASURE_RESTORE_T0="$(python3 -c 'import time; print(int(time.time() * 1000))')"
+  [[ "$engine" != herdr ]] || start_server
+  start_hided -restored
+  MEASURE_RESTORE_TABS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["tabs"])' "$MEASURE_RUN_DIR/scale.json")" \
+    MEASURE_RESTORE_PANES="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["panes"])' "$MEASURE_RUN_DIR/scale.json")" \
+    node "$measure_dir/restore.mjs" > "$MEASURE_RUN_DIR/restore.json"
+  uptime >> "$MEASURE_RUN_DIR/restore.json.uptime"
+  cat "$MEASURE_RUN_DIR/restore.json"
   note 'measurement complete; cleaning up owned processes'
   exit 0
 fi
@@ -505,13 +636,13 @@ if [[ "$scenario" == keys || "$scenario" == remote-core ]]; then
   spawn_owned resources-driven python3 "$measure_dir/resources.py" "$hided_pid" "$server_pid" "$chrome_pid"
   resource_pid=$owned_pid
   unset MEASURE_RESOURCE_SECONDS
-  python3 "$measure_dir/diag-counts.py" "$MEASURE_PRIVATE/hide-state/Logs/core.jsonl" > "$MEASURE_RUN_DIR/driven-diagnostics-before.json"
+  python3 "$measure_dir/diag-counts.py" "$hide_state/Logs/core.jsonl" > "$MEASURE_RUN_DIR/driven-diagnostics-before.json"
   MEASURE_WS_COUNT_SECONDS="$driven_seconds" spawn_owned ws-driven node "$measure_dir/ws-count.mjs"
   ws_pid=$owned_pid
   wait "$resource_pid" "$ws_pid"
   cp "$MEASURE_RUN_DIR/logs/resources-driven.log" "$MEASURE_RUN_DIR/resources-driven.json"
   cp "$MEASURE_RUN_DIR/logs/ws-driven.log" "$MEASURE_RUN_DIR/ws-driven.json"
-  python3 "$measure_dir/diag-counts.py" "$MEASURE_PRIVATE/hide-state/Logs/core.jsonl" > "$MEASURE_RUN_DIR/driven-diagnostics-after.json"
+  python3 "$measure_dir/diag-counts.py" "$hide_state/Logs/core.jsonl" > "$MEASURE_RUN_DIR/driven-diagnostics-after.json"
   # The echoed marker has to arrive whole, so the measured pane goes back
   # to a plain cat while the other four keep printing.
   reset_pane "$MEASURE_PANE_ID"
@@ -538,7 +669,7 @@ if [[ "$scenario" == keys || "$scenario" == remote-core ]]; then
   sleep 5
   node -e "
 import('$measure_dir/cdp.mjs').then(async ({connectPage}) => { const p = await connectPage('$MEASURE_CDP_PORT'); const panes = JSON.parse(process.argv[1]); console.log(JSON.stringify(await p.evaluate('(' + JSON.stringify(panes) + ').map((id) => ({pane: id, text_chars: window.__hideProbe.paneText(id).trim().length}))'))); p.close(); })" "$(printf '%s\n' "${all_panes[@]}" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().split()))')" > "$MEASURE_RUN_DIR/reopen-panes.json"
-  python3 "$measure_dir/diag-counts.py" "$MEASURE_PRIVATE/hide-state/Logs/core.jsonl" > "$MEASURE_RUN_DIR/reopen-diagnostics.json"
+  python3 "$measure_dir/diag-counts.py" "$hide_state/Logs/core.jsonl" > "$MEASURE_RUN_DIR/reopen-diagnostics.json"
   wait "$ws_pid"
   cp "$MEASURE_RUN_DIR/logs/ws-reopen.log" "$MEASURE_RUN_DIR/ws-reopen.json"
   cat "$MEASURE_RUN_DIR/reopen-panes.json" "$MEASURE_RUN_DIR/reopen-diagnostics.json" "$MEASURE_RUN_DIR/ws-driven.json" "$MEASURE_RUN_DIR/ws-reopen.json"

@@ -123,7 +123,7 @@ function helperArtifacts(t, identity) {
   for (const [platform, machine] of [["linux-x86_64", 62], ["linux-aarch64", 183]]) {
     fs.mkdirSync(path.join(root, platform));
     const files = {};
-    for (const name of ["hided", "hide", "hide-agent-hooks"]) {
+    for (const name of ["hided", "hide", "hide-agent-hooks", "hide-holder"]) {
       const bytes = Buffer.alloc(64);
       bytes.set([0x7f, 0x45, 0x4c, 0x46, 2, 1]);
       bytes.writeUInt16LE(3, 16);
