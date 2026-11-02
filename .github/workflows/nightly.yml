@@ -82,6 +82,8 @@ jobs:
       lane: nightly-macos
       runner: macos-15
       herdr-platform: macos-aarch64
+      # And once more on the core's own engine (PRD engine-bundle-3-core-owns D-14).
+      own-engine: true
       shards: 1
       grep: "@platform"
 
@@ -97,6 +99,7 @@ jobs:
       lane: nightly-windows
       runner: windows-latest
       herdr-platform: windows-x86_64
+      own-engine: true
       shards: 1
       grep: "@platform"
 

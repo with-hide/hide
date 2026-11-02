@@ -42,10 +42,10 @@ on:
         required: true
       own-engine:
         description: >-
-          Also runs the tests tagged `@own` on the core's own engine
-          (HIDE_E2E_ENGINE=own, PRD engine-bundle-3-core-owns D-24): one more
-          job of the `e2e` matrix, a daemon with HIDE_DEV_PANE_HOLDER on over
-          the built `hide-holder` and no Herdr fetched at all.
+          Also runs every test not tagged `@herdr` on the core's own engine
+          (HIDE_E2E_ENGINE=own, PRD engine-bundle-3-core-owns D-14, D-24): the
+          same number of shards again, each a daemon with HIDE_DEV_PANE_HOLDER
+          on over the built `hide-holder` and no Herdr fetched at all.
         type: boolean
         required: false
         default: false
@@ -184,7 +184,7 @@ jobs:
           retention-days: 1
 
   e2e:
-    name: web e2e ${{ inputs.lane }}${{ matrix.engine == 'own' && ' own engine' || format(' {0}/{1}', matrix.shard, inputs.shards) }}
+    name: web e2e ${{ inputs.lane }}${{ matrix.engine == 'own' && ' own engine' || '' }} ${{ matrix.shard }}/${{ inputs.shards }}
     needs: [build, build-web]
     # Both builds are skipped for a single shard; a failure or cancellation
     # in either still stops the shards, and the lane reports the failure.
@@ -201,10 +201,9 @@ jobs:
         # shard count outside 1 to 8 has an entry, and a matrix without values
         # fails the lane.
         shard: ${{ fromJSON('[[], [1], [1,2], [1,2,3], [1,2,3,4], [1,2,3,4,5], [1,2,3,4,5,6], [1,2,3,4,5,6,7], [1,2,3,4,5,6,7,8]]')[inputs.shards] }}
-        engine: [herdr]
-        # The own engine's tests are few while bundle 3 moves them onto it, so
-        # they run whole in one job beside the shards (shard 0 is no shard).
-        include: ${{ fromJSON(inputs.own-engine && '[{"shard":0,"engine":"own"}]' || '[]') }}
+        # The own engine deals the same tests out over as many shards again,
+        # so the lane's wall-clock time stays the Herdr shards'.
+        engine: ${{ fromJSON(inputs.own-engine && '["herdr","own"]' || '["herdr"]') }}
     steps:
       - name: Keep line endings as committed
         run: git config --global core.autocrlf false
@@ -288,6 +287,13 @@ jobs:
         # from Playwright); `--with-deps` only added fonts and newer Mesa
         # builds. A launch failure names the missing library in the shard log.
         run: bash scripts/verify-web.sh web playwright-install
+      - name: Fetch the pane holder's pinned ConPTY runtime
+        # On Windows a node loads the holder's ConPTY from `holder-conpty`
+        # beside its own program (`hide_kit::holders::CONPTY_SOURCE`), where
+        # the app package puts it; the debug daemon runs from target/debug.
+        if: matrix.engine == 'own' && runner.os == 'Windows'
+        timeout-minutes: 5
+        run: python scripts/fetch-conpty.py --out target/debug/holder-conpty
       - name: Fetch the pinned Herdr runtime
         id: herdr
         # The own engine's job runs with no Herdr on the runner.
@@ -311,12 +317,15 @@ jobs:
           HIDE_E2E_ENGINE: ${{ matrix.engine }}
           HIDE_E2E_SCREENSHOT_DIR: ${{ runner.temp }}/hide-e2e
           HIDE_E2E_TRACE: "1"
-          GREP: ${{ matrix.engine == 'own' && '@own' || inputs.grep }}
-          SHARD: ${{ matrix.engine == 'own' && '1/1' || format('{0}/{1}', matrix.shard, inputs.shards) }}
+          GREP: ${{ inputs.grep }}
+          # A test that looks at Herdr itself is tagged `@herdr` and runs on Herdr alone (docs/TESTING.md).
+          GREP_INVERT: ${{ matrix.engine == 'own' && '@herdr' || '' }}
+          SHARD: ${{ format('{0}/{1}', matrix.shard, inputs.shards) }}
         run: |
           mkdir -p "$HIDE_E2E_SCREENSHOT_DIR"
           args=()
           if [ -n "$GREP" ]; then args+=(--grep "$GREP"); fi
+          if [ -n "$GREP_INVERT" ]; then args+=(--grep-invert "$GREP_INVERT"); fi
           if [ "${SHARD#*/}" -gt 1 ]; then
             # The shard's tests are dealt by their recorded durations, not by
             # Playwright's equal counts. Playwright counts a `--test-list` that

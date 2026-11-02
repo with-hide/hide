@@ -628,7 +628,10 @@ jobs:
         run: python3 scripts/ci-flaky-report.py --suite rust --junit target/nextest/ci/junit*.xml
 
   # The browser `@platform` tests on Windows, the same set the macOS lane
-  # runs, against hided and the pinned Herdr for Windows.
+  # runs, against hided and the pinned Herdr for Windows, and once more on
+  # the core's own engine over the Windows pane holder (PRD
+  # engine-bundle-3-core-owns D-14: the same tests on both engines on every
+  # system).
   windows-e2e:
     name: windows e2e
     needs: plan
@@ -642,6 +645,7 @@ jobs:
       lane: windows
       runner: windows-latest
       herdr-platform: windows-x86_64
+      own-engine: true
       shards: 1
       grep: "@platform"
 
@@ -663,7 +667,8 @@ jobs:
       lane: linux
       runner: ubuntu-latest
       herdr-platform: linux-x86_64
-      # The tests bundle 3 has moved onto the core's own engine, once more on it.
+      # Every test not tagged `@herdr` once more on the core's own engine, over
+      # as many shards again (PRD engine-bundle-3-core-owns D-14, D-24).
       own-engine: true
       # Median per test from twenty successful main runs, 2026-10-26..28:
       # 385 Linux tests total 3851.3 s; five shards plan at most 770.3 s,

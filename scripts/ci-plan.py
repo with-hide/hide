@@ -474,10 +474,11 @@ NAMED_LANES = (
     ("scripts/agent_journey/local.py", JOURNEY_LANES | HOLDER_RESTART_LANES),
     ("scripts/agent_journey/opencode_service.py", JOURNEY_LANES | HOLDER_RESTART_LANES),
     # The pinned Windows ConPTY runtime a holder runs on: the vt lane's
-    # Windows tests and the restart lane's Windows cells fetch it, and the
-    # package carries it beside the holder.
-    ("contracts/conpty.json", {"vt", "package"} | HOLDER_RESTART_LANES),
-    ("scripts/fetch-conpty.py", {"vt", "package"} | HOLDER_RESTART_LANES),
+    # Windows tests, the restart lane's Windows cells and the Windows e2e
+    # lane's own-engine job fetch it, and the package carries it beside the
+    # holder.
+    ("contracts/conpty.json", {"vt", "package", "windows-e2e"} | HOLDER_RESTART_LANES),
+    ("scripts/fetch-conpty.py", {"vt", "package", "windows-e2e"} | HOLDER_RESTART_LANES),
     ("scripts/holder-restart-check.py", HOLDER_RESTART_LANES),
     ("scripts/holder_owned.py", HOLDER_RESTART_LANES),
     ("scripts/holder-restart-spawn.mjs", HOLDER_RESTART_LANES),
