@@ -520,3 +520,135 @@ fn an_own_engine_pane_names_itself_and_proves_its_recorded_shell() {
     assert_eq!(Some(inspected.shell_started), proof.shell_started);
     built.stop();
 }
+
+/// PRD engine-bundle-3-core-owns B18's hook cells: on the core's own engine
+/// a Claude whose hook said its conversation is put to sleep in its pane by
+/// its own quit key and woken there resuming that conversation by id, the
+/// way the pane menu's Sleep and Wake run (`agent_sleep_herdr`). The
+/// stand-in `claude` records each start's arguments and rests until Ctrl+C
+/// ends it, as Claude Code quits on one press into an empty composer.
+#[cfg(unix)]
+#[test]
+#[ignore = "needs the built pane holder: HIDE_TEST_HOLDER_BIN"]
+fn an_own_engine_claude_slept_with_its_hooked_conversation_wakes_resuming_it() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::Path;
+
+    use crate::agent_sleep::WakeMode;
+    use crate::agent_sleep_herdr::{WakeOutcome, WakeRequest, end_agent, start_agent};
+    use crate::agent_start::{ShellStart, start_at_shell_reusing_name};
+    use crate::codex_launch::CodexDaemon;
+    use crate::recent_closed::{ClosedAgent, resume_arguments};
+
+    const SESSION: &str = "0b8f1f3e-5c2a-4a8e-9a54-2d4c1f6b7e90";
+    let built = BuiltHolders::start();
+    let engine = &built.engine;
+    engine.set_agent_definitions(std::sync::Arc::new(
+        hide_agent_adapter::definition::Catalog::read(Vec::new()),
+    ));
+    let root = Path::new(&built.folder).parent().unwrap().to_owned();
+    let (bin, args) = (root.join("bin"), root.join("claude-args"));
+    std::fs::create_dir_all(&bin).unwrap();
+    let claude = bin.join("claude");
+    std::fs::write(
+        &claude,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nexec sleep 600\n",
+            args.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let starts = || std::fs::read_to_string(&args).unwrap_or_default();
+    let env = BTreeMap::from([(
+        "PATH".to_owned(),
+        format!("{}:/usr/bin:/bin", bin.display()),
+    )]);
+    let (_, _, pane) = engine
+        .create_workspace(WAIT, &built.folder, "sleep", false, env)
+        .expect("a workspace is made");
+    prompted(engine, &pane);
+    let node = hide_node::Local::new(Some(root.join("h")));
+    let start = engine
+        .prepare_start(super::AgentLaunch {
+            pane_id: pane.clone(),
+            name: "sleeper".into(),
+            kind: "claude".into(),
+            args: Vec::new(),
+            codex_daemon: CodexDaemon::Unsupported,
+        })
+        .expect("the start is prepared");
+    start_at_shell_reusing_name(
+        engine,
+        Some(&node),
+        "contract:sleep",
+        ShellStart::Plain,
+        &start,
+        SHOWN_WITHIN,
+        &|| Ok(()),
+    )
+    .unwrap_or_else(|error| panic!("the agent starts: {error:?}"));
+    until("the agent runs and rests", || {
+        starts() == "\n"
+            && engine
+                .agent_state(WAIT, &pane)
+                .is_ok_and(|state| state.status == "idle")
+    });
+
+    // Its hook says which conversation it runs; the session projects it.
+    engine
+        .hook_session(&pane, "claude", SESSION)
+        .expect("the hook's session is taken");
+    let listed = engine.agents(WAIT).unwrap();
+    let session = listed[0]
+        .agent_session
+        .as_ref()
+        .map(|session| session.value.clone());
+    assert_eq!(session.as_deref(), Some(SESSION));
+
+    end_agent(engine, &node, &pane, "claude")
+        .unwrap_or_else(|error| panic!("the agent sleeps: {error:?}"));
+    let args = resume_arguments(&ClosedAgent {
+        kind: "claude".into(),
+        session_id: session.clone(),
+        ..ClosedAgent::default()
+    })
+    .expect("Claude resumes by id");
+    let woke = start_agent(
+        engine,
+        &node,
+        &WakeRequest {
+            pane_id: pane.clone(),
+            kind: "claude".into(),
+            name: "sleeper".into(),
+            mode: WakeMode::Resume,
+            args,
+            cwd: None,
+            session_id: session,
+            codex_daemon: CodexDaemon::Unsupported,
+        },
+    );
+    assert_eq!(woke, WakeOutcome::Started);
+    until("the resume runs", || starts().lines().count() == 2);
+    assert_eq!(starts(), format!("\n--resume {SESSION}\n"));
+    let woken = engine.agents(WAIT).unwrap();
+    assert_eq!(
+        woken[0]
+            .agent_session
+            .as_ref()
+            .map(|session| session.value.as_str()),
+        Some(SESSION),
+        "the woken agent runs the conversation it resumed"
+    );
+    built.stop();
+}
+
+#[cfg(unix)]
+#[allow(clippy::disallowed_methods)] // a polling helper bounded by a deadline
+fn until(what: &str, done: impl Fn() -> bool) {
+    let deadline = Instant::now() + SHOWN_WITHIN;
+    while !done() {
+        assert!(Instant::now() < deadline, "{what} never happened");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
