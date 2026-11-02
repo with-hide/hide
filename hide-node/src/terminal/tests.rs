@@ -1897,6 +1897,34 @@ fn keys_held_for_a_letter_are_kept_when_another_letter_begins_and_follow_the_las
     assert_eq!(input_bytes(&opened, b"\r\rx".len()), b"\r\rx");
 }
 
+/// A fork's new pane holds the operator's keys until the fork's agent runs,
+/// but the core's own engine types that agent's start line there at once, and
+/// the held keys follow it once the request resolves: holding the start line
+/// too left the fork's agent never started.
+#[test]
+fn the_engines_start_line_is_not_held_behind_a_forks_request() {
+    let harness = harness(RetryPolicy::Automatic);
+    let opened = harness.controlling("w1:p1");
+    harness.service.control(TerminalControl::RequestOpen {
+        request: "fork".into(),
+        fork: true,
+    });
+    harness.service.control(TerminalControl::RequestHold {
+        request: "fork".into(),
+        pane: "w1:p1".into(),
+    });
+    harness.key("w1:p1", b"typed early");
+    harness
+        .service
+        .type_input("w1:p1", Typed::Bytes(b"claude --resume s\r".to_vec()));
+    assert_eq!(input_bytes(&opened, 18), b"claude --resume s\r");
+    harness.service.control(TerminalControl::RequestResolve {
+        request: "fork".into(),
+        pane: "w1:p1".into(),
+    });
+    assert_eq!(input_bytes(&opened, 11), b"typed early");
+}
+
 /// A sleeping agent's pane takes none of the operator's keys, but the core's
 /// own engine types the agent's quit key and its resume line there while the
 /// sleep record holds the pane asleep, and they are written.

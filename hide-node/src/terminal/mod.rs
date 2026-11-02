@@ -437,7 +437,11 @@ impl Service {
 impl Inner {
     fn route_input(&mut self, target: KeyTarget, chunk: HeldChunk, now: Instant) {
         let target = match target {
-            KeyTarget::Pane(ref pane) => self
+            // A request holds the operator's keys typed into a new pane until
+            // its agent runs; the engine's own typing there (that agent's
+            // start line) is what the request waits for, so it is never held
+            // behind it.
+            KeyTarget::Pane(ref pane) if chunk.by != Typist::Engine => self
                 .requests
                 .holder(pane)
                 .map(KeyTarget::Request)
