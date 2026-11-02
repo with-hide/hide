@@ -1,10 +1,12 @@
 // Partly derived from Herdr v0.9.5 (https://github.com/herdrdev/herdr, commit
 // 2ecf19a), src/pane/terminal.rs: the wheel's routing and
-// `ghostty_recent_read_range`.
+// `ghostty_recent_read_range`; and src/pane/input.rs: the key event a named
+// key is encoded from (`ghostty_key_event_from_terminal_key`).
 // Copyright 2025 herdr contributors. Licensed under the Apache License,
 // Version 2.0; see NOTICE at the repository root.
 // Changed by Hide: a wheel arrives as lines with an optional cell instead of
-// a terminal event, and a read is cut to the protocol's byte bound.
+// a terminal event, a read is cut to the protocol's byte bound, and a key
+// arrives by one of Hide's ten names instead of as a terminal event.
 
 //! The pane's parsed terminal and everything read from it or written for
 //! it: the program's output and the answers to its questions, the screen a
