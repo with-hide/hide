@@ -18,8 +18,7 @@
     <title>hide · Run more agents. Hold less.</title>
     <link rel="icon" type="image/png" href="./assets/hide-mark.png">
     <link rel="preload" as="font" href="./assets/fonts/BricolageGrotesque-Variable.woff2" type="font/woff2" crossorigin>
-    <link rel="preload" as="image" href="./assets/shots/hero-dark.webp" type="image/webp" media="not (prefers-color-scheme: light)">
-    <link rel="preload" as="image" href="./assets/shots/hero-light.webp" type="image/webp" media="(prefers-color-scheme: light)">
+    <link rel="preload" as="image" href="./assets/shots/kick-conductor.webp" type="image/webp">
     <link rel="stylesheet" href="./styles.css">
     <script>document.documentElement.classList.remove("no-js");</script>
     <script type="module" src="./downloads.js"></script>
@@ -38,7 +37,7 @@
           <span>hide</span>
         </a>
         <nav aria-label="Main navigation">
-          <a class="nav-extra" href="#ai">Product</a>
+          <a class="nav-extra" href="#team">Product</a>
           <a class="nav-extra" href="#pricing">Pricing</a>
           <a class="nav-extra" href="#faq">FAQ</a>
           <a class="nav-extra" href="https://github.com/with-hide/hide">GitHub</a>
@@ -52,7 +51,7 @@
         <div class="wrap hero-copy">
           <p class="label bare">The multi-agent IDE for people</p>
           <h1 id="intro-title">Run 100+ agents.<br> <span class="accent">See only what needs you.</span></h1>
-          <p class="lead">Claude Code, Codex and the rest keep running in real terminals. hide reads all of them and brings you the decisions.</p>
+          <p class="lead">Hand a Conductor one mission. It plans the work, starts Claude Code, Codex, Antigravity and Grok on every machine you connect, and brings you only the decisions.</p>
           <div class="actions">
             <a class="button primary" id="hero-download" href="#download">Get hide <span aria-hidden="true">↓</span></a>
             <a class="button secondary" href="https://github.com/with-hide/hide">View on GitHub <span aria-hidden="true">↗</span></a>
@@ -61,17 +60,10 @@
           <p class="hero-meta"><span>Free · Apache 2.0 licensed</span><span>macOS · Windows · Linux</span><span>Built on Herdr</span></p>
         </div>
 
-        <figure class="stage wrap reveal" data-tab="projects">
-          <div class="window-wrap">
-            <img class="peek" src="./assets/owls/owl-peek-still.svg" data-motion="./assets/owls/owl-peek.svg" width="1200" height="942" alt="">
-            <div class="window">
-              <div class="panel">
-                <picture>
-                  <source media="(prefers-color-scheme: light)" srcset="./assets/shots/hero-light.webp">
-                  <img src="./assets/shots/hero-dark.webp" width="2912" height="1800" alt="The hide window. The sidebar's Projects list raises the two agents that need an answer above the project tree. A Claude Code lead splitting the work and a Codex agent asking to merge two pull requests run side by side, and the Project tool beside them counts the sessions, pull requests, worktrees and the last seven days' cost, with the project's to-do list under them.">
-                </picture>
-              </div>
-            </div>
+        <figure class="stage wrap reveal">
+          <div class="window film">
+            <img src="./assets/shots/kick-conductor.webp" width="1920" height="1080" alt="A Conductor plans a six-step mission on its map, then each step flies out to a worker on This Mac, linux-box or mac-mini: Claude Code on Opus 5, Codex on GPT-6.1-Sol and GPT-6-Astra, Antigravity on Gemini 4 Argon and Grok. One agent on linux-box asks a question, you answer it, and every step ends in a pull request.">
+            <video class="film-video" data-src="./assets/video/kick-conductor" muted loop playsinline preload="none" aria-hidden="true" hidden></video>
           </div>
         </figure>
 
@@ -81,6 +73,48 @@
             <li>Claude Code</li><li>Codex</li><li>Antigravity</li><li>OpenCode</li><li>Grok</li><li>Pi</li><li>omp</li>
           </ul>
         </div>
+      </section>
+
+
+      <section class="section wrap" id="team" aria-labelledby="team-title">
+        <div class="section-head center reveal">
+          <img class="owl" data-owl="agents" src="./assets/owls/owl-agents-still.svg" data-motion="./assets/owls/owl-agents.svg" width="720" height="575" alt="" loading="lazy">
+          <p class="label bare">Multi-agent view</p>
+          <h2 id="team-title">36 agents running.<br> <span class="accent">Two need you.</span></h2>
+          <p>See every agent from above, then by project, by task or by pull request. Press My turn and only your decisions stay.</p>
+        </div>
+        <figure class="shot film-shot reveal">
+          <img src="./assets/shots/kick-focus.webp" width="1920" height="1080" alt="Thirty-six agents of four projects fold into the sidebar's Projects, Tasks and PRs lists; in the Overview, My turn leaves only the two that wait on you: Approve #431 and #436? and Retry failed payments." loading="lazy" decoding="async">
+          <video class="film-video" data-src="./assets/video/kick-focus" muted loop playsinline preload="none" aria-hidden="true" hidden></video>
+        </figure>
+        <div class="team-pair">
+          <figure class="card reveal">
+            <div class="card-shot"><picture>
+              <source media="(prefers-color-scheme: light)" srcset="./assets/shots/team-light.webp">
+              <img src="./assets/shots/team-dark.webp" width="690" height="800" alt="The lead's pane head with its worker list open: Split the invoice export in three, eight workers under it, each with its state, agent and pull request." loading="lazy" decoding="async">
+            </picture></div>
+            <figcaption><b>In the lead's pane.</b> Every worker it started, with its state and pull request.</figcaption>
+          </figure>
+          <figure class="card reveal">
+            <div class="card-shot"><picture>
+              <source media="(prefers-color-scheme: light)" srcset="./assets/shots/conductor-light.webp">
+              <img src="./assets/shots/conductor-dark.webp" width="2568" height="1080" alt="A Conductor's pane with its Mission 4/6 chip beside the mission's map: a research step, four changes with their workers and pull requests, and a check of #431 and #436 together before the report." loading="lazy" decoding="async">
+            </picture></div>
+            <figcaption><b>Conductor.</b> Hand it a mission: it plans the pull requests, starts the workers and keeps the map beside you.</figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section class="section wrap" id="memory" aria-labelledby="memory-title">
+        <div class="section-head center reveal">
+          <p class="label bare">Project Memory</p>
+          <h2 id="memory-title">Say it once.<br> <span class="accent">Every next agent already knows.</span></h2>
+          <p>Tell Codex on Monday, and Antigravity starts Thursday already knowing. The rules you keep repeating move into AGENTS.md with one press.</p>
+        </div>
+        <figure class="shot film-shot reveal">
+          <img src="./assets/shots/kick-memory.webp" width="1920" height="1080" alt="Two fresh agents on Thursday: one starts from zero, runs npm and has to be told again; Antigravity in hide starts with the card Use pnpm, never npm, said to Codex on Monday, and gets it right the first time." loading="lazy" decoding="async">
+          <video class="film-video" data-src="./assets/video/kick-memory" muted loop playsinline preload="none" aria-hidden="true" hidden></video>
+        </figure>
       </section>
 
       <section class="section wrap" id="ai" aria-labelledby="ai-title">
@@ -128,39 +162,7 @@
               <source media="(prefers-color-scheme: light)" srcset="./assets/shots/memory-lane-light.webp">
               <img src="./assets/shots/memory-lane-dark.webp" width="1144" height="1200" alt="Project Memory: Auto memory on, Use pnpm, never npm waiting to be promoted to the docs, and the project's cards of decisions and lessons." loading="lazy" decoding="async">
             </picture></div>
-            <figcaption><b>Say it once.</b> A decision becomes a card the next agent starts with, whichever vendor runs it.</figcaption>
-          </figure>
-        </div>
-      </section>
-
-      <section class="section wrap" id="team" aria-labelledby="team-title">
-        <div class="section-head center reveal">
-          <img class="owl" data-owl="agents" src="./assets/owls/owl-agents-still.svg" data-motion="./assets/owls/owl-agents.svg" width="720" height="575" alt="" loading="lazy">
-          <p class="label bare">Multi-agent view</p>
-          <h2 id="team-title">Your agents work as a team.<br> <span class="accent">Watch all of it.</span></h2>
-          <p>A lead splits the work, starts workers and gets pull requests back. Press any agent and its team and its messages light up.</p>
-        </div>
-        <figure class="shot map-shot reveal">
-          <picture>
-            <source media="(prefers-color-scheme: light)" srcset="./assets/shots/map-light.webp">
-            <img src="./assets/shots/map-dark.webp" width="2912" height="1800" alt="The Overview's work graph. Agents of three projects sit around You; lines show which agent started which and the messages between them, and the two that wait on you are drawn in amber." loading="lazy" decoding="async">
-          </picture>
-          <video class="map-video" data-dark="./assets/video/map-dark" data-light="./assets/video/map-light" muted loop playsinline preload="none" aria-hidden="true" hidden></video>
-        </figure>
-        <div class="team-pair">
-          <figure class="card reveal">
-            <div class="card-shot"><picture>
-              <source media="(prefers-color-scheme: light)" srcset="./assets/shots/team-light.webp">
-              <img src="./assets/shots/team-dark.webp" width="690" height="800" alt="The lead's pane head with its worker list open: Split the invoice export in three, eight workers under it, each with its state, agent and pull request." loading="lazy" decoding="async">
-            </picture></div>
-            <figcaption><b>In the lead's pane.</b> Every worker it started, with its state and pull request.</figcaption>
-          </figure>
-          <figure class="card reveal">
-            <div class="card-shot"><picture>
-              <source media="(prefers-color-scheme: light)" srcset="./assets/shots/conductor-light.webp">
-              <img src="./assets/shots/conductor-dark.webp" width="2568" height="1080" alt="A Conductor's pane with its Mission 4/6 chip beside the mission's map: a research step, four changes with their workers and pull requests, and a check of #431 and #436 together before the report." loading="lazy" decoding="async">
-            </picture></div>
-            <figcaption><b>Conductor.</b> Hand it a mission: it plans the pull requests, starts the workers and keeps the map beside you.</figcaption>
+            <figcaption><b>A decision becomes a card.</b> The next agent starts with it, whichever vendor runs it.</figcaption>
           </figure>
         </div>
       </section>
@@ -345,6 +347,7 @@
           <a href="https://github.com/with-hide/hide">Source</a>
           <a href="https://github.com/with-hide/hide/blob/main/docs/README.md">Docs</a>
           <a href="https://github.com/with-hide/hide/blob/main/docs/INSTALL.md">Install</a>
+          <a href="https://discord.gg/h6zme5kybD">Discord</a>
           <a href="https://herdr.dev/">Herdr</a>
           <a href="https://github.com/with-hide/hide/blob/main/LICENSE">Apache 2.0 license</a>
         </nav>

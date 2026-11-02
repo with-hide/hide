@@ -109,7 +109,7 @@
   }
   .button.primary:hover { color: var(--lime); }
   /* The ivory owl needs an edge on the day field. */
-  .stage .peek, .owl, .closing .owl-rest { filter: drop-shadow(0 8px 18px rgba(16, 17, 18, 0.16)); }
+  .owl, .closing .owl-rest { filter: drop-shadow(0 8px 18px rgba(16, 17, 18, 0.16)); }
 }
 
 * { box-sizing: border-box; }
@@ -231,7 +231,7 @@ code, .mono { font-family: var(--font-mono); }
 .hero-meta span::before { content: ""; width: 5px; height: 5px; border-radius: 1px; background: var(--second); opacity: 0.8; }
 
 /* Hero product shot: the real app, lifted on a quiet aurora. */
-.stage { position: relative; margin-top: 88px; }
+.stage { position: relative; margin-top: 64px; }
 .stage::before {
   content: "";
   position: absolute;
@@ -243,20 +243,6 @@ code, .mono { font-family: var(--font-mono); }
   filter: blur(40px);
 }
 .window-wrap { position: relative; }
-.stage .peek {
-  /* The owl peeks out from behind the window's edges: its 1200x942 field spans the window's width
-     with the window's top edge at y = 200 and the screenshot below it, so each edge the owl hides
-     behind lands on the same edge of the screenshot at every width. */
-  position: absolute;
-  z-index: 2;
-  left: 0;
-  top: 0;
-  width: 100%;
-  height: auto;
-  transform: translateY(-21.231%);
-  pointer-events: none;
-  transition: opacity 300ms ease;
-}
 .window {
   position: relative;
   overflow: hidden;
@@ -288,10 +274,11 @@ code, .mono { font-family: var(--font-mono); }
 .shot img { display: block; width: 100%; height: auto; }
 
 
-/* The team: the Overview map, played while it is on screen over its still. */
-.map-shot { position: relative; margin-top: 48px; box-shadow: var(--shot-shadow); }
-.map-video { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: cover; }
-.map-video[hidden] { display: none; }
+/* The films: each plays while it is on screen over its still, which stays under reduced motion and without script. */
+.film-shot { position: relative; margin-top: 48px; box-shadow: var(--shot-shadow); }
+.film { position: relative; }
+.film-video { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: cover; }
+.film-video[hidden] { display: none; }
 /* The team: what the lead's pane and a Conductor show, the same height side by side. */
 .team-pair { display: grid; grid-template-columns: minmax(0, 0.8625fr) minmax(0, 2.3778fr); gap: 16px; margin-top: 16px; }
 
