@@ -182,6 +182,21 @@ async fn close_code(socket: &mut Socket) -> Option<u16> {
     .flatten()
 }
 
+/// The macOS app's executable answers as the CLI only when asked to, and
+/// hided has no terminal around it to ask for it; the fake, like that
+/// executable, refuses unless `TAILSCALE_BE_CLI=1` reaches it.
+#[tokio::test]
+async fn the_app_executable_is_run_as_the_cli() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = FakeTailscale::new(dir.path());
+    fake.ready();
+    let status = hided::mobile::tailscale::status(&fake.bin)
+        .await
+        .expect("tailscale status runs as the CLI");
+    assert!(status.logged_in);
+    assert_eq!(status.dns_name.as_deref(), Some(DNS));
+}
+
 #[tokio::test]
 async fn mobile_is_off_by_default_and_never_runs_tailscale() {
     let dir = tempfile::tempdir().unwrap();
