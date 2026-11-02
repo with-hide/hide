@@ -3,13 +3,14 @@
 // MEASURE_KEY_COUNT keys (10,000 by default) into the web shell's terminal
 // through the shell's own key path, one CDP `Input.dispatchKeyEvent` per
 // key as key-echo.mjs does, then reads the pane's content back from its
-// isolated Herdr and counts the keys that never arrived and the ones that
+// receipt reader and counts the keys that never arrived and the ones that
 // arrived out of order. It does not stop at the first loss: every count is
 // reported.
 //
 // The keys spell distinct markers (`mNNNNN` and a space, Enter after every
 // 100th), so a lost or moved key also breaks a marker. The pane runs
-// `stty -echo -icanon; cat`, so what Herdr holds is what the pane received.
+// `stty -echo -icanon; cat` for a scrollback reader, or `tee <receipt>`
+// for a local byte receipt, so the reader returns what the pane received.
 // MEASURE_PANE_READ is the shell command that prints the pane's logical
 // lines (default: `$HERDR_BIN_PATH pane read $MEASURE_PANE_ID --source
 // recent-unwrapped --lines 4000` on the private socket); for a device pane
@@ -127,7 +128,7 @@ const seenSet = new Set(seen);
 const missingMarkers = [];
 for (let index = 0; index < markerCount; index += 1) if (!seenSet.has(index)) missingMarkers.push(index);
 console.log(JSON.stringify({
-  method: "one CDP Input.dispatchKeyEvent per key into the measured pane's terminal; pane runs stty -echo -icanon; cat; content read back from the pane's own isolated Herdr from the first marker on; lost = sent keys absent from what arrived; reordered = arrived keys outside the longest in-order common subsequence; unexpected = arrived keys never typed",
+  method: "one CDP Input.dispatchKeyEvent per key into the measured pane's terminal; pane runs stty -echo -icanon with cat or tee; content read back through the configured receipt reader from the first marker on; lost = sent keys absent from what arrived; reordered = arrived keys outside the longest in-order common subsequence; unexpected = arrived keys never typed",
   pane_id: paneId,
   screen_pane_id: screenPane,
   keys_typed: sent.length,

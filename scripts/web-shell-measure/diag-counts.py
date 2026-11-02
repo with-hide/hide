@@ -3,7 +3,8 @@
 import collections, json, sys
 counts = collections.Counter()
 try:
-    lines = open(sys.argv[1]).read().splitlines()
+    with open(sys.argv[1]) as log:
+        lines = log.read().splitlines()
 except FileNotFoundError:
     lines = []
 for line in lines:
@@ -11,7 +12,10 @@ for line in lines:
         record = json.loads(line)
     except json.JSONDecodeError:
         continue
-    record = record.get("event", record)
+    # Older logs wrap an object in event; current records also use event
+    # for a string naming the input. Only an object is an envelope.
+    if isinstance(record.get("event"), dict):
+        record = record["event"]
     kind = str(record.get("kind", ""))
     if kind.startswith("terminal.") or "redraw" in kind or "resume" in kind:
         counts[kind] += 1
