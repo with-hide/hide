@@ -47,6 +47,8 @@ export type PracticeStep<M = unknown> = {
    * stays done, however the learner closes it afterwards.
    */
   shown?: string;
+  /** Done by the world on its own (`PracticeWorld.later`), an agent finishing its turn: ⏎ does nothing and the button says it waits. */
+  wait?: true;
 };
 
 export type PracticeChapter<M = unknown> = {

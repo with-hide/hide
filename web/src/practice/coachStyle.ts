@@ -42,7 +42,7 @@ ${ZONES}
 .pc-go{font:inherit;font-size:var(--text-subhead);font-weight:600;border:0;border-radius:var(--radius-lg);padding:var(--spacing-sm) var(--spacing-md);background:var(--practice-accent);color:var(--practice-ink);cursor:pointer;display:flex;gap:var(--spacing-sm);align-items:center;white-space:nowrap;flex:none}
 .pc-back{font:inherit;font-size:var(--text-body);border:0;background:none;color:var(--practice-mute);cursor:pointer;padding:var(--spacing-xs);white-space:nowrap;flex:none}
 .pc-back:hover,.pc-exit:hover{color:var(--practice-text)}
-.pc-exit{font:inherit;font-size:var(--text-body);border:0;background:none;color:var(--practice-mute);cursor:pointer;padding:var(--spacing-xs);margin-left:calc(var(--spacing-xs) * -1)}
+.pc-exit{font:inherit;font-size:var(--text-body);border:0;background:none;color:var(--practice-mute);cursor:pointer;padding:var(--spacing-xs);margin-left:calc(var(--spacing-xs) * -1);white-space:nowrap;flex:none}
 .pc-go.pc-sub{background:color-mix(in srgb,var(--practice-ink) 8%,transparent)}
 .pc-end{position:absolute;inset:0;margin:auto;height:fit-content;width:calc(var(--size-practice-bubble) * 1.2);background:var(--practice-card);color:var(--practice-text);border-radius:var(--radius-xl);padding:var(--spacing-lg) var(--spacing-lg) var(--spacing-md) var(--spacing-xl);pointer-events:auto;
   box-shadow:${SHADOW},0 0 0 var(--size-hairline) var(--practice-line);animation:pc-bubble .35s ${EASE} both}

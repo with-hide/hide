@@ -59,4 +59,10 @@ export type PracticeWorld<M> = {
    * shell's own components stay as they are.
    */
   examples?: string[];
+  /**
+   * What the world does next on its own, as an agent at work would: the event
+   * applied at `at` (epoch ms) unless another event changes the model first,
+   * which asks again. A world that only answers the learner has none.
+   */
+  later?: (model: M) => { at: number; event: CoreEvent } | null;
 };

@@ -407,6 +407,10 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
     if (step.command && !shellLayerOpen(useUiStore.getState())) setFlash(commandLabel(step.command));
     if (step.done?.(model)) done();
   }, [done, model, step]);
+  // A step that waits on the world's own beat is over at once when the beat came while an earlier step was up.
+  useEffect(() => {
+    if (step.wait && step.done?.(current.current)) done();
+  }, [done, step]);
   useEffect(() => {
     if (!flash) return undefined;
     const timer = window.setTimeout(() => setFlash(null), 900);
@@ -458,7 +462,7 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
   const perform = useCallback(() => {
     // ⏎ while a performed step's result is shown moves on without waiting out the rest.
     if (settle.current) return settle.current.move();
-    if (playing.current === step) return;
+    if (playing.current === step || step.wait) return;
     if (!acts(step)) return advance();
     performed.current = step;
     // A field the step types into is opened first by the step's command: ⌘K, then the words.
@@ -545,7 +549,7 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
     : step.gesture && "type" in step.gesture ? say("practice.via.type")
     : step.gesture && "menu" in step.gesture ? say("practice.via.menu")
     : step.gesture && "pick" in step.gesture ? say("practice.via.pick") : null;
-  const go = last ? say("practice.finish") : acts(step) ? say("practice.try") : say("practice.next");
+  const go = last ? say("practice.finish") : step.wait ? say("practice.waiting") : acts(step) ? say("practice.try") : say("practice.next");
   // The quest card sits in the lower left; the bubble moves clear of it, then of an open palette or menu.
   const place = besideLayer(clearOf(bubblePlace(ring, step.side, size), rectOf(chapter.quest ? "[data-practice-quest]" : null), size), layerBox, size);
   const title = say(`practice.${chapter.id}.title`);

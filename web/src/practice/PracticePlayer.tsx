@@ -71,6 +71,14 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
     return { actions: createActions(send, clipboard), clipboard, send };
   }, []);
 
+  // The world's own next beat, an agent finishing a turn, plays at its time; any change to the model before then asks again.
+  useEffect(() => {
+    const beat = chapter.world.later?.(model);
+    if (!beat) return undefined;
+    const timer = window.setTimeout(() => send(beat.event), Math.max(0, beat.at - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [chapter, model, send]);
+
   useEffect(() => installKeyboard(actions), [actions]);
   useEffect(() => holdPageClipboard(clipboard), [clipboard]);
   // A link, a window, a navigation or a host call the shell would have sent off the page goes to the world instead.
