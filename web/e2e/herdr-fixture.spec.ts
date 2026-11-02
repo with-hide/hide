@@ -1,3 +1,5 @@
+// The fixture's own contract. The first test is the engine-neutral fixture's, on either engine; every
+// other one is about the pinned Herdr's fixture (its CLI start order, its server, its readiness reads).
 // @platform: The real pinned CLI starts two native pane processes together;
 // a partial start failure must release the private server and Windows locks.
 import { expect, test } from "@playwright/test";
@@ -6,6 +8,9 @@ import fs from "node:fs";
 import os from "node:os";
 import net from "node:net";
 import path from "node:path";
+import { startFixture } from "./engine-fixture";
+import { sendKeys, withControl } from "./daemon-actions";
+import { startHided } from "./hided-fixture";
 import { herdrBinary, setFixtureLifecycle, startHerdr } from "./herdr-fixture";
 import { herdrGate } from "./herdr-gate";
 import { fixtureProgram, localEndpoint } from "./platform-fixture";
@@ -96,7 +101,24 @@ catch (error) { if (error.stderr) process.stderr.write(error.stderr); process.ex
   }
 }
 
-test("fixture starts overlap and both panes accept their first input", { tag: "@platform" }, async () => {
+test("the fixture's two agents accept their first input, and stopping it removes its root", { tag: "@platform" }, async () => {
+  const fixture = await startFixture();
+  const daemon = await startHided(fixture, "fixture-first-input");
+  try {
+    for (const [index, pane] of fixture.panes.entries()) {
+      const marker = `first-input-${index}`;
+      await withControl(daemon, async (control) => sendKeys(control, pane, marker));
+      await expect.poll(() => fs.existsSync(fixture.inputLogs[index]!) ? fs.readFileSync(fixture.inputLogs[index]!, "utf8") : "").toBe(marker);
+    }
+  } finally {
+    daemon.stop();
+    fixture.stop();
+  }
+  expect(fs.existsSync(fixture.root)).toBe(false);
+});
+
+// Herdr only: it orders the two `herdr agent start` calls through a proxy of the Herdr CLI.
+test("fixture starts overlap and both panes accept their first input @herdr", { tag: "@platform" }, async () => {
   await withStartBarrier(false, async (root) => {
     const fixture = await startHerdr();
     try {
@@ -113,7 +135,8 @@ test("fixture starts overlap and both panes accept their first input", { tag: "@
   });
 });
 
-test("fixture waits for the sibling start before cleaning up a failed pair", { tag: "@platform" }, async () => {
+// Herdr only: it fails one `herdr agent start` of the Herdr fixture and checks that fixture's cleanup.
+test("fixture waits for the sibling start before cleaning up a failed pair @herdr", { tag: "@platform" }, async () => {
   await withStartBarrier(true, async (root) => {
     const started = startHerdr();
     // A regression that unexpectedly succeeds must still release its server.
@@ -129,7 +152,8 @@ test("fixture waits for the sibling start before cleaning up a failed pair", { t
   });
 });
 
-test("registered setup waits for an observed interactive answer before its first input", { tag: "@platform" }, async () => {
+// Herdr only: it reads Herdr's `agent.get` readiness answers through a gate on the Herdr socket.
+test("registered setup waits for an observed interactive answer before its first input @herdr", { tag: "@platform" }, async () => {
   await withHeldLaunch(async (release) => {
     const began = Date.now();
     const fixture = await startHerdr({ readiness: "registered" });
@@ -185,7 +209,8 @@ test("registered setup waits for an observed interactive answer before its first
   });
 });
 
-test("stopping a registered fixture cancels its pending readiness reader", { tag: "@platform" }, async () => {
+// Herdr only: it cancels the Herdr fixture's own readiness reader of `agent.get`.
+test("stopping a registered fixture cancels its pending readiness reader @herdr", { tag: "@platform" }, async () => {
   const fixture = await startHerdr({ readiness: "registered" });
   let gate: Awaited<ReturnType<typeof herdrGate>> | undefined;
   let pending: Promise<void> | undefined;
@@ -209,7 +234,8 @@ test("stopping a registered fixture cancels its pending readiness reader", { tag
   }
 });
 
-test("registered readiness fails when an initial agent has exited", { tag: "@platform" }, async () => {
+// Herdr only: it reads Herdr's `agent.get` refusal for an exited agent.
+test("registered readiness fails when an initial agent has exited @herdr", { tag: "@platform" }, async () => {
   const fixture = await startHerdr({ readiness: "registered" });
   try {
     fixture.run(["pane", "close", fixture.panes[0]]);
@@ -220,7 +246,8 @@ test("registered readiness fails when an initial agent has exited", { tag: "@pla
   }
 });
 
-test("registered partial failure waits for its held sibling before cleanup", { tag: "@platform" }, async () => {
+// Herdr only: it holds one of two `agent.start` requests on the Herdr socket.
+test("registered partial failure waits for its held sibling before cleanup @herdr", { tag: "@platform" }, async () => {
   await withStartBarrier(false, async (root) => {
     const connect = net.createConnection;
     let release: (() => void) | undefined;

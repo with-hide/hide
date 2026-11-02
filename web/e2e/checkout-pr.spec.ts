@@ -1,5 +1,5 @@
 // A checkout row's pull request (PRD checkout-pr-glyph-card): on an isolated
-// pinned Herdr and hided, with a fake `gh` that knows one approved, passing
+// engine and hided, with a fake `gh` that knows one approved, passing
 // pull request on the worktree's branch. The row's glyph is a button that
 // opens the pull request in a browser display of the Workspace in front, and
 // in the default browser with ⌘ or while no Workspace is in front; hovering
@@ -10,11 +10,13 @@
 // and Dark captures land in HIDE_E2E_SCREENSHOT_DIR.
 
 import { expect, test } from "@playwright/test";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
-import { labelAgent, startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { startFixture, type AgentFixture } from "./engine-fixture";
+import { openProject, openWorktree, withControl } from "./daemon-actions";
+import { startAgentInProject } from "./fixture-agents";
 import { startHided, type Daemon } from "./hided-fixture";
 import { fixtureProgram } from "./platform-fixture";
 import { chooseTheme, countSent, rest, rowGeometry, screenshot } from "./wire";
@@ -68,25 +70,10 @@ process.exit(1);
   return bin;
 }
 
-async function prompt(herdr: HerdrFixture, pane: string): Promise<void> {
-  const deadline = Date.now() + 15_000;
-  while (Date.now() < deadline) {
-    const read = spawnSync(herdr.bin, ["pane", "read", pane, "--source", "visible", "--format", "text"], { env: herdr.env, encoding: "utf8", timeout: 10_000 });
-    if (read.status === 0 && read.stdout.includes("fixture %")) return;
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error(`no prompt in pane ${pane}`);
-}
-
-/** A Herdr workspace at `cwd` with a fake `claude` agent titled `task`. */
-async function workspaceAt(herdr: HerdrFixture, cwd: string, task: string): Promise<void> {
-  const created = herdr.run(["workspace", "create", "--cwd", cwd, "--label", path.basename(cwd), "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]) as {
-    result: { root_pane: { pane_id: string } };
-  };
-  const pane = created.result.root_pane.pane_id;
-  await prompt(herdr, pane);
-  herdr.run(["agent", "start", `agent-${path.basename(cwd)}`, "--kind", "claude", "--pane", pane]);
-  labelAgent(herdr, pane, { task });
+/** The `claude` stand-in titled `task` in the project at `cwd`, or in the linked worktree `cwd` of a project already open. */
+async function workspaceAt(fixture: AgentFixture, daemon: Daemon, cwd: string, task: string, worktree = false): Promise<void> {
+  const project = await withControl(daemon, (control) => (worktree ? openWorktree(control, cwd) : openProject(control, cwd, path.basename(cwd))));
+  await startAgentInProject(fixture, daemon, project, { task });
 }
 
 test("a checkout's pull request: the glyph opens it, the row's card describes it, the menu names it", async ({ page }) => {
@@ -96,7 +83,7 @@ test("a checkout's pull request: the glyph opens it, the row's card describes it
   await new Promise<void>((resolve) => site.listen(0, "127.0.0.1", resolve));
   const port = (site.address() as { port: number }).port;
   const url = `http://127.0.0.1:${port}/acme/repo/pull/180`;
-  const herdr = await startHerdr();
+  const herdr = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
     const repo = path.join(herdr.root, "repo");
@@ -108,12 +95,13 @@ test("a checkout's pull request: the glyph opens it, the row's card describes it
     const worktree = path.join(herdr.root, "repo-pr");
     git(repo, ["worktree", "add", "-b", BRANCH, worktree]);
     git(worktree, ["commit", "--allow-empty", "-m", "card"]);
-    await workspaceAt(herdr, repo, "메인 체크아웃 정리");
-    await workspaceAt(herdr, worktree, "PR 카드 구현");
 
     daemon = await startHided(herdr, "checkout-pr", undefined, { PATH: `${fakeGh(herdr.root, url)}${path.delimiter}${herdr.fixturePath}` });
     const sent = countSent(page);
+    // The core lists a linked worktree once a client shows its repository.
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
+    await workspaceAt(herdr, daemon, repo, "메인 체크아웃 정리");
+    await workspaceAt(herdr, daemon, worktree, "PR 카드 구현", true);
     await expect(page.locator("[data-main-screen]")).toBeVisible({ timeout: 20_000 });
 
     const project = page.locator("[data-project]").filter({ has: page.locator("[data-project-row]", { hasText: /^repo/ }) });
@@ -285,7 +273,7 @@ test("a checkout's pull request: the glyph opens it, the row's card describes it
 // @platform: The card names a checkout by the path the core reads it at, which the system spells (`C:\...` on Windows, /private/var on macOS) and the page shows in the wire spelling.
 test("a checkout's card names the checkout by its real path", { tag: "@platform" }, async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 });
-  const herdr = await startHerdr();
+  const herdr = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
     const repo = path.join(herdr.root, "repo");
@@ -296,11 +284,11 @@ test("a checkout's card names the checkout by its real path", { tag: "@platform"
     git(repo, ["commit", "-m", "initial"]);
     const worktree = path.join(herdr.root, "repo-pr");
     git(repo, ["worktree", "add", "-b", BRANCH, worktree]);
-    await workspaceAt(herdr, repo, "메인 체크아웃 정리");
-    await workspaceAt(herdr, worktree, "PR 카드 구현");
 
     daemon = await startHided(herdr, "checkout-path");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
+    await workspaceAt(herdr, daemon, repo, "메인 체크아웃 정리");
+    await workspaceAt(herdr, daemon, worktree, "PR 카드 구현", true);
     await expect(page.locator("[data-main-screen]")).toBeVisible({ timeout: 20_000 });
 
     const project = page.locator("[data-project]").filter({ has: page.locator("[data-project-row]", { hasText: /^repo/ }) });

@@ -1,4 +1,4 @@
-// The S7 View areas on an isolated pinned Herdr and hided (PRD
+// The S7 View areas on an isolated engine and hided (PRD
 // workspace-views-layout B1-B22): a click previews a file in the last used
 // area and a double click, Keep open or the first edit pins it (B1-B3); Open
 // to the side shows one document twice with one buffer (B4, B5, B20); tab
@@ -14,7 +14,8 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { toPage } from "../../desktop/src/main/wirePath";
-import { startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { startFixture, type AgentFixture } from "./engine-fixture";
+import { openProject, withControl } from "./daemon-actions";
 import { startHided, type Daemon } from "./hided-fixture";
 import { bindChordlessCommand, countSent, enterWorkspace, pinState, screenshot, setLanePinned, showDocuments, showExplorer, showProjectRow, showTool } from "./wire";
 import { chord } from "./chords";
@@ -31,7 +32,7 @@ test.use({ actionTimeout: 15_000 });
 type SentEvent = { kind: string; payload: Record<string, unknown> };
 
 type Stack = {
-  herdr: HerdrFixture;
+  herdr: AgentFixture;
   daemon: Daemon;
   /** The resolved checkout root in the core's wire spelling. */
   root: string;
@@ -45,7 +46,7 @@ type Stack = {
 
 /** The daemon's state directory, where `workspace-views.json` lives. */
 function stateDir(daemon: Daemon): string {
-  return path.join(path.dirname(daemon.home), "hide");
+  return daemon.stateDir;
 }
 
 function viewsFile(daemon: Daemon): string {
@@ -122,17 +123,18 @@ async function startStack(
   page: Page,
   label: string,
   files: Record<string, string>,
-  options: { beforeOpen?: () => Promise<void>; prepare?: (checkout: string, herdr: HerdrFixture) => void } = {},
+  options: { beforeOpen?: () => Promise<void>; prepare?: (checkout: string) => void; projects?: (daemon: Daemon, herdr: AgentFixture) => Promise<void> } = {},
 ): Promise<Stack> {
-  const herdr = await startHerdr();
+  const herdr = await startFixture();
   let daemon: Daemon | null = null;
   try {
     for (const [name, contents] of Object.entries(files)) {
       fs.mkdirSync(path.dirname(path.join(herdr.root, "fixture", name)), { recursive: true });
       fs.writeFileSync(path.join(herdr.root, "fixture", name), contents);
     }
-    options.prepare?.(path.join(herdr.root, "fixture"), herdr);
+    options.prepare?.(path.join(herdr.root, "fixture"));
     daemon = await startHided(herdr, label);
+    await options.projects?.(daemon, herdr);
     const last = new Map<string, Record<string, unknown>>();
     const sent = countSent(page, last);
     const events: SentEvent[] = [];
@@ -673,11 +675,13 @@ test("dragging a tab reorders, moves or splits once on a valid drop and leaves e
 test("a drag or a tab menu begun on one Workspace ends when another client moves the front to another Workspace", async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
   const stack = await startStack(page, "s7-front-moves", { "a.txt": "a\n", "c.txt": "c\n" }, {
-    prepare: (checkout, herdr) => {
+    prepare: (checkout) => {
       const beta = path.join(path.dirname(checkout), "beta");
       fs.mkdirSync(beta, { recursive: true });
       for (const name of ["b1.txt", "b2.txt"]) fs.writeFileSync(path.join(beta, name), `${name}\n`);
-      herdr.run(["workspace", "create", "--cwd", beta, "--label", "beta", "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]);
+    },
+    projects: async (daemon, herdr) => {
+      await withControl(daemon, (control) => openProject(control, path.join(herdr.root, "beta"), "beta"));
     },
   });
   const other = await page.context().newPage();
@@ -1231,14 +1235,14 @@ test("a window too narrow to dock opens the pinned lane over the agents with one
     // The close chord with the keyboard in the View area closes that view and
     // leaves the agents under the lane alone.
     await editor(page, 0).click();
-    const herdrBefore = herdrIds(stack.herdr);
+    const panesBefore = await paneIds(stack.daemon);
     const closes = () => viewEvents(stack).filter((event) => event.payload.action === "close").length;
     const closesBefore = closes();
     await page.keyboard.press(chord("close_tab"));
     await expect.poll(closes).toBe(closesBefore + 1);
     await expect.poll(() => shape(page)).toBe("@(>a.txt)");
     expect(stack.events.filter((event) => event.kind === "close_tab" || event.kind === "close_pane")).toHaveLength(0);
-    expect(herdrIds(stack.herdr)).toEqual(herdrBefore);
+    expect(await paneIds(stack.daemon)).toEqual(panesBefore);
 
     // An agent chosen from the sidebar keeps the pinned lane up, and nothing
     // narrow was sent or stored (B19).
@@ -1296,9 +1300,9 @@ test("in a stacked lane, Select in File Tree brings the Explorer in front even w
   }
 });
 
-/** The pane and tab ids the private Herdr holds, to show a restart used them as they were (B15). */
-function herdrIds(herdr: HerdrFixture): string[] {
-  const text = JSON.stringify(herdr.run(["api", "snapshot"]));
+/** The pane and tab ids the daemon publishes, to show a restart used them as they were (B15). */
+async function paneIds(daemon: Daemon): Promise<string[]> {
+  const text = await withControl(daemon, (control) => control.until((rest) => (rest.pane_layouts ? JSON.stringify(rest.pane_layouts) : undefined), "the pane layouts"));
   return [...new Set([...text.matchAll(/"(?:pane_id|tab_id)":"([^"]+)"/g)].map((match) => match[1] ?? ""))].sort();
 }
 
@@ -1338,7 +1342,7 @@ test("a restart brings the View areas back as they were, and a file gone meanwhi
     await expect
       .poll(() => JSON.stringify(storedWorkspace(stack.daemon, stack.root)?.view_layout))
       .toMatch(/"ratio":0\.45.*"ratio":0\.55/);
-    const panes = herdrIds(stack.herdr);
+    const panes = await paneIds(stack.daemon);
     await screenshot(page, "s7-restore-before");
 
     // The file goes while Hide is stopped, and Hide comes back on the same state.
@@ -1371,8 +1375,8 @@ test("a restart brings the View areas back as they were, and a file gone meanwhi
     await expect(page.locator("[data-retry-unavailable]")).toHaveCount(1);
     await screenshot(page, "s7-restore-unavailable");
 
-    // Herdr's panes and tabs are used as they are: nothing was started or rewritten (B15).
-    expect(herdrIds(stack.herdr)).toEqual(panes);
+    // The panes and tabs are used as they are: nothing was started or rewritten (B15).
+    expect(await paneIds(stack.daemon)).toEqual(panes);
 
     // Retry reads the file again once it is back (B16).
     fs.writeFileSync(path.join(stack.root, "e.txt"), "e is back\n");

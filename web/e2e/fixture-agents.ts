@@ -8,6 +8,10 @@
 // the core's own engine. Both engines read the stand-in's screen with
 // Herdr's rules for Claude Code (`hide-agent-adapter/agents/claude-code.toml`).
 
+import fs from "node:fs";
+import path from "node:path";
+import { expect } from "@playwright/test";
+import { reportedMarker } from "./agent-pane";
 import { claudeProjects, declareAgentSession, writeFixtureTranscript, type FixtureLabel } from "./herdr-fixture";
 import { agentIn, checkoutListedAt, closePane, focusTab, newTab, sendKeys, tabPanes, withControl, type AgentRow, type OpenedProject } from "./daemon-actions";
 import type { Daemon } from "./hided-fixture";
@@ -20,7 +24,8 @@ function reads(row: AgentRow | undefined, state: AgentState): boolean {
   if (!row) return false;
   if (state === "blocked") return row.blocked === true;
   if (state === "working") return row.activity === "working" && !row.blocked;
-  return !row.blocked && row.activity !== "working" && (row.status_code === "idle" || row.status_code === "done");
+  // A turn that ended unseen with no label verdict reads `stopped` (status-marks D-03).
+  return !row.blocked && row.activity !== "working" && (row.status_code === "idle" || row.status_code === "done" || row.status_code === "stopped");
 }
 
 /**
@@ -180,4 +185,81 @@ export async function spawnChild(
   }
   await withControl(daemon, (control) => control.until((rest) => agentIn(rest, pane)?.lineage_parent_pane_id === parent || undefined, `${pane} listed as ${parent}'s child`, 30_000));
   return pane;
+}
+
+/**
+ * Has the agent in `pane`, an agent of a family fixture
+ * (`startFixture({ family: true })`), take a new session as Claude Code does
+ * after `/clear`, and waits until its row names it. The family's stand-in
+ * does not read the session escape `setAgentSession` types, so on the core's
+ * own engine the agent reports through Hide's SessionStart hook, run as the
+ * agent from inside its pane; on Herdr it is Herdr's integration report.
+ * A child's relationship ends with its session, which is the point.
+ */
+export async function takeOverSession(fixture: AgentFixture, daemon: Pick<Daemon, "origin" | "token">, pane: string, session: string, cwd = path.join(fixture.root, "fixture")): Promise<void> {
+  if (fixture.engine === "herdr") return setAgentSession(fixture, daemon, pane, session);
+  const hooks = fixture.daemonEnv.HIDE_E2E_HOOKS;
+  if (!hooks) throw new Error("the fixture names no hook helper to report a session with");
+  const answer = await fixture.runAs(pane)(["hook", "--runtime", "claude-code", "--event", "SessionStart"], {
+    program: hooks,
+    input: JSON.stringify({ session_id: session, hook_event_name: "SessionStart", source: "clear", cwd }),
+  });
+  if (answer.status !== 0) throw new Error(`${pane} could not report ${session}: ${answer.out}`);
+  await withControl(daemon, (control) => control.until((rest) => agentIn(rest, pane)?.session_id === session, `${pane} on session ${session}`, 20_000));
+}
+
+/**
+ * Rests the stand-in in `pane` after a turn whose transcript ends in a
+ * question (`continueFixtureTranscript` with `question: true`), and waits
+ * until its row asks: a rest the operator is asked to answer reads
+ * `question`, not `idle`, so `setAgentState` would never see it.
+ */
+export async function setAgentAsking(daemon: Pick<Daemon, "origin" | "token">, pane: string): Promise<AgentRow> {
+  return withControl(daemon, async (control) => {
+    await control.until((rest) => agentIn(rest, pane), `an agent in ${pane}`, 20_000);
+    sendKeys(control, pane, "\x1b]0;✳ Claude Code\x07");
+    return control.until((rest) => {
+      const row = agentIn(rest, pane);
+      return row && !row.blocked && row.activity !== "working" && (row as AgentRow & { demand?: string }).demand === "question" ? row : undefined;
+    }, `${pane} asking`, 20_000);
+  });
+}
+
+/**
+ * Has the agent in `from`, an agent of a family fixture, hand work to the
+ * operator as a real agent does (`hide agent spawn` without `--parent`): an
+ * independent root with no relationship to `from`, in its own tab of the
+ * checkout of `repo` on `branch`. Waits until the daemon lists it and returns
+ * its pane.
+ */
+export async function spawnRoot(
+  fixture: AgentFixture,
+  daemon: Pick<Daemon, "origin" | "token">,
+  from: string,
+  { name, repo, branch = "main" }: { name: string; repo: string; branch?: string },
+): Promise<string> {
+  const args = ["agent", "spawn", "--name", name, "--intent", name, "--kind", "claude", "--repo", repo, "--branch", branch];
+  type Spawned = { ok?: boolean; value?: { pane?: string }; error?: { code?: string } } | null;
+  const deadline = Date.now() + 30_000;
+  let pane: string | undefined;
+  for (;;) {
+    const answer = await fixture.runAs(from)(args);
+    const spawned = JSON.parse(answer.out.trim().split("\n").at(-1) ?? "null") as Spawned;
+    pane = spawned?.ok ? spawned.value?.pane : undefined;
+    if (answer.status === 0 && pane) break;
+    if (spawned?.error?.code !== "native_identity_unavailable" || Date.now() > deadline) throw new Error(`${from} could not spawn ${name}: ${answer.out}`);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  await withControl(daemon, (control) => control.until((rest) => agentIn(rest, pane) || undefined, `an agent in ${pane}`, 30_000));
+  return pane;
+}
+
+/**
+ * Waits until the stand-in a family fixture's agent runs in `pane` has
+ * reported its session and so reads its terminal: a child `spawnChild`
+ * lists is registered before its stand-in runs, and keys typed before it
+ * reads are dropped by the terminal mode it sets.
+ */
+export async function agentReading(fixture: Pick<EngineServer, "root">, pane: string): Promise<void> {
+  await expect.poll(() => fs.existsSync(reportedMarker(fixture.root, pane)), { message: `the agent in ${pane} reading its terminal`, timeout: 30_000 }).toBe(true);
 }

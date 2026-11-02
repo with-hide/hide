@@ -1,4 +1,4 @@
-// Agent sleep on an isolated pinned Herdr and hided (PRD agent-sleep B2, B3,
+// Agent sleep on an isolated engine and hided (PRD agent-sleep B2, B3,
 // B10-B12, B15, B16): Sleep agent from the pane menu ends the agent and
 // leaves the pane's shell, the row keeps its place with the moon, the pane
 // shows Sleeping instead of its terminal, Settings counts it, and a visit
@@ -6,40 +6,42 @@
 // conversation's resume arguments.
 
 import { expect, test } from "@playwright/test";
-import path from "node:path";
-import { CLAUDE_FULL_ACCESS_LINE, claudeProjects, setFixtureSession, startHerdr, writeFixtureTranscript } from "./herdr-fixture";
+import { startFixture } from "./engine-fixture";
+import { agentIn, focusTab, newTab, withControl } from "./daemon-actions";
+import { CLAUDE_FULL_ACCESS } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
-import { countSent, screenshot } from "./wire";
+import { countSent, enterWorkspace, screenshot } from "./wire";
 import { chord } from "./chords";
 
 test.describe.configure({ timeout: 150_000 });
 
-const SESSION = "11111111-2222-3333-4444-555555555555";
+// The session the fixture's second agent runs (`engine-fixture.ts`), whose transcript names it Agent two.
+const SESSION = "fixture-two";
 
-type ProcessInfo = {
-  result: { process_info: { shell_pid: number; foreground_process_group_id: number; foreground_processes: { argv?: string[] | null }[] } };
-};
-
-test("an agent slept from the pane menu keeps its row and wakes in the same pane on a visit", async ({ page }) => {
+// Herdr only until the own engine publishes a sleeping agent's row: after Sleep agent the core records
+// `agent_sleep.slept` and the stand-in is gone, but the snapshot lists no row for the pane, so the pane
+// never draws Sleeping with Wake agent (the same gap as `sleep-wake-click.spec.ts`).
+test("an agent slept from the pane menu keeps its row and wakes in the same pane on a visit @herdr", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  const herdr = await startHerdr();
+  const herdr = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    const [, sleeper] = herdr.panes;
-    // The official Claude integration's report: the conversation id, under
-    // Herdr's own source.
-    writeFixtureTranscript(claudeProjects(herdr), SESSION, { task: "Agent two" });
-    setFixtureSession(herdr, sleeper, SESSION);
-    const other = herdr.run([
-      "tab", "create", "--workspace", herdr.workspace, "--cwd", path.join(herdr.root, "fixture"), "--label", "other", "--env", `PATH=${herdr.fixturePath}`, "--no-focus",
-    ]) as { result: { tab: { tab_id: string } } };
-    const processInfo = () => (herdr.run(["pane", "process-info", "--pane", sleeper]) as ProcessInfo).result.process_info;
-
     daemon = await startHided(herdr, "agent-sleep");
+    const [, sleeper] = herdr.panes;
+    // Each start leaves its line on the pane's screen; whitespace is dropped, since the line wraps at the pane's width.
+    const flat = (text: string) => text.replace(/\s+/g, "");
+    const resume = flat(`claude --resume ${SESSION} ${CLAUDE_FULL_ACCESS[0]} ${CLAUDE_FULL_ACCESS[1]}`);
+    const typedResumes = () => page.evaluate((id) => window.__hideProbe?.paneText(id) ?? "", sleeper).then((text) => flat(text).split(resume).length - 1);
+    // A new tab is the one shown; the agents' tab is shown again, with this one beside it.
+    const other = await withControl(daemon, async (control) => {
+      const made = await newTab(control, herdr, "other");
+      await focusTab(control, herdr, herdr.tab);
+      return made;
+    });
     const last = new Map<string, Record<string, unknown>>();
     countSent(page, last);
-    await page.goto(`${daemon.origin}/#token=${daemon.token}`);
-    await page.locator("[data-checkout]").first().click();
+    await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
+    await enterWorkspace(page, "fixture");
     const pane = page.locator(`[data-pane-view="${sleeper}"]`);
     await expect(pane).toBeVisible({ timeout: 20_000 });
     // Sleep must preserve a name the automatic label worker has produced.
@@ -59,8 +61,8 @@ test("an agent slept from the pane menu keeps its row and wakes in the same pane
     await expect(pane.locator(`[data-agent-wake="${sleeper}"]`)).toBeVisible();
     // The body says it once; nothing waits on the operator, so no second row.
     await expect(pane.locator("[data-pane-header-band]")).toHaveCount(0);
-    const slept = processInfo();
-    expect(slept.foreground_process_group_id).toBe(slept.shell_pid);
+    // The shell holds the terminal again: its prompt is the last thing on the pane's screen, below the line that started the agent.
+    await expect.poll(() => page.evaluate((id) => (window.__hideProbe?.paneText(id) ?? "").trimEnd().split("\n").pop() ?? "", sleeper), { timeout: 20_000 }).toMatch(/fixture %$/);
 
     // B10: the row keeps its name with the moon.
     const row = page.locator(`nav[data-sidebar] [data-pane="${sleeper}"]`);
@@ -86,14 +88,13 @@ test("an agent slept from the pane menu keeps its row and wakes in the same pane
 
     // B12, B16: leaving the tab and coming back wakes it in the same pane,
     // resuming the conversation, and the row is awake again.
-    await page.locator(`[data-tab="${other.result.tab.tab_id}"]`).click();
+    const typedBefore = await typedResumes();
+    await page.locator(`[data-tab="${other.tab}"]`).click();
     await expect(page.locator(`[data-pane-view="${sleeper}"]`)).toHaveCount(0);
     await page.locator(`[data-tab="${herdr.tab}"]`).click();
-    // Herdr's schema makes argv optional and nullable; a process reported without
-    // it must not end the poll before the resumed agent is reported.
-    await expect.poll(() => processInfo().foreground_processes.map((process) => process.argv?.join(" ")), { timeout: 30_000 }).toContain(
-      `claude --resume ${SESSION} ${CLAUDE_FULL_ACCESS_LINE}`,
-    );
+    // The wake types one more resume line at the pane's shell, and the agent is listed in the pane again.
+    await expect.poll(typedResumes, { timeout: 30_000 }).toBeGreaterThan(typedBefore);
+    await withControl(daemon, (control) => control.until((rest) => (agentIn(rest, sleeper)?.session_id === SESSION ? true : undefined), `the resumed agent in ${sleeper}`, 30_000));
     await expect(pane.locator("[data-pane-sleep]")).toHaveCount(0, { timeout: 30_000 });
     await expect(row.locator('[data-agent-status="sleeping"]')).toHaveCount(0);
     await screenshot(page, "agent-sleep-awake");

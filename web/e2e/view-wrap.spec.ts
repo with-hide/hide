@@ -1,5 +1,5 @@
 // A file or diff view opens with long lines wrapped, and its Wrap toggle turns
-// that off for the one tab, through an isolated pinned Herdr, hided and
+// that off for the one tab, through an isolated engine, hided and
 // browser. The fixture is disposable and never uses an operator checkout,
 // socket or app.
 
@@ -7,7 +7,8 @@ import { expect, test, type Locator } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { startHerdr } from "./herdr-fixture";
+import { startFixture } from "./engine-fixture";
+import { openProject, withControl } from "./daemon-actions";
 import { startHided } from "./hided-fixture";
 import { showExplorer, showProjectRow, showTool, screenshot } from "./wire";
 import { toPage } from "../../desktop/src/main/wirePath";
@@ -20,7 +21,7 @@ function overflows(scroller: Locator): Promise<boolean> {
 }
 
 test("file and diff views open wrapped and Wrap turns it off per tab", async ({ page }) => {
-  const herdr = await startHerdr({ readiness: "registered" });
+  const herdr = await startFixture({ agents: false });
   let daemon: Awaited<ReturnType<typeof startHided>> | null = null;
   try {
     const repoDir = path.join(herdr.root, "wrap-repo");
@@ -33,9 +34,9 @@ test("file and diff views open wrapped and Wrap turns it off per tab", async ({ 
     execFileSync("git", ["add", "-A"], { cwd: repo });
     execFileSync("git", ["-c", "user.email=e2e@example.com", "-c", "user.name=e2e", "-c", "commit.gpgsign=false", "commit", "-qm", "base"], { cwd: repo });
     fs.writeFileSync(file, `${line("base")}\n${line("added")}\n`);
-    herdr.run(["workspace", "create", "--cwd", repo, "--label", "wrap-repo", "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]);
 
     daemon = await startHided(herdr, "view-wrap");
+    await withControl(daemon, (control) => openProject(control, repo, "wrap-repo"));
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await (await showProjectRow(page, page.locator("[data-project]", { hasText: "wrap-repo" }).locator("[data-checkout]").first())).click();
 

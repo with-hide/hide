@@ -3,10 +3,11 @@
 // popover, and the row leaves once the removal finishes.
 
 import { expect, test } from "@playwright/test";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { startFixture } from "./engine-fixture";
+import { openProject, withControl } from "./daemon-actions";
 import { startHided, type Daemon } from "./hided-fixture";
 import { screenshot, showProjectRow } from "./wire";
 
@@ -16,16 +17,6 @@ const BRANCH = "feature/slow";
 
 function git(cwd: string, args: string[]): string {
   return execFileSync("git", ["-c", "user.name=e2e", "-c", "user.email=e2e@example.invalid", "-c", "init.defaultBranch=main", ...args], { cwd, encoding: "utf8" });
-}
-
-async function prompt(herdr: HerdrFixture, pane: string): Promise<void> {
-  const deadline = Date.now() + 15_000;
-  while (Date.now() < deadline) {
-    const read = spawnSync(herdr.bin, ["pane", "read", pane, "--source", "visible", "--format", "text"], { env: herdr.env, encoding: "utf8", timeout: 10_000 });
-    if (read.status === 0 && read.stdout.includes("fixture %")) return;
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error(`no prompt in pane ${pane}`);
 }
 
 /**
@@ -50,7 +41,7 @@ function heldGit(root: string, fixturePath: string): { path: string; release: ()
 
 test("a checkout row being deleted opens no empty menu", async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 });
-  const herdr = await startHerdr();
+  const herdr = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
     const repo = path.join(herdr.root, "repo");
@@ -63,21 +54,15 @@ test("a checkout row being deleted opens no empty menu", async ({ page }) => {
     git(repo, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
     const worktree = path.join(herdr.root, "repo-slow");
     git(repo, ["worktree", "add", "-b", BRANCH, worktree]);
-    // Unmerged, so the row stays among the active checkouts rather than folding into Inactive once its pane closes.
+    // Unmerged, so the row stays among the active checkouts rather than folding into Inactive.
     git(worktree, ["commit", "--allow-empty", "-m", "not merged anywhere"]);
-
-    // A pane in main keeps the project listed once the worktree's pane closes.
-    for (const [cwd, label] of [[repo, "repo"], [worktree, "repo-slow"]]) {
-      const created = herdr.run(["workspace", "create", "--cwd", cwd, "--label", label, "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]) as {
-        result: { root_pane: { pane_id: string } };
-      };
-      await prompt(herdr, created.result.root_pane.pane_id);
-    }
 
     const held = heldGit(herdr.root, herdr.fixturePath);
     daemon = await startHided(herdr, "worktree-removing-menu", undefined, { PATH: held.path });
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await expect(page.locator("[data-main-screen]")).toBeVisible({ timeout: 20_000 });
+    // A pane in main keeps the project listed once the worktree goes; the core lists the worktree, with no tab of its own, once a client shows its repository.
+    await withControl(daemon, (control) => openProject(control, repo, "repo"));
 
     const emptyFold = page.locator("[data-empty-worktrees]");
     // The project runs no agent, so it waits under No agents (PRD sidebar-titlebar-refresh B1).

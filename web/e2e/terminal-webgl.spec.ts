@@ -1,8 +1,9 @@
-// Real WebGL context loss, on the existing private daemon/PTY fixtures.
+// Real WebGL context loss, on the existing private daemon/PTY fixtures, either engine.
 // Software WebGL proves browser recovery, not native GPU or physical input.
 import { expect, test, type Page } from "@playwright/test";
 import fs from "node:fs";
-import { startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { startFixture, type AgentFixture } from "./engine-fixture";
+import { closePane, withControl } from "./daemon-actions";
 import { startHided, type Daemon } from "./hided-fixture";
 import { countSent, enterWorkspace } from "./wire";
 
@@ -18,7 +19,7 @@ declare global {
 }
 
 async function start(page: Page) {
-  const herdr = await startHerdr();
+  const herdr = await startFixture();
   let daemon: Daemon | undefined;
   const stop = () => {
     try { daemon?.stop(); } finally { herdr.stop(); }
@@ -34,7 +35,7 @@ async function start(page: Page) {
     await view.locator(".xterm-helper-textarea").focus();
     await expect.poll(() => page.evaluate(() => window.__hideProbe?.paneId())).toBe(pane);
     await typeMarker(page, pane, "BEFORE_GPU_LOSS");
-    return { herdr, pane, view, sent, stop };
+    return { herdr, daemon, pane, view, sent, stop };
   } catch (error) {
     stop();
     throw error;
@@ -78,7 +79,7 @@ async function loseContext(page: Page, pane: string) {
   await expect.poll(() => page.evaluate(() => window.__webglLoss?.lost)).toBe(true);
 }
 
-function received(herdr: HerdrFixture) {
+function received(herdr: AgentFixture) {
   return fs.readFileSync(herdr.inputLogs[0], "utf8").replaceAll("\r", "\n");
 }
 
@@ -89,7 +90,7 @@ test("unavailable WebGL keeps the terminal usable and closes cleanly", async ({ 
     await expect(flow.view.locator(".xterm-rows")).toHaveCount(1);
     await typeMarker(page, flow.pane, "AFTER_NO_WEBGL");
     await expect.poll(() => received(flow.herdr)).toBe("BEFORE_GPU_LOSS\nAFTER_NO_WEBGL\n");
-    flow.herdr.run(["pane", "close", flow.pane]);
+    await withControl(flow.daemon, (control) => closePane(control, flow.pane));
     await expect.poll(() => page.evaluate(() => window.__hideProbe?.liveTerminals())).not.toContain(flow.pane);
   } finally { flow.stop(); }
 });
@@ -147,7 +148,7 @@ webglTest.describe("WebGL recovery", () => {
       await page.clock.install();
       await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000));
       await loseContext(page, flow.pane);
-      flow.herdr.run(["pane", "close", flow.pane]);
+      await withControl(flow.daemon, (control) => closePane(control, flow.pane));
       await expect.poll(() => page.evaluate(() => window.__hideProbe?.liveTerminals())).not.toContain(flow.pane);
       await page.clock.runFor(3100);
       await page.clock.resume();

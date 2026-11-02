@@ -2,7 +2,8 @@ import { expect, test } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 import { fixtureExecutable } from "./platform-fixture";
-import { runInPane, startHerdr } from "./herdr-fixture";
+import { startFixture } from "./engine-fixture";
+import { runInPane } from "./daemon-actions";
 import { startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace, screenshot, showDocuments, showExplorer } from "./wire";
 
@@ -17,7 +18,7 @@ test.use({ actionTimeout: 15_000 });
 
 test("folded documents kept behind the tool column show nothing through them", async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
-  const herdr = await startHerdr({ agents: false });
+  const herdr = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
     const fixture = path.join(herdr.root, "fixture");
@@ -27,7 +28,7 @@ test("folded documents kept behind the tool column show nothing through them", a
     await enterWorkspace(page, "fixture");
     await showExplorer(page);
     const hide = path.resolve("..", "target", "debug", fixtureExecutable("hide"));
-    const ran = await runInPane(herdr, herdr.panes[0], "cli-1", { env: { HIDE_STATE_DIR: daemon.stateDir }, argv: [hide, "file", "open", "a.md"] });
+    const ran = await runInPane(herdr, daemon, herdr.panes[0], "cli-1", { env: { HIDE_STATE_DIR: daemon.stateDir }, argv: [hide, "file", "open", "a.md"] });
     expect(ran.status, ran.stderr).toBe(0);
     const selected = page.locator('[data-view-tab-bar] [role="tab"][aria-selected="true"]');
     await expect(selected).toHaveAttribute("aria-label", /\/a\.md/);
