@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import "../chapters";
 import chapter from "../chapters/mission";
 import type { CoreEvent } from "../world";
-import { BEATS, CONDUCTOR, MISSION_WORLD, type MissionModel } from "./mission";
+import { BEATS, CONDUCTOR, MISSION_WORLD, SIGN_IN_FILE, openedFile, showsExplorer, type MissionModel } from "./mission";
 
 const doneAt = (id: string, model: MissionModel) => chapter.steps.find((step) => step.id === id)!.done!(model);
 const typedInto = (pane_id: string, text: string): CoreEvent => ({ kind: "key", payload: { pane_id, bytes_base64: btoa(text) } });
@@ -25,7 +25,7 @@ describe("chapter 0's plan, approved before anything runs (UI_BEHAVIOR, Practice
   it("plans for a while before the plan stands", () => {
     const model = planning();
     expect(missionIn(model)).toBeNull();
-    expect(doneAt("ask", model)).toBe(true);
+    expect(doneAt("intro", model)).toBe(true);
     expect(doneAt("thinking", model)).toBe(false);
     expect(MISSION_WORLD.later!(model)!.at - model.times[1]!).toBe(BEATS[1]);
   });
@@ -113,5 +113,27 @@ describe("chapter 0's end: the report and Memory (UI_BEHAVIOR, Practice window)"
     const dropped = apply(asking(), answer({ option: 2 }));
     expect(keys(dropped)).toContain("drop");
     expect(missionIn(finish(dropped))!.nodes.every((node) => node.status === "done")).toBe(true);
+  });
+});
+
+describe("chapter 0's result in the Explorer (UI_BEHAVIOR, Practice window)", () => {
+  const done = () => finish(answered());
+  const frames = (model: MissionModel) => MISSION_WORLD.snapshot(model, Date.now()).frames!;
+
+  it("marks the files the finished parts changed, and only those", () => {
+    const changed = (model: MissionModel) => frames(model).changes!.entries.map((entry) => entry.relative_path);
+    expect(changed(running())).toEqual([]);
+    expect(changed(done())).toEqual(["db/migrations/0042_login_tokens.sql", "web/src/pages/SignIn.tsx", "src/auth/magicLink.ts", "mail/templates/sign-in.html"]);
+    expect(changed(finish(apply(asking(), answer({ option: 2 }))))).toContain("src/auth/password.ts");
+  });
+
+  it("opens the Explorer from its tool and a file of the checkout beside it, and nothing outside it", () => {
+    const explorer = apply(done(), { kind: "workspace_view", payload: { tool: "explorer" } });
+    expect(showsExplorer(explorer)).toBe(true);
+    const open = (path: string) => MISSION_WORLD.apply(explorer, { kind: "file_open", payload: { path, workspace_id: "hide-practice", preview: true } });
+    const opened = open(SIGN_IN_FILE)!;
+    expect(openedFile(opened)).toBe(SIGN_IN_FILE);
+    expect(frames(opened).documents!.file1!.contents_utf8).toContain("Use a password instead");
+    expect(open("/elsewhere/SignIn.tsx")).toBeNull();
   });
 });

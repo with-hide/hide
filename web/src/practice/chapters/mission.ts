@@ -5,10 +5,11 @@
 // from the pane's mission chip and approves it in the terminal; the pane head's second row lists the child agents it starts, one opens in its tab and its head leads back, they run, and when the Conductor has a question it
 // lands in the sidebar's 내 차례, where the learner opens it and answers on the
 // map. The Overview shows the team at work until it is done, and what the work
-// left is the Conductor's report and a new memory in the Project's Memory.
+// left is the Conductor's report, a new memory in the Project's Memory, and the
+// changed files in the Explorer, one of them opened beside it.
 
 import { chapter } from "../chapter";
-import { CONDUCTOR, MISSION_WORLD, focusedOn, missionInSlot, showsMemory, type MissionModel } from "../worlds/mission";
+import { CONDUCTOR, MISSION_WORLD, SIGN_IN_FILE, focusedOn, missionInSlot, openedFile, showsExplorer, showsMemory, type MissionModel } from "../worlds/mission";
 
 const PANE = `[data-pane-view="${CONDUCTOR}"]`;
 const CHIP = `${PANE} [data-pane-mission-chip]`;
@@ -21,14 +22,12 @@ const SCREEN = "ui";
 export default chapter<MissionModel>({
   id: "mission",
   number: 0,
-  version: 9,
+  version: 10,
   world: MISSION_WORLD,
   quest: true,
   steps: [
-    // The bubble keeps low while the Conductor writes, so its lines stay readable.
-    { id: "intro", target: PANE, side: "inside" },
-    // The situation, handed over with `/hide-mission`: the Conductor plans for a few seconds before the plan stands.
-    { id: "ask", quest: true, target: PANE, side: "center", gesture: { type: { pane: CONDUCTOR, words: "practice.mission.world.example" } }, done: (model) => model.stage >= 1 },
+    // The situation, handed over with `/hide-mission` from the first step: the Conductor plans for a few seconds before the plan stands.
+    { id: "intro", quest: true, target: PANE, side: "center", gesture: { type: { pane: CONDUCTOR, words: "practice.mission.world.example" } }, done: (model) => model.stage >= 1 },
     { id: "thinking", target: PANE, side: "center", wait: true, done: (model) => model.stage >= 2 },
     // The chip opens the whole plan in the 보기 slot; a first plan also opens the chip's popover once.
     { id: "chip", quest: true, target: CHIP, side: "right", gesture: { click: true }, done: missionInSlot },
@@ -47,12 +46,17 @@ export default chapter<MissionModel>({
     { id: "answer", quest: true, target: ANSWER, side: "left", gesture: { click: true }, done: (model) => model.stage >= 6 },
     { id: "overview", quest: true, target: "[data-sidebar-overview]", side: "right", gesture: { click: true }, shown: GRAPH },
     // The team at work on the map until the last worker is done.
-    { id: "graph", target: GRAPH, side: "inside", wait: true, done: (model) => model.stage >= 9 },
+    // The bubble stands under the graph, so its nodes stay in sight.
+    { id: "graph", target: GRAPH, side: "bottom", wait: true, done: (model) => model.stage >= 9 },
     // Done: the Overview put away by its own shortcut, or Esc, for what the work left.
-    { id: "finished", target: GRAPH, side: "inside", command: "overview", shown: `body:not(:has(${GRAPH}))` },
+    { id: "finished", target: GRAPH, side: "bottom", command: "overview", shown: `body:not(:has(${GRAPH}))` },
     { id: "report", target: "[data-mission]", side: "left" },
     // ⇧⌘L opens Hide AI on its Memory tab; the rail icon would open it on 제안.
     { id: "memory", quest: true, target: '[data-lane-tool="memory"]', side: "left", command: "open_project_memory", done: showsMemory },
-    { id: "end", target: "[data-hide-ai-tool]", side: "left" },
+    // The files the parts changed, in the Explorer, and one of them opened beside it.
+    { id: "explorer", quest: true, target: '[data-lane-tool="explorer"]', side: "left", command: "toggle_lane_explorer", done: showsExplorer },
+    { id: "file", quest: true, target: `[data-explorer-row="${SIGN_IN_FILE}"]`, side: "left", gesture: { click: true }, done: (model) => openedFile(model) === SIGN_IN_FILE },
+    // The bubble keeps to the terminal, so the opened file stays readable.
+    { id: "end", target: PANE, side: "inside" },
   ],
 });
