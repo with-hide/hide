@@ -201,6 +201,13 @@ struct Pane {
     session: Option<Session>,
     /// The PTY size last settled, which an attach asks for.
     size: Option<GridSize>,
+    /// `size` is the one the pane's holder had when it attached with none
+    /// decided, so the first view's grid is the one it takes, as an attach
+    /// after that view would have.
+    size_from_holder: bool,
+    /// The last attempt opened the pane as a holder pane. One that did not
+    /// (its holder was not started yet) holds back no attach once it is.
+    attempted_as_holder: bool,
     /// The grid the screen draws the pane at, which a frame must match.
     view: Option<GridSize>,
     recovery: Option<Recovery>,
@@ -485,7 +492,7 @@ impl TerminalNode for Service {
 
     fn view(&self, pane: &str, size: GridSize, new_view: bool) {
         let now = Instant::now();
-        self.shared.run(|inner, _| {
+        self.shared.run(|inner, shared| {
             // A screen names the panes it draws, and nothing but the cap
             // keeps a client from naming panes no node has.
             if !inner.panes.contains_key(pane) && inner.unattached() >= MAX_UNATTACHED_PANES {
@@ -508,6 +515,14 @@ impl TerminalNode for Service {
                 return;
             }
             entry.need_full = true;
+            // A holder pane attached at its own size before any grid was
+            // decided (a pane its node started while no view drew it) takes
+            // the view's, which the core sees as the size the pane already
+            // has and so never sends.
+            if entry.size_from_holder && entry.size != Some(size) {
+                inner.resize(shared, pane, size, now);
+                return;
+            }
             // The core sends no resize for a grid that did not change, so a
             // view at the grid the session runs at asks for the whole screen
             // here, as a redraw does; any other grid's resize brings one.
@@ -893,6 +908,7 @@ impl Inner {
                     && let Some(size) = size
                 {
                     entry.size = Some(size);
+                    entry.size_from_holder = false;
                 }
                 if manual {
                     entry.recovery = None;
@@ -1470,8 +1486,18 @@ impl Inner {
         };
         let refused_at_cap = entry.lifecycle.state == "unavailable"
             && entry.lifecycle.exit_category.as_deref() == Some("attach_limit");
+        // An attempt made before the pane's holder was started could not
+        // reach it, whether it already failed or is still on its way to
+        // failing; the attach its holder's start asks for goes now rather
+        // than on that attempt's retry clock (a late answer of the earlier
+        // generation is dropped). A pane that never gets a
+        // holder (closed, or its holder ended) stays on that clock.
+        let holder_arrived = matches!(entry.lifecycle.state, "unavailable" | "starting")
+            && !entry.attempted_as_holder
+            && shared.attacher.keeps_own_size(pane);
         let allowed = entry.session.is_none()
             && (refused_at_cap
+                || holder_arrived
                 || !matches!(
                     entry.lifecycle.state,
                     "starting"
@@ -1559,6 +1585,7 @@ impl Inner {
         entry.current_generation = Some(generation);
         entry.session = None;
         entry.first_frame_pending = true;
+        entry.attempted_as_holder = shared.attacher.keeps_own_size(pane);
         entry.lifecycle = Lifecycle {
             state: "starting",
             message,
@@ -1787,8 +1814,11 @@ impl Inner {
         // A pane attached with no size takes the one its transport found;
         // a size its transport already has is not sent again, since a
         // holder resizes its PTY on every resize it is sent.
+        // A view that arrived while the session opened is the grid an
+        // attach after it would have asked for, as `start_session` reads it.
         if entry.size.is_none() {
-            entry.size = found_size;
+            entry.size = entry.view.or(found_size);
+            entry.size_from_holder = entry.view.is_none();
         }
         if mode == Mode::Control
             && let Some(size) = entry.size
@@ -2294,6 +2324,7 @@ impl Inner {
             return;
         }
         let previous = entry.size.replace(size);
+        entry.size_from_holder = false;
         if previous == Some(size) && !entry.need_full {
             return;
         }

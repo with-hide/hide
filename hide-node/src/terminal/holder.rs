@@ -632,7 +632,8 @@ impl Holders {
     }
 
     /// Starts `request`'s pane and attaches its screen to `service`, at the
-    /// size it was started at. The pane id is the start's key: asked again
+    /// size the core named for it, else the size it was started at until a
+    /// view draws it. The pane id is the start's key: asked again
     /// for a pane that lives, it answers that pane and starts no second
     /// holder. A pane past [`MAX_ATTACHED_PANES`] runs and is reported
     /// `attach_limit` by the service, as any pane over the cap is. The
@@ -659,12 +660,12 @@ impl Holders {
         let socket = hide_kit::layout::holder_socket(&self.state_dir, &holder);
         self.known.insert(&request.pane, socket.clone());
         self.watches.watch(&request.pane, socket);
+        // No size: the start's is the holder's own, not a decision, and it
+        // must not replace a size the core already named for the pane (a
+        // daemon that starts again names the one it saved).
         service.control(TerminalControl::Attach {
             pane: request.pane.clone(),
-            size: Some(GridSize {
-                rows: request.size.rows,
-                cols: request.size.cols,
-            }),
+            size: None,
             manual: false,
         });
         Ok(started)
