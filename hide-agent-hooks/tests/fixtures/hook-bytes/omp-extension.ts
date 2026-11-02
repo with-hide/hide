@@ -1,4 +1,4 @@
-// hide-extension@12 sha256=ac353bbbf5dadfd8333fade005ee1cf9bdb5d8b359a887c5408f628a8800c273
+// hide-extension@13 sha256=62c5cbf4109d8667cd17616a8da5298c004df2cb0ce3b1c331c98bc095053cc6
 // Hide's extension for Pi and omp, written by Hide's install kit (hide-agent-hooks).
 // An edit is kept and shown as edited in Settings; Reinstall puts Hide's back.
 // Outside a Herdr pane, in an agent started from another Pi's or omp's shell, or when its helper is gone, it does
@@ -14,7 +14,7 @@ import path from "node:path";
 const HELPER = "/kit path/it's/hide-agent-hooks";
 const ROUTE = [];
 const AGENT = "omp";
-const VERSION = 12;
+const VERSION = 13;
 
 // The prompt budget is Claude Code's prompt hook's; the tool budget is the spawn guard's. Both hosts wait for
 // a handler far longer (omp gives up at 30 s and then blocks the tool), so these are the limits.
@@ -138,7 +138,10 @@ function helperPresent() {
 }
 
 function managed(env) {
-  if (env.HERDR_ENV !== "1" || !env.HERDR_PANE_ID || !env.HERDR_SOCKET_PATH) return false;
+  // A pane on the core's own engine names itself HIDE_PANE_ID first, a Herdr pane by its three variables
+  // (`hide_agent_hooks::pane`, the rule the helper and the CLI share).
+  const herdrPane = env.HERDR_ENV === "1" && env.HERDR_PANE_ID && env.HERDR_SOCKET_PATH;
+  if (!env.HIDE_PANE_ID && !herdrPane) return false;
   // omp marks every shell it starts with OMPCODE=1 and Pi with PI_SESSION_ID: an agent started there is not
   // the pane's agent, and its prompts must not take the pane's letters.
   if (env.OMPCODE === "1" || env.PI_SESSION_ID) return false;

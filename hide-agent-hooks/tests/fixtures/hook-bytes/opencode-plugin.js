@@ -1,4 +1,4 @@
-// hide-opencode-plugin@11 sha256=ede107e5cad13260645b75387ae463167442a1fa6eac645a73091deacf6c6222
+// hide-opencode-plugin@12 sha256=887dac2f496e336a68b6fd13025116e0e6edbb8841c719b49ceefe640f4ea1ee
 // Hide's OpenCode 1.x plugin, written by Hide's install kit (hide-agent-hooks).
 // An edit is kept and shown as edited in Settings; Reinstall puts Hide's back.
 // Outside a Herdr pane Hide manages, or when its helper is gone, it does nothing.
@@ -123,6 +123,12 @@ function fileArgs(args) {
   return named;
 }
 
+// A pane Hide manages: one on the core's own engine names itself HIDE_PANE_ID first, a Herdr pane by its three
+// variables (`hide_agent_hooks::pane`, the rule the helper and the CLI share).
+function inPane(env) {
+  return Boolean(env.HIDE_PANE_ID) || (env.HERDR_ENV === "1" && Boolean(env.HERDR_PANE_ID) && Boolean(env.HERDR_SOCKET_PATH));
+}
+
 function helperPresent() {
   try {
     return statSync(HELPER).isFile();
@@ -132,7 +138,7 @@ function helperPresent() {
 }
 
 function managed(env) {
-  return env.HERDR_ENV === "1" && Boolean(env.HERDR_PANE_ID) && Boolean(env.HERDR_SOCKET_PATH) && helperPresent();
+  return inPane(env) && helperPresent();
 }
 
 /** The helper's answer, or null when it failed, timed out or said nothing usable. */
