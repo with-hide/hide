@@ -23,7 +23,8 @@ async function fixture(t, protocol = 2) {
   await writeFile(resolve(dist, 'protocols.json'), JSON.stringify([protocol]));
   await writeFile(resolve(dist, `p/${protocol}/index.html`), page);
   await writeFile(resolve(dist, `p/${protocol}/assets/new.js`), 'new bundle');
-  const oldFiles = new Map([['p/1/index.html', page], ['p/1/assets/old.js', 'old bundle']]);
+  const oldFiles = new Map([['p/1/index.html', page], ['p/1/assets/old.js', 'old bundle'],
+    ['assets/relay_bg-old.wasm', 'old WASM'], ['assets/connect-old.js', 'old lazy module']]);
   const manifest = { schema: 1, source: 'b'.repeat(40), files: Object.fromEntries([...oldFiles].map(([path, bytes]) =>
     [path, { size: Buffer.byteLength(bytes), sha256: createHash('sha256').update(bytes).digest('hex') }])) };
   const state = {
@@ -47,11 +48,12 @@ async function fixture(t, protocol = 2) {
     } }) : new Response('missing', { status: 404 });
   };
   const stage = resolve(root, 'new-parent/stage');
-  const prepare = () => preparePhone({ source, dist, stage, secrets, fetcher, ancestor: async () => {
+  const prepare = (destination = stage) => preparePhone({ source, dist, stage: destination, secrets, fetcher, ancestor: async () => {
     if (!state.ancestor) throw new Error('source would roll back production');
   } });
-  const serve = async () => {
-    const dir = resolve(stage, '.vercel/output/static');
+  const serve = async (destination = stage) => {
+    const dir = resolve(destination, '.vercel/output/static');
+    state.live.clear();
     for (const path of await readdir(dir, { recursive: true, withFileTypes: true })) {
       if (path.isFile()) {
         const absolute = resolve(path.parentPath, path.name);
@@ -112,12 +114,59 @@ test('updating the same protocol keeps its previously referenced assets', async 
   assert.equal(await readFile(resolve(f.stage, '.vercel/output/static/p/1/assets/old.js'), 'utf8'), 'old bundle');
 });
 
-for (const failure of ['missing inventory', 'missing asset', 'corrupt asset', 'protocol disagreement', 'rollback', 'analytics', 'git deploy', 'foreign project']) {
+test('an open loader can fetch its old lazy module and WASM after two deployments', async t => {
+  const f = await fixture(t, 1);
+  f.state.project.targets = {};
+  await mkdir(resolve(f.dist, 'assets'));
+  const oldWasm = Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]);
+  const oldLoader = `export async function connect(read) {
+    const response = await read('${ORIGIN}/assets/connect-old.js');
+    if (!response.ok) throw new Error('The open loader lost its lazy module');
+    const lazy = await import('data:text/javascript,' + encodeURIComponent(await response.text()));
+    const wasm = await read('${ORIGIN}' + lazy.wasmPath);
+    if (!wasm.ok) throw new Error('The open loader lost its WASM');
+    return new Uint8Array(await wasm.arrayBuffer());
+  }`;
+  await writeFile(resolve(f.dist, 'assets/loader-old.js'), oldLoader);
+  await writeFile(resolve(f.dist, 'assets/connect-old.js'), "export const wasmPath = '/assets/relay_bg-old.wasm';");
+  await writeFile(resolve(f.dist, 'assets/relay_bg-old.wasm'), oldWasm);
+  await f.prepare();
+  await f.serve();
+  // The tab loads its loader now, but connects only after the next deployment.
+  const response = await f.fetcher(`${ORIGIN}/assets/loader-old.js`);
+  const openTab = await import('data:text/javascript,' + encodeURIComponent(await response.text()));
+  f.state.previous = new Map(f.state.live);
+  f.state.project.targets = { production: { readyState: 'READY', url: 'previous.vercel.app' } };
+  await rm(resolve(f.dist, 'assets'), { recursive: true });
+  await mkdir(resolve(f.dist, 'assets'));
+  await writeFile(resolve(f.dist, 'assets/loader-new.js'), 'new loader');
+  await writeFile(resolve(f.dist, 'assets/connect-new.js'), 'new lazy module');
+  await writeFile(resolve(f.dist, 'assets/relay_bg-new.wasm'), 'new WASM');
+  const next = `${f.stage}-next`;
+  await f.prepare(next);
+  // Replace the served deployment completely: the HTTP fixture retains nothing.
+  await f.serve(next);
+  assert.deepEqual(Buffer.from(await openTab.connect(f.fetcher)), oldWasm);
+  assert.equal(await (await f.fetcher(`${ORIGIN}/assets/loader-old.js`)).text(), oldLoader);
+  assert.equal(await (await f.fetcher(`${ORIGIN}/assets/loader-new.js`)).text(), 'new loader');
+  await confirmPhone(next, f.fetcher);
+});
+
+test('the public confirmation command reaches its files without deployment credentials', async t => {
+  const f = await fixture(t);
+  assert.throws(() => execFileSync('node', ['scripts/phone-release.mjs', 'confirm', f.stage], {
+    env: { ...process.env, ...ci, ...Object.fromEntries(Object.keys(SECRETS).map(k => [k, ''])) }, stdio: 'pipe',
+  }), error => error.status === 1 && error.stderr.includes('ENOENT') && !error.stderr.includes('secrets'));
+});
+
+for (const failure of ['missing inventory', 'missing asset', 'corrupt asset', 'missing root asset', 'corrupt root asset', 'protocol disagreement', 'rollback', 'analytics', 'git deploy', 'foreign project']) {
   test(`release stops before an upload on ${failure}`, async t => {
     const f = await fixture(t);
     if (failure === 'missing inventory') f.state.previous.delete('phone-site.json');
     if (failure === 'missing asset') f.state.previous.delete('p/1/assets/old.js');
     if (failure === 'corrupt asset') f.state.previous.set('p/1/assets/old.js', 'changed');
+    if (failure === 'missing root asset') f.state.previous.delete('assets/relay_bg-old.wasm');
+    if (failure === 'corrupt root asset') f.state.previous.set('assets/relay_bg-old.wasm', 'changed');
     if (failure === 'protocol disagreement') f.state.previous.set('protocols.json', '[1,2]');
     if (failure === 'rollback') f.state.ancestor = false;
     if (failure === 'analytics') f.state.project.webAnalytics = { enabledAt: 20, disabledAt: 10 };
@@ -150,9 +199,12 @@ test('a successful upload is insufficient if a retained file or production CSP i
 });
 
 test('unsafe inventory paths, excessive retained files and reused asset names are refused', async t => {
-  const f = await fixture(t, 1);
-  await writeFile(resolve(f.dist, 'p/1/assets/old.js'), 'replacement');
-  await assert.rejects(f.prepare(), /name reused/);
+  for (const path of ['p/1/assets/old.js', 'assets/relay_bg-old.wasm']) {
+    const f = await fixture(t, 1);
+    await mkdir(resolve(f.dist, 'assets'), { recursive: true });
+    await writeFile(resolve(f.dist, path), 'replacement');
+    await assert.rejects(f.prepare(), /name reused/);
+  }
   for (const path of ['../escape', 'p/1/../escape', 'p/1/%2e%2e/escape']) {
     const next = await fixture(t);
     const manifest = JSON.parse(next.state.previous.get('phone-site.json'));
@@ -162,7 +214,16 @@ test('unsafe inventory paths, excessive retained files and reused asset names ar
   }
   const next = await fixture(t);
   const manifest = JSON.parse(next.state.previous.get('phone-site.json'));
-  for (let i = 0; i < 4096; i++) manifest.files[`p/1/assets/${i}.js`] = manifest.files['p/1/index.html'];
+  for (let i = 0; i < 4096; i++) manifest.files[`assets/${i}.js`] = manifest.files['p/1/index.html'];
   next.state.previous.set('phone-site.json', JSON.stringify(manifest));
   await assert.rejects(next.prepare(), /Invalid phone site inventory/);
+  // Root assets share the documented 16 MiB file and 256 MiB site limits.
+  for (const [count, size, reason] of [[1, 16 * 1024 * 1024 + 1, /Invalid phone site entry/],
+    [17, 16 * 1024 * 1024, /exceeds 256 MiB/]]) {
+    const oversized = await fixture(t);
+    const manifest = JSON.parse(oversized.state.previous.get('phone-site.json'));
+    for (let i = 0; i < count; i++) manifest.files[`assets/large-${i}.wasm`] = { ...manifest.files['p/1/index.html'], size };
+    oversized.state.previous.set('phone-site.json', JSON.stringify(manifest));
+    await assert.rejects(oversized.prepare(), reason);
+  }
 });

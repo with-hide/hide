@@ -5,6 +5,7 @@ filesystem/HTTP boundary in Node. No test contacts or deploys to the host.
 """
 from pathlib import Path
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -52,16 +53,34 @@ class PhoneRelease(unittest.TestCase):
 
     def test_named_secrets_and_example_are_one_contract(self):
         workflow = yaml.safe_load((ROOT / ".github/workflows/release-candidate.yml").read_text())
-        env = workflow["jobs"]["phone"]["env"]
+        phone = workflow["jobs"]["phone"]
         keys = {line.split("=", 1)[0] for line in (ROOT / "scripts/phone-release.env.example").read_text().splitlines()
                 if line and not line.startswith("#")}
-        self.assertEqual(set(env), keys)
-        for key in keys:
-            self.assertEqual(env[key], "${{ secrets." + key + " }}")
+        self.assertFalse(keys.intersection(workflow.get("env", {})))
+        self.assertFalse(keys.intersection(phone.get("env", {})))
+        for step in phone["steps"]:
+            command = step.get("run", "")
+            expected = (keys if "phone-release.mjs check" in command or "phone-release.mjs prepare" in command
+                        else {"PHONE_VERCEL_TOKEN"} if "deploy --prebuilt --prod" in command else set())
+            env = {key: value for key, value in step.get("env", {}).items() if key in keys}
+            self.assertEqual(set(env), expected, step.get("name", step.get("uses")))
+            for key in expected:
+                self.assertEqual(env[key], "${{ secrets." + key + " }}")
         result = subprocess.run(["node", "--input-type=module", "-e",
                                  "import {SECRETS} from './scripts/phone-release.mjs'; console.log(Object.keys(SECRETS).sort().join('\\n'))"],
                                 cwd=ROOT, capture_output=True, text=True, timeout=10, check=True)
         self.assertEqual(set(result.stdout.splitlines()), keys)
+
+    def test_phone_job_actions_are_immutable_with_version_notes(self):
+        text = (ROOT / ".github/workflows/release-candidate.yml").read_text()
+        phone = yaml.safe_load(text)["jobs"]["phone"]
+        versions = {"actions/checkout": "v7", "actions/setup-node": "v4", "pnpm/action-setup": "v6"}
+        actions = [step["uses"] for step in phone["steps"] if "uses" in step]
+        self.assertEqual({action.split("@")[0] for action in actions}, set(versions))
+        for action in actions:
+            name, revision = action.split("@")
+            self.assertRegex(revision, r"^[a-f0-9]{40}$")
+            self.assertRegex(text, rf"uses: {re.escape(action)} # {versions[name]}(?:\s|$)")
 
     def test_upload_command_propagates_the_hosts_failure(self):
         workflow = yaml.safe_load((ROOT / ".github/workflows/release-candidate.yml").read_text())

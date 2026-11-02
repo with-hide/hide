@@ -593,7 +593,9 @@ The public repository's `phone-production` GitHub environment supplies exactly t
 | `PHONE_VERCEL_ORG_ID` | The existing Vercel team or account ID |
 | `PHONE_VERCEL_PROJECT_ID` | The existing phone project ID, separate from the introduction site |
 
-All are required; the first step names every missing or invalid key and stops without printing values, installing dependencies or contacting the host.
+All are required; the credential check names every missing or invalid key and stops without printing values, installing dependencies or contacting the host.
+Only the credential check and retention step receive all three secrets; upload receives only the token, and public confirmation receives none.
+The phone job's external Actions are pinned to reviewed full commit SHAs with version comments, and neither those Actions nor the dependency installation or phone build receives deployment secrets.
 The deployment owner creates the project, domain and secrets, restricts `phone-production` to main, and gives the token to that environment only.
 Keep Git integration and deploy hooks disconnected, Web Analytics and Speed Insights off, and production deployment URLs publicly readable so CI can retain the previous static files.
 Attach `app.withhide.dev` to this project before the first run; production confirmation uses that exact address and fails if DNS or the domain points elsewhere.
@@ -606,7 +608,9 @@ The scripts neither create the project nor configure its domain or secrets.
 Every candidate's phone job holds the same `phone-production` concurrency group, with cancellation disabled, across reading the old site, upload and confirmation.
 It reads the project's current production deployment through Vercel's API, then downloads from that deployment's fixed URL rather than a moving custom-domain alias.
 `phone-site.json` records the source commit and every static file's size and SHA-256.
-Every old `p/<n>/` file is checked against that inventory and copied into the new deployment; the new bundle then updates only its own protocol's entry page and adds its assets.
+Every old `p/<n>/` and root `assets/` file is checked against that inventory and copied into the new deployment.
+The new build refreshes the loader and its own protocol's entry pages and adds its assets.
+Root assets include the hashed WASM and lazy JavaScript modules an already-open loader can request when the person connects after a newer deployment.
 Previously referenced assets stay even when the same protocol is built again, and reusing an asset name for different bytes is refused.
 `protocols.json` is recomputed as the sorted union of all retained protocol directories, each of which must have an entry page.
 Only a project with no production deployment starts empty; a missing inventory, missing old asset, inconsistent protocol list or digest mismatch is a failure, never a reason to discard old bundles.

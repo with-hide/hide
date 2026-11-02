@@ -121,7 +121,9 @@ export async function preparePhone({ source, dist, stage, secrets, fetcher = fet
     await ancestor(manifest.source, source);
     // Only a project with no production deployment bootstraps empty. A missing
     // or corrupt existing inventory is an error, never permission to erase it.
-    for (const [path, entry] of Object.entries(manifest.files).filter(([p]) => p.startsWith('p/'))) {
+    // An open loader can request its root WASM or lazy module after a deploy.
+    // Both asset trees share the same digest, collision and resource checks.
+    for (const [path, entry] of Object.entries(manifest.files).filter(([p]) => p.startsWith('p/') || p.startsWith('assets/'))) {
       const { bytes } = await get(`${origin}/${path}`, fetcher);
       if (bytes.length !== entry.size || sha256(bytes) !== entry.sha256) throw new Error(`Previous phone file differs: ${path}`);
       await put(output, path, bytes);
@@ -187,10 +189,10 @@ export async function confirmPhone(stage, fetcher = fetch) {
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   try {
     requireMain(process.env);
-    const secrets = credentials(process.env);
     const [command, source, dist, stage] = process.argv.slice(2);
-    if (command === 'check') { /* Fail before installing or building. */ }
+    if (command === 'check') credentials(process.env); // Fail before installing or building.
     else if (command === 'prepare') {
+      const secrets = credentials(process.env);
       execFileSync('git', ['merge-base', '--is-ancestor', source, 'origin/main']);
       if (execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim() !== source) throw new Error('Phone build checkout differs from source');
       await preparePhone({ source, dist, stage, secrets, ancestor: (before, after) => execFileSync('git', ['merge-base', '--is-ancestor', before, after]) });
