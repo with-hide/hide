@@ -8,7 +8,7 @@ import { sendKeys, withControl } from "./daemon-actions";
 import { startFixture } from "./engine-fixture";
 import { dumpOnFailure } from "./failure-dump";
 import { startHided, type Daemon } from "./hided-fixture";
-import { enterWorkspace } from "./wire";
+import { countSent, enterWorkspace } from "./wire";
 
 test.describe.configure({ timeout: 120_000 });
 test.use({ actionTimeout: 15_000 });
@@ -16,8 +16,9 @@ test.use({ actionTimeout: 15_000 });
 const paneText = (page: Page, pane: string) => page.evaluate((id) => window.__hideProbe?.paneText(id) ?? "", pane);
 const selection = (page: Page, pane: string) => page.evaluate((id) => window.__hideProbe?.paneSelection(id) ?? null, pane);
 
-// Herdr only until the wheel reliably scrolls an agent pane on the own engine: in about one run in three the first wheel moves nothing there, the snapshot listing the focused pane as transport_state "idle" and the other pane as "controlling".
-test("a selection stays on the text it covers when the wheel scrolls the pane @herdr", async ({ page, context }) => {
+test("a selection stays on the text it covers when the wheel scrolls the pane", async ({ page, context }) => {
+  const lastSent = new Map<string, Record<string, unknown>>();
+  const sent = countSent(page, lastSent);
   await page.setViewportSize({ width: 1680, height: 900 });
   const herdr = await startFixture();
   let daemon: Daemon | null = null;
@@ -55,6 +56,8 @@ test("a selection stays on the text it covers when the wheel scrolls the pane @h
       selection: await selection(page, pane),
       grid: await page.evaluate((id) => window.__hideProbe?.paneGrid(id) ?? null, pane),
       focused: await page.locator('[data-pane-view][data-focused="true"]').getAttribute("data-pane-view"),
+      scrollCount: sent.get("terminal_scroll") ?? 0,
+      lastScroll: lastSent.get("terminal_scroll"),
       snapshot: await withControl(daemon!, (control) => control.until((rest) => rest, "the failure snapshot")),
     }), () => expect.poll(() => paneText(page, pane), { timeout: 10_000 }).not.toBe(textBefore));
     await expect.poll(() => selection(page, pane)).toBe(before);
