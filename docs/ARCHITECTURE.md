@@ -3539,6 +3539,12 @@ Push is Web Push that hided signs and encrypts itself with `ring`: a VAPID ES256
 Only the push services' own hosts are accepted as endpoints (Apple, FCM, Mozilla, Windows), parsed as an `https` URL with no userinfo and no port but 443 and posted without following redirects, plus a loopback endpoint in a debug build for the e2e.
 `agent_state::push::Transitions` (`agent_state/turn.rs`) owns notification state and the ten-minute disappearance ledger; hided owns subscriptions, mode policy and delivery.
 The first list only seeds the transitions; after it, a root agent entering Needs You or Done sends one notice per subscribed phone, a descendant's question, approval or error raises its root, and the notice's tag (`device|root pane`) replaces the one before it.
+A stopped turn with agent summaries on waits to announce Done until its final analysis lands, including the existing one timeout retry; its row keeps following the activity and demand facts meanwhile.
+The label worker carries one pending lifecycle sequence per pane through the snapshot to the shared notification judge, so an asynchronous Question judgment cannot be preceded by a premature Done notice.
+Success, terminal failure, an unreadable session, cancellation by a newer lifecycle state, or turning summaries off ends that wait; no notification timer or polling is added.
+Every fallback that ends the wait finalizes this turn's notice as Done at one point: a terminal analysis failure, an unreadable session, turning summaries off, or entering provider recovery (for example a login or usage limit, recorded as `notification.provider_recovery`).
+A later recovered judgment or turning summaries back on still updates the row but does not announce the same lifecycle sequence again.
+A new turn, a native unanswered question, a separate core ask, and a raised descendant remain new notification causes; the same root tag still replaces a previous notice.
 A relay push also carries `room`, the same derived base64url device room as the QR, so the phone's per-room worker opens the correct Hide; each Hide retains its own VAPID key.
 A push payload carries the root's row title as `title`, `state` (`needs_you` or `done`), its published `status_code` and exact chosen second-line `detail`, the project as `place`, the `tag`, `device_id`, `pane_id` and `clear`.
 The sentence is untranslated and never logged; terminal content is still excluded (operator-approved change 2026-10-13, [status-model.md: With and without Hide AI](status-model.md#with-and-without-hide-ai)).

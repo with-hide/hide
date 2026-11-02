@@ -461,6 +461,10 @@ pub mod phone {
         /// The delivery notice is already responsible for this transition: a
         /// root in Needs You only for raised causes that notice announces.
         pub human_notice: bool,
+        #[serde(skip)]
+        pub notification_pending: bool,
+        #[serde(skip)]
+        pub notification_finalized: bool,
     }
 
     impl PhoneAgent {
@@ -770,6 +774,18 @@ pub mod phone {
                 emphasized: matches!(str_of(agent, "group"), "needs_you" | "done"),
                 holds_notification: matches!(str_of(agent, "group"), "needs_you" | "done")
                     || matches!(str_of(agent, "demand"), "question" | "approval" | "error"),
+                notification_finalized: agent
+                    .get("notification_finalized")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+                    && agent.get("user_turn").is_none_or(Value::is_null)
+                    && agent.get("ask_subject").is_none_or(Value::is_null)
+                    && agent
+                        .get("raised")
+                        .and_then(Value::as_array)
+                        .is_none_or(Vec::is_empty),
+                notification_pending: agent.get("notification_pending").and_then(Value::as_bool)
+                    == Some(true),
                 human_notice: str_of(agent, "demand") == "none"
                     && !agent
                         .get("blocked")

@@ -1842,6 +1842,11 @@ pub struct SidebarAgentSnapshot {
     /// block is built from (PRD overview-request-view D-14).
     #[serde(skip_serializing)]
     pub(crate) row_facts: Option<crate::request_view::RowFacts>,
+    /// Notification delivery waits for the final turn-end analysis; the
+    /// visible row continues to follow its own activity and demand facts.
+    pub notification_pending: bool,
+    /// A fallback already finalized this turn's notice as Done.
+    pub notification_finalized: bool,
     /// The request and block letters the agent's session sent whose answer
     /// it still waits for, each with who will answer it. Laid by the runtime
     /// from the delivery ledger, never by a session read, so it does not make

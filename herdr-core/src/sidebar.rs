@@ -264,6 +264,11 @@ pub struct SessionAgentPayload {
     /// on by the label overlay, never read from Herdr.
     #[serde(skip)]
     pub(crate) facts: Option<crate::request_view::RowFacts>,
+    /// The label worker still owes the stopped turn its final judgment.
+    #[serde(skip)]
+    pub(crate) notification_pending: bool,
+    #[serde(skip)]
+    pub(crate) notification_finalized: bool,
     /// Display history, never used by agent_demand/activity or close proof.
     #[serde(skip)]
     pub(crate) record: Option<crate::labels::record::RecordBinding>,
@@ -922,6 +927,8 @@ fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSnapshot, Str
         lineage_collapsed: false,
         sleep: None,
         row_facts: agent.facts,
+        notification_pending: agent.notification_pending,
+        notification_finalized: agent.notification_finalized,
         awaited_replies: Vec::new(),
         hide_ai: None,
         request: None,

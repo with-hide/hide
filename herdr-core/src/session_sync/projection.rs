@@ -142,6 +142,8 @@ impl ProjectionState {
                     label: None,
                     changed_at_unix_ms: None,
                     facts: None,
+                    notification_pending: false,
+                    notification_finalized: false,
                 }
             })
             .collect();
