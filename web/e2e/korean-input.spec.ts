@@ -5,7 +5,7 @@
 
 import { expect, test } from "@playwright/test";
 import fs from "node:fs";
-import { startHerdr } from "./herdr-fixture";
+import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { composeKorean } from "./ime";
 import { enterWorkspace } from "./wire";
@@ -22,7 +22,7 @@ function heard(log: string, from: number): string {
 // @platform: Hangul bytes reach the agent's PTY through the platform's Herdr.
 test("⇧↩ right after a Hangul syllable reaches the program after that syllable", { tag: "@platform" }, async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  const herdr = await startHerdr();
+  const herdr = await startFixture();
   let daemon: Daemon | null = null;
   try {
     const [agent] = herdr.panes;
@@ -77,7 +77,7 @@ test("⇧↩ right after a Hangul syllable reaches the program after that syllab
 
 test("Escape while Hangul is composing in the search field keeps ⌘K open, and closes it once the syllable is in", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  const herdr = await startHerdr();
+  const herdr = await startFixture();
   let daemon: Daemon | null = null;
   try {
     daemon = await startHided(herdr, "korean-escape");

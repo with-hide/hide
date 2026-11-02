@@ -1,12 +1,12 @@
 import { expect, test } from "@playwright/test";
-import { startHerdr } from "./herdr-fixture";
+import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { countSent, enterWorkspace, screenshot } from "./wire";
 import { chord, held } from "./chords";
 
 test("shared Overview preserves work, returns the keyboard and has direct sidebar commands", async ({ page }) => {
   test.setTimeout(120_000);
-  const herdr = await startHerdr();
+  const herdr = await startFixture();
   let daemon: Daemon | null = null;
   try {
     daemon = await startHided(herdr, "overview-modal");

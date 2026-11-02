@@ -6,7 +6,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import path from "node:path";
 import { chord } from "./chords";
-import { startHerdr } from "./herdr-fixture";
+import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace, screenshot } from "./wire";
 
@@ -78,7 +78,7 @@ async function inkOf(page: Page, screen: Locator, grid: { cols: number; rows: nu
 }
 
 async function start(page: Page) {
-  const herdr = await startHerdr();
+  const herdr = await startFixture();
   let daemon: Daemon | undefined;
   const stop = () => {
     try { daemon?.stop(); } finally { herdr.stop(); }

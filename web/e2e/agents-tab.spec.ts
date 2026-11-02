@@ -7,7 +7,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
-import { startHerdr } from "./herdr-fixture";
+import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { countSent, enterWorkspace, screenshot } from "./wire";
 
@@ -25,7 +25,7 @@ const read = (file: string) => (fs.existsSync(file) ? fs.readFileSync(file, "utf
  * likely to have there.
  */
 async function start(label: string) {
-  const herdr = await startHerdr({ readiness: "registered" });
+  const herdr = await startFixture();
   const home = path.join(fs.mkdtempSync(path.join(herdr.root, "ag-")), "home");
   for (const folder of [".claude", ".codex", ".grok/hooks", ".cursor"]) fs.mkdirSync(path.join(home, folder), { recursive: true });
   fs.mkdirSync(path.join(home, ".local", "bin"), { recursive: true });

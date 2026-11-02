@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
-import { startHerdr } from "./herdr-fixture";
+import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { checkoutGitFixture } from "./checkout-git-fixture";
 import { git } from "./work-prs-fixture";
@@ -9,7 +9,7 @@ import { enterWorkspace, screenshot } from "./wire";
 
 test("checkout header reads working files with Changes closed, current-SHA statuses, and idempotent Changes", async ({ page }) => {
   test.setTimeout(90_000);
-  const herdr = await startHerdr({ readiness: "registered" });
+  const herdr = await startFixture();
   let daemon: Daemon | undefined;
   try {
     const fixture = checkoutGitFixture(herdr, { historyCount: 6 });
@@ -78,7 +78,7 @@ test("checkout header reads working files with Changes closed, current-SHA statu
 
 test("a commit pushed to origin shows as one to receive, without a manual fetch, and Pull takes it only past the operator's files", async ({ page }) => {
   test.setTimeout(90_000);
-  const herdr = await startHerdr({ readiness: "registered" });
+  const herdr = await startFixture();
   let daemon: Daemon | undefined;
   try {
     // A GitHub-named origin whose fetch is rewritten to a local bare repository, so the header

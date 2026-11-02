@@ -6,7 +6,7 @@
 // a real update runs in the package lane (desktop/e2e/packaged-update.spec.ts).
 
 import { expect, test, type Page } from "@playwright/test";
-import { startHerdr } from "./herdr-fixture";
+import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { screenshot } from "./wire";
 
@@ -99,7 +99,7 @@ async function load(page: Page, daemon: Daemon): Promise<void> {
 
 test("the desktop app shows a ready update as the Help dot and line, and every state in About; a browser tab shows none", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
-  const herdr = await startHerdr();
+  const herdr = await startFixture();
   let daemon: Daemon | null = null;
   try {
     daemon = await startHided(herdr, "app-update");

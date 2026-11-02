@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 import { agentPane } from "./agent-pane";
-import { startHerdr } from "./herdr-fixture";
+import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace, screenshot, setLanePinned, showExplorer } from "./wire";
 
@@ -38,7 +38,7 @@ async function noteOnLine(page: Page, line: number, note: string): Promise<void>
 
 test("an agent's View wears its mark, and the operator's line comment reaches that agent as one letter", async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
-  const herdr = await startHerdr({ agents: false });
+  const herdr = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
     const fixture = path.join(herdr.root, "fixture");
@@ -120,7 +120,7 @@ test("an agent's View wears its mark, and the operator's line comment reaches th
 
 test("an area dragged on an image reaches its agent with a screenshot of that area", async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
-  const herdr = await startHerdr({ agents: false });
+  const herdr = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
     // Both suites run from their package folder, one below the repository.

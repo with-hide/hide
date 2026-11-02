@@ -7,14 +7,14 @@
 import { expect, test } from "@playwright/test";
 import { FakeTailscale } from "./fake-tailscale";
 import { chord } from "./chords";
-import { startHerdr } from "./herdr-fixture";
+import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 
 test.describe.configure({ timeout: 120_000 });
 
 test("a ready Mac is one line, the QR waits for Show QR, and the push dropdown on Notifications describes one mode", async ({ page }) => {
   await page.setViewportSize({ width: 1100, height: 800 });
-  const herdr = await startHerdr({ readiness: "registered" });
+  const herdr = await startFixture();
   const tailscale = new FakeTailscale();
   let daemon: Daemon | null = null;
   try {

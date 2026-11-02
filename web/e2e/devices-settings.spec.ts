@@ -8,7 +8,7 @@
 // the desktop suite's isolated sshd (`desktop/e2e/device-kit.spec.ts`).
 
 import { expect, test, type Page } from "@playwright/test";
-import { startHerdr } from "./herdr-fixture";
+import { startFixture } from "./engine-fixture";
 import { startHided, writeSshHost, type Daemon } from "./hided-fixture";
 import { countSent, enterWorkspace, screenshot } from "./wire";
 
@@ -26,7 +26,7 @@ async function openDevices(page: Page, daemon: Daemon) {
 
 test("a device row is one line with Test and a menu, Add device is one button, and Remove asks first", async ({ page }) => {
   await page.setViewportSize({ width: 900, height: 800 });
-  const herdr = await startHerdr({ readiness: "registered" });
+  const herdr = await startFixture();
   let daemon: Daemon | null = null;
   try {
     daemon = await startHided(herdr, "devices-settings");
@@ -112,7 +112,7 @@ test("a device row is one line with Test and a menu, Add device is one button, a
 
 test("the Add dialog lists the account's Hosts, fills the name from the chosen one, and has no field for a username, port or key", async ({ page }) => {
   await page.setViewportSize({ width: 900, height: 800 });
-  const herdr = await startHerdr({ readiness: "registered" });
+  const herdr = await startFixture();
   let daemon: Daemon | null = null;
   try {
     daemon = await startHided(herdr, "devices-add-dialog");

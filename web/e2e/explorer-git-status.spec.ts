@@ -5,24 +5,24 @@ import { expect, test, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace, showExplorer } from "./wire";
 import { toPage } from "../../desktop/src/main/wirePath";
 
-const git = (herdr: HerdrFixture, root: string, ...args: string[]) => execFileSync("git", ["-C", root, ...args], { env: herdr.env, stdio: "ignore" });
+const git = (root: string, ...args: string[]) => execFileSync("git", ["-C", root, ...args], { stdio: "ignore" });
 
 /** Each folder the Explorer can show, set up before hided starts, and the Git mark its answer leaves in the header. */
-const FOLDERS: Array<{ name: string; setup: (herdr: HerdrFixture, root: string) => void; mark: { state: string; says: RegExp } | null }> = [
+const FOLDERS: Array<{ name: string; setup: (root: string) => void; mark: { state: string; says: RegExp } | null }> = [
   // Nothing for the operator to do, so nothing is drawn.
   { name: "a plain folder", setup: () => {}, mark: null },
-  { name: "a repository", setup: (herdr, root) => git(herdr, root, "init", "-q"), mark: null },
+  { name: "a repository", setup: (root) => git(root, "init", "-q"), mark: null },
   // `rev-parse` finds the repository without the index and `status` then fails
   // on it: a failure the operator can repair.
   {
     name: "a repository whose index is corrupt",
-    setup: (herdr, root) => {
-      git(herdr, root, "init", "-q");
+    setup: (root) => {
+      git(root, "init", "-q");
       fs.writeFileSync(path.join(root, ".git", "index"), "not an index");
     },
     mark: { state: "unavailable", says: /^Git status unavailable: Git could not read this repository/ },
@@ -31,12 +31,12 @@ const FOLDERS: Array<{ name: string; setup: (herdr: HerdrFixture, root: string) 
 
 for (const folder of FOLDERS) {
   test(`an Explorer row stays where it was drawn when the Git status of ${folder.name} lands`, async ({ page }) => {
-    const herdr = await startHerdr({ agents: false });
+    const herdr = await startFixture({ agents: false });
     let daemon: Daemon | null = null;
     try {
       const root = fs.realpathSync(path.join(herdr.root, "fixture"));
       for (const name of ["first.md", "second.md"]) fs.writeFileSync(path.join(root, name), `# ${name}\n`);
-      folder.setup(herdr, root);
+      folder.setup(root);
       daemon = await startHided(herdr, "explorer-git-status");
       const release = await holdGitAnswer(page, root);
       await page.goto(`${daemon.origin}/#token=${daemon.token}`);

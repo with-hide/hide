@@ -3,7 +3,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
-import { startHerdr } from "./herdr-fixture";
+import { startFixture } from "./engine-fixture";
 import { aiSettingsFile, startHided, type Daemon } from "./hided-fixture";
 import { countSent, screenshot } from "./wire";
 
@@ -19,7 +19,7 @@ const read = (file: string) => (fs.existsSync(file) ? fs.readFileSync(file, "utf
  * folder each agent makes), a kit record only when `record`, and a daemon that runs the kit.
  */
 async function start(record: boolean, options: { seedHideAi?: boolean; savedProfile?: boolean } = {}) {
-  const herdr = await startHerdr();
+  const herdr = await startFixture();
   const home = path.join(fs.mkdtempSync(path.join(herdr.root, "ob-")), "home");
   for (const folder of [".claude", ".grok"]) fs.mkdirSync(path.join(home, folder), { recursive: true });
   fs.mkdirSync(path.join(home, ".local", "bin"), { recursive: true });

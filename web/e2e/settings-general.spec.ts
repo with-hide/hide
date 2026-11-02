@@ -6,7 +6,7 @@
 // moved into Agents and Hide AI.
 
 import { expect, test } from "@playwright/test";
-import { startHerdr } from "./herdr-fixture";
+import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace, screenshot } from "./wire";
 
@@ -14,7 +14,7 @@ test.describe.configure({ timeout: 120_000 });
 
 test("Settings lists its pages in two groups with About apart, and About shows the real Herdr values behind a closed Details", async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 900 });
-  const herdr = await startHerdr({ readiness: "registered" });
+  const herdr = await startFixture();
   let daemon: Daemon | null = null;
   try {
     daemon = await startHided(herdr, "settings-general");
@@ -113,7 +113,7 @@ test("Settings lists its pages in two groups with About apart, and About shows t
 
 test("Sleep after, the issue link and the worktree names live in Agents and Hide AI with their stored values", async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 900 });
-  const herdr = await startHerdr({ readiness: "registered" });
+  const herdr = await startFixture();
   let daemon: Daemon | null = null;
   try {
     daemon = await startHided(herdr, "settings-moved");
@@ -155,7 +155,7 @@ test("Sleep after, the issue link and the worktree names live in Agents and Hide
 test("General and About read without sideways scrolling in Korean and English, light and dark, on the smallest window", async ({ page }) => {
   // B65, settings-left-nav B13: the sheet shrinks with its window to the smallest one, the list beside the page; every row has to wrap, not clip.
   await page.setViewportSize({ width: 720, height: 480 });
-  const herdr = await startHerdr({ readiness: "registered" });
+  const herdr = await startFixture();
   let daemon: Daemon | null = null;
   try {
     daemon = await startHided(herdr, "settings-narrow");
