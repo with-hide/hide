@@ -9,7 +9,7 @@ import { chord } from "./chords";
 import { e2eEngine } from "./e2e-engine";
 import { openLayout, startLayoutStack, type LayoutStack } from "./engine-fixture";
 import { corePaneFocus } from "./daemon-actions";
-import { panePrompt } from "./herdr-fixture";
+import { panePrompt, paneSizeCommand, type PaneShell } from "./herdr-fixture";
 import { countSent, screenshot } from "./wire";
 
 test.describe.configure({ timeout: 90_000 });
@@ -64,14 +64,10 @@ async function splitShell(page: Page, { stack, sent }: Open): Promise<string> {
 /**
  * The size the pane's own program reads from its terminal, printed after
  * `marker`: `stty` in the Unix fixture shell, the console window PowerShell
- * reads in the Windows PowerShell pane.
+ * reads directly or as a child of the Windows CMD pane.
  */
-async function programSize(page: Page, pane: string, marker: string): Promise<{ rows: number; cols: number }> {
-  const ask =
-    process.platform === "win32"
-      ? `$s = $Host.UI.RawUI.WindowSize; '${marker} ' + $s.Height + ' ' + $s.Width`
-      : `echo ${marker} $(stty size)`;
-  await page.keyboard.type(ask);
+async function programSize(page: Page, pane: string, shell: PaneShell, marker: string): Promise<{ rows: number; cols: number }> {
+  await page.keyboard.type(paneSizeCommand(shell, marker));
   await page.keyboard.press("Enter");
   // The probe's screen text pads each row with spaces to the grid's width.
   const pattern = new RegExp(`^${marker} (\\d+) (\\d+) *$`, "m");
@@ -263,7 +259,7 @@ test("Reopen closed tab gives back the tab just closed with a working shell", { 
     const pane = (await paneIds(page))[0]!;
     await expect.poll(() => paneText(page, pane), { timeout: 15_000 }).toMatch(panePrompt(stack.server.shell));
     await focusPane(page, stack, pane);
-    expect(await programSize(page, pane, "reopened")).toEqual(await page.evaluate((id) => window.__hideProbe!.paneGrid(id), pane));
+    expect(await programSize(page, pane, stack.server.shell, "reopened")).toEqual(await page.evaluate((id) => window.__hideProbe!.paneGrid(id), pane));
   } finally {
     open.stack.stop();
   }
@@ -276,16 +272,16 @@ test("a narrower window reaches each pane's program as a narrower terminal", { t
     const [left, right] = stack.panes as [string, string];
     const grid = (pane: string) => page.evaluate((id) => window.__hideProbe!.paneGrid(id), pane);
     await focusPane(page, stack, left);
-    const wide = await programSize(page, left, "wide");
+    const wide = await programSize(page, left, stack.server.shell, "wide");
     expect(wide).toEqual(await grid(left));
 
     await page.setViewportSize({ width: 1200, height: 900 });
     await expect.poll(async () => (await grid(left))!.cols).toBeLessThan(wide.cols);
     await expect.poll(async () => (await grid(right))!.cols).toBeLessThan(wide.cols);
     // The engine sizes the program's terminal to the grid the screen drew.
-    expect(await programSize(page, left, "narrow")).toEqual(await grid(left));
+    expect(await programSize(page, left, stack.server.shell, "narrow")).toEqual(await grid(left));
     await focusPane(page, stack, right);
-    expect(await programSize(page, right, "narrow")).toEqual(await grid(right));
+    expect(await programSize(page, right, stack.server.shell, "narrow")).toEqual(await grid(right));
   } finally {
     open.stack.stop();
   }

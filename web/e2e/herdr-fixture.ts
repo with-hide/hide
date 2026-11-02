@@ -383,6 +383,13 @@ export function printFileCommand(shell: PaneShell, file: string): string {
   return shell === "cmd" ? `cls & type ${cmdQuote(file)}` : `clear; cat ${posixQuote(file)}`;
 }
 
+/** Prints the terminal dimensions read by a program in the fixture's actual shell. */
+export function paneSizeCommand(shell: PaneShell, marker: string): string {
+  if (shell === "posix") return `echo ${posixQuote(marker)} $(stty size)`;
+  const script = `$s = $Host.UI.RawUI.WindowSize; ${powershellQuote(`${marker} `)} + $s.Height + ' ' + $s.Width`;
+  return shell === "powershell" ? script : paneCommandLine(shell, ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script]);
+}
+
 /** The text that runs `program` in a pane's shell, ready for `pane run`. */
 export function paneProgramLine(shell: PaneShell, program: PaneProgram): string {
   if (shell === "powershell") {

@@ -14,7 +14,7 @@ import { altScreenProgram, bytesReceived } from "./alt-screen-program";
 import { corePaneFocus, focusTab, newTab, openProject, tabsOf, withControl } from "./daemon-actions";
 import { startFixture, type AgentFixture, type EngineServer } from "./engine-fixture";
 import { waitForTerminal } from "./group-start-helper";
-import { paneCommandLine, panePrompt, printLinesCommand } from "./herdr-fixture";
+import { paneCommandLine, panePrompt, printFileCommand, printLinesCommand } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { fixtureProgram } from "./platform-fixture";
 import { projectRow } from "./overview-entry";
@@ -466,10 +466,9 @@ test("a drag selects locally without a click, and its copy joins wrapped lines a
     const shellView = page.locator(`[data-pane-view="${shellPaneId}"]`);
     const shellGrid = (await page.evaluate((id) => window.__hideProbe?.paneGrid(id) ?? null, shellPaneId))!;
     const wrapped = "w".repeat(shellGrid.cols + 7);
-    // Hide-made panes use PowerShell on Windows and zsh on Unix.
-    await page.keyboard.type(process.platform === "win32"
-      ? `Clear-Host; Write-Output '${wrapped}' 'short' '' '  in' '    deeper' 'end'\n`
-      : `clear; echo ${wrapped}; echo short; echo; echo '  in'; echo '    deeper'; echo end\n`);
+    const textFile = path.join(flow.herdr.root, "selection.txt");
+    fs.writeFileSync(textFile, [wrapped, "short", "", "  in", "    deeper", "end", ""].join("\n"));
+    await page.keyboard.type(`${printFileCommand(flow.herdr.shell, textFile)}\n`);
     await expect.poll(() => screen(page), { timeout: 15_000 }).toMatch(/^w+\s*\n\s*w+\s*\n\s*short\s*\n\s*\n\s+in\s*\n\s+deeper\s*\n\s*end/);
     const shellScreen = (await shellView.locator(".xterm-screen").boundingBox())!;
     const shellCell = (column: number, row: number) => ({
