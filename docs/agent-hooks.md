@@ -551,7 +551,7 @@ Hide writes into OpenCode's global plugin folder `~/.config/opencode/plugins/`, 
 OpenCode 1.x loads only the files of the folder, so it never sees `hide-opencode/`, and OpenCode 2 loads `hide.js` as a plugin that does nothing.
 `hide-agent-hooks/src/opencode.rs` declares the three files and `hide-agent-hooks/src/plugin.rs`, the owned script files they share with Pi's and omp's extension, writes, judges and removes them together; their sources are `hide-agent-hooks/src/opencode/{plugin,server,tui}.js` with this build's helper path filled in.
 Each file's first line, `// <hide-opencode-plugin|hide-opencode-server|hide-opencode-tui>@<version> sha256=<hash of the rest>`, proves the file is Hide's, carries its version and shows whether it was edited; `hide.js` and `server.js` hold `const HELPER = "<absolute path of this build's hide-agent-hooks>";`, and `tui.js` takes it from `server.js`.
-The current plugin, server and TUI payload versions are 11, 5 and 3; Pi and omp use extension version 12.
+The current plugin, server and TUI payload versions are 12, 6 and 3; Pi and omp use extension version 13.
 OpenCode's configuration folder is never created: with no `~/.config/opencode` the row reads Absent and says OpenCode has not created it yet, and only the `plugins/` folder inside an existing one and Hide's `hide-opencode/` inside that are made.
 
 On OpenCode 1.x the plugin does nothing outside a pane Hide manages: with neither `HIDE_PANE_ID` (a pane of the core's own engine) nor `HERDR_ENV=1`, `HERDR_PANE_ID` and `HERDR_SOCKET_PATH` (a Herdr pane), or no helper at its path, it registers no hook and starts no process, so OpenCode in an ordinary terminal runs as if the file were not there.
