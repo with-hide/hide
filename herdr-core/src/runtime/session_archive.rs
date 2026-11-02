@@ -135,7 +135,7 @@ impl Runtime {
             ));
         }
         if let Some(device) = crate::address::pane_device(&agent.pane_id)
-            && !self.archive_device_connected(device)
+            && !self.device_answers(device)
         {
             return Some((
                 "archive.device_disconnected",
@@ -198,7 +198,7 @@ impl Runtime {
     /// session those panes and rows come from is loaded: before that every
     /// pane there would read as gone.
     fn archive_machine_read(&self, machine: &str) -> bool {
-        self.archive_device_connected(machine)
+        self.device_answers(machine)
             && self
                 .delivery_panes
                 .get(machine)
@@ -210,16 +210,6 @@ impl Runtime {
                     .remote
                     .iter()
                     .any(|remote| remote.target_id == machine && remote.session.is_some()))
-    }
-
-    fn archive_device_connected(&self, device: &str) -> bool {
-        device == self.node.as_str()
-            || self
-                .snapshot
-                .status
-                .remote
-                .iter()
-                .any(|remote| remote.target_id == device && remote.state == "connected")
     }
 
     fn admit_archive(
@@ -686,7 +676,7 @@ impl Runtime {
             .map(|member| member.pane_id.clone())
             .filter(|pane| {
                 closed.contains(pane)
-                    || (self.archive_device_connected(&self.archive_machine_of(pane))
+                    || (self.device_answers(&self.archive_machine_of(pane))
                         && !self.pane_listed(pane))
             })
             .collect::<HashSet<_>>();
@@ -786,7 +776,7 @@ impl Runtime {
             return true;
         }
         let device = record.members[0].machine.clone();
-        if !self.archive_device_connected(&device) {
+        if !self.device_answers(&device) {
             self.set_error(
                 "archive.device_disconnected",
                 format!("{device} is not connected; resume it once it reconnects"),
@@ -1398,7 +1388,7 @@ impl Runtime {
         front: bool,
     ) -> Result<u64, String> {
         let local = member.machine == self.node.as_str();
-        if !self.archive_device_connected(&member.machine) {
+        if !self.device_answers(&member.machine) {
             return Err(format!("{} is not connected", member.machine));
         }
         if !std::path::Path::new(&member.checkout_path).is_absolute() && local {
