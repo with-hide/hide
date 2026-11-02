@@ -10,6 +10,7 @@ import { NO_CHOICE, type StartChoice } from "./start";
 
 export type Screen =
   /** No code and no credential on this phone (B13). */
+  | "version"
   | "unpaired"
   /** The QR opened this page: "Connect to <Mac>" and Connect (B11). */
   | "pair"
@@ -54,6 +55,8 @@ export type PendingInput = { requestId: string; kind: "text" | "key" };
 
 type PhoneState = {
   screen: Screen;
+  relayError: "storage" | "busy" | "qrError" | null;
+  deviceProtocol: number | null;
   pair: PairPayload | null;
   refusal: Refusal | null;
   /** A live, authenticated socket. */
@@ -90,6 +93,8 @@ type PhoneState = {
 
 const initial: PhoneState = {
   screen: "unpaired",
+  relayError: null,
+  deviceProtocol: null,
   pair: null,
   refusal: null,
   connected: false,

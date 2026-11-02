@@ -1,3 +1,4 @@
+import { OfflineText } from "./OfflineText";
 // The phone's start sheet (PRD home-device-rail D-24, B42-B46): what to do, where
 // (default This Mac's Home), which agent kind and model, and Start. The kind and
 // model start from the desktop's remembered choice. The text stays until a
@@ -9,7 +10,7 @@ import { Button } from "../components/ui/button";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "../components/ui/sheet";
 import { closeStartSheet, editStartSheet, submitStart } from "./connection";
-import { UNREACHABLE_NOTICE, noticeText, type StartKind } from "./protocol";
+import { noticeText, type StartKind } from "./protocol";
 import { START_KINDS, modelsOf, selectionOf, startFailure, startProblem, targetText } from "./start";
 import { usePhone } from "./store";
 
@@ -45,7 +46,7 @@ export function StartSheet() {
         {!connected ? (
           <p role="status" className="flex items-center gap-md rounded-lg bg-secondary px-md py-sm text-subhead text-subtle-foreground" data-phone-start-unreachable="true">
             <Loader2Icon aria-hidden="true" className="size-(--size-icon-lg) shrink-0 animate-spin" />
-            <span>{noticeText(t, UNREACHABLE_NOTICE)}</span>
+            <span><OfflineText /></span>
           </p>
         ) : null}
         <textarea
