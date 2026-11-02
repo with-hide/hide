@@ -28,14 +28,15 @@ use hide_holder_protocol::record::{self, EndReason, Identity, PaneRecord, Phase,
 use hide_holder_protocol::{Answer, Size};
 use hide_kit::layout;
 use hide_kit::panes::{StartRequest, Started};
+use hide_node::terminal::engine_panes::{LocalPanes, PaneShell};
 use hide_node::terminal::holder::{HolderFolders, Holders, Switch, open_holder};
 use hide_node::terminal::protocol::SessionEvent;
 use hide_node::terminal::{
     Attacher, Mode, OutputSink, ReportSink, RetryPolicy, Service, SessionParts,
 };
 use hide_node_link::holders::{
-    HolderError, NO_RULES_FOR_HOLDER, PaneFacts, PaneFactsSink, RuleSet, ScreenRead, ScreenRules,
-    ScreenState, UNSUPPORTED_HOLDER, WATCH_LOST,
+    HolderError, HolderStart, NO_RULES_FOR_HOLDER, PaneFacts, PaneFactsSink, PaneHolders, RuleSet,
+    ScreenRead, ScreenRules, ScreenState, UNSUPPORTED_HOLDER, WATCH_LOST,
 };
 use hide_node_link::terminal::{
     GridSize, KeyTarget, TerminalControl, TerminalNode, TerminalReport,
@@ -570,6 +571,66 @@ fn a_started_pane_shows_its_first_full_screen_takes_input_and_converges() {
     assert_eq!(ended.phase, Phase::Ended);
     assert_eq!(ended.end.map(|end| end.reason), Some(EndReason::Terminated));
     assert!(!holder.runs());
+}
+
+/// The saved layout, or a newly drawn pane, can attach before its holder's
+/// start was registered. The node's engine already owns that pane: it
+/// waits for the same holder start and draws its output, without Herdr.
+#[test]
+fn an_engine_pane_attaches_before_its_holder_start_is_registered() {
+    let folder = Folder::new();
+    let Node {
+        service,
+        holders,
+        screens,
+        reports,
+        herdr_opened,
+    } = Node::start(Switch::On, folder.home.path(), &folder.state);
+    let service = Arc::new(service);
+    let holders = Arc::new(holders.unwrap());
+    let engine = LocalPanes::new(
+        Arc::clone(&holders),
+        Arc::clone(&service),
+        PaneShell::Fixed(shell()),
+    );
+    let pane = "w1:p1";
+    assert!(holders.record(pane).unwrap().is_none());
+    let (opened, _) = channel();
+    assert!(
+        holders
+            .attacher(Box::new(Herdr(Mutex::new(opened))))
+            .keeps_own_size(pane),
+        "an engine pane belongs to its holder before a record or start exists"
+    );
+    service.control(TerminalControl::Attach {
+        pane: pane.to_owned(),
+        size: None,
+        manual: false,
+    });
+    reports.wait_state(pane, "starting");
+    engine
+        .start(&HolderStart {
+            pane: pane.to_owned(),
+            program: None,
+            cwd: hide_platform::path::to_wire(folder.home.path()).unwrap(),
+            env: Vec::new(),
+            rows: SIZE.rows,
+            cols: SIZE.cols,
+            notice: None,
+        })
+        .unwrap();
+    screens.first_full(pane);
+    service.key(KeyTarget::Pane(pane.to_owned()), print_ok().to_vec(), 0);
+    screens.wait_drawn_after(pane, 0, "hide-ok");
+    assert!(herdr_opened.lock().unwrap().try_recv().is_err());
+    assert!(
+        !reports
+            .states(pane)
+            .iter()
+            .any(|state| state == "unavailable")
+    );
+    engine.terminate(pane).unwrap();
+    service.close();
 }
 
 /// A redraw, and a view at the grid the pane already runs at, each bring a
