@@ -6,7 +6,6 @@
 //! never under the runtime lock and never on the session-sync thread, and
 //! each failure is a code, never a path or a message.
 
-use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -14,6 +13,8 @@ use hide_node_link::git::GitCommand;
 use hide_node_link::protocol::Call;
 use hide_node_link::{ErrorCode, LinkError, NodeLink};
 use hide_session::{Agent, ConversationEvent, ProjectSession};
+
+use crate::session_excerpt::{EVENT_CHARS, Extent, Located, ReadFailure, SESSION_TIMEOUT, cut};
 
 use super::super::ledger::SessionRef;
 use super::super::policy;
@@ -24,9 +25,6 @@ use crate::node::NodeId;
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long a candidate's node is given to name the Project that holds it.
 const IDENTITY_TIMEOUT: Duration = Duration::from_secs(5);
-const SESSION_TIMEOUT: Duration = Duration::from_secs(60);
-/// The most characters one event of a session shows.
-const EVENT_CHARS: usize = 2_000;
 
 /// The read tools of one Project's checkout.
 pub struct NodeReads {
@@ -185,14 +183,6 @@ fn refused(error: LinkError) -> ReadRefused {
     }
 }
 
-fn cut(text: &str, chars: usize) -> String {
-    let mut kept: String = text.chars().take(chars).collect();
-    if kept.len() < text.len() {
-        kept.push('…');
-    }
-    kept
-}
-
 fn shown(index: usize, event: &ConversationEvent) -> String {
     format!(
         "#{index} {} ({}): {}",
@@ -208,92 +198,6 @@ fn actions_job(url: &str) -> Option<u64> {
     let (_, rest) = url.split_once("/actions/runs/")?;
     let (_, job) = rest.split_once("/job/")?;
     job.split(['/', '?', '#']).next()?.parse().ok()
-}
-
-/// The events of one session a read shows, chosen as they stream past
-/// page by page: `count` events from the window's pivot, with up to half of
-/// them before it when the window is around a time.
-struct EventWindow {
-    window: SessionWindow,
-    before: usize,
-    count: usize,
-    ring: VecDeque<(usize, String)>,
-    kept: Vec<(usize, String)>,
-    pivot: bool,
-    seen: usize,
-}
-
-impl EventWindow {
-    fn new(window: SessionWindow) -> Self {
-        let (before, count) = match window {
-            SessionWindow::Around { count, .. } => (count as usize / 2, count as usize),
-            SessionWindow::From { count, .. } => (0, count as usize),
-        };
-        Self {
-            window,
-            before,
-            count,
-            ring: VecDeque::new(),
-            kept: Vec::new(),
-            pivot: false,
-            seen: 0,
-        }
-    }
-
-    /// One more event; `line` words it by its number, and only for an event
-    /// the window may show.
-    fn push(&mut self, at_unix_ms: u64, line: impl FnOnce(usize) -> String) {
-        let index = self.seen;
-        self.seen += 1;
-        if !self.pivot {
-            self.pivot = match self.window {
-                SessionWindow::Around { at_unix_ms: at, .. } => at_unix_ms >= at,
-                SessionWindow::From { from, .. } => index >= from as usize,
-            };
-            if self.pivot {
-                self.kept.extend(self.ring.drain(..));
-            }
-        }
-        if self.pivot {
-            if !self.full() {
-                self.kept.push((index, line(index)));
-            }
-        } else if self.before > 0 {
-            self.ring.push_back((index, line(index)));
-            if self.ring.len() > self.before {
-                self.ring.pop_front();
-            }
-        }
-    }
-
-    fn full(&self) -> bool {
-        self.kept.len() >= self.count
-    }
-
-    /// The excerpt, or `None` when the session has no event to show. A
-    /// window around a time after the session's last event shows its end.
-    fn finish(mut self, complete: bool) -> Option<Excerpt> {
-        if !self.pivot && matches!(self.window, SessionWindow::Around { .. }) {
-            self.kept.extend(self.ring.drain(..));
-        }
-        let first = self.kept.first()?.0;
-        let last = self.kept.last()?.0;
-        let of = if complete {
-            format!("of {}", self.seen)
-        } else {
-            "of more".to_owned()
-        };
-        Some(Excerpt {
-            text: self
-                .kept
-                .into_iter()
-                .map(|(_, line)| line)
-                .collect::<Vec<_>>()
-                .join("\n"),
-            truncated: false,
-            span: Some(format!("events {first}-{last} {of}")),
-        })
-    }
 }
 
 impl ReadTools for NodeReads {
@@ -314,38 +218,34 @@ impl ReadTools for NodeReads {
             id: found.id.clone(),
             cwd: found.checkout_path.to_string_lossy().into_owned(),
         };
-        let mut shown_events = EventWindow::new(window);
-        let mut consumed = 0u64;
-        let mut checkpoint = None;
-        let mut complete = false;
-        for _ in 0..hide_session::cursor::ARCHIVE_PAGE_LIMIT {
-            let read: hide_session::ConversationRead = hide_node_link::link::call_as_reader(
-                &*self.node,
-                agent,
-                hide_node_link::sessions::ReaderFeature::Conversation,
-                Call::SessionConversation {
-                    agent,
-                    path: found.locator.to_string_lossy().into_owned(),
-                    scope: scope.clone(),
-                    checkpoint: checkpoint.clone(),
-                },
-                SESSION_TIMEOUT,
-            )
-            .map_err(refused)?;
-            consumed = consumed.saturating_add(read.read_bytes);
-            for event in &read.events {
-                shown_events.push(event.at_unix_ms, |index| shown(index, event));
-            }
-            if !read.has_more || read.read_bytes == 0 {
-                complete = true;
-                break;
-            }
-            if shown_events.full() || consumed > hide_session::SESSION_READ_LIMIT_BYTES {
-                break;
-            }
-            checkpoint = Some(read.checkpoint);
-        }
-        shown_events.finish(complete).ok_or(ReadRefused::NotFound)
+        let located = Located {
+            agent,
+            path: found.locator.to_string_lossy().into_owned(),
+            scope,
+        };
+        let events =
+            crate::session_excerpt::read(&*self.node, &located, window, Extent::Window, &shown)
+                .map_err(|failure| match failure {
+                    ReadFailure::Link(error) => refused(error),
+                    ReadFailure::Deadline => ReadRefused::Unavailable("link.unknown".into()),
+                })?;
+        let first = events.kept.first().ok_or(ReadRefused::NotFound)?.0;
+        let last = events.kept.last().ok_or(ReadRefused::NotFound)?.0;
+        let of = if events.complete {
+            format!("of {}", events.seen)
+        } else {
+            "of more".to_owned()
+        };
+        Ok(Excerpt {
+            text: events
+                .kept
+                .into_iter()
+                .map(|(_, line)| line)
+                .collect::<Vec<_>>()
+                .join("\n"),
+            truncated: false,
+            span: Some(format!("events {first}-{last} {of}")),
+        })
     }
 
     fn ci_log(&mut self, pr: u32, check: &str) -> Result<Excerpt, ReadRefused> {
@@ -493,41 +393,6 @@ mod tests {
             None
         );
         assert_eq!(actions_job("https://github.com/o/r/actions/runs/123"), None);
-    }
-
-    fn read(window: SessionWindow, times: &[u64]) -> Option<Excerpt> {
-        let mut events = EventWindow::new(window);
-        for at in times {
-            events.push(*at, |index| format!("e{index}"));
-        }
-        events.finish(true)
-    }
-
-    #[test]
-    fn a_session_read_shows_the_events_around_a_record_or_from_a_number() {
-        let times: Vec<u64> = (0..20).map(|at| at * 10).collect();
-        let around = read(
-            SessionWindow::Around {
-                at_unix_ms: 95,
-                count: 4,
-            },
-            &times,
-        )
-        .unwrap();
-        assert_eq!(around.text, "e8\ne9\ne10\ne11");
-        assert_eq!(around.span.as_deref(), Some("events 8-11 of 20"));
-        let from = read(SessionWindow::From { from: 18, count: 5 }, &times).unwrap();
-        assert_eq!(from.text, "e18\ne19");
-        let late = read(
-            SessionWindow::Around {
-                at_unix_ms: 1_000,
-                count: 4,
-            },
-            &times,
-        )
-        .unwrap();
-        assert_eq!(late.text, "e18\ne19", "a time past the end shows the end");
-        assert!(read(SessionWindow::From { from: 30, count: 5 }, &times).is_none());
     }
 
     fn git(root: &std::path::Path, arguments: &[&str]) {

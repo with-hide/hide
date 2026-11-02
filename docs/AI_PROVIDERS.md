@@ -110,7 +110,7 @@ A Project no linked node names answers every read `project_unreachable`, and the
 
 | Read | What Hide runs | Bound |
 | --- | --- | --- |
-| `session` | the session a record happened in, through the session readers (`Call::SessionConversation`), around the record or from an event number | 16 events, at most 40, 2,000 characters an event |
+| `session` | the session a record happened in, through the session readers (`Call::SessionConversation`), around the record or from an event number; the window is `herdr-core/src/session_excerpt.rs`, which `hide session read` shares ([ARCHITECTURE.md: The link record](ARCHITECTURE.md#the-link-record)) | 16 events, at most 40, 2,000 characters an event |
 | `ci_log` | the failed check's page from the pull request's checks (`gh pr view`), then `gh run view --job <id> --log-failed`, which the node cuts to its last 256 KiB | the last 200 lines; a check not on GitHub Actions is refused |
 | `file` | the file's first 256 KiB (`Call::Bytes`), as numbered lines | 120 lines, at most 200 |
 | `search` | `git grep` of tracked text files for a fixed text, case ignored (`GitCommand::Grep`) | 5 lines a file, 40 shown, 64 KiB from the node |
