@@ -3270,6 +3270,10 @@
                 "invalid_brief",
                 "brief_not_submitted",
                 "mission_brief_missing",
+                "mission_machine_node_refused",
+                "mission_machine_unavailable",
+                "mission_projects_loading",
+                "mission_machine_no_repository",
                 "beside_other_checkout",
                 "beside_other_machine",
                 "beside_needs_agent_pane",
@@ -4188,7 +4192,8 @@
                 "mission_criteria_missing",
                 "mission_criteria_too_many",
                 "mission_checkers_invalid",
-                "mission_external_invalid"
+                "mission_external_invalid",
+                "mission_machine_node_refused"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -4464,7 +4469,8 @@
                 "mission_criteria_unmet",
                 "mission_checker_is_worker",
                 "mission_checker_unknown",
-                "mission_external_invalid"
+                "mission_external_invalid",
+                "mission_machine_node_refused"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -5120,7 +5126,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:6fcdfbd23657a233e9c694d824824aa205b237d6624d94025e930d8dcd3d14c4",
+    "digest": "sha256:40ec8c0888b27d22159731f1b7e295fbc87560b5bbfdc080f9eb788d5755636f",
     "envelopes": {
         "agent": {
             "answer": "value",
