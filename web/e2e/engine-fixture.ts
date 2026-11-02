@@ -8,7 +8,6 @@
 // Herdr itself stays on `herdr-fixture.ts`.
 
 import crypto from "node:crypto";
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -25,6 +24,7 @@ export type HideRunner = (args: string[], run?: AgentRun) => Promise<HideAnswer>
 import { afterCleanup, ownUntilWorkerExit } from "./worker-owned";
 import { enterWorkspace } from "./wire";
 import { e2eEngine, type E2eEngine } from "./e2e-engine";
+import { git } from "./work-prs-fixture";
 
 /** What the daemon runs its panes on, and the private root the run's files live under. */
 export type EngineServer = DaemonEngine & {
@@ -316,8 +316,6 @@ async function openFixture(control: HidedControl, server: EngineServer, daemon: 
 
 /** Makes `dir` a Git repository on `main` with one commit. */
 function gitRepository(dir: string): void {
-  for (const args of [["init", "-q", "-b", "main"], ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-q", "--allow-empty", "-m", "baseline"]]) {
-    const git = spawnSync("git", ["-C", dir, ...args], { encoding: "utf8" });
-    if (git.status !== 0) throw new Error(`git ${args.join(" ")} in ${dir}: ${git.stderr}`);
-  }
+  git(dir, ["init", "-q", "-b", "main"]);
+  git(dir, ["commit", "-q", "--allow-empty", "-m", "baseline"]);
 }
