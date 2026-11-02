@@ -183,6 +183,7 @@ async function choosePush(page: Page, mode: "off" | "app_closed" | "always"): Pr
   await expect(page.locator(`[data-push-detail="${mode}"]`)).toBeVisible();
   await page.locator('[data-settings-tab="mobile"]').click();
   await expect(page.locator('[data-mobile-tab="true"]')).toBeVisible();
+  await page.getByText("Advanced · Connect directly with Tailscale", { exact: true }).click();
 }
 
 /** The push mode Settings > Notifications shows, read there before returning to Mobile. */
@@ -191,6 +192,7 @@ async function expectPush(page: Page, label: string): Promise<void> {
   await expect(page.locator("[data-push-select]")).toHaveText(label);
   await page.locator('[data-settings-tab="mobile"]').click();
   await expect(page.locator('[data-mobile-tab="true"]')).toBeVisible();
+  await page.getByText("Advanced · Connect directly with Tailscale", { exact: true }).click();
 }
 
 /** The QR's `#pair=...` fragment, opened on this loopback daemon instead of the ts.net address. */
