@@ -2850,4 +2850,74 @@ mod tests {
         let reader = next.delivery_agent(WAIT, "reader").unwrap();
         assert_eq!(reader.pane_id, gemini, "the resumed agent keeps its name");
     }
+
+    /// D-7: a pane whose holder outlived the daemon keeps its program, but
+    /// the resume the daemon typed may never have reached its shell (the
+    /// daemon ended first). Its shell at its prompt resumes the conversation
+    /// again, once; a pane whose agent runs is left as it is.
+    #[test]
+    fn an_adopted_pane_whose_shell_is_at_its_prompt_resumes_its_agent_again() {
+        let root = tempfile::tempdir().unwrap();
+        let place = place(root.path());
+        let folder = root.path().join("repo");
+        for dir in [&place.home, &folder] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let first_holders = Holders::found(HolderRecovery::default());
+        first_holders.idle_shell(41, "zsh");
+        let first = OwnEngine::open(
+            Arc::clone(&first_holders) as Arc<dyn PaneHolders>,
+            place.clone(),
+        )
+        .unwrap();
+        let (_, _, claude) = first
+            .create_workspace(WAIT, &wire(&folder), "w", true, Env::new())
+            .unwrap();
+        first
+            .report_agent_session(WAIT, &claude, "claude", "s-1", 1)
+            .unwrap();
+        drop(first);
+        let reopen = |processes: HolderProcesses| {
+            let holders = Arc::new(Holders::default());
+            *holders.processes.lock().unwrap() = Some(processes);
+            let engine =
+                OwnEngine::open(Arc::clone(&holders) as Arc<dyn PaneHolders>, place.clone())
+                    .unwrap();
+            holders.hand(HolderRecovery {
+                present: vec![claude.clone()],
+                ..HolderRecovery::default()
+            });
+            engine.restored().unwrap();
+            (holders, engine)
+        };
+
+        // The agent runs in its terminal's foreground: nothing is typed.
+        let (running, engine) = reopen(HolderProcesses {
+            shell: 52,
+            foreground: Some(hide_node_link::holders::HolderForeground {
+                group: 60,
+                members: vec![(60, "claude".to_owned())],
+            }),
+        });
+        assert_eq!(running.typed(&claude), "");
+        drop(engine);
+
+        let (idle, _engine) = reopen(HolderProcesses {
+            shell: 52,
+            foreground: Some(hide_node_link::holders::HolderForeground {
+                group: 52,
+                members: vec![(52, "zsh".to_owned())],
+            }),
+        });
+        assert!(
+            idle.wait_typed(&claude)
+                .starts_with("claude --resume s-1 || printf"),
+            "{:?}",
+            idle.typed(&claude)
+        );
+        assert!(
+            idle.started().is_empty(),
+            "the adopted pane keeps its shell"
+        );
+    }
 }

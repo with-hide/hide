@@ -24,7 +24,10 @@
 //! agent in the same folder) or one an adopted pane still runs stays a shell.
 //! A pane that cannot be resumed opens with one line saying why, and a resume
 //! whose agent ends with a failure says so in the pane, which is a shell
-//! again.
+//! again. An adopted pane whose saved agent is not running, its shell the
+//! terminal's foreground, is resumed the same way: the daemon that typed
+//! its resume ended before the line reached the shell, or the agent ended
+//! while no daemon ran.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -99,6 +102,7 @@ pub(super) fn start(engine: OwnEngine<'static>, saved: BTreeSet<String>) -> Resu
 
 /// One saved pane to start again: its id, the folder it was saved in, and
 /// the agent it ran.
+#[derive(Clone)]
 struct Restart {
     pane: String,
     cwd: String,
@@ -211,7 +215,7 @@ impl OwnEngine<'static> {
     fn adopt(&self, saved: &BTreeSet<String>, recovery: &HolderRecovery) -> Vec<Resume> {
         let present: BTreeSet<&str> = recovery.present.iter().map(String::as_str).collect();
         let home = self.home().ok();
-        let (finished, restarts, orphans, running) = {
+        let (finished, restarts, orphans, adopted_agents) = {
             let mut topology = self.topology();
             topology.count_past(
                 recovery
@@ -249,11 +253,10 @@ impl OwnEngine<'static> {
                     })
                 })
                 .collect();
-            // The conversations the adopted panes' agents still hold.
-            let running: BTreeSet<(String, String)> = topology
+            let adopted_agents: Vec<String> = topology
                 .panes()
-                .filter(|(id, _)| present.contains(id))
-                .filter_map(|(_, pane)| Some(conversation(pane.agent.as_ref()?, &pane.cwd)))
+                .filter(|(id, pane)| present.contains(id) && pane.agent.is_some())
+                .map(|(id, _)| id.to_owned())
                 .collect();
             let orphans: Vec<String> = recovery
                 .present
@@ -261,10 +264,49 @@ impl OwnEngine<'static> {
                 .filter(|id| !placed.contains(*id))
                 .cloned()
                 .collect();
-            (finished, restarts, orphans, running)
+            (finished, restarts, orphans, adopted_agents)
         };
-        let plans = plans(&self.shared.definitions.get(), &restarts, running);
-        let (failures, resumes) = self.start_restarts(&restarts, &plans, home.as_deref());
+        // Asked of each holder off the topology lock.
+        let idle: Vec<String> = adopted_agents
+            .into_iter()
+            .filter(|pane| self.at_its_prompt(pane))
+            .collect();
+        let (idle, running) = {
+            let mut topology = self.topology();
+            let idle: Vec<Restart> = idle
+                .into_iter()
+                .filter_map(|id| {
+                    let pane = topology.pane_mut(&id).ok()?;
+                    Some(Restart {
+                        cwd: pane.cwd.clone(),
+                        agent: pane.agent.take(),
+                        pane: id,
+                    })
+                })
+                .collect();
+            // The conversations the adopted panes' agents still hold.
+            let running: BTreeSet<(String, String)> = topology
+                .panes()
+                .filter(|(id, _)| present.contains(id))
+                .filter_map(|(_, pane)| Some(conversation(pane.agent.as_ref()?, &pane.cwd)))
+                .collect();
+            (idle, running)
+        };
+        let both: Vec<Restart> = restarts.iter().chain(&idle).cloned().collect();
+        let plans = plans(&self.shared.definitions.get(), &both, running);
+        let (failures, mut resumes) = self.start_restarts(&restarts, &plans, home.as_deref());
+        for restart in &idle {
+            match plans.get(&restart.pane) {
+                Some(Plan::Resume(resume)) => resumes.push(resume.clone()),
+                Some(Plan::Shell(why)) => crate::diagnostic!(serde_json::json!({
+                    "component": "own_engine",
+                    "kind": "engine.restore_not_resumed",
+                    "pane_id": restart.pane,
+                    "message": why,
+                })),
+                None => {}
+            }
+        }
         let closed: Vec<String> = {
             let mut topology = self.topology();
             let failed: BTreeSet<&str> = failures.iter().map(|(pane, _)| pane.as_str()).collect();
@@ -307,11 +349,33 @@ impl OwnEngine<'static> {
             "adopted": present.len().saturating_sub(orphans.len()),
             "closed": finished,
             "started": restarts.len(),
+            "idle": idle.len(),
             "gathered": orphans.len(),
             "resumes": resumes.len(),
         }));
         self.changed();
         resumes
+    }
+
+    /// Whether the pane's shell is its terminal's foreground, so no program
+    /// it started runs there. A system that does not say (Windows has no
+    /// foreground group) or a holder that does not answer is not read as
+    /// one, so nothing is typed over a program that may run.
+    fn at_its_prompt(&self, pane: &str) -> bool {
+        match self.shared.holders.processes(pane) {
+            Ok(processes) => processes
+                .foreground
+                .is_some_and(|foreground| foreground.group == processes.shell),
+            Err(error) => {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "own_engine",
+                    "kind": "engine.restore_processes_unread",
+                    "pane_id": pane,
+                    "message": error.to_string(),
+                }));
+                false
+            }
+        }
     }
 
     /// Starts every pane of `restarts`, [`STARTS_AT_ONCE`] at a time, each
