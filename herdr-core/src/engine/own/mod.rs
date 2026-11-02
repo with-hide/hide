@@ -473,6 +473,49 @@ impl OwnEngine<'_> {
             .map_err(holder_error)
     }
 
+    /// Starts the holder of `pane`, whose id this call just reserved, once
+    /// every gate's [`super::Placement`] has recorded it (PRD
+    /// engine-bundle-3-core-owns D-11). The order is the locks' order and
+    /// never overlaps: the topology lock was let go once the id was reserved
+    /// (the caller's block ended), a placement takes the lock its record
+    /// needs (the runtime's, for a spawn) and lets it go, and the holder
+    /// starts outside every lock. A placement that refuses leaves the pane
+    /// unmade; a holder that does not start withdraws every placement in this
+    /// same call, so no record names a pane that never ran.
+    fn start_placed(
+        &self,
+        pane: &str,
+        program: Option<&[String]>,
+        cwd: &str,
+        env: Env,
+    ) -> Result<(), EngineError> {
+        let placements: Vec<_> = self
+            .gates
+            .iter()
+            .filter_map(|gate| gate.placement.as_ref())
+            .collect();
+        for (at, placement) in placements.iter().enumerate() {
+            if let Err(error) = placement.place(pane) {
+                for placed in &placements[..at] {
+                    placed.withdraw(pane);
+                }
+                return Err(error);
+            }
+        }
+        if let Err(error) = self.start_pane(pane, program, cwd, env, None) {
+            self.withdraw(pane);
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// Takes back every gate's placement of `pane`, which will not run.
+    fn withdraw(&self, pane: &str) {
+        for placement in self.gates.iter().filter_map(|gate| gate.placement.as_ref()) {
+            placement.withdraw(pane);
+        }
+    }
+
     /// Ends the holders of `panes`, every one asked even when one fails:
     /// the first failure, if any. A holder already gone is ended.
     fn end_panes(&self, panes: &[String]) -> Result<(), EngineError> {
@@ -522,7 +565,7 @@ impl OwnEngine<'_> {
             topology.reserve_tab(workspace)?
         };
         let (tab, pane) = &reserved;
-        self.start_pane(pane, program, cwd, env.clone(), None)?;
+        self.start_placed(pane, program, cwd, env.clone())?;
         let added = self.topology().add_tab(
             workspace,
             (tab, pane),
@@ -533,6 +576,7 @@ impl OwnEngine<'_> {
         if let Err(error) = added {
             // The workspace closed while the pane started.
             let _ = self.end_panes(std::slice::from_ref(pane));
+            self.withdraw(pane);
             return Err(error);
         }
         self.changed();
@@ -563,7 +607,7 @@ impl OwnEngine<'_> {
             let (workspace, _) = topology.pane_place(target)?;
             (topology.reserve_pane(&workspace)?, cwd)
         };
-        self.start_pane(&pane, None, &cwd, env.clone(), None)?;
+        self.start_placed(&pane, None, &cwd, env.clone())?;
         let added = self.topology().add_split(
             target,
             direction,
@@ -575,6 +619,7 @@ impl OwnEngine<'_> {
         if let Err(error) = added {
             // The pane beside it closed while this one started.
             let _ = self.end_panes(std::slice::from_ref(&pane));
+            self.withdraw(&pane);
             return Err(error);
         }
         self.changed();
@@ -909,7 +954,7 @@ impl<'g> Engine for OwnEngine<'g> {
         self.check()?;
         self.restored()?;
         let reserved = self.topology().reserve_workspace();
-        self.start_pane(&reserved.pane, None, cwd, env.clone(), None)?;
+        self.start_placed(&reserved.pane, None, cwd, env.clone())?;
         self.topology().add_workspace(
             &reserved,
             label,
@@ -1928,6 +1973,122 @@ mod tests {
             }
             other => panic!("expected a refusal naming the source, got {other:?}"),
         }
+    }
+
+    /// What a placement saw: each call, in order, with whether the pane's
+    /// holder had been asked to start by then and whether the topology could
+    /// be read meanwhile.
+    struct Placed {
+        engine: Arc<OwnEngine<'static>>,
+        holders: Arc<Holders>,
+        refuse: bool,
+        seen: Arc<Mutex<Vec<(String, bool, bool)>>>,
+    }
+
+    impl super::super::Placement for Placed {
+        fn place(&self, pane: &str) -> Result<(), EngineError> {
+            let started = self
+                .holders
+                .started
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|start| start.pane == pane);
+            // Another thread reads the topology while the placement runs: a
+            // placement made under the topology lock would hold it up.
+            let (sent, read) = std::sync::mpsc::channel();
+            let engine = Arc::clone(&self.engine);
+            std::thread::spawn(move || {
+                let _ = sent.send(engine.focused_workspace(WAIT).is_ok());
+            });
+            let topology_free = read.recv_timeout(Duration::from_secs(2)).unwrap_or(false);
+            self.seen
+                .lock()
+                .unwrap()
+                .push((format!("place {pane}"), started, topology_free));
+            if self.refuse {
+                return Err(refused(
+                    "spawn_refused",
+                    "the record took no pane".to_owned(),
+                ));
+            }
+            Ok(())
+        }
+
+        fn withdraw(&self, pane: &str) {
+            self.seen
+                .lock()
+                .unwrap()
+                .push((format!("withdraw {pane}"), false, true));
+        }
+    }
+
+    /// PRD engine-bundle-3-core-owns D-11, B30: a pane a gated call makes is
+    /// placed after its id is reserved and the topology lock let go, and
+    /// before its holder starts; a holder that does not start withdraws it
+    /// in the same call, and a placement refused starts nothing.
+    #[test]
+    fn a_new_pane_is_placed_off_the_topology_lock_before_its_holder_starts() {
+        let holders = Arc::new(Holders::default());
+        let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+        let (_, _, first) = engine
+            .create_workspace(WAIT, "/w", "w", true, Env::new())
+            .unwrap();
+        let handle = Arc::new(OwnEngine {
+            shared: Arc::clone(&engine.shared),
+            gates: Vec::new(),
+        });
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let placing = |refuse| {
+            engine.gated(Gate::placing(Placed {
+                engine: Arc::clone(&handle),
+                holders: Arc::clone(&holders),
+                refuse,
+                seen: Arc::clone(&seen),
+            }))
+        };
+
+        let split = placing(false)
+            .split_beside(WAIT, &first, None, Env::new())
+            .expect("the split is made");
+        assert_eq!(
+            seen.lock().unwrap().drain(..).collect::<Vec<_>>(),
+            [(format!("place {split}"), false, true)],
+            "placed before its holder started, with the topology free"
+        );
+        assert!(
+            holders
+                .started
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|start| start.pane == split)
+        );
+
+        holders.refuse.store(true, Ordering::Release);
+        refused_for_the_holder(placing(false).split_beside(WAIT, &first, None, Env::new()));
+        let seen_now: Vec<_> = seen.lock().unwrap().drain(..).collect();
+        let [(placed, false, true), (withdrawn, _, _)] = seen_now.as_slice() else {
+            panic!("expected a placement and its withdrawal, got {seen_now:?}");
+        };
+        assert_eq!(
+            placed.trim_start_matches("place "),
+            withdrawn.trim_start_matches("withdraw "),
+            "the pane that did not start is the one withdrawn"
+        );
+        holders.refuse.store(false, Ordering::Release);
+
+        let before = holders.started.lock().unwrap().len();
+        match placing(true).split_beside(WAIT, &first, None, Env::new()) {
+            Err(EngineError::Refused { code, .. }) => assert_eq!(code, "spawn_refused"),
+            other => panic!("expected the placement's refusal, got {other:?}"),
+        }
+        assert_eq!(
+            holders.started.lock().unwrap().len(),
+            before,
+            "nothing starts in a pane the record refused"
+        );
+        assert_eq!(engine.pane_folders(WAIT).unwrap().len(), 2);
     }
 
     #[test]

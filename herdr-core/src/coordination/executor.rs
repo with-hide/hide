@@ -966,6 +966,18 @@ fn spawn(
     let (spawn_id, on_device) = (reserved.id.clone(), reserved.machine.is_some());
     let placed = (|| -> Result<Value, String> {
         if reserved.pane.is_none() {
+            // An engine that names a pane before it runs anything there (the
+            // core's own) has this record name it first, so the pane is
+            // never seen running unregistered, and a pane whose holder does
+            // not start is taken off the record in the same call (PRD
+            // engine-bundle-3-core-owns D-11). Herdr names a pane only once
+            // it runs, so its pane is recorded below, after the call.
+            let engine = engine.gated(crate::engine::Gate::placing(SpawnPlacement {
+                client,
+                authority,
+                actor,
+                spawn: reserved.id.clone(),
+            }));
             // How the pane's shell says it has finished starting, recorded
             // with the pane so every later start in it waits the same way.
             let shell;
@@ -1413,6 +1425,56 @@ fn spawn(
             reason
         }
     })
+}
+
+/// A spawn's record told each pane the engine makes for it before the pane
+/// runs anything ([`crate::engine::Placement`]): the record's mutation takes
+/// the delivery store's turn and the runtime's lock, never the engine's
+/// topology lock, which the engine let go before it asked.
+struct SpawnPlacement<'c> {
+    client: &'c Client,
+    authority: &'c Authority,
+    actor: &'c Actor,
+    spawn: String,
+}
+
+impl crate::engine::Placement for SpawnPlacement<'_> {
+    fn place(&self, pane: &str) -> Result<(), EngineError> {
+        mutate(
+            self.client,
+            self.authority,
+            self.actor,
+            Mutation::Place {
+                id: self.spawn.clone(),
+                pane: pane.to_owned(),
+            },
+        )
+        .map(drop)
+        .map_err(|code| EngineError::Refused {
+            message: format!("spawn {} could not name pane {pane}: {code}", self.spawn),
+            code,
+        })
+    }
+
+    fn withdraw(&self, pane: &str) {
+        let withdrawn = mutate(
+            self.client,
+            self.authority,
+            self.actor,
+            Mutation::Withdraw {
+                id: self.spawn.clone(),
+                pane: pane.to_owned(),
+            },
+        );
+        if let Err(code) = withdrawn {
+            // The record names a pane that never ran until the same intent
+            // asks again, which finds no such pane.
+            crate::diagnostic!(json!({
+                "component": "spawn", "kind": "placement.withdraw_failed",
+                "spawn": self.spawn, "pane_id": pane, "code": code,
+            }));
+        }
+    }
 }
 
 /// The caller's own pane a spawn beside it splits, on the caller's own

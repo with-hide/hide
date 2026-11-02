@@ -666,6 +666,21 @@ pub(crate) enum Mutation {
         shell: Option<String>,
         child: Option<String>,
     },
+    /// The engine named the spawn's pane before starting anything in it
+    /// (PRD engine-bundle-3-core-owns D-11, `engine::Placement`): the record
+    /// names `pane` from now on. A pane the same placement named earlier
+    /// (the seed of a workspace a tab then replaces) gives way to it; a
+    /// spawn whose agent was typed or bound keeps its pane.
+    Place {
+        id: String,
+        pane: String,
+    },
+    /// The pane [`Mutation::Place`] named never ran: the record names no
+    /// pane again, unless it names another one by now.
+    Withdraw {
+        id: String,
+        pane: String,
+    },
     /// Herdr took a start of the spawn's agent in its pane.
     Typed {
         id: String,
@@ -1542,6 +1557,47 @@ pub(crate) fn apply(
             if child.is_some() {
                 record.child = child.clone()
             };
+            Ok(json!(record))
+        }
+        Mutation::Place { id, pane } | Mutation::Withdraw { id, pane } => {
+            let parent = ledger
+                .spawns
+                .iter()
+                .find(|record| &record.id == id)
+                .ok_or("spawn_unavailable")?
+                .parent
+                .clone();
+            if !resolve_actor(ledger, &parent).is_some_and(|parent| parent.same_identity(caller)) {
+                return Err("parent_authority_required".into());
+            }
+            let record = ledger
+                .spawns
+                .iter_mut()
+                .find(|record| &record.id == id)
+                .ok_or("spawn_unavailable")?;
+            let placing = matches!(mutation, Mutation::Place { .. });
+            let moves = if placing {
+                if record.child.is_some() || record.typed > 0 {
+                    // Its agent runs in the pane it names; nothing replaces it.
+                    return Err("intent_conflict".into());
+                }
+                record.pane.as_ref() != Some(pane)
+            } else {
+                record.child.is_none() && record.pane.as_ref() == Some(pane)
+            };
+            if moves {
+                record.pane = placing.then(|| pane.clone());
+                record.terminal = None;
+                ledger.spawn_placement_revision = ledger
+                    .spawn_placement_revision
+                    .checked_add(1)
+                    .ok_or("capacity")?;
+            }
+            let record = ledger
+                .spawns
+                .iter()
+                .find(|record| &record.id == id)
+                .ok_or("spawn_unavailable")?;
             Ok(json!(record))
         }
         Mutation::Typed { id } => {
@@ -3129,6 +3185,65 @@ mod tests {
         child.actor.device_id = device.into();
         child.project = Some("/fixture/topic".into());
         (ledger, actor, parent_id, id, child)
+    }
+
+    /// PRD engine-bundle-3-core-owns D-11: the engine names a spawn's pane
+    /// before anything runs there; a later pane of the same placement (a tab
+    /// that replaces its workspace's seed) takes its place, a pane that never
+    /// ran is withdrawn, and once the agent was typed the pane stays.
+    #[test]
+    fn a_placed_pane_is_named_until_withdrawn_and_kept_once_its_agent_was_typed() {
+        let mut ledger = Ledger::default();
+        let parent = record("parent", "native-parent", None);
+        let actor = parent.actor.clone();
+        let parent_id = register(&mut ledger, parent, &actor);
+        let reserved = apply(
+            &mut ledger,
+            &actor,
+            &Mutation::Reserve {
+                parent: parent_id,
+                command: command("placed"),
+            },
+            1,
+        )
+        .unwrap();
+        let id = reserved["id"].as_str().unwrap().to_owned();
+        let place = |pane: &str| Mutation::Place {
+            id: id.clone(),
+            pane: pane.into(),
+        };
+        let withdraw = |pane: &str| Mutation::Withdraw {
+            id: id.clone(),
+            pane: pane.into(),
+        };
+        let pane = |ledger: &Ledger| ledger.spawns[0].pane.clone();
+
+        apply(&mut ledger, &actor, &place("w1:p1"), 2).unwrap();
+        assert_eq!(pane(&ledger).as_deref(), Some("w1:p1"));
+        apply(&mut ledger, &actor, &place("w1:p2"), 3).unwrap();
+        assert_eq!(pane(&ledger).as_deref(), Some("w1:p2"), "the replacing tab");
+        apply(&mut ledger, &actor, &withdraw("w1:p1"), 4).unwrap();
+        assert_eq!(
+            pane(&ledger).as_deref(),
+            Some("w1:p2"),
+            "a pane given way already is not the one taken back"
+        );
+        apply(&mut ledger, &actor, &withdraw("w1:p2"), 5).unwrap();
+        assert_eq!(pane(&ledger), None, "the pane that never ran is no one's");
+
+        apply(&mut ledger, &actor, &place("w1:p3"), 6).unwrap();
+        apply(&mut ledger, &actor, &Mutation::Typed { id: id.clone() }, 7).unwrap();
+        assert_eq!(
+            apply(&mut ledger, &actor, &place("w1:p4"), 8).unwrap_err(),
+            "intent_conflict"
+        );
+        assert_eq!(pane(&ledger).as_deref(), Some("w1:p3"));
+
+        let stranger = record("stranger", "native-stranger", None).actor;
+        assert_eq!(
+            apply(&mut ledger, &stranger, &withdraw("w1:p3"), 9).unwrap_err(),
+            "parent_authority_required"
+        );
     }
 
     /// A spawn's brief is part of its intent, is marked submitted once so a
