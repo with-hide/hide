@@ -42,7 +42,7 @@ export async function startEngine(engine = e2eEngine()): Promise<EngineServer> {
     const server = await startHerdr({ empty: true });
     // Hide chooses the integrated shell for panes it starts. Give its node
     // the same shell as the private server, not the CI runner's login shell.
-    return { engine, ...server, shell: process.platform === "win32" ? "powershell" : server.shell, daemonEnv: { SHELL: server.env.SHELL } };
+    return { engine, ...server, daemonEnv: { SHELL: server.env.SHELL } };
   }
   return startOwnEngine();
 }

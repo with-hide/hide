@@ -323,9 +323,10 @@ async function waitFor(predicate: () => boolean, what: string, ms = 10_000, deta
 
 export type PaneShell = "posix" | "cmd" | "powershell";
 
-/** Hide-made Windows panes run PowerShell, even if the private Herdr default is cmd.exe. */
+/** Match the ordinary pane shell selected by the engine fixture. */
 export function panePrompt(shell: PaneShell): RegExp {
-  return shell === "powershell" ? /PS [^\r\n]*>/ : /fixture %/;
+  // A narrow pane wraps the path onto physical rows; the prompt still ends at >.
+  return shell === "powershell" ? /PS [^>]*>/ : /fixture %/;
 }
 
 /**
