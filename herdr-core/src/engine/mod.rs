@@ -185,6 +185,15 @@ pub(crate) trait Engine: Send + Sync {
     /// recognizes and reads them by. Herdr knows its own agents and ignores
     /// it.
     fn set_agent_definitions(&self, _catalog: Arc<hide_agent_adapter::definition::Catalog>) {}
+    /// The session the hook of the `kind` agent in `pane` reported, proved
+    /// to come from that pane (PRD engine-bundle-3-core-owns D-9, D-16): an
+    /// engine that starts and resumes agents itself keeps it as the pane's
+    /// agent's session, saved with the pane, so a reboot resumes that
+    /// conversation. Herdr learns a pane's session from its own integration
+    /// and ignores it.
+    fn hook_session(&self, _pane: &str, _kind: &str, _session: &str) -> Answer<()> {
+        Ok(())
+    }
 
     // The session as a whole.
 

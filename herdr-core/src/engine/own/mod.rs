@@ -816,6 +816,34 @@ impl<'g> Engine for OwnEngine<'g> {
         self.changed();
     }
 
+    fn hook_session(&self, pane: &str, kind: &str, session: &str) -> Answer<()> {
+        self.check()?;
+        let catalog = self.shared.definitions.get();
+        let definition =
+            agents::definition(&catalog, kind).ok_or_else(|| EngineError::Refused {
+                code: "unknown_agent".to_owned(),
+                message: format!("no agent definition names {kind}"),
+            })?;
+        // Only the agent the pane runs takes it: a session the operator's
+        // own hook started in the pane's environment (`claude -p` from a
+        // Stop hook) is another agent's, and the engine already knows the
+        // pane runs no agent of that kind.
+        let runs = self
+            .topology()
+            .pane(pane)?
+            .agent
+            .as_ref()
+            .is_some_and(|agent| agent.kind == definition.id);
+        if runs
+            && self
+                .topology()
+                .set_agent_session(pane, &definition.id, session)?
+        {
+            self.changed();
+        }
+        Ok(())
+    }
+
     fn session(&self, _wait: Wait) -> Answer<ProjectionState> {
         self.check()?;
         let catalog = self.shared.definitions.get();
@@ -1460,9 +1488,28 @@ impl<'g> Engine for OwnEngine<'g> {
         Ok(pane.to_owned())
     }
 
-    fn pane_identity(&self, _wait: Wait, _pane: &str) -> Answer<PaneProof> {
+    fn pane_identity(&self, _wait: Wait, pane: &str) -> Answer<PaneProof> {
         self.check()?;
-        unsupported("a pane's proof", IDENTITY_PR)
+        // The pane's record names the start that runs and its program, with
+        // the time the system gave that program (D-9): a pid the system
+        // reused since does not match it. A pane id never moves on this
+        // engine, so the pane named is the pane proved.
+        self.known(pane)?;
+        let proof = self.shared.holders.proof(pane).map_err(holder_error)?;
+        Ok(PaneProof {
+            pane_id: pane.to_owned(),
+            terminal_id: pane.to_owned(),
+            shell_pid: i32::try_from(proof.program).map_err(|_| {
+                refused(
+                    "pane_not_running",
+                    format!(
+                        "pane {pane}'s program pid {} is out of range",
+                        proof.program
+                    ),
+                )
+            })?,
+            shell_started: Some(proof.started),
+        })
     }
 
     fn prepare_start(&self, launch: AgentLaunch) -> Result<PreparedStart, String> {
@@ -1798,6 +1845,16 @@ mod tests {
                 .unwrap()
                 .clone()
                 .ok_or_else(|| HolderError::Unreachable("not asked".to_owned()))
+        }
+        fn proof(&self, _: &str) -> Result<hide_node_link::holders::HolderProof, HolderError> {
+            // Every pane's program is this test's own process.
+            let program = std::process::id();
+            Ok(hide_node_link::holders::HolderProof {
+                incarnation: 1,
+                program,
+                started: hide_platform::process::start_time(program)
+                    .map_err(|error| HolderError::Unreachable(error.to_string()))?,
+            })
         }
         fn input(&self, pane: &str, bytes: Vec<u8>) -> Result<(), HolderError> {
             self.typed.0.lock().unwrap().push((pane.to_owned(), bytes));

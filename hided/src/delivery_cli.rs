@@ -2,7 +2,7 @@
 
 use herdr_core::delivery::{BODY_LIMIT, Command, HOOK_LETTERS};
 
-use crate::env::{self, Env};
+use crate::env::Env;
 
 pub const USAGE: &str = "hide request send <target> --intent <key> --body <text> [--kind request|block|report|progress] [--now | --force]\nhide request reply <id> --intent <key> --body <text>\nhide request ack|cancel|show <id>\nhide inbox [--hook [--prompt-digest <sha256>] [--session <id>] [--tool|--turn-end]]\nhide watch start <target> [--observer <id>] [--actor <id>]\nhide watch assign <watch-or-target-id> --observer <id> [--actor <id>] [--expected-generation <n>] [--approval <text>]\nhide watch stop <id>\nhide watch list\nThese commands need a running Hide and a current agent pane; Hide's window does not have to be open.";
 
@@ -208,7 +208,7 @@ pub fn run(env: &Env, command: Command) -> Result<(), String> {
             );
         }
         let mut credential = crate::workspace_cli::Credential::acquire(env)?;
-        let hint = std::env::var(env::HERDR_PANE_ID).ok();
+        let hint = env.pane_id.clone();
         crate::workspace_cli::request_delivery(&mut credential, command, hint.as_deref())
     })();
     match result {

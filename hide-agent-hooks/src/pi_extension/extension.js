@@ -116,7 +116,10 @@ function helperPresent() {
 }
 
 function managed(env) {
-  if (env.HERDR_ENV !== "1" || !env.HERDR_PANE_ID || !env.HERDR_SOCKET_PATH) return false;
+  // A pane on the core's own engine names itself HIDE_PANE_ID first, a Herdr pane by its three variables
+  // (`hide_agent_hooks::pane`, the rule the helper and the CLI share).
+  const herdrPane = env.HERDR_ENV === "1" && env.HERDR_PANE_ID && env.HERDR_SOCKET_PATH;
+  if (!env.HIDE_PANE_ID && !herdrPane) return false;
   // omp marks every shell it starts with OMPCODE=1 and Pi with PI_SESSION_ID: an agent started there is not
   // the pane's agent, and its prompts must not take the pane's letters.
   if (env.OMPCODE === "1" || env.PI_SESSION_ID) return false;

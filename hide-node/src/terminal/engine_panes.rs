@@ -14,11 +14,12 @@ use std::sync::Arc;
 
 use hide_host::shell_integration::{ShellLaunch, ShellReadiness, UserShell};
 
+use hide_holder_protocol::record::Phase;
 use hide_holder_protocol::{Answer, Appearance, CloseReason, Foreground, OpenError, Size, Theme};
 use hide_kit::panes::{CloseError, StartRefusal, StartRequest, Started};
 use hide_node_link::holders::{
-    HolderError, HolderForeground, HolderProcesses, HolderRecovery, HolderStart, PaneEnded,
-    PaneFactsSink, PaneHolders, ScreenRules, StyledRead, UNSUPPORTED_HOLDER,
+    HolderError, HolderForeground, HolderProcesses, HolderProof, HolderRecovery, HolderStart,
+    PaneEnded, PaneFactsSink, PaneHolders, ScreenRules, StyledRead, UNSUPPORTED_HOLDER,
 };
 use hide_node_link::terminal::{KeyTarget, TerminalNode};
 
@@ -126,7 +127,10 @@ impl PaneHolders for LocalPanes {
             pane: start.pane.clone(),
             program,
             cwd,
-            // The shell's own variables, then the caller's.
+            // The shell's own variables, then the caller's, then the pane's
+            // own name for itself, which no caller's variable replaces (PRD
+            // engine-bundle-3-core-owns D-9): the holder removes every
+            // Herdr variable, so a process in the pane names this pane alone.
             env: env
                 .into_iter()
                 .chain(
@@ -135,6 +139,10 @@ impl PaneHolders for LocalPanes {
                         .iter()
                         .map(|(name, value)| (OsString::from(name), OsString::from(value))),
                 )
+                .chain([(
+                    OsString::from(hide_node_link::holders::PANE_ID_VARIABLE),
+                    OsString::from(&start.pane),
+                )])
                 .collect(),
             size,
             // The screen's colors reach a holder by a theme message once a
@@ -232,6 +240,25 @@ impl PaneHolders for LocalPanes {
             Answer::Text { .. } => Err(HolderError::Unreachable(format!(
                 "pane {pane}'s holder answered a process ask with text"
             ))),
+        }
+    }
+
+    fn proof(&self, pane: &str) -> Result<HolderProof, HolderError> {
+        let record = self
+            .holders
+            .record(pane)
+            .map_err(|why| HolderError::Unreachable(format!("pane {pane}'s record: {why}")))?
+            .ok_or_else(|| HolderError::NoPane(format!("pane {pane} has no record")))?;
+        match (record.phase, record.program, record.end) {
+            (Phase::Running, Some(program), None) => Ok(HolderProof {
+                incarnation: record.incarnation,
+                program: program.pid,
+                started: program.started,
+            }),
+            (phase, _, _) => Err(HolderError::Refused {
+                code: "pane_not_running",
+                message: format!("pane {pane}'s record is {phase:?}, not running"),
+            }),
         }
     }
 

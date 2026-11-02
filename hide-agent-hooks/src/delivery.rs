@@ -216,9 +216,7 @@ fn keep_plan(mut intake: Intake, session: Option<&str>) -> Option<Intake> {
             .ok()
     });
     if let Some(plan) = plan {
-        let pane = std::env::var("HERDR_PANE_ID")
-            .ok()
-            .filter(|pane| !pane.is_empty());
+        let pane = crate::pane::from_env();
         if let (Some(pane), Some(session), Ok(home)) =
             (pane, session, hide_platform::host::home_dir())
             && crate::plan_record::write(&home, &pane, session, &plan).is_err()

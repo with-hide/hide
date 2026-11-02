@@ -351,93 +351,163 @@ fn the_pinned_herdr_meets_the_engine_contract() {
     meets_the_contract(engine.as_ref(), &folder, || drop(herdr));
 }
 
-#[test]
-#[ignore = "needs the built pane holder: HIDE_TEST_HOLDER_BIN"]
-fn the_own_engine_meets_the_engine_contract() {
-    use std::path::PathBuf;
-    use std::sync::Arc;
+/// The core's own engine over holders started from the built holder
+/// (`HIDE_TEST_HOLDER_BIN`), whose panes run `/bin/sh` (PowerShell on
+/// Windows) in a folder of their own; the holders end with it.
+struct BuiltHolders {
+    engine: super::own::OwnEngine<'static>,
+    holders: std::sync::Arc<hide_node::terminal::holder::Holders>,
+    service: std::sync::Arc<hide_node::terminal::Service>,
+    folder: String,
+    _root: tempfile::TempDir,
+}
 
-    use hide_node::terminal::engine_panes::{LocalPanes, PaneShell};
-    use hide_node::terminal::holder::{HolderFolders, Holders};
-    use hide_node::terminal::{Attacher, Mode, OutputSink, ReportSink, SessionParts};
+impl BuiltHolders {
+    fn start() -> Self {
+        use std::path::PathBuf;
+        use std::sync::Arc;
 
-    struct NoHerdr;
-    impl Attacher for NoHerdr {
-        fn open(&self, _: &str, _: Mode, _: u16, _: u16) -> Result<SessionParts, String> {
-            Err("this test runs no Herdr".to_owned())
+        use hide_node::terminal::engine_panes::{LocalPanes, PaneShell};
+        use hide_node::terminal::holder::{HolderFolders, Holders};
+        use hide_node::terminal::{Attacher, Mode, OutputSink, ReportSink, SessionParts};
+
+        struct NoHerdr;
+        impl Attacher for NoHerdr {
+            fn open(&self, _: &str, _: Mode, _: u16, _: u16) -> Result<SessionParts, String> {
+                Err("this test runs no Herdr".to_owned())
+            }
         }
-    }
-    struct Nowhere;
-    impl OutputSink for Nowhere {
-        fn output(&self, _: &str, _: &[u8], _: bool) {}
-        fn forget(&self, _: &str) {}
-    }
-    impl ReportSink for Nowhere {
-        fn report(&self, _: hide_node_link::terminal::TerminalReport) {}
-    }
+        struct Nowhere;
+        impl OutputSink for Nowhere {
+            fn output(&self, _: &str, _: &[u8], _: bool) {}
+            fn forget(&self, _: &str) {}
+        }
+        impl ReportSink for Nowhere {
+            fn report(&self, _: hide_node_link::terminal::TerminalReport) {}
+        }
 
-    let program = PathBuf::from(
-        std::env::var_os("HIDE_TEST_HOLDER_BIN")
-            .expect("HIDE_TEST_HOLDER_BIN names the built hide-holder"),
-    );
-    let conpty =
-        cfg!(windows).then(|| {
+        let program = PathBuf::from(
+            std::env::var_os("HIDE_TEST_HOLDER_BIN")
+                .expect("HIDE_TEST_HOLDER_BIN names the built hide-holder"),
+        );
+        let conpty = cfg!(windows).then(|| {
             PathBuf::from(std::env::var_os("HIDE_HOLDER_CONPTY").expect(
                 "HIDE_HOLDER_CONPTY names the pinned ConPTY runtime (scripts/fetch-conpty.py)",
             ))
         });
-    // A holder's socket path is limited to about a hundred bytes on Unix.
-    let root = if cfg!(unix) {
-        tempfile::Builder::new()
-            .prefix("ho")
-            .tempdir_in("/tmp")
-            .unwrap()
-    } else {
-        tempfile::tempdir().unwrap()
-    };
-    let (home, state_dir, folder) = (
-        root.path().join("h"),
-        root.path().join("s"),
-        root.path().join("w"),
-    );
-    for dir in [&home, &state_dir, &folder] {
-        std::fs::create_dir_all(dir).unwrap();
-    }
-    let terminals = Holders::start_from(
-        Some((
-            HolderFolders {
-                home: &home,
-                state_dir: &state_dir,
-            },
-            hide_kit::holders::Source { program, conpty },
-        )),
-        Box::new(NoHerdr),
-        Arc::new(Nowhere) as Arc<dyn OutputSink>,
-        Arc::new(Nowhere) as Arc<dyn ReportSink>,
-    )
-    .expect("the node's holders open");
-    let holders = terminals.holders.expect("the holders are on");
-    // The contract's command lines are a POSIX shell's and Windows
-    // PowerShell's, whatever shell this account uses.
-    let shell = if cfg!(windows) {
-        vec!["powershell.exe".into()]
-    } else {
-        vec!["/bin/sh".into()]
-    };
-    let panes = Arc::new(LocalPanes::new(
-        Arc::clone(&holders),
-        Arc::clone(&terminals.service),
-        PaneShell::Fixed(shell),
-    ));
-    let engine = super::own::OwnEngine::new(panes);
-    let folder = hide_platform::path::to_wire(&folder).unwrap();
-    meets_the_contract(&engine, &folder, || {
-        // The holders outlive an engine; the test that started them ends
-        // every one it left.
-        let left = engine.pane_folders(WAIT).expect("the session reads");
-        engine.stop();
-        for (pane, _) in left {
-            let _ = holders.terminate(&terminals.service, &pane);
+        // A holder's socket path is limited to about a hundred bytes on Unix.
+        let root = if cfg!(unix) {
+            tempfile::Builder::new()
+                .prefix("ho")
+                .tempdir_in("/tmp")
+                .unwrap()
+        } else {
+            tempfile::tempdir().unwrap()
+        };
+        let (home, state_dir, folder) = (
+            root.path().join("h"),
+            root.path().join("s"),
+            root.path().join("w"),
+        );
+        for dir in [&home, &state_dir, &folder] {
+            std::fs::create_dir_all(dir).unwrap();
         }
-    });
+        let terminals = Holders::start_from(
+            Some((
+                HolderFolders {
+                    home: &home,
+                    state_dir: &state_dir,
+                },
+                hide_kit::holders::Source { program, conpty },
+            )),
+            Box::new(NoHerdr),
+            Arc::new(Nowhere) as Arc<dyn OutputSink>,
+            Arc::new(Nowhere) as Arc<dyn ReportSink>,
+        )
+        .expect("the node's holders open");
+        let holders = terminals.holders.expect("the holders are on");
+        // The contract's command lines are a POSIX shell's and Windows
+        // PowerShell's, whatever shell this account uses.
+        let shell = if cfg!(windows) {
+            vec!["powershell.exe".into()]
+        } else {
+            vec!["/bin/sh".into()]
+        };
+        let panes = Arc::new(LocalPanes::new(
+            Arc::clone(&holders),
+            Arc::clone(&terminals.service),
+            PaneShell::Fixed(shell),
+        ));
+        Self {
+            engine: super::own::OwnEngine::new(panes),
+            holders,
+            service: terminals.service,
+            folder: hide_platform::path::to_wire(&folder).unwrap(),
+            _root: root,
+        }
+    }
+
+    /// Ends the engine and every holder it left: the holders outlive an
+    /// engine, so the test that started them ends them.
+    fn stop(&self) {
+        let left = self.engine.pane_folders(WAIT).expect("the session reads");
+        self.engine.stop();
+        for (pane, _) in left {
+            let _ = self.holders.terminate(&self.service, &pane);
+        }
+    }
+}
+
+#[test]
+#[ignore = "needs the built pane holder: HIDE_TEST_HOLDER_BIN"]
+fn the_own_engine_meets_the_engine_contract() {
+    let built = BuiltHolders::start();
+    meets_the_contract(&built.engine, &built.folder, || built.stop());
+}
+
+/// PRD engine-bundle-3-core-owns B28, D-9: a pane on the core's own engine
+/// names itself `HIDE_PANE_ID` and no Herdr pane, says its terminal is
+/// Hide's, and its proof names the shell its record holds, by the start time
+/// the system gives that shell.
+#[test]
+#[ignore = "needs the built pane holder: HIDE_TEST_HOLDER_BIN"]
+fn an_own_engine_pane_names_itself_and_proves_its_recorded_shell() {
+    let built = BuiltHolders::start();
+    let engine = &built.engine;
+    // What the daemon was started with reaches its holders; a Herdr pane's
+    // variables among it must not reach the pane's program.
+    let env = BTreeMap::from([
+        ("HERDR_PANE_ID".to_owned(), "w9:p9".to_owned()),
+        (
+            "HERDR_SOCKET_PATH".to_owned(),
+            "/nowhere/herdr.sock".to_owned(),
+        ),
+    ]);
+    let (_, _, pane) = engine
+        .create_workspace(WAIT, &built.folder, "identity", false, env)
+        .expect("a workspace is made");
+    prompted(engine, &pane);
+    let line = if cfg!(windows) {
+        "Write-Output \"id=$env:HIDE_PANE_ID term=$env:TERM_PROGRAM herdr=$(@(Get-ChildItem env:HERDR_* -ErrorAction SilentlyContinue).Count)\""
+    } else {
+        "echo \"id=$HIDE_PANE_ID term=$TERM_PROGRAM herdr=$(env | grep -c '^HERDR_')\""
+    };
+    engine.submit_text(WAIT, &pane, line).unwrap();
+    shows(engine, &pane, &format!("id={pane} term=hide herdr=0"));
+
+    let proof = engine
+        .pane_identity(WAIT, &pane)
+        .expect("the pane is proved");
+    let shell = engine.pane_processes(WAIT, &pane).unwrap().shell_pid;
+    assert_eq!(proof.pane_id, pane);
+    assert_eq!(Some(u32::try_from(proof.shell_pid).unwrap()), shell);
+    assert_eq!(
+        proof.shell_started,
+        Some(
+            hide_platform::process::start_time(u32::try_from(proof.shell_pid).unwrap())
+                .expect("the shell runs")
+        ),
+        "the record names the shell by the start the system gives it"
+    );
+    built.stop();
 }

@@ -755,7 +755,28 @@ impl Core {
         if !check_owner_thread(self, "hook.status") {
             return Err("hook_status_unavailable");
         }
-        lock_recover(&self.runtime).ingest_hook_status(device, caller, report)
+        let engine = {
+            let mut runtime = lock_recover(&self.runtime);
+            runtime.ingest_hook_status(device, caller, report)?;
+            // Only this machine's engine can be the core's own (a device's
+            // node still runs Herdr), and its panes are named bare.
+            report
+                .session
+                .as_ref()
+                .filter(|_| device == runtime.node().as_str())
+                .and_then(|_| runtime.delivery_engine(device))
+        };
+        // The engine is asked off the runtime lock, as every engine call is.
+        if let (Some(engine), Some(session)) = (engine, report.session.as_deref()) {
+            if let Err(error) = engine.hook_session(caller, &report.runtime, session) {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "agent_hooks", "kind": "hook_session.refused",
+                    "pane": caller, "device": device, "agent": report.runtime,
+                    "message": error.to_string(),
+                }));
+            }
+        }
+        Ok(())
     }
 
     /// `hide agent catalog`: the agents, models and efforts of `machine`, or

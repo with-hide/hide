@@ -101,6 +101,12 @@ function fileArgs(args) {
   return named;
 }
 
+// A pane Hide manages: one on the core's own engine names itself HIDE_PANE_ID first, a Herdr pane by its three
+// variables (`hide_agent_hooks::pane`, the rule the helper and the CLI share).
+function inPane(env) {
+  return Boolean(env.HIDE_PANE_ID) || (env.HERDR_ENV === "1" && Boolean(env.HERDR_PANE_ID) && Boolean(env.HERDR_SOCKET_PATH));
+}
+
 function helperPresent() {
   try {
     return statSync(HELPER).isFile();
@@ -110,7 +116,7 @@ function helperPresent() {
 }
 
 function managed(env) {
-  return env.HERDR_ENV === "1" && Boolean(env.HERDR_PANE_ID) && Boolean(env.HERDR_SOCKET_PATH) && helperPresent();
+  return inPane(env) && helperPresent();
 }
 
 /** The helper's answer, or null when it failed, timed out or said nothing usable. */

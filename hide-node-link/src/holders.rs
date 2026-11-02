@@ -9,6 +9,11 @@
 //! its link carries the calls (the device bundle). Nothing here runs unless
 //! the development switch `HIDE_DEV_PANE_HOLDER` is on.
 
+/// The variable a pane's processes name their pane by, which the node sets
+/// in every pane it starts and the CLI, the hook helper and the agent
+/// plugins read first (PRD engine-bundle-3-core-owns D-9).
+pub use hide_agent_hooks::pane::HIDE_PANE_ID as PANE_ID_VARIABLE;
+
 /// One pane to start, under the id the core chose for it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HolderStart {
@@ -67,6 +72,20 @@ pub struct HolderForeground {
     pub group: u32,
     /// Each member's pid and name, in the order the holder listed them.
     pub members: Vec<(u32, String)>,
+}
+
+/// A pane's start and program as its record names them
+/// ([`PaneHolders::proof`]).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HolderProof {
+    /// The start of the pane the record is, never reused by another start.
+    pub incarnation: u64,
+    /// The pane's program, which leads its terminal's session: the shell of
+    /// a shell pane.
+    pub program: u32,
+    /// When the program started, as the system's process start time reads,
+    /// so a pid the system gave another process since is told apart.
+    pub started: u64,
 }
 
 /// What a pane's holder says of its pane now (PRD engine-bundle-3-core-owns
@@ -248,6 +267,13 @@ pub trait PaneHolders: Send + Sync {
     fn read_styled(&self, pane: &str, read: StyledRead) -> Result<(String, bool), HolderError>;
     /// The pane's program and its terminal's foreground processes.
     fn processes(&self, pane: &str) -> Result<HolderProcesses, HolderError>;
+    /// Which start of the pane runs now and the program it runs, as the
+    /// pane's record says (PRD engine-bundle-3-core-owns D-9): what a
+    /// process that names the pane is proved against. Read from the record
+    /// alone, never from the holder, so a holder that does not answer cannot
+    /// vouch for anything; a pane whose program has not started or has ended
+    /// is refused `pane_not_running`.
+    fn proof(&self, pane: &str) -> Result<HolderProof, HolderError>;
     /// Types `bytes` into the pane as they are, through the connection that
     /// holds its screen, in order with every other key typed there.
     fn input(&self, pane: &str, bytes: Vec<u8>) -> Result<(), HolderError>;

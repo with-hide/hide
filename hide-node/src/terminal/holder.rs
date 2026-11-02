@@ -719,6 +719,14 @@ impl Holders {
         self.ask(pane, Ask::Processes)
     }
 
+    /// The pane's record, read under no lock: a reader sees one whole
+    /// record, as each change replaces it atomically.
+    pub fn record(&self, pane: &str) -> Result<Option<PaneRecord>, String> {
+        self.panes
+            .record(&holder_pane(pane))
+            .map_err(|why| why.to_string())
+    }
+
     /// Asks in the version the pane's record says its holder speaks, so a
     /// newer node still reads an older holder.
     fn ask(&self, pane: &str, ask: Ask) -> Result<Answer, OpenError> {
