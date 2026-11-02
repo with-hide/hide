@@ -10,7 +10,7 @@ import { useInterfaceTranslation } from "../i18n/client";
  */
 const SKILLS = [
   { name: "hide", icon: BookOpenTextIcon, help: "hide guide", what: "agents.skills.hide" },
-  { name: "hide-conductor", icon: WaypointsIcon, help: "hide mission help", what: "agents.skills.conductor" },
+  { name: "hide-mission", icon: WaypointsIcon, help: "hide mission help", what: "agents.skills.conductor" },
   { name: "hide-plan", icon: ListChecksIcon, help: "hide plan help", what: "agents.skills.plan" },
 ] as const;
 

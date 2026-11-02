@@ -2,7 +2,7 @@
 //! the skill stub and the guidance hooks, against a private HOME.
 
 use super::*;
-use crate::agents::{ADAPTERS, CONDUCTOR_SKILL, GUIDE_SKILL, PLAN_SKILL, RETIRED_SKILLS, SKILLS};
+use crate::agents::{ADAPTERS, GUIDE_SKILL, MISSION_SKILL, PLAN_SKILL, RETIRED_SKILLS, SKILLS};
 
 fn agent<'a>(report: &'a KitReport, id: &str) -> &'a AgentReport {
     report
@@ -199,12 +199,11 @@ fn an_older_stub_is_replaced_without_the_operator_asking() {
 /// The skills folder an earlier build filled with `hide-browser` and
 /// `hide-conductor` version 1 alone, recorded as Hide's.
 fn earlier_build_folder(fixture: &Fixture) -> PathBuf {
-    install(fixture, "grok", ".grok");
-    apply(&fixture.target, &Scope::agents(["grok"], []));
-    let root = fixture.home().join(".agents/skills");
-    // That build wrote neither the guide nor the plan's stub.
-    std::fs::remove_dir_all(root.join(GUIDE_SKILL.name)).unwrap();
-    std::fs::remove_dir_all(root.join(PLAN_SKILL.name)).unwrap();
+    let root = written_folder(fixture);
+    // That build wrote none of the current stubs.
+    for skill in SKILLS {
+        std::fs::remove_dir_all(root.join(skill.name)).unwrap();
+    }
     // The files exactly as that build wrote them.
     std::fs::create_dir_all(root.join("hide-browser")).unwrap();
     std::fs::write(root.join("hide-browser/SKILL.md"), "---\nname: hide-browser\ndescription: Read and drive a browser display inside Hide. Use when a task involves a web page, a local app in a browser tab, or checking what a page shows.\n---\n\n<!-- hide-skill@1: written by Hide; remove it from Settings, Agents -->\n\nRun `hide browser help` and follow what it prints. It explains how to open a page, read it by refs, check a change with `--diff`, and what to do when a command fails.\n").unwrap();
@@ -213,9 +212,15 @@ fn earlier_build_folder(fixture: &Fixture) -> PathBuf {
     root
 }
 
-/// The earlier build's `hide-browser` goes, and its `hide-conductor` version
-/// 1 is an older version of the current Conductor stub, replaced by the
-/// marker rule; `hide` is written beside it.
+/// The shared skills folder after Grok's stubs went in, recorded as Hide's.
+fn written_folder(fixture: &Fixture) -> PathBuf {
+    install(fixture, "grok", ".grok");
+    apply(&fixture.target, &Scope::agents(["grok"], []));
+    fixture.home().join(".agents/skills")
+}
+
+/// The earlier build's `hide-browser` and `hide-conductor` go, and the
+/// current stubs are written in their place.
 #[test]
 fn an_earlier_builds_two_stubs_give_way_to_the_current_ones() {
     let fixture = Fixture::new();
@@ -231,15 +236,16 @@ fn an_earlier_builds_two_stubs_give_way_to_the_current_ones() {
         agent(&report, "grok").skill.state,
         ComponentState::Installed
     );
-    assert_eq!(
-        std::fs::read_to_string(root.join("hide/SKILL.md")).unwrap(),
-        GUIDE_SKILL.text()
-    );
     assert!(!root.join("hide-browser").exists());
-    assert_eq!(
-        std::fs::read_to_string(root.join("hide-conductor/SKILL.md")).unwrap(),
-        CONDUCTOR_SKILL.text()
-    );
+    assert!(!root.join("hide-conductor").exists());
+    for skill in SKILLS {
+        assert_eq!(
+            std::fs::read_to_string(skill.file_in(&root)).unwrap(),
+            skill.text(),
+            "{}",
+            skill.name
+        );
+    }
     assert!(
         GUIDE_SKILL
             .text()
@@ -252,22 +258,85 @@ fn an_earlier_builds_two_stubs_give_way_to_the_current_ones() {
             .contains(hide_agent_hooks::intent_table!())
     );
     assert!(GUIDE_SKILL.text().contains("<!-- hide-skill@5:"));
-    // The Conductor's stub names missions and the Conductor for the agent
+    // The mission's stub names missions and the Conductor for the agent
     // choosing it, and sends it to the help that owns the commands.
     assert!(
-        CONDUCTOR_SKILL
+        MISSION_SKILL
+            .text()
+            .starts_with("---\nname: hide-mission\n")
+    );
+    assert!(
+        MISSION_SKILL
             .text()
             .contains("description: \"Conduct a mission of agents in Hide")
     );
-    assert!(CONDUCTOR_SKILL.text().contains("run `hide mission help`"));
-    assert!(CONDUCTOR_SKILL.text().contains("<!-- hide-skill@3:"));
-    // The plan's stub is written beside them and sends the agent to the
-    // help that owns the plan's commands.
-    assert_eq!(
-        std::fs::read_to_string(root.join("hide-plan/SKILL.md")).unwrap(),
-        PLAN_SKILL.text()
-    );
+    assert!(MISSION_SKILL.text().contains("run `hide mission help`"));
+    // The plan's stub sends the agent to the help that owns the plan's
+    // commands.
     assert!(PLAN_SKILL.text().contains("run `hide plan help`"));
+}
+
+/// Every `hide-conductor` a build wrote under that name gives way to
+/// `hide-mission`; one the operator edited, and a `hide-conductor` folder of
+/// their own, stay as they are.
+#[test]
+fn the_renamed_conductor_stub_goes_and_the_operators_own_stays() {
+    let conductor = RETIRED_SKILLS
+        .iter()
+        .find(|skill| skill.name == "hide-conductor")
+        .unwrap();
+    // The last version under the old name is the current stub's text.
+    assert_eq!(
+        conductor.texts.last().unwrap().to_string(),
+        MISSION_SKILL
+            .text()
+            .replace("name: hide-mission", "name: hide-conductor")
+            .replace("hide-skill@1:", "hide-skill@3:")
+    );
+    for (index, text) in conductor.texts.iter().enumerate() {
+        let fixture = Fixture::new();
+        let root = written_folder(&fixture);
+        let file = root.join("hide-conductor/SKILL.md");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, text).unwrap();
+        assert_eq!(
+            agent(&status(&fixture.target), "grok").skill.state,
+            ComponentState::Outdated,
+            "version {}",
+            index + 1
+        );
+
+        apply(&fixture.target, &Scope::automatic());
+
+        assert!(
+            !root.join("hide-conductor").exists(),
+            "version {}",
+            index + 1
+        );
+        assert_eq!(
+            std::fs::read_to_string(MISSION_SKILL.file_in(&root)).unwrap(),
+            MISSION_SKILL.text()
+        );
+    }
+
+    let edited = format!("{}Always ask me first.\n", conductor.texts.last().unwrap());
+    let own = "---\nname: hide-conductor\ndescription: my own conductor\n---\n\nDo it my way.\n";
+    for kept in [edited.as_str(), own] {
+        let fixture = Fixture::new();
+        let root = written_folder(&fixture);
+        let file = root.join("hide-conductor/SKILL.md");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, kept).unwrap();
+
+        let report = apply(&fixture.target, &Scope::automatic());
+        apply(&fixture.target, &Scope::agents([], ["grok", "codex"]));
+
+        assert_eq!(
+            agent(&report, "grok").skill.state,
+            ComponentState::Installed
+        );
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), kept);
+    }
 }
 
 #[test]
@@ -311,15 +380,13 @@ fn an_old_stub_the_operator_edited_stays_and_the_rest_go() {
 fn a_recorded_folder_with_only_edited_old_stubs_waits_for_reinstall() {
     let fixture = Fixture::new();
     let root = earlier_build_folder(&fixture);
-    // The folder holds only what the operator edited: the retired stub with
-    // their words, and none of Hide's current stubs (the earlier build's
-    // `hide-conductor` is an older version of one, so it is taken out here).
+    // The folder holds only what the operator edited: the retired stubs
+    // with their words, and none of Hide's current stubs.
     for name in RETIRED_SKILLS.map(|skill| skill.name) {
         let path = root.join(name).join("SKILL.md");
         let edited = std::fs::read_to_string(&path).unwrap() + "Mine now.\n";
         std::fs::write(&path, edited).unwrap();
     }
-    std::fs::remove_dir_all(root.join(CONDUCTOR_SKILL.name)).unwrap();
 
     // The operator's edits decide nothing, and a recorded folder without
     // Hide's stubs reads as their removal: no pass writes them back.

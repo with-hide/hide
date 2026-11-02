@@ -21,7 +21,7 @@ export default chapter<MissionModel>({
   steps: [
     { id: "intro", target: PANE, side: "inside" },
     // Any words make the mission: the Conductor plans it, starts its workers, and asks one decision.
-    { id: "ask", quest: true, target: PANE, side: "inside", gesture: say("/hide-conductor Make payment retries configurable with backoff and docs, as 3 PRs. Start once the plan is up"), done: (model) => model.stage >= 1 },
+    { id: "ask", quest: true, target: PANE, side: "inside", gesture: say("/hide-mission Make payment retries configurable with backoff and docs, as 3 PRs. Start once the plan is up"), done: (model) => model.stage >= 1 },
     // The chip and its popover, which a first plan that lands while the learner looks at the pane opens once,
     // pinned (missionReveal.ts). A look: ⏎ pressing the chord here would close a map the plan left pinned.
     { id: "chip", target: `${CHIP}, [data-pane-mission]`, side: "bottom", command: "toggle_plan" },
