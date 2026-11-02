@@ -301,6 +301,15 @@ pub const ADAPTERS: &[AgentAdapter] = &[
                 style: Style::Dim,
             }],
         }),
+        // Claude Code's messaging socket is not a rung: Claude Code holds a
+        // message for a session that bypasses permission prompts unless its
+        // sender attests a matching permission mode (2.1.302 in the agent
+        // journey, 2026-11-01), and a session Hide starts with full access
+        // does, so the letter waited for review instead of running.
+        input: &[
+            InputRung::AgentApi(AgentApi::LaunchPrompt),
+            InputRung::Typed,
+        ],
         start: Some(LaunchDialect::Claude),
         find: Some(FindDialect::ClaudeTranscript),
         usage: UsageDeclaration {
@@ -394,6 +403,11 @@ pub const ADAPTERS: &[AgentAdapter] = &[
                 style: Style::Dim,
             }],
         }),
+        input: &[
+            InputRung::AgentApi(AgentApi::LaunchPrompt),
+            InputRung::AgentApi(AgentApi::CodexQueue),
+            InputRung::Typed,
+        ],
         start: Some(LaunchDialect::Codex),
         find: Some(FindDialect::CodexTranscript),
         usage: UsageDeclaration {
@@ -501,6 +515,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
                 style: Style::Italic,
             }],
         }),
+        input: TYPED_ONLY,
         start: Some(LaunchDialect::Grok),
         find: None,
         usage: UsageDeclaration {
@@ -610,6 +625,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
                 style: Style::Rgb(128, 128, 128),
             }],
         }),
+        input: TYPED_ONLY,
         start: Some(LaunchDialect::OpenCode),
         find: None,
         usage: UsageDeclaration {
@@ -716,6 +732,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             trailer: 0,
             empty: &[],
         }),
+        input: TYPED_ONLY,
         start: Some(LaunchDialect::Pi),
         find: None,
         usage: UsageDeclaration {
@@ -824,6 +841,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
                 style: Style::Any,
             }],
         }),
+        input: TYPED_ONLY,
         start: Some(LaunchDialect::Omp),
         find: None,
         usage: UsageDeclaration {
@@ -934,6 +952,14 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             trailer: 0,
             empty: &[],
         }),
+        // agy 1.4.12 holds `-i` through its folder trust question (measured
+        // 2026-11-01). Its running TUI is also a language server on a
+        // loopback port that takes a message, but only with a token set by
+        // a hidden start flag and a port read from its log: not declared.
+        input: &[
+            InputRung::AgentApi(AgentApi::LaunchPrompt),
+            InputRung::Typed,
+        ],
         start: Some(LaunchDialect::Antigravity),
         find: None,
         usage: UsageDeclaration {
@@ -1024,6 +1050,7 @@ pub(super) const RETIRED_CURSOR: AgentAdapter = AgentAdapter {
         would_change: "Restore active support with a pinned Cursor transcript sample and a thread converter.",
     }),
     composer: Support::Unsupported(RETIRED_CONTEXT_ABSENCE),
+    input: TYPED_ONLY,
     start: None,
     find: None,
     usage: UsageDeclaration {

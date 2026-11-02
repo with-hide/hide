@@ -838,6 +838,79 @@ impl Systems {
     }
 }
 
+/// One way Hide hands an agent a brief or a letter (`docs/delivery.md`, The
+/// input ladder). An agent's ladder ([`AgentAdapter::input`]) names the rungs
+/// it has in the order Hide tries them; the last is always [`Self::Typed`],
+/// today's typing, so an agent without a channel of its own keeps today's
+/// behavior. The Hide extension kind (a script of Hide's in the agent's own
+/// extension folder that takes input, measured for Pi and omp) is not
+/// declared until an agent uses it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InputRung {
+    /// The agent's own way in.
+    AgentApi(AgentApi),
+    /// Typed into the agent's screen through Herdr's `agent.prompt`; the
+    /// agent's own record (its prompt hook or session file) confirms it.
+    Typed,
+}
+
+/// The agent's own ways in that Hide uses, each measured on the real CLI
+/// (`docs/delivery.md`, The input ladder).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AgentApi {
+    /// A spawn's brief as the start's prompt argument
+    /// ([`LaunchDialect::prompt_flag`]), which the CLI holds through its own
+    /// start screens and submits after them: Codex 0.166.0 through "Hooks
+    /// need review", Claude Code 2.1.316 and agy 1.4.12 through their folder
+    /// trust question (measured 2026-11-01). Only a fresh start's first input
+    /// takes it.
+    LaunchPrompt,
+    /// `codex queue --thread <session> --message=<text>`: the session's own
+    /// durable queue, which the running TUI takes as a turn once it rests
+    /// with an empty composer (Codex 0.166.0, measured 2026-11-01). A Codex
+    /// has no thread before its first turn, so this rung needs the session
+    /// its hook reported.
+    CodexQueue,
+}
+
+impl AgentApi {
+    /// Whether the rung takes only a fresh start's first input.
+    pub const fn first_input_only(self) -> bool {
+        matches!(self, Self::LaunchPrompt)
+    }
+
+    /// The agent whose own API this is.
+    pub const fn agent(self) -> Option<AgentId> {
+        match self {
+            Self::LaunchPrompt => None,
+            Self::CodexQueue => Some(AgentId::Codex),
+        }
+    }
+}
+
+impl InputRung {
+    /// The rung's name in the journey contract and a log line.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::AgentApi(AgentApi::LaunchPrompt) => "launch_prompt",
+            Self::AgentApi(AgentApi::CodexQueue) => "codex_queue",
+            Self::Typed => "typed",
+        }
+    }
+}
+
+/// The ladder of an agent with no way in of its own.
+pub const TYPED_ONLY: &[InputRung] = &[InputRung::Typed];
+
+impl AgentAdapter {
+    /// Whether a fresh start of the agent carries its brief as the start's
+    /// prompt argument ([`AgentApi::LaunchPrompt`]).
+    pub fn launch_prompt(&self) -> bool {
+        self.input
+            .contains(&InputRung::AgentApi(AgentApi::LaunchPrompt))
+    }
+}
+
 /// Independent gates; adding prompt intake never grants bell or shell denial.
 #[derive(Clone, Copy, Debug)]
 pub struct AgentAdapter {
@@ -895,6 +968,9 @@ pub struct AgentAdapter {
     /// says the composer holds nothing (`docs/delivery.md`, Reading the
     /// composer).
     pub composer: Capability<composer::Composer>,
+    /// How Hide hands the agent a brief or a letter, rung by rung
+    /// ([`InputRung`]); every agent declares one, ending with `Typed`.
+    pub input: &'static [InputRung],
     pub start: Option<LaunchDialect>,
     /// Safety declaration for keyless journeys only; never changes a real login HOME.
     pub fake_home: journey::FakeHome,
