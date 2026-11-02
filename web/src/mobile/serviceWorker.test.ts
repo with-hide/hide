@@ -104,3 +104,27 @@ it("leads with the status word with no detail too, and works with older payloads
   await newPhone.push({ title: "task", state: "done", detail: "배포 완료", place: "project" });
   expect(newPhone.shown).toEqual([{ title: "task", body: "배포 완료 · project", tag: undefined }]);
 });
+
+it("a hosted push stays bound to its registration's device and opens that agent in the loader", async () => {
+  for (const room of ["a".repeat(43), "b".repeat(43)]) {
+    const handlers = new Map<string, (event: unknown) => void>();
+    let notification: { data: unknown } | null = null;
+    const opened: string[] = [];
+    const self = {
+      location: new URL("https://app.withhide.dev/sw.js"),
+      registration: { scope: `https://app.withhide.dev/push/${room}/`, getNotifications: async () => [],
+        showNotification: async (_title: string, options: { data: unknown }) => { notification = options; } },
+      clients: { matchAll: async () => [], openWindow: async (url: string) => { opened.push(url); } },
+      addEventListener: (kind: string, listener: (event: unknown) => void) => handlers.set(kind, listener),
+    };
+    const caches = { open: async () => ({ match: async () => undefined }) };
+    runInContext(readFileSync(new URL("../../public/m/sw.js", import.meta.url), "utf8"), createContext({ self, caches, Response, URL, URLSearchParams }));
+    const work: Promise<unknown>[] = [];
+    const waitUntil = (promise: Promise<unknown>) => work.push(promise);
+    handlers.get("push")!({ data: { json: () => ({ title: "Ready", device_id: "device", pane_id: "pane", room: "untrusted" }) }, waitUntil });
+    await Promise.all(work);
+    handlers.get("notificationclick")!({ notification: { ...notification!, close: () => {} }, waitUntil });
+    await Promise.all(work);
+    expect(opened).toEqual([`/?host=${room}&open=device%7Cpane`]);
+  }
+});

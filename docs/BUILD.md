@@ -254,7 +254,8 @@ The sealed `test`, `lint`, `release` and `cli` invocations keep their existing b
 Desktop build uses esbuild without typechecking, so its separate typecheck remains required.
 Standalone package `build` and `e2e` commands keep their preparation: web build typechecks, web package e2e builds the shell, and desktop e2e builds the host.
 The desktop packager also runs the web build with its typecheck by default, for local builds and standalone CI calls alike.
-The web package's `bundle` script owns the Vite command; both `build` after its typecheck and the packager's CI-only path call it.
+The web package's `bundle` script prepares the relay WASM and owns the Vite command; both `build` after its typecheck and the packager's CI-only path call it.
+`typecheck`, `test`, `dev` and `build:phone` also prepare their WASM prerequisite through `prepare:relay`; Cargo checks freshness on repeated calls, and a preparation failure stops the caller.
 `package.yml` accepts `web-typechecked: true` only from a caller that requires the same source's verify web build before accepting or publishing its packages.
 It passes that source as `HIDE_WEB_TYPECHECKED_SHA`; `package.mjs` requires GitHub Actions, an exact checkout commit match and unchanged web inputs and lockfile with no untracked web source, then runs Vite without repeating `tsc`.
 The `GITHUB_ACTIONS=true` check guards against mistakes, not a security boundary; a caller that sets the environment still owns the verify dependency contract.
@@ -264,10 +265,10 @@ The PR/main caller opts in only when its plan requires the `checks` lane, and th
 For macOS, the override reaches only `compile`, where the web shell is built; `assemble` uses the compiled binaries without another web build.
 Until that gate passes, a built package is unverified; the opt-in is a dependency contract, not independent proof of success.
 Other callers leave the input false, and setting the source override outside GitHub Actions or for another commit fails packaging.
-`web e2e` through this wrapper runs Playwright against the web output already built; `desktop e2e` always rebuilds the desktop host before Playwright, including a direct local invocation.
+`web e2e` through this wrapper builds the phone bundle and native relay fixture, then runs Playwright against the web output already built; `desktop e2e` always rebuilds the desktop host before Playwright, including a direct local invocation.
 Both forward the test arguments and their exit status, so a missing test filter fails the caller.
 `<web|desktop> e2e-list [args...]` only discovers tests (`playwright test --list`); it needs no app build and cannot execute tests.
-The desktop CI job uses it for the complete and filtered shard lists, then uses `desktop e2e` for execution: one fresh host build per job instead of one for each list and another for execution.
+Both web and desktop CI jobs use discovery for the complete and filtered shard lists, then use `e2e` for execution: preparation happens once per execution, never while listing tests.
 There is no skip-build flag, freshness marker or reuse of a previous job's desktop output.
 `playwright-install` installs Chromium for web or desktop; `desktop package` packages this runner's app.
 `desktop package compile` builds only the web shell and the release binaries and records them in `desktop/out/release-binaries.json` (commit, version, build order and each binary's SHA-256); `desktop package assemble` builds the host and packages exactly those binaries, refusing a record of another commit, version or order and any binary that is missing, linked or changed.
@@ -558,7 +559,8 @@ Generated browser bindings and `relay_bg.wasm` land in ignored `hide-relay-proto
 The library is excluded from hakari's native workspace feature union because the union includes operating-system dependencies that cannot compile for WASM; its own direct dependencies and target features remain locked.
 
 A phone bundle first runs that script, then imports `hide-relay-protocol/web/index.ts` and loads the generated local `relay_bg.wasm` asset with its exported initializer.
-The loader owns asset URL resolution, HTTP MIME/cache behavior and startup errors; this library does not install a phone loader or alter the existing shell build.
+The phone loader owns asset URL resolution, HTTP MIME/cache behavior and startup errors; the library owns only the shared ABI.
+The web E2E lane prepares the locked binding tool and WASM in a separate bounded step before the existing five-minute shell build, including on a cold Windows runner.
 Both hided and the browser therefore run one cryptographic implementation and one parser.
 The public checkout builds with the pinned Rust toolchain and registry dependencies, without a private binary, credential or design tool.
 `bash scripts/check-relay-protocol.sh` builds and tests both targets and their interoperability; after workspace dependency installation, `bash scripts/verify-web.sh relay-protocol typecheck` checks the TypeScript surface against the generated bindings.

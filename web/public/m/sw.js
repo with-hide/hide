@@ -21,10 +21,13 @@
 // the address it was added from, whose fragment carries the phone's
 // credential into an installed app whose storage iOS may keep apart.
 
-const CACHE = "hide-phone-shell-v1";
+const HOSTED = self.location?.pathname === "/sw.js";
+const ROOT = HOSTED ? "/" : "/m/";
+const ROOM = HOSTED ? new URL(self.registration.scope).pathname.match(/^\/push\/([A-Za-z0-9_-]{43})\/$/)?.[1] : null;
+const CACHE = HOSTED ? "hide-hosted-phone-shell-v1" : "hide-phone-shell-v1";
 const WORDS_CACHE = "hide-phone-words";
-const WORDS_URL = "/m/words.json";
-const SHELL = ["/m/", "/m/manifest.webmanifest", "/m/icon-192.png", "/m/icon-512.png", "/m/apple-touch-icon.png"];
+const WORDS_URL = ROOM ? `/push/${ROOM}/words.json` : `${ROOT}words.json`;
+const SHELL = [ROOT, `${ROOT}manifest.webmanifest`, "/m/icon-192.png", "/m/icon-512.png", "/m/apple-touch-icon.png"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -39,7 +42,7 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches
       .keys()
-      .then((keys) => Promise.all(keys.filter((key) => key !== CACHE && key !== WORDS_CACHE).map((key) => caches.delete(key))))
+      .then((keys) => Promise.all(keys.filter((key) => key.startsWith(HOSTED ? "hide-hosted-phone-shell-" : "hide-phone-shell-") && key !== CACHE).map((key) => caches.delete(key))))
       .then(() => self.clients.claim()),
   );
 });
@@ -48,13 +51,13 @@ function isShell(url) {
   // The words store is this worker's own state: neither cached as shell nor
   // answered from the network.
   if (url.pathname === WORDS_URL) return false;
-  return url.origin === self.location.origin && (url.pathname.startsWith("/m/") || url.pathname.startsWith("/assets/"));
+  return url.origin === self.location.origin && (url.pathname.startsWith("/m/") || url.pathname.startsWith("/assets/") || (HOSTED && (url.pathname === "/" || url.pathname === "/protocols.json" || url.pathname === "/manifest.webmanifest" || /^\/p\/[1-9][0-9]*\//.test(url.pathname))));
 }
 
 self.addEventListener("fetch", (event) => {
   const request = event.request;
   const url = new URL(request.url);
-  if (request.method !== "GET" || !isShell(url) || url.pathname === "/m/sw.js") return;
+  if (request.method !== "GET" || !isShell(url) || (url.pathname === "/m/sw.js" || url.pathname === "/sw.js")) return;
   if (url.pathname.startsWith("/assets/")) {
     // Hashed file names never change content: the cache answers first.
     event.respondWith(
@@ -64,7 +67,7 @@ self.addEventListener("fetch", (event) => {
           fetch(request).then((response) => {
             if (response.ok) {
               const copy = response.clone();
-              void caches.open(CACHE).then((cache) => cache.put(request, copy));
+              event.waitUntil(putShell(request, copy));
             }
             return response;
           }),
@@ -73,13 +76,13 @@ self.addEventListener("fetch", (event) => {
     return;
   }
   // The page and the manifest: the network first, so a new build lands at once.
-  const key = request.mode === "navigate" ? "/m/" : request;
+  const key = request.mode === "navigate" ? (HOSTED ? url.pathname : "/m/") : request;
   event.respondWith(
     fetch(request)
       .then((response) => {
         if (response.ok) {
           const copy = response.clone();
-          void caches.open(CACHE).then((cache) => cache.put(key, copy));
+          event.waitUntil(putShell(key, copy));
         }
         return response;
       })
@@ -165,7 +168,7 @@ self.addEventListener("push", (event) => {
         tag: payload.tag,
         icon: "/m/icon-192.png",
         badge: "/m/icon-192.png",
-        data: { device_id: payload.device_id, pane_id: payload.pane_id },
+        data: { device_id: payload.device_id, pane_id: payload.pane_id, room: ROOM },
       }),
     ),
   );
@@ -177,6 +180,15 @@ self.addEventListener("notificationclick", (event) => {
   const tag = data.device_id && data.pane_id ? `${data.device_id}|${data.pane_id}` : null;
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((windows) => {
+      if (HOSTED) {
+        const query = new URLSearchParams();
+        if (data.room) query.set("host", data.room);
+        if (tag) query.set("open", tag);
+        const url = `/?${query}`;
+        const existing = windows.find((client) => new URL(client.url).origin === self.location.origin);
+        if (existing) return existing.navigate(url).then((client) => client?.focus());
+        return self.clients.openWindow(url);
+      }
       const open = windows.find((client) => new URL(client.url).pathname.startsWith("/m/"));
       if (open) {
         if (tag) open.postMessage({ type: "open", tag });
@@ -186,3 +198,12 @@ self.addEventListener("notificationclick", (event) => {
     }),
   );
 });
+
+
+// Bound versioned static assets too; no runtime frame is ever admitted here.
+async function putShell(key, response) {
+  const cache = await caches.open(CACHE);
+  await cache.put(key, response);
+  const keys = await cache.keys();
+  for (const expired of keys.slice(0, Math.max(0, keys.length - 128))) await cache.delete(expired);
+}
