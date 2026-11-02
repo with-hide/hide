@@ -88,9 +88,9 @@ await page.evaluate(`(() => {
             else if (kind === "switch") shown = grid(subject) !== null;
             else if (kind === "resize") shown = seen.panes.every((id) => grid(id) !== null && grid(id) !== beforeGrids[id]);
             else shown = grid(subject) !== null && grid(subject) !== beforeGrids[subject];
-            if (shown) return resolve({ key_ms: state.keyAt, screen_ms: screen, frame_ms: now, subject, after: look() });
+            if (shown) return resolve({ key_ms: state.keyAt, screen_ms: screen, frame_ms: now, subject, after: look(), origin: performance.timeOrigin });
           }
-          if (now - started > timeoutMs) return resolve({ key_ms: state.keyAt, screen_ms: screen, frame_ms: null, subject, after: look(), timeout: true });
+          if (now - started > timeoutMs) return resolve({ key_ms: state.keyAt, screen_ms: screen, frame_ms: null, subject, after: look(), timeout: true, origin: performance.timeOrigin });
           requestAnimationFrame(step);
         };
         requestAnimationFrame(step);
@@ -147,6 +147,11 @@ async function measure(kind, start) {
     frame_ms: result.frame_ms === null || result.key_ms === null ? null : result.frame_ms - result.key_ms,
     timeout: Boolean(result.timeout),
     subject: result.subject,
+    // Wall-clock times, so a sample lines up with the core's `pane_op.timing`
+    // record of the same operation (its `requested_at_unix_ms` and stages):
+    // key to request, request to snapshot read, and that read to the screen.
+    key_unix_ms: result.key_ms === null ? null : result.origin + result.key_ms,
+    screen_unix_ms: result.screen_ms === null ? null : result.origin + result.screen_ms,
   };
   samples.push(sample);
   await sleep(SETTLE_MS);
