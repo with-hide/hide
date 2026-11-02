@@ -1,24 +1,29 @@
 import { expect, test } from "@playwright/test";
-import { labelAgent, paneShellTabName, startHerdr } from "./herdr-fixture";
+import { startFixture } from "./engine-fixture";
+import { startHerdr, paneShellTabName } from "./herdr-fixture";
+import { runInPane } from "./daemon-actions";
+import { labelAgentPane, startAgentIn } from "./fixture-agents";
 import { startHided, type Daemon } from "./hided-fixture";
 import { localEndpoint } from "./platform-fixture";
 import { enterWorkspace, screenshot } from "./wire";
 
 test("focused agent titles, inline rename, clear and reconnect", async ({ page }) => {
   test.setTimeout(120_000);
-  const herdr = await startHerdr({ agents: false });
+  const fixture = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "tab-names");
+    daemon = await startHided(fixture, "tab-names");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
-    const tab = page.locator(`[data-tab="${herdr.tab}"]`);
+    const tab = page.locator(`[data-tab="${fixture.tab}"]`);
     await expect(tab).toBeVisible();
-    await expect(tab).toContainText(paneShellTabName(herdr.shell));
-    const [first, second] = herdr.panes;
-    for (const [pane, name, title] of [[first, "one", "첫 번째 작업 진행"], [second, "two", "두 번째 작업 진행"]]) {
-      herdr.run(["agent", "start", name!, "--kind", "claude", "--pane", pane!]);
-      labelAgent(herdr, pane!, { task: title! });
+    await expect(tab).toContainText(paneShellTabName(fixture.shell));
+    const [first, second] = fixture.panes;
+    for (const [pane, title] of [[first, "첫 번째 작업 진행"], [second, "두 번째 작업 진행"]]) {
+      // The own engine lists a program typed as a fresh shell's very first line only after a first command has run there.
+      await runInPane(fixture, daemon, pane!, `warm-${pane!.replaceAll(":", "-")}`, { argv: [process.execPath, "-v"] });
+      await startAgentIn(fixture, daemon, pane!);
+      await labelAgentPane(fixture, daemon, pane!, { task: title! });
     }
     await page.locator(`[data-pane-view="${first}"]`).click({ position: { x: 30, y: 60 } });
     await expect(tab).toContainText("첫 번째 작업 진행", { timeout: 15_000 });
@@ -74,11 +79,12 @@ test("focused agent titles, inline rename, clear and reconnect", async ({ page }
     await expect(tab).toContainText("첫 번째 작업 진행");
   } finally {
     daemon?.stop();
-    herdr.stop();
+    fixture.stop();
   }
 });
 
-test("rename refusal and timeout preserve text for retry", async ({ page }) => {
+// Herdr only: the test answers Herdr's tab.rename at its socket with a refusal and then with silence.
+test("rename refusal and timeout preserve text for retry @herdr", async ({ page }) => {
   test.setTimeout(120_000);
   const net = await import("node:net");
   const path = await import("node:path");

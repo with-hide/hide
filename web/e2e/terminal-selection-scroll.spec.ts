@@ -1,33 +1,30 @@
 // A drag selection in an agent pane keeps the text it covers while the wheel
-// scrolls Herdr's viewport (the pane has no local scrollback, so the frame is
-// redrawn in place under the selection), on an isolated pinned Herdr.
+// scrolls the engine's viewport (the pane has no local scrollback, so the frame
+// is redrawn in place under the selection), on either engine.
 
 import { expect, test, type Page } from "@playwright/test";
 import { mod } from "./chords";
-import { execFileSync } from "node:child_process";
-import { startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { sendKeys, withControl } from "./daemon-actions";
+import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace } from "./wire";
 
 test.describe.configure({ timeout: 120_000 });
 test.use({ actionTimeout: 15_000 });
 
-function herdrCli(herdr: HerdrFixture, args: string[]): string {
-  return execFileSync(herdr.bin, args, { env: herdr.env, encoding: "utf8", timeout: 30_000 });
-}
-
 const paneText = (page: Page, pane: string) => page.evaluate((id) => window.__hideProbe?.paneText(id) ?? "", pane);
 const selection = (page: Page, pane: string) => page.evaluate((id) => window.__hideProbe?.paneSelection(id) ?? null, pane);
 
-test("a selection stays on the text it covers when the wheel scrolls the pane", async ({ page, context }) => {
+// Herdr only until the wheel reliably scrolls an agent pane on the own engine: in about one run in three the first wheel moves nothing there, the snapshot listing the focused pane as transport_state "idle" and the other pane as "controlling".
+test("a selection stays on the text it covers when the wheel scrolls the pane @herdr", async ({ page, context }) => {
   await page.setViewportSize({ width: 1680, height: 900 });
-  const herdr = await startHerdr();
+  const herdr = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    const [pane] = herdr.panes;
     const rows = Array.from({ length: 160 }, (_, index) => `row-${String(index + 1).padStart(3, "0")}`).join("\n");
-    herdrCli(herdr, ["pane", "send-text", pane, `${rows}\n`]);
     daemon = await startHided(herdr, "selection-scroll");
+    const [pane] = herdr.panes;
+    await withControl(daemon, async (control) => sendKeys(control, pane, `${rows}\n`));
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     await expect.poll(() => paneText(page, pane), { timeout: 20_000 }).toContain("row-160");

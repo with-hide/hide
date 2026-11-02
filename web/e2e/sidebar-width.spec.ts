@@ -5,25 +5,15 @@
 // a double-click returns it to 292. Captures land in HIDE_E2E_SCREENSHOT_DIR.
 
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { openProject, withControl } from "./daemon-actions";
+import { startFixture } from "./engine-fixture";
 import { startHided } from "./hided-fixture";
 import { countSent, rest, screenshot, showProjectRow } from "./wire";
 import { quietFor } from "./wait";
 
 test.describe.configure({ timeout: 120_000 });
-
-async function prompt(herdr: HerdrFixture, pane: string): Promise<void> {
-  const deadline = Date.now() + 15_000;
-  while (Date.now() < deadline) {
-    const read = spawnSync(herdr.bin, ["pane", "read", pane, "--source", "visible", "--format", "text"], { env: herdr.env, encoding: "utf8", timeout: 10_000 });
-    if (read.status === 0 && read.stdout.includes("fixture %")) return;
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error(`no prompt in pane ${pane}`);
-}
 
 /** `--size-rail`: the always-shown device rail, which the nav and its box carry beside the content column the width names. */
 const RAIL = 48;
@@ -43,19 +33,16 @@ async function dragEdge(page: Page, edge: Locator, dx: number): Promise<() => Pr
 
 test("the sidebar's edge drags between its bounds, lands once, survives a reload and resets on a double-click", async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 });
-  const herdr = await startHerdr({ readiness: "registered" });
+  const herdr = await startFixture();
   const daemon = await startHided(herdr, "sidebar-width");
   try {
     const folder = path.join(herdr.root, "notes");
     fs.mkdirSync(folder);
-    const created = herdr.run(["workspace", "create", "--cwd", folder, "--label", "notes", "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]) as {
-      result: { root_pane: { pane_id: string } };
-    };
-    await prompt(herdr, created.result.root_pane.pane_id);
+    const opened = await withControl(daemon, (control) => openProject(control, folder, "notes"));
 
     const last = new Map<string, Record<string, unknown>>();
     const sent = countSent(page, last);
-    await page.goto(`${daemon.origin}/#token=${daemon.token}`);
+    await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     const nav = page.locator("nav[data-sidebar]");
     const box = page.locator("[data-sidebar-box]");
     const edge = page.locator("[data-sidebar-edge]");
@@ -64,6 +51,8 @@ test("the sidebar's edge drags between its bounds, lands once, survives a reload
     await (await showProjectRow(page, page.locator("[data-project]", { hasText: /^notes/ }).locator("[data-checkout]"))).click();
     await expect(page.locator("[data-workspace-screen]")).toBeVisible();
     await expect(page.locator(".xterm").first()).toBeVisible({ timeout: 20_000 });
+    // The notes shell has drawn its prompt, so the terminal is settled before the first resize count.
+    await expect.poll(() => page.evaluate((id) => window.__hideProbe?.paneText(id) ?? "", opened.pane), { timeout: 20_000 }).toContain("fixture %");
     await rest(page);
     expect(await width(nav)).toBe(292 + RAIL);
 

@@ -3,7 +3,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { declareParent, labelAgent, type FixtureLabel, type HerdrFixture } from "./herdr-fixture";
+import { toPage } from "../../desktop/src/main/wirePath";
+import { claudeProjects, writeFixtureTranscript, type FixtureLabel } from "./herdr-fixture";
+import { closePane, showTabOf, withControl } from "./daemon-actions";
+import type { AgentFixture, EngineServer } from "./engine-fixture";
+import { agentReading, labelAgentPane, spawnChild, startAgentInProject } from "./fixture-agents";
+import type { Daemon } from "./hided-fixture";
 import { fixtureProgram } from "./platform-fixture";
 import { expect } from "@playwright/test";
 import { DatabaseSync } from "node:sqlite";
@@ -35,7 +40,7 @@ export const NEXT_GOAL = "놓친 일 이슈 생성과 검색 검증";
 export const CHILD_GOAL = "자식 세션 결과물 연결 검증";
 export const MISSED = "좁은 열에서 긴 한국어 요청의 줄바꿈을 확인해야 합니다";
 
-export function workFixture(herdr: HerdrFixture, uncertainCreate = false) {
+export function workFixture(herdr: Pick<EngineServer, "root" | "fixturePath">, uncertainCreate = false) {
   const cwd = path.join(herdr.root, "fixture");
   const git = (args: string[]) => execFileSync("git", ["-c", "user.name=e2e", "-c", "user.email=e2e@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd });
   // Match the GitHub fixture's head branch on every system, regardless of
@@ -111,17 +116,57 @@ process.stderr.write("unsupported fixture gh arguments\\n");process.exit(1);
   return { env, calls, contexts, issue, repositoryUnavailable, repositoryGate, clock: setClock };
 }
 
-export function seedFirstWork(herdr: HerdrFixture, at: number, goal = FIRST_GOAL) {
-  const session = labelAgent(herdr, herdr.panes[0], {
-    task: goal, at, cwd: path.join(herdr.root,"fixture"), end: "done", toolOutputs: ["https://github.com/acme/repo/pull/31", "https://github.com/acme/repo/issues/41"],
+/** What the first turn of the fixture's work is labelled: the goal, a request, its pull request and issue, one missed line and one artifact. */
+function firstWork(fixture: Pick<EngineServer, "root">, at: number, goal: string): FixtureLabel {
+  return {
+    task: goal, at, cwd: path.join(fixture.root, "fixture"), end: "done", toolOutputs: ["https://github.com/acme/repo/pull/31", "https://github.com/acme/repo/issues/41"],
     request: "기록 화면 구현 요청", work: { missed: [{ kind: "follow_up", text: MISSED }], resolved: [], artifacts: ["세션 기록 화면 시안"] },
-  });
-  const child = labelAgent(herdr, herdr.panes[1], {
-    task: CHILD_GOAL, at: at + 200, cwd: path.join(herdr.root,"fixture"), end: "done", toolOutputs: ["https://github.com/acme/repo/pull/34"],
-    work: { missed: [], resolved: [], artifacts: [] },
-  });
-  declareParent(herdr, herdr.panes[1], herdr.panes[0]);
-  return { session, child };
+  };
+}
+
+/** What the first work's delegated child is labelled: its own goal and the pull request it printed. */
+function childWork(fixture: Pick<EngineServer, "root">, at: number): FixtureLabel {
+  return { task: CHILD_GOAL, at: at + 200, cwd: path.join(fixture.root, "fixture"), end: "done", toolOutputs: ["https://github.com/acme/repo/pull/34"], work: { missed: [], resolved: [], artifacts: [] } };
+}
+
+/**
+ * Starts the work agent of a session spec: an operator-owned root in the
+ * fixture's checkout running a session whose transcript is labelled `root`
+ * from the start, in a tab of its own, replacing the fixture's first pane
+ * (its first shell, or with a family fixture its first agent and, with it,
+ * its child). With `child`, the root then delegates a child running a
+ * session labelled so, as a real agent does (`hide agent spawn --parent
+ * here`), which needs a family fixture (`startFixture({ family: true })`).
+ * Returns the root's pane and session and the child's.
+ */
+export async function startWork(
+  fixture: AgentFixture,
+  daemon: Pick<Daemon, "origin" | "token">,
+  root: FixtureLabel,
+  child?: FixtureLabel,
+): Promise<{ pane: string; session: string; child: { pane: string; session: string } | null }> {
+  const dir = path.join(fixture.root, "fixture");
+  const project = { folder: toPage(fs.realpathSync.native(dir)), workspace: fixture.workspace, checkout: fixture.checkout, tab: fixture.tab, pane: fixture.panes[0] };
+  // A family's second agent is the first one's child: it goes with it.
+  if (fixture.family) await withControl(daemon, (control) => closePane(control, fixture.panes[1]));
+  const started = await startAgentInProject(fixture, daemon, project, root);
+  if (!child) return { pane: started.pane, session: started.session, child: null };
+  await withControl(daemon, (control) => showTabOf(control, started.pane));
+  await agentReading(fixture, started.pane);
+  const session = `work-child-${process.pid}-${started.session}`;
+  writeFixtureTranscript(claudeProjects(fixture), session, child);
+  return { pane: started.pane, session: started.session, child: { pane: await spawnChild(fixture, daemon, started.pane, { name: "child", repo: dir, session }), session } };
+}
+
+/** The first work of a session spec: a root labelled `goal`, with its delegated child when the fixture is a family. */
+export async function seedFirstWork(fixture: AgentFixture, daemon: Pick<Daemon, "origin" | "token">, at: number, goal = FIRST_GOAL) {
+  const started = await startWork(fixture, daemon, firstWork(fixture, at, goal), fixture.family ? childWork(fixture, at) : undefined);
+  return { session: started.session, child: started.child?.session ?? null, pane: started.pane };
+}
+
+/** New work in the pane `seedFirstWork` started: a new session labelled the same, as an agent that began again would run; returns the session. */
+export async function reseedWork(fixture: AgentFixture, daemon: Pick<Daemon, "origin" | "token">, pane: string, at: number, goal: string): Promise<string> {
+  return labelAgentPane(fixture, daemon, pane, firstWork(fixture, at, goal));
 }
 
 export function nextWork(at: number): FixtureLabel {

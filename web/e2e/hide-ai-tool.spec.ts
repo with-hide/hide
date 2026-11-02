@@ -1,4 +1,4 @@
-// The Hide AI tool on a real core through an isolated pinned Herdr, hided and
+// The Hide AI tool on a real core through an isolated engine, hided and
 // browser (PRD hide-ai-suggestions B1, B3). The fixture is disposable and
 // never uses an operator checkout, socket, app, Memory or suggestion store.
 
@@ -6,23 +6,24 @@ import { expect, test } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { startHerdr } from "./herdr-fixture";
+import { openProject, withControl } from "./daemon-actions";
+import { startEngine } from "./engine-fixture";
 import { startHided } from "./hided-fixture";
 import { countSent, showProjectMemory, showProjectRow } from "./wire";
 
 test.describe.configure({ timeout: 90_000 });
 
 test("Hide AI opens the front checkout's Project with its two tabs, and its head switch turns all of it off", async ({ page }) => {
-  const herdr = await startHerdr({ readiness: "registered" });
+  const engine = await startEngine();
   let daemon: Awaited<ReturnType<typeof startHided>> | null = null;
   try {
-    const repoDir = path.join(herdr.root, "hide-ai-repo");
+    const repoDir = path.join(engine.root, "hide-ai-repo");
     fs.mkdirSync(repoDir);
     const repo = fs.realpathSync(repoDir);
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
-    herdr.run(["workspace", "create", "--cwd", repo, "--label", "hide-ai-repo", "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]);
 
-    daemon = await startHided(herdr, "hide-ai-tool");
+    daemon = await startHided(engine, "hide-ai-tool");
+    await withControl(daemon, (control) => openProject(control, repo, "hide-ai-repo"));
     const last = new Map<string, Record<string, unknown>>();
     const sent = countSent(page, last);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
@@ -69,6 +70,6 @@ test("Hide AI opens the front checkout's Project with its two tabs, and its head
     await expect(tool.locator('[data-hide-ai-tool-tab="memory"]')).toBeVisible();
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

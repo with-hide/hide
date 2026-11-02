@@ -7,42 +7,43 @@
 // a focused View keeps its local tabs.
 
 import { expect, test } from "@playwright/test";
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { startHerdr } from "./herdr-fixture";
+import { agentIn, newTab, openProject, sendKeys, viewPane, withControl } from "./daemon-actions";
+import { startFixture } from "./engine-fixture";
 import { fixtureExecutable } from "./platform-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { countSent, enterWorkspace, screenshot, showExplorer, showProjectRow } from "./wire";
 import { chord, held, label } from "./chords";
 
 test.describe.configure({ timeout: 120_000 });
-test.use({ actionTimeout: 15_000 });
 
 test("Recent Panels crosses checkouts onto a display and a tab; Recent Projects restores the last surface", async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 900 });
-  const herdr = await startHerdr();
+  const herdr = await startFixture();
   let daemon: Daemon | null = null;
   try {
     fs.writeFileSync(path.join(herdr.root, "fixture", "plan.txt"), "plan line\n");
     fs.mkdirSync(path.join(herdr.root, "beta"), { recursive: true });
-    const beta = herdr.run([
-      "workspace", "create", "--cwd", path.join(herdr.root, "beta"), "--label", "beta", "--env", `PATH=${herdr.fixturePath}`, "--no-focus",
-    ]) as { result: { tab: { tab_id: string }; root_pane: { pane_id: string } } };
-    const betaTab = beta.result.tab.tab_id;
+    daemon = await startHided(herdr, "recent");
     // One agent per tab, so each row is named and marked by its agent: a
     // Codex in beta (the fixture's shim under that name) and a Claude alone
     // in a second fixture tab. The fixture's first tab holds two agents and
-    // keeps its Herdr label and the neutral mark.
+    // keeps its tab label and the neutral mark. The page shows neither pane
+    // yet, so each is sized on this connection, which types the program too.
     fs.copyFileSync(path.join(herdr.root, "bin", fixtureExecutable("claude")), path.join(herdr.root, "bin", fixtureExecutable("codex")));
-    const solo = herdr.run([
-      "tab", "create", "--workspace", herdr.workspace, "--cwd", path.join(herdr.root, "fixture"), "--label", "solo", "--env", `PATH=${herdr.fixturePath}`, "--no-focus",
-    ]) as { result: { root_pane: { pane_id: string } } };
-    for (const [name, kind, pane] of [["three", "codex", beta.result.root_pane.pane_id], ["four", "claude", solo.result.root_pane.pane_id]] as const) {
-      await expect.poll(() => execFileSync(herdr.bin, ["pane", "read", pane, "--source", "recent", "--lines", "5"], { env: herdr.env, encoding: "utf8" }), { timeout: 20_000 }).toContain("fixture %");
-      herdr.run(["agent", "start", name, "--kind", kind, "--pane", pane]);
-    }
-    daemon = await startHided(herdr, "recent");
+    const beta = await withControl(daemon, async (control) => {
+      const run = async (pane: string, program: string) => {
+        viewPane(control, pane);
+        sendKeys(control, pane, `${program}\r`);
+        await control.until((rest) => agentIn(rest, pane), `${program} in ${pane}`, 30_000);
+      };
+      const beta = await openProject(control, path.join(herdr.root, "beta"), "beta");
+      await run(beta.pane, "codex");
+      await run((await newTab(control, herdr, "solo")).pane, "claude");
+      return beta;
+    });
+    const betaTab = beta.tab;
     const last = new Map<string, Record<string, unknown>>();
     const sent = countSent(page, last);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
@@ -141,7 +142,7 @@ test("Recent Panels crosses checkouts onto a display and a tab; Recent Projects 
     // The Agent area's ⌥` crosses projects: the keyboard in beta's Codex,
     // then in the pane the fixture opens on, and the first candidate is
     // beta's pane, which one focus_pane brings back with its project.
-    const betaPane = beta.result.root_pane.pane_id;
+    const betaPane = beta.pane;
     await (await showProjectRow(page, page.locator("[data-project]", { hasText: "beta" }).locator("[data-checkout]").first())).click();
     await expect(canvas).toHaveAttribute("data-canvas", betaTab);
     await page.locator(`[data-pane-view="${betaPane}"]`).click();

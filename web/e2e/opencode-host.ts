@@ -22,7 +22,7 @@ const { execFileSync } = require("node:child_process");
 const { pathToFileURL } = require("node:url");
 
 const config = JSON.parse(fs.readFileSync(path.join(path.dirname(process.argv[1]), "opencode-host.json"), "utf8"));
-const pane = process.env.HERDR_PANE_ID;
+const pane = process.env.HIDE_PANE_ID || process.env.HERDR_PANE_ID;
 const folder = path.join(config.dir, pane.replace(/[^A-Za-z0-9]/g, "-"));
 const session = "ses_" + pane.replace(/[^A-Za-z0-9]/g, "");
 fs.mkdirSync(folder, { recursive: true });
@@ -98,7 +98,8 @@ const run = {
 };
 
 (async () => {
-  announce();
+  // Only a Herdr pane is told what runs in it; on the core's own engine the plugin's own report below is how Hide learns the session.
+  if (config.herdr) announce();
   // OpenCode 1.x runs the default definition's server.
   const { server } = (await import(pathToFileURL(config.plugin).href)).default;
   const hooks = await server({ client, directory: process.cwd() });
@@ -121,7 +122,7 @@ const run = {
 });
 `;
 
-export type HostConfig = { herdr: string; stateDir: string; plugin: string; dir: string };
+export type HostConfig = { herdr?: string; stateDir: string; plugin: string; dir: string };
 
 /** Writes the stand-in as `opencode` in `bin`, configured by `config`. */
 export function installOpenCodeHost(bin: string, config: HostConfig): string {

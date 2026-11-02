@@ -1,16 +1,18 @@
 // This Mac's Home (PRD home-device-rail B16-B18, B21) against a private
-// Herdr and hided: the sidebar has no Home row (sidebar-titlebar-refresh B11),
+// engine and hided: the sidebar has no Home row (sidebar-titlebar-refresh B11),
 // so Home is reached from the start panel, whose start aimed at Home makes
 // `~/hide` in the daemon's HOME with a link per registered project and hide's
 // guide files, and runs the agent there; a `~/hide` that is not Hide's is left
 // alone, and the reason shows inside the start panel.
 
 import { expect, test, type Page } from "@playwright/test";
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { withControl } from "./daemon-actions";
+import { startFixture } from "./engine-fixture";
 import { startHerdr, type HerdrFixture } from "./herdr-fixture";
 import { herdrGate } from "./herdr-gate";
+import type { Rest } from "./hided-control.mjs";
 import { startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace, screenshot } from "./wire";
 import { chord } from "./chords";
@@ -38,29 +40,28 @@ async function aimAtHome(page: Page, node: string) {
   await expect(panel.locator("[data-start-target]")).toHaveAttribute("data-start-target", `home:${node}`);
 }
 
-type SnapshotPane = { pane_id: string; workspace_id: string; tab_id: string; cwd?: string | null; foreground_cwd?: string | null };
-type HerdrSnapshot = { result: { snapshot: { workspaces: { workspace_id: string; label?: string }[]; panes: SnapshotPane[] } } };
-type PaneProcess = { result: { process_info: { shell_pid: number; foreground_process_group_id: number } } };
-
 /**
- * Written only when the test fails, so the next failure says where each pane's
- * cwd came from. Herdr's `cwd` is a pane's OSC 7 report when it made one and
- * the shell's /proc cwd otherwise, and `foreground_cwd` is always /proc; the
- * shell's /proc cwd read here (Linux) and the per-process cwds Herdr lists in
- * `process-info` tell which of the two was wrong. Hide's side is where the
- * path back landed. Each read stands alone, so one that
- * fails is recorded instead of hiding the rest.
+ * Written only when the test fails, so the next failure says where the daemon
+ * put Home: what it publishes for each workspace (is it Home, its checkouts'
+ * tabs) and for the tab shown (its panes and the folder each is in), next to
+ * what the page draws. Each read stands alone, so one that fails is
+ * recorded instead of hiding the rest.
  */
-async function recordFailure(page: Page, herdr: HerdrFixture, daemon: Daemon | null) {
-  const read = <T,>(what: () => T): T | { error: string } => {
+async function recordFailure(page: Page, daemon: Daemon | null) {
+  const read = async <T,>(what: () => Promise<T>): Promise<T | { error: string }> => {
     try {
-      return what();
+      return await what();
     } catch (error) {
       return { error: String(error) };
     }
   };
-  const snapshot = read(() => herdr.run(["api", "snapshot"]) as HerdrSnapshot);
-  const panes = "error" in snapshot ? [] : snapshot.result.snapshot.panes;
+  const published = daemon
+    ? await read(() => withControl(daemon, (control) => control.until((rest) => {
+      const navigator = rest.navigator as { workspaces?: { id: string; path: string; is_home?: boolean; checkouts: { path?: string; tabs?: { id: string }[] }[] }[] } | undefined;
+      const shown = rest.tab as { id?: string; panes?: { id: string; cwd: string }[] } | null;
+      return { workspaces: navigator?.workspaces?.map(({ id, path: folder, is_home, checkouts }) => ({ id, folder, is_home, checkouts: checkouts.map((checkout) => ({ path: checkout.path, tabs: checkout.tabs?.map((tab) => tab.id) })) })), shown: shown ? { id: shown.id, panes: shown.panes?.map(({ id, cwd }) => ({ id, cwd })) } : null };
+    }, "the published workspaces", 5_000)))
+    : null;
   const diagnostics = {
     daemonHome: daemon?.home ?? null,
     hide: {
@@ -68,31 +69,26 @@ async function recordFailure(page: Page, herdr: HerdrFixture, daemon: Daemon | n
       project: await page.locator("[data-go-overview]").getAttribute("data-go-overview", { timeout: 1_000 }).catch(() => null),
       kind: await page.locator("[data-workspace-location]").getAttribute("data-workspace-location", { timeout: 1_000 }).catch(() => null),
     },
-    workspaces: "error" in snapshot ? snapshot : snapshot.result.snapshot.workspaces,
-    panes: panes.map((pane) => {
-      const info = read(() => (herdr.run(["pane", "process-info", "--pane", pane.pane_id]) as PaneProcess).result.process_info);
-      const procCwd = (pid: number) => (process.platform === "linux" ? read(() => fs.readlinkSync(`/proc/${pid}/cwd`)) : "no /proc on this system");
-      return {
-        ...pane,
-        process: info,
-        shellProcCwd: "error" in info ? null : procCwd(info.shell_pid),
-        foregroundProcCwd: "error" in info ? null : procCwd(info.foreground_process_group_id),
-        visibleText: read(() => {
-          const result = spawnSync(herdr.bin, ["pane", "read", pane.pane_id, "--source", "visible", "--format", "text"], { env: herdr.env, encoding: "utf8", timeout: 10_000 });
-          return result.status === 0 ? result.stdout : `pane read exited ${result.status}: ${result.stderr.trim()}`;
-        }),
-      };
-    }),
+    published,
   };
   const file = test.info().outputPath("home-diagnostics.json");
   fs.writeFileSync(file, JSON.stringify(diagnostics, null, 2));
   await test.info().attach("home-diagnostics", { path: file, contentType: "application/json" });
 }
 
-/** A start aimed at Home with a pinned project: `~/hide` is made and the agent runs in it, Herdr's pane included. */
-async function inOpenedHome(page: Page, check: (home: string, herdr: HerdrFixture) => Promise<void>, registeredFirst = false): Promise<void> {
+/** Whether the tab the daemon shows holds a pane in `folder` (a wire spelling) or below it. */
+function paneAt(rest: Rest, folder: string): true | undefined {
+  const shown = rest.tab as { panes?: { cwd?: string | null }[] } | null;
+  return shown?.panes?.some((pane) => pane.cwd?.startsWith(folder)) ? true : undefined;
+}
+
+/**
+ * A start aimed at Home with a pinned project: `~/hide` is made and the agent runs in it.
+ * With `registeredFirst` the test holds Herdr's creation of Home's workspace at its socket, so it needs Herdr.
+ */
+async function inOpenedHome(page: Page, check: (home: string, root: string) => Promise<void>, registeredFirst = false): Promise<void> {
   await page.setViewportSize({ width: 1280, height: 800 });
-  const herdr = await startHerdr();
+  const herdr = registeredFirst ? await startHerdr() : await startFixture();
   let gate: Awaited<ReturnType<typeof herdrGate>> | null = null;
   let registeredWithoutPane = false;
   if (registeredFirst) page.on("websocket", (socket) => socket.on("framereceived", ({ payload }) => {
@@ -103,7 +99,7 @@ async function inOpenedHome(page: Page, check: (home: string, herdr: HerdrFixtur
   }));
   let daemon: Daemon | null = null;
   try {
-    if (registeredFirst) gate = await herdrGate(herdr);
+    if (registeredFirst) gate = await herdrGate(herdr as HerdrFixture);
     // The fixture's folders are in the daemon's home, as an operator's projects
     // are, so a pin registers them and a project outliving its last pane stays
     // listed without asking about a folder outside home (PRD wsl-device B15).
@@ -122,38 +118,24 @@ async function inOpenedHome(page: Page, check: (home: string, herdr: HerdrFixtur
       await held;
       // Publish the existing workspace once while Home's creation is held:
       // the registered Home now has a row, but no Herdr owner or pane.
-      herdr.run(["workspace", "rename", herdr.workspace, "catalog-ready"]);
+      (herdr as HerdrFixture).run(["workspace", "rename", (herdr as HerdrFixture).workspace, "catalog-ready"]);
       await expect.poll(() => registeredWithoutPane, { message: "Home is listed before Herdr creates its first pane" }).toBe(true);
       console.log(`[${Date.now()}] Home registration listed without an owner or pane; releasing workspace.create`);
       await gate.release();
     }
     // B17: the agent opens in Home once Home's sync answered, so everything the
-    // sync writes is on disk by the time Herdr has a pane there. Herdr spells a
-    // pane's folder as the system does, so both sides are read as the wire spells it.
-    await expect
-      .poll(() => fs.existsSync(home) && panesAt(herdr, toPage(fs.realpathSync(home))), { timeout: 30_000 })
-      .toBe(true);
-    await check(home, herdr);
+    // sync writes is on disk by the time the engine has a pane there. The core
+    // spells a pane's folder as the wire does, so Home's folder is read the same way.
+    await expect.poll(() => fs.existsSync(home), { timeout: 30_000 }).toBe(true);
+    const folder = toPage(fs.realpathSync(home));
+    await withControl(daemon, (control) => control.until((rest) => paneAt(rest, folder), `a pane in ${folder}`, 30_000));
+    await check(home, herdr.root);
   } catch (error) {
-    await recordFailure(page, herdr, daemon);
+    await recordFailure(page, daemon);
     throw error;
   } finally {
     try { daemon?.stop(); } finally { try { await gate?.stop(); } finally { herdr.stop(); } }
   }
-}
-
-/** Whether a pane of Herdr's snapshot is in `folder` (a wire spelling) or below it. */
-function panesAt(herdr: HerdrFixture, folder: string): boolean {
-  const snapshot = herdr.run(["api", "snapshot"]) as HerdrSnapshot;
-  const onWire = (native: string | null | undefined): string => {
-    if (!native) return "";
-    try {
-      return toPage(native);
-    } catch {
-      return "";
-    }
-  };
-  return snapshot.result.snapshot.panes.some((pane) => [pane.cwd, pane.foreground_cwd].some((cwd) => onWire(cwd).startsWith(folder)));
 }
 
 test("a start aimed at Home makes ~/hide with its guide files and runs the agent there", async ({ page }) => {
@@ -169,7 +151,8 @@ test("a start aimed at Home makes ~/hide with its guide files and runs the agent
   });
 });
 
-test("Home stays selected when its empty registration is listed before its first pane", async ({ page }) => {
+// Herdr only: it holds Herdr's `workspace.create` at its socket (`herdrGate`) while Home is listed with no pane; the own engine has no socket to hold.
+test("Home stays selected when its empty registration is listed before its first pane @herdr", async ({ page }) => {
   await inOpenedHome(page, async () => {
     await expect(page.locator('nav[aria-label="Location"]')).toHaveText("~/hide");
   }, true);
@@ -177,16 +160,16 @@ test("Home stays selected when its empty registration is listed before its first
 
 // @platform: The link Home makes to a project: a symbolic link on macOS and Linux, a junction on Windows.
 test("Home's ~/hide holds a link to each registered project", { tag: "@platform" }, async ({ page }) => {
-  await inOpenedHome(page, async (home, herdr) => {
+  await inOpenedHome(page, async (home, root) => {
     const link = path.join(home, "fixture");
     expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
-    expect(fs.realpathSync(link)).toBe(fs.realpathSync(path.join(herdr.root, "fixture")));
+    expect(fs.realpathSync(link)).toBe(fs.realpathSync(path.join(root, "fixture")));
   });
 });
 
 test("a ~/hide that is not Hide's is left alone, and the reason shows in the start panel", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
-  const herdr = await startHerdr({ agents: false });
+  const herdr = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
     daemon = await startHided(herdr, "home-conflict");

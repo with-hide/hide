@@ -1,11 +1,23 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { herdrHasFocus, startHerdr } from "./herdr-fixture";
+import { startFixture } from "./engine-fixture";
+import { corePaneFocus, withControl } from "./daemon-actions";
 import { startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace } from "./wire";
 import { chord } from "./chords";
 
 type Operator = { client_id: string; sequence: number };
 type Frame = { type?: string; payload?: { rest?: { focused?: { pane_id?: string; operator_focus?: Operator[] } } } };
+
+/** Waits until the core holds the keyboard on `pane`, the one focus there is on either engine. */
+async function coreFocusOn(daemon: Daemon, pane: string) {
+  await withControl(daemon, (control) => control.until((rest) => corePaneFocus(rest) === pane || undefined, `the core's focus on ${pane}`, 30_000));
+}
+
+/** The pane's terminal is attached to the page and controls it. */
+async function attached(pane: Locator) {
+  await expect(pane).toHaveAttribute("data-transport", "controlling");
+}
 
 /** Two frames on: the passive effect that follows a snapshot's focused pane has run by then. */
 const settle = (page: Page) => page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
@@ -64,17 +76,17 @@ async function holdSnapshots(page: Page) {
 }
 
 test("a snapshot older than the last click does not take the keys back, and the one that includes it keeps them", { tag: "@platform" }, async ({ page }) => {
-  const herdr = await startHerdr();
+  const fixture = await startFixture();
   let daemon: Daemon | undefined;
   try {
-    daemon = await startHided(herdr, "stale-snapshot-focus");
+    daemon = await startHided(fixture, "stale-snapshot-focus");
     const net = await holdSnapshots(page);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
-    const panes = herdr.panes.map((pane) => page.locator(`[data-pane-view="${pane}"]`));
+    const panes = fixture.panes.map((pane) => page.locator(`[data-pane-view="${pane}"]`));
     const keys = panes.map((pane) => pane.locator(".xterm-helper-textarea"));
-    for (const pane of panes) await expect(pane).toHaveAttribute("data-transport", "controlling");
-    await expect.poll(() => herdrHasFocus(herdr, herdr.panes[0])).toBe(true);
+    for (const pane of panes) await attached(pane);
+    await coreFocusOn(daemon, fixture.panes[0]);
     await expect(keys[0]).toBeFocused();
     const boxes = await Promise.all(panes.map((pane) => pane.boundingBox()));
     const click = (index: number) => page.mouse.click(boxes[index]!.x + 100, boxes[index]!.y + 100);
@@ -104,24 +116,24 @@ test("a snapshot older than the last click does not take the keys back, and the 
     await expect(keys[0]).toBeFocused();
   } finally {
     daemon?.stop();
-    herdr.stop();
+    fixture.stop();
   }
 });
 
 test("the answer to a click on the focused pane leaves the keys where the operator took them since", { tag: "@platform" }, async ({ page }) => {
-  const herdr = await startHerdr();
+  const fixture = await startFixture();
   let daemon: Daemon | undefined;
   try {
-    daemon = await startHided(herdr, "stale-snapshot-answer");
+    daemon = await startHided(fixture, "stale-snapshot-answer");
     const net = await holdSnapshots(page);
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
-    const pane = page.locator(`[data-pane-view="${herdr.panes[0]}"]`);
+    const pane = page.locator(`[data-pane-view="${fixture.panes[0]}"]`);
     const keys = pane.locator(".xterm-helper-textarea");
     const agents = page.locator('nav[data-sidebar="projects"]');
     const sidebarHasKeys = () => agents.evaluate((node) => node.contains(document.activeElement));
-    await expect(pane).toHaveAttribute("data-transport", "controlling");
-    await expect.poll(() => herdrHasFocus(herdr, herdr.panes[0])).toBe(true);
+    await attached(pane);
+    await coreFocusOn(daemon, fixture.panes[0]);
     await expect(keys).toBeFocused();
     await page.keyboard.press(chord("sidebar_projects"));
     await expect.poll(sidebarHasKeys).toBe(true);
@@ -145,24 +157,24 @@ test("the answer to a click on the focused pane leaves the keys where the operat
     await expect(pane).toHaveAttribute("data-focused", "true");
   } finally {
     daemon?.stop();
-    herdr.stop();
+    fixture.stop();
   }
 });
 
 test("a focus move that waited for the last click is dropped once the operator takes the keys elsewhere", { tag: "@platform" }, async ({ page }) => {
-  const herdr = await startHerdr();
+  const fixture = await startFixture();
   let daemon: Daemon | undefined;
   try {
-    daemon = await startHided(herdr, "stale-snapshot-waited");
+    daemon = await startHided(fixture, "stale-snapshot-waited");
     const net = await holdSnapshots(page);
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
-    const panes = herdr.panes.map((pane) => page.locator(`[data-pane-view="${pane}"]`));
+    const panes = fixture.panes.map((pane) => page.locator(`[data-pane-view="${pane}"]`));
     const keys = panes[1].locator(".xterm-helper-textarea");
     const agents = page.locator('nav[data-sidebar="projects"]');
     const sidebarHasKeys = () => agents.evaluate((node) => node.contains(document.activeElement));
-    for (const pane of panes) await expect(pane).toHaveAttribute("data-transport", "controlling");
-    await expect.poll(() => herdrHasFocus(herdr, herdr.panes[0])).toBe(true);
+    for (const pane of panes) await attached(pane);
+    await coreFocusOn(daemon, fixture.panes[0]);
     const box = (await panes[1].boundingBox())!;
 
     // Two clicks on the other pane, with a visit to the sidebar between them
@@ -191,11 +203,12 @@ test("a focus move that waited for the last click is dropped once the operator t
     await expect(panes[1]).toHaveAttribute("data-focused", "true");
   } finally {
     daemon?.stop();
-    herdr.stop();
+    fixture.stop();
   }
 });
 
-test("a focus move the core followed from Herdr still takes the keys once the clicks are answered", { tag: "@platform" }, async ({ page }) => {
+// Herdr only: Hide following a pane focus that Herdr moved on its own, outside Hide.
+test("a focus move the core followed from Herdr still takes the keys once the clicks are answered @herdr", { tag: "@platform" }, async ({ page }) => {
   const herdr = await startHerdr();
   let daemon: Daemon | undefined;
   try {
@@ -224,31 +237,31 @@ test("a focus move the core followed from Herdr still takes the keys once the cl
 });
 
 test("opening the pane that is already focused from the sidebar takes the keyboard", { tag: "@platform" }, async ({ page }) => {
-  const herdr = await startHerdr();
+  const fixture = await startFixture();
   let daemon: Daemon | undefined;
   try {
-    daemon = await startHided(herdr, "open-focused-from-sidebar");
+    daemon = await startHided(fixture, "open-focused-from-sidebar");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
-    const pane = page.locator(`[data-pane-view="${herdr.panes[0]}"]`);
+    const pane = page.locator(`[data-pane-view="${fixture.panes[0]}"]`);
     const keys = pane.locator(".xterm-helper-textarea");
     const agents = page.locator('nav[data-sidebar="projects"]');
     const sidebarHasKeys = () => agents.evaluate((node) => node.contains(document.activeElement));
-    await expect(pane).toHaveAttribute("data-transport", "controlling");
-    await expect.poll(() => herdrHasFocus(herdr, herdr.panes[0])).toBe(true);
+    await attached(pane);
+    await coreFocusOn(daemon, fixture.panes[0]);
     await expect(keys).toBeFocused();
     await page.keyboard.press(chord("sidebar_projects"));
     await expect.poll(sidebarHasKeys).toBe(true);
 
     // The row of the focused pane: the core moves nothing, and the keys still
     // leave the row for the terminal, which shows its outline again.
-    await page.locator(`nav[data-sidebar] [data-agent-open="${herdr.panes[0]}"]`).first().click();
+    await page.locator(`nav[data-sidebar] [data-agent-open="${fixture.panes[0]}"]`).first().click();
     await expect(keys).toBeFocused();
     await expect(pane).toHaveAttribute("data-focused", "true");
     await settle(page);
     await expect(keys).toBeFocused();
   } finally {
     daemon?.stop();
-    herdr.stop();
+    fixture.stop();
   }
 });

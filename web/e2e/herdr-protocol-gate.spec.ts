@@ -50,7 +50,8 @@ async function standIn(herdr: HerdrFixture, version: string, protocol: number) {
   return { socket, methods, stop: () => new Promise<void>((resolve) => server.close(() => resolve())) };
 }
 
-test("an older Herdr holds Hide while Hide moves it once on its own: no key opens a workspace, and a failed move keeps the hold", async ({ page }) => {
+// Herdr only: it plays the operator's Herdr server on another protocol, and the product under test is Hide's handling of that server.
+test("an older Herdr holds Hide while Hide moves it once on its own: no key opens a workspace, and a failed move keeps the hold @herdr", async ({ page }) => {
   const herdr = await startHerdr();
   const old = await standIn(herdr, "0.8.2", 20);
   const daemon = await startHided(herdr, "gate-older", undefined, { HERDR_SOCKET_PATH: old.socket }, true, { bundledHerdr: true });
@@ -90,7 +91,8 @@ test("an older Herdr holds Hide while Hide moves it once on its own: no key open
   }
 });
 
-test("a newer Herdr holds Hide with the wait for a Hide update, leaving that Herdr as it is", async ({ page }) => {
+// Herdr only: it plays the operator's Herdr server on a newer protocol, and the product under test is Hide's handling of that server.
+test("a newer Herdr holds Hide with the wait for a Hide update, leaving that Herdr as it is @herdr", async ({ page }) => {
   const herdr = await startHerdr();
   const newer = await standIn(herdr, "0.10.0", 23);
   const daemon = await startHided(herdr, "gate-newer", undefined, { HERDR_SOCKET_PATH: newer.socket }, true, { bundledHerdr: true });

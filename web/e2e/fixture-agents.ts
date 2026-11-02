@@ -13,7 +13,7 @@ import path from "node:path";
 import { expect } from "@playwright/test";
 import { reportedMarker } from "./agent-pane";
 import { claudeProjects, declareAgentSession, writeFixtureTranscript, type FixtureLabel } from "./herdr-fixture";
-import { agentIn, checkoutListedAt, closePane, focusTab, newTab, sendKeys, tabPanes, withControl, type AgentRow, type OpenedProject } from "./daemon-actions";
+import { agentIn, checkoutAt, closePane, focusTab, newTab, sendKeys, tabPanes, withControl, type AgentRow, type OpenedProject } from "./daemon-actions";
 import type { Daemon } from "./hided-fixture";
 import type { AgentFixture, EngineServer } from "./engine-fixture";
 
@@ -134,7 +134,7 @@ export async function startAgentInProject(fixture: EngineServer, daemon: Pick<Da
       checkout_path: project.folder, provider: "claude", resume_session_id: session, request_id: `e2e-${session}`,
     });
     const made = await control.until((rest) => {
-      const tab = checkoutListedAt(rest, project.folder)?.tabs.find((id) => id !== project.tab);
+      const tab = checkoutAt(rest, project.folder)?.tabs.find((id) => id !== project.tab);
       const pane = tab ? tabPanes(rest, tab)[0] : undefined;
       return tab && pane && agentIn(rest, pane) ? { tab, pane } : undefined;
     }, `an agent in a tab of ${project.folder}`, 30_000);

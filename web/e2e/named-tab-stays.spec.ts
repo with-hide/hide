@@ -3,48 +3,60 @@
 // shell in the tab, and closing that shell closes the tab.
 import { expect, test, type Page } from "@playwright/test";
 import path from "node:path";
-import { startHerdr } from "./herdr-fixture";
+import { startFixture } from "./engine-fixture";
+import { newTab, tabPanes, tabsOf } from "./daemon-actions";
+import { connectControl, type HidedControl, type Rest } from "./hided-control.mjs";
+import { toPage } from "../../desktop/src/main/wirePath";
 import { chord } from "./chords";
 import { startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace, screenshot } from "./wire";
 
 test.describe.configure({ timeout: 120_000 });
 
-type Snapshot = { result: { snapshot: { tabs: { tab_id: string; label: string }[]; panes: { pane_id: string; tab_id: string; cwd?: string | null }[] } } };
+/** The tab the core shows, as the snapshot publishes it: its panes with their folders, and the name the sidebar gives it. */
+type ShownTab = { id: string | null; label: string | null; sidebar?: { manual_name: string | null; number: number; named_by_operator: boolean }; panes: { id: string; cwd: string }[] };
+
+function shown(rest: Rest): ShownTab | undefined {
+  return (rest.tab ?? undefined) as ShownTab | undefined;
+}
 
 test("closing a named tab's last agent keeps the tab, its name and its sidebar line until its shell closes", async ({ page }) => {
-  const herdr = await startHerdr();
+  const fixture = await startFixture();
   let daemon: Daemon | null = null;
+  let control: HidedControl | null = null;
   try {
-    const [first, second] = herdr.panes;
-    const snapshot = () => (herdr.run(["api", "snapshot"]) as Snapshot).result.snapshot;
-    const panesOfTab = () => snapshot().panes.filter((pane) => pane.tab_id === herdr.tab);
-    daemon = await startHided(herdr, "named-tab-stays");
+    daemon = await startHided(fixture, "named-tab-stays");
+    const [first, second] = fixture.panes;
+    const watch = (control = await connectControl(daemon));
+    const panesOfTab = () => watch.until((rest) => tabPanes(rest, fixture.tab), "the panes of the tab");
+    const tabExists = (rest: Rest) => tabsOf(rest, fixture.workspace)?.includes(fixture.tab) === true;
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
-    await page.locator(`[data-agent-tab-bar] [data-tab="${herdr.tab}"]`).click({ button: "right" });
+    await page.locator(`[data-agent-tab-bar] [data-tab="${fixture.tab}"]`).click({ button: "right" });
     await page.locator('[data-menu-item="rename_tab"]').click();
     const input = page.getByRole("textbox", { name: "Tab name", exact: true });
     await input.fill("Planning");
     await input.press("Enter");
     await expect(input).toHaveCount(0);
-    const line = page.locator(`[data-sidebar-tab-line="${herdr.tab}"]`);
+    const line = page.locator(`[data-sidebar-tab-line="${fixture.tab}"]`);
     await expect(line).toContainText("Planning");
 
     // One agent of two leaves as any pane does.
     await page.locator(`[data-pane-view="${second}"]`).getByRole("button", { name: /^Close/ }).click();
-    await expect.poll(() => panesOfTab().map((pane) => pane.pane_id)).toEqual([first]);
+    await expect.poll(panesOfTab).toEqual([first]);
 
     // The last one leaves a shell at the checkout in the same tab.
     await page.locator(`[data-pane-view="${first}"]`).getByRole("button", { name: /^Close/ }).click();
-    await expect.poll(() => panesOfTab().map((pane) => pane.pane_id).filter((id) => id !== first)).toHaveLength(1);
-    await expect.poll(() => panesOfTab().some((pane) => pane.pane_id === first)).toBe(false);
-    const [shell] = panesOfTab();
-    expect(shell!.cwd).toBe(path.join(herdr.root, "fixture"));
-    expect(snapshot().tabs.find((tab) => tab.tab_id === herdr.tab)?.label).toBe("Planning");
-    await expect(page.locator(`[data-agent-tab-bar] [data-tab="${herdr.tab}"]`)).toContainText("Planning");
-    await expect(page.locator(`[data-pane-view="${shell!.pane_id}"]`)).toBeVisible();
-    await expect(page.locator(`[data-pane-view="${shell!.pane_id}"]`)).toHaveAttribute("data-focused", "true");
+    const [shell] = await watch.until((rest) => {
+      const now = tabPanes(rest, fixture.tab);
+      return now.length === 1 && now[0] !== first ? now : undefined;
+    }, "a shell in the tab where the last agent was");
+    const kept = await watch.until((rest) => (shown(rest)?.id === fixture.tab ? shown(rest) : undefined), "the named tab shown");
+    expect(kept.panes.find((pane) => pane.id === shell)?.cwd).toBe(toPage(path.join(fixture.root, "fixture")));
+    expect(kept.sidebar?.manual_name).toBe("Planning");
+    await expect(page.locator(`[data-agent-tab-bar] [data-tab="${fixture.tab}"]`)).toContainText("Planning");
+    await expect(page.locator(`[data-pane-view="${shell!}"]`)).toBeVisible();
+    await expect(page.locator(`[data-pane-view="${shell!}"]`)).toHaveAttribute("data-focused", "true");
     await expect(line).toContainText("Planning");
     // With no agent left, its line says its name alone, never a count of none.
     await expect(line.locator("[data-sidebar-tab]")).toHaveAttribute("aria-label", "Planning");
@@ -52,14 +64,15 @@ test("closing a named tab's last agent keeps the tab, its name and its sidebar l
 
     // Choosing the line opens the tab; closing the shell closes the tab and its name.
     await line.locator("[data-sidebar-tab]").click();
-    await expect(page.locator("[data-canvas]").first()).toHaveAttribute("data-canvas", herdr.tab);
-    await page.locator(`[data-pane-view="${shell!.pane_id}"]`).getByRole("button", { name: /^Close/ }).click();
-    await expect.poll(() => snapshot().tabs.some((tab) => tab.tab_id === herdr.tab)).toBe(false);
+    await expect(page.locator("[data-canvas]").first()).toHaveAttribute("data-canvas", fixture.tab);
+    await page.locator(`[data-pane-view="${shell!}"]`).getByRole("button", { name: /^Close/ }).click();
+    await watch.until((rest) => !tabExists(rest) || undefined, "the tab closed with its shell");
     await expect(line).toHaveCount(0);
-    await expect(page.locator(`[data-tab="${herdr.tab}"]`)).toHaveCount(0);
+    await expect(page.locator(`[data-tab="${fixture.tab}"]`)).toHaveCount(0);
   } finally {
+    control?.close();
     daemon?.stop();
-    herdr.stop();
+    fixture.stop();
   }
 });
 
@@ -83,38 +96,40 @@ function reopenOffered(page: Page): () => boolean {
   return () => offered;
 }
 
-// Herdr keeps any label a reopen sends as the tab's name, so a reopen sends
-// only the operator's: a tab never named comes back unnamed.
+// An engine keeps any label a reopen sends as the tab's name, so a reopen
+// sends only the operator's: a tab never named comes back unnamed.
 test("reopening an unnamed tab leaves it unnamed", async ({ page }) => {
-  const herdr = await startHerdr();
+  const fixture = await startFixture();
   let daemon: Daemon | null = null;
+  let control: HidedControl | null = null;
   try {
-    const snapshot = () => (herdr.run(["api", "snapshot"]) as Snapshot).result.snapshot;
+    daemon = await startHided(fixture, "named-tab-reopen");
+    const watch = (control = await connectControl(daemon));
     // A second tab keeps the workspace, which its last tab's close would end.
-    const other = (herdr.run(["tab", "create", "--workspace", herdr.workspace, "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]) as { result: { tab: { tab_id: string } } }).result.tab.tab_id;
-    daemon = await startHided(herdr, "named-tab-reopen");
+    const other = (await newTab(watch, fixture, "other")).tab;
     const offered = reopenOffered(page);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
 
-    const closing = page.locator(`[data-agent-tab-bar] [data-tab="${herdr.tab}"]`);
+    const closing = page.locator(`[data-agent-tab-bar] [data-tab="${fixture.tab}"]`);
     await closing.hover();
     await closing.getByRole("button", { name: /^Close tab/ }).click();
-    await expect.poll(() => snapshot().tabs.some((tab) => tab.tab_id === herdr.tab)).toBe(false);
+    await watch.until((rest) => tabsOf(rest, fixture.workspace)?.includes(fixture.tab) === false || undefined, "the tab closed");
     await expect.poll(offered).toBe(true);
     await page.locator(`[data-agent-tab-bar] [data-tab="${other}"]`).click();
     await page.keyboard.press(chord("reopen_closed_tab"));
-    const reopenedTab = () => snapshot().tabs.find((tab) => snapshot().panes.filter((pane) => pane.tab_id === tab.tab_id).length === 2);
-    await expect.poll(() => reopenedTab()?.tab_id).toBeTruthy();
-    const reopened = reopenedTab()!;
-    // Herdr numbers a tab it was given no name for.
-    expect(reopened.label, "the reopened tab carries no name Hide made up").toMatch(/^\d+$/);
+    const reopenedId = await watch.until((rest) => tabsOf(rest, fixture.workspace)?.find((id) => id !== other && tabPanes(rest, id).length === 2), "the reopened tab with its two panes");
+    // The reopened tab is shown, and the name it carries is the operator's, which it never had.
+    const reopened = await watch.until((rest) => (shown(rest)?.id === reopenedId ? shown(rest) : undefined), "the reopened tab shown");
+    expect(reopened.sidebar?.named_by_operator, "the reopened tab carries no name Hide made up").toBe(false);
+    expect(reopened.sidebar?.manual_name).toBeNull();
 
     // The sidebar names it as any unnamed tab, so its last agent's close
     // takes it (closing restored agents waits on a status check here).
-    await expect(page.locator(`[data-sidebar-tab-line="${reopened.tab_id}"]`)).toContainText(`Tab ${reopened.label}`);
+    await expect(page.locator(`[data-sidebar-tab-line="${reopenedId}"]`)).toContainText(`Tab ${reopened.sidebar!.number}`);
   } finally {
+    control?.close();
     daemon?.stop();
-    herdr.stop();
+    fixture.stop();
   }
 });

@@ -10,7 +10,8 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { agentPane, type HideAnswer } from "./agent-pane";
-import { startHerdr } from "./herdr-fixture";
+import { openProject, viewPane, withControl } from "./daemon-actions";
+import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace, placedBoxes, screenshot } from "./wire";
 
@@ -38,7 +39,7 @@ const PLAN = {
 
 test("a plan put up for review asks on the pane, the agent's approval clears it, and its steps draw on the chip and in the 보기 slot", async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 1000 });
-  const herdr = await startHerdr({ agents: false });
+  const herdr = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
     const repoDir = path.join(herdr.root, "plan-repo");
@@ -48,9 +49,13 @@ test("a plan put up for review asks on the pane, the agent's approval clears it,
       const git = spawnSync("git", ["-C", repo, ...args], { encoding: "utf8" });
       expect(git.status, git.stderr).toBe(0);
     }
-    const created = herdr.run(["workspace", "create", "--cwd", repo, "--label", "plan-repo", "--env", `PATH=${herdr.fixturePath}`, "--focus"]) as { result: { root_pane: { pane_id: string } } };
     daemon = await startHided(herdr, "plan-review");
-    const pane = created.result.root_pane.pane_id;
+    // The agent starts before the page shows the pane, so the pane is sized first.
+    const { pane } = await withControl(daemon, async (control) => {
+      const opened = await openProject(control, repo, "plan-repo");
+      viewPane(control, opened.pane);
+      return opened;
+    });
     const agent = await agentPane(herdr, daemon.stateDir, pane);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "plan-repo");

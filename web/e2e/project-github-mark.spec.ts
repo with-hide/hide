@@ -1,4 +1,4 @@
-// A project row's GitHub mark: on an isolated pinned Herdr and hided, a Git
+// A project row's GitHub mark: on an isolated engine and hided, a Git
 // project whose remote names a GitHub repository (a fake `gh` answers for
 // acme/repo) draws the mark at its row's end, named after the repository, and
 // a ⌘ press opens the repository in the default browser without selecting the
@@ -6,10 +6,12 @@
 // Light and Dark captures land in HIDE_E2E_SCREENSHOT_DIR.
 
 import { expect, test } from "@playwright/test";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { labelAgent, startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { startFixture } from "./engine-fixture";
+import { openProject, withControl } from "./daemon-actions";
+import { startAgentInProject } from "./fixture-agents";
 import { startHided, type Daemon } from "./hided-fixture";
 import { fixtureProgram } from "./platform-fixture";
 import { chooseTheme, countSent, rest, screenshot } from "./wire";
@@ -42,45 +44,28 @@ process.exit(1);
   return bin;
 }
 
-async function prompt(herdr: HerdrFixture, pane: string): Promise<void> {
-  const deadline = Date.now() + 15_000;
-  while (Date.now() < deadline) {
-    const read = spawnSync(herdr.bin, ["pane", "read", pane, "--source", "visible", "--format", "text"], { env: herdr.env, encoding: "utf8", timeout: 10_000 });
-    if (read.status === 0 && read.stdout.includes("fixture %")) return;
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error(`no prompt in pane ${pane}`);
-}
-
-/** A Herdr workspace at `cwd` with a fake `claude` agent titled `task`. */
-async function workspaceAt(herdr: HerdrFixture, cwd: string, task: string): Promise<void> {
-  const created = herdr.run(["workspace", "create", "--cwd", cwd, "--label", path.basename(cwd), "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]) as {
-    result: { root_pane: { pane_id: string } };
-  };
-  const pane = created.result.root_pane.pane_id;
-  await prompt(herdr, pane);
-  herdr.run(["agent", "start", `agent-${path.basename(cwd)}`, "--kind", "claude", "--pane", pane]);
-  labelAgent(herdr, pane, { task });
-}
-
 test("a GitHub project's row ends in the repository's mark, a folder's in none, and no row counts agents", async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 });
   await page.context().route("https://github.com/**", (route) => route.fulfill({ contentType: "text/html", body: "<title>acme/repo</title>" }));
-  const herdr = await startHerdr({ readiness: "registered" });
+  const fixture = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
-    const repo = path.join(herdr.root, "repo");
+    const repo = path.join(fixture.root, "repo");
     fs.mkdirSync(repo);
     initGithubRepository(repo);
     fs.writeFileSync(path.join(repo, "README.md"), "# repo\n");
     git(repo, ["add", "README.md"]);
     git(repo, ["commit", "-m", "initial"]);
-    const notes = path.join(herdr.root, "notes");
+    const notes = path.join(fixture.root, "notes");
     fs.mkdirSync(notes);
-    await workspaceAt(herdr, repo, "저장소 정리");
-    await workspaceAt(herdr, notes, "메모 정리");
 
-    daemon = await startHided(herdr, "project-github-mark", undefined, { PATH: `${fakeGh(herdr.root)}${path.delimiter}${herdr.fixturePath}` });
+    daemon = await startHided(fixture, "project-github-mark", undefined, { PATH: `${fakeGh(fixture.root)}${path.delimiter}${fixture.fixturePath}` });
+    // One agent in each folder, as the start panel starts one.
+    await withControl(daemon, async (control) => {
+      for (const [dir, task] of [[repo, "저장소 정리"], [notes, "메모 정리"]] as const) {
+        await startAgentInProject(fixture, daemon!, await openProject(control, dir, path.basename(dir)), { task });
+      }
+    });
     const sent = countSent(page);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await expect(page.locator("[data-main-screen]").or(page.locator("[data-workspace-screen]"))).toBeVisible({ timeout: 20_000 });
@@ -122,6 +107,6 @@ test("a GitHub project's row ends in the repository's mark, a folder's in none, 
     }
   } finally {
     await daemon?.stop();
-    await herdr.stop();
+    await fixture.stop();
   }
 });

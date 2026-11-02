@@ -11,7 +11,8 @@ import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
 import { toPage } from "../../desktop/src/main/wirePath";
-import { startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { openProject, withControl } from "./daemon-actions";
+import { startFixture, type AgentFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { countSent, enterWorkspace, screenshot, showDocuments, showExplorer, showProjectRow } from "./wire";
 import { chord, mod } from "./chords";
@@ -89,7 +90,7 @@ function gitFixture(dir: string): void {
 }
 
 type Fixture = {
-  herdr: HerdrFixture;
+  herdr: AgentFixture;
   daemon: Daemon;
   /** The resolved checkout root in the core's wire spelling. */
   repo: string;
@@ -104,7 +105,7 @@ async function openCheckout(
   beforeLoad?: (page: Page) => Promise<void>,
   extraFiles: Record<string, string> = {},
 ): Promise<Fixture> {
-  const herdr = await startHerdr();
+  const herdr = await startFixture();
   let daemon: Daemon | null = null;
   try {
     const repoDir = path.join(herdr.root, "repo");
@@ -135,12 +136,9 @@ async function openCheckout(
     fs.writeFileSync(path.join(repoDir, "huge.txt"), "");
     fs.truncateSync(path.join(repoDir, "huge.txt"), 17 * 1024 * 1024);
     const repo = toPage(fs.realpathSync(repoDir));
-    herdr.run([
-      "workspace", "create", "--cwd", repoDir, "--label", "repo",
-      "--env", `PATH=${herdr.fixturePath}`, "--no-focus",
-    ]);
 
     daemon = await startHided(herdr, "s3");
+    await withControl(daemon, (control) => openProject(control, repoDir, "repo"));
     const lastSent = new Map<string, Record<string, unknown>>();
     const sent = countSent(page, lastSent);
     await beforeLoad?.(page);
@@ -1452,8 +1450,7 @@ test("a dropped file reaches the terminal as an attachment", async ({ page }) =>
       () => ({
         log: { exists: fs.existsSync(log), bytes: read().length, tail: read().slice(-200) },
         sent: Object.fromEntries([...sent]),
-        process: herdr.run(["pane", "process-info", "--pane", target]),
-        screen: herdr.run(["pane", "read", target, "--source", "recent-unwrapped", "--lines", "20"]),
+        screen: page.evaluate((id) => window.__hideProbe?.paneText(id) ?? "", target),
       }),
       () => expect.poll(read, { timeout: 15_000 }).toContain("dropped.png"),
     );

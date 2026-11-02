@@ -1,8 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
 import path from "node:path";
 import fs from "node:fs";
-import { dumpOnFailure, tabsBothSides } from "./failure-dump";
-import { startHerdr } from "./herdr-fixture";
+import { newTab, tabsOf, withControl } from "./daemon-actions";
+import { startFixture } from "./engine-fixture";
+import { dumpOnFailure, pageTabs } from "./failure-dump";
 import { startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace, screenshot, setLanePinned, showExplorer } from "./wire";
 import { toPage } from "../../desktop/src/main/wirePath";
@@ -65,22 +66,29 @@ async function strip(page: Page, column: "agent" | "view" = "agent"): Promise<St
 
 const settle = (page: Page) => page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
 
-/** An Agent strip of `count` tabs: Herdr makes them, the page draws them. */
+/** An Agent strip of `count` tabs: the daemon makes them, the page draws them. */
 async function startStrip(page: Page, count: number) {
   await page.setViewportSize({ width: 1920, height: 1080 });
-  const herdr = await startHerdr({ agents: false });
+  const fixture = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
-  const stop = () => { daemon?.stop(); herdr.stop(); };
+  const stop = () => { daemon?.stop(); fixture.stop(); };
   try {
-    for (let made = 1; made < Math.min(count, 3); made += 1) herdr.run(["tab", "create", "--workspace", herdr.workspace, "--cwd", path.join(herdr.root, "fixture"), "--no-focus"]);
-    daemon = await startHided(herdr, "tab-strip-fit");
+    daemon = await startHided(fixture, "tab-strip-fit");
+    const live = daemon;
+    // Both sides of "the strip shows what the core lists": the tabs of the checkout and the tabs the page drew.
+    const bothSides = async () => ({ core: await withControl(live, (control) => control.until((rest) => tabsOf(rest, fixture.workspace), "the tabs of the checkout")), page: await pageTabs(page) });
+    const make = (made: number, to: number) => withControl(live, async (control) => {
+      for (let tab = made; tab < to; tab += 1) await newTab(control, fixture, `strip-${tab}`);
+    });
+    // The fixture's checkout starts with its one tab.
+    await make(1, Math.min(count, 3));
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     const tabs = page.locator("[data-agent-tab-bar] [role=tab]");
-    await dumpOnFailure("tab-strip-fit tabs", () => tabsBothSides(herdr, page), () => expect(tabs).toHaveCount(Math.min(count, 3)));
-    // The first screen is drawn before the rest are made, so a tab Herdr makes later is one the page had to take in.
-    for (let made = 3; made < count; made += 1) herdr.run(["tab", "create", "--workspace", herdr.workspace, "--cwd", path.join(herdr.root, "fixture"), "--no-focus"]);
-    await dumpOnFailure("tab-strip-fit tabs", () => tabsBothSides(herdr, page), () => expect(tabs).toHaveCount(count));
+    await dumpOnFailure("tab-strip-fit tabs", bothSides, () => expect(tabs).toHaveCount(Math.min(count, 3)));
+    // The first screen is drawn before the rest are made, so a tab made later is one the page had to take in.
+    await make(3, count);
+    await dumpOnFailure("tab-strip-fit tabs", bothSides, () => expect(tabs).toHaveCount(count));
     return { tabs, stop };
   } catch (error) {
     stop();
@@ -180,13 +188,13 @@ test("Selecting an Agent tab moves the title width to it, and the selected tab s
 });
 
 test("File View tabs use the same shrinking strip and transfer the longest title on selection", async ({ page }) => {
-  const herdr = await startHerdr({ agents: false });
+  const fixture = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
     const names = ["한글 노트.md", "検証結果.md", "项目计划.md", ...Array.from({ length: 9 }, (_, i) => `notes-${i + 1}.md`)];
-    const root = fs.realpathSync(path.join(herdr.root, "fixture"));
+    const root = fs.realpathSync(path.join(fixture.root, "fixture"));
     for (const name of names) fs.writeFileSync(path.join(root, name), `# ${name}\n`);
-    daemon = await startHided(herdr, "file-tab-strip");
+    daemon = await startHided(fixture, "file-tab-strip");
     await page.setViewportSize({ width: 2400, height: 1000 });
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
@@ -258,5 +266,5 @@ test("File View tabs use the same shrinking strip and transfer the longest title
     await expect(tabs.first()).toHaveAccessibleName(/한글 노트.md/);
     await tabs.first().locator("button").click();
     await expect(tabs).toHaveCount(names.length - 1);
-  } finally { daemon?.stop(); herdr.stop(); }
+  } finally { daemon?.stop(); fixture.stop(); }
 });

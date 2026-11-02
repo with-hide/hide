@@ -3,7 +3,10 @@
 // parent's responsibility; children unfold under their root only when the
 // operator opens it, and the pane header's tree button opens the same tree.
 import { expect, test } from "@playwright/test";
-import { continueFixtureTranscript, declareParent, elsewhereTab, finishFixtureTurn, labelAgent, setFixtureLifecycle, startHerdr } from "./herdr-fixture";
+import { closePane, withControl } from "./daemon-actions";
+import { startFixture } from "./engine-fixture";
+import { elsewhereTab, finishUnseenTurn, setAgentAsking, setAgentState } from "./fixture-agents";
+import { continueFixtureTranscript } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { countSent, screenshot, sidebarOverflow } from "./wire";
 
@@ -14,16 +17,18 @@ const WAIT_SENTENCE = "하위 작업 위임 후 자식이 계보 투영과 테�
 
 test("roots stay in one sidebar, open their children in place, and the header's tree button opens the tree", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  const herdr = await startHerdr({ readiness: "registered" });
+  // The child is the parent's delegated child, spawned by the parent agent itself (family).
+  const fixture = await startFixture({ family: true });
   let daemon: Daemon | null = null;
   try {
-    const [parent, child] = herdr.panes;
-    labelAgent(herdr, parent, { task: "Agent one", progress: WAIT_SENTENCE });
-    await finishFixtureTurn(herdr, parent, elsewhereTab(herdr));
-    const childSession = labelAgent(herdr, child, { task: LONG_TITLE, progress: "계보 투영 구현 중" });
-    await setFixtureLifecycle(herdr, child, "working");
-    declareParent(herdr, child, parent);
-    daemon = await startHided(herdr, "sidebar-status");
+    daemon = await startHided(fixture, "sidebar-status");
+    const [parent, child] = fixture.panes;
+    // A relationship holds only on the session it was spawned on, so each agent is labelled by a turn appended to its own session.
+    const childSession = "fixture-two";
+    continueFixtureTranscript(fixture, "fixture-one", { task: "Agent one", progress: WAIT_SENTENCE });
+    await finishUnseenTurn(fixture, daemon, parent, await elsewhereTab(fixture, daemon));
+    continueFixtureTranscript(fixture, childSession, { task: LONG_TITLE, progress: "계보 투영 구현 중" });
+    await setAgentState(daemon, child, "working");
     const last = new Map<string, Record<string, unknown>>();
     const sent = countSent(page, last);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
@@ -41,8 +46,8 @@ test("roots stay in one sidebar, open their children in place, and the header's 
     expect(await sidebarOverflow(page, "calc(var(--size-sidebar-min) + var(--size-rail))")).toEqual([]);
     expect(await waitLine.locator('[data-line-part="text"]').evaluate((node) => node.scrollWidth > node.clientWidth)).toBe(true);
     await sidebarOverflow(page, "");
-    continueFixtureTranscript(herdr, childSession, { task: LONG_TITLE, reply: QUESTION, question: true });
-    await setFixtureLifecycle(herdr, child, "idle");
+    continueFixtureTranscript(fixture, childSession, { task: LONG_TITLE, reply: QUESTION, question: true });
+    await setAgentAsking(daemon, child);
     // An ordinary question waits on the root, so the root stops waiting and keeps its own state, never raised, and a quiet child adds no mark.
     await expect(parentRow).toHaveAttribute("data-waiting", "false", { timeout: 20_000 });
     await expect(page.locator(`[data-raised-group="done"] [data-pane="${parent}"]`)).toBeVisible();
@@ -102,12 +107,12 @@ test("roots stay in one sidebar, open their children in place, and the header's 
     // the children button sits, until the operator closes it.
     await page.locator("[data-detail-close]").click();
     await treeButton.click();
-    herdr.run(["pane", "close", child]);
+    await withControl(daemon, (control) => closePane(control, child));
     await expect(tree).toHaveCount(0, { timeout: 20_000 });
     await expect(treeButton).toHaveCount(0);
     await expect(parentRow.locator(`[data-tree-chevron="${parent}"]`)).toHaveCount(0);
   } finally {
     daemon?.stop();
-    herdr.stop();
+    fixture.stop();
   }
 });

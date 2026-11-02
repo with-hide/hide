@@ -6,7 +6,8 @@ import { expect, test } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { startHerdr } from "./herdr-fixture";
+import { openProject, withControl } from "./daemon-actions";
+import { startEngine, startFixture } from "./engine-fixture";
 import { startHided } from "./hided-fixture";
 import { countSent, registerFolder, screenshot, showExplorer, showProjectRow, showTool } from "./wire";
 import { chord } from "./chords";
@@ -16,7 +17,7 @@ import { onDisk } from "./wait";
 test.describe.configure({ timeout: 90_000 });
 
 test("History opens a scoped patch, then updates after editing the original file", async ({ page }) => {
-  const herdr = await startHerdr();
+  const herdr = await startFixture({ agents: false });
   let daemon: Awaited<ReturnType<typeof startHided>> | null = null;
   try {
     const repoDir = path.join(herdr.root, "history-repo");
@@ -36,9 +37,9 @@ test("History opens a scoped patch, then updates after editing the original file
     execFileSync("git", ["add", "-A"], { cwd: repo });
     execFileSync("git", ["-c", "user.email=e2e@example.com", "-c", "user.name=e2e", "-c", "commit.gpgsign=false", "commit", "-qm", "branch"], { cwd: repo });
     fs.writeFileSync(file, "first\nsecond <script>window.__executed = true</script>\n");
-    herdr.run(["workspace", "create", "--cwd", repo, "--label", "history-repo", "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]);
 
     daemon = await startHided(herdr, "s4");
+    await withControl(daemon, (control) => openProject(control, repo, "history-repo"));
     const lastSent = new Map<string, Record<string, unknown>>();
     const sent = countSent(page, lastSent);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
@@ -111,7 +112,8 @@ test("History opens a scoped patch, then updates after editing the original file
 });
 
 test("registered subfolder History opens inside patches and hides sibling changes", async ({ page }) => {
-  const herdr = await startHerdr();
+  // An empty engine: the repository is no project of its own, only the folder registered inside it is.
+  const herdr = await startEngine();
   let daemon: Awaited<ReturnType<typeof startHided>> | null = null;
   try {
     const sent = countSent(page);

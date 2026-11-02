@@ -1,13 +1,13 @@
-// The start panel (PRD home-device-rail B23-B33, B35) on an isolated pinned
-// Herdr and hided with the fixture's `claude` shim: ⌘K's `Start an agent…`
+// The start panel (PRD home-device-rail B23-B33, B35) on an isolated engine
+// and hided with the fixture's `claude` shim: ⌘K's `Start an agent…`
 // opens it on any screen with the keyboard in the text box; the target is the
 // checkout in front; a start with a model runs the agent with `--model <id>`
 // and hands it the first prompt; the next open preselects the kind and model;
 // Esc keeps what was written until a start spends it.
 
 import { expect, test, type Page } from "@playwright/test";
-import { spawnSync } from "node:child_process";
-import { herdrHasFocus, startHerdr } from "./herdr-fixture";
+import { corePaneFocus, withControl } from "./daemon-actions";
+import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { countSent, enterWorkspace, screenshot } from "./wire";
 import { chord } from "./chords";
@@ -26,13 +26,13 @@ async function openFromPalette(page: Page) {
 
 test("⌘K Start an agent… starts an agent in the checkout in front with the chosen model and first prompt", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  const herdr = await startHerdr();
+  const fixture = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "start-panel");
+    daemon = await startHided(fixture, "start-panel");
     const last = new Map<string, Record<string, unknown>>();
     countSent(page, last);
-    await page.goto(`${daemon.origin}/#token=${daemon.token}`);
+    await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
 
     // B33: the command is in ⌘K, and it opens the panel with the keyboard in its text box.
@@ -76,7 +76,7 @@ test("⌘K Start an agent… starts an agent in the checkout in front with the c
     await expect(model).toBeFocused();
 
     await page.locator("[data-start-text]").fill("첫 지시 확인용 문장");
-    const known = new Set<string>(herdr.panes);
+    const known = new Set<string>(fixture.panes);
     await page.keyboard.press("Enter");
 
     // The panel is done: closed, and its text spent.
@@ -92,12 +92,15 @@ test("⌘K Start an agent… starts an agent in the checkout in front with the c
       return pane !== "" && !known.has(pane);
     }, { timeout: 30_000 }).toBe(true);
     expect(known.has(pane)).toBe(false);
-    await expect.poll(() => herdrHasFocus(herdr, pane)).toBe(true);
+    // The core holds the keyboard in the new pane too, not only the page.
+    await withControl(daemon, (control) => control.until((rest) => corePaneFocus(rest) === pane || undefined, `the focus of ${pane}`, 30_000));
+    // The shell echoes the command line the core typed, so its arguments are read from the pane's text with the
+    // line breaks a narrow pane wraps it at taken out, rather than from the screen as laid out.
     await expect
       .poll(
-        () => {
-          const info = spawnSync(herdr.bin, ["pane", "process-info", "--pane", pane], { env: herdr.env, encoding: "utf8", timeout: 10_000 }).stdout;
-          return info.includes("--dangerously-skip-permissions") && info.includes("skipDangerousModePermissionPrompt") && info.includes("--model") && info.includes("opus") && info.includes("첫 지시 확인용 문장");
+        async () => {
+          const shown = (await page.evaluate((id) => window.__hideProbe?.paneText(id) ?? "", pane)).replace(/\s+/g, "");
+          return ["--dangerously-skip-permissions", "skipDangerousModePermissionPrompt", "--modelopus", "첫지시확인용문장"].every((part) => shown.includes(part));
         },
         { timeout: 30_000 },
       )
@@ -122,6 +125,6 @@ test("⌘K Start an agent… starts an agent in the checkout in front with the c
     await expect(panel).toHaveCount(0);
   } finally {
     daemon?.stop();
-    herdr.stop();
+    fixture.stop();
   }
 });

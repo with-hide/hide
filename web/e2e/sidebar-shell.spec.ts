@@ -11,29 +11,31 @@
 import { expect, test, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
-import { startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { openProject, withControl } from "./daemon-actions";
+import { startEngine, startFixture, type EngineServer } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { chooseTheme, enterWorkspace, screenshot, showProjectRow, sidebarRowsFit, THIS_MACHINE } from "./wire";
 import { chord, commandLabel, mod } from "./chords";
 
 test.describe.configure({ timeout: 120_000 });
 
-/** One private stack with the page on it, the Projects list drawn; `check` runs with it and both are stopped after. */
+/** One private stack with the page on it, the Projects list drawn (with `firstRun`, a daemon with no project, as a first run starts); `check` runs with it and both are stopped after. */
 async function withShell(
   page: Page,
   label: string,
-  check: (stack: { herdr: HerdrFixture; daemon: Daemon }) => Promise<void>,
-  prepare?: (herdr: HerdrFixture) => void,
+  check: (stack: { herdr: EngineServer; daemon: Daemon }) => Promise<void>,
+  prepare?: (herdr: EngineServer, daemon: Daemon) => Promise<void>,
+  { firstRun = false }: { firstRun?: boolean } = {},
 ): Promise<void> {
   await page.setViewportSize({ width: 1280, height: 800 });
-  const herdr = await startHerdr();
+  const herdr = firstRun ? await startEngine() : await startFixture();
   let daemon: Daemon | null = null;
   try {
-    prepare?.(herdr);
     daemon = await startHided(herdr, label);
+    await prepare?.(herdr, daemon);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await expect(page.locator("nav[data-sidebar]")).toHaveAttribute("data-sidebar", "projects", { timeout: 20_000 });
-    await expect(page.locator("[data-project-list] [data-checkout]").first()).toBeVisible({ timeout: 20_000 });
+    if (!firstRun) await expect(page.locator("[data-project-list] [data-checkout]").first()).toBeVisible({ timeout: 20_000 });
     await check({ herdr, daemon });
   } finally {
     daemon?.stop();
@@ -133,7 +135,7 @@ test("the Search row and the Overview row under the device, with no Home row, an
 });
 
 test("the window's top row names the device over the rail and the sidebar, and carries the Workspace's path and icons", async ({ page }) => {
-  await withShell(page, "sidebar-title-row", async () => {
+  await withShell(page, "sidebar-title-row", async ({ herdr, daemon }) => {
     const row = page.locator("[data-title-row]");
     const sidebar = page.locator("nav[data-sidebar]");
     const center = page.locator("[data-title-center]");
@@ -152,6 +154,7 @@ test("the window's top row names the device over the rail and the sidebar, and c
     await expect(center.locator("*")).toHaveCount(0);
 
     // B17, B18: a Workspace puts its project / checkout path and its icons in the row, and no toolbar under it.
+    await withControl(daemon, (control) => openProject(control, path.join(herdr.root, "fixture"), "fixture"));
     await enterWorkspace(page, "fixture");
     const project = center.locator("[data-workspace-project]");
     await expect(project).toHaveText("fixture");
@@ -196,7 +199,7 @@ test("the window's top row names the device over the rail and the sidebar, and c
     await expect(sidebarSwitch).toHaveAttribute("aria-expanded", "true");
     await expect(terminal).toBeFocused();
     await expect(page.locator('[data-agent-area-id][data-keyboard-area="true"]')).toHaveCount(1);
-  });
+  }, undefined, { firstRun: true });
 });
 
 /** A folder whose name is longer than any row or path has room for at the smallest window. */
@@ -235,10 +238,10 @@ test("at the smallest window and the largest Interface text, long names shorten 
     // The sidebar's long Korean name, the No agents fold, Search and the footer overlap nothing.
     expect(await sidebarRowsFit(page)).toEqual([]);
     await screenshot(page, "title-row-smallest-largest-text");
-  }, (herdr) => {
+  }, async (herdr, daemon) => {
     const folder = path.join(herdr.root, LONG_NAME);
     fs.mkdirSync(folder);
-    herdr.run(["workspace", "create", "--cwd", folder, "--label", LONG_NAME, "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]);
+    await withControl(daemon, (control) => openProject(control, folder, LONG_NAME));
   });
 });
 

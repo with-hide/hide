@@ -16,7 +16,7 @@ import { paneProgramLine, type PaneShell } from "./herdr-fixture";
 
 type LayoutNode = { type: "pane"; pane_id: string } | { type: "split"; first: LayoutNode; second: LayoutNode };
 type PaneLayout = { tab_id: string; focused_pane_id: string | null; zoomed: boolean; root: LayoutNode };
-type NavigatorWorkspace = { id: string; path: string; label?: string; checkouts: { id: string; path?: string; agent_groups?: { groups: { tabs: string[] }[] } }[] };
+type NavigatorWorkspace = { id: string; path: string; label?: string; checkouts: { id: string; path?: string; tabs?: { id: string }[]; agent_groups?: { groups: { tabs: string[] }[] } }[] };
 
 /** Runs `use` on a connection of its own to `daemon`, closed whatever happens. */
 export async function withControl<T>(daemon: Pick<Daemon, "origin" | "token">, use: (control: HidedControl) => Promise<T>): Promise<T> {
@@ -82,12 +82,17 @@ function workspacesOf(rest: Rest): NavigatorWorkspace[] {
   return ((rest.navigator as { workspaces?: NavigatorWorkspace[] } | undefined)?.workspaces ?? []);
 }
 
-/** The checkout `folder` names in the navigator, with its tabs in order. */
+/**
+ * The checkout whose folder is `folder` (the page's spelling) in any project
+ * the navigator lists, with its tabs in order: a project's own folder, or a
+ * linked worktree, which is listed under its repository's project.
+ */
 export function checkoutAt(rest: Rest, folder: string): { workspace: string; checkout: string; tabs: string[] } | undefined {
-  const workspace = workspacesOf(rest).find((row) => row.path === folder);
-  const checkout = workspace?.checkouts[0];
-  if (!workspace || !checkout) return undefined;
-  return { workspace: workspace.id, checkout: checkout.id, tabs: checkout.agent_groups?.groups.flatMap((group) => group.tabs) ?? [] };
+  for (const workspace of workspacesOf(rest)) {
+    const checkout = workspace.checkouts.find((listed) => listed.path === folder) ?? (workspace.path === folder ? workspace.checkouts[0] : undefined);
+    if (checkout) return { workspace: workspace.id, checkout: checkout.id, tabs: checkout.agent_groups?.groups.flatMap((group) => group.tabs) ?? [] };
+  }
+  return undefined;
 }
 
 /** The tabs of `workspace` the navigator lists, in order. */
@@ -219,15 +224,6 @@ export async function runInPane(
   return { status: Number.parseInt(read(files.status), 10), stdout: read(files.stdout), stderr: read(files.stderr) };
 }
 
-/** The checkout whose folder is `folder` (the page's spelling) in any project the navigator lists, with its tabs in order: a linked worktree is listed under its repository's project, not as a project of its own. */
-export function checkoutListedAt(rest: Rest, folder: string): { workspace: string; checkout: string; tabs: string[] } | undefined {
-  for (const workspace of workspacesOf(rest)) {
-    const checkout = workspace.checkouts.find((listed) => listed.path === folder);
-    if (checkout) return { workspace: workspace.id, checkout: checkout.id, tabs: checkout.agent_groups?.groups.flatMap((group) => group.tabs) ?? [] };
-  }
-  return undefined;
-}
-
 /**
  * Opens a terminal in the linked worktree `dir` of a project the daemon
  * already lists, as New tab here on its row does: waits until the core has
@@ -235,7 +231,62 @@ export function checkoutListedAt(rest: Rest, folder: string): { workspace: strin
  */
 export async function openWorktree(control: HidedControl, dir: string): Promise<OpenedProject> {
   const folder = toPage(fs.realpathSync.native(dir));
-  const listed = await control.until((rest) => checkoutListedAt(rest, folder), `the worktree ${folder} listed`, 30_000);
+  const listed = await control.until((rest) => checkoutAt(rest, folder), `the worktree ${folder} listed`, 30_000);
   const made = await newTab(control, listed, "worktree");
   return { folder, workspace: listed.workspace, checkout: listed.checkout, ...made };
+}
+
+/**
+ * `runInPane` for a pane the operator is not in. Typing the line gives that
+ * pane the core's keyboard focus on either engine, which an agent running a
+ * command never does, so the program waits at a gate while the focus goes
+ * back to the pane that held it, and runs only then: it sees the focus as
+ * the operator had it.
+ */
+export async function runInPaneKeepingFocus(
+  fixture: { root: string; shell: PaneShell },
+  daemon: Pick<Daemon, "origin" | "token">,
+  pane: string,
+  name: string,
+  program: { env?: Record<string, string>; argv: string[]; stdout?: boolean },
+): Promise<{ status: number; stdout: string; stderr: string }> {
+  const gate = path.join(fixture.root, `${name}.gate`);
+  const wait = [
+    'const fs = require("node:fs");',
+    'const { spawnSync } = require("node:child_process");',
+    "const [program, ...args] = process.argv.slice(1);",
+    "const start = Date.now();",
+    `while (!fs.existsSync(${JSON.stringify(gate)})) {`,
+    "  if (Date.now() - start > 30000) process.exit(9);",
+    "  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);",
+    "}",
+    'process.exit(spawnSync(program, args, { stdio: "inherit" }).status ?? 1);',
+  ].join(" ");
+  const before = await withControl(daemon, (control) => control.until((rest) => corePaneFocus(rest) ?? undefined, "the focused pane", 20_000));
+  const running = runInPane(fixture, daemon, pane, name, { ...program, argv: [process.execPath, "-e", wait, ...program.argv] });
+  await withControl(daemon, async (control) => {
+    await control.until((rest) => corePaneFocus(rest) === pane || undefined, `the typed line to reach ${pane}`, 20_000);
+    if (before !== pane) await focusPane(control, before);
+  });
+  fs.writeFileSync(gate, "");
+  return running;
+}
+
+/**
+ * Shows the tab that holds `pane`, as a click on its tab does, wherever the
+ * navigator lists it: a tab nobody has shown is not attached on Herdr, so the
+ * keys typed into a pane of a spawned child's tab are dropped until it is.
+ */
+export async function showTabOf(control: HidedControl, pane: string): Promise<void> {
+  const where = await control.until((rest) => {
+    const tab = tabOfPane(rest, pane);
+    if (!tab) return undefined;
+    for (const workspace of workspacesOf(rest)) {
+      for (const checkout of workspace.checkouts) {
+        if (checkout.tabs?.some((listed) => listed.id === tab)) return { at: { workspace: workspace.id, checkout: checkout.id }, tab };
+      }
+    }
+    return undefined;
+  }, `the tab holding ${pane} listed`, 30_000);
+  await focusTab(control, where.at, where.tab);
 }

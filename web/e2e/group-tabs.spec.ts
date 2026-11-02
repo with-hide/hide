@@ -1,11 +1,14 @@
 import { createLegacyDraft } from "./group-start-helper";
-// Approved group-tabs B3/B5-B10/B12/B18/B21/B23: real private Herdr
-// topology is the oracle for whether a blank tab starts anything.
+// Approved group-tabs B3/B5-B10/B12/B18/B21/B23: the topology the daemon
+// publishes is the oracle for whether a blank tab starts anything; the tests
+// that hold or lose an engine's answer to a start run on Herdr's socket.
 import { expect, test, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { CLAUDE_FULL_ACCESS, herdrHasFocus, startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { startFixture } from "./engine-fixture";
+import { tabsOf, withControl } from "./daemon-actions";
 import { herdrGate } from "./herdr-gate";
 import { herdrTabs } from "./failure-dump";
 import { startHided, type Daemon } from "./hided-fixture";
@@ -24,6 +27,11 @@ const blank = (page: Page) => page.locator("[data-agent-tab-start]");
 function topology(herdr: HerdrFixture) {
   const workspaces = herdrTabs(herdr) as { tabs: string[] }[];
   return workspaces.flatMap((workspace) => workspace.tabs);
+}
+
+/** The tabs of the fixture's project as the daemon publishes them now: the engine's tabs, a draft being no tab of its own. */
+async function tabsNow(daemon: Daemon, workspace: string): Promise<string[]> {
+  return withControl(daemon, async (control) => (await control.until((rest) => tabsOf(rest, workspace), `the tabs of ${workspace}`)).filter((id) => !id.startsWith("draft:")));
 }
 
 async function open(page: Page, daemon: Daemon) {
@@ -62,19 +70,19 @@ async function chooseGroup(page: Page, name: string) {
 }
 
 test("an empty group and draft survive navigation and restart without creating a shell", async ({ page }) => {
-  const herdr = await startHerdr({ agents: false });
+  const fixture = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "group-draft");
+    daemon = await startHided(fixture, "group-draft");
     await page.setViewportSize({ width: 1440, height: 900 });
     await open(page, daemon);
-    const original = topology(herdr);
+    const original = await tabsNow(daemon, fixture.workspace);
     await screenshot(page, "group-tabs-ungrouped-work");
     const group = await createGroup(page, "문서 검토");
     await expect(stripTabs(page)).toHaveCount(0);
     await expect(blank(page)).toHaveAttribute("data-agent-tab-start", "empty");
     await expect(terminal(page)).toBeEnabled();
-    await createLegacyDraft(page, daemon!, path.join(herdr.root, "fixture"));
+    await createLegacyDraft(page, daemon!, path.join(fixture.root, "fixture"));
     await expect(stripTabs(page)).toHaveCount(1);
     const draft = await blank(page).getAttribute("data-agent-tab-start");
     expect(draft).toMatch(/^draft:/);
@@ -83,7 +91,7 @@ test("an empty group and draft survive navigation and restart without creating a
     await expect(stripTabs(page)).toHaveCount(original.length);
     await chooseGroup(page, "문서 검토");
     await expect(blank(page).getByRole("textbox")).toHaveValue("아직 보내지 않은 작업");
-    expect(topology(herdr)).toEqual(original);
+    expect(await tabsNow(daemon, fixture.workspace)).toEqual(original);
     await screenshot(page, "group-tabs-blank-terminal-action");
     const evidence = process.env.HIDE_E2E_SCREENSHOT_DIR;
     if (evidence) fs.copyFileSync(path.join(daemon.stateDir, "workspace-views.json"), path.join(evidence, "group-restart-before.json"));
@@ -93,11 +101,12 @@ test("an empty group and draft survive navigation and restart without creating a
     await open(page, daemon);
     await expect(selector(page)).toHaveAttribute("data-agent-group-selector", group);
     await expect(blank(page)).toHaveAttribute("data-agent-tab-start", draft!);
-    expect(topology(herdr)).toEqual(original);
-  } finally { try { daemon?.stop(); } finally { herdr.stop(); } }
+    expect(await tabsNow(daemon, fixture.workspace)).toEqual(original);
+  } finally { try { daemon?.stop(); } finally { fixture.stop(); } }
 });
 
-test("terminal start fills the draft slot and duplicate intent delivery creates only one tab", async ({ page }) => {
+// Herdr only: it holds `layout.apply` at Herdr's socket (`herdrGate`) while a duplicate intent arrives; the own engine has no socket to hold.
+test("terminal start fills the draft slot and duplicate intent delivery creates only one tab @herdr", async ({ page }) => {
   const herdr = await startHerdr({ agents: false });
   const gate = await herdrGate(herdr);
   let daemon: Daemon | null = null;
@@ -141,7 +150,8 @@ test("terminal start fills the draft slot and duplicate intent delivery creates 
   } finally { try { daemon?.stop(); } finally { try { await gate.stop(); } finally { herdr.stop(); } } }
 });
 
-test("a late global start stays behind after returning to an empty group or draft", async ({ page }) => {
+// Herdr only: it holds `layout.apply` at Herdr's socket (`herdrGate`) while the operator moves on, and reads the started process through Herdr; the own engine has no socket to hold.
+test("a late global start stays behind after returning to an empty group or draft @herdr", async ({ page }) => {
   for (const draft of [false, true]) {
     const herdr = await startHerdr({ agents: false });
     const gate = await herdrGate(herdr);
@@ -196,10 +206,10 @@ test("a late global start stays behind after returning to an empty group or draf
 });
 
 test("Start agent opens a tab with its chosen model and prompt beside a terminal", async ({ page }) => {
-  const herdr = await startHerdr({ agents: false });
+  const fixture = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "group-add-agent");
+    daemon = await startHided(fixture, "group-add-agent");
     await open(page, daemon);
     const group = await createGroup(page, "Agent work");
     // UI_BEHAVIOR.md: New tab opens a terminal; Start agent opens its own tab.
@@ -209,7 +219,7 @@ test("Start agent opens a tab with its chosen model and prompt beside a terminal
     await expect(page.locator("[data-pane-view]")).toHaveCount(1);
     const tab = (await stripTabs(page).getAttribute("data-tab"))!;
     const originalPane = (await page.locator("[data-pane-view]").getAttribute("data-pane-view"))!;
-    const originalTabs = topology(herdr);
+    const originalTabs = await tabsNow(daemon, fixture.workspace);
     await expect(page.getByRole("button", { name: "Add agent", exact: true })).toHaveCount(0);
     await page.keyboard.press(chord("search"));
     await page.locator('[data-palette="Search"] [data-palette-input]').fill("Start an agent");
@@ -229,19 +239,24 @@ test("Start agent opens a tab with its chosen model and prompt beside a terminal
     await expect(selector(page)).toHaveAttribute("data-agent-group-selector", group);
     await expect(stripTabs(page)).toHaveCount(2);
     await expect(page.locator(`[data-agent-tab-bar] [data-tab="${tab}"]`)).toBeVisible();
-    expect(topology(herdr)).toHaveLength(originalTabs.length + 1);
+    expect(await tabsNow(daemon, fixture.workspace)).toHaveLength(originalTabs.length + 1);
     const added = (await page.locator("[data-pane-view]").evaluateAll((panes) => panes.map((pane) => pane.getAttribute("data-pane-view")!))).find((id) => id !== originalPane)!;
-    await expect.poll(() => {
-      const info = herdr.run(["pane", "process-info", "--pane", added]) as { result: { process_info: { foreground_processes: { argv?: string[] | null }[] } } };
-      return info.result.process_info.foreground_processes.map((process) => process.argv);
-    }, { timeout: 30_000 }).toContainEqual([expect.stringMatching(/(?:^|[/\\])claude(?:\.exe)?$/), ...CLAUDE_FULL_ACCESS, "--model", "opus", "--", "새 탭의 에이전트"]);
+    // The argument list the agent was started with is the engine's to say; nothing Hide publishes carries it.
+    if (fixture.engine === "herdr") {
+      const server = fixture as typeof fixture & { run: HerdrFixture["run"] };
+      await expect.poll(() => {
+        const info = server.run(["pane", "process-info", "--pane", added]) as { result: { process_info: { foreground_processes: { argv?: string[] | null }[] } } };
+        return info.result.process_info.foreground_processes.map((process) => process.argv);
+      }, { timeout: 30_000 }).toContainEqual([expect.stringMatching(/(?:^|[/\\])claude(?:\.exe)?$/), ...CLAUDE_FULL_ACCESS, "--model", "opus", "--", "새 탭의 에이전트"]);
+    }
     await page.locator(`[data-agent-tab-bar] [data-tab="${tab}"]`).click();
     await expect(page.locator(`[data-pane-view="${originalPane}"]`)).toBeVisible();
     await screenshot(page, "group-tabs-new-agent-tab");
-  } finally { try { daemon?.stop(); } finally { herdr.stop(); } }
+  } finally { try { daemon?.stop(); } finally { fixture.stop(); } }
 });
 
-test("a committed start with its answer lost across restart adopts the original shell", async ({ page }) => {
+// Herdr only: it holds `layout.apply` at Herdr's socket (`herdrGate`) and kills the daemon before Herdr's answer arrives; the own engine has no socket to hold.
+test("a committed start with its answer lost across restart adopts the original shell @herdr", async ({ page }) => {
   const herdr = await startHerdr({ agents: false });
   const gate = await herdrGate(herdr);
   let daemon: Daemon | null = null;
@@ -274,7 +289,8 @@ test("a committed start with its answer lost across restart adopts the original 
   } finally { try { daemon?.stop(); } finally { try { await gate.stop(); } finally { herdr.stop(); } } }
 });
 
-test("a lost join answer preserves the existing zoomed tab and all three shells after restart", async ({ page }) => {
+// Herdr only: it holds `pane.move` at Herdr's socket (`herdrGate`) and kills the daemon before Herdr's answer arrives; the own engine has no socket to hold.
+test("a lost join answer preserves the existing zoomed tab and all three shells after restart @herdr", async ({ page }) => {
   const herdr = await startHerdr({ agents: false });
   const gate = await herdrGate(herdr);
   let daemon: Daemon | null = null;

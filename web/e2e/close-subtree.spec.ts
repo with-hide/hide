@@ -5,93 +5,88 @@
 // question about the agents its checkout spawned outside it.
 
 import { expect, test, type Locator } from "@playwright/test";
-import { execFile, execFileSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import net from "node:net";
 import path from "node:path";
-import { promisify } from "node:util";
-import { finishFixtureTurn, labelAgent, setFixtureLifecycle, spawnAgent, startHerdr, type FixtureLabel, type HerdrFixture } from "./herdr-fixture";
+import { startFixture, type AgentFixture } from "./engine-fixture";
+import { connectControl } from "./hided-control.mjs";
+import { closePane, focusTab, openProject, openWorktree, showTabOf, tabOfPane, viewPane, withControl } from "./daemon-actions";
+import { agentReading, finishUnseenTurn, setAgentAsking, setAgentState, spawnChild, spawnRoot, startAgentInProject, takeOverSession } from "./fixture-agents";
+import { claudeProjects, writeFixtureTranscript, type FixtureLabel } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
-import { localEndpoint } from "./platform-fixture";
 import { countSent, enterWorkspace, screenshot } from "./wire";
 import { chord } from "./chords";
 
 test.describe.configure({ timeout: 180_000 });
 test.use({ actionTimeout: 15_000 });
 
-const run = promisify(execFile);
+/** Waits until the daemon lists none of `panes` in any tab. */
+async function gone(daemon: Daemon, panes: string[], timeout = 60_000): Promise<void> {
+  await withControl(daemon, (control) => control.until((rest) => (panes.every((pane) => tabOfPane(rest, pane) === undefined) ? true : undefined), `${panes.join(", ")} closed`, timeout));
+}
 
-/** Every pane id the private Herdr lists right now. */
-async function livePanes(herdr: HerdrFixture): Promise<Set<string>> {
-  const { stdout } = await run(herdr.bin, ["pane", "list"], { env: herdr.env, encoding: "utf8", timeout: 10_000 });
-  const ids = new Set<string>();
-  const visit = (value: unknown): void => {
-    if (Array.isArray(value)) value.forEach(visit);
-    else if (value && typeof value === "object") {
-      const row = value as Record<string, unknown>;
-      if (typeof row.pane_id === "string") ids.add(row.pane_id);
-      Object.values(row).forEach(visit);
-    }
-  };
-  visit(JSON.parse(stdout));
-  return ids;
+/** Whether the daemon still lists `pane` in a tab. */
+async function listed(daemon: Daemon, pane: string): Promise<boolean> {
+  return withControl(daemon, async (control) => (await control.until((rest) => ({ live: tabOfPane(rest, pane) !== undefined }), `the layouts naming ${pane}`)).live);
 }
 
 /**
- * Records the order Herdr closes the panes in `watched`, from its own
- * `pane.closed` events. Polling `pane list` from a subprocess was slower than
- * the core's ~140 ms steps on a loaded runner and saw two panes go in one
- * look (CI, 2026-10-01); the events carry the order itself. Resolves once
- * the subscription is live, so nothing the caller does next is missed; the
- * caller closes it on every exit path.
+ * Records the order the panes in `watched` leave the daemon's layouts, from
+ * the snapshots the daemon publishes: each close is its own change, so two
+ * panes leaving in one snapshot would be recorded as a tie, which the order
+ * assertion refuses. Resolves once the watch is live, so nothing the caller
+ * does next is missed; the caller closes it on every exit path.
  */
-async function watchCloseOrder(herdr: HerdrFixture, watched: string[]): Promise<{ order: Promise<string[]>; close: () => void }> {
-  const socket = net.createConnection(localEndpoint(herdr.socket));
+async function watchCloseOrder(daemon: Daemon, watched: string[]): Promise<{ order: Promise<string[]>; close: () => void }> {
+  const control = await connectControl(daemon);
   const order: string[] = [];
-  let buffer = "";
-  let ack: (error?: Error) => void = () => undefined;
-  let settle: (error?: Error) => void = () => undefined;
-  const live = new Promise<void>((resolve, reject) => {
-    ack = (error) => (error ? reject(error) : resolve());
-  });
-  const done = new Promise<string[]>((resolve, reject) => {
-    settle = (error) => {
-      clearTimeout(timer);
-      socket.destroy();
-      if (error) reject(error);
-      else resolve(order);
-    };
-  });
+  const done = control.until((rest) => {
+    const left = watched.filter((pane) => tabOfPane(rest, pane) === undefined && !order.includes(pane));
+    if (left.length === 1) order.push(left[0]!);
+    else if (left.length > 1) order.push(`tie(${left.join("+")})`, ...left.slice(1).map(() => "tie"));
+    return watched.every((pane) => tabOfPane(rest, pane) === undefined) ? order : undefined;
+  }, "every watched pane closed", 60_000) as Promise<string[]>;
   // A failure before the caller awaits `done` still reaches it; this only
   // keeps the runner from reporting the same rejection as unhandled.
   done.catch(() => undefined);
-  const fail = (error: Error) => {
-    ack(error);
-    settle(error);
-  };
-  const timer = setTimeout(() => fail(new Error(`closed so far: ${order.join(", ") || "none"}`)), 60_000);
-  socket.on("error", fail);
-  // Herdr ending the stream before every pane closed is a failure, not a wait.
-  socket.on("close", () => fail(new Error(`Herdr closed the event stream; closed so far: ${order.join(", ") || "none"}`)));
-  socket.on("data", (chunk) => {
-    buffer += chunk.toString("utf8");
-    for (let newline = buffer.indexOf("\n"); newline >= 0; newline = buffer.indexOf("\n")) {
-      const text = buffer.slice(0, newline).trim();
-      buffer = buffer.slice(newline + 1);
-      if (!text) continue;
-      const line = JSON.parse(text) as { id?: string; error?: unknown; data?: { type?: string; pane_id?: string } };
-      if (line.id === "close-order") {
-        ack(line.error ? new Error(`events.subscribe refused: ${JSON.stringify(line.error)}`) : undefined);
-        continue;
-      }
-      const pane = line.data?.type === "pane_closed" ? line.data.pane_id : undefined;
-      if (pane && watched.includes(pane) && !order.includes(pane)) order.push(pane);
-      if (order.length === watched.length) settle();
-    }
-  });
-  socket.write(`${JSON.stringify({ id: "close-order", method: "events.subscribe", params: { subscriptions: [{ type: "pane.closed" }] } })}\n`);
-  await live;
-  return { order: done, close: () => fail(new Error("closed by the test")) };
+  return { order: done, close: () => control.close() };
+}
+
+let delegated = 0;
+
+/**
+ * Has the agent in `parent` delegate a child in a tab of its own, as a real
+ * agent does. With `named`, the child runs a session whose transcript is
+ * labelled so from the start, since a later session is no longer that
+ * child's. The child's pane is sized for the keys a spec types into it.
+ */
+async function delegate(fixture: AgentFixture, daemon: Daemon, parent: string, name: string, named?: FixtureLabel, repo = path.join(fixture.root, "fixture")): Promise<string> {
+  let session: string | undefined;
+  if (named) {
+    session = `close-${name}-${process.pid}-${(delegated += 1)}`;
+    writeFixtureTranscript(claudeProjects(fixture), session, named);
+  }
+  const pane = await spawnChild(fixture, daemon, parent, { name, repo, session });
+  await withControl(daemon, async (control) => viewPane(control, pane));
+  // Its stand-in drops keys typed before it reads its terminal.
+  await agentReading(fixture, pane);
+  return pane;
+}
+
+/**
+ * The fixture's second agent was spawned beside the first as its child: a
+ * new session in its pane ends that relationship, so the pair are two
+ * operator-owned agents, as two panes of one tab are.
+ */
+async function releaseChild(fixture: AgentFixture, daemon: Daemon): Promise<void> {
+  await takeOverSession(fixture, daemon, fixture.panes[1], "fixture-released");
+}
+
+/** Makes `dir` a Git repository on `main` with one commit, the folder a spawned child opens in. */
+function repository(dir: string): void {
+  fs.mkdirSync(dir, { recursive: true });
+  git(dir, ["init", "-q", "-b", "main"]);
+  git(dir, ["commit", "-q", "--allow-empty", "-m", "baseline"]);
 }
 
 /** The tops of `buttons`, rounded: one value means they share one row. */
@@ -103,20 +98,23 @@ async function rowTops(buttons: Locator[]): Promise<number[]> {
 
 test("the close sheet counts and brightens what needs the operator, stays live while open, and closes what it shows", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  const herdr = await startHerdr();
+  const fixture = await startFixture({ family: true });
   let daemon: Daemon | null = null;
   try {
-    const target = herdr.panes[1];
-    const spawn = (name: string, task: FixtureLabel) => spawnAgent(herdr, name, target, undefined, task);
-    const working = await spawn("working", { task: "계보 투영 구현" });
-    const asking = await spawn("asking", { task: "병합 전 검증 실행", reply: "병합 전에 검증을 다시 돌릴까요?", question: true });
-    const finished = await spawn("finished", { task: "릴리스 노트 초안" });
-    const quiet = await spawn("quiet", { task: "로그 파일 정리 작업" });
-    await setFixtureLifecycle(herdr, working, "working");
-    // Its own workspace is not the one Herdr's clients show.
-    await finishFixtureTurn(herdr, finished, herdr.tab);
+    daemon = await startHided(fixture, "close-subtree-states");
+    const live = daemon;
+    const [target] = fixture.panes;
+    await releaseChild(fixture, live);
+    const working = await delegate(fixture, live, target, "working", { task: "계보 투영 구현" });
+    const asking = await delegate(fixture, live, target, "asking", { task: "병합 전 검증 실행", reply: "병합 전에 검증을 다시 돌릴까요?", question: true });
+    const finished = await delegate(fixture, live, target, "finished", { task: "릴리스 노트 초안" });
+    const quiet = await delegate(fixture, live, target, "quiet", { task: "로그 파일 정리 작업" });
+    await setAgentState(live, working, "working");
+    await setAgentAsking(live, asking);
+    // The operator's own tab is the one shown, so the finished turn is not seen.
+    await finishUnseenTurn(fixture, live, finished, fixture.tab);
+    await withControl(live, (control) => focusTab(control, fixture, fixture.tab));
 
-    daemon = await startHided(herdr, "close-subtree-states");
     const last = new Map<string, Record<string, unknown>>();
     const sent = countSent(page, last);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
@@ -167,10 +165,10 @@ test("the close sheet counts and brightens what needs the operator, stays live w
 
     // The list is live (D-20, B13): a child spawned while the sheet is open
     // shows up, one that closes elsewhere drops out, and the title follows.
-    const late = await spawnAgent(herdr, "late", target);
+    const late = await delegate(fixture, live, target, "late");
     await expect(sheet.locator(`[data-subtree-row="${late}"]`)).toBeVisible({ timeout: 30_000 });
     await expect(sheet.getByRole("heading")).toHaveText("Close this agent and 5 children?");
-    herdr.run(["pane", "close", quiet]);
+    await withControl(live, (control) => closePane(control, quiet));
     await expect(sheet.locator(`[data-subtree-row="${quiet}"]`)).toHaveCount(0, { timeout: 30_000 });
     await expect(sheet.getByRole("heading")).toHaveText("Close this agent and 4 children?");
     expect(sent.get("close_tree") ?? 0).toBe(0);
@@ -180,29 +178,32 @@ test("the close sheet counts and brightens what needs the operator, stays live w
     await page.keyboard.press("Enter");
     expect(sent.get("close_tree")).toBe(1);
     expect(new Set(last.get("close_tree")?.pane_ids as string[])).toEqual(new Set([working, asking, finished, late]));
-    await expect.poll(async () => {
-      const live = await livePanes(herdr);
-      return [target, working, asking, finished, late].filter((pane) => live.has(pane));
-    }, { timeout: 60_000 }).toEqual([]);
+    await gone(live, [target, working, asking, finished, late]);
   } finally {
     daemon?.stop();
-    herdr.stop();
+    fixture.stop();
   }
 });
 
 test("the close sheet closes the whole subtree deepest first, and Close only keeps the children", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  const herdr = await startHerdr();
+  const fixture = await startFixture({ family: true });
   let daemon: Daemon | null = null;
   let closeWatch: { order: Promise<string[]>; close: () => void } | null = null;
   try {
-    const [keeper, target] = herdr.panes;
+    daemon = await startHided(fixture, "close-subtree");
+    const live = daemon;
     // target spawned child, which spawned grandchild; keeper spawned kept.
-    const child = await spawnAgent(herdr, "child", target);
-    const grandchild = await spawnAgent(herdr, "grandchild", child);
-    const kept = await spawnAgent(herdr, "kept", keeper);
+    // The fixture's first agent is the target and its own child, beside it, is the
+    // child; the second root is the keeper, in a tab of its own.
+    const [target, child] = fixture.panes;
+    const grandchild = await delegate(fixture, live, child, "grandchild");
+    const keeper = await spawnRoot(fixture, live, target, { name: "keeper", repo: path.join(fixture.root, "fixture") });
+    await withControl(live, async (control) => viewPane(control, keeper));
+    await agentReading(fixture, keeper);
+    const kept = await delegate(fixture, live, keeper, "kept");
+    await withControl(live, (control) => focusTab(control, fixture, fixture.tab));
 
-    daemon = await startHided(herdr, "close-subtree");
     const last = new Map<string, Record<string, unknown>>();
     const sent = countSent(page, last);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
@@ -231,14 +232,13 @@ test("the close sheet closes the whole subtree deepest first, and Close only kee
     await expect(sheet).toHaveCount(0);
     expect(sent.get("close_tree") ?? 0).toBe(0);
     expect(sent.get("close_pane") ?? 0).toBe(0);
-    const before = await livePanes(herdr);
-    for (const pane of [target, child, grandchild]) expect(before.has(pane)).toBe(true);
+    for (const pane of [target, child, grandchild]) expect(await listed(live, pane)).toBe(true);
 
     // Enter closes the subtree as one event, deepest first, target last.
     await page.locator(`[data-terminal-host="${target}"]`).click();
     await page.keyboard.press(chord("close_tab"));
     await expect(sheet.locator("[data-subtree-close-all]")).toBeFocused();
-    closeWatch = await watchCloseOrder(herdr, [target, child, grandchild]);
+    closeWatch = await watchCloseOrder(live, [target, child, grandchild]);
     await page.keyboard.press("Enter");
     expect(await closeWatch.order).toEqual([grandchild, child, target]);
     expect(sent.get("close_tree")).toBe(1);
@@ -247,31 +247,35 @@ test("the close sheet closes the whole subtree deepest first, and Close only kee
     await screenshot(page, "close-subtree-all-closed");
 
     // Close only closes just the target; its child becomes the operator's.
+    // The keeper's tab is not the one the page shows, so it is shown first.
+    await withControl(live, (control) => showTabOf(control, keeper));
     await page.locator(`[data-terminal-host="${keeper}"]`).click();
     await page.keyboard.press(chord("close_tab"));
     await expect(sheet.getByRole("heading")).toHaveText("Close this agent and 1 child?");
     await sheet.locator("[data-subtree-close-only]").click();
-    await expect.poll(async () => (await livePanes(herdr)).has(keeper), { timeout: 20_000 }).toBe(false);
-    expect((await livePanes(herdr)).has(kept)).toBe(true);
+    await expect.poll(() => listed(live, keeper), { timeout: 20_000 }).toBe(false);
+    expect(await listed(live, kept)).toBe(true);
     expect(sent.get("close_tree")).toBe(1);
     await expect(page.locator(`[data-pane="${kept}"]`)).toHaveAttribute("data-depth", "0", { timeout: 20_000 });
     await screenshot(page, "close-subtree-close-only");
   } finally {
     closeWatch?.close();
     daemon?.stop();
-    herdr.stop();
+    fixture.stop();
   }
 });
 
 test("an open close sheet follows the snapshot: Stop-work tracks its pane, and a subtree sheet whose last child leaves turns back into it", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  const herdr = await startHerdr();
+  const fixture = await startFixture({ family: true });
   let daemon: Daemon | null = null;
   try {
-    const [keeper, target] = herdr.panes;
-    labelAgent(herdr, target, { task: "계보 투영 구현" });
-    await setFixtureLifecycle(herdr, target, "working");
-    daemon = await startHided(herdr, "close-stop-work-live");
+    daemon = await startHided(fixture, "close-stop-work-live");
+    const live = daemon;
+    // The target and the keeper are two operator-owned agents in one tab.
+    const [target, keeper] = fixture.panes;
+    await releaseChild(fixture, live);
+    await setAgentState(live, target, "working");
     const last = new Map<string, Record<string, unknown>>();
     const sent = countSent(page, last);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
@@ -292,17 +296,17 @@ test("an open close sheet follows the snapshot: Stop-work tracks its pane, and a
 
     // The pane settles while the sheet is open: its row dims and says so, and
     // the sheet stays until the operator answers (B28, D-40).
-    await setFixtureLifecycle(herdr, target, "idle");
+    await setAgentState(live, target, "idle");
     await expect(row).toHaveAttribute("data-stop-work-state", "quiet", { timeout: 30_000 });
     expect(await opacity()).toBeLessThan(1);
     // It starts again: bright again, in place.
-    await setFixtureLifecycle(herdr, target, "working");
+    await setAgentState(live, target, "working");
     await expect(row).toHaveAttribute("data-stop-work-state", "active", { timeout: 30_000 });
     expect(await opacity()).toBe(1);
     await screenshot(page, "close-stop-work-live");
 
     // A child spawned while it is open turns it into the subtree sheet in place.
-    const child = await spawnAgent(herdr, "child", target);
+    const child = await delegate(fixture, live, target, "child");
     await expect(subtree.locator(`[data-subtree-row="${child}"]`)).toBeVisible({ timeout: 30_000 });
     await expect(subtree.getByRole("heading")).toHaveText("Close this agent and 1 child?");
     // The keyboard stays on the sheet itself, not on the Enter default of the new one.
@@ -310,8 +314,8 @@ test("an open close sheet follows the snapshot: Stop-work tracks its pane, and a
 
     // The target settles, then its last child closes elsewhere: the sheet
     // turns back into the target's Stop-work sheet with the quiet target dimmed.
-    await setFixtureLifecycle(herdr, target, "idle");
-    herdr.run(["pane", "close", child]);
+    await setAgentState(live, target, "idle");
+    await withControl(live, (control) => closePane(control, child));
     await expect(subtree).toHaveCount(0, { timeout: 30_000 });
     await expect(confirm.getByRole("heading")).toHaveText("Stop the active pane?");
     await expect(row).toHaveAttribute("data-stop-work-state", "quiet", { timeout: 30_000 });
@@ -325,12 +329,12 @@ test("an open close sheet follows the snapshot: Stop-work tracks its pane, and a
     await confirm.getByRole("button", { name: "Stop work and close" }).click();
     expect(sent.get("close_pane")).toBe(1);
     expect(last.get("close_pane")).toMatchObject({ pane_id: target, confirmed: true });
-    await expect.poll(async () => (await livePanes(herdr)).has(target), { timeout: 20_000 }).toBe(false);
-    expect((await livePanes(herdr)).has(keeper)).toBe(true);
+    await expect.poll(() => listed(live, target), { timeout: 20_000 }).toBe(false);
+    expect(await listed(live, keeper)).toBe(true);
     await expect(confirm).toHaveCount(0);
   } finally {
     daemon?.stop();
-    herdr.stop();
+    fixture.stop();
   }
 });
 
@@ -341,29 +345,39 @@ function git(cwd: string, args: string[]): string {
 // @platform: Process ownership: which processes belong to a checkout, read through libproc on macOS and /proc on Linux.
 test("Delete worktree closes the agents its checkout spawned outside it before the folder goes", { tag: "@platform" }, async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 });
-  const herdr = await startHerdr();
+  const fixture = await startFixture({ family: true });
   let daemon: Daemon | null = null;
   try {
     const branch = "feature/spawner";
-    const repo = path.join(herdr.root, "repo");
-    fs.mkdirSync(repo);
-    git(repo, ["init"]);
+    const repo = path.join(fixture.root, "fixture");
+    const worktree = path.join(fixture.root, "repo-spawner");
+    // The folder the worktree's agent spawns one in.
+    const outsideRepo = path.join(fixture.root, "outside");
+    repository(outsideRepo);
+
+    daemon = await startHided(fixture, "close-subtree-worktree");
+    // The fixture folder is a Git repository once its daemon made the fixture.
     fs.writeFileSync(path.join(repo, "README.md"), "# repo\n");
     git(repo, ["add", "README.md"]);
     git(repo, ["commit", "-m", "initial"]);
     git(repo, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
     git(repo, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
-    const worktree = path.join(herdr.root, "repo-spawner");
     git(repo, ["worktree", "add", "-b", branch, worktree]);
-    // The worktree's agent spawned one in another folder.
-    const spawner = await spawnAgent(herdr, "spawner", null, worktree);
-    const outside = await spawnAgent(herdr, "outside", spawner);
-
-    daemon = await startHided(herdr, "close-subtree-worktree");
+    const live = daemon;
     const last = new Map<string, Record<string, unknown>>();
     countSent(page, last);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
-    await expect(page.locator("[data-main-screen]")).toBeVisible({ timeout: 20_000 });
+    await enterWorkspace(page, "fixture");
+    // The core lists a linked worktree once a page is connected and it has read the repository.
+    const { spawner, outside } = await withControl(live, async (control) => {
+      const opened = await openWorktree(control, worktree);
+      await openProject(control, outsideRepo, "outside");
+      const agent = await startAgentInProject(fixture, live, opened, { task: "워크트리 스포너" });
+      await showTabOf(control, agent.pane);
+      await agentReading(fixture, agent.pane);
+      // The worktree's agent spawned one in another folder.
+      return { spawner: agent.pane, outside: await delegate(fixture, live, agent.pane, "outside", undefined, outsideRepo) };
+    });
     await expect(page.locator(`nav[data-sidebar] [data-pane="${spawner}"] [data-tree-chevron="${spawner}"]`).first()).toBeVisible({ timeout: 30_000 });
 
     const feature = page.locator("[data-checkout-row]").filter({ has: page.locator(`[data-checkout][aria-label^="${branch}"]`) });
@@ -395,34 +409,40 @@ test("Delete worktree closes the agents its checkout spawned outside it before t
     await withOutside.click();
     expect(last.get("remove_worktree")).toMatchObject({ close_descendant_pane_ids: [outside] });
     await expect(dialog.locator('[data-delete-result="finished"]')).toBeVisible({ timeout: 60_000 });
-    const live = await livePanes(herdr);
-    expect(live.has(outside)).toBe(false);
-    expect(live.has(spawner)).toBe(false);
+    expect(await listed(live, outside)).toBe(false);
+    expect(await listed(live, spawner)).toBe(false);
     expect(fs.existsSync(worktree)).toBe(false);
   } finally {
     daemon?.stop();
-    herdr.stop();
+    fixture.stop();
   }
 });
 
 test("Remove project closes the agents its panes spawned outside it before the project goes", async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 });
-  const herdr = await startHerdr();
+  const fixture = await startFixture({ family: true });
   let daemon: Daemon | null = null;
   try {
-    // The fixture project's second agent spawned one in a folder of its own.
-    const outside = await spawnAgent(herdr, "outside", herdr.panes[1]);
+    // The fixture project's agent spawned one in a project of its own.
+    const outsideRepo = path.join(fixture.root, "outside");
+    repository(outsideRepo);
 
-    daemon = await startHided(herdr, "close-subtree-project");
+    daemon = await startHided(fixture, "close-subtree-project");
+    const live = daemon;
+    const [parent] = fixture.panes;
+    const outside = await withControl(live, async (control) => {
+      await openProject(control, outsideRepo, "outside");
+      return delegate(fixture, live, parent, "outside", undefined, outsideRepo);
+    });
     const last = new Map<string, Record<string, unknown>>();
     countSent(page, last);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
-    await expect(page.locator("[data-main-screen]")).toBeVisible({ timeout: 20_000 });
-    await expect(page.locator(`nav[data-sidebar] [data-pane="${herdr.panes[1]}"] [data-tree-chevron="${herdr.panes[1]}"]`).first()).toBeVisible({ timeout: 30_000 });
+    await enterWorkspace(page, "fixture");
+    await expect(page.locator(`nav[data-sidebar] [data-pane="${parent}"] [data-tree-chevron="${parent}"]`).first()).toBeVisible({ timeout: 30_000 });
 
-    // A plain folder's row: its menu target is the row itself.
-    await page.locator("[data-project-menu]").filter({ has: page.getByRole("button", { name: /^fixture,/ }) }).first().click({ button: "right" });
-    await page.getByRole("menu", { name: "fixture actions" }).locator('[data-menu-item="remove_project"]').click();
+    // The project row's own menu removes the whole project.
+    await page.getByRole("button", { name: "More actions for fixture", exact: true }).click();
+    await page.getByRole("menu", { name: "More actions for fixture" }).locator('[data-menu-item="remove_project"]').click();
 
     const dialog = page.locator("[data-remove-project]");
     await expect(dialog.locator("[data-removal-subtree]")).toContainText("1 agent outside this project", { timeout: 30_000 });
@@ -436,12 +456,9 @@ test("Remove project closes the agents its panes spawned outside it before the p
 
     await withOutside.click();
     expect(last.get("remove_workspace")).toMatchObject({ close_descendant_pane_ids: [outside] });
-    await expect.poll(async () => {
-      const live = await livePanes(herdr);
-      return [outside, ...herdr.panes].filter((pane) => live.has(pane));
-    }, { timeout: 60_000 }).toEqual([]);
+    await gone(live, [outside, ...fixture.panes]);
   } finally {
     daemon?.stop();
-    herdr.stop();
+    fixture.stop();
   }
 });

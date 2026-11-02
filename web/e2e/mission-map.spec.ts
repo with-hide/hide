@@ -1,5 +1,5 @@
-// A Conductor's mission as the operator meets it, on an isolated pinned
-// Herdr and hided (PRD software-factory-conductor B14, B15, B19, B21, B48):
+// A Conductor's mission as the operator meets it, on either engine and an
+// isolated hided (PRD software-factory-conductor B14, B15, B19, B21, B48):
 // the real `hide mission` commands from the pane's own shell change the
 // core's record, the first plan opens nothing in the lane and, with the
 // operator looking at the Conductor pane, pins that pane's popover once
@@ -9,17 +9,14 @@
 // Settings › Conductor keeps the cap the next `hide mission settings` reads.
 
 import { expect, test, type Page } from "@playwright/test";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import path from "node:path";
-import { agentPane, type HideAnswer } from "./agent-pane";
-import { startHerdr, type HerdrFixture } from "./herdr-fixture";
+import type { HideAnswer } from "./agent-pane";
+import { startFixture, type AgentFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace, placedBoxes, screenshot } from "./wire";
 
 test.describe.configure({ timeout: 120_000 });
 
-type Answer = { ok: boolean; reason?: string; result?: Record<string, unknown> };
+type Answer = { ok: boolean; reason?: string; result?: Record<string, unknown>; value?: Record<string, unknown> };
 
 type Hide = (args: string[]) => Promise<HideAnswer>;
 
@@ -45,26 +42,19 @@ const PLAN = {
 };
 
 /**
- * A repository Project, since a mission belongs to one, with the Conductor's
- * agent pane in it and the shell open on it. A daemon that started is stopped
- * when the pane fails to come up.
+ * The fixture's repository Project, since a mission belongs to one, with the
+ * Conductor's agent pane in it (the fixture's first agent, a Claude Code
+ * stand-in that runs `hide` commands as a real agent does) and the page open
+ * on it. The Conductor's one worker is the fixture's second agent, its
+ * delegated child. A daemon that started is stopped when the page fails to open.
  */
-async function conductorRepo(page: Page, herdr: HerdrFixture, label: string): Promise<{ daemon: Daemon; conductor: Hide; pane: string }> {
-  const repoDir = path.join(herdr.root, "missions-repo");
-  fs.mkdirSync(repoDir);
-  const repo = fs.realpathSync(repoDir);
-  for (const args of [["init", "-q", "-b", "main"], ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-q", "--allow-empty", "-m", "baseline"]]) {
-    const git = spawnSync("git", ["-C", repo, ...args], { encoding: "utf8" });
-    expect(git.status, git.stderr).toBe(0);
-  }
-  const created = herdr.run(["workspace", "create", "--cwd", repo, "--label", "missions-repo", "--env", `PATH=${herdr.fixturePath}`, "--focus"]) as { result: { root_pane: { pane_id: string } } };
-  const daemon = await startHided(herdr, label);
+async function conductorRepo(page: Page, fixture: AgentFixture, label: string): Promise<{ daemon: Daemon; conductor: Hide; pane: string; worker: string }> {
+  const daemon = await startHided(fixture, label);
   try {
-    const pane = created.result.root_pane.pane_id;
-    const conductor = await agentPane(herdr, daemon.stateDir, pane);
+    const [pane, worker] = fixture.panes;
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
-    await enterWorkspace(page, "missions-repo");
-    return { daemon, conductor, pane };
+    await enterWorkspace(page, "fixture");
+    return { daemon, conductor: fixture.runAs(pane), pane, worker };
   } catch (error) {
     daemon.stop();
     throw error;
@@ -78,12 +68,12 @@ async function createMission(conductor: Hide) {
 
 test("the Conductor's first plan shows on its pane, the map follows the record, and the Conductor settings keep the cap", async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 1000 });
-  const herdr = await startHerdr({ agents: false });
+  const fixture = await startFixture({ family: true });
   let daemon: Daemon | null = null;
   try {
-    const opened = await conductorRepo(page, herdr, "mission-map");
+    const opened = await conductorRepo(page, fixture, "mission-map");
     daemon = opened.daemon;
-    const { conductor, pane } = opened;
+    const { conductor, worker } = opened;
     const map = page.locator('aside[data-detail="mission"]');
     await createMission(conductor);
     // A mission without a plan opens nothing; its pane's chip says it is being planned.
@@ -117,11 +107,10 @@ test("the Conductor's first plan shows on its pane, the map follows the record, 
     expect(screen.y).toBeGreaterThan(api.y + api.height);
 
     await mission(conductor, ["mission", "start"]);
-    // The node's worker is a live agent row (here the Conductor's own registration), as a spawned worker's is.
-    const listed = (herdr.run(["api", "snapshot"]) as { result: { snapshot: { agents: { pane_id: string; terminal_id: string; agent_session?: { value: string } }[] } } }).result.snapshot.agents.find((agent) => agent.pane_id === pane)!;
-    const self = JSON.parse((await conductor(["agent", "register", "--host-scope", herdr.socket, "--session", listed.agent_session!.value, "--instance", listed.terminal_id, "--name", "conductor", "--pane", pane])).out.trim().split("\n").at(-1)!) as { ok: boolean; value: { id: string } };
-    expect(self.ok, JSON.stringify(self)).toBe(true);
-    await mission(conductor, ["mission", "node", "api", "--status", "working", "--agent-id", self.value.id, "--line", "엔드포인트 작성 중"]);
+    // The node's worker is a live agent row, the Conductor's delegated child, as a spawned worker's is.
+    const listed = (await mission(conductor, ["agent", "list"])).value as { items: { id: string; pane: string }[] };
+    const workerId = listed.items.find((agent) => agent.pane === worker)!.id;
+    await mission(conductor, ["mission", "node", "api", "--status", "working", "--agent-id", workerId, "--line", "엔드포인트 작성 중"]);
     await expect(map.locator("[data-mission-status]")).toHaveAttribute("data-mission-status", "running");
     const node = map.locator('[data-mission-node="api"]');
     await expect(node).toHaveAttribute("data-node-status", "working");
@@ -175,16 +164,16 @@ test("the Conductor's first plan shows on its pane, the map follows the record, 
     await expect.poll(async () => JSON.stringify((await mission(conductor, ["mission", "settings"])).result)).toContain('"concurrency":6');
   } finally {
     daemon?.stop();
-    herdr.stop();
+    fixture.stop();
   }
 });
 
 test("a narrow window keeps every card's words inside it, a long title ending in an ellipsis (PRD mission-node-simple B30)", async ({ page }) => {
   await page.setViewportSize({ width: 900, height: 1000 });
-  const herdr = await startHerdr({ agents: false });
+  const fixture = await startFixture({ family: true });
   let daemon: Daemon | null = null;
   try {
-    const opened = await conductorRepo(page, herdr, "mission-map-narrow");
+    const opened = await conductorRepo(page, fixture, "mission-map-narrow");
     daemon = opened.daemon;
     await createMission(opened.conductor);
     await mission(opened.conductor, ["mission", "plan", "--json", JSON.stringify(PLAN)]);
@@ -206,6 +195,6 @@ test("a narrow window keeps every card's words inside it, a long title ending in
     await screenshot(page, "mission-map-narrow");
   } finally {
     daemon?.stop();
-    herdr.stop();
+    fixture.stop();
   }
 });

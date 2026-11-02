@@ -6,7 +6,10 @@ import { expect, test, type Page } from "@playwright/test";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { toPage } from "../../desktop/src/main/wirePath";
 import { herdrTabs } from "./failure-dump";
+import { agentIn, checkoutAt, sendKeys, withControl } from "./daemon-actions";
+import { startFixture, type AgentFixture } from "./engine-fixture";
 import { startHerdr, type HerdrFixture } from "./herdr-fixture";
 import { herdrGate } from "./herdr-gate";
 import { startHided, type Daemon } from "./hided-fixture";
@@ -61,9 +64,8 @@ function plainCommand(shell: string): string[] {
     : [shell];
 }
 
-function privateShellEnv(herdr: HerdrFixture): Record<string, string> {
-  const home = herdr.env.HOME!;
-  fixtureLoginShellPath(home, herdr.fixturePath);
+function privateShellEnv(home: string, fixturePath: string): Record<string, string> {
+  fixtureLoginShellPath(home, fixturePath);
   const rc = path.join(home, "plain-shell.rc");
   fs.writeFileSync(rc, "PS1='fixture $ '\nexport PS1\n");
   // macOS /etc/bashrc overwrites an inherited PS1. The private account's
@@ -72,6 +74,55 @@ function privateShellEnv(herdr: HerdrFixture): Record<string, string> {
     fs.appendFileSync(path.join(home, file), "\nPS1='fixture $ '\nexport PS1\n");
   }
   return { PS1: "fixture $ ", BASH_SILENCE_DEPRECATION_WARNING: "1", ENV: rc };
+}
+
+/** The folder of the fixture's checkout, as the core spells it. */
+const folderOf = (fixture: AgentFixture) => toPage(fs.realpathSync(path.join(fixture.root, "fixture")));
+
+/** The tabs the fixture's checkout holds now, as the daemon publishes them. */
+function tabsHeld(fixture: AgentFixture, daemon: Daemon): Promise<string[]> {
+  return withControl(daemon, (control) => control.until((rest) => checkoutAt(rest, folderOf(fixture))?.tabs, "the checkout's tabs"));
+}
+
+/** The shell identity the saved start of `pane` records, once the start is bound to it. */
+async function shellIdentity(daemon: Daemon, pane: string): Promise<Identity> {
+  let found: Identity | undefined;
+  await expect.poll(() => (found = starts(daemon).find((start) => start.effect?.binding?.pane_id === pane)?.effect?.binding?.identity)).toBeTruthy();
+  expect(found!.shell_pid).toBeGreaterThan(0);
+  // The shell the start recorded is still the one running.
+  expect(() => process.kill(found!.shell_pid, 0)).not.toThrow();
+  return found!;
+}
+
+/**
+ * The HOME the pane's shell reads its startup files from: a private Herdr's
+ * panes keep the server's, the own engine's are children of the daemon, whose
+ * HOME is `plain`.
+ */
+function shellHome(fixture: AgentFixture, plain: string): string {
+  return fixture.engine === "herdr" ? (fixture as AgentFixture & Pick<HerdrFixture, "env">).env.HOME! : plain;
+}
+
+function paneText(page: Page, pane: string): Promise<string> {
+  return page.evaluate((id) => window.__hideProbe?.paneText(id) ?? "", pane);
+}
+
+async function typesInto(page: Page, daemon: Daemon, pane: string, suffix = "INPUT_OK") {
+  // The contiguous expected output never appears in the typed command, so
+  // terminal echo alone cannot satisfy this assertion.
+  await withControl(daemon, async (control) => sendKeys(control, pane, `printf '%s%s\\n' PLAIN_ ${suffix}\r`));
+  let output = "";
+  await expect.poll(async () => (output = await paneText(page, pane))).toContain(`PLAIN_${suffix}`);
+  expect(output).toContain("fixture $ ");
+}
+
+async function agentRunning(page: Page, daemon: Daemon, herdr: AgentFixture, pane: string, prompt: string) {
+  await withControl(daemon, (control) => control.until((rest) => agentIn(rest, pane)?.agent_kind === "claude" || undefined, `a Claude agent in ${pane}`, 30_000));
+  await expect.poll(async () => paneText(page, pane), { timeout: 30_000 }).toContain(prompt);
+  // Herdr also names the agent's command line, which carries the model; the own engine publishes no process arguments to read.
+  if (herdr.engine !== "herdr") return;
+  const direct = herdr as AgentFixture & HerdrFixture;
+  await expect.poll(() => JSON.stringify(direct.run(["pane", "process-info", "--pane", pane])), { timeout: 30_000 }).toContain("opus");
 }
 
 async function open(page: Page, daemon: Daemon) {
@@ -127,21 +178,6 @@ async function startClaude(page: Page, prompt: string) {
   await expect(blank(page)).toHaveCount(0, { timeout: 30_000 });
 }
 
-async function claudeIsRunning(herdr: HerdrFixture, pane: string, prompt: string) {
-  await expect.poll(() => {
-    const row = herdr.run(["pane", "get", pane]) as { result: { pane: { agent: string | null } } };
-    return row.result.pane.agent;
-  }, { timeout: 30_000 }).toBe("claude");
-  await expect.poll(() => JSON.stringify(herdr.run(["pane", "process-info", "--pane", pane])), { timeout: 30_000 }).toContain("opus");
-  await expect.poll(() => {
-    // Herdr removes only terminal soft wrapping. Preserve the exact prompt,
-    // including its spaces, rather than normalizing arbitrary output text.
-    const read = spawnSync(herdr.bin, ["pane", "read", pane, "--source", "recent-unwrapped", "--lines", "80", "--format", "text"], { env: herdr.env, encoding: "utf8", timeout: 10_000 });
-    expect(read.status, read.stderr).toBe(0);
-    return read.stdout;
-  }, { timeout: 30_000 }).toContain(prompt);
-}
-
 async function cleanup(primary: unknown, steps: (() => void | Promise<void>)[]) {
   const errors: unknown[] = primary === undefined ? [] : [primary];
   for (const step of steps) {
@@ -157,30 +193,36 @@ for (const scenario of [
 ]) {
   test(scenario.name, async ({ page }) => {
     test.skip(!fs.existsSync(scenario.shell), `This regression requires ${scenario.shell}`);
-    const herdr = await startHerdr({ agents: false });
+    const herdr = await startFixture({ agents: false });
     let gate: Awaited<ReturnType<typeof herdrGate>> | undefined;
     let daemon: Daemon | null = null;
     let failure: unknown;
     try {
-      gate = await herdrGate(herdr, privateShellEnv(herdr));
-      const home = path.join(herdr.root, "plain-home");
+      // The own engine's panes read the HOME its fixture made; a private Herdr's daemon runs in a home of its own.
+      const home = herdr.engine === "own" ? herdr.home! : path.join(herdr.root, "plain-home");
       fs.mkdirSync(path.join(home, ".hide"), { recursive: true });
+      const shellEnv = privateShellEnv(shellHome(herdr, home), herdr.fixturePath);
+      // A pane made by the product reaches the private shell's environment by the engine's own route.
+      if (herdr.engine === "herdr") gate = await herdrGate(herdr as AgentFixture & HerdrFixture, shellEnv);
       const blocked = path.join(home, ".hide", "shell-integration");
       if (scenario.blockIntegration) fs.writeFileSync(blocked, "integration directory deliberately unavailable\n");
-      daemon = await startHided(herdr, "group-plain-shell", home, { SHELL: scenario.shell, HERDR_SOCKET_PATH: gate.socket });
+      daemon = await startHided(herdr, "group-plain-shell", home, { SHELL: scenario.shell, ...(gate ? { HERDR_SOCKET_PATH: gate.socket } : shellEnv) });
+      // The own engine's panes read the daemon's HOME, whose login files the daemon's start rewrote.
+      if (herdr.engine === "own") privateShellEnv(home, herdr.fixturePath);
       await open(page, daemon);
       await createGroup(page, "Plain terminal");
       const pane = await startTerminal(page);
       await expect(selector(page)).toContainText("Plain terminal");
-      await acceptsInput(herdr, pane);
-      const actual = identity(herdr, pane);
-      expect(actual.shell_pid).toBeGreaterThan(0);
+      await typesInto(page, daemon, pane);
+      const actual = await shellIdentity(daemon, pane);
       await expect.poll(() => starts(daemon!).find(start => start.effect?.binding?.pane_id === pane)).toMatchObject({
         state: "ready",
         effect: { shell_readiness: "plain", expected_command: plainCommand(scenario.shell), binding: { pane_id: pane, identity: actual } },
       });
+      // Herdr names the same terminal and shell process for the pane as the start recorded.
+      if (herdr.engine === "herdr") expect(identity(herdr as AgentFixture & HerdrFixture, pane)).toEqual({ terminal_id: actual.terminal_id, shell_pid: actual.shell_pid });
       const tab = (await stripTabs(page).getAttribute("data-tab"))!;
-      const originalTabs = topology(herdr);
+      const originalTabs = await tabsHeld(herdr, daemon);
       // D-01 removes Add agent. Exercise the preserved start lifecycle
       // through its public event instead of inventing another UI entry.
       const group = await selector(page).getAttribute("data-agent-group-selector");
@@ -190,10 +232,11 @@ for (const scenario of [
       await expect(page.locator(`[data-pane-view="${pane}"]`)).toBeVisible();
       await expect(stripTabs(page)).toHaveAttribute("data-tab", tab);
       const added = (await page.locator("[data-pane-view]").evaluateAll(panes => panes.map(pane => pane.getAttribute("data-pane-view")!))).find(id => id !== pane)!;
-      await claudeIsRunning(herdr, added, prompt);
-      expect(identity(herdr, pane)).toEqual(actual);
-      expect(topology(herdr).sort()).toEqual(originalTabs.sort());
-      await acceptsInput(herdr, pane, "AFTER_AGENT_ADD");
+      await agentRunning(page, daemon, herdr, added, prompt);
+      expect(await shellIdentity(daemon, pane)).toEqual(actual);
+      if (herdr.engine === "herdr") expect(identity(herdr as AgentFixture & HerdrFixture, pane)).toEqual({ terminal_id: actual.terminal_id, shell_pid: actual.shell_pid });
+      expect((await tabsHeld(herdr, daemon)).sort()).toEqual(originalTabs.sort());
+      await typesInto(page, daemon, pane, "AFTER_AGENT_ADD");
       await expect.poll(() => starts(daemon!).find(start => start.effect?.binding?.pane_id === added)).toMatchObject({
         state: "ready",
         effect: { shell_readiness: "plain", expected_command: plainCommand(scenario.shell) },
@@ -210,8 +253,8 @@ for (const scenario of [
         await expect(page.locator("[data-pane-view]")).toHaveCount(1);
         await expect(selector(page)).toContainText("First plain agent");
         const first = (await page.locator("[data-pane-view]").getAttribute("data-pane-view"))!;
-        await claudeIsRunning(herdr, first, firstPrompt);
-        expect(topology(herdr)).toHaveLength(originalTabs.length + 1);
+        await agentRunning(page, daemon, herdr, first, firstPrompt);
+        expect(await tabsHeld(herdr, daemon)).toHaveLength(originalTabs.length + 1);
         await expect.poll(() => starts(daemon!).find(start => start.effect?.binding?.pane_id === first)).toMatchObject({
           state: "ready",
           effect: { shell_readiness: "plain", expected_command: plainCommand(scenario.shell) },
@@ -223,13 +266,14 @@ for (const scenario of [
   });
 }
 
-test("a plain sh start with a lost answer adopts the same shell after daemon restart", async ({ page }) => {
+// Herdr only: it holds Herdr's layout.apply answer, ends the daemon, and checks the restarted daemon adopts the shell Herdr made.
+test("a plain sh start with a lost answer adopts the same shell after daemon restart @herdr", async ({ page }) => {
   const herdr = await startHerdr({ agents: false });
   let gate: Awaited<ReturnType<typeof herdrGate>> | undefined;
   let daemon: Daemon | null = null;
   let failure: unknown;
   try {
-    gate = await herdrGate(herdr, privateShellEnv(herdr));
+    gate = await herdrGate(herdr, privateShellEnv(herdr.env.HOME!, herdr.fixturePath));
     daemon = await startHided(herdr, "group-plain-recover", undefined, { SHELL: "/bin/sh", HERDR_SOCKET_PATH: gate.socket });
     await open(page, daemon);
     await createGroup(page, "Owner");

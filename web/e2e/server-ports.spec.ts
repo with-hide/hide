@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { startHerdr } from "./herdr-fixture";
+import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace } from "./wire";
 import { openServerButton, startServer } from "./server-fixture";
@@ -12,12 +12,12 @@ test.describe.configure({ timeout: 180_000 });
 test("running Workspace ports: the globe's count, one listener opens at once, two open the keyboard picker", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  const herdr = await startHerdr({ agents: false });
+  const fixture = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   const servers: ChildProcess[] = [];
   try {
-    daemon = await startHided(herdr, "server-ports");
-    const root = fs.realpathSync(path.join(herdr.root, "fixture"));
+    daemon = await startHided(fixture, "server-ports");
+    const root = fs.realpathSync(path.join(fixture.root, "fixture"));
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
@@ -47,6 +47,6 @@ test("running Workspace ports: the globe's count, one listener opens at once, tw
     expect(errors).toEqual([]);
   } finally {
     for (const child of servers) child.kill();
-    daemon?.stop(); herdr.stop();
+    daemon?.stop(); fixture.stop();
   }
 });

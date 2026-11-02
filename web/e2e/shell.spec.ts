@@ -3,8 +3,9 @@ import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { herdrBinary, linkFixtureTranscripts, startHerdr, type HerdrFixture } from "./herdr-fixture";
-import { aiSettingsFile, spawnDaemon, stopDaemon } from "./hided-fixture";
+import { startEngine, startFixture } from "./engine-fixture";
+import { herdrBinary, linkFixtureTranscripts, type HerdrFixture } from "./herdr-fixture";
+import { aiSettingsFile, spawnDaemon, startHided, stopDaemon } from "./hided-fixture";
 import { enterWorkspace } from "./wire";
 import { fixtureExecutable, fixtureHomeEnv, fixtureOpenCommand, fixtureToolPath, inheritedFixtureEnv } from "./platform-fixture";
 import { ownUntilWorkerExit } from "./worker-owned";
@@ -16,8 +17,8 @@ type Daemon = {
   stop: () => void;
 };
 
-/** `herdr` lends the daemon its transcripts and its `claude` label provider. */
-async function startHided(extra: Record<string, string> = {}, herdr?: HerdrFixture): Promise<Daemon> {
+/** A daemon with no engine at all and no Herdr socket, for the one test about a socket Hide cannot find; `herdr` lends it its transcripts and its `claude` label provider. */
+async function startBareHided(extra: Record<string, string> = {}, herdr?: HerdrFixture): Promise<Daemon> {
   const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "hide-e2e-")));
   const bin = path.resolve("..", "target", "debug", fixtureExecutable("hided"));
   let env: NodeJS.ProcessEnv = {};
@@ -138,8 +139,9 @@ async function startHided(extra: Record<string, string> = {}, herdr?: HerdrFixtu
   }
 }
 
-test("sidebar shows a missing Herdr socket and the badge goes live", async ({ page }) => {
-  const daemon = await startHided();
+// Herdr only: the sidebar's notice for a Herdr socket that is missing, which the own engine never has.
+test("sidebar shows a missing Herdr socket and the badge goes live @herdr", async ({ page }) => {
+  const daemon = await startBareHided();
   try {
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await expect(page.getByText("Herdr socket missing")).toBeVisible();
@@ -150,12 +152,15 @@ test("sidebar shows a missing Herdr socket and the badge goes live", async ({ pa
 });
 
 test("a bad token shows the refused connection state", async ({ page }) => {
-  const daemon = await startHided();
+  const engine = await startEngine();
+  let daemon: Awaited<ReturnType<typeof startHided>> | null = null;
   try {
+    daemon = await startHided(engine, "shell-bad-token");
     await page.goto(`${daemon.origin}/#token=${"aa".repeat(32)}`);
     await expect(page.getByText("connection refused - run hide again")).toBeVisible();
   } finally {
-    daemon.stop();
+    daemon?.stop();
+    engine.stop();
   }
 });
 
@@ -169,10 +174,10 @@ async function typedTextEchoes(page: Page, marker: string): Promise<void> {
 
 // @platform: Real PTY input and echo through the platform's Herdr and its shell.
 test("a sidebar row click switches the pane and typed text echoes there", { tag: "@platform" }, async ({ page }) => {
-  const herdr = await startHerdr();
-  let daemon: Daemon | null = null;
+  const herdr = await startFixture();
+  let daemon: Awaited<ReturnType<typeof startHided>> | null = null;
   try {
-    daemon = await startHided({ HERDR_SOCKET_PATH: herdr.socket, HERDR_BIN_PATH: herdr.bin }, herdr);
+    daemon = await startHided(herdr, "shell");
     const [first, second] = herdr.panes;
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page);

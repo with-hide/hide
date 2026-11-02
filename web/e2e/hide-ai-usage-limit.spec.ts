@@ -1,4 +1,4 @@
-// Hide AI's usage limit on an isolated pinned Herdr and hided (PRD hide-ai-usage-limit B1 to B5, B10):
+// Hide AI's usage limit on an isolated engine and hided, either engine (PRD hide-ai-usage-limit B1 to B5, B10):
 // the daemon's PATH carries a `claude` that answers `/usage` with a week we choose and hands everything
 // else to the fixture shim, so the weekly figure the core judges is scripted and the operator's own
 // quota is never read. Grok is a stand-in with no usage figure, which is what an unreadable agent is.
@@ -10,7 +10,8 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { startEngine, type EngineServer } from "./engine-fixture";
+import { openProject, withControl } from "./daemon-actions";
 import { aiSettingsFile, startHided, type Daemon } from "./hided-fixture";
 import { fixtureExecutable, fixtureProgram, fixtureToolPath } from "./platform-fixture";
 import { enterWorkspace, screenshot, showProjectMemory } from "./wire";
@@ -26,12 +27,12 @@ function printedReset(at: Date): string {
 }
 
 /** A `claude` that prints the week in `frame.json` for `/usage` and runs the fixture shim for anything else. */
-function usageShim(herdr: HerdrFixture) {
+function usageShim(engine: EngineServer) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "hide-e2e-limit-"));
   const bin = path.join(root, "bin");
   fs.mkdirSync(bin);
   const frame = path.join(root, "frame.json");
-  const real = path.join(herdr.root, "bin", fixtureExecutable("claude"));
+  const real = path.join(engine.root, "bin", fixtureExecutable("claude"));
   const reset = printedReset(new Date(Math.floor(Date.now() / 3_600_000) * 3_600_000 + (4 * 24 + 3) * 3_600_000));
   const setWeek = (percent: number) =>
     fs.writeFileSync(
@@ -56,8 +57,8 @@ process.exit(run.status ?? 1);
 }
 
 /** `grok` answers its model list and nothing else: signed in for Hide AI, with no weekly figure. */
-function grokStandIn(herdr: HerdrFixture): string {
-  const dir = path.join(herdr.root, "stand-ins");
+function grokStandIn(engine: EngineServer): string {
+  const dir = path.join(engine.root, "stand-ins");
   fixtureProgram(dir, "grok", `if (process.argv[2] === "models") { console.log("* grok-fixture (default)"); process.exit(0); }\nprocess.exit(1);\n`);
   return dir;
 }
@@ -66,20 +67,20 @@ type Stored = { fallback?: { provider: string }[]; usage_limit?: number | "none"
 const stored = (daemon: Daemon): Stored => JSON.parse(fs.readFileSync(aiSettingsFile(daemon.home), "utf8")) as Stored;
 
 async function start(label: string, percent: number) {
-  const herdr = await startHerdr();
-  const repoDir = path.join(herdr.root, "limit-repo");
+  const engine = await startEngine();
+  const repoDir = path.join(engine.root, "limit-repo");
   fs.mkdirSync(repoDir);
   const repo = fs.realpathSync(repoDir);
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
-  herdr.run(["workspace", "create", "--cwd", repo, "--label", "limit-repo", "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]);
-  const usage = usageShim(herdr);
+  const usage = usageShim(engine);
   usage.setWeek(percent);
-  const daemon = await startHided(herdr, label, undefined, { PATH: `${grokStandIn(herdr)}${path.delimiter}${usage.path}`, CODEX_HOME: undefined });
+  const daemon = await startHided(engine, label, undefined, { PATH: `${grokStandIn(engine)}${path.delimiter}${usage.path}`, CODEX_HOME: undefined });
   const stop = () => {
     daemon.stop();
-    herdr.stop();
+    engine.stop();
     usage.cleanup();
   };
+  await withControl(daemon, (control) => openProject(control, repo, "limit-repo"));
   return { daemon, usage, stop };
 }
 

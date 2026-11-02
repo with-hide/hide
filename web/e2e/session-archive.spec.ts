@@ -1,43 +1,32 @@
-// 세션 보관 on a real isolated Herdr and daemon (PRD session-archive): a
+// 세션 보관 on a real isolated daemon (PRD session-archive): a
 // session with a working child asks first, archives into 보관됨 with every
 // pane closed, opens its record, resumes the tree, and deletes from the archive.
 import { expect, test, type Page } from "@playwright/test";
-import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { CLAUDE_FULL_ACCESS_LINE, declareParent, herdrHasFocus, labelAgent, setFixtureLifecycle, setFixtureSession, spawnAgent, startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { corePaneFocus, tabOfPane, withControl } from "./daemon-actions";
+import { startFixture, type AgentFixture } from "./engine-fixture";
+import { setAgentState, spawnRoot } from "./fixture-agents";
+import { CLAUDE_FULL_ACCESS, continueFixtureTranscript } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { openTaskFolds, screenshot, showTasks } from "./wire";
 
 test.describe.configure({ timeout: 240_000 });
 test.use({ actionTimeout: 15_000 });
 
-type ProcessInfo = { result: { process_info: { foreground_processes: { argv?: string[] | null }[] } } };
-
-function git(cwd: string, args: string[]): void {
-  execFileSync("git", ["-c", "user.name=e2e", "-c", "user.email=e2e@example.invalid", "-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false", ...args], { cwd, stdio: "ignore" });
+/** Waits for the resume of `session` and returns the pane its agent now runs in. */
+async function confirmResume(daemon: Daemon, session: string): Promise<string> {
+  return withControl(daemon, (control) => control.until((rest) => {
+    const rows = ((rest.navigator as { agents?: { pane_id: string; agent_kind?: string | null; session_id?: string | null }[] } | undefined)?.agents ?? []);
+    return rows.find((row) => row.agent_kind && row.session_id === session)?.pane_id;
+  }, `the resume of ${session}`, 60_000));
 }
 
-const panes = (herdr: HerdrFixture) => (herdr.run(["pane", "list"]) as { result: { panes: { pane_id: string }[] } }).result.panes.map((pane) => pane.pane_id);
-
-/** The pane whose agent Herdr started with `claude --resume <session>` and the default 전부 허용 option, or null. */
-function resumedIn(herdr: HerdrFixture, session: string): string | null {
-  for (const pane of panes(herdr)) {
-    // A pane listed a moment ago can be gone now: opening a checkout replaces its first shell.
-    const read = spawnSync(herdr.bin, ["pane", "process-info", "--pane", pane], { env: herdr.env, encoding: "utf8", timeout: 10_000 });
-    if (read.status !== 0) continue;
-    const info = JSON.parse(read.stdout) as ProcessInfo;
-    if (info.result.process_info.foreground_processes.some((process) => process.argv?.join(" ") === `claude --resume ${session} ${CLAUDE_FULL_ACCESS_LINE}`)) return pane;
-  }
-  return null;
-}
-
-/** Waits for the resume of `session`, then reports it from that pane as Claude Code's session hook does. */
-async function confirmResume(herdr: HerdrFixture, session: string): Promise<string> {
-  let pane: string | null = null;
-  await expect.poll(() => (pane = resumedIn(herdr, session)), { timeout: 60_000 }).not.toBeNull();
-  setFixtureSession(herdr, pane!, session);
-  return pane!;
+/** Hide starts a resume as `claude --resume <session>` with the default 전부 허용 option; `from` is a live agent whose pane reads the line. */
+async function expectResumeLine(fixture: AgentFixture, from: string, pane: string, session: string): Promise<void> {
+  const read = await fixture.runAs(from)(["pane", "read", pane]);
+  // The shell echoes the line as typed, which may quote the settings argument, so each part is read on its own.
+  for (const part of [`claude --resume ${session}`, CLAUDE_FULL_ACCESS[0]!, "skipDangerousModePermissionPrompt"]) expect(read.out).toContain(part);
 }
 
 const archive = (daemon: Daemon) => () => Object.keys(JSON.parse(fs.readFileSync(path.join(daemon.stateDir, "core-state.json"), "utf8")).session_archive ?? {}).length;
@@ -50,23 +39,21 @@ async function openArchivedFold(page: Page) {
 
 test("세션 보관 asks over running work, closes the tree into 보관됨, resumes it and deletes it from the archive", async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 1000 });
-  const herdr = await startHerdr();
+  // The family is the archived tree: the fixture's parent and its delegated child.
+  const fixture = await startFixture({ family: true });
   let daemon: Daemon | null = null;
   try {
-    const repo = path.join(herdr.root, "repo");
-    fs.mkdirSync(repo);
-    git(repo, ["init"]);
-    git(repo, ["commit", "--allow-empty", "-m", "initial"]);
-    const root = await spawnAgent(herdr, "archive-root", null, repo);
-    const rootSession = labelAgent(herdr, root, { task: "보관할 세션의 루트 작업" });
-    const child = await spawnAgent(herdr, "archive-child", null, path.join(herdr.root, "child"));
-    const childSession = labelAgent(herdr, child, { task: "루트가 맡긴 하위 작업" });
-    declareParent(herdr, child, root);
-    await setFixtureLifecycle(herdr, child, "working");
-    // The fixture's folders are in the daemon's home, as an operator's projects
-    // are, so a pin registers them and a project outliving its last pane stays
-    // listed without asking about a folder outside home (PRD wsl-device B15).
-    daemon = await startHided(herdr, "session-archive", herdr.root);
+    daemon = await startHided(fixture, "session-archive");
+    const [root, child] = fixture.panes;
+    const rootSession = "fixture-one";
+    const childSession = "fixture-two";
+    // The session kept apart from the tree: an independent root the parent handed work to.
+    const other = await spawnRoot(fixture, daemon, root, { name: "archive-other", repo: path.join(fixture.root, "fixture") });
+    continueFixtureTranscript(fixture, rootSession, { task: "보관할 세션의 루트 작업" });
+    await setAgentState(daemon, root, "working");
+    await setAgentState(daemon, root, "idle");
+    continueFixtureTranscript(fixture, childSession, { task: "루트가 맡긴 하위 작업" });
+    await setAgentState(daemon, child, "working");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     const tasks = await showTasks(page);
     const row = tasks.locator(`[data-task-row="${root}"]`);
@@ -87,7 +74,7 @@ test("세션 보관 asks over running work, closes the tree into 보관됨, resu
     await sheet.locator("[data-archive-confirm]").click();
 
     // B8, B14: every pane closes, the task leaves the open groups for 보관됨, and the archive is saved.
-    await expect.poll(() => panes(herdr).filter((pane) => pane === root || pane === child), { timeout: 60_000 }).toEqual([]);
+    await withControl(daemon, (control) => control.until((rest) => [root, child].every((pane) => tabOfPane(rest, pane) === undefined) || undefined, `${root} and ${child} closed`, 60_000));
     await expect(row).toHaveCount(0);
     await expect.poll(archive(daemon)).toBe(1);
     await openArchivedFold(page);
@@ -105,18 +92,19 @@ test("세션 보관 asks over running work, closes the tree into 보관됨, resu
 
     // B21, B22: 이어가기 resumes the root, then its child, and the row leaves 보관됨 once both are back.
     await now.locator('[data-record-now-button="resume"]').click();
-    const resumedRoot = await confirmResume(herdr, rootSession);
-    const resumedChild = await confirmResume(herdr, childSession);
+    const resumedRoot = await confirmResume(daemon, rootSession);
+    const resumedChild = await confirmResume(daemon, childSession);
     expect(resumedChild).not.toBe(resumedRoot);
     // Only the root takes the screen; its child opens behind it.
-    await expect.poll(() => herdrHasFocus(herdr, resumedRoot)).toBe(true);
+    await withControl(daemon, (control) => control.until((rest) => corePaneFocus(rest) === resumedRoot || undefined, `${resumedRoot} focused`, 30_000));
+    // Reading a pane types into the pane it runs in, so the lines are read once the screen is settled.
+    for (const [pane, session] of [[resumedRoot, rootSession], [resumedChild, childSession]] as const) await expectResumeLine(fixture, other, pane, session);
     await expect.poll(archive(daemon), { timeout: 60_000 }).toBe(0);
     await expect(tasks.locator("[data-archived-row]")).toHaveCount(0);
     await openTaskFolds(page);
     await expect(tasks.locator(`[data-task-row="${resumedRoot}"]`)).toBeVisible({ timeout: 30_000 });
 
     // B28, B29: 보관함에서 지우기… asks first, neither button holding the keyboard, and the record goes.
-    const [other] = herdr.panes;
     await tasks.locator(`[data-task-row="${other}"]`).click({ button: "right" });
     await page.locator(`[data-task-context="${other}"] [data-menu-item="archive"]`).click();
     await expect.poll(archive(daemon), { timeout: 60_000 }).toBe(1);
@@ -131,6 +119,6 @@ test("세션 보관 asks over running work, closes the tree into 보관됨, resu
     await expect(tasks.locator("[data-archived-row]")).toHaveCount(0);
   } finally {
     daemon?.stop();
-    herdr.stop();
+    fixture.stop();
   }
 });

@@ -1,4 +1,4 @@
-// Hide's extension for Pi and omp on the pinned Herdr and a hided that runs the install kit (PRD pi-omp-extension
+// Hide's extension for Pi and omp on an isolated engine, either engine, and a hided that runs the install kit (PRD pi-omp-extension
 // B1, B3, B5, B7, B9, B16, D-11): the kit writes the extension into the fixture HOME's Pi and omp folders, and a Pi
 // stand-in and an omp stand-in (`pi-omp-host.ts`) load it from there in the two panes. A letter from one reaches the
 // other's next prompt as a hidden message and is confirmed only once the host wrote that prompt and its reply, a shell
@@ -10,7 +10,8 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { bundledExecutable } from "./bundled-app";
-import { startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { startFixture, type AgentFixture } from "./engine-fixture";
+import { sendKeys, withControl } from "./daemon-actions";
 import { startHided, type Daemon } from "./hided-fixture";
 import { installPiOmpHosts, piOmpHost, type Host } from "./pi-omp-host";
 import { snapshotCounts } from "./subagent-counts";
@@ -20,7 +21,7 @@ import { enterWorkspace } from "./wire";
 test.skip(process.platform === "win32", "the Pi and omp extension is not written on Windows");
 test.describe.configure({ timeout: 120_000 });
 
-type Stack = { herdr: HerdrFixture; daemon: Daemon; home: string; pi: Host; omp: Host };
+type Stack = { fixture: AgentFixture; daemon: Daemon; home: string; pi: Host; omp: Host };
 
 /**
  * A private HOME that has Pi and omp (their programs and agent folders) and a kit record with both on and the
@@ -28,11 +29,11 @@ type Stack = { herdr: HerdrFixture; daemon: Daemon; home: string; pi: Host; omp:
  * once the kit has written the extension.
  */
 async function start(label: string): Promise<Stack> {
-  const herdr = await startHerdr({ agents: false });
+  const fixture = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
-    const home = path.join(herdr.root, "home");
-    const git = (...args: string[]) => execFileSync("git", ["-C", path.join(herdr.root, "fixture"), ...args], { env: { ...process.env, GIT_AUTHOR_NAME: "fixture", GIT_AUTHOR_EMAIL: "fixture@example.invalid", GIT_COMMITTER_NAME: "fixture", GIT_COMMITTER_EMAIL: "fixture@example.invalid" } });
+    const home = path.join(fixture.root, "home");
+    const git = (...args: string[]) => execFileSync("git", ["-C", path.join(fixture.root, "fixture"), ...args], { env: { ...process.env, GIT_AUTHOR_NAME: "fixture", GIT_AUTHOR_EMAIL: "fixture@example.invalid", GIT_COMMITTER_NAME: "fixture", GIT_COMMITTER_EMAIL: "fixture@example.invalid" } });
     git("init", "-q", "-b", "main");
     git("-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "fixture");
     fs.mkdirSync(path.join(home, ".local", "bin"), { recursive: true });
@@ -42,34 +43,36 @@ async function start(label: string): Promise<Stack> {
     }
     fs.mkdirSync(path.join(home, ".hide", "kit"), { recursive: true });
     fs.writeFileSync(path.join(home, ".hide", "kit", "installed.json"), JSON.stringify({ format: 1, installed: [], agents: { "claude-code": false, codex: false, pi: true, omp: true } }));
-    daemon = await startHided(herdr, label, home, {}, true);
+    daemon = await startHided(fixture, label, home, {}, true);
     const extension = { pi: path.join(home, ".pi", "agent", "extensions", "hide.ts"), omp: path.join(home, ".omp", "agent", "extensions", "hide.ts") };
     for (const file of Object.values(extension)) {
       await expect.poll(() => fs.existsSync(file), { message: `the kit wrote ${file}`, timeout: 60_000 }).toBe(true);
       // B1: the extension names this build's helper, the bundle's.
       expect(fs.readFileSync(file, "utf8")).toContain(JSON.stringify(bundledExecutable("hide-agent-hooks")));
     }
-    const dir = path.join(herdr.root, "pi-omp");
-    installPiOmpHosts(path.join(herdr.root, "bin"), { herdr: herdr.bin, stateDir: daemon.stateDir, extension, dir });
-    execFileSync(herdr.bin, ["pane", "run", herdr.panes[0], "pi"], { env: herdr.env, timeout: 10_000 });
-    execFileSync(herdr.bin, ["pane", "run", herdr.panes[1], "omp"], { env: herdr.env, timeout: 10_000 });
-    const [pi, omp] = await Promise.all(herdr.panes.map((pane) => piOmpHost(dir, pane)));
-    // The core learns each pane's session from its own Herdr subscription, which can trail `herdr agent list`; a
+    const dir = path.join(fixture.root, "pi-omp");
+    installPiOmpHosts(path.join(fixture.root, "bin"), { herdr: (fixture as AgentFixture & { bin: string }).bin, stateDir: daemon.stateDir, extension, dir });
+    await withControl(daemon, async (control) => {
+      sendKeys(control, fixture.panes[0], "pi\r");
+      sendKeys(control, fixture.panes[1], "omp\r");
+    });
+    const [pi, omp] = await Promise.all(fixture.panes.map((pane) => piOmpHost(dir, pane)));
+    // The core learns each pane's session from its engine, which can trail the stand-in's report; a
     // mailbox command answers only once it has, so the panes' agents are heard before the spec writes to them.
     for (const host of [pi!, omp!]) {
       await expect.poll(async () => (await hide(host, "inbox")).ok, { message: `hided heard the ${host.agent} pane's session`, timeout: 20_000 }).toBe(true);
     }
-    return { herdr, daemon, home, pi: pi!, omp: omp! };
+    return { fixture, daemon, home, pi: pi!, omp: omp! };
   } catch (error) {
     daemon?.stop();
-    herdr.stop();
+    fixture.stop();
     throw error;
   }
 }
 
 function stop(stack: Stack): void {
   stack.daemon.stop();
-  stack.herdr.stop();
+  stack.fixture.stop();
 }
 
 /** `hide <args>` run inside `host`'s pane, as its agent would run it, parsed. */
@@ -81,7 +84,8 @@ async function hide(host: Host, ...args: string[]): Promise<{ ok?: boolean; resu
 
 type Hidden = { customType: string; content: string; display: boolean; details: { hide: string } };
 
-test("a letter rides each agent's next prompt as a hidden message and is confirmed only once the host wrote it", async ({ page }) => {
+// Herdr only until the Pi and omp stand-ins (`pi-omp-host.ts`) report a session the own engine takes: they announce through Herdr's CLI and read HERDR_PANE_ID, and with both patched the own engine lists the pi and omp agents but their pane keeps no session (`hide inbox` answers native_identity_required).
+test("a letter rides each agent's next prompt as a hidden message and is confirmed only once the host wrote it @herdr", async ({ page }) => {
   const stack = await start("pi-omp-letter");
   try {
     await page.goto(`${stack.daemon.origin}/#token=${stack.daemon.token}`);
@@ -89,7 +93,7 @@ test("a letter rides each agent's next prompt as a hidden message and is confirm
     // B5: omp names its session by a file path longer than 250 bytes.
     expect(Buffer.byteLength(stack.omp.session)).toBeGreaterThan(250);
 
-    for (const [sender, recipient, pane] of [[stack.pi, stack.omp, stack.herdr.panes[1]], [stack.omp, stack.pi, stack.herdr.panes[0]]] as const) {
+    for (const [sender, recipient, pane] of [[stack.pi, stack.omp, stack.fixture.panes[1]], [stack.omp, stack.pi, stack.fixture.panes[0]]] as const) {
       const body = `E2E-LETTER-TO-${recipient.agent.toUpperCase()}`;
       const sent = await hide(sender, "request", "send", pane, "--intent", `e2e-${recipient.agent}-letter`, "--body", body);
       expect(sent.ok, JSON.stringify(sent)).toBe(true);
@@ -119,7 +123,8 @@ test("a letter rides each agent's next prompt as a hidden message and is confirm
   }
 });
 
-test("a shell call that starts an agent through Herdr is refused with the spawn guard's reason, and others run", async () => {
+// Herdr only until the Pi and omp stand-ins (`pi-omp-host.ts`) report a session the own engine takes: they announce through Herdr's CLI and read HERDR_PANE_ID, and with both patched the own engine lists the pi and omp agents but their pane keeps no session (`hide inbox` answers native_identity_required).
+test("a shell call that starts an agent through Herdr is refused with the spawn guard's reason, and others run @herdr", async () => {
   const stack = await start("pi-omp-guard");
   try {
     for (const host of [stack.pi, stack.omp]) {
@@ -138,10 +143,11 @@ test("a shell call that starts an agent through Herdr is refused with the spawn 
   }
 });
 
-test("omp's subagents move the pane's counts in the snapshot, and their prompts take no letters", async ({ page }) => {
+// Herdr only until the Pi and omp stand-ins (`pi-omp-host.ts`) report a session the own engine takes: they announce through Herdr's CLI and read HERDR_PANE_ID, and with both patched the own engine lists the pi and omp agents but their pane keeps no session (`hide inbox` answers native_identity_required).
+test("omp's subagents move the pane's counts in the snapshot, and their prompts take no letters @herdr", async ({ page }) => {
   const stack = await start("pi-omp-counts");
   try {
-    const pane = stack.herdr.panes[1];
+    const pane = stack.fixture.panes[1];
     // The hook reports to the core, so the counts are what the core puts in the pane's row.
     const counts = snapshotCounts(page, pane);
     await page.goto(`${stack.daemon.origin}/#token=${stack.daemon.token}`);

@@ -1,5 +1,7 @@
 import { expect, test, type CDPSession, type Page } from "@playwright/test";
 import fs from "node:fs";
+import { corePaneFocus, withControl } from "./daemon-actions";
+import { startFixture } from "./engine-fixture";
 import { herdrGate } from "./herdr-gate";
 import { herdrHasFocus, startHerdr } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
@@ -88,6 +90,60 @@ function observeFocusFrames(page: Page) {
   };
 }
 
+/** The page on `daemon`'s two panes, with the clicks and the facts the burst tests read: the same on either engine. */
+async function focusHarness(page: Page, daemon: Daemon, panes: readonly string[], focusFrames: ReturnType<typeof observeFocusFrames>, mark: (stage: string) => void) {
+  const diagnostics = observeDiagnostics(page);
+  await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
+  await enterWorkspace(page, "fixture");
+  const [first] = panes as [string, string];
+  const views = panes.map((pane) => page.locator(`[data-pane-view="${pane}"]`));
+  for (const pane of views) await expect(pane).toHaveAttribute("data-transport", "controlling");
+  const boxes = await Promise.all(views.map((pane) => pane.boundingBox()));
+  // These polls read captured diagnostics in memory, without browser or
+  // engine I/O. Observe acceptance promptly within the unchanged timeout.
+  const focusObservation = { intervals: [25] };
+  let lastClickAt = 0;
+  const click = async (index: number) => {
+    const box = boxes[index]!;
+    lastClickAt = Date.now();
+    await page.mouse.click(box.x + 100, box.y + 100);
+  };
+  const clickBurst = async (mouse: CDPSession) => {
+    const completedAfter = focusFrames.completedClicks() + 40;
+    const inputs: Promise<unknown>[] = [];
+    lastClickAt = Date.now();
+    // Use the same trusted Chromium input as page.mouse, queued in order.
+    // Awaiting 40 separate browser round trips can outlast the held
+    // request's real five-second deadline on a loaded macOS runner.
+    for (let i = 0; i < 20; i += 1) {
+      for (const index of [1, 0]) {
+        const box = boxes[index]!;
+        const point = { x: box.x + 100, y: box.y + 100 };
+        inputs.push(mouse.send("Input.dispatchMouseEvent", { ...point, type: "mouseMoved", buttons: 0 }));
+        inputs.push(mouse.send("Input.dispatchMouseEvent", { ...point, type: "mousePressed", button: "left", buttons: 1, clickCount: 1 }));
+        inputs.push(mouse.send("Input.dispatchMouseEvent", { ...point, type: "mouseReleased", button: "left", buttons: 0, clickCount: 1 }));
+      }
+    }
+    mark("cdp.inputs.before");
+    await Promise.all(inputs);
+    mark("cdp.inputs.after");
+    // ACKs from the separate CDP session do not fence frame observation.
+    // Each real mouseup sends terminal_click after its focus event on the
+    // same WebSocket. The last click fences every earlier focus frame.
+    mark("cdp.processed.before");
+    await expect.poll(() => focusFrames.completedClicks(), focusObservation).toBe(completedAfter);
+    mark("cdp.processed.after");
+  };
+  const requested = () => diagnostics().filter((entry) => entry.kind === "pane.focus.requested");
+  const confirmed = () => {
+    const last = diagnostics().filter((entry) => entry.kind.startsWith("pane.focus")).at(-1);
+    return last?.kind === "pane.focus"
+      && last.message.startsWith(`Pane ${first} focus confirmed`)
+      && last.occurred_at >= lastClickAt;
+  };
+  return { diagnostics, views, focusObservation, click, clickBurst, requested, confirmed };
+}
+
 /** Hide on two panes of the platform's Herdr, behind the gate, with the clicks
  * and the facts the burst tests read. `stop` ends everything that started. */
 async function startFocusStack(page: Page, label: string, mark: (stage: string) => void = () => {}) {
@@ -110,56 +166,9 @@ async function startFocusStack(page: Page, label: string, mark: (stage: string) 
   try {
     gate = await herdrGate(herdr);
     daemon = await startHided({ ...herdr, socket: gate.socket }, label);
-    const diagnostics = observeDiagnostics(page);
-    await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
-    await enterWorkspace(page, "fixture");
     const [first, second] = herdr.panes;
-    const panes = herdr.panes.map((pane) => page.locator(`[data-pane-view="${pane}"]`));
-    for (const pane of panes) await expect(pane).toHaveAttribute("data-transport", "controlling");
+    const { diagnostics, views: panes, focusObservation, click, clickBurst, requested, confirmed } = await focusHarness(page, daemon, herdr.panes, focusFrames, mark);
     await expect.poll(() => herdrHasFocus(herdr, first)).toBe(true);
-    const boxes = await Promise.all(panes.map((pane) => pane.boundingBox()));
-    // These polls read captured diagnostics in memory, without browser or
-    // Herdr I/O. Observe acceptance promptly within the unchanged timeout.
-    const focusObservation = { intervals: [25] };
-    let lastClickAt = 0;
-    const click = async (index: number) => {
-      const box = boxes[index]!;
-      lastClickAt = Date.now();
-      await page.mouse.click(box.x + 100, box.y + 100);
-    };
-    const clickBurst = async (mouse: CDPSession) => {
-      const completedAfter = focusFrames.completedClicks() + 40;
-      const inputs: Promise<unknown>[] = [];
-      lastClickAt = Date.now();
-      // Use the same trusted Chromium input as page.mouse, queued in order.
-      // Awaiting 40 separate browser round trips can outlast the held
-      // request's real five-second deadline on a loaded macOS runner.
-      for (let i = 0; i < 20; i += 1) {
-        for (const index of [1, 0]) {
-          const box = boxes[index]!;
-          const point = { x: box.x + 100, y: box.y + 100 };
-          inputs.push(mouse.send("Input.dispatchMouseEvent", { ...point, type: "mouseMoved", buttons: 0 }));
-          inputs.push(mouse.send("Input.dispatchMouseEvent", { ...point, type: "mousePressed", button: "left", buttons: 1, clickCount: 1 }));
-          inputs.push(mouse.send("Input.dispatchMouseEvent", { ...point, type: "mouseReleased", button: "left", buttons: 0, clickCount: 1 }));
-        }
-      }
-      mark("cdp.inputs.before");
-      await Promise.all(inputs);
-      mark("cdp.inputs.after");
-      // ACKs from the separate CDP session do not fence frame observation.
-      // Each real mouseup sends terminal_click after its focus event on the
-      // same WebSocket. The last click fences every earlier focus frame.
-      mark("cdp.processed.before");
-      await expect.poll(() => focusFrames.completedClicks(), focusObservation).toBe(completedAfter);
-      mark("cdp.processed.after");
-    };
-    const requested = () => diagnostics().filter((entry) => entry.kind === "pane.focus.requested");
-    const confirmed = () => {
-      const last = diagnostics().filter((entry) => entry.kind.startsWith("pane.focus")).at(-1);
-      return last?.kind === "pane.focus"
-        && last.message.startsWith(`Pane ${first} focus confirmed`)
-        && last.occurred_at >= lastClickAt;
-    };
     return { herdr, gate, diagnostics, focusFrames, first, second, panes, focusObservation, click, clickBurst, requested, confirmed, stop };
   } catch (error) {
     await stop();
@@ -167,8 +176,9 @@ async function startFocusStack(page: Page, label: string, mark: (stage: string) 
   }
 }
 
-// These cases exercise real terminal input/focus through the platform's Herdr.
-test("rapid pane clicks coalesce behind one request", { tag: "@platform" }, async ({ page }) => {
+// These cases exercise real terminal input/focus through the platform's engine.
+// Herdr only: it holds the core's pane.focus request at Herdr's socket and counts what Herdr was asked, which is the coalescing of the core's requests to Herdr.
+test("rapid pane clicks coalesce behind one request @herdr", { tag: "@platform" }, async ({ page }) => {
   // Two fixed bursts produce at most 32 stage records, with no input contents.
   const stages: { stage: string; at: number }[] = [];
   const mark = (stage: string) => { stages.push({ stage, at: Date.now() }); };
@@ -243,10 +253,16 @@ test("rapid pane clicks coalesce behind one request", { tag: "@platform" }, asyn
 });
 
 test("keys typed after rapid pane clicks reach the last pane", { tag: "@platform" }, async ({ page }) => {
-  const stack = await startFocusStack(page, "focus-keys");
-  const { herdr, gate, diagnostics, focusFrames, first, panes, focusObservation, clickBurst, confirmed } = stack;
+  const fixture = await startFixture();
+  const focusFrames = observeFocusFrames(page);
+  let daemon: Daemon | undefined;
   let mouse: CDPSession | undefined;
   try {
+    daemon = await startHided(fixture, "focus-keys");
+    const live = daemon;
+    const [first] = fixture.panes;
+    const { diagnostics, views: panes, focusObservation, clickBurst, confirmed } = await focusHarness(page, live, fixture.panes, focusFrames, () => {});
+    await withControl(live, (control) => control.until((rest) => corePaneFocus(rest) === first || undefined, `the focus of ${first}`, 20_000));
     mouse = await page.context().newCDPSession(page);
     // The page has sent every click when the burst returns, not hided accepted
     // them: confirming a request that was not the last one is not the burst's
@@ -263,23 +279,31 @@ test("keys typed after rapid pane clicks reach the last pane", { tag: "@platform
     // The keys go to the terminal that holds the keyboard, which follows the snapshot.
     await expect(panes[0].locator(".xterm-helper-textarea")).toBeFocused();
     await expect(panes[0]).toHaveAttribute("data-focused", "true");
-    await expect.poll(() => herdrHasFocus(herdr, first)).toBe(true);
+    await withControl(live, (control) => control.until((rest) => corePaneFocus(rest) === first || undefined, `the focus of ${first}`, 20_000));
     const marker = "FOCUS_ORDERING_INPUT";
     await page.keyboard.type(marker);
-    await expect.poll(() => fs.readFileSync(herdr.inputLogs[0], "utf8")).toContain(marker);
-    expect(fs.readFileSync(herdr.inputLogs[1], "utf8")).not.toContain(marker);
-    expect(gate.maximum("pane.focus")).toBe(1);
+    await expect.poll(() => fs.readFileSync(fixture.inputLogs[0], "utf8")).toContain(marker);
+    expect(fs.readFileSync(fixture.inputLogs[1], "utf8")).not.toContain(marker);
     await screenshot(page, "pane-focus-ordering-last-click");
   } finally {
     try {
       await mouse?.detach();
     } finally {
-      await stack.stop();
+      try {
+        daemon?.stop();
+      } finally {
+        try {
+          fixture.stop();
+        } finally {
+          await focusFrames.save();
+        }
+      }
     }
   }
 });
 
-test("a real external Herdr focus is followed", { tag: "@platform" }, async ({ page }) => {
+// Herdr only: it moves the focus in Herdr outside Hide, which Hide must follow.
+test("a real external Herdr focus is followed @herdr", { tag: "@platform" }, async ({ page }) => {
   const stack = await startFocusStack(page, "focus-external");
   const { herdr, diagnostics, first, panes } = stack;
   try {
@@ -293,7 +317,8 @@ test("a real external Herdr focus is followed", { tag: "@platform" }, async ({ p
   }
 });
 
-test("an unknown focus result ends the burst before a delayed mutation is released", { tag: "@platform" }, async ({ page }) => {
+// Herdr only: it holds a pane.focus request at Herdr's socket until Herdr's answer is unknown, then delivers it late.
+test("an unknown focus result ends the burst before a delayed mutation is released @herdr", { tag: "@platform" }, async ({ page }) => {
   const herdr = await startHerdr();
   const focusFrames = observeFocusFrames(page);
   let gate: Awaited<ReturnType<typeof herdrGate>> | undefined;
