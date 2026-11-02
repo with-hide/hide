@@ -154,7 +154,7 @@ export async function openLayout(page: Page, stack: LayoutStack): Promise<void> 
   await expect(page.locator("[data-canvas]")).toHaveAttribute("data-canvas", stack.tab);
   await expect(page.locator("[data-pane-view]")).toHaveCount(stack.panes.length);
   for (const pane of stack.panes) {
-    await expect.poll(() => page.evaluate((id) => window.__hideProbe?.paneText(id) ?? "", pane), { timeout: 20_000, message: `the prompt in ${pane}` }).toContain("fixture %");
+    await expect.poll(() => page.evaluate((id) => (window as unknown as { __hideProbe?: { paneText: (id: string) => string } }).__hideProbe?.paneText(id) ?? "", pane), { timeout: 20_000, message: `the prompt in ${pane}` }).toContain("fixture %");
   }
 }
 
