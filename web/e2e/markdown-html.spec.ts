@@ -165,7 +165,7 @@ test("a badge that cannot be reached ends in its alt text and the logo still dra
   await page.route("https://img.shields.io/github/**", () => {});
   try {
     await page.locator(`[data-explorer-row="${stack.repo}/README.md"]`).click();
-    for (const alt of ["Latest release", "Apache License 2.0", "macOS, Windows and Linux", "Built on Herdr"]) {
+    for (const alt of ["Latest release", "Functional Source License 1.1", "macOS, Windows and Linux", "Built on Herdr"]) {
       await expect(page.locator(".cm-md-alt[data-state='failed']", { hasText: alt })).toBeVisible({ timeout: 30_000 });
     }
     const logo = page.locator('.cm-md-html img[alt="hide owl app icon"]');
