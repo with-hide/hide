@@ -112,10 +112,7 @@ async function fork(page: Page, herdr: AgentFixture, daemon: Daemon, forker: str
   return { forked, startMs };
 }
 
-// Herdr only until the own engine starts a fork's agent: the fork pane opens and its row reads Starting, but
-// the held input request stays `pending` and the pane keeps a bare prompt (no resume line is typed, the stand-in
-// never prints FORK_INPUT_READY) for the whole 30 s wait.
-test("Fork agent accepts bare pane keys from another client and opens right of the source @herdr", { tag: "@platform" }, async ({ page }) => {
+test("Fork agent accepts bare pane keys from another client and opens right of the source", { tag: "@platform" }, async ({ page }) => {
   const herdr = await startFixture();
   let daemon: Daemon | null = null;
   try {
@@ -169,10 +166,7 @@ test("Fork agent accepts bare pane keys from another client and opens right of t
   }
 });
 
-// Herdr only until the own engine starts a fork's agent: the fork pane opens and its row reads Starting, but
-// the held input request stays `pending` and the pane keeps a bare prompt (no resume line is typed, the stand-in
-// never prints FORK_INPUT_READY) for the whole 30 s wait.
-test("Fork agent to the side splits the source's tab and moves the keyboard to the fork @herdr", async ({ page }) => {
+test("Fork agent to the side splits the source's tab and moves the keyboard to the fork", async ({ page }) => {
   const herdr = await startFixture();
   let daemon: Daemon | null = null;
   try {

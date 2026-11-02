@@ -226,6 +226,16 @@ fn run_coordinator(
                     ) {
                         return;
                     }
+                    if let Some(writer) = lineage_writer.as_mut() {
+                        writer.reconnected();
+                        observe_pulled(
+                            writer,
+                            &context,
+                            session.published_state(),
+                            true,
+                            snapshot_started_at,
+                        );
+                    }
                     pulled = Some(session);
                 }
                 Err(error) => {
@@ -1060,8 +1070,13 @@ fn run_coordinator(
                         // Not connected yet; the connect reads it.
                         continue;
                     }
+                    let started_at = Instant::now();
                     match super::pulled::PulledSession::read(&context) {
                         Ok(session) => {
+                            let moved = pulled.as_ref().is_none_or(|previous| {
+                                previous.published_state().agents
+                                    != session.published_state().agents
+                            });
                             let current = pulled.insert(session);
                             if !publish_session(
                                 &context,
@@ -1072,6 +1087,15 @@ fn run_coordinator(
                                 &mut arrivals,
                             ) {
                                 return;
+                            }
+                            if let Some(writer) = lineage_writer.as_mut() {
+                                observe_pulled(
+                                    writer,
+                                    &context,
+                                    current.published_state(),
+                                    moved,
+                                    started_at,
+                                );
                             }
                         }
                         Err(error) => {
@@ -2087,6 +2111,32 @@ fn begin_read_connection(context: &SessionSyncContext, snapshot_started_at: Inst
 
 /// What the lineage writer reads from the runtime in one lock: the delivery
 /// ledger and the panes that should carry this connection's mark.
+/// Hands a pulled engine's agents to the lineage writer, as the event path
+/// hands it each agent list Herdr answers: the writer settles the
+/// registrations Hide owes an agent once its session shows (a fork, a spawn
+/// given no prompt) and writes each registration's lineage tokens on its
+/// pane. Without it no fork on the core's own engine is ever registered.
+/// `moved` says the agents differ from the last session read.
+fn observe_pulled(
+    writer: &mut crate::coordination::lineage::Writer,
+    context: &SessionSyncContext,
+    state: &ProjectionState,
+    moved: bool,
+    started_at: Instant,
+) {
+    let Some((ledger, marks)) = lineage_inputs(context) else {
+        return;
+    };
+    writer.observe(
+        &ledger,
+        &state.agents,
+        &|pane| state.panes.iter().any(|known| known.pane_id == pane),
+        &marks,
+        moved,
+        started_at,
+    );
+}
+
 fn lineage_inputs(
     context: &SessionSyncContext,
 ) -> Option<(

@@ -497,6 +497,15 @@ int main(int argc, char **argv) {
 #endif
   fixture_count_t n;
   while ((n = terminal_read(b, sizeof b)) > 0) {
+    /* Keys held for the pane until the agent ran can arrive in the same read
+       as a session request typed after them: the request is the read's tail,
+       and what comes before it is input like any other. */
+    static const char request[] = "\x1b]7770;session=";
+    for (fixture_count_t at = 1; at + (fixture_count_t)(sizeof request - 1) < n; at++) {
+      if (memcmp(b + at, request, sizeof request - 1) != 0 || !session_request(b + at, (size_t)(n - at))) continue;
+      n = at;
+      break;
+    }
     if (session_request(b, (size_t)n)) continue;
     if (log >= 0 && write(log, b, (size_t)n) < 0) return 1;
 #ifdef _WIN32
