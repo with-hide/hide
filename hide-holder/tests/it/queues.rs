@@ -108,29 +108,6 @@ fn input_past_its_bound_closes_the_connection_that_sent_it_and_the_pane_runs_on(
     assert!(again.closed.is_none(), "{:?}", again.closed);
 }
 
-/// Input a connection handed over and the program had not taken yet when
-/// another connection took the pane over is never written: only the new
-/// connection's input reaches the program (PRD engine-bundle-3-core-owns
-/// D-12a).
-#[cfg(unix)]
-#[test]
-fn a_replaced_connections_unwritten_input_never_reaches_the_program() {
-    let home = Home::new();
-    let script = Script::new(&home, vec![b"ready".to_vec()]);
-    let release = home.path().join("release");
-    let hold: OsString = release.clone().into();
-    let holder = script.start_with(&home, &[(HOLD_WRITES, &hold)]);
-    let mut old = holder.open();
-    old.wait_for_text("ready");
-    old.send(ClientMessage::Input(b"old".to_vec())).unwrap();
-
-    let mut new = holder.open();
-    assert_eq!(old.wait_closed().reason, CloseReason::TakenOver);
-    new.send(ClientMessage::Input(b"new".to_vec())).unwrap();
-    std::fs::write(&release, b"").unwrap();
-    script.wait_heard(b"new");
-}
-
 /// A node that accepts notices is told the answers were refused, with the
 /// bound in the detail, and later how many were, once the program takes its
 /// answers again; the program's output is read all the while.

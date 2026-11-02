@@ -195,12 +195,13 @@ enum Control {
 /// engine-bundle-3-core-owns D-12a).
 #[derive(Clone)]
 struct InputPath {
-    /// The generation of the connection that holds the pane, 0 for none:
-    /// a reader whose connection no longer holds it hands nothing over.
-    holding: Arc<AtomicU64>,
-    /// The newest generation that took the pane over: the PTY writer drops
-    /// what an older one handed over and is not written yet.
-    newest: Arc<AtomicU64>,
+    /// The generation of the connection that holds the pane, 0 for none. A
+    /// reader holds it from its check until its input is queued, and a
+    /// takeover or a close changes it only between two of them, so input is
+    /// queued exactly when the run thread would have taken it: what a
+    /// connection sent before another took the pane over is written, what
+    /// it sent after is not.
+    holding: Arc<Mutex<u64>>,
     pane: Arc<Mutex<Pane>>,
     writes: Sender<PtyWrite>,
     queued: Arc<AtomicUsize>,
@@ -217,20 +218,25 @@ enum Taken {
 }
 
 impl InputPath {
+    fn holding(&self) -> MutexGuard<'_, u64> {
+        self.holding.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     fn taken_over(&self, generation: u64) {
-        self.newest.store(generation, Ordering::SeqCst);
-        self.holding.store(generation, Ordering::SeqCst);
+        *self.holding() = generation;
     }
 
     fn let_go(&self) {
-        self.holding.store(0, Ordering::SeqCst);
+        *self.holding() = 0;
     }
 
     /// Encodes `message` for the pane's settings now and hands its bytes to
     /// the PTY writer, putting the screen back at the bottom as typing does,
-    /// when `generation` still holds the pane.
+    /// when `generation` still holds the pane. The lock order is the
+    /// generation, then the pane.
     fn take(&self, generation: u64, outbox: &Outbox, message: ClientMessage) -> Taken {
-        if self.holding.load(Ordering::SeqCst) != generation {
+        let holding = self.holding();
+        if *holding != generation {
             return Taken::Next;
         }
         let (bytes, moved) = {
@@ -277,6 +283,8 @@ impl InputPath {
             outbox.changed();
         }
         let length = bytes.len();
+        // Held to the end, so the takeover waits for this input to be queued.
+        let _holding = holding;
         let queued = self.queued.load(Ordering::SeqCst);
         if queued + length > INPUT_QUEUE_CAP {
             let _ = self
@@ -549,8 +557,7 @@ impl Holder {
             move || read_pty(reader, &pane, &marks, &answers, &sender)
         });
         let input = InputPath {
-            holding: Arc::new(AtomicU64::new(0)),
-            newest: Arc::new(AtomicU64::new(0)),
+            holding: Arc::new(Mutex::new(0)),
             pane: pane.clone(),
             writes,
             queued: input_queued,
@@ -786,8 +793,7 @@ impl Holder {
         self.generation += 1;
         let generation = self.generation;
         // Before anything of the new connection is read: what the one it
-        // replaces sent from here on, or sent and is not written yet, is
-        // dropped.
+        // replaces sends from here on is dropped.
         self.input.taken_over(generation);
         if let Some(previous) = self.current.take() {
             self.publish(None);
@@ -1461,8 +1467,7 @@ fn read_pty(
 /// The one writer to the program: input and answers in the order they came.
 /// Once the PTY refuses a connection's input, the rest it sent is dropped,
 /// since that connection is closed; another connection's input is tried
-/// again. Input of a connection another one took the pane over from is
-/// dropped too, when it was not written before the takeover.
+/// again.
 fn write_pty(
     mut writer: Box<dyn std::io::Write + Send>,
     writes: &Receiver<PtyWrite>,
@@ -1485,9 +1490,7 @@ fn write_pty(
                     !panic_on_input,
                     "asked to panic on input ({PANIC_ON_INPUT})"
                 );
-                let replaced = generation < input.newest.load(Ordering::SeqCst);
-                if !replaced
-                    && refused != Some(generation)
+                if refused != Some(generation)
                     && let Err(error) = writer.write_all(&bytes).and_then(|()| writer.flush())
                 {
                     refused = Some(generation);
