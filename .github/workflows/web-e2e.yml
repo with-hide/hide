@@ -320,6 +320,21 @@ jobs:
             bin=$(zsh scripts/fetch-herdr-runtime.sh --platform "$HERDR_PLATFORM")
           fi
           echo "bin=$bin" >> "$GITHUB_OUTPUT"
+      - name: Put the isolated fixture programs on the Windows pane PATH
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_ACTIONS -ne 'true') { throw 'Registry fixture setup is only for a disposable GitHub runner' }
+          # Each test installs its stand-ins in its own root. A pane's PTY
+          # expands REG_EXPAND_SZ in that daemon's environment, so it finds
+          # this test's programs without a shared shim or a product override.
+          $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')
+          try {
+            $before = $key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+            $entry = '%HIDE_E2E_ROOT%\bin'
+            $parts = @($before -split ';' | Where-Object { $_ -and $_ -ne $entry })
+            $key.SetValue('Path', (@($entry) + $parts) -join ';', [Microsoft.Win32.RegistryValueKind]::ExpandString)
+          } finally { $key.Dispose() }
       - name: End-to-end
         timeout-minutes: 20
         env:
