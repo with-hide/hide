@@ -565,44 +565,19 @@ impl OwnEngine<'_> {
         env: Env,
     ) -> Result<(), EngineError> {
         let started = self.start_pane(pane, program, cwd, env, None);
-        self.settle_drawn(pane, started)
-    }
-
-    /// What became of the start of `pane`, drawn `starting`: see
-    /// [`Self::start_drawn`].
-    fn settle_drawn(
-        &self,
-        pane: &str,
-        started: Result<(), EngineError>,
-    ) -> Result<(), EngineError> {
-        let kept = {
-            let mut topology = self.topology();
-            match topology.pane_mut(pane) {
-                Ok(drawn) => {
-                    drawn.starting = false;
-                    if started.is_err() {
-                        let _ = topology.remove_pane(pane);
-                    }
-                    true
-                }
-                Err(_) => false,
-            }
-        };
-        match started {
-            Ok(()) => {
-                if !kept {
-                    let _ = self.end_panes(&[pane.to_owned()]);
-                }
-                Ok(())
-            }
-            Err(error) => {
-                if kept {
-                    self.changed();
-                }
-                self.withdraw(pane);
-                Err(error)
-            }
+        let settled = settle_start(
+            &self.shared.topology,
+            &*self.shared.holders,
+            pane,
+            started.is_ok(),
+        );
+        if settled == Settled::TakenOut {
+            self.changed();
         }
+        if started.is_err() {
+            self.withdraw(pane);
+        }
+        started
     }
 
     /// Whether a gate records the panes this call makes: a spawn's, whose
@@ -624,9 +599,12 @@ impl OwnEngine<'_> {
     /// holder's start bound (`hide_kit::panes::START_LIMIT`); one that
     /// cannot be made starts the holder here.
     fn start_after_answer(&self, pane: &str, program: Option<&[String]>, cwd: &str, env: Env) {
-        // The holders and not the engine: an engine let go while a start
-        // runs ends then, its session saved, and the holder runs on as every
-        // holder outlives its daemon (D-10), gathered by the next restore.
+        // The topology and the holders, and the engine only weakly, to
+        // publish a pane taken out: the thread is never the engine's last
+        // owner, so an engine let go while a start runs ends and saves at
+        // once, and the holder runs on as every holder outlives its daemon
+        // (D-10), for the next restore to gather.
+        let topology = Arc::clone(&self.shared.topology);
         let holders = Arc::clone(&self.shared.holders);
         let shared = Arc::downgrade(&self.shared);
         let (pane, program, cwd) = (
@@ -636,20 +614,24 @@ impl OwnEngine<'_> {
         );
         let start = move || {
             let started = start_holder(&*holders, &pane, program.as_deref(), &cwd, env, None);
-            let Some(shared) = shared.upgrade() else {
+            let settled = settle_start(&topology, &*holders, &pane, started.is_ok());
+            let Err(error) = started else {
                 return;
             };
-            let engine = OwnEngine {
-                shared,
-                gates: Vec::new(),
-            };
-            if let Err(error) = engine.settle_drawn(&pane, started) {
-                crate::diagnostic!(serde_json::json!({
-                    "component": "own_engine",
-                    "kind": "pane.start_failed",
-                    "pane_id": pane,
-                    "message": error.to_string(),
-                }));
+            crate::diagnostic!(serde_json::json!({
+                "component": "own_engine",
+                "kind": "pane.start_failed",
+                "pane_id": pane,
+                "message": error.to_string(),
+            }));
+            if settled == Settled::TakenOut
+                && let Some(shared) = shared.upgrade()
+            {
+                OwnEngine {
+                    shared,
+                    gates: Vec::new(),
+                }
+                .changed();
             }
         };
         let starting = Arc::new(Mutex::new(Some(start)));
@@ -722,22 +704,7 @@ impl OwnEngine<'_> {
     /// Ends the holders of `panes`, every one asked even when one fails:
     /// the first failure, if any. A holder already gone is ended.
     fn end_panes(&self, panes: &[String]) -> Result<(), EngineError> {
-        let mut first = None;
-        for pane in panes {
-            match self.shared.holders.terminate(pane) {
-                Ok(()) | Err(HolderError::NoPane { .. }) => {}
-                Err(error) => {
-                    crate::diagnostic!(serde_json::json!({
-                        "component": "own_engine",
-                        "kind": "pane.end_failed",
-                        "pane_id": pane,
-                        "message": error.to_string(),
-                    }));
-                    first.get_or_insert(holder_error(error));
-                }
-            }
-        }
-        first.map_or(Ok(()), Err)
+        end_holders(&*self.shared.holders, panes)
     }
 
     /// A new tab of `workspace` whose first pane runs `program`, replacing
@@ -947,6 +914,72 @@ impl OwnEngine<'_> {
 
 /// A holder's failure in the engine boundary's words: a pane the node does
 /// not have is the refusal a pane the engine does not have is.
+/// Ends the holders of `panes`, every one asked even when one fails: the
+/// first failure, if any. A holder already gone is ended.
+fn end_holders(holders: &dyn PaneHolders, panes: &[String]) -> Result<(), EngineError> {
+    let mut first = None;
+    for pane in panes {
+        match holders.terminate(pane) {
+            Ok(()) | Err(HolderError::NoPane { .. }) => {}
+            Err(error) => {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "own_engine",
+                    "kind": "pane.end_failed",
+                    "pane_id": pane,
+                    "message": error.to_string(),
+                }));
+                first.get_or_insert(holder_error(error));
+            }
+        }
+    }
+    first.map_or(Ok(()), Err)
+}
+
+/// What became of the pane a start drew `starting`.
+#[derive(Debug, PartialEq, Eq)]
+enum Settled {
+    /// Its holder runs and the pane is in the topology.
+    Running,
+    /// It was closed while its holder started; a holder that started is
+    /// ended.
+    Closed,
+    /// Its holder did not start: the pane is taken out again, its tab with
+    /// it when it was the only one.
+    TakenOut,
+}
+
+/// Settles the start of `pane`, drawn `starting`, once its holder `started`
+/// or did not ([`OwnEngine::start_drawn`]).
+fn settle_start(
+    topology: &Mutex<Topology>,
+    holders: &dyn PaneHolders,
+    pane: &str,
+    started: bool,
+) -> Settled {
+    let kept = {
+        let mut topology = Held(topology.lock().unwrap_or_else(PoisonError::into_inner));
+        match topology.pane_mut(pane) {
+            Ok(drawn) => {
+                drawn.starting = false;
+                if !started {
+                    let _ = topology.remove_pane(pane);
+                }
+                true
+            }
+            Err(_) => false,
+        }
+    };
+    match (started, kept) {
+        (true, true) => Settled::Running,
+        (true, false) => {
+            let _ = end_holders(holders, &[pane.to_owned()]);
+            Settled::Closed
+        }
+        (false, true) => Settled::TakenOut,
+        (false, false) => Settled::Closed,
+    }
+}
+
 /// Starts `pane`'s holder running `program`, or the machine's shell after
 /// `notice` when one is given.
 fn start_holder(
