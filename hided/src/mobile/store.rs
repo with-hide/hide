@@ -56,6 +56,9 @@ pub struct MobileSettings {
     pub enabled: bool,
     #[serde(default)]
     pub method: Method,
+    /// The last verified direct scope, retained after removing our Serve entry.
+    #[serde(default)]
+    pub last_tailnet: Option<String>,
     #[serde(default)]
     pub relay_keys: Option<RelayKeys>,
     #[serde(default)]

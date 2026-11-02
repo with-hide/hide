@@ -215,6 +215,9 @@ impl Mobile {
 
     pub fn start(config: Config) -> Arc<Self> {
         let mut settings: MobileSettings = store::read(&store::settings_path(&config.state_dir));
+        if settings.last_tailnet.is_none() {
+            settings.last_tailnet = settings.serve.as_ref().map(|serve| serve.dns_name.clone());
+        }
         let vapid = match settings
             .vapid_pkcs8
             .as_deref()
@@ -238,7 +241,7 @@ impl Mobile {
         };
         let mut phones = Phones::load(
             store::phones_path(&config.state_dir),
-            settings.serve.as_ref().map(|serve| serve.dns_name.as_str()),
+            settings.last_tailnet.as_deref(),
         );
         if settings.method == Method::Relay {
             phones.set_scope(Some(PhoneOrigin::Relay));
@@ -564,6 +567,10 @@ impl Mobile {
                 return;
             }
             inner.phones.set_origin(dns_name);
+            if inner.settings.last_tailnet.as_deref() != Some(dns_name) {
+                inner.settings.last_tailnet = Some(dns_name.to_owned());
+                self.save_settings(&inner);
+            }
         }
         *self
             .origin
@@ -1272,9 +1279,9 @@ impl Mobile {
                         Method::Relay => Some(PhoneOrigin::Relay),
                         Method::Tailscale => inner
                             .settings
-                            .serve
+                            .last_tailnet
                             .as_ref()
-                            .map(|record| PhoneOrigin::Paired(record.dns_name.clone())),
+                            .map(|name| PhoneOrigin::Paired(name.clone())),
                     };
                     inner.phones.set_scope(scope);
                     inner.checklist = None;

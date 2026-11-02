@@ -358,6 +358,46 @@ async fn relay_pairs_encrypts_reconnects_scopes_revokes_and_stops() {
 }
 
 #[tokio::test]
+async fn switching_back_restores_direct_phones_without_a_live_tailscale_or_serve_entry() {
+    let dir = tempfile::tempdir().unwrap();
+    let state_dir = dir.path().join("state");
+    std::fs::create_dir(&state_dir).unwrap();
+    std::fs::write(
+        state_dir.join("mobile.json"),
+        json!({"enabled":false,"method":"relay","last_tailnet":"fixture.ts.net"}).to_string(),
+    )
+    .unwrap();
+    let now = hided::mobile::now_ms();
+    let record = |id: &str, origin: Value| {
+        json!({
+            "id":id,"name":"Phone","credential_sha256":"0".repeat(64),
+            "paired_at_ms":now,"last_seen_ms":now,"origin":origin,
+        })
+    };
+    std::fs::write(
+        state_dir.join("phones.json"),
+        json!({"phones":[record("direct", json!({"paired":"fixture.ts.net"})), record("relay", json!("relay"))]}).to_string(),
+    )
+    .unwrap();
+    let running = hided::start_daemon(env(dir.path(), 9)).await.unwrap();
+    let mut shell = shell(&running).await;
+    let relay = state(&mut shell, |s| s["method"] == "relay").await;
+    assert_eq!(relay["phones"].as_array().unwrap().len(), 1);
+    assert_eq!(relay["phones"][0]["id"], "relay");
+    for method in ["tailscale", "relay", "tailscale"] {
+        event(&mut shell, "mobile_method", json!({"method":method})).await;
+        let shown = state(&mut shell, |s| s["method"] == method).await;
+        assert_eq!(shown["phones"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            shown["phones"][0]["id"],
+            if method == "relay" { "relay" } else { "direct" }
+        );
+        assert!(shown["qr"].is_null());
+    }
+    running.stop();
+}
+
+#[tokio::test]
 async fn unauthenticated_peers_expire_without_using_paired_phone_slots() {
     let dir = tempfile::tempdir().unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
