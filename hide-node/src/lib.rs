@@ -83,6 +83,15 @@ impl Local {
         self
     }
 
+    /// The node answers the core's own engine from `holders`, this
+    /// machine's pane holders (`Call::Pane`, `Call::PaneWatch`), as a
+    /// device's node answers from its own (PRD engine-bundle-3-core-owns
+    /// D-22). Only a daemon with the development switch on gives it any.
+    pub fn with_panes(self, holders: Arc<dyn hide_node_link::holders::PaneHolders>) -> Self {
+        self.env.panes.fill(holders);
+        self
+    }
+
     /// The node keeps what it measured of each repository's worktrees in
     /// `folder` (`hide_kit::layout::worktree_facts`), so a restarted daemon
     /// measures again only the worktrees whose inputs moved.

@@ -13,7 +13,9 @@
 # (hided/tests/it/held_letter_notice.rs), because this is the lane that already
 # fetches the pinned binary for a change to `hided` or `herdr-core`, and the
 # remote core journeys (hided/tests/it/remote_core.rs), which need the same
-# binaries, pinned Herdr and loopback SSH.
+# binaries, pinned Herdr and loopback SSH, and a device of the core's own
+# engine (hided/tests/it/device_own_engine.rs), which needs the loopback SSH
+# and the built pane holder and no Herdr.
 name: remote mailbox lane
 
 on:
@@ -51,6 +53,12 @@ jobs:
         timeout-minutes: 5
         with:
           set: workspace
+          save: false
+      # hide-vt's Zig inputs and caches, which the vt lane saves: the pane
+      # holder a device of the core's own engine runs links hide-vt.
+      - uses: ./.github/actions/vt-cache
+        timeout-minutes: 5
+        with:
           save: false
       - name: Install zsh and the SSH server
         # The fixture starts every pane's shell from SHELL=/bin/zsh, and the
@@ -168,6 +176,15 @@ jobs:
         # process of another account (`nobody`) this needs.
         timeout-minutes: 5
         run: bash scripts/verify-cargo.sh nextest --profile ci -p hide-host --lib -E 'test(=panes::tests::another_account_s_open_is_refused_by_the_kernel_s_peer_check)' --run-ignored only
+      - name: A device of the core's own engine over the system ssh
+        # hided/tests/it/device_own_engine.rs (PRD engine-bundle-3-core-owns
+        # D-22, B35): the device gets the pane holder and no Herdr, and a pane
+        # keeps its process when the device's node ends with its link and a
+        # new link's node finds it.
+        timeout-minutes: 15
+        run: |
+          bash scripts/verify-cargo.sh build -p hide-holder --bin hide-holder
+          HIDE_TEST_HOLDER_BIN=$PWD/target/debug/hide-holder bash scripts/verify-cargo.sh nextest --profile ci -p hided --test it -E 'test(/^device_own_engine::/)' --run-ignored only
       - name: A screen machine whose core runs on another machine
         # hided/tests/it/remote_core.rs (PRD core-host-node-remote-core): a
         # node-role hided attached over this lane's loopback SSH to a core

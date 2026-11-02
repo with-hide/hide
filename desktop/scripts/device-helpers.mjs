@@ -12,9 +12,13 @@ import { Buffer } from "node:buffer";
 import { fileURLToPath } from "node:url";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-export const HELPER_PROGRAMS = ["hided", "hide", "hide-agent-hooks"];
+// The pane holder is a device's only program on the core's own engine
+// (PRD engine-bundle-3-core-owns D-22); a device on Herdr is sent the others.
+export const HELPER_PROGRAMS = ["hided", "hide", "hide-agent-hooks", "hide-holder"];
 export const DEVICE_PROGRAMS = [...HELPER_PROGRAMS, "herdr"];
 export const DEVICE_BUNDLE_MANIFEST = "device-bundles.json";
+// 2: each bundle carries the pane holder too.
+export const DEVICE_BUNDLE_FORMAT = 2;
 export const DEVICE_PLATFORMS = {
   "linux-x86_64": { target: "x86_64-unknown-linux-gnu", os: "linux", arch: "x64" },
   "linux-aarch64": { target: "aarch64-unknown-linux-gnu", os: "linux", arch: "arm64" },
@@ -94,7 +98,7 @@ export function prepareDeviceBundles(directory, identity, output, herdrPaths) {
     }
     const asset = `hide-device-${platform}-${identity.version}.tar.gz`;
     const archive = path.join(output, asset);
-    // A deliberately small USTAR vocabulary: four regular files, no paths,
+    // A deliberately small USTAR vocabulary: five regular files, no paths,
     // extended attributes, links or platform-specific metadata records.
     execFileSync("tar", ["--format", "ustar", "-czf", asset, "-C", platform, ...DEVICE_PROGRAMS], {
       cwd: output,
@@ -107,7 +111,7 @@ export function prepareDeviceBundles(directory, identity, output, herdrPaths) {
     fs.rmSync(stage, { recursive: true });
   }
   const manifest = path.join(output, DEVICE_BUNDLE_MANIFEST);
-  fs.writeFileSync(manifest, `${JSON.stringify({ format: 1, ...identity, platforms }, null, 2)}\n`);
+  fs.writeFileSync(manifest, `${JSON.stringify({ format: DEVICE_BUNDLE_FORMAT, ...identity, platforms }, null, 2)}\n`);
   return manifest;
 }
 
@@ -121,7 +125,7 @@ export function readDeviceBundles(output, identity) {
   assertIdentity(identity);
   const file = path.join(output, DEVICE_BUNDLE_MANIFEST);
   const manifest = JSON.parse(fs.readFileSync(file, "utf8"));
-  if (manifest.format !== 1 || manifest.commit !== identity.commit || manifest.version !== identity.version || manifest.order !== identity.order) {
+  if (manifest.format !== DEVICE_BUNDLE_FORMAT || manifest.commit !== identity.commit || manifest.version !== identity.version || manifest.order !== identity.order) {
     throw new Error("device bundle identity mismatch: make the bundles for this source, version and order");
   }
   if (Object.keys(manifest.platforms).sort().join(",") !== Object.keys(DEVICE_PLATFORMS).sort().join(",")) throw new Error("device bundles do not cover every Linux platform");
@@ -152,7 +156,7 @@ function build(platform, identity) {
   const folder = path.join(repo, "desktop/out/device-helpers", platform);
   fs.rmSync(folder, { recursive: true, force: true });
   run("bash", ["scripts/verify-web.sh", "web", "build"]);
-  run("bash", ["scripts/verify-cargo.sh", "build", "--release", "--target", system.target, "-p", "hided", "--bins", "-p", "hide-agent-hooks", "--bin", "hide-agent-hooks"], {
+  run("bash", ["scripts/verify-cargo.sh", "build", "--release", "--target", system.target, "-p", "hided", "--bins", "-p", "hide-agent-hooks", "--bin", "hide-agent-hooks", "-p", "hide-holder", "--bin", "hide-holder"], {
     env: { ...process.env, HIDE_VERSION: identity.version, HIDE_COMMIT: identity.commit, HIDE_BUILD_ORDER: identity.order },
   });
   fs.mkdirSync(folder, { recursive: true });

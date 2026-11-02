@@ -567,6 +567,8 @@ The remote mailbox lane includes `hided/tests/it/device_bootstrap.rs`: through t
 Its second journey checks that a compatible running server connects its terminal services before the automatic kit pass.
 Both journeys confirm their private server and SSH exits before passing, including the server bootstrap detached from its helper.
 Its Herdr handoff tests also move a device server on the older Herdr 0.8.2 protocol with its pane still running.
+It also runs `hided/tests/it/device_own_engine.rs`, a device of the core's own engine (PRD engine-bundle-3-core-owns B35): it builds `hide-holder` (the lane restores the vt lane's Zig inputs for it) and stages it beside the shipped `hided`, connects with the holder in Herdr's place, starts a pane by the node link's pane requests, proves a caller in another pane by that pane's holder record, ends the link and its node, and checks the next link's node finds the pane with the same process and that no file of Herdr's reached the account; it needs no Herdr.
+Locally: `bash scripts/verify-cargo.sh build -p hide-holder --bin hide-holder && bash scripts/verify-cargo.sh cli`, then `HIDE_TEST_HOLDER_BIN=$PWD/target/debug/hide-holder bash scripts/verify-cargo.sh nextest -p hided --test it -E 'test(/^device_own_engine::/)' --run-ignored only`.
 
 ### WSL device lane
 

@@ -135,6 +135,7 @@ pub struct WslDevice {
     distro: String,
     access: WslAccess,
     packages: HelperPackages,
+    engine: super::DeviceEngine,
     panes: Option<PaneHook>,
     terminals: Option<TerminalHook>,
     /// The link the latest attempt started, which carries the device's
@@ -149,6 +150,7 @@ impl WslDevice {
         distro: &str,
         access: WslAccess,
         packages: HelperPackages,
+        engine: super::DeviceEngine,
         panes: Option<PaneHook>,
         terminals: Option<TerminalHook>,
     ) -> Result<Self, String> {
@@ -159,6 +161,7 @@ impl WslDevice {
             distro: distro.to_owned(),
             access,
             packages,
+            engine,
             panes,
             terminals,
             link: Arc::default(),
@@ -425,7 +428,7 @@ impl DialedTransport for WslDevice {
                     observed: Box::new(identity),
                 });
             }
-            let payload = self.packages.payload(&facts.os, &facts.arch)?;
+            let payload = self.packages.payload_for(&facts.os, &facts.arch, self.engine)?;
             stage("install");
             let installed =
                 bootstrap::install(&mut *pipe, &consent.helper_root, &facts.home, &payload)?;
@@ -472,21 +475,27 @@ impl DialedTransport for WslDevice {
         }
         host.take_readers(hello.protocol, readers)
             .map_err(EstablishError::Helper)?;
-        let socket = hello
-            .herdr_socket
-            .clone()
-            .ok_or_else(|| "the WSL helper bridges no Herdr socket".to_owned());
+        let own = self.engine == super::DeviceEngine::Holders;
+        let socket = match own {
+            false => hello
+                .herdr_socket
+                .clone()
+                .ok_or_else(|| "the WSL helper bridges no Herdr socket".to_owned()),
+            true => Err("the distribution's panes run on the core's own engine".to_owned()),
+        };
         *lock_recover(&self.herdr_socket) = socket.clone().ok();
         *lock_recover(&self.link) = Some(host.clone());
         // Only a Herdr that does not answer needs the kit before the
-        // services start; otherwise the core runs its pass after ready.
-        let herdr_answers = hide_herdr_client::request_with_connector(
-            &host.herdr_connector(),
-            "session.snapshot",
-            json!({}),
-            HERDR_CHECK_TIMEOUT,
-        )
-        .is_ok();
+        // services start; otherwise the core runs its pass after ready. A
+        // distribution of the core's own engine has no Herdr to ask.
+        let herdr_answers = own
+            || hide_herdr_client::request_with_connector(
+                &host.herdr_connector(),
+                "session.snapshot",
+                json!({}),
+                HERDR_CHECK_TIMEOUT,
+            )
+            .is_ok();
         let kit = (!herdr_answers).then(|| {
             stage("kit");
             call_as::<hide_kit::KitReport>(
@@ -506,15 +515,20 @@ impl DialedTransport for WslDevice {
             .map(Box::new)
             .map_err(|error| error.to_string())
         });
-        if self.panes.is_some() {
-            stage("panes");
-            super::start_panes_at(socket.clone(), &host);
-        }
-        let terminals = match self.terminals.clone() {
-            None => Err("this process takes no device terminals".to_owned()),
-            Some(hook) => {
-                stage("terminals");
-                super::start_terminals_at(socket, &host, hook)
+        let terminals = if own {
+            stage("holders");
+            super::start_holders_at(&host, self.terminals.clone())
+        } else {
+            if self.panes.is_some() {
+                stage("panes");
+                super::start_panes_at(socket.clone(), &host);
+            }
+            match self.terminals.clone() {
+                None => Err("this process takes no device terminals".to_owned()),
+                Some(hook) => {
+                    stage("terminals");
+                    super::start_terminals_at(socket, &host, hook)
+                }
             }
         };
         // The link is the core's from here (see the SSH device's).

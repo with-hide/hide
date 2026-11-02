@@ -33,7 +33,9 @@ pub mod transfer;
 pub mod upstream;
 
 pub use device::{Connector, SshDevice};
-pub use host::{LinkStream, LinkWriter, OpenError, PaneEvents, PaneEventsSlot, RemoteHost};
+pub use host::{
+    DeviceEngine, LinkStream, LinkWriter, OpenError, PaneEvents, PaneEventsSlot, RemoteHost,
+};
 
 use hide_node_link::device::{CapabilityReport, RemoteHostIdentity, RemoteStage, SnapshotCheck};
 

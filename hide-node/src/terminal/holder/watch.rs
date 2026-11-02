@@ -189,9 +189,9 @@ impl Watches {
         let send = {
             let mut panes = locked(&self.panes);
             let Some(watched) = panes.get_mut(pane) else {
-                return Err(HolderError::NoPane(format!(
-                    "pane {pane} has no holder on this machine"
-                )));
+                return Err(HolderError::NoPane {
+                    message: format!("pane {pane} has no holder on this machine"),
+                });
             };
             watched.rules = rules;
             match &watched.open {
@@ -206,10 +206,8 @@ impl Watches {
         let Some((writer, manifest)) = send else {
             return Ok(());
         };
-        send_rules(&writer, manifest).map_err(|error| {
-            HolderError::Unreachable(format!(
-                "pane {pane}'s holder could not be given its screen rules: {error}"
-            ))
+        send_rules(&writer, manifest).map_err(|error| HolderError::Unreachable {
+            message: format!("pane {pane}'s holder could not be given its screen rules: {error}"),
         })
     }
 
