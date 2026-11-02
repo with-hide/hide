@@ -393,7 +393,8 @@ function CriterionLine({ mission, line, actions }: { mission: Mission; line: Mis
         <span className="flex min-w-0 items-center gap-xs">
           <Badge variant="outline" data-line-tag={line.kind}>{t(TAG[line.kind])}</Badge>
           <span className="min-w-0 flex-1 truncate" title={whole}>{name}</span>
-          {note ? <span className="shrink-0 text-caption text-muted-foreground" data-line-note="true">{note}</span> : null}
+          {/* The note truncates too, at half the line, so the line's own words keep their place. */}
+          {note ? <span className="min-w-0 max-w-1/2 truncate text-caption text-muted-foreground" data-line-note="true">{note}</span> : null}
           {checks && checks.checkers.length > 0 ? (
             <span className="flex shrink-0 items-center gap-xxs" data-panel-checker-chips={checks.checkers.length}>
               {checks.checkers.map((checker, index) => <CheckerChip key={index} mission={mission} kind={checks.kind} checker={checker} actions={actions} />)}
