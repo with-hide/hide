@@ -11,7 +11,7 @@
   if (projects && projects.getAttribute('aria-selected') !== 'true') { projects.click(); return false; }
   const checkout = document.querySelector('[data-checkout-kind="branch"]:not([disabled])');
   if (checkout) { once('checkout', checkout); return false; }
-  // The fixture's project is the one a scale did not add: scale.sh labels each of its own project-N.
+  // The fixture's project is the one a scale did not add: fixture.mjs (and scale.sh) label each of their own project-N.
   const project = [...document.querySelectorAll('[data-project]')].find((row) => !/^project-\d+$/.test(row.querySelector('[data-row-name]')?.textContent?.trim() ?? ''));
   if (!project) {
     once('no-agents', document.querySelector('[data-no-agent-projects][aria-expanded="false"]')) || once('inactive-projects', document.querySelector('[data-inactive-projects][aria-expanded="false"]'));

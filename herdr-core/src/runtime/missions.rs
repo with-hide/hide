@@ -1110,6 +1110,23 @@ impl Runtime {
                 // the operator's press, and the shell shows a first plan on
                 // the Conductor pane's own chip (PRD mission-pane-chip D-02).
                 let mut next = crate::missions::apply_plan(&current, &plan, now)?;
+                // A replan does not make a node an agent on another machine
+                // works or checks one only the project's machine runs.
+                for node in next.nodes.iter().filter(|node| !node.runs_elsewhere()) {
+                    let checkers = node
+                        .criteria
+                        .iter()
+                        .flat_map(|line| &line.checkers)
+                        .filter_map(|checker| checker.agent_id.as_ref());
+                    for id in node.agent_id.iter().chain(checkers) {
+                        if self.registered_elsewhere(&next, id)?.is_some() {
+                            return Err(crate::coordination::refusal(
+                                "mission_machine_node_refused",
+                                &node.key,
+                            ));
+                        }
+                    }
+                }
                 let Mission {
                     nodes, round_seq, ..
                 } = &mut next;
@@ -1157,6 +1174,22 @@ impl Runtime {
                     .iter()
                     .position(|row| row.key == node)
                     .ok_or("mission_node_unknown")?;
+                let named = [
+                    patch.reviewer.as_deref(),
+                    patch.verifier.as_deref(),
+                    patch.agent_id.as_ref().and_then(Option::as_deref),
+                ];
+                // An agent from another machine is bound only where a spawn
+                // for this node would start it; one it holds already stays.
+                let held = &current.nodes[index];
+                for id in named.into_iter().flatten() {
+                    if held.agent_id.as_deref() != Some(id)
+                        && !Self::checks_node(held, id)
+                        && let Some(machine) = self.registered_elsewhere(current, id)?
+                    {
+                        self.admit_elsewhere(current, &machine, Some(held))?;
+                    }
+                }
                 let mut bound = current.nodes[index].clone();
                 for (kind, checker) in [
                     (CheckKind::Review, &patch.reviewer),
@@ -1532,16 +1565,6 @@ impl Runtime {
             })
     }
 
-    /// Whether `device`'s project catalog is still being read: this machine's
-    /// until its Git read answers, a device's until its first list arrives.
-    fn projects_loading(&self, device: &str) -> bool {
-        if device == self.node.as_str() {
-            self.snapshot.git_worktrees_loading
-        } else {
-            !self.device_worktrees.contains_key(device)
-        }
-    }
-
     fn conductor_of(&self, device: &str, pane: &str, actor: Actor) -> Conductor {
         let session = self
             .machine_agents(device)
@@ -1691,7 +1714,8 @@ impl Runtime {
     /// The admission of a spawn `actor` asks for (B4, B8, B11, B12): none
     /// when it conducts no open mission, a refusal while its plan is not
     /// approved, when the worker would run on another machine than the
-    /// project's, or when it is none of the operator's worker candidates,
+    /// project's that may not run it (`admit_elsewhere`), or when it is none
+    /// of the operator's worker candidates,
     /// and otherwise the mission whose cap the ledger checks.
     pub(crate) fn mission_spawn_admission(
         &self,
@@ -1708,20 +1732,19 @@ impl Runtime {
         if mission.status == MissionStatus::Planning {
             return Err("mission_not_started".into());
         }
+        let node = intent
+            .strip_prefix(&mission.id)
+            .and_then(|rest| rest.strip_prefix(':'))
+            .and_then(|key| mission.node(key));
         // A node's worker starts on its brief, or stands at an empty prompt
         // until a person types: a letter cannot wake a session that has not
         // run its first turn (delivery.md, session_unread).
-        if !briefed
-            && intent
-                .strip_prefix(&mission.id)
-                .and_then(|rest| rest.strip_prefix(':'))
-                .is_some_and(|key| mission.node(key).is_some())
-        {
+        if !briefed && node.is_some() {
             return Err("mission_brief_missing".into());
         }
         let worker_machine = machine.unwrap_or(actor.device_id.as_str());
         if worker_machine != mission.device_id {
-            return Err("mission_machine_refused".into());
+            self.admit_elsewhere(mission, worker_machine, node)?;
         }
         // The candidates the mission was created with: a Settings edit
         // applies from the next mission (B48).
@@ -1737,6 +1760,56 @@ impl Runtime {
             mission: mission.id.clone(),
             cap: mission.cap,
         }))
+    }
+
+    /// Whether a worker or checker of `mission` may start on `machine`,
+    /// another machine than the project's: the node its intent names, when
+    /// it names one, is a pull-request change (`MissionNode::runs_elsewhere`),
+    /// the machine answers, and it holds a project of the mission's GitHub
+    /// repository, compared by the id GitHub gives it, which a rename keeps.
+    /// A checker's intent names no node of its own; the node is judged when
+    /// it is bound (`hide mission node`), which asks this same rule.
+    fn admit_elsewhere(
+        &self,
+        mission: &Mission,
+        machine: &str,
+        node: Option<&MissionNode>,
+    ) -> Result<(), String> {
+        if let Some(node) = node.filter(|node| !node.runs_elsewhere()) {
+            return Err(crate::coordination::refusal(
+                "mission_machine_node_refused",
+                &node.key,
+            ));
+        }
+        if !self.device_answers(machine) {
+            return Err("mission_machine_unavailable".into());
+        }
+        if self.projects_loading(machine) {
+            return Err("mission_projects_loading".into());
+        }
+        let repository = self
+            .github_project_on(&mission.device_id, &mission.project)
+            .and_then(|project| project.issues.repository_id.as_deref());
+        let held = repository.is_some_and(|id| {
+            self.github_projects_on(machine)
+                .any(|project| project.issues.repository_id.as_deref() == Some(id))
+        });
+        if !held {
+            return Err("mission_machine_no_repository".into());
+        }
+        Ok(())
+    }
+
+    /// The machine registration `id` runs on, when the ledger has it on
+    /// another machine than `mission`'s. A ledger Hide could not read is its
+    /// own refusal, since it cannot say where the agent runs.
+    fn registered_elsewhere(&self, mission: &Mission, id: &str) -> Result<Option<String>, String> {
+        Ok(self
+            .delivery_state()?
+            .agents
+            .iter()
+            .find(|record| record.id == id && record.machine != mission.device_id)
+            .map(|record| record.machine.clone()))
     }
 
     /// The missions whose Conductor's session is one of `sessions`
@@ -2336,7 +2409,7 @@ impl Runtime {
                     ),
                     verdict: node.verdict,
                     checks: node.checks,
-                    plan: record.and_then(|record| self.worker_plan(&record.machine, &record.pane)),
+                    plan: record.and_then(|record| self.worker_plan(record)),
                     attention: node.attention.as_ref().map(|attention| {
                         let operator = attention.operator_at_unix_ms.is_some();
                         let on_row =

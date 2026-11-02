@@ -1380,8 +1380,17 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         "mission_not_started" => {
             "The operator has not approved the mission's plan; show it to them and run hide mission start once they approve"
         }
-        "mission_machine_refused" => {
-            "A mission's workers run on the machine its project is on; leave out --machine or name that machine"
+        "mission_machine_node_refused" => {
+            "On another machine than the project's, a mission runs only a pull-request change node's worker and its checkers; leave out --machine, or name the project's machine, for this node's worker"
+        }
+        "mission_machine_unavailable" => {
+            "That machine is not connected; reconnect it in Settings > Devices and run the same command again, or leave out --machine to start the worker on the project's machine"
+        }
+        "mission_projects_loading" => {
+            "Hide is still reading that machine's projects; run the same command again in a few seconds"
+        }
+        "mission_machine_no_repository" => {
+            "Hide knows no project of the mission's GitHub repository on that machine: register a checkout of it there as a project, or wait while GitHub is still being read for that project or for the mission's own (its pull requests show once it is), then run the same command again with --repo naming it; or leave out --machine"
         }
         "mission_candidate_refused" => {
             "The worker is none of the operator's candidates in Settings > Conductor; run hide mission settings and start it as one of them (its agent, its fixed model or the CLI's default, its fixed effort)"

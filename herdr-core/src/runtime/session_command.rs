@@ -34,6 +34,18 @@ impl Runtime {
             .iter()
             .map(|device| {
                 let local = device.id == self.node.as_str();
+                let reading = !local
+                    && remote(&device.id).is_some_and(|remote| {
+                        remote.state == "connected"
+                            && remote.session.as_ref().is_some_and(|session| {
+                                let read = self.device_worktrees.get(&device.id);
+                                crate::device_catalog::git_roots(session)
+                                    .iter()
+                                    .any(|root| {
+                                        !read.is_some_and(|read| read.projects.contains_key(root))
+                                    })
+                            })
+                    });
                 DeviceFacts {
                     id: device.id.clone(),
                     label: device.label.clone(),
@@ -46,6 +58,7 @@ impl Runtime {
                                 .then(|| remote.unreachable_since_unix_ms.unwrap_or(0))
                         })
                     },
+                    reading,
                 }
             })
             .collect();

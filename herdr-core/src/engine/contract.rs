@@ -438,8 +438,12 @@ impl BuiltHolders {
             Arc::clone(&terminals.service),
             PaneShell::Fixed(shell),
         ));
+        // Asked as every own engine asks its machine's holders: through the
+        // machine's node, here this machine's in-process node, by the
+        // requests a device's node answers over its link (D-22).
+        let node = Arc::new(hide_node::Local::new(Some(home.clone())).with_panes(panes));
         Self {
-            engine: super::own::OwnEngine::new(panes),
+            engine: super::own::OwnEngine::new(super::own::link_panes(node)),
             holders,
             service: terminals.service,
             folder: hide_platform::path::to_wire(&folder).unwrap(),

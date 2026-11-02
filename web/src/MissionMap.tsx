@@ -24,6 +24,7 @@ import { MissionMapCanvas } from "./MissionMapCanvas";
 import { MissionNodePanel } from "./MissionNodePanel";
 import { MissionTurn } from "./MissionTurn";
 import { markWord, RunText, useNodeRun, useNodeTimes } from "./missionParts";
+import { planCount } from "./plans";
 import {
   attentionWords,
   defectEdges,
@@ -344,7 +345,8 @@ const ATTENTION_CARD = "border-mission-hold ring-2 ring-mission-hold/20";
  * and border, its title on one line that ends in an ellipsis (the whole
  * title on hover and in its accessible name) with Hide's mark when Hide
  * changed it last; a line holding its worker's agent mark, model and effort
- * as the panel's head draws them, and how long it has taken; and a line
+ * as the panel's head draws them, how long it has taken and its worker's
+ * plan as `n/m`; and a line
  * holding its pull requests' marks or a direct change's result, and after
  * them `! 나` or `! Conductor` when it waits on someone to look, its reason on
  * hover. A line with nothing to hold is not drawn. The Conductor's line shows
@@ -363,6 +365,8 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
   const worker = useNodeRun(node);
   const run = worker?.run ?? null;
   const took = useNodeTimes(mission, node, events, end)?.took ?? null;
+  // The worker's plan is one number at the end of that line, never a line of its own.
+  const plan = run || took ? node.plan : null;
   const titleText = (
     <span className={cn("min-w-0 flex-1 truncate text-body font-semibold", (look === "external" || look === "cancelled" || look === "waiting") && "text-muted-foreground", look === "dropped" && "text-muted-foreground line-through")} title={node.line ? undefined : node.title}>
       {node.title}
@@ -377,6 +381,7 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
         word,
         ...(node.kind === "external" && look !== "external" ? [t("mission.look.external")] : []),
         ...(run ? [run.text] : []),
+        ...(plan ? [t("plan.chip", { progress: planCount(plan) })] : []),
         ...node.prs.map((pr) => t("mission.attention.pr", { number: String(pr.number) })),
         ...(attention ? [`${t("mission.attention")} · ${attention.who} · ${attention.why}`] : []),
         ...(hide ? [t("mission.hide.mark", { what: hide })] : []),
@@ -409,6 +414,7 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
           {worker?.agent ? <AgentMark kind={worker.agent} /> : null}
           {run ? <RunText run={run} /> : null}
           {took ? <span className="shrink-0" data-node-took="true">{run ? "· " : ""}{took}</span> : null}
+          {plan ? <span className="shrink-0 font-mono tabular-nums" data-node-plan-count="true">{run || took ? "· " : ""}{planCount(plan)}</span> : null}
         </span>
       ) : null}
       {result || attention ? (

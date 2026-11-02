@@ -197,7 +197,7 @@ A cold build on an Apple M-series Mac took 46 s with a peak of 1.07 GB in the Zi
 
 `scripts/verify-cargo.sh` prepares the inputs before every mode that can build hide-vt (`test`, `lint`, `release`, and a scoped mode naming `--workspace`, `-p hide-vt` or `-p hide-holder`), which does nothing when they are ready.
 When the preparation fails, as it does without a network the first time, the command stops before cargo with the reason and the command to run where ziglang.org, github.com, codeberg.org and deps.files.ghostty.org are reachable.
-`release` builds the pane holder, which every package carries and which links hide-vt, so packaging prepares the inputs, Zig included, as a test does; `cli` builds no hide-vt and needs no Zig, and no device kit carries libghostty-vt yet.
+`release` builds the pane holder, which every package carries and which links hide-vt, so packaging prepares the inputs, Zig included, as a test does; `cli` builds no hide-vt and needs no Zig; a Linux device kit carries the pane holder, so `device-helpers.mjs build` prepares them too.
 The Mac mini's release jobs therefore prepare the inputs as its verify job `vt (macos)` does, in each job's own hide-vt input folder ([The Mac mini CI runner](#the-mac-mini-ci-runner)), and a job that finds that folder empty downloads them first, about 415 MB with Zig, before it compiles.
 
 In CI, `.github/actions/vt-cache` restores the prepared folder, keyed by the pin file, system and architecture, and Zig's caches, keyed by the pin file, `hide-vt/build.rs` (which fixes the target mapping and the `ReleaseFast` optimize mode), system and architecture.
@@ -254,7 +254,8 @@ The sealed `test`, `lint`, `release` and `cli` invocations keep their existing b
 Desktop build uses esbuild without typechecking, so its separate typecheck remains required.
 Standalone package `build` and `e2e` commands keep their preparation: web build typechecks, web package e2e builds the shell, and desktop e2e builds the host.
 The desktop packager also runs the web build with its typecheck by default, for local builds and standalone CI calls alike.
-The web package's `bundle` script owns the Vite command; both `build` after its typecheck and the packager's CI-only path call it.
+The web package's `bundle` script prepares the relay WASM and owns the Vite command; both `build` after its typecheck and the packager's CI-only path call it.
+`typecheck`, `test`, `dev` and `build:phone` also prepare their WASM prerequisite through `prepare:relay`; Cargo checks freshness on repeated calls, and a preparation failure stops the caller.
 `package.yml` accepts `web-typechecked: true` only from a caller that requires the same source's verify web build before accepting or publishing its packages.
 It passes that source as `HIDE_WEB_TYPECHECKED_SHA`; `package.mjs` requires GitHub Actions, an exact checkout commit match and unchanged web inputs and lockfile with no untracked web source, then runs Vite without repeating `tsc`.
 The `GITHUB_ACTIONS=true` check guards against mistakes, not a security boundary; a caller that sets the environment still owns the verify dependency contract.
@@ -264,10 +265,10 @@ The PR/main caller opts in only when its plan requires the `checks` lane, and th
 For macOS, the override reaches only `compile`, where the web shell is built; `assemble` uses the compiled binaries without another web build.
 Until that gate passes, a built package is unverified; the opt-in is a dependency contract, not independent proof of success.
 Other callers leave the input false, and setting the source override outside GitHub Actions or for another commit fails packaging.
-`web e2e` through this wrapper runs Playwright against the web output already built; `desktop e2e` always rebuilds the desktop host before Playwright, including a direct local invocation.
+`web e2e` through this wrapper builds the phone bundle and native relay fixture, then runs Playwright against the web output already built; `desktop e2e` always rebuilds the desktop host before Playwright, including a direct local invocation.
 Both forward the test arguments and their exit status, so a missing test filter fails the caller.
 `<web|desktop> e2e-list [args...]` only discovers tests (`playwright test --list`); it needs no app build and cannot execute tests.
-The desktop CI job uses it for the complete and filtered shard lists, then uses `desktop e2e` for execution: one fresh host build per job instead of one for each list and another for execution.
+Both web and desktop CI jobs use discovery for the complete and filtered shard lists, then use `e2e` for execution: preparation happens once per execution, never while listing tests.
 There is no skip-build flag, freshness marker or reuse of a previous job's desktop output.
 `playwright-install` installs Chromium for web or desktop; `desktop package` packages this runner's app.
 `desktop package compile` builds only the web shell and the release binaries and records them in `desktop/out/release-binaries.json` (commit, version, build order and each binary's SHA-256); `desktop package assemble` builds the host and packages exactly those binaries, refusing a record of another commit, version or order and any binary that is missing, linked or changed.
@@ -357,8 +358,8 @@ Never redirect a release target directory.
 
 | Artifact | Download into this checkout | Contents |
 | --- | --- | --- |
-| `hide-device-helper-linux-x86_64` | `desktop/out/device-helpers/linux-x86_64/` | `hided`, `hide`, `hide-agent-hooks`, `manifest.json` |
-| `hide-device-helper-linux-aarch64` | `desktop/out/device-helpers/linux-aarch64/` | same four files |
+| `hide-device-helper-linux-x86_64` | `desktop/out/device-helpers/linux-x86_64/` | `hided`, `hide`, `hide-agent-hooks`, `hide-holder`, `manifest.json` |
+| `hide-device-helper-linux-aarch64` | `desktop/out/device-helpers/linux-aarch64/` | same five files |
 
 Each producer manifest records platform, source commit, version, build order and each helper's SHA-256.
 `package.yml` resolves one identity with `desktop/scripts/build-identity.mjs` and calls the producer on every call, beside the Windows and Linux packages; a [release candidate](#unsigned-release-candidates) keeps both artifacts for the private publisher.
@@ -374,13 +375,14 @@ Downloaded artifacts need not retain executable mode bits.
 
 Before building the native app, or before assembling it from compiled binaries, `prepareDeviceBundles` copies the helpers and pinned Herdr into private worktree staging.
 Linux bytes remain unchanged; only the native Mac app follows the existing Developer ID signing and notarization path.
-It hashes the final files and builds one gzip-compressed USTAR archive per platform, containing exactly four regular entries at its root: `hided`, `hide`, `hide-agent-hooks`, `herdr`.
+It hashes the final files and builds one gzip-compressed USTAR archive per platform, containing exactly five regular entries at its root: `hided`, `hide`, `hide-agent-hooks`, `hide-holder`, `herdr`.
+The pane holder is sent only to a device of the core's own engine (PRD engine-bundle-3-core-owns D-22, `HelperPackages::payload_for`); a device on its Herdr is sent the other four, exactly as before the kit carried the holder, so only the one cached download grows by the holder's size.
 No paths, links, extended attributes or PAX records belong in an archive.
 The archive's name is `hide-device-<platform>-<app-version>.tar.gz`, without a leading `v` in the version.
-The uncompressed four-file total and the compressed archive are each capped at 256 MiB.
+The uncompressed five-file total and the compressed archive are each capped at 256 MiB.
 
-`device-bundles.json` has `format: 1`, `version`, full `commit`, decimal string `order`, and `platforms` keyed by the two Linux platform names above.
-Each platform records `asset`, archive `sha256`, archive `size` in bytes, and `files` keyed by the four program names, each with its final `sha256` and `size`.
+`device-bundles.json` has `format: 2` (format 1 had no holder; an app reads only its own release's manifest, so no build reads both), `version`, full `commit`, decimal string `order`, and `platforms` keyed by the two Linux platform names above.
+Each platform records `asset`, archive `sha256`, archive `size` in bytes, and `files` keyed by the five program names, each with its final `sha256` and `size`.
 Hashes are lowercase SHA-256 hex.
 The app ships this small manifest; the Mac package's `desktop/out/release/` receives a copy and both archives alongside the installers and updater files, and the Windows package publishes neither, so each archive is a release asset once.
 `desktop/out/device-bundles/` keeps the intermediate output, never anything under `/tmp`.
@@ -546,3 +548,31 @@ This gate proves the asset set and digests, not installation, terminal input/out
 The Windows and Linux package smoke checks cover bundled tools, daemon startup, the embedded shell and daemon shutdown; the macOS packaged-app specs and the Windows packaged window open the app itself, and the tagged commit's main `verify` run covers the end-to-end suites.
 `release-draft.mjs --publish` publishes the draft, as the latest release for a stable tag and as a pre-release for an `-rc.N` tag, only after that final read, and only when every one of those release gates passed ([CONTRIBUTING.md](../CONTRIBUTING.md#releases)); without `--publish` it prepares the draft only.
 Its source guard does not establish that the repository setting is on; verify it before release work.
+
+## Mobile relay WebAssembly
+
+`bash scripts/build-relay-wasm.sh` builds `hide-relay-protocol` for `wasm32-unknown-unknown` from source.
+The compiler comes from the root `rust-toolchain.toml`; the script installs that toolchain's WASM standard library and the exact `wasm-bindgen-cli` version matching `Cargo.lock`, with `--locked` CLI dependencies.
+Compiler output, binding tools and their build output all stay inside this worktree's `target/`.
+The crate retains `rlib` and `cdylib` outputs to use one standard Cargo build path for native and WASM; native verification also links the small cdylib, while consumers link the rlib.
+Generated browser bindings and `relay_bg.wasm` land in ignored `hide-relay-protocol/pkg/`; no compiled binary or third-party CDN script is committed.
+The library is excluded from hakari's native workspace feature union because the union includes operating-system dependencies that cannot compile for WASM; its own direct dependencies and target features remain locked.
+
+A phone bundle first runs that script, then imports `hide-relay-protocol/web/index.ts` and loads the generated local `relay_bg.wasm` asset with its exported initializer.
+The phone loader owns asset URL resolution, HTTP MIME/cache behavior and startup errors; the library owns only the shared ABI.
+The web E2E lane prepares the locked binding tool and WASM in a separate bounded step before the existing five-minute shell build, including on a cold Windows runner.
+Both hided and the browser therefore run one cryptographic implementation and one parser.
+The public checkout builds with the pinned Rust toolchain and registry dependencies, without a private binary, credential or design tool.
+`bash scripts/check-relay-protocol.sh` builds and tests both targets and their interoperability; after workspace dependency installation, `bash scripts/verify-web.sh relay-protocol typecheck` checks the TypeScript surface against the generated bindings.
+
+## Mobile relay server
+
+`bash scripts/verify-cargo.sh build -p hide-relay --bin hide-relay` builds the standalone memory-only server into `target/debug/hide-relay` (`.exe` on Windows).
+Run `target/debug/hide-relay --listen 127.0.0.1:8787` for local clients; `/ws` accepts WebSockets and `/health` answers the uptime check.
+For a deployment binary, use `bash scripts/verify-cargo.sh build --release -p hide-relay --bin hide-relay`, which keeps output in this worktree's `target/release/`.
+It is a separate service and is not packaged into the desktop app.
+`hide-relay --help` lists its entire configuration surface: a literal bind address and an optional trusted reverse-proxy IP.
+It reads no environment override, configuration file, database, persistent state or credentials.
+Its CLI parser is `hide-relay/src/config.rs`, budget authority is `limits.rs`, and [RELAY_PROTOCOL.md](RELAY_PROTOCOL.md) defines forwarding, proxy trust, log collection and reconnect semantics.
+Ctrl+C on every system, or SIGTERM on Unix, drains the server; the operating service manager owns restarting it.
+`bash scripts/verify-cargo.sh test-scoped -p hide-relay` starts private loopback listeners and real protocol clients and stops them on every exit path.

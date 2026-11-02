@@ -101,6 +101,13 @@ impl Runtime {
                     .and_then(|github| github.project(&project.path))
                 {
                     super::projects::associate_pull_requests(project, Some(found));
+                    // A node's checkouts take the read's status with its
+                    // issues (`project_node_issues`); a dialed device's here.
+                    if !reports_own_facts {
+                        for checkout in &mut project.checkouts {
+                            checkout.github = found.status.clone();
+                        }
+                    }
                     // A node's project lists its pull requests on its PRs tab
                     // as this machine's does (D-29).
                     if reports_own_facts && project.is_git {

@@ -3747,19 +3747,58 @@ impl Runtime {
         read.generation
     }
 
-    /// What GitHub last answered for the project at `root` on `device`,
-    /// stale or not: this machine's reader's for its own, a node's read
-    /// (`device_github`) for one of a node's; a device this core does not
-    /// read has none. The one place a caller picks between the two.
+    /// What GitHub last answered for `device`'s projects, stale or not:
+    /// this machine's reader's for its own, a node's read (`device_github`)
+    /// for a node's; a device this core does not read has none. The one
+    /// place a caller picks between the two.
+    fn github_on(&self, device: &str) -> Option<&crate::model::GithubSnapshot> {
+        if device == self.node.as_str() {
+            Some(&self.github)
+        } else {
+            self.device_github.get(device)
+        }
+    }
+
+    /// What GitHub last answered for the project at `root` on `device`.
     pub(super) fn github_project_on(
         &self,
         device: &str,
         root: &str,
     ) -> Option<&crate::model::GithubProjectSnapshot> {
+        self.github_on(device)?.project(root)
+    }
+
+    /// Every project on `device` GitHub last answered for.
+    pub(super) fn github_projects_on(
+        &self,
+        device: &str,
+    ) -> impl Iterator<Item = &crate::model::GithubProjectSnapshot> {
+        self.github_on(device)
+            .into_iter()
+            .flat_map(|github| github.projects.iter())
+    }
+
+    /// The worktree list of the project at `root` on `device`: this
+    /// machine's catalog for its own, a device's last list for one of its.
+    pub(super) fn project_worktrees_on(
+        &self,
+        device: &str,
+        root: &str,
+    ) -> Option<&crate::model::ProjectWorktreesSnapshot> {
         if device == self.node.as_str() {
-            self.github.project(root)
+            self.worktree_catalog.project(root)
         } else {
-            self.device_github.get(device)?.project(root)
+            self.device_worktrees.get(device)?.projects.get(root)
+        }
+    }
+
+    /// Whether `device`'s project catalog is still being read: this machine's
+    /// until its Git read answers, a device's until its first list arrives.
+    pub(super) fn projects_loading(&self, device: &str) -> bool {
+        if device == self.node.as_str() {
+            self.snapshot.git_worktrees_loading
+        } else {
+            !self.device_worktrees.contains_key(device)
         }
     }
 
@@ -3795,19 +3834,18 @@ impl Runtime {
             .copied()
     }
 
-    /// The pull requests and issues of a node's repositories, read for
+    /// The pull requests and issues of a device's repositories, read for
     /// `request`: its rows carry them, as this machine's do, and a failed
-    /// read keeps the previous ones.
+    /// read keeps the previous ones. A device this core dials reads the
+    /// same; only a node's rows show its issues (`project_node_issues`).
     pub(crate) fn ingest_device_github(
         &mut self,
         device_id: &str,
         request: &crate::github::GithubRequest,
         github: crate::model::GithubSnapshot,
     ) -> bool {
-        if !self
-            .link_origin(device_id)
-            .is_some_and(LinkOrigin::reports_own_facts)
-        {
+        // A late answer for a device removed meanwhile lands nowhere.
+        if self.link_origin(device_id).is_none() {
             return false;
         }
         let (repositories, _) = self.node_github_repositories(device_id);

@@ -46,6 +46,7 @@ LANES = (
     "policy",
     "rust",
     "checks",
+    "relay-protocol",
     "os-contract",
     "os-contract-macos",
     "vt",
@@ -222,6 +223,7 @@ def reader_entries(name):
 # OMP keeps whole crates: its public SDK contract uses hide-ai and hide-platform.
 # A new/unknown input still takes the full fallback below, never a silent skip.
 MACOS_LANE_INPUTS = {
+    "relay-protocol": {"paths": ("hide-relay-protocol/*", "hide-relay/*", "scripts/build-relay-wasm.sh", "scripts/check-relay-protocol.sh")},
     "desktop-e2e": {
         "paths": (
             "desktop/src/*", "desktop/static/*", "desktop/e2e/*",
@@ -279,10 +281,12 @@ def macos_lanes(name):
 # without a macOS path, and the lanes with a macOS leg beside their Linux and
 # Windows ones, which run without it (`pr.yml` reads the plan's `macos`).
 MACOS_ONLY_LANES = ("os-contract-macos", "desktop-e2e")
-MACOS_LEG_LANES = ("vt", "holder-restart", "omp-contract", "package")
+MACOS_LEG_LANES = ("relay-protocol", "vt", "holder-restart", "omp-contract", "package")
 # Each entry is code or CI whose macOS form only a macOS job of a pull
 # request proves. A glob's `*` includes descendants.
 MACOS_PATHS = (
+    "hide-relay-protocol/*", "hide-relay/*", "scripts/build-relay-wasm.sh", "scripts/check-relay-protocol.sh",
+    ".github/workflows/relay-protocol.yml",
     # The workflows that define the macOS jobs a pull request runs, and
     # `pr.yml`, which calls them and picks their runners and legs.
     ".github/workflows/pr.yml", ".github/workflows/desktop-e2e.yml", ".github/workflows/os-contract.yml",
@@ -456,6 +460,9 @@ SYSTEM_TESTS = (
     ("scripts/tests/test_agent_live_windows.py", JOURNEY_LANES),
 )
 NAMED_LANES = (
+    ("web/e2e/worker-owned.ts", WEB_E2E_LANES | {"relay-protocol"}),
+    ("scripts/build-relay-wasm.sh", {"relay-protocol"}),
+    ("scripts/check-relay-protocol.sh", {"relay-protocol"}),
     # The vt lane's own scripts; `prepare-vt-inputs.py`, which every Rust lane
     # runs through `verify-cargo.sh`, plans every lane.
     ("scripts/check-vt-build-refusals.sh", {"vt"}),
@@ -612,8 +619,10 @@ def classify(path, status, crates, root):
         # Every crate compiles into the Windows workspace `windows check` builds.
         lanes = {"rust", "windows-check"}
         # The web suite drives hided, so a crate it links reaches it; the
-        # desktop suite drives it too, and main's full run runs that one.
-        if "hided" in packages:
+        # desktop suite drives it too, and main's full run runs that one. The
+        # suite's own-engine job runs each pane in the holder beside hided,
+        # which hided does not link, so a crate the holder links reaches it too.
+        if packages & {"hided", "hide-holder"}:
             lanes.add("web-e2e")
         if packages & MAILBOX_CRATES:
             lanes.add("remote-mailbox")
@@ -625,6 +634,8 @@ def classify(path, status, crates, root):
             lanes.add("agy-contract")
         if crate["name"] in VT_CRATES or path.as_posix() in VT_CRATE_FILES:
             lanes.update({"vt", "holder-restart"})
+        if crate["name"] in ("hide-relay-protocol", "hide-relay"):
+            lanes.add("relay-protocol")
         if any(fnmatchcase(path.as_posix(), pattern) for pattern in HOLDER_NODE_FILES):
             lanes.add("holder-restart")
         if path.as_posix() in JOURNEY_CRATE_FILES or is_journey_product(path):

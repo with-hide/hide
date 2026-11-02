@@ -663,6 +663,8 @@ jobs:
       lane: linux
       runner: ubuntu-latest
       herdr-platform: linux-x86_64
+      # The tests bundle 3 has moved onto the core's own engine, once more on it.
+      own-engine: true
       # Median per test from twenty successful main runs, 2026-10-26..28:
       # 385 Linux tests total 3851.3 s; five shards plan at most 770.3 s,
       # six at most 641.9 s. Six is the smallest count within 720 s.
@@ -887,12 +889,20 @@ jobs:
       # and the nightly build what ships and save the release dependency set.
       quick-build: ${{ github.event_name == 'pull_request' }}
 
+  relay-protocol:
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.lanes), 'relay-protocol')
+    uses: ./.github/workflows/relay-protocol.yml
+    secrets: inherit
+    with:
+      include-macos: ${{ needs.plan.outputs.macos == 'true' }}
+
   verify:
     name: verify
     permissions:
       contents: read
       actions: read
-    needs: [plan, policy, rust, checks, os-contract, os-contract-macos, vt, holder-restart, agy-contract, omp-contract, agent-journey, agent-clis, windows-check, windows-e2e, windows-desktop, windows-wsl, web-e2e, remote-mailbox, desktop-e2e, package]
+    needs: [plan, policy, rust, checks, relay-protocol, os-contract, os-contract-macos, vt, holder-restart, agy-contract, omp-contract, agent-journey, agent-clis, windows-check, windows-e2e, windows-desktop, windows-wsl, web-e2e, remote-mailbox, desktop-e2e, package]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5

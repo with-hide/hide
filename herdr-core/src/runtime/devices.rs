@@ -214,8 +214,12 @@ impl Runtime {
                     (DeviceReach::Dialed(transport), None)
                 }
             };
-            let engine =
-                crate::engine::herdr::HerdrEngine::shared(transport.device().herdr_api_connector());
+            // A device of the core's own engine has none until its node is
+            // ready (`own_devices`); a Herdr device's engine reaches its
+            // Herdr through the link once there is one.
+            let engine = (!self.device_on_own_engine(registration)).then(|| {
+                crate::engine::herdr::HerdrEngine::shared(transport.device().herdr_api_connector())
+            });
             Ok::<_, String>((transport, arrived, engine))
         })();
         let (transport, arrived, engine) = match started {
@@ -249,44 +253,18 @@ impl Runtime {
                 )),
             );
         };
-        self.install_remote_control(live::RemoteControlContext::new(
-            device_id.clone(),
-            Arc::clone(&engine),
-            context.runtime.clone(),
-            context.notifier.clone(),
-        ));
         self.install_remote_file_transport(device_id.clone(), transport.clone());
-        let mut sync_context = session_sync::SessionSyncContext::remote(
-            device_id.clone(),
-            registration.label.clone(),
-            engine,
-            context.runtime.clone(),
-            context.notifier.clone(),
-        )
-        .with_hook_facts(self.hook_facts());
-        // Its machine is read through its node, as this machine is through
-        // its own: a node that dials in, and a WSL distribution of this PC.
-        if registration.origin.reports_own_facts() {
-            sync_context = sync_context.dialed_in(
-                super::inbound::InboundLink::for_device(&device_id, context.runtime.clone()),
-                self.own_node(),
-            );
-        }
-        let (sync, changed) = match session_sync::spawn(sync_context, None) {
-            Ok(handle) => (Some(handle), false),
-            Err(message) => {
-                crate::diagnostic!(serde_json::json!({
-                    "component": "remote_session_sync",
-                    "kind": "coordinator.spawn_failed",
-                    "target": device_id,
-                    "message": message,
-                }));
-                let changed = self.ingest_remote_session(
-                    &device_id,
-                    Err(live::SessionFetchError::Unreachable(message)),
-                );
-                (None, changed)
+        let (sync, changed) = match engine {
+            Some(engine) => {
+                self.install_remote_control(live::RemoteControlContext::new(
+                    device_id.clone(),
+                    Arc::clone(&engine),
+                    context.runtime.clone(),
+                    context.notifier.clone(),
+                ));
+                self.spawn_remote_sync(registration, engine)
             }
+            None => (None, false),
         };
         self.remote_connections.insert(
             device_id.clone(),
@@ -301,6 +279,55 @@ impl Runtime {
             None => self.start_device_host(&device_id, attempt),
         };
         changed || host_changed || self.refresh_device_snapshots()
+    }
+
+    /// Starts the coordinator of `registration`'s session on `engine`: what
+    /// the device's engine says reaches the core through it. Answers the
+    /// handle, `None` when it could not start, and whether the row changed.
+    pub(super) fn spawn_remote_sync(
+        &mut self,
+        registration: &DeviceRegistration,
+        engine: crate::engine::SharedEngine,
+    ) -> (Option<session_sync::SessionSyncHandle>, bool) {
+        let device_id = registration.id.clone();
+        let Some(context) = self.worker_context.clone() else {
+            return (None, false);
+        };
+        let mut sync_context = session_sync::SessionSyncContext::remote(
+            device_id.clone(),
+            registration.label.clone(),
+            engine,
+            context.runtime.clone(),
+            context.notifier.clone(),
+            // Every device's pull requests are read with this machine's
+            // login, by the repository its checkout's `origin` names.
+            self.own_node(),
+        )
+        .with_hook_facts(self.hook_facts());
+        // Its machine is read through its node, as this machine is through
+        // its own: a node that dials in, and a WSL distribution of this PC.
+        if registration.origin.reports_own_facts() {
+            sync_context = sync_context.dialed_in(super::inbound::InboundLink::for_device(
+                &device_id,
+                context.runtime.clone(),
+            ));
+        }
+        match session_sync::spawn(sync_context, None) {
+            Ok(handle) => (Some(handle), false),
+            Err(message) => {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "remote_session_sync",
+                    "kind": "coordinator.spawn_failed",
+                    "target": device_id,
+                    "message": message,
+                }));
+                let changed = self.ingest_remote_session(
+                    &device_id,
+                    Err(live::SessionFetchError::Unreachable(message)),
+                );
+                (None, changed)
+            }
+        }
     }
 
     pub(super) fn ingest_device_machine_id(
