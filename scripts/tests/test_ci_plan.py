@@ -297,6 +297,12 @@ class Selection(unittest.TestCase):
                 self.assertIn("vt", result["lanes"])
                 self.assertFalse(result["full"])
         self.assertIn("hide-holder", plan("vendor/portable-pty/Cargo.toml")["rust_packages"])
+        # The web suite's own-engine job runs each pane in a holder, which
+        # hided does not link, so the holder's crates reach the web suite.
+        for path in ("hide-holder/src/holder.rs", "hide-holder-protocol/src/lib.rs", "hide-vt/build.rs",
+                     "vendor/portable-pty/src/unix.rs"):
+            with self.subTest(path=path):
+                self.assertIn("web-e2e", plan(path)["lanes"])
         # The platform layer's own contract covers the resident start and the
         # session end; its every change does not wait for the Zig build.
         for path in ("hide-platform/src/process/resident.rs", "hide-kit/src/layout.rs"):

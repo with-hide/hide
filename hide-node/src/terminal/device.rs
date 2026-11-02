@@ -420,7 +420,10 @@ impl OutputSink for NodeOutputs {
 
 /// A device node's terminal service, as its link's serve loop reaches it.
 pub struct NodeTerminals {
-    service: Mutex<Option<Service>>,
+    service: Mutex<Option<Arc<Service>>>,
+    /// The node's pane holders, once its core started its terminals over
+    /// them (`Call::HoldersStart`) rather than over its Herdr.
+    holders: Mutex<Option<Arc<dyn hide_node_link::holders::PaneHolders>>>,
     uplink: Arc<Uplink>,
     attacher: AttacherFor,
     /// The node's own screens, for a node whose core runs elsewhere.
@@ -469,6 +472,7 @@ impl NodeTerminals {
     fn with_attacher(attacher: AttacherFor) -> Self {
         Self {
             service: Mutex::default(),
+            holders: Mutex::default(),
             uplink: Arc::default(),
             attacher,
             screen: None,
@@ -487,6 +491,18 @@ impl NodeTerminals {
         }
     }
 
+    /// Where the node's output goes: up its link and, for a node with its
+    /// own screens, to those too.
+    fn outputs(&self) -> Arc<dyn OutputSink> {
+        match &self.screen {
+            Some(screen) => Arc::new(NodeOutputs {
+                screen: Arc::clone(screen),
+                uplink: Arc::clone(&self.uplink),
+            }),
+            None => Arc::new(UplinkOutputs(Arc::clone(&self.uplink))),
+        }
+    }
+
     fn with_service(&self, work: impl FnOnce(&Service)) {
         // The service's own lock serializes its work; this one only guards
         // its start and stop, and a call never waits on the link.
@@ -499,17 +515,18 @@ impl NodeTerminals {
 impl hide_host::serve::Terminals for NodeTerminals {
     fn start(&self, herdr_socket: &str) -> Result<(), String> {
         let mut service = lock(&self.service);
+        if lock(&self.holders).is_some() {
+            return Err(
+                "This node's terminals run on its pane holders; one node runs one engine's panes"
+                    .to_owned(),
+            );
+        }
         if service.is_some() {
             return Ok(());
         }
-        let outputs: Arc<dyn OutputSink> = match &self.screen {
-            Some(screen) => Arc::new(NodeOutputs {
-                screen: Arc::clone(screen),
-                uplink: Arc::clone(&self.uplink),
-            }),
-            None => Arc::new(UplinkOutputs(Arc::clone(&self.uplink))),
-        };
-        // Holders run only on the local node in this bundle.
+        let outputs = self.outputs();
+        // A Herdr node's terminals: holders run when its core asks for them
+        // (`start_holders`), never because of this process's environment.
         super::holder::device_switch()?;
         let started = Service::start(
             (self.attacher)(herdr_socket),
@@ -520,9 +537,59 @@ impl hide_host::serve::Terminals for NodeTerminals {
             RetryPolicy::Manual,
         )
         .map_err(|error| format!("The device's terminal service could not start: {error}"))?;
-        *service = Some(started);
+        *service = Some(Arc::new(started));
         *lock(DIAGNOSTICS.get_or_init(|| Mutex::new(Weak::new()))) = Arc::downgrade(&self.uplink);
         Ok(())
+    }
+
+    /// The node's terminals over its own pane holders, in the device node's
+    /// own state folder (`hide_kit::layout::device_node_state`), apart from
+    /// a Hide that runs on the same account, so neither reconciles the
+    /// other's panes (PRD engine-bundle-3-core-owns D-22). A pane with no
+    /// program runs the account's shell with Hide's integration, as on the
+    /// core's own machine. Started once; asked again, it answers the same
+    /// holders.
+    fn start_holders(&self) -> Result<Arc<dyn hide_node_link::holders::PaneHolders>, String> {
+        let mut service = lock(&self.service);
+        let mut holders = lock(&self.holders);
+        if let Some(holders) = holders.as_ref() {
+            return Ok(Arc::clone(holders));
+        }
+        if service.is_some() {
+            return Err(
+                "This node's terminals run on its Herdr; one node runs one engine's panes"
+                    .to_owned(),
+            );
+        }
+        let home = hide_platform::host::home_dir()
+            .map_err(|error| format!("pane holders need the account's home: {error}"))?;
+        let state_dir = hide_kit::layout::device_node_state(&home);
+        let super::holder::LocalTerminals {
+            service: started,
+            holders: opened,
+        } = super::holder::Holders::start_local(
+            Some(super::holder::HolderFolders {
+                home: &home,
+                state_dir: &state_dir,
+            }),
+            Box::new(NoHerdr),
+            self.outputs(),
+            Arc::new(UplinkReports(Arc::clone(&self.uplink))),
+        )?;
+        let opened = opened.ok_or("the node's pane holders did not open")?;
+        let panes: Arc<dyn hide_node_link::holders::PaneHolders> =
+            Arc::new(super::engine_panes::LocalPanes::new(
+                opened,
+                Arc::clone(&started),
+                super::engine_panes::PaneShell::Account {
+                    home,
+                    user: hide_host::shell_integration::UserShell::of_process(),
+                },
+            ));
+        *service = Some(started);
+        *holders = Some(Arc::clone(&panes));
+        *lock(DIAGNOSTICS.get_or_init(|| Mutex::new(Weak::new()))) = Arc::downgrade(&self.uplink);
+        Ok(panes)
     }
 
     fn line(&self, line: &[u8]) {
@@ -605,6 +672,23 @@ impl hide_host::serve::Terminals for NodeTerminals {
         if let Some(service) = lock(&self.service).take() {
             service.close();
         }
+    }
+}
+
+/// A node whose panes are all holder panes opens nothing through Herdr.
+struct NoHerdr;
+
+impl super::Attacher for NoHerdr {
+    fn open(
+        &self,
+        pane: &str,
+        _: super::protocol::Mode,
+        _: u16,
+        _: u16,
+    ) -> Result<super::SessionParts, String> {
+        Err(format!(
+            "pane {pane} has no holder on this device, and this node runs no Herdr"
+        ))
     }
 }
 

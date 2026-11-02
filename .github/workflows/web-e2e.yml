@@ -40,6 +40,15 @@ on:
         description: How many shards deal the tests out.
         type: number
         required: true
+      own-engine:
+        description: >-
+          Also runs the tests tagged `@own` on the core's own engine
+          (HIDE_E2E_ENGINE=own, PRD engine-bundle-3-core-owns D-24): one more
+          job of the `e2e` matrix, a daemon with HIDE_DEV_PANE_HOLDER on over
+          the built `hide-holder` and no Herdr fetched at all.
+        type: boolean
+        required: false
+        default: false
       grep:
         description: Playwright `--grep` filter; empty runs every test.
         type: string
@@ -120,7 +129,8 @@ jobs:
         timeout-minutes: 20
         # The first-run choice spec runs the kit from a copy laid out as an installed app,
         # which needs the agent hooks beside `hided`.
-        run: bash scripts/verify-cargo.sh build -p hided -p hide-agent-hooks
+        # The own engine's daemon starts each pane's holder from the `hide-holder` beside it.
+        run: bash scripts/verify-cargo.sh build -p hided -p hide-agent-hooks${{ inputs.own-engine && ' -p hide-holder' || '' }}
       - name: Keep the binaries for the shards
         uses: actions/upload-artifact@v7
         timeout-minutes: 5
@@ -130,6 +140,7 @@ jobs:
             target/debug/hided${{ runner.os == 'Windows' && '.exe' || '' }}
             target/debug/hide${{ runner.os == 'Windows' && '.exe' || '' }}
             target/debug/hide-agent-hooks${{ runner.os == 'Windows' && '.exe' || '' }}
+            ${{ inputs.own-engine && format('target/debug/hide-holder{0}', runner.os == 'Windows' && '.exe' || '') || '' }}
           if-no-files-found: error
           retention-days: 1
 
@@ -173,7 +184,7 @@ jobs:
           retention-days: 1
 
   e2e:
-    name: web e2e ${{ inputs.lane }} ${{ matrix.shard }}/${{ inputs.shards }}
+    name: web e2e ${{ inputs.lane }}${{ matrix.engine == 'own' && ' own engine' || format(' {0}/{1}', matrix.shard, inputs.shards) }}
     needs: [build, build-web]
     # Both builds are skipped for a single shard; a failure or cancellation
     # in either still stops the shards, and the lane reports the failure.
@@ -190,6 +201,10 @@ jobs:
         # shard count outside 1 to 8 has an entry, and a matrix without values
         # fails the lane.
         shard: ${{ fromJSON('[[], [1], [1,2], [1,2,3], [1,2,3,4], [1,2,3,4,5], [1,2,3,4,5,6], [1,2,3,4,5,6,7], [1,2,3,4,5,6,7,8]]')[inputs.shards] }}
+        engine: [herdr]
+        # The own engine's tests are few while bundle 3 moves them onto it, so
+        # they run whole in one job beside the shards (shard 0 is no shard).
+        include: ${{ fromJSON(inputs.own-engine && '[{"shard":0,"engine":"own"}]' || '[]') }}
     steps:
       - name: Keep line endings as committed
         run: git config --global core.autocrlf false
@@ -214,7 +229,7 @@ jobs:
       - name: Build hided for Playwright
         if: ${{ inputs.shards == 1 }}
         timeout-minutes: 20
-        run: bash scripts/verify-cargo.sh build -p hided -p hide-agent-hooks
+        run: bash scripts/verify-cargo.sh build -p hided -p hide-agent-hooks${{ inputs.own-engine && ' -p hide-holder' || '' }}
       - name: Fetch hided from the build job
         if: ${{ inputs.shards > 1 }}
         uses: actions/download-artifact@v8
@@ -225,7 +240,7 @@ jobs:
       - name: Mark the binaries executable
         if: ${{ inputs.shards > 1 && runner.os != 'Windows' }}
         # An artifact does not keep the executable bit.
-        run: chmod +x target/debug/hided target/debug/hide target/debug/hide-agent-hooks
+        run: chmod +x target/debug/hided target/debug/hide target/debug/hide-agent-hooks${{ inputs.own-engine && ' target/debug/hide-holder' || '' }}
       - name: Install web dependencies
         timeout-minutes: 5
         run: bash scripts/verify-web.sh install
@@ -275,6 +290,8 @@ jobs:
         run: bash scripts/verify-web.sh web playwright-install
       - name: Fetch the pinned Herdr runtime
         id: herdr
+        # The own engine's job runs with no Herdr on the runner.
+        if: matrix.engine == 'herdr'
         timeout-minutes: 5
         # The click-flow e2e attaches hided to an isolated real Herdr; the
         # fixture refuses any binary whose version is not the pin.
@@ -291,10 +308,11 @@ jobs:
         timeout-minutes: 20
         env:
           HIDE_E2E_HERDR_BIN: ${{ steps.herdr.outputs.bin }}
+          HIDE_E2E_ENGINE: ${{ matrix.engine }}
           HIDE_E2E_SCREENSHOT_DIR: ${{ runner.temp }}/hide-e2e
           HIDE_E2E_TRACE: "1"
-          GREP: ${{ inputs.grep }}
-          SHARD: ${{ matrix.shard }}/${{ inputs.shards }}
+          GREP: ${{ matrix.engine == 'own' && '@own' || inputs.grep }}
+          SHARD: ${{ matrix.engine == 'own' && '1/1' || format('{0}/{1}', matrix.shard, inputs.shards) }}
         run: |
           mkdir -p "$HIDE_E2E_SCREENSHOT_DIR"
           args=()
@@ -349,14 +367,14 @@ jobs:
         run: |
           python3 scripts/ci-flaky-report.py --suite web --playwright web/e2e-report.json \
             --history-record agents/runs/ci-test-history \
-            --job-name "web e2e ${{ inputs.lane }} ${{ matrix.shard }}/${{ inputs.shards }}"
+            --job-name "web e2e ${{ inputs.lane }}${{ matrix.engine == 'own' && ' own engine' || format(' {0}/{1}', matrix.shard, inputs.shards) }}"
       - name: Keep this job attempt's test report
         continue-on-error: true
         timeout-minutes: 2
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
-          name: ci-test-history-web-${{ inputs.lane }}-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          name: ci-test-history-web-${{ inputs.lane }}-${{ matrix.engine == 'own' && 'own' || matrix.shard }}-attempt-${{ github.run_attempt }}
           path: agents/runs/ci-test-history/
           if-no-files-found: error
           retention-days: 7
@@ -371,7 +389,7 @@ jobs:
         if: ${{ failure() || steps.flaky.outputs.flaky == 'true' }}
         uses: actions/upload-artifact@v7
         with:
-          name: hide-web-e2e-logs-${{ inputs.lane }}-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          name: hide-web-e2e-logs-${{ inputs.lane }}-${{ matrix.engine == 'own' && 'own' || matrix.shard }}-attempt-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/hide-e2e
             web/test-results

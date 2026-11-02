@@ -591,9 +591,16 @@ Neither the switches nor a callback count prove physical compositor presentation
 
 ### Pane topology latency
 
-`MEASURE_SCENARIO=topology` measures how long a split, a zoom and unzoom, a pane close, a new tab and a tab switch take to reach the screen (PRD instant-pane-topology D-15, B23).
-It adds a second tab to the measured workspace, and with `MEASURE_SCALE=operator` or `double` `scale.sh` first fills the private server to that scale (D-18): 43 workspaces, 62 tabs, 66 panes and 30 agents of which 5 print a line every 50 ms, or twice each (86, 124, 132, 60, 10); every other workspace is its own Git checkout, agents are reported with `herdr pane report-agent`, and while the run lasts one idle agent changes state every two seconds, the agent-status-only publish D-18 prices.
-The run records `resources-idle.json` before anything moves, one echo trial under the agent churn (`echo-summary.json`, the typing half of B24), and `topology.mjs`'s rounds (`MEASURE_TOPOLOGY_ROUNDS`, 20 by default), then skips the frame window.
+`MEASURE_SCENARIO=topology` measures how long a split, a zoom and unzoom, a pane close, a new tab, a tab switch and a window resize take to reach the screen (PRD instant-pane-topology D-15, B23; PRD engine-bundle-3-core-owns B43).
+It runs on either engine, picked by `MEASURE_ENGINE` (PRD engine-bundle-3-core-owns D-15): `herdr`, the default, starts the private pinned Herdr server; `own` starts no server and gives the same `hided` `HIDE_DEV_PANE_HOLDER=1`, its panes in the `hide-holder` beside it.
+On both, `fixture.mjs` makes the whole topology with the web shell's own events on the daemon's WebSocket (`create_workspace` with the confirmation Add project sends, `create_tab`, and `focus_pane` then `create_pane` for a split, which acts on the current pane), never with an engine's CLI, and every key the run types goes through the page (`type.mjs`, `key-echo.mjs`, CDP), so a pair of runs differs in the switch alone.
+It adds a second tab to the measured workspace, and with `MEASURE_SCALE=operator` or `double` first fills the session to that scale (D-18): 43 workspaces, 62 tabs and 66 panes, 5 of which print a line every 50 ms once the idle sample is taken, or twice each (86, 124, 132, 10); every other workspace is its own Git checkout.
+No pane reports an agent and no agent state changes: the report was Herdr's own call (`herdr pane report-agent`), which has no daemon event, so the echo and the rounds no longer carry the agent-status churn the series before 2026-11-02 did, and a figure from that series is not compared with one from this.
+A printing pane is a split whose folder holds a FIFO; the run's private `.zshrc` waits on it in the foreground and `fixture.mjs drive` releases it, so the printer is the pane's own shell and ends with it.
+The run records `resources-idle.json` before anything moves, one echo trial (`echo-summary.json`, the typing half of B24), and `topology.mjs`'s rounds (`MEASURE_TOPOLOGY_ROUNDS`, 20 by default), then skips the frame window.
+Each round ends with two resizes: the page's width set to 1100 and back to 1280 with CDP `Emulation.setDeviceMetricsOverride`, `screen_ms` the canvas's new width and `frame_ms` every shown pane's new grid.
+While the rounds run, `save-watch.py` reads every 10 ms the files each engine saves its layout in (the daemon's `core-state.json` and `workspace-views.json` on both, and Herdr's session folder or the own engine's `engine` folder), and `save-summary.json` gives the writes and bytes per group and per operation the rounds made (`topology.json`'s `operations`, which counts the new tab's untimed close).
+The daemon's state folder lives in the run's short socket folder while the run lasts, because the own engine's holder sockets are under it and a run folder's path is longer than a Unix socket address takes, and the run's end moves it to `isolated/hide-state`; the own engine's holders outlive the daemon by design, so the run ends each by the pid its record names and writes how many still run to `cleanup-processes.txt`.
 The initial resource sample precedes topology/status churn, while `memory-after-topology.json` follows the driven phase.
 This scenario currently collects no continuously sampled driven CPU interval; its initial resource result is not driven CPU evidence.
 Keys are CDP `Input.dispatchKeyEvent` events, which Chrome delivers to the focused terminal as an ordinary renderer keydown, so each chord takes the web shell's own keydown path and its browser chord; a tab switch is a click on the tab.
@@ -601,6 +608,14 @@ Every time is on the page's clock from the chord's first keydown (or the click):
 `topology-summary.json` gives each operation's p50, p95 and max to screen and to frame.
 `MEASURE_HIDED_BIN` points the run at another hided, such as a baseline built from the merge base, so baseline and candidate share the fixture; run both headless (`--isolated-headless`) under the same scale and report the load beside each.
 Herdr's share and Hide's are read from the candidate's `pane_op.timing` lines in the run's `hide-state` diagnostic log (Drawn ahead of Herdr in [ARCHITECTURE.md](ARCHITECTURE.md#drawn-ahead-of-herdr)), which the baseline does not write.
+
+### Restore after a reboot
+
+`MEASURE_SCENARIO=restore` (PRD engine-bundle-3-core-owns B44) builds the topology fixture at `MEASURE_SCALE` on either engine, opens the page on it, and then kills every process the run started for the panes with SIGKILL: the daemon, then the Herdr server and everything under it, or every pane holder its records name and everything under each.
+It writes the list to `restore-victims.txt` and fails unless none of them runs within ten seconds, then notes t0 and starts them again, the Herdr server first on Herdr.
+`restore.mjs` times from t0 on the machine's wall clock: `tabs_ms` until the snapshot lays out every tab of the fixture again, `front_ms` until the page, opened as the daemon answers `/health`, shows the measured checkout's tab with every pane of it drawn, and `shells_ms` until every pane's shell has read its rc file again (the private `.zshrc` touches one file per shell in `shell-ready/`).
+A time that did not come within `MEASURE_RESTORE_SECONDS` (180) is `null`, and a missing front names what the page last showed (`front_last`).
+An agent's resume is not timed here; the engine's functional tests own it.
 
 ### The nightly performance lane
 
@@ -614,23 +629,24 @@ The fixture is the measurement's identity, so it is fixed:
 
 | Part | Contract |
 | --- | --- |
-| Topology | `scale.sh` at `operator`: 43 workspaces and 43 projects (the measured checkout, a linked worktree of the fixture repository, and 42 others that are each their own Git checkout), 62 tabs (the measured tab and the switch target, one root tab in each other workspace, 18 more), 66 panes (one per tab and four splits) |
-| Agents | 30 reported with `herdr pane report-agent`, idle at first; 5 of their panes print a line every 50 ms after the idle sample, and one idle agent changes state every 2 s through the echo and the topology rounds |
+| Topology | `fixture.mjs` at `operator`, on Herdr: 43 workspaces and 43 projects (the measured checkout, a linked worktree of the fixture repository, and 42 others that are each their own Git checkout), 62 tabs (the measured tab and the switch target, one root tab in each other workspace, 18 more), 66 panes (one per tab and four splits) |
+| Printing | No agent is reported; 5 panes print a line every 50 ms after the idle sample |
 | Idle resources | `resources-idle.json`: 20 one-second samples of the owned `hided`, Herdr and Chrome trees before anything moves |
-| Echo | One trial of 50 screen keys on the measured pane under that churn, renderer keydown to xterm write on the page's clock |
-| Topology | 20 rounds of split, zoom, unzoom, close and new tab by chord, and two tab switches by click, each to screen and to terminal, with Herdr's share and Hide's from `pane_op.timing` |
+| Echo | One trial of 50 screen keys on the measured pane, renderer keydown to xterm write on the page's clock |
+| Topology | 20 rounds of split, zoom, unzoom, close and new tab by chord, two tab switches by click and two resizes, each to screen and to terminal, with Herdr's share and Hide's from `pane_op.timing`, and the layout saves the rounds made |
 | Memory | `memory-settled.json` and `memory-after-topology.json` |
 | Browser and runner | Headless Google Chrome at 1280 × 900 on the `macos-15` hosted image |
 | Driver | `scripts/web-shell-measure/` at the run's commit |
 
-`scale.sh` writes the counts the private server answers beside the ones the scale asks for (`scale.json`), and a run whose counts differ is not this fixture.
-Changing any row of this table, `scale.sh`'s operator numbers or the driver's measurement boundaries starts a new series: do it in its own pull request that says so.
+`fixture.mjs` writes the counts the daemon's snapshot answers beside the ones the scale asks for (`scale.json`), and a run whose counts differ is not this fixture.
+The series changed on 2026-11-02 (PRD engine-bundle-3-core-owns D-24): the fixture is made through the daemon on either engine, without the agent reports and their churn, and each round adds two resizes; a record before it is not compared with one after.
+Changing any row of this table, `fixture.mjs`'s operator numbers or the driver's measurement boundaries starts a new series: do it in its own pull request that says so.
 Each record carries the driver's hash, the runner image, the Chrome, Herdr and `hided` identities and the load, so a reader compares only records of one series.
 
 `scripts/web-shell-measure/nightly.py` judges the run and writes its record, `nightly-summary.json`.
 It derives every figure again from the raw files through `summarize.py`, writes the same table to the job's summary page with the record beneath it, and fails the job in three cases only:
 
-- the fixture is not the lane's: another scenario, scale or browser mode, or a private server whose topology is not the one `scale.sh` asked for;
+- the fixture is not the lane's: another scenario, scale or browser mode, or a session whose topology is not the one `fixture.mjs` asked for;
 - a measurement is invalid by `summarize.py`'s own contract: an echo with missing, incomplete, negative or nonnumeric samples or an unproven clock boundary; or
 - a measurement is missing, because the run stopped before it.
 

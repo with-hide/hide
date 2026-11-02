@@ -93,13 +93,17 @@ impl Runtime {
     /// settle; `None` while the definitions are off or no session runs.
     pub(crate) fn agent_definitions_for_engine(
         &self,
-    ) -> Option<(crate::engine::SharedEngine, std::sync::Arc<Catalog>)> {
+    ) -> Option<(Vec<crate::engine::SharedEngine>, std::sync::Arc<Catalog>)> {
         let state = self.agent_definitions.as_ref()?;
-        let live = self.live.as_ref()?;
-        Some((
-            std::sync::Arc::clone(&live.engine),
-            std::sync::Arc::new(state.catalog.clone()),
-        ))
+        // This machine's engine, and every device's on the core's own
+        // engine, start and read agents by the same definitions.
+        let engines: Vec<_> = self
+            .live
+            .iter()
+            .map(|live| std::sync::Arc::clone(&live.engine))
+            .chain(self.own_device_engines())
+            .collect();
+        (!engines.is_empty()).then(|| (engines, std::sync::Arc::new(state.catalog.clone())))
     }
 
     /// Settings › Agents opened: read the folder again on a worker. Nothing
@@ -135,8 +139,10 @@ impl Runtime {
                         (changed, guard.agent_definitions_for_engine())
                     })
                     .unwrap_or((false, None));
-                if let Some((engine, catalog)) = handoff {
-                    engine.set_agent_definitions(catalog);
+                if let Some((engines, catalog)) = handoff {
+                    for engine in engines {
+                        engine.set_agent_definitions(Arc::clone(&catalog));
+                    }
                 }
                 if changed {
                     context.notifier.notify();

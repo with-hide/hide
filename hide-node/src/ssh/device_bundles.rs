@@ -14,7 +14,12 @@ use std::time::Duration;
 
 const MANIFEST: &str = "device-bundles.json";
 const PLATFORMS: [&str; 2] = ["linux-x86_64", "linux-aarch64"];
-const PROGRAMS: [&str; 4] = ["hided", "hide", "hide-agent-hooks", "herdr"];
+/// The pane holder, which only a device of the core's own engine is sent
+/// (PRD engine-bundle-3-core-owns D-22).
+pub(super) const HOLDER: &str = "hide-holder";
+const PROGRAMS: [&str; 5] = ["hided", "hide", "hide-agent-hooks", HOLDER, "herdr"];
+/// 2: each bundle carries the pane holder too.
+const FORMAT: u32 = 2;
 const MAX_MANIFEST: u64 = 16 * 1024;
 const MAX_BUNDLE: u64 = 256 * 1024 * 1024;
 // Two <=256 MiB slots, a <=256 MiB staging kit and <=256 MiB archive:
@@ -54,8 +59,14 @@ pub(super) fn supported(os: &str, arch: &str) -> bool {
     PLATFORMS.contains(&format!("{os}-{arch}").as_str())
 }
 
-pub(super) fn payload(directory: Option<&Path>, os: &str, arch: &str) -> Result<Payload, String> {
-    let read = || -> Result<Payload> {
+/// The device kit for `os`/`arch` from the verified release download: the
+/// payload a device on its Herdr gets, and the pane holder apart from it.
+pub(super) fn payload(
+    directory: Option<&Path>,
+    os: &str,
+    arch: &str,
+) -> Result<(Payload, Package), String> {
+    let read = || -> Result<(Payload, Package)> {
         let directory = directory
             .context("This build has no device download manifest; install a released Hide app")?;
         let path = directory.join(MANIFEST);
@@ -89,7 +100,7 @@ pub(super) fn payload(directory: Option<&Path>, os: &str, arch: &str) -> Result<
 impl Manifest {
     fn validate(&self) -> Result<()> {
         ensure!(
-            self.format == 1,
+            self.format == FORMAT,
             "Unsupported device download manifest format"
         );
         ensure!(
@@ -172,7 +183,12 @@ fn read_file(path: &Path, limit: u64) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn load(manifest: &Manifest, platform: &str, home: &Path, base: &str) -> Result<Payload> {
+fn load(
+    manifest: &Manifest,
+    platform: &str,
+    home: &Path,
+    base: &str,
+) -> Result<(Payload, Package)> {
     let bundle = manifest
         .platforms
         .get(platform)
@@ -191,7 +207,7 @@ fn load(manifest: &Manifest, platform: &str, home: &Path, base: &str) -> Result<
         lock::Waited::Locked(guard) => guard,
         _ => bail!("Another device kit download is busy"),
     };
-    // Only these four names belong here. Unknown files are refused, never
+    // Only these names belong here. Unknown files are refused, never
     // recursively removed. Staging from an interrupted attempt is reclaimed.
     for entry in fs::read_dir(&root)?.take(5) {
         let name = entry?.file_name();
@@ -238,6 +254,7 @@ fn load(manifest: &Manifest, platform: &str, home: &Path, base: &str) -> Result<
             herdr: None,
             missing: Vec::new(),
         };
+        let mut holder = None;
         for name in PROGRAMS {
             let expected = &bundle.files[name];
             let bytes = read_file(&folder.join(format!("{name}-{platform}")), expected.size)?;
@@ -251,13 +268,16 @@ fn load(manifest: &Manifest, platform: &str, home: &Path, base: &str) -> Result<
                 digest: expected.sha256.clone(),
                 executable: true,
             };
-            if name == "herdr" {
-                payload.add_herdr(file);
-            } else {
-                payload.files.push(file);
+            match name {
+                "herdr" => payload.add_herdr(file),
+                HOLDER => holder = Some(file),
+                _ => payload.files.push(file),
             }
         }
-        Ok(payload)
+        Ok((
+            payload,
+            holder.context("The device kit carries no pane holder")?,
+        ))
     })();
     stage.finish(result)
 }
@@ -332,7 +352,7 @@ fn remove_slot(path: &Path) -> Result<()> {
 fn verify_folder(folder: &Path, bundle: &Bundle, platform: &str) -> Result<()> {
     private::own_dir(folder)?;
     ensure!(
-        fs::read_dir(folder)?.take(5).count() == 4,
+        fs::read_dir(folder)?.take(PROGRAMS.len() + 1).count() == PROGRAMS.len(),
         "Incomplete cached device kit"
     );
     for (name, expected) in &bundle.files {
@@ -382,7 +402,7 @@ fn download(url: &str, bundle: &Bundle, target: &Path) -> Result<()> {
 fn unpack(stage: &Path, bundle: &Bundle, platform: &str) -> Result<()> {
     let gzip = flate2::read::GzDecoder::new(File::open(stage.join("archive.tar.gz"))?);
     // Bound tar padding and metadata too. Raw entries disable automatic PAX
-    // or long-name interpretation: this contract needs four USTAR files.
+    // or long-name interpretation: this contract needs five USTAR files.
     let mut tar = tar::Archive::new(gzip.take(MAX_BUNDLE + 16385));
     let mut seen = BTreeSet::new();
     for entry in tar.entries()?.raw(true) {

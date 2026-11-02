@@ -4,7 +4,7 @@ import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { DEVICE_PLATFORMS, DEVICE_PROGRAMS, DEVICE_BUNDLE_MANIFEST } from "../desktop/scripts/device-helpers.mjs";
+import { DEVICE_PLATFORMS, DEVICE_PROGRAMS, DEVICE_BUNDLE_MANIFEST, DEVICE_BUNDLE_FORMAT } from "../desktop/scripts/device-helpers.mjs";
 
 /**
  * The tag is the one source of a release's kind: `vX.Y.Z` is a stable
@@ -139,7 +139,7 @@ async function verifyDeviceBundles(version, directory, assets, sourceSha) {
   const digest = (value) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
   const size = (value, minimum = 1) => Number.isSafeInteger(value) && value >= minimum && value <= 256 * 1024 * 1024;
   if (!sameNames(manifest, ["format", "version", "commit", "order", "platforms"])
-    || manifest.format !== 1 || manifest.version !== version
+    || manifest.format !== DEVICE_BUNDLE_FORMAT || manifest.version !== version
     || typeof manifest.commit !== "string" || !/^[a-f0-9]{40}$/.test(manifest.commit)
     || (sourceSha !== undefined && manifest.commit !== sourceSha)
     || typeof manifest.order !== "string" || !/^[0-9]+$/.test(manifest.order)

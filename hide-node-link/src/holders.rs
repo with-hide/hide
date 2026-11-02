@@ -14,8 +14,10 @@
 /// plugins read first (PRD engine-bundle-3-core-owns D-9).
 pub use hide_agent_hooks::pane::HIDE_PANE_ID as PANE_ID_VARIABLE;
 
+use serde::{Deserialize, Serialize};
+
 /// One pane to start, under the id the core chose for it.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct HolderStart {
     /// The pane's id, which is the start's key: the same id asked again
     /// with the same command answers the pane that runs.
@@ -44,7 +46,7 @@ pub type PaneEnded = std::sync::Arc<dyn Fn(&str) + Send + Sync>;
 /// What a node found of its panes' holders when it started (PRD
 /// engine-bundle-3-core-owns D-7), under the core's pane ids, every pane it
 /// holds a record of in exactly one list.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct HolderRecovery {
     /// Panes that finished while no node ran: their program exited or a node
     /// ended them, so they close, as a pane whose program exits closes.
@@ -61,13 +63,13 @@ pub struct HolderRecovery {
 /// The processes a pane's terminal holds: its program, which is the shell
 /// of a shell pane, and the foreground process group with its members'
 /// names, or none when the system cannot say.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct HolderProcesses {
     pub shell: u32,
     pub foreground: Option<HolderForeground>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct HolderForeground {
     pub group: u32,
     /// Each member's pid and name, in the order the holder listed them.
@@ -81,16 +83,17 @@ pub use hide_holder_protocol::Key as HolderKey;
 /// What the engine types into a pane (PRD engine-bundle-3-core-owns D-21):
 /// bytes as they are, or a paste and named keys the pane's holder encodes
 /// for its program's modes when they are written.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "input", rename_all = "snake_case")]
 pub enum PaneInput {
-    Bytes(Vec<u8>),
-    Paste(Vec<u8>),
+    Bytes(#[serde(with = "base64_bytes")] Vec<u8>),
+    Paste(#[serde(with = "base64_bytes")] Vec<u8>),
     Keys(Vec<HolderKey>),
 }
 
 /// A pane's start and program as its record names them
 /// ([`PaneHolders::proof`]).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct HolderProof {
     /// The start of the pane the record is, never reused by another start.
     pub incarnation: u64,
@@ -107,7 +110,7 @@ pub struct HolderProof {
 /// one is put right by the next. The holder sends it on a connection of its
 /// own that takes nothing over and needs no screen, so a pane no screen
 /// shows is followed as one that is shown.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PaneFacts {
     /// The folder the pane's shell last reported (OSC 7, or OSC 9;9 from
     /// Windows PowerShell's prompt), in the wire spelling; `None` until it
@@ -136,7 +139,7 @@ pub struct PaneFacts {
 
 /// The program in a pane's foreground, as an agent definition's
 /// `executables` recognize it.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ForegroundProgram {
     pub pid: u32,
     /// The program's name without its folder or `.exe`; for a runtime that
@@ -156,7 +159,8 @@ pub const MAX_FOREGROUND_ARGS: usize = 64;
 pub const MAX_FOREGROUND_ARGV_BYTES: usize = 8 * 1024;
 
 /// A state a pane's screen rules can read.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ScreenState {
     Idle,
     Working,
@@ -165,7 +169,8 @@ pub enum ScreenState {
 }
 
 /// What a pane's screen rules read, or why they read nothing.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "read", rename_all = "snake_case")]
 pub enum ScreenRead {
     /// The pane was given no rules.
     #[default]
@@ -198,14 +203,14 @@ pub const WATCH_LOST: &str = "watch_lost";
 /// holder the first one the holder's evaluator can run (its
 /// `min_engine_version` at most the holder's); when none fits, the pane's
 /// screen reads [`NO_RULES_FOR_HOLDER`].
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ScreenRules {
     /// The agent definition's id, for the logs.
     pub agent: String,
     pub sets: Vec<RuleSet>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RuleSet {
     /// Where it came from, for the logs: `built-in` or the operator's file.
     pub source: String,
@@ -218,7 +223,8 @@ pub struct RuleSet {
 /// A read of a pane's screen with its styling kept, as escape sequences
 /// ([`PaneHolders::read_styled`]), as Herdr's `pane.read --format ansi`
 /// answers it.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "read", content = "rows", rename_all = "snake_case")]
 pub enum StyledRead {
     /// The rows the screen shows now (Herdr's `visible` source), which an
     /// agent's composer is judged on.
@@ -233,21 +239,25 @@ pub type PaneFactsSink = std::sync::Arc<dyn Fn(&str, &PaneFacts) + Send + Sync>;
 
 /// Why a holder call did not do what was asked. A caller branches on the
 /// kind and shows the message.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "error", rename_all = "snake_case")]
 pub enum HolderError {
     /// The node has no such pane: never started, or ended and forgotten.
-    NoPane(String),
+    NoPane { message: String },
     /// The node refused, under a stable code: the cap of holders, a pane
     /// started with another command, a holder that could not start.
-    Refused { code: &'static str, message: String },
-    /// The holder could not be reached or did not answer.
-    Unreachable(String),
+    Refused { code: String, message: String },
+    /// The holder could not be reached or did not answer, or the node's link
+    /// did not carry the call.
+    Unreachable { message: String },
 }
 
 impl std::fmt::Display for HolderError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NoPane(message) | Self::Unreachable(message) => formatter.write_str(message),
+            Self::NoPane { message } | Self::Unreachable { message } => {
+                formatter.write_str(message)
+            }
             Self::Refused { code, message } => write!(formatter, "{code}: {message}"),
         }
     }
@@ -322,4 +332,102 @@ pub trait PaneHolders: Send + Sync {
     /// any it had, or none; kept by the node and given again to a holder it
     /// reaches anew.
     fn set_rules(&self, pane: &str, rules: Option<ScreenRules>) -> Result<(), HolderError>;
+}
+
+/// One thing the core's engine asks a node's holders, by the node link
+/// (PRD engine-bundle-3-core-owns D-22): each [`PaneHolders`] request as it
+/// crosses [`crate::protocol::Call::Pane`], whichever machine the node is.
+/// The answer is a [`PaneAnswer`] of the shape the request names.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "ask", rename_all = "snake_case")]
+pub enum PaneCall {
+    /// [`PaneHolders::start`]; answers nothing.
+    Start { start: HolderStart },
+    /// [`PaneHolders::shell_launch`]; answers an optional
+    /// [`crate::protocol::ShellLaunch`].
+    ShellLaunch,
+    /// [`PaneHolders::terminate`]; answers nothing.
+    Terminate { pane: String },
+    /// [`PaneHolders::read`]; answers a [`PaneText`].
+    Read { pane: String, lines: u16 },
+    /// [`PaneHolders::read_styled`]; answers a [`PaneText`].
+    ReadStyled { pane: String, read: StyledRead },
+    /// [`PaneHolders::processes`]; answers [`HolderProcesses`].
+    Processes { pane: String },
+    /// [`PaneHolders::proof`]; answers a [`HolderProof`].
+    Proof { pane: String },
+    /// [`PaneHolders::input`]; answers nothing.
+    Input { pane: String, input: PaneInput },
+    /// [`PaneHolders::letter`]; answers nothing once the submit was handed
+    /// over.
+    Letter {
+        pane: String,
+        body: PaneInput,
+        submit: PaneInput,
+        gap_ms: u64,
+    },
+    /// [`PaneHolders::recovered`]; answers [`HolderRecovery`].
+    Recovered { timeout_ms: u64 },
+    /// [`PaneHolders::set_rules`]; answers nothing.
+    SetRules {
+        pane: String,
+        rules: Option<ScreenRules>,
+    },
+}
+
+/// A pane's text as a read answers it, and whether rows were left out.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaneText {
+    pub text: String,
+    pub truncated: bool,
+}
+
+/// What a node answers a [`PaneCall`] with: the request's answer, or the
+/// holders' own refusal, which keeps its kind and code across the link.
+pub type PaneAnswer = Result<serde_json::Value, HolderError>;
+
+/// What a node's pane watch ([`crate::protocol::Call::PaneWatch`]) reports,
+/// until the core answers a report with false: each pane's facts whenever
+/// they change, each pane whose program exited on its own, and, once a
+/// second with nothing else to say, that it still watches, so a core that
+/// no longer listens is heard within a second.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "report", rename_all = "snake_case")]
+pub enum PaneWatchReport {
+    Facts { pane: String, facts: PaneFacts },
+    Ended { pane: String },
+    Quiet,
+}
+
+/// How many pane requests ([`crate::protocol::Call::is_pane`]) a node works
+/// on at once, and the core admits per node: a restore's eight starts, and
+/// the one pane watch beside them.
+pub const PANE_LANE: usize = 9;
+
+/// How often a quiet pane watch says it still watches.
+pub const PANE_WATCH_QUIET: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// The most reports a node's pane watch keeps waiting for its core: one
+/// facts per pane and the panes that ended, for the node's cap of holders.
+/// Past it the oldest facts go first (the pane's next facts put it right);
+/// an end is never dropped while a facts report can make room.
+pub const PANE_WATCH_CAP: usize = 4 * 128;
+
+/// Bytes as base64 text in a JSON line.
+mod base64_bytes {
+    use base64::Engine;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub(super) fn serialize<S: Serializer>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&base64::engine::general_purpose::STANDARD.encode(bytes))
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Vec<u8>, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        base64::engine::general_purpose::STANDARD
+            .decode(text)
+            .map_err(serde::de::Error::custom)
+    }
 }
