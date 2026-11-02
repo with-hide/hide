@@ -68,6 +68,7 @@ const KEYS = new Map<string, MessageKey>([
   ["agent_start.line_unchecked", "coreError.agent.lineUnchecked"],
   ["agent_start.refused_by_herdr", "coreError.agent.refusedByHerdr"],
   ["agent_start.unconfirmed", "coreError.agent.unconfirmed"],
+  ["agent_start.prompt_not_typed", "coreError.agent.promptNotTyped"],
   ["agent_start.not_saved", "coreError.agent.notSaved"],
   ["agent_start.no_start_dialect", "coreError.agent.noStartDialect"],
   ["agent_start.terminal_device_unavailable", "coreError.agent.terminalDeviceUnavailable"],
