@@ -66,7 +66,7 @@ Health requests do not use WebSocket admission or IP-rate budget.
 A refusal closes its sending socket, leaving unrelated sockets intact; closing the room's owning device necessarily disconnects that room's phones too.
 If a phone recipient's data queue is full, that phone is refused and removed; the device receives `peer_left`, and other phones remain live.
 If a phone fills the device's data queue, the sending phone is refused; an unauthenticated burst cannot evict the device.
-Control messages have sixteen independently reserved slots, so data cannot exhaust lifecycle capacity.
+Control messages have sixteen independently reserved slots, so data cannot exhaust lifecycle capacity; library embeddings may lower this through `Limits::queued_controls`.
 Each successful join reserves its eventual `peer_left` slot before inserting the phone; new joins are refused when those slots run out.
 One bounded FIFO merges data and control while preserving `peer_joined`, data and `peer_left` order; permits remain held through each write.
 If the device itself cannot receive data or `peer_left`, it is disconnected so it cannot keep a ghost peer.

@@ -886,7 +886,11 @@ async fn restart_waits_for_an_incomplete_http_handshake_and_exits_cleanly() {
 #[tokio::test]
 async fn an_unauthenticated_phone_burst_cannot_evict_the_device_or_hide_peer_left() {
     use futures_util::StreamExt;
-    let mut fixture = Fixture::start(Limits::default()).await;
+    let mut fixture = Fixture::start(Limits {
+        queued_controls: 4,
+        ..Limits::default()
+    })
+    .await;
     let mut device = fixture.socket_with_small_receive_window("192.0.2.1").await;
     let hello = register(&mut device, &DeviceKey::from_seed(&[38; 32])).await;
     let mut good = fixture.socket("192.0.2.2").await;
@@ -942,8 +946,9 @@ async fn an_unauthenticated_phone_burst_cannot_evict_the_device_or_hide_peer_lef
     };
     assert_eq!(u16::from(close.code), 1013);
     fixture.cap("outbound_queue");
-    // Churning unauthenticated joins must leave reserved departure capacity
-    // for every accepted phone even while the device's write is blocked.
+    // Hold admitted phones until their departure reservations exhaust the
+    // lowered control budget. This does not depend on kernel send-buffer size
+    // or whether pending lifecycle messages have already reached the device.
     let mut churn = Vec::new();
     let mut control_refused = false;
     for host in 10..30 {
@@ -958,9 +963,7 @@ async fn an_unauthenticated_phone_burst_cannot_evict_the_device_or_hide_peer_lef
         .await;
         match control(&mut phone).await {
             ServerMessage::Joined { connection, .. } => {
-                churn.push(connection);
-                send(&mut phone, ClientMessage::Close { connection }).await;
-                closed(&mut phone, 1000).await;
+                churn.push((connection, phone));
             }
             ServerMessage::Refused {
                 reason: Refusal::ConnectionLimit,
@@ -977,6 +980,20 @@ async fn an_unauthenticated_phone_burst_cannot_evict_the_device_or_hide_peer_lef
         "bounded lifecycle queue must refuse new joins"
     );
     fixture.cap("control_queue");
+    assert!(
+        !churn.is_empty(),
+        "accepted phones must retain departure reservations"
+    );
+    for (connection, phone) in &mut churn {
+        send(
+            phone,
+            ClientMessage::Close {
+                connection: *connection,
+            },
+        )
+        .await;
+        closed(phone, 1000).await;
+    }
     // Drain already forwarded attack frames; lifecycle metadata still arrives
     // after that data, before the healthy phone's next frame.
     loop {
@@ -996,14 +1013,20 @@ async fn an_unauthenticated_phone_burst_cannot_evict_the_device_or_hide_peer_lef
             message => panic!("device was not kept live {message:?}"),
         }
     }
-    for connection in churn {
+    for (connection, _) in &churn {
         assert_eq!(
             control(&mut device).await,
-            ServerMessage::PeerJoined { connection }
+            ServerMessage::PeerJoined {
+                connection: *connection
+            }
         );
+    }
+    for (connection, _) in &churn {
         assert_eq!(
             control(&mut device).await,
-            ServerMessage::PeerLeft { connection }
+            ServerMessage::PeerLeft {
+                connection: *connection
+            }
         );
     }
     exchange(

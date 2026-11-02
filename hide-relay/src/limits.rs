@@ -25,6 +25,7 @@ pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(16);
 #[derive(Clone, Copy)]
 pub struct Limits {
     pub idle_timeout: Duration,
+    pub queued_controls: usize,
     pub connections: usize,
     pub phones_per_room: usize,
     pub connections_per_ip: usize,
@@ -36,6 +37,7 @@ impl Default for Limits {
     fn default() -> Self {
         Self {
             idle_timeout: IDLE_TIMEOUT,
+            queued_controls: MAX_QUEUED_CONTROLS,
             connections: MAX_CONNECTIONS,
             phones_per_room: MAX_PHONES_PER_ROOM,
             connections_per_ip: MAX_CONNECTIONS_PER_IP,
@@ -49,6 +51,8 @@ impl Limits {
     pub(crate) fn valid(self) -> bool {
         !self.idle_timeout.is_zero()
             && self.idle_timeout <= IDLE_TIMEOUT
+            && self.queued_controls > 0
+            && self.queued_controls <= MAX_QUEUED_CONTROLS
             && self.connections > 0
             && self.connections <= MAX_CONNECTIONS
             && self.phones_per_room > 0

@@ -156,7 +156,7 @@ impl State {
                 role: Role::Pending,
                 output,
                 data_capacity: Arc::new(Semaphore::new(MAX_QUEUED_FRAMES)),
-                control_capacity: Arc::new(Semaphore::new(MAX_QUEUED_CONTROLS)),
+                control_capacity: Arc::new(Semaphore::new(self.limits.queued_controls)),
                 departure_capacity: None,
                 end,
                 bytes: 0,
