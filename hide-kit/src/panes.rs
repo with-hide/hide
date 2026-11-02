@@ -719,7 +719,11 @@ impl Panes {
         match first_line(reader, START_LIMIT) {
             Report::Line(line) if line.starts_with("ready ") => {
                 let ready = stages.begun.elapsed();
-                let _lock = self.lock()?;
+                // Records are replaced atomically, as `record()` reads
+                // them without the writer lock. This read changes nothing
+                // and checks the reserved incarnation below; taking every
+                // holder's writer lock here held a completed start behind
+                // unrelated starts before its worker could take another.
                 match record::read(&layout::pane_record(&self.state_dir, pane)) {
                     // A program that exits at once may have ended the pane
                     // by now; the start still took place.
