@@ -434,7 +434,8 @@ Hide keeps it only while a worktree it made for Grok in that repository is there
 A worktree whose repository has no main checkout (a bare repository's) is refused, since Grok keeps its trust under no folder Hide can name.
 
 Pi 1.0.4 keeps one JSON object of resolved folders, each `true`, `false` or `null`, and reads the nearest decision from the folder up: the folder's own entry, else the nearest folder above it that has one, `null` being none (`findNearestTrustEntry`, measured 2026-11-02 by reading its source and answering its question in an isolated HOME).
-So Hide's entry names the worktree by its resolved path as Pi resolves it (`realpath`), a folder above it the operator already trusts in Pi leaves Hide nothing to add, and one the operator answered "Do not trust" for, the worktree or a folder above it, is refused like Grok's No.
+So Hide's entry names the worktree by its resolved path as Pi resolves it (`realpath`), a folder above it the operator already answered for in Pi leaves Hide nothing to add, "Do not trust" included: Pi asks nothing once a decision is saved, so Hide writes nothing and the start goes on as it would without Hide.
+Switching Pi off, like removing Hide from the machine, takes Hide's entries out of the file with Pi's extension (`Plugin::trust`), and leaves the operator's.
 Hide writes the file under Pi's own lock, proper-lockfile's `trust.json.lock` folder beside the file as spelled, which Pi takes around every read and write and gives up on after ten tries 20 ms apart, so Hide holds it only across its own read and write and Pi's start does not meet it; a lock left more than ten seconds is taken over as Claude Code's is.
 Hide writes the folder the agent folder would be if Pi has not made it yet, as Pi does, so a Pi started there for the first time finds the trust.
 

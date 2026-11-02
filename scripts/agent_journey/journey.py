@@ -16,7 +16,7 @@ import time
 
 from agent_live_check.processes import ProcessError
 from agent_live_check.protection import write_private
-from agent_live_check.system import git, same_path
+from agent_live_check.system import WINDOWS, git, same_path
 
 from . import cells, composer, fork, kit, memory, provider_limit, title, usage
 from .requests import model_requests
@@ -114,48 +114,43 @@ def brief(value):
 
 # A brief's cap in bytes (herdr-core `delivery::BODY_LIMIT`, `invalid_brief`).
 BRIEF_CAP = 16 * 1024
-# The most bytes of a brief's prompt argument a start carries, on every
-# system (herdr-core `coordination::executor::LAUNCH_PROMPT_BYTES`); a longer
-# brief is typed once the agent runs.
-LAUNCH_PROMPT_BYTES = 6 * 1024
 
 
-def argument_bytes(text):
-    """The bytes of `text` as the start's prompt argument: each line break
-    as U+2028 and each tab as four spaces (`worktree_control::prompt_argument`)."""
-    return len(text.replace("\r\n", "\n").replace("\n", "\u2028").replace("\t", "    ").encode())
-
-
-def filled(head, value, size, measure):
-    """`head`, notes over many lines with tabs, and the request last, exactly
-    `size` by `measure`, so a start or a typing that cut it, read it as
-    options or files, or submitted it twice shows in the agent's record
-    (cells.record_verdict)."""
-    tail = f"\n\n## Request\n{prompt(value)}\n"
-    line = "- Note:\tkeep `hide agent show` and `--brief-file` as they are; nothing to change here.\n"
-    notes = ""
-    while measure(head + notes + line + tail) <= size:
-        notes += line
-    notes += "." * (size - measure(head + notes + tail))
-    text = head + notes + tail
-    assert measure(text) == size, measure(text)
-    return text
+def rides_start():
+    """Whether Hide carries a brief as the start's prompt on this system. On
+    Windows the journey starts every CLI through a .cmd launcher
+    (agent_live_check.system.launcher), as npm's shim of a CLI is, and a start
+    through cmd.exe carries no prompt (herdr-core `start_prompt`), so the
+    brief is typed there."""
+    return not WINDOWS
 
 
 def long_brief(value):
     """A brief an agent's start carries as its prompt argument, of the forms
     a command line and an option parser can take apart: it starts with `-`,
-    holds tabs and many lines, and is as long as a start carries."""
-    return filled("-JOURNEY brief, not an option\tof the agent\n\n## Notes\n", value, LAUNCH_PROMPT_BYTES,
-                  argument_bytes)
+    holds tabs and hundreds of lines, and is as long as a brief may be, its
+    request last, so a start that cut it, read it as options or submitted it
+    twice shows in the agent's record (cells.record_verdict)."""
+    head = "-JOURNEY brief, not an option\tof the agent\n\n## Notes\n"
+    tail = f"\n\n## Request\n{prompt(value)}\n"
+    line = "- Note:\tkeep `hide agent show` and `--brief-file` as they are; nothing to change here.\n"
+    room = BRIEF_CAP - len((head + tail).encode())
+    notes = (line * (room // len(line.encode()) + 1)).encode()[:room].decode()
+    text = head + notes + tail
+    assert len(text.encode()) == BRIEF_CAP, len(text.encode())
+    return text
+
+
+# The file `at_brief` names, which no measured repository holds.
+MISSING_FILE = "journey-missing-file.md"
 
 
 def at_brief(value):
-    """A launched brief that starts with `@` and a file of the repository,
-    which Pi 1.0.4 reads as a file to attach (so Pi types its brief) and omp
-    attaches, over lines and tabs, as long as a start carries."""
-    return filled("@README.md is the repository's one file.\n\tIt needs no change.\n\n## Notes\n", value,
-                  LAUNCH_PROMPT_BYTES, argument_bytes)
+    """A brief that starts with `@` and names a file the repository does not
+    have, over lines and a tab: Pi 1.0.4 reads such a word as a file and
+    exits 1 (so Pi types its brief), and a release of another CLI that starts
+    doing so fails this cell."""
+    return f"@{MISSING_FILE} names no file of this repository.\n\tIt needs no change.\n\n{prompt(value)}\n"
 
 
 class Journey:
@@ -403,7 +398,7 @@ class Journey:
         # record has to confirm: as the start's prompt argument where the
         # agent declares that, as long as a start carries, and typed
         # otherwise; the untrusted start keeps the agent's prompt argument.
-        launched = self.own_rungs and self.launches()
+        launched = self.own_rungs and self.launches() and rides_start()
         sent = long_brief(first) if launched else brief(first)
         args, answer, attempts = self.spawn("journey-" + self.id, self.repository, self.branch, worktree,
                                             sent if self.brief_start else prompt(first),
@@ -449,9 +444,10 @@ class Journey:
         return (self.row.get("input") or [None])[0] == "launch_prompt"
 
     def launch_brief(self, repository):
-        """A brief that starts with `@`, in a start of its own in a worktree
-        of a repository the account never trusted: the start carries it once,
-        past any screen of the agent's, and the agent records it exactly."""
+        """A brief that starts with `@` naming a missing file, in a start of
+        its own in a worktree of a repository the account never trusted: the
+        start carries it once, past any screen of the agent's, or on Windows
+        it is typed once (`rides_start`), and the agent records it exactly."""
         if not cells.measurable(self.table, self.id, "launch_brief"):
             return
         value = token()
@@ -474,7 +470,7 @@ class Journey:
             turn, read, record["activities"] = self.wait_turn(0, value)
             spawn_record = self.spawn_record(name)
             record["brief_input"], record["read"] = (spawn_record or {}).get("brief_input"), read
-            self.settle("launch_brief", cells.start_verdict(spawned, turn, cells.brief_verdict(spawn_record, True),
+            self.settle("launch_brief", cells.start_verdict(spawned, turn, cells.brief_verdict(spawn_record, rides_start()),
                                                             cells.record_verdict(read, sent, value)),
                         self.evidence("launch-brief", record))
         finally:

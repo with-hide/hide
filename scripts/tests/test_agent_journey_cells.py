@@ -395,15 +395,15 @@ class LaunchedBriefRecord(unittest.TestCase):
             self.assertIn("differs from it at character", verdict[1])
         self.assertEqual(cells.record_verdict({"error": "gone"}, self.BRIEF, "JOURNEY-0000A001")[0], cells.FAIL)
 
-    def test_both_launched_briefs_fill_what_a_start_carries(self):
-        from agent_journey.journey import LAUNCH_PROMPT_BYTES, argument_bytes, at_brief, long_brief
-        for text, first in ((long_brief("JOURNEY-0000A001"), "-"), (at_brief("JOURNEY-0000A001"), "@README.md ")):
-            # As the start's argument: a line break is U+2028, three bytes, and a tab four spaces.
-            argument = text.replace("\n", "\u2028").replace("\t", "    ")
-            self.assertEqual(len(argument.encode()), LAUNCH_PROMPT_BYTES)
-            self.assertTrue(text.startswith(first) and "\t" in text and text.count("\n") > 30)
-            self.assertTrue(text.rstrip().endswith("Reply with exactly JOURNEY-0000A001"))
-        self.assertEqual(argument_bytes("a\tb\nc"), 1 + 4 + 1 + 3 + 1)
+    def test_the_long_brief_fills_a_brief_and_the_at_brief_names_a_missing_file(self):
+        from agent_journey.journey import BRIEF_CAP, MISSING_FILE, at_brief, long_brief
+        text = long_brief("JOURNEY-0000A001")
+        self.assertEqual(len(text.encode()), BRIEF_CAP)
+        self.assertTrue(text.startswith("-") and "\t" in text and text.count("\n") > 100)
+        self.assertTrue(text.rstrip().endswith("Reply with exactly JOURNEY-0000A001"))
+        at = at_brief("JOURNEY-0000A001")
+        self.assertTrue(at.startswith(f"@{MISSING_FILE} ") and "\t" in at and "\n" in at)
+        self.assertTrue(at.rstrip().endswith("Reply with exactly JOURNEY-0000A001"))
 
 
 class InputRung(unittest.TestCase):
