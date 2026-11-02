@@ -1,17 +1,21 @@
-// The S6 flow on an isolated pinned Herdr and hided: a first run on Main, a Project's
-// Overview and its Workspace (B1, B2, B4), the right lane from its rail, the
-// path's menu and the chords, one tool at a time, pinned beside live agents
-// with a terminal resized once per pin change (PRD right-lane), a delegated
-// child reached from its parent's chip and left by its Return (B14-B16), and
-// a restart that brings the Workspace back with a View tab whose file is gone
-// marked unavailable (B19, B20).
+// The S6 flow on an isolated engine and hided, on either engine: a first run
+// on Main, a Project's Overview and its Workspace (B1, B2, B4), the right lane
+// from its rail, the path's menu and the chords, one tool at a time, pinned
+// beside live agents with a terminal resized once per pin change (PRD
+// right-lane), and a restart that brings the Workspace back with a View tab
+// whose file is gone marked unavailable (B19, B20). A delegated child reached
+// from its parent's chip and left by its Return (B14-B16) is its own test on a
+// family fixture, whose agents write no input log.
 
 import { expect, test, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
-import { declareParent, herdrHasFocus, startHerdr } from "./herdr-fixture";
+import { corePaneFocus, withControl } from "./daemon-actions";
+import { startFixture } from "./engine-fixture";
+import { spawnChild } from "./fixture-agents";
+import { claudeProjects, writeFixtureTranscript } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
-import { chooseLane, countSent, pinState, screenshot, setLanePinned, showExplorer } from "./wire";
+import { chooseLane, countSent, enterWorkspace, pinState, screenshot, setLanePinned, showExplorer } from "./wire";
 import { chord } from "./chords";
 import { projectRow } from "./overview-entry";
 import { toPage } from "../../desktop/src/main/wirePath";
@@ -51,18 +55,18 @@ async function savedFront(daemon: Daemon, pattern: RegExp): Promise<void> {
   await expect.poll(savedFronts).toEqual([expect.stringMatching(pattern)]);
 }
 
-test("Main, Overview and a Workspace with its lane, tools and delegated child", async ({ page }) => {
+test("Main, Overview and a Workspace with its lane and tools", async ({ page }) => {
   // Wide enough to dock the lane beside the agents.
   await page.setViewportSize({ width: 1920, height: 1000 });
-  const herdr = await startHerdr();
+  const fixture = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    const [parent, child] = herdr.panes;
     // The Explorer names rows by the checkout's resolved path.
-    const root = path.join(fs.realpathSync(herdr.root), "fixture");
-    fs.writeFileSync(path.join(herdr.root, "fixture", "notes.md"), "# Notes\n\nkept across a restart\n");
-    fs.writeFileSync(path.join(herdr.root, "fixture", "gone.txt"), "removed before the restart\n");
-    daemon = await startHided(herdr, "s6");
+    const root = path.join(fs.realpathSync(fixture.root), "fixture");
+    fs.writeFileSync(path.join(fixture.root, "fixture", "notes.md"), "# Notes\n\nkept across a restart\n");
+    fs.writeFileSync(path.join(fixture.root, "fixture", "gone.txt"), "removed before the restart\n");
+    daemon = await startHided(fixture, "s6");
+    const [parent, child] = fixture.panes;
     const last = new Map<string, Record<string, unknown>>();
     const sent = countSent(page, last);
     await open(page, daemon);
@@ -164,15 +168,15 @@ test("Main, Overview and a Workspace with its lane, tools and delegated child", 
     await expect(page.locator(`[data-pane-view="${child}"]`)).toHaveAttribute("data-focused", "true", { timeout: 15_000 });
     await expect.poll(() => last.get("focus_pane")).toMatchObject({ pane_id: child, origin: "operator" });
     await page.keyboard.type("typed beside the lane");
-    await expect.poll(() => fs.readFileSync(herdr.inputLogs[1], "utf8"), { timeout: 10_000 }).toContain("typed beside the lane");
+    await expect.poll(() => fs.readFileSync(fixture.inputLogs[1], "utf8"), { timeout: 10_000 }).toContain("typed beside the lane");
     await expect(workspace).toHaveAttribute("data-lane-mode", "docked");
-    const mouseReports = () => fs.readFileSync(herdr.inputLogs[1], "latin1").split("\x1b[<0;").length - 1;
+    const mouseReports = () => fs.readFileSync(fixture.inputLogs[1], "latin1").split("\x1b[<0;").length - 1;
     const reportsBefore = mouseReports();
     await childHost.click({ position: { x: 40, y: 60 } });
     await expect.poll(mouseReports, { timeout: 10_000 }).toBe(reportsBefore + 2);
-    const heardBefore = fs.readFileSync(herdr.inputLogs[1], "latin1").length;
+    const heardBefore = fs.readFileSync(fixture.inputLogs[1], "latin1").length;
     await page.keyboard.press(chord("find_in_pane"));
-    await expect.poll(() => JSON.stringify(fs.readFileSync(herdr.inputLogs[1], "latin1").slice(heardBefore)), { timeout: 10_000 }).toBe(JSON.stringify("\x0f/"));
+    await expect.poll(() => JSON.stringify(fs.readFileSync(fixture.inputLogs[1], "latin1").slice(heardBefore)), { timeout: 10_000 }).toBe(JSON.stringify("\x0f/"));
     await expect.poll(() => last.get("pane_find_open")).toMatchObject({ pane_id: child });
     await expect(page.locator(".cm-search")).toHaveCount(0);
     await expect(page.locator("[data-find-bar]")).toHaveCount(0);
@@ -212,7 +216,7 @@ test("Main, Overview and a Workspace with its lane, tools and delegated child", 
     await page.locator(`[data-agent-open="${parent}"]`).first().click();
     await expect(page.locator(`[data-pane-view="${parent}"]`)).toHaveAttribute("data-focused", "true", { timeout: 15_000 });
     await expect(workspace).toHaveAttribute("data-lane-mode", "docked");
-    await expect.poll(() => herdrHasFocus(herdr, parent), { timeout: 15_000 }).toBe(true);
+    await withControl(daemon, (control) => control.until((rest) => corePaneFocus(rest) === parent || undefined, `${parent} focused`, 15_000));
 
     // B19: a window too narrow to dock opens the pinned lane over the agents
     // and stores nothing; widening docks it again.
@@ -227,22 +231,64 @@ test("Main, Overview and a Workspace with its lane, tools and delegated child", 
     await expect(workspace).toHaveAttribute("data-lane-mode", "docked");
     await expect(page.locator(`[data-pane-view="${parent}"]`)).toHaveAttribute("data-focused", "true", { timeout: 15_000 });
 
-    // A declared child shows in its parent's header tree; the core
-    // moves the delegated pane to its own tab, so the chip crosses tabs with
-    // one tracked focus, and the child's Return comes back the same way
-    // (B14-B16).
-    declareParent(herdr, child, parent);
+    // A restart brings the Workspace back with its lane docked at its width
+    // and its View tabs; the file that went away stays as an unavailable tab
+    // (S6 B19, B20; PRD right-lane B22).
+    const laneWidth = (await lane.boundingBox())!.width;
+    await lane.locator('[data-tab-kind="file"]', { hasText: "gone.txt" }).click();
+    await savedFront(daemon, /\/gone\.txt$/);
+    fs.rmSync(path.join(fixture.root, "fixture", "gone.txt"));
+    daemon = await daemon.restart();
+    // Reopening the app is a fresh page, not a reconnect of this one.
+    await page.goto("about:blank");
+    await open(page, daemon);
+    await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "docked", { timeout: 20_000 });
+    await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-view", "documents");
+    await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-shows", "explorer");
+    await expect.poll(async () => (await lane.boundingBox())!.width).toBeCloseTo(laneWidth, 0);
+    await expect(page.locator('[data-view-area] [data-tab-kind="file"]')).toHaveCount(2, { timeout: 15_000 });
+    await expect(page.locator('[data-view-area] [data-unavailable="true"]')).toHaveCount(1);
+    await expect(page.locator("[data-view-area] [data-close-unavailable]")).toBeVisible();
+    await screenshot(page, "s6-restored-unavailable");
+  } finally {
+    daemon?.stop();
+    fixture.stop();
+  }
+});
+
+test("a delegated child is reached from its parent's chip and left by its Return", async ({ page }) => {
+  // Wide enough to dock the lane beside the agents.
+  await page.setViewportSize({ width: 1920, height: 1000 });
+  const fixture = await startFixture({ family: true });
+  let daemon: Daemon | null = null;
+  try {
+    daemon = await startHided(fixture, "s6-child");
+    const [parent] = fixture.panes;
+    const last = new Map<string, Record<string, unknown>>();
+    const sent = countSent(page, last);
+    await open(page, daemon);
+    await enterWorkspace(page, "fixture");
+    await expect(page.locator(`[data-pane-view="${parent}"]`)).toHaveAttribute("data-focused", "true", { timeout: 15_000 });
+
+    // A delegated child shows in its parent's header tree; the core
+    // puts the delegated pane in a tab of its own, so the chip crosses tabs
+    // with one tracked focus, and the child's Return comes back the same way
+    // (B14-B16). The agent delegates it as a real one does, on a session
+    // whose transcript names it.
+    const session = `s6-child-${process.pid}`;
+    writeFixtureTranscript(claudeProjects(fixture), session, { task: "Agent three" });
+    const child = await spawnChild(fixture, daemon, parent, { name: "agent-three", repo: fs.realpathSync.native(path.join(fixture.root, "fixture")), session });
     await expect(page.locator(`[data-pane-view="${child}"]`)).toHaveCount(0, { timeout: 20_000 });
     await page.locator(`[data-pane-view="${parent}"] [data-pane-tree="${parent}"]`).click();
     const chip = page.locator(`[data-agent-child="${child}"]`);
     await expect(chip).toBeVisible({ timeout: 20_000 });
-    await expect(chip).toContainText("Agent two");
+    await expect(chip).toContainText("Agent three");
     await screenshot(page, "s6-child-chip");
     await chip.click();
     await expect.poll(() => last.get("focus_pane")?.pane_id).toBe(child);
     expect(last.get("focus_pane")?.request_id).toEqual(expect.any(String));
     await expect(page.locator(`[data-pane-view="${child}"]`)).toHaveAttribute("data-focused", "true", { timeout: 15_000 });
-    // Herdr's layout confirms the move, and the in-flight line goes away.
+    // The engine's layout confirms the move, and the in-flight line goes away.
     await expect(page.locator("[data-relation-status]")).toHaveCount(0, { timeout: 15_000 });
     const back = page.locator(`[data-pane-view="${child}"] [data-pane-return="${parent}"]`);
     await expect(back).toBeVisible();
@@ -269,28 +315,8 @@ test("Main, Overview and a Workspace with its lane, tools and delegated child", 
     // button's hint up after it; the hint waits for the pointer to come back.
     await quietFor(page, 800, "the closed menu's button does not bring its hint up");
     await expect(page.locator('[data-slot="tooltip-content"]')).toHaveCount(0);
-
-    // A restart brings the Workspace back with its lane docked at its width
-    // and its View tabs; the file that went away stays as an unavailable tab
-    // (S6 B19, B20; PRD right-lane B22).
-    const laneWidth = (await lane.boundingBox())!.width;
-    await lane.locator('[data-tab-kind="file"]', { hasText: "gone.txt" }).click();
-    await savedFront(daemon, /\/gone\.txt$/);
-    fs.rmSync(path.join(herdr.root, "fixture", "gone.txt"));
-    daemon = await daemon.restart();
-    // Reopening the app is a fresh page, not a reconnect of this one.
-    await page.goto("about:blank");
-    await open(page, daemon);
-    await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "docked", { timeout: 20_000 });
-    await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-view", "documents");
-    await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-shows", "explorer");
-    await expect.poll(async () => (await lane.boundingBox())!.width).toBeCloseTo(laneWidth, 0);
-    await expect(page.locator('[data-view-area] [data-tab-kind="file"]')).toHaveCount(2, { timeout: 15_000 });
-    await expect(page.locator('[data-view-area] [data-unavailable="true"]')).toHaveCount(1);
-    await expect(page.locator("[data-view-area] [data-close-unavailable]")).toBeVisible();
-    await screenshot(page, "s6-restored-unavailable");
   } finally {
     daemon?.stop();
-    herdr.stop();
+    fixture.stop();
   }
 });
