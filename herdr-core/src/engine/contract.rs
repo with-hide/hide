@@ -539,6 +539,7 @@ fn an_own_engine_claude_slept_with_its_hooked_conversation_wakes_resuming_it() {
     use crate::agent_start::{ShellStart, start_at_shell_reusing_name};
     use crate::codex_launch::CodexDaemon;
     use crate::recent_closed::{ClosedAgent, resume_arguments};
+    use hide_node_link::terminal::{KeyTarget, TerminalControl, TerminalNode};
 
     const SESSION: &str = "0b8f1f3e-5c2a-4a8e-9a54-2d4c1f6b7e90";
     let built = BuiltHolders::start();
@@ -606,6 +607,20 @@ fn an_own_engine_claude_slept_with_its_hooked_conversation_wakes_resuming_it() {
         .map(|session| session.value.clone());
     assert_eq!(session.as_deref(), Some(SESSION));
 
+    // From the sleep's start until the wake has run, the core holds the pane
+    // asleep at its node (`TerminalControl::Asleep`, from the sleep record),
+    // so the operator's keys go nowhere; the quit key and the resume line the
+    // engine types still reach the agent.
+    let asleep = |asleep: bool| {
+        built.service.control(TerminalControl::Asleep {
+            pane: pane.clone(),
+            asleep,
+        });
+    };
+    asleep(true);
+    built
+        .service
+        .key(KeyTarget::Pane(pane.clone()), b"stray".to_vec(), 0);
     end_agent(engine, &node, &pane, "claude")
         .unwrap_or_else(|error| panic!("the agent sleeps: {error:?}"));
     let args = resume_arguments(&ClosedAgent {
@@ -630,6 +645,15 @@ fn an_own_engine_claude_slept_with_its_hooked_conversation_wakes_resuming_it() {
     );
     assert_eq!(woke, WakeOutcome::Started);
     until("the resume runs", || starts().lines().count() == 2);
+    asleep(false);
+    assert!(
+        !engine
+            .read_pane(WAIT, &pane, "recent", 200)
+            .unwrap()
+            .text
+            .contains("stray"),
+        "the operator's key reached a sleeping agent's pane"
+    );
     assert_eq!(starts(), format!("\n--resume {SESSION}\n"));
     let woken = engine.agents(WAIT).unwrap();
     assert_eq!(

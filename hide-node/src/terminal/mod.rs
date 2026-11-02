@@ -212,12 +212,21 @@ struct Pane {
     asleep: bool,
     asleep_reported: bool,
     hold: PaneHold,
-    /// While the core's own engine types a letter into the pane: the
-    /// operator's keys typed meanwhile, written after the letter's submit in
-    /// the order typed (PRD engine-bundle-3-core-owns D-13).
-    letter: Option<PaneHold>,
+    /// While the core's own engine types letters into the pane: the
+    /// operator's keys typed meanwhile, written after the last letter's
+    /// submit in the order typed (PRD engine-bundle-3-core-owns D-13).
+    letter: Option<LetterHold>,
     first_frame_pending: bool,
     reported: Option<PaneTerminalState>,
+}
+
+/// The keys held while letters are typed into a pane, and how many letters
+/// are being typed: a letter that begins while another is typed shares its
+/// hold, and the keys are written once the last of them has been submitted.
+#[derive(Default)]
+struct LetterHold {
+    letters: usize,
+    keys: PaneHold,
 }
 
 struct SpawnRequest {
@@ -384,14 +393,20 @@ impl Service {
             fn drop(&mut self) {
                 let now = Instant::now();
                 self.service.shared.run(|inner, _| {
-                    let Some(held) = inner
-                        .panes
-                        .get_mut(self.pane)
-                        .and_then(|entry| entry.letter.take())
-                    else {
+                    let Some(entry) = inner.panes.get_mut(self.pane) else {
                         return;
                     };
-                    for chunk in held.take_in_order(self.pane, now) {
+                    let Some(letter) = entry.letter.as_mut() else {
+                        return;
+                    };
+                    letter.letters -= 1;
+                    if letter.letters > 0 {
+                        return;
+                    }
+                    let Some(held) = entry.letter.take() else {
+                        return;
+                    };
+                    for chunk in held.keys.take_in_order(self.pane, now) {
                         inner.route_input(KeyTarget::Pane(self.pane.to_owned()), chunk, now);
                     }
                 });
@@ -399,7 +414,7 @@ impl Service {
         }
         self.shared.run(|inner, _| {
             if let Some(entry) = inner.panes.get_mut(pane) {
-                entry.letter = Some(PaneHold::default());
+                entry.letter.get_or_insert_with(LetterHold::default).letters += 1;
             }
         });
         let _letter = Letter {
@@ -1032,7 +1047,7 @@ impl Inner {
                 }
             }
             TerminalControl::Write { pane, data } => match protocol::decode_base64(&data) {
-                Ok(bytes) => self.write_control(&pane, Typed::Bytes(bytes), now),
+                Ok(bytes) => self.write_control(&pane, Typed::Bytes(bytes), Typist::Operator, now),
                 Err(message) => self.error(&pane, "terminal.invalid_input", message),
             },
             TerminalControl::Asleep { pane, asleep } => match self.panes.get_mut(&pane) {
@@ -1242,7 +1257,7 @@ impl Inner {
                 .get_mut(pane)
                 .and_then(|entry| entry.letter.as_mut())
         {
-            letter.hold(pane, chunk);
+            letter.keys.hold(pane, chunk);
             return;
         }
         if let Some(permit) = &chunk.permit {
@@ -1302,11 +1317,13 @@ impl Inner {
             Typed::Bytes(bytes) => operator && input::submits(bytes),
             Typed::Paste(_) | Typed::Keys(_) => false,
         };
+        // A sleeping agent's pane takes none of the operator's typing; the
+        // core's own engine types its sleep (the agent's quit key) and its
+        // wake (the resume line) there while the sleep record holds it
+        // asleep, so its input goes through.
         let asleep = self.panes.get(pane).is_some_and(|entry| entry.asleep);
-        if asleep {
-            if operator {
-                self.input_fact(pane, &chunk, (false, false), "write_key_asleep", now);
-            }
+        if asleep && operator {
+            self.input_fact(pane, &chunk, (false, false), "write_key_asleep", now);
             let entry = self.panes.get_mut(pane).expect("checked above");
             if !entry.asleep_reported {
                 entry.asleep_reported = true;
@@ -1454,11 +1471,12 @@ impl Inner {
             entry.hold.hold(pane, chunk);
             return;
         }
-        self.write_control(pane, chunk.input, now);
+        self.write_control(pane, chunk.input, chunk.by, now);
     }
 
-    /// Writes input to the pane's controller, or says why it cannot.
-    fn write_control(&mut self, pane: &str, input: Typed, now: Instant) {
+    /// Writes input to the pane's controller, or says why it cannot. `by`
+    /// is who typed it; a screen's answer to its terminal is the operator's.
+    fn write_control(&mut self, pane: &str, input: Typed, by: Typist, now: Instant) {
         let Some(entry) = self.panes.get(pane) else {
             self.refuse(
                 pane,
@@ -1477,9 +1495,10 @@ impl Inner {
             );
             return;
         }
-        if entry.asleep {
+        if entry.asleep && by == Typist::Operator {
             // Bytes a screen answers its terminal with are no more for the
-            // shell under a sleeping agent than a key is.
+            // shell under a sleeping agent than a key is; the core's own
+            // engine typing its sleep and wake there goes through.
             return;
         }
         let result = match entry.session.as_ref() {

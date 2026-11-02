@@ -1870,6 +1870,61 @@ fn keys_typed_during_a_letter_follow_its_submit_in_order() {
     assert!(matches!(typed, TerminalReport::Input { .. }), "{typed:?}");
 }
 
+/// A letter begun while another is typed into the same pane shares its
+/// hold: a key typed during the first is kept and written once the last
+/// letter has been submitted.
+#[test]
+fn keys_held_for_a_letter_are_kept_when_another_letter_begins_and_follow_the_last_submit() {
+    let harness = harness(RetryPolicy::Automatic);
+    let opened = harness.controlling("w1:p1");
+    let letter = |body: &'static [u8], gap: u64| {
+        harness.service.type_letter(
+            "w1:p1",
+            Typed::Bytes(body.to_vec()),
+            Typed::Bytes(b"\r".to_vec()),
+            Duration::from_millis(gap),
+        );
+    };
+    thread::scope(|scope| {
+        let first = scope.spawn(|| letter(b"a", 300));
+        assert_eq!(input_bytes(&opened, 1), b"a");
+        harness.key("w1:p1", b"x");
+        let second = scope.spawn(|| letter(b"b", 600));
+        assert_eq!(input_bytes(&opened, 1), b"b");
+        first.join().unwrap();
+        second.join().unwrap();
+    });
+    assert_eq!(input_bytes(&opened, b"\r\rx".len()), b"\r\rx");
+}
+
+/// A sleeping agent's pane takes none of the operator's keys, but the core's
+/// own engine types the agent's quit key and its resume line there while the
+/// sleep record holds the pane asleep, and they are written.
+#[test]
+fn the_engines_typing_reaches_a_sleeping_pane_and_the_operators_keys_do_not() {
+    let harness = harness(RetryPolicy::Automatic);
+    let opened = harness.controlling("w1:p1");
+    harness.service.control(TerminalControl::Asleep {
+        pane: "w1:p1".into(),
+        asleep: true,
+    });
+    harness.key("w1:p1", b"lost");
+    harness
+        .service
+        .type_input("w1:p1", Typed::Bytes(b"\x03".to_vec()));
+    harness
+        .service
+        .type_input("w1:p1", Typed::Bytes(b"claude --resume s\r".to_vec()));
+    let typed = b"\x03claude --resume s\r";
+    assert_eq!(input_bytes(&opened, typed.len()), typed);
+    harness.service.control(TerminalControl::Asleep {
+        pane: "w1:p1".into(),
+        asleep: false,
+    });
+    harness.key("w1:p1", b"kept");
+    assert_eq!(opened.next_input(), b"kept");
+}
+
 /// The core's own engine typing a command is not the operator typing: no
 /// key of it is reported, so the first report is the operator's own key.
 #[test]
