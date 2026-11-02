@@ -293,18 +293,19 @@ export function landingDevices(nowMs: number, width: number): { rest: SnapshotRe
     status: { ...scene.rest.status, remote: [connected("macbook"), connected("workbox")] },
   } as SnapshotRest;
   const mobile: MobileState = {
+    method: "relay", relay: { state: "connected" },
     enabled: true,
     exposure: "exposed",
-    checklist: { installed: "ok", logged_in: "ok", https: "ok", host_name: "mini.example.ts.net" },
+    checklist: null,
     download_url: "https://example.invalid/tailscale",
     admin_url: "https://example.invalid/admin",
     foreign_target: null,
     failure: null,
-    url: "https://mini.example.ts.net/m/",
+    url: "https://app.withhide.dev/",
     qr: null,
     code_expires_at_ms: null,
     phones: [{ id: "phone-1", name: "Phone", last_seen_ms: nowMs - NOW_SKEW, connected: true, notifications: "on", revoke_at_ms: nowMs + 30 * 86_400_000 }],
-    max_phones: 5,
+    max_phones: 4,
     push_mode: "app_closed",
     now_ms: nowMs,
   };

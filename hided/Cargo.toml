@@ -23,6 +23,7 @@ hide-host = { path = "../hide-host" }
 hide-node = { path = "../hide-node" }
 hide-node-link = { path = "../hide-node-link" }
 hide-platform = { path = "../hide-platform" }
+hide-relay-protocol = { path = "../hide-relay-protocol" }
 hide-kit = { path = "../hide-kit" }
 hide-herdr-client = { path = "../hide-herdr-client" }
 hide-session = { path = "../hide-session" }
@@ -38,7 +39,7 @@ base64 = "=0.23.1"
 subtle = "=2.6.1"
 cap-std = "=4.0.3"
 percent-encoding = "=2.3.2"
-tokio-tungstenite = { version = "=0.30.0", default-features = false, features = ["connect"] }
+tokio-tungstenite = { version = "=0.30.0", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 futures-util = "=0.3.34"
 # Web Push: VAPID signing and RFC 8291 encryption (ring), and the POST to the
 # push service (ureq over rustls). Both are already in the build through

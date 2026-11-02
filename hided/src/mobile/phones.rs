@@ -53,7 +53,7 @@ pub struct Phones {
     /// The tailnet name this core was last exposed at, which a switch-off or a
     /// failed check leaves as it is; none before its first exposure on
     /// record.
-    origin: Option<String>,
+    origin: Option<PhoneOrigin>,
 }
 
 /// Why a credential lets no phone in.
@@ -124,11 +124,16 @@ impl Phones {
     /// The address the core is exposed at now.
     pub fn set_origin(&mut self, origin: &str) {
         self.stamp(origin);
-        self.origin = Some(origin.to_owned());
+        self.origin = Some(PhoneOrigin::Paired(origin.to_owned()));
+    }
+
+    pub fn set_scope(&mut self, scope: Option<PhoneOrigin>) {
+        self.clear_code();
+        self.origin = scope;
     }
 
     fn here(&self, phone: &PhoneRecord) -> bool {
-        matches!((&phone.origin, &self.origin), (PhoneOrigin::Paired(at), Some(now)) if at == now)
+        self.origin.as_ref() == Some(&phone.origin)
     }
 
     /// The phones paired at the address this core was last exposed at.
@@ -211,7 +216,7 @@ impl Phones {
             last_seen_ms: now_ms,
             notifications: Notifications::Unasked,
             push: None,
-            origin: PhoneOrigin::Paired(origin),
+            origin,
         };
         self.file.phones.push(record.clone());
         self.save();

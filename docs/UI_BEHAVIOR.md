@@ -3478,16 +3478,22 @@ Every value is the core's `status.background_ai`; the tab sends `ai_settings` ev
 
 ### Settings > Mobile
 
-Mobile is a page of Settings' machine group, after Hide AI; Tailscale runs on the core's machine, so a failing step and the serve entry line name that machine (`Tailscale isn't installed on Mac mini` on a window of another machine, `This Mac` on its own).
-Its switch, 폰에서 Hide 열기, is off at first, and its one-line description says it works over Tailscale and only inside the tailnet (PRD settings-cleanup B59).
-While the switch is off hide runs no Tailscale command.
-Turned on, the three Mac checks (Tailscale installed, logged in, MagicDNS and HTTPS on for the tailnet) fold into one line, `Tailscale is ready`, once they all pass (B57); a failing step shows only itself with a warning and its action (a download link, "Tailscale 앱에서 로그인", or the admin console's DNS page with a link) and nothing for the steps that passed or still wait.
-The phone side, Tailscale on the phone with the same account, is guidance hide cannot check and is part of the `폰 연결하기` row's description.
-The page rechecks every three seconds while it is open, so logging in or turning HTTPS on continues without reopening it.
-Once every Mac step passes and hide has confirmed its serve entry, the `폰 연결하기` row offers `QR 보기`; opening the page makes no code and voids none (B58).
-Pressing it shows the QR, 폰 카메라로 스캔하세요, the ts.net address and the code's m:ss countdown, and the row's button becomes `QR 숨기기`, which takes the code out again; a pairing phone spends the code and the QR goes, so the next phone needs `QR 보기` again.
-An HTTPS entry hide did not make shows its target in one line and no pairing row; a failed serve command shows the failed step and its message in one line, and so does a Funnel that would publish the address, which also disconnects every phone when it is turned on later.
-A removal that fails when the switch goes off keeps that line under the switch until hide finishes it.
+Mobile is a page of Settings' machine group, after Hide AI.
+Its switch, 폰에서 Hide 열기, is off at first; the default method is Hide's Tokyo relay, without a login, account or payment step.
+While off, no relay link or phone connection remains and retry cannot create one.
+The one connection row shows 연결 중…, 연결됨 · Hide 중계 (도쿄), 중계에 닿지 않아요 · 다시 시도 중 with 지금 다시, 이 Hide가 너무 오래됐어요 with 업데이트, or the relay's capacity refusal reason.
+The update action opens Settings > About; failures stay in this row without a banner or popup.
+A one-line note says the phone and Hide encrypt the content and the relay cannot read it.
+When connected, 폰 연결하기 offers QR 보기; opening the page makes no code and voids none.
+Pressing it shows the QR, 폰 카메라로 스캔하세요, app.withhide.dev and the code's m:ss countdown, and QR 숨기기 removes it.
+Pairing spends the five-minute code, and expiry removes the QR and offers QR 보기 again.
+
+고급 contains Tailscale로 직접 연결; switching it selects that method and closes the previous method's phone connections.
+Only the selected method's phones appear and count toward its four-phone limit; switching back restores its previous phones.
+Tailscale's checks, troubleshooting links, direct ts.net QR and owned-serve failures stay inside 고급.
+Tailscale runs on the core's machine, so its failing steps name that machine.
+The page rechecks Tailscale every three seconds while open; passed checks collapse to Tailscale is ready.
+A foreign HTTPS entry or Funnel is refused; a failed removal remains visible until cleanup finishes, including after switch-off.
 The phones group is titled 연결된 폰 · n / 4; each row shows the phone's name, when it was last seen, whether notifications are on or off, the days left before the seven-day revoke once it has been away a day, and 연결 해제, which closes that phone at once.
 The push to the phone is on Settings > Notifications, not on this page (PRD settings-left-nav B7): one dropdown of 끔 (the default), 앱이 닫혀 있을 때만 and 항상, with the description of the chosen mode only under it, and the choice survives a restart (B59).
 

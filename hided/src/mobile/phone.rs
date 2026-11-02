@@ -49,9 +49,15 @@ const SEND_LIMIT: Duration = Duration::from_secs(10);
 
 /// Sends one message; false when the socket failed or stalled past
 /// `SEND_LIMIT`, and the connection should end.
-async fn send(socket: &mut WebSocket, message: Message, phone_id: &str) -> bool {
+async fn send(socket: &mut Socket, message: Message, phone_id: &str) -> bool {
     match tokio::time::timeout(SEND_LIMIT, socket.send(message)).await {
-        Ok(result) => result.is_ok(),
+        Ok(Ok(())) => true,
+        Ok(Err(())) => {
+            herdr_core::diagnostic!(
+                json!({"component":"mobile_phone", "kind":"phone.send_failed", "phone_id":phone_id})
+            );
+            false
+        }
         Err(_) => {
             herdr_core::diagnostic!(json!({
                 "component": "mobile_phone", "kind": "phone.stalled", "phone_id": phone_id,
@@ -61,9 +67,126 @@ async fn send(socket: &mut WebSocket, message: Message, phone_id: &str) -> bool 
     }
 }
 
-/// The one function every frame to a phone passes through.
-pub fn encode(frame: &Value) -> Message {
-    Message::Text(frame.to_string().into())
+/// The one function every application frame to a phone passes through.
+/// Relay messages leave this boundary only as authenticated ciphertext.
+fn encode(
+    frame: &Value,
+    session: Option<&mut hide_relay_protocol::noise::Session>,
+) -> Result<Vec<Message>, hide_relay_protocol::Error> {
+    let text = frame.to_string();
+    match session {
+        Some(session) => Ok(session
+            .send_message(text.as_bytes())?
+            .into_iter()
+            .map(|bytes| Message::Binary(bytes.into()))
+            .collect()),
+        None => Ok(vec![Message::Text(text.into())]),
+    }
+}
+
+async fn send_frame(socket: &mut Socket, frame: &Value, phone_id: &str) -> bool {
+    let session = match socket {
+        Socket::Direct(_) => None,
+        Socket::Relay(relay) => Some(&mut relay.session),
+    };
+    let messages = match encode(frame, session) {
+        Ok(messages) => messages,
+        Err(reason) => {
+            herdr_core::diagnostic!(
+                json!({"component":"mobile_phone", "kind":"phone.encode_failed", "phone_id":phone_id, "reason":reason.to_string()})
+            );
+            return false;
+        }
+    };
+    for message in messages {
+        if !send(socket, message, phone_id).await {
+            return false;
+        }
+    }
+    true
+}
+
+pub(super) enum Socket {
+    Direct(WebSocket),
+    Relay(Box<RelaySocket>),
+}
+pub(super) struct RelaySocket {
+    session: hide_relay_protocol::noise::Session,
+    incoming: mpsc::Receiver<Vec<u8>>,
+    outgoing: mpsc::Sender<super::relay::Output>,
+    clock: tokio::time::Instant,
+    timer: tokio::time::Interval,
+    connection: u32,
+}
+impl Socket {
+    pub(super) fn relay(
+        session: hide_relay_protocol::noise::Session,
+        incoming: mpsc::Receiver<Vec<u8>>,
+        outgoing: mpsc::Sender<super::relay::Output>,
+        connection: u32,
+    ) -> Self {
+        let mut timer = tokio::time::interval(Duration::from_secs(1));
+        timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        Self::Relay(Box::new(RelaySocket {
+            session,
+            incoming,
+            outgoing,
+            clock: tokio::time::Instant::now(),
+            timer,
+            connection,
+        }))
+    }
+    async fn send(&mut self, message: Message) -> Result<(), ()> {
+        match self {
+            Self::Direct(socket) => socket.send(message).await.map_err(|_| ()),
+            Self::Relay(relay) => match message {
+                Message::Binary(bytes) => relay
+                    .outgoing
+                    .try_send(super::relay::Output::Frame {
+                        connection: relay.connection,
+                        bytes: bytes.to_vec(),
+                    })
+                    .map_err(|_| ()),
+                // Relay liveness uses the phone protocol's JSON ping. Closing the
+                // serving task tells the supervisor to send the routing close.
+                Message::Ping(_) | Message::Close(_) => Ok(()),
+                _ => Err(()),
+            },
+        }
+    }
+    pub(super) async fn recv(&mut self) -> Option<Result<Message, ()>> {
+        match self {
+            Self::Direct(socket) => socket.recv().await.map(|result| result.map_err(|_| ())),
+            Self::Relay(relay) => loop {
+                let result = tokio::select! {
+                    incoming = relay.incoming.recv() => {
+                        let bytes = incoming?;
+                        relay.session.recv_message(&bytes, relay.clock.elapsed().as_millis() as u64)
+                    },
+                    _ = relay.timer.tick() => {
+                        relay.session.check_timeout(relay.clock.elapsed().as_millis() as u64).map(|()| None)
+                    },
+                };
+                match result {
+                    Ok(Some(bytes)) => {
+                        return Some(
+                            String::from_utf8(bytes)
+                                .map(|text| Message::Text(text.into()))
+                                .map_err(|_| ()),
+                        );
+                    }
+                    Ok(None) => {}
+                    Err(reason) => {
+                        herdr_core::diagnostic!(
+                            json!({"component":"mobile_relay", "kind":"phone.cipher_refused",
+                            "connection":relay.connection, "reason":reason.to_string()})
+                        );
+                        return Some(Err(()));
+                    }
+                }
+            },
+        }
+    }
 }
 
 fn refusal_logged(kind: &str, phone_id: Option<&str>, reason: &str) {
@@ -72,10 +195,10 @@ fn refusal_logged(kind: &str, phone_id: Option<&str>, reason: &str) {
     }));
 }
 
-async fn refuse(socket: &mut WebSocket, reason: &str) {
-    let refusal = encode(&json!({"type": "refused", "reason": reason}));
+async fn refuse(socket: &mut Socket, reason: &str) {
+    let refusal = json!({"type": "refused", "reason": reason});
     let _ = tokio::time::timeout(SEND_LIMIT, async {
-        let _ = socket.send(refusal).await;
+        let _ = send_frame(socket, &refusal, "unadmitted").await;
         let _ = socket
             .send(Message::Close(Some(CloseFrame {
                 code: CLOSE_REFUSED,
@@ -407,7 +530,24 @@ fn request_id_of(message: &Value) -> Option<&str> {
 
 /// Serves a phone after the daemon counted it toward `MAX_CLIENTS`.
 pub async fn serve(
-    mut socket: WebSocket,
+    socket: WebSocket,
+    first: Value,
+    mobile: Arc<Mobile>,
+    connection: u64,
+    user_agent: String,
+) {
+    serve_socket(
+        Socket::Direct(socket),
+        first,
+        mobile,
+        connection,
+        user_agent,
+    )
+    .await;
+}
+
+pub(super) async fn serve_socket(
+    mut socket: Socket,
     first: Value,
     mobile: Arc<Mobile>,
     connection: u64,
@@ -449,23 +589,27 @@ pub async fn serve(
     // Registered before anything is sent, then checked again: a revoke or a
     // switch-off that lands in between closes this socket like any other.
     let close = mobile.register(connection, &phone.id);
+    struct Registration(Arc<Mobile>, u64);
+    impl Drop for Registration {
+        fn drop(&mut self) {
+            self.0.unregister(self.1);
+        }
+    }
+    let _registration = Registration(Arc::clone(&mobile), connection);
     if let Err(reason) = mobile.still_admitted(&phone.id) {
         refuse(&mut socket, reason).await;
-        mobile.unregister(connection);
         return;
     }
     if let Some(paired) = paired
-        && !send(&mut socket, encode(&paired), &phone.id).await
+        && !send_frame(&mut socket, &paired, &phone.id).await
     {
-        mobile.unregister(connection);
         return;
     }
     run(&mut socket, &mobile, connection, &phone.id, close).await;
-    mobile.unregister(connection);
 }
 
 async fn run(
-    socket: &mut WebSocket,
+    socket: &mut Socket,
     mobile: &Arc<Mobile>,
     connection: u64,
     phone_id: &str,
@@ -498,7 +642,7 @@ async fn run(
         agents_frame(&projection.borrow_and_update()),
     ];
     for frame in &first {
-        if !send(socket, encode(frame), phone_id).await {
+        if !send_frame(socket, frame, phone_id).await {
             return;
         }
     }
@@ -512,20 +656,20 @@ async fn run(
             changed = projection.changed() => {
                 if changed.is_err() { return; }
                 let frame = agents_frame(&projection.borrow_and_update());
-                if !send(socket, encode(&frame), phone_id).await { return; }
+                if !send_frame(socket, &frame, phone_id).await { return; }
             }
             changed = meta.changed() => {
                 if changed.is_err() { return; }
                 let frame = meta_frame(&meta.borrow_and_update());
-                if !send(socket, encode(&frame), phone_id).await { return; }
+                if !send_frame(socket, &frame, phone_id).await { return; }
             }
             changed = catalog.changed() => {
                 if changed.is_err() { return; }
                 let frame = catalog.borrow_and_update().frame();
-                if open.sheet && !send(socket, encode(&frame), phone_id).await { return; }
+                if open.sheet && !send_frame(socket, &frame, phone_id).await { return; }
             }
             Some(frame) = frames.recv() => {
-                if !send(socket, encode(&frame), phone_id).await { return; }
+                if !send_frame(socket, &frame, phone_id).await { return; }
             }
             _ = ping.tick() => {
                 if heard.elapsed() >= SILENT_LIMIT {
@@ -559,7 +703,7 @@ async fn run(
                 let current = Arc::clone(&projection.borrow());
                 let reply = handle(mobile, connection, phone_id, &message, &mut open, &frames_tx, &current).await;
                 if let Some(reply) = reply
-                    && !send(socket, encode(&reply), phone_id).await
+                    && !send_frame(socket, &reply, phone_id).await
                 {
                     return;
                 }
@@ -1063,6 +1207,7 @@ mod tests {
             state_dir: directory.join("state"),
             home: directory.to_path_buf(),
             port: 0,
+            relay_url: crate::env::RELAY_URL.to_owned(),
             cli: super::super::tailscale::CliSource {
                 pinned: None,
                 search_path: None,

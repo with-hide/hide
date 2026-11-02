@@ -41,6 +41,8 @@ pub const HIDE_PANE_ID: &str = hide_agent_hooks::pane::HIDE_PANE_ID;
 pub const HERDR_PANE_ID: &str = hide_agent_hooks::pane::HERDR_PANE_ID;
 pub const HIDE_CAP_REF: &str = "HIDE_CAP_REF";
 pub const HIDE_TAILSCALE_BIN: &str = "HIDE_TAILSCALE_BIN";
+pub const HIDE_RELAY_URL: &str = "HIDE_RELAY_URL";
+pub const RELAY_URL: &str = "wss://relay.withhide.dev/ws";
 pub const HIDE_MACHINE_ID: &str = host::MACHINE_ID_VARIABLE;
 /// Test-only: how a core move starts the core on the machine taking it.
 pub const HIDE_CORE_STARTER: &str = "HIDE_CORE_STARTER";
@@ -197,6 +199,12 @@ pub const REGISTRY: &[EnvKey] = &[
         absent_behavior: "The CLI the system's Tailscale app installs (/Applications/Tailscale.app/Contents/MacOS/Tailscale on macOS, %ProgramFiles%\\Tailscale\\tailscale.exe on Windows), then `tailscale` on PATH; isolated verification sets it so no test reaches the account's own Tailscale",
     },
     EnvKey {
+        key: HIDE_RELAY_URL,
+        required: false,
+        format: "WebSocket URL for development or tests; wss, or ws on loopback only; no credentials, query or fragment",
+        absent_behavior: "Mobile connects to wss://relay.withhide.dev/ws",
+    },
+    EnvKey {
         key: HIDE_MACHINE_ID,
         required: false,
         format: "a node id: lowercase letters, digits and '-'; only a test fixture sets it, so one host runs a node and the core it dials as two machines",
@@ -297,6 +305,7 @@ pub struct Env {
     pub pane_id: Option<String>,
     /// The only tailscale CLI Mobile runs, when set (`HIDE_TAILSCALE_BIN`).
     pub tailscale_bin: Option<PathBuf>,
+    pub relay_url: String,
     /// PATH as the daemon received it, searched for `tailscale` at each check.
     pub search_path: Option<String>,
 }
@@ -606,6 +615,17 @@ fn resolve(mut read: impl FnMut(&str) -> Option<String>) -> (Env, Vec<EnvError>)
         Some(value) => Some(PathBuf::from(value)),
         None => None,
     };
+    let relay_url = match read(HIDE_RELAY_URL) {
+        Some(value) if valid_relay_url(&value) => value,
+        Some(_) => {
+            errors.push(EnvError {
+                key: HIDE_RELAY_URL,
+                kind: "invalid",
+            });
+            String::new()
+        }
+        None => RELAY_URL.to_owned(),
+    };
     let search_path = read(PATH).filter(|value| !value.is_empty());
     let env = Env {
         home,
@@ -627,9 +647,24 @@ fn resolve(mut read: impl FnMut(&str) -> Option<String>) -> (Env, Vec<EnvError>)
         host_cli_dir,
         pane_id,
         tailscale_bin,
+        relay_url,
         search_path,
     };
     (env, errors)
+}
+
+fn valid_relay_url(value: &str) -> bool {
+    let Ok(uri) = value.parse::<axum::http::Uri>() else {
+        return false;
+    };
+    let Some(host) = uri.host() else {
+        return false;
+    };
+    !value.contains(['@', '#'])
+        && uri.query().is_none()
+        && (uri.scheme_str() == Some("wss")
+            || (uri.scheme_str() == Some("ws")
+                && matches!(host, "localhost" | "127.0.0.1" | "[::1]")))
 }
 
 /// A helper root names a folder on another machine, so it is checked for
@@ -1137,6 +1172,38 @@ mod tests {
                 .unwrap()
                 .host_helper_root,
             None
+        );
+    }
+
+    #[test]
+    fn relay_override_requires_tls_except_on_loopback() {
+        for value in [
+            "ws://example.test/ws",
+            "https://example.test/ws",
+            "wss://user@example.test/ws",
+            "wss://example.test/ws?token=secret",
+            "wss://example.test/#secret",
+        ] {
+            assert_eq!(
+                from_map(&[(HOME, "/Users/example"), (HIDE_RELAY_URL, value)]).unwrap_err()[0].key,
+                HIDE_RELAY_URL
+            );
+        }
+        for value in [
+            "wss://relay.example.test/ws",
+            "ws://127.0.0.1:8787/ws",
+            "ws://[::1]:8787/ws",
+        ] {
+            assert_eq!(
+                from_map(&[(HOME, "/Users/example"), (HIDE_RELAY_URL, value)])
+                    .unwrap()
+                    .relay_url,
+                value
+            );
+        }
+        assert_eq!(
+            from_map(&[(HOME, "/Users/example")]).unwrap().relay_url,
+            RELAY_URL
         );
     }
 

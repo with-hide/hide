@@ -2712,6 +2712,7 @@ fn a_pending_core_does_nothing_outside_until_its_link_commits() -> Result<()> {
             host_cli_dir: None,
             pane_id: None,
             tailscale_bin: Some(tailscale.bin.clone()),
+            relay_url: "ws://127.0.0.1:9/ws".to_owned(),
             search_path: None,
         }))
         .map_err(anyhow::Error::msg)?;

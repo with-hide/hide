@@ -1307,6 +1307,12 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "mobile_enable", payload: { enabled } });
     },
     /** Settings > Mobile open or closed: hided rechecks the checklist while it is open; a code is made only by Show QR. */
+    setMobileMethod(method: "relay" | "tailscale") {
+      dispatch({ schema_version: 2, kind: "mobile_method", payload: { method } });
+    },
+    retryMobile() {
+      dispatch({ schema_version: 2, kind: "mobile_retry", payload: {} });
+    },
     observeMobile(observing: boolean) {
       dispatch({ schema_version: 2, kind: "mobile_observe", payload: { observing } });
     },

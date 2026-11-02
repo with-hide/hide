@@ -14,6 +14,7 @@ mod handshake;
 mod held_letter_notice;
 mod herdr_handoff;
 mod mobile;
+mod mobile_relay;
 mod node_contract;
 mod node_home;
 mod node_link_facts;
