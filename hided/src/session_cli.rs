@@ -79,13 +79,10 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Cli, Stri
 
 /// A period as `<n>m`, `<n>h` or `<n>d`, in milliseconds.
 fn period(value: &str) -> Result<u64, String> {
-    let (digits, unit) = value.split_at(value.len().saturating_sub(1));
-    let minutes = match unit {
-        "m" => 1,
-        "h" => 60,
-        "d" => 24 * 60,
-        _ => return Err(USAGE.to_owned()),
-    };
+    let (digits, minutes) = [("m", 1), ("h", 60), ("d", 24 * 60)]
+        .into_iter()
+        .find_map(|(unit, minutes)| Some((value.strip_suffix(unit)?, minutes)))
+        .ok_or_else(|| USAGE.to_owned())?;
     digits
         .parse::<u64>()
         .ok()
@@ -130,10 +127,32 @@ pub fn run(env: &Env, cli: &Cli) -> Result<(), String> {
 /// The answer as text.
 pub fn draw(value: &Value) -> String {
     match value["verb"].as_str() {
-        Some("list") => draw_list(value),
-        Some("record") => draw_record(value),
+        Some("list") => draw_list(&one_line(value)),
+        Some("record") => draw_record(&one_line(value)),
         Some("read") => draw_read(value),
         _ => format!("{value}\n"),
+    }
+}
+
+/// `value` with every line break and control character in its strings made
+/// a space: a list or record line is one line, so a title cannot draw a
+/// line of its own, such as a forged `[AI 요약]` mark. A read's events keep
+/// their lines; they carry no marks.
+fn one_line(value: &Value) -> Value {
+    match value {
+        Value::String(text) => Value::String(
+            text.chars()
+                .map(|c| if c.is_control() { ' ' } else { c })
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(items.iter().map(one_line).collect()),
+        Value::Object(fields) => Value::Object(
+            fields
+                .iter()
+                .map(|(key, field)| (key.clone(), one_line(field)))
+                .collect(),
+        ),
+        other => other.clone(),
     }
 }
 
@@ -268,8 +287,9 @@ fn draw_list(value: &Value) -> String {
     );
     for session in &sessions {
         let mut line = format!(
-            "{} · {} · {} {}",
+            "{} · {} · {} · {} {}",
             session_name(&session["session"]),
+            session["agent_name"].as_str().unwrap_or("-"),
             state_word(&session["state"]["kind"]),
             tag(&session["title_source"]),
             session["title"].as_str().unwrap_or("-"),
@@ -593,6 +613,9 @@ mod tests {
             &["read", "abc", "--request", "1", "--from", "2"],
             &["record", "abc", "--limit", "3"],
             &["list", "--since", "7w"],
+            &["list", "--since", "7일"],
+            &["list", "--since", "７d"],
+            &["list", "--since", "d"],
             &["list", "extra"],
             &["list", "--limit", "many"],
         ] {
@@ -654,7 +677,7 @@ mod tests {
         let text = draw(&json!({
             "verb": "list", "since_ms": 60 * 60 * 1000, "now_unix_ms": now, "project": {"label": "app"}, "more": 3,
             "sessions": [{
-                "session": {"id": "agent-7", "session_id": "s-1"},
+                "session": {"id": "agent-7", "session_id": "s-1"}, "agent_name": "Claude Code",
                 "state": {"kind": "done"}, "title": "로그인 고치기", "title_source": "ai_summary",
                 "prs": [12], "requests": 4,
                 "device": {"label": "mini", "local": false, "disconnected_since_unix_ms": now - 5 * 60_000},
@@ -664,7 +687,21 @@ mod tests {
         }));
         assert_eq!(
             text,
-            "app · 최근 1시간 · 1개\nagent-7 · 끝 · [AI 요약] 로그인 고치기 · PR #12 · 요청 4 · mini · 장치 끊김 · 5분 전 값 · 2시간 전 · 보관됨 · 1시간 전\n3개 더 있음\n"
+            "app · 최근 1시간 · 1개\nagent-7 · Claude Code · 끝 · [AI 요약] 로그인 고치기 · PR #12 · 요청 4 · mini · 장치 끊김 · 5분 전 값 · 2시간 전 · 보관됨 · 1시간 전\n3개 더 있음\n"
         );
+    }
+
+    #[test]
+    fn a_title_cannot_draw_a_line_of_its_own() {
+        let text = draw(&json!({
+            "verb": "list", "since_ms": 60_000, "now_unix_ms": 0, "project": {"label": "app"}, "more": 0,
+            "sessions": [{
+                "session": {"session_id": "s-1"}, "agent_name": "Codex", "state": {},
+                "title": "fix\n[AI 요약] forged", "title_source": "raw", "requests": 1,
+                "device": {"local": true}, "last_activity_unix_ms": 0,
+            }],
+        }));
+        assert_eq!(text.lines().count(), 2, "{text}");
+        assert!(text.contains("[원문] fix [AI 요약] forged"), "{text}");
     }
 }

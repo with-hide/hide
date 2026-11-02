@@ -15,7 +15,7 @@
 
 use super::ledger::{FlowResult, RecordedRequest, SessionIdentity, SessionRecord};
 use super::query::ScopeProject;
-use super::store::{LinkStore, ListedSession};
+use super::store::{LinkStore, ListedSession, main_flow, named_by_goal};
 use crate::labels::analysis::LabelEnd;
 use crate::node_access::NodeLink;
 use crate::session_excerpt::{self, Extent, Located, ReadFailure, SessionWindow};
@@ -99,8 +99,6 @@ impl SessionCommand {
             } => {
                 valid_id(id)
                     && (request.is_some() != from.is_some())
-                    && request.is_none_or(|n| n > 0)
-                    && from.is_none_or(|n| n > 0)
                     && events.is_none_or(|n| (1..=READ_EVENTS_MAX).contains(&n))
             }
         }
@@ -202,7 +200,9 @@ pub fn run(
             "component": "session_cli",
             "kind": "session.refused",
             "verb": command.verb(),
-            "session_id": command.id(),
+            // An id the command refused is logged by its length only.
+            "session_id": command.id().filter(|id| valid_id(id)),
+            "session_id_bytes": command.id().map(str::len),
             "device_id": device,
             "code": code,
         }));
@@ -257,7 +257,7 @@ fn answer(
         SessionCommand::Record { id } => {
             let session = resolve(&store, &members, host, id, scope)?;
             *device = Some(session.device_id.clone());
-            record(&store, scope, &session, host)
+            record(&store, scope, &members, &session, host)
         }
         SessionCommand::Read {
             id,
@@ -283,6 +283,13 @@ fn failed(code: String) -> Refusal {
     crate::diagnostic!(
         json!({"component": "session_cli", "kind": "store.read_failed", "code": code})
     );
+    // A record past one of its caps gives the same answer on every retry.
+    if code.ends_with("_capacity") {
+        return no(
+            "links_unavailable",
+            "The record is past what Hide reads at once, so a retry gives the same answer; read the session's events with hide session read --from",
+        );
+    }
     no(
         "links_unavailable",
         "Retry; the reason is in Hide's diagnostic log",
@@ -381,6 +388,13 @@ fn device_value(scope: &SessionScope, id: &str) -> Value {
     })
 }
 
+/// Free text from a session (a title, a request, an agent's own words, a
+/// summary) as another agent may read it: masked like everything `read`
+/// shows, since the reader may be on another device (D-07).
+fn masked(text: &str) -> String {
+    session_excerpt::mask(text)
+}
+
 fn project_value(project: &ScopeProject) -> Value {
     json!({
         "label": project.label,
@@ -390,23 +404,23 @@ fn project_value(project: &ScopeProject) -> Value {
 }
 
 /// The title as the record screen names a session (`recordTitle`): the
-/// operator's own title, else the main flow with summaries on, else the
-/// agent's title, else its product's name.
+/// operator's own title, else the main flow with summaries on (`[원문]` when
+/// a `/goal` named it), else the agent's title, else its product's name.
 fn title(
     manual: Option<&str>,
-    main_flow: Option<&str>,
+    main_flow: Option<(&str, bool)>,
     native: Option<&str>,
     agent: &str,
     summaries: bool,
 ) -> (String, &'static str) {
     if let Some(manual) = manual {
-        return (manual.to_owned(), RAW);
+        return (masked(manual), RAW);
     }
-    if summaries && let Some(flow) = main_flow {
-        return (flow.to_owned(), AI);
+    if summaries && let Some((flow, by_goal)) = main_flow {
+        return (masked(flow), if by_goal { RAW } else { AI });
     }
     (
-        native.map_or_else(|| crate::sidebar::provider_name(Some(agent)), str::to_owned),
+        native.map_or_else(|| crate::sidebar::provider_name(Some(agent)), masked),
         RAW,
     )
 }
@@ -478,13 +492,16 @@ fn list(
 fn listed_value(scope: &SessionScope, row: &ListedSession, facts: &SessionFacts) -> Value {
     let (title, title_source) = title(
         row.manual_title.as_deref(),
-        row.main_flow.as_deref(),
+        row.main_flow
+            .as_ref()
+            .map(|flow| (flow.name.as_str(), flow.named_by_goal)),
         row.native_title.as_deref(),
         &row.session.agent,
         scope.summaries,
     );
     json!({
         "session": identity_value(&row.session, facts),
+        "agent_name": crate::sidebar::provider_name(Some(&row.session.agent)),
         "device": device_value(scope, &row.session.device_id),
         "title": title,
         "title_source": title_source,
@@ -523,7 +540,7 @@ fn state_value(
             json!({
                 "kind": kind,
                 "source": "record",
-                "line": line.filter(|line| !line.is_empty()),
+                "line": line.filter(|line| !line.is_empty()).map(masked),
                 "line_source": AI,
                 "at_unix_ms": status.at_unix_ms,
                 "limited": status.limited,
@@ -537,11 +554,17 @@ fn state_value(
 fn record(
     store: &LinkStore,
     scope: &SessionScope,
+    members: &BTreeSet<SessionIdentity>,
     session: &SessionIdentity,
     host: &dyn SessionHost,
 ) -> Result<Value, Refusal> {
     let record = store.ledger_record(session).map_err(failed)?;
-    let record = host.lay_pulls(record).ok_or_else(core_gone)?;
+    let mut record = host.lay_pulls(record).ok_or_else(core_gone)?;
+    // The record's tree and the scope's closure share one depth limit; a
+    // child either missed is left out rather than shown outside the scope.
+    record
+        .children
+        .retain(|child| members.contains(&child.session));
     let mut asked = vec![record.session.clone()];
     asked.extend(
         record
@@ -558,19 +581,16 @@ fn record(
         .find(|project| {
             project.device_id == session.device_id
                 && record.cwd.as_deref().is_some_and(|cwd| {
-                    cwd == project.root
-                        || project
-                            .checkouts
-                            .iter()
-                            .any(|checkout| cwd.starts_with(checkout))
-                        || cwd.starts_with(&format!("{}/", project.root.trim_end_matches('/')))
+                    std::iter::once(&project.root)
+                        .chain(&project.checkouts)
+                        .any(|owner| super::within(cwd, owner))
                 })
         })
         .map(project_value);
     let summaries = scope.summaries;
     let (title_text, title_source) = title(
         record.manual_title.as_deref(),
-        (!record.flows.is_empty()).then_some(record.title.as_str()),
+        main_flow(&record.flows).map(|flow| (flow.name.as_str(), named_by_goal(flow))),
         record.native_title.as_deref(),
         &session.agent,
         summaries,
@@ -582,18 +602,14 @@ fn record(
         .iter()
         .enumerate()
         .map(|(index, flow)| {
-            let named_by_goal = flow
-                .requests
-                .first()
-                .is_some_and(|request| request.goal_command);
             let requests = flow
                 .requests
                 .iter()
                 .map(|request| request_value(request, &mut number, summaries))
                 .collect::<Vec<_>>();
             json!({
-                "name": summaries.then_some(&flow.name),
-                "name_source": if named_by_goal { RAW } else { AI },
+                "name": summaries.then(|| masked(&flow.name)),
+                "name_source": if named_by_goal(flow) { RAW } else { AI },
                 "at_unix_ms": flow.at_unix_ms,
                 "request_count": flow.request_count,
                 "current": index + 1 == flow_count,
@@ -607,8 +623,8 @@ fn record(
     let now = live.kind.map(|kind| {
         json!({
             "kind": kind,
-            "request": live.request,
-            "now": live.now,
+            "request": live.request.as_deref().map(masked),
+            "now": live.now.as_deref().map(masked),
         })
     });
     let children = record
@@ -619,7 +635,7 @@ fn record(
         .map(|(child, facts)| {
             let (title, title_source) = title(
                 child.manual_title.as_deref(),
-                (!child.flows.is_empty()).then_some(child.title.as_str()),
+                main_flow(&child.flows).map(|flow| (flow.name.as_str(), named_by_goal(flow))),
                 child.native_title.as_deref(),
                 &child.session.agent,
                 summaries,
@@ -654,7 +670,7 @@ fn record(
         "state": state_value(&own, record.status.as_ref(), summaries),
         "now": now,
         "asks": if summaries {
-            record.asks.iter().map(|ask| json!({"text": ask.text, "at_unix_ms": ask.at_unix_ms, "source": AI})).collect::<Vec<_>>()
+            record.asks.iter().map(|ask| json!({"text": masked(&ask.text), "at_unix_ms": ask.at_unix_ms, "source": AI})).collect::<Vec<_>>()
         } else {
             Vec::new()
         },
@@ -663,7 +679,7 @@ fn record(
         "folded_flows": 0,
         "pr_groups": record.pr_groups,
         "pr_omitted": record.pr_omitted,
-        "artifacts": if summaries { record.artifacts.clone() } else { Vec::new() },
+        "artifacts": if summaries { record.artifacts.iter().map(|artifact| masked(artifact)).collect() } else { Vec::new() },
         "children": children,
         "children_omitted": record.children.len().saturating_sub(CHILDREN_LIMIT),
     }))
@@ -678,10 +694,12 @@ fn request_value(request: &RecordedRequest, number: &mut u32, summaries: bool) -
         *number
     });
     let (text, source) = match request.summary.as_deref() {
-        Some(summary) if summaries && !letter => (summary.to_owned(), AI),
+        Some(summary) if summaries && !letter => (masked(summary), AI),
+        // Masked whole before the first line is cut, so a cut never splits
+        // a secret past recognition.
         _ => (
             session_excerpt::cut(
-                request.text.split('\n').next().unwrap_or_default(),
+                masked(&request.text).split('\n').next().unwrap_or_default(),
                 RAW_REQUEST_CHARS,
             ),
             RAW,
@@ -703,13 +721,13 @@ fn request_value(request: &RecordedRequest, number: &mut u32, summaries: bool) -
 fn result_value(result: &FlowResult) -> Value {
     match result {
         FlowResult::Turn(turn) => json!({
-            "kind": end_word(turn.end), "line": turn.line, "source": AI, "at_unix_ms": turn.at_unix_ms,
+            "kind": end_word(turn.end), "line": masked(&turn.line), "source": AI, "at_unix_ms": turn.at_unix_ms,
         }),
         FlowResult::Closing { line, at_unix_ms } => json!({
-            "kind": "closing", "line": line, "source": AI, "at_unix_ms": at_unix_ms,
+            "kind": "closing", "line": masked(line), "source": AI, "at_unix_ms": at_unix_ms,
         }),
         FlowResult::MovedOn { line, at_unix_ms } => json!({
-            "kind": "moved_on", "line": line, "source": AI, "at_unix_ms": at_unix_ms,
+            "kind": "moved_on", "line": masked(line), "source": AI, "at_unix_ms": at_unix_ms,
         }),
         FlowResult::Settled(settled) => json!({
             "kind": match settled.state {
@@ -771,15 +789,17 @@ fn read(
     let count = events.unwrap_or(READ_EVENTS_DEFAULT);
     let window = match (request, from) {
         (Some(number), _) => {
-            let record = store.ledger_record(session).map_err(failed)?;
-            let requests = record
-                .flows
+            // The session's own flows, as its record numbers them; its
+            // children's requests are not loaded.
+            let flows = store.ledger_flows(session).map_err(failed)?;
+            let requests = flows
                 .iter()
                 .flat_map(|flow| &flow.requests)
                 .filter(|request| request.letter_from.is_none())
                 .collect::<Vec<_>>();
-            let at = requests
-                .get(number as usize - 1)
+            let at = (number as usize)
+                .checked_sub(1)
+                .and_then(|index| requests.get(index))
                 .map(|request| request.at_unix_ms)
                 .ok_or_else(|| out_of_range("requests", requests.len()))?;
             SessionWindow::Around {
@@ -787,8 +807,10 @@ fn read(
                 count,
             }
         }
+        // Event 0 is in no session: the read then only counts, and its end
+        // names the range (B11).
         (None, Some(first)) => SessionWindow::From {
-            from: first - 1,
+            from: first.checked_sub(1).unwrap_or(u32::MAX),
             count,
         },
         (None, None) => unreachable!("validated"),
@@ -816,6 +838,11 @@ fn read(
         &|_, event| shown_event(event),
     )
     .map_err(read_refusal)?;
+    if !read.reached {
+        // The session reader's byte bound stopped the read before the
+        // asked event; what it read is named, never shown as the answer.
+        return Err(out_of_range("readable events", read.seen));
+    }
     if read.kept.is_empty() {
         if read.complete && read.seen > 0 {
             return Err(out_of_range("events", read.seen));
@@ -855,13 +882,12 @@ fn shown_event(event: &hide_session::ConversationEvent) -> Value {
     let mut cut_any = false;
     let mut lines = Vec::new();
     for line in redacted.lines() {
-        let shown = session_excerpt::cut(line, READ_LINE_CHARS);
-        cut_any |= shown.len() != line.len();
+        let (shown, cut) = session_excerpt::cut_marked(line, READ_LINE_CHARS);
+        cut_any |= cut;
         lines.push(shown);
     }
-    let joined = lines.join("\n");
-    let text = session_excerpt::cut(&joined, session_excerpt::EVENT_CHARS);
-    cut_any |= text.len() != joined.len();
+    let (text, cut) = session_excerpt::cut_marked(&lines.join("\n"), session_excerpt::EVENT_CHARS);
+    cut_any |= cut;
     json!({
         "at_unix_ms": event.at_unix_ms,
         "role": event.role,
@@ -878,6 +904,9 @@ fn out_of_range(what: &'static str, count: usize) -> Refusal {
     let range = match (what, count) {
         ("requests", 0) => "the session has no recorded requests".to_owned(),
         ("requests", _) => format!("requests 1-{count}"),
+        ("readable events", _) => format!(
+            "events 1-{count} are readable; the rest is past the read bound, so read it with hide session record"
+        ),
         (_, _) => format!("events 1-{count}"),
     };
     (
@@ -889,10 +918,19 @@ fn out_of_range(what: &'static str, count: usize) -> Refusal {
 fn read_refusal(failure: ReadFailure) -> Refusal {
     use hide_node_link::{ErrorCode, LinkError};
     match failure {
-        ReadFailure::Deadline | ReadFailure::Link(LinkError::Unknown(_)) => no(
+        ReadFailure::Deadline => no(
             "read_timeout",
             "The device did not answer within 60 s; retry, or read it with hide session record",
         ),
+        // The call may have reached the node, but no answer came back: a
+        // link that dropped, or an answer that could not be read.
+        ReadFailure::Link(LinkError::Unknown(_)) => {
+            crate::diagnostic!(json!({"component": "session_cli", "kind": "read.unanswered"}));
+            no(
+                "read_timeout",
+                "The device did not answer; retry, or read it with hide session record",
+            )
+        }
         ReadFailure::Link(LinkError::NotConnected(_)) => no(
             "device_unavailable",
             "The device that holds this session is not connected; reconnect it and retry",
@@ -1411,5 +1449,182 @@ mod tests {
             read(&scope, "s-mystery", None, Some(1)).unwrap_err().0,
             "session_unreadable"
         );
+    }
+
+    fn add_session(
+        scope: &SessionScope,
+        session: &SessionIdentity,
+        cwd: &str,
+        texts: &[(u64, &str)],
+    ) {
+        let (mut store, _) = LinkStore::open(&scope.store).unwrap();
+        store
+            .apply_ledger_update(&LedgerUpdate::Requests {
+                session: session.clone(),
+                cwd: cwd.into(),
+                path: Some(format!(
+                    "/home/u/.claude/projects/x/{}.jsonl",
+                    session.session_id
+                )),
+                requests: texts
+                    .iter()
+                    .enumerate()
+                    .map(|(offset, (at, text))| RecordedRequest {
+                        offset: offset as u64,
+                        at_unix_ms: *at,
+                        text: (*text).to_owned(),
+                        author: WorkAuthor::Operator,
+                        count: 1,
+                        ..RecordedRequest::default()
+                    })
+                    .collect(),
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn a_record_masks_a_secret_named_like_an_environment_variable() {
+        let (_state, mut scope) = fixture();
+        scope.summaries = false;
+        add_session(
+            &scope,
+            &identity("local", "s-leak"),
+            "/work/app",
+            &[(NOW - 1_000, "DB_PASSWORD=hunter2hunter2 then fix the login")],
+        );
+        let answer = run_with(
+            &scope,
+            SessionCommand::Record {
+                id: "s-leak".into(),
+            },
+        )
+        .unwrap();
+        let text = answer.to_string();
+        assert!(!text.contains("hunter2"), "{text}");
+        assert!(text.contains("fix the login"), "{text}");
+    }
+
+    #[test]
+    fn a_list_counts_repeated_requests_as_the_record_numbers_them() {
+        let (_state, scope) = fixture();
+        add_session(
+            &scope,
+            &identity("local", "s-again"),
+            "/work/app",
+            &[
+                (NOW - 50_000, "계속"),
+                (NOW - 40_000, "계속"),
+                (NOW - 30_000, "계속"),
+                (NOW - 10_000, "다른 일"),
+            ],
+        );
+        let listed = list(&scope, None, None);
+        let row = listed["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["session"]["session_id"] == "s-again")
+            .unwrap()
+            .clone();
+        assert_eq!(row["requests"], 2);
+        let record = run_with(
+            &scope,
+            SessionCommand::Record {
+                id: "s-again".into(),
+            },
+        )
+        .unwrap();
+        let numbers: Vec<Value> = record["flows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|flow| flow["requests"].as_array().unwrap().clone())
+            .map(|request| request["number"].clone())
+            .collect();
+        assert_eq!(numbers, [json!(1), json!(2)]);
+        let (code, _) = read(&scope, "s-again", Some(3), None).unwrap_err();
+        assert_eq!(
+            crate::coordination::split_refusal(&code),
+            ("out_of_range", Some("requests 1-2"))
+        );
+    }
+
+    #[test]
+    fn a_project_nested_in_the_callers_keeps_its_own_sessions() {
+        let (state, scope) = fixture();
+        let (mut store, _) = LinkStore::open(&state.path().join("links.sqlite3")).unwrap();
+        store
+            .apply_project(
+                &project("sub", "local", "/work/app/vendor/sub", "acme/sub"),
+                NOW,
+            )
+            .unwrap();
+        drop(store);
+        add_session(
+            &scope,
+            &identity("local", "s-sub"),
+            "/work/app/vendor/sub/src",
+            &[(NOW - 1_000, "inner work")],
+        );
+        add_session(
+            &scope,
+            &identity("local", "s-vendor"),
+            "/work/app/vendor",
+            &[(NOW - 1_000, "outer work")],
+        );
+        let ids = ids(&list(&scope, None, None));
+        assert!(!ids.contains(&"s-sub".to_owned()), "{ids:?}");
+        assert!(ids.contains(&"s-vendor".to_owned()), "{ids:?}");
+    }
+
+    #[test]
+    fn a_zero_number_is_out_of_range_with_the_range() {
+        let (_state, scope) = fixture();
+        let (code, _) = read(&scope, "s-app", Some(0), None).unwrap_err();
+        assert_eq!(
+            crate::coordination::split_refusal(&code),
+            ("out_of_range", Some("requests 1-3"))
+        );
+        let (code, _) = read(&scope, "s-app", None, Some(0)).unwrap_err();
+        assert_eq!(
+            crate::coordination::split_refusal(&code),
+            ("out_of_range", Some("events 1-30"))
+        );
+    }
+
+    /// A node whose one page is already past the session reader's byte
+    /// bound, so a read stops after it with more to come.
+    struct Huge;
+
+    impl NodeLink for Huge {
+        fn call(&self, call: Call, timeout: Duration) -> Result<LinkAnswer, LinkError> {
+            let answer = Shelf.call(call, timeout)?;
+            let LinkAnswer::Parsed(mut page) = answer else {
+                unreachable!("the shelf answers parsed pages");
+            };
+            page["has_more"] = json!(true);
+            page["read_bytes"] = json!(hide_session::SESSION_READ_LIMIT_BYTES + 1);
+            Ok(LinkAnswer::Parsed(page))
+        }
+
+        fn reader_features(&self) -> Option<&ReaderFeatures> {
+            Shelf.reader_features()
+        }
+    }
+
+    #[test]
+    fn a_read_past_the_read_bound_names_the_readable_part_and_shows_nothing_else() {
+        let (_state, mut scope) = fixture();
+        scope.nodes = vec![("local".into(), Arc::new(Huge) as Arc<dyn NodeLink>)];
+        let (code, _) = read(&scope, "s-app", None, Some(31)).unwrap_err();
+        let (code, detail) = crate::coordination::split_refusal(&code);
+        assert_eq!(code, "out_of_range");
+        assert!(
+            detail.unwrap().starts_with("events 1-30 are readable"),
+            "{detail:?}"
+        );
+        let answer = read(&scope, "s-app", None, Some(1)).unwrap();
+        assert_eq!(answer["total"], Value::Null, "the end was not reached");
+        assert_eq!(answer["next_from"], READ_EVENTS_DEFAULT + 1);
     }
 }

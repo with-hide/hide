@@ -58,9 +58,8 @@ impl Runtime {
             projects: links.projects,
             devices,
             nodes,
-            summaries: self.ai_settings.as_ref().is_some_and(|settings| {
-                settings.enabled && settings.chosen && settings.agent_summary
-            }),
+            // The screen's gate, so the marks match what it shows.
+            summaries: super::backlog::summaries_on(self.ai_settings.as_ref()),
             now_unix_ms: unix_milliseconds(),
         })
     }
@@ -126,22 +125,10 @@ impl Runtime {
                 },
             );
         }
-        let mut archived: HashMap<SessionIdentity, u64> = HashMap::new();
-        for record in self.snapshot.ui_state.session_archive.records.values() {
-            for member in record.held().filter(|member| member.closed) {
-                let Some(kind) = super::links::session_agent(&member.kind) else {
-                    continue;
-                };
-                let identity = SessionIdentity {
-                    device_id: member.machine.clone(),
-                    agent: kind.to_owned(),
-                    session_id: member.native_session_id.clone(),
-                };
-                if wanted.contains(&identity) {
-                    archived.insert(identity, record.archived_at_unix_ms);
-                }
-            }
-        }
+        let archived: HashMap<SessionIdentity, u64> = self
+            .archived_sessions()
+            .filter(|(session, _)| wanted.contains(session))
+            .collect();
         sessions
             .iter()
             .map(|session| SessionFacts {

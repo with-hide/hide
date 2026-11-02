@@ -854,7 +854,7 @@ pub(crate) fn redact(text: &str) -> String {
 }
 
 /// `text` with secrets, email addresses and home accounts masked, trimmed.
-fn mask(text: &str) -> String {
+pub(crate) fn mask(text: &str) -> String {
     let masked = SECRET.replace_all(text, "[redacted-secret]");
     let masked = EMAIL.replace_all(&masked, "[redacted-personal]");
     let masked = HOME_PREFIX.replace_all(&masked, |captures: &regex::Captures<'_>| {

@@ -116,7 +116,7 @@ A Project no linked node names answers every read `project_unreachable`, and the
 | `search` | `git grep` of tracked text files for a fixed text, case ignored (`GitCommand::Grep`) | 5 lines a file, 40 shown, 64 KiB from the node |
 | `git_log` | `git log` of the repository or of one path (`GitCommand::Log`) | 10 commits, at most 20 |
 
-Every result passes the Memory redactor (`hide_memory::redact`) before it is put in a request, and is cut to its bound.
+Every result passes `session_excerpt::mask` (the label pipeline's mask of secrets, email addresses and home accounts, which catches a secret named like an environment variable, then the Memory redactor `hide_memory::redact`) before it is put in a request, and is cut to its bound.
 A path with a credential file anywhere in it (the rule Memory's checks use: `.env*`, keys and certificates, names containing `secret` or `credential`) or Git's own folder, whose configuration can hold a token, is refused before anything is read, and a search hit in such a file is not shown.
 Each line a result keeps is at most 400 characters.
 

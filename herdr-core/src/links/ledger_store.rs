@@ -1428,6 +1428,101 @@ impl LinkStore {
         self.record_tree(session, &mut visited, 0, &mut budget, true)
     }
 
+    /// One session's own flows as its record places them, without its
+    /// children: what `hide session` numbers a session's requests and names
+    /// its list line by, so the list, the record and a read agree.
+    pub fn ledger_flows(&self, session: &SessionIdentity) -> Result<Vec<WorkFlow>, String> {
+        let chapters = self.chapter_rows(session)?;
+        let turns = self.turn_rows(session)?;
+        let mut budget = REQUEST_LIMIT;
+        self.own_flows(session, &chapters, &turns, &mut budget)
+    }
+
+    fn chapter_rows(&self, session: &SessionIdentity) -> Result<Vec<WorkChapter>, String> {
+        let args = params![session.device_id, session.agent, session.session_id];
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT chapter,goal,at,closed_result FROM ledger_chapters \
+            WHERE device=?1 AND agent=?2 AND id=?3 ORDER BY at,rowid",
+            )
+            .map_err(failed)?;
+        statement
+            .query_map(args, |r| {
+                Ok(WorkChapter {
+                    id: r.get(0)?,
+                    goal: r.get(1)?,
+                    at_unix_ms: r.get(2)?,
+                    closed_result: r.get(3)?,
+                })
+            })
+            .map_err(failed)?
+            .collect::<Result<_, _>>()
+            .map_err(failed)
+    }
+
+    /// `session`'s requests placed into its flows, each counted against
+    /// `request_budget`, which a record tree shares among its sessions.
+    fn own_flows(
+        &self,
+        session: &SessionIdentity,
+        chapters: &[WorkChapter],
+        turns: &[TurnRow],
+        request_budget: &mut usize,
+    ) -> Result<Vec<WorkFlow>, String> {
+        let mut statement=self.connection.prepare("SELECT offset,at,text,author,summary,answers,letter_from,images \
+        FROM ledger_requests WHERE device=?1 AND agent=?2 AND id=?3 ORDER BY at DESC,offset DESC LIMIT ?4").map_err(failed)?;
+        let rows = statement
+            .query_map(
+                params![
+                    session.device_id,
+                    session.agent,
+                    session.session_id,
+                    *request_budget as i64 + 1
+                ],
+                |r| {
+                    Ok((
+                        r.get::<_, u64>(0)?,
+                        r.get::<_, u64>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, String>(3)?,
+                        r.get::<_, Option<String>>(4)?,
+                        r.get::<_, Option<String>>(5)?,
+                        r.get::<_, Option<String>>(6)?,
+                        r.get::<_, u32>(7)?,
+                    ))
+                },
+            )
+            .map_err(failed)?;
+        let mut requests = Vec::new();
+        for row in rows {
+            if *request_budget == 0 {
+                return Err("ledger_record_request_capacity".into());
+            }
+            *request_budget -= 1;
+            let (offset, at, text, author, summary, answers, letter_from, images) =
+                row.map_err(failed)?;
+            requests.push(shown_request(
+                &session.agent,
+                RecordedRequest {
+                    offset,
+                    at_unix_ms: at,
+                    text,
+                    author: decoded(author)?,
+                    images,
+                    summary,
+                    answers,
+                    letter_from,
+                    count: 1,
+                    repeats: Vec::new(),
+                    goal_command: false,
+                },
+            ));
+        }
+        requests.reverse();
+        Ok(place_flows(chapters, requests, turns))
+    }
+
     fn record_tree(
         &self,
         session: &SessionIdentity,
@@ -1482,88 +1577,18 @@ impl LinkStore {
         }
         let turns = self.turn_rows(session)?;
         record.status = status_of(&turns);
-        let mut statement = self
-            .connection
-            .prepare(
-                "SELECT chapter,goal,at,closed_result FROM ledger_chapters \
-            WHERE device=?1 AND agent=?2 AND id=?3 ORDER BY at,rowid",
-            )
-            .map_err(failed)?;
-        let chapters: Vec<WorkChapter> = statement
-            .query_map(args, |r| {
-                Ok(WorkChapter {
-                    id: r.get(0)?,
-                    goal: r.get(1)?,
-                    at_unix_ms: r.get(2)?,
-                    closed_result: r.get(3)?,
-                })
-            })
-            .map_err(failed)?
-            .collect::<Result<_, _>>()
-            .map_err(failed)?;
+        let chapters = self.chapter_rows(session)?;
         record.title = chapters
             .last()
             .map(|chapter| chapter.goal.clone())
             .or_else(|| record.native_title.clone())
             .unwrap_or_else(|| crate::sidebar::provider_name(Some(&session.agent)));
         if include_requests {
-            let mut statement=self.connection.prepare("SELECT offset,at,text,author,summary,answers,letter_from,images \
-            FROM ledger_requests WHERE device=?1 AND agent=?2 AND id=?3 ORDER BY at DESC,offset DESC LIMIT ?4").map_err(failed)?;
-            let rows = statement
-                .query_map(
-                    params![
-                        session.device_id,
-                        session.agent,
-                        session.session_id,
-                        *request_budget as i64 + 1
-                    ],
-                    |r| {
-                        Ok((
-                            r.get::<_, u64>(0)?,
-                            r.get::<_, u64>(1)?,
-                            r.get::<_, String>(2)?,
-                            r.get::<_, String>(3)?,
-                            r.get::<_, Option<String>>(4)?,
-                            r.get::<_, Option<String>>(5)?,
-                            r.get::<_, Option<String>>(6)?,
-                            r.get::<_, u32>(7)?,
-                        ))
-                    },
-                )
-                .map_err(failed)?;
-            let mut requests = Vec::new();
-            for row in rows {
-                if *request_budget == 0 {
-                    return Err("ledger_record_request_capacity".into());
-                }
-                *request_budget -= 1;
-                let (offset, at, text, author, summary, answers, letter_from, images) =
-                    row.map_err(failed)?;
-                requests.push(shown_request(
-                    &session.agent,
-                    RecordedRequest {
-                        offset,
-                        at_unix_ms: at,
-                        text,
-                        author: decoded(author)?,
-                        images,
-                        summary,
-                        answers,
-                        letter_from,
-                        count: 1,
-                        repeats: Vec::new(),
-                        goal_command: false,
-                    },
-                ));
-            }
-            requests.reverse();
-            record.flows = place_flows(&chapters, requests, &turns);
+            record.flows = self.own_flows(session, &chapters, &turns, request_budget)?;
             // The record is named after the flow the operator asked most of,
             // the later one on a tie (D-06, B9); the pane keeps the current
             // flow's name.
-            if !chapters.is_empty()
-                && let Some(largest) = record.flows.iter().max_by_key(|flow| flow.request_count)
-            {
+            if let Some(largest) = main_flow(&record.flows) {
                 record.title.clone_from(&largest.name);
             }
         }
@@ -2506,6 +2531,20 @@ fn settlement(prs: &[&WorkOutput]) -> Option<PrSettlement> {
     })
 }
 
+/// The id of the one flow a session with no goal has, named after its first
+/// request.
+const NO_GOAL_FLOW: &str = "flow-start";
+
+/// The flow a record is named after: among goal flows, the one the operator
+/// asked most of, the later one on a tie (D-06, B9); none for a session with
+/// no goal, which keeps its agent's title.
+pub(crate) fn main_flow(flows: &[WorkFlow]) -> Option<&WorkFlow> {
+    if flows.first().is_some_and(|flow| flow.id == NO_GOAL_FLOW) {
+        return None;
+    }
+    flows.iter().max_by_key(|flow| flow.request_count)
+}
+
 /// A request's words as the record shows them (D-18, B15, B25): attachment
 /// paths become a count, and a `/goal` command keeps its words and a mark,
 /// in the agents that have the command (Claude Code, Codex).
@@ -2569,7 +2608,7 @@ fn place_flows(
         let Some(first) = requests.first() else {
             return Vec::new();
         };
-        vec![("flow-start".to_owned(), None, first.at_unix_ms, None)]
+        vec![(NO_GOAL_FLOW.to_owned(), None, first.at_unix_ms, None)]
     } else {
         chapters
             .iter()

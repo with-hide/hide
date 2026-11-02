@@ -45,6 +45,9 @@ pub(crate) struct Events<T> {
     pub seen: usize,
     /// The read reached the session's last event, so `seen` is all of them.
     pub complete: bool,
+    /// The read reached the window's first event; a read the byte bound
+    /// stopped before it kept no answer to what was asked.
+    pub reached: bool,
 }
 
 /// How far a read goes past a full window.
@@ -114,7 +117,7 @@ pub(crate) fn read<T>(
         )?;
         consumed = consumed.saturating_add(page.read_bytes);
         for event in &page.events {
-            shown.push(event.at_unix_ms, |index| line(index, event));
+            shown.push(event, line);
         }
         if !page.has_more || page.read_bytes == 0 {
             complete = true;
@@ -127,13 +130,13 @@ pub(crate) fn read<T>(
         }
         checkpoint = Some(page.checkpoint);
     }
-    Ok(shown.finish(complete))
+    Ok(shown.finish(complete, line))
 }
 
 /// Text as it may leave the machine: credentials masked, at most `bytes`
 /// long and cut on a character. Answers whether anything was cut.
 pub(crate) fn egress(text: &str, bytes: usize) -> (String, bool) {
-    let redacted = hide_memory::redact(text).text;
+    let redacted = mask(text);
     if redacted.len() <= bytes {
         return (redacted, false);
     }
@@ -142,6 +145,15 @@ pub(crate) fn egress(text: &str, bytes: usize) -> (String, bool) {
         end -= 1;
     }
     (redacted[..end].to_owned(), true)
+}
+
+/// `text` with credentials, email addresses and home accounts masked: the
+/// label pipeline's mask (`labels::analysis`), which catches a secret named
+/// like an environment variable (`DB_PASSWORD=`), then Project Memory's
+/// redactor. Whatever another agent reads of a session passes through here
+/// before it is cut, so a cut never splits a secret past recognition.
+pub(crate) fn mask(text: &str) -> String {
+    hide_memory::redact(&crate::labels::analysis::mask(text)).text
 }
 
 /// Whether one name of a path is a credential file, a folder named for
@@ -153,21 +165,29 @@ pub(crate) fn credential_name(name: &str) -> bool {
 
 /// `text` cut to `chars` characters, with `…` when anything was cut.
 pub(crate) fn cut(text: &str, chars: usize) -> String {
+    cut_marked(text, chars).0
+}
+
+/// [`cut`], and whether anything was cut.
+pub(crate) fn cut_marked(text: &str, chars: usize) -> (String, bool) {
     let mut kept: String = text.chars().take(chars).collect();
-    if kept.len() < text.len() {
+    let cut = kept.len() < text.len();
+    if cut {
         kept.push('…');
     }
-    kept
+    (kept, cut)
 }
 
 /// The events of one session a read shows, chosen as they stream past
 /// page by page: `count` events from the window's pivot, with up to half of
-/// them before it when the window is around a time.
+/// them before it when the window is around a time. An event before the
+/// pivot is held as read and worded only once it is kept, so the wording
+/// (a redaction, for `hide session read`) runs on the shown events alone.
 struct EventWindow<T> {
     window: SessionWindow,
     before: usize,
     count: usize,
-    ring: VecDeque<(usize, T)>,
+    ring: VecDeque<(usize, ConversationEvent)>,
     kept: Vec<(usize, T)>,
     pivot: bool,
     seen: usize,
@@ -191,29 +211,37 @@ impl<T> EventWindow<T> {
     }
 
     /// One more event; `line` words it by its number, and only for an event
-    /// the window may show.
-    fn push(&mut self, at_unix_ms: u64, line: impl FnOnce(usize) -> T) {
+    /// the window keeps.
+    fn push(&mut self, event: &ConversationEvent, line: &dyn Fn(usize, &ConversationEvent) -> T) {
         let index = self.seen;
         self.seen += 1;
         if !self.pivot {
             self.pivot = match self.window {
-                SessionWindow::Around { at_unix_ms: at, .. } => at_unix_ms >= at,
+                SessionWindow::Around { at_unix_ms: at, .. } => event.at_unix_ms >= at,
                 SessionWindow::From { from, .. } => index >= from as usize,
             };
             if self.pivot {
-                self.kept.extend(self.ring.drain(..));
+                self.keep_ring(line);
             }
         }
         if self.pivot {
             if !self.full() {
-                self.kept.push((index, line(index)));
+                self.kept.push((index, line(index, event)));
             }
         } else if self.before > 0 {
-            self.ring.push_back((index, line(index)));
+            self.ring.push_back((index, event.clone()));
             if self.ring.len() > self.before {
                 self.ring.pop_front();
             }
         }
+    }
+
+    fn keep_ring(&mut self, line: &dyn Fn(usize, &ConversationEvent) -> T) {
+        let held = std::mem::take(&mut self.ring);
+        self.kept.extend(
+            held.into_iter()
+                .map(|(index, event)| (index, line(index, &event))),
+        );
     }
 
     fn full(&self) -> bool {
@@ -221,13 +249,23 @@ impl<T> EventWindow<T> {
     }
 
     /// What the window kept. A window around a time after the session's
-    /// last event keeps its end.
-    fn finish(mut self, complete: bool) -> Events<T> {
-        if !self.pivot && matches!(self.window, SessionWindow::Around { .. }) {
-            self.kept.extend(self.ring.drain(..));
+    /// last event keeps its end; one the read stopped short of keeps
+    /// nothing, rather than events that are not the ones asked for.
+    fn finish(
+        mut self,
+        complete: bool,
+        line: &dyn Fn(usize, &ConversationEvent) -> T,
+    ) -> Events<T> {
+        if complete && !self.pivot && matches!(self.window, SessionWindow::Around { .. }) {
+            self.keep_ring(line);
         }
         Events {
-            kept: self.kept,
+            reached: self.pivot || complete,
+            kept: if self.pivot || complete {
+                self.kept
+            } else {
+                Vec::new()
+            },
             seen: self.seen,
             complete,
         }
@@ -239,11 +277,14 @@ mod tests {
     use super::*;
 
     fn fill(window: SessionWindow, times: &[u64]) -> Events<String> {
+        let line = |index: usize, _: &ConversationEvent| format!("#{index}");
         let mut shown = EventWindow::new(window);
         for at in times {
-            shown.push(*at, |index| format!("#{index}"));
+            let event =
+                ConversationEvent::new("user", hide_session::EventKind::Human, *at, String::new());
+            shown.push(&event, &line);
         }
-        shown.finish(true)
+        shown.finish(true, &line)
     }
 
     fn numbers(events: &Events<String>) -> Vec<usize> {
@@ -294,6 +335,21 @@ mod tests {
         let (short, cut) = egress("가나다라마", 7);
         assert_eq!(short, "가나");
         assert!(cut);
+    }
+
+    #[test]
+    fn mask_catches_secrets_named_like_environment_variables() {
+        for secret in [
+            "DB_PASSWORD=hunter2hunter2",
+            "export STRIPE_API_KEY=abcd1234efgh5678",
+            "GITHUB_ACCESS_TOKEN=abcdefgh1234",
+        ] {
+            let masked = mask(secret);
+            assert!(
+                !masked.contains(secret.split('=').nth(1).unwrap()),
+                "{masked}"
+            );
+        }
     }
 
     #[test]

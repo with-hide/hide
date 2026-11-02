@@ -6,7 +6,7 @@
 use super::{LinkStore, SessionKey, failed};
 use crate::links::ledger::{LEDGER_DEPTH_LIMIT, RecordStatus, SessionIdentity};
 use rusqlite::{OptionalExtension, params};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// One line of `hide session list`, as the record holds it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -20,16 +20,31 @@ pub struct ListedSession {
     pub activity_unix_ms: u64,
     pub native_title: Option<String>,
     pub manual_title: Option<String>,
-    /// The flow the operator asked the most in, the later one on a tie, as
-    /// the record names a session; none while it has no flow.
-    pub main_flow: Option<String>,
-    /// Its requests, the operator's and a parent's, letters left out, as
-    /// the record numbers them.
+    /// The flow the record names the session after; none without a goal.
+    pub main_flow: Option<MainFlow>,
+    /// Its requests as the record numbers them: the operator's and a
+    /// parent's, repeats merged, letters left out.
     pub request_count: usize,
     /// The pull requests it made, newest first.
     pub prs: Vec<u64>,
     pub status: Option<RecordStatus>,
     pub file_gone: bool,
+}
+
+/// The flow a session is named after, and whether its name is the
+/// operator's own `/goal` words rather than a summary.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MainFlow {
+    pub name: String,
+    pub named_by_goal: bool,
+}
+
+/// Whether a flow is named by the `/goal` command that opened it, in the
+/// operator's words.
+pub fn named_by_goal(flow: &crate::links::ledger::WorkFlow) -> bool {
+    flow.requests
+        .first()
+        .is_some_and(|request| request.goal_command)
 }
 
 /// One page of a scope's sessions and how many more the period holds.
@@ -56,30 +71,11 @@ impl LinkStore {
     /// Project's own device, or whose recorded original project is one of
     /// them, and every descendant of those on any device.
     pub fn scope_members(&self, keys: &[String]) -> Result<BTreeSet<SessionIdentity>, String> {
-        let mut owners = HashSet::new();
-        for key in keys {
-            let Some(project) = self.project(key)? else {
-                continue;
-            };
-            let root = project.root.trim_end_matches('/').to_owned();
-            let mut statement = self
-                .connection
-                .prepare_cached("SELECT path FROM worktrees WHERE project=?1")
-                .map_err(failed)?;
-            let worktrees = statement
-                .query_map([key], |r| r.get::<_, String>(0))
-                .map_err(failed)?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(failed)?;
-            owners.insert((project.device.clone(), root));
-            for path in worktrees {
-                owners.insert((
-                    project.device.clone(),
-                    path.trim_end_matches('/').to_owned(),
-                ));
-            }
-        }
-        owners.retain(|(_, path)| !path.is_empty());
+        // A folder belongs to the deepest registered place holding it, so a
+        // Project nested in a caller's keeps its own sessions, as a pull
+        // request's sessions are fenced (`deepest_owner`).
+        let places = self.registered_places()?;
+        let keys: HashSet<&str> = keys.iter().map(String::as_str).collect();
         let mut statement = self
             .connection
             .prepare(
@@ -100,25 +96,17 @@ impl LinkStore {
                 ))
             })
             .map_err(failed)?;
-        let owned = |device: &str, path: &str| {
-            let mut path = path.trim_end_matches('/');
-            loop {
-                if owners.contains(&(device.to_owned(), path.to_owned())) {
-                    return true;
-                }
-                match path.rfind('/') {
-                    Some(at) if at > 0 => path = &path[..at],
-                    _ => return false,
-                }
-            }
+        let owned = |device: &str, place: &str| {
+            super::deepest_owner(&places, device, place).is_some_and(|key| keys.contains(key))
         };
         let mut members = BTreeSet::new();
         for row in rows {
             let (session, cwd, origin) = row.map_err(failed)?;
             let device = session.device_id.as_str();
-            let mine = origin.as_deref().is_some_and(|root| {
-                owners.contains(&(device.to_owned(), root.trim_end_matches('/').to_owned()))
-            }) || cwd.as_deref().is_some_and(|cwd| owned(device, cwd));
+            let mine = [origin, cwd]
+                .iter()
+                .flatten()
+                .any(|place| owned(device, place));
             if mine {
                 members.insert(session);
                 if members.len() > MEMBER_LIMIT {
@@ -282,30 +270,12 @@ impl LinkStore {
             .optional()
             .map_err(failed)?
             .unwrap_or((None, None));
-        let mut statement = self
-            .connection
-            .prepare_cached(
-                "SELECT goal,at FROM ledger_chapters WHERE device=?1 AND agent=?2 AND id=?3 ORDER BY at,rowid",
-            )
-            .map_err(failed)?;
-        let chapters = statement
-            .query_map(args, |r| Ok((r.get::<_, String>(0)?, r.get::<_, u64>(1)?)))
-            .map_err(failed)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(failed)?;
-        let mut statement = self
-            .connection
-            .prepare_cached(
-                "SELECT at FROM ledger_requests WHERE device=?1 AND agent=?2 AND id=?3 \
-                 AND letter_from IS NULL ORDER BY at",
-            )
-            .map_err(failed)?;
-        let requests = statement
-            .query_map(args, |r| r.get::<_, u64>(0))
-            .map_err(failed)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(failed)?;
-        let main_flow = main_flow(&chapters, &requests);
+        let flows = self.ledger_flows(&session)?;
+        let main_flow = super::ledger::main_flow(&flows).map(|flow| MainFlow {
+            name: flow.name.clone(),
+            named_by_goal: named_by_goal(flow),
+        });
+        let request_count = flows.iter().map(|flow| flow.request_count).sum();
         let mut statement = self
             .connection
             .prepare_cached(
@@ -328,7 +298,7 @@ impl LinkStore {
             native_title,
             manual_title,
             main_flow,
-            request_count: requests.len(),
+            request_count,
             prs,
             status,
             file_gone,
@@ -373,39 +343,5 @@ impl LinkStore {
             )
             .optional()
             .map_err(failed)
-    }
-}
-
-/// The flow with the most requests, the later one on a tie; a request before
-/// the first flow counts toward the first, as the record places it.
-fn main_flow(chapters: &[(String, u64)], requests: &[u64]) -> Option<String> {
-    let mut counts: BTreeMap<usize, usize> = BTreeMap::new();
-    for at in requests {
-        let index = chapters
-            .iter()
-            .rposition(|(_, start)| start <= at)
-            .unwrap_or(0);
-        *counts.entry(index).or_default() += 1;
-    }
-    let best = (0..chapters.len())
-        .max_by_key(|index| (counts.get(index).copied().unwrap_or(0), *index))?;
-    chapters.get(best).map(|(goal, _)| goal.clone())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::main_flow;
-
-    #[test]
-    fn the_main_flow_is_the_one_asked_most_the_later_on_a_tie() {
-        let chapters = vec![
-            ("a".to_owned(), 10),
-            ("b".to_owned(), 20),
-            ("c".to_owned(), 30),
-        ];
-        assert_eq!(main_flow(&chapters, &[5, 11, 21, 31]).as_deref(), Some("a"));
-        assert_eq!(main_flow(&chapters, &[11, 21]).as_deref(), Some("b"));
-        assert_eq!(main_flow(&chapters, &[]).as_deref(), Some("c"));
-        assert_eq!(main_flow(&[], &[1, 2]), None);
     }
 }
