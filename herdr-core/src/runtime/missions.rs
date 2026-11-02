@@ -1789,7 +1789,8 @@ impl Runtime {
 
     /// Refuses binding registration `id` to `node` as its worker or checker
     /// when the agent runs on another machine than `mission`'s and the node
-    /// is not one that may (`admit_elsewhere`).
+    /// is not one that may (`admit_elsewhere`). A ledger Hide could not
+    /// read is its own refusal, since it cannot say where the agent runs.
     fn bind_elsewhere(
         &self,
         mission: &Mission,
@@ -1799,12 +1800,11 @@ impl Runtime {
         if node.runs_elsewhere() {
             return Ok(());
         }
-        let elsewhere = self.delivery_state().is_ok_and(|ledger| {
-            ledger
-                .agents
-                .iter()
-                .any(|record| record.id == id && record.machine != mission.device_id)
-        });
+        let elsewhere = self
+            .delivery_state()?
+            .agents
+            .iter()
+            .any(|record| record.id == id && record.machine != mission.device_id);
         if elsewhere {
             return Err(crate::coordination::refusal(
                 "mission_machine_node_refused",
