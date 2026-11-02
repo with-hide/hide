@@ -3479,6 +3479,28 @@ Every value is the core's `status.background_ai`; the tab sends `ai_settings` ev
 
 ## Mobile companion
 
+The hosted phone app at `app.withhide.dev` and the advanced Tailscale app at `/m/` share every list, detail and command screen.
+The hosted start page shows the paired-device list; choosing a device opens the bundle matching its phone protocol at `/p/<n>/`.
+A QR opens a single-line, escaped `<device name>에 연결`, a line about viewing and replying to agents, the encryption assurance, 연결, and the existing five-minute expiry guidance.
+Its code leaves the address before connection and is never stored.
+Expired and already-used codes retain the device's existing `code_expired` wording, and four paired phones retain the existing limit guidance.
+An unsupported device shows `<device>의 Hide를 업데이트해 주세요`, the available phone app and device protocol versions, and 다른 기기 고르기.
+
+In the hosted app, the header's device name opens a picker with each saved device's connection dot, 내 차례 and 작업 중 counts, or its last successful contact when offline.
+A device whose protocol differs from the open bundle shows a warning dot and both versions instead of counts; selecting it asks the root loader for its matching bundle or update guidance.
+Neither the root list nor a bundle's picker authenticates to an incompatible device to read its status.
+Choosing another device replaces the page and closes the old connection; drafts and pending actions do not move between devices.
+다른 기기 연결 opens the camera scanner inside the installed app, with a QR-link paste alternative when camera permission is unavailable.
+The browser holds at most sixteen devices and reports its limit or a failed storage write inline.
+기기 지우기 asks for confirmation before removing that browser's saved connection and its notification subscription; scanning a fresh QR connects it again.
+When a relay device is unreachable, the list stays dimmed and the list, detail and start sheet say `<device>의 Hide가 꺼져 있거나 잠자고 있어요 · 다시 시도 중`, with no Tailscale wording.
+The existing automatic reconnect resumes when the device answers.
+
+The first hosted pairing offers the home-screen hint until dismissed, once per browser storage, and keeps the existing 알림 켜기 action, denied-permission line and Safari-tab installation line.
+Each saved device owns its own notification subscription; tapping a notification selects that device and opens its agent even when another device was last shown.
+The hosted app asks for no account, login or payment and loads no external script or analytics.
+The following Tailscale-specific address and transport guidance remains for the advanced direct connection; the list, conversation, reply, quick keys, start and wake behavior is common to both transports.
+
 ### Settings > Mobile
 
 Mobile is a page of Settings' machine group, after Hide AI.

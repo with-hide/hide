@@ -42,3 +42,5 @@ __pycache__/
 
 # Rebuilt from the locked relay protocol crate, never checked in.
 /hide-relay-protocol/pkg/
+
+/web/phone-dist/

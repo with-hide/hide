@@ -45,6 +45,7 @@ pub fn split_refusal(refusal: &str) -> (&str, Option<&str>) {
             | "mission_checkers_invalid"
             | "mission_checker_is_worker"
             | "mission_external_invalid"
+            | "mission_machine_node_refused"
             | "mission_nodes_unfinished"
             | "plan_invalid"
             | "plan_order_refused"

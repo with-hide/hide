@@ -3,7 +3,8 @@
 #
 # Usage: verify-web.sh [install [--ignore-scripts | holder] | PACKAGE ACTION [args...]]
 # PACKAGE: web, desktop, relay-protocol (typecheck only). ACTION: typecheck, lint, test, build, e2e, e2e-list,
-# playwright-install, package and electron-install (desktop only).
+# bundle and build:phone (web only), playwright-install,
+# package and electron-install (desktop only).
 #
 # Runs the web shell and desktop app typecheck, lint, unit tests and build.
 # Playwright flows use the explicit per-package e2e actions below.
@@ -51,7 +52,15 @@ if (( $# > 0 )); then
     esac
     case "$action" in
         typecheck|lint|test|build) exec pnpm --dir "$directory" "$action" "$@" ;;
+        bundle|build:phone)
+            [[ "$package" == web ]] || { printf '%s requires web\n' "$action" >&2; exit 2; }
+            exec pnpm --dir web "$action" "$@"
+            ;;
         e2e)
+            if [[ "$package" == web ]]; then
+                bash scripts/verify-cargo.sh build -p hide-relay-protocol --example phone_peer
+                pnpm --dir web build:phone
+            fi
             if [[ "$package" == desktop ]]; then
                 pnpm --dir "$directory" build
             fi
@@ -91,6 +100,7 @@ for package in web desktop; do
     # Web build already typechecks before bundling. Desktop's esbuild does not.
     if [[ "$package" == web ]]; then
         pnpm --dir "$package" build
+        pnpm --dir "$package" build:phone
     else
         pnpm --dir "$package" typecheck
     fi
