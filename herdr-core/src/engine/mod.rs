@@ -660,26 +660,29 @@ impl EngineHandle {
         }
     }
 
-    /// The core's own engine, whose panes `holders` run, for the state
-    /// folder `state_dir`: it stands for that folder's engine folder
-    /// (`hide_kit::layout::engine_dir`), saves its session there and lays
-    /// the saved session out again as it opens, `home` is where it opens
-    /// worktrees and a restored pane whose folder is gone, and `node` is this
-    /// machine's node, which reads its folders and runs its Git. Only a daemon
-    /// with the development switch `HIDE_DEV_PANE_HOLDER` on builds it (PRD
-    /// engine-bundle-3-core-owns D-5).
+    /// The core's own engine for this machine, whose panes the holders of
+    /// `node` run, for the state folder `state_dir`: it stands for that
+    /// folder's engine folder (`hide_kit::layout::engine_dir`), saves its
+    /// session there and lays the saved session out again as it opens,
+    /// `home` is where it opens worktrees and a restored pane whose folder is
+    /// gone, and `node` is this machine's node, which reads its folders, runs
+    /// its Git and answers its pane holders through the same requests a
+    /// device's node answers ([`hide_node_link::link_panes::LinkPanes`]).
+    /// Only a daemon with the development switch `HIDE_DEV_PANE_HOLDER` on
+    /// builds it (PRD engine-bundle-3-core-owns D-5, D-22).
     pub fn own(
-        holders: Arc<dyn hide_node_link::holders::PaneHolders>,
         node: Arc<dyn hide_node_link::NodeLink>,
         state_dir: std::path::PathBuf,
         home: std::path::PathBuf,
         definitions: hide_agent_adapter::definition::Catalog,
     ) -> Result<Self, String> {
         let scope = hide_kit::layout::engine_dir(&state_dir);
+        let home = hide_platform::path::to_wire(&home)
+            .map_err(|error| format!("{} has no wire spelling: {error}", home.display()))?;
         let engine = own::OwnEngine::open(
-            holders,
+            own::link_panes(Arc::clone(&node)),
             own::Place {
-                state_dir,
+                engine_dir: scope.clone(),
                 home,
                 node,
                 definitions: Arc::new(definitions),

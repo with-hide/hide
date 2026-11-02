@@ -174,6 +174,41 @@ pub(crate) struct OwnEngine<'g> {
     gates: Vec<Gate<'g>>,
 }
 
+/// The pane holders of the machine `node` reaches, as every engine of this
+/// kind asks them: through its node, whichever machine it is (PRD
+/// engine-bundle-3-core-owns D-22).
+pub(crate) fn link_panes(node: Arc<dyn NodeLink>) -> Arc<dyn PaneHolders> {
+    Arc::new(hide_node_link::link_panes::LinkPanes::new(
+        node,
+        Arc::new(|record: serde_json::Value| crate::diagnostic!(record)),
+    ))
+}
+
+/// A device's own engine (PRD engine-bundle-3-core-owns D-22): its session
+/// kept in the core's state folder `state_dir` under the device's own
+/// folder, its panes run by the holders of the device's node `node`, which
+/// answers for the account whose home is `home` (in the wire spelling). One
+/// is opened for each link the device's node brings and let go with it, so
+/// a node that starts again is laid out again around the holders it finds.
+pub(crate) fn open_device(
+    device: &str,
+    node: Arc<dyn NodeLink>,
+    state_dir: &std::path::Path,
+    home: String,
+    definitions: Arc<hide_agent_adapter::definition::Catalog>,
+) -> Result<OwnEngine<'static>, String> {
+    let engine_dir = hide_kit::layout::device_engine_dir(state_dir, device)?;
+    OwnEngine::open(
+        link_panes(Arc::clone(&node)),
+        Place {
+            engine_dir,
+            home,
+            node,
+            definitions,
+        },
+    )
+}
+
 impl OwnEngine<'static> {
     /// An engine with no workspace, whose panes `holders` run, that saves
     /// nothing and restores nothing: a test's.
@@ -2236,11 +2271,16 @@ mod tests {
     fn place(root: &std::path::Path) -> Place {
         let home = root.join("home");
         Place {
-            state_dir: root.join("state"),
+            engine_dir: hide_kit::layout::engine_dir(&root.join("state")),
             node: Arc::new(hide_node::Local::new(Some(home.clone()))),
-            home,
+            home: wire(&home),
             definitions: Arc::new(hide_agent_adapter::definition::Catalog::read(Vec::new())),
         }
+    }
+
+    /// The home a test's place names, on this machine.
+    fn home(place: &Place) -> std::path::PathBuf {
+        hide_platform::path::from_wire(&place.home).unwrap()
     }
 
     fn wire(path: &std::path::Path) -> String {
@@ -2277,7 +2317,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let place = place(root.path());
         let (kept, gone) = (root.path().join("kept"), root.path().join("gone"));
-        for dir in [&place.home, &kept, &gone] {
+        for dir in [&home(&place), &kept, &gone] {
             std::fs::create_dir_all(dir).unwrap();
         }
         let first =
@@ -2344,7 +2384,7 @@ mod tests {
         let started = holders.started();
         assert_eq!(started.len(), 2, "{started:?}");
         assert_eq!(started[0].pane, ended);
-        assert_eq!(started[0].cwd, wire(&place.home));
+        assert_eq!(started[0].cwd, place.home.clone());
         assert!(
             started[0]
                 .notice
@@ -2390,8 +2430,8 @@ mod tests {
     fn an_unreadable_save_is_kept_and_the_running_panes_gathered_without_ending_one() {
         let root = tempfile::tempdir().unwrap();
         let place = place(root.path());
-        std::fs::create_dir_all(&place.home).unwrap();
-        let path = hide_kit::layout::engine_session(&place.state_dir);
+        std::fs::create_dir_all(home(&place)).unwrap();
+        let path = hide_kit::layout::engine_session_in(&place.engine_dir);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, "{ not a session").unwrap();
 
@@ -2403,10 +2443,10 @@ mod tests {
         let engine =
             OwnEngine::open(Arc::clone(&holders) as Arc<dyn PaneHolders>, place.clone()).unwrap();
         let (workspace, _, pane) = engine
-            .create_workspace(WAIT, &wire(&place.home), "new", false, Env::new())
+            .create_workspace(WAIT, &place.home.clone(), "new", false, Env::new())
             .unwrap();
 
-        let backups = hide_kit::layout::engine_backups(&place.state_dir);
+        let backups = hide_kit::layout::engine_backups_in(&place.engine_dir);
         let kept: Vec<String> = std::fs::read_dir(&backups)
             .unwrap()
             .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
@@ -2435,11 +2475,11 @@ mod tests {
     fn a_pane_whose_program_exits_closes_and_takes_its_last_tab_with_it() {
         let root = tempfile::tempdir().unwrap();
         let place = place(root.path());
-        std::fs::create_dir_all(&place.home).unwrap();
+        std::fs::create_dir_all(home(&place)).unwrap();
         let holders = Holders::found(HolderRecovery::default());
         let engine =
             OwnEngine::open(Arc::clone(&holders) as Arc<dyn PaneHolders>, place.clone()).unwrap();
-        let home = wire(&place.home);
+        let home = place.home.clone();
         let (workspace, tab, first) = engine
             .create_workspace(WAIT, &home, "w", true, Env::new())
             .unwrap();
@@ -2492,9 +2532,9 @@ mod tests {
     fn a_new_worktree_goes_under_hides_folder_and_a_herdr_one_opens_where_it_is() {
         let root = tempfile::tempdir().unwrap();
         let place = place(root.path());
-        let repo = place.home.join("repo");
-        std::fs::create_dir_all(&place.home).unwrap();
-        run_git(&place.home, &["init", "-q", "repo"]);
+        let repo = home(&place).join("repo");
+        std::fs::create_dir_all(home(&place)).unwrap();
+        run_git(&home(&place), &["init", "-q", "repo"]);
         run_git(
             &repo,
             &[
@@ -2509,7 +2549,7 @@ mod tests {
                 "init",
             ],
         );
-        let herdr_place = place.home.join(".herdr/worktrees/repo/old");
+        let herdr_place = home(&place).join(".herdr/worktrees/repo/old");
         run_git(
             &repo,
             &[
@@ -2527,7 +2567,10 @@ mod tests {
         let made = engine
             .create_worktree(WAIT, &wire(&repo), "feat/Layout", None, None, None, true)
             .expect("a worktree is made");
-        let expected = hide_kit::layout::engine_worktree(&place.home, "repo", "feat-layout");
+        let expected = hide_platform::path::from_wire(
+            &hide_kit::layout::engine_worktree(&place.home, "repo", "feat-layout").unwrap(),
+        )
+        .unwrap();
         assert!(
             same_folder(&made.path, &expected),
             "{} is not {}",
@@ -2795,7 +2838,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let place = place(root.path());
         let folder = root.path().join("repo");
-        for dir in [&place.home, &folder] {
+        for dir in [&home(&place), &folder] {
             std::fs::create_dir_all(dir).unwrap();
         }
         let first_holders = Holders::found(HolderRecovery::default());
@@ -2878,7 +2921,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let place = place(root.path());
         let folder = root.path().join("repo");
-        for dir in [&place.home, &folder] {
+        for dir in [&home(&place), &folder] {
             std::fs::create_dir_all(dir).unwrap();
         }
         let first_holders = Holders::found(HolderRecovery::default());

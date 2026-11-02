@@ -1222,15 +1222,10 @@ fn local_engine(
         )),
         (Some(holders), None) => {
             let home = core_home(options)?;
-            // The engine's folders and Git are this machine's, read by a node
-            // answering for the core's home as the core's own node does.
-            let node = Arc::new(hide_node::Local::new(Some(home.clone())));
-            // The engine opens knowing the operator's agents, so the restore
-            // that starts with it resumes theirs too; a folder that cannot be
-            // read leaves the built-in ones, and the core's read logs why.
-            let definitions = hide_kit::agent_definitions::read(&home)
-                .unwrap_or_else(|_| hide_agent_adapter::definition::Catalog::read(Vec::new()));
-            EngineHandle::own(
+            // The engine's folders, Git and pane holders are this machine's,
+            // asked of a node answering for the core's home as the core's own
+            // node does, by the same requests a device's node answers.
+            let node = Arc::new(hide_node::Local::new(Some(home.clone())).with_panes(
                 // A pane with no program of its own runs the account's shell
                 // with Hide's integration, as the node prepares it for a tab.
                 Arc::new(LocalPanes::new(
@@ -1241,12 +1236,13 @@ fn local_engine(
                         user: hide_host::shell_integration::UserShell::of_process(),
                     },
                 )),
-                node,
-                state_dir.to_path_buf(),
-                home,
-                definitions,
-            )
-            .map(Some)
+            ));
+            // The engine opens knowing the operator's agents, so the restore
+            // that starts with it resumes theirs too; a folder that cannot be
+            // read leaves the built-in ones, and the core's read logs why.
+            let definitions = hide_kit::agent_definitions::read(&home)
+                .unwrap_or_else(|_| hide_agent_adapter::definition::Catalog::read(Vec::new()));
+            EngineHandle::own(node, state_dir.to_path_buf(), home, definitions).map(Some)
         }
         (None, Some(socket)) => Ok(Some(EngineHandle::herdr(hide_node::herdr(
             std::path::Path::new(socket),
