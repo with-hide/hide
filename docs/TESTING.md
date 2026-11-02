@@ -168,6 +168,7 @@ When the behavior depends on the order of two events, the test fixes that order;
   Every `agent start` the fixture sends (setup's and every `fixture.run`'s) goes through `startAgentAtShell`, which sends it only while `shellAvailability` says the pinned Herdr counts the shell as available (`docs/ARCHITECTURE.md`, Starting an agent), as the product's `agent_start` does.
   Setup starts its two agents concurrently through bounded, worker-owned CLI children or socket requests; it observes both results before returning or cleaning up, so one failed start cannot leave its sibling using a removed server or folder.
   The default `startHerdr()` returns only after both CLI starts report interactive-ready success, and `fixture.run` keeps its synchronous start contract.
+  The compiled interactive stand-in prints its first screen after initialization on every system, as a real agent does; a silent Unix stand-in could leave output-driven detection observing the shell before `exec`, so an unrelated warm-up command is not a readiness barrier.
   A consumer that needs registered names, pane topology, transcripts, settings or files, but sends no input to the initial panes, uses `startHerdr({ readiness: "registered" })`.
   That form uses the pinned socket's `agent.start` registration acknowledgement, not the CLI's later interactive wait; it makes no promise that the agent accepts input yet.
   Before any initial-pane input, including a lifecycle screen or browser keyboard/mouse input, such a consumer must `await fixture.ready()` or keep the default interactive setup.

@@ -491,11 +491,12 @@ int main(int argc, char **argv) {
     static const char composer[] = "\xe2\x80\xba Ask Codex to do anything\r\n";
     if (terminal_write(composer, sizeof composer - 1) != (fixture_count_t)(sizeof composer - 1)) return 1;
   }
-#ifdef _WIN32
-  // Herdr's encoded PowerShell launch has no visible agent name.
-  // Announce from the initialized interactive process before reading input.
+  // A real interactive agent draws its first screen after it starts.
+  // Announce after initialization on every system: shell echo can precede
+  // exec, so a silent stand-in leaves output-driven detection seeing the shell.
   static const char ready[] = "claude fixture ready\r\n";
   if (terminal_write(ready, sizeof ready - 1) != (fixture_count_t)(sizeof ready - 1)) return 1;
+#ifdef _WIN32
   char b[16384];
 #else
   char b[4096];

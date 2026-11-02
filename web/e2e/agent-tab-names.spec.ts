@@ -1,7 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { startFixture } from "./engine-fixture";
 import { startHerdr, paneShellTabName } from "./herdr-fixture";
-import { runInPane } from "./daemon-actions";
 import { labelAgentPane, startAgentIn } from "./fixture-agents";
 import { startHided, type Daemon } from "./hided-fixture";
 import { localEndpoint } from "./platform-fixture";
@@ -20,8 +19,6 @@ test("focused agent titles, inline rename, clear and reconnect", async ({ page }
     await expect(tab).toContainText(paneShellTabName(fixture.shell));
     const [first, second] = fixture.panes;
     for (const [pane, title] of [[first, "첫 번째 작업 진행"], [second, "두 번째 작업 진행"]]) {
-      // The own engine lists a program typed as a fresh shell's very first line only after a first command has run there.
-      await runInPane(fixture, daemon, pane!, `warm-${pane!.replaceAll(":", "-")}`, { argv: [process.execPath, "-v"] });
       await startAgentIn(fixture, daemon, pane!);
       await labelAgentPane(fixture, daemon, pane!, { task: title! });
     }
