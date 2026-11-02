@@ -13,7 +13,7 @@ import { agentPane, type HideAnswer } from "./agent-pane";
 import { openProject, viewPane, withControl } from "./daemon-actions";
 import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
-import { enterWorkspace, placedBoxes, screenshot } from "./wire";
+import { enterWorkspace, placedBoxes, screenshot, showTasks } from "./wire";
 
 test.describe.configure({ timeout: 120_000 });
 
@@ -68,9 +68,14 @@ test("a plan put up for review asks on the pane, the agent's approval clears it,
     // The review is the agent's question: the pane's ask band says it, in
     // the interface language, from the subject the core sent (B14).
     await expect(page.locator('[data-pane-header-band="answer"]')).toContainText("Plan review · 4 steps");
-    // The sidebar's second line asks the same.
+    // The visible pane has read the core's question: the project tree is quiet,
+    // while the header and the read task card keep the request until answered.
     const sidebar = page.locator("[data-sidebar-content]").first();
-    await expect(sidebar).toContainText("Plan review · 4 steps");
+    await expect(sidebar.locator(`[data-pane="${pane}"] [data-agent-line]`)).toHaveCount(0);
+    const tasks = await showTasks(page);
+    const task = tasks.locator(`[data-task-row="${pane}"]`);
+    await expect(task).toHaveAttribute("data-task-read", "true");
+    await expect(task).toContainText("Plan review · 4 steps");
     // Putting a plan up opens no 보기 slot by itself (D-29).
     await expect(page.locator('aside[data-detail="plan"]')).toHaveCount(0);
 

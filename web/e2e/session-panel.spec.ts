@@ -3,7 +3,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { openWorktree, viewPane, withControl } from "./daemon-actions";
+import { agentIn, openWorktree, viewPane, withControl } from "./daemon-actions";
 import { startFixture, type AgentFixture } from "./engine-fixture";
 import { agentReading, sessionIn, setAgentState, startAgentInProject, takeOverSession, type AgentState } from "./fixture-agents";
 import { claudeProjects, continueFixtureTranscript, writeFixtureTranscript, type FixtureLabel } from "./herdr-fixture";
@@ -58,6 +58,9 @@ async function labelFamily(fixture: AgentFixture, daemon: Daemon, parent: Fixtur
   await finishTurn(daemon, parentPane);
   continueFixtureTranscript(fixture, await sessionIn(daemon, childPane), child);
   await finishTurn(daemon, childPane);
+  // A turn-end label that lands after the next turn starts is stale. The
+  // fixture needs the completed turn's title before making its child work again.
+  await withControl(daemon, (control) => control.until((rest) => agentIn(rest, childPane)?.identity_label === child.task, "the child's completed turn label", 30_000));
   await setAgentState(daemon, childPane, "working");
 }
 
@@ -117,6 +120,7 @@ test("the 태스크 list groups the device's tasks, folds children and resting o
     await page.keyboard.press("Enter");
     await expect(page.locator(`[data-pane-view="${question}"]`)).toHaveAttribute("data-focused", "true");
     await expect(group("needs_you").locator(`[data-task-row="${question}"]`)).toHaveAttribute("data-task-read", "true");
+    await expect(ask(question)).toContainText(QUESTION);
     await row(asking).locator('[data-task-focus="row"]').click();
     await expect(page.locator(`[data-pane-view="${asking}"]`)).toHaveAttribute("data-focused", "true");
     await expect(row(asking)).toHaveAttribute("data-selected", "true");
