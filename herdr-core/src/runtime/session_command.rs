@@ -49,6 +49,16 @@ impl Runtime {
                 }
             })
             .collect();
+        let repositories = links
+            .projects
+            .iter()
+            .filter_map(|project| {
+                Some((
+                    project.key.clone(),
+                    self.project_repository(&project.device_id, &project.root)?,
+                ))
+            })
+            .collect();
         let mut nodes = vec![(self.node.to_string(), self.own_node())];
         nodes.extend(self.ready_device_channels());
         Some(SessionScope {
@@ -56,6 +66,7 @@ impl Runtime {
             local_device: links.local_device,
             caller: links.caller,
             projects: links.projects,
+            repositories,
             devices,
             nodes,
             // The screen's gate, so the marks match what it shows.
