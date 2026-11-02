@@ -1048,7 +1048,10 @@ fn a_wsl_own_engine_device_runs_its_panes_in_holders_with_no_herdr() {
     });
     let herdr = as_root(
         &distro,
-        &format!("find ~{USER} -name 'herdr*' 2>/dev/null; pgrep -u {USER} -f '[h]erdr' || true"),
+        // A Herdr program by its name: the node's own start line names
+        // Herdr (`node serve --own-herdr`), so a match on the command line
+        // would find the node.
+        &format!("find ~{USER} -name 'herdr*' 2>/dev/null; pgrep -a -u {USER} -x herdr || true"),
     );
     assert!(
         herdr.trim().is_empty(),
