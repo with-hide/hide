@@ -451,14 +451,15 @@ int main(int argc, char **argv) {
   if (native_session(argc, argv) != 0) return 1;
   if (agent_pane_runner(argc, argv) != 0) return 1;
   const char *log_path = getenv("HIDE_E2E_INPUT_LOG");
-  /* On the core's own engine a pane's environment is its daemon's, so the
-     fixture names a folder and each pane logs under its own id there
-     (`engine-fixture.ts`, `paneInputLog`), `:` written as `-`. */
+  /* A pane the fixture made through the daemon logs under its own id in the
+     run's root (`engine-fixture.ts`, `paneInputLog`), `:` written as `-`;
+     the pane names itself as `hide_agent_hooks::pane` reads it. */
   char pane_log[4096];
-  const char *pane_logs = getenv("HIDE_E2E_PANE_INPUT_LOGS"), *pane = getenv("HIDE_PANE_ID");
-  if (!log_path && pane_logs && pane && *pane) {
-    if (snprintf(pane_log, sizeof pane_log, "%s/input-%s.log", pane_logs, pane) >= (int)sizeof pane_log) return 1;
-    for (char *at = pane_log + strlen(pane_logs); *at; at++) if (*at == ':') *at = '-';
+  const char *pane_root = getenv("HIDE_E2E_ROOT"), *pane = getenv("HIDE_PANE_ID");
+  if (!pane || !*pane) pane = getenv("HERDR_PANE_ID");
+  if (!log_path && pane_root && pane && *pane) {
+    if (snprintf(pane_log, sizeof pane_log, "%s/input-%s.log", pane_root, pane) >= (int)sizeof pane_log) return 1;
+    for (char *at = pane_log + strlen(pane_root); *at; at++) if (*at == ':') *at = '-';
     log_path = pane_log;
   }
   int flags = O_WRONLY | O_CREAT | O_APPEND;

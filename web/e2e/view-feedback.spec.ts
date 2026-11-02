@@ -43,8 +43,8 @@ test("an agent's View wears its mark, and the operator's line comment reaches th
   try {
     const fixture = path.join(herdr.root, "fixture");
     fs.writeFileSync(path.join(fixture, "notes.md"), ["# Notes", "", "The first line.", "The second line, long enough to wrap onto more rows of the View than one. ".repeat(8).trim(), "The end."].join("\n") + "\n");
-    const pane = herdr.panes[0]!;
     daemon = await startHided(herdr, "view-feedback");
+    const pane = herdr.panes[0]!;
     const agent = await agentPane(herdr, daemon.stateDir, pane);
     const hide = async (args: string[]) => {
       const answer = await agent(args);
@@ -125,8 +125,8 @@ test("an area dragged on an image reaches its agent with a screenshot of that ar
   try {
     // Both suites run from their package folder, one below the repository.
     fs.copyFileSync(path.resolve("..", "assets", "pet-theme", "default", "assets", "sleeping.png"), path.join(herdr.root, "fixture", "mock.png"));
-    const pane = herdr.panes[0]!;
     daemon = await startHided(herdr, "view-feedback-image");
+    const pane = herdr.panes[0]!;
     const agent = await agentPane(herdr, daemon.stateDir, pane);
     const hide = async (args: string[]) => {
       const answer = await agent(args);

@@ -230,7 +230,7 @@ export function agentIn(rest: Rest, pane: string): FixtureAgentRow | undefined {
 /** The fields of a sidebar agent row (`navigator.agents`) a fixture reads. */
 export type FixtureAgentRow = { pane_id: string; agent_kind?: string | null; status_code?: string | null };
 
-/** The file the `claude` shim in `pane` logs every byte its terminal delivered to, on the own engine (`HIDE_E2E_PANE_INPUT_LOGS`). */
+/** The file the `claude` shim in `pane` logs every byte its terminal delivered to, under the run's root (`HIDE_E2E_ROOT`). */
 export function paneInputLog(root: string, pane: string): string {
   return path.join(root, `input-${pane.replaceAll(":", "-")}.log`);
 }
@@ -264,7 +264,6 @@ export type AgentFixture = EngineServer & {
 
 export async function startFixture({ agents = true }: { agents?: boolean } = {}): Promise<AgentFixture> {
   const server = await startEngine();
-  const inputLogs = server.root;
   let made: { workspace: string; tab: string; panes: [string, string] } | null = null;
   const need = () => {
     if (!made) throw new Error("the fixture's checkout and panes are made by its first daemon: read them after startHided");
@@ -290,19 +289,19 @@ export async function startFixture({ agents = true }: { agents?: boolean } = {})
   return {
     ...server,
     // The stand-in reports a new session through Hide's own hook from inside its pane (`setAgentSession`).
-    daemonEnv: { ...server.daemonEnv, HIDE_E2E_PANE_INPUT_LOGS: inputLogs, HIDE_E2E_HOOKS: path.resolve("..", "target", "debug", fixtureExecutable("hide-agent-hooks")) },
+    daemonEnv: { ...server.daemonEnv, HIDE_E2E_HOOKS: path.resolve("..", "target", "debug", fixtureExecutable("hide-agent-hooks")) },
     opened,
     get workspace() { return need().workspace; },
     get tab() { return need().tab; },
     get panes() { return need().panes; },
-    get inputLogs() { const [one, two] = need().panes; return [paneInputLog(inputLogs, one), paneInputLog(inputLogs, two)] as [string, string]; },
+    get inputLogs() { const [one, two] = need().panes; return [paneInputLog(server.root, one), paneInputLog(server.root, two)] as [string, string]; },
     ready: async () => { need(); },
   };
 }
 
 async function openFixture(control: HidedControl, server: EngineServer, agents: boolean): Promise<{ workspace: string; tab: string; panes: [string, string] }> {
   const folder = toPage(fs.realpathSync.native(path.join(server.root, "fixture")));
-  control.send("create_workspace", { path: folder, label: "e2e", initialize_git: false, confirmed_outside_home: folder });
+  control.send("create_workspace", { path: folder, label: "fixture", initialize_git: false, confirmed_outside_home: folder });
   const first = await control.until((rest) => {
     const checkout = checkoutAt(rest, folder);
     const tab = checkout?.tabs[0];
@@ -345,5 +344,11 @@ async function openFixture(control: HidedControl, server: EngineServer, agents: 
   // The shell Add project opened is not the fixture's: its tab goes.
   control.send("close_pane", { pane_id: first.pane, confirmed: true });
   await control.until((rest) => !checkoutAt(rest, folder)?.tabs.includes(first.tab), `the close of ${first.tab}`, 30_000);
+  // Each stand-in opens its input log once it runs and reads its terminal,
+  // which an engine can list it before (Herdr lists a start at once).
+  await expect.poll(() => panes.every((pane) => fs.existsSync(paneInputLog(server.root, pane))), { message: "both fixture agents reading their terminals", timeout: 30_000 }).toBe(true);
+  // The first agent holds the keyboard, as a spec on Herdr's fixture found it.
+  control.send("focus_pane", { pane_id: panes[0], origin: "operator" });
+  await control.until((rest) => corePaneFocus(rest) === panes[0], `the focus of ${panes[0]}`, 30_000);
   return { workspace: first.workspace, tab: one.tab, panes };
 }

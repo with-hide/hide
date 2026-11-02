@@ -57,8 +57,8 @@ async function switchDesk(page: Page, on: boolean) {
 async function startDesk(page: Page, name: string, open = true): Promise<Desk> {
   const herdr = await startFixture({ agents: false });
   const repo = path.join(herdr.root, "fixture");
-  const pane = herdr.panes[1];
   let daemon = await startHided(herdr, name);
+  const pane = herdr.panes[1];
   daemon = await daemon.restart((stateDir) => {
     fs.writeFileSync(path.join(stateDir, "delivery-ledger.json"), JSON.stringify(deskLedger(daemon.node, pane, repo)));
   });

@@ -25,8 +25,8 @@ test("⇧↩ right after a Hangul syllable reaches the program after that syllab
   const herdr = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    const [agent] = herdr.panes;
     daemon = await startHided(herdr, "korean-terminal");
+    const [agent] = herdr.panes;
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     // Herdr focused this pane when the fixture made it; a click would send

@@ -25,8 +25,8 @@ test("an agent's open the operator has not looked at waits on its row until the 
     fs.writeFileSync(path.join(fixture, "login.md"), "# Login\n");
     fs.writeFileSync(path.join(fixture, "notes.md"), "# Notes\n");
     fs.writeFileSync(path.join(fixture, "plan.md"), "# Plan\n");
-    const [pane, other] = herdr.panes;
     daemon = await startHided(herdr, "unseen-views");
+    const [pane, other] = herdr.panes;
     const agent = await agentPane(herdr, daemon.stateDir, pane);
     const hide = async (args: string[]) => {
       const answer = await agent(args);
