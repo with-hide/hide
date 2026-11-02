@@ -446,7 +446,11 @@ async fn unauthenticated_peers_expire_without_using_paired_phone_slots() {
                 assert!((1..=4).contains(&connection));
                 assert!(closed_peers.insert(connection));
             }
-            Some(Message::Binary(_)) => {}
+            Some(Message::Binary(bytes)) => {
+                // Consume status updates just as a real phone does, preserving
+                // the authenticated receive sequence while its peers expire.
+                paired.recv_message(&bytes, 0).unwrap();
+            }
             other => panic!("expected peer close, got {other:?}"),
         }
     }
