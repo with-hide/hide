@@ -123,9 +123,9 @@ impl std::error::Error for DurableWriteError {
 }
 
 /// Writes `contents` to `path` whole or not at all: the bytes go to a file
-/// beside it, are flushed to the device (`fsync`; on macOS not the
-/// `F_FULLFSYNC` that also empties the device's cache, which is
-/// [`write_file_durable`]'s barrier), and replace `path` in one step. Parent sync and
+/// beside it, are synced with `sync_all`, and replace `path` in one step.
+/// Pass [`WriteOptions::UntilReboot`] only for records that need not survive
+/// power loss; passing an [`Access`] keeps the full file sync. Parent sync and
 /// temporary cleanup are best effort. A replacement error does not promise
 /// the old destination is unchanged on every system.
 /// Returns the identity of the file now at `path`.
@@ -133,8 +133,36 @@ impl std::error::Error for DurableWriteError {
 /// `path` itself is replaced, so a link there is replaced by a file; a caller
 /// that means to write through a link resolves it first with
 /// [`identity::canonical`].
-pub fn write_file(path: &Path, contents: &[u8], access: Access) -> io::Result<FileId> {
-    write(path, contents, access, WriteMode::Visibility).map_err(DurableWriteError::into_io_error)
+pub fn write_file(
+    path: &Path,
+    contents: &[u8],
+    options: impl Into<WriteOptions>,
+) -> io::Result<FileId> {
+    let (access, mode) = match options.into() {
+        WriteOptions::SyncAll(access) => (access, WriteMode::Visibility),
+        WriteOptions::UntilReboot(access) => (access, WriteMode::UntilReboot),
+    };
+    write(path, contents, access, mode).map_err(DurableWriteError::into_io_error)
+}
+
+/// File access and the file barrier for [`write_file`]. Both choices keep
+/// atomic replacement and best-effort parent sync; checked durability is
+/// [`write_file_durable`]'s separate contract.
+#[derive(Clone, Copy)]
+pub enum WriteOptions {
+    /// The existing file barrier (`sync_all`, including macOS F_FULLFSYNC).
+    SyncAll(Access),
+    /// Only for records whose subjects cannot outlive this boot and whose
+    /// owner recovers missing, damaged or older bytes after power loss.
+    /// Uses fsync on Unix, without macOS's extra device-cache barrier;
+    /// Windows retains sync_all. This is not a power-loss durability promise.
+    UntilReboot(Access),
+}
+
+impl From<Access> for WriteOptions {
+    fn from(access: Access) -> Self {
+        Self::SyncAll(access)
+    }
 }
 
 /// Who may use a file [`write_file_durable`] writes: the current account
@@ -184,6 +212,7 @@ pub fn write_file_durable(
 #[derive(Clone, Copy)]
 enum WriteMode {
     Visibility,
+    UntilReboot,
     Durable,
 }
 
@@ -231,13 +260,17 @@ fn write(
             if let Some(kept) = &kept {
                 kept.apply(&file)?;
             }
-            #[cfg(test)]
-            if matches!(mode, WriteMode::Durable) {
-                os_faults::fail(os_faults::Point::FileSync)?;
-            }
             match mode {
-                WriteMode::Visibility => sys::flush(&file)?,
-                WriteMode::Durable => file.sync_all()?,
+                WriteMode::UntilReboot => {
+                    #[cfg(test)]
+                    os_faults::fail(os_faults::Point::FileFlush)?;
+                    sys::flush(&file)?;
+                }
+                WriteMode::Visibility | WriteMode::Durable => {
+                    #[cfg(test)]
+                    os_faults::fail(os_faults::Point::FileSync)?;
+                    file.sync_all()?;
+                }
             }
             let id = identity::file_id_of(&file)?;
             drop(file);
@@ -248,7 +281,9 @@ fn write(
             cleanup: temporary.cleanup(mode),
         })?;
         let replaced = match mode {
-            WriteMode::Visibility => sys::replace(&temporary.path, path, kept.is_some()),
+            WriteMode::Visibility | WriteMode::UntilReboot => {
+                sys::replace(&temporary.path, path, kept.is_some())
+            }
             WriteMode::Durable => sys::replace_durable(&temporary.path, path),
         };
         replaced.map_err(|source| DurableWriteError::ReplacementUncertain {
@@ -257,7 +292,7 @@ fn write(
         })?;
         temporary.disarm();
         match mode {
-            WriteMode::Visibility => sync_path_parent(folder),
+            WriteMode::Visibility | WriteMode::UntilReboot => sync_path_parent(folder),
             WriteMode::Durable => {
                 sync_durable_parent(folder).map_err(|source| {
                     DurableWriteError::ReplacedNotDurable {
@@ -746,6 +781,7 @@ mod os_faults {
     pub(super) enum Point {
         FileWrite,
         FileSync,
+        FileFlush,
         Replacement,
         ReplacementAcknowledgement,
         Cleanup,
@@ -949,11 +985,11 @@ mod tests {
         let strict = folder.path().join("strict");
         let legacy = folder.path().join("legacy");
         let other_thread = folder.path().join("other-thread");
-        let _fault = os_faults::install(&[Point::FileSync]);
+        let _fault = os_faults::install(&[Point::ParentSync]);
 
         assert!(matches!(
             write_file_durable(&strict, b"strict", DurableAccess::Private),
-            Err(DurableWriteError::BeforeReplace { .. })
+            Err(DurableWriteError::ReplacedNotDurable { .. })
         ));
         write_file(&legacy, b"legacy", Access::KeepOrPrivate).unwrap();
         let other_id = std::thread::spawn(move || {
@@ -962,7 +998,7 @@ mod tests {
         .join()
         .unwrap();
 
-        assert!(!strict.exists());
+        assert_eq!(fs::read(&strict).unwrap(), b"strict");
         assert_eq!(fs::read(&legacy).unwrap(), b"legacy");
         assert_eq!(
             fs::read(folder.path().join("other-thread")).unwrap(),
@@ -974,7 +1010,37 @@ mod tests {
         );
         assert_eq!(
             names(folder.path()),
-            [OsString::from("legacy"), OsString::from("other-thread")]
+            [
+                OsString::from("legacy"),
+                OsString::from("other-thread"),
+                OsString::from("strict")
+            ]
         );
+    }
+
+    #[test]
+    fn ordinary_writes_keep_full_file_sync_and_boot_records_explicitly_choose_their_flush() {
+        for (options, point) in [
+            (Access::Private.into(), Point::FileSync),
+            (WriteOptions::UntilReboot(Access::Private), Point::FileFlush),
+        ] {
+            let folder = tempfile::tempdir().unwrap();
+            let path = folder.path().join("record");
+            fs::write(&path, b"old").unwrap();
+            let old_id = identity::file_id(&path).unwrap();
+            let fault = os_faults::install(&[point]);
+
+            let error = write_file(&path, b"new", options).unwrap_err();
+            assert_eq!(error.raw_os_error(), Some(os_faults::IO_ERROR));
+            assert_eq!(fs::read(&path).unwrap(), b"old");
+            assert_eq!(identity::file_id(&path).unwrap(), old_id);
+            assert_eq!(names(folder.path()), [OsString::from("record")]);
+
+            drop(fault);
+            let id = write_file(&path, b"new", options).unwrap();
+            assert_eq!(fs::read(&path).unwrap(), b"new");
+            assert_eq!(identity::file_id(&path).unwrap(), id);
+            assert!(super::super::private::is_private(&path).unwrap());
+        }
     }
 }

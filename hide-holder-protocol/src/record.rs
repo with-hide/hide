@@ -296,7 +296,12 @@ pub fn write(path: &Path, record: &PaneRecord) -> io::Result<()> {
             ),
         ));
     }
-    hide_platform::fs::atomic::write_file(path, &bytes, Access::Private).map(|_| ())
+    hide_platform::fs::atomic::write_file(
+        path,
+        &bytes,
+        hide_platform::fs::atomic::WriteOptions::UntilReboot(Access::Private),
+    )
+    .map(|_| ())
 }
 
 /// Takes the records' lock at `path`, waiting up to `wait`; `None` when

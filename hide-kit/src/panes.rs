@@ -415,7 +415,9 @@ impl Panes {
             hide_platform::fs::atomic::write_file(
                 &counter,
                 floor.to_string().as_bytes(),
-                hide_platform::fs::Access::Private,
+                hide_platform::fs::atomic::WriteOptions::UntilReboot(
+                    hide_platform::fs::Access::Private,
+                ),
             )
             .map_err(|error| format!("{} could not be written: {error}", counter.display()))?;
             self.emit(
@@ -1061,7 +1063,9 @@ impl Panes {
             hide_platform::fs::atomic::write_file(
                 &path,
                 end.to_string().as_bytes(),
-                hide_platform::fs::Access::Private,
+                hide_platform::fs::atomic::WriteOptions::UntilReboot(
+                    hide_platform::fs::Access::Private,
+                ),
             )
             .map_err(|error| format!("{} could not be written: {error}", path.display()))?;
             *taken = next..end;
