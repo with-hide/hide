@@ -74,6 +74,20 @@ pub struct HolderForeground {
     pub members: Vec<(u32, String)>,
 }
 
+/// A key the engine presses by name, which the pane's holder encodes for
+/// its program's keyboard modes when it is written.
+pub use hide_holder_protocol::Key as HolderKey;
+
+/// What the engine types into a pane (PRD engine-bundle-3-core-owns D-21):
+/// bytes as they are, or a paste and named keys the pane's holder encodes
+/// for its program's modes when they are written.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PaneInput {
+    Bytes(Vec<u8>),
+    Paste(Vec<u8>),
+    Keys(Vec<HolderKey>),
+}
+
 /// A pane's start and program as its record names them
 /// ([`PaneHolders::proof`]).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -274,9 +288,22 @@ pub trait PaneHolders: Send + Sync {
     /// vouch for anything; a pane whose program has not started or has ended
     /// is refused `pane_not_running`.
     fn proof(&self, pane: &str) -> Result<HolderProof, HolderError>;
-    /// Types `bytes` into the pane as they are, through the connection that
-    /// holds its screen, in order with every other key typed there.
-    fn input(&self, pane: &str, bytes: Vec<u8>) -> Result<(), HolderError>;
+    /// Types `input` into the pane through the connection that holds its
+    /// screen, in order with every other key typed there; a pane whose
+    /// screen was let go is attached again for it. It is the engine's
+    /// typing, never reported as the operator's.
+    fn input(&self, pane: &str, input: PaneInput) -> Result<(), HolderError>;
+    /// Types a letter: `body`, then `submit` once `gap` has passed, holding
+    /// the operator's keys typed into the pane meanwhile and writing them
+    /// after the submit in the order typed (PRD engine-bundle-3-core-owns
+    /// D-13). Returns once the submit was handed over.
+    fn letter(
+        &self,
+        pane: &str,
+        body: PaneInput,
+        submit: PaneInput,
+        gap: std::time::Duration,
+    ) -> Result<(), HolderError>;
     /// What the node's start found of its holders, once it has looked at
     /// every record, waiting at most `timeout` for it: refused
     /// `recovery_unfinished` when it has not finished by then.

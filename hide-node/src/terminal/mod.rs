@@ -45,7 +45,7 @@ use serde_json::json;
 
 use self::input::{
     AttachmentHold, HeldChunk, InputFact, InputFacts, KeyRoute, PaneHold, Refusal, Refusals,
-    Requests,
+    Requests, Typed, Typist,
 };
 pub use self::protocol::Mode;
 use self::protocol::SessionEvent;
@@ -212,6 +212,10 @@ struct Pane {
     asleep: bool,
     asleep_reported: bool,
     hold: PaneHold,
+    /// While the core's own engine types a letter into the pane: the
+    /// operator's keys typed meanwhile, written after the letter's submit in
+    /// the order typed (PRD engine-bundle-3-core-owns D-13).
+    letter: Option<PaneHold>,
     first_frame_pending: bool,
     reported: Option<PaneTerminalState>,
 }
@@ -334,33 +338,104 @@ fn unix_ms() -> u64 {
 impl Service {
     fn route_input(&self, target: KeyTarget, chunk: HeldChunk) {
         let now = Instant::now();
-        self.shared.run(|inner, _| {
-            let target = match target {
-                KeyTarget::Pane(ref pane) => inner
-                    .requests
-                    .holder(pane)
-                    .map(KeyTarget::Request)
-                    .unwrap_or(target),
-                _ => target,
-            };
-            match target {
-                KeyTarget::Pane(pane) => inner.write_key(&pane, chunk, true, now),
-                KeyTarget::Request(request) => match inner.requests.route(&request, chunk) {
-                    (KeyRoute::Pane(pane), Some(chunk)) => {
-                        inner.write_key(&pane, chunk, false, now)
-                    }
-                    (KeyRoute::Dropped { limit: true }, _) => {
-                        inner.reports.push(TerminalReport::RequestDiscarded {
-                            request,
-                            reason: "limit".to_owned(),
-                        })
-                    }
-                    (KeyRoute::Held, _) => inner.wake_clock = true,
-                    _ => {}
-                },
+        self.shared
+            .run(|inner, _| inner.route_input(target, chunk, now));
+    }
+
+    /// Types `input` into `pane` as the core's own engine, behind every key
+    /// typed there before it. It is not the operator's typing: no input fact
+    /// is reported for it, and a letter's hold does not take it. A pane
+    /// whose session was released, since its tab left the last shown, is
+    /// attached again for it, and the input waits in the pane's hold as a
+    /// new pane's keys do (64 KiB, 3 s).
+    fn type_input(&self, pane: &str, input: Typed) {
+        let now = Instant::now();
+        let chunk = HeldChunk {
+            typed_at: now,
+            typed_at_unix_ms: unix_ms(),
+            input,
+            by: Typist::Engine,
+            permit: None,
+        };
+        self.shared.run(|inner, shared| {
+            if inner.panes.get(pane).is_some_and(|entry| {
+                entry.session.is_none() && !entry.closing && entry.lifecycle.state == "released"
+            }) {
+                inner.request_control(shared, pane, now);
             }
-            inner.expire_fork_input(now);
+            inner.route_input(KeyTarget::Pane(pane.to_owned()), chunk, now);
         });
+    }
+
+    /// Types a letter into `pane` as the core's own engine: `body`, then
+    /// `submit` once `gap` has passed, on the caller's thread. The
+    /// operator's keys typed into the pane from the body until the submit
+    /// was handed over are held, at most 64 KiB and 3 s as a new pane's
+    /// are, and written after the submit in the order typed, so none lands
+    /// inside the letter and none is lost (PRD engine-bundle-3-core-owns
+    /// D-13). The hold ends on every way out, a panic included.
+    fn type_letter(&self, pane: &str, body: Typed, submit: Typed, gap: Duration) {
+        struct Letter<'a> {
+            service: &'a Service,
+            pane: &'a str,
+        }
+        impl Drop for Letter<'_> {
+            fn drop(&mut self) {
+                let now = Instant::now();
+                self.service.shared.run(|inner, _| {
+                    let Some(held) = inner
+                        .panes
+                        .get_mut(self.pane)
+                        .and_then(|entry| entry.letter.take())
+                    else {
+                        return;
+                    };
+                    for chunk in held.take_in_order(self.pane, now) {
+                        inner.route_input(KeyTarget::Pane(self.pane.to_owned()), chunk, now);
+                    }
+                });
+            }
+        }
+        self.shared.run(|inner, _| {
+            if let Some(entry) = inner.panes.get_mut(pane) {
+                entry.letter = Some(PaneHold::default());
+            }
+        });
+        let _letter = Letter {
+            service: self,
+            pane,
+        };
+        self.type_input(pane, body);
+        thread::sleep(gap);
+        self.type_input(pane, submit);
+    }
+}
+
+impl Inner {
+    fn route_input(&mut self, target: KeyTarget, chunk: HeldChunk, now: Instant) {
+        let target = match target {
+            KeyTarget::Pane(ref pane) => self
+                .requests
+                .holder(pane)
+                .map(KeyTarget::Request)
+                .unwrap_or(target),
+            _ => target,
+        };
+        match target {
+            KeyTarget::Pane(pane) => self.write_key(&pane, chunk, true, now),
+            KeyTarget::Request(request) => match self.requests.route(&request, chunk) {
+                (KeyRoute::Pane(pane), Some(chunk)) => self.write_key(&pane, chunk, false, now),
+                (KeyRoute::Dropped { limit: true }, _) => {
+                    self.reports.push(TerminalReport::RequestDiscarded {
+                        request,
+                        reason: "limit".to_owned(),
+                    })
+                }
+                (KeyRoute::Held, _) => self.wake_clock = true,
+                _ => {}
+            },
+        }
+        self.expire_fork_input(now);
     }
 }
 
@@ -461,7 +536,8 @@ impl TerminalNode for Service {
             HeldChunk {
                 typed_at: Instant::now(),
                 typed_at_unix_ms: unix_ms(),
-                bytes: vec![0; bytes.max(1)],
+                input: Typed::Bytes(vec![0; bytes.max(1)]),
+                by: Typist::Operator,
                 permit: Some(permit),
             },
         );
@@ -478,7 +554,8 @@ impl TerminalNode for Service {
             permit: None,
             typed_at: now,
             typed_at_unix_ms,
-            bytes,
+            input: Typed::Bytes(bytes),
+            by: Typist::Operator,
         };
         self.route_input(target, chunk);
     }
@@ -954,7 +1031,7 @@ impl Inner {
                 }
             }
             TerminalControl::Write { pane, data } => match protocol::decode_base64(&data) {
-                Ok(bytes) => self.write_control(&pane, &bytes, now),
+                Ok(bytes) => self.write_control(&pane, Typed::Bytes(bytes), now),
                 Err(message) => self.error(&pane, "terminal.invalid_input", message),
             },
             TerminalControl::Asleep { pane, asleep } => match self.panes.get_mut(&pane) {
@@ -990,7 +1067,7 @@ impl Inner {
                     "kind": "terminal.input_handed_over",
                     "pane_id": pane,
                     "chunks": held.len(),
-                    "bytes": held.iter().map(|chunk| chunk.bytes.len()).sum::<usize>(),
+                    "bytes": held.iter().map(|chunk| chunk.input.len()).sum::<usize>(),
                 }));
                 for chunk in held {
                     self.write_key(&pane, chunk, false, now);
@@ -1158,6 +1235,15 @@ impl Inner {
     /// this pane on the screen; a key held for a creation reaches its new
     /// pane without moving the keyboard.
     fn write_key(&mut self, pane: &str, chunk: HeldChunk, focus: bool, now: Instant) {
+        if chunk.by == Typist::Operator
+            && let Some(letter) = self
+                .panes
+                .get_mut(pane)
+                .and_then(|entry| entry.letter.as_mut())
+        {
+            letter.hold(pane, chunk);
+            return;
+        }
         if let Some(permit) = &chunk.permit {
             use hide_node_link::terminal::InputPermitError;
             let result = if now >= permit.deadline() {
@@ -1210,10 +1296,16 @@ impl Inner {
             );
             return;
         }
-        let submitted = input::submits(&chunk.bytes);
+        let operator = chunk.by == Typist::Operator;
+        let submitted = match &chunk.input {
+            Typed::Bytes(bytes) => operator && input::submits(bytes),
+            Typed::Paste(_) | Typed::Keys(_) => false,
+        };
         let asleep = self.panes.get(pane).is_some_and(|entry| entry.asleep);
         if asleep {
-            self.input_fact(pane, &chunk, (false, false), "write_key_asleep", now);
+            if operator {
+                self.input_fact(pane, &chunk, (false, false), "write_key_asleep", now);
+            }
             let entry = self.panes.get_mut(pane).expect("checked above");
             if !entry.asleep_reported {
                 entry.asleep_reported = true;
@@ -1225,19 +1317,22 @@ impl Inner {
             }
             return;
         }
-        if let Some(attachment) = self
-            .attachment
-            .as_mut()
-            .filter(|attachment| attachment.pane == pane && !attachment.delivering)
+        // The operator's keys typed while an attachment is pasted wait
+        // behind it; the engine's input is not theirs and goes its way.
+        if let Typed::Bytes(bytes) = &chunk.input
+            && operator
+            && let Some(attachment) = self
+                .attachment
+                .as_mut()
+                .filter(|attachment| attachment.pane == pane && !attachment.delivering)
         {
             let intent = attachment.hold.intent.clone();
             let outcome = if attachment.hold.cancelling {
                 Some(AttachmentInputOutcome::Cancelling)
-            } else if attachment.hold.queued.len() + chunk.bytes.len() > MAX_ATTACHMENT_INPUT_BYTES
-            {
+            } else if attachment.hold.queued.len() + bytes.len() > MAX_ATTACHMENT_INPUT_BYTES {
                 Some(AttachmentInputOutcome::Limit)
             } else {
-                attachment.hold.queued.extend_from_slice(&chunk.bytes);
+                attachment.hold.queued.extend_from_slice(bytes);
                 None
             };
             self.input_fact(
@@ -1251,12 +1346,14 @@ impl Inner {
                 self.report(TerminalReport::AttachmentInput {
                     intent,
                     outcome,
-                    bytes: chunk.bytes.len(),
+                    bytes: chunk.input.len(),
                 });
             }
             return;
         }
-        self.input_fact(pane, &chunk, (submitted, focus), "write_key", now);
+        if operator {
+            self.input_fact(pane, &chunk, (submitted, focus), "write_key", now);
+        }
         self.write_typed(pane, chunk, now);
     }
 
@@ -1278,7 +1375,15 @@ impl Inner {
             }
             result
         } else {
-            session.write(&chunk.bytes)
+            Self::write_session(session, chunk.input)
+        }
+    }
+
+    fn write_session(session: &Session, input: Typed) -> Result<(), session::WriteRefused> {
+        match input {
+            Typed::Bytes(bytes) => session.write(&bytes),
+            Typed::Paste(text) => session.paste(text),
+            Typed::Keys(keys) => session.keys(keys),
         }
     }
 
@@ -1299,7 +1404,7 @@ impl Inner {
         }
         let facts = self.facts.entry(pane.to_owned()).or_default();
         let waiting = facts.deadline().is_some();
-        let fact = facts.key(now, at, submitted, moves, (chunk.bytes.len(), path));
+        let fact = facts.key(now, at, submitted, moves, (chunk.input.len(), path));
         if !waiting && facts.deadline().is_some() {
             self.wake_clock = true;
         }
@@ -1348,11 +1453,11 @@ impl Inner {
             entry.hold.hold(pane, chunk);
             return;
         }
-        self.write_control(pane, &chunk.bytes, now);
+        self.write_control(pane, chunk.input, now);
     }
 
-    /// Writes bytes to the pane's controller, or says why it cannot.
-    fn write_control(&mut self, pane: &str, bytes: &[u8], now: Instant) {
+    /// Writes input to the pane's controller, or says why it cannot.
+    fn write_control(&mut self, pane: &str, input: Typed, now: Instant) {
         let Some(entry) = self.panes.get(pane) else {
             self.refuse(
                 pane,
@@ -1377,7 +1482,7 @@ impl Inner {
             return;
         }
         let result = match entry.session.as_ref() {
-            Some(session) if session.mode == Mode::Control => session.write(bytes),
+            Some(session) if session.mode == Mode::Control => Self::write_session(session, input),
             Some(_) => {
                 self.refuse(
                     pane,
@@ -1409,6 +1514,9 @@ impl Inner {
             ),
             Err(session::WriteRefused::Failed(message)) => {
                 self.error(pane, "terminal.write_failed", message)
+            }
+            Err(session::WriteRefused::Unsupported(message)) => {
+                self.refuse(pane, "terminal.unsupported_holder", message, now)
             }
         }
     }
@@ -1816,7 +1924,7 @@ impl Inner {
                     "kind": "terminal.input_discarded",
                     "pane_id": pane,
                     "reason": "read_only",
-                    "bytes": held.iter().map(|chunk| chunk.bytes.len()).sum::<usize>(),
+                    "bytes": held.iter().map(|chunk| chunk.input.len()).sum::<usize>(),
                 }));
             }
         }

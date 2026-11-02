@@ -14,17 +14,16 @@ use std::sync::Arc;
 
 use hide_host::shell_integration::{ShellLaunch, ShellReadiness, UserShell};
 
+use super::Service;
+use super::holder::Holders;
+use super::input::Typed;
 use hide_holder_protocol::record::Phase;
 use hide_holder_protocol::{Answer, Appearance, CloseReason, Foreground, OpenError, Size, Theme};
 use hide_kit::panes::{CloseError, StartRefusal, StartRequest, Started};
 use hide_node_link::holders::{
     HolderError, HolderForeground, HolderProcesses, HolderProof, HolderRecovery, HolderStart,
-    PaneEnded, PaneFactsSink, PaneHolders, ScreenRules, StyledRead, UNSUPPORTED_HOLDER,
+    PaneEnded, PaneFactsSink, PaneHolders, PaneInput, ScreenRules, StyledRead, UNSUPPORTED_HOLDER,
 };
-use hide_node_link::terminal::{KeyTarget, TerminalNode};
-
-use super::Service;
-use super::holder::Holders;
 
 /// This machine's holders and the service that shows their screens.
 pub struct LocalPanes {
@@ -262,9 +261,20 @@ impl PaneHolders for LocalPanes {
         }
     }
 
-    fn input(&self, pane: &str, bytes: Vec<u8>) -> Result<(), HolderError> {
+    fn input(&self, pane: &str, input: PaneInput) -> Result<(), HolderError> {
+        self.service.type_input(pane, typed(input));
+        Ok(())
+    }
+
+    fn letter(
+        &self,
+        pane: &str,
+        body: PaneInput,
+        submit: PaneInput,
+        gap: std::time::Duration,
+    ) -> Result<(), HolderError> {
         self.service
-            .key(KeyTarget::Pane(pane.to_owned()), bytes, super::unix_ms());
+            .type_letter(pane, typed(body), typed(submit), gap);
         Ok(())
     }
 
@@ -331,6 +341,15 @@ fn shell_after_notice(shell: &[OsString], notice: &str) -> Vec<OsString> {
     ];
     program.extend(shell.iter().cloned());
     program
+}
+
+/// The engine's input in the service's words.
+fn typed(input: PaneInput) -> Typed {
+    match input {
+        PaneInput::Bytes(bytes) => Typed::Bytes(bytes),
+        PaneInput::Paste(text) => Typed::Paste(text),
+        PaneInput::Keys(keys) => Typed::Keys(keys),
+    }
 }
 
 fn start_refusal(refusal: StartRefusal) -> HolderError {

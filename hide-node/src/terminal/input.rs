@@ -93,8 +93,48 @@ fn valid_request_id(request_id: &str) -> bool {
 pub(super) struct HeldChunk {
     pub(super) typed_at: Instant,
     pub(super) typed_at_unix_ms: u64,
-    pub(super) bytes: Vec<u8>,
+    pub(super) input: Typed,
+    pub(super) by: Typist,
     pub(super) permit: Option<super::permit::Permit>,
+}
+
+/// What a chunk types. The operator's keys are bytes; the core's own engine
+/// also types a paste and named keys, which the pane's holder encodes for
+/// the program's modes when they are written (PRD engine-bundle-3-core-owns
+/// D-21).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum Typed {
+    Bytes(Vec<u8>),
+    Paste(Vec<u8>),
+    Keys(Vec<hide_holder_protocol::Key>),
+}
+
+impl Typed {
+    /// What it counts against a cap: its bytes, or one per key.
+    pub(super) fn len(&self) -> usize {
+        match self {
+            Self::Bytes(bytes) | Self::Paste(bytes) => bytes.len(),
+            Self::Keys(keys) => keys.len(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn into_bytes(self) -> Vec<u8> {
+        match self {
+            Self::Bytes(bytes) => bytes,
+            other => panic!("not bytes: {other:?}"),
+        }
+    }
+}
+
+/// Who typed a chunk: only the operator's keys are their typing, reported to
+/// the core as such and held while a letter is typed into the pane (PRD
+/// engine-bundle-3-core-owns D-13).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Typist {
+    Operator,
+    /// The core's own engine: a letter, a prompt, a command it types.
+    Engine,
 }
 
 /// The keys a pane can still be given at `now`, in order; those held longer
@@ -103,7 +143,7 @@ pub(super) fn fresh_chunks(pane_id: &str, chunks: Vec<HeldChunk>, now: Instant) 
     let (fresh, stale): (Vec<_>, Vec<_>) = chunks
         .into_iter()
         .partition(|chunk| now.saturating_duration_since(chunk.typed_at) <= HELD_INPUT_MAX_AGE);
-    let bytes = stale.iter().map(|chunk| chunk.bytes.len()).sum::<usize>();
+    let bytes = stale.iter().map(|chunk| chunk.input.len()).sum::<usize>();
     if bytes > 0 {
         crate::diagnostic!(json!({
             "component": "terminal_input",
@@ -266,7 +306,7 @@ impl Requests {
             request
                 .held
                 .retain(|chunk| chunk.permit.as_ref().is_none_or(|p| now < p.deadline()));
-            request.held_bytes = request.held.iter().map(|chunk| chunk.bytes.len()).sum();
+            request.held_bytes = request.held.iter().map(|chunk| chunk.input.len()).sum();
             request.permit_deadline = request
                 .held
                 .iter()
@@ -356,19 +396,19 @@ impl Requests {
                         "component": "terminal_input",
                         "kind": "terminal.input_after_discard",
                         "request_id": request.id,
-                        "bytes": chunk.bytes.len(),
+                        "bytes": chunk.input.len(),
                     }));
                 }
-                request.dropped_bytes = request.dropped_bytes.saturating_add(chunk.bytes.len());
+                request.dropped_bytes = request.dropped_bytes.saturating_add(chunk.input.len());
                 (KeyRoute::Dropped { limit: false }, None)
             }
             RequestState::Pending => {
-                if request.held_bytes + chunk.bytes.len() > INPUT_HOLD_LIMIT_BYTES {
-                    request.dropped_bytes = chunk.bytes.len();
+                if request.held_bytes + chunk.input.len() > INPUT_HOLD_LIMIT_BYTES {
+                    request.dropped_bytes = chunk.input.len();
                     request.discard("limit");
                     return (KeyRoute::Dropped { limit: true }, None);
                 }
-                request.held_bytes += chunk.bytes.len();
+                request.held_bytes += chunk.input.len();
                 if let Some(permit) = &chunk.permit {
                     request.permit_deadline = Some(
                         request
@@ -516,10 +556,10 @@ impl PaneHold {
             chunk.typed_at.saturating_duration_since(first.typed_at) > HELD_INPUT_MAX_AGE
         }) {
             *chunks = fresh_chunks(pane_id, std::mem::take(chunks), chunk.typed_at);
-            *bytes = chunks.iter().map(|chunk| chunk.bytes.len()).sum();
+            *bytes = chunks.iter().map(|chunk| chunk.input.len()).sum();
         }
-        if *bytes + chunk.bytes.len() > INPUT_HOLD_LIMIT_BYTES {
-            let dropped = *bytes + chunk.bytes.len();
+        if *bytes + chunk.input.len() > INPUT_HOLD_LIMIT_BYTES {
+            let dropped = *bytes + chunk.input.len();
             *self = Self::Overflowed;
             crate::diagnostic!(json!({
                 "component": "terminal_input",
@@ -530,7 +570,7 @@ impl PaneHold {
             }));
             return false;
         }
-        *bytes += chunk.bytes.len();
+        *bytes += chunk.input.len();
         if let Some(permit) = &chunk.permit {
             *permit_deadline =
                 Some(permit_deadline.map_or(permit.deadline(), |at| at.min(permit.deadline())));
@@ -545,12 +585,20 @@ impl PaneHold {
             Self::Holding { chunks, .. } => {
                 let mut writes: Vec<HeldChunk> = Vec::new();
                 for chunk in fresh_chunks(pane_id, chunks, now) {
-                    if chunk.permit.is_none()
-                        && let Some(last) = writes.last_mut().filter(|last| last.permit.is_none())
-                    {
-                        last.bytes.extend(chunk.bytes);
-                    } else {
-                        writes.push(chunk);
+                    match (writes.last_mut(), chunk) {
+                        (
+                            Some(HeldChunk {
+                                input: Typed::Bytes(last),
+                                permit: None,
+                                ..
+                            }),
+                            HeldChunk {
+                                input: Typed::Bytes(bytes),
+                                permit: None,
+                                ..
+                            },
+                        ) => last.extend(bytes),
+                        (_, chunk) => writes.push(chunk),
                     }
                 }
                 writes
@@ -559,11 +607,21 @@ impl PaneHold {
         }
     }
 
+    /// Every chunk it holds that is still fresh at `now`, each as it was
+    /// typed, in order: a letter's hold hands them back one by one, so each
+    /// is judged as the key it was.
+    pub(super) fn take_in_order(self, pane_id: &str, now: Instant) -> Vec<HeldChunk> {
+        match self {
+            Self::Holding { chunks, .. } => fresh_chunks(pane_id, chunks, now),
+            Self::Empty | Self::Overflowed => Vec::new(),
+        }
+    }
+
     #[cfg(test)]
     fn take(&mut self, pane_id: &str, now: Instant) -> Vec<u8> {
         self.take_chunks(pane_id, now)
             .into_iter()
-            .flat_map(|chunk| chunk.bytes)
+            .flat_map(|chunk| chunk.input.into_bytes())
             .collect()
     }
 
@@ -588,7 +646,7 @@ impl PaneHold {
                 return;
             }
             chunks.retain(|chunk| chunk.permit.as_ref().is_none_or(|p| now < p.deadline()));
-            *bytes = chunks.iter().map(|chunk| chunk.bytes.len()).sum();
+            *bytes = chunks.iter().map(|chunk| chunk.input.len()).sum();
             *permit_deadline = chunks
                 .iter()
                 .filter_map(|chunk| chunk.permit.as_ref().map(|p| p.deadline()))
@@ -888,7 +946,7 @@ mod tests {
         let held = requests.resolve("fork-1", "w1:p2", ready);
         let delivered: Vec<u8> = fresh_chunks("w1:p2", held, ready)
             .into_iter()
-            .flat_map(|chunk| chunk.bytes)
+            .flat_map(|chunk| chunk.input.into_bytes())
             .collect();
         assert_eq!(delivered, b"hello\r");
     }
@@ -898,7 +956,8 @@ mod tests {
             permit: None,
             typed_at,
             typed_at_unix_ms: 0,
-            bytes: bytes.to_vec(),
+            input: Typed::Bytes(bytes.to_vec()),
+            by: Typist::Operator,
         }
     }
 
@@ -923,7 +982,9 @@ mod tests {
         assert_eq!(requests.route("r1", chunk(b"\r", now)).0, KeyRoute::Held);
         let held = requests.resolve("r1", "w1:p2", now);
         assert_eq!(
-            held.iter().map(|c| c.bytes.clone()).collect::<Vec<_>>(),
+            held.iter()
+                .map(|c| c.input.clone().into_bytes())
+                .collect::<Vec<_>>(),
             vec![b"ls".to_vec(), b"\r".to_vec()]
         );
         assert_eq!(

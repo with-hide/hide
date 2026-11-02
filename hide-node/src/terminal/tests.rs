@@ -1833,3 +1833,100 @@ fn side_channel_waiters_are_bounded_and_node_close_refuses_them() {
         );
     }
 }
+
+/// Reads the session's input until `count` bytes came, in order.
+fn input_bytes(opened: &Opened, count: usize) -> Vec<u8> {
+    let mut written = Vec::new();
+    while written.len() < count {
+        written.extend(opened.next_input());
+    }
+    written
+}
+
+/// PRD engine-bundle-3-core-owns D-13, B31: keys the operator types while
+/// the core's own engine types a letter wait until its submit was handed
+/// over, then follow it in the order typed; none lands inside the letter.
+#[test]
+fn keys_typed_during_a_letter_follow_its_submit_in_order() {
+    let harness = harness(RetryPolicy::Automatic);
+    let opened = harness.controlling("w1:p1");
+    thread::scope(|scope| {
+        let letter = scope.spawn(|| {
+            harness.service.type_letter(
+                "w1:p1",
+                Typed::Bytes(b"letter".to_vec()),
+                Typed::Bytes(b"\r".to_vec()),
+                Duration::from_millis(300),
+            );
+        });
+        assert_eq!(input_bytes(&opened, b"letter".len()), b"letter");
+        harness.key("w1:p1", b"x");
+        harness.key("w1:p1", b"y\r");
+        letter.join().unwrap();
+    });
+    assert_eq!(input_bytes(&opened, b"\rxy\r".len()), b"\rxy\r");
+    // The held keys are the operator's, reported as typed once written.
+    let typed = harness.report_where(|report| matches!(report, TerminalReport::Input { .. }));
+    assert!(matches!(typed, TerminalReport::Input { .. }), "{typed:?}");
+}
+
+/// The core's own engine typing a command is not the operator typing: no
+/// key of it is reported, so the first report is the operator's own key.
+#[test]
+fn the_engines_typing_is_not_reported_as_the_operators() {
+    let harness = harness(RetryPolicy::Automatic);
+    let opened = harness.controlling("w1:p1");
+    harness
+        .service
+        .type_input("w1:p1", Typed::Bytes(b"ls\r".to_vec()));
+    assert_eq!(opened.next_input(), b"ls\r");
+    harness.key("w1:p1", b"x");
+    assert_eq!(opened.next_input(), b"x");
+    let first = harness.report_where(|report| matches!(report, TerminalReport::Input { .. }));
+    assert!(
+        matches!(
+            first,
+            TerminalReport::Input {
+                submitted: false,
+                ..
+            }
+        ),
+        "{first:?}"
+    );
+}
+
+/// A pane whose tab left the last shown has no session; the engine's input
+/// attaches it again and is written once the session opens.
+#[test]
+fn the_engines_typing_into_a_released_pane_attaches_it_and_is_written() {
+    let harness = harness(RetryPolicy::Automatic);
+    let _first = harness.controlling("w1:p1");
+    harness.service.control(TerminalControl::Release {
+        pane: "w1:p1".into(),
+        message: "detached".into(),
+    });
+    harness.state("w1:p1", "released");
+    harness
+        .service
+        .type_input("w1:p1", Typed::Bytes(b"resume\r".to_vec()));
+    let again = harness.opened();
+    assert_eq!(input_bytes(&again, b"resume\r".len()), b"resume\r");
+}
+
+/// Named keys go only to a transport that encodes them; another refuses
+/// them with why, sends nothing, and keeps its session.
+#[test]
+fn named_keys_for_a_session_that_does_not_read_them_are_refused_with_why() {
+    let harness = harness(RetryPolicy::Automatic);
+    let opened = harness.controlling("w1:p1");
+    harness
+        .service
+        .type_input("w1:p1", Typed::Keys(vec![hide_holder_protocol::Key::Enter]));
+    let refused = harness.report_where(|report| matches!(report, TerminalReport::Error { .. }));
+    assert!(
+        matches!(&refused, TerminalReport::Error { kind, .. } if kind == "terminal.unsupported_holder"),
+        "{refused:?}"
+    );
+    harness.key("w1:p1", b"x");
+    assert_eq!(opened.next_input(), b"x");
+}

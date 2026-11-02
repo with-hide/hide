@@ -30,7 +30,9 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::Duration;
 
 use hide_node_link::NodeLink;
-use hide_node_link::holders::{HolderError, HolderStart, PaneFacts, PaneHolders, StyledRead};
+use hide_node_link::holders::{
+    HolderError, HolderKey, HolderStart, PaneFacts, PaneHolders, PaneInput, StyledRead,
+};
 
 use super::keys::PaneKey;
 use super::{
@@ -706,8 +708,16 @@ impl OwnEngine<'_> {
     }
 
     fn type_bytes(&self, pane: &str, bytes: Vec<u8>) -> Answer<()> {
+        self.type_input(pane, PaneInput::Bytes(bytes))
+    }
+
+    /// Types into the pane through its holder, in order with every other
+    /// key typed there; a paste and named keys are encoded by the holder for
+    /// the program's modes when they are written (PRD
+    /// engine-bundle-3-core-owns D-21).
+    fn type_input(&self, pane: &str, input: PaneInput) -> Answer<()> {
         self.known(pane)?;
-        self.shared.holders.input(pane, bytes).map_err(holder_error)
+        self.shared.holders.input(pane, input).map_err(holder_error)
     }
 
     fn processes(&self, pane: &str) -> Answer<PaneProcessGroup> {
@@ -790,21 +800,24 @@ fn delivery_of(
     }
 }
 
-const IDENTITY_PR: &str = "pane identity pull request";
+/// What brings a find's scroll of the screen: the holder saying and moving
+/// its screen's scroll position (PRD engine-bundle-3-core-owns D-21).
+const SCROLL_POSITION: &str = "holder's scroll position capability";
 
-/// The bytes a key sends to a program that has asked for no key mode.
-fn key_bytes(key: PaneKey) -> &'static [u8] {
+/// Hide's key as the holder names it; the holder encodes it for the
+/// program's keyboard modes, as Herdr encodes a named key for its pane.
+fn holder_key(key: PaneKey) -> HolderKey {
     match key {
-        PaneKey::Esc => b"\x1b",
-        PaneKey::Enter => b"\r",
-        PaneKey::Tab => b"\t",
-        PaneKey::ShiftTab => b"\x1b[Z",
-        PaneKey::Up => b"\x1b[A",
-        PaneKey::Down => b"\x1b[B",
-        PaneKey::Right => b"\x1b[C",
-        PaneKey::Left => b"\x1b[D",
-        PaneKey::Backspace => b"\x7f",
-        PaneKey::CtrlC => b"\x03",
+        PaneKey::Esc => HolderKey::Escape,
+        PaneKey::Enter => HolderKey::Enter,
+        PaneKey::Tab => HolderKey::Tab,
+        PaneKey::ShiftTab => HolderKey::ShiftTab,
+        PaneKey::Up => HolderKey::Up,
+        PaneKey::Down => HolderKey::Down,
+        PaneKey::Left => HolderKey::Left,
+        PaneKey::Right => HolderKey::Right,
+        PaneKey::Backspace => HolderKey::Backspace,
+        PaneKey::CtrlC => HolderKey::CtrlC,
     }
 }
 
@@ -1362,7 +1375,7 @@ impl<'g> Engine for OwnEngine<'g> {
         _offset_from_bottom: u64,
     ) -> Answer<Option<crate::find::pane::PaneScroll>> {
         self.check()?;
-        unsupported("a scroll", IDENTITY_PR)
+        unsupported("a scroll", SCROLL_POSITION)
     }
 
     fn report_pane_tokens(
@@ -1440,37 +1453,36 @@ impl<'g> Engine for OwnEngine<'g> {
 
     fn send_keys(&self, _wait: Wait, pane: &str, keys: &[&str]) -> Answer<()> {
         self.check()?;
-        let mut bytes = Vec::new();
-        for key in keys {
-            bytes.extend_from_slice(key_bytes(named_key(key)?));
-        }
-        self.type_bytes(pane, bytes)
+        let keys = keys
+            .iter()
+            .map(|key| named_key(key).map(holder_key))
+            .collect::<Answer<_>>()?;
+        self.type_input(pane, PaneInput::Keys(keys))
     }
 
+    /// The text as it is, then Enter encoded for the program's keyboard
+    /// modes, as Herdr submits text.
     fn submit_text(&self, _wait: Wait, pane: &str, text: &str) -> Answer<()> {
         self.check()?;
-        let mut bytes = text.as_bytes().to_vec();
-        bytes.extend_from_slice(key_bytes(PaneKey::Enter));
-        self.type_bytes(pane, bytes)
+        self.type_bytes(pane, text.as_bytes().to_vec())?;
+        self.type_input(pane, PaneInput::Keys(vec![HolderKey::Enter]))
     }
 
     fn press_key(&self, _wait: Wait, pane: &str, key: &str) -> Answer<()> {
         self.check()?;
-        self.type_bytes(pane, key_bytes(named_key(key)?).to_vec())
+        let key = holder_key(named_key(key)?);
+        self.type_input(pane, PaneInput::Keys(vec![key]))
     }
 
     fn press_pane_keys(&self, _wait: Wait, pane: &str, keys: &[PaneKey]) -> Answer<()> {
         self.check()?;
-        let bytes = keys
-            .iter()
-            .flat_map(|key| key_bytes(*key).iter().copied())
-            .collect();
-        self.type_bytes(pane, bytes)
+        let keys = keys.iter().copied().map(holder_key).collect();
+        self.type_input(pane, PaneInput::Keys(keys))
     }
 
-    fn paste_text(&self, _wait: Wait, _pane: &str, _text: &str) -> Answer<()> {
+    fn paste_text(&self, _wait: Wait, pane: &str, text: &str) -> Answer<()> {
         self.check()?;
-        unsupported("a paste", IDENTITY_PR)
+        self.type_input(pane, PaneInput::Paste(text.as_bytes().to_vec()))
     }
 
     fn notify(&self, _wait: Wait, _title: &str, _body: &str) -> Answer<Notified> {
@@ -1720,15 +1732,24 @@ impl<'g> Engine for OwnEngine<'g> {
         };
         // Herdr's `agent.prompt`: the text as one paste when the program
         // takes bracketed paste, then Enter a moment later, so a program that
-        // reads a fast Enter as part of the paste still submits.
-        let bytes = if paste {
-            [b"\x1b[200~", text.as_bytes(), b"\x1b[201~"].concat()
+        // reads a fast Enter as part of the paste still submits. Typed as a
+        // letter, so the operator's keys typed meanwhile wait until the
+        // Enter was handed over instead of landing inside it (D-13).
+        let body = if paste {
+            PaneInput::Paste(text.as_bytes().to_vec())
         } else {
-            text.as_bytes().to_vec()
+            PaneInput::Bytes(text.as_bytes().to_vec())
         };
-        self.type_bytes(&pane, bytes)?;
-        std::thread::sleep(PROMPT_SUBMIT_DELAY);
-        self.type_bytes(&pane, b"\r".to_vec())
+        self.known(&pane)?;
+        self.shared
+            .holders
+            .letter(
+                &pane,
+                body,
+                PaneInput::Keys(vec![HolderKey::Enter]),
+                PROMPT_SUBMIT_DELAY,
+            )
+            .map_err(holder_error)
     }
 
     fn create_worktree(
@@ -1901,8 +1922,27 @@ mod tests {
                     .map_err(|error| HolderError::Unreachable(error.to_string()))?,
             })
         }
-        fn input(&self, pane: &str, bytes: Vec<u8>) -> Result<(), HolderError> {
-            self.typed.0.lock().unwrap().push((pane.to_owned(), bytes));
+        fn input(&self, pane: &str, input: PaneInput) -> Result<(), HolderError> {
+            self.typed
+                .0
+                .lock()
+                .unwrap()
+                .push((pane.to_owned(), shown(input)));
+            self.typed.1.notify_all();
+            Ok(())
+        }
+        fn letter(
+            &self,
+            pane: &str,
+            body: PaneInput,
+            submit: PaneInput,
+            _gap: Duration,
+        ) -> Result<(), HolderError> {
+            let mut letter = b"<letter>".to_vec();
+            letter.extend(shown(body));
+            letter.extend(shown(submit));
+            letter.extend(b"</letter>");
+            self.typed.0.lock().unwrap().push((pane.to_owned(), letter));
             self.typed.1.notify_all();
             Ok(())
         }
@@ -2554,6 +2594,19 @@ mod tests {
     /// Every pane's typed bytes, in order.
     type Typed = Vec<(String, Vec<u8>)>;
 
+    /// Input as the double records it: bytes as they are, a paste and named
+    /// keys by name, since the holder encodes those.
+    fn shown(input: PaneInput) -> Vec<u8> {
+        match input {
+            PaneInput::Bytes(bytes) => bytes,
+            PaneInput::Paste(text) => [b"<paste>".as_slice(), &text, b"</paste>"].concat(),
+            PaneInput::Keys(keys) => keys
+                .iter()
+                .flat_map(|key| format!("<{key:?}>").into_bytes())
+                .collect(),
+        }
+    }
+
     /// What was typed into `pane`, in order.
     fn typed_into(typed: &[(String, Vec<u8>)], pane: &str) -> String {
         typed
@@ -2705,7 +2758,7 @@ mod tests {
         assert!(
             holders
                 .typed(&pane)
-                .ends_with("\u{1b}[200~a\nb\u{1b}[201~\r"),
+                .ends_with("<letter><paste>a\nb</paste><Enter></letter>"),
             "{:?}",
             holders.typed(&pane)
         );
