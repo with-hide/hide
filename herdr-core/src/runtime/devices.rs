@@ -61,6 +61,18 @@ pub(super) struct RemoteDeviceConnection {
 }
 
 impl Runtime {
+    /// Whether `device` answers this core: this machine always does, another
+    /// device while its link is connected.
+    pub(super) fn device_answers(&self, device: &str) -> bool {
+        device == self.node.as_str()
+            || self
+                .snapshot
+                .status
+                .remote
+                .iter()
+                .any(|remote| remote.target_id == device && remote.state == "connected")
+    }
+
     pub(super) fn refresh_remote_topology(&self, device: &str) -> bool {
         if let Some(sync) = self
             .remote_connections
