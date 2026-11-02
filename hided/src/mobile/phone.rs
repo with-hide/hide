@@ -107,7 +107,7 @@ async fn send_frame(socket: &mut Socket, frame: &Value, phone_id: &str) -> bool 
 }
 
 pub(super) enum Socket {
-    Direct(WebSocket),
+    Direct(Box<WebSocket>),
     Relay(Box<RelaySocket>),
 }
 pub(super) struct RelaySocket {
@@ -537,7 +537,7 @@ pub async fn serve(
     user_agent: String,
 ) {
     serve_socket(
-        Socket::Direct(socket),
+        Socket::Direct(Box::new(socket)),
         first,
         mobile,
         connection,

@@ -204,8 +204,13 @@ pub async fn supervise(mobile: Arc<Mobile>) {
         let delay = match backoff(attempt) {
             Ok(delay) => delay,
             Err(_) => {
+                diagnostic(None, "random_unavailable");
                 mobile.relay_state(State::KeyUnavailable);
-                break;
+                tokio::select! {
+                    _ = changes.changed() => { attempt = 0; },
+                    _ = stopping.changed() => break,
+                }
+                continue;
             }
         };
         attempt = attempt.saturating_add(1);
