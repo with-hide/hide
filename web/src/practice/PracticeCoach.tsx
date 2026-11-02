@@ -546,7 +546,8 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
     : step.gesture && "menu" in step.gesture ? say("practice.via.menu")
     : step.gesture && "pick" in step.gesture ? say("practice.via.pick") : null;
   const go = last ? say("practice.finish") : acts(step) ? say("practice.try") : say("practice.next");
-  const place = besideLayer(bubblePlace(ring, step.side, size), layerBox, size);
+  // The quest card sits in the lower left; the bubble moves clear of it, then of an open palette or menu.
+  const place = besideLayer(clearOf(bubblePlace(ring, step.side, size), rectOf(chapter.quest ? "[data-practice-quest]" : null), size), layerBox, size);
   const title = say(`practice.${chapter.id}.title`);
 
   return (
@@ -614,6 +615,17 @@ function bubblePlace(ring: Rect | null, side: PracticeStep["side"], size: { w: n
     return { x, y: clampY(ring.y + ring.h + 22), arrow: { left: Math.max(16, Math.min(w - 32, ring.x + ring.w / 2 - x - 8)), top: -8 } };
   }
   return { x: clampX(ring.x + 60), y: clampY(ring.y + Math.min(ring.h * 0.3, 260)), arrow: null };
+}
+
+/** The bubble lifted above the quest card it would cover, or set beside it when there is no room above; its arrow goes, since it no longer points from where it was. */
+function clearOf(place: Placement, card: Rect | null, size: { w: number; h: number }): Placement {
+  if (!card) return place;
+  const { w, h } = size;
+  const covers = place.x < card.x + card.w && place.x + w > card.x && place.y < card.y + card.h && place.y + h > card.y;
+  if (!covers) return place;
+  const above = card.y - h - 16;
+  if (above >= 40) return { x: place.x, y: above, arrow: null };
+  return { x: Math.min(window.innerWidth - w - 16, card.x + card.w + 16), y: place.y, arrow: null };
 }
 
 /** The bubble moved beside an open palette or menu it would cover, on whichever side has room. */

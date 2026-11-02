@@ -83,6 +83,7 @@ ${ZONES}
 .pc-quest li{display:flex;align-items:center;gap:var(--spacing-sm);padding:var(--spacing-xs) var(--spacing-sm);border-radius:var(--radius-md);font-size:var(--text-subhead);color:var(--practice-mute);transition:background .3s,color .3s}
 .pc-quest li.cur{background:color-mix(in srgb,var(--practice-accent) 18%,transparent);color:var(--practice-text);font-weight:600}
 .pc-quest li.done{color:var(--practice-text)}
+.pc-quest:not(:hover) li:not(.cur){display:none}
 .pc-ck{width:var(--size-checkbox);height:var(--size-checkbox);border-radius:var(--radius-sm);border:var(--size-hairline) solid var(--practice-line);display:grid;place-items:center;flex:none;transition:all .3s ${EASE}}
 .pc-quest li.done .pc-ck{background:var(--practice-accent);border-color:var(--practice-accent)}
 .pc-quest li.done .pc-ck::after{content:"";width:var(--spacing-xs);height:var(--spacing-sm);border:solid var(--practice-ink);border-width:0 var(--size-tab-indicator) var(--size-tab-indicator) 0;transform:rotate(45deg);animation:pc-pop .35s ${EASE}}
