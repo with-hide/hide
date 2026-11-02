@@ -222,6 +222,9 @@ it("draws the review band with one button to the conversation, and none once the
   const gone = await mount([], "map");
   try {
     expect(gone.container.querySelector("[data-plan-state=gone]")).not.toBeNull();
+    // A finished mission node keeps its worker's plan after the pane closed: the map still draws it (`크게 ›` on the node's panel).
+    await act(async () => useShellStore.setState((state) => ({ rest: { ...state.rest, missions: { items: [{ id: "m", nodes: [{ key: "n", plan: plan() }] }] } } as unknown as SnapshotRest })));
+    expect(gone.container.querySelector("[data-plan-graph=large]")).not.toBeNull();
   } finally { await gone.unmount(); }
 });
 

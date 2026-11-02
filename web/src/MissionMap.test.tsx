@@ -535,7 +535,7 @@ it("shows on the card and in the panel how long a node took from its events, and
   const events = [move(90, "a", "working"), move(30, "a", "done"), move(40, "b", "working")];
   const facts = async (map: Awaited<ReturnType<typeof mount>>, key: string) => {
     await act(async () => card(map, key).click());
-    return map.q("[data-panel-facts]")?.textContent ?? null;
+    return map.q("[data-panel-fact]")?.textContent ?? null;
   };
   const map = await mount({ items: [mission({ nodes })] }, [], [], { mission_events: { mission: "mission-1", events, dropped: 0 } });
   try {
@@ -613,23 +613,35 @@ it("opens the picked node's panel: its head, where it is, what it made, its fini
   try {
     await act(async () => card(map, "engine").click());
     const panel = map.q('[data-mission-detail="engine"]')!;
-    expect([...panel.querySelectorAll<HTMLElement>("[data-panel-part]")].map((part) => part.dataset.panelPart)).toEqual(["head", "now", "result", "criteria", "links", "ways", "events"]);
+    expect([...panel.querySelectorAll<HTMLElement>("[data-panel-part]")].map((part) => part.dataset.panelPart)).toEqual(["head", "now", "plan", "result", "criteria", "links", "ways", "events"]);
+    // The head holds the ways to the worker's terminal and record, beside ✕, so they stay in reach while the panel scrolls.
+    const head = panel.querySelector('[data-panel-part="head"]')!;
+    expect(head.className).toContain("sticky");
+    expect([head.querySelector("[data-node-terminal]")?.textContent, head.querySelector("[data-node-terminal]")?.getAttribute("aria-label"), head.querySelector("[data-node-record]")?.textContent]).toEqual(["Terminal", "Go to terminal", "Record"]);
     expect(panel.querySelector("[data-panel-title]")?.textContent).toBe("조사 에이전트: Hide가 실행하는 명령 읽기");
     // No launch recorded for its pane: the plan's model and effort, marked planned.
     expect(panel.querySelector("[data-panel-meta] [data-run]")?.getAttribute("title")).toBe("opus·xhigh (planned)");
     expect([panel.querySelector("[data-panel-meta] [data-run-words]")?.textContent, panel.querySelector("[data-panel-meta] [data-run-planned]")?.textContent]).toEqual(["opus·xhigh", "(planned)"]);
-    expect(panel.querySelector("[data-panel-facts]")?.textContent).toBe("took 1m · Attempt 2");
+    // One line of facts: no state or kind word, which the mark already says, and the branch at its end.
+    expect([...panel.querySelectorAll("[data-panel-fact]")].map((fact) => fact.textContent)).toEqual(["took 1m", "Attempt 2"]);
+    expect(panel.querySelector("[data-panel-meta]")?.textContent).not.toContain("Working");
+    expect(panel.querySelector("[data-panel-meta] [data-panel-branch]")?.textContent).toBe("hide-ai-engine");
+    // The worker's plan: its count and checklist, no `Now:` line, and `Larger ›` opening its map as the pane chip does.
+    expect(panel.querySelector('[data-panel-plan="open"] [data-panel-plan-count]')?.textContent).toBe("0/1");
     expect([...panel.querySelectorAll<HTMLElement>("[data-plan-row]")].map((row) => row.dataset.planRow)).toEqual(["parse"]);
-    // What it made: the PR in its state, the base it stacks on, the CI line and the branch.
+    expect(panel.textContent).not.toContain("Now:");
+    await act(async () => panel.querySelector<HTMLElement>("[data-panel-plan-large]")!.click());
+    expect(map.events.filter((event) => event.kind === "detail_open").map((event) => event.payload)).toEqual([{ item: { kind: "plan", session: plan.session } }]);
+    // What it made: the PR in its state, the base it stacks on and the CI line.
     expect(panel.querySelector("[data-pr-mark]")?.getAttribute("data-pr-mark")).toBe("mergeable");
     expect(panel.querySelector("[data-panel-base]")?.textContent).toBe(`on ${"#"}1703`);
     expect(panel.querySelector('[data-panel-part="result"]')?.textContent).toContain("✓rerun 1 time");
-    expect(panel.querySelector("[data-panel-branch]")?.textContent).toBe("hide-ai-engine");
-    // One list of ✓ ○ ⤳ ✕, a skipped line with its reason, the review by its checker's name.
+    // One list of ✓ ○ ⤳ ✕, each with a tag of who decides it, on one line with the whole text on hover; the review ends in its checker's chip.
     const lines = [...panel.querySelectorAll<HTMLElement>("[data-panel-line]")].map((row) => row.textContent);
-    expect(lines).toEqual(["✓명령 읽기가 cat/rg 잡음을 걸러낸다", "⤳실제 세션 50개 replay", "✕Check command passes", "✓CI passesrerun 1 time", "○codex review"]);
-    // Grouped by who decides them; a skipped line carries its reason and a failed one its short reason, the full text folded.
-    expect([...panel.querySelectorAll<HTMLElement>("[data-criteria-group]")].map((group) => group.dataset.criteriaGroup)).toEqual(["own", "auto", "agents"]);
+    expect(lines).toEqual(["✓Work명령 읽기가 cat/rg 잡음을 걸러낸다", "⤳Work실제 세션 50개 replay", "✕CheckCheck command passes", "✓CICI passesrerun 1 time", "○Reviewcodex reviewreview to start"]);
+    expect(panel.querySelector('[data-panel-line="check"] [title]')?.getAttribute("title")).toBe("Check command passes\n\ncargo nextest: 3 failed, 120 passed");
+    expect(panel.querySelector("[data-criteria-group]")).toBeNull();
+    // A skipped line carries its reason and a failed one its short reason, the full text folded.
     expect([...panel.querySelectorAll<HTMLElement>("[data-panel-verdict]")].map((verdict) => [verdict.dataset.panelVerdict, verdict.textContent])).toEqual([
       ["skipped", "Skipped세션이 31개뿐"],
       ["fail", "Failed3 tests failFull text"],
@@ -645,8 +657,11 @@ it("opens the picked node's panel: its head, where it is, what it made, its fini
     const named = (scope: string) => [...panel.querySelectorAll(`${scope} [data-criterion-mark]`)].map((mark) => mark.getAttribute("aria-label"));
     expect(named('[data-panel-part="result"]')).toEqual(["passed"]);
     expect(named("[data-panel-line]")).toEqual(["passed", "skipped", "failed", "passed", "not yet"]);
-    expect(panel.querySelector('[data-panel-part="criteria"] h4')?.textContent).toBe("Done when · 2/5");
-    expect(panel.querySelector('[data-panel-links="before"]')?.textContent).toBe(`Waits onCore${"#"}1703`);
+    expect(panel.querySelector('[data-panel-part="criteria"] h4')?.textContent).toBe("Done when 2/5");
+    // The connections are one line of flow: before → this node → after, each side named for a screen reader.
+    expect(panel.querySelector("[data-panel-flow]")?.textContent).toBe(`Core${"#"}1703This node세 PR 함께 확인`);
+    expect(panel.querySelector('[data-panel-link="core"]')?.getAttribute("aria-label")).toBe("Waits on · Core");
+    expect(panel.querySelector('[data-panel-link="verify"]')?.getAttribute("aria-label")).toBe("Waited on by · 세 PR 함께 확인");
     // A connection picks its node.
     await act(async () => (panel.querySelector('[data-panel-link="verify"]') as HTMLElement).click());
     expect(map.q("[data-mission-panel]")?.getAttribute("data-mission-panel")).toBe("verify");
@@ -664,6 +679,44 @@ it("opens the picked node's panel: its head, where it is, what it made, its fini
   } finally { await map.unmount(); }
 });
 
+it("counts a worker's plan at the end of its card's run line, and keeps a finished node's plan folded in its panel with its map one press away (operator decision 2026-11-02)", async () => {
+  const step = (key: string, status: "done" | "working" | "planned") => ({ key, title: `Step ${key}`, depends_on: [], status, line: null, output: null, changed: false, change: null, waiting: false, delegate: false, evidence: null, delegation: null });
+  const plan = (session_id: string, done: number, total: number) => ({
+    pane_id: "", session: { device_id: "mac", agent: "codex", session_id },
+    steps: Array.from({ length: total }, (_, index) => step(`s${index}`, index < done ? "done" : index === done ? "working" : "planned")),
+    review: "approved" as const, ask: null, progress: { current: done < total ? `s${done}` : null, next: null, done, total, finished: done === total }, created_at_unix_ms: 1, updated_at_unix_ms: 2,
+  });
+  const worker = { agent: "codex", model: "gpt-5.5", effort: "high", effort_auto: false };
+  const nodes = [
+    node("live", { status: "working", worker, plan: plan("live-session", 3, 5), change: "the operator asked for WASM" }),
+    node("over", { status: "done", worker, plan: plan("over-session", 4, 4), finished_at_unix_ms: 60, launched: { agent_id: "agent-2", agent: "codex", model: "gpt-5.5", effort: "high" } }),
+    node("none", { status: "working", worker }),
+  ];
+  const map = await mount({ items: [mission({ nodes })] });
+  try {
+    // One number at the end of the run line, never a line of its own.
+    expect(["live", "over", "none"].map((key) => card(map, key).querySelector("[data-node-run] [data-node-plan-count]")?.textContent ?? null)).toEqual(["· 3/5", "· 4/4", null]);
+    expect(card(map, "live").getAttribute("aria-label")).toContain("Plan 3/5");
+    await act(async () => card(map, "live").click());
+    const live = map.q('[data-mission-detail="live"]')!;
+    expect(live.querySelector("[data-panel-plan]")?.getAttribute("data-panel-plan")).toBe("open");
+    expect(live.querySelector("[data-panel-plan-toggle]")).toBeNull();
+    // A replan is one mark in the facts line; its reason is its hover and its name.
+    expect(live.querySelector("[data-panel-replan]")?.getAttribute("aria-label")).toBe("Changed by a replan · the operator asked for WASM");
+    expect(live.querySelector("[data-panel-meta]")?.textContent).toContain("Replanned");
+    await act(async () => card(map, "over").click());
+    const over = map.q('[data-mission-detail="over"]')!;
+    // Finished: the plan its worker left, folded under its count.
+    expect([over.querySelector("[data-panel-plan]")?.getAttribute("data-panel-plan"), over.querySelector("[data-panel-plan-count]")?.textContent, over.querySelector("[data-plan-row]")]).toEqual(["folded", "4/4", null]);
+    const toggle = over.querySelector<HTMLElement>("[data-panel-plan-toggle]")!;
+    expect([toggle.textContent, toggle.getAttribute("aria-expanded")]).toEqual(["Expand", "false"]);
+    await act(async () => toggle.click());
+    expect([...over.querySelectorAll<HTMLElement>("[data-plan-row]")].map((row) => row.dataset.stepStatus)).toEqual(["done", "done", "done", "done"]);
+    await act(async () => over.querySelector<HTMLElement>("[data-panel-plan-large]")!.click());
+    expect(map.events.filter((event) => event.kind === "detail_open").map((event) => event.payload)).toEqual([{ item: { kind: "plan", session: plan("over-session", 4, 4).session } }]);
+  } finally { await map.unmount(); }
+});
+
 it("puts the question the decision asks of a node and its choices in its panel, read only, and the worker's plan line in the summary (B31; PRD hide-plan B16; PRD mission-tool B19)", async () => {
   const own = {
     pane_id: "p2", session: { device_id: "mac", agent: "codex", session_id: "worker-session" },
@@ -674,11 +727,11 @@ it("puts the question the decision asks of a node and its choices in its panel, 
   try {
     // A working node's own plan step is where the summary says it is (PRD mission-tool B19).
     expect(map.q('[data-mission-summary-line="api"]')?.textContent).toBe("Now: Core events (0/2)");
-    // The node's panel keeps the Conductor's last line under the worker's plan (PRD mission-node-simple B4).
+    // Beside the worker's plan the Conductor's line is left to the record: the plan says where the node is.
     await act(async () => card(map, "api").click());
     const api = map.q('[data-mission-detail="api"]')!;
     expect(api.querySelector("[data-panel-plan]")).not.toBeNull();
-    expect(api.querySelector("[data-panel-conductor-line]")?.textContent).toBe("Conductor's line");
+    expect(api.querySelector("[data-panel-conductor-line]")).toBeNull();
     await act(async () => card(map, "screen").click());
     const panel = map.q('[data-mission-detail="screen"]')!;
     expect(panel.querySelector("[data-panel-question]")?.textContent).toBe("Which base for the screen PR?");
@@ -751,7 +804,8 @@ it("puts in a node's panel what waits on whom with its choices, the worker's lif
   try {
     await act(async () => card(map, "ended").click());
     const panel = map.q('[data-mission-detail="ended"]')!;
-    expect([...panel.querySelectorAll<HTMLElement>("[data-panel-part]")].map((part) => part.dataset.panelPart)).toEqual(["head", "attention", "now", "links", "ways", "hide", "events"]);
+    // No connections and nothing to resume or open as a card: neither part is drawn.
+    expect([...panel.querySelectorAll<HTMLElement>("[data-panel-part]")].map((part) => part.dataset.panelPart)).toEqual(["head", "attention", "now", "hide", "events"]);
     expect(panel.querySelector("[data-panel-attention]")?.textContent).toBe("! Conductor · Worker ended with work left");
     expect(panel.querySelector("[data-panel-worker-life]")?.textContent).toBe("Worker ended");
     // The operator may settle it before the Conductor does (B17).
@@ -782,7 +836,7 @@ it("draws a defect a later node found as a red dashed edge back to the node it o
     expect(edge?.getAttribute("class")).toContain("text-mission-failed");
     expect(edge?.hasAttribute("data-edge-dashed")).toBe(true);
     await act(async () => card(map, "api").click());
-    expect(map.q('[data-panel-line="d1"]')?.textContent).toBe("○the filter resets on reloadfound by Node verify");
+    expect(map.q('[data-panel-line="d1"]')?.textContent).toBe("○Workthe filter resets on reloadfound by Node verify");
     await map.rerender(mission({ nodes: nodes("pass") }));
     expect(map.q('[data-dependency-edge="verify~api"]')).toBeNull();
   } finally { await map.unmount(); }
