@@ -2685,7 +2685,10 @@ fn a_pending_core_does_nothing_outside_until_its_link_commits() -> Result<()> {
         &state.join("core-handover.json"),
         &json!({"version": 1, "intent": INTENT, "source": SOURCE_NODE, "target": TARGET_NODE, "state": {"state": "pending", "lease_until_unix_ms": lease_ahead()}}),
     )?;
-    write_record(&state.join("mobile.json"), &json!({"enabled": true}))?;
+    write_record(
+        &state.join("mobile.json"),
+        &json!({"enabled": true, "method": "tailscale"}),
+    )?;
     let tailscale = FakeTailscale::new(&home);
     tailscale.ready();
     let runtime = tokio::runtime::Builder::new_multi_thread()
