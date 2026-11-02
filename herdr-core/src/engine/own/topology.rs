@@ -1173,10 +1173,18 @@ impl Topology {
                 let root = tree_of(&tab.root)?;
                 let laid: BTreeSet<String> = leaves(&root).into_iter().collect();
                 let mut panes = BTreeMap::new();
-                for pane in tab.panes {
+                for mut pane in tab.panes {
                     if !seen.insert(pane.id.clone()) {
                         return Err(format!("pane id {:?} is repeated", pane.id));
                     }
+                    // Hide's server mark vouches that a saved read state's
+                    // sequence was numbered by the engine the pane is on now
+                    // (`crate::engine::tokens::SERVER_MARK_TOKEN`). The agents'
+                    // sequences start again with the engine and are not saved,
+                    // so a restored pane carries no mark, as a pane on a
+                    // restarted Herdr server carries none.
+                    pane.tokens
+                        .remove(crate::engine::tokens::SERVER_MARK_TOKEN);
                     panes.insert(
                         pane.id,
                         Pane {
@@ -2075,6 +2083,32 @@ mod tests {
         );
         assert_eq!(read.reserve_pane(&first.workspace).unwrap(), "w1:p4");
         assert_eq!(read.reserve_workspace().workspace, "w2");
+    }
+
+    // The agents' state sequences start again with the engine, so the mark
+    // that vouches for a saved sequence does not outlive it; every other
+    // token does.
+    #[test]
+    fn a_restored_pane_keeps_its_tokens_but_not_the_server_mark() {
+        let mut topology = Topology::default();
+        let first = workspace(&mut topology);
+        topology
+            .set_pane_tokens(
+                &first.pane,
+                &BTreeMap::from([
+                    ("purpose".to_owned(), Some("kept".to_owned())),
+                    (
+                        crate::engine::tokens::SERVER_MARK_TOKEN.to_owned(),
+                        Some("server-before".to_owned()),
+                    ),
+                ]),
+            )
+            .unwrap();
+        let saved = serde_json::to_string(&topology.to_saved()).unwrap();
+        let read = Topology::from_saved(serde_json::from_str(&saved).unwrap()).unwrap();
+        let tokens = &read.pane(&first.pane).unwrap().tokens;
+        assert_eq!(tokens.get("purpose"), Some(&Value::String("kept".to_owned())));
+        assert!(!tokens.contains_key(crate::engine::tokens::SERVER_MARK_TOKEN));
     }
 
     #[test]

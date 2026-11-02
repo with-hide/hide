@@ -126,6 +126,7 @@ Each record names the server it was read on (`PaneReadRecord::server`).
 Every connection Hide makes to a Herdr server, this machine's or a device's, starts with a fresh mark, and once a saved record or completion names that mark the lineage writer writes it on the pane as the `hide_server` token (`wire::SERVER_MARK_TOKEN`).
 A pane that carries a mark is on the server that mark names; a pane that carries none is on the server Hide is connected to now, because Herdr drops the mark with its server.
 So a hided restart against a running server finds its old mark and keeps comparing sequences, and a turn the agent finished while Hide was away is news.
+On the core's own engine the agents' sequences start again with the daemon, so the engine keeps every token of a pane it saved except this mark, and a restored pane is judged as a pane on a restarted Herdr server is (`own/topology.rs`, `Topology::from_saved`).
 
 A record saved on another server is carried over instead of compared.
 Each record holds its verdict (`PaneReadRecord::unread`), saved whenever it flips, and until the pane settles on the new server the row keeps that verdict.
