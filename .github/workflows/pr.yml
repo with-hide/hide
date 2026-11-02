@@ -432,6 +432,7 @@ jobs:
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^opener_lifecycle::/)'
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^connect_stop::/)'
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^handshake::/)'
+          bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^mobile_relay::/)'
       - name: A device's Herdr copy a server runs is kept
         # The kit judges a copy's use by the files a process holds in it on
         # Windows, never by the image paths it could read (hide-host/src/kit.rs).
