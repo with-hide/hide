@@ -3,18 +3,17 @@
 //! task's first prompt (`worktree_control`) and, through the spawn's brief, a
 //! promoted Memory card (`runtime::memory_promotion`). A caller that gets a
 //! [`Refusal`] has its own way on: the brief is typed once the agent runs, a
-//! first prompt fails the start with the reason.
-
-use hide_node_link::protocol::StartForm;
+//! first prompt fails the start with the reason. A spawn's brief also asks
+//! how the machine starts the program, since it can be typed instead
+//! (`executor::launch_prompt`).
 
 /// Why a start cannot carry a prompt.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Refusal {
     /// The prompt itself: a control character, or past [`MAX_PROMPT_BYTES`].
     Prompt(String),
-    /// The start: the agent has no start form, its native arguments give a
-    /// prompt already, its machine could not say how it starts, or it starts
-    /// through `cmd.exe`.
+    /// The start: the agent has no start form, or its native arguments give
+    /// a prompt already.
     Start(String),
 }
 
@@ -28,19 +27,8 @@ impl Refusal {
 
 /// The words a start of `kind`, whose native arguments are `native`, adds to
 /// carry `prompt` as one argument in the agent's own form
-/// (`LaunchDialect::prompt_form`). `form` says how the pane's machine starts
-/// the agent's program (`Call::AgentInstalled`) and is asked last, only for a
-/// prompt every other check let through. On Windows a program that is a
-/// batch file, npm's `.cmd` shim of every CLI among them, runs through
-/// `cmd.exe`, which reads the start line again: it refuses a line past 8,191
-/// characters, expands `%`, and a shim may read its arguments again, so such
-/// a start carries no prompt.
-pub(crate) fn carried(
-    kind: &str,
-    native: &[String],
-    prompt: &str,
-    form: impl FnOnce() -> Result<StartForm, String>,
-) -> Result<Vec<String>, Refusal> {
+/// (`LaunchDialect::prompt_form`).
+pub(crate) fn carried(kind: &str, native: &[String], prompt: &str) -> Result<Vec<String>, Refusal> {
     let dialect = hide_agent_adapter::adapter(kind)
         .and_then(|row| row.start)
         .ok_or_else(|| Refusal::Start(format!("{kind} has no start Hide makes")))?;
@@ -50,12 +38,7 @@ pub(crate) fn carried(
         ));
     }
     let argument = prompt_argument(prompt).map_err(Refusal::Prompt)?;
-    match form().map_err(Refusal::Start)? {
-        StartForm::Program => Ok(dialect.prompt_arguments(&argument)),
-        StartForm::Batch => Err(Refusal::Start(format!(
-            "{kind} starts through cmd.exe on this Windows machine, which reads a prompt in its arguments again"
-        ))),
-    }
+    Ok(dialect.prompt_arguments(&argument))
 }
 
 /// The longest first prompt, in bytes once encoded, that a start carries.
@@ -105,15 +88,11 @@ pub(crate) fn prompt_argument(prompt: &str) -> Result<String, String> {
 mod tests {
     use super::*;
 
-    fn program() -> Result<StartForm, String> {
-        Ok(StartForm::Program)
-    }
-
     #[test]
     fn a_prompt_rides_the_start_as_one_word_only_where_the_start_carries_it_whole() {
         let words = |kind: &str, native: &[&str], prompt: &str| {
             let native: Vec<String> = native.iter().map(|word| (*word).to_owned()).collect();
-            carried(kind, &native, prompt, program)
+            carried(kind, &native, prompt)
         };
         assert_eq!(
             words("opencode", &[], "-go\tnow").unwrap(),
@@ -136,23 +115,5 @@ mod tests {
             Err(Refusal::Prompt(_))
         ));
         assert!(matches!(words("cursor", &[], "go"), Err(Refusal::Start(_))));
-    }
-
-    #[test]
-    fn a_batch_start_carries_no_prompt_and_the_form_is_asked_only_for_a_prompt_it_could_carry() {
-        let batch = carried("codex", &[], "go", || Ok(StartForm::Batch));
-        assert!(
-            matches!(batch, Err(Refusal::Start(ref why)) if why.contains("cmd.exe")),
-            "{batch:?}"
-        );
-        let unknown = carried("codex", &[], "go", || Err("link_lost".into()));
-        assert_eq!(unknown, Err(Refusal::Start("link_lost".into())));
-        let asked = std::cell::Cell::new(false);
-        let form = || {
-            asked.set(true);
-            program()
-        };
-        assert!(carried("codex", &[], "a\u{7}b", form).is_err());
-        assert!(!asked.get(), "a refused prompt asks the machine nothing");
     }
 }

@@ -1573,25 +1573,6 @@ impl From<Launch> for TaskAgentOutcome {
     }
 }
 
-/// How the machine that runs the pane starts `kind` (`Call::AgentInstalled`),
-/// for a first prompt on a device, whose agent this machine's node does not
-/// answer for.
-fn first_prompt_form(
-    pane_node: Option<&dyn crate::node_access::NodeLink>,
-    kind: &str,
-) -> Result<StartForm, String> {
-    let node = pane_node.ok_or("no machine said how the agent starts")?;
-    crate::node_access::call_as::<Option<StartForm>>(
-        node,
-        Call::AgentInstalled {
-            name: kind.to_owned(),
-        },
-        AGENT_CHECK_TIMEOUT,
-    )
-    .map_err(|error| format!("the pane's machine did not say how the agent starts ({error})"))?
-    .ok_or_else(|| format!("{kind} is not on the PATH of the pane's machine"))
-}
-
 #[allow(clippy::too_many_arguments)] // the task/pane launch identity plus its effect admission
 fn launch_agent(
     engine: &dyn Engine,
@@ -1612,7 +1593,6 @@ fn launch_agent(
     // Herdr would type the command into the pane's shell and wait for an
     // agent that can never appear; say so before asking it. A device's PATH
     // is not this machine's, so there its Herdr answers for it.
-    let mut form = None;
     if let Some(node) = agent_node {
         match crate::node_access::call_as::<Option<StartForm>>(
             node,
@@ -1621,7 +1601,7 @@ fn launch_agent(
             },
             AGENT_CHECK_TIMEOUT,
         ) {
-            Ok(Some(answered)) => form = Some(answered),
+            Ok(Some(_)) => {}
             Ok(None) => {
                 return Launch::Failed(AgentFailure::with_detail(
                     "agent_start.not_installed",
@@ -1636,14 +1616,13 @@ fn launch_agent(
             }
         }
     }
-    // The first prompt rides the start as the agent's own argument where the
-    // start carries it (`start_prompt`); nothing types it, so a start that
-    // cannot carry it fails with the reason and the surface keeps the text.
+    // The first prompt rides the start as the agent's own argument
+    // (`start_prompt`); nothing types it, so a start that cannot carry it
+    // fails with the reason and the surface keeps the text. A start through
+    // `cmd.exe` carries it too, as before the spawn's brief learned to be
+    // typed there: `cmd.exe` may rewrite its `%` and `"` (docs/INSTALL.md).
     if let Some(prompt) = prompt {
-        let carried = crate::start_prompt::carried(kind, &args, prompt, || {
-            form.map_or_else(|| first_prompt_form(pane_node, kind), Ok)
-        });
-        match carried {
+        match crate::start_prompt::carried(kind, &args, prompt) {
             Ok(words) => args.extend(words),
             Err(crate::start_prompt::Refusal::Prompt(detail)) => {
                 return Launch::Failed(AgentFailure::with_detail(
@@ -4999,12 +4978,15 @@ mod tests {
         }
     }
 
-    /// On Windows a start through `cmd.exe` carries no first prompt: the
-    /// start fails with the reason before Herdr types anything, and the
-    /// surface keeps the text, rather than `cmd.exe` reading it again.
+    /// On Windows a start through `cmd.exe` still carries its first prompt,
+    /// which nothing would type: `cmd.exe` may rewrite its `%` and `"`
+    /// (docs/INSTALL.md), but the start goes on as before.
     #[test]
-    fn a_first_prompt_to_a_batch_start_fails_before_herdr() {
-        let server = server(vec![]);
+    fn a_first_prompt_rides_a_batch_start_too() {
+        let server = server(vec![
+            shell_ready(),
+            json!({"result":{"type":"agent_started","argv":[],"agent":agent("working")}}),
+        ]);
         let outcome = launch_with_prompt(
             &*server,
             Some(&Starts(StartForm::Batch)),
@@ -5014,22 +4996,17 @@ mod tests {
                 resume_scope: None,
                 pane_id: "w1:p1".into(),
                 kind: "codex".into(),
-                prompt: Some("50% done, say \"hi\"".into()),
+                prompt: Some("fix it".into()),
                 args: Vec::new(),
                 codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
                 shell: crate::agent_start::ShellStart::Plain,
                 made_worktree: None,
             },
         );
-        let TaskAgentOutcome::Failed(failure) = outcome else {
-            panic!("expected a failed start, got {outcome:?}");
-        };
-        assert_eq!(failure.reason, "agent_start.prompt_not_carried");
-        assert!(
-            failure.detail.as_deref().unwrap().contains("cmd.exe"),
-            "{failure:?}"
-        );
-        assert!(requests_of(&server).is_empty());
+        assert!(matches!(outcome, TaskAgentOutcome::Started), "{outcome:?}");
+        let requests = requests_of(&server);
+        assert_eq!(methods_of(&requests), ["pane.process_info", "agent.start"]);
+        assert_eq!(requests[1]["params"]["args"], json!(["--", "fix it"]));
     }
 
     /// The host's own git answering for a real repository on this machine.
