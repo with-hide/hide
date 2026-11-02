@@ -43,6 +43,11 @@ See [the build input](BUILD.md#product-analytics-build-input) and [Settings](UI_
 
 ## State placement and publication
 
+The standalone `hide-relay` service owns its room membership, connection routing, admission windows and byte counters in one memory-only state object.
+It does not link the core, read a credential store or persist state; protocol endpoints alone own Noise keys and ciphertext authentication.
+Its listener owns every connection task, each task owns its registration and bounded output queue, and dropping or stopping the service retires them all.
+[RELAY_PROTOCOL.md](RELAY_PROTOCOL.md#server-budgets-and-refusals) owns the refusal, restart and resource bounds, with real socket regressions in `hide-relay/tests/it`.
+
 The front Workspace's Git header is ephemeral core state (`runtime/checkout_git.rs`), projected only into that device/path's `workspace_view.git`, never persisted or inferred from visibility-gated Changes rows.
 The existing Changes pump drives two single-flight `BackgroundRead` readers (`checkout_git.rs`): one owning-node `Call::CheckoutGit` for the whole checkout, and one core-node exact-SHA GitHub read using fixed allowlisted arguments.
 Changing the target or channel advances a generation; ingests compare that identity and the CI repository and complete ordered SHA list before publishing, while a HEAD change immediately clears the preceding CI result.
@@ -2987,7 +2992,7 @@ The answers C runs beside a linked node's screens (a device checkout's file read
 A file an M screen pastes or drops is staged on M (`hided/src/node_uploads.rs`): for one of M's panes C is told only its path on M (`terminal_attachment` with `staged_on`, accepted only from that node's relay) and pastes it as it pastes any device's, keeping its hold on the keys typed behind it; for any other pane M sends the upload on to C as the screen sent it and keeps no copy, after holding the batch to C's own caps (8 files, 40 MiB) before a byte crosses the link.
 C reads M's machine as it reads its own wherever the result is M's: M's coordinator asks M's TCP listeners through the link every 5 s (`ports.rs`, `InboundLink`), and they are attributed to M's panes only, as C's own are to C's; an SSH device's listeners are not read, so its panes carry none.
 The size of an M project the Overview shows is measured on M the same way (`disk.rs`, `device_disk_request`): M's coordinator measures the M projects the Projects tab watches (`disk_watch`) and the one a cleanup sheet asks for, and the rows go onto M's own project rows only, never matched against C's paths.
-An M checkout's pull request is read on C with C's `gh` login (D-16): M's worktree read answers its repository's `origin` URL from the repository's own configuration, C names the GitHub repository from it (`gh::repository_of_remote`), and M's coordinator asks C's own node to run the same allow-listed `gh` command lines with `GH_REPO` set to that name and no folder (`Call::Gh` `repository`), each repository once and then every five minutes; the answers stay keyed to M, so an M path never matches a C project.
+An M checkout's pull request is read on C with C's `gh` login (D-16): M's worktree read answers its repository's `origin` URL from the repository's own configuration, C names the GitHub repository from it (`gh::repository_of_remote`), and M's coordinator asks C's own node to run the same allow-listed `gh` command lines with `GH_REPO` set to that name and no folder (`Call::Gh` `repository`), and `repo view`, which ignores `GH_REPO` and reads a folder's remotes, takes the name as its argument, each repository once and then every five minutes; the answers stay keyed to M, so an M path never matches a C project.
 An SSH device's checkouts are read the same way, on C with C's login by the repository its helper's worktree read names, since every device's coordinator is built with C's own node as its `gh` login (`SessionSyncContext::remote`); the answers give its checkouts their pull requests and its Project its repository for the link record, while its issues, source and PRs tab stay off as D-29 keeps them for a device the core dials.
 An M project lists every worktree M's worktree read reports, as one of C's own lists its worktrees, a worktree with no pane open included (`device_catalog::apply_worktrees`, D-29).
 Such a row has the id of its folder on M (`device_catalog::checkout_id`), the id a move gives that checkout (`node_migration::reown`), so the links, labels and folds kept under it meet the row, and it folds under Inactive by C's own rule (`project_context::inactive_checkout_group`); a device C dials shows only the checkouts its Herdr session opens.
@@ -3384,6 +3389,9 @@ Memory retires its own worktrees through the ordinary `Call::WorktreeRetire` mac
 
 ### The mobile companion
 
+The shared relay library and its WASM boundary are specified in [RELAY_PROTOCOL.md](RELAY_PROTOCOL.md).
+The hosted phone uses its WASM initiator; the device transport is integrated separately.
+
 Phone transport, pairing, conversation reads and delivery live in `hided/src/mobile/`; status projection and notification transitions belong to `herdr-core/src/agent_state/`.
 `Runtime::remote_herdr_api` lends the Herdr API connection the core already holds for a connected SSH device.
 Mobile is off until the operator turns it on in Settings > Mobile, and it is kept in `mobile.json` beside the daemon's state (the switch, the push mode, the serve entry hided added, and the VAPID key), written through a temporary file at mode 0600.
@@ -3403,9 +3411,39 @@ A request that arrives through `tailscale serve` (a forwarded-for or Tailscale i
 Every handshake has ten seconds to send its first frame.
 
 The phone app is a static shell and a data channel, kept apart.
+
+`web/src/mobile/loader.tsx` is the small start page for `app.withhide.dev`; `web/src/mobile/main.tsx` is the same phone UI served directly at `/m/` and as a versioned relay bundle.
+`pnpm --dir web build:phone` writes `web/phone-dist/`: the root `index.html`, `protocols.json`, root manifest and `/sw.js`, shared icons, and `/p/<PHONE_PROTOCOL>/index.html` with its own hashed assets.
+`PHONE_PROTOCOL` is declared in `web/src/mobile/phoneVersion.ts`; deployment retains older numbered directories and lists the available numbers in `protocols.json`.
+The root reads only the relay's `phone_protocol` metadata and opens that exact supported bundle, never a closest or newest fallback.
+A paired device that is offline can open its saved protocol bundle and let the shared connection retry; a changed version returns through the loader.
+An unsupported number stays on the update screen with the phone and device protocol versions.
+
+`hosts.ts` owns one bounded browser storage record: at most sixteen paired devices, each with its room, plain-text display name, QR-authenticated Noise public key, credential, last protocol and last successful contact.
+Corrupt records and storage refusal are visible failures; QR codes and conversation content are never persisted.
+The QR fragment is cleared synchronously before WASM initialization and relay access; its name is escaped React text, truncated to one line on the landing screen.
+`relaySocket.ts` is the socket boundary used by the existing connection and command code: the shared WASM crate performs Noise NK, then the first encrypted message carries `{client_kind:"phone", pair}` or `{client_kind:"phone", token}`.
+This boundary compares the relay's phone protocol with its own bundle before starting Noise, for both the main connection and every presence observer.
+A mismatch closes without a handshake, credential or app frame; the main connection returns to the loader, while a list observer stops retrying and gives its row both versions and a loader action.
+The direct `/m/` socket keeps its existing handshake and UI.
+A relay socket owns its handshake deadline, chunk deadline check, and Noise memory; closing disposes all of them, and the browser send buffer is capped at 1 MiB with no retained application send queue.
+Reconnection keeps the existing command request identities and adds jitter; no action is automatically replayed by the transport.
+The host picker opens at most one extra read-only connection per other saved device only while its list is visible; it authenticates for counts but never opens an agent detail or sends an action.
+The in-app scanner uses bundled `jsqr`, one camera and at most 640 by 640 pixels at four scans per second; hiding or leaving it stops every track and timer.
+
+The hosted manifest starts at `/` so an installed app can add another device in its own storage.
+The same `/sw.js` is registered once at `/` for the shell and once at `/push/<room>/` per saved device for push, since each device owns a different VAPID key.
+Removing a device unsubscribes and unregisters its exact push scope before removing its credential; it never unregisters the root worker returned by an ancestor-scope lookup.
+A notification retains the registration's room and opens `/?host=<room>&open=<device_id>|<pane_id>`, which selects the correct bundle and agent.
+Only static responses and translated notification words are cached, never device data; the shell cache is bounded to 128 entries and old shell versions are removed on activation.
+The app build embeds a strict CSP allowing same-origin scripts and `wasm-unsafe-eval`, same-origin assets and the declared relay WebSocket; there are no external scripts, analytics, login or payment paths.
+`VITE_HIDE_RELAY_URL` is the only public build override: a credential-free WSS URL, or a loopback WS URL for isolated development.
+Physical iPhone home-screen storage, camera and multi-registration push delivery require device verification; emulated viewport and service-worker tests do not prove those OS boundaries.
+
+The direct Tailscale shell remains as follows.
 `/m/` serves `mobile.html`, and `/m/manifest.webmanifest`, `/m/sw.js` and the icons come from `web/public/m/` through the same static route as the desktop shell's `/assets`; the page, the service worker and the manifest are served `no-cache`.
 The service worker caches only that shell, so the app opens without a network and shows its unreachable line.
-Pairing, the agent list, an agent's conversation, a pane's rows, replies, keys, starts and the push subscription travel on `/ws` only; the phone calls no other HTTP path.
+Pairing, the agent list, an agent's conversation, a pane's rows, replies, keys, starts and the push subscription travel on `/ws` only; HTTP fetches carry only static shell assets and the hosted protocol manifest.
 The first frame decides the client: `{client_kind: "phone", token}` for a paired phone or `{client_kind: "phone", pair, name}` to pair; a phone counts toward `MAX_CLIENTS`, and a refusal sends `{type: "refused", reason}` (`code_expired`, `phone_limit`, `revoked`, `mobile_off`) and closes with 4001.
 Every frame to a phone goes through `mobile::phone::encode`, the one place a relay would wrap in end-to-end encryption.
 

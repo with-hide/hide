@@ -235,6 +235,13 @@ GitHub's merge queue was turned on 2026-10-05 and off again the next day: with t
 Its ruleset is kept disabled and `verify` no longer runs on a merge group.
 Runner capacity has to grow before the queue can help: on 2026-10-07 all 20 jobs were in use for 427 minutes, and between 13:00 and 19:00 KST a full `verify` run took a median 23.9 minutes, 10.7 of them waiting for a runner (read from each job's created and started times).
 
+## Relay protocol gate
+
+Changes to `hide-relay-protocol/` or its build/check scripts run `bash scripts/check-relay-protocol.sh` and `bash scripts/verify-web.sh relay-protocol typecheck` locally, in addition to the Rust and web gates their diff selects.
+The [relay contract](docs/RELAY_PROTOCOL.md) owns the native/WASM vectors, cross-decryption, limits and QR assertions; the reusable `relay-protocol` workflow proves the platform forms in CI.
+Changes to `hide-relay/` also select that workflow on Linux, Windows and macOS, where real loopback clients exercise rooms, opaque forwarding, caps, invalid admission and restart.
+Run `bash scripts/verify-cargo.sh nextest --profile ci -p hide-relay` and `bash scripts/verify-cargo.sh clippy -p hide-relay --all-targets -- -D warnings` for its service boundary.
+
 ## CI gates
 
 Every required check exists because something once went wrong without it.
@@ -417,9 +424,11 @@ It never merges, because three Herdr behaviors the core relies on are covered by
 
 ## License of contributions
 
-hide is released under the Apache License 2.0 ([LICENSE](LICENSE)), and [NOTICE](NOTICE) carries its copyright notice.
-By submitting a contribution, you confirm that you have the right to submit it and agree that it is licensed under the same Apache License 2.0, as section 5 of the license provides.
+hide is released under the Functional Source License, Version 1.1, ALv2 Future License ([LICENSE](LICENSE)), and [NOTICE](NOTICE) carries its copyright notice.
+By submitting a contribution, you confirm that you have the right to submit it and agree that you license it to the project under the [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0), so the project can distribute it as part of hide under hide's license.
 You keep the copyright in your contribution.
+Each person is added to [`.github/APPROVED_CONTRIBUTORS`](.github/APPROVED_CONTRIBUTORS) only after agreeing to these terms once, in a GitHub comment of their own that says so, and the commit that adds them links that comment.
+A person listed before these terms gives the same agreement before their first pull request is merged.
 
 ## Commit messages and attribution
 

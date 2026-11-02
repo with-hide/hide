@@ -1,0 +1,20 @@
+[package]
+name = "hide-relay"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+hide-relay-protocol = { path = "../hide-relay-protocol" }
+tokio = { version = "=1.53.2", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-tungstenite = { version = "=0.30.0", default-features = false, features = ["handshake"] }
+futures-util = "=0.3.34"
+hyper = { version = "=1.12.0", features = ["http1", "server"] }
+hyper-util = { version = "=0.1.21", features = ["tokio"] }
+http-body-util = "=0.1.5"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
+
+[dev-dependencies]
+tokio-tungstenite = { version = "=0.30.0", default-features = false, features = ["connect"] }

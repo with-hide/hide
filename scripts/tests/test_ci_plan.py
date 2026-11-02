@@ -16,17 +16,17 @@ CRATES = ci.cargo_crates(ROOT)
 EVERY_PACKAGE = sorted(crate["name"] for crate in CRATES.values())
 # The lanes that take a macOS runner; every other check on macOS is a job of
 # `nightly.yml`.
-MACOS_LANES = {"os-contract-macos", "vt", "holder-restart", "desktop-e2e", "package", "omp-contract"}
+MACOS_LANES = {"os-contract-macos", "vt", "holder-restart", "desktop-e2e", "package", "omp-contract", "relay-protocol"}
 # What a push, the nightly and an unclassified path plan: every lane but
 # `package`, `agent-clis` and `holder-restart`, which are planned by their own
 # paths only.
 FULL = [
-    "policy", "rust", "checks", "os-contract", "os-contract-macos", "vt", "agy-contract", "omp-contract", "agent-journey",
+    "policy", "rust", "checks", "relay-protocol", "os-contract", "os-contract-macos", "vt", "agy-contract", "omp-contract", "agent-journey",
     "windows-check", "windows-e2e", "windows-desktop", "windows-wsl", "web-e2e", "remote-mailbox", "desktop-e2e",
 ]
 # Every lane, independently named: CI edits must exercise the planner's decisions.
 ALL = [
-    "policy", "rust", "checks", "os-contract", "os-contract-macos", "vt", "holder-restart", "agy-contract", "omp-contract", "agent-journey",
+    "policy", "rust", "checks", "relay-protocol", "os-contract", "os-contract-macos", "vt", "holder-restart", "agy-contract", "omp-contract", "agent-journey",
     "agent-clis", "windows-check", "windows-e2e", "windows-desktop", "windows-wsl", "web-e2e", "remote-mailbox", "desktop-e2e",
     "package",
 ]
@@ -238,6 +238,14 @@ class Selection(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertNotIn("windows-desktop", plan(path)["lanes"])
 
+    def test_relay_wire_and_its_build_and_process_owner_run_interoperability(self):
+        for path in ("hide-relay-protocol/src/noise.rs", "hide-relay-protocol/tests/cross-wasm.ts",
+                     "hide-relay/src/server.rs", "hide-relay/tests/it/relay.rs",
+                     "scripts/build-relay-wasm.sh", "scripts/check-relay-protocol.sh", "web/e2e/worker-owned.ts"):
+            with self.subTest(path=path):
+                self.assertIn("relay-protocol", plan(path)["lanes"])
+        self.assertNotIn("relay-protocol", plan("web/src/Overview.tsx")["lanes"])
+
     def test_a_platform_crate_reaches_every_os_and_its_consumers(self):
         result = plan("hide-platform/src/process.rs")
         self.assertTrue(
@@ -251,7 +259,7 @@ class Selection(unittest.TestCase):
         # platform layer.
         self.assertEqual(result["rust_packages"],
                          [name for name in EVERY_PACKAGE
-                          if name not in ("hide-agent-adapter", "hide-screen-rules", "hide-shell", "hide-vt", "workspace-hack")])
+                          if name not in ("hide-agent-adapter", "hide-screen-rules", "hide-shell", "hide-vt", "hide-relay", "hide-relay-protocol", "workspace-hack")])
         self.assertFalse(result["full"])
 
     def test_an_adapter_change_tests_its_real_consumers_and_compiles_on_windows(self):
@@ -849,6 +857,8 @@ def runner_jobs(block):
         # A lane whose macOS leg follows the plan names both lists; the most is the longer.
         systems = re.search(r"\n      systems: (.*)", block).group(1)
         return max(len(json.loads(found)) for found in re.findall(r"'(\[[^']*\])'", systems))
+    if "uses: ./.github/workflows/relay-protocol.yml" in block:
+        return 3
     if "uses: ./.github/workflows/wsl-device.yml" in block:
         # Windows cannot build the Linux programs the distribution runs.
         return 2
@@ -972,11 +982,12 @@ class Workflows(unittest.TestCase):
         # WSL link crosses. The vt lane's three legs, planned only for a change
         # to hide-vt's build, add three. The holder restart lane's three legs,
         # planned only for a change to the holder, the node's holder code, the
-        # agent pins or the lane's scripts, add three. The core's own engine
-        # runs the web suite over as many shards again as Herdr's, on Linux
-        # and Windows, until the Herdr lane goes with Herdr (PRD
-        # engine-bundle-3-core-owns D-24): seven more.
-        self.assertLessEqual(most, 48, "a run starts more jobs than the suites and native SDK contracts need")
+        # agent pins or the lane's scripts, add three.
+        # Native and WASM relay interoperability adds one job on each OS.
+        # The core's own engine runs the web suite over as many shards again
+        # as Herdr's, on Linux and Windows, until the Herdr lane goes with
+        # Herdr (PRD engine-bundle-3-core-owns D-24): seven more.
+        self.assertLessEqual(most, 51, "a run starts more jobs than the suites and native SDK contracts need")
         testing = (ROOT / "docs/TESTING.md").read_text()
         self.assertIn(f"starts at most {most} jobs", testing)
 

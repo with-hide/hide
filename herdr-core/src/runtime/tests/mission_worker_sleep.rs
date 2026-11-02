@@ -1062,3 +1062,53 @@ fn a_node_keeps_the_launch_its_workers_own_session_was_started_with() {
     show(&mut runtime, session("w-order:t1", None));
     assert_eq!(launched(&mut runtime), None);
 }
+
+/// A node's worker plan is found by its registration's conversation (the
+/// map's `n/m` and the panel's checklist), so it stays on a finished node
+/// once the worker's pane is gone, and another conversation's plan is never
+/// taken for it.
+#[test]
+fn a_finished_node_keeps_its_workers_plan_after_the_pane_closes() {
+    let mut runtime = mission_runtime();
+    let plan_of = |pane: &str, status: &str| -> crate::plans::Plan {
+        serde_json::from_value(serde_json::json!({
+            "session": {"device_id": crate::node::TEST_NODE, "agent": "claude", "session_id": native(pane)},
+            "steps": [
+                {"key": "a", "title": "Read it", "status": "done"},
+                {"key": "b", "title": "Fix it", "depends_on": ["a"], "status": status}
+            ],
+            "created_at_unix_ms": 1, "updated_at_unix_ms": 1
+        }))
+        .unwrap()
+    };
+    // A plan written the way `hide plan set` writes one: the book moves.
+    let put = |runtime: &mut Runtime, plan: crate::plans::Plan| {
+        runtime.plans.book.insert(plan.session.clone(), plan);
+        runtime.plans.edit += 1;
+    };
+    let shown = |runtime: &mut Runtime| {
+        runtime.refresh_missions();
+        runtime.snapshot.missions.items[0].nodes[0]
+            .plan
+            .as_ref()
+            .map(|plan| {
+                (
+                    plan.pane_id.clone(),
+                    plan.progress.done,
+                    plan.progress.total,
+                )
+            })
+    };
+    // Only the Conductor's plan is in the book: the worker has none.
+    put(&mut runtime, plan_of(LEAD, "working"));
+    assert_eq!(shown(&mut runtime), None);
+
+    put(&mut runtime, plan_of(WORKER, "working"));
+    assert_eq!(shown(&mut runtime), Some((WORKER.into(), 1, 2)));
+
+    // The worker finishes its plan and the node, then its pane closes.
+    put(&mut runtime, plan_of(WORKER, "done"));
+    set_node(&mut runtime, crate::missions::NodeStatus::Done);
+    show(&mut runtime, session("w-order:t1", None));
+    assert_eq!(shown(&mut runtime), Some((WORKER.into(), 2, 2)));
+}

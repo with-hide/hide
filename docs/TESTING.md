@@ -663,7 +663,7 @@ A passing fixture does not prove paid-service authentication or standalone suppo
 
 ### How many jobs a run starts
 
-A run that plans every lane a pull request can plan starts at most 48 jobs, eighteen more than the 2026-10-05 shape of run `37324202934` before the macOS and mailbox work: that work saved one, the e2e suites outgrew their shards' step caps, which took a second macOS desktop shard and two more web shards ([Balancing the e2e shards](#balancing-the-e2e-shards)), the agent journey's Linux stand-in job and Windows forms job added two, and the `agent CLIs` installs on Linux and Windows, which only a change to `contracts/agent-clis.json` or an installer plans, added two, building the shared web shell in parallel with the daemon adds one, the WSL device lane's Linux build and Windows run add two, and the `vt` lane's Linux, macOS and Windows builds of hide-vt, which only a change to hide-vt, the pane holder or their build scripts plans, add three, and the holder restart lane's Linux, macOS and Windows legs, which only a change to the holder, the node's holder code, the agent pins or the lane's scripts plans, add three; the refreshed twenty-run median requires six web shards; and the core's own engine runs the web suite over as many shards again as Herdr's on Linux and once more on Windows, seven jobs, until the Herdr lane goes with Herdr (PRD engine-bundle-3-core-owns D-24).
+A run that plans every lane a pull request can plan starts at most 51 jobs, eighteen more than the 2026-10-05 shape of run `37324202934` before the macOS and mailbox work: that work saved one, the e2e suites outgrew their shards' step caps, which took a second macOS desktop shard and two more web shards ([Balancing the e2e shards](#balancing-the-e2e-shards)), the agent journey's Linux stand-in job and Windows forms job added two, and the `agent CLIs` installs on Linux and Windows, which only a change to `contracts/agent-clis.json` or an installer plans, added two, building the shared web shell in parallel with the daemon adds one, the WSL device lane's Linux build and Windows run add two, and the `vt` lane's Linux, macOS and Windows builds of hide-vt, which only a change to hide-vt, the pane holder or their build scripts plans, add three, and the holder restart lane's Linux, macOS and Windows legs, which only a change to the holder, the node's holder code, the agent pins or the lane's scripts plans, add three; the refreshed twenty-run median requires six web shards; native and WASM relay interoperability adds one job on each system; and the core's own engine runs the web suite over as many shards again as Herdr's on Linux and once more on Windows, seven jobs, until the Herdr lane goes with Herdr (PRD engine-bundle-3-core-owns D-24).
 `scripts/tests/test_ci_plan.py` counts them from the workflows:
 
 | Jobs | Count | Why |
@@ -853,3 +853,25 @@ The nightly's `report` job (`scripts/ci-flaky-report.py --nightly`) is the one w
 - [ ] The fixture copies the whole isolation environment, owns every process it starts on every exit path, and reports cleanup failures without replacing the original error.
 - [ ] A system difference lives beside the fixture that owns the resource, not in the spec.
 - [ ] No timeout, retry, count or skip was changed to make the test pass, and no test was tagged out of a required lane.
+
+## Mobile relay protocol
+
+`bash scripts/check-relay-protocol.sh` is the native/WASM interoperability gate, described in [RELAY_PROTOCOL.md](RELAY_PROTOCOL.md#build-and-evidence).
+Its single Rust integration binary and one private malformed-chunk unit test run under native cargo and `wasm-bindgen-test-runner`, including the pinned official cacophony NK vector and fatal-error/fragment-only QR cases.
+The TypeScript test uses the production WASM bindings against a native Rust stdio peer, verifies both directions through a 256 KiB serialized message and owns the peer through success, failure and worker exit.
+The peer accepts at most eight bounded lines, starts no children and exits on stdin EOF; a 30-second guard detects a hang, never schedules expected ordering.
+The `relay-protocol` lane runs on Linux and Windows and includes macOS when the PR plan requests macOS coverage; main's full plan includes it.
+Crate changes and its build/check scripts select this lane, while general build definitions and lockfiles retain full coverage.
+Each job restores the workspace dependency set through the shared Rust cache action without saving; WASM and binding-tool build outputs are outside that native dependency cache.
+Its three platform jobs account for the increase in the maximum job count above.
+
+The same lane runs `hide-relay`'s one integration binary through nextest on all three systems for a server change, then checks its Clippy targets.
+The server journeys use real loopback HTTP/WebSocket connections, real challenge proofs and real endpoint Noise sessions; no relay handler or owned collaborator is mocked.
+They cover multiple phones and both directions, all five required caps, bounded accounting records, rejected signatures and expired/replayed admission, invalid routing, endpoint-detected ciphertext tamper/replay, log allowlisting and full server restart.
+A monotonic test clock moves rate and daily windows to their exact boundaries without sleeps; limits may be lowered through the service's embedding API, never raised above production.
+The service's caller owns its listener, task and shutdown signal; test guards abort that task on failure, and its task set owns every accepted socket.
+
+The relay's opt-in `production_capacity_keeps_128_rooms_live_and_refuses_only_socket_513` load case fills all 512 production slots with 128 devices and 384 real Noise sessions, exchanges 72 MiB across three bursts and checks that every socket receives restart.
+Run `bash scripts/verify-cargo.sh test-scoped -p hide-relay --test it production_capacity -- --ignored` on a host with at least 1,100 available file descriptors for the client and server ends.
+It is excluded from ordinary CI because the test host's descriptor budget includes both ends; the regular caller tests exercise each cap with lowered service limits on all three systems.
+Record the host, elapsed time and outcome outside the repository; this finite loopback workload is not an internet throughput or latency guarantee.

@@ -1,3 +1,4 @@
+import { OfflineText } from "./OfflineText";
 // The phone app's screens (PRD mobile-companion D-08, B11-B16, B19-B23,
 // B30, B38): pairing, the refused and unpaired guidance, and the list; the
 // detail is `Detail.tsx`. Every value comes from the store the socket writes.
@@ -18,7 +19,6 @@ import { StartSheet } from "./StartSheet";
 import {
   GROUP_TITLE,
   REFUSAL_NOTICE,
-  UNREACHABLE_NOTICE,
   headerLine,
   noticeText,
   notificationRow,
@@ -27,10 +27,17 @@ import {
 } from "./protocol";
 import { closeStaleNotifications, enableNotifications, permission, pushSupported } from "./push";
 import { patch, usePhone } from "./store";
+import { hostedPhone, PHONE_PROTOCOL } from "./relayRuntime";
+import { HostPicker } from "./HostPicker";
+import { VersionScreen } from "./HostList";
 
 export function App() {
+  const { t } = useInterfaceTranslation();
   const screen = usePhone((s) => s.screen);
   const detail = usePhone((s) => s.detail);
+  const name = usePhone((s) => s.macName);
+  const deviceProtocol = usePhone((s) => s.deviceProtocol);
+  if (screen === "version") return <VersionScreen t={t} name={name} protocol={deviceProtocol} app={String(PHONE_PROTOCOL)} />;
   if (screen === "pair") return <PairScreen />;
   if (screen === "refused") return <Guidance refused />;
   if (screen === "unpaired") return <Guidance refused={false} />;
@@ -52,11 +59,13 @@ function PairScreen() {
   const { t } = useInterfaceTranslation();
   const macName = usePhone((s) => s.macName);
   const [pairing, setPairing] = useState(false);
+  const unreachable = usePhone((s) => s.unreachable);
   return (
     <Centered>
       <HideIcon />
-      <h1 className="text-headline font-semibold text-foreground">{t("mobile.pair.title", { name: macName || t("mobile.mac") })}</h1>
+      <h1 className="w-full truncate text-headline font-semibold text-foreground">{t("mobile.pair.title", { name: macName || t("mobile.mac") })}</h1>
       <p className="max-w-(--size-mobile-copy) text-subhead text-muted-foreground">{t("mobile.pair.description")}</p>
+      {hostedPhone() ? <p className="text-subhead text-muted-foreground">{t("mobile.relay.encrypted")}</p> : null}
       <Button
         className="h-(--size-touch-target) w-full max-w-(--size-mobile-copy) rounded-lg text-title font-semibold"
         disabled={pairing}
@@ -68,6 +77,7 @@ function PairScreen() {
       >
         {t("mobile.pair.connect")}
       </Button>
+      {unreachable && hostedPhone() ? <p role="status" className="text-subhead text-muted-foreground"><OfflineText /></p> : null}
       <p className="text-body text-muted-foreground">{t("mobile.pair.expiry")}</p>
     </Centered>
   );
@@ -77,14 +87,16 @@ function PairScreen() {
 function Guidance({ refused }: { refused: boolean }) {
   const { t } = useInterfaceTranslation();
   const refusal = usePhone((s) => s.refusal);
+  const relayError = usePhone((s) => s.relayError);
   const text = noticeText(t, refused && refusal ? REFUSAL_NOTICE[refusal] : REFUSAL_NOTICE.no_credential);
   return (
     <Centered>
       <HideIcon />
       <p role={refused ? "alert" : undefined} className="max-w-(--size-mobile-copy) text-title text-foreground" data-phone-guidance={refused ? (refusal ?? "revoked") : "unpaired"}>
-        {text}
+        {relayError ? t(`mobile.relay.${relayError}`) : text}
       </p>
       {refused && refusal !== "phone_limit" && refusal !== "no_credential" ? <p className="text-subhead text-muted-foreground">{noticeText(t, REFUSAL_NOTICE.no_credential)}</p> : null}
+      {hostedPhone() ? <Button variant="secondary" onClick={() => location.assign("/")}>{t("mobile.relay.choose")}</Button> : null}
     </Centered>
   );
 }
@@ -102,6 +114,7 @@ function ListScreen() {
   const unreachable = usePhone((s) => s.unreachable);
   const groups = usePhone((s) => s.groups);
   const installHint = usePhone((s) => s.installHint);
+  const relayError = usePhone((s) => s.relayError);
   useEffect(() => {
     if (groups && connected) void closeStaleNotifications(groups);
   }, [groups, connected]);
@@ -131,7 +144,7 @@ function ListScreen() {
             </button>
           </div>
         </div>
-        {macName ? (
+        {hostedPhone() ? <HostPicker name={macName} /> : macName ? (
           <p className="mt-xs flex items-center gap-xs text-subhead text-muted-foreground" data-phone-header={headerLine(t, macName, otherPhones)}>
             <LaptopIcon aria-hidden="true" className="size-(--size-icon) shrink-0" />
             <span className="min-w-0 truncate">{headerLine(t, macName, otherPhones)}</span>
@@ -141,9 +154,10 @@ function ListScreen() {
       {dim ? (
         <div role="status" className="mt-md flex items-center gap-md bg-secondary px-lg py-md text-subhead text-subtle-foreground" data-phone-unreachable="true">
           <Loader2Icon aria-hidden="true" className="size-(--size-icon-lg) shrink-0 animate-spin" />
-          <span>{noticeText(t, UNREACHABLE_NOTICE)}</span>
+          <span><OfflineText /></span>
         </div>
       ) : null}
+      {relayError === "storage" || relayError === "loadError" ? <p role="alert" className="px-lg text-warning">{t(`mobile.relay.${relayError}`)}</p> : null}
       {installHint && !standalone() ? <InstallHint /> : null}
       {connected ? <NotificationRow /> : null}
       <div className={dim ? "opacity-50" : undefined} aria-busy={dim}>
@@ -257,7 +271,10 @@ function InstallHint() {
   return (
     <div className="mx-lg mt-md flex items-start gap-md rounded-lg border border-border bg-card px-md py-sm text-subhead text-card-foreground" data-phone-install-hint="true">
       <span className="min-w-0 flex-1">{t("mobile.installHint")}</span>
-      <button type="button" aria-label={t("common.close")} className="flex size-(--size-touch-target) shrink-0 items-center justify-center text-muted-foreground" onClick={() => patch({ installHint: false })}>
+      <button type="button" aria-label={t("common.close")} className="flex size-(--size-touch-target) shrink-0 items-center justify-center text-muted-foreground" onClick={() => {
+        patch({ installHint: false });
+        if (hostedPhone()) { try { localStorage.setItem("hide.phone.installed-hint", "seen"); } catch { patch({ relayError: "storage" }); } }
+      }}>
         <XIcon aria-hidden="true" className="size-(--size-icon)" />
       </button>
     </div>

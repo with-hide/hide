@@ -1,3 +1,4 @@
+import { OfflineText } from "./OfflineText";
 // One agent's detail on the phone (PRD mobile-companion B24-B28, D-18): the
 // row's head; the agent's conversation from its own transcript, the
 // operator's messages as ❯ blocks and the agent's Markdown at full width, with
@@ -24,7 +25,6 @@ import {
   MAX_MESSAGES,
   MAX_REPLY_CHARS,
   QUICK_KEYS,
-  UNREACHABLE_NOTICE,
   boxDrawingRow,
   inputFailure,
   messageTime,
@@ -109,7 +109,7 @@ export function Detail({ onBack }: { onBack: () => void }) {
       </header>
       {unreachable && !connected ? (
         <div role="status" className="shrink-0 bg-secondary px-lg py-sm text-subhead text-subtle-foreground" data-phone-unreachable="true">
-          {noticeText(t, UNREACHABLE_NOTICE)}
+          <OfflineText />
         </div>
       ) : null}
       {note ? (

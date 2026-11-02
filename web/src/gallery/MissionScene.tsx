@@ -31,7 +31,7 @@ import { requireInterfaceLanguage } from "../i18n/locale";
 import { MissionMap } from "../MissionMap";
 import { PaneWorkChip } from "../PaneMissionChip";
 import { ConductorTab } from "../settings/ConductorTab";
-import type { AgentRow, Mission, MissionChecker, MissionCriterion, MissionEvent, MissionLanding, MissionNode, MissionWorker, SnapshotRest } from "../snapshot";
+import type { AgentRow, Mission, MissionChecker, MissionCriterion, MissionEvent, MissionLanding, MissionNode, MissionWorker, PlanView, SnapshotRest } from "../snapshot";
 import { useShellStore } from "../store";
 import { useUiStore } from "../ui";
 
@@ -60,6 +60,17 @@ const inMain = (commit: string): MissionLanding => ({ state: "landed", proof: { 
 const opus = (effort: string | null) => ({ agent: "claude", model: "Opus", effort, effort_auto: true });
 const astra = (effort: string | null) => ({ agent: "codex", model: "Astra", effort, effort_auto: true });
 const sonnet = { agent: "claude", model: "Sonnet", effort: "low", effort_auto: false };
+/** A worker's own plan as the core keeps it for its node: `done` steps finished, the next one at work. */
+function workerPlan(session: string, titles: string[], done: number): PlanView {
+  return {
+    pane_id: "", session: { device_id: "mac", agent: "codex", session_id: session },
+    steps: titles.map((title, index) => ({ key: `s${index}`, title, depends_on: index > 0 ? [`s${index - 1}`] : [], status: index < done ? "done" as const : index === done ? "working" as const : "planned" as const, line: null, output: index === titles.length - 1 ? "pr" as const : null, changed: false, change: null, waiting: index > done, delegate: false, evidence: null, delegation: null })),
+    review: "approved", ask: null,
+    progress: { current: done < titles.length ? `s${done}` : null, next: done + 1 < titles.length ? `s${done + 1}` : null, done, total: titles.length, finished: done === titles.length },
+    created_at_unix_ms: 1, updated_at_unix_ms: 2,
+  };
+}
+
 /** The screen node's pane, whose recorded launch runs another model than the plan named (the card shows the pane's). */
 const SCREEN_PANE = "w1:p7";
 /** The pane of the reviewer the core bound in the running state, whose recorded launch the strip shows. */
@@ -136,9 +147,9 @@ function plan(state: string, now: number): MissionNode[] {
   const review = (minutes: number) => ({ status: "working" as const, started_at_unix_ms: ago(minutes) });
   return [
     node("cause", `${no(1487)} 원인 조사`, { kind: "research", delivery: null, worker: opus("xhigh"), ...done(44, 24), line: "reopen 때 셀 초기화가 먼저 돎", ...finish(own(1, "원인을 재현 단계와 함께 적는다")) }),
-    node("fix-1481", `이슈 ${no(1481)} 수정`, { worker: astra("high"), agent_id: "agent-1481", launched: { agent_id: "agent-1481", agent: "codex", model: "Astra 2", effort: "high" }, ...done(40, 14), pr: 1501, pr_state: "mergeable", landing: MERGE_LEFT, stage: 3, hide: { action: "done", at_unix_ms: ago(26) }, ...finish(own(1, "빈 목록에서도 필터가 남는다"), line("check", "check", "pass"), ci("pass")) }),
+    node("fix-1481", `이슈 ${no(1481)} 수정`, { worker: astra("high"), agent_id: "agent-1481", plan: workerPlan("worker-1481", ["빈 목록 재현", "필터 상태 보존", "구현 PR"], 3), launched: { agent_id: "agent-1481", agent: "codex", model: "Astra 2", effort: "high" }, ...done(40, 14), pr: 1501, pr_state: "mergeable", landing: MERGE_LEFT, stage: 3, hide: { action: "done", at_unix_ms: ago(26) }, ...finish(own(1, "빈 목록에서도 필터가 남는다"), line("check", "check", "pass"), ci("pass")) }),
     node("fix-1490", `이슈 ${no(1490)} 수정`, {
-      worker: astra("medium"), pr: 1505, stage: 3, change: `${no(1483)}은 ${no(1490)}과 같은 원인이라 합침`,
+      worker: astra("medium"), pr: 1505, pr_url: "https://github.com/with-hide/hide/pull/1505", stage: 3, change: `${no(1483)}은 ${no(1490)}과 같은 원인이라 합침`,
       ...(stack ? { ...done(40, 9), pr_state: "mergeable" as const, landing: MERGE_LEFT } : decision ? { status: "working" as const, started_at_unix_ms: ago(30), pr_state: "failed" as const, attempts: 2, line: "CI 실패 · 시도 2/2", hide: { action: "woke" as const, pr: 1505, why: "ci_failed" as const, at_unix_ms: ago(3) } } : { ...review(30), pr_state: "pending" as const }),
       ...finish(own(1, "검색어를 지우면 처음 목록으로 돌아간다"), line("check", "check", "pass"), line("review", "review", stack ? "pass" : "open", { rule: "all", checkers: [checker(opus("high"), "pass", "agent-21"), { ...checker(sonnet, stack ? "pass" : "open", stack || decision ? undefined : "agent-22"), ...(stack || decision ? {} : { pane_id: REVIEW_PANE }) }] }), ci(decision ? "fail" : "pass")),
     }),
@@ -146,7 +157,8 @@ function plan(state: string, now: number): MissionNode[] {
       // Merged with a line left unrecorded and no Conductor to ask: it waits on the operator (PRD mission-node-simple B13, B14).
       ...(state === "no-conductor" ? { status: "working" as const, finished_at_unix_ms: null, landing: null, criteria_met: 0, criteria: [own(1, "목록 API가 페이지를 나눠 준다", "open"), ci("pass")], attention: { reason: "merged_unproven" as const, pr: 1503, to: "operator" as const, since_unix_ms: ago(6), on_row: false, item: true } } : {}) }),
     node("fix-1487", `${no(1487)} 수정`, {
-      depends_on: ["cause"], worker: astra("medium"), pane_id: FIX_PANE, pr: 1506, stage: 3, reopened: stack ? 0 : 1,
+      depends_on: ["cause"], worker: astra("medium"), pane_id: FIX_PANE, pr: 1506, pr_url: "https://github.com/with-hide/hide/pull/1506", stage: 3, reopened: stack ? 0 : 1, branch: "fix/1487-reopen-cells",
+      plan: workerPlan("worker-1487", ["reopen 재현 테스트", "셀 초기화 순서 고치기", "실제 세션 replay", "전체 검사", "구현 PR"], stack ? 5 : 2),
       ...(stack ? { ...done(30, 12), pr_state: "mergeable" as const, landing: MERGE_LEFT } : { ...working(5), pr_state: "pending" as const, line: "replay 19/31" }),
       ...finish(own(1, "reopen 뒤에도 셀이 남는다"), own(2, "실제 세션 50개 replay", "skipped", { skip: { reason: "기록된 세션이 31개뿐" } }), ...(stack ? [] : [line("d1", "defect", "open", { text: "다시 열면 첫 셀만 비어 있다", found_by: "check-1487" })]), ci(stack ? "pass" : "open")),
     }),

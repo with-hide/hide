@@ -1,3 +1,4 @@
+import { mobileRelayEnglish, mobileRelayCatalogs } from "./resources/mobileRelay";
 import { groupTabsCatalogs, groupTabsEnglish } from "./resources/groupTabs";
 import { overviewBacklogCatalogs, overviewBacklogEnglish } from "../overviewBacklogMessages";
 import { overviewUsageCatalogs, overviewUsageEnglish } from "../overviewUsageMessages";
@@ -97,6 +98,7 @@ export const english = {
   ...commandsEnglish,
   ...nativeEnglish,
   ...mobileEnglish,
+  ...mobileRelayEnglish,
   ...settingsEnglish,
   ...usageEnglish,
   ...cleanupEnglish,
@@ -171,6 +173,7 @@ export const catalogs = {
     ...commandsCatalogs.ko,
     ...nativeCatalogs.ko,
     ...mobileCatalogs.ko,
+    ...mobileRelayCatalogs.ko,
     ...settingsCatalogs.ko,
     ...usageCatalogs.ko,
     ...cleanupCatalogs.ko,
@@ -240,6 +243,7 @@ export const catalogs = {
     ...commandsCatalogs["zh-CN"],
     ...nativeCatalogs["zh-CN"],
     ...mobileCatalogs["zh-CN"],
+    ...mobileRelayCatalogs["zh-CN"],
     ...settingsCatalogs["zh-CN"],
     ...usageCatalogs["zh-CN"],
     ...cleanupCatalogs["zh-CN"],
@@ -309,6 +313,7 @@ export const catalogs = {
     ...commandsCatalogs.ja,
     ...nativeCatalogs.ja,
     ...mobileCatalogs.ja,
+    ...mobileRelayCatalogs.ja,
     ...settingsCatalogs.ja,
     ...usageCatalogs.ja,
     ...cleanupCatalogs.ja,

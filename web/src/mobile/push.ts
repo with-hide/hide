@@ -9,7 +9,9 @@ import { attentionReasonText } from "../missions";
 import { MISSION_ATTENTION_REASONS } from "../snapshot";
 import { staleTags, type AgentGroup } from "./protocol";
 import { patch, usePhone } from "./store";
-import { send } from "./connection";
+import { send, currentHost } from "./connection";
+import { hostedPhone } from "./relayRuntime";
+import { registerHostPush, removeHostPush } from "./hosts";
 
 export function pushSupported(): boolean {
   return "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
@@ -30,6 +32,25 @@ function applicationServerKey(base64url: string): Uint8Array<ArrayBuffer> {
 async function registration(): Promise<ServiceWorkerRegistration | null> {
   if (!("serviceWorker" in navigator)) return null;
   try {
+    const host = currentHost();
+    if (hostedPhone()) {
+      if (!host || usePhone.getState().relayError === "storage") return null;
+      const worker = await registerHostPush(host.room);
+      if (worker.active) return worker;
+      const pending = worker.installing ?? worker.waiting;
+      if (!pending) return null;
+      await new Promise<void>((resolve, reject) => {
+        const timeout = window.setTimeout(() => { pending.removeEventListener("statechange", changed); reject(new Error("worker_timeout")); }, 15_000);
+        const changed = () => {
+          if (pending.state !== "activated" && pending.state !== "redundant") return;
+          clearTimeout(timeout); pending.removeEventListener("statechange", changed);
+          if (pending.state === "activated") resolve(); else reject(new Error("worker_failed"));
+        };
+        pending.addEventListener("statechange", changed);
+        changed();
+      });
+      return worker;
+    }
     return await navigator.serviceWorker.ready;
   } catch {
     return null;
@@ -100,11 +121,14 @@ export async function syncPush(): Promise<void> {
 
 /** A revoked phone keeps no subscription of its own (D-19). */
 export async function forgetPush(): Promise<void> {
-  const worker = await registration();
+  if (!("serviceWorker" in navigator)) return;
+  const host = currentHost();
   try {
+    if (hostedPhone()) { if (host) await removeHostPush(host.room); return; }
+    const worker = await registration();
     await (await worker?.pushManager.getSubscription())?.unsubscribe();
   } catch {
-    // Nothing is sent to a revoked phone anyway; hided dropped its copy in the same write.
+    if (hostedPhone()) patch({ relayError: "storage" });
   }
 }
 
