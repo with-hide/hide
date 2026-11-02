@@ -565,13 +565,15 @@ impl OwnEngine<'_> {
         env: Env,
     ) -> Result<(), EngineError> {
         let started = self.start_pane(pane, program, cwd, env, None);
+        let why = started.as_ref().err().map(ToString::to_string);
         let settled = settle_start(
             &self.shared.topology,
             &*self.shared.holders,
             pane,
-            started.is_ok(),
+            why.as_deref(),
+            OnFailure::TakeOut,
         );
-        if settled == Settled::TakenOut {
+        if settled == Settled::Failed {
             self.changed();
         }
         if started.is_err() {
@@ -591,9 +593,10 @@ impl OwnEngine<'_> {
     /// and its shell starts after: the core shows a created tab when the
     /// answer names it, so the holder's start (three flushed writes of its
     /// record and two programs started) stood between the chord and the
-    /// screen. A holder that does not start then takes its pane out, as a
-    /// pane whose shell exits at once closes, and logs why
-    /// (`pane.start_failed`); a call whose outcome hangs on the start (a
+    /// screen. A holder that does not start then leaves its pane where it
+    /// was drawn, marked with why ([`OnFailure::Mark`]: the screen shows
+    /// the pane's terminal could not start and offers to close it), and
+    /// logs `pane.start_failed`; a call whose outcome hangs on the start (a
     /// spawn's placement, a tab it replaces) uses [`Self::start_drawn`].
     /// Each start runs on a thread of its own that ends with it, within the
     /// holder's start bound (`hide_kit::panes::START_LIMIT`); one that
@@ -614,17 +617,19 @@ impl OwnEngine<'_> {
         );
         let start = move || {
             let started = start_holder(&*holders, &pane, program.as_deref(), &cwd, env, None);
-            let settled = settle_start(&topology, &*holders, &pane, started.is_ok());
             let Err(error) = started else {
+                settle_start(&topology, &*holders, &pane, None, OnFailure::Mark);
                 return;
             };
+            let why = error.to_string();
             crate::diagnostic!(serde_json::json!({
                 "component": "own_engine",
                 "kind": "pane.start_failed",
                 "pane_id": pane,
-                "message": error.to_string(),
+                "message": why,
             }));
-            if settled == Settled::TakenOut
+            let settled = settle_start(&topology, &*holders, &pane, Some(&why), OnFailure::Mark);
+            if settled == Settled::Failed
                 && let Some(shared) = shared.upgrade()
             {
                 OwnEngine {
@@ -935,6 +940,20 @@ fn end_holders(holders: &dyn PaneHolders, panes: &[String]) -> Result<(), Engine
     first.map_or(Ok(()), Err)
 }
 
+/// What a pane drawn `starting` becomes when its holder does not start.
+#[derive(Clone, Copy)]
+enum OnFailure {
+    /// Taken out again, its tab with it when it was the only one: the call
+    /// that drew it waits for the start and is refused with its reason.
+    TakeOut,
+    /// Kept where it was drawn, marked with why (`Pane::failed`), which the
+    /// session gives as the pane's `restore_error`: the screen shows that
+    /// its terminal could not start and offers to close it, as it does for
+    /// a pane a restore could not start. The call that drew it was answered
+    /// before the start ended, so the pane is where the operator learns.
+    Mark,
+}
+
 /// What became of the pane a start drew `starting`.
 #[derive(Debug, PartialEq, Eq)]
 enum Settled {
@@ -943,40 +962,44 @@ enum Settled {
     /// It was closed while its holder started; a holder that started is
     /// ended.
     Closed,
-    /// Its holder did not start: the pane is taken out again, its tab with
-    /// it when it was the only one.
-    TakenOut,
+    /// Its holder did not start and the pane changed as [`OnFailure`] says.
+    Failed,
 }
 
-/// Settles the start of `pane`, drawn `starting`, once its holder `started`
-/// or did not ([`OwnEngine::start_drawn`]).
+/// Settles the start of `pane`, drawn `starting`, once its holder started
+/// or did not, `failed` saying why ([`OwnEngine::start_drawn`]).
 fn settle_start(
     topology: &Mutex<Topology>,
     holders: &dyn PaneHolders,
     pane: &str,
-    started: bool,
+    failed: Option<&str>,
+    on_failure: OnFailure,
 ) -> Settled {
     let kept = {
         let mut topology = Held(topology.lock().unwrap_or_else(PoisonError::into_inner));
         match topology.pane_mut(pane) {
             Ok(drawn) => {
                 drawn.starting = false;
-                if !started {
-                    let _ = topology.remove_pane(pane);
+                match (failed, on_failure) {
+                    (None, _) => {}
+                    (Some(why), OnFailure::Mark) => drawn.failed = Some(why.to_owned()),
+                    (Some(_), OnFailure::TakeOut) => {
+                        let _ = topology.remove_pane(pane);
+                    }
                 }
                 true
             }
             Err(_) => false,
         }
     };
-    match (started, kept) {
-        (true, true) => Settled::Running,
-        (true, false) => {
+    match (failed, kept) {
+        (None, true) => Settled::Running,
+        (None, false) => {
             let _ = end_holders(holders, &[pane.to_owned()]);
             Settled::Closed
         }
-        (false, true) => Settled::TakenOut,
-        (false, false) => Settled::Closed,
+        (Some(_), true) => Settled::Failed,
+        (Some(_), false) => Settled::Closed,
     }
 }
 
@@ -2429,6 +2452,7 @@ mod tests {
     }
 
     /// Waits for `done`, which a holder start on its own thread settles.
+    #[allow(clippy::disallowed_methods)] // a polling helper: it sleeps between observations of a state, bounded by a deadline
     fn settles(what: &str, done: impl Fn() -> bool) {
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         while !done() {
@@ -2497,8 +2521,11 @@ mod tests {
             || ended(&pane),
         );
 
-        // A holder that does not start takes its drawn pane out again, its
-        // tab with it, as a pane whose shell exits at once closes.
+        // A holder that does not start leaves its pane where it was drawn,
+        // marked with the holder's reason, which the session gives as the
+        // pane's `restore_error`: the screen shows the pane could not start
+        // and offers to close it. Closing it then ends nothing, since no
+        // holder runs.
         holders.refuse.store(true, Ordering::Release);
         let split = engine.split_beside(WAIT, &first, None, Env::new()).unwrap();
         let (_, launched) = engine
@@ -2513,10 +2540,37 @@ mod tests {
                 &["sh".to_owned()],
             )
             .unwrap();
-        settles("the panes that did not start are taken out", || {
-            !shown(&split) && !shown(&launched)
+        let failed = |pane: &str| {
+            engine
+                .topology()
+                .pane(pane)
+                .ok()
+                .and_then(|pane| pane.failed.clone())
+        };
+        settles("the panes that did not start are marked", || {
+            failed(&split).is_some() && failed(&launched).is_some()
         });
-        assert!(engine.topology().pane_place(&launched).is_err());
+        assert!(
+            failed(&split)
+                .unwrap()
+                .contains("the holder program is missing"),
+            "{:?}",
+            failed(&split)
+        );
+        let session = engine.session(WAIT).unwrap();
+        let projected = |pane: &str| {
+            session
+                .panes
+                .iter()
+                .find(|projected| projected.pane_id == pane)
+                .and_then(|projected| projected.restore_error.clone())
+        };
+        assert_eq!(projected(&split), failed(&split));
+        assert_eq!(projected(&launched), failed(&launched));
+        let ended_before = holders.ended.lock().unwrap().len();
+        engine.close_pane(WAIT, &split).unwrap();
+        assert!(!shown(&split));
+        assert_eq!(holders.ended.lock().unwrap().len(), ended_before + 1);
         assert!(shown(&first));
     }
 
