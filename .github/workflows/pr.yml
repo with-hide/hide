@@ -889,12 +889,19 @@ jobs:
       # and the nightly build what ships and save the release dependency set.
       quick-build: ${{ github.event_name == 'pull_request' }}
 
+  relay-protocol:
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.lanes), 'relay-protocol')
+    uses: ./.github/workflows/relay-protocol.yml
+    with:
+      include-macos: ${{ needs.plan.outputs.macos == 'true' }}
+
   verify:
     name: verify
     permissions:
       contents: read
       actions: read
-    needs: [plan, policy, rust, checks, os-contract, os-contract-macos, vt, holder-restart, agy-contract, omp-contract, agent-journey, agent-clis, windows-check, windows-e2e, windows-desktop, windows-wsl, web-e2e, remote-mailbox, desktop-e2e, package]
+    needs: [plan, policy, rust, checks, relay-protocol, os-contract, os-contract-macos, vt, holder-restart, agy-contract, omp-contract, agent-journey, agent-clis, windows-check, windows-e2e, windows-desktop, windows-wsl, web-e2e, remote-mailbox, desktop-e2e, package]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
