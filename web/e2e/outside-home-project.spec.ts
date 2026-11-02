@@ -9,7 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { dumpOnFailure } from "./failure-dump";
 import { startFixture } from "./engine-fixture";
-import { startHided, type Daemon } from "./hided-fixture";
+import { asFirstRun, startHided, type Daemon } from "./hided-fixture";
 import { sendEvent, showExplorer } from "./wire";
 import { toPage } from "../../desktop/src/main/wirePath";
 
@@ -63,7 +63,7 @@ test("a project outside home is asked about again after its removal, and its wor
     fs.writeFileSync(path.join(repo, "README.md"), "# outside\n");
     git(repo, ["add", "README.md"]);
     git(repo, ["commit", "-q", "-m", "initial"]);
-    daemon = await startHided(herdr, "outside-home-project");
+    daemon = await asFirstRun(await startHided(herdr, "outside-home-project"));
     expect(path.relative(daemon.home, repo).startsWith("..")).toBe(true);
     const registered = watchCore(page);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);

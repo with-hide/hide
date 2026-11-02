@@ -59,7 +59,8 @@ async function desktopBridge(page: Page) {
   }, process.platform);
 }
 
-test("desktop preserves choices through Back and reload while a disabled saved profile requires no connection", async ({ page }) => {
+// Herdr only: the saved profile is Herdr's own SSH client catalog (`~/.local/state/herdr/client/endpoints.json`), which the first run reads through Herdr.
+test("desktop preserves choices through Back and reload while a disabled saved profile requires no connection @herdr", async ({ page }) => {
   await desktopBridge(page);
   const sent = countSent(page);
   const { daemon } = await start(false, { savedProfile: true });
@@ -97,7 +98,8 @@ test("desktop preserves choices through Back and reload while a disabled saved p
   } finally { daemon.stop(); }
 });
 
-test("desktop skips Devices only after an actual empty saved-profile read", async ({ page }) => {
+// Herdr only: the empty read is of Herdr's own SSH client catalog, through Herdr.
+test("desktop skips Devices only after an actual empty saved-profile read @herdr", async ({ page }) => {
   await desktopBridge(page);
   const { daemon } = await start(false);
   try {

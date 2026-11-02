@@ -122,7 +122,8 @@ async function dockedWithDocument(page: Page, label: string, use: (docked: Docke
   }
 }
 
-test("Cmd+F in a focused pane opens that pane's find bar, not the document's, and in the View area stays the document's", async ({ page }) => {
+// Herdr only until the pane holder reports its screen's scroll position: the own engine answers no scroll for a pane (`Engine::pane_scroll`), so ⌘F on an agent pane opens the agent's own search rather than the bar over the history the holder keeps.
+test("Cmd+F in a focused pane opens that pane's find bar, not the document's, and in the View area stays the document's @herdr", async ({ page }) => {
   await dockedWithDocument(page, "pane-find-bar", async ({ focused }) => {
     // B4: with a document open beside the agents, Cmd+F in a focused pane
     // opens that pane's find bar, not the document's.
@@ -148,7 +149,8 @@ test("Cmd+F in a focused pane opens that pane's find bar, not the document's, an
   });
 });
 
-test("the find bar steps through matches with Enter and Shift+Enter and counts from 1", async ({ page }) => {
+// Herdr only until the pane holder reports its screen's scroll position: the own engine answers no scroll for a pane (`Engine::pane_scroll`), so ⌘F on an agent pane opens the agent's own search rather than the bar over the history the holder keeps.
+test("the find bar steps through matches with Enter and Shift+Enter and counts from 1 @herdr", async ({ page }) => {
   await dockedWithDocument(page, "pane-find-count", async ({ focused, sent, last }) => {
     await page.keyboard.press(chord("find_in_pane"));
     const bar = page.locator("[data-find-bar]");
