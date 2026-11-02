@@ -419,6 +419,8 @@ It never merges, because three Herdr behaviors the core relies on are covered by
 hide is released under the Functional Source License, Version 1.1, ALv2 Future License ([LICENSE](LICENSE)), and [NOTICE](NOTICE) carries its copyright notice.
 By submitting a contribution, you confirm that you have the right to submit it and agree that you license it to the project under the [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0), so the project can distribute it as part of hide under hide's license.
 You keep the copyright in your contribution.
+Each person is added to [`.github/APPROVED_CONTRIBUTORS`](.github/APPROVED_CONTRIBUTORS) only after agreeing to these terms once, in a GitHub comment of their own that says so, and the commit that adds them links that comment.
+A person listed before these terms gives the same agreement before their first pull request is merged.
 
 ## Commit messages and attribution
 
