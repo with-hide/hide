@@ -655,7 +655,8 @@ test("switching to another checkout and back keeps the first checkout's retained
     await page.locator(`[data-pane-view="${warmPane}"] textarea`).focus();
     await page.keyboard.type("checkout-warm");
     await expect.poll(() => paneText(page, warmPane)).toContain("checkout-warm");
-    await expect.poll(() => attachedPanes(page)).toEqual([...retained].sort());
+    // Every pane of the first checkout is attached; beta's pane is too where the fixture showed its tab as it made it.
+    await expect.poll(() => attachedPanes(page)).toEqual(expect.arrayContaining(retained));
     const warmTextarea = await page.locator(`[data-pane-view="${warmPane}"] textarea`).elementHandle();
 
     // Four tabs are shown at most, so every pane stays attached, and the
