@@ -1624,6 +1624,57 @@ fn a_device_this_core_dials_keeps_no_issues_here() {
     );
 }
 
+/// A device this core dials has its pull requests read here as a node's
+/// are, with this machine's login by the repository its checkout's `origin`
+/// names: its checkout carries its pull request, its link record names the
+/// repository, and its issues still stay on the device.
+#[test]
+fn a_device_this_core_dials_has_its_pull_requests_read_with_this_machine_s_login() {
+    let repo = repo(Some("https://github.com/acme/app.git"), "feature");
+    let shared = node_runtime(
+        &repo,
+        FakeDevice::new(),
+        Recording::of(None),
+        Default::default(),
+    );
+    let mut runtime = shared.lock().unwrap();
+    runtime.snapshot.ui_state.device_registrations[0].origin = crate::model::LinkOrigin::Dialed {
+        ssh_alias: "macbook".to_owned(),
+    };
+    let request = runtime.device_github_request(NODE, std::time::Instant::now());
+    assert_eq!(
+        request
+            .projects
+            .iter()
+            .map(|project| (project.root.clone(), project.repository.clone()))
+            .collect::<Vec<_>>(),
+        [(
+            std::path::PathBuf::from(&repo.root),
+            Some("acme/app".to_owned())
+        )]
+    );
+    ingest_node_pull_request(&mut runtime, &repo);
+    let project = node_project(&runtime).unwrap();
+    let linked = project
+        .checkouts
+        .iter()
+        .find(|checkout| checkout.path == repo.linked)
+        .unwrap();
+    assert_eq!(
+        linked.pull_request.as_ref().map(|pull| pull.number),
+        Some(7)
+    );
+    assert_eq!(linked.github.last_success_at_unix_ms, Some(5));
+    assert_eq!(project.tasks, crate::tasks::ProjectTasksSnapshot::default());
+    let facts = runtime.link_projects();
+    let fact = facts
+        .iter()
+        .find(|fact| fact.device_id == NODE && fact.root == repo.root)
+        .unwrap();
+    assert_eq!(fact.repository.as_deref(), Some("acme/app"));
+    assert!(fact.prs_read);
+}
+
 /// With a node's checkout in front of the Overview, the card is that
 /// checkout's, with the GitHub state its rows carry; opening the Overview
 /// again or the card's refresh reads its repository again; and past the

@@ -262,15 +262,18 @@ impl Runtime {
             engine,
             context.runtime.clone(),
             context.notifier.clone(),
+            // Every device's pull requests are read with this machine's
+            // login, by the repository its checkout's `origin` names.
+            self.own_node(),
         )
         .with_hook_facts(self.hook_facts());
         // Its machine is read through its node, as this machine is through
         // its own: a node that dials in, and a WSL distribution of this PC.
         if registration.origin.reports_own_facts() {
-            sync_context = sync_context.dialed_in(
-                super::inbound::InboundLink::for_device(&device_id, context.runtime.clone()),
-                self.own_node(),
-            );
+            sync_context = sync_context.dialed_in(super::inbound::InboundLink::for_device(
+                &device_id,
+                context.runtime.clone(),
+            ));
         }
         let (sync, changed) = match session_sync::spawn(sync_context, None) {
             Ok(handle) => (Some(handle), false),
