@@ -1790,7 +1790,7 @@ impl Runtime {
     /// Refuses binding registration `id` to `node` as its worker or checker
     /// when the agent runs on another machine than `mission`'s and the node
     /// is not one that may (`admit_elsewhere`).
-    pub(super) fn bind_elsewhere(
+    fn bind_elsewhere(
         &self,
         mission: &Mission,
         node: &MissionNode,
