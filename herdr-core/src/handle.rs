@@ -1178,6 +1178,50 @@ impl Core {
         lock_recover(&self.runtime).links_scope(context)
     }
 
+    /// What a `hide session` command reads, which the daemon then answers
+    /// off this thread (`links::session_command::run`).
+    pub fn session_scope(
+        &self,
+        context: &crate::workspace_control::Context,
+    ) -> Option<crate::links::session_command::SessionScope> {
+        if !check_owner_thread(self, "session_scope") {
+            return None;
+        }
+        lock_recover(&self.runtime).session_scope(context)
+    }
+
+    /// The native session the registered agent `id` runs.
+    pub fn agent_session(&self, id: &str) -> Option<crate::links::ledger::SessionIdentity> {
+        if !check_owner_thread(self, "agent_session") {
+            return None;
+        }
+        lock_recover(&self.runtime).registered_agent_session(id)
+    }
+
+    /// Each session's agent id, live state and archive time, in the order
+    /// asked.
+    pub fn session_facts(
+        &self,
+        sessions: &[crate::links::ledger::SessionIdentity],
+    ) -> Vec<crate::links::session_command::SessionFacts> {
+        if !check_owner_thread(self, "session_facts") {
+            return Vec::new();
+        }
+        lock_recover(&self.runtime).session_facts(sessions)
+    }
+
+    /// A record read off the screen's slot, with its `PR` sections laid as
+    /// the screen lays them.
+    pub fn session_record_pulls(
+        &self,
+        record: crate::links::ledger::SessionRecord,
+    ) -> crate::links::ledger::SessionRecord {
+        if !check_owner_thread(self, "session_record_pulls") {
+            return record;
+        }
+        lock_recover(&self.runtime).laid_record_pulls(record)
+    }
+
     /// What a hook's Memory read for a pane in `context` is answered from,
     /// which the daemon then answers off this thread
     /// (`crate::memory_hook::answer`), or why there is none.

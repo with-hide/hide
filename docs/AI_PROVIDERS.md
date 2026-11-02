@@ -110,13 +110,13 @@ A Project no linked node names answers every read `project_unreachable`, and the
 
 | Read | What Hide runs | Bound |
 | --- | --- | --- |
-| `session` | the session a record happened in, through the session readers (`Call::SessionConversation`), around the record or from an event number | 16 events, at most 40, 2,000 characters an event |
+| `session` | the session a record happened in, through the session readers (`Call::SessionConversation`), around the record or from an event number; the window is `herdr-core/src/session_excerpt.rs`, which `hide session read` shares ([ARCHITECTURE.md: The link record](ARCHITECTURE.md#the-link-record)) | 16 events, at most 40, 2,000 characters an event |
 | `ci_log` | the failed check's page from the pull request's checks (`gh pr view`), then `gh run view --job <id> --log-failed`, which the node cuts to its last 256 KiB | the last 200 lines; a check not on GitHub Actions is refused |
 | `file` | the file's first 256 KiB (`Call::Bytes`), as numbered lines | 120 lines, at most 200 |
 | `search` | `git grep` of tracked text files for a fixed text, case ignored (`GitCommand::Grep`) | 5 lines a file, 40 shown, 64 KiB from the node |
 | `git_log` | `git log` of the repository or of one path (`GitCommand::Log`) | 10 commits, at most 20 |
 
-Every result passes the Memory redactor (`hide_memory::redact`) before it is put in a request, and is cut to its bound.
+Every result passes the Memory redactor (`hide_memory::redact`, through `session_excerpt::mask`) before it is put in a request, and is cut to its bound; a session window past the reader's byte bound answers `session_read_bound`, not the events it did reach.
 A path with a credential file anywhere in it (the rule Memory's checks use: `.env*`, keys and certificates, names containing `secret` or `credential`) or Git's own folder, whose configuration can hold a token, is refused before anything is read, and a search hit in such a file is not shown.
 Each line a result keeps is at most 400 characters.
 

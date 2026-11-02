@@ -124,7 +124,9 @@ pub(super) struct BacklogItemPayload {
     pub(super) task_key: String,
 }
 
-fn summaries_on(settings: Option<&hide_ai::AiSettings>) -> bool {
+/// Whether summaries are shown, as the screen decides it
+/// (`summariesEnabled`): the switch on, Hide AI on and an agent chosen.
+pub(super) fn summaries_on(settings: Option<&hide_ai::AiSettings>) -> bool {
     settings.is_some_and(|settings| settings.enabled && settings.chosen && settings.agent_summary)
 }
 

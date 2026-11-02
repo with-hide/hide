@@ -231,6 +231,8 @@ enum Command {
         context: Context,
         reply: Sender<Option<herdr_core::links::query::Scope>>,
     },
+    /// `hide session`: the runtime's part, each asked once under its lock.
+    Session(SessionAsk),
     MemoryScope {
         context: Context,
         reply: Sender<Result<herdr_core::memory_hook::Scope, &'static str>>,
@@ -1065,6 +1067,22 @@ impl CoreHandle {
         }
     }
 
+    /// What a `hide session` command reads, as the core knows it now; the
+    /// read itself runs on the caller's blocking task.
+    pub fn session_scope(
+        &self,
+        context: &Context,
+    ) -> Option<herdr_core::links::session_command::SessionScope> {
+        let (reply, rx) = mpsc::channel();
+        self.commands
+            .send(Command::Session(SessionAsk::Scope {
+                context: context.clone(),
+                reply,
+            }))
+            .ok()?;
+        rx.recv().ok().flatten()
+    }
+
     /// The Projects a `hide links` read may answer from, as the core knows
     /// them now; the read itself runs on the caller's blocking task.
     pub fn links_scope(&self, context: &Context) -> Option<herdr_core::links::query::Scope> {
@@ -1688,6 +1706,20 @@ fn owner_loop(
             Command::LinksScope { context, reply } => {
                 let _ = reply.send(core.links_scope(&context));
             }
+            Command::Session(ask) => match ask {
+                SessionAsk::Scope { context, reply } => {
+                    let _ = reply.send(core.session_scope(&context));
+                }
+                SessionAsk::Agent { id, reply } => {
+                    let _ = reply.send(core.agent_session(&id));
+                }
+                SessionAsk::Facts { sessions, reply } => {
+                    let _ = reply.send(core.session_facts(&sessions));
+                }
+                SessionAsk::Pulls { record, reply } => {
+                    let _ = reply.send(Box::new(core.session_record_pulls(*record)));
+                }
+            },
             Command::MemoryScope { context, reply } => {
                 let _ = reply.send(core.memory_scope(&context));
             }
@@ -1762,6 +1794,66 @@ impl CoreHandle {
             Default::default(),
         )
         .unwrap()
+    }
+}
+
+/// The runtime's part of a `hide session` command.
+pub enum SessionAsk {
+    Scope {
+        context: Context,
+        reply: Sender<Option<herdr_core::links::session_command::SessionScope>>,
+    },
+    Agent {
+        id: String,
+        reply: Sender<Option<herdr_core::links::ledger::SessionIdentity>>,
+    },
+    Facts {
+        sessions: Vec<herdr_core::links::ledger::SessionIdentity>,
+        reply: Sender<Vec<herdr_core::links::session_command::SessionFacts>>,
+    },
+    Pulls {
+        record: Box<herdr_core::links::ledger::SessionRecord>,
+        reply: Sender<Box<herdr_core::links::ledger::SessionRecord>>,
+    },
+}
+
+/// A `hide session` command's runtime part, asked of the core's owner
+/// thread from the caller's blocking task.
+impl herdr_core::links::session_command::SessionHost for CoreHandle {
+    fn agent_session(&self, id: &str) -> Option<herdr_core::links::ledger::SessionIdentity> {
+        let (reply, rx) = mpsc::channel();
+        self.commands
+            .send(Command::Session(SessionAsk::Agent {
+                id: id.to_owned(),
+                reply,
+            }))
+            .ok()?;
+        rx.recv().ok().flatten()
+    }
+
+    fn facts(
+        &self,
+        sessions: Vec<herdr_core::links::ledger::SessionIdentity>,
+    ) -> Option<Vec<herdr_core::links::session_command::SessionFacts>> {
+        let (reply, rx) = mpsc::channel();
+        self.commands
+            .send(Command::Session(SessionAsk::Facts { sessions, reply }))
+            .ok()?;
+        rx.recv().ok()
+    }
+
+    fn lay_pulls(
+        &self,
+        record: herdr_core::links::ledger::SessionRecord,
+    ) -> Option<herdr_core::links::ledger::SessionRecord> {
+        let (reply, rx) = mpsc::channel();
+        self.commands
+            .send(Command::Session(SessionAsk::Pulls {
+                record: Box::new(record),
+                reply,
+            }))
+            .ok()?;
+        rx.recv().ok().map(|record| *record)
     }
 }
 

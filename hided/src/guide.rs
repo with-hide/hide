@@ -32,6 +32,11 @@ mod tests {
     }
 
     #[test]
+    fn the_guide_spells_hide_session_as_the_command_parses_it() {
+        assert!(TEXT.contains(crate::session_cli::USAGE));
+    }
+
+    #[test]
     fn the_guide_spells_hide_device_as_the_command_parses_it() {
         assert!(TEXT.contains(crate::device_cli::USAGE));
     }
