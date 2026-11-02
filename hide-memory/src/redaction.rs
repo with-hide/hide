@@ -12,9 +12,14 @@ fn patterns() -> &'static [Regex] {
     static PATTERNS: OnceLock<Vec<Regex>> = OnceLock::new();
     PATTERNS.get_or_init(|| {
         [
-            r#"(?i)\b(?:api[_-]?key|access[_-]?token|client[_-]?secret|password)\s*[:=]\s*['"]?[^\s'"]{8,}"#,
+            // A name may end an environment variable's (`DB_PASSWORD=`), so
+            // it starts at a word boundary or after `_`.
+            r#"(?i)(?:\b|_)(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|secret[_-]?access[_-]?key|private[_-]?key|password|passwd)\s*[:=]\s*['"]?[^\s'"]{8,}"#,
+            // The password in an address's user part (`postgres://app:pw@db`).
+            r"(?i)\b[a-z][a-z0-9+.-]*://[^\s:/@]+:[^\s@/]+@",
             r"\bsk-[A-Za-z0-9_-]{16,}\b",
-            r"\b(?:ghp|github_pat)_[A-Za-z0-9_]{20,}\b",
+            r"\b(?:ghp|gho|ghs|ghu|ghr|github_pat)_[A-Za-z0-9_]{20,}\b",
+            r"\b(?:xox[abprs]-[A-Za-z0-9-]{10,}|npm_[A-Za-z0-9]{20,}|glpat-[A-Za-z0-9_-]{20,})",
             r"(?s)-----BEGIN (?:RSA |EC |OPENSSH |ENCRYPTED )?PRIVATE KEY-----.*?-----END (?:RSA |EC |OPENSSH |ENCRYPTED )?PRIVATE KEY-----",
             r"\bAKIA[0-9A-Z]{16}\b",
             r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{16,}\b",
@@ -53,6 +58,29 @@ pub fn redact(input: &str) -> RedactedText {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn credentials_named_like_environment_variables_and_tokens_are_removed() {
+        for (source, secret) in [
+            ("DB_PASSWORD=hunter2hunter2", "hunter2hunter2"),
+            ("export STRIPE_API_KEY=abcd1234efgh5678", "abcd1234efgh5678"),
+            ("GITHUB_ACCESS_TOKEN=abcdefgh1234", "abcdefgh1234"),
+            (
+                "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMIK7MDENG",
+                "wJalrXUtnFEMIK7MDENG",
+            ),
+            ("PRIVATE_KEY=abcdefgh12345678", "abcdefgh12345678"),
+            ("DATABASE_URL=postgres://app:pw1234@db:5432/x", "pw1234"),
+            ("slack xoxb-1234567890-abcdefghij", "xoxb-1234567890"),
+            ("gho_abcdefghijklmnopqrstuvwxyz12", "gho_abcdefghij"),
+            ("npm_abcdefghijklmnopqrstuvwxyz12", "npm_abcdefghij"),
+        ] {
+            let result = redact(source);
+            assert!(!result.text.contains(secret), "{source} -> {}", result.text);
+        }
+        // Code that names a field is not a credential.
+        assert_eq!(redact("pub token: String,").text, "pub token: String,");
+    }
 
     #[test]
     fn known_credentials_are_removed_before_any_caller_can_store_them() {

@@ -229,6 +229,11 @@ impl ReadTools for NodeReads {
                     ReadFailure::Link(error) => refused(error),
                     ReadFailure::Deadline => ReadRefused::Unavailable("link.unknown".into()),
                 })?;
+        if !events.reached {
+            // The session is there; the asked window lies past the reader's
+            // byte bound.
+            return Err(ReadRefused::Unavailable("session_read_bound".into()));
+        }
         let first = events.kept.first().ok_or(ReadRefused::NotFound)?.0;
         let last = events.kept.last().ok_or(ReadRefused::NotFound)?.0;
         let of = if events.complete {

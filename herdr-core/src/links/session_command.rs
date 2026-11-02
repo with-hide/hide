@@ -284,11 +284,20 @@ fn failed(code: String) -> Refusal {
         json!({"component": "session_cli", "kind": "store.read_failed", "code": code})
     );
     // A record past one of its caps gives the same answer on every retry.
-    if code.ends_with("_capacity") {
-        return no(
-            "links_unavailable",
-            "The record is past what Hide reads at once, so a retry gives the same answer; read the session's events with hide session read --from",
-        );
+    match code.as_str() {
+        "session_scope_capacity" => {
+            return no(
+                "links_unavailable",
+                "The Project holds more sessions than Hide reads at once, so a retry gives the same answer",
+            );
+        }
+        "ledger_record_request_capacity" | "ledger_descendant_capacity" => {
+            return no(
+                "links_unavailable",
+                "The record is past what Hide reads at once, so a retry gives the same answer; read the session's events with hide session read --from",
+            );
+        }
+        _ => {}
     }
     no(
         "links_unavailable",
@@ -565,6 +574,15 @@ fn record(
     record
         .children
         .retain(|child| members.contains(&child.session));
+    for group in &mut record.pr_groups {
+        group.name = masked(&group.name);
+        for pull in &mut group.pulls {
+            pull.title = masked(&pull.title);
+            for holder in &mut pull.holders {
+                *holder = masked(holder);
+            }
+        }
+    }
     let mut asked = vec![record.session.clone()];
     asked.extend(
         record
@@ -711,7 +729,7 @@ fn request_value(request: &RecordedRequest, number: &mut u32, summaries: bool) -
         "text": text,
         "source": source,
         "letter_from": request.letter_from,
-        "answers": request.answers,
+        "answers": request.answers.as_deref().map(masked),
         "images": request.images,
         "count": request.count,
         "goal_command": request.goal_command,
@@ -1492,6 +1510,18 @@ mod tests {
             "/work/app",
             &[(NOW - 1_000, "DB_PASSWORD=hunter2hunter2 then fix the login")],
         );
+        let (mut store, _) = LinkStore::open(&scope.store).unwrap();
+        store
+            .apply_ledger_update(&LedgerUpdate::Summaries {
+                session: identity("local", "s-leak"),
+                summaries: vec![RequestSummary {
+                    offset: 0,
+                    summary: "로그인 고치기".into(),
+                    answers: Some("PRIVATE_KEY=abcdefgh12345678 에 답함".into()),
+                }],
+            })
+            .unwrap();
+        drop(store);
         let answer = run_with(
             &scope,
             SessionCommand::Record {
@@ -1501,6 +1531,7 @@ mod tests {
         .unwrap();
         let text = answer.to_string();
         assert!(!text.contains("hunter2"), "{text}");
+        assert!(!text.contains("abcdefgh12345678"), "{text}");
         assert!(text.contains("fix the login"), "{text}");
     }
 

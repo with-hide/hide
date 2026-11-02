@@ -147,13 +147,12 @@ pub(crate) fn egress(text: &str, bytes: usize) -> (String, bool) {
     (redacted[..end].to_owned(), true)
 }
 
-/// `text` with credentials, email addresses and home accounts masked: the
-/// label pipeline's mask (`labels::analysis`), which catches a secret named
-/// like an environment variable (`DB_PASSWORD=`), then Project Memory's
-/// redactor. Whatever another agent reads of a session passes through here
-/// before it is cut, so a cut never splits a secret past recognition.
+/// `text` with credentials masked by Project Memory's redactor, the one
+/// owner of what counts as a credential. Whatever another agent or a
+/// provider reads of a session passes through here before it is cut, so a
+/// cut never splits a secret past recognition.
 pub(crate) fn mask(text: &str) -> String {
-    hide_memory::redact(&crate::labels::analysis::mask(text)).text
+    hide_memory::redact(text).text
 }
 
 /// Whether one name of a path is a credential file, a folder named for
@@ -335,21 +334,6 @@ mod tests {
         let (short, cut) = egress("가나다라마", 7);
         assert_eq!(short, "가나");
         assert!(cut);
-    }
-
-    #[test]
-    fn mask_catches_secrets_named_like_environment_variables() {
-        for secret in [
-            "DB_PASSWORD=hunter2hunter2",
-            "export STRIPE_API_KEY=abcd1234efgh5678",
-            "GITHUB_ACCESS_TOKEN=abcdefgh1234",
-        ] {
-            let masked = mask(secret);
-            assert!(
-                !masked.contains(secret.split('=').nth(1).unwrap()),
-                "{masked}"
-            );
-        }
     }
 
     #[test]
