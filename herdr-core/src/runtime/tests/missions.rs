@@ -732,7 +732,7 @@ fn a_mission_on_another_device_shows_that_devices_pull_request() {
             message: None,
             herdr_version: None,
             session: None,
-            files: Default::default(),
+            files: crate::model::RemoteFileListSnapshot::idle(),
             catalog: Default::default(),
             unreachable_since_unix_ms: None,
         });
