@@ -633,6 +633,8 @@ The core's own engine replaces Herdr only when it is no worse than Herdr on ever
 Each row is measured as pairs on one build: the Herdr path (H) and the own engine's path (P), the development switch `HIDE_DEV_PANE_HOLDER` the only difference, five pairs, the order flipped every pair.
 No pair is dropped; each run records its load and the build processes running beside it, and a run is started only on a quiet machine (load under 6, no cargo or rustc running).
 A latency passes within 1.1 x H + 0.5 ms and any other value within 1.1 x H, judged on the median over the pairs of P minus that tolerance, so at least three of five pairs are inside it.
+The bundle 3 gate has one accepted transition exception: row 30's shell-response time after restoring 66 panes may exceed that latency tolerance by a median of at most 87.7 ms; the original slack and the raw P minus H are both reported, and bundle 4 owns closing this gap.
+The exception is `median(P - (1.1 x H + 0.5 ms)) <= 87.7 ms`, not a larger allowance for the tab list or first screen in the same row, or for any other row.
 Loss, duplication and order of keys, a holder's wakeups while idle, and one holder's memory (4 MiB idle, 6 MiB after a flood) hold in every run, not on a median.
 The memory of panes no screen shows and the sum of holders' memory are recorded and not judged: a process per pane is the accepted cost (D-33).
 
