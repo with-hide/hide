@@ -1348,6 +1348,7 @@ fn spawn(
                     })?
                     .ok_or_else(|| "the agent is not on the PATH of the pane's machine".to_owned())
             })?;
+            let carried = words.clone();
             if let Some(words) = words {
                 if !launched_before {
                     reserved = serde_json::from_value(mutate(
@@ -1387,6 +1388,36 @@ fn spawn(
                 },
             )?)
             .map_err(|_| "spawn_unavailable")?;
+            // A launched brief waits on the agent's own start, which can take
+            // many seconds cold: the clock its record is owed by starts once
+            // the agent takes input (`BriefLaunched` again), as a typed
+            // brief's starts at its typing, so a slow start raises no notice.
+            // Unseen within the wait, the clock keeps the start's moment.
+            if let Some(words) = carried {
+                match crate::delivery::ladder::ready(
+                    engine.as_ref(),
+                    pane,
+                    name,
+                    super::BRIEF_READY_WAIT,
+                ) {
+                    Ok(()) => {
+                        reserved = serde_json::from_value(mutate(
+                            client,
+                            authority,
+                            actor,
+                            Mutation::BriefLaunched {
+                                id: reserved.id.clone(),
+                                words,
+                            },
+                        )?)
+                        .map_err(|_| "spawn_unavailable")?;
+                    }
+                    Err(not) => crate::diagnostic!(json!({
+                        "component": "spawn", "kind": "brief.launch_ready_unseen",
+                        "spawn": reserved.id, "pane_id": pane, "detail": format!("{not:?}"),
+                    })),
+                }
+            }
         }
         // The brief is the child's first prompt, submitted once the agent
         // takes input and before its session is waited for: an agent that
