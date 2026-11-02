@@ -456,4 +456,37 @@ mod tests {
             assert_eq!(typed(&herdr), [json!("letter")], "{kind}");
         }
     }
+
+    /// An agent that never takes input within the wait is `Late`, with
+    /// nothing typed, and one ready under another name is not ready: the
+    /// wait reads the agent the start named.
+    #[test]
+    fn an_agent_that_never_takes_input_is_late_and_nothing_is_typed() {
+        for (name, interactive) in [("hide-codex-w1-p2", false), ("someone-else", true)] {
+            let herdr = FakeHerdr::start("ladder-never-ready", move |method, _| match method {
+                "agent.get" => json!({"type": "agent_info", "agent": {
+                    "pane_id": "w1:p2", "tab_id": "w1:t1", "workspace_id": "w1",
+                    "terminal_id": "term_1", "agent": "codex", "agent_status": "idle",
+                    "state_change_seq": 1, "focused": false, "interactive_ready": interactive,
+                    "name": name, "revision": 0}}),
+                other => panic!("unexpected {other}"),
+            });
+            let answer = ready(
+                herdr.engine().as_ref(),
+                "w1:p2",
+                "hide-codex-w1-p2",
+                Duration::from_millis(300),
+            );
+            assert!(
+                matches!(answer, Err(NotReady::Late(_))),
+                "{name}: {answer:?}"
+            );
+            assert!(
+                herdr
+                    .calls()
+                    .iter()
+                    .all(|(method, _)| method == "agent.get")
+            );
+        }
+    }
 }

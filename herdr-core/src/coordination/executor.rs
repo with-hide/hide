@@ -334,23 +334,6 @@ fn brief_ready(engine: &dyn Engine, spawn: &str, pane: &str, name: &str) -> Resu
     })
 }
 
-/// How a machine starts `kind`'s program (`Call::AgentInstalled`): `None`
-/// where it found no such program. The one ask of it, made by a device's
-/// target check before anything is created there, and otherwise only for a
-/// brief every other check let ride the start (`start_prompt::carried`).
-fn start_form(
-    node: &dyn crate::node_access::NodeLink,
-    kind: &str,
-) -> Result<Option<StartForm>, crate::node_access::LinkError> {
-    crate::node_access::call_as::<Option<StartForm>>(
-        node,
-        hide_node_link::protocol::Call::AgentInstalled {
-            name: hide_agent_adapter::canonical_kind(kind).to_owned(),
-        },
-        TARGET_CHECK_TIMEOUT,
-    )
-}
-
 fn brief_refused(spawn: &str, pane: &str, kind: &str, detail: String) -> String {
     crate::diagnostic!(json!({
         "component": "spawn", "kind": kind, "spawn": spawn, "pane_id": pane, "detail": detail,
@@ -358,49 +341,21 @@ fn brief_refused(spawn: &str, pane: &str, kind: &str, detail: String) -> String 
     "brief_not_submitted".to_owned()
 }
 
-/// The words a fresh start of `kind` adds to carry `brief` as its prompt
-/// argument (`AgentApi::LaunchPrompt`), or `None` where the brief is typed
-/// once the agent runs: an agent that does not hold a launch prompt through
-/// its start screens, a start that cannot carry it (`start_prompt::carried`:
-/// native arguments that give a prompt already, a brief the command line
-/// refuses), a machine that did not say how the agent starts, or a start
-/// through `cmd.exe`. `form` says how the pane's machine starts the agent's
-/// program (`Call::AgentInstalled`) and is asked last, only for a brief every
-/// other check let through. On Windows a program that is a batch file, npm's
-/// `.cmd` shim of every CLI among them, runs through `cmd.exe`, which reads
-/// the start line again: it refuses a line past 8,191 characters, expands
-/// `%`, and a shim may read its arguments again, so such a start carries no
-/// brief, which can be typed instead. Decided once, for the spawn's first
-/// start, and saved with `BriefLaunched`.
-fn launch_prompt(
-    kind: &str,
-    args: &[String],
-    brief: &str,
-    form: impl FnOnce() -> Result<StartForm, String>,
-) -> Option<Vec<String>> {
-    hide_agent_adapter::adapter(kind).filter(|row| row.launch_prompt())?;
-    let refused = |detail: &str| {
-        crate::diagnostic!(json!({
-            "component": "spawn", "kind": "brief.launch_refused", "agent_kind": kind,
-            "detail": detail,
-        }));
-    };
-    let words = crate::start_prompt::carried(kind, args, brief)
-        .map_err(|refusal| refused(refusal.detail()))
-        .ok()?;
-    match form() {
-        Ok(StartForm::Program) => Some(words),
-        Ok(StartForm::Batch) => {
-            refused(
-                "the agent starts through cmd.exe, which reads a prompt in its arguments again",
-            );
-            None
-        }
-        Err(detail) => {
-            refused(&detail);
-            None
-        }
-    }
+/// The words a fresh start of `kind` adds to carry `brief` as its launch
+/// prompt (`start_prompt::launched`, the one decision), or `None` where the
+/// brief is typed once the agent runs; a reason to type it is logged.
+/// Decided once, for the spawn's first start, and saved with
+/// `BriefLaunched`.
+fn launch_prompt(kind: &str, args: &[String], brief: &str, here: bool) -> Option<Vec<String>> {
+    crate::start_prompt::launched(kind, args, brief, here)
+        .map_err(|refusal| {
+            crate::diagnostic!(json!({
+                "component": "spawn", "kind": "brief.launch_refused", "agent_kind": kind,
+                "detail": refusal.detail(),
+            }));
+        })
+        .ok()
+        .flatten()
 }
 
 /// The words this start of the spawn adds to carry its brief, `None` where
@@ -415,7 +370,7 @@ fn launch_prompt(
 fn brief_words(
     reserved: &SpawnRecord,
     start_args: &[String],
-    form: impl FnOnce() -> Result<StartForm, String>,
+    here: bool,
 ) -> Result<Option<Vec<String>>, String> {
     let Some(brief) = reserved.brief.as_deref() else {
         return Ok(None);
@@ -435,7 +390,7 @@ fn brief_words(
     if reserved.briefed {
         return Ok(None);
     }
-    Ok(launch_prompt(&reserved.kind, start_args, brief, form))
+    Ok(launch_prompt(&reserved.kind, start_args, brief, here))
 }
 
 /// Sends `brief` down its prepared route, the one submission path the
@@ -721,9 +676,8 @@ const TARGET_CHECK_TIMEOUT: Duration = Duration::from_secs(8);
 /// Judges a device that is not the caller's before anything is made there:
 /// the id names a device, the device takes work now, `repo` (when this
 /// attempt still has to make the checkout) is a repository there, and the
-/// agent CLI is installed there, answering how it starts when that was
-/// asked. The node link is taken under the runtime lock and called after it
-/// is released.
+/// agent CLI is installed there. The node link is taken under the runtime
+/// lock and called after it is released.
 fn check_target(
     client: &Client,
     actor: &Actor,
@@ -732,7 +686,7 @@ fn check_target(
     intent: &str,
     repository: Option<&str>,
     agent: bool,
-) -> Result<Option<StartForm>, String> {
+) -> Result<(), String> {
     use crate::node_access::{LinkError, call_as};
     use hide_node_link::{cleanup::RepositoryDirs, protocol::Call};
     let link = client
@@ -774,10 +728,16 @@ fn check_target(
         }
     }
     if !agent {
-        return Ok(None);
+        return Ok(());
     }
-    match start_form(link.as_ref(), kind) {
-        Ok(Some(form)) => Ok(Some(form)),
+    match call_as::<Option<StartForm>>(
+        link.as_ref(),
+        Call::AgentInstalled {
+            name: hide_agent_adapter::canonical_kind(kind).to_owned(),
+        },
+        TARGET_CHECK_TIMEOUT,
+    ) {
+        Ok(Some(_)) => Ok(()),
         Ok(None) => Err("agent_not_installed".into()),
         Err(error) => {
             Err(unavailable("agent_installed", error).unwrap_or("agent_not_installed".into()))
@@ -895,9 +855,6 @@ fn spawn(
     } else {
         None
     };
-    // How the device's machine starts the agent, when its check asked; a
-    // brief that may ride the start reads it rather than asking again.
-    let mut checked_form = None;
     if let Some(device) = machine {
         // Nothing is created for a device that cannot take the spawn, so the
         // judgment comes before the parent is registered or the intent
@@ -928,7 +885,7 @@ fn spawn(
         }
         let started = earlier.is_some_and(|record| record.pane.is_some());
         if !earlier.is_some_and(|record| record.completed) {
-            checked_form = check_target(
+            check_target(
                 client,
                 actor,
                 device,
@@ -1337,17 +1294,7 @@ fn spawn(
                 .brief_input
                 .as_ref()
                 .is_some_and(|input| input.route == SendRoute::Launch);
-            let words = brief_words(&reserved, &start_args, || {
-                if let Some(form) = checked_form {
-                    return Ok(form);
-                }
-                let node = node.as_deref().ok_or("no machine runs the pane")?;
-                start_form(node, kind)
-                    .map_err(|error| {
-                        format!("the pane's machine did not say how the agent starts ({error})")
-                    })?
-                    .ok_or_else(|| "the agent is not on the PATH of the pane's machine".to_owned())
-            })?;
+            let words = brief_words(&reserved, &start_args, !on_device)?;
             let carried = words.clone();
             if let Some(words) = words {
                 if !launched_before {
@@ -2160,46 +2107,9 @@ fn overridden_later(kind: &str, name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use hide_node_link::protocol::StartForm;
-
-    /// A brief rides the start only where the pane's machine said the start
-    /// carries it whole: through `cmd.exe` (a Windows batch file, npm's shim)
-    /// a brief past its line, or with a character it reads as its own, is
-    /// typed, and so is one whose start form the node could not tell.
-    #[test]
-    fn a_brief_rides_the_start_only_where_the_start_carries_it_and_the_machine_is_asked_last() {
-        let program = || Ok(StartForm::Program);
-        // A whole brief rides the start, starting with `-` or not.
-        let brief = format!("-{}", "x".repeat(16 * 1024 - 1));
-        assert_eq!(
-            super::launch_prompt("omp", &[], &brief, program).unwrap(),
-            ["--".to_owned(), brief.clone()]
-        );
-        assert_eq!(
-            super::launch_prompt("omp", &[], "@a", || Ok(StartForm::Batch)),
-            None
-        );
-        assert_eq!(
-            super::launch_prompt("omp", &[], "go", || Err("link_lost".into())),
-            None
-        );
-        // Nothing asks the pane's machine for an agent that holds no launch
-        // prompt, a spawn whose native arguments give one, or a brief the
-        // command line refuses.
-        let unasked = || -> Result<StartForm, String> { panic!("the machine was asked") };
-        assert_eq!(super::launch_prompt("pi", &[], "go", unasked), None);
-        assert_eq!(super::launch_prompt("opencode", &[], "go", unasked), None);
-        assert_eq!(super::launch_prompt("cursor", &[], "go", unasked), None);
-        assert_eq!(
-            super::launch_prompt("codex", &["--".into(), "mine".into()], "go", unasked),
-            None
-        );
-        assert_eq!(super::launch_prompt("codex", &[], "a\u{7}b", unasked), None);
-    }
-
     /// A start typed again for a spawn whose brief rode its first start
-    /// carries the saved words and asks the machine nothing, whatever the
-    /// adapter or the machine would say now; a record an earlier build saved
+    /// carries the saved words, whatever the adapter or the machine would
+    /// decide now; a record an earlier build saved
     /// without its words is given them as that build gave them, and fails
     /// where that start can carry none.
     #[test]
@@ -2217,41 +2127,47 @@ mod tests {
             }))
             .unwrap()
         };
-        let unasked = || -> Result<StartForm, String> { panic!("the machine was asked") };
         // Saved words win over what the adapter would give now: OpenCode's
         // brief is typed today, and its earlier launch is not undone.
         assert_eq!(
             super::brief_words(
                 &record("opencode", Some("launch"), &["--prompt=-go"]),
                 &[],
-                unasked
+                true
             ),
             Ok(Some(vec!["--prompt=-go".to_owned()]))
         );
         // An earlier build's launched record has no words: its start gave
         // the brief as carried, and nothing is asked.
         assert_eq!(
-            super::brief_words(&record("codex", Some("launch"), &[]), &[], unasked),
+            super::brief_words(&record("codex", Some("launch"), &[]), &[], true),
             Ok(Some(vec!["--".to_owned(), "-go".to_owned()]))
         );
         assert_eq!(
             super::brief_words(
                 &record("codex", Some("launch"), &[]),
                 &["--".into(), "mine".into()],
-                unasked
+                true
             ),
             Err("brief_launch_unrecorded".to_owned())
         );
         // A brief that was typed is never launched by a later start.
         assert_eq!(
-            super::brief_words(&record("codex", Some("typed"), &[]), &[], unasked),
+            super::brief_words(&record("codex", Some("typed"), &[]), &[], true),
             Ok(None)
         );
-        // Only a fresh start asks how the machine starts the agent.
+        // Only a fresh start decides: here it launches where the journey
+        // proves it, and a device's start is typed.
         assert_eq!(
-            super::brief_words(&record("codex", None, &[]), &[], || Ok(StartForm::Program)),
-            Ok(Some(vec!["--".to_owned(), "-go".to_owned()]))
+            super::brief_words(&record("codex", None, &[]), &[], false),
+            Ok(None)
         );
+        if !cfg!(windows) {
+            assert_eq!(
+                super::brief_words(&record("codex", None, &[]), &[], true),
+                Ok(Some(vec!["--".to_owned(), "-go".to_owned()]))
+            );
+        }
     }
 
     #[test]

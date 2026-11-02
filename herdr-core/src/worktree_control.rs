@@ -1407,6 +1407,8 @@ fn start_task_agent(
                 launch_engine,
                 reader.as_deref().or(agent_node),
                 pane_node.as_deref(),
+                // Only a start on this machine has an install check here.
+                agent_node.is_some(),
                 id,
                 start,
                 &current_start,
@@ -1437,13 +1439,23 @@ fn launch_with_prompt(
     id: u64,
     start: PendingAgentStart,
 ) -> TaskAgentOutcome {
-    launch_with_prompt_checked(engine, agent_node, agent_node, id, start, &|| Ok(()))
+    launch_with_prompt_checked(
+        engine,
+        agent_node,
+        agent_node,
+        agent_node.is_some(),
+        id,
+        start,
+        &|| Ok(()),
+    )
 }
 
+#[allow(clippy::too_many_arguments)] // the task/pane launch identity plus its effect admission
 fn launch_with_prompt_checked(
     engine: &dyn Engine,
     agent_node: Option<&dyn crate::node_access::NodeLink>,
     pane_node: Option<&dyn crate::node_access::NodeLink>,
+    here: bool,
     id: u64,
     start: PendingAgentStart,
     current: &dyn Fn() -> Result<(), String>,
@@ -1491,6 +1503,7 @@ fn launch_with_prompt_checked(
         engine,
         agent_node,
         pane_node,
+        here,
         id,
         &pane_id,
         shell,
@@ -1578,6 +1591,7 @@ fn launch_agent(
     engine: &dyn Engine,
     agent_node: Option<&dyn crate::node_access::NodeLink>,
     pane_node: Option<&dyn crate::node_access::NodeLink>,
+    here: bool,
     id: u64,
     pane_id: &str,
     shell: crate::agent_start::ShellStart,
@@ -1593,7 +1607,6 @@ fn launch_agent(
     // Herdr would type the command into the pane's shell and wait for an
     // agent that can never appear; say so before asking it. A device's PATH
     // is not this machine's, so there its Herdr answers for it.
-    let mut form = None;
     if let Some(node) = agent_node {
         match crate::node_access::call_as::<Option<StartForm>>(
             node,
@@ -1602,7 +1615,7 @@ fn launch_agent(
             },
             AGENT_CHECK_TIMEOUT,
         ) {
-            Ok(Some(answered)) => form = Some(answered),
+            Ok(Some(_)) => {}
             Ok(None) => {
                 return Launch::Failed(AgentFailure::with_detail(
                     "agent_start.not_installed",
@@ -1617,24 +1630,20 @@ fn launch_agent(
             }
         }
     }
-    // The first prompt is typed once the agent's screen is drawn, the same
-    // for every agent on every system, and rides the start only where the
-    // agent declares the launch prompt and the start is its own program
-    // (docs/delivery.md, The input ladder): a device's start, whose form
-    // this machine did not read, and a start through `cmd.exe` are typed.
+    // The first prompt is typed once the agent's screen takes input, and
+    // rides the start only in a cell the journey proves
+    // (`start_prompt::launched`, docs/delivery.md, The input ladder).
     let mut typed = None;
     if let Some(prompt) = prompt {
-        let launches = form == Some(StartForm::Program)
-            && hide_agent_adapter::adapter(kind).is_some_and(|row| row.launch_prompt());
-        match crate::start_prompt::carried(kind, &args, prompt) {
-            Ok(words) if launches => args.extend(words),
+        match crate::start_prompt::launched(kind, &args, prompt, here) {
+            Ok(Some(words)) => args.extend(words),
             Err(crate::start_prompt::Refusal::Prompt(detail)) => {
                 return Launch::Failed(AgentFailure::with_detail(
                     "agent_start.invalid_prompt",
                     detail,
                 ));
             }
-            _ => typed = Some(prompt),
+            Ok(None) | Err(crate::start_prompt::Refusal::Start(_)) => typed = Some(prompt),
         }
     }
     let name = crate::fork::task_agent_name(kind, pane_id);
@@ -1701,9 +1710,10 @@ fn launch_agent(
 /// Types a started agent's first prompt once its screen takes input, the
 /// typed rung's one typing (`ladder::typed_only`). A task start has no retype
 /// and no notice: the operator is looking at the tab they opened. An agent
-/// that never takes input, or a typing that failed, is the start's failure,
-/// told on the task's surface with nothing started again, since the agent
-/// runs (`agent_start.prompt_not_typed`).
+/// that never takes input, a typing Herdr refused, and one whose answer was
+/// lost and may have landed are told alike on the task's surface, which asks
+/// the operator to look before typing it, with nothing started again, since
+/// the agent runs (`agent_start.prompt_not_typed`).
 fn type_first_prompt(
     engine: &dyn Engine,
     id: u64,
@@ -1720,7 +1730,9 @@ fn type_first_prompt(
         }));
         Launch::Unknown(AgentFailure::with_detail(
             "agent_start.prompt_not_typed",
-            format!("The agent started, but its first prompt was not typed ({detail})"),
+            format!(
+                "The agent started, but Hide could not confirm its first prompt was typed ({detail})"
+            ),
         ))
     };
     if let Err(not) = ladder::ready(engine, pane_id, name, crate::coordination::BRIEF_READY_WAIT) {
@@ -4588,9 +4600,15 @@ mod tests {
         );
         std::fs::write(&path, &header).unwrap();
         assert_eq!(
-            launch_with_prompt_checked(&*server, Some(&node), Some(&node), 7, make(), &|| Err(
-                "session_resume_intent_changed".into()
-            )),
+            launch_with_prompt_checked(
+                &*server,
+                Some(&node),
+                Some(&node),
+                true,
+                7,
+                make(),
+                &|| Err("session_resume_intent_changed".into())
+            ),
             TaskAgentOutcome::Failed(AgentFailure::reason("session_resume_intent_changed"))
         );
         assert!(requests_of(&server).is_empty());
@@ -4638,7 +4656,9 @@ mod tests {
                 &["--auto-approve"],
             ),
         ] {
-            let typed = prompt.is_empty();
+            // No Windows journey cell proves a launch, so there every first
+            // prompt is typed.
+            let typed = prompt.is_empty() || cfg!(windows);
             let mut replies = vec![
                 shell_ready(),
                 json!({"result":{"type":"agent_started","argv":[],"agent":agent("working")}}),
@@ -4688,7 +4708,9 @@ mod tests {
             if extra_roots {
                 expected.extend(["--add-dir", "/work/my app"]);
             }
-            expected.extend(prompt.iter().copied());
+            if !typed {
+                expected.extend(prompt.iter().copied());
+            }
             assert_eq!(requests[1]["params"]["args"], json!(expected), "{kind}");
             assert_eq!(requests[1]["params"]["kind"], kind);
         }
@@ -4722,7 +4744,7 @@ mod tests {
             json!({"result":{"type":"agent_started","argv":[],"agent":agent("working")}}),
         ]);
         let outcome =
-            launch_with_prompt_checked(&*server, None, Some(&node), 7, make(), &|| Ok(()));
+            launch_with_prompt_checked(&*server, None, Some(&node), false, 7, make(), &|| Ok(()));
         assert!(matches!(outcome, TaskAgentOutcome::Started), "{outcome:?}");
         let written: Value =
             serde_json::from_slice(&std::fs::read(home.path().join(".claude.json")).unwrap())
@@ -4735,7 +4757,7 @@ mod tests {
         // With no pane node the start refuses before Herdr is asked.
         let server = self::server(vec![]);
         let TaskAgentOutcome::Failed(reason) =
-            launch_with_prompt_checked(&*server, None, None, 7, make(), &|| Ok(()))
+            launch_with_prompt_checked(&*server, None, None, false, 7, make(), &|| Ok(()))
         else {
             panic!("a start without the pane's machine went ahead")
         };
@@ -5041,63 +5063,66 @@ mod tests {
         }
     }
 
-    /// A start this machine cannot prove carries no first prompt: one through
-    /// `cmd.exe` (Windows' batch file, npm's shim), which reads the start line
-    /// again, and a device's, whose start form this machine did not read. The
-    /// agent starts without it and the prompt is typed once, whole, after its
-    /// screen takes input.
+    /// A device's start, which no journey cell proves, carries no first
+    /// prompt: the agent starts without it and the prompt is typed once,
+    /// whole, after its screen takes input.
     #[test]
-    fn a_first_prompt_is_typed_after_the_screen_where_the_start_is_not_proven() {
-        let batch = Starts(StartForm::Batch);
-        for node in [Some(&batch as &dyn crate::node_access::NodeLink), None] {
+    fn a_first_prompt_to_a_device_start_is_typed_after_the_screen() {
+        let mut replies = vec![
+            shell_ready(),
+            json!({"result":{"type":"agent_started","argv":[],"agent":agent("working")}}),
+        ];
+        replies.extend(typed_replies("codex"));
+        let server = server(replies);
+        let prompt = "50% done, say \"hi\"\nthen stop";
+        let outcome = launch_with_prompt(&*server, None, 7, codex_start(prompt));
+        assert!(matches!(outcome, TaskAgentOutcome::Started), "{outcome:?}");
+        let requests = requests_of(&server);
+        assert_eq!(
+            methods_of(&requests),
+            [
+                "pane.process_info",
+                "agent.start",
+                "agent.get",
+                "agent.prompt"
+            ]
+        );
+        // The start carries no argument, so Herdr is sent none.
+        assert_eq!(requests[1]["params"]["args"], Value::Null);
+        assert_eq!(requests[3]["params"]["text"], prompt);
+    }
+
+    /// A first prompt Herdr refused, one whose typing lost its answer and may
+    /// have landed, and one whose agent could not be read are the start's
+    /// failure on the task's surface alike, settled rather than offered
+    /// again: the agent runs, and a Retry would start a second one.
+    #[test]
+    fn a_first_prompt_not_confirmed_typed_settles_the_start_as_unconfirmed() {
+        let refused = json!({"error":{"code":"invalid_params","message":"bad text"}});
+        let lost = json!({"result":{"type":"pane_info","pane":agent("working")}});
+        let unread = json!({"error":{"code":"internal","message":"agent read failed"}});
+        for (case, tail) in [
+            ("refused", vec![typed_replies("codex")[0].clone(), refused]),
+            ("lost", vec![typed_replies("codex")[0].clone(), lost]),
+            ("unread", vec![unread]),
+        ] {
             let mut replies = vec![
                 shell_ready(),
                 json!({"result":{"type":"agent_started","argv":[],"agent":agent("working")}}),
             ];
-            replies.extend(typed_replies("codex"));
+            replies.extend(tail);
             let server = server(replies);
-            let outcome = launch_with_prompt(
-                &*server,
-                node,
-                7,
-                codex_start("50% done, say \"hi\"\nthen stop"),
-            );
-            assert!(matches!(outcome, TaskAgentOutcome::Started), "{outcome:?}");
-            let requests = requests_of(&server);
-            assert_eq!(
-                methods_of(&requests),
-                [
-                    "pane.process_info",
-                    "agent.start",
-                    "agent.get",
-                    "agent.prompt"
-                ]
-            );
-            // The start carries no argument, so Herdr is sent none.
-            assert_eq!(requests[1]["params"]["args"], Value::Null);
-            assert_eq!(
-                requests[3]["params"]["text"],
-                "50% done, say \"hi\"\nthen stop"
-            );
+            let outcome = launch_with_prompt(&*server, None, 7, codex_start("go"));
+            let TaskAgentOutcome::Unknown(failure) = outcome else {
+                panic!("{case}: expected an unconfirmed start, got {outcome:?}");
+            };
+            assert_eq!(failure.reason, "agent_start.prompt_not_typed", "{case}");
+            let agent_prompts = requests_of(&server)
+                .iter()
+                .filter(|request| request["method"] == "agent.prompt")
+                .count();
+            assert!(agent_prompts <= 1, "{case}: typed once at most");
         }
-    }
-
-    /// A first prompt Herdr did not type is the start's failure on the task's
-    /// surface, settled rather than offered again: the agent runs, and a
-    /// Retry would start a second one.
-    #[test]
-    fn a_first_prompt_that_was_not_typed_settles_the_start_as_unconfirmed() {
-        let server = server(vec![
-            shell_ready(),
-            json!({"result":{"type":"agent_started","argv":[],"agent":agent("working")}}),
-            typed_replies("codex")[0].clone(),
-            json!({"error":{"code":"invalid_params","message":"bad text"}}),
-        ]);
-        let outcome = launch_with_prompt(&*server, None, 7, codex_start("go"));
-        let TaskAgentOutcome::Unknown(failure) = outcome else {
-            panic!("expected an unconfirmed start, got {outcome:?}");
-        };
-        assert_eq!(failure.reason, "agent_start.prompt_not_typed");
     }
 
     /// The host's own git answering for a real repository on this machine.

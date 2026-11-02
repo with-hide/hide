@@ -1,19 +1,19 @@
-//! What a start can carry as the agent's prompt, the one rule for every
-//! start Hide makes with one: a spawn's brief (`coordination::executor`), a
-//! task's first prompt (`worktree_control`) and, through the spawn's brief, a
-//! promoted Memory card (`runtime::memory_promotion`). A caller that gets a
-//! [`Refusal`] has its own way on: the brief is typed once the agent runs, a
-//! first prompt fails the start with the reason. A spawn's brief also asks
-//! how the machine starts the program, since it can be typed instead
-//! (`executor::launch_prompt`).
+//! The one launch decision for every start Hide makes with a first input,
+//! a spawn's brief (`coordination::executor`), a task's first prompt
+//! (`worktree_control`) and, through the spawn's brief, a promoted Memory
+//! card (`runtime::memory_promotion`), under the standard of
+//! docs/delivery.md, The input ladder: typed once the agent's screen takes
+//! input, and launched as the agent's start argument only in the cells the
+//! agent journey proves.
 
-/// Why a start cannot carry a prompt.
+/// Why a start that would launch its first input types it instead.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Refusal {
-    /// The prompt itself: a control character, or past [`MAX_PROMPT_BYTES`].
+    /// The prompt itself: a control character, or past [`MAX_PROMPT_BYTES`];
+    /// a task refuses such a prompt before anything starts.
     Prompt(String),
-    /// The start: the agent has no start form, or its native arguments give
-    /// a prompt already.
+    /// The start: its native arguments give a prompt already, or it runs
+    /// where no journey cell proves a launch.
     Start(String),
 }
 
@@ -26,8 +26,39 @@ impl Refusal {
 }
 
 /// The words a start of `kind`, whose native arguments are `native`, adds to
-/// carry `prompt` as one argument in the agent's own form
-/// (`LaunchDialect::prompt_form`).
+/// carry `prompt` as its launch prompt, in the agent's own form
+/// (`LaunchDialect::prompt_form`); `Ok(None)` for an agent that does not
+/// declare the launch prompt, typed as every input is by default. The
+/// journey proves a launch only for an agent that declares it, started on
+/// this machine (`here`), on macOS or Linux: a device's start and every start
+/// on Windows, where the journey starts each CLI through npm's `.cmd`
+/// launcher, are typed until a cell proves them.
+pub(crate) fn launched(
+    kind: &str,
+    native: &[String],
+    prompt: &str,
+    here: bool,
+) -> Result<Option<Vec<String>>, Refusal> {
+    if !hide_agent_adapter::adapter(kind).is_some_and(|row| row.launch_prompt()) {
+        return Ok(None);
+    }
+    let words = carried(kind, native, prompt)?;
+    if !here {
+        return Err(Refusal::Start(
+            "it starts on a device, where no journey cell proves a launch".into(),
+        ));
+    }
+    if cfg!(windows) {
+        return Err(Refusal::Start(
+            "no Windows journey cell proves a launch".into(),
+        ));
+    }
+    Ok(Some(words))
+}
+
+/// The words a start of `kind` adds to carry `prompt` as one argument in the
+/// agent's own form, whatever its declaration: [`launched`]'s, and a launched
+/// record an earlier build saved without them.
 pub(crate) fn carried(kind: &str, native: &[String], prompt: &str) -> Result<Vec<String>, Refusal> {
     let dialect = hide_agent_adapter::adapter(kind)
         .and_then(|row| row.start)
@@ -89,31 +120,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_prompt_rides_the_start_as_one_word_only_where_the_start_carries_it_whole() {
-        let words = |kind: &str, native: &[&str], prompt: &str| {
+    fn a_first_input_launches_only_where_the_agent_declares_it_and_the_journey_proves_it() {
+        let words = |kind: &str, native: &[&str], prompt: &str, here: bool| {
             let native: Vec<String> = native.iter().map(|word| (*word).to_owned()).collect();
-            carried(kind, &native, prompt)
+            launched(kind, &native, prompt, here)
         };
-        assert_eq!(
-            words("opencode", &[], "-go\tnow").unwrap(),
-            ["--prompt=-go    now"]
-        );
-        assert_eq!(words("codex", &[], "-x\ny").unwrap(), ["--", "-x\u{2028}y"]);
-        assert_eq!(words("antigravity", &[], "@a").unwrap(), ["-i", "@a"]);
-        // A whole brief, 16 KiB, rides the start.
-        let brief = "x".repeat(16 * 1024);
-        assert_eq!(
-            words("claude", &[], &brief).unwrap(),
-            ["--", brief.as_str()]
-        );
+        // Typed by default: OpenCode, Pi and Cursor declare no launch.
+        for kind in ["opencode", "pi", "cursor"] {
+            assert_eq!(words(kind, &[], "go", true), Ok(None), "{kind}");
+        }
         assert!(matches!(
-            words("codex", &["--", "mine"], "go"),
+            words("codex", &[], "a\u{7}b", true),
+            Err(Refusal::Prompt(_))
+        ));
+        assert!(matches!(
+            words("codex", &["--", "mine"], "go", true),
             Err(Refusal::Start(_))
         ));
         assert!(matches!(
-            words("codex", &[], "a\u{7}b"),
-            Err(Refusal::Prompt(_))
+            words("codex", &[], "go", false),
+            Err(Refusal::Start(_))
         ));
-        assert!(matches!(words("cursor", &[], "go"), Err(Refusal::Start(_))));
+        let launched_here = words("codex", &[], "-x\ny", true);
+        if cfg!(windows) {
+            assert!(matches!(launched_here, Err(Refusal::Start(_))));
+        } else {
+            assert_eq!(
+                launched_here,
+                Ok(Some(vec!["--".into(), "-x\u{2028}y".into()]))
+            );
+            assert_eq!(
+                words("antigravity", &[], "@a", true),
+                Ok(Some(vec!["-i".into(), "@a".into()]))
+            );
+            // A whole brief, 16 KiB, rides the start.
+            let brief = "x".repeat(16 * 1024);
+            assert_eq!(
+                words("claude", &[], &brief, true),
+                Ok(Some(vec!["--".into(), brief]))
+            );
+        }
     }
 }
