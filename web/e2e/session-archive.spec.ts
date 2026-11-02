@@ -7,7 +7,7 @@ import path from "node:path";
 import { corePaneFocus, tabOfPane, withControl } from "./daemon-actions";
 import { startFixture, type AgentFixture } from "./engine-fixture";
 import { setAgentState, spawnRoot } from "./fixture-agents";
-import { CLAUDE_FULL_ACCESS, continueFixtureTranscript } from "./herdr-fixture";
+import { CLAUDE_FULL_ACCESS, claudeProjects, continueFixtureTranscript, writeFixtureTranscript } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { openTaskFolds, screenshot, showTasks } from "./wire";
 
@@ -48,7 +48,10 @@ test("세션 보관 asks over running work, closes the tree into 보관됨, resu
     const rootSession = "fixture-one";
     const childSession = "fixture-two";
     // The session kept apart from the tree: an independent root the parent handed work to.
-    const other = await spawnRoot(fixture, daemon, root, { name: "archive-other", repo: path.join(fixture.root, "fixture") });
+    // An archive needs a session its transcript proves, so it resumes one the spec wrote.
+    const otherSession = "fixture-archive-other";
+    writeFixtureTranscript(claudeProjects(fixture), otherSession, { task: "따로 둔 독립 작업" });
+    const other = await spawnRoot(fixture, daemon, root, { name: "archive-other", repo: path.join(fixture.root, "fixture"), session: otherSession });
     continueFixtureTranscript(fixture, rootSession, { task: "보관할 세션의 루트 작업" });
     await setAgentState(daemon, root, "working");
     await setAgentState(daemon, root, "idle");

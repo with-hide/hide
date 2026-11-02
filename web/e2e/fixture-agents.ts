@@ -229,16 +229,17 @@ export async function setAgentAsking(daemon: Pick<Daemon, "origin" | "token">, p
  * Has the agent in `from`, an agent of a family fixture, hand work to the
  * operator as a real agent does (`hide agent spawn` without `--parent`): an
  * independent root with no relationship to `from`, in its own tab of the
- * checkout of `repo` on `branch`. Waits until the daemon lists it and returns
- * its pane.
+ * checkout of `repo` on `branch`. With `session`, it resumes that session,
+ * whose transcript the spec wrote. Waits until the daemon lists it and
+ * returns its pane.
  */
 export async function spawnRoot(
   fixture: AgentFixture,
   daemon: Pick<Daemon, "origin" | "token">,
   from: string,
-  { name, repo, branch = "main" }: { name: string; repo: string; branch?: string },
+  { name, repo, branch = "main", session }: { name: string; repo: string; branch?: string; session?: string },
 ): Promise<string> {
-  const args = ["agent", "spawn", "--name", name, "--intent", name, "--kind", "claude", "--repo", repo, "--branch", branch];
+  const args = ["agent", "spawn", "--name", name, "--intent", name, "--kind", "claude", "--repo", repo, "--branch", branch, ...(session ? ["--", "--resume", session] : [])];
   type Spawned = { ok?: boolean; value?: { pane?: string }; error?: { code?: string } } | null;
   const deadline = Date.now() + 30_000;
   let pane: string | undefined;
