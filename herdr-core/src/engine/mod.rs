@@ -463,6 +463,18 @@ pub(crate) trait Engine: Send + Sync {
     /// Whose pane an inherited caller reference names now, and that pane's
     /// shell and terminal: the proof a pane's process asks a credential on.
     fn pane_identity(&self, wait: Wait, pane: &str) -> Answer<PaneProof>;
+    /// The pane's terminal and shell as this engine itself proves them, what
+    /// a start checks it types into the pane it chose (PRD
+    /// engine-bundle-3-core-owns D-9): the core's own engine reads the
+    /// pane's record. Herdr answers `None` and leaves it to the node that
+    /// holds its socket (`Call::PaneInspect`), as before.
+    fn inspect_pane(
+        &self,
+        _wait: Wait,
+        _pane: &str,
+    ) -> Option<Answer<hide_node_link::panes::PaneIdentity>> {
+        None
+    }
 
     // Agents.
 

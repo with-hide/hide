@@ -1569,6 +1569,22 @@ impl<'g> Engine for OwnEngine<'g> {
         })
     }
 
+    fn inspect_pane(
+        &self,
+        wait: Wait,
+        pane: &str,
+    ) -> Option<Answer<hide_node_link::panes::PaneIdentity>> {
+        Some(self.pane_identity(wait, pane).and_then(|proof| {
+            Ok(hide_node_link::panes::PaneIdentity {
+                terminal_id: proof.terminal_id,
+                shell_pid: proof.shell_pid,
+                shell_started: proof.shell_started.ok_or_else(|| {
+                    refused("pane_not_running", format!("pane {pane} has no start"))
+                })?,
+            })
+        }))
+    }
+
     fn prepare_start(&self, launch: AgentLaunch) -> Result<PreparedStart, String> {
         let catalog = self.shared.definitions.get();
         let definition = agents::definition(&catalog, &launch.kind)

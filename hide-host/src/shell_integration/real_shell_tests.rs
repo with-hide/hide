@@ -371,5 +371,8 @@ fn outside_herdr_bash_keeps_every_prompt_command_the_user_set() {
         .find(&format!("\u{1b}]7;file://{}\u{7}", home.display()))
         .unwrap_or_else(|| panic!("the folder was not said: {screen:?}"));
     let two = screen.find("user-two-ran").expect("user_two ran");
-    assert!(two < said, "the folder was said before user_two: {screen:?}");
+    assert!(
+        two < said,
+        "the folder was said before user_two: {screen:?}"
+    );
 }

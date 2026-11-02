@@ -374,6 +374,7 @@ impl Service {
     /// are, and written after the submit in the order typed, so none lands
     /// inside the letter and none is lost (PRD engine-bundle-3-core-owns
     /// D-13). The hold ends on every way out, a panic included.
+    #[allow(clippy::disallowed_methods)] // Herdr's submit delay, a production wait
     fn type_letter(&self, pane: &str, body: Typed, submit: Typed, gap: Duration) {
         struct Letter<'a> {
             service: &'a Service,
