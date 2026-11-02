@@ -3490,12 +3490,12 @@ Every value is the core's `status.background_ai`; the tab sends `ai_settings` ev
 
 The hosted phone app at `app.withhide.dev` and the advanced Tailscale app at `/m/` share every list, detail and command screen.
 The hosted start page shows the paired-device list; choosing a device opens the bundle matching its phone protocol at `/p/<n>/`.
-A QR opens a single-line, escaped `<device name>에 연결`, a line about viewing and replying to agents, the encryption assurance, 연결, and the existing five-minute expiry guidance.
+A QR opens the shared device-first page described below, with an escaped, wrapping device name, a short line about viewing and replying to agents, 연결, the encryption assurance and five-minute expiry guidance.
 Its code leaves the address before connection and is never stored.
 Expired and already-used codes retain the device's existing `code_expired` wording, and four paired phones retain the existing limit guidance.
-An unsupported device shows `<device>의 Hide를 업데이트해 주세요`, the available phone app and device protocol versions, and 다른 기기 고르기.
+An unsupported device uses the shared version guidance below, with the device name, labelled phone app and device protocol versions, and 다른 기기 고르기.
 
-In the hosted app, the header's device name opens a picker with each saved device's connection dot, 내 차례 and 작업 중 counts, or its last successful contact when offline.
+In the hosted app, the header's device name opens the shared bottom sheet with each saved device's labelled connection state, 내 차례 and 작업 중 counts, or its last successful contact when offline.
 A device whose protocol differs from the open bundle shows a warning dot and both versions instead of counts; selecting it asks the root loader for its matching bundle or update guidance.
 Neither the root list nor a bundle's picker authenticates to an incompatible device to read its status.
 Choosing another device replaces the page and closes the old connection; drafts and pending actions do not move between devices.
