@@ -198,7 +198,7 @@ export async function spawnChild(
  */
 export async function takeOverSession(fixture: AgentFixture, daemon: Pick<Daemon, "origin" | "token">, pane: string, session: string, cwd = path.join(fixture.root, "fixture")): Promise<void> {
   if (fixture.engine === "herdr") return setAgentSession(fixture, daemon, pane, session);
-  const hooks = fixture.daemonEnv.HIDE_E2E_HOOKS;
+  const hooks = fixture.daemonEnv?.HIDE_E2E_HOOKS;
   if (!hooks) throw new Error("the fixture names no hook helper to report a session with");
   const answer = await fixture.runAs(pane)(["hook", "--runtime", "claude-code", "--event", "SessionStart"], {
     program: hooks,

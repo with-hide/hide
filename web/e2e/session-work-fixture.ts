@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { toPage } from "../../desktop/src/main/wirePath";
-import { claudeProjects, writeFixtureTranscript, type FixtureLabel } from "./herdr-fixture";
+import { claudeProjects, declareParent, labelAgent, writeFixtureTranscript, type FixtureLabel, type HerdrFixture } from "./herdr-fixture";
 import { closePane, showTabOf, withControl } from "./daemon-actions";
 import type { AgentFixture, EngineServer } from "./engine-fixture";
 import { agentReading, labelAgentPane, spawnChild, startAgentInProject } from "./fixture-agents";
@@ -162,6 +162,18 @@ export async function startWork(
 export async function seedFirstWork(fixture: AgentFixture, daemon: Pick<Daemon, "origin" | "token">, at: number, goal = FIRST_GOAL) {
   const started = await startWork(fixture, daemon, firstWork(fixture, at, goal), fixture.family ? childWork(fixture, at) : undefined);
   return { session: started.session, child: started.child?.session ?? null, pane: started.pane };
+}
+
+/**
+ * The same first work on a Herdr fixture's two agents, labelled in place,
+ * the second declared the first's child, for the desktop suite, which runs
+ * on Herdr alone.
+ */
+export function seedFirstWorkOnHerdr(herdr: HerdrFixture, at: number, goal = FIRST_GOAL) {
+  const session = labelAgent(herdr, herdr.panes[0], firstWork(herdr, at, goal));
+  const child = labelAgent(herdr, herdr.panes[1], childWork(herdr, at));
+  declareParent(herdr, herdr.panes[1], herdr.panes[0]);
+  return { session, child };
 }
 
 /** New work in the pane `seedFirstWork` started: a new session labelled the same, as an agent that began again would run; returns the session. */

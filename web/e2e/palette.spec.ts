@@ -39,6 +39,7 @@ test("⌘K lists results by kind with a detail beside them, and the sidebar Sear
     });
     const last = new Map<string, Record<string, unknown>>();
     const sent = countSent(page, last);
+    await page.goto("about:blank");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     // One sidebar exposes the project and its root agents.
     await expect(page.locator('[data-sidebar="projects"]')).toBeVisible();
