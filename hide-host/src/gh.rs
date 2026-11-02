@@ -86,6 +86,21 @@ fn run_gh(
     run_gh_for(Command::new(binary), cwd, None, arguments, timeout)
 }
 
+/// The command line `gh` is run with. `gh repo view` ignores `GH_REPO` and
+/// reads the repository from its folder's git remotes (gh 2.76), so a call
+/// naming its repository, such as a connected device's checkout this machine
+/// has no folder for, names it as the argument `repo view` takes instead.
+fn named_arguments<'a>(arguments: &[&'a str], repository: Option<&'a str>) -> Vec<&'a str> {
+    match (arguments, repository) {
+        (["repo", "view", rest @ ..], Some(repository)) => {
+            let mut named = vec!["repo", "view", repository];
+            named.extend_from_slice(rest);
+            named
+        }
+        _ => arguments.to_vec(),
+    }
+}
+
 /// Runs one allowed `gh` command; `repository` is the repository a command
 /// that reads it from its folder works on (`GH_REPO`).
 #[allow(clippy::disallowed_methods)] // a production wait, not test code
@@ -100,7 +115,7 @@ fn run_gh_for(
         return Err(GhFailure::network("Unsupported gh command".to_owned()));
     }
     command
-        .args(arguments)
+        .args(named_arguments(arguments, repository))
         .env("GH_PROMPT_DISABLED", "1")
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GH_PAGER", "cat")
@@ -362,6 +377,37 @@ esac"#
         )
         .unwrap_err();
         assert_eq!(failure.reason, "gh: Bad credentials (HTTP 401)");
+    }
+
+    /// A device's checkout has no folder on the machine that reads its
+    /// GitHub, so the read names the repository and runs in no checkout;
+    /// `repo view` takes that name as its argument, which it otherwise reads
+    /// from the folder's remotes.
+    #[test]
+    fn a_repository_view_named_by_its_repository_needs_no_checkout() {
+        let fixture = GhFixture::new(
+            r#"
+[ "$GH_REPO" = acme/app ] || exit 90
+case "$1 $2 $3" in
+  "repo view acme/app") printf '{"nameWithOwner":"acme/app"}';;
+  "pr list --state") printf '[]';;
+  *) printf 'failed to run git: fatal: not a git repository' >&2; exit 1;;
+esac"#,
+        );
+        let named = |arguments: &[&str]| {
+            run_gh_for(
+                Command::new(&fixture.binary),
+                None,
+                Some("acme/app"),
+                arguments,
+                FIXTURE_DEADLINE,
+            )
+        };
+        assert_eq!(
+            named(&["repo", "view", "--json", "nameWithOwner"]).unwrap(),
+            r#"{"nameWithOwner":"acme/app"}"#
+        );
+        assert_eq!(named(&PR_LIST).unwrap(), "[]");
     }
 
     #[test]
