@@ -1,3 +1,4 @@
+import { MobileScene } from "./MobileScene";
 import { clientI18n } from "../i18n/translator";
 import { requireInterfaceLanguage } from "../i18n/locale";
 import { StrictMode } from "react";
@@ -50,6 +51,10 @@ export function mountGallery(root: Root) {
   }
   const scene = params.get("scene");
   if (scene !== null) {
+    if (scene === "mobile") {
+      root.render(<StrictMode><MobileScene params={params} /></StrictMode>);
+      return;
+    }
     if (scene === "group-tabs") {
       document.title = "hide · Group tabs scene";
       root.render(<StrictMode><GroupTabsScene params={params} /></StrictMode>);

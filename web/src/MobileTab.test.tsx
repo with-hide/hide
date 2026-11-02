@@ -17,6 +17,7 @@ const passed = { installed: "ok", logged_in: "ok", https: "ok", host_name: "mac"
 
 function frame(over: Partial<MobileState>): MobileState {
   return {
+    method: "tailscale", relay: { state: "connected" },
     enabled: true,
     exposure: "exposed",
     checklist: passed,
@@ -78,8 +79,8 @@ it("shows the code with its countdown and a Hide QR that takes it away", async (
 
 it("offers Show QR directly once the code has expired, and a fresh code is one click away", async () => {
   const { events, q, unmount } = await mount(frame({ qr: "https://mac.ts.net/m/#pair=x", code_expires_at_ms: 1_000, now_ms: 2_000 }));
-  expect(q("[data-mobile-qr]")?.getAttribute("data-mobile-qr-expired")).toBe("true");
-  expect(q("[data-mobile-countdown]")?.getAttribute("data-mobile-countdown")).toBe("expired");
+  expect(q("[data-mobile-qr]")).toBeNull();
+  expect(q("[data-mobile-countdown]")).toBeNull();
   expect(q("[data-mobile-hide-code]")).toBeNull();
   await act(async () => { q('[data-mobile-show-code="true"]')?.click(); });
   expect(kinds(events)).toContain("mobile_show_code");
@@ -101,9 +102,10 @@ it("shows only the failing step and its fix, and no Pair a phone row until it is
   await unmount();
 });
 
-it("describes access as Over Tailscale, only inside your tailnet (B59)", async () => {
+it("keeps Tailscale under Advanced after relay becomes the default (B6)", async () => {
   const { container, unmount } = await mount(frame({}));
-  expect(container.textContent).toContain("Over Tailscale, only inside your tailnet.");
+  expect(container.querySelector("details")?.textContent).toContain("Tailscale");
+  expect(container.querySelector("details")?.open).toBe(false);
   expect(container.textContent).not.toContain("removes only its own entry");
   await unmount();
 });
@@ -111,5 +113,38 @@ it("describes access as Over Tailscale, only inside your tailnet (B59)", async (
 it("leaves the push mode to Settings > Notifications (PRD settings-left-nav B7)", async () => {
   const { q, unmount } = await mount(frame({ push_mode: "off" }));
   expect(q("[data-push-select]")).toBeNull();
+  await unmount();
+});
+
+it.each([
+  ["connecting", undefined, "Connecting…"],
+  ["connected", undefined, "Connected · Hide relay (Tokyo)"],
+  ["retrying", undefined, "Relay unreachable · Retrying"],
+  ["refused", "unsupported_version", "This Hide is too old"],
+  ["refused", "daily_limit", "Today’s relay data limit was reached"],
+] as const)("shows %s in one connection row without a popup", async (status, reason, text) => {
+  const { container, events, unmount } = await mount(frame({ method: "relay", relay: { state: status, reason }, checklist: null }));
+  expect(container.textContent).toContain(text);
+  expect(container.textContent).toContain("Only your phone and this device can read the contents.");
+  expect(container.querySelectorAll("[data-mobile-connection]")).toHaveLength(1);
+  expect(container.querySelector('[role="alert"], [role="dialog"]')).toBeNull();
+  expect(container.querySelector("[data-mobile-step]")).toBeNull();
+  const button = Array.from(container.querySelectorAll("button")).find(b => b.textContent === "Retry now");
+  if (status === "retrying") {
+    await act(async () => button?.click());
+    expect(kinds(events)).toContain("mobile_retry");
+  }
+  await unmount();
+});
+
+it("keeps a direct cleanup failure in the connection line while relay pairing remains available", async () => {
+  const { container, q, unmount } = await mount(frame({
+    method: "relay", relay: { state: "connected" }, checklist: null,
+    failure: { step: "remove", message: "Tailscale CLI unavailable" },
+  }));
+  expect(container.querySelectorAll("[data-mobile-connection]")).toHaveLength(1);
+  expect(container.querySelector("[data-mobile-connection]")?.textContent).not.toContain("Connected · Hide relay");
+  expect(q('[data-mobile-show-code="true"]')).not.toBeNull();
+  expect(container.querySelector('[role="alert"], [role="dialog"]')).toBeNull();
   await unmount();
 });

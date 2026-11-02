@@ -3,9 +3,7 @@
 //! phone). Both are owner-only and written whole through a temporary file and
 //! a rename, so a crash leaves the old file or the new one, never a torn one.
 //!
-//! Neither file names a transport beyond the serve record, and a phone record
-//! holds only a hash of its credential: a relay transport reads the same
-//! phones (PRD D-01).
+//! Credentials belong to a transport scope; only their hashes are stored.
 
 use std::fs;
 use std::io;
@@ -57,12 +55,54 @@ pub struct MobileSettings {
     #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
+    pub method: Option<Method>,
+    /// The last verified direct scope, retained after removing our Serve entry.
+    #[serde(default)]
+    pub last_tailnet: Option<String>,
+    #[serde(default)]
+    pub relay_keys: Option<RelayKeys>,
+    #[serde(default)]
     pub push_mode: PushMode,
     #[serde(default)]
     pub serve: Option<ServeRecord>,
     /// The VAPID signing key as base64url PKCS#8, made once.
     #[serde(default)]
     pub vapid_pkcs8: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Method {
+    #[default]
+    Relay,
+    Tailscale,
+}
+
+impl MobileSettings {
+    /// Keep an existing direct setup on upgrade; only a new setup defaults to relay.
+    pub fn method(&self) -> Method {
+        self.method.unwrap_or_else(|| {
+            if self.serve.is_some() || self.last_tailnet.is_some() {
+                Method::Tailscale
+            } else {
+                Method::Relay
+            }
+        })
+    }
+}
+
+/// Different key types, persisted only through the private settings writer.
+#[derive(Clone, Deserialize, Serialize)]
+pub struct RelayKeys {
+    pub device_seed: String,
+    pub noise_secret: String,
+    pub noise_public: String,
+}
+
+impl std::fmt::Debug for RelayKeys {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RelayKeys([redacted])")
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -97,6 +137,7 @@ pub enum PhoneOrigin {
     #[default]
     Unrecorded,
     Paired(String),
+    Relay,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

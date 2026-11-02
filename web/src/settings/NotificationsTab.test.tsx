@@ -13,6 +13,7 @@ vi.hoisted(() => {
 });
 
 const mobile = (push_mode: MobileState["push_mode"]): MobileState => ({
+  method: "tailscale", relay: { state: "connected" },
   enabled: false,
   exposure: "off",
   checklist: null,

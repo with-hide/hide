@@ -3387,13 +3387,30 @@ Memory retires its own worktrees through the ordinary `Call::WorktreeRetire` mac
 ### The mobile companion
 
 The shared relay library and its WASM boundary are specified in [RELAY_PROTOCOL.md](RELAY_PROTOCOL.md).
-The hosted phone uses its WASM initiator; the device transport is integrated separately.
+The hosted phone uses its WASM initiator.
+hided uses it for signed device admission, Noise responder sessions and QR v2; the phone credential is checked only inside the established encrypted session.
 
 Phone transport, pairing, conversation reads and delivery live in `hided/src/mobile/`; status projection and notification transitions belong to `herdr-core/src/agent_state/`.
 `Runtime::remote_herdr_api` lends the Herdr API connection the core already holds for a connected SSH device.
-Mobile is off until the operator turns it on in Settings > Mobile, and it is kept in `mobile.json` beside the daemon's state (the switch, the push mode, the serve entry hided added, and the VAPID key), written through a temporary file at mode 0600.
+Mobile is off until the operator turns it on in Settings > Mobile, and it is kept in `mobile.json` beside the daemon's state (the switch, selected method, last direct scope, push mode, owned serve entry, VAPID key, device signing seed and Noise static key), written through a temporary file at mode 0600.
+An older file without a method keeps Tailscale when it has a Serve record or last tailnet; a new setup defaults to relay.
+The relay keys are decoded once per daemon and shared by admission, QR and push payloads.
 
-The transport is the operator's own Tailscale, and `mobile/tailscale.rs` is the only file that knows it, so a relay later replaces that one module.
+The default transport is `mobile/relay.rs`: one outbound WebSocket to `wss://relay.withhide.dev/ws`, with the validated `HIDE_RELAY_URL` override for tests and development (plaintext `ws` is loopback-only).
+The supervisor owns that socket and at most eight phone tasks; switching off, changing method, closing the move gate or shutting down cancels the link and joins its phone tasks.
+Each peer has eight inbound frames, and the link has a shared 32-frame outbound queue; a full queue closes the affected peer with a content-free diagnostic.
+Encrypted data and its routing close share that queue so the final refusal always precedes close.
+Admission and sends have ten-second deadlines; each phone has one ten-second budget from arrival through Noise and its first credential message, and an unauthenticated connection never takes a paired-phone slot.
+The link pings every twenty seconds and closes after sixty seconds without a response.
+Each Noise receiver polls `check_timeout` once per second even without input; a ciphertext authentication failure, replay or unfinished chunk assembly closes only that phone and logs no content.
+A lost link reconnects with equal jitter, from 0.5-1 second up to 15-30 seconds, with no retained transport retry queue.
+The existing per-phone input request ledger survives link loss; input work runs beside the socket and is not aborted with it.
+The blocking write itself owns a settlement guard, so cancellation of even its async waiter cannot leave a request permanently in flight; a panic settles uncertain.
+The reconnecting phone reads the written, in-flight, refused or uncertain outcome without repeating an ambiguous write.
+A method change waits for any Tailscale exposure in progress and its owned entry's removal before the relay can connect.
+If the Tailscale CLI is gone, the obsolete ownership record is dropped and relay may connect, while the connection line retains the cleanup failure for the current daemon session.
+
+Tailscale remains the advanced direct method, and `mobile/tailscale.rs` is the only file that knows its CLI.
 It finds the CLI at `HIDE_TAILSCALE_BIN`, then the macOS app bundle's `/Applications/Tailscale.app/Contents/MacOS/Tailscale`, then `tailscale` on PATH, and reads `tailscale status --json` for the backend state, `Self.DNSName`, `Self.HostName`, MagicDNS and `CertDomains`; every command runs with a fifteen-second bound.
 Every command carries `TAILSCALE_BE_CLI=1`: the app bundle's executable is both the app and its CLI, and it acts as the CLI only when its environment looks like a terminal (`SHLVL`, `TERM`, `TERM_PROGRAM` or `PS1`), which hided's never does, so without the variable every command started the app and timed out ([Tailscale CLI](https://tailscale.com/kb/1080/cli), macOS); the plain CLI on Linux and Windows does not read it.
 hided binds loopback as before and adds `tailscale serve --bg --yes --https=443 http://127.0.0.1:<port>`, then confirms the entry with `serve status --json` before a QR is shown.
@@ -3442,15 +3459,18 @@ The direct Tailscale shell remains as follows.
 The service worker caches only that shell, so the app opens without a network and shows its unreachable line.
 Pairing, the agent list, an agent's conversation, a pane's rows, replies, keys, starts and the push subscription travel on `/ws` only; HTTP fetches carry only static shell assets and the hosted protocol manifest.
 The first frame decides the client: `{client_kind: "phone", token}` for a paired phone or `{client_kind: "phone", pair, name}` to pair; a phone counts toward `MAX_CLIENTS`, and a refusal sends `{type: "refused", reason}` (`code_expired`, `phone_limit`, `revoked`, `mobile_off`) and closes with 4001.
-Every frame to a phone goes through `mobile::phone::encode`, the one place a relay would wrap in end-to-end encryption.
+Every application frame to a phone goes through `mobile::phone::encode`; on a relay connection this calls the shared Noise session's `send_message`, including refusals and pairing credentials, and only ciphertext reaches the routing queue.
 
 A pairing code is sixteen random bytes, is accepted only while Mobile is on and exposed, lives only in memory for five minutes, is spent by the first phone that uses it, and is replaced only when `mobile_show_code` is sent again; opening Settings > Mobile issues none and voids none (B58).
-The QR is `https://<DNSName>/m/#pair=<base64url {v:1, endpoint, code}>`, so the code never reaches a request line or a log.
-A paired phone gets a 32-byte credential; `phones.json` (mode 0600) keeps only its SHA-256, compared in constant time, with the name, the last connection, the notification answer, the push subscription and the tailnet name it was paired at (`PhoneOrigin`).
+The relay QR is `https://app.withhide.dev/#pair=<base64url QR v2>`, carrying the device name, signing public key, Noise public key, derived room and code as specified in `RELAY_PROTOCOL.md`.
+The advanced direct QR remains `https://<DNSName>/m/#pair=<base64url {v:1, endpoint, code}>`; neither code reaches a request line or a log.
+A paired phone gets a 32-byte credential; `phones.json` (mode 0600) keeps only its SHA-256, compared in constant time, with the name, the last connection, the notification answer, the push subscription and its pairing scope (`PhoneOrigin::Relay` or the tailnet name).
 The phone keeps the credential in its storage and in its address fragment (`#k=`), because the manifest has no `start_url` and a Home Screen app starts from the address it was added from, whose storage iOS may keep apart from Safari's.
-At most four phones pair at one tailnet name; the limit is checked before the code is spent.
-Only the phones paired at the name this core was last exposed at count (PRD core-host-node-move B17): they are listed in Settings > Mobile, receive pushes and are let in, and the limit counts them; a switch-off or a failed check leaves that name as it was.
+At most four phones pair in one scope; the limit is checked before the code is spent.
+Only phones in the selected relay or tailnet scope count (PRD mobile-relay B7, core-host-node-move B17): they are listed in Settings > Mobile, receive pushes and are let in, and the limit counts them; a switch-off or a failed check leaves that name as it was.
 After a move the phone's Home Screen app still starts at the old machine's address, so each phone scans the new machine's code once; until then the phones paired where the core ran wait unlisted, a credential of theirs is answered `mobile_off` (the phone stays paired and shows the core as unreachable), and a move back lets them in again; the seven-day rule below ends them otherwise, so no more than four phones per address of the last seven days are kept.
+Switching methods hides the other scope's phones without revoking them; switching back restores them.
+`mobile.json` retains the last verified tailnet name separately from its owned Serve entry, so removing that entry or an offline Tailscale does not erase the direct phone list.
 A record from before phones kept their address reads as `Unrecorded` and takes the exposure `mobile.json` names at the first load, or the first exposure.
 A phone keeps at most two connections, the oldest closed first, a connection that answers no ping for 45 seconds is closed and recorded as `phone.silent`, and one whose frame cannot leave within ten seconds is closed and recorded as `phone.stalled`.
 A phone away for seven days is revoked at start, by an hourly sweep and when it next connects, and a revoke, manual or automatic, drops the credential and the subscription in one write and closes that phone's connection.
@@ -3512,6 +3532,7 @@ Push is Web Push that hided signs and encrypts itself with `ring`: a VAPID ES256
 Only the push services' own hosts are accepted as endpoints (Apple, FCM, Mozilla, Windows), parsed as an `https` URL with no userinfo and no port but 443 and posted without following redirects, plus a loopback endpoint in a debug build for the e2e.
 `agent_state::push::Transitions` (`agent_state/turn.rs`) owns notification state and the ten-minute disappearance ledger; hided owns subscriptions, mode policy and delivery.
 The first list only seeds the transitions; after it, a root agent entering Needs You or Done sends one notice per subscribed phone, a descendant's question, approval or error raises its root, and the notice's tag (`device|root pane`) replaces the one before it.
+A relay push also carries `room`, the same derived base64url device room as the QR, so the phone's per-room worker opens the correct Hide; each Hide retains its own VAPID key.
 A push payload carries the root's row title as `title`, `state` (`needs_you` or `done`), its published `status_code` and exact chosen second-line `detail`, the project as `place`, the `tag`, `device_id`, `pane_id` and `clear`.
 The sentence is untranslated and never logged; terminal content is still excluded (operator-approved change 2026-10-13, [status-model.md: With and without Hide AI](status-model.md#with-and-without-hide-ai)).
 The phone page gives its worker the translated group and row-status words, kept in `hide-phone-words` so a closed app still notifies: with a sentence the body is the row word, sentence and project joined by ` · `; without one the old group word and project remain.
