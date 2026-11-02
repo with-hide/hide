@@ -4310,7 +4310,7 @@ impl Runtime {
         let prompt = payload.agent_kind.as_ref().and(payload.prompt.clone());
         if let Some(message) = prompt
             .as_deref()
-            .and_then(|prompt| crate::worktree_control::prompt_argument(prompt).err())
+            .and_then(|prompt| crate::start_prompt::prompt_argument(prompt).err())
         {
             self.set_error("worktree.create_invalid_prompt", message, false);
             return true;
@@ -4687,7 +4687,7 @@ impl Runtime {
         // tab or Home sync, so nothing is left behind.
         if let Some(message) = prompt
             .as_deref()
-            .and_then(|prompt| crate::worktree_control::prompt_argument(prompt).err())
+            .and_then(|prompt| crate::start_prompt::prompt_argument(prompt).err())
         {
             self.set_request_error(
                 "agent_start.invalid_prompt",

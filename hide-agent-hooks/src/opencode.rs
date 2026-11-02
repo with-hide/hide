@@ -65,4 +65,5 @@ pub const TUI: PluginFile = PluginFile {
 
 pub const PLUGIN: Plugin = Plugin {
     files: &[V1, SERVER, TUI],
+    trust: None,
 };

@@ -725,3 +725,46 @@ fn every_agent_declares_an_input_ladder_that_ends_typed() {
         }
     }
 }
+
+/// A start's first prompt is one word that no CLI reads as an option, in
+/// the form each CLI's help names: after `--`, after agy's `-i`, or joined to
+/// OpenCode's `--prompt=`, since OpenCode 2.0.29 prints its help and exits on
+/// `--prompt -x` (measured 2026-11-02). Native arguments that hold either
+/// form already give the start its prompt, so a brief never adds a second.
+#[test]
+fn a_start_prompt_that_starts_with_a_dash_stays_one_word() {
+    use hide_agent_adapter::LaunchDialect;
+    let expected: &[(LaunchDialect, &[&str])] = &[
+        (LaunchDialect::Claude, &["--", "-x @y"]),
+        (LaunchDialect::Codex, &["--", "-x @y"]),
+        (LaunchDialect::Grok, &["--", "-x @y"]),
+        (LaunchDialect::OpenCode, &["--prompt=-x @y"]),
+        (LaunchDialect::Pi, &["--", "-x @y"]),
+        (LaunchDialect::Omp, &["--", "-x @y"]),
+        (LaunchDialect::Cursor, &["--", "-x @y"]),
+        (LaunchDialect::Antigravity, &["-i", "-x @y"]),
+    ];
+    for (dialect, words) in expected {
+        let arguments = dialect.prompt_arguments("-x @y");
+        assert_eq!(arguments, *words, "{dialect:?}");
+        assert!(dialect.carries_prompt(&arguments), "{dialect:?}");
+        let other: Vec<String> = ["--model", "m", "--prompts", "-x"]
+            .map(str::to_owned)
+            .into();
+        assert!(!dialect.carries_prompt(&other), "{dialect:?}");
+    }
+    assert!(LaunchDialect::OpenCode.carries_prompt(&["--prompt".to_owned(), "x".to_owned()]));
+    // agy's prompt option under its long name gives a prompt too.
+    for given in [
+        &["--prompt-interactive", "x"][..],
+        &["--prompt-interactive=x"],
+        &["-i", "x"],
+    ] {
+        let given: Vec<String> = given.iter().map(|word| (*word).to_owned()).collect();
+        assert!(
+            LaunchDialect::Antigravity.carries_prompt(&given),
+            "{given:?}"
+        );
+    }
+    assert!(!LaunchDialect::Antigravity.carries_prompt(&["--model".to_owned(), "x".to_owned()]));
+}

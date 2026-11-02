@@ -22,7 +22,7 @@ use crate::live::{
 use crate::recent_closed::reopen::export_reopen_layout;
 use hide_node_link::git::{BranchConfigKey, GitCommand};
 use hide_node_link::process::ProcessStart;
-use hide_node_link::protocol::Call;
+use hide_node_link::protocol::{Call, StartForm};
 
 pub(crate) const CONFIRM_TIMEOUT: Duration = Duration::from_secs(5);
 const CONFIRM_POLL: Duration = Duration::from_millis(100);
@@ -1452,7 +1452,7 @@ fn launch_with_prompt_checked(
         pane_id,
         kind,
         prompt,
-        mut args,
+        args,
         codex_daemon,
         resume_scope,
         resume_reference,
@@ -1481,19 +1481,11 @@ fn launch_with_prompt_checked(
     {
         return TaskAgentOutcome::Failed(AgentFailure::reason("session_resume_scope_required"));
     }
-    let Some(dialect) = hide_agent_adapter::adapter(&kind).and_then(|row| row.start) else {
+    if hide_agent_adapter::adapter(&kind)
+        .and_then(|row| row.start)
+        .is_none()
+    {
         return TaskAgentOutcome::Failed(AgentFailure::reason("agent_start.no_start_dialect"));
-    };
-    if let Some(prompt) = prompt {
-        match prompt_argument(&prompt) {
-            Ok(argument) => args.extend([dialect.prompt_flag().to_owned(), argument]),
-            Err(message) => {
-                return TaskAgentOutcome::Failed(AgentFailure::with_detail(
-                    "agent_start.invalid_prompt",
-                    message,
-                ));
-            }
-        }
     }
     launch_agent(
         engine,
@@ -1504,6 +1496,7 @@ fn launch_with_prompt_checked(
         shell,
         &kind,
         args,
+        prompt.as_deref(),
         codex_daemon,
         &|| {
             current()?;
@@ -1520,49 +1513,6 @@ fn launch_with_prompt_checked(
         },
     )
     .into()
-}
-
-/// The longest first prompt, in bytes once encoded, that a start carries.
-/// Herdr types the command into the pane's shell, and the slowest shell
-/// measured bounds it: through the pinned Herdr, macOS bash took 27 s to take
-/// a 76 KB command and did not finish 300 KB within 60 s, where zsh took 5 s;
-/// 64 KB stays well inside the 120 s start wait on either.
-const MAX_PROMPT_BYTES: usize = 64 * 1024;
-
-/// The first prompt as one argument Herdr can type into the pane's shell,
-/// which refuses a line break or a tab in an argument. Each line break becomes
-/// U+2028 (LINE SEPARATOR), which Herdr passes through and the model reads as
-/// a line break, and a tab four spaces; any other control character is refused
-/// rather than dropped, and so is a prompt over [`MAX_PROMPT_BYTES`]. Every
-/// start event checks its prompt with this before anything is created, so a
-/// refused prompt leaves no tab or worktree behind; the worker encodes it.
-pub(crate) fn prompt_argument(prompt: &str) -> Result<String, String> {
-    let mut argument = String::with_capacity(prompt.len());
-    let mut chars = prompt.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '\r' => {
-                chars.next_if_eq(&'\n');
-                argument.push('\u{2028}');
-            }
-            '\n' => argument.push('\u{2028}'),
-            '\t' => argument.push_str("    "),
-            c if c.is_control() => {
-                return Err(format!(
-                    "The first prompt has a control character (U+{:04X}) that cannot be passed to the agent; remove it and start again.",
-                    u32::from(c)
-                ));
-            }
-            c => argument.push(c),
-        }
-    }
-    if argument.len() > MAX_PROMPT_BYTES {
-        return Err(format!(
-            "The first prompt is longer than {} KB, more than the agent's command line can carry; shorten it and start again.",
-            MAX_PROMPT_BYTES / 1024
-        ));
-    }
-    Ok(argument)
 }
 
 pub fn spawn_task_agent_start(context: WorktreeTarget, id: u64) -> Result<(), String> {
@@ -1632,7 +1582,8 @@ fn launch_agent(
     pane_id: &str,
     shell: crate::agent_start::ShellStart,
     kind: &str,
-    args: Vec<String>,
+    mut args: Vec<String>,
+    prompt: Option<&str>,
     codex_daemon: crate::codex_launch::CodexDaemon,
     check: &dyn Fn() -> Result<(), String>,
 ) -> Launch {
@@ -1643,15 +1594,15 @@ fn launch_agent(
     // agent that can never appear; say so before asking it. A device's PATH
     // is not this machine's, so there its Herdr answers for it.
     if let Some(node) = agent_node {
-        match crate::node_access::call_as::<bool>(
+        match crate::node_access::call_as::<Option<StartForm>>(
             node,
             Call::AgentInstalled {
                 name: kind.to_owned(),
             },
             AGENT_CHECK_TIMEOUT,
         ) {
-            Ok(true) => {}
-            Ok(false) => {
+            Ok(Some(_)) => {}
+            Ok(None) => {
                 return Launch::Failed(AgentFailure::with_detail(
                     "agent_start.not_installed",
                     format!("{kind} is not installed on the daemon's PATH"),
@@ -1661,6 +1612,30 @@ fn launch_agent(
                 return Launch::Failed(AgentFailure::with_detail(
                     "agent_start.install_check_failed",
                     format!("Could not check whether {kind} is installed ({error})"),
+                ));
+            }
+        }
+    }
+    // The first prompt rides the start as the agent's own argument
+    // (`start_prompt`); nothing types it, so a start that cannot carry it
+    // fails with the reason and the surface keeps the text. A start through
+    // `cmd.exe` carries it too, as before the spawn's brief learned to be
+    // typed there: `cmd.exe` may rewrite its `%` and `"` (docs/INSTALL.md).
+    if let Some(prompt) = prompt {
+        match crate::start_prompt::carried(kind, &args, prompt) {
+            Ok(words) => args.extend(words),
+            Err(crate::start_prompt::Refusal::Prompt(detail)) => {
+                return Launch::Failed(AgentFailure::with_detail(
+                    "agent_start.invalid_prompt",
+                    detail,
+                ));
+            }
+            Err(crate::start_prompt::Refusal::Start(detail)) => {
+                return Launch::Failed(AgentFailure::with_detail(
+                    "agent_start.prompt_not_carried",
+                    format!(
+                        "The first prompt cannot ride this start: {detail}. Start the agent without it and send it once the agent runs."
+                    ),
                 ));
             }
         }
@@ -4581,38 +4556,53 @@ mod tests {
     }
 
     /// The installed CLI help fixes these expectations independently of the
-    /// adapter. Every first prompt travels in argv, never as PTY input.
+    /// adapter. Every first prompt travels in argv, never as PTY input, as
+    /// one word no option parser can take for an option: a prompt that
+    /// starts with `-` after `--`, and joined to OpenCode's `--prompt=`,
+    /// which OpenCode 2.0.29 reads `--prompt -x` as a missing value of.
     #[test]
     fn a_first_prompt_travels_as_the_agents_own_argument() {
         // OpenCode takes no model, so its start names none; Pi asks no
         // permission question, so full access adds nothing to it.
-        for (kind, prompt_flag, extra_roots, model, full_access) in [
+        for (kind, prompt, extra_roots, model, full_access) in [
             (
                 "claude",
-                "--",
+                &["--", "-fix the tests"][..],
                 true,
                 Some("fixture-model"),
                 &crate::agent_permission::CLAUDE_FULL_ACCESS[..],
             ),
             (
                 "codex",
-                "--",
+                &["--", "-fix the tests"][..],
                 true,
                 Some("fixture-model"),
                 &crate::agent_permission::CODEX_FULL_ACCESS[..],
             ),
             (
                 "grok",
-                "--",
+                &["--", "-fix the tests"][..],
                 false,
                 Some("fixture-model"),
                 &["--always-approve"],
             ),
-            ("opencode", "--prompt", false, None, &["--auto"]),
-            ("pi", "--", false, Some("fixture-model"), &[]),
+            (
+                "opencode",
+                &["--prompt=-fix the tests"][..],
+                false,
+                None,
+                &["--auto"],
+            ),
+            (
+                "pi",
+                &["--", "-fix the tests"][..],
+                false,
+                Some("fixture-model"),
+                &[],
+            ),
             (
                 "omp",
-                "--",
+                &["--", "-fix the tests"][..],
                 true,
                 Some("fixture-model"),
                 &["--auto-approve"],
@@ -4633,14 +4623,14 @@ mod tests {
             ));
             let outcome = launch_with_prompt(
                 &*server,
-                None,
+                Some(&Starts(StartForm::Program)),
                 7,
                 PendingAgentStart {
                     resume_reference: None,
                     resume_scope: None,
                     pane_id: "w1:p1".into(),
                     kind: kind.into(),
-                    prompt: Some("fix the tests".into()),
+                    prompt: Some("-fix the tests".into()),
                     args,
                     codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
                     shell: crate::agent_start::ShellStart::Plain,
@@ -4662,7 +4652,7 @@ mod tests {
             if extra_roots {
                 expected.extend(["--add-dir", "/work/my app"]);
             }
-            expected.extend([prompt_flag, "fix the tests"]);
+            expected.extend(prompt.iter().copied());
             assert_eq!(requests[1]["params"]["args"], json!(expected), "{kind}");
             assert_eq!(requests[1]["params"]["kind"], kind);
         }
@@ -4722,7 +4712,7 @@ mod tests {
         let server = server(vec![]);
         let outcome = launch_with_prompt(
             &*server,
-            None,
+            Some(&Starts(StartForm::Program)),
             7,
             PendingAgentStart {
                 resume_reference: None,
@@ -4755,7 +4745,9 @@ mod tests {
                 _timeout: std::time::Duration,
             ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
                 self.0.lock().unwrap().push(call);
-                Ok(crate::node_access::LinkAnswer::Parsed(json!(false)))
+                Ok(crate::node_access::LinkAnswer::Parsed(
+                    serde_json::Value::Null,
+                ))
             }
         }
         let node = Missing(Mutex::default());
@@ -4800,7 +4792,7 @@ mod tests {
         ]);
         let outcome = launch_with_prompt(
             &*server,
-            None,
+            Some(&Starts(StartForm::Program)),
             7,
             PendingAgentStart {
                 resume_reference: None,
@@ -4833,7 +4825,7 @@ mod tests {
         ]);
         let outcome = launch_with_prompt(
             &*server,
-            None,
+            Some(&Starts(StartForm::Program)),
             7,
             PendingAgentStart {
                 resume_reference: None,
@@ -4868,7 +4860,7 @@ mod tests {
         let server = server(vec![]);
         let outcome = launch_with_prompt(
             &*server,
-            None,
+            Some(&Starts(StartForm::Program)),
             7,
             PendingAgentStart {
                 resume_reference: None,
@@ -4898,11 +4890,11 @@ mod tests {
     #[test]
     fn a_prompt_over_the_cap_fails_the_start_before_herdr() {
         let server = server(vec![]);
-        let at_cap = "가".repeat(MAX_PROMPT_BYTES / 3);
-        assert!(prompt_argument(&at_cap).is_ok());
+        let at_cap = "가".repeat(crate::start_prompt::MAX_PROMPT_BYTES / 3);
+        assert!(crate::start_prompt::prompt_argument(&at_cap).is_ok());
         let outcome = launch_with_prompt(
             &*server,
-            None,
+            Some(&Starts(StartForm::Program)),
             7,
             PendingAgentStart {
                 resume_reference: None,
@@ -4937,7 +4929,7 @@ mod tests {
         ]);
         let outcome = launch_with_prompt(
             &*server,
-            None,
+            Some(&Starts(StartForm::Program)),
             7,
             PendingAgentStart {
                 resume_reference: None,
@@ -4967,6 +4959,54 @@ mod tests {
             methods_of(&requests_of(&server)),
             ["pane.process_info", "agent.start"]
         );
+    }
+
+    /// A machine that has the agent and starts it as `0` says.
+    struct Starts(StartForm);
+    impl crate::node_access::NodeLink for Starts {
+        fn call(
+            &self,
+            call: hide_node_link::protocol::Call,
+            _timeout: std::time::Duration,
+        ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+            match call {
+                hide_node_link::protocol::Call::AgentInstalled { .. } => Ok(
+                    crate::node_access::LinkAnswer::Parsed(serde_json::to_value(self.0).unwrap()),
+                ),
+                other => Err(crate::node_access::LinkError::Unknown(format!("{other:?}"))),
+            }
+        }
+    }
+
+    /// On Windows a start through `cmd.exe` still carries its first prompt,
+    /// which nothing would type: `cmd.exe` may rewrite its `%` and `"`
+    /// (docs/INSTALL.md), but the start goes on as before.
+    #[test]
+    fn a_first_prompt_rides_a_batch_start_too() {
+        let server = server(vec![
+            shell_ready(),
+            json!({"result":{"type":"agent_started","argv":[],"agent":agent("working")}}),
+        ]);
+        let outcome = launch_with_prompt(
+            &*server,
+            Some(&Starts(StartForm::Batch)),
+            7,
+            PendingAgentStart {
+                resume_reference: None,
+                resume_scope: None,
+                pane_id: "w1:p1".into(),
+                kind: "codex".into(),
+                prompt: Some("fix it".into()),
+                args: Vec::new(),
+                codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
+                shell: crate::agent_start::ShellStart::Plain,
+                made_worktree: None,
+            },
+        );
+        assert!(matches!(outcome, TaskAgentOutcome::Started), "{outcome:?}");
+        let requests = requests_of(&server);
+        assert_eq!(methods_of(&requests), ["pane.process_info", "agent.start"]);
+        assert_eq!(requests[1]["params"]["args"], json!(["--", "fix it"]));
     }
 
     /// The host's own git answering for a real repository on this machine.

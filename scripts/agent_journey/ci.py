@@ -54,7 +54,8 @@ FIXTURE_ONLY = "a stand-in imitates Claude Code and Codex only; the fake model l
 # once it runs the pinned CLIs on a fake model. It does answer from its
 # start's Memory index, as the fake model does, so `guidance_memory` is its.
 FIXTURE_UNIMITATED = {cell: "the C stand-in does not imitate it; the fake model lane measures it"
-                      for cell in ("letter_busy", "letter_menu", "composer", "fork", "title", "usage")}
+                      for cell in ("letter_busy", "letter_menu", "composer", "fork", "title", "usage",
+                                   "launch_brief")}
 FIXTURE_CELLS = tuple(name for name in cells.CELLS
                       if name != "start_untrusted" and name not in FIXTURE_UNIMITATED)
 

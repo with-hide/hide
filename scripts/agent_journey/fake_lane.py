@@ -123,12 +123,20 @@ def agy(home, url, root, local, key=KEY):
 def opencode(home, url, root, local, key=KEY):
     """OpenCode 2.0.29's custom provider and default model in its global
     `opencode.json` (opencode.ai/v2/docs/providers), its key read from the
-    variable `env` names, and no update check."""
+    variable `env` names, and no update check. Every other provider is
+    denied (`provider.use` policies, what its `enabled_providers` key reads
+    as): OpenCode submits a start prompt before it has read this file, and a
+    start that lost that race took its own free hosted model (macOS, run
+    41415065150, 2026-11-02); Hide types OpenCode's brief since, but a first
+    prompt still rides the start, and a run's text must never reach a hosted
+    model."""
     del root, local
     folder = home / opencode_service.CONFIG
     private_directory(folder)
     write_private(folder / "opencode.json", json.dumps({
         "model": f"{PROVIDER}/{MODEL}",
+        "policies": [{"action": "provider.use", "resource": "*", "effect": "deny"},
+                     {"action": "provider.use", "resource": PROVIDER, "effect": "allow"}],
         "providers": {PROVIDER: {"name": "Journey", "env": ["JOURNEY_FAKE_KEY"],
                                  "package": "@opencode/ai/providers/openai-compatible",
                                  "settings": {"baseURL": f"{url}/v1"}, "models": {MODEL: {"name": "Journey"}}}}}).encode())

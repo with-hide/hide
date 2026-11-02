@@ -67,6 +67,10 @@ pub struct PluginFile {
 #[derive(Debug)]
 pub struct Plugin {
     pub files: &'static [PluginFile],
+    /// The agent whose folder trust Hide records for the worktrees it starts
+    /// it in (`folder_trust`), taken out with the plugin: switching the agent
+    /// off and removing Hide from the machine both remove the plugin.
+    pub trust: Option<crate::folder_trust::Agent>,
 }
 
 /// The plugin `dialect` names.
@@ -180,12 +184,21 @@ impl Plugin {
     /// write stays too, and so does the folder that holds it. True when a
     /// file went.
     pub fn remove(&self, home: &Path) -> Result<bool, String> {
+        // Hide's trust entries go whether or not the operator edited the
+        // file: they are Hide's, and nothing else takes them out.
+        let forgotten = match self.trust {
+            Some(agent) => {
+                crate::folder_trust::forget_all(agent, home, crate::folder_trust::Tools::none())
+                    .map_err(|failure| failure.message())?
+            }
+            None => 0,
+        };
         for file in self.files {
             if file.owner(home)? == Owner::Edited {
-                return Ok(false);
+                return Ok(forgotten > 0);
             }
         }
-        let mut removed = false;
+        let mut removed = forgotten > 0;
         for file in self.files {
             removed |= file.remove(home)?;
         }

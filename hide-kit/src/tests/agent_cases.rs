@@ -1628,3 +1628,37 @@ fn a_plugin_named_like_hides_that_hide_did_not_write_is_left_alone() {
     apply(&fixture.target, &Scope::agents([], ["opencode"]));
     assert!(opencode_plugin(&fixture).exists());
 }
+
+/// Switching Pi off takes out the folder trust Hide recorded for the
+/// worktrees it started Pi in, as removing Hide does, and leaves the
+/// operator's own entries in Pi's `trust.json`.
+#[test]
+fn switching_pi_off_forgets_hides_folder_trust_and_keeps_the_operators() {
+    use hide_agent_hooks::folder_trust::{self, Agent, Tools};
+    let fixture = Fixture::new();
+    install(&fixture, "pi", ".pi/agent");
+    apply(&fixture.target, &Scope::agents(["pi"], []));
+    let trust = fixture.home().join(".pi/agent/trust.json");
+    let operators = fixture.home().join("theirs");
+    std::fs::create_dir_all(&operators).unwrap();
+    let operators = std::fs::canonicalize(&operators).unwrap();
+    std::fs::write(
+        &trust,
+        serde_json::json!({ operators.to_str().unwrap(): false }).to_string(),
+    )
+    .unwrap();
+    let worktree = fixture.home().join("work/app-wt");
+    std::fs::create_dir_all(&worktree).unwrap();
+    let worktree = std::fs::canonicalize(&worktree).unwrap();
+    folder_trust::trust(Agent::Pi, fixture.home(), &worktree, Tools::none()).unwrap();
+    let read =
+        || -> Value { serde_json::from_str(&std::fs::read_to_string(&trust).unwrap()).unwrap() };
+    assert_eq!(read()[worktree.to_str().unwrap()], true);
+
+    apply(&fixture.target, &Scope::agents([], ["pi"]));
+
+    assert_eq!(
+        read(),
+        serde_json::json!({ operators.to_str().unwrap(): false })
+    );
+}
