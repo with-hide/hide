@@ -240,6 +240,7 @@ class Selection(unittest.TestCase):
 
     def test_relay_wire_and_its_build_and_process_owner_run_interoperability(self):
         for path in ("hide-relay-protocol/src/noise.rs", "hide-relay-protocol/tests/cross-wasm.ts",
+                     "hide-relay/src/server.rs", "hide-relay/tests/it/relay.rs",
                      "scripts/build-relay-wasm.sh", "scripts/check-relay-protocol.sh", "web/e2e/worker-owned.ts"):
             with self.subTest(path=path):
                 self.assertIn("relay-protocol", plan(path)["lanes"])
@@ -258,7 +259,7 @@ class Selection(unittest.TestCase):
         # platform layer.
         self.assertEqual(result["rust_packages"],
                          [name for name in EVERY_PACKAGE
-                          if name not in ("hide-agent-adapter", "hide-screen-rules", "hide-shell", "hide-vt", "hide-relay-protocol", "workspace-hack")])
+                          if name not in ("hide-agent-adapter", "hide-screen-rules", "hide-shell", "hide-vt", "hide-relay", "hide-relay-protocol", "workspace-hack")])
         self.assertFalse(result["full"])
 
     def test_an_adapter_change_tests_its_real_consumers_and_compiles_on_windows(self):

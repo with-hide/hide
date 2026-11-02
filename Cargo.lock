@@ -1312,6 +1312,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "hide-relay"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "hide-relay-protocol",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite 0.30.0",
+ "workspace-hack",
+]
+
+[[package]]
 name = "hide-relay-protocol"
 version = "0.1.0"
 dependencies = [

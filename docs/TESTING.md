@@ -849,3 +849,9 @@ The peer accepts at most eight bounded lines, starts no children and exits on st
 The `relay-protocol` lane runs on Linux and Windows and includes macOS when the PR plan requests macOS coverage; main's full plan includes it.
 Crate changes and its build/check scripts select this lane, while general build definitions and lockfiles retain full coverage.
 Its three platform jobs account for the increase in the maximum job count above.
+
+The same lane runs `hide-relay`'s one integration binary through nextest on all three systems for a server change, then checks its Clippy targets.
+The server journeys use real loopback HTTP/WebSocket connections, real challenge proofs and real endpoint Noise sessions; no relay handler or owned collaborator is mocked.
+They cover multiple phones and both directions, all five required caps, bounded accounting records, rejected signatures and expired/replayed admission, invalid routing, endpoint-detected ciphertext tamper/replay, log allowlisting and full server restart.
+A monotonic test clock moves rate and daily windows to their exact boundaries without sleeps; limits may be lowered through the service's embedding API, never raised above production.
+The service's caller owns its listener, task and shutdown signal; test guards abort that task on failure, and its task set owns every accepted socket.

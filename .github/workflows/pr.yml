@@ -891,6 +891,7 @@ jobs:
     needs: plan
     if: contains(fromJSON(needs.plan.outputs.lanes), 'relay-protocol')
     uses: ./.github/workflows/relay-protocol.yml
+    secrets: inherit
     with:
       include-macos: ${{ needs.plan.outputs.macos == 'true' }}
 

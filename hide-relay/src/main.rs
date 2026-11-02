@@ -1,0 +1,75 @@
+use hide_relay::{
+    Relay,
+    config::{Config, HELP},
+    event::Event,
+    limits::Limits,
+};
+use std::io::Write;
+
+fn log(event: Event) {
+    let line = serde_json::to_string(&event).expect("static event serialization");
+    writeln!(std::io::stderr().lock(), "{line}").expect("relay log unavailable");
+}
+
+#[tokio::main]
+async fn main() -> std::process::ExitCode {
+    let config = match Config::parse(std::env::args().skip(1)) {
+        Ok(Some(config)) => config,
+        Ok(None) => {
+            print!("{HELP}");
+            return std::process::ExitCode::SUCCESS;
+        }
+        Err(event) => {
+            log(Event {
+                event,
+                room: None,
+                size: None,
+                cap: None,
+            });
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    let Ok(listener) = tokio::net::TcpListener::bind(config.listen).await else {
+        log(Event {
+            event: "bind_failed",
+            room: None,
+            size: None,
+            cap: None,
+        });
+        return std::process::ExitCode::FAILURE;
+    };
+    let relay =
+        Relay::new(Limits::default(), config.trusted_proxy, log).expect("valid production limits");
+    log(Event {
+        event: "server_started",
+        room: None,
+        size: None,
+        cap: None,
+    });
+    if relay.serve(listener, shutdown()).await.is_err() {
+        log(Event {
+            event: "server_failed",
+            room: None,
+            size: None,
+            cap: None,
+        });
+        return std::process::ExitCode::FAILURE;
+    }
+    std::process::ExitCode::SUCCESS
+}
+
+async fn shutdown() {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("install termination handler");
+        tokio::select! { _ = tokio::signal::ctrl_c() => {}, _ = terminate.recv() => {} }
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("install interrupt handler");
+    }
+}

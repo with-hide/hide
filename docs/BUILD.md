@@ -560,3 +560,15 @@ The loader owns asset URL resolution, HTTP MIME/cache behavior and startup error
 Both hided and the browser therefore run one cryptographic implementation and one parser.
 The public checkout builds with the pinned Rust toolchain and registry dependencies, without a private binary, credential or design tool.
 `bash scripts/check-relay-protocol.sh` builds and tests both targets and their interoperability; after workspace dependency installation, `bash scripts/verify-web.sh relay-protocol typecheck` checks the TypeScript surface against the generated bindings.
+
+## Mobile relay server
+
+`bash scripts/verify-cargo.sh build -p hide-relay --bin hide-relay` builds the standalone memory-only server into `target/debug/hide-relay` (`.exe` on Windows).
+Run `target/debug/hide-relay --listen 127.0.0.1:8787` for local clients; `/ws` accepts WebSockets and `/health` answers the uptime check.
+For a deployment binary, use `bash scripts/verify-cargo.sh build --release -p hide-relay --bin hide-relay`, which keeps output in this worktree's `target/release/`.
+It is a separate service and is not packaged into the desktop app.
+`hide-relay --help` lists its entire configuration surface: a literal bind address and an optional trusted reverse-proxy IP.
+It reads no environment override, configuration file, database, persistent state or credentials.
+Its CLI parser is `hide-relay/src/config.rs`, budget authority is `limits.rs`, and [RELAY_PROTOCOL.md](RELAY_PROTOCOL.md) defines forwarding, proxy trust, log collection and reconnect semantics.
+Ctrl+C on every system, or SIGTERM on Unix, drains the server; the operating service manager owns restarting it.
+`bash scripts/verify-cargo.sh test-scoped -p hide-relay` starts private loopback listeners and real protocol clients and stops them on every exit path.
