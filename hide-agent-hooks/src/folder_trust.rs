@@ -1,5 +1,5 @@
 //! The folder trust Hide records in an agent's own state for the worktrees it
-//! makes. Claude Code, Codex, agy and Grok each ask, the first time they
+//! makes. Claude Code, Codex, agy, Grok and Pi each ask, the first time they
 //! start interactively in a folder they have not been told to trust, whether
 //! to trust it, and a delegated child stopped at that question waits for an
 //! answer nobody is there to give. So Hide records that trust before it
@@ -19,6 +19,8 @@
 //! - Grok: `[folders."<folder>"] trusted = true` in
 //!   `~/.grok/trusted_folders.toml`, changed while Hide holds Grok's own lock
 //!   on that file.
+//! - Pi: `"<folder>": true` in `~/.pi/agent/trust.json`, changed while Hide
+//!   holds Pi's own lock on that file.
 //!
 //! The entry names the worktree itself, never the repository it was made
 //! from, for every agent that reads one: answering an agent's own question in
@@ -56,9 +58,9 @@ use serde_json::{Map, Value};
 use crate::install::{HookDocument, InstallFailure, read_document, write_document};
 use crate::runtime::AgentRuntime;
 
-/// How long Hide waits for Claude Code's own lock on its config, which Claude
-/// holds only while it saves the file.
-const CLAUDE_LOCK_WAIT: Duration = Duration::from_secs(2);
+/// How long Hide waits for Claude Code's own lock on its config, or Pi's on
+/// its trust file, which each holds only while it reads or saves the file.
+const LOCK_FOLDER_WAIT: Duration = Duration::from_secs(2);
 /// How long Hide waits for Grok's own lock on its trust file, which Grok holds
 /// only while it reads and replaces the file.
 const GROK_LOCK_WAIT: Duration = Duration::from_secs(2);
@@ -73,10 +75,17 @@ pub enum Agent {
     Codex,
     Antigravity,
     Grok,
+    Pi,
 }
 
 impl Agent {
-    pub const ALL: [Self; 4] = [Self::ClaudeCode, Self::Codex, Self::Antigravity, Self::Grok];
+    pub const ALL: [Self; 5] = [
+        Self::ClaudeCode,
+        Self::Codex,
+        Self::Antigravity,
+        Self::Grok,
+        Self::Pi,
+    ];
 
     /// The agent a start of `dialect` records trust for, when it asks one
     /// (`LaunchDialect::trusts_worktrees`).
@@ -89,6 +98,7 @@ impl Agent {
             LaunchDialect::Codex => Some(Self::Codex),
             LaunchDialect::Antigravity => Some(Self::Antigravity),
             LaunchDialect::Grok => Some(Self::Grok),
+            LaunchDialect::Pi => Some(Self::Pi),
             _ => None,
         }
     }
@@ -100,6 +110,7 @@ impl Agent {
             Self::Codex => "Codex",
             Self::Antigravity => "agy",
             Self::Grok => "Grok",
+            Self::Pi => "Pi",
         }
     }
 
@@ -111,6 +122,7 @@ impl Agent {
             Self::Codex => AgentRuntime::Codex.trust_path(home),
             Self::Antigravity => antigravity::settings_path(home),
             Self::Grok => grok::settings_path(home),
+            Self::Pi => pi::settings_path(home),
         }
     }
 
@@ -120,7 +132,7 @@ impl Agent {
     fn longest_hold(self) -> Duration {
         let own = match self {
             Self::Codex => crate::codex_trust::SESSION_BOUND,
-            Self::ClaudeCode => CLAUDE_LOCK_WAIT,
+            Self::ClaudeCode | Self::Pi => LOCK_FOLDER_WAIT,
             Self::Grok => GROK_LOCK_WAIT,
             Self::Antigravity => Duration::ZERO,
         };
@@ -139,6 +151,7 @@ impl Agent {
             Self::Codex => "codex-trust",
             Self::Antigravity => "antigravity-trust",
             Self::Grok => "grok-trust",
+            Self::Pi => "pi-trust",
         }
     }
 
@@ -177,8 +190,8 @@ impl Agent {
 
 /// What a change may start: the `codex` program whose app-server records
 /// Codex's trust, and the flag that ends it, or a wait for an agent's own
-/// lock, when Hide quits. Claude Code's, agy's and Grok's changes start
-/// nothing.
+/// lock, when Hide quits. Claude Code's, agy's, Grok's and Pi's changes
+/// start nothing.
 #[derive(Clone, Copy)]
 pub struct Tools<'a> {
     pub codex: Option<&'a Program>,
@@ -186,7 +199,7 @@ pub struct Tools<'a> {
 }
 
 impl Tools<'static> {
-    /// For a change that starts nothing: Claude Code's, agy's and Grok's.
+    /// For a change that starts nothing: Claude Code's, agy's, Grok's and Pi's.
     pub fn none() -> Self {
         static NEVER: AtomicBool = AtomicBool::new(false);
         Self {
@@ -408,6 +421,7 @@ pub fn trust(agent: Agent, home: &Path, folder: &Path, tools: Tools) -> Result<(
             ),
             Agent::Antigravity => antigravity::add(home, &key, &gone_entries, &mut remember),
             Agent::Grok => grok::add(home, &key, &gone_entries, tools.stop, &mut remember),
+            Agent::Pi => pi::add(home, &key, &gone_entries, &mut remember),
         })
     };
     match written {
@@ -595,6 +609,7 @@ fn forget_where(
         )?,
         Agent::Antigravity => antigravity::remove(home, &gone)?,
         Agent::Grok => grok::remove(home, &gone, tools.stop)?,
+        Agent::Pi => pi::remove(home, &gone)?,
     };
     write_record(agent, home, &kept)?;
     Ok(removed)
@@ -900,20 +915,17 @@ mod grok {
     }
 }
 
-/// Claude Code's trust: `hasTrustDialogAccepted` of a `projects` entry in its
-/// global config, which Claude Code itself rewrites while it runs. Claude
-/// Code takes that file's lock (proper-lockfile's `<file>.lock` folder) and
-/// reads the file again before every write of its own, so Hide holds the same
-/// lock across its read and its write and neither drops the other's change.
-mod claude {
+/// proper-lockfile's lock, which Claude Code and Pi take on a file before
+/// they read it again and write it: a folder beside the file, made to take
+/// the lock and removed to release it. Hide makes the same folder across its
+/// own read and write of the file, so neither drops the other's change.
+mod lock_folder {
     use std::time::SystemTime;
 
     use hide_platform::fs::identity::FileId;
 
     use super::*;
 
-    const PROJECTS: &str = "projects";
-    const ACCEPTED: &str = "hasTrustDialogAccepted";
     /// proper-lockfile's default: a lock folder not touched for this long was
     /// left by a process that ended, and is taken over.
     const STALE: Duration = Duration::from_secs(10);
@@ -929,35 +941,31 @@ mod claude {
         Some((id, modified))
     }
 
-    /// Claude Code's lock on its config, held until dropped.
-    pub(super) struct ConfigLock {
+    /// The agent's lock on `file`, held until dropped.
+    pub(super) struct LockFolder {
         path: PathBuf,
-        /// The folder Hide made. A hold past [`STALE`] lets Claude Code take
-        /// the lock over, and then the folder there is Claude's.
+        file: PathBuf,
+        owner: &'static str,
+        /// The folder Hide made. A hold past [`STALE`] lets the agent take
+        /// the lock over, and then the folder there is the agent's.
         made: Mark,
     }
 
-    impl ConfigLock {
-        /// The lock beside the config's real path, where proper-lockfile
-        /// puts it (it resolves links), so a linked `~/.claude.json` is locked
-        /// where Claude Code locks it.
-        pub(super) fn path(config: &Path) -> PathBuf {
-            let real = hide_platform::fs::identity::canonical(config)
-                .unwrap_or_else(|_| config.to_path_buf());
-            let mut path = real.into_os_string();
-            path.push(".lock");
-            PathBuf::from(path)
-        }
-
+    impl LockFolder {
+        /// Makes the lock folder `path` for `file`, waiting up to
+        /// [`LOCK_FOLDER_WAIT`] while `owner` (the agent) holds it.
         // Another process's lock folder announces nothing when it goes.
         #[allow(clippy::disallowed_methods)] // a production wait, not test code
-        pub(super) fn take(config: &Path) -> Result<Self, InstallFailure> {
-            let path = Self::path(config);
+        pub(super) fn take(
+            path: PathBuf,
+            file: &Path,
+            owner: &'static str,
+        ) -> Result<Self, InstallFailure> {
             let failure = |detail: String| InstallFailure::NotWritable {
-                path: config.display().to_string(),
+                path: file.display().to_string(),
                 detail,
             };
-            let deadline = Instant::now() + CLAUDE_LOCK_WAIT;
+            let deadline = Instant::now() + LOCK_FOLDER_WAIT;
             loop {
                 match std::fs::create_dir(&path) {
                     Ok(()) => {
@@ -968,7 +976,12 @@ mod claude {
                                 path.display()
                             )));
                         };
-                        return Ok(Self { path, made });
+                        return Ok(Self {
+                            path,
+                            file: file.to_path_buf(),
+                            owner,
+                            made,
+                        });
                     }
                     Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
                     Err(error) => return Err(failure(error.to_string())),
@@ -981,7 +994,7 @@ mod claude {
                     // folder seen stale, then one more try to make it, so a
                     // lock made meanwhile is waited for. Hide's own changes
                     // never meet here, since each holds Hide's lock first, so
-                    // the only other taker is Claude Code, whose own takeover
+                    // the only other taker is the agent, whose own takeover
                     // leaves the same moment between the look and the removal.
                     if mark(&path) == seen {
                         let _ = std::fs::remove_dir(&path);
@@ -990,9 +1003,9 @@ mod claude {
                 }
                 if Instant::now() >= deadline {
                     return Err(failure(format!(
-                        "Claude Code held its config lock ({}) for more than {} s",
+                        "{owner} held its lock ({}) for more than {} s",
                         path.display(),
-                        CLAUDE_LOCK_WAIT.as_secs()
+                        LOCK_FOLDER_WAIT.as_secs()
                     )));
                 }
                 std::thread::sleep(POLL);
@@ -1004,25 +1017,166 @@ mod claude {
             mark(&self.path) == Some(self.made)
         }
 
-        /// Refuses a write once Claude Code took the lock over.
-        fn still_held(&self, config: &Path) -> Result<(), InstallFailure> {
+        /// Refuses a write once the agent took the lock over.
+        pub(super) fn still_held(&self) -> Result<(), InstallFailure> {
             if self.held() {
                 return Ok(());
             }
             Err(InstallFailure::NotWritable {
-                path: config.display().to_string(),
-                detail: "Claude Code took its config lock over while Hide held it".to_owned(),
+                path: self.file.display().to_string(),
+                detail: format!("{} took its lock over while Hide held it", self.owner),
             })
         }
     }
 
-    impl Drop for ConfigLock {
+    impl Drop for LockFolder {
         fn drop(&mut self) {
-            // A lock Claude Code took over is Claude's to remove.
+            // A lock the agent took over is the agent's to remove.
             if self.held() {
                 let _ = std::fs::remove_dir(&self.path);
             }
         }
+    }
+}
+
+/// Pi's trust: `"<folder>": true` in `trust.json` of Pi's agent folder, a
+/// JSON object of resolved folders, each `true`, `false` or `null`. Pi 1.0.4
+/// asks in a folder whose project files it would load (a `.pi/` resource of
+/// the folder, or `.agents/skills` in it or a folder above), and reads the
+/// nearest entry from the folder up, so an entry for the worktree itself
+/// answers it and a folder above that the operator decided decides it too
+/// (`findNearestTrustEntry`, `dist/core/trust-manager.js`). Pi takes
+/// proper-lockfile's lock on `trust.json.lock` beside the file, as spelled
+/// (`realpath: false`), around every read and write, and gives up after ten
+/// tries 20 ms apart, so Hide holds it only across its own read and write.
+mod pi {
+    use super::lock_folder::LockFolder;
+    use super::*;
+
+    /// In Pi's own folder in the install scope
+    /// (`hide_agent_adapter::HomeScope::Install`), beside its settings.
+    pub(super) fn settings_path(home: &Path) -> PathBuf {
+        hide_agent_adapter::AgentId::Pi
+            .adapter()
+            .install_home(home)
+            .join("trust.json")
+    }
+
+    fn lock(settings: &Path) -> Result<LockFolder, InstallFailure> {
+        if let Some(parent) = settings.parent() {
+            hide_platform::fs::private::create_dir_all(parent).map_err(|error| {
+                InstallFailure::NotWritable {
+                    path: settings.display().to_string(),
+                    detail: error.to_string(),
+                }
+            })?;
+        }
+        let mut path = settings.as_os_str().to_owned();
+        path.push(".lock");
+        LockFolder::take(PathBuf::from(path), settings, "Pi")
+    }
+
+    /// The nearest decision Pi reads for `key`: the folder's own entry, else
+    /// the nearest folder above it that has one, with that folder.
+    fn nearest<'a>(decisions: &Map<String, Value>, key: &'a str) -> Option<(&'a str, bool)> {
+        Path::new(key).ancestors().find_map(|folder| {
+            let folder = folder.to_str()?;
+            decisions
+                .get(folder)
+                .and_then(Value::as_bool)
+                .map(|trusted| (folder, trusted))
+        })
+    }
+
+    /// Records `key` as trusted unless Pi already decides it, and takes out
+    /// the entries in `gone` in the same write. A folder the operator answered
+    /// "Do not trust" for in Pi, the worktree or a folder above it, is
+    /// refused, never overridden.
+    pub(super) fn add(
+        home: &Path,
+        key: &str,
+        gone: &[String],
+        remember: &mut dyn FnMut() -> Result<(), InstallFailure>,
+    ) -> Result<Added, InstallFailure> {
+        let settings = settings_path(home);
+        let lock = lock(&settings)?;
+        let mut document = read_document(&settings)?
+            .unwrap_or_else(|| HookDocument::new(Value::Object(Map::new())));
+        let decisions = root_object(&mut document, &settings, Agent::Pi)?;
+        match nearest(decisions, key) {
+            Some((_, true)) => return Ok(Added::Present),
+            Some((folder, false)) => {
+                return Err(InstallFailure::Refused {
+                    path: settings.display().to_string(),
+                    detail: format!(
+                        "Pi marks {folder} not trusted; trust it in Pi, or start the agent there yourself"
+                    ),
+                });
+            }
+            None => {}
+        }
+        remember()?;
+        take_out(decisions, gone);
+        decisions.insert(key.to_owned(), Value::Bool(true));
+        lock.still_held()?;
+        write_document(&settings, &document).map(|()| Added::New)
+    }
+
+    pub(super) fn remove(home: &Path, gone: &[String]) -> Result<usize, InstallFailure> {
+        let settings = settings_path(home);
+        if !settings.exists() {
+            return Ok(0);
+        }
+        let lock = lock(&settings)?;
+        let Some(mut document) = read_document(&settings)? else {
+            return Ok(0);
+        };
+        let removed = take_out(root_object(&mut document, &settings, Agent::Pi)?, gone);
+        if removed > 0 {
+            lock.still_held()?;
+            write_document(&settings, &document)?;
+        }
+        Ok(removed)
+    }
+
+    /// Takes out each entry in `gone` that Pi still trusts; one the operator
+    /// has since answered "Do not trust" for stays theirs.
+    fn take_out(decisions: &mut Map<String, Value>, gone: &[String]) -> usize {
+        let mut removed = 0;
+        for key in gone {
+            if decisions.get(key) == Some(&Value::Bool(true)) {
+                decisions.shift_remove(key);
+                removed += 1;
+            }
+        }
+        removed
+    }
+}
+
+/// Claude Code's trust: `hasTrustDialogAccepted` of a `projects` entry in its
+/// global config, which Claude Code itself rewrites while it runs. Claude
+/// Code takes that file's lock (proper-lockfile's `<file>.lock` folder) and
+/// reads the file again before every write of its own, so Hide holds the same
+/// lock across its read and its write and neither drops the other's change.
+mod claude {
+    use super::lock_folder::LockFolder;
+    use super::*;
+
+    const PROJECTS: &str = "projects";
+    const ACCEPTED: &str = "hasTrustDialogAccepted";
+    /// The lock folder beside the config's real path, where proper-lockfile
+    /// puts it (it resolves links), so a linked `~/.claude.json` is locked
+    /// where Claude Code locks it.
+    pub(super) fn lock_path(config: &Path) -> PathBuf {
+        let real =
+            hide_platform::fs::identity::canonical(config).unwrap_or_else(|_| config.to_path_buf());
+        let mut path = real.into_os_string();
+        path.push(".lock");
+        PathBuf::from(path)
+    }
+
+    fn lock(config: &Path) -> Result<LockFolder, InstallFailure> {
+        LockFolder::take(lock_path(config), config, "Claude Code")
     }
 
     fn projects<'a>(
@@ -1046,7 +1200,7 @@ mod claude {
         remember: &mut dyn FnMut() -> Result<(), InstallFailure>,
     ) -> Result<Added, InstallFailure> {
         let config = Agent::ClaudeCode.settings_path(home);
-        let lock = ConfigLock::take(&config)?;
+        let lock = lock(&config)?;
         let mut document =
             read_document(&config)?.unwrap_or_else(|| HookDocument::new(Value::Object(Map::new())));
         let projects = projects(&mut document, &config)?;
@@ -1057,7 +1211,7 @@ mod claude {
         remember()?;
         entry.insert(ACCEPTED.to_owned(), Value::Bool(true));
         take_out(projects, gone);
-        lock.still_held(&config)?;
+        lock.still_held()?;
         write_document(&config, &document).map(|()| Added::New)
     }
 
@@ -1066,13 +1220,13 @@ mod claude {
         if !config.exists() {
             return Ok(0);
         }
-        let lock = ConfigLock::take(&config)?;
+        let lock = lock(&config)?;
         let Some(mut document) = read_document(&config)? else {
             return Ok(0);
         };
         let removed = take_out(projects(&mut document, &config)?, gone);
         if removed > 0 {
-            lock.still_held(&config)?;
+            lock.still_held()?;
             write_document(&config, &document)?;
         }
         Ok(removed)

@@ -327,7 +327,7 @@ fn claude_s_own_lock_is_waited_for_and_released() {
     std::fs::create_dir(&lock).unwrap();
     let refused = trust(Agent::ClaudeCode, home.path(), &folder("tree"), none()).unwrap_err();
     assert!(
-        refused.message().contains("held its config lock"),
+        refused.message().contains("Claude Code held its lock"),
         "{}",
         refused.message()
     );
@@ -556,8 +556,8 @@ fn hide_leaves_a_claude_lock_it_no_longer_holds() {
     let home = tempfile::tempdir().unwrap();
     let config = home.path().join(".claude.json");
     std::fs::write(&config, "{}").unwrap();
-    let held = claude::ConfigLock::take(&config).unwrap();
-    let lock = claude::ConfigLock::path(&config);
+    let lock = claude::lock_path(&config);
+    let held = lock_folder::LockFolder::take(lock.clone(), &config, "Claude Code").unwrap();
     assert!(held.held());
     // Claude Code took it over after Hide held it past the stale time.
     std::fs::remove_dir(&lock).unwrap();
@@ -612,19 +612,19 @@ fn codex_trust_needs_a_codex_to_record_it_through() {
 }
 
 #[test]
-fn only_claude_codex_agy_and_grok_starts_record_a_trust() {
+fn only_claude_codex_agy_grok_and_pi_starts_record_a_trust() {
     use hide_agent_adapter::LaunchDialect;
     for dialect in [
         LaunchDialect::Claude,
         LaunchDialect::Codex,
         LaunchDialect::Antigravity,
         LaunchDialect::Grok,
+        LaunchDialect::Pi,
     ] {
         assert!(Agent::of(dialect).is_some(), "{dialect:?}");
     }
     for dialect in [
         LaunchDialect::OpenCode,
-        LaunchDialect::Pi,
         LaunchDialect::Omp,
         LaunchDialect::Cursor,
     ] {
@@ -785,4 +785,108 @@ fn a_grok_worktree_of_a_repository_without_a_main_checkout_is_refused() {
         .message();
     assert!(refused.contains("main checkout"), "{refused}");
     assert!(!Agent::Grok.settings_path(home.path()).exists());
+}
+
+/// Pi's trust file, as Pi 1.0.4 writes it after the operator's own answers:
+/// sorted keys, two spaces, a line break at the end.
+const PI_OPERATOR: &str = "{\n  \"/elsewhere\": true\n}\n";
+
+#[test]
+fn pi_trusts_the_worktree_itself_and_hide_takes_out_only_its_own_entry() {
+    let home = home();
+    let settings = Agent::Pi.settings_path(home.path());
+    assert_eq!(settings, home.path().join(".pi/agent/trust.json"));
+    std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    std::fs::write(&settings, PI_OPERATOR).unwrap();
+    let (_, linked) = linked_worktree(home.path());
+    let key = hide_platform::fs::identity::canonical(&linked).unwrap();
+    trust_worktree(Agent::Pi, home.path(), &linked, none()).unwrap();
+    let written = read_json(&settings);
+    assert_eq!(written["/elsewhere"], Value::Bool(true));
+    assert_eq!(written[key.to_str().unwrap()], Value::Bool(true));
+    assert_eq!(written.as_object().unwrap().len(), 2);
+    assert_eq!(recorded(Agent::Pi, home.path()), [key.to_str().unwrap()]);
+    assert!(
+        !home.path().join(".pi/agent/trust.json.lock").exists(),
+        "Hide releases Pi's lock"
+    );
+
+    assert_eq!(forget(Agent::Pi, home.path(), &linked, none()).unwrap(), 1);
+    assert_eq!(std::fs::read_to_string(&settings).unwrap(), PI_OPERATOR);
+    assert!(recorded(Agent::Pi, home.path()).is_empty());
+
+    trust_worktree(Agent::Pi, home.path(), &linked, none()).unwrap();
+    assert_eq!(forget_all(Agent::Pi, home.path(), none()).unwrap(), 1);
+    assert_eq!(std::fs::read_to_string(&settings).unwrap(), PI_OPERATOR);
+}
+
+#[test]
+fn pi_s_own_answer_for_the_worktree_or_a_folder_above_stays_the_operator_s() {
+    let home = home();
+    let settings = Agent::Pi.settings_path(home.path());
+    std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    let (_, linked) = linked_worktree(home.path());
+    let key = hide_platform::fs::identity::canonical(&linked).unwrap();
+    let above = key.parent().unwrap().to_str().unwrap().to_owned();
+
+    // A folder above the worktree that the operator trusted in Pi already
+    // answers Pi's question there: Hide adds and records nothing.
+    let trusted = serde_json::to_string_pretty(&serde_json::json!({ &above: true })).unwrap();
+    std::fs::write(&settings, &trusted).unwrap();
+    trust_worktree(Agent::Pi, home.path(), &linked, none()).unwrap();
+    assert_eq!(std::fs::read_to_string(&settings).unwrap(), trusted);
+    assert!(recorded(Agent::Pi, home.path()).is_empty());
+
+    // "Do not trust" for it is refused, never overridden.
+    let refused_above =
+        serde_json::to_string_pretty(&serde_json::json!({ &above: false })).unwrap();
+    std::fs::write(&settings, &refused_above).unwrap();
+    let refused = trust_worktree(Agent::Pi, home.path(), &linked, none()).unwrap_err();
+    assert!(
+        refused.message().contains("Pi marks") && refused.message().contains(&above),
+        "{}",
+        refused.message()
+    );
+    assert_eq!(std::fs::read_to_string(&settings).unwrap(), refused_above);
+    assert!(recorded(Agent::Pi, home.path()).is_empty());
+
+    // Pi's own `null` is no decision, as Pi reads it.
+    std::fs::write(
+        &settings,
+        serde_json::to_string(&serde_json::json!({ key.to_str().unwrap(): null })).unwrap(),
+    )
+    .unwrap();
+    trust_worktree(Agent::Pi, home.path(), &linked, none()).unwrap();
+    assert_eq!(
+        read_json(&settings)[key.to_str().unwrap()],
+        Value::Bool(true)
+    );
+}
+
+#[test]
+fn pi_s_own_lock_is_waited_for_and_a_missing_agent_folder_is_made() {
+    let home = tempfile::tempdir().unwrap();
+    let (_, linked) = linked_worktree(home.path());
+    let settings = Agent::Pi.settings_path(home.path());
+    std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    let lock = home.path().join(".pi/agent/trust.json.lock");
+    // A Pi reading its trust holds the lock folder.
+    std::fs::create_dir(&lock).unwrap();
+    let refused = trust_worktree(Agent::Pi, home.path(), &linked, none()).unwrap_err();
+    assert!(
+        refused.message().contains("Pi held its lock"),
+        "{}",
+        refused.message()
+    );
+    assert!(!settings.exists());
+    assert!(recorded(Agent::Pi, home.path()).is_empty());
+    assert!(
+        lock.is_dir(),
+        "a lock Hide did not take is not Hide's to remove"
+    );
+
+    std::fs::remove_dir_all(home.path().join(".pi")).unwrap();
+    trust_worktree(Agent::Pi, home.path(), &linked, none()).unwrap();
+    assert!(settings.is_file());
+    assert!(!lock.exists());
 }

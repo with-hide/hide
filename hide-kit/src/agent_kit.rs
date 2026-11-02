@@ -286,11 +286,31 @@ fn remove_guidance(target: &KitTarget, agent: GuidanceAgent) -> RemoveOutcome {
 
 // --- OpenCode's plugin, Pi's and omp's extension ---------------------------------
 
+/// Takes the plugin out and, for Pi, the folder trust Hide recorded for the
+/// worktrees it started Pi in, as switching agy or Grok off does
+/// (docs/agent-hooks.md, Folder trust for the worktrees Hide makes).
 fn remove_plugin(target: &KitTarget, dialect: PluginDialect) -> RemoveOutcome {
-    match plugin::of(dialect).remove(&target.home) {
-        Ok(true) => RemoveOutcome::Removed,
-        Ok(false) => RemoveOutcome::Absent,
-        Err(reason) => RemoveOutcome::Failed { reason },
+    use hide_agent_hooks::folder_trust::{self, Agent, Tools};
+    let removed = match plugin::of(dialect).remove(&target.home) {
+        Ok(removed) => removed,
+        Err(reason) => return RemoveOutcome::Failed { reason },
+    };
+    let forgotten = match dialect {
+        PluginDialect::Pi => match folder_trust::forget_all(Agent::Pi, &target.home, Tools::none())
+        {
+            Ok(forgotten) => forgotten,
+            Err(failure) => {
+                return RemoveOutcome::Failed {
+                    reason: failure.message(),
+                };
+            }
+        },
+        _ => 0,
+    };
+    if removed || forgotten > 0 {
+        RemoveOutcome::Removed
+    } else {
+        RemoveOutcome::Absent
     }
 }
 
