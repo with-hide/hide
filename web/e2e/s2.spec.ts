@@ -13,7 +13,7 @@ import { altScreenProgram, bytesReceived } from "./alt-screen-program";
 import { corePaneFocus, focusTab, newTab, openProject, tabsOf, withControl } from "./daemon-actions";
 import { startFixture, type AgentFixture, type EngineServer } from "./engine-fixture";
 import { waitForTerminal } from "./group-start-helper";
-import { paneCommandLine } from "./herdr-fixture";
+import { paneCommandLine, panePrompt, printLinesCommand } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { fixtureProgram } from "./platform-fixture";
 import { projectRow } from "./overview-entry";
@@ -210,7 +210,7 @@ async function splitShell(page: Page, flow: Flow): Promise<string> {
   await expect.poll(focusedPane).toBe(shellPaneId);
   const shellPane = page.locator(`[data-pane-view="${shellPaneId}"]`);
   await expect(shellPane).toHaveAttribute("data-transport", /connected|controlling|idle/, { timeout: 15_000 });
-  await expect.poll(() => screen(page), { timeout: 15_000 }).toContain("fixture %");
+  await expect.poll(() => screen(page), { timeout: 15_000 }).toMatch(panePrompt(flow.herdr.shell));
   // The next focus_pane must not go out before the focus is confirmed.
   await focusConfirmed(flow, shellPaneId);
   await shellPane.locator(".xterm-helper-textarea").focus();
@@ -262,7 +262,7 @@ test("a tab switch mounts the new tab, ⌥T opens a terminal directly, and recen
     await expect(page.locator("[data-pane-view]")).toHaveCount(1);
     const secondTabShell = (await page.locator("[data-pane-view]").getAttribute("data-pane-view"))!;
     await expect.poll(() => sent.get("agent_layout.focus")).toBe(1);
-    await expect.poll(() => screen(page), { timeout: 15_000 }).toContain("fixture %");
+    await expect.poll(() => screen(page), { timeout: 15_000 }).toMatch(panePrompt(herdr.shell));
 
     // New tab opens a terminal directly in the marked checkout owner.
     const tabsBefore = await listedTabs(flow);
@@ -332,8 +332,9 @@ test("a wheel over a shell pane is one terminal_scroll per batch, and a click is
     // terminal_scroll per batch and the core's viewport follows (B19).
     const shellPane = page.locator('[data-pane-view][data-focused="true"]');
     const shellPaneId = await splitShell(page, flow);
-    await page.keyboard.type("seq 1 100\n");
-    await expect.poll(() => screen(page), { timeout: 15_000 }).toMatch(/100\s+fixture %/);
+    await page.keyboard.type(`${herdr.shell === "posix" ? "seq 1 100" : printLinesCommand(herdr.shell, "", 100)}\n`);
+    const bottom = new RegExp(`100\\s+${panePrompt(herdr.shell).source}`);
+    await expect.poll(() => screen(page), { timeout: 15_000 }).toMatch(bottom);
     const shellBox = (await shellPane.boundingBox())!;
     await page.mouse.move(shellBox.x + shellBox.width / 2, shellBox.y + shellBox.height / 2);
     const keysBeforeWheel = sent.get("key") ?? 0;
@@ -341,11 +342,11 @@ test("a wheel over a shell pane is one terminal_scroll per batch, and a click is
     await expect.poll(() => sent.get("terminal_scroll")).toBe(1);
     expect(lastSent.get("terminal_scroll")).toMatchObject({ direction: "up", modifiers: 0 });
     expect(lastSent.get("terminal_scroll")!.lines as number).toBeGreaterThan(1);
-    await expect.poll(() => screen(page), { timeout: 10_000 }).not.toMatch(/100\s+fixture %/);
+    await expect.poll(() => screen(page), { timeout: 10_000 }).not.toMatch(bottom);
     await page.mouse.wheel(0, 400);
     await expect.poll(() => sent.get("terminal_scroll")).toBe(2);
     expect(lastSent.get("terminal_scroll")).toMatchObject({ direction: "down" });
-    await expect.poll(() => screen(page), { timeout: 10_000 }).toMatch(/100\s+fixture %/);
+    await expect.poll(() => screen(page), { timeout: 10_000 }).toMatch(bottom);
     // ⌥ + wheel is the browser's, not Herdr's.
     await page.keyboard.down("Alt");
     await page.mouse.wheel(0, -120);
@@ -441,7 +442,7 @@ test("a wheel over an alternate-screen program is one terminal_scroll and no key
     // the PTY got, in this order.
     await expect.poll(() => bytesReceived(log).toString("latin1"), { timeout: 15_000 }).toBe("\x1b[B\x1b[Aq");
     // The program left the alternate screen on q and the shell's prompt is back.
-    await expect.poll(() => screen(page), { timeout: 15_000 }).toMatch(/fixture %\s*$/);
+    await expect.poll(() => screen(page), { timeout: 15_000 }).toMatch(new RegExp(`${panePrompt(flow.herdr.shell).source}\\s*$`));
   } finally {
     flow.stop();
   }
@@ -459,9 +460,9 @@ test("a drag selects locally without a click, and its copy joins wrapped lines a
     const shellView = page.locator(`[data-pane-view="${shellPaneId}"]`);
     const shellGrid = (await page.evaluate((id) => window.__hideProbe?.paneGrid(id) ?? null, shellPaneId))!;
     const wrapped = "w".repeat(shellGrid.cols + 7);
-    // The fixture selects ComSpec on Windows and zsh on Unix.
+    // Hide-made panes use PowerShell on Windows and zsh on Unix.
     await page.keyboard.type(process.platform === "win32"
-      ? `cls&echo:${wrapped}&echo:short&echo:&echo:  in&echo:    deeper&echo:end\n`
+      ? `Clear-Host; Write-Output '${wrapped}' 'short' '' '  in' '    deeper' 'end'\n`
       : `clear; echo ${wrapped}; echo short; echo; echo '  in'; echo '    deeper'; echo end\n`);
     await expect.poll(() => screen(page), { timeout: 15_000 }).toMatch(/^w+\s*\n\s*w+\s*\n\s*short\s*\n\s*\n\s+in\s*\n\s+deeper\s*\n\s*end/);
     const shellScreen = (await shellView.locator(".xterm-screen").boundingBox())!;

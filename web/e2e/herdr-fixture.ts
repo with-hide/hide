@@ -32,6 +32,7 @@ import path from "node:path";
 import { afterCleanup, ownUntilWorkerExit } from "./worker-owned";
 import { endWindowsProcesses, fixtureExecutable, fixtureHomeEnv, fixturePrograms, inheritedFixtureEnv, localEndpoint, windowsProcessTree, type WindowsProcess } from "./platform-fixture";
 import { endProcessGroup } from "./process-tree";
+import { powershellCommand, powershellQuote } from "./windows-command";
 
 /** What `pane process-info` answers about a pane's shell, as far as the fixture reads it. */
 type ShellProcessInfo = {
@@ -320,7 +321,12 @@ async function waitFor(predicate: () => boolean, what: string, ms = 10_000, deta
   throw new Error(`timed out waiting for ${what}${detail ? `; last seen: ${detail()}` : ""}`);
 }
 
-export type PaneShell = "posix" | "cmd";
+export type PaneShell = "posix" | "cmd" | "powershell";
+
+/** Hide-made Windows panes run PowerShell, even if the private Herdr default is cmd.exe. */
+export function panePrompt(shell: PaneShell): RegExp {
+  return shell === "powershell" ? /PS [^\r\n]*>/ : /fixture %/;
+}
 
 /**
  * The family of the shell `isolatedEnv` named for Herdr's panes. The shell
@@ -337,11 +343,12 @@ export function paneShellOf(env: NodeJS.ProcessEnv): PaneShell {
 
 /** A tab named for its pane's shell, or numbered when none has named it yet; cmd.exe titles its console with its own path. */
 export function paneShellTabName(shell: PaneShell): RegExp {
-  return shell === "cmd" ? /cmd\.exe|Tab \d+/i : /zsh|Tab \d+/;
+  return shell === "cmd" ? /cmd\.exe|Tab \d+/i : shell === "powershell" ? /powershell|Tab \d+/i : /zsh|Tab \d+/;
 }
 
 /** The line that makes a pane's shell print `lines`, one at a time. */
 export function printLinesCommand(shell: PaneShell, prefix: string, count: number): string {
+  if (shell === "powershell") return `1..${count} | ForEach-Object { Write-Output (${powershellQuote(prefix)} + $_) }`;
   if (shell === "cmd") return `for %n in (${Array.from({ length: count }, (_, i) => i + 1).join(" ")}) do @echo ${prefix}%n`;
   return `for n in ${Array.from({ length: count }, (_, i) => i + 1).join(" ")}; do printf '${prefix}%s\\n' "$n"; sleep 0.1; done`;
 }
@@ -365,16 +372,37 @@ function cmdQuote(value: string): string {
 
 /** Runs these arguments through the shell the fixture actually selected. */
 export function paneCommandLine(shell: PaneShell, argv: string[]): string {
+  if (shell === "powershell") return powershellCommand(argv);
   return argv.map(shell === "cmd" ? cmdQuote : posixQuote).join(" ");
 }
 
 /** Clears the pane and prints a fixture file through the shell it really runs. */
 export function printFileCommand(shell: PaneShell, file: string): string {
+  if (shell === "powershell") return `Clear-Host; Get-Content -LiteralPath ${powershellQuote(file)} -Encoding UTF8`;
   return shell === "cmd" ? `cls & type ${cmdQuote(file)}` : `clear; cat ${posixQuote(file)}`;
 }
 
 /** The text that runs `program` in a pane's shell, ready for `pane run`. */
 export function paneProgramLine(shell: PaneShell, program: PaneProgram): string {
+  if (shell === "powershell") {
+    // Keep redirected bytes and exit status independent of PowerShell 5's
+    // UTF-16 redirection. The private file also keeps the typed line bounded.
+    const script = `${program.status}.cjs`;
+    fs.writeFileSync(script, `
+const fs = require("node:fs");
+const { spawnSync } = require("node:child_process");
+const program = ${JSON.stringify(program)};
+const out = fs.openSync(program.stdout ?? "NUL", "w");
+const err = fs.openSync(program.stderr, "w");
+try {
+  const [binary, ...args] = program.argv;
+  const result = spawnSync(binary, args, { env: { ...process.env, ...program.env }, stdio: ["inherit", out, err], timeout: 20000 });
+  if (result.error) fs.writeSync(err, String(result.error));
+  fs.writeFileSync(program.status, String(result.status ?? 1));
+} finally { fs.closeSync(out); fs.closeSync(err); }
+`);
+    return paneCommandLine(shell, [process.execPath, script]);
+  }
   const env = Object.entries(program.env ?? {});
   if (shell === "cmd") {
     const sets = env.map(([key, value]) => `set ${cmdQuote(`${key}=${value}`)} && `).join("");

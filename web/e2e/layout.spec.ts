@@ -9,6 +9,7 @@ import { chord } from "./chords";
 import { e2eEngine } from "./e2e-engine";
 import { openLayout, startLayoutStack, type LayoutStack } from "./engine-fixture";
 import { corePaneFocus } from "./daemon-actions";
+import { panePrompt } from "./herdr-fixture";
 import { countSent, screenshot } from "./wire";
 
 test.describe.configure({ timeout: 90_000 });
@@ -55,7 +56,7 @@ async function splitShell(page: Page, { stack, sent }: Open): Promise<string> {
   const shellPaneId = created[0]!;
   await expect.poll(() => probePane(page)).toBe(shellPaneId);
   await expect(page.locator(`[data-pane-view="${shellPaneId}"]`)).toHaveAttribute("data-transport", /connected|controlling|idle/, { timeout: 15_000 });
-  await expect.poll(() => paneText(page, shellPaneId), { timeout: 15_000 }).toContain("fixture %");
+  await expect.poll(() => paneText(page, shellPaneId), { timeout: 15_000 }).toMatch(panePrompt(stack.server.shell));
   await focusPane(page, stack, shellPaneId);
   return shellPaneId;
 }
@@ -63,12 +64,12 @@ async function splitShell(page: Page, { stack, sent }: Open): Promise<string> {
 /**
  * The size the pane's own program reads from its terminal, printed after
  * `marker`: `stty` in the Unix fixture shell, the console window PowerShell
- * reads in the Windows one (cmd.exe has no size command of its own).
+ * reads in the Windows PowerShell pane.
  */
 async function programSize(page: Page, pane: string, marker: string): Promise<{ rows: number; cols: number }> {
   const ask =
     process.platform === "win32"
-      ? `powershell -NoProfile -Command "$s = $Host.UI.RawUI.WindowSize; '${marker} ' + $s.Height + ' ' + $s.Width"`
+      ? `$s = $Host.UI.RawUI.WindowSize; '${marker} ' + $s.Height + ' ' + $s.Width`
       : `echo ${marker} $(stty size)`;
   await page.keyboard.type(ask);
   await page.keyboard.press("Enter");
@@ -208,7 +209,7 @@ async function newTab(page: Page, { stack, sent }: Open): Promise<string> {
   await expect(page.locator("[data-canvas]")).toHaveAttribute("data-canvas", tab);
   await expect(page.locator("[data-pane-view]")).toHaveCount(1);
   const pane = (await paneIds(page))[0]!;
-  await expect.poll(() => paneText(page, pane), { timeout: 15_000 }).toContain("fixture %");
+  await expect.poll(() => paneText(page, pane), { timeout: 15_000 }).toMatch(panePrompt(stack.server.shell));
   return tab;
 }
 
@@ -260,7 +261,7 @@ test("Reopen closed tab gives back the tab just closed with a working shell", { 
     await expect(page.locator("[data-canvas]")).toHaveAttribute("data-canvas", reopened);
     await expect(page.locator("[data-pane-view]")).toHaveCount(1);
     const pane = (await paneIds(page))[0]!;
-    await expect.poll(() => paneText(page, pane), { timeout: 15_000 }).toContain("fixture %");
+    await expect.poll(() => paneText(page, pane), { timeout: 15_000 }).toMatch(panePrompt(stack.server.shell));
     await focusPane(page, stack, pane);
     expect(await programSize(page, pane, "reopened")).toEqual(await page.evaluate((id) => window.__hideProbe!.paneGrid(id), pane));
   } finally {

@@ -15,7 +15,7 @@ import path from "node:path";
 import { expect, type Page } from "@playwright/test";
 import { connectControl, type HidedControl } from "./hided-control.mjs";
 import { agentIn, areaShowing, checkoutAt, closePane, focusPane, openProject, splitPane, tabPanes, viewPane } from "./daemon-actions";
-import { claudeProjects, declareAgentSession, paneShellOf, startHerdr, writeFixtureTranscript, type PaneShell } from "./herdr-fixture";
+import { claudeProjects, declareAgentSession, panePrompt, paneShellOf, startHerdr, writeFixtureTranscript, type PaneShell } from "./herdr-fixture";
 import { startHided, type Daemon, type DaemonEngine } from "./hided-fixture";
 import { fixtureExecutable, fixturePrograms } from "./platform-fixture";
 import { installAgentRunner, reportedMarker, type AgentPaneFixture, type AgentRun, type HideAnswer } from "./agent-pane";
@@ -38,7 +38,12 @@ export type EngineServer = DaemonEngine & {
 
 /** The selected engine, empty: a private Herdr server, or what the own engine's daemon needs. */
 export async function startEngine(engine = e2eEngine()): Promise<EngineServer> {
-  if (engine === "herdr") return { engine, ...(await startHerdr({ empty: true })) };
+  if (engine === "herdr") {
+    const server = await startHerdr({ empty: true });
+    // Hide chooses the integrated shell for panes it starts. Give its node
+    // the same shell as the private server, not the CI runner's login shell.
+    return { engine, ...server, shell: process.platform === "win32" ? "powershell" : server.shell, daemonEnv: { SHELL: server.env.SHELL } };
+  }
   return startOwnEngine();
 }
 
@@ -82,7 +87,7 @@ function startOwnEngine(): EngineServer {
       daemonEnv,
       // A pane's shell is a child of the daemon's node, in the daemon's HOME.
       home: path.join(root, "home"),
-      shell: paneShellOf(daemonEnv),
+      shell: process.platform === "win32" ? "powershell" : paneShellOf(daemonEnv),
       stop,
       afterStop: (cleanup) => {
         if (stopped) cleanup();
@@ -146,7 +151,7 @@ export async function openLayout(page: Page, stack: LayoutStack): Promise<void> 
   await expect(page.locator("[data-canvas]")).toHaveAttribute("data-canvas", stack.tab);
   await expect(page.locator("[data-pane-view]")).toHaveCount(stack.panes.length);
   for (const pane of stack.panes) {
-    await expect.poll(() => page.evaluate((id) => (window as unknown as { __hideProbe?: { paneText: (id: string) => string } }).__hideProbe?.paneText(id) ?? "", pane), { timeout: 20_000, message: `the prompt in ${pane}` }).toContain("fixture %");
+    await expect.poll(() => page.evaluate((id) => (window as unknown as { __hideProbe?: { paneText: (id: string) => string } }).__hideProbe?.paneText(id) ?? "", pane), { timeout: 20_000, message: `the prompt in ${pane}` }).toMatch(panePrompt(stack.server.shell));
   }
 }
 
@@ -196,7 +201,22 @@ export async function startFixture({ agents = true, family = false }: { agents?:
   };
   const opened = async (daemon: Daemon) => {
     if (made) return;
-    const control = await connectControl(daemon);
+    // Preserve the setup's last output when no page could open yet. A fixed
+    // byte cap keeps an unexpected output flood from growing the run's memory.
+    const terminal: string[] = [];
+    let terminalBytes = 0;
+    let terminalDropped = 0;
+    const control = await connectControl(daemon, 15_000, (chunks) => {
+      const encoded = JSON.stringify(chunks);
+      const bytes = Buffer.byteLength(encoded);
+      if (bytes > 256 * 1024) { terminalDropped += 1; return; }
+      while (terminal.length && (terminal.length >= 32 || terminalBytes + bytes > 256 * 1024)) {
+        terminalBytes -= Buffer.byteLength(terminal.shift()!);
+        terminalDropped += 1;
+      }
+      terminal.push(encoded);
+      terminalBytes += bytes;
+    });
     try {
       made = await openFixture(control, server, daemon, family ? "family" : agents ? "agents" : "shells");
     } catch (error) {
@@ -205,6 +225,7 @@ export async function startFixture({ agents = true, family = false }: { agents?:
       if (keep) {
         const rest = await control.until((now) => now, "the last snapshot", 1_000).catch(() => null);
         fs.writeFileSync(path.join(keep, `fixture-setup-${path.basename(server.root)}.json`), JSON.stringify(rest));
+        fs.writeFileSync(path.join(keep, `fixture-terminal-${path.basename(server.root)}.json`), JSON.stringify({ dropped: terminalDropped, chunks: terminal.map((encoded) => JSON.parse(encoded)) }));
       }
       throw error;
     } finally {
