@@ -1,4 +1,4 @@
-// Chapter 1: splitting, jumping and zooming, closing the working agent and
+// Chapter 2: splitting, jumping and zooming, closing the working agent and
 // reopening it, moving a pane, and opening a tab.
 
 import { chapter } from "../chapter";
@@ -15,7 +15,7 @@ const agentClosed = (model: ScreenModel) => model.closed.at(-1)?.pane.agent != n
 
 export default chapter<ScreenModel>({
   id: "screen",
-  number: 1,
+  number: 2,
   version: 4,
   world: SCREEN_WORLD,
   quest: true,

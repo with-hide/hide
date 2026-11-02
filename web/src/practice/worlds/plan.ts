@@ -1,4 +1,4 @@
-// Chapter 7's world: one Claude agent the learner asks for a bigger change,
+// Chapter 8's world: one Claude agent the learner asks for a bigger change,
 // plan first. Whatever words the learner sends play the next part of the
 // script, since a practice understands no words: the agent puts up a plan
 // for review (`hide plan set --ask`), which the core lays on its row as a

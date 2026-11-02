@@ -1,11 +1,11 @@
-// Chapter 0: the three parts of the screen, pointed at on a window with work in them.
+// Chapter 1: the three parts of the screen, pointed at on a window with work in them.
 
 import { chapter } from "../chapter";
 import { TOUR_WORLD, type TourModel } from "../worlds/tour";
 
 export default chapter<TourModel>({
   id: "overview",
-  number: 0,
+  number: 1,
   version: 2,
   world: TOUR_WORLD,
   quest: false,

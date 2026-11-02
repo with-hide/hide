@@ -1,4 +1,4 @@
-// Chapter 4's world: a lead agent and two other open agents in one tab, where
+// Chapter 5's world: a lead agent and two other open agents in one tab, where
 // the learner hands work on by saying it. Each request sent from the lead's
 // prompt, in whatever words, plays the next part of the script, as the agents
 // would, since a practice understands no words: the lead

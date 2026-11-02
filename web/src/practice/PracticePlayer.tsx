@@ -71,6 +71,14 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
     return { actions: createActions(send, clipboard), clipboard, send };
   }, []);
 
+  // The world's own next beat, an agent finishing a turn, plays at its time; any change to the model before then asks again.
+  useEffect(() => {
+    const beat = chapter.world.later?.(model);
+    if (!beat) return undefined;
+    const timer = window.setTimeout(() => send(beat.event), Math.max(0, beat.at - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [chapter, model, send]);
+
   useEffect(() => installKeyboard(actions), [actions]);
   useEffect(() => holdPageClipboard(clipboard), [clipboard]);
   // A link, a window, a navigation or a host call the shell would have sent off the page goes to the world instead.
@@ -85,7 +93,7 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
       rest: { ...rest, ui_state }, agents, connection: "live", focusedPaneId: focused, usage: usage ? { nodes: [usage] } : null,
       fileIndex: frames?.fileIndex ?? null, editor: frames?.editor ?? null, documents: frames?.documents ?? NO_DOCUMENTS,
       sessionWorkSearch: frames?.sessionWorkSearch ?? null, sessionRecord: frames?.sessionRecord ?? null, linkPanel: frames?.linkPanel ?? null,
-      listings: frames?.listings ?? NO_LISTINGS, changes: frames?.changes ?? null, memory: frames?.memory ?? null,
+      listings: frames?.listings ?? NO_LISTINGS, changes: frames?.changes ?? null, memory: frames?.memory ?? null, suggestions: frames?.suggestions ?? null,
     });
   }, [chapter, model, operator]);
 

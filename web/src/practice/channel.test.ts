@@ -20,9 +20,9 @@ it("opens a browser tab on the chapter's address and tells a window already open
   const listener = new BroadcastChannel(PRACTICE_CHANNEL);
   const heard = new Promise<PracticeMessage>((resolve) => { listener.onmessage = (event: MessageEvent<PracticeMessage>) => resolve(event.data); });
   openPractice(FIRST_CHAPTER);
-  expect(await heard).toEqual({ kind: "play", chapter: "overview" });
+  expect(await heard).toEqual({ kind: "play", chapter: "mission" });
   listener.close();
-  expect(open).toHaveBeenCalledWith(practiceAddress("en", "overview"), PRACTICE_CHANNEL);
+  expect(open).toHaveBeenCalledWith(practiceAddress("en", "mission"), PRACTICE_CHANNEL);
   expect(practiceAddress("ko", "overview")).toBe("/?practice=1&lang=ko&chapter=overview");
   expect(practiceAddress("ko")).toBe("/?practice=1&lang=ko");
 });
@@ -33,5 +33,5 @@ it("asks the desktop app for no chapter when none is named, so the window opens 
   openPractice();
   expect(bridge).toHaveBeenCalledWith("en", undefined);
   openPractice(FIRST_CHAPTER);
-  expect(bridge).toHaveBeenLastCalledWith("en", "overview");
+  expect(bridge).toHaveBeenLastCalledWith("en", "mission");
 });

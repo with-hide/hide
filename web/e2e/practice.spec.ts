@@ -158,15 +158,20 @@ test("the practice window plays every chapter by the guide's button as it does w
   });
 });
 
-/** Presses Enter in chapter `id` until its step `at` shows, each press waiting for the practice to move; null presses on until the chapter is left. */
-async function pressTo(practice: Page, id: string, at: number | null): Promise<void> {
+/**
+ * Presses Enter in chapter `id` until its step `at` shows, each press waiting for the practice to move; null presses on until the chapter is left.
+ * A step that waits on the world's own beat takes no Enter; `hurry`, given by a journey that faked the page's clock, runs it ahead there so the beat comes at once.
+ */
+async function pressTo(practice: Page, id: string, at: number | null, hurry: (() => Promise<void>) | null = null): Promise<void> {
   const layer = practice.locator(`[data-practice-chapter="${id}"] [data-practice-layer]`);
   for (let presses = 0; ; presses += 1) {
     const now = await practiceState(practice);
     if (!now.startsWith(`${id}:`)) return expect(at, `chapter ${id} was left before step ${at}`).toBeNull();
     if (at !== null && Number(await layer.getAttribute("data-practice-index")) >= at) return;
     expect(presses, `the practice stopped moving at ${now}`).toBeLessThan(PRESSES_PER_CHAPTER);
-    await practice.keyboard.press("Enter");
+    const waiting = (await layer.getAttribute("data-practice-waiting")) !== null;
+    if (waiting && hurry) await hurry();
+    else if (!waiting) await practice.keyboard.press("Enter");
     await expect.poll(() => practiceState(practice), { message: `Enter at ${now} moved nothing`, timeout: 10_000 }).not.toBe(now);
     await settled(practice);
   }
@@ -175,6 +180,9 @@ async function pressTo(practice: Page, id: string, at: number | null): Promise<v
 test("every chapter started over from each of its steps plays to its end with Enter alone", async ({ page }) => {
   test.setTimeout(600_000);
   await withPractice(page, async (practice, chapters) => {
+    // Chapter 0 waits seconds at a time for its Conductor; replayed from each of its steps that would be minutes, so its clock runs ahead on those steps.
+    await practice.clock.install();
+    const hurry = () => practice.clock.fastForward(5_000);
     const ids = await chapters.evaluateAll((rows) => rows.map((row) => row.getAttribute("data-practice-hub-chapter")!));
     for (const id of ids) {
       const row = practice.locator(`[data-practice-hub-chapter="${id}"]`);
@@ -183,7 +191,7 @@ test("every chapter started over from each of its steps plays to its end with En
       const steps = Number(await layer.getAttribute("data-practice-steps"));
       // Each run goes one step further than the one before, and starts over from the list where the learner would.
       for (let reached = 1; reached < steps; reached += 1) {
-        await pressTo(practice, id, reached);
+        await pressTo(practice, id, reached, hurry);
         await practice.locator("[data-practice-hub-open]").click();
         // A run that reached the last step has seen the chapter, and the list then offers it again from the start.
         await expect(row).toHaveAttribute("data-status", /^(paused|done)$/);
@@ -191,7 +199,7 @@ test("every chapter started over from each of its steps plays to its end with En
         await ((await fromStart.count()) ? fromStart : row.locator("[data-practice-play]")).click();
         await expect(layer).toHaveAttribute("data-practice-index", "0");
       }
-      await pressTo(practice, id, null);
+      await pressTo(practice, id, null, hurry);
       if ((await practiceState(practice)) !== "hub") await practice.locator("[data-practice-hub-open]").click();
       await expect(row).toHaveAttribute("data-status", "done");
     }
@@ -235,11 +243,11 @@ test("the bubble's Exit closes the practice from any step, keeping where the cha
 
 test("the first chapter ends by asking what next, and Use Hide now closes the practice", async ({ page }) => {
   await withPractice(page, async (practice) => {
-    await practice.locator('[data-practice-hub-chapter="overview"] [data-practice-play]').click();
-    const layer = practice.locator('[data-practice-chapter="overview"] [data-practice-layer]');
-    await pressTo(practice, "overview", Number(await layer.getAttribute("data-practice-steps")) - 1);
+    await practice.locator('[data-practice-hub-chapter="mission"] [data-practice-play]').click();
+    const layer = practice.locator('[data-practice-chapter="mission"] [data-practice-layer]');
+    await pressTo(practice, "mission", Number(await layer.getAttribute("data-practice-steps")) - 1);
     await practice.keyboard.press("Enter");
-    const choice = practice.locator('[data-practice-chapter="overview"] [data-practice-choice]');
+    const choice = practice.locator('[data-practice-chapter="mission"] [data-practice-choice]');
     await expect(choice.locator("[data-practice-choice-way]")).toHaveCount(3);
     await clickClosingItsPage(choice.locator('[data-practice-choice-way="leave"]'));
   });
@@ -294,7 +302,7 @@ test("the sidebar's invitation brings the open practice window forward on chapte
     await expect(invite).toBeVisible();
     await page.bringToFront();
     await page.locator("[data-practice-invite-open]").click();
-    await expect(practice.locator('[data-practice-chapter="overview"]')).toBeVisible({ timeout: 20_000 });
+    await expect(practice.locator('[data-practice-chapter="mission"]')).toBeVisible({ timeout: 20_000 });
     expect(page.context().pages()).toHaveLength(2);
     await expect(invite).toHaveCount(0);
     await page.reload();

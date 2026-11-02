@@ -1,6 +1,6 @@
 import type { Catalog, Catalogs } from "../../schema";
 
-// Chapter 6's words (`practice/chapters/project.ts`).
+// Chapter 7's words (`practice/chapters/project.ts`).
 const en = {
   "practice.project.title": "The project at a glance",
   "practice.project.summary": "The right lane: counts, the last 7 days, Explorer, Hide AI",
@@ -32,7 +32,7 @@ const en = {
   "practice.project.close.kick": "Close",
   "practice.project.close.title": "A key puts it away",
   "practice.project.close.text": "The same key opens it again on the tool you left. Closed with × instead, it opens on the Explorer.",
-  "practice.project.end.kick": "End of chapter 6",
+  "practice.project.end.kick": "End of chapter 7",
   "practice.project.end.title": "The rail stays on the right",
   "practice.project.end.text": "A number on an icon says how much waits there.",
 };
@@ -68,7 +68,7 @@ const ko = {
   "practice.project.close.kick": "닫기",
   "practice.project.close.title": "단축키로 닫아요",
   "practice.project.close.text": "같은 키로 다시 열면 보던 도구로, ×로 닫았다면 탐색기로 열려요.",
-  "practice.project.end.kick": "6편 끝",
+  "practice.project.end.kick": "7편 끝",
   "practice.project.end.title": "도구 줄은 오른쪽에 늘 있어요",
   "practice.project.end.text": "아이콘의 숫자는 거기서 기다리는 일의 수예요.",
 } satisfies Catalog<typeof en>;
@@ -104,7 +104,7 @@ const zhCN = {
   "practice.project.close.kick": "关闭",
   "practice.project.close.title": "用快捷键收起",
   "practice.project.close.text": "用同一个键再打开，会回到你上次看的工具。如果用 × 关闭，会打开文件浏览器。",
-  "practice.project.end.kick": "第 6 章结束",
+  "practice.project.end.kick": "第 7 章结束",
   "practice.project.end.title": "工具栏一直在右边",
   "practice.project.end.text": "图标上的数字是那里等着你的事。",
 } satisfies Catalog<typeof en>;
@@ -140,7 +140,7 @@ const ja = {
   "practice.project.close.kick": "閉じる",
   "practice.project.close.title": "キーでしまえます",
   "practice.project.close.text": "同じキーで開き直すと、最後に見ていたツールで開きます。× で閉じたときはエクスプローラーで開きます。",
-  "practice.project.end.kick": "第 6 章 おわり",
+  "practice.project.end.kick": "第 7 章 おわり",
   "practice.project.end.title": "ツール列はいつも右にあります",
   "practice.project.end.text": "アイコンの数字は、そこで待っていることの数です。",
 } satisfies Catalog<typeof en>;

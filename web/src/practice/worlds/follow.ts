@@ -1,4 +1,4 @@
-// Chapter 3's world: a lead agent fixing a checkout bug with two Codex
+// Chapter 4's world: a lead agent fixing a checkout bug with two Codex
 // children, each in its own tab as delegated children are, beside a second
 // project whose tasks ask and finish. Opening a child and coming back to the
 // lead is the one script it plays: back at the lead, the cause child has
