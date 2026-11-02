@@ -15,6 +15,10 @@ pub const DNS: &str = "mac.tailnet-name.ts.net";
 /// only removals, and `apply-then-fail` applies an add and then fails it
 /// (a `serve --bg` that timed out after it took); with `funnel` a removal
 /// leaves the Funnel flag in place; every call is appended to `calls.log`.
+/// Like the macOS app's executable, it acts as the CLI only when told to with
+/// `TAILSCALE_BE_CLI=1`; otherwise it refuses, where the real one starts the
+/// app and never answers. It looks at that variable alone, so a terminal the
+/// test runs from (`TERM`, `SHLVL`) cannot stand in for it.
 pub struct FakeTailscale {
     pub state: PathBuf,
     pub bin: PathBuf,
@@ -35,6 +39,7 @@ impl FakeTailscale {
         let script = format!(
             r#"#!/bin/sh
 S='{state}'
+if [ "$TAILSCALE_BE_CLI" != 1 ]; then echo "started as the Tailscale app, not the CLI" >&2; exit 3; fi
 echo "$*" >> "$S/calls.log"
 case "$1" in
   status) cat "$S/status.json" ;;

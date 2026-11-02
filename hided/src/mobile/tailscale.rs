@@ -80,6 +80,16 @@ async fn run(program: &Path, args: &[&str]) -> Result<Vec<u8>, CommandFailure> {
     let command = format!("tailscale {}", args.join(" "));
     let child = tokio::process::Command::new(program)
         .args(args)
+        // The macOS app's executable is both the app and its CLI, and it acts
+        // as the CLI only when its environment looks like a terminal (`SHLVL`,
+        // `TERM`, `TERM_PROGRAM` or `PS1`). hided has none of them, so every
+        // command started the app and waited out its deadline. Tailscale's
+        // documented switch for a script, "Using the Tailscale CLI", macOS, at
+        // https://tailscale.com/kb/1080/cli: "you can force your script to run
+        // Tailscale as a CLI by setting the environment variable
+        // `TAILSCALE_BE_CLI=1`". The plain `tailscale` CLI on Linux and
+        // Windows does not read it.
+        .env("TAILSCALE_BE_CLI", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
