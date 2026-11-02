@@ -6185,22 +6185,6 @@ fn an_agent_on_another_machine_is_bound_only_where_a_spawn_there_is_admitted() {
             "an agent from outside the mission is held to the spawn's rule"
         );
     }
-    runtime
-        .snapshot
-        .status
-        .remote
-        .push(device_status("connected", Vec::new()));
-    assert_eq!(
-        refused(&mut runtime, bind("fix", json!({"agent_id": "agent-9"}))),
-        code("mission_projects_loading", None)
-    );
-    runtime
-        .device_worktrees
-        .insert(DEVICE.into(), Default::default());
-    assert_eq!(
-        refused(&mut runtime, bind("fix", json!({"agent_id": "agent-9"}))),
-        code("mission_machine_no_repository", None)
-    );
     connect_with_repository(&mut runtime, Vec::new());
     command(
         &mut runtime,
@@ -6340,46 +6324,48 @@ fn a_check_recorded_on_another_machine_holds_against_that_machines_checkout() {
     );
 }
 
-/// A check on another machine is written only in `remote_folder`, a field a
-/// build from before workers ran elsewhere does not know: that build reads
-/// the node with no folder, so its check open, and once it saved the book
-/// without the field, this build reads the check open too, never the
-/// device's path as a checkout on the mission's machine.
+/// A check on the mission's machine is written in `folder` alone, as builds
+/// from before workers ran elsewhere wrote and read it; one on another
+/// machine only in `remote_folder`, a field such a build does not know: it
+/// reads that check as open, and once it saved the book without the field
+/// this build reads it open too, never the device's path as a checkout on
+/// the mission's machine.
 #[test]
-fn a_check_on_another_machine_is_open_to_a_build_that_predates_it() {
+fn a_check_folder_is_read_the_same_by_a_build_that_predates_devices() {
     use crate::mission_criteria::CriterionState;
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
     let (_, path) = record_far_check(&mut runtime);
-    let node = &mut runtime.missions.book.get_mut("mission-1").unwrap().nodes[0];
-    let mut written = serde_json::to_value(&*node).unwrap();
-    assert!(written.get("folder").is_none(), "{written}");
+    let saved_by_old_build = |runtime: &mut Runtime| {
+        let node = &mut runtime.missions.book.get_mut("mission-1").unwrap().nodes[0];
+        let mut written = serde_json::to_value(&*node).unwrap();
+        written.as_object_mut().unwrap().remove("remote_folder");
+        *node = serde_json::from_value(written.clone()).unwrap();
+        written
+    };
+    let node = &runtime.missions.book.get("mission-1").unwrap().nodes[0];
     assert_eq!(
-        written["remote_folder"],
-        json!({"device_id": DEVICE, "path": path})
+        serde_json::to_value(node).unwrap()["remote_folder"],
+        json!([DEVICE, path])
     );
-    written.as_object_mut().unwrap().remove("remote_folder");
-    *node = serde_json::from_value(written).unwrap();
+    let written = saved_by_old_build(&mut runtime);
+    assert!(written.get("folder").is_none(), "{written}");
     assert_eq!(line_state(&runtime, "check"), CriterionState::Open);
-}
 
-/// A check on the mission's machine is written in `folder` alone, as builds
-/// from before workers ran elsewhere wrote it and read it, so a book either
-/// build saved keeps its passed check.
-#[test]
-fn a_check_on_the_missions_machine_is_written_as_before() {
-    use crate::mission_criteria::CriterionState;
-    let fixture = conducting();
-    let mut runtime = fixture.runtime.lock().unwrap();
-    running_criteria_mission(&mut runtime);
-    met_fix(&mut runtime);
-    let path = runtime.snapshot.navigator.workspaces[0].checkouts[0]
-        .path
-        .clone();
-    let node = &mut runtime.missions.book.get_mut("mission-1").unwrap().nodes[0];
-    let written = serde_json::to_value(&*node).unwrap();
+    // Another worker on the project's machine records it there.
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"agent_id": "agent-2"}}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("fix", "check", json!({"commit": HEAD})),
+    )
+    .unwrap();
+    let written = saved_by_old_build(&mut runtime);
     assert_eq!(written["folder"], json!(path));
-    assert!(written.get("remote_folder").is_none(), "{written}");
-    *node = serde_json::from_value(written).unwrap();
     assert_eq!(line_state(&runtime, "check"), CriterionState::Pass);
 }

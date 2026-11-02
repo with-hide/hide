@@ -137,14 +137,6 @@ pub enum Delivery {
     Direct,
 }
 
-/// The checkout on another machine than the mission's that a node's check
-/// command ran in (`MissionNode::remote_folder`).
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct RemoteFolder {
-    pub device_id: String,
-    pub path: String,
-}
-
 /// A node's state, one of three the map shows (PRD mission-node-simple
 /// D-01, D-16): waiting to start, in progress (writing code, CI, review and
 /// the merge wait alike), done; and left out by a replan. What waits on
@@ -607,13 +599,13 @@ pub struct MissionNode {
     /// whoever works the node then (B7, D-16). Read through `check_folder`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub folder: Option<String>,
-    /// The checkout on another machine the check command last ran in, in
-    /// place of `folder`, which then stays empty: a build from before
-    /// workers ran elsewhere does not know this field, so it reads the node
-    /// as having no folder and the check as open, never a device's path as
-    /// one on the mission's machine.
+    /// The machine and path of the checkout on another machine the check
+    /// command last ran in, in place of `folder`, which then stays empty: a
+    /// build from before workers ran elsewhere does not know this field, so
+    /// it reads the check as open, never a device's path as one on the
+    /// mission's machine.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub remote_folder: Option<RemoteFolder>,
+    pub remote_folder: Option<(String, String)>,
     /// The proof that a direct change's branch is in main, which a mission
     /// waiting for its branches waits on (B17, B18): of that branch only,
     /// while the node stays done.
@@ -710,7 +702,7 @@ impl MissionNode {
         mission_device: &'a str,
     ) -> Option<(&'a str, &'a str)> {
         match &self.remote_folder {
-            Some(remote) => Some((remote.device_id.as_str(), remote.path.as_str())),
+            Some((device, path)) => Some((device, path)),
             None => Some((mission_device, self.folder.as_deref()?)),
         }
     }
@@ -725,16 +717,9 @@ impl MissionNode {
         path: &str,
     ) -> bool {
         let moved = self.check_folder(mission_device) != Some((device, path));
-        if device == mission_device {
-            self.folder = Some(path.to_owned());
-            self.remote_folder = None;
-        } else {
-            self.folder = None;
-            self.remote_folder = Some(RemoteFolder {
-                device_id: device.to_owned(),
-                path: path.to_owned(),
-            });
-        }
+        let remote = device != mission_device;
+        self.folder = (!remote).then(|| path.to_owned());
+        self.remote_folder = remote.then(|| (device.to_owned(), path.to_owned()));
         moved
     }
 
