@@ -4,8 +4,8 @@
 //! events around one request.
 //!
 //! The scope is the caller's Project and the connected devices' Projects of
-//! the same GitHub repository, with every descendant of their sessions
-//! (D-09). `list` and `record` read the link record on a read-only
+//! the same repository, as each checkout's own `origin` names it, with every
+//! descendant of their sessions (D-09). `list` and `record` read the link record on a read-only
 //! connection off the runtime's lock; `record` is the screen's own
 //! [`LinkStore::ledger_record`], with the pull requests laid by the runtime
 //! as the screen's are. `read` asks the node that holds the session's file,
@@ -21,7 +21,7 @@ use crate::node_access::NodeLink;
 use crate::session_excerpt::{self, Extent, Located, ReadFailure, SessionWindow};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -144,6 +144,12 @@ pub struct SessionScope {
     /// caller is in none.
     pub caller: String,
     pub projects: Vec<ScopeProject>,
+    /// Each Project's repository by record key: the one the operator
+    /// connected it to, else the one its own checkout's `origin` names
+    /// (`[HOST/]OWNER/NAME`), read from Git with no GitHub call, so a
+    /// device's clone joins the caller's Project even when GitHub was never
+    /// read for it (D-09). A Project with neither has no entry.
+    pub repositories: BTreeMap<String, String>,
     pub devices: Vec<DeviceFacts>,
     /// This machine's node and each ready device's.
     pub nodes: Vec<(String, Arc<dyn NodeLink>)>,
@@ -248,7 +254,7 @@ fn answer(
             )
         }
     })?;
-    let keys = scope_keys(&store, scope, caller).map_err(failed)?;
+    let keys = scope_keys(scope, caller);
     let members = store.scope_members(&keys).map_err(failed)?;
     match command {
         SessionCommand::List { since_ms, limit } => {
@@ -305,30 +311,27 @@ fn failed(code: String) -> Refusal {
     )
 }
 
-/// The caller's Project and every device's Project of the same GitHub
-/// repository; the caller's alone when its repository is not on GitHub.
-fn scope_keys(
-    store: &LinkStore,
-    scope: &SessionScope,
-    caller: &ScopeProject,
-) -> Result<Vec<String>, String> {
+/// The caller's Project and every device's Project of the caller's
+/// repository; the caller's alone when its repository is unknown.
+fn scope_keys(scope: &SessionScope, caller: &ScopeProject) -> Vec<String> {
     let mut keys = vec![caller.key.clone()];
-    let Some(name) = store.project(&caller.key)?.and_then(|row| row.name) else {
-        return Ok(keys);
+    let Some(name) = scope.repositories.get(&caller.key) else {
+        return keys;
     };
-    for project in &scope.projects {
-        if project.device_id == caller.device_id || project.key == caller.key {
-            continue;
-        }
-        if store
-            .project(&project.key)?
-            .and_then(|row| row.name)
-            .is_some_and(|other| other.eq_ignore_ascii_case(&name))
-        {
-            keys.push(project.key.clone());
-        }
-    }
-    Ok(keys)
+    keys.extend(
+        scope
+            .projects
+            .iter()
+            .filter(|project| project.device_id != caller.device_id && project.key != caller.key)
+            .filter(|project| {
+                scope
+                    .repositories
+                    .get(&project.key)
+                    .is_some_and(|other| other.eq_ignore_ascii_case(name))
+            })
+            .map(|project| project.key.clone()),
+    );
+    keys
 }
 
 /// The session `id` names: a registered agent's id or a native session id,
@@ -1008,13 +1011,13 @@ mod tests {
         }
     }
 
-    fn project(key: &str, device: &str, root: &str, repository: &str) -> ProjectFacts {
+    fn project(key: &str, device: &str, root: &str, repository: Option<&str>) -> ProjectFacts {
         ProjectFacts {
             key: key.into(),
             device_id: device.into(),
             workspace_id: format!("ws-{key}"),
             root: root.into(),
-            repository: Some(repository.into()),
+            repository: repository.map(Into::into),
             repository_id: None,
             connection_epoch: 0,
             worktrees: Vec::new(),
@@ -1052,17 +1055,18 @@ mod tests {
             .unwrap();
     }
 
-    /// `app` here and its clone on device `mini` share `acme/app`; `lib` is
-    /// another Project. `s-app` worked in `app` and delegated `s-child`,
+    /// `app` here and its clone on device `mini` share `acme/app` by their
+    /// `origin`, though GitHub was never read for the clone (no name in the
+    /// record, as on the operator's mini); `lib` is another Project. `s-app` worked in `app` and delegated `s-child`,
     /// which ran outside every Project's folder.
     fn fixture() -> (tempfile::TempDir, SessionScope) {
         let state = tempfile::tempdir().unwrap();
         let path = state.path().join("links.sqlite3");
         let (mut store, _) = LinkStore::open(&path).unwrap();
         for facts in [
-            project("app", "local", "/work/app", "acme/app"),
-            project("app-mini", "mini", "/home/u/app", "Acme/App"),
-            project("lib", "local", "/work/lib", "acme/lib"),
+            project("app", "local", "/work/app", Some("acme/app")),
+            project("app-mini", "mini", "/home/u/app", None),
+            project("lib", "local", "/work/lib", Some("acme/lib")),
         ] {
             store.apply_project(&facts, NOW).unwrap();
         }
@@ -1141,6 +1145,11 @@ mod tests {
                 scope_project("app-mini", "mini", "/home/u/app"),
                 scope_project("lib", "local", "/work/lib"),
             ],
+            repositories: BTreeMap::from([
+                ("app".to_owned(), "acme/app".to_owned()),
+                ("app-mini".to_owned(), "Acme/App".to_owned()),
+                ("lib".to_owned(), "acme/lib".to_owned()),
+            ]),
             devices: vec![
                 DeviceFacts {
                     id: "local".into(),
@@ -1296,6 +1305,22 @@ mod tests {
                 "invalid_request"
             );
         }
+    }
+
+    #[test]
+    fn a_device_clone_joins_by_its_origin_and_an_unknown_repository_stays_alone() {
+        let (_state, scope) = fixture();
+        let listed = |scope: &SessionScope| ids(&list(scope, None, None));
+        // GitHub never named the clone; its `origin` does.
+        assert!(listed(&scope).contains(&"s-mini".to_owned()));
+        let mut unknown = scope.clone();
+        unknown.repositories.remove("app");
+        assert_eq!(listed(&unknown), ["s-child", "s-app", "s-secret"]);
+        let mut other = scope.clone();
+        other
+            .repositories
+            .insert("app-mini".into(), "acme/fork".into());
+        assert!(!listed(&other).contains(&"s-mini".to_owned()));
     }
 
     #[test]
@@ -1595,7 +1620,7 @@ mod tests {
         let (mut store, _) = LinkStore::open(&state.path().join("links.sqlite3")).unwrap();
         store
             .apply_project(
-                &project("sub", "local", "/work/app/vendor/sub", "acme/sub"),
+                &project("sub", "local", "/work/app/vendor/sub", Some("acme/sub")),
                 NOW,
             )
             .unwrap();
