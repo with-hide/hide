@@ -142,8 +142,9 @@ fn request_failure(method: &str, error: &hide_herdr_client::ApiError) -> String 
         hide_herdr_client::ApiError::Remote { code, .. } => code.as_str(),
         hide_herdr_client::ApiError::NotRunning(_) => "not running",
         hide_herdr_client::ApiError::Transport(_) => "transport",
-        hide_herdr_client::ApiError::Malformed(_) => "malformed",
-        hide_herdr_client::ApiError::TooLarge(_) => "answer too large",
+        hide_herdr_client::ApiError::Malformed(_) | hide_herdr_client::ApiError::TooLarge(_) => {
+            "malformed"
+        }
     };
     format!("Herdr on this machine did not answer {method}: {reason}")
 }
