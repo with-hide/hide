@@ -23,13 +23,14 @@ describe("chapter 0's plan, approved before anything runs (UI_BEHAVIOR, Practice
   it("plans for a while before the plan stands", () => {
     const model = planning();
     expect(missionIn(model)).toBeNull();
-    expect(doneAt("ask", model)).toBe(false);
+    expect(doneAt("ask", model)).toBe(true);
+    expect(doneAt("thinking", model)).toBe(false);
     expect(MISSION_WORLD.later!(model)!.at - model.times[1]!).toBe(BEATS.plan);
   });
 
   it("plans every part and asks for the go, with no worker started", () => {
     const model = planned();
-    expect(doneAt("ask", model)).toBe(true);
+    expect(doneAt("thinking", model)).toBe(true);
     expect(missionIn(model)!.status).toBe("planning");
     expect(missionIn(model)!.nodes.map((node) => node.status)).toEqual(["planned", "planned", "planned"]);
     expect(MISSION_WORLD.panes(model)).toEqual([CONDUCTOR]);
