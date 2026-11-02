@@ -76,6 +76,7 @@ Admission alone prunes the bounded accounting tables; there is no per-frame full
 The first routing hello and device proof must complete within ten seconds of WebSocket establishment.
 Admitted sockets expire after 90 seconds without incoming traffic; clients keep them alive with a ping or an encrypted application heartbeat well before that deadline.
 Each socket write has a five-second deadline, and its registration is released before a final close write is attempted.
+An oversize refusal half-closes TCP and discards at most `MAX_FRAME + 14` unread bytes within that same deadline, so a reset caused by unread payload does not erase the refusal for a bounded oversize frame.
 Restart stops acceptance, closes admitted sockets with code `1012` (`restart`), clears every room and counter and drains or aborts all owned tasks within six seconds.
 An HTTP upgrade already in progress may instead see a failed upgrade or `timeout`; it must reconnect too.
 

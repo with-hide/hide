@@ -447,6 +447,7 @@ async fn frame_limit_and_routing_violations_close_only_sender() {
         )
         .await;
         closed(&mut phone, if case == "oversize" { 1013 } else { 1008 }).await;
+        drop(phone);
         assert_eq!(
             control(&mut device).await,
             ServerMessage::PeerLeft { connection: id }

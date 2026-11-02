@@ -24,6 +24,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     sync::{mpsc, watch},
     task::JoinSet,
@@ -302,7 +303,11 @@ async fn session(mut socket: Socket, mut admission: Admission) {
                 break End::Refused(Rejection::new(Refusal::Timeout, if admitted { "idle_timeout" } else { "admission_timeout" }));
             }
             outgoing = admission.output.recv() => {
-                let Some(message) = outgoing else { break End::PeerClosed };
+                let Some(message) = outgoing else {
+                    // Removing a peer closes its queue after publishing its end.
+                    // Either receiver may wake first; retain the published reason.
+                    break (*admission.end.borrow_and_update()).expect("closed peer queue carries its end");
+                };
                 if !matches!(timeout(WRITE_TIMEOUT, socket.send(message)).await, Ok(Ok(()))) {
                     break End::Refused(Rejection::cap(Refusal::Timeout, "write_deadline"));
                 }
@@ -396,6 +401,13 @@ fn control(
 
 async fn finish(socket: &mut Socket, end: End) {
     let deadline = tokio::time::Instant::now() + WRITE_TIMEOUT;
+    let oversized = matches!(
+        end,
+        End::Refused(Rejection {
+            cap: Some("frame_size"),
+            ..
+        })
+    );
     let (code, reason) = match end {
         End::Restart => (CloseCode::Restart, "restart"),
         End::PeerClosed => (CloseCode::Normal, "peer_closed"),
@@ -425,4 +437,15 @@ async fn finish(socket: &mut Socket, end: End) {
         }))),
     )
     .await;
+    if oversized {
+        // The parser rejects the length before reading its payload. Dropping a
+        // TCP socket with unread bytes can reset it and erase the refusal. Send
+        // FIN, then discard a bounded remainder within the same write deadline.
+        let _ = timeout_at(deadline, async {
+            socket.get_mut().shutdown().await?;
+            let mut remaining = socket.get_mut().take(MAX_CLOSE_DRAIN_BYTES as u64);
+            tokio::io::copy(&mut remaining, &mut tokio::io::sink()).await
+        })
+        .await;
+    }
 }

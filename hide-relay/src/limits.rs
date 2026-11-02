@@ -11,6 +11,8 @@ pub const MAX_IP_RECORDS: usize = 4096;
 pub const MAX_ROOM_RECORDS: usize = 4096;
 pub const MAX_PENDING_HTTP: usize = 32;
 pub const MAX_QUEUED_FRAMES: usize = 4;
+/// Discard at most one bounded frame plus the largest WebSocket header on refusal.
+pub const MAX_CLOSE_DRAIN_BYTES: usize = MAX_FRAME + 14;
 pub const HTTP_TIMEOUT: Duration = Duration::from_secs(5);
 pub const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 pub const IDLE_TIMEOUT: Duration = Duration::from_secs(90);

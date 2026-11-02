@@ -191,8 +191,8 @@ pub async fn join(socket: &mut Socket, room: &str, device: &mut Socket) -> u32 {
 }
 pub async fn noise(phone: &mut Socket, device: &mut Socket, connection: u32) -> (Session, Session) {
     let key = NoiseKeypair::generate().unwrap();
-    let mut initiator = Session::initiator(&key.public, connection).unwrap();
-    let mut responder = Session::responder(&key.secret, connection).unwrap();
+    let mut initiator = Session::initiator(&key.public_key(), connection).unwrap();
+    let mut responder = Session::responder(&key, connection).unwrap();
     let first = initiator.write_handshake().unwrap();
     phone
         .send(Message::Binary(first.clone().into()))

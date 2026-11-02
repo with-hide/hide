@@ -239,6 +239,8 @@ Runner capacity has to grow before the queue can help: on 2026-10-07 all 20 jobs
 
 Changes to `hide-relay-protocol/` or its build/check scripts run `bash scripts/check-relay-protocol.sh` and `bash scripts/verify-web.sh relay-protocol typecheck` locally, in addition to the Rust and web gates their diff selects.
 The [relay contract](docs/RELAY_PROTOCOL.md) owns the native/WASM vectors, cross-decryption, limits and QR assertions; the reusable `relay-protocol` workflow proves the platform forms in CI.
+Changes to `hide-relay/` also select that workflow on Linux, Windows and macOS, where real loopback clients exercise rooms, opaque forwarding, caps, invalid admission and restart.
+Run `bash scripts/verify-cargo.sh nextest --profile ci -p hide-relay` and `bash scripts/verify-cargo.sh clippy -p hide-relay --all-targets -- -D warnings` for its service boundary.
 
 ## CI gates
 
