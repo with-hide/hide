@@ -268,3 +268,67 @@ export async function prepareWindowsRun(packageDir: string): Promise<string[]> {
 export function endWindowsProcesses(owned: WindowsProcess[], root?: string): void {
   endWindowsTree(fixtureShimPath("hide-processes"), owned, root);
 }
+
+/** How long the holders a fixture daemon left are given to end before the fixture names them. */
+const HOLDER_END_MS = 10_000;
+
+type HolderRecord = { holder?: { pid: number } | null; program?: { pid: number } | null };
+
+/**
+ * Ends the pane holders a fixture daemon's own engine left running, and
+ * their programs with them. A holder outlives its daemon by design, so the
+ * next daemon can adopt it (PRD engine-bundle-3-core-owns), which makes the
+ * fixture its owner once the daemon is stopped: each holder is the pid its
+ * record under `stateDir/holders/records` names. On Unix a pid is ended only
+ * while its command line still names that record, since a freed pid may
+ * belong to another process; Windows ends the holder's tree as listed now.
+ * A holder ends its program when it goes (the pane's terminal hangs up).
+ * Throws, naming `stateDir`, when one still runs after the bound.
+ */
+export function endPaneHolders(stateDir: string): void {
+  const records = path.join(stateDir, "holders", "records");
+  if (!fs.existsSync(records)) return;
+  const owned: number[] = [];
+  for (const name of fs.readdirSync(records).filter((file) => file.endsWith(".json"))) {
+    const file = path.join(records, name);
+    const record = JSON.parse(fs.readFileSync(file, "utf8")) as HolderRecord;
+    const holder = record.holder?.pid;
+    if (holder === undefined) continue;
+    if (process.platform === "win32") {
+      endWindowsProcesses(windowsProcessTree(holder));
+      continue;
+    }
+    // `ps` exits 1, printing nothing, for a pid that no longer runs.
+    let command = "";
+    try {
+      command = execFileSync("ps", ["-o", "command=", "-p", String(holder)], { encoding: "utf8", timeout: 5_000 });
+    } catch (error) {
+      if ((error as { status?: number }).status !== 1) throw error;
+    }
+    if (!command.includes(file)) continue;
+    process.kill(holder, "SIGTERM");
+    owned.push(holder);
+    if (record.program?.pid !== undefined) owned.push(record.program.pid);
+  }
+  const running = () => owned.filter((pid) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  const deadline = Date.now() + HOLDER_END_MS;
+  while (running().length > 0 && Date.now() < deadline) {
+    // Synchronous worker-exit cleanup cannot await a timer.
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+  }
+  const left = running();
+  if (left.length > 0) throw new Error(`pane holder processes ${left.join(", ")} still run ${HOLDER_END_MS / 1000} s after their end; preserve ${stateDir}`);
+  if (process.platform === "win32") return;
+  // Nothing that names this state folder runs on: a holder without a record,
+  // or one whose record went, would hold a terminal until the machine runs out.
+  const strays = execFileSync("ps", ["-Ao", "pid=,command="], { encoding: "utf8", timeout: 5_000 })
+    .split("\n").filter((line) => line.includes(`${path.join(stateDir, "holders")}${path.sep}`));
+  if (strays.length > 0) throw new Error(`processes of ${stateDir} still run after its holders ended: ${strays.join("; ")}`);
+}
