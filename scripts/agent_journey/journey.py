@@ -126,13 +126,6 @@ def argument_bytes(text):
     return len(text.replace("\r\n", "\n").replace("\n", "\u2028").replace("\t", "    ").encode())
 
 
-def rides_start(text):
-    """Whether Hide carries `text` as the start's prompt rather than typing
-    it. The journey's briefs hold none of the characters cmd.exe reads as its
-    own, so on Windows too only the length decides."""
-    return argument_bytes(text) <= LAUNCH_PROMPT_BYTES
-
-
 def filled(head, value, size, measure):
     """`head`, notes over many lines with tabs, and the request last, exactly
     `size` by `measure`, so a start or a typing that cut it, read it as
@@ -158,12 +151,11 @@ def long_brief(value):
 
 
 def at_brief(value):
-    """A brief that starts with `@` and a file of the repository, which Pi
-    1.0.4 would read as a file to attach and omp attaches, over lines and a
-    tab, as long as a brief may be: past what a start carries, so an agent
-    that declares the launch prompt takes it typed, once."""
+    """A launched brief that starts with `@` and a file of the repository,
+    which Pi 1.0.4 reads as a file to attach (so Pi types its brief) and omp
+    attaches, over lines and tabs, as long as a start carries."""
     return filled("@README.md is the repository's one file.\n\tIt needs no change.\n\n## Notes\n", value,
-                  BRIEF_CAP, lambda text: len(text.encode()))
+                  LAUNCH_PROMPT_BYTES, argument_bytes)
 
 
 class Journey:
@@ -457,10 +449,9 @@ class Journey:
         return (self.row.get("input") or [None])[0] == "launch_prompt"
 
     def launch_brief(self, repository):
-        """A brief that starts with `@` and is as long as a brief may be, in a
-        start of its own in a worktree of a repository the account never
-        trusted: past what a start carries, so it is typed once the agent
-        runs, once, and the agent records it exactly."""
+        """A brief that starts with `@`, in a start of its own in a worktree
+        of a repository the account never trusted: the start carries it once,
+        past any screen of the agent's, and the agent records it exactly."""
         if not cells.measurable(self.table, self.id, "launch_brief"):
             return
         value = token()
@@ -483,7 +474,7 @@ class Journey:
             turn, read, record["activities"] = self.wait_turn(0, value)
             spawn_record = self.spawn_record(name)
             record["brief_input"], record["read"] = (spawn_record or {}).get("brief_input"), read
-            self.settle("launch_brief", cells.start_verdict(spawned, turn, cells.brief_verdict(spawn_record, rides_start(sent)),
+            self.settle("launch_brief", cells.start_verdict(spawned, turn, cells.brief_verdict(spawn_record, True),
                                                             cells.record_verdict(read, sent, value)),
                         self.evidence("launch-brief", record))
         finally:
