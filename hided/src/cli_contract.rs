@@ -893,6 +893,9 @@ pub const COMMANDS: &[Spec] = &[
             "mission_checker_unknown",
             "mission_external_invalid",
             "mission_machine_node_refused",
+            "mission_machine_unavailable",
+            "mission_projects_loading",
+            "mission_machine_no_repository",
         ],
     },
     Spec {

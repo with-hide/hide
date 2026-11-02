@@ -137,6 +137,14 @@ pub enum Delivery {
     Direct,
 }
 
+/// The checkout on another machine than the mission's that a node's check
+/// command ran in (`MissionNode::remote_folder`).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RemoteFolder {
+    pub device_id: String,
+    pub path: String,
+}
+
 /// A node's state, one of three the map shows (PRD mission-node-simple
 /// D-01, D-16): waiting to start, in progress (writing code, CI, review and
 /// the merge wait alike), done; and left out by a replan. What waits on
@@ -594,17 +602,18 @@ pub struct MissionNode {
     /// A direct change's commit on main (B22, B33).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub commit: Option<String>,
-    /// The checkout the node's check command last passed or failed in, on
-    /// `folder_device`: its head now is what the line is compared with,
+    /// The checkout on the mission's machine the node's check command last
+    /// passed or failed in: its head now is what the line is compared with,
     /// whoever works the node then (B7, D-16). Read through `check_folder`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub folder: Option<String>,
-    /// The machine `folder` is on. A record written before a worker could
-    /// run on another machine has none, and its folder is on the mission's
-    /// machine. A field of its own so a build that predates it still reads
-    /// the book.
+    /// The checkout on another machine the check command last ran in, in
+    /// place of `folder`, which then stays empty: a build from before
+    /// workers ran elsewhere does not know this field, so it reads the node
+    /// as having no folder and the check as open, never a device's path as
+    /// one on the mission's machine.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub folder_device: Option<String>,
+    pub remote_folder: Option<RemoteFolder>,
     /// The proof that a direct change's branch is in main, which a mission
     /// waiting for its branches waits on (B17, B18): of that branch only,
     /// while the node stays done.
@@ -695,19 +704,19 @@ impl MissionNode {
     }
 
     /// The machine and path of the checkout the node's check command last
-    /// ran in; a folder recorded without its machine is on `mission_device`.
+    /// ran in: `folder` on `mission_device`, or `remote_folder`.
     pub(crate) fn check_folder<'a>(
         &'a self,
         mission_device: &'a str,
     ) -> Option<(&'a str, &'a str)> {
-        let path = self.folder.as_deref()?;
-        Some((
-            self.folder_device.as_deref().unwrap_or(mission_device),
-            path,
-        ))
+        match &self.remote_folder {
+            Some(remote) => Some((remote.device_id.as_str(), remote.path.as_str())),
+            None => Some((mission_device, self.folder.as_deref()?)),
+        }
     }
 
-    /// Records the checkout the check command ran in; answers whether it
+    /// Records the checkout the check command ran in, `folder` on the
+    /// mission's machine and `remote_folder` on another; answers whether it
     /// is another one than before.
     pub(crate) fn set_check_folder(
         &mut self,
@@ -716,15 +725,23 @@ impl MissionNode {
         path: &str,
     ) -> bool {
         let moved = self.check_folder(mission_device) != Some((device, path));
-        self.folder = Some(path.to_owned());
-        self.folder_device = Some(device.to_owned());
+        if device == mission_device {
+            self.folder = Some(path.to_owned());
+            self.remote_folder = None;
+        } else {
+            self.folder = None;
+            self.remote_folder = Some(RemoteFolder {
+                device_id: device.to_owned(),
+                path: path.to_owned(),
+            });
+        }
         moved
     }
 
     /// Forgets the checkout the check command ran in.
     pub(crate) fn clear_check_folder(&mut self) {
         self.folder = None;
-        self.folder_device = None;
+        self.remote_folder = None;
     }
 
     pub fn seen(&self, number: u32) -> Option<&PrSeen> {
@@ -1808,7 +1825,7 @@ pub(crate) fn apply_plan(
                 pr_seen: Vec::new(),
                 commit: None,
                 folder: None,
-                folder_device: None,
+                remote_folder: None,
                 in_main: None,
                 branch_ahead: None,
                 outside_round: 0,
@@ -2256,6 +2273,12 @@ pub fn next_action(code: &str) -> &'static str {
         }
         "mission_checkout_unknown" => {
             "Record the check command from a pane in the checkout it ran in: Hide holds the line against that checkout's later commits"
+        }
+        "mission_machine_unavailable" => {
+            "That agent's machine is not connected: reconnect it in Settings > Devices and bind again, or bind an agent that runs on the project's machine"
+        }
+        "mission_machine_no_repository" => {
+            "Hide knows no project of the mission's GitHub repository on that agent's machine: register a checkout of it there as a project, or wait while GitHub is still being read for that project or for the mission's own, then bind again"
         }
         "mission_machine_node_refused" => {
             "On another machine than the project's, a mission runs only a pull-request change node's worker and its checkers: start this node's worker or checker on the project's machine, or bind one that runs there"

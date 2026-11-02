@@ -1111,7 +1111,7 @@ impl Runtime {
                 // the Conductor pane's own chip (PRD mission-pane-chip D-02).
                 let mut next = crate::missions::apply_plan(&current, &plan, now)?;
                 // A replan does not make a node an agent on another machine
-                // works or checks one only the project's machine may.
+                // works or checks one only the project's machine runs.
                 for node in &next.nodes {
                     let checkers = node
                         .criteria
@@ -1119,7 +1119,7 @@ impl Runtime {
                         .flat_map(|line| &line.checkers)
                         .filter_map(|checker| checker.agent_id.as_ref());
                     for id in node.agent_id.iter().chain(checkers) {
-                        self.bind_elsewhere(&next, node, id)?;
+                        self.keep_elsewhere(&next, node, id)?;
                     }
                 }
                 let Mission {
@@ -1755,7 +1755,7 @@ impl Runtime {
     /// the machine answers, and it holds a project of the mission's GitHub
     /// repository, compared by the id GitHub gives it, which a rename keeps.
     /// A checker's intent names no node of its own; the node is judged when
-    /// it is bound (`bind_elsewhere`).
+    /// it is bound (`bind_elsewhere`), which asks this same rule.
     fn admit_elsewhere(
         &self,
         mission: &Mission,
@@ -1787,31 +1787,57 @@ impl Runtime {
         Ok(())
     }
 
+    /// The machine registration `id` runs on, when the ledger has it on
+    /// another machine than `mission`'s. A ledger Hide could not read is its
+    /// own refusal, since it cannot say where the agent runs.
+    fn registered_elsewhere(&self, mission: &Mission, id: &str) -> Result<Option<String>, String> {
+        Ok(self
+            .delivery_state()?
+            .agents
+            .iter()
+            .find(|record| record.id == id && record.machine != mission.device_id)
+            .map(|record| record.machine.clone()))
+    }
+
     /// Refuses binding registration `id` to `node` as its worker or checker
-    /// when the agent runs on another machine than `mission`'s and the node
-    /// is not one that may (`admit_elsewhere`). A ledger Hide could not
-    /// read is its own refusal, since it cannot say where the agent runs.
+    /// when the agent runs on another machine than `mission`'s and could not
+    /// start there for this node (`admit_elsewhere`), as a spawn would be
+    /// refused. An agent the node already holds is judged as a replan keeps
+    /// it (`keep_elsewhere`), so the same command again is not refused
+    /// while its machine is away.
     fn bind_elsewhere(
         &self,
         mission: &Mission,
         node: &MissionNode,
         id: &str,
     ) -> Result<(), String> {
-        if node.runs_elsewhere() {
+        if node.agent_id.as_deref() == Some(id) || Self::checks_node(node, id) {
+            return self.keep_elsewhere(mission, node, id);
+        }
+        match self.registered_elsewhere(mission, id)? {
+            Some(machine) => self.admit_elsewhere(mission, &machine, Some(node)),
+            None => Ok(()),
+        }
+    }
+
+    /// Refuses keeping registration `id` on `node` when the agent runs on
+    /// another machine than `mission`'s and `node` is one only the project's
+    /// machine runs, as a replan can make it. Only the node's kind is
+    /// judged: a machine away for a while or a repository not read yet does
+    /// not refuse a replan that changes something else.
+    fn keep_elsewhere(
+        &self,
+        mission: &Mission,
+        node: &MissionNode,
+        id: &str,
+    ) -> Result<(), String> {
+        if node.runs_elsewhere() || self.registered_elsewhere(mission, id)?.is_none() {
             return Ok(());
         }
-        let elsewhere = self
-            .delivery_state()?
-            .agents
-            .iter()
-            .any(|record| record.id == id && record.machine != mission.device_id);
-        if elsewhere {
-            return Err(crate::coordination::refusal(
-                "mission_machine_node_refused",
-                &node.key,
-            ));
-        }
-        Ok(())
+        Err(crate::coordination::refusal(
+            "mission_machine_node_refused",
+            &node.key,
+        ))
     }
 
     /// The missions whose Conductor's session is one of `sessions`

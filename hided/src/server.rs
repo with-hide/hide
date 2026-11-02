@@ -1390,7 +1390,7 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
             "Hide is still reading that machine's projects; run the same command again in a few seconds"
         }
         "mission_machine_no_repository" => {
-            "That machine has no project of the mission's GitHub repository that Hide has read from GitHub; register a checkout of it there as a project and wait for its pull requests to show, then run the same command again with --repo naming it, or leave out --machine"
+            "Hide knows no project of the mission's GitHub repository on that machine: register a checkout of it there as a project, or wait while GitHub is still being read for that project or for the mission's own (its pull requests show once it is), then run the same command again with --repo naming it; or leave out --machine"
         }
         "mission_candidate_refused" => {
             "The worker is none of the operator's candidates in Settings > Conductor; run hide mission settings and start it as one of them (its agent, its fixed model or the CLI's default, its fixed effort)"

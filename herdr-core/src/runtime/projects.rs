@@ -3747,34 +3747,35 @@ impl Runtime {
         read.generation
     }
 
-    /// What GitHub last answered for the project at `root` on `device`,
-    /// stale or not: this machine's reader's for its own, a node's read
-    /// (`device_github`) for one of a node's; a device this core does not
-    /// read has none. The one place a caller picks between the two.
+    /// What GitHub last answered for `device`'s projects, stale or not:
+    /// this machine's reader's for its own, a node's read (`device_github`)
+    /// for a node's; a device this core does not read has none. The one
+    /// place a caller picks between the two.
+    fn github_on(&self, device: &str) -> Option<&crate::model::GithubSnapshot> {
+        if device == self.node.as_str() {
+            Some(&self.github)
+        } else {
+            self.device_github.get(device)
+        }
+    }
+
+    /// What GitHub last answered for the project at `root` on `device`.
     pub(super) fn github_project_on(
         &self,
         device: &str,
         root: &str,
     ) -> Option<&crate::model::GithubProjectSnapshot> {
-        if device == self.node.as_str() {
-            self.github.project(root)
-        } else {
-            self.device_github.get(device)?.project(root)
-        }
+        self.github_on(device)?.project(root)
     }
 
-    /// Every project on `device` GitHub last answered for, stale or not,
-    /// read as `github_project_on` reads one.
+    /// Every project on `device` GitHub last answered for.
     pub(super) fn github_projects_on(
         &self,
         device: &str,
     ) -> impl Iterator<Item = &crate::model::GithubProjectSnapshot> {
-        let github = if device == self.node.as_str() {
-            Some(&self.github)
-        } else {
-            self.device_github.get(device)
-        };
-        github.into_iter().flat_map(|github| github.projects.iter())
+        self.github_on(device)
+            .into_iter()
+            .flat_map(|github| github.projects.iter())
     }
 
     /// The worktree list of the project at `root` on `device`: this

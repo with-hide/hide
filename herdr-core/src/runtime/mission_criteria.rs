@@ -39,7 +39,8 @@ impl Runtime {
     /// catalog reads for the checkout its check command ran in, whoever
     /// works the node now, or, once its pull request is merged, that pull
     /// request's head, which is the work that reached main. None when Hide
-    /// cannot read it, and then no check passes.
+    /// cannot read it, its machine not answering included, and then no
+    /// check passes.
     fn node_head(
         &self,
         mission: &Mission,
@@ -52,6 +53,11 @@ impl Runtime {
             return pull.head_oid.clone();
         }
         let (device, folder) = node.check_folder(&mission.device_id)?;
+        // A machine that does not answer shows its last session, whose head
+        // may be long gone: nothing passes on it until it answers again.
+        if !self.device_answers(device) {
+            return None;
+        }
         self.catalog_workspaces()
             .filter(|workspace| workspace.device_id == device)
             .flat_map(|workspace| &workspace.checkouts)

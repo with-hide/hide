@@ -6111,11 +6111,37 @@ fn a_worker_on_another_machine_starts_only_for_a_pull_request_change_of_the_same
     assert_eq!(admit(&runtime, None, "mission-1:land").unwrap(), mission);
 }
 
-/// An agent registered on another machine is bound only to a pull-request
-/// change node, as its worker or its checker, and a replan does not turn a
-/// node such an agent works into one only the project's machine runs.
+/// `DEVICE` connected with `workspaces` in its session, its project list
+/// read, and GitHub naming the mission's repository `R_1` for the mission's
+/// project and for `DEVICE_ROOT` there.
+fn connect_with_repository(runtime: &mut Runtime, workspaces: Vec<WorkspaceSnapshot>) {
+    runtime.github = repository_read(PROJECT, Some("R_1"));
+    runtime
+        .snapshot
+        .status
+        .remote
+        .retain(|remote| remote.target_id != DEVICE);
+    runtime
+        .snapshot
+        .status
+        .remote
+        .push(device_status("connected", workspaces));
+    runtime
+        .device_worktrees
+        .insert(DEVICE.into(), Default::default());
+    runtime
+        .device_github
+        .insert(DEVICE.into(), repository_read(DEVICE_ROOT, Some("R_1")));
+}
+
+/// An agent registered on another machine is bound to a node, as its worker
+/// or its checker, only where a spawn for that node would start it there:
+/// a pull-request change, on a connected machine holding the mission's
+/// repository. An agent the node holds stays through a time its machine is
+/// away, and a replan is refused only for making its node one the
+/// project's machine runs.
 #[test]
-fn an_agent_on_another_machine_is_bound_only_to_a_pull_request_change_node() {
+fn an_agent_on_another_machine_is_bound_only_where_a_spawn_there_is_admitted() {
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
     command(
@@ -6124,33 +6150,65 @@ fn an_agent_on_another_machine_is_bound_only_to_a_pull_request_change_node() {
         json!({"op": "create", "title": "Fix the bug"}),
     )
     .unwrap();
-    let plan = |delivery: &str| {
+    let plan = |delivery: &str, title: &str| {
         let review = json!([{"as": "review", "by": [{"agent": "codex", "model": "gpt-6-astra"}]}]);
         json!({"op": "plan", "plan": {"check": "cargo test", "nodes": [
-            {"key": "fix", "title": "Fix it", "kind": "change", "delivery": delivery,
+            {"key": "fix", "title": title, "kind": "change", "delivery": delivery,
              "criteria": ["the parser keeps v1 files"], "checks": review},
             {"key": "land", "title": "Land it", "kind": "change", "delivery": "direct",
              "criteria": ["it is in main"], "checks": review},
         ]}})
     };
-    command(&mut runtime, "sender", plan("pr")).unwrap();
+    command(&mut runtime, "sender", plan("pr", "Fix it")).unwrap();
     command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
     with_worker_and_reviewer(&mut runtime);
     register(&mut runtime, far_agent("agent-9", "w2:p0").1);
     let bind = |node: &str, patch: Value| json!({"op": "node", "node": node, "patch": patch});
+    let refused = |runtime: &mut Runtime, command_json: Value| {
+        let refusal = command(runtime, "sender", command_json).unwrap_err();
+        let (code, detail) = crate::coordination::split_refusal(&refusal);
+        (code.to_owned(), detail.map(str::to_owned))
+    };
+    let code = |code: &str, detail: Option<&str>| (code.to_owned(), detail.map(str::to_owned));
 
     for patch in [
         json!({"agent_id": "agent-9"}),
         json!({"reviewer": "agent-9"}),
     ] {
         assert_eq!(
-            crate::coordination::split_refusal(
-                &command(&mut runtime, "sender", bind("land", patch)).unwrap_err()
-            ),
-            ("mission_machine_node_refused", Some("land"))
+            refused(&mut runtime, bind("land", patch.clone())),
+            code("mission_machine_node_refused", Some("land"))
+        );
+        assert_eq!(
+            refused(&mut runtime, bind("fix", patch)),
+            code("mission_machine_unavailable", None),
+            "an agent from outside the mission is held to the spawn's rule"
         );
     }
-    // An agent on the project's machine binds to either.
+    runtime
+        .snapshot
+        .status
+        .remote
+        .push(device_status("connected", Vec::new()));
+    assert_eq!(
+        refused(&mut runtime, bind("fix", json!({"agent_id": "agent-9"}))),
+        code("mission_projects_loading", None)
+    );
+    runtime
+        .device_worktrees
+        .insert(DEVICE.into(), Default::default());
+    assert_eq!(
+        refused(&mut runtime, bind("fix", json!({"agent_id": "agent-9"}))),
+        code("mission_machine_no_repository", None)
+    );
+    connect_with_repository(&mut runtime, Vec::new());
+    command(
+        &mut runtime,
+        "sender",
+        bind("fix", json!({"agent_id": "agent-9", "status": "working"})),
+    )
+    .unwrap();
+    // An agent on the project's machine binds to either node.
     command(
         &mut runtime,
         "sender",
@@ -6160,17 +6218,19 @@ fn an_agent_on_another_machine_is_bound_only_to_a_pull_request_change_node() {
         ),
     )
     .unwrap();
+
+    // Its machine away for a while, the agent the node holds stays.
+    runtime.snapshot.status.remote[0] = device_status("disconnected", Vec::new());
     command(
         &mut runtime,
         "sender",
-        bind("fix", json!({"agent_id": "agent-9", "status": "working"})),
+        bind("fix", json!({"agent_id": "agent-9"})),
     )
     .unwrap();
+    command(&mut runtime, "sender", plan("pr", "Fix the parser")).unwrap();
     assert_eq!(
-        crate::coordination::split_refusal(
-            &command(&mut runtime, "sender", plan("direct")).unwrap_err()
-        ),
-        ("mission_machine_node_refused", Some("fix"))
+        refused(&mut runtime, plan("direct", "Fix the parser")),
+        code("mission_machine_node_refused", Some("fix"))
     );
     assert_eq!(
         node_view(&runtime, "fix").delivery,
@@ -6178,42 +6238,40 @@ fn an_agent_on_another_machine_is_bound_only_to_a_pull_request_change_node() {
     );
 }
 
-/// A worker on another machine records its check from its checkout there,
-/// and the line holds against that machine's checkout: the checkout at the
-/// same path on the project's machine, still at the recorded commit, says
-/// nothing of it.
-#[test]
-fn a_check_recorded_on_another_machine_holds_against_that_machines_checkout() {
-    use crate::mission_criteria::CriterionState;
-    let fixture = conducting();
-    let mut runtime = fixture.runtime.lock().unwrap();
-    running_criteria_mission(&mut runtime);
+/// The workspace of `DEVICE`'s session with `far`'s checkout at `path`,
+/// at `head`.
+fn far_checkout(far: &Actor, path: &str, head: &str) -> WorkspaceSnapshot {
+    let mut checkout = checkout(
+        "remote:mini:workspace:w2",
+        "remote:mini:checkout:w2",
+        path,
+        Some(pane(&far.pane_id, path)),
+    );
+    checkout.head_oid = Some(head.into());
+    let mut workspace = workspace(
+        "remote:mini:workspace:w2",
+        "fixture",
+        DEVICE_ROOT,
+        vec![checkout],
+    );
+    workspace.device_id = DEVICE.into();
+    workspace.remote_target_id = Some(DEVICE.into());
+    workspace
+}
+
+/// The fix node worked by `agent-9` on `DEVICE`, in a checkout there at the
+/// same path as the project's machine's, which has recorded its check at
+/// `HEAD`; answers that agent and the path.
+fn record_far_check(runtime: &mut Runtime) -> (Actor, String) {
+    running_criteria_mission(runtime);
     let path = runtime.snapshot.navigator.workspaces[0].checkouts[0]
         .path
         .clone();
     let (far, record) = far_agent("agent-9", "w2:p0");
-    register(&mut runtime, record);
-    let device_checkout = |head: &str| {
-        let mut checkout = checkout(
-            "remote:mini:workspace:w2",
-            "remote:mini:checkout:w2",
-            &path,
-            Some(pane(&far.pane_id, &path)),
-        );
-        checkout.head_oid = Some(head.into());
-        let mut workspace = workspace(
-            "remote:mini:workspace:w2",
-            "fixture",
-            DEVICE_ROOT,
-            vec![checkout],
-        );
-        workspace.device_id = DEVICE.into();
-        workspace.remote_target_id = Some(DEVICE.into());
-        device_status("connected", vec![workspace])
-    };
-    runtime.snapshot.status.remote.push(device_checkout(HEAD));
+    register(runtime, record);
+    connect_with_repository(runtime, vec![far_checkout(&far, &path, HEAD)]);
     command(
-        &mut runtime,
+        runtime,
         "sender",
         json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-9"}}),
     )
@@ -6235,14 +6293,46 @@ fn a_check_recorded_on_another_machine_holds_against_that_machines_checkout() {
         )
         .unwrap();
     assert!(changed);
+    (far, path)
+}
+
+const OTHER_HEAD: &str = "0123456789abcdef0123456789abcdef01234567";
+
+/// A worker on another machine records its check from its checkout there,
+/// and the line holds against that machine's checkout while the machine
+/// answers: the project's machine's checkout at the same path says nothing
+/// of it, a machine away proves nothing, and a new commit there asks for
+/// the check again.
+#[test]
+fn a_check_recorded_on_another_machine_holds_against_that_machines_checkout() {
+    use crate::mission_criteria::CriterionState;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let (far, path) = record_far_check(&mut runtime);
     assert_eq!(line_state(&runtime, "check"), CriterionState::Pass);
     let node = &runtime.missions.book.get("mission-1").unwrap().nodes[0];
     assert_eq!(
         node.check_folder(crate::node::TEST_NODE),
         Some((DEVICE, path.as_str()))
     );
+    checkout_at(&mut runtime, OTHER_HEAD);
+    assert_eq!(
+        line_state(&runtime, "check"),
+        CriterionState::Pass,
+        "the same path on the project's machine is another checkout"
+    );
 
-    runtime.snapshot.status.remote[0] = device_checkout("0123456789abcdef0123456789abcdef01234567");
+    runtime.snapshot.status.remote[0] =
+        device_status("disconnected", vec![far_checkout(&far, &path, HEAD)]);
+    assert_eq!(
+        line_state(&runtime, "check"),
+        CriterionState::Open,
+        "the last session of a machine away proves no head"
+    );
+    runtime.snapshot.status.remote[0].state = "connected".into();
+    assert_eq!(line_state(&runtime, "check"), CriterionState::Pass);
+    runtime.snapshot.status.remote[0] =
+        device_status("connected", vec![far_checkout(&far, &path, OTHER_HEAD)]);
     assert_eq!(
         line_state(&runtime, "check"),
         CriterionState::Open,
@@ -6250,22 +6340,46 @@ fn a_check_recorded_on_another_machine_holds_against_that_machines_checkout() {
     );
 }
 
-/// A book written before a worker could run on another machine keeps a
-/// check's folder without its machine: it reads as on the mission's
-/// machine, so a check that passed there still holds, and a record now
-/// writes its machine.
+/// A check on another machine is written only in `remote_folder`, a field a
+/// build from before workers ran elsewhere does not know: that build reads
+/// the node with no folder, so its check open, and once it saved the book
+/// without the field, this build reads the check open too, never the
+/// device's path as a checkout on the mission's machine.
 #[test]
-fn a_check_folder_written_without_its_machine_is_on_the_missions_machine() {
+fn a_check_on_another_machine_is_open_to_a_build_that_predates_it() {
+    use crate::mission_criteria::CriterionState;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let (_, path) = record_far_check(&mut runtime);
+    let node = &mut runtime.missions.book.get_mut("mission-1").unwrap().nodes[0];
+    let mut written = serde_json::to_value(&*node).unwrap();
+    assert!(written.get("folder").is_none(), "{written}");
+    assert_eq!(
+        written["remote_folder"],
+        json!({"device_id": DEVICE, "path": path})
+    );
+    written.as_object_mut().unwrap().remove("remote_folder");
+    *node = serde_json::from_value(written).unwrap();
+    assert_eq!(line_state(&runtime, "check"), CriterionState::Open);
+}
+
+/// A check on the mission's machine is written in `folder` alone, as builds
+/// from before workers ran elsewhere wrote it and read it, so a book either
+/// build saved keeps its passed check.
+#[test]
+fn a_check_on_the_missions_machine_is_written_as_before() {
     use crate::mission_criteria::CriterionState;
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
     running_criteria_mission(&mut runtime);
     met_fix(&mut runtime);
-    assert_eq!(line_state(&runtime, "check"), CriterionState::Pass);
+    let path = runtime.snapshot.navigator.workspaces[0].checkouts[0]
+        .path
+        .clone();
     let node = &mut runtime.missions.book.get_mut("mission-1").unwrap().nodes[0];
-    let mut written = serde_json::to_value(&*node).unwrap();
-    assert_eq!(written["folder_device"], crate::node::TEST_NODE);
-    written.as_object_mut().unwrap().remove("folder_device");
+    let written = serde_json::to_value(&*node).unwrap();
+    assert_eq!(written["folder"], json!(path));
+    assert!(written.get("remote_folder").is_none(), "{written}");
     *node = serde_json::from_value(written).unwrap();
     assert_eq!(line_state(&runtime, "check"), CriterionState::Pass);
 }
