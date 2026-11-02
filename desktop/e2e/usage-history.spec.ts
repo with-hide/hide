@@ -62,8 +62,15 @@ test("native usage history preserves totals, hover geometry and the Overview fil
         const before = await detail.boundingBox();
         await popover.locator('[data-usage-day][data-today="true"]').hover();
         await expect(detail.locator('[data-usage-cost]')).toHaveAttribute("aria-label", /fixture-unpriced-model/);
+        // A day of other content, here the oldest with no records against the
+        // fixture's unpriced cost, must keep the summary's height: a value that
+        // wraps moves the grass under the pointer, which then hovers another day.
+        await popover.locator('[data-usage-day]').first().hover();
+        await expect(detail.locator('[data-usage-total]')).toHaveText(language === "en" ? "No data" : "기록 없음");
         const after = await detail.boundingBox();
         expect(after!.height).toBe(before!.height);
+        expect(await detail.locator('.usage-summary-value').evaluateAll(values => values.every(value => value.scrollWidth <= value.clientWidth))).toBe(true);
+        await popover.locator('[data-usage-day][data-today="true"]').hover();
         expect(await popover.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
         await detail.locator('[data-usage-cost]').focus();
         const costHint = page.locator('[data-slot="tooltip-content"]');

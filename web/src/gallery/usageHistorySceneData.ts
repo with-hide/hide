@@ -5,10 +5,11 @@ import type { NodeUsage, UsageAmount, UsageContribution, UsageDay, UsageHideAiDa
 
 const NAMES = ["claude", "codex", "opencode", "pi", "omp", "grok"];
 const SHARES = [6000, 2000, 1000, 500, 300, 200];
+/** `heavy` prices a day in the hundreds to thousands of dollars, wide enough to fill the popover's summary column. */
 const amount = (n: number, state: string): UsageAmount => ({
   calls: n ? 1 : 0, new_tokens: n,
   tokens: { input: n * .3, output: n * .2, cache_write: n * .5, cache_read: n * 12, cache_write_1h: 0, reasoning: null },
-  cost: { micro_usd: n * 2, partial: state === "unpriced", waiting: state === "offline", stale: state === "stale", incomplete: false, unpriced_models: state === "unpriced" ? ["model-with-no-public-price"] : [], other_unpriced_models: 0 },
+  cost: { micro_usd: n * (state === "heavy" ? 400 : 2), partial: state === "unpriced", waiting: state === "offline", stale: state === "stale", incomplete: state === "heavy", unpriced_models: state === "unpriced" ? ["model-with-no-public-price"] : [], other_unpriced_models: 0 },
 });
 /** Hide's own AI on a day, beside the agents' `sessions`: four features in fixed shares of a twelfth of them, and, in the `hide-unknown` state, two calls with no reported usage every fifth day. */
 function hideAiDay(sessions: UsageAmount, index: number, state: string): UsageHideAiDay | null {

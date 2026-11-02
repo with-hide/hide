@@ -1,9 +1,16 @@
 .usage-history { --usage-cell: var(--size-usage-cell); }
+/* Hovering a day swaps these values in place, so a value never wraps: a
+   second line would move the day under the pointer and make it flicker. The
+   size shrinks only when the text scale makes a dollar amount like
+   "≥ $1,600.00 *" wider than its column, and an amount wider still is cut,
+   with the cost's hint carrying it in full. */
 .usage-summary { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--spacing-md); }
-.usage-summary-value { font-family: var(--font-mono); font-size: var(--text-headline); font-weight: 600; line-height: 1.4; min-height: 1.4em; overflow-wrap: anywhere; }
+.usage-summary > * { container-type: inline-size; }
+.usage-summary-value { font-family: var(--font-mono); font-size: min(var(--text-headline), 13cqi); font-weight: 600; line-height: 1.4; min-height: 1.4em; white-space: nowrap; overflow: clip; overflow-clip-margin: var(--size-hairline); text-overflow: ellipsis; }
 .usage-cost { outline: none; }
 .usage-cost:focus-visible { box-shadow: 0 0 0 var(--size-hairline) var(--ring); }
-.usage-summary-value [data-cost-unavailable="true"] { font-size: var(--text-subhead); }
+.usage-summary-value .text-micro { font-size: min(var(--text-micro), 0.6em); }
+.usage-summary-value [data-cost-unavailable="true"] { font-size: min(var(--text-subhead), 1em); }
 [data-usage-detail] > :first-child { min-height: var(--size-control-sm); }
 .usage-token-detail { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--spacing-xs); padding-top: var(--spacing-xs); }
 .usage-grass-section { display: flex; flex-direction: column; gap: var(--spacing-sm); padding-block: var(--spacing-md); border-block: var(--size-hairline) solid var(--border); }
@@ -27,7 +34,7 @@
 .usage-legend { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--spacing-xxs); font-size: var(--text-micro); color: var(--muted-foreground); }
 .usage-limits { padding-bottom: var(--spacing-sm); border-bottom: var(--size-hairline) solid var(--border); }
 .usage-overview { display: flex; flex-direction: column; gap: var(--spacing-xl); padding: var(--spacing-xl); min-width: 0; width: 100%; max-width: var(--size-overview-usage-content); margin-inline: auto; }
-.usage-overview .usage-summary-value { font-size: var(--text-display); }
+.usage-overview .usage-summary-value { font-size: min(var(--text-display), 13cqi); }
 .usage-overview .usage-comparison-plot { height: var(--size-overview-usage-plot); }
 .usage-overview-limits { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--size-usage-popover)), 1fr)); gap: var(--spacing-md); padding-top: var(--spacing-md); }
 .usage-overview-history { min-width: 0; width: 100%; }
