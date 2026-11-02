@@ -570,7 +570,7 @@ fn record(
     let summaries = scope.summaries;
     let (title_text, title_source) = title(
         record.manual_title.as_deref(),
-        Some(record.title.as_str()).filter(|_| !record.flows.is_empty()),
+        (!record.flows.is_empty()).then_some(record.title.as_str()),
         record.native_title.as_deref(),
         &session.agent,
         summaries,
@@ -619,7 +619,7 @@ fn record(
         .map(|(child, facts)| {
             let (title, title_source) = title(
                 child.manual_title.as_deref(),
-                Some(child.title.as_str()).filter(|_| !child.flows.is_empty()),
+                (!child.flows.is_empty()).then_some(child.title.as_str()),
                 child.native_title.as_deref(),
                 &child.session.agent,
                 summaries,
@@ -1067,7 +1067,7 @@ mod tests {
             device_id: device.into(),
             checkouts: vec![root.into()],
         };
-        let node: Arc<dyn NodeLink> = Arc::new(Shelf::default());
+        let node: Arc<dyn NodeLink> = Arc::new(Shelf);
         let scope = SessionScope {
             store: path,
             local_device: "local".into(),
@@ -1127,7 +1127,6 @@ mod tests {
 
     /// A node holding one conversation of 30 events, one a minute from an
     /// hour ago; the 3rd carries a credential.
-    #[derive(Default)]
     struct Shelf;
 
     impl NodeLink for Shelf {
