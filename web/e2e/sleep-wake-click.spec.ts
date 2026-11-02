@@ -7,28 +7,27 @@
 // over the pane's center and the click would land either way, so this file
 // runs a software WebGL context as `terminal-webgl.spec.ts` does.
 
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { dumpOnFailure } from "./failure-dump";
-import { CLAUDE_FULL_ACCESS_LINE, claudeProjects, setFixtureSession, startHerdr, writeFixtureTranscript, type HerdrFixture } from "./herdr-fixture";
+import { withControl, agentIn } from "./daemon-actions";
+import { startFixture } from "./engine-fixture";
+import { CLAUDE_FULL_ACCESS } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { screenshot } from "./wire";
 
 test.use({ launchOptions: { args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] } });
 test.describe.configure({ timeout: 120_000 });
 
-const SESSION = "22222222-3333-4444-5555-666666666666";
-
-type ProcessInfo = { result: { process_info: { foreground_processes: { argv?: string[] | null }[] } } };
+// The session the fixture's second agent runs (`engine-fixture.ts`).
+const SESSION = "fixture-two";
 
 test("a mouse click at the center of Wake agent over a WebGL terminal wakes the pane", async ({ page }) => {
-  const herdr = await startHerdr();
+  const herdr = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    const [, sleeper] = herdr.panes;
-    writeFixtureTranscript(claudeProjects(herdr), SESSION, { task: "Agent two" });
-    setFixtureSession(herdr, sleeper, SESSION);
     daemon = await startHided(herdr, "sleep-wake-click");
-    await page.goto(`${daemon.origin}/#token=${daemon.token}`);
+    const [, sleeper] = herdr.panes;
+    await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await page.locator("[data-checkout]").first().click();
     const pane = page.locator(`[data-pane-view="${sleeper}"]`);
     await expect(pane).toBeVisible({ timeout: 20_000 });
@@ -39,6 +38,16 @@ test("a mouse click at the center of Wake agent over a WebGL terminal wakes the 
     await item.click();
     const wake = pane.locator(`[data-agent-wake="${sleeper}"]`);
     await expect(wake).toBeVisible({ timeout: 30_000 });
+    // The woken agent is the stand-in resumed on the session, typed at the
+    // pane's shell with Hide's full-access flag: each start leaves such a
+    // line on the screen (the fixture's own start did too), so the wake is
+    // one more of them, and the sidebar lists an agent in the pane again.
+    // Whitespace is dropped, since the line wraps at the pane's width, and
+    // the settings argument is not matched, since each shell quotes it its way.
+    const flat = (text: string) => text.replace(/\s+/g, "");
+    const line = flat(`claude --resume ${SESSION} ${CLAUDE_FULL_ACCESS[0]} ${CLAUDE_FULL_ACCESS[1]}`);
+    const typed = () => page.evaluate((id) => window.__hideProbe?.paneText(id) ?? "", sleeper).then((text) => flat(text).split(line).length - 1);
+    const before = await typed();
     // The terminal under the sleeping body draws with WebGL, whose link
     // layer is the canvas the operator's click landed on.
     await expect(pane.locator("canvas.xterm-link-layer")).toHaveCount(1);
@@ -50,12 +59,13 @@ test("a mouse click at the center of Wake agent over a WebGL terminal wakes the 
     if (!box) throw new Error("Wake agent has no box");
     await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
 
-    const resumed = () =>
-      (herdr.run(["pane", "process-info", "--pane", sleeper]) as ProcessInfo).result.process_info.foreground_processes.map((process) => process.argv?.join(" "));
     // Once in a while on Linux the wake's start was answered but no resumed
     // agent ever held the pane (with-hide/hide-private#322); what the shell's
     // line showed then says whether the line was typed, mangled or ran.
-    await dumpOnFailure("woken pane", () => wokenPane(herdr, sleeper), () => expect.poll(resumed, { timeout: 30_000 }).toContain(`claude --resume ${SESSION} ${CLAUDE_FULL_ACCESS_LINE}`));
+    await dumpOnFailure("woken pane", () => wokenPane(page, daemon!, sleeper), async () => {
+      await expect.poll(typed, { timeout: 30_000 }).toBeGreaterThan(before);
+      await withControl(daemon!, (control) => control.until((rest) => agentIn(rest, sleeper), `the resumed agent in ${sleeper}`, 30_000));
+    });
     await expect(pane.locator("[data-pane-sleep]")).toHaveCount(0, { timeout: 30_000 });
   } finally {
     daemon?.stop();
@@ -63,10 +73,9 @@ test("a mouse click at the center of Wake agent over a WebGL terminal wakes the 
   }
 });
 
-/** The pane's screen, its foreground processes and Herdr's agent on it, as Herdr answers now. */
-function wokenPane(herdr: HerdrFixture, pane: string): unknown {
-  const screen = herdr.run(["pane", "read", pane, "--source", "recent", "--lines", "20", "--format", "text"]);
-  const processes = herdr.run(["pane", "process-info", "--pane", pane]);
-  const agents = (herdr.run(["agent", "list"]) as { result: { agents: { pane_id: string }[] } }).result.agents.filter((agent) => agent.pane_id === pane);
-  return { screen, processes, agents };
+/** The pane's screen as the page drew it and the agent row the daemon lists on it, as they are now. */
+async function wokenPane(page: Page, daemon: Daemon, pane: string): Promise<unknown> {
+  const screen = await page.evaluate((id) => window.__hideProbe?.paneText(id) ?? "", pane);
+  const agent = await withControl(daemon, (control) => control.until((rest) => agentIn(rest, pane) ?? null, `the agent row of ${pane}`, 2_000));
+  return { screen, agent };
 }

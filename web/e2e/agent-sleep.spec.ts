@@ -18,10 +18,7 @@ test.describe.configure({ timeout: 150_000 });
 // The session the fixture's second agent runs (`engine-fixture.ts`), whose transcript names it Agent two.
 const SESSION = "fixture-two";
 
-// Herdr only until the own engine publishes a sleeping agent's row: after Sleep agent the core records
-// `agent_sleep.slept` and the stand-in is gone, but the snapshot lists no row for the pane, so the pane
-// never draws Sleeping with Wake agent (the same gap as `sleep-wake-click.spec.ts`).
-test("an agent slept from the pane menu keeps its row and wakes in the same pane on a visit @herdr", async ({ page }) => {
+test("an agent slept from the pane menu keeps its row and wakes in the same pane on a visit", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   const herdr = await startFixture();
   let daemon: Daemon | null = null;
