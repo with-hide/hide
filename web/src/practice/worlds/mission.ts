@@ -1,18 +1,22 @@
 // Chapter 0's world: one job carried from the learner's request to the report,
-// as a mission (`hide-mission`), at the pace an agent works. Whatever words the
-// learner sends play the next part of the script, since a practice understands
-// no words, and the Conductor's own turns end by themselves (`later`): the
-// first words are the mission, which the Conductor plans for a few seconds
-// before the plan stands on the map and it asks whether to start; the next
-// words approve it, and the Conductor starts a worker per part in a tab of its
-// own. A while later the settings part is a pull request and the Conductor
-// asks one decision (`hide mission decide`) with its choices, which reaches
-// the sidebar's 내 차례; a choice pressed on the map's banner, an answer written
-// there, or the next words said to the Conductor answer it. The Conductor
-// folds one part into another and goes on, and a while later the last worker
-// is done, the Conductor reports, and the Project's Memory keeps what was
-// decided. Every word the world shows is in the learner's language
-// (`practice.mission.world.*`), since this is the chapter a newcomer meets first.
+// as a mission (`hide-mission`), at the pace an agent works. The job is moving
+// sign-in to email links: a survey, a token table, the API on it, the sign-in
+// screen and the mail in parallel, checked together at the end, two workers at
+// a time. Whatever words the learner sends play the next part of the script,
+// since a practice understands no words, and the Conductor's own turns end by
+// themselves (`later`): the first words are the mission, which the Conductor
+// plans for a few seconds before the plan stands on the map and it asks
+// whether to start; the next words approve it, and the Conductor starts each
+// part's worker in a tab of its own as the part's turn and the cap allow. A
+// while in, it asks one decision (`hide mission decide`) with its choices,
+// whether to keep password sign-in, which reaches the sidebar's 내 차례; a
+// choice pressed on the map's banner, an answer written there, or the next
+// words said to the Conductor answer it, and the answer changes the plan:
+// keeping it gives the screen both ways, dropping it adds a part that takes
+// password sign-in out. The rest runs, the check passes, the Conductor
+// reports, and the Project's Memory keeps what was decided. Every word the
+// world shows is in the learner's language (`practice.mission.world.*`), since
+// this is the chapter a newcomer meets first.
 
 import type { ProjectTasksScope } from "../../agentScope";
 import type { MessageKey } from "../../i18n/catalogs";
@@ -23,35 +27,55 @@ import { agent, applyDesk, counted, deskSnapshot, focusedPane, hideAiOn, keyText
 
 const PLACE: PracticePlace = { project: "hide-practice", label: "hide-practice", branch: "main" };
 
-/** The Conductor's pane, and the panes of its two workers: the backoff part's and the settings part's. */
+/** The Conductor's pane. */
 export const CONDUCTOR = "cd";
-export const WORKER = "wk";
-export const CONFIG_WORKER = "wc";
-const WORKER_TAB = "t2";
-const CONFIG_TAB = "t3";
 
 const MISSION_ID = "practice-mission";
 
-/** How long the Conductor plans, how long the workers run before the question, and how long the work takes after the answer. */
-export const BEATS = { plan: 3500, ask: 7000, finish: 9000 } as const;
+/**
+ * Where the mission stands: 0 before it, 1 the Conductor planning, 2 the plan
+ * up and waiting for the learner's go, 3 the survey, 4 the token table and the
+ * screen, 5 the API and the screen with a decision waiting, 6 answered, 7 the
+ * mail (and, when dropped, taking password sign-in out), 8 the check, 9 done
+ * and reported.
+ */
+export type MissionStage = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
+
+/** The stage the decision waits at, and the last. */
+const ASKING: MissionStage = 5;
+const DONE: MissionStage = 9;
+
+/** How long each of the Conductor's own turns takes before the next stage, by the stage it ends. */
+export const BEATS: Partial<Record<MissionStage, number>> = { 1: 3500, 3: 3000, 4: 4000, 6: 3000, 7: 3500, 8: 3000 };
 /** Between two lines the Conductor writes. */
 const LINE_MS = 450;
 /** The event a Conductor's turn ending plays: the stage it moves to. */
 const BEAT = "practice_beat";
 
+type Part = "survey" | "db" | "screen" | "api" | "mail" | "drop" | "verify";
+
+/** One part of the plan: its kind, who does it in which pane, when it starts and ends, its PR, what it waits on, and the file it touches. */
+type PartSpec = {
+  key: Part; kind: "change" | "research" | "verify"; pane: string; agent: "claude" | "codex"; model: string; effort: "low" | "medium" | "high";
+  start: MissionStage; end: MissionStage; pr: number | null; deps: Part[]; file: string;
+};
+
+const PARTS: PartSpec[] = [
+  { key: "survey", kind: "research", pane: "sv", agent: "claude", model: "sonnet", effort: "medium", start: 3, end: 4, pr: null, deps: [], file: "src/auth/session.ts" },
+  { key: "db", kind: "change", pane: "db", agent: "codex", model: "gpt-5.5", effort: "medium", start: 4, end: 5, pr: 31, deps: ["survey"], file: "db/migrations/0042_login_tokens.sql" },
+  { key: "screen", kind: "change", pane: "ui", agent: "claude", model: "sonnet", effort: "medium", start: 4, end: 7, pr: 33, deps: ["survey"], file: "web/src/pages/SignIn.tsx" },
+  { key: "api", kind: "change", pane: "ap", agent: "codex", model: "gpt-5.5", effort: "high", start: 5, end: 7, pr: 32, deps: ["db"], file: "src/auth/magicLink.ts" },
+  { key: "mail", kind: "change", pane: "ml", agent: "codex", model: "gpt-5.5", effort: "low", start: 7, end: 8, pr: 34, deps: ["survey"], file: "mail/templates/sign-in.html" },
+  { key: "drop", kind: "change", pane: "pw", agent: "codex", model: "gpt-5.5", effort: "medium", start: 7, end: 8, pr: 35, deps: ["api"], file: "src/auth/password.ts" },
+  { key: "verify", kind: "verify", pane: "vf", agent: "claude", model: "sonnet", effort: "medium", start: 8, end: 9, pr: null, deps: ["api", "screen", "mail"], file: "e2e/sign-in.spec.ts" },
+];
+
 /** One of the world's words in the learner's language. */
 const say = (key: string, values?: Record<string, string | number>) => clientI18n.t(`practice.mission.world.${key}` as MessageKey, values as never) as string;
 const title = () => say("title");
 const decision = () => say("decision");
-/** The decision's choices, as `hide mission decide --option` gives them; the first is the one recommended. */
+/** The decision's choices, as `hide mission decide --option` gives them; the first, keeping password sign-in, is the one recommended. */
 const options = () => [say("option1"), say("option2")];
-
-/**
- * Where the mission stands: 0 before it, 1 the Conductor planning, 2 the plan
- * up and waiting for the learner's go, 3 the workers running, 4 a decision
- * waiting, 5 answered and at work, 6 done and reported.
- */
-export type MissionStage = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 
 export type MissionModel = {
   desk: DeskModel;
@@ -64,6 +88,8 @@ export type MissionModel = {
   said: string[];
   /** Anything else said to the Conductor, which it takes on as it goes. */
   noted: string[];
+  /** Whether the answer drops password sign-in, which adds the part that takes it out. */
+  drop: boolean;
   /** The 보기 slot: what it opened, oldest first, and whether the lane draws it. */
   detail: DetailItem[];
   detailShown: boolean;
@@ -92,6 +118,19 @@ export function missionInSlot(model: MissionModel): boolean {
 }
 
 const since = (model: MissionModel, stage: MissionStage) => model.times[stage] ?? Date.now();
+
+/** The parts in the plan: dropping password sign-in adds its part, and the check then waits on it too. */
+function parts(model: MissionModel): PartSpec[] {
+  return PARTS.filter((part) => part.key !== "drop" || model.drop).map((part) => (part.key === "verify" && model.drop ? { ...part, deps: [...part.deps, "drop" as const] } : part));
+}
+
+/** Where a part stands once the mission runs: waiting its turn, at work, or done. */
+function phase(part: PartSpec, stage: MissionStage): "waiting" | "working" | "done" {
+  return stage < part.start ? "waiting" : stage < part.end ? "working" : "done";
+}
+
+/** The parts whose workers have started, in the order they started. */
+const begun = (model: MissionModel) => (model.stage >= 3 ? parts(model).filter((part) => model.stage >= part.start) : []);
 
 // --- The rows --------------------------------------------------------------------
 
@@ -127,17 +166,13 @@ function asking(row: AgentRow, what: string, at: number): AgentRow {
 
 const COUNTS = (working: number) => ({ error: 0, approval: 0, question: 0, working, done: 0 });
 
-/** Whether the stage has the Conductor waiting on the learner: its go, then its decision. */
-const asks = (stage: MissionStage) => stage === 2 || stage === 4;
-/** Whether the Conductor is at work: planning, watching its workers, or carrying out the answer. */
-const conductorWorks = (stage: MissionStage) => stage === 1 || stage === 3 || stage === 5;
-/** Whether the settings worker is done: its PR stands before the question comes. */
-const configDone = (stage: MissionStage) => stage >= 4;
+/** Whether the Conductor waits on the learner: its go, then its decision. */
+const asks = (stage: MissionStage) => stage === 2 || stage === ASKING;
+/** Whether the Conductor is at work: planning, or watching its workers. */
+const conductorWorks = (stage: MissionStage) => stage !== 0 && stage !== DONE && !asks(stage);
 
-/** The workers at work: both once the mission runs, the backoff one alone once the settings part is a PR, none once it is done. */
-function busyWorkers(stage: MissionStage): number {
-  return stage === 3 ? 2 : stage === 4 || stage === 5 ? 1 : 0;
-}
+/** The workers at work. */
+const busy = (model: MissionModel) => begun(model).filter((part) => phase(part, model.stage) === "working").length;
 
 /** The Conductor as the stage has it. */
 function conductorRow(model: MissionModel): AgentRow {
@@ -146,19 +181,19 @@ function conductorRow(model: MissionModel): AgentRow {
     pane_id: CONDUCTOR, identity_label: title(), agent_kind: "claude", session_id: "practice-conductor",
     group: working ? "working" : "seen", mark: working ? "going" : "quiet", status_code: working ? "working" : "idle", activity: working ? "working" : "idle", elapsed: working ? "1s" : "8m",
   });
-  const row = model.stage === 2 ? asking(base, say("approveQuestion"), since(model, 2)) : model.stage === 4 ? asking(base, decision(), since(model, 4)) : working ? base : resting(base);
-  if (model.stage < 3) return row;
-  const busy = busyWorkers(model.stage);
-  return { ...row, lineage_child_pane_ids: [CONFIG_WORKER, WORKER], lineage_collapsed: false, direct_child_counts: COUNTS(busy), descendant_counts: COUNTS(busy) };
+  const row = model.stage === 2 ? asking(base, say("approveQuestion"), since(model, 2)) : model.stage === ASKING ? asking(base, decision(), since(model, ASKING)) : working ? base : resting(base);
+  const children = begun(model).map((part) => part.pane);
+  if (!children.length) return row;
+  return { ...row, lineage_child_pane_ids: children, lineage_collapsed: false, direct_child_counts: COUNTS(busy(model)), descendant_counts: COUNTS(busy(model)) };
 }
 
-/** A worker the Conductor delegated a part to, at work until `rests` says its part is done. */
-function workerRow(paneId: string, part: "config" | "backoff", rests: boolean): AgentRow {
+/** A part's worker, delegated by the Conductor, at work until its part is done. */
+function workerRow(part: PartSpec, stage: MissionStage): AgentRow {
   const base: AgentRow = {
-    ...agent({ pane_id: paneId, identity_label: say(`node.${part}`), agent_kind: "codex", session_id: `practice-worker-${part}`, group: "working", mark: "going", status_code: "working", activity: "working", elapsed: "2m" }),
+    ...agent({ pane_id: part.pane, identity_label: say(`node.${part.key}`), agent_kind: part.agent, session_id: `practice-worker-${part.key}`, group: "working", mark: "going", status_code: "working", activity: "working", elapsed: "2m" }),
     delegated: true, lineage_parent_pane_id: CONDUCTOR, lineage_path_pane_ids: [CONDUCTOR], lineage_depth: 1,
   };
-  const row = rests ? resting(base) : base;
+  const row = phase(part, stage) === "done" ? resting(base) : base;
   return { ...row, state: { ...row.state, root: false } };
 }
 
@@ -177,32 +212,32 @@ function initial(): MissionModel {
     groups: [{ id: null, name: null, tabs: ["t1"] }],
     selectedGroup: null,
     activeTab: "t1",
-    // Past the workers' tabs, so a tab or split the learner opens takes a new number.
-    nextId: 4,
+    // Past every worker's tab, so a tab or split the learner opens takes a new number.
+    nextId: PARTS.length + 2,
     operations: [],
   };
   // The sidebar starts on its 태스크 list, where a question lands in 내 차례.
-  return { desk, stage: 0, times: { 0: Date.now() }, draft: "", said: [], noted: [], detail: [], detailShown: false, laneCalls: 0, lens: "tasks", memory: false, looked: false, focus: null };
+  return { desk, stage: 0, times: { 0: Date.now() }, draft: "", said: [], noted: [], drop: false, detail: [], detailShown: false, laneCalls: 0, lens: "tasks", memory: false, looked: false, focus: null };
 }
 
-/** The mission started: each worker in its own tab. */
-function started(desk: DeskModel): DeskModel {
+/** The desk with a tab for each worker that has started and has none yet. */
+function withWorkerTabs(model: MissionModel): DeskModel {
+  const desk = model.desk;
+  const fresh = begun(model).filter((part) => !desk.panes.some((pane) => pane.id === part.pane));
+  if (!fresh.length) return desk;
+  const tabId = (part: PartSpec) => `t${PARTS.findIndex((one) => one.key === part.key) + 2}`;
   return {
     ...desk,
-    panes: [...desk.panes, { id: WORKER, agent: null, title: say("node.backoff") }, { id: CONFIG_WORKER, agent: null, title: say("node.config") }],
-    tabs: [
-      ...desk.tabs,
-      { id: WORKER_TAB, name: null, root: { type: "pane", pane_id: WORKER }, focused: WORKER, zoomed: false },
-      { id: CONFIG_TAB, name: null, root: { type: "pane", pane_id: CONFIG_WORKER }, focused: CONFIG_WORKER, zoomed: false },
-    ],
-    groups: desk.groups.map((group) => (group.id === null ? { ...group, tabs: [...group.tabs, WORKER_TAB, CONFIG_TAB] } : group)),
+    panes: [...desk.panes, ...fresh.map((part) => ({ id: part.pane, agent: null, title: say(`node.${part.key}`) }))],
+    tabs: [...desk.tabs, ...fresh.map((part) => ({ id: tabId(part), name: null, root: { type: "pane" as const, pane_id: part.pane }, focused: part.pane, zoomed: false }))],
+    groups: desk.groups.map((group) => (group.id === null ? { ...group, tabs: [...group.tabs, ...fresh.map(tabId)] } : group)),
   };
 }
 
 /** The desk with each pane's agent as the stage has it. */
 function withAgents(model: MissionModel): DeskModel {
-  const workers: Record<string, AgentRow> = model.stage >= 3 ? { [WORKER]: workerRow(WORKER, "backoff", model.stage === 6), [CONFIG_WORKER]: workerRow(CONFIG_WORKER, "config", configDone(model.stage)) } : {};
-  const rows: Record<string, AgentRow> = { [CONDUCTOR]: conductorRow(model), ...workers };
+  const rows: Record<string, AgentRow> = { [CONDUCTOR]: conductorRow(model) };
+  for (const part of begun(model)) rows[part.pane] = workerRow(part, model.stage);
   return { ...model.desk, panes: model.desk.panes.map((pane) => ({ ...pane, agent: rows[pane.id] ?? pane.agent })) };
 }
 
@@ -211,88 +246,71 @@ function withAgents(model: MissionModel): DeskModel {
 const PR_URL = (number: number) => `https://example.com/${PLACE.project}/pull/${number}`;
 const MINUTE = 60_000;
 
-const NODE: Omit<MissionNode, "key" | "title" | "status" | "worker"> = {
-  kind: "change", depends_on: [], blocked: null, delivery: "pr", agent_id: null, pane_id: null, machine: null,
+const NODE: Omit<MissionNode, "key" | "title" | "status" | "worker" | "kind" | "depends_on" | "delivery"> = {
+  blocked: null, agent_id: null, pane_id: null, machine: null,
   pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 1,
   line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, landing: null, verdict: null, checks: null, plan: null, prs: [], attention: null, hide: null,
 };
 
-/** The plan's three parts, as the record holds them at the model's stage. */
-function nodes(model: MissionModel): MissionNode[] {
-  const start = since(model, 3);
-  const planned = model.stage === 2;
-  const answered = model.stage >= 5;
-  const done = model.stage === 6;
-  const configWorker = { agent: "codex" as const, model: "gpt-5.5", effort: "medium" as const };
-  const config: MissionNode = planned
-    ? { ...NODE, key: "config", title: say("node.config"), status: "planned", worker: configWorker }
-    : !configDone(model.stage)
-      ? { ...NODE, key: "config", title: say("node.config"), status: "working", worker: configWorker, agent_id: "agent-1", pane_id: CONFIG_WORKER, branch: "practice/retry-config", stage: 1, line: say("configWorking"), started_at_unix_ms: start }
-      : {
-        ...NODE, key: "config", title: say("node.config"), status: "done", worker: configWorker,
-        pr: 21, prs: [{ number: 21, state: "mergeable", url: PR_URL(21) }], pr_state: "mergeable", landing: { state: "left", action: "merge" }, pr_url: PR_URL(21), branch: "practice/retry-config", stage: 3,
-        line: say("configLine"), review: say("configReview"), started_at_unix_ms: start, finished_at_unix_ms: since(model, 4),
-      };
-  const backoffWorker = { agent: "codex" as const, model: "gpt-5.5", effort: "high" as const, effort_auto: true };
-  const backoff: MissionNode = planned
-    ? { ...NODE, key: "backoff", title: say("node.backoff"), status: "planned", worker: backoffWorker }
-    : done
-      ? {
-        ...NODE, key: "backoff", title: say("node.backoff"), status: "done", worker: backoffWorker, branch: "practice/retry-backoff",
-        pr: 22, prs: [{ number: 22, state: "mergeable", url: PR_URL(22) }], pr_state: "mergeable", landing: { state: "left", action: "merge" }, pr_url: PR_URL(22), stage: 3,
-        line: say("configLine"), change: say("backoffChange"), started_at_unix_ms: start, finished_at_unix_ms: since(model, 6),
-      }
-      : {
-        ...NODE, key: "backoff", title: say("node.backoff"), status: "working", worker: backoffWorker, agent_id: "agent-2", pane_id: WORKER, branch: "practice/retry-backoff",
-        ...(answered
-          ? { pr: 22, prs: [{ number: 22, state: "pending" as const, url: PR_URL(22) }], pr_state: "pending" as const, pr_url: PR_URL(22), stage: 2, line: say("backoffLineAfter"), change: say("backoffChange") }
-          : { stage: 1, line: say("backoffLine") }),
-        started_at_unix_ms: start,
-      };
-  const docs: MissionNode = {
-    ...NODE, key: "docs", title: say("node.docs"), depends_on: ["backoff"],
-    status: answered ? "dropped" : "planned",
-    worker: { agent: "claude", model: "sonnet", effort: "low" },
-    change: answered ? say("docsChange") : null,
+/** A part as the record holds it at the model's stage. */
+function node(model: MissionModel, part: PartSpec): MissionNode {
+  const at = model.stage === 2 ? "waiting" : phase(part, model.stage);
+  const base: MissionNode = {
+    ...NODE, key: part.key, title: say(`node.${part.key}`), kind: part.kind, depends_on: part.deps, delivery: part.kind === "change" ? "pr" : null,
+    status: at === "waiting" ? "planned" : at === "working" ? "working" : "done",
+    worker: { agent: part.agent, model: part.model, effort: part.effort },
   };
-  return [config, backoff, docs];
+  // The screen's part changes with the answer: both ways kept, or the password field gone.
+  const change = part.key === "screen" && model.stage > ASKING ? say(model.drop ? "screenChangeDrop" : "screenChangeKeep") : part.key === "drop" ? say("dropChange") : null;
+  if (at === "waiting") return { ...base, change };
+  const branch = part.kind === "change" ? `practice/sign-in-${part.key}` : null;
+  const started = { agent_id: `agent-${part.pane}`, pane_id: part.pane, branch, started_at_unix_ms: since(model, part.start), change };
+  if (at === "working") return { ...base, ...started, stage: part.kind === "change" ? 1 : null, line: say(`line.${part.key}`) };
+  const finished = { ...started, finished_at_unix_ms: since(model, part.end), line: say(`doneLine.${part.key}`) };
+  if (part.kind === "verify") return { ...base, ...finished, verdict: "pass", checks: { passed: 12, total: 12 } };
+  if (part.pr === null) return { ...base, ...finished };
+  return { ...base, ...finished, pr: part.pr, prs: [{ number: part.pr, state: "mergeable", url: PR_URL(part.pr) }], pr_state: "mergeable", pr_url: PR_URL(part.pr), stage: 3, landing: { state: "left", action: "merge" } };
 }
 
 /** The mission once its plan stands; while the Conductor still plans there is none. */
 function mission(model: MissionModel): Mission | null {
   if (model.stage < 2) return null;
   const now = Date.now();
-  const status = model.stage === 2 ? "planning" : model.stage === 6 ? "merge_wait" : "running";
+  const status = model.stage === 2 ? "planning" : model.stage === DONE ? "merge_wait" : "running";
+  const plan = parts(model);
+  const landed = plan.filter((part) => part.pr !== null && model.stage >= part.end).map((part) => part.key);
   return {
     id: MISSION_ID, title: title(), workspace_id: PLACE.project, project: PLACE.label, checkout_path: `/work/${PLACE.project}`, device_id: "local",
     status, scope: "pr", cap: 2, exempt: false, strength: "normal", other_vendor: true,
     // No session: this practice keeps no record to open.
     conductor: { pane_id: CONDUCTOR, name: title(), agent_kind: "claude", session: null, present: true, takes_answers: true },
-    nodes: nodes(model), merge_order: ["config", "backoff"], landing_order: configDone(model.stage) ? ["config"] : [], stack_waiting: 0, check: "pnpm test", github: "practice-bot",
-    decision: model.stage === 4 ? decision() : null,
-    question: model.stage === 4 ? { key: 1, why: say("why"), options: options(), recommend: 1, node: "docs", asked_at_unix_ms: since(model, 4) } : null,
-    answer: null, answer_failed: null, delay: null, report: model.stage === 6 ? say("report") : null,
+    nodes: plan.map((part) => node(model, part)), merge_order: plan.filter((part) => part.pr !== null).sort((a, b) => a.pr! - b.pr!).map((part) => part.key), landing_order: landed, stack_waiting: 0, check: "pnpm test:e2e", github: "practice-bot",
+    decision: model.stage === ASKING ? decision() : null,
+    question: model.stage === ASKING ? { key: 1, why: say("why"), options: options(), recommend: 1, node: "screen", asked_at_unix_ms: since(model, ASKING) } : null,
+    answer: null, answer_failed: null, delay: null, report: model.stage === DONE ? say("report", { count: landed.length }) : null,
     created_at_unix_ms: since(model, 1), started_at_unix_ms: model.stage >= 3 ? since(model, 3) : null, closed_at_unix_ms: null,
-    running: busyWorkers(model.stage), stale: false, github_stale: false, github_read_at_unix_ms: now,
+    running: busy(model), stale: false, github_stale: false, github_read_at_unix_ms: now,
   };
 }
 
 // --- The Conductor's prompt and its turns ---------------------------------------------------
 
-/** The model moved to `stage`, which begins now. */
+/** The model moved to `stage`, which begins now, with a tab for each worker it starts. */
 function to(model: MissionModel, stage: MissionStage): MissionModel {
-  return { ...model, stage, times: { ...model.times, [stage]: Date.now() } };
+  const moved = { ...model, stage, times: { ...model.times, [stage]: Date.now() } };
+  return { ...moved, desk: withWorkerTabs(moved) };
 }
 
-/** The decision answered with `words`: the Conductor folds the docs part into the backoff PR and goes back to work. */
-function answered(model: MissionModel, words: string): MissionModel {
-  return to({ ...model, said: [...model.said, words] }, 5);
+/** The decision answered with `words`, dropping password sign-in or keeping it: the Conductor changes the plan and goes back to work. */
+function answered(model: MissionModel, words: string, drop: boolean): MissionModel {
+  return to({ ...model, said: [...model.said, words], drop }, 6);
 }
 
 /**
  * The prompt, sent: the first words are the mission, the next the go once the
- * plan is up, the next the decision's answer; words said while the Conductor
- * is at work, or after, it takes on as it goes. An empty prompt sends nothing.
+ * plan is up, the next the decision's answer (which keeps password sign-in
+ * unless it is the choice that drops it); words said while the Conductor is at
+ * work, or after, it takes on as it goes. An empty prompt sends nothing.
  */
 function submit(model: MissionModel): MissionModel {
   const words = model.draft.trim();
@@ -302,9 +320,9 @@ function submit(model: MissionModel): MissionModel {
     case 0:
       return to(sent, 1);
     case 2:
-      return to({ ...sent, desk: started(model.desk) }, 3);
-    case 4:
-      return answered({ ...model, draft: "" }, words);
+      return to(sent, 3);
+    case ASKING:
+      return answered({ ...model, draft: "" }, words, words === options()[1]);
     default:
       return { ...model, draft: "", noted: [...model.noted, words] };
   }
@@ -315,16 +333,16 @@ function submit(model: MissionModel): MissionModel {
  * the question, then the choice pressed or the words written. An answer to
  * another mission or question, or once nothing is asked, is refused.
  */
-function answerLine(model: MissionModel, payload: Record<string, unknown>): string | null {
-  if (model.stage !== 4 || payload.mission !== MISSION_ID || payload.key !== 1) return null;
+function answerOf(model: MissionModel, payload: Record<string, unknown>): { line: string; drop: boolean } | null {
+  if (model.stage !== ASKING || payload.mission !== MISSION_ID || payload.key !== 1) return null;
   const answer = typeof payload.option === "number" ? options()[payload.option - 1] : typeof payload.text === "string" ? payload.text.trim() : undefined;
-  return answer ? say("answerLine", { question: decision(), answer }) : null;
+  return answer ? { line: say("answerLine", { question: decision(), answer }), drop: payload.option === 2 } : null;
 }
 
-/** The Conductor's turn that ends on its own: the plan stands, the question comes, the work is done. */
+/** The Conductor's turn that ends on its own: the plan stands, a part finishes and the next starts, the question comes, the check passes. */
 function later(model: MissionModel): { at: number; event: CoreEvent } | null {
-  const next = model.stage === 1 ? { stage: 2, wait: BEATS.plan } : model.stage === 3 ? { stage: 4, wait: BEATS.ask } : model.stage === 5 ? { stage: 6, wait: BEATS.finish } : null;
-  return next ? { at: since(model, model.stage) + next.wait, event: { kind: BEAT, payload: { stage: next.stage } } } : null;
+  const wait = BEATS[model.stage];
+  return wait === undefined ? null : { at: since(model, model.stage) + wait, event: { kind: BEAT, payload: { stage: model.stage + 1 } } };
 }
 
 // --- The events --------------------------------------------------------------------------
@@ -335,7 +353,7 @@ function focused(model: MissionModel, event: CoreEvent): MissionModel | null {
   const paneId = String(event.payload.pane_id);
   const requestId = event.payload.request_id;
   const focus: PaneFocusRequest | null = typeof requestId === "string" ? { request_id: requestId, target_pane_id: paneId, phase: "succeeded", message: null, retryable: false } : model.focus;
-  const looked = model.looked || (model.stage === 4 && paneId === CONDUCTOR);
+  const looked = model.looked || (model.stage === ASKING && paneId === CONDUCTOR);
   if (!desk && looked === model.looked && focus === model.focus) return null;
   return { ...model, desk: desk ?? model.desk, focus, looked };
 }
@@ -344,13 +362,13 @@ function apply(model: MissionModel, event: CoreEvent): MissionModel | null {
   const p = event.payload;
   switch (event.kind) {
     case BEAT:
-      return p.stage === model.stage + 1 ? to(model, p.stage as MissionStage) : null;
+      return p.stage === model.stage + 1 && BEATS[model.stage] !== undefined ? to(model, p.stage as MissionStage) : null;
     // Only the Conductor is talked to here; keys typed into another pane reach no one.
     case "key":
       return p.pane_id === CONDUCTOR && typeof p.bytes_base64 === "string" ? typed(model, keyText(p.bytes_base64), submit) : null;
     case "mission_answer": {
-      const line = answerLine(model, p);
-      return line ? answered(model, line) : null;
+      const answer = answerOf(model, p);
+      return answer ? answered(model, answer.line, answer.drop) : null;
     }
     case "focus_pane":
       return focused(model, event);
@@ -390,7 +408,7 @@ function apply(model: MissionModel, event: CoreEvent): MissionModel | null {
 function conductorHeader(model: MissionModel): PaneHeader {
   const band = (reason: string, at: number) => ({ kind: "answer" as const, reason, since_unix_ms: at, read: false, action: null, more: 0 });
   if (model.stage === 2) return { working: false, notice: null, band: band(say("approveQuestion"), since(model, 2)) };
-  if (model.stage === 4) return { working: false, notice: null, band: band(decision(), since(model, 4)) };
+  if (model.stage === ASKING) return { working: false, notice: null, band: band(decision(), since(model, ASKING)) };
   if (conductorWorks(model.stage)) return { working: true, notice: null, band: null, request: { text: model.said.at(-1)!, images: 0 } };
   return { working: false, notice: null, band: null };
 }
@@ -398,7 +416,7 @@ function conductorHeader(model: MissionModel): PaneHeader {
 /** The 태스크 list's one task: the Conductor with its workers, in 내 차례 while it asks. */
 function tasks(model: MissionModel, nowMs: number): ProjectTasksScope {
   const state = asks(model.stage) ? "needs_you" as const : conductorWorks(model.stage) ? "working" as const : "resting" as const;
-  const members = model.stage >= 3 ? [CONDUCTOR, CONFIG_WORKER, WORKER] : [CONDUCTOR];
+  const members = [CONDUCTOR, ...begun(model).map((part) => part.pane)];
   const recency = new Date(nowMs).toISOString();
   return { cards: [{ root: CONDUCTOR, state, members, checkouts: [`${PLACE.project}:${PLACE.branch}`], recency, stage: 1 }], needs_you: state === "needs_you" ? 1 : 0, recency };
 }
@@ -406,11 +424,13 @@ function tasks(model: MissionModel, nowMs: number): ProjectTasksScope {
 function snapshot(model: MissionModel, nowMs: number): WorldSnapshot {
   const desk = withAgents(model);
   const drawn = deskSnapshot([{ place: PLACE, model: desk }], PLACE.project, nowMs);
+  const children = begun(model).map((part) => part.pane);
   // Once the mission runs, its workers are drawn under the Conductor, and every agent not at work is counted where it stands.
-  const lineage = model.stage >= 3 ? withLineage(drawn.rest, CONDUCTOR, [CONFIG_WORKER, WORKER]) : drawn.rest;
-  const resting = (model.stage === 0 ? 1 : 0) + (configDone(model.stage) ? 1 : 0) + (model.stage === 6 ? 2 : 0);
+  const lineage = children.length ? withLineage(drawn.rest, CONDUCTOR, children) : drawn.rest;
+  const doneWorkers = begun(model).filter((part) => phase(part, model.stage) === "done").length;
+  const restingCount = doneWorkers + (model.stage === 0 || model.stage === DONE ? 1 : 0);
   const asked = asks(model.stage) ? counted(lineage, "needs_you") : lineage;
-  const counts = resting ? counted(asked, "seen", resting) : asked;
+  const counts = restingCount ? counted(asked, "seen", restingCount) : asked;
   const base = withTasks(counts, tasks(model, nowMs));
   const navigator = base.navigator!;
   // A worker's head carries the way back to its parent, as the core lists a child's lineage.
@@ -461,7 +481,7 @@ const DAY_MS = 24 * 60 * MINUTE;
  */
 function memory(model: MissionModel, nowMs: number): MemorySection {
   type Card = [kind: "decision" | "rule" | "lesson", key: string, ageMs: number, mine: number];
-  const decided: Card[] = model.stage === 6 ? [["decision", "memoryNew", MINUTE, 1]] : [];
+  const decided: Card[] = model.stage === DONE ? [["decision", model.drop ? "memoryDrop" : "memoryKeep", MINUTE, 1]] : [];
   const cards: Card[] = [...decided, ["lesson", "memoryLesson", 3 * DAY_MS, 0], ["rule", "memoryRule", 6 * DAY_MS, 1]];
   return {
     project: {
@@ -492,50 +512,61 @@ function written(model: MissionModel, stage: MissionStage, lines: string[]): str
   return lines.slice(0, Math.max(0, shown));
 }
 
-/** The Conductor's conversation: the mission and its plan, the go and its workers, the decision, the changed plan, and the report. */
+const ran = (command: string, result: string) => [`● ${BOLD}Bash${RESET}(${command})`, `  ${DIM}⎿${RESET}  ${result}`];
+
+/** What the Conductor writes when a stage begins: parts done, workers started, the decision, the changed plan, the check, the report. */
+function stageLines(model: MissionModel, stage: MissionStage): string[] {
+  const plan = parts(model);
+  const finished = plan.filter((part) => part.end === stage);
+  const starting = plan.filter((part) => part.start === stage);
+  const done = finished.map((part) => (part.pr === null
+    ? `● ${GREEN}✓${RESET} ${say(`node.${part.key}`)} · ${say(`doneLine.${part.key}`)}`
+    : `● ${GREEN}#${part.pr}${RESET} ${say(`node.${part.key}`)} · ${say("ciPassed")}`));
+  const spawn = starting.length ? ran(`hide agent spawn --parent here --plan-node ${starting.map((part) => part.key).join(",")} …`, say("spawned", { parts: starting.map((part) => say(`node.${part.key}`)).join(", ") })) : [];
+  switch (stage) {
+    case 1:
+      return [`● ${say("reading")}`, ...ran(`hide mission create --title "${title()}"`, say("made"))];
+    case 2:
+      return [...ran("hide mission plan --file plan.json", say("planned", { count: PARTS.length - 1 })), `  ${DIM}${say("planShape")}${RESET}`, "", `● ${YELLOW}${say("planReady")}${RESET}`];
+    case 3:
+      return [`● ${say("starting")}`, ...spawn];
+    case ASKING:
+      return [...done, ...spawn, "", `● ${YELLOW}${say("decideHead")}${RESET} ${say("decideWhy")}`, `  ${decision()}`, ...ran("hide mission decide --option … --recommend 1 --node screen", say("asked"))];
+    case 6:
+      return [...ran("hide mission plan --file plan.json", say(model.drop ? "foldedDrop" : "foldedKeep")), ...ran("hide mission decide --clear", say("cleared")), ...ran("hide request send ui …", say("toldScreen"))];
+    case DONE:
+      return [...done, "", ...ran("hide mission report …", say("reported")), `● ${GREEN}${say("report", { count: plan.filter((part) => part.pr !== null).length })}${RESET}`];
+    default:
+      return [...done, ...spawn];
+  }
+}
+
+/** The Conductor's conversation, stage by stage. */
 function conductorScreen(model: MissionModel, cols: number): string {
   const said = (words: string) => ["", `${DIM}>${RESET} ${words}`, ""];
-  const ran = (command: string, result: string) => [`● ${BOLD}Bash${RESET}(${command})`, `  ${DIM}⎿${RESET}  ${result}`];
   const spinner = (words: string) => ["", `${CLAUDE}✻ ${words} ${DIM}(esc to interrupt)${RESET}`];
   const rows = ["", "", `${CLAUDE}✻${RESET} ${BOLD}Claude Code${RESET}`, `  ${DIM}~/${PLACE.project} · ${PLACE.branch}${RESET}`];
-  const s = model.stage;
-  if (s >= 1) rows.push(...said(model.said[0]!), ...written(model, 1, [`● ${say("reading")}`, ...ran(`hide mission create --title "${title()}"`, say("made"))]));
-  if (s >= 2) rows.push(...written(model, 2, [...ran("hide mission plan --file plan.json", say("planned")), "", `● ${YELLOW}${say("planReady")}${RESET}`]));
-  if (s >= 3) rows.push(...said(model.said[1]!), ...written(model, 3, [`● ${say("starting")}`, ...ran("hide agent spawn --parent here …", say("started"))]));
-  if (s >= 4) {
-    rows.push(...written(model, 4, [
-      ...ran("hide mission node config --pr 21 --status done", `${GREEN}#21${RESET} ${say("node.config")} · ${say("ciPassed")}`),
-      "", `● ${YELLOW}${say("decideHead")}${RESET} ${say("decideWhy")}`, `  ${decision()}`,
-      ...ran("hide mission decide --option … --recommend 1", say("asked")),
-    ]));
+  const heard: Partial<Record<MissionStage, string>> = { 1: model.said[0], 3: model.said[1], 6: model.said[2] };
+  for (let stage = 1 as MissionStage; stage <= model.stage; stage = (stage + 1) as MissionStage) {
+    const words = heard[stage];
+    if (words) rows.push(...said(words));
+    rows.push(...written(model, stage, stageLines(model, stage)));
   }
-  if (s >= 5) rows.push(...said(model.said[2]!), ...written(model, 5, [...ran("hide mission plan --file plan.json", say("folded")), ...ran("hide mission decide --clear", say("cleared")), `● ${say("doneLine")}`]));
-  // Words said while the Conductor works, or after, it takes on.
   for (const words of model.noted) rows.push(...said(words), `● ${say("noted")}`);
-  if (s === 6) rows.push(...written(model, 6, ["", ...ran("hide mission report …", say("reported")), `● ${GREEN}${say("report")}${RESET}`]));
-  if (s === 1) rows.push(...spinner(say("thinking")));
-  if (s === 3 || s === 5) rows.push(...spinner(say("waiting", { count: busyWorkers(s) })));
+  if (model.stage === 1) rows.push(...spinner(say("thinking")));
+  else if (conductorWorks(model.stage)) rows.push(...spinner(say("waiting", { count: busy(model) })));
   rows.push("", rule(cols), `${DIM}>${RESET} ${model.draft}`, rule(cols));
   return rows.join("\r\n");
 }
 
-/** A worker's terminal: its brief and what it did, as far as the stage has it. */
-function workerScreen(model: MissionModel, part: "config" | "backoff"): string {
-  const box = [
-    `${DIM}╭──────────────────────────────╮${RESET}`,
-    `${DIM}│${RESET} ${BOLD}>_ Codex${RESET}                     ${DIM}│${RESET}`,
-    `${DIM}│${RESET} ${DIM}~/${PLACE.project}-${part}${RESET}${" ".repeat(Math.max(1, 19 - part.length))}${DIM}│${RESET}`,
-    `${DIM}╰──────────────────────────────╯${RESET}`,
-    "",
-  ];
-  if (part === "config") {
-    const rows = [...box, `${CODEX}›${RESET} ${say("briefConfig", { title: title() })}`, "", `${DIM}•${RESET} ${BOLD}Edited${RESET} src/payment/config.ts`, ""];
-    rows.push(configDone(model.stage) ? `${GREEN}✓${RESET} #21 · ${say("ciPassed")}` : `${DIM}•${RESET} ${say("workerTesting")}`);
-    return rows.join("\r\n");
-  }
-  const rows = [...box, `${CODEX}›${RESET} ${say("brief", { title: title() })}`, "", `${DIM}•${RESET} ${BOLD}Edited${RESET} src/payment/retry.ts`];
-  if (model.stage >= 5) rows.push("", `${CODEX}›${RESET} ${YELLOW}🦉  ${say("letterFrom", { title: title() })}${RESET}`, `  ${say("letterBody")}`, "", `${DIM}•${RESET} ${BOLD}Opened${RESET} #22 · ${say("opened")}`);
-  rows.push("", model.stage === 6 ? `${GREEN}✓${RESET} #22 · ${say("workerDone")}` : `${DIM}•${RESET} ${say("workerTesting")}`);
+/** A worker's terminal: its brief, the file it changed, the Conductor's letter for the screen's worker, and where it stands. */
+function workerScreen(model: MissionModel, part: PartSpec): string {
+  const color = part.agent === "codex" ? CODEX : CLAUDE;
+  const head = part.agent === "codex" ? `${BOLD}>_ Codex${RESET}` : `${CLAUDE}✻${RESET} ${BOLD}Claude Code${RESET}`;
+  const rows = [head, `  ${DIM}~/${PLACE.project}-${part.key}${RESET}`, "", `${color}›${RESET} ${say("brief", { title: title(), part: say(`node.${part.key}`) })}`, "", `${DIM}•${RESET} ${BOLD}${part.kind === "research" ? "Read" : "Edited"}${RESET} ${part.file}`];
+  if (part.key === "screen" && model.stage > ASKING) rows.push("", `${color}›${RESET} ${YELLOW}🦉  ${say("letterFrom", { title: title() })}${RESET}`, `  ${say(model.drop ? "letterDrop" : "letterKeep")}`);
+  const done = phase(part, model.stage) === "done";
+  rows.push("", done ? `${GREEN}✓${RESET} ${part.pr === null ? say(`doneLine.${part.key}`) : `#${part.pr} · ${say("ciPassed")}`}` : `${DIM}•${RESET} ${say(`line.${part.key}`)}`);
   return rows.join("\r\n");
 }
 
@@ -546,8 +577,12 @@ export const MISSION_WORLD: PracticeWorld<MissionModel> = {
   later,
   prompt: (model, paneId) => (paneId === CONDUCTOR ? model.draft : ""),
   panes: (model) => model.desk.panes.map((pane) => pane.id),
-  // A pane the learner opened, a new tab or a split, is a shell with no agent in it.
-  screen: (model, paneId, cols) => (paneId === CONDUCTOR ? conductorScreen(model, cols) : paneId === WORKER ? workerScreen(model, "backoff") : paneId === CONFIG_WORKER ? workerScreen(model, "config") : shellScreen(PLACE)),
+  screen: (model, paneId, cols) => {
+    if (paneId === CONDUCTOR) return conductorScreen(model, cols);
+    const part = PARTS.find((one) => one.pane === paneId);
+    // A pane the learner opened, a new tab or a split, is a shell with no agent in it.
+    return part ? workerScreen(model, part) : shellScreen(PLACE);
+  },
   // The mission's parts stand for pull requests, which could pass for real ones; the mark sits on the title, clear of the card's marks.
   examples: ["[data-mission-node] > span:first-child > span[title]"],
 };
