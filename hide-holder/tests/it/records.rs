@@ -545,7 +545,7 @@ fn a_record_of_an_earlier_boot_ends_nothing_it_names() {
 /// since a record is flushed to the device but not past its cache (a pane
 /// record need not outlive the machine: its holder dies with it). None of
 /// that may stop the panes starting again: a node that opens the folder
-/// sets the unparseable records written before this boot aside, ends the
+/// removes the unparseable records written before this boot, ends the
 /// older readable one as of an earlier boot, moves the counter past every
 /// incarnation a record holds, and every pane then starts as new. A record
 /// damaged in this boot is no crash's and is left as it is, refusing its
@@ -567,6 +567,7 @@ fn records_a_power_loss_left_empty_cut_off_or_old_do_not_stop_the_panes_starting
     let mut old = folder.reserved("old", Phase::Running);
     old.boot = Some("an-earlier-boot".to_owned());
     old.incarnation = 500;
+    old.reserved_at_unix_ms = 1_000_000_000_000;
     folder.write(&old);
     let whole = serde_json::to_vec(&old).unwrap();
     std::fs::write(records.join("empty.json"), b"").unwrap();
@@ -585,13 +586,13 @@ fn records_a_power_loss_left_empty_cut_off_or_old_do_not_stop_the_panes_starting
         records.join("fresh.json").exists(),
         "a record of this boot is left"
     );
-    let set_aside: Vec<_> = folder
-        .events("pane_holder.record_set_aside")
+    let removed: Vec<_> = folder
+        .events("pane_holder.record_removed")
         .into_iter()
         .map(|event| event["pane"].as_str().unwrap().to_owned())
         .collect();
-    assert_eq!(set_aside.len(), 2, "{set_aside:?}");
-    assert!(set_aside.contains(&"empty".to_owned()) && set_aside.contains(&"cut".to_owned()));
+    assert_eq!(removed.len(), 2, "{removed:?}");
+    assert!(removed.contains(&"empty".to_owned()) && removed.contains(&"cut".to_owned()));
     let next: u64 = std::fs::read_to_string(layout::pane_incarnations(&folder.state))
         .unwrap()
         .trim()
@@ -606,11 +607,12 @@ fn records_a_power_loss_left_empty_cut_off_or_old_do_not_stop_the_panes_starting
     let Some(Judgment::Ended(ended)) = found.panes.get("old") else {
         panic!("{found:?}");
     };
-    // Windows names no boot, so there the record's holder is found gone.
+    // Windows names no boot; the old reservation has no holder and is
+    // past START_LIMIT, so its interrupted start is ended.
     let expected = if cfg!(unix) {
         EndReason::MachineRestarted
     } else {
-        EndReason::HolderLost
+        EndReason::StartInterrupted
     };
     assert_eq!(end_reason(ended), expected);
 

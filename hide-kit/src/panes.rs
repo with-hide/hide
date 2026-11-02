@@ -344,7 +344,7 @@ impl Panes {
     ///
     /// - a record that cannot be parsed and was last written before this
     ///   boot began names nothing that runs (no process outlives its boot),
-    ///   so it is set aside (`pane_holder.record_set_aside`) and its pane
+    ///   so it is removed (`pane_holder.record_removed`) and its pane
     ///   starts again as one with no record; one written in this boot, or of
     ///   a format this build does not know (a newer build's), is left as it
     ///   is and reported, as before, since its holder may run;
@@ -384,10 +384,10 @@ impl Panes {
                 Ok(None) => {}
                 Err(Unreadable::Corrupt(why)) if written_before(&path, booted) => {
                     std::fs::remove_file(&path).map_err(|error| {
-                        format!("{} could not be set aside: {error}", path.display())
+                        format!("{} could not be removed: {error}", path.display())
                     })?;
                     self.emit(
-                        "pane_holder.record_set_aside",
+                        "pane_holder.record_removed",
                         json!({
                             "pane": path.file_stem().map(|stem| stem.to_string_lossy().into_owned()),
                             "reason": "written before this boot and cannot be parsed",
