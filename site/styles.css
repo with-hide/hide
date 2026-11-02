@@ -387,13 +387,6 @@ code, .mono { font-family: var(--font-mono); }
 .split { display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr); gap: 64px; align-items: center; }
 .split .section-head p .text-link { display: inline-flex; min-height: 0; }
 
-/* Built on Herdr: what runs on what. */
-.layers { display: grid; gap: 10px; }
-.layers li { display: grid; gap: 4px; padding: 20px 24px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--bg-raised); }
-.layers b { font-family: var(--font-mono); font-size: var(--t-label); font-weight: var(--w-medium); letter-spacing: 0.14em; text-transform: uppercase; color: var(--faint); }
-.layers span { font-size: var(--t-body); color: var(--ink); }
-.layers .hide { border-color: color-mix(in srgb, var(--lime) 50%, transparent); background: color-mix(in srgb, var(--lime) 8%, var(--bg-raised)); }
-.layers .hide b { color: var(--accent-text); }
 
 /* Pricing */
 .plans { display: grid; gap: 16px; margin-top: 48px; }
