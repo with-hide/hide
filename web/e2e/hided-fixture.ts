@@ -61,16 +61,15 @@ export function spawnDaemon(binary: string, env: NodeJS.ProcessEnv): ChildProces
 }
 
 /**
- * Ends a fixture daemon on Unix through `hide stop`, which sends SIGTERM,
- * gives the graceful stop five seconds, then ends the daemon's tree and fails
- * if it still runs. A stopped daemon holds that SIGTERM pending, so it is
+ * Ends a fixture daemon through `hide stop`, using the platform's termination
+ * and exit proof. On Unix a stopped daemon holds SIGTERM pending, so it is
  * continued first. True once the end is confirmed; a daemon that never wrote
  * its state has nothing to save and is killed, and false says its exit is not
  * observed yet. Throws, naming `root` to keep, when the stop is not confirmed.
  */
 export function stopDaemon(child: ChildProcess, binary: string, env: NodeJS.ProcessEnv, root: string): boolean {
   if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return true;
-  child.kill("SIGCONT");
+  if (process.platform !== "win32") child.kill("SIGCONT");
   if (!fs.existsSync(path.join(env.HIDE_STATE_DIR!, "hided.json"))) {
     child.kill("SIGKILL");
     return false;
@@ -262,7 +261,9 @@ async function launch(herdr: DaemonEngine, label: string, dir: string, home: str
           const hostId = fs.readFileSync(path.join(dir, "hide", "host-id"), "utf8").trim();
           const node = (JSON.parse(fs.readFileSync(path.join(dir, "hide", "node.json"), "utf8")) as { node: string }).node;
           const restart = async (beforeStart?: (stateDir: string) => void | Promise<void>) => {
-            end();
+            // A restart ends only the daemon. Windows fixture teardown's
+            // descendant sweep would also kill the holders it must adopt.
+            stopDaemon(child, binary, daemonEnv, dir);
             await exited;
             await beforeStart?.(path.join(dir, "hide"));
             // The next daemon takes over the directory and its removal.

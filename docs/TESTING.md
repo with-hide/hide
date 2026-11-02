@@ -347,6 +347,7 @@ A piece that another open change is still building is marked as pending with the
    Do not raise a timeout to cover the stall.
 7. **Restart through `daemon.restart()`, and leave the old page first.**
    `daemon.restart()` in `web/e2e/hided-fixture.ts` stops `hided` and starts it again on the same state folder and port, as a real restart does, and takes an optional callback to edit the state folder before the start; `web/e2e/sidebar-pr-start.spec.ts` restarts three times in one test.
+   It uses `hide stop` on every system and preserves the own engine's holders for adoption; only final fixture cleanup sweeps their process trees.
    A navigation that only changes the hash does not remount the connection, so the old page keeps its old token and socket and races the new one.
    Go through `about:blank` before opening the new origin and token, as `openSettings` in `web/e2e/interface-language.spec.ts` does, and keep that step in one helper per spec.
    Why: the old page and the new token reconnect at the same time and either can win.
