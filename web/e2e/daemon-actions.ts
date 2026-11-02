@@ -33,6 +33,19 @@ export function sendKeys(control: HidedControl, pane: string, text: string): voi
   control.send("key", { pane_id: pane, bytes_base64: Buffer.from(text, "utf8").toString("base64") });
 }
 
+/**
+ * Reports a grid for `pane` as the pane view does once it is drawn, for a
+ * pane no page shows yet: on Herdr the daemon attaches a pane's terminal,
+ * and so delivers keys typed into it, only once a view has sized it
+ * (`hide-node` terminal, `waiting_size`); the core's own engine sizes its
+ * panes itself. Never for a pane the page shows: its view's own size
+ * would be replaced.
+ */
+export function viewPane(control: HidedControl, pane: string, { cols = 120, rows = 40 }: { cols?: number; rows?: number } = {}): void {
+  control.send("terminal_viewport", { pane_id: pane, cols, rows, new_view: true });
+  control.send("terminal_resize", { pane_id: pane, cols, rows });
+}
+
 /** The panes of a layout, first to last. */
 export function layoutPanes(node: LayoutNode): string[] {
   return node.type === "pane" ? [node.pane_id] : [...layoutPanes(node.first), ...layoutPanes(node.second)];
@@ -117,6 +130,8 @@ export type AgentRow = {
   unread?: boolean;
   session_id?: string | null;
   identity_label?: string | null;
+  /** The pane of the agent's responsibility parent, when it is a delegated child. */
+  lineage_parent_pane_id?: string | null;
 };
 
 /** The agent row the snapshot lists for `pane`, once an agent runs there. */
@@ -202,4 +217,25 @@ export async function runInPane(
   const read = (file: string): string => (fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "");
   await expect.poll(() => /^\d+/.test(read(files.status)), { message: `${name} to finish in pane ${pane}; stderr ${read(files.stderr)}`, timeout: 20_000 }).toBe(true);
   return { status: Number.parseInt(read(files.status), 10), stdout: read(files.stdout), stderr: read(files.stderr) };
+}
+
+/** The checkout whose folder is `folder` (the page's spelling) in any project the navigator lists, with its tabs in order: a linked worktree is listed under its repository's project, not as a project of its own. */
+export function checkoutListedAt(rest: Rest, folder: string): { workspace: string; checkout: string; tabs: string[] } | undefined {
+  for (const workspace of workspacesOf(rest)) {
+    const checkout = workspace.checkouts.find((listed) => listed.path === folder);
+    if (checkout) return { workspace: workspace.id, checkout: checkout.id, tabs: checkout.agent_groups?.groups.flatMap((group) => group.tabs) ?? [] };
+  }
+  return undefined;
+}
+
+/**
+ * Opens a terminal in the linked worktree `dir` of a project the daemon
+ * already lists, as New tab here on its row does: waits until the core has
+ * read the repository and lists the worktree, then makes its first tab.
+ */
+export async function openWorktree(control: HidedControl, dir: string): Promise<OpenedProject> {
+  const folder = toPage(fs.realpathSync.native(dir));
+  const listed = await control.until((rest) => checkoutListedAt(rest, folder), `the worktree ${folder} listed`, 30_000);
+  const made = await newTab(control, listed, "worktree");
+  return { folder, workspace: listed.workspace, checkout: listed.checkout, ...made };
 }

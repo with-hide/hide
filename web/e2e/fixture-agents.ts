@@ -9,7 +9,7 @@
 // Herdr's rules for Claude Code (`hide-agent-adapter/agents/claude-code.toml`).
 
 import { claudeProjects, declareAgentSession, writeFixtureTranscript, type FixtureLabel } from "./herdr-fixture";
-import { agentIn, focusTab, newTab, sendKeys, withControl, type AgentRow } from "./daemon-actions";
+import { agentIn, checkoutListedAt, closePane, focusTab, newTab, sendKeys, tabPanes, withControl, type AgentRow, type OpenedProject } from "./daemon-actions";
 import type { Daemon } from "./hided-fixture";
 import type { AgentFixture, EngineServer } from "./engine-fixture";
 
@@ -109,4 +109,75 @@ export async function startAgentIn(fixture: EngineServer, daemon: Pick<Daemon, "
   if (!session) return row;
   await setAgentSession(fixture, daemon, pane, session);
   return withControl(daemon, (control) => control.until((rest) => agentIn(rest, pane), `the agent in ${pane}`));
+}
+
+let projectAgents = 0;
+
+/**
+ * Starts the `claude` stand-in in a tab of its own in the project `project`
+ * (`openProject`), as the start panel's start does, resuming a session whose
+ * transcript names it `label`, and replaces the project's first shell with
+ * it, as `startFixture` does. Waits until the agent is listed and returns its
+ * tab and pane. Unlike a typed `startAgentIn`, the session is known from the
+ * start on both engines.
+ */
+export async function startAgentInProject(fixture: EngineServer, daemon: Pick<Daemon, "origin" | "token">, project: OpenedProject, label: FixtureLabel): Promise<{ tab: string; pane: string; session: string }> {
+  const session = `project-agent-${process.pid}-${(projectAgents += 1)}`;
+  writeFixtureTranscript(claudeProjects(fixture), session, label);
+  return withControl(daemon, async (control) => {
+    control.send("agent_start_in_checkout", {
+      checkout_path: project.folder, provider: "claude", resume_session_id: session, request_id: `e2e-${session}`,
+    });
+    const made = await control.until((rest) => {
+      const tab = checkoutListedAt(rest, project.folder)?.tabs.find((id) => id !== project.tab);
+      const pane = tab ? tabPanes(rest, tab)[0] : undefined;
+      return tab && pane && agentIn(rest, pane) ? { tab, pane } : undefined;
+    }, `an agent in a tab of ${project.folder}`, 30_000);
+    // Herdr learns a pane's session from its integration's report, the own engine from the start's resume.
+    if (fixture.engine === "herdr") declareAgentSession(fixture as EngineServer & { env: NodeJS.ProcessEnv; bin: string }, made.pane, session);
+    await closePane(control, project.pane);
+    // A row still reading Starting grows a line when it settles, which moves the rows below it.
+    await control.until((rest) => {
+      const row = agentIn(rest, made.pane);
+      return row?.session_id === session && row.status_code !== "starting" ? true : undefined;
+    }, `${made.pane} on session ${session}, started`, 20_000);
+    return { ...made, session };
+  });
+}
+
+/** The session the agent in `pane` runs now, as the daemon publishes it. */
+export async function sessionIn(daemon: Pick<Daemon, "origin" | "token">, pane: string): Promise<string> {
+  return withControl(daemon, (control) => control.until((rest) => agentIn(rest, pane)?.session_id ?? undefined, `the session of ${pane}`, 20_000));
+}
+
+/**
+ * Has the agent in `parent`, an agent of a family fixture
+ * (`startFixture({ family: true })`), spawn a child as a real agent
+ * delegates (`hide agent spawn --parent here`), in the checkout of `repo` on
+ * `branch` (its own tab), or beside the parent in the parent's own checkout
+ * with `beside`. With `session`, the child resumes that session, whose
+ * transcript the spec wrote. Waits until the daemon lists the child as
+ * `parent`'s and returns its pane.
+ */
+export async function spawnChild(
+  fixture: AgentFixture,
+  daemon: Pick<Daemon, "origin" | "token">,
+  parent: string,
+  { name, repo, branch = "main", beside = false, session }: { name: string; repo: string; branch?: string; beside?: boolean; session?: string },
+): Promise<string> {
+  const args = ["agent", "spawn", "--parent", "here", "--name", name, "--intent", name, "--kind", "claude", "--repo", repo, "--branch", branch, ...(beside ? ["--beside"] : []), ...(session ? ["--", "--resume", session] : [])];
+  type Spawned = { ok?: boolean; value?: { pane?: string }; error?: { code?: string } } | null;
+  const deadline = Date.now() + 30_000;
+  let pane: string | undefined;
+  for (;;) {
+    const answer = await fixture.runAs(parent)(args);
+    const spawned = JSON.parse(answer.out.trim().split("\n").at(-1) ?? "null") as Spawned;
+    pane = spawned?.ok ? spawned.value?.pane : undefined;
+    if (answer.status === 0 && pane) break;
+    // A child started fresh reports its session after the spawn answers; the same intent then answers it (docs/delivery.md).
+    if (spawned?.error?.code !== "native_identity_unavailable" || Date.now() > deadline) throw new Error(`${parent} could not spawn ${name}: ${answer.out}`);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  await withControl(daemon, (control) => control.until((rest) => agentIn(rest, pane)?.lineage_parent_pane_id === parent || undefined, `${pane} listed as ${parent}'s child`, 30_000));
+  return pane;
 }

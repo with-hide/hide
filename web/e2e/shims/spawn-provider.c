@@ -272,8 +272,21 @@ int main(int argc, char **argv) {
   static const char ready[] = "\r\nClaude Code fixture\r\nclaude fixture ready\r\n❯ ";
   if (terminal_write(ready, sizeof ready - 1) != (fixture_count_t)(sizeof ready - 1)) return 1;
   char bytes[16384];
+  /* Everything else typed is echoed, as the `claude` stand-in echoes it
+     (`claude-shim.c`), so a spec draws the screens an engine reads an
+     agent's state from; a console's lone CR is echoed as a line end. */
+  static char echo[sizeof bytes * 2];
   fixture_count_t count;
   while ((count = terminal_read(bytes, sizeof bytes)) > 0) {
+    size_t out = 0;
+    for (fixture_count_t i = 0; i < count; i++) {
+      if (bytes[i] == '!') continue;
+      echo[out++] = bytes[i];
+#ifdef _WIN32
+      if (bytes[i] == '\r' && (i + 1 == count || bytes[i + 1] != '\n')) echo[out++] = '\n';
+#endif
+    }
+    if (out && terminal_write(echo, out) != (fixture_count_t)out) return 1;
     for (fixture_count_t i = 0; i < count; i++) {
       if (bytes[i] != '!') continue;
       int status = run_child(command);

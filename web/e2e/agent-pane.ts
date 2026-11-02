@@ -48,7 +48,7 @@ export async function agentPane(fixture: AgentPaneFixture, stateDir: string, pan
 }
 
 /** The file the session reporter writes once `pane`'s agent has reported its session. */
-function reportedMarker(root: string, pane: string): string {
+export function reportedMarker(root: string, pane: string): string {
   return path.join(root, `session-reported-${pane.replaceAll(":", "-")}`);
 }
 
@@ -58,6 +58,16 @@ function reportedMarker(root: string, pane: string): string {
  * in `pane` once one runs there.
  */
 export function agentRunner(fixture: AgentPaneFixture, stateDir: string, pane: string, kind: "claude" | "grok" = "claude"): (args: string[], run?: AgentRun) => Promise<HideAnswer> {
+  return installAgentRunner(fixture, stateDir, kind)(pane);
+}
+
+/**
+ * `agentRunner` before the agent's pane exists, for an agent Hide itself
+ * starts: every fixture `claude` started from now on runs as such an agent,
+ * and the answer gives the way to run `hide` as the one in a pane once it
+ * runs there.
+ */
+export function installAgentRunner(fixture: AgentPaneFixture, stateDir: string, kind: "claude" | "grok" = "claude"): (pane: string) => (args: string[], run?: AgentRun) => Promise<HideAnswer> {
   const root = fixture.root;
   // An engine reads the agent from the program in the pane's foreground, so the runner takes the agent's name.
   const runner = path.join(root, "worker-bin", fixtureExecutable(kind));
@@ -97,7 +107,7 @@ if (ran.status !== 0) process.exit(1);
 fs.writeFileSync(path.join(${JSON.stringify(root)}, "session-reported-" + pane.replaceAll(":", "-")), session);
 `);
   fs.writeFileSync(path.join(root, "provider.config"), [process.execPath, reporter, completed, process.execPath, driver, ""].join("\n"));
-  return async (args, run = {}) => {
+  return (pane) => async (args, run = {}) => {
     fs.writeFileSync(command, JSON.stringify({ args, ...run }));
     fs.rmSync(completed, { force: true });
     fs.rmSync(output, { force: true });
