@@ -73,8 +73,9 @@ export class RelaySocket implements PhoneSocket {
   send(text: string): void {
     if (!this.noise || !this.ws || this.readyState !== WebSocket.OPEN) throw new Error("relay_closed");
     try {
-      if (this.ws.bufferedAmount > 1_048_576) throw new Error("send_limit");
-      for (const frame of this.noise.send_message(new TextEncoder().encode(text))) this.ws.send(frame);
+      const frames = this.noise.send_message(new TextEncoder().encode(text));
+      if (this.ws.bufferedAmount + frames.reduce((bytes, frame) => bytes + frame.byteLength, 0) > 1_048_576) throw new Error("send_limit");
+      for (const frame of frames) this.ws.send(frame);
     } catch (error) { this.close(); throw error; }
   }
 

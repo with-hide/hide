@@ -157,7 +157,7 @@ function ListScreen() {
           <span><OfflineText /></span>
         </div>
       ) : null}
-      {relayError === "storage" ? <p role="alert" className="px-lg text-warning">{t("mobile.relay.storage")}</p> : null}
+      {relayError === "storage" || relayError === "loadError" ? <p role="alert" className="px-lg text-warning">{t(`mobile.relay.${relayError}`)}</p> : null}
       {installHint && !standalone() ? <InstallHint /> : null}
       {connected ? <NotificationRow /> : null}
       <div className={dim ? "opacity-50" : undefined} aria-busy={dim}>

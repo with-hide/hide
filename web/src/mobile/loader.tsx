@@ -55,7 +55,15 @@ function Loader() {
       try { if (host) setTarget(readHosts(localStorage).find((candidate) => candidate.room === host) ?? null); }
       catch { setError("storage"); }
     }).catch(() => setError("qrError"));
+    const followQr = () => {
+      void takePairing().then((qr) => {
+        if (!qr) return;
+        setTarget(null); setVersion(null); setError(null); setAdding(false); setPair(qr);
+      }).catch(() => setError("qrError"));
+    };
+    window.addEventListener("hashchange", followQr);
     if ("serviceWorker" in navigator) void navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => setError("loadError"));
+    return () => window.removeEventListener("hashchange", followQr);
   }, []);
   useEffect(() => {
     if (!target) return;

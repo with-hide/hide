@@ -3487,7 +3487,7 @@ In the hosted app, the header's device name opens a picker with each saved devic
 Choosing another device replaces the page and closes the old connection; drafts and pending actions do not move between devices.
 다른 기기 연결 opens the camera scanner inside the installed app, with a QR-link paste alternative when camera permission is unavailable.
 The browser holds at most sixteen devices and reports its limit or a failed storage write inline.
-기기 지우기 removes that browser's saved connection and its notification subscription; scanning a fresh QR connects it again.
+기기 지우기 asks for confirmation before removing that browser's saved connection and its notification subscription; scanning a fresh QR connects it again.
 When a relay device is unreachable, the list stays dimmed and the list, detail and start sheet say `<device>의 Hide가 꺼져 있거나 잠자고 있어요 · 다시 시도 중`, with no Tailscale wording.
 The existing automatic reconnect resumes when the device answers.
 

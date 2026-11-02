@@ -261,7 +261,7 @@ function connect(): void {
       attempt = 0;
       if (relayHost) {
         relayHost = { ...relayHost, name: frame.mac_name || relayHost.name, lastSeen: Date.now() };
-        patch({ relayError: null });
+        patch({ relayError: usePhone.getState().relayError === "loadError" ? "loadError" : null });
         storeCredential(credential);
       }
       if (watch) watch.ready = true;

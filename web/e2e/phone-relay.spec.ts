@@ -1,5 +1,6 @@
 import { expect, test as base } from "@playwright/test";
 import { WebSocket } from "ws";
+import qrcode from "qrcode-generator";
 import { startPhoneRelay } from "./phone-relay-fixture";
 
 const test = base.extend<{ relay: Awaited<ReturnType<typeof startPhoneRelay>> }>({
@@ -44,6 +45,9 @@ async function pair(page: import("@playwright/test").Page, relay: Awaited<Return
 }
 
 test("QR clears its secret, pairs over Noise and uses the shared conversation, terminal and reply UI", async ({ page, relay }) => {
+  // A camera/link can return to a root page that is already open (same-document navigation).
+  await page.goto(relay.origin + "/");
+  await expect(page.getByRole("button", { name: "Connect another device" })).toBeVisible();
   await page.goto(relay.origin + "/" + new URL(relay.qr).hash);
   await expect(page.getByRole("heading", { name: `Connect to ${relay.pairing.name}`, exact: true })).toBeVisible();
   await expect(page).not.toHaveURL(/#pair=/);
@@ -117,6 +121,30 @@ test("the in-app link scanner adds a device and CSP refuses external scripts", a
   }));
   expect(blocked).toBe(true);
   await expect(page.locator("script[src^='https://']")).toHaveCount(1); // Only the rejected test script.
+});
+
+test("the in-app camera decodes a QR and releases its video track", async ({ page, relay }) => {
+  const qr = qrcode(0, "M"); qr.addData(relay.qr); qr.make();
+  const matrix = Array.from({ length: qr.getModuleCount() }, (_, row) =>
+    Array.from({ length: qr.getModuleCount() }, (_, column) => qr.isDark(row, column)));
+  await page.addInitScript((cells) => {
+    navigator.mediaDevices.getUserMedia = async () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = canvas.height = (cells.length + 8) * 4;
+      const context = canvas.getContext("2d")!;
+      context.fillStyle = "white"; context.fillRect(0, 0, canvas.width, canvas.height);
+      context.fillStyle = "black";
+      cells.forEach((row, y) => row.forEach((dark, x) => { if (dark) context.fillRect((x + 4) * 4, (y + 4) * 4, 4, 4); }));
+      const stream = canvas.captureStream(4);
+      (window as unknown as { cameraTrack: MediaStreamTrack }).cameraTrack = stream.getVideoTracks()[0]!;
+      return stream;
+    };
+  }, matrix);
+  await page.goto(`${relay.origin}/?add=1`);
+  await page.getByRole("button", { name: "Scan QR code", exact: true }).click();
+  await expect(page.getByRole("heading", { name: `Connect to ${relay.pairing.name}`, exact: true })).toBeVisible();
+  await expect(page.locator("video")).toHaveCount(0);
+  expect(await page.evaluate(() => (window as unknown as { cameraTrack: MediaStreamTrack }).cameraTrack.readyState)).toBe("ended");
 });
 
 test("start and wake use the same encrypted command path", async ({ page, relay }) => {

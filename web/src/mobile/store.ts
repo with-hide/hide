@@ -55,7 +55,7 @@ export type PendingInput = { requestId: string; kind: "text" | "key" };
 
 type PhoneState = {
   screen: Screen;
-  relayError: "storage" | "busy" | "qrError" | null;
+  relayError: "storage" | "busy" | "qrError" | "loadError" | null;
   deviceProtocol: number | null;
   pair: PairPayload | null;
   refusal: Refusal | null;

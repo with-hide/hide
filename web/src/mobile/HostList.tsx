@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { TFunction } from "i18next";
+import { Trash2 } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { readHosts, hostLink, removeHost, type PairedHost } from "./hosts";
 import { watchHost, type Presence } from "./presence";
@@ -33,11 +34,11 @@ export function HostList({ t, active, choose = (host: PairedHost) => window.loca
       return <div key={host.room} className="flex min-w-0 items-center"><Button variant="ghost" className="h-auto min-h-(--size-touch-target) min-w-0 flex-1 justify-start gap-sm px-sm py-md text-left" onClick={() => choose(host)}>
         <span role="img" aria-label={t(state?.online ? "mobile.connected" : "mobile.disconnected")} className={`size-(--size-status-mark) shrink-0 rounded-full ${state?.online ? "bg-success" : "bg-muted-foreground"}`} />
         <span className="min-w-0 flex-1"><span className="block truncate text-title">{host.name}</span>
-          <span className="block text-body text-muted-foreground">{state?.online
+          <span className="block whitespace-normal text-body text-muted-foreground">{state?.online
             ? state.needs !== undefined ? t("mobile.relay.counts", { needs: state.needs, working: state.working ?? 0 }) : t("mobile.relay.connecting")
             : seen ? t("mobile.relay.lastSeen", { time: new Date(seen).toLocaleString() }) : t("mobile.relay.neverSeen")}</span>
         </span>
-      </Button><Button variant="ghost" size="sm" className="min-h-(--size-touch-target)" onClick={() => setRemoving(host)}>{t("mobile.relay.remove")}</Button></div>;
+      </Button><Button variant="ghost" size="icon" className="min-h-(--size-touch-target) min-w-(--size-touch-target)" aria-label={t("mobile.relay.remove")} onClick={() => setRemoving(host)}><Trash2 /></Button></div>;
     })}
     {removing ? <div className="flex flex-col gap-sm px-sm py-md">
       <p className="text-subhead">{t("mobile.relay.removeConfirm", { name: removing.name })}</p>
