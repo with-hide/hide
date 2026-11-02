@@ -21,8 +21,8 @@ import http from "node:http";
 import path from "node:path";
 import { startFixture, type AgentFixture } from "./engine-fixture";
 import { closePane, sendKeys, withControl } from "./daemon-actions";
-import { elsewhereTab, finishUnseenTurn, setAgentSession, setAgentState } from "./fixture-agents";
-import { claudeProjects, labelMarker, writeFixtureTranscript } from "./herdr-fixture";
+import { elsewhereTab, finishUnseenTurn, sessionIn, setAgentAsking, setAgentSession, setAgentState } from "./fixture-agents";
+import { claudeProjects, continueFixtureTranscript, labelMarker } from "./herdr-fixture";
 import { DNS, FakeTailscale } from "./fake-tailscale";
 import { startHided, type Daemon } from "./hided-fixture";
 import { screenshot, THIS_MACHINE } from "./wire";
@@ -148,21 +148,15 @@ function title(fixture: AgentFixture, pane: string): string {
   return pane === fixture.panes[0] ? "Agent one" : "Agent two";
 }
 
-let asks = 0;
-
 /**
- * The agent stops and its label asks the operator `question`: the turn ends
- * and the session whose transcript holds the question is reported back to
- * back, as an agent's own integration does at a stop. A push goes out for the
- * state the core reads when the turn ends, so the question must follow it at
- * once.
+ * The agent writes its question to the current session before it stops, as
+ * a real turn does. Replacing the session after stopping publishes an ended
+ * turn on the old session first, which can already send a done notification.
  */
 async function ask(fixture: AgentFixture, daemon: Daemon, pane: string, question: string): Promise<void> {
-  const session = `ask-${process.pid}-${(asks += 1)}`;
-  writeFixtureTranscript(claudeProjects(fixture), session, { task: title(fixture, pane), reply: question, question: true });
-  await withControl(daemon, async (control) => sendKeys(control, pane, "\x1b]0;✳ Claude Code\x07"));
-  await setAgentSession(fixture, daemon, pane, session);
-  await setAgentState(daemon, pane, "idle");
+  await setAgentState(daemon, pane, "working");
+  continueFixtureTranscript(fixture, await sessionIn(daemon, pane), { task: title(fixture, pane), reply: question, question: true });
+  await setAgentAsking(daemon, pane);
 }
 
 async function work(daemon: Daemon, pane: string): Promise<void> {
@@ -249,8 +243,7 @@ async function noPushFor(received: Push[], count: number, ms = 3_000): Promise<v
   expect(received).toHaveLength(count);
 }
 
-// Herdr only until the own engine's push for an ended turn carries the question its session read finds: with the stand-in's turn ended and its question session reported back to back, the own lane sends the closed-app push as `done` where Herdr's sends `needs_you` (everything before that assertion passes on the own lane).
-test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push rules and revoke @herdr", async ({ browser, page }) => {
+test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push rules and revoke", async ({ browser, page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   const fixture = await startFixture();
   const tailscale = new FakeTailscale();
