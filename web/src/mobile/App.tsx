@@ -249,7 +249,7 @@ function InstallHint() {
   const { t } = useInterfaceTranslation();
   return (
     <div className="mx-xl mt-lg flex items-start gap-sm text-body leading-relaxed text-subtle-foreground" data-phone-install-hint="true">
-      <span className="min-w-0 flex-1">{t("mobile.installHint")}</span>
+      <span className="min-w-0 flex-1 break-keep wrap-anywhere">{t("mobile.installHint")}</span>
       <Button variant="ghost" size="icon" aria-label={t("common.close")} className="size-(--size-touch-target) text-muted-foreground" onClick={() => {
         patch({ installHint: false });
         if (hostedPhone()) { try { localStorage.setItem("hide.phone.installed-hint", "seen"); } catch { patch({ relayError: "storage" }); } }
