@@ -482,6 +482,12 @@ impl Holder {
         // else's: no Herdr pane, outer terminal or parent agent (D-9).
         crate::pane_env::apply(&mut command);
         command.env_remove(hide_platform::process::LENT_KEY);
+        // The holder's own launch metadata, never its program's: a guarded
+        // launch in the pane (Hide's hook helper) would take the holder's
+        // owner descriptor for its own, fail to watch it and do nothing.
+        for key in hide_platform::process::OWNER_LAUNCH_KEYS {
+            command.env_remove(key);
+        }
         let panic_on_input = cfg!(debug_assertions) && std::env::var_os(PANIC_ON_INPUT).is_some();
         command.env_remove(PANIC_ON_INPUT);
         let hold_writes = std::env::var_os(HOLD_WRITES)
