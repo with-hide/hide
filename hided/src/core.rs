@@ -1373,7 +1373,14 @@ fn owner_loop(
             .unwrap_or_else(|| std::path::PathBuf::from("herdr")),
     )
     .with_pane_events(panes)
-    .with_terminals(Arc::clone(&terminals) as Arc<dyn DeviceSink>);
+    .with_terminals(Arc::clone(&terminals) as Arc<dyn DeviceSink>)
+    // A core on its own engine runs every device's panes on it too, in pane
+    // holders the device's node runs, and puts no Herdr on the device (PRD
+    // engine-bundle-3-core-owns D-22).
+    .with_engine(match own_engine.as_ref().and_then(EngineHandle::own_scope).is_some() {
+        true => hide_node::ssh::DeviceEngine::Holders,
+        false => hide_node::ssh::DeviceEngine::Herdr,
+    });
     // This PC's WSL distributions are devices too (PRD wsl-device D-01);
     // there is no WSL to reach on any other system.
     let devices = match hide_node::ssh::host::wsl::WslAccess::of_this_pc() {

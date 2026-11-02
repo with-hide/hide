@@ -128,6 +128,23 @@ const HOOKS_NAME: &str = "hide-agent-hooks";
 /// of the same system gets in a folder of its own (PRD device-herdr-update
 /// D-08, `hide_kit::device_herdr`).
 const HERDR_NAME: &str = "herdr";
+/// The pane holder (`hide-holder`), which a device of the core's own engine
+/// runs its panes in, beside the helper in the same build folder, as the
+/// app carries it beside `hided` (PRD engine-bundle-3-core-owns D-22).
+const HOLDER_NAME: &str = "hide-holder";
+
+/// Which engine runs a device's panes: the device's Herdr, as every shipped
+/// Hide does, or the core's own engine over pane holders the device's node
+/// runs, with the development switch `HIDE_DEV_PANE_HOLDER` on (PRD
+/// engine-bundle-3-core-owns D-22). Only the second carries the holder to
+/// the device, and only the first carries Herdr, so a connection with the
+/// switch off uploads exactly what it always has.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum DeviceEngine {
+    #[default]
+    Herdr,
+    Holders,
+}
 /// How long a draining connection waits for its admitted requests before it
 /// closes anyway. An admitted request is written and answered by its one
 /// deadline, and the longest call timeout is 120 s (an index walk, a
@@ -195,10 +212,43 @@ impl HelperPackages {
         })
     }
 
-    /// Everything this build puts on a device of `os`/`arch`: the helper,
-    /// which the device cannot do without, and the kit's parts, each found by
-    /// the same rule as the helper. A part this build does not carry is left out and named, and
-    /// the kit on the device reports it as missing from the build.
+    /// What a device of `os`/`arch` gets for the engine that runs its panes:
+    /// [`HelperPackages::payload`] for its Herdr, unchanged, or that with no
+    /// Herdr and the pane holder beside the helper.
+    pub(super) fn payload_for(
+        &self,
+        os: &str,
+        arch: &str,
+        engine: DeviceEngine,
+    ) -> Result<Payload, EstablishError> {
+        let payload = self.payload(os, arch)?;
+        match engine {
+            DeviceEngine::Herdr => Ok(payload),
+            // No Herdr goes to the device, and the holder goes beside the
+            // helper; a build that does not carry the holder for the
+            // device's system connects nothing rather than a node that
+            // could run no pane.
+            DeviceEngine::Holders => {
+                let mut payload = payload.without_herdr();
+                let holder = self.find_named(HOLDER_NAME, os, arch).map_err(|()| {
+                    EstablishError::Unsupported(format!(
+                        "This Hide build does not include the pane holder for {} {arch}; the core's own engine cannot run this device's panes",
+                        platform_label(os)
+                    ))
+                })?;
+                payload
+                    .files
+                    .push(read_package(HOLDER_NAME, &holder).map_err(EstablishError::Install)?);
+                Ok(payload)
+            }
+        }
+    }
+
+    /// Everything this build puts on a device of `os`/`arch` whose panes run
+    /// on its Herdr: the helper, which the device cannot do without, and the
+    /// kit's parts, each found by the same rule as the helper. A part this
+    /// build does not carry is left out and named, and the kit on the device
+    /// reports it as missing from the build.
     pub(super) fn payload(&self, os: &str, arch: &str) -> Result<Payload, EstablishError> {
         // Existing native and developer-provided artifacts keep their lookup
         // rule. Only a missing foreign helper goes to the release cache. This
@@ -302,9 +352,10 @@ impl Payload {
         self.herdr = Some(herdr);
     }
 
-    /// The payload for the machine running the core, which runs its own
-    /// app's Herdr: a device's copy and the pin naming it are not its to
-    /// carry.
+    /// The payload with no Herdr: for the machine running the core, which
+    /// runs its own app's Herdr, and for a device whose panes the core's own
+    /// engine runs, which runs none, so neither carries a device's copy or
+    /// the pin naming it.
     fn without_herdr(mut self) -> Self {
         self.herdr = None;
         self.files
@@ -372,7 +423,7 @@ fn read_package(relative: &str, path: &Path) -> Result<Package, String> {
 /// files carry no mode; `None` for a name the kit does not define.
 fn program_by_contract(relative: &str) -> Option<bool> {
     match relative {
-        HELPER_NAME | CLI_NAME | HOOKS_NAME => Some(true),
+        HELPER_NAME | CLI_NAME | HOOKS_NAME | HOLDER_NAME => Some(true),
         name if name == hide_kit::device_herdr::HERDR_PROGRAM => Some(true),
         _ => None,
     }
@@ -1183,6 +1234,50 @@ pub(super) fn establish_stage(target: &str, stage: &str, since: Instant) {
         "stage": stage,
         "elapsed_ms": since.elapsed().as_millis() as u64,
     }));
+}
+
+/// Starts the node's pane holders, the terminal service that shows them and
+/// the pane service its panes' `hide` is proved on (`Call::HoldersStart`),
+/// and the writer that carries the core's side of the terminals, for a
+/// device whose panes the core's own engine runs (PRD
+/// engine-bundle-3-core-owns D-22). A node that cannot start them has no
+/// terminals, and the reason goes to the log.
+pub(super) fn start_holders_at(
+    host: &RemoteHost,
+    hook: Option<TerminalHook>,
+) -> Result<Arc<dyn hide_node_link::terminal::TerminalNode>, String> {
+    let started = call_as::<PanesStarted>(host, Call::HoldersStart, HELLO_TIMEOUT)
+        .map_err(|error| error.to_string())
+        .and_then(|_| {
+            let hook = hook.ok_or_else(|| "this process takes no device terminals".to_owned())?;
+            crate::terminal::device::DeviceTerminals::start(
+                &hook.node,
+                Arc::new(host.clone()),
+                hook.sink,
+            )
+            .map_err(|error| format!("the terminal writer could not start: {error}"))
+        });
+    match started {
+        Ok(terminals) => {
+            host.take_terminal_lines(terminals.inbound());
+            crate::diagnostic!(json!({
+                "component": "remote_host",
+                "kind": "host.holders_started",
+                "target": host.inner.target,
+                "link": terminals.link(),
+            }));
+            Ok(Arc::new(terminals))
+        }
+        Err(reason) => {
+            crate::diagnostic!(json!({
+                "component": "remote_host",
+                "kind": "host.holders_unstarted",
+                "target": host.inner.target,
+                "reason": reason,
+            }));
+            Err(reason)
+        }
+    }
 }
 
 /// Starts the node's pane service for the device's Herdr at `herdr_socket`,
