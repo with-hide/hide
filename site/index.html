@@ -18,7 +18,7 @@
     <title>hide · Run more agents. Hold less.</title>
     <link rel="icon" type="image/png" href="./assets/hide-mark.png">
     <link rel="preload" as="font" href="./assets/fonts/BricolageGrotesque-Variable.woff2" type="font/woff2" crossorigin>
-    <link rel="preload" as="image" href="./assets/shots/kick-conductor.webp" type="image/webp">
+    <link rel="preload" as="image" href="./assets/shots/kick-hero.webp" type="image/webp">
     <link rel="stylesheet" href="./styles.css">
     <script>document.documentElement.classList.remove("no-js");</script>
     <script type="module" src="./downloads.js"></script>
@@ -37,7 +37,7 @@
           <span>hide</span>
         </a>
         <nav aria-label="Main navigation">
-          <a class="nav-extra" href="#team">Product</a>
+          <a class="nav-extra" href="#conductor">Product</a>
           <a class="nav-extra" href="#pricing">Pricing</a>
           <a class="nav-extra" href="#faq">FAQ</a>
           <a class="nav-extra" href="https://github.com/with-hide/hide">GitHub</a>
@@ -62,8 +62,8 @@
 
         <figure class="stage wrap reveal">
           <div class="window film">
-            <img src="./assets/shots/kick-conductor.webp" width="1920" height="1080" alt="A Conductor plans a six-step mission on its map, then each step flies out to a worker on This Mac, linux-box or mac-mini: Claude Code on Opus 5, Codex on GPT-6.1-Sol and GPT-6-Astra, Antigravity on Gemini 4 Argon and Grok. One agent on linux-box asks a question, you answer it, and every step ends in a pull request.">
-            <video class="film-video" data-src="./assets/video/kick-conductor" muted loop playsinline preload="none" aria-hidden="true" hidden></video>
+            <img src="./assets/shots/kick-hero.webp" width="1920" height="1080" alt="A Conductor plans a six-step mission on its map, then each step flies out to a worker on This Mac, linux-box or mac-mini.">
+            <video class="film-video" data-src="./assets/video/kick-hero" muted loop playsinline preload="none" aria-hidden="true" hidden></video>
           </div>
         </figure>
 
@@ -76,44 +76,45 @@
       </section>
 
 
-      <section class="section wrap" id="team" aria-labelledby="team-title">
+      <section class="section wrap" id="conductor" aria-labelledby="conductor-title">
         <div class="section-head center reveal">
-          <img class="owl" data-owl="agents" src="./assets/owls/owl-agents-still.svg" data-motion="./assets/owls/owl-agents.svg" width="720" height="575" alt="" loading="lazy">
-          <p class="label bare">Multi-agent view</p>
-          <h2 id="team-title">36 agents running.<br> <span class="accent">Two need you.</span></h2>
-          <p>See every agent from above, then by project, by task or by pull request. Press My turn and only your decisions stay.</p>
+          <p class="label bare">Conductor</p>
+          <h2 id="conductor-title">One mission in.<br> <span class="accent">Every agent on the map.</span></h2>
+          <p>Tell a Conductor what you want. It plans the pull requests with you, starts the right agent for each on the machine you pick, and asks you only when it has to.</p>
         </div>
-        <figure class="shot film-shot reveal">
-          <img src="./assets/shots/kick-focus.webp" width="1920" height="1080" alt="Thirty-six agents of four projects fold into the sidebar's Projects, Tasks and PRs lists; in the Overview, My turn leaves only the two that wait on you: Approve #431 and #436? and Retry failed payments." loading="lazy" decoding="async">
-          <video class="film-video" data-src="./assets/video/kick-focus" muted loop playsinline preload="none" aria-hidden="true" hidden></video>
+        <figure class="chapters reveal" id="conductor-film">
+          <ol class="ch-tabs" aria-label="Chapters">
+            <li><button type="button" data-at="0" data-to="2.5"><span class="ch-name">Plan</span><span class="ch-line">Six steps drawn on the map, an agent and a machine for each</span><i class="ch-bar"></i></button></li>
+            <li><button type="button" data-at="2.5" data-to="7.9"><span class="ch-name">Start</span><span class="ch-line">One word, and every step lands on its machine</span><i class="ch-bar"></i></button></li>
+            <li><button type="button" data-at="7.9" data-to="10.8"><span class="ch-name">Ask</span><span class="ch-line">One agent needs you. You answer from the map</span><i class="ch-bar"></i></button></li>
+            <li><button type="button" data-at="10.8" data-to="16"><span class="ch-name">Report</span><span class="ch-line">Every step ends in a pull request</span><i class="ch-bar"></i></button></li>
+          </ol>
+          <div class="shot film-shot film">
+            <img src="./assets/shots/kick-conductor.webp" width="1920" height="1080" alt="A Conductor plans a six-step mission on its map, then each step flies out to a worker on This Mac, linux-box or mac-mini: Claude Code, Codex, Antigravity and Grok. One agent on linux-box asks a question, you answer it, and every step ends in a pull request." loading="lazy" decoding="async">
+            <video class="film-video" data-src="./assets/video/kick-conductor" muted loop playsinline preload="none" aria-hidden="true" hidden></video>
+          </div>
         </figure>
-        <div class="team-pair">
-          <figure class="card reveal">
-            <div class="card-shot"><picture>
-              <source media="(prefers-color-scheme: light)" srcset="./assets/shots/team-light.webp">
-              <img src="./assets/shots/team-dark.webp" width="690" height="800" alt="The lead's pane head with its worker list open: Split the invoice export in three, eight workers under it, each with its state, agent and pull request." loading="lazy" decoding="async">
-            </picture></div>
-            <figcaption><b>In the lead's pane.</b> Every worker it started, with its state and pull request.</figcaption>
-          </figure>
-          <figure class="card reveal">
-            <div class="card-shot"><picture>
-              <source media="(prefers-color-scheme: light)" srcset="./assets/shots/conductor-light.webp">
-              <img src="./assets/shots/conductor-dark.webp" width="2568" height="1080" alt="A Conductor's pane with its Mission 4/6 chip beside the mission's map: a research step, four changes with their workers and pull requests, and a check of #431 and #436 together before the report." loading="lazy" decoding="async">
-            </picture></div>
-            <figcaption><b>Conductor.</b> Hand it a mission: it plans the pull requests, starts the workers and keeps the map beside you.</figcaption>
-          </figure>
-        </div>
       </section>
 
-      <section class="section wrap" id="memory" aria-labelledby="memory-title">
+      <section class="section wrap" id="views" aria-labelledby="views-title">
         <div class="section-head center reveal">
-          <p class="label bare">Project Memory</p>
-          <h2 id="memory-title">Say it once.<br> <span class="accent">Every next agent already knows.</span></h2>
-          <p>Tell Codex on Monday, and Antigravity starts Thursday already knowing. The rules you keep repeating move into AGENTS.md with one press.</p>
+          <img class="owl" data-owl="agents" src="./assets/owls/owl-agents-still.svg" data-motion="./assets/owls/owl-agents.svg" width="720" height="575" alt="" loading="lazy">
+          <p class="label bare">Bird's eye</p>
+          <h2 id="views-title">36 agents running.<br> <span class="accent">Two need you.</span></h2>
+          <p>See every agent from above, then read the same work by project, by task or by pull request. Press My turn and only your decisions stay.</p>
         </div>
-        <figure class="shot film-shot reveal">
-          <img src="./assets/shots/kick-memory.webp" width="1920" height="1080" alt="Two fresh agents on Thursday: one starts from zero, runs npm and has to be told again; Antigravity in hide starts with the card Use pnpm, never npm, said to Codex on Monday, and gets it right the first time." loading="lazy" decoding="async">
-          <video class="film-video" data-src="./assets/video/kick-memory" muted loop playsinline preload="none" aria-hidden="true" hidden></video>
+        <figure class="chapters reveal" id="views-film">
+          <ol class="ch-tabs" aria-label="Chapters">
+            <li><button type="button" data-at="0" data-to="3.2"><span class="ch-name">From above</span><span class="ch-line">Every agent of every project, alive</span><i class="ch-bar"></i></button></li>
+            <li><button type="button" data-at="3.2" data-to="5.1"><span class="ch-name">Projects</span><span class="ch-line">Every checkout, what runs in it</span><i class="ch-bar"></i></button></li>
+            <li><button type="button" data-at="5.1" data-to="6.45"><span class="ch-name">Tasks</span><span class="ch-line">What waits on you comes first</span><i class="ch-bar"></i></button></li>
+            <li><button type="button" data-at="6.45" data-to="7.4"><span class="ch-name">PRs</span><span class="ch-line">What can merge, what is still cooking</span><i class="ch-bar"></i></button></li>
+            <li><button type="button" data-at="7.4" data-to="14"><span class="ch-name">My turn</span><span class="ch-line">Two left. Everything else can wait</span><i class="ch-bar"></i></button></li>
+          </ol>
+          <div class="shot film-shot film">
+            <img src="./assets/shots/kick-focus.webp" width="1920" height="1080" alt="Thirty-six agents of four projects fold into the sidebar's Projects, Tasks and PRs lists; in the Overview, My turn leaves only the two that wait on you." loading="lazy" decoding="async">
+            <video class="film-video" data-src="./assets/video/kick-focus" muted loop playsinline preload="none" aria-hidden="true" hidden></video>
+          </div>
         </figure>
       </section>
 
@@ -121,51 +122,60 @@
         <div class="section-head center reveal">
           <img class="owl" data-owl="ai" src="./assets/owls/owl-ai-still.svg" data-motion="./assets/owls/owl-ai.svg" width="510" height="680" alt="" loading="lazy">
           <p class="label bare">Hide AI</p>
-          <h2 id="ai-title">Ten logs in.<br> <span class="accent">One line out.</span></h2>
-          <p>Hide AI reads every agent's work and writes what you need to know: what the task is, and why it stopped. It runs on the agent CLI you already signed in to.</p>
+          <h2 id="ai-title">Hide AI reads your project.<br> <span class="accent">You read one line.</span></h2>
+          <p>It goes through every agent's session and writes what you need: what each task is, how far it got, which pull requests it opened and what it learned. It runs on the agent CLI you already signed in to.</p>
         </div>
-        <figure class="ai-switch reveal" data-on="true">
-          <div class="switch-bar">
-            <span id="switch-label">Hide AI</span>
-            <button type="button" class="toggle" role="switch" aria-checked="true" aria-labelledby="switch-label"><span class="toggle-knob"></span></button>
-            <span class="switch-word" aria-hidden="true"><span class="w-on">On</span><span class="w-off">Off</span></span>
+        <figure class="slides reveal" data-slide="0">
+          <ol class="sl-tabs" aria-label="What Hide AI writes">
+            <li><button type="button" aria-pressed="true"><b>Every task, named</b><span>Off, tasks called Codex and OpenCode. On, what each one is and why it stopped.</span><i class="ch-bar"></i></button></li>
+            <li><button type="button" aria-pressed="false"><b>Each session, summed up</b><span>What you asked, what it settled, what still waits on you.</span><i class="ch-bar"></i></button></li>
+            <li><button type="button" aria-pressed="false"><b>Every pull request, by who acts next</b><span>Ready to merge on top, the ones an agent is still fixing below.</span><i class="ch-bar"></i></button></li>
+            <li><button type="button" aria-pressed="false"><b>What it learned</b><span>A decision becomes a card the next agent starts with, whichever vendor runs it.</span><i class="ch-bar"></i></button></li>
+          </ol>
+          <div class="sl-stage">
+            <div class="sl-item">
+            <figure class="ai-switch" data-on="true">
+              <div class="switch-bar">
+                <span id="switch-label">Hide AI</span>
+                <button type="button" class="toggle" role="switch" aria-checked="true" aria-labelledby="switch-label"><span class="toggle-knob"></span></button>
+                <span class="switch-word" aria-hidden="true"><span class="w-on">On</span><span class="w-off">Off</span></span>
+              </div>
+              <div class="shot switch-shot">
+                <picture class="s-off">
+                  <source media="(prefers-color-scheme: light)" srcset="./assets/shots/rows-off-light.webp">
+                  <img src="./assets/shots/rows-off-dark.webp" width="632" height="904" alt="Hide AI off: the Tasks list names most tasks only by their vendor, Codex, Antigravity, OpenCode and Codex again; Revisit holds only the starred task, the release notes sit under Working, and only #437 shows outside the lead's task." loading="lazy" decoding="async">
+                </picture>
+                <picture class="s-on">
+                  <source media="(prefers-color-scheme: light)" srcset="./assets/shots/rows-on-light.webp">
+                  <img src="./assets/shots/rows-on-dark.webp" width="632" height="904" alt="Hide AI on: the same Tasks list reads Approve #431 and #436? and #433: CSV or XLSX for the export? under Needs You, Fix the test that broke the export under Unread, the release notes' question and a starred task under Revisit, and pull requests #438 and #439 linked to the tasks that opened them." loading="lazy" decoding="async">
+                </picture>
+              </div>
+            </figure>
+            </div>
+            <div class="sl-item">
+              <picture>
+                <source media="(prefers-color-scheme: light)" srcset="./assets/shots/record-lane-light.webp">
+                <img src="./assets/shots/record-lane-dark.webp" width="1144" height="1200" alt="A session's record: working, one question waiting on you, its requests grouped as Plan the export and Check each pull request, and the pull requests its workers opened." loading="lazy" decoding="async">
+              </picture>
+            </div>
+            <div class="sl-item">
+              <picture>
+                <source media="(prefers-color-scheme: light)" srcset="./assets/shots/prs-list-light.webp">
+                <img src="./assets/shots/prs-list-dark.webp" width="640" height="712" alt="The sidebar's PR list: #431 and #436 under Needs You, ready to merge with checks passed; #438 and #432 under Agent is working, one with failed checks." loading="lazy" decoding="async">
+              </picture>
+            </div>
+            <div class="sl-item">
+              <div class="film sl-film">
+              <img src="./assets/shots/kick-memory.webp" width="1920" height="1080" alt="Two fresh agents on Thursday: one starts from zero and has to be told again; Antigravity in hide starts with the card Use pnpm, never npm, said to Codex on Monday." loading="lazy" decoding="async">
+              <video class="film-video" data-src="./assets/video/kick-memory" data-follow="slide" muted loop playsinline preload="none" aria-hidden="true" hidden></video>
+              </div>
+            </div>
           </div>
-          <div class="shot switch-shot">
-            <picture class="s-off">
-              <source media="(prefers-color-scheme: light)" srcset="./assets/shots/rows-off-light.webp">
-              <img src="./assets/shots/rows-off-dark.webp" width="632" height="904" alt="Hide AI off: the Tasks list names most tasks only by their vendor, Codex, Antigravity, OpenCode and Codex again; Revisit holds only the starred task, the release notes sit under Working, and only #437 shows outside the lead's task." loading="lazy" decoding="async">
-            </picture>
-            <picture class="s-on">
-              <source media="(prefers-color-scheme: light)" srcset="./assets/shots/rows-on-light.webp">
-              <img src="./assets/shots/rows-on-dark.webp" width="632" height="904" alt="Hide AI on: the same Tasks list reads Approve #431 and #436? and #433: CSV or XLSX for the export? under Needs You, Fix the test that broke the export under Unread, the release notes' question and a starred task under Revisit, and pull requests #438 and #439 linked to the tasks that opened them." loading="lazy" decoding="async">
-            </picture>
-          </div>
-          <figcaption><b>Off</b>, tasks called Codex and OpenCode. <b>On</b>, what each one is, the question you read and left for later, and the pull requests each agent opened.</figcaption>
         </figure>
-        <div class="cards three">
-          <figure class="card reveal">
-            <div class="card-shot"><picture>
-              <source media="(prefers-color-scheme: light)" srcset="./assets/shots/prs-list-light.webp">
-              <img src="./assets/shots/prs-list-dark.webp" width="640" height="712" alt="The sidebar's PR list: #431 and #436 under Needs You, ready to merge with checks passed; #438 and #432 under Agent is working, one with failed checks; one merged pull request folded away." loading="lazy" decoding="async">
-            </picture></div>
-            <figcaption><b>Every pull request, by who acts next.</b> Ready to merge on top, the ones an agent is still fixing below.</figcaption>
-          </figure>
-          <figure class="card reveal">
-            <div class="card-shot"><picture>
-              <source media="(prefers-color-scheme: light)" srcset="./assets/shots/record-lane-light.webp">
-              <img src="./assets/shots/record-lane-dark.webp" width="1144" height="1200" alt="A session's record: working, one question waiting on you, its requests grouped as Plan the export and Check each pull request, and the pull requests its workers opened." loading="lazy" decoding="async">
-            </picture></div>
-            <figcaption><b>A session becomes a record.</b> What you asked, what it settled, what waits on you.</figcaption>
-          </figure>
-          <figure class="card reveal">
-            <div class="card-shot"><picture>
-              <source media="(prefers-color-scheme: light)" srcset="./assets/shots/memory-lane-light.webp">
-              <img src="./assets/shots/memory-lane-dark.webp" width="1144" height="1200" alt="Project Memory: Auto memory on, Use pnpm, never npm waiting to be promoted to the docs, and the project's cards of decisions and lessons." loading="lazy" decoding="async">
-            </picture></div>
-            <figcaption><b>A decision becomes a card.</b> The next agent starts with it, whichever vendor runs it.</figcaption>
-          </figure>
-        </div>
       </section>
+
+
+
 
       <section class="section wrap" id="herdr" aria-labelledby="herdr-title">
         <div class="split reveal">
