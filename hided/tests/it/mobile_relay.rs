@@ -137,6 +137,11 @@ async fn accept(listener: &TcpListener) -> Device {
     device
 }
 async fn phone(device: &mut Device, qr: &PairingQr, connection: u32, auth: Value) -> Session {
+    let mut session = handshake(device, qr, connection).await;
+    send(device, &mut session, auth).await;
+    session
+}
+async fn handshake(device: &mut Device, qr: &PairingQr, connection: u32) -> Session {
     control(device, ServerMessage::PeerJoined { connection }).await;
     let public: [u8; 32] = URL_SAFE_NO_PAD
         .decode(&qr.noise_key)
@@ -152,7 +157,6 @@ async fn phone(device: &mut Device, qr: &PairingQr, connection: u32, auth: Value
         panic!("Noise response");
     };
     session.read_handshake(&bytes).unwrap();
-    send(device, &mut session, auth).await;
     session
 }
 async fn send(device: &mut Device, phone: &mut Session, message: Value) {
@@ -350,6 +354,64 @@ async fn relay_pairs_encrypts_reconnects_scopes_revokes_and_stops() {
             .await
             .is_err()
     );
+    running.stop();
+}
+
+#[tokio::test]
+async fn unauthenticated_peers_expire_without_using_paired_phone_slots() {
+    let dir = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let running = hided::start_daemon(env(dir.path(), listener.local_addr().unwrap().port()))
+        .await
+        .unwrap();
+    let mut shell = shell(&running).await;
+    state(&mut shell, |_| true).await;
+    event(&mut shell, "mobile_enable", json!({"enabled":true})).await;
+    let mut device = accept(&listener).await;
+    state(&mut shell, |s| s["relay"]["state"] == "connected").await;
+    event(&mut shell, "mobile_show_code", json!({})).await;
+    let code = state(&mut shell, |s| s["qr"].is_string()).await;
+    let qr = PairingQr::decode(code["qr"].as_str().unwrap()).unwrap();
+    // Two peers stop before Noise; two finish Noise but never send credentials.
+    // These four connections must not consume the four paired-phone slots.
+    for connection in [1, 2] {
+        control(&mut device, ServerMessage::PeerJoined { connection }).await;
+    }
+    for connection in [3, 4] {
+        let _ = handshake(&mut device, &qr, connection).await;
+    }
+    let mut paired = phone(
+        &mut device,
+        &qr,
+        5,
+        json!({"client_kind":"phone","pair":qr.code,"name":"Phone"}),
+    )
+    .await;
+    receive(&mut device, &mut paired, "paired").await;
+    receive(&mut device, &mut paired, "agents").await;
+    let listed = state(&mut shell, |s| {
+        s["phones"].as_array().is_some_and(|p| p.len() == 1)
+    })
+    .await;
+    assert_eq!(listed["phones"].as_array().unwrap().len(), 1);
+    // The wait observes the product's ten-second deadline, not a settling delay.
+    let mut closed_peers = std::collections::BTreeSet::new();
+    while closed_peers.len() < 4 {
+        match next(&mut device).await {
+            Some(Message::Text(text)) => {
+                let ClientMessage::Close { connection } = ClientMessage::decode(&text).unwrap()
+                else {
+                    panic!("expected peer close");
+                };
+                assert!((1..=4).contains(&connection));
+                assert!(closed_peers.insert(connection));
+            }
+            Some(Message::Binary(_)) => {}
+            other => panic!("expected peer close, got {other:?}"),
+        }
+    }
+    send(&mut device, &mut paired, json!({"type":"ping","id":9})).await;
+    assert_eq!(receive(&mut device, &mut paired, "pong").await["id"], 9);
     running.stop();
 }
 

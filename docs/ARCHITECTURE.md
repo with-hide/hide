@@ -3392,7 +3392,8 @@ The default transport is `mobile/relay.rs`: one outbound WebSocket to `wss://rel
 The supervisor owns that socket and at most eight phone tasks; switching off, changing method, closing the move gate or shutting down cancels the link and joins its phone tasks.
 Each peer has eight inbound frames, and the link has a shared 32-frame outbound queue; a full queue closes the affected peer with a content-free diagnostic.
 Encrypted data and its routing close share that queue so the final refusal always precedes close.
-Admission, Noise handshake, phone credential and sends have ten-second deadlines; the link pings every twenty seconds and closes after sixty seconds without a response.
+Admission and sends have ten-second deadlines; each phone has one ten-second budget from arrival through Noise and its first credential message, and an unauthenticated connection never takes a paired-phone slot.
+The link pings every twenty seconds and closes after sixty seconds without a response.
 Each Noise receiver polls `check_timeout` once per second even without input; a ciphertext authentication failure, replay or unfinished chunk assembly closes only that phone and logs no content.
 A lost link reconnects with equal jitter, from 0.5-1 second up to 15-30 seconds, with no retained transport retry queue.
 The existing per-phone input request ledger survives link loss, and an already dispatched write settles after its phone task ends, so a repeated reply keeps its written, in-flight or uncertain result.

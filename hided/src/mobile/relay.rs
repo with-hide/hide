@@ -27,6 +27,8 @@ use super::{
 };
 
 const DEADLINE: Duration = Duration::from_secs(10);
+/// One budget from peer arrival through Noise and the first credential message.
+const PHONE_AUTH_DEADLINE: Duration = Duration::from_secs(10);
 const MAX_PEERS: usize = 8;
 const INBOUND_QUEUE: usize = 8;
 const OUTBOUND_QUEUE: usize = 32;
@@ -379,9 +381,10 @@ async fn serve(
     mut inbound: mpsc::Receiver<Vec<u8>>,
     outbound: mpsc::Sender<Output>,
 ) -> u32 {
+    let authenticate_by = tokio::time::Instant::now() + PHONE_AUTH_DEADLINE;
     let result = async {
         let mut session = Session::responder(&keys.noise, connection)?;
-        tokio::time::timeout(DEADLINE, async {
+        tokio::time::timeout_at(authenticate_by, async {
             let frame = inbound.recv().await.ok_or(Error::SessionClosed)?;
             session.read_handshake(&frame)?;
             outbound
@@ -395,7 +398,7 @@ async fn serve(
         .await
         .map_err(|_| Error::Timeout)??;
         let mut socket = phone::Socket::relay(session, inbound, outbound.clone(), connection);
-        let first = tokio::time::timeout(DEADLINE, socket.recv())
+        let first = tokio::time::timeout_at(authenticate_by, socket.recv())
             .await
             .map_err(|_| Error::Timeout)?;
         let Some(Ok(axum::extract::ws::Message::Text(text))) = first else {
