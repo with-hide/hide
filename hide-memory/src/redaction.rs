@@ -12,9 +12,10 @@ fn patterns() -> &'static [Regex] {
     static PATTERNS: OnceLock<Vec<Regex>> = OnceLock::new();
     PATTERNS.get_or_init(|| {
         [
-            // A name may end an environment variable's (`DB_PASSWORD=`), so
-            // it starts at a word boundary or after `_`.
-            r#"(?i)(?:\b|_)(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|secret[_-]?access[_-]?key|private[_-]?key|password|passwd)\s*[:=]\s*['"]?[^\s'"]{8,}"#,
+            // A name may end an environment variable's (`JWT_SECRET=`), so it
+            // starts at a word boundary or after `_`, and may be a quoted
+            // key (`"password": "…"`).
+            r#"(?i)(?:\b|_)(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|secret[_-]?access[_-]?key|secret[_-]?key|private[_-]?key|password|passwd|secret|token)['"]?\s*[:=]\s*['"]?[^\s'"]{8,}"#,
             // The password in an address's user part (`postgres://app:pw@db`).
             r"(?i)\b[a-z][a-z0-9+.-]*://[^\s:/@]+:[^\s@/]+@",
             r"\bsk-[A-Za-z0-9_-]{16,}\b",
@@ -74,12 +75,24 @@ mod tests {
             ("slack xoxb-1234567890-abcdefghij", "xoxb-1234567890"),
             ("gho_abcdefghijklmnopqrstuvwxyz12", "gho_abcdefghij"),
             ("npm_abcdefghijklmnopqrstuvwxyz12", "npm_abcdefghij"),
+            ("JWT_SECRET=supersecretvalue1", "supersecretvalue1"),
+            ("SECRET_KEY=abcdef123456", "abcdef123456"),
+            ("NPM_TOKEN=abcdef123456789", "abcdef123456789"),
+            ("export TOKEN=abcdef123456", "abcdef123456"),
+            (r#"{"password":"hunter2hunter2"}"#, "hunter2hunter2"),
+            (r#""DB_PASSWORD": "hunter2hunter2""#, "hunter2hunter2"),
         ] {
             let result = redact(source);
             assert!(!result.text.contains(secret), "{source} -> {}", result.text);
         }
-        // Code that names a field is not a credential.
-        assert_eq!(redact("pub token: String,").text, "pub token: String,");
+        // Code that names a field, and prose, are not credentials.
+        for ordinary in [
+            "pub token: String,",
+            "see https://example.com:8080/path and git@github.com:org/repo.git",
+            "the secret is to keep it short",
+        ] {
+            assert_eq!(redact(ordinary).text, ordinary);
+        }
     }
 
     #[test]
