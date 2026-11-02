@@ -14,7 +14,7 @@ import { corePaneFocus, withControl } from "./daemon-actions";
 import { startFixture } from "./engine-fixture";
 import { spawnChild } from "./fixture-agents";
 import { claudeProjects, writeFixtureTranscript } from "./herdr-fixture";
-import { startHided, type Daemon } from "./hided-fixture";
+import { asFirstRun, startHided, type Daemon } from "./hided-fixture";
 import { chooseLane, countSent, enterWorkspace, pinState, screenshot, setLanePinned, showExplorer } from "./wire";
 import { chord } from "./chords";
 import { projectRow } from "./overview-entry";
@@ -65,7 +65,7 @@ test("Main, Overview and a Workspace with its lane and tools", async ({ page }) 
     const root = path.join(fs.realpathSync(fixture.root), "fixture");
     fs.writeFileSync(path.join(fixture.root, "fixture", "notes.md"), "# Notes\n\nkept across a restart\n");
     fs.writeFileSync(path.join(fixture.root, "fixture", "gone.txt"), "removed before the restart\n");
-    daemon = await startHided(fixture, "s6");
+    daemon = await asFirstRun(await startHided(fixture, "s6"));
     const [parent, child] = fixture.panes;
     const last = new Map<string, Record<string, unknown>>();
     const sent = countSent(page, last);

@@ -1,7 +1,7 @@
 import { expect, type Locator, type Page } from "@playwright/test";
 import path from "node:path";
 import { startFixture } from "./engine-fixture";
-import { focusTab, newTab, tabOfPane } from "./daemon-actions";
+import { focusTab, newTab, tabOfPane, viewPane } from "./daemon-actions";
 import { connectControl, type HidedControl, type Rest } from "./hided-control.mjs";
 import { startHerdr, type HerdrFixture } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
@@ -82,6 +82,8 @@ export async function startMove(page: Page) {
     daemon = await startHided(fixture, "pane-move");
     control = await connectControl(daemon);
     const target = await newTab(control, fixture, "Move destination");
+    // It came forward with no page to size it, as no operator's New tab does; sized here, its terminal attaches on Herdr too.
+    viewPane(control, target.pane);
     // The new tab came forward as New tab makes it; the pair of panes stays in front.
     await focusTab(control, fixture, fixture.tab);
     return { fixture, ...(await drive(page, daemon, control, fixture.panes, fixture.tab, target)), stop };

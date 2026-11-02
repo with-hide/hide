@@ -8,12 +8,10 @@
 // no GitHub project here, offers no GitHub search. Captured in Dark and Light.
 
 import { expect, test, type Page } from "@playwright/test";
-import fs from "node:fs";
-import path from "node:path";
 import { startFixture, type AgentFixture } from "./engine-fixture";
 import { labelAgentPane, setAgentState } from "./fixture-agents";
 import type { FixtureLabel } from "./herdr-fixture";
-import { startHided, type Daemon } from "./hided-fixture";
+import { asFirstRun, startHided, type Daemon } from "./hided-fixture";
 import { countSent, screenshot } from "./wire";
 import { chord } from "./chords";
 
@@ -24,20 +22,6 @@ function headings(page: Page) {
   return page.locator('[data-palette="Search"] [cmdk-group-heading]');
 }
 
-
-/**
- * The same daemon started again with its saved Workspace choice gone: the
- * setup chose the Workspace, so a page would open on it, and the screen under
- * test is the one with nothing in front.
- */
-async function withoutSavedChoice(daemon: Daemon): Promise<Daemon> {
-  return daemon.restart((stateDir) => {
-    const file = path.join(stateDir, "workspace-views.json");
-    const saved = JSON.parse(fs.readFileSync(file, "utf8")) as { workspaces: { last_used_unix_ms: number }[] };
-    for (const workspace of saved.workspaces) workspace.last_used_unix_ms = 0;
-    fs.writeFileSync(file, JSON.stringify(saved));
-  });
-}
 
 /** Opens the restarted daemon's page through a blank page, so the new token mounts a new connection. */
 async function openAfterRestart(page: Page, daemon: Daemon): Promise<void> {
@@ -59,7 +43,7 @@ test("⌘K lists results by kind with a detail beside them, and the sidebar Sear
   try {
     daemon = await startHided(fixture, "palette");
     const [one, two] = fixture.panes;
-    daemon = await withoutSavedChoice(daemon);
+    daemon = await asFirstRun(daemon);
     const last = new Map<string, Record<string, unknown>>();
     const sent = countSent(page, last);
     await openAfterRestart(page, daemon);

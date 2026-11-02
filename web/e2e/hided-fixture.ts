@@ -125,6 +125,21 @@ export async function startHided(herdr: DaemonEngine, label = "s2", homeOverride
 }
 
 /** Where the daemon keeps Hide AI's choice under a home: the platform's state folder, `hide/ai.json`. */
+/**
+ * The same daemon started again as on a first run, with no Workspace in
+ * front: a fixture made through the daemon brings its Workspace forward, so
+ * its page would open on it. Open its page through `about:blank` afterwards
+ * (docs/TESTING.md, Writing a Playwright e2e test, step 7).
+ */
+export async function asFirstRun(daemon: Daemon): Promise<Daemon> {
+  return daemon.restart((stateDir) => {
+    const file = path.join(stateDir, "workspace-views.json");
+    const saved = JSON.parse(fs.readFileSync(file, "utf8")) as { workspaces: { last_used_unix_ms: number }[] };
+    for (const workspace of saved.workspaces) workspace.last_used_unix_ms = 0;
+    fs.writeFileSync(file, JSON.stringify(saved));
+  });
+}
+
 export function aiSettingsFile(home: string): string {
   const stateUnderHome = process.platform === "darwin" ? path.join("Library", "Application Support") : process.platform === "win32" ? path.join("AppData", "Local") : path.join(".local", "state");
   return path.join(home, stateUnderHome, "hide", "ai.json");

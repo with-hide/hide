@@ -286,6 +286,8 @@ async function openFixture(control: HidedControl, server: EngineServer, daemon: 
   if (server.engine === "herdr" && !runAs) {
     const herdr = server as EngineServer & { env: NodeJS.ProcessEnv; bin: string };
     panes.forEach((pane, index) => declareAgentSession(herdr, pane, FIXTURE_AGENTS[index]!.session));
+    // The report reaches the core through Herdr's event stream, after the call returns.
+    await control.until((rest) => panes.every((pane, index) => agentIn(rest, pane)?.session_id === FIXTURE_AGENTS[index]!.session) || undefined, "both fixture agents on their sessions", 30_000);
   }
   // The shell Add project opened is not the fixture's: its tab goes.
   await closePane(control, first.pane);
