@@ -37,6 +37,24 @@ fn repeated_sync_updates_do_not_start_a_second_terminal_session() {
     assert!(terminals.attaches().is_empty());
 }
 
+/// A node's report for a pane no layout holds is dropped, unless it answers
+/// an attach this core asked for: the core's own engine can make a pane's
+/// session ready before the session read that lists the pane, and the node
+/// does not report an unchanged state again, so a dropped answer would leave
+/// the pane idle.
+#[test]
+fn the_answer_to_an_attach_the_core_asked_for_is_kept_before_a_layout_holds_the_pane() {
+    let mut runtime = runtime();
+    runtime.ingest_session(Ok(context_payload()));
+    assert!(!runtime.snapshot.pane_layouts.is_empty());
+    assert!(!report_terminal(&mut runtime, "w9:p1", terminal_state("controlling", 1)));
+    assert!(!runtime.terminal_states.contains_key("w9:p1"));
+    assert!(runtime.request_terminal_control("w1:p9"));
+    assert!(report_terminal(&mut runtime, "w1:p9", terminal_state("controlling", 2)));
+    assert_eq!(runtime.terminal_states["w1:p9"].state, "controlling");
+    assert!(!runtime.request_terminal_control("w1:p9"));
+}
+
 /// An answer for which no operation of this runtime is waiting (a late or a
 /// foreign one) moves nothing: only an operation Hide started is drawn ahead
 /// of Herdr.
