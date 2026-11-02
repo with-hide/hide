@@ -51,9 +51,9 @@ impl Runtime {
         {
             return pull.head_oid.clone();
         }
-        let folder = node.folder.as_deref()?;
+        let (device, folder) = node.check_folder(&mission.device_id)?;
         self.catalog_workspaces()
-            .filter(|workspace| workspace.device_id == mission.device_id)
+            .filter(|workspace| workspace.device_id == device)
             .flat_map(|workspace| &workspace.checkouts)
             .find(|checkout| checkout.path == folder)
             .and_then(|checkout| checkout.head_sha().map(str::to_owned))
@@ -236,7 +236,7 @@ impl Runtime {
         if let (Some(before), Some(after)) = (&node.agent_id, &next.agent_id)
             && before != after
         {
-            next.folder = None;
+            next.clear_check_folder();
             for line in &mut next.criteria {
                 if line.kind == CriterionKind::Check && line.skip.is_none() {
                     *line = crate::mission_criteria::Criterion::new(
@@ -385,15 +385,15 @@ impl Runtime {
                     return Err("mission_criterion_not_yours".into());
                 };
                 if line.kind == CriterionKind::Check {
-                    // The check is the folder it ran in: its head later is
-                    // what the line is held against (D-16).
+                    // The check is the folder it ran in, on the machine the
+                    // worker works on: its head later is what the line is
+                    // held against (D-16).
                     let folder = self
                         .pane_checkout(&actor.device_id, &actor.pane_id)
-                        .filter(|_| actor.device_id == mission.device_id)
                         .map(|checkout| checkout.path.clone())
                         .ok_or("mission_checkout_unknown")?;
-                    let moved = next.folder.as_deref() != Some(folder.as_str());
-                    next.folder = Some(folder);
+                    let moved =
+                        next.set_check_folder(&mission.device_id, &actor.device_id, &folder);
                     let mut effect = next.criteria[at]
                         .record(pass, evidence, summary, commit, rerun, recorder)?;
                     effect.changed |= moved;

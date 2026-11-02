@@ -398,6 +398,10 @@ pub const COMMANDS: &[Spec] = &[
             "invalid_brief",
             "brief_not_submitted",
             "mission_brief_missing",
+            "mission_machine_node_refused",
+            "mission_machine_unavailable",
+            "mission_projects_loading",
+            "mission_machine_no_repository",
             "beside_other_checkout",
             "beside_other_machine",
             "beside_needs_agent_pane",
@@ -838,6 +842,7 @@ pub const COMMANDS: &[Spec] = &[
             "mission_criteria_too_many",
             "mission_checkers_invalid",
             "mission_external_invalid",
+            "mission_machine_node_refused",
         ],
     },
     Spec {
@@ -887,6 +892,7 @@ pub const COMMANDS: &[Spec] = &[
             "mission_checker_is_worker",
             "mission_checker_unknown",
             "mission_external_invalid",
+            "mission_machine_node_refused",
         ],
     },
     Spec {

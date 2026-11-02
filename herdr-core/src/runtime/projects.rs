@@ -3763,6 +3763,44 @@ impl Runtime {
         }
     }
 
+    /// Every project on `device` GitHub last answered for, stale or not,
+    /// read as `github_project_on` reads one.
+    pub(super) fn github_projects_on(
+        &self,
+        device: &str,
+    ) -> impl Iterator<Item = &crate::model::GithubProjectSnapshot> {
+        let github = if device == self.node.as_str() {
+            Some(&self.github)
+        } else {
+            self.device_github.get(device)
+        };
+        github.into_iter().flat_map(|github| github.projects.iter())
+    }
+
+    /// The worktree list of the project at `root` on `device`: this
+    /// machine's catalog for its own, a device's last list for one of its.
+    pub(super) fn project_worktrees_on(
+        &self,
+        device: &str,
+        root: &str,
+    ) -> Option<&crate::model::ProjectWorktreesSnapshot> {
+        if device == self.node.as_str() {
+            self.worktree_catalog.project(root)
+        } else {
+            self.device_worktrees.get(device)?.projects.get(root)
+        }
+    }
+
+    /// Whether `device`'s project catalog is still being read: this machine's
+    /// until its Git read answers, a device's until its first list arrives.
+    pub(super) fn projects_loading(&self, device: &str) -> bool {
+        if device == self.node.as_str() {
+            self.snapshot.git_worktrees_loading
+        } else {
+            !self.device_worktrees.contains_key(device)
+        }
+    }
+
     /// Asks the pull requests of `root` on `device` again once its last
     /// read is `older_than` old: this machine's through the look rule, a
     /// node's, read with this machine's login, through its next read.
