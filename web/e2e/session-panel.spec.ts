@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { openWorktree, viewPane, withControl } from "./daemon-actions";
 import { startFixture, type AgentFixture } from "./engine-fixture";
-import { agentReading, sessionIn, setAgentState, startAgentInProject, takeOverSession } from "./fixture-agents";
+import { agentReading, sessionIn, setAgentState, startAgentInProject, takeOverSession, type AgentState } from "./fixture-agents";
 import { claudeProjects, continueFixtureTranscript, writeFixtureTranscript, type FixtureLabel } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { chord } from "./chords";
@@ -25,7 +25,7 @@ function git(cwd: string, args: string[]): void {
  * core lists a linked worktree once a page is connected, so the page opens
  * first. Returns its pane.
  */
-async function agentInWorktree(fixture: AgentFixture, daemon: Daemon, name: string, label: FixtureLabel): Promise<string> {
+async function agentInWorktree(fixture: AgentFixture, daemon: Daemon, name: string, label: FixtureLabel, state?: AgentState): Promise<string> {
   const dir = path.join(fixture.root, `fixture-${name}`);
   git(path.join(fixture.root, "fixture"), ["worktree", "add", "-b", `prd/${name}`, dir]);
   return withControl(daemon, async (control) => {
@@ -34,6 +34,9 @@ async function agentInWorktree(fixture: AgentFixture, daemon: Daemon, name: stri
     // mark what it says as seen, which is not the point of the tasks that wait for the operator.
     viewPane(control, agent.pane);
     await agentReading(fixture, agent.pane);
+    // Put the agent on its current screen before binding the turn we label.
+    // A later idle-to-approval transition means another turn ran and clears the old turn's line.
+    if (state) await setAgentState(daemon, agent.pane, state);
     // A new session is read as soon as it starts, which is how the core takes the label of a turn that already ended.
     const session = `label-${process.pid}-${name}`;
     writeFixtureTranscript(claudeProjects(fixture), session, label);
@@ -80,8 +83,7 @@ test("the 태스크 list groups the device's tasks, folds children and resting o
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     const [parent, child] = fixture.panes;
     await labelFamily(fixture, daemon, { task: LONG_TITLE, progress: "자식의 결과를 기다리는 중" }, { task: "하위 작업 검증" });
-    const asking = await agentInWorktree(fixture, daemon, "asking", { task: "권한 승인 요청", progress: "검증 명령을 승인해 주세요" });
-    await setAgentState(daemon, asking, "blocked");
+    const asking = await agentInWorktree(fixture, daemon, "asking", { task: "권한 승인 요청", progress: "검증 명령을 승인해 주세요" }, "blocked");
     const question = await agentInWorktree(fixture, daemon, "question", { task: "AI 질문 읽음 확인", reply: QUESTION, question: true });
     const stopped = await agentInWorktree(fixture, daemon, "stopped", { task: "설정 화면 스위치 추가", progress: "테스트 환경이 없어 멈췄어요", end: "unfinished" });
     await page.goto("about:blank");
