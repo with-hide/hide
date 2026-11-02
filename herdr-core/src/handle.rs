@@ -319,6 +319,16 @@ impl Core {
         lock_recover(&runtime).set_guardrails_own_file(options.account_state_folder);
         lock_recover(&runtime).publish_own_guardrail_policy();
         lock_recover(&runtime).set_terminals(terminals);
+        // A core on its own engine runs the devices it dials on it too (PRD
+        // engine-bundle-3-core-owns D-22).
+        if own_engine.as_ref().and_then(|engine| engine.own_scope()).is_some() {
+            lock_recover(&runtime).run_devices_on_own_engine(
+                std::path::Path::new(&options.app_state_path)
+                    .parent()
+                    .unwrap_or(std::path::Path::new("."))
+                    .to_path_buf(),
+            );
+        }
         // Started before anything can attach, so no report waits on it.
         let terminal_reports = match crate::terminal_reports::ReportPump::spawn(
             reports,
@@ -810,8 +820,10 @@ impl Core {
             let changed = runtime.settle_agent_definitions(home, read);
             (changed, runtime.agent_definitions_for_engine())
         };
-        if let Some((engine, catalog)) = handoff {
-            engine.set_agent_definitions(catalog);
+        if let Some((engines, catalog)) = handoff {
+            for engine in engines {
+                engine.set_agent_definitions(Arc::clone(&catalog));
+            }
         }
         if changed {
             notify_change(self);

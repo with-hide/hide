@@ -778,7 +778,7 @@ impl OwnEngine<'_> {
 /// not have is the refusal a pane the engine does not have is.
 fn holder_error(error: HolderError) -> EngineError {
     match error {
-        HolderError::NoPane { message: message } => EngineError::Refused {
+        HolderError::NoPane { message } => EngineError::Refused {
             code: "pane_not_found".to_owned(),
             message,
         },
@@ -786,7 +786,7 @@ fn holder_error(error: HolderError) -> EngineError {
             code: code.to_owned(),
             message,
         },
-        HolderError::Unreachable { message: message } => EngineError::Transport(message),
+        HolderError::Unreachable { message } => EngineError::Transport(message),
     }
 }
 

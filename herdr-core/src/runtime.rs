@@ -49,6 +49,7 @@ mod herdr_takeover;
 mod hide_notes;
 mod home;
 mod hosts;
+mod own_devices;
 mod inbound;
 mod issues;
 mod kit;
@@ -1988,6 +1989,9 @@ pub struct Runtime {
     /// The operator's agent definition files as last read; `None` while the
     /// development switch is off, which reads none (`agent_definitions`).
     agent_definitions: Option<agent_definitions::AgentDefinitions>,
+    /// Set when the devices this core dials run on its own engine, the
+    /// development switch on (`own_devices`); `None` runs them on Herdr.
+    own_devices: Option<own_devices::OwnDevices>,
     herdr_profiles_job: Option<herdr_profiles::HerdrProfilesJob>,
     herdr_profile_endpoints: BTreeMap<String, Result<String, String>>,
     /// The connection attempt each first-run Connect started, by device and
@@ -2620,6 +2624,7 @@ impl Runtime {
             next_ssh_hosts_id: 0,
             ssh_hosts_job: None,
             agent_definitions: None,
+            own_devices: None,
             herdr_profiles_job: None,
             herdr_profile_endpoints: BTreeMap::new(),
             first_run_attempts: BTreeMap::new(),
