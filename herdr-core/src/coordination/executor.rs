@@ -377,14 +377,28 @@ fn brief_refused(spawn: &str, pane: &str, kind: &str, detail: String) -> String 
     "brief_not_submitted".to_owned()
 }
 
+/// The most bytes a launched brief's prompt argument holds, on every
+/// system. Herdr's answer to `pane.process_info`, which every pane proof and
+/// session read asks for, lists each foreground process with its `argv` and
+/// its `cmdline`, and those reads stop at 64 KiB: a Codex started from npm
+/// runs a Node wrapper and its own program, so the argument is in the answer
+/// four times, and a 16 KiB brief pushed it past the cap, after which every
+/// hook of that Codex lost its pane and its letters went unanswered (the
+/// agent journey on Linux and macOS, 2026-11-02). Four copies of 6 KiB,
+/// each `"` or `\` escaped to two bytes, stay inside it, and so do the
+/// 8,191 characters `cmd.exe` reads for a program Windows runs through it.
+/// A longer brief is typed once the agent runs.
+const LAUNCH_PROMPT_BYTES: usize = 6 * 1024;
+
 /// The words a fresh start of `kind` adds to carry `brief` as its prompt
 /// argument (`AgentApi::LaunchPrompt`), or `None` where the brief is sent
 /// once the agent runs: an agent that does not hold a launch prompt through
-/// its start screens, native arguments that already give one, or a brief
-/// the command line cannot carry (`worktree_control::prompt_argument`), or
-/// cannot carry through `cmd.exe` when the pane's machine runs the agent's
-/// program that way (`form`, `worktree_control::batch_carries`). A form the
-/// node could not tell is the error it answered, and the brief is typed.
+/// its start screens, native arguments that already give one, a brief the
+/// command line cannot carry (`worktree_control::prompt_argument`) or past
+/// [`LAUNCH_PROMPT_BYTES`], or one `cmd.exe` would rewrite when the pane's
+/// machine runs the agent's program that way (`form`,
+/// `worktree_control::batch_carries`). A form the node could not tell is
+/// the error it answered, and the brief is typed.
 fn launch_prompt(
     kind: &str,
     args: &[String],
@@ -397,6 +411,11 @@ fn launch_prompt(
         return None;
     }
     let carried = crate::worktree_control::prompt_argument(brief).and_then(|argument| {
+        if argument.len() > LAUNCH_PROMPT_BYTES {
+            return Err(format!(
+                "the brief is longer than the {LAUNCH_PROMPT_BYTES} bytes a start carries"
+            ));
+        }
         match form? {
             Some(StartForm::Batch) => {
                 crate::worktree_control::batch_carries(&argument).map_err(|reason| {
@@ -2116,17 +2135,23 @@ mod tests {
         };
         let program = || Ok(Some(StartForm::Program));
         let batch = || Ok(Some(StartForm::Batch));
-        let long = format!("-{}", "x ".repeat(4 * 1024));
+        // At the bound, and one byte past it, typed on every system.
+        let at_bound = format!("-{}", "x".repeat(super::LAUNCH_PROMPT_BYTES - 1));
+        let past = format!("{at_bound}x");
         assert_eq!(
             launch("-go\tnow", program()).unwrap(),
             ["--prompt=-go    now"]
         );
         assert_eq!(
-            launch(&long, program()).unwrap(),
-            [format!("--prompt={long}")]
+            launch(&at_bound, program()).unwrap(),
+            [format!("--prompt={at_bound}")]
         );
+        assert_eq!(launch(&past, program()), None);
+        // A line break is three bytes once it is U+2028.
+        let lines = format!("-{}", "\n".repeat(super::LAUNCH_PROMPT_BYTES / 3));
+        assert_eq!(launch(&lines, program()), None);
         assert_eq!(launch("@a & b", batch()).unwrap(), ["--prompt=@a & b"]);
-        for typed in [&long[..], "50% done", "say \"hi\"", "a&b", "a^b"] {
+        for typed in [&past[..], "50% done", "say \"hi\"", "a&b", "a^b"] {
             assert_eq!(launch(typed, batch()), None, "{typed}");
         }
         assert_eq!(launch("go", Ok(None)), None);

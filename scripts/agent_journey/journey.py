@@ -16,7 +16,7 @@ import time
 
 from agent_live_check.processes import ProcessError
 from agent_live_check.protection import write_private
-from agent_live_check.system import WINDOWS, git, same_path
+from agent_live_check.system import git, same_path
 
 from . import cells, composer, fork, kit, memory, provider_limit, title, usage
 from .requests import model_requests
@@ -114,40 +114,56 @@ def brief(value):
 
 # A brief's cap in bytes (herdr-core `delivery::BODY_LIMIT`, `invalid_brief`).
 BRIEF_CAP = 16 * 1024
-# The most characters a prompt argument holds when Windows starts the agent
-# through cmd.exe (herdr-core `worktree_control::BATCH_PROMPT_UNITS`), as it
-# starts every agent of this journey there: its launcher is a .cmd file
-# (agent_live_check.system.launcher), as npm's shim of a CLI is.
-BATCH_PROMPT_UNITS = 6 * 1024
+# The most bytes of a brief's prompt argument a start carries, on every
+# system (herdr-core `coordination::executor::LAUNCH_PROMPT_BYTES`); a longer
+# brief is typed once the agent runs.
+LAUNCH_PROMPT_BYTES = 6 * 1024
+
+
+def argument_bytes(text):
+    """The bytes of `text` as the start's prompt argument: each line break
+    as U+2028 and each tab as four spaces (`worktree_control::prompt_argument`)."""
+    return len(text.replace("\r\n", "\n").replace("\n", "\u2028").replace("\t", "    ").encode())
 
 
 def rides_start(text):
-    """Whether Hide carries `text` as the start's prompt on this system,
-    rather than typing it: on Windows only within what cmd.exe carries."""
-    return not WINDOWS or len(text.encode("utf-16-le")) // 2 <= BATCH_PROMPT_UNITS
+    """Whether Hide carries `text` as the start's prompt rather than typing
+    it. The journey's briefs hold none of the characters cmd.exe reads as its
+    own, so on Windows too only the length decides."""
+    return argument_bytes(text) <= LAUNCH_PROMPT_BYTES
+
+
+def filled(head, value, size, measure):
+    """`head`, notes over many lines with tabs, and the request last, exactly
+    `size` by `measure`, so a start or a typing that cut it, read it as
+    options or files, or submitted it twice shows in the agent's record
+    (cells.record_verdict)."""
+    tail = f"\n\n## Request\n{prompt(value)}\n"
+    line = "- Note:\tkeep `hide agent show` and `--brief-file` as they are; nothing to change here.\n"
+    notes = ""
+    while measure(head + notes + line + tail) <= size:
+        notes += line
+    notes += "." * (size - measure(head + notes + tail))
+    text = head + notes + tail
+    assert measure(text) == size, measure(text)
+    return text
 
 
 def long_brief(value):
     """A brief an agent's start carries as its prompt argument, of the forms
     a command line and an option parser can take apart: it starts with `-`,
-    holds tabs and many lines, and is as long as a brief may be, its request
-    last, so a start that cut it, read it as options or submitted it twice
-    shows in the agent's record (cells.record_verdict)."""
-    head = "-JOURNEY brief, not an option\tof the agent\n\n## Notes\n"
-    tail = f"\n\n## Request\n{prompt(value)}\n"
-    line = "- Note:\tkeep `hide agent show` and `--brief-file` as they are; nothing to change here.\n"
-    room = BRIEF_CAP - len((head + tail).encode())
-    notes = (line * (room // len(line.encode()) + 1)).encode()[:room].decode()
-    text = head + notes + tail
-    assert len(text.encode()) == BRIEF_CAP, len(text.encode())
-    return text
+    holds tabs and many lines, and is as long as a start carries."""
+    return filled("-JOURNEY brief, not an option\tof the agent\n\n## Notes\n", value, LAUNCH_PROMPT_BYTES,
+                  argument_bytes)
 
 
 def at_brief(value):
-    """A launched brief that starts with `@` and a file of the repository,
-    which Pi 1.0.4 reads as a file to attach (so Pi types its brief) and omp
-    attaches, over lines and a tab."""
-    return f"@README.md is the repository's one file.\n\tIt needs no change.\n\n{prompt(value)}\n"
+    """A brief that starts with `@` and a file of the repository, which Pi
+    1.0.4 would read as a file to attach and omp attaches, over lines and a
+    tab, as long as a brief may be: past what a start carries, so an agent
+    that declares the launch prompt takes it typed, once."""
+    return filled("@README.md is the repository's one file.\n\tIt needs no change.\n\n## Notes\n", value,
+                  BRIEF_CAP, lambda text: len(text.encode()))
 
 
 class Journey:
@@ -393,11 +409,10 @@ class Journey:
         self.created.append(entry)
         # The first start hands Hide's brief to the agent, which its own
         # record has to confirm: as the start's prompt argument where the
-        # agent declares that, at a brief's whole length, and typed otherwise;
-        # the untrusted start keeps the agent's prompt argument.
-        long = self.own_rungs and self.launches()
-        sent = long_brief(first) if long else brief(first)
-        launched = long and rides_start(sent)
+        # agent declares that, as long as a start carries, and typed
+        # otherwise; the untrusted start keeps the agent's prompt argument.
+        launched = self.own_rungs and self.launches()
+        sent = long_brief(first) if launched else brief(first)
         args, answer, attempts = self.spawn("journey-" + self.id, self.repository, self.branch, worktree,
                                             sent if self.brief_start else prompt(first),
                                             brief=self.brief_start)
@@ -442,9 +457,10 @@ class Journey:
         return (self.row.get("input") or [None])[0] == "launch_prompt"
 
     def launch_brief(self, repository):
-        """A brief that starts with `@`, in a start of its own in a worktree
-        of a repository the account never trusted: the start carries it once,
-        past any screen of the agent's, and the agent records it exactly."""
+        """A brief that starts with `@` and is as long as a brief may be, in a
+        start of its own in a worktree of a repository the account never
+        trusted: past what a start carries, so it is typed once the agent
+        runs, once, and the agent records it exactly."""
         if not cells.measurable(self.table, self.id, "launch_brief"):
             return
         value = token()
@@ -467,7 +483,7 @@ class Journey:
             turn, read, record["activities"] = self.wait_turn(0, value)
             spawn_record = self.spawn_record(name)
             record["brief_input"], record["read"] = (spawn_record or {}).get("brief_input"), read
-            self.settle("launch_brief", cells.start_verdict(spawned, turn, cells.brief_verdict(spawn_record, True),
+            self.settle("launch_brief", cells.start_verdict(spawned, turn, cells.brief_verdict(spawn_record, rides_start(sent)),
                                                             cells.record_verdict(read, sent, value)),
                         self.evidence("launch-brief", record))
         finally:

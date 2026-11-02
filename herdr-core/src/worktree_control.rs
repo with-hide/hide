@@ -1565,25 +1565,15 @@ pub(crate) fn prompt_argument(prompt: &str) -> Result<String, String> {
     Ok(argument)
 }
 
-/// The most UTF-16 units a prompt argument holds when the start runs through
-/// `cmd.exe` (`StartForm::Batch`): `cmd.exe` reads a command line of at most
-/// 8,191 characters and prints "The command line is too long." past it
-/// (a 16 KiB brief, the agent journey on Windows, 2026-11-02), and the
-/// program's path and the start's other arguments share that line.
-const BATCH_PROMPT_UNITS: usize = 6 * 1024;
-
 /// Whether `argument`, a prompt argument ([`prompt_argument`]), reaches a
-/// program that Windows runs through `cmd.exe` as it was given: within
-/// [`BATCH_PROMPT_UNITS`], with no `%` (which `cmd.exe` expands) or `"`
-/// (which the start's quoting escapes in a way `cmd.exe` does not read),
-/// and, when it holds no space and so is not quoted, none of `& | < > ^`.
-/// Refused with the reason, and the brief is typed instead.
+/// program that Windows runs through `cmd.exe` (`StartForm::Batch`) as it
+/// was given: with no `%` (which `cmd.exe` expands) or `"` (which the
+/// start's quoting escapes in a way `cmd.exe` does not read), and, when it
+/// holds no space and so is not quoted, none of `& | < > ^`. Its length is
+/// the launch's own bound (`coordination::executor::LAUNCH_PROMPT_BYTES`),
+/// inside the 8,191 characters `cmd.exe` reads. Refused with the reason,
+/// and the brief is typed instead.
 pub(crate) fn batch_carries(argument: &str) -> Result<(), String> {
-    if argument.encode_utf16().count() > BATCH_PROMPT_UNITS {
-        return Err(format!(
-            "longer than the {BATCH_PROMPT_UNITS} characters cmd.exe carries"
-        ));
-    }
     let quoted = argument.contains(' ');
     match argument
         .chars()
