@@ -15,12 +15,12 @@ export const DETAIL_INSET = "pl-(--size-mobile-row-inset)";
 /** The row's head: the detail screen (`large`) names the agent with its logo, a list row does not (PRD agent-mark-quiet B12). */
 export function AgentHead({ agent, large }: { agent: PhoneAgent; large: boolean }) {
   return (
-    <span className="flex min-w-0 items-center gap-sm">
+    <span className={`flex min-w-0 gap-sm ${large ? "items-start" : "items-center"}`}>
       {/* The desktop row's mark; a read turn is dimmed as it is there. */}
       {agent.read ? <StatusMark mark="turn" read data-phone-mark="turn" /> : <StatusMark mark={agent.mark} className={(agent.mark === "turn" || agent.mark === "look") && !agent.emphasized ? "opacity-(--opacity-read-status)" : undefined} data-phone-mark={agent.mark} />}
       {large ? <AgentMark kind={agent.agent_kind} /> : null}
       <span
-        className={`min-w-0 truncate ${large ? "text-headline font-semibold" : "text-title font-medium"} ${
+        className={`min-w-0 ${large ? "whitespace-normal break-keep text-title font-medium wrap-anywhere" : "truncate text-title font-medium"} ${
           agent.emphasized || large ? "text-foreground" : "text-subtle-foreground"
         }`}
       >

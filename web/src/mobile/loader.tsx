@@ -6,6 +6,7 @@ import "./mobile.css";
 import { useLoaderTranslation } from "./loaderTranslation";
 import { Button } from "../components/ui/button";
 import { HostList, VersionScreen } from "./HostList";
+import { Landing, DeviceIdentity } from "./Landing";
 import { ScanQr } from "./ScanQr";
 import { bundlePath, readHosts, MAX_HOSTS, type PairedHost } from "./hosts";
 import { RELAY_URL, relayReady, takePairing } from "./relayRuntime";
@@ -107,19 +108,20 @@ function Loader() {
     return () => { controller.abort(); if (timer) clearTimeout(timer); };
   }, [target]);
   if (version && target) return <VersionScreen t={t} name={target.name} protocol={version.device} app={version.supported.join(", ")} />;
-  return <main className="phone-safe-top flex min-h-full flex-col gap-lg px-lg py-xxxl">
-    <h1 className="text-display font-semibold">hide</h1>
-    {pair ? <>
-      <h2 className="truncate text-headline font-semibold" title={pair.name}>{t("mobile.pair.title", { name: pair.name })}</h2>
-      <p className="text-subhead text-muted-foreground">{t("mobile.pair.description")}</p>
-      <p className="text-subhead text-muted-foreground">{t("mobile.relay.encrypted")}</p>
-      <Button className="min-h-(--size-touch-target)" disabled={!!target} onClick={() => setTarget(pair)}>{t(target ? "mobile.relay.connecting" : "mobile.pair.connect")}</Button>
-      <p className="text-body text-muted-foreground">{t("mobile.pair.expiry")}</p>
-    </> : adding ? <ScanQr t={t} onPair={(qr) => { setPair(qr); setAdding(false); }} /> : <>
+  if (pair) return <Landing note={<>{t("mobile.relay.encrypted")}<br />{t("mobile.pair.expiry")}</>}>
+    <DeviceIdentity name={pair.name} large />
+    <p className="max-w-(--size-mobile-copy) text-subhead leading-relaxed text-subtle-foreground">{t("mobile.pair.description")}</p>
+    <Button variant="secondary" className="min-h-(--size-touch-target) rounded-lg px-xl text-subhead" disabled={!!target} onClick={() => setTarget(pair)}>{t(target ? "mobile.relay.connecting" : "mobile.pair.connect")}</Button>
+    {target ? <Button variant="ghost" className="min-h-(--size-touch-target) text-body" onClick={() => { setTarget(null); setPair(null); setAdding(false); setError(null); }}>{t("mobile.relay.choose")}</Button> : null}
+    {error ? <p role="alert" className="max-w-(--size-mobile-copy) text-body text-warning">{t(`mobile.relay.${error}`)}</p> : null}
+  </Landing>;
+  return <main className="phone-safe-top phone-safe-bottom flex min-h-full flex-col gap-lg px-xl">
+    <h1 className="pt-lg text-headline font-semibold">hide</h1>
+    {adding ? <ScanQr t={t} onPair={(qr) => { setPair(qr); setAdding(false); }} /> : <>
       <h2 className="text-title">{t("mobile.relay.devices")}</h2>
       {!target ? <HostList t={t} choose={(host) => { setError(null); setTarget(host); }} /> : null}
     </>}
-    {target && !pair ? <p role="status">{t("mobile.relay.connecting")}</p> : null}
+    {target ? <p role="status">{t("mobile.relay.connecting")}</p> : null}
     {target ? <Button variant="ghost" onClick={() => { setTarget(null); setPair(null); setAdding(false); setError(null); }}>{t("mobile.relay.choose")}</Button> : null}
     {error ? <p role="alert" className="text-subhead text-warning">{t(`mobile.relay.${error}`)}</p> : null}
   </main>;

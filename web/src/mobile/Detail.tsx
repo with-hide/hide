@@ -15,6 +15,7 @@ import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type UIEve
 import { Elapsed } from "../components/elapsed";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs";
 import { wakeFailureReason, wakingLine } from "../sleep";
 import type { AgentSleep } from "../snapshot";
@@ -75,22 +76,22 @@ export function Detail({ onBack }: { onBack: () => void }) {
   const note = rowsNote ?? (gone && (showsConversation || !rows) ? rowsProblem("gone") : null);
   return (
     <main className="flex h-full flex-col" data-phone-detail={detail ? `${detail.key.device_id}|${detail.key.pane_id}` : ""}>
-      <header className="phone-safe-top shrink-0 border-b border-border bg-card px-lg pb-md">
+      <header className="phone-safe-top shrink-0 border-b border-border bg-background px-lg pb-md">
         {/* ← List, Conversation | Terminal in the middle, and the elapsed time share one row, so the switch costs no height. */}
         <div className="flex items-center gap-sm pt-sm">
           <div className="flex min-w-0 flex-1 basis-0">
-            <button type="button" onClick={onBack} className="-ml-sm flex min-h-(--size-touch-target) items-center gap-xs px-sm text-title text-foreground" data-phone-back="true">
+            <Button variant="ghost" onClick={onBack} className="-ml-sm flex min-h-(--size-touch-target) items-center gap-xs px-sm text-body text-foreground" data-phone-back="true">
               <ArrowLeftIcon aria-hidden="true" className="size-(--size-icon-lg)" />
               {t("mobile.list")}
-            </button>
+            </Button>
           </div>
           {hasConversation && detail && !sleep ? (
             <Tabs value={detail.view} onValueChange={(value) => setView(value as DetailView)} className="shrink-0">
               <TabsList>
-                <TabsTrigger value="conversation" className="h-(--size-touch-target) px-md text-title" data-phone-view="conversation">
+                <TabsTrigger value="conversation" className="h-(--size-touch-target) px-sm text-body" data-phone-view="conversation">
                   {t("mobile.tab.conversation")}
                 </TabsTrigger>
-                <TabsTrigger value="terminal" className="h-(--size-touch-target) px-md text-title" data-phone-view="terminal">
+                <TabsTrigger value="terminal" className="h-(--size-touch-target) px-sm text-body" data-phone-view="terminal">
                   {t("mobile.tab.terminal")}
                 </TabsTrigger>
               </TabsList>
@@ -329,16 +330,16 @@ function ReplyBar({ disabled }: { disabled: boolean }) {
   const blocked = disabled || pending !== null;
   const shown = tooLong ? inputFailure("too_long") : error;
   return (
-    <footer className="phone-safe-bottom shrink-0 border-t border-border bg-card px-lg pt-md">
+    <footer className="phone-safe-bottom shrink-0 border-t border-border bg-background px-lg pt-xs">
       <div className="grid grid-cols-5 gap-sm" role="group" aria-label={t("mobile.quickKeys")}>
         {QUICK_KEYS.map((quick) => (
           <Button
             key={quick.key}
-            variant="secondary"
+            variant="ghost"
             aria-label={t(quick.name)}
             disabled={blocked}
             data-phone-key={quick.key}
-            className="h-(--size-touch-target) rounded-lg font-mono text-title"
+            className="h-(--size-touch-target) rounded-md font-mono text-body"
             onClick={() => sendKey(quick.key)}
           >
             {quick.label}
@@ -352,7 +353,7 @@ function ReplyBar({ disabled }: { disabled: boolean }) {
           sendReply(text);
         }}
       >
-        <input
+        <Input
           value={text}
           onChange={(event) => setText(event.target.value)}
           placeholder={t("mobile.replyPlaceholder")}
@@ -363,9 +364,9 @@ function ReplyBar({ disabled }: { disabled: boolean }) {
           autoCorrect="off"
           data-phone-reply="true"
           aria-invalid={tooLong || undefined}
-          className="h-(--size-touch-target) min-w-0 flex-1 rounded-lg border border-border bg-input px-md text-title text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
+          className="h-(--size-touch-target) min-w-0 flex-1 rounded-lg border border-border bg-input px-md text-title text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-(--opacity-disabled)"
         />
-        <Button type="submit" disabled={blocked || text.trim().length === 0 || tooLong} className="h-(--size-touch-target) rounded-lg px-lg text-title font-semibold" data-phone-send="true">
+        <Button variant="secondary" type="submit" disabled={blocked || text.trim().length === 0 || tooLong} className="h-(--size-touch-target) rounded-md px-md text-body font-medium" data-phone-send="true">
           {t("mobile.send")}
         </Button>
       </form>

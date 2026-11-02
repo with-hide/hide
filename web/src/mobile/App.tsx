@@ -29,6 +29,7 @@ import { closeStaleNotifications, enableNotifications, permission, pushSupported
 import { patch, usePhone } from "./store";
 import { hostedPhone, PHONE_PROTOCOL } from "./relayRuntime";
 import { HostPicker } from "./HostPicker";
+import { Landing, DeviceIdentity } from "./Landing";
 import { VersionScreen } from "./HostList";
 
 export function App() {
@@ -44,16 +45,6 @@ export function App() {
   return detail ? <Detail onBack={closeDetail} /> : <ListScreen />;
 }
 
-function HideIcon() {
-  return (
-    <img aria-hidden="true" alt="" src="/m/icon-192.png" className="size-(--size-mobile-app-icon) rounded-xl" />
-  );
-}
-
-function Centered({ children }: { children: React.ReactNode }) {
-  return <main className="flex min-h-full flex-col items-center justify-center gap-lg px-lg py-xxxl text-center">{children}</main>;
-}
-
 /** The page the QR opens (B11). */
 function PairScreen() {
   const { t } = useInterfaceTranslation();
@@ -61,25 +52,20 @@ function PairScreen() {
   const [pairing, setPairing] = useState(false);
   const unreachable = usePhone((s) => s.unreachable);
   return (
-    <Centered>
-      <HideIcon />
-      <h1 className="w-full truncate text-headline font-semibold text-foreground">{t("mobile.pair.title", { name: macName || t("mobile.mac") })}</h1>
-      <p className="max-w-(--size-mobile-copy) text-subhead text-muted-foreground">{t("mobile.pair.description")}</p>
-      {hostedPhone() ? <p className="text-subhead text-muted-foreground">{t("mobile.relay.encrypted")}</p> : null}
+    <Landing note={<>{hostedPhone() ? <>{t("mobile.relay.encrypted")}<br /></> : null}{t("mobile.pair.expiry")}</>}>
+      <DeviceIdentity name={macName || t("mobile.mac")} large />
+      <p className="max-w-(--size-mobile-copy) text-subhead leading-relaxed text-subtle-foreground">{t("mobile.pair.description")}</p>
       <Button
-        className="h-(--size-touch-target) w-full max-w-(--size-mobile-copy) rounded-lg text-title font-semibold"
+        variant="secondary"
+        className="h-(--size-touch-target) rounded-lg px-xl text-subhead"
         disabled={pairing}
         data-phone-pair="true"
-        onClick={() => {
-          setPairing(true);
-          pairNow();
-        }}
+        onClick={() => { setPairing(true); pairNow(); }}
       >
         {t("mobile.pair.connect")}
       </Button>
-      {unreachable && hostedPhone() ? <p role="status" className="text-subhead text-muted-foreground"><OfflineText /></p> : null}
-      <p className="text-body text-muted-foreground">{t("mobile.pair.expiry")}</p>
-    </Centered>
+      {unreachable && hostedPhone() ? <p role="status" className="text-body text-muted-foreground"><OfflineText /></p> : null}
+    </Landing>
   );
 }
 
@@ -90,14 +76,13 @@ function Guidance({ refused }: { refused: boolean }) {
   const relayError = usePhone((s) => s.relayError);
   const text = noticeText(t, refused && refusal ? REFUSAL_NOTICE[refusal] : REFUSAL_NOTICE.no_credential);
   return (
-    <Centered>
-      <HideIcon />
-      <p role={refused ? "alert" : undefined} className="max-w-(--size-mobile-copy) text-title text-foreground" data-phone-guidance={refused ? (refusal ?? "revoked") : "unpaired"}>
+    <Landing>
+      <p role={refused ? "alert" : undefined} className="max-w-(--size-mobile-copy) break-keep text-title leading-relaxed text-foreground wrap-anywhere" data-phone-guidance={refused ? (refusal ?? "revoked") : "unpaired"}>
         {relayError ? t(`mobile.relay.${relayError}`) : text}
       </p>
       {refused && refusal !== "phone_limit" && refusal !== "no_credential" ? <p className="text-subhead text-muted-foreground">{noticeText(t, REFUSAL_NOTICE.no_credential)}</p> : null}
-      {hostedPhone() ? <Button variant="secondary" onClick={() => location.assign("/")}>{t("mobile.relay.choose")}</Button> : null}
-    </Centered>
+      {hostedPhone() ? <Button variant="secondary" className="min-h-(--size-touch-target) px-xl text-subhead" onClick={() => location.assign("/")}>{t("mobile.relay.choose")}</Button> : null}
+    </Landing>
   );
 }
 
@@ -123,16 +108,10 @@ function ListScreen() {
   const sleeping = groups?.flatMap((group) => group.sleeping_sessions ?? []) ?? [];
   return (
     <main className="phone-safe-bottom flex min-h-full flex-col">
-      <header className="phone-safe-top px-lg">
+      <header className="phone-safe-top px-xl" data-phone-connected={connected ? "true" : "false"}>
         <div className="flex items-center justify-between pt-lg">
-          <h1 className="text-display font-semibold text-foreground">hide</h1>
+          <h1 className="text-headline font-semibold text-foreground">hide</h1>
           <div className="flex items-center gap-md">
-            <span
-              role="img"
-              aria-label={connected ? t("mobile.connected") : t("mobile.disconnected")}
-              data-phone-connected={connected ? "true" : "false"}
-              className={`size-(--size-status-mark) rounded-full ${connected ? "bg-success" : "bg-muted-foreground"}`}
-            />
             <button
               type="button"
               aria-label={t("mobile.start.title")}
@@ -152,7 +131,7 @@ function ListScreen() {
         ) : null}
       </header>
       {dim ? (
-        <div role="status" className="mt-md flex items-center gap-md bg-secondary px-lg py-md text-subhead text-subtle-foreground" data-phone-unreachable="true">
+        <div role="status" className="mt-md flex items-center gap-sm px-xl py-sm text-body text-subtle-foreground" data-phone-unreachable="true">
           <Loader2Icon aria-hidden="true" className="size-(--size-icon-lg) shrink-0 animate-spin" />
           <span><OfflineText /></span>
         </div>
@@ -160,7 +139,7 @@ function ListScreen() {
       {relayError === "storage" || relayError === "loadError" ? <p role="alert" className="px-lg text-warning">{t(`mobile.relay.${relayError}`)}</p> : null}
       {installHint && !standalone() ? <InstallHint /> : null}
       {connected ? <NotificationRow /> : null}
-      <div className={dim ? "opacity-50" : undefined} aria-busy={dim}>
+      <div className={dim ? "opacity-(--opacity-dimmed)" : undefined} aria-busy={dim}>
         {groups && agents.length === 0 && sleeping.length === 0 ? (
           <p className="px-lg py-xxl text-center text-title text-muted-foreground" data-phone-empty="true">
             {t("mobile.noAgents")}
@@ -170,8 +149,8 @@ function ListScreen() {
           const id = group.group;
           if (group.count === 0) return null;
           return (
-            <section key={id} className="px-lg pt-lg" data-phone-group={id}>
-              <h2 className="flex gap-sm pb-xs text-subhead text-muted-foreground">
+            <section key={id} className="px-xl pt-lg" data-phone-group={id}>
+              <h2 className="flex gap-sm pb-xs text-body text-muted-foreground">
                 <span>{t(GROUP_TITLE[id])}</span>
                 <span className="font-mono" data-phone-group-count={group.count}>
                   {group.count}
@@ -269,14 +248,14 @@ function AgentRow({ agent }: { agent: PhoneAgent }) {
 function InstallHint() {
   const { t } = useInterfaceTranslation();
   return (
-    <div className="mx-lg mt-md flex items-start gap-md rounded-lg border border-border bg-card px-md py-sm text-subhead text-card-foreground" data-phone-install-hint="true">
-      <span className="min-w-0 flex-1">{t("mobile.installHint")}</span>
-      <button type="button" aria-label={t("common.close")} className="flex size-(--size-touch-target) shrink-0 items-center justify-center text-muted-foreground" onClick={() => {
+    <div className="mx-xl mt-lg flex items-start gap-sm text-body leading-relaxed text-subtle-foreground" data-phone-install-hint="true">
+      <span className="min-w-0 flex-1 break-keep wrap-anywhere">{t("mobile.installHint")}</span>
+      <Button variant="ghost" size="icon" aria-label={t("common.close")} className="size-(--size-touch-target) text-muted-foreground" onClick={() => {
         patch({ installHint: false });
         if (hostedPhone()) { try { localStorage.setItem("hide.phone.installed-hint", "seen"); } catch { patch({ relayError: "storage" }); } }
       }}>
         <XIcon aria-hidden="true" className="size-(--size-icon)" />
-      </button>
+      </Button>
     </div>
   );
 }
@@ -291,24 +270,24 @@ function NotificationRow() {
   if (!row) return null;
   if (row === "enable") {
     return (
-      <button
-        type="button"
+      <Button
+        variant="ghost"
         disabled={asking}
         data-phone-notifications="enable"
-        className="mx-lg mt-md flex min-h-(--size-touch-target) items-center gap-md rounded-lg border border-border bg-card px-md text-left text-title text-card-foreground active:bg-accent"
+        className="mx-xl mt-sm h-auto min-h-(--size-touch-target) justify-start gap-sm whitespace-normal px-none text-left text-subhead font-normal text-subtle-foreground"
         onClick={() => {
           setAsking(true);
           void enableNotifications().finally(() => setAsking(false));
         }}
       >
-        <BellIcon aria-hidden="true" className="size-(--size-icon-lg) shrink-0 text-primary" />
+        <BellIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-muted-foreground" />
         <span className="flex-1">{t("mobile.notifications.enable")}</span>
         <ChevronRightIcon aria-hidden="true" className="size-(--size-icon) text-muted-foreground" />
-      </button>
+      </Button>
     );
   }
   return (
-    <p className="mx-lg mt-md flex items-start gap-md rounded-lg border border-border bg-card px-md py-sm text-subhead text-muted-foreground" data-phone-notifications={row}>
+    <p className="mx-xl mt-sm flex items-start gap-sm py-sm text-body leading-relaxed text-muted-foreground" data-phone-notifications={row}>
       <BellIcon aria-hidden="true" className="mt-xxs size-(--size-icon) shrink-0" />
       <span>{row === "denied" ? t("mobile.notifications.denied") : t("mobile.notifications.installFirst")}</span>
     </p>

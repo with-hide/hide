@@ -1,5 +1,5 @@
 import { Dialog as SheetPrimitive } from "radix-ui";
-import type { ComponentProps } from "react";
+import { useRef, type ComponentProps } from "react";
 import { cn } from "../../lib/utils";
 import { useLayerOpen, useReturnFocus } from "./layer";
 
@@ -23,13 +23,16 @@ function SheetContent({
   className,
   side = "right",
   onCloseAutoFocus,
+  returnFocusTo,
   ...props
-}: ComponentProps<typeof SheetPrimitive.Content> & { side?: "top" | "right" | "bottom" | "left" }) {
-  const returnFocus = useReturnFocus(true);
+}: ComponentProps<typeof SheetPrimitive.Content> & { side?: "top" | "right" | "bottom" | "left"; returnFocusTo?: () => HTMLElement | null }) {
+  const surface = useRef<HTMLDivElement>(null);
+  const returnFocus = useReturnFocus(true, returnFocusTo ? { target: returnFocusTo, within: () => surface.current } : undefined);
   return (
     <SheetPrimitive.Portal>
       <SheetPrimitive.Overlay data-slot="sheet-overlay" className="fixed inset-0 z-50 bg-background opacity-(--opacity-dimmed)" />
       <SheetPrimitive.Content
+        ref={surface}
         data-slot="sheet-content"
         data-side={side}
         className={cn(
