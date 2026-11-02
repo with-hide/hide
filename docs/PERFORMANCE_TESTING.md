@@ -616,6 +616,30 @@ It writes the list to `restore-victims.txt` and fails unless none of them runs w
 A time that did not come within `MEASURE_RESTORE_SECONDS` (180) is `null`, and a missing front names what the page last showed (`front_last`).
 An agent's resume is not timed here; the engine's functional tests own it.
 
+### The two-engine gate
+
+The core's own engine replaces Herdr only when it is no worse than Herdr on every row of a 31-row table (PRD engine-bundle-3-core-owns D-14, D-15, B39 to B44).
+Each row is measured as pairs on one build: the Herdr path (H) and the own engine's path (P), the development switch `HIDE_DEV_PANE_HOLDER` the only difference, five pairs, the order flipped every pair.
+No pair is dropped; each run records its load and the build processes running beside it, and a run is started only on a quiet machine (load under 6, no cargo or rustc running).
+A latency passes within 1.1 x H + 0.5 ms and any other value within 1.1 x H, judged on the median over the pairs of P minus that tolerance, so at least three of five pairs are inside it.
+Loss, duplication and order of keys, a holder's wakeups while idle, and one holder's memory (4 MiB idle, 6 MiB after a flood) hold in every run, not on a median.
+The memory of panes no screen shows and the sum of holders' memory are recorded and not judged: a process per pane is the accepted cost (D-33).
+
+| Rows | What | Measured by |
+| --- | --- | --- |
+| 1 to 5 (B39) | Idle: CPU over 60 s, holder wakeups, the memory of 64 attached panes, one holder's memory idle and after a flood | `scripts/holder-perf.py` at the node ([The pane holder's path](#the-pane-holders-path)) |
+| 6 to 9 (B40) | Key to frame latency alone, beside one and eight flooding panes, and beside a slow consumer, with a slow consumer's holder at most 6 MiB | `scripts/holder-perf.py` |
+| 10 to 15 (B41) | A flood: bytes per frame, time to drain, the path's CPU, reattach time, frames per pane at most 62.5 a second | `scripts/holder-perf.py` |
+| 16 to 21, 31 (B40, B41, B42) | The app end to end: echo idle and with five panes printing, CPU while printing, idle CPU, CPU with no window, hided's and Chrome's largest RSS, and their RSS after the scale | `scripts/web-shell-measure/run.sh` with `MEASURE_ENGINE` |
+| 22 to 27 (B43) | A new tab, a split, zoom and unzoom, a pane close, a tab switch and a resize, to screen and to frame, p50 and p95 | `MEASURE_SCENARIO=topology` ([Pane topology latency](#pane-topology-latency)) |
+| 28 (B40) | Echo at the operator's scale | the same topology run's `echo-summary.json` |
+| 29 (B44) | Layout save writes, at most one per operation | the same run's `save-summary.json` |
+| 30 (B44) | After every process was killed: the tab list, the front tab drawn, every shell answering | `MEASURE_SCENARIO=restore` ([Restore after a reboot](#restore-after-a-reboot)) |
+
+Rows are measured under the load as it is (R), and key latency alone (rows 6 to 9 at one pane and at 128 panes) also under a standing load L of 28 busy processes, which `holder-perf.py --load 28` starts beside the path and ends with the round, so both paths meet the same load whatever else the machine runs.
+The app's engine RSS is judged by the per-holder bound above, never against the Herdr server's.
+The numbers belong to the run record; this document keeps the method, not a verdict.
+
 ### The nightly performance lane
 
 `nightly.yml` calls `perf.yml`, whose one job (`performance (macOS) / topology operator`, on `macos-15`) measures the same fixture every night against the product `hided` built from that night's `main`.

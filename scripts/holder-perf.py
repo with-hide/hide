@@ -42,13 +42,20 @@ the holder's own backpressure and its fragment cap run; on Herdr's, that
 pane's `herdr terminal session` client stopped (SIGSTOP) for 30 ms of every
 40 ms. The node's sink is never slowed.
 
+With `--load N` the round first starts N busy processes of its own (a
+Python loop each), the gate's load L (PRD engine-bundle-3-core-owns D-15:
+28), so both paths are measured under the same standing load and not under
+whatever else the machine runs; they are not the path's processes, and the
+result names how many ran (`load_busy`).
+
 Everything a round starts (the node, the holders, the Herdr server and its
-panes) is ended by pid and start time on every path, a stop signal included
-(`holder_owned.Owned`); a round that leaves any of it running fails.
+panes, the busy processes) is ended by pid and start time on every path, a
+stop signal included (`holder_owned.Owned`); a round that leaves any of it
+running fails.
 
 Usage: holder-perf.py --bin <folder with holder_node and hide-holder> --herdr <pinned herdr>
        --path herdr|holder --panes N --out <file.json> [--idle-seconds S] [--keys K]
-       [--phases all|slow_consumer|flood_unattached]
+       [--phases all|slow_consumer|flood_unattached] [--load N]
 """
 
 import argparse
@@ -471,6 +478,9 @@ class Round:
         self.owned.records(self.state)
         self.path = self.node = None
         try:
+            for _ in range(args.load):
+                self.owned.spawn([sys.executable, "-c", "while True: pass"], stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self.path = (HerdrPath if args.path == "herdr" else HolderPath)(args.herdr, self.root, args.panes,
                                                                              self.owned)
             self.path.state = self.state
@@ -482,7 +492,7 @@ class Round:
             if left:
                 print(LEFT + "; ".join(left), file=sys.stderr)
             raise
-        self.result = {"path": args.path, "panes": args.panes, "rows": ROWS, "cols": COLS,
+        self.result = {"path": args.path, "panes": args.panes, "rows": ROWS, "cols": COLS, "load_busy": args.load,
                        "conditions_start": conditions(), "phases": {}}
 
     def new_node(self):
@@ -652,6 +662,7 @@ def main():
     parser.add_argument("--keys", type=int, default=200)
     parser.add_argument("--flood-bytes", type=int, default=20_000_000)
     parser.add_argument("--phases", choices=("all", "slow_consumer", "flood_unattached"), default="all")
+    parser.add_argument("--load", type=int, default=0, help="busy processes the round runs beside the path (L: 28)")
     args = parser.parse_args()
     if sys.platform != "darwin":
         raise SystemExit("this measurement reads macOS's process accounting; Linux and Windows run the CI bounds")
