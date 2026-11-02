@@ -1001,6 +1001,12 @@ impl Inner {
         match control {
             TerminalControl::Attach { pane, size, manual } => {
                 let entry = self.panes.entry(pane.clone()).or_default();
+                // An attach is always answered with the pane's state, an
+                // unchanged one too: a pane's holder attaches it at its start,
+                // and the core drops that report while no layout it has read
+                // holds the pane yet, so the attach it asks for once it does
+                // would otherwise go unanswered.
+                entry.reported = None;
                 if entry.session.is_none()
                     && let Some(size) = size
                 {

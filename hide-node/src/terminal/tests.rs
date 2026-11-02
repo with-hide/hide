@@ -778,6 +778,16 @@ fn an_ended_session_says_so_on_the_pane_and_a_closing_one_does_not() {
 }
 
 #[test]
+fn an_attach_to_a_pane_already_attached_is_answered_with_its_state() {
+    let harness = harness(RetryPolicy::Automatic);
+    let _opened = harness.controlling("w1:p1");
+    // The core asks for the attach the pane's start already made.
+    harness.attach("w1:p1", Some(SIZE));
+    let state = harness.state("w1:p1", "controlling");
+    assert_eq!(state.mode.as_deref(), Some("control"));
+}
+
+#[test]
 fn a_released_pane_ends_its_session_and_its_output_is_forgotten() {
     let harness = harness(RetryPolicy::Automatic);
     let _opened = harness.controlling("w1:p1");
