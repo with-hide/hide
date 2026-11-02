@@ -3522,9 +3522,14 @@ A reply or quick key sent while its pane is being forked waits for that fork und
 The phone reports success only after Herdr confirms the write; a holder refusal keeps the reply text and shows the existing send-failure line so the operator can retry once the pane is ready.
 A pane outside the desktop's attached tabs remains writable without attaching it or moving the desktop's keyboard.
 
-The QR opens a page with the hide icon, "<Mac>에 연결", a line on what the phone can do, 연결, and a note that the code expires in five minutes.
+The QR opens a quiet device-first page: the hide wordmark, a device icon and wrapping device name, one short line on what the phone can do, and a compact secondary 연결 button.
+The five-minute expiry and, on the hosted app, end-to-end encryption note sit below the main content.
+Pairing refusals use the same layout and keep their existing recovery actions.
 연결 opens the list and a one-time hint to keep hide on the Home Screen; an expired or spent code says so, a fifth phone is told the limit and to revoke one on the Mac, and a page opened with no code or credential says to scan the QR in Settings > Mobile.
-The list's header shows hide, the Mac's name, how many other phones are connected, and a connection dot.
+The list's header shows hide, the device name and how many other phones are connected; it has no unlabelled connection dot.
+On the hosted app the wrapping device name opens the shared bottom sheet: each device row shows its name, labelled connection state and counts or last-seen time, with remove and connect-another actions.
+A protocol mismatch uses the same device-first layout, the two version numbers with labels, and a secondary action to choose another device.
+Home-screen and notification prompts are plain rows separated by spacing, without repeated filled accent buttons or enclosing cards.
 Agents sit in 내 차례, 읽을 것, 작업 중 and 확인함, the sidebar's own section names, with their counts, each row with its status mark (the sidebar's five marks and the word that leads its line), task name, project and branch, the SSH device's chip, the elapsed time and the request or news line, and the list updates live.
 Local sleeping conversations appear as separate rows in the core-selected group, with Wake or Check status and no conversation detail or reply bar.
 Those controls are disabled while disconnected or while one sleep request is waiting; a refused request keeps the row and asks the operator to check connection and session status before trying again.
@@ -3536,7 +3541,7 @@ The desktop does not follow a phone start: the visible tab and the keyboard stay
 Pressing 시작 again for the same text and choice after a lost answer sends the same request id, and hided starts one agent for it.
 While hided is out of reach the sheet shows the unreachable line and keeps what was written; a refused start shows its reason inside the sheet and keeps the text, which is cleared only by a start that went.
 When hided is out of reach the last list stays dimmed under "연결 안 됨 · Mac의 Hide가 꺼져 있거나 폰의 Tailscale이 꺼져 있어요. 다시 시도 중", the app retries on its own, and it shows the same line when opened without a network.
-A Mac that went to sleep shows it too: the phone asks hided when it has heard nothing for 20 seconds and shows the line 10 seconds after an unanswered ask, and on returning to the phone it asks at once, so the green dot never outlasts a hided that has stopped answering by more than 30 seconds.
+A Mac that went to sleep shows it too: the phone asks hided when it has heard nothing for 20 seconds and shows the line 10 seconds after an unanswered ask, and on returning to the phone it asks at once, so the connected state never outlasts a hided that has stopped answering by more than 30 seconds.
 A row opens its detail: ← 목록, the elapsed time and the row's head, with 대화 | 터미널 between ← 목록 and the elapsed time when the agent has a conversation to show, a Claude Code, Codex, Grok, Pi, omp, Cursor or OpenCode agent on this Mac whose session Herdr reports.
 대화 is the agent's own conversation, its newest 30 messages with the newest at the bottom: the operator's messages as ❯ blocks on a grey ground, the agent's Markdown drawn at full width (headings, emphasis, lists, tables, and code wrapped without highlighting, a link or an image as its text), an interruption as 중단됨, and the time after each turn; pulling to the top loads 30 older messages at a time up to the first, and at 300 it says 최근 300개까지 볼 수 있어요.
 What the agent writes next arrives on its own, and tool output and injected context are never shown.
@@ -3544,7 +3549,7 @@ Pi, omp and Grok use their recorded native message units and times (a Grok promp
 Cursor uses its native graph units under the same page and text bounds; a recorded time is shown at minute precision and an unrecorded time is omitted.
 OpenCode uses its own messages from its database, paged by message with the same 30-message and text bounds; every page, idle poll and copied pager proves the root session and exact checkout again, and a session rewound under the phone is read anew.
 An unavailable or changed native source falls back through the existing feature-local refusal path; no transcript is borrowed from another session and no new banner is added.
-터미널, and the whole detail of any other agent, is the pane's recent rows read-only in the terminal's colours with the newest at the bottom, each row wrapped at the phone's width so the detail never scrolls sideways; pulling to the top loads older rows until the pane has no more.
+터미널, and the whole detail of any other agent, is the pane's recent rows read-only in the terminal's colours with the newest at the bottom, in the shared body text size, each row wrapped at the phone's width so the detail never scrolls sideways; pulling to the top loads older rows until the pane has no more.
 Every detail has the quick keys (Enter, Escape, 위 화살표, 아래 화살표, Ctrl-C by accessible name) and a one-line reply with 보내기; a reply is sent with Enter after it and clears on success, a failure keeps the text with the reason under it, and a reply over 2,000 characters is named before it is sent.
 When hide cannot tell whether a reply reached the pane, the line says so and asks the operator to check the terminal before sending it again.
 An agent whose process Hide ended and whose pane holds a bare shell (a keep-pane sleep, described with the pane body above) shows its state in the terminal's place, in the desktop pane's words: Sleeping with its last progress line and Wake agent; Waking… with how old the resumed conversation is; or `Couldn’t resume this conversation` with the core's reason, Retry and Start new session.

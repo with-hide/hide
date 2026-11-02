@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import type { TFunction } from "i18next";
-import { Trash2 } from "lucide-react";
+import { LaptopIcon, PlusIcon, Trash2 } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { readHosts, hostLink, removeHost, type PairedHost } from "./hosts";
 import { watchHost, type Presence } from "./presence";
+import { Landing, DeviceIdentity } from "./Landing";
 import { PHONE_PROTOCOL } from "./phoneVersion";
 
 /** Observe lists only while the picker is open. Never opens a detail or sends an action. */
@@ -34,14 +35,22 @@ export function HostList({ t, active, choose = (host: PairedHost) => window.loca
       const seen = state?.lastSeen ?? host.lastSeen;
       const mismatch = state?.protocolMismatch !== undefined
         ? t("mobile.relay.versions", { app: PHONE_PROTOCOL, device: state.protocolMismatch }) : null;
-      return <div key={host.room} className="flex min-w-0 items-center"><Button variant="ghost" className="h-auto min-h-(--size-touch-target) min-w-0 flex-1 justify-start gap-sm px-sm py-md text-left" onClick={() => choose(host)}>
-        <span role="img" aria-label={mismatch ?? t(state?.online ? "mobile.connected" : "mobile.disconnected")} className={`size-(--size-status-mark) shrink-0 rounded-full ${mismatch ? "bg-warning" : state?.online ? "bg-success" : "bg-muted-foreground"}`} />
-        <span className="min-w-0 flex-1"><span className="block truncate text-title">{host.name}</span>
-          <span className="block whitespace-normal text-body text-muted-foreground">{mismatch ?? (state?.online
-            ? state.needs !== undefined ? t("mobile.relay.counts", { needs: state.needs, working: state.working ?? 0 }) : t("mobile.relay.connecting")
-            : seen ? t("mobile.relay.lastSeen", { time: new Date(seen).toLocaleString() }) : t("mobile.relay.neverSeen"))}</span>
-        </span>
-      </Button><Button variant="ghost" size="icon" className="min-h-(--size-touch-target) min-w-(--size-touch-target)" aria-label={t("mobile.relay.remove")} onClick={() => setRemoving(host)}><Trash2 /></Button></div>;
+      return <div key={host.room} className="flex min-w-0 items-start">
+        <Button variant="ghost" className="h-auto min-h-(--size-touch-target) min-w-0 flex-1 items-start justify-start gap-md px-sm py-md text-left" onClick={() => choose(host)}>
+          <LaptopIcon aria-hidden="true" className="mt-xs size-(--size-icon-lg) shrink-0 text-muted-foreground" />
+          <span className="flex min-w-0 flex-1 flex-col gap-xs">
+            <span className="whitespace-normal break-keep text-subhead font-medium wrap-anywhere">{host.name}</span>
+            <span className="flex items-center gap-xs text-body text-muted-foreground">
+              <span aria-hidden="true" className={`size-(--size-status-mark) shrink-0 rounded-full ${mismatch ? "bg-warning" : state?.online ? "bg-success" : "bg-muted-foreground"}`} />
+              {mismatch ? t("mobile.relay.updateTitle") : t(state?.online ? "mobile.connected" : "mobile.disconnected")}
+            </span>
+            <span className="whitespace-normal text-body font-normal text-muted-foreground">{mismatch ?? (state?.online
+              ? state.needs !== undefined ? t("mobile.relay.counts", { needs: state.needs, working: state.working ?? 0 }) : t("mobile.relay.connecting")
+              : seen ? t("mobile.relay.lastSeen", { time: new Date(seen).toLocaleString() }) : t("mobile.relay.neverSeen"))}</span>
+          </span>
+        </Button>
+        <Button variant="ghost" size="icon" className="mt-md min-h-(--size-touch-target) min-w-(--size-touch-target) text-muted-foreground" aria-label={t("mobile.relay.remove")} onClick={() => setRemoving(host)}><Trash2 aria-hidden="true" /></Button>
+      </div>;
     })}
     {removing ? <div className="flex flex-col gap-sm px-sm py-md">
       <p className="text-subhead">{t("mobile.relay.removeConfirm", { name: removing.name })}</p>
@@ -55,15 +64,19 @@ export function HostList({ t, active, choose = (host: PairedHost) => window.loca
         }}>{t("mobile.relay.remove")}</Button>
       </div>
     </div> : null}
-    <Button variant="ghost" className="min-h-(--size-touch-target) justify-start" onClick={() => window.location.assign("/?add=1")}>{t("mobile.relay.add")}</Button>
+    <Button variant="ghost" className="mt-sm min-h-(--size-touch-target) justify-start gap-sm border-t border-border px-sm text-body" onClick={() => window.location.assign("/?add=1")}><PlusIcon aria-hidden="true" className="size-(--size-icon)" />{t("mobile.relay.add")}</Button>
     {error ? <p role="alert">{t("mobile.relay.storage")}</p> : null}
   </div>;
 }
 
 export function VersionScreen({ t, name, protocol, app }: { t: TFunction; name: string; protocol: number | null; app: string }) {
-  return <main className="flex min-h-full flex-col justify-center gap-lg px-lg text-center">
-    <h1 className="break-words text-headline font-semibold">{t("mobile.relay.update", { name })}</h1>
-    <p className="text-subhead text-muted-foreground">{t("mobile.relay.versions", { app, device: protocol ?? "?" })}</p>
-    <Button variant="secondary" className="min-h-(--size-touch-target)" onClick={() => window.location.assign("/")}>{t("mobile.relay.choose")}</Button>
-  </main>;
+  return <Landing>
+    <DeviceIdentity name={name} />
+    <h1 className="max-w-(--size-mobile-copy) whitespace-normal break-keep text-headline font-semibold leading-relaxed wrap-anywhere">{t("mobile.relay.updateTitle")}</h1>
+    <dl className="flex gap-xxl text-body text-muted-foreground" aria-label={t("mobile.relay.versions", { app, device: protocol ?? "?" })}>
+      <div className="flex flex-col gap-xs"><dt>{t("mobile.relay.phoneVersion")}</dt><dd className="font-mono text-subtle-foreground">{app}</dd></div>
+      <div className="flex flex-col gap-xs"><dt>{t("mobile.relay.deviceVersion")}</dt><dd className="font-mono text-subtle-foreground">{protocol ?? "?"}</dd></div>
+    </dl>
+    <Button variant="secondary" className="min-h-(--size-touch-target) px-xl text-subhead" onClick={() => window.location.assign("/")}>{t("mobile.relay.choose")}</Button>
+  </Landing>;
 }

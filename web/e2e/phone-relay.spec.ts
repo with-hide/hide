@@ -49,7 +49,7 @@ test("QR clears its secret, pairs over Noise and uses the shared conversation, t
   await page.goto(relay.origin + "/");
   await expect(page.getByRole("button", { name: "Connect another device" })).toBeVisible();
   await page.goto(relay.origin + "/" + new URL(relay.qr).hash);
-  await expect(page.getByRole("heading", { name: `Connect to ${relay.pairing.name}`, exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: relay.pairing.name, exact: true })).toBeVisible();
   await expect(page).not.toHaveURL(/#pair=/);
   await expect(page.locator('img[src="x"]')).toHaveCount(0);
   await page.getByRole("button", { name: "Connect", exact: true }).click();
@@ -119,7 +119,7 @@ for (const surface of ["root", "picker"]) {
       expect(relay.wire.binaryFrames).toBe(0);
       expect(relay.received).toEqual([]);
       await page.getByRole("button", { name: /Phone app 1 · Device 9/ }).click();
-      await expect(page.getByRole("heading", { name: `Update Hide on ${relay.pairing.name}` })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Update Hide on this device" })).toBeVisible();
       expect(relay.wire.binaryFrames).toBe(0);
       expect(relay.received).toEqual([]);
     } finally { await page.goto("about:blank"); await second.stop(); }
@@ -130,8 +130,10 @@ test("unsupported device shows both protocol versions and lets the user choose a
   relay.state.protocol = 9;
   await page.goto(relay.origin + "/" + new URL(relay.qr).hash);
   await page.getByRole("button", { name: "Connect", exact: true }).click();
-  await expect(page.getByRole("heading", { name: `Update Hide on ${relay.pairing.name}` })).toBeVisible();
-  await expect(page.getByText("Phone app 1 · Device 9", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Update Hide on this device" })).toBeVisible();
+  await expect(page.getByText("Phone app", { exact: true })).toBeVisible();
+  await expect(page.getByText("Device", { exact: true })).toBeVisible();
+  await expect(page.getByText("9", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Choose another device" }).click();
   await expect(page.getByRole("button", { name: "Connect another device" })).toBeVisible();
 });
@@ -150,7 +152,7 @@ test("the in-app link scanner adds a device and CSP refuses external scripts", a
   await page.getByRole("button", { name: "Connect another device" }).click();
   await page.getByRole("textbox", { name: "Paste QR link" }).fill(relay.qr);
   await page.getByRole("button", { name: "Connect", exact: true }).click();
-  await expect(page.getByRole("heading", { name: `Connect to ${relay.pairing.name}`, exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: relay.pairing.name, exact: true })).toBeVisible();
   const blocked = await page.evaluate(() => new Promise<boolean>((resolve) => {
     document.addEventListener("securitypolicyviolation", (event) => resolve(event.blockedURI === "https://example.com/external.js"), { once: true });
     const script = document.createElement("script"); script.src = "https://example.com/external.js"; document.head.append(script);
@@ -178,7 +180,7 @@ test("the in-app camera decodes a QR and releases its video track", async ({ pag
   }, matrix);
   await page.goto(`${relay.origin}/?add=1`);
   await page.getByRole("button", { name: "Scan QR code", exact: true }).click();
-  await expect(page.getByRole("heading", { name: `Connect to ${relay.pairing.name}`, exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: relay.pairing.name, exact: true })).toBeVisible();
   await expect(page.locator("video")).toHaveCount(0);
   expect(await page.evaluate(() => (window as unknown as { cameraTrack: MediaStreamTrack }).cameraTrack.readyState)).toBe("ended");
 });
@@ -248,4 +250,26 @@ test("one browser keeps two devices and switches its live list through the heade
     await expect(page).toHaveURL(new RegExp(`/p/1/\\?host=${relay.pairing.room}`));
     await expect(page.locator('[data-phone-connected="true"]')).toBeVisible();
   } finally { await page.goto("about:blank"); await second.stop(); }
+});
+
+// Approved B1: the QR names the device, and the device picker is a labelled
+// sheet in the phone's language. The hostile name remains an escaping fixture.
+test.describe("Korean phone screens", () => {
+  test.use({ locale: "ko-KR" });
+  test("QR and device sheet keep all actions and counts in Korean", async ({ page, relay }) => {
+    await page.goto(relay.origin + "/" + new URL(relay.qr).hash);
+    await expect(page.getByRole("heading", { name: relay.pairing.name, exact: true })).toBeVisible();
+    await expect(page.getByText("에이전트를 보고 답할 수 있어요.", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "연결", exact: true }).click();
+    await expect(page.locator('[data-phone-connected="true"]')).toBeVisible();
+    const trigger = page.getByRole("button", { name: relay.pairing.name, exact: true });
+    await trigger.click();
+    const sheet = page.getByRole("dialog", { name: "기기 고르기" });
+    await expect(sheet).toBeVisible();
+    await expect(sheet.getByText("내 차례 1 · 작업 중 2", { exact: true })).toBeVisible();
+    await expect(sheet.getByRole("button", { name: "다른 기기 연결" })).toBeVisible();
+    await sheet.getByRole("button", { name: "닫기", exact: true }).click();
+    await expect(sheet).toHaveCount(0);
+    await expect(trigger).toBeFocused();
+  });
 });
