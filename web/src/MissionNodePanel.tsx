@@ -1,4 +1,4 @@
-import { ArrowRightIcon, ChevronRightIcon, GitBranchIcon, HistoryIcon, XIcon } from "lucide-react";
+import { ArrowRightIcon, ChevronRightIcon, GitBranchIcon, HistoryIcon, ScrollTextIcon, SquareTerminalIcon, XIcon } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
@@ -53,7 +53,7 @@ import { useShellStore } from "./store";
 
 export function MissionNodePanel({ mission, node, events, end, onSelect, onClose, actions }: { mission: Mission; node: MissionNode; events: MissionEvent[] | null; end: number; onSelect: (key: string) => void; onClose: () => void; actions: Actions }) {
   return (
-    <div className="flex min-w-0 flex-col gap-md px-md pb-sm text-body" data-mission-detail={node.key}>
+    <div className="@container/mission-panel flex min-w-0 flex-col gap-md px-md pb-sm text-body" data-mission-detail={node.key}>
       <Head mission={mission} node={node} events={events} end={end} onClose={onClose} actions={actions} />
       <Attention mission={mission} node={node} actions={actions} />
       <Now mission={mission} node={node} events={events} />
@@ -90,7 +90,9 @@ function Head({ mission, node, events, end, onClose, actions }: { mission: Missi
   // The worker's life beside its model (B4): asleep or ended, as `hide agent show` says it.
   const life = node.agent_runtime === "asleep" || node.agent_runtime === "ended" ? t(node.agent_runtime === "asleep" ? "mission.worker.asleep" : "mission.worker.ended") : null;
   const branch = node.branch ?? (node.external && "branch" in node.external ? node.external.branch : null);
+  const kind = KIND_SHORT[node.kind];
   const parts: ReactNode[] = [
+    ...(kind ? [<span key="kind" className="shrink-0 font-semibold text-subtle-foreground" data-panel-kind={node.kind}>{t(kind)}</span>] : []),
     ...(worker ? [<span key="run" className="flex min-w-0 items-center gap-xxs">{worker.agent ? <AgentMark kind={worker.agent} /> : null}<RunText run={worker.run} /></span>] : []),
     ...facts.map((fact) => <span key={fact} className="shrink-0 tabular-nums" data-panel-fact="true">{fact}</span>),
     ...(replan
@@ -117,8 +119,8 @@ function Head({ mission, node, events, end, onClose, actions }: { mission: Missi
     <section className="sticky top-0 z-10 -mx-md flex min-w-0 flex-col gap-xxs bg-background px-md pb-xs pt-sm" data-panel-part="head">
       <div className="flex min-w-0 items-start gap-xs">
         <MissionNodeMark look={look} label={markWord(node, look, t)} className="mt-xxs" />
-        <h3 className="min-w-0 flex-1 break-words text-subhead font-semibold" data-panel-title="true">{node.title}</h3>
-        <WorkerWays node={node} actions={actions} />
+        <h3 className="min-w-0 flex-1 break-words text-subhead font-semibold [word-break:keep-all]" data-panel-title="true">{node.title}</h3>
+        <WorkerWays mission={mission} node={node} actions={actions} />
         <Hint label={t("mission.panel.close")}>
           <Button variant="ghost" size="icon-sm" className="-mr-xs shrink-0 text-muted-foreground" aria-label={t("mission.panel.close")} onClick={onClose} data-panel-close="true">
             <XIcon />
@@ -134,24 +136,50 @@ function Head({ mission, node, events, end, onClose, actions }: { mission: Missi
   );
 }
 
-/** `터미널` and `기록` (B31): the worker's terminal while its row is shown, and its record; an outside node has neither. */
-function WorkerWays({ node, actions }: { node: MissionNode; actions: Actions }) {
+/** A node's kind as the head's first fact; a change, the usual kind, says nothing. */
+const KIND_SHORT: Record<MissionNode["kind"], MessageKey | null> = {
+  change: null,
+  research: "mission.kind.research",
+  verify: "mission.panel.kindVerify",
+  external: "mission.kind.external",
+};
+
+/**
+ * The head's ways out (B31): the node's current pull request as its PR mark
+ * (state icon and `#n`), which opens its PR card, then `터미널` (the worker's
+ * terminal while its row is shown) and `기록`, their icons alone in a panel
+ * narrower than `--size-mission-panel-words` so a long title keeps its room;
+ * an outside node has none.
+ */
+function WorkerWays({ mission, node, actions }: { mission: Mission; node: MissionNode; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const row = useWorkerRow(node);
   // Derived outside the selector: it builds a new session each call, which a selector must not return.
   const rest = useShellStore((s) => s.rest);
   const session = useMemo(() => (row ? sessionOfAgent(row) : null), [row, rest]);
   if (node.kind === "external") return null;
+  const card = node.pr != null ? `${t("mission.prCard")} · #${node.pr}` : null;
   return (
     <>
+      {node.pr != null && card ? (
+        <Hint label={card}>
+          <Button size="sm" variant="secondary" className="shrink-0 px-xs" aria-label={card} disabled={!node.pr_url} onClick={() => node.pr_url && actions.openSessionPullRequest({ workspace_id: mission.workspace_id, url: node.pr_url, number: node.pr! })} data-node-pr-card={node.pr}>
+            <MissionPrMark number={node.pr} state={node.pr_state} stale={mission.github_stale} />
+          </Button>
+        </Hint>
+      ) : null}
       <Hint label={t("mission.toTerminal")}>
-        <Button size="sm" variant="secondary" className="shrink-0" aria-label={t("mission.toTerminal")} disabled={!node.pane_id || !row} onClick={() => node.pane_id && actions.openAgent(node.pane_id)} data-node-terminal="true">
-          {t("mission.panel.terminal")}
+        <Button size="sm" variant="secondary" className="shrink-0 px-xs mission-panel-words:px-sm" aria-label={t("mission.toTerminal")} disabled={!node.pane_id || !row} onClick={() => node.pane_id && actions.openAgent(node.pane_id)} data-node-terminal="true">
+          <SquareTerminalIcon aria-hidden="true" className="mission-panel-words:hidden" />
+          <span className="hidden mission-panel-words:inline">{t("mission.panel.terminal")}</span>
         </Button>
       </Hint>
-      <Button size="sm" variant="secondary" className="shrink-0" disabled={!session} onClick={() => session && actions.openChildRecord(session)} data-node-record="true">
-        {t("mission.record")}
-      </Button>
+      <Hint label={t("mission.record")}>
+        <Button size="sm" variant="secondary" className="shrink-0 px-xs mission-panel-words:px-sm" aria-label={t("mission.record")} disabled={!session} onClick={() => session && actions.openChildRecord(session)} data-node-record="true">
+          <ScrollTextIcon aria-hidden="true" className="mission-panel-words:hidden" />
+          <span className="hidden mission-panel-words:inline">{t("mission.record")}</span>
+        </Button>
+      </Hint>
     </>
   );
 }
@@ -276,18 +304,19 @@ function PlanPart({ plan, folded, actions }: { plan: PlanView; folded: boolean; 
 }
 
 /**
- * What the node made (B31): its pull request with its state, the CI line and
- * the base it stacks on, its commit on main, a research conclusion or a
- * verify node's verdict; its branch is the head's. Nothing the record does
- * not hold.
+ * What the node made (B31): its earlier pull requests with their states and
+ * the base its current one stacks on, the CI line, its commit on main, a
+ * research conclusion or a verify node's verdict; its current pull request
+ * and its branch are the head's. Nothing the record does not hold.
  */
 function Made({ mission, node }: { mission: Mission; node: MissionNode }) {
   const { t } = useInterfaceTranslation();
   const ci = node.criteria.find((line) => line.kind === "ci");
   const rows: [string, ReactNode][] = [];
   const outside = node.external && "pr" in node.external ? [{ number: node.external.pr, state: node.pr_state, url: node.pr_url }] : [];
-  const prs = node.prs.length > 0 ? node.prs : outside;
-  if (prs.length > 0) {
+  // The current pull request is the head's button; the earlier ones and the base it stacks on stay here. An outside node has no head button.
+  const prs = node.prs.length > 0 ? node.prs.filter((pr) => node.kind === "external" || pr.number !== node.pr) : outside;
+  if (prs.length > 0 || node.base_pr != null) {
     rows.push([
       t("mission.field.pr"),
       <span key="pr" className="flex min-w-0 flex-wrap items-center gap-xs" data-panel-prs={prs.map((pr) => pr.number).join(" ")}>
@@ -489,18 +518,12 @@ function Links({ mission, node, onSelect }: { mission: Mission; node: MissionNod
   );
 }
 
-/** The panel's last buttons (B31): `다시 진행` on a done or dropped node and the PR card when the node has a pull request; the terminal and record are the head's. */
+/** `다시 진행` on a done or dropped node (B16); the pull request, terminal and record are the head's. */
 function Ways({ mission, node, actions }: { mission: Mission; node: MissionNode; actions: Actions }) {
-  const { t } = useInterfaceTranslation();
-  if (node.kind === "external") return null;
-  const resumable = nodeResumable(mission, node);
-  if (!resumable && node.pr == null) return null;
+  if (node.kind === "external" || !nodeResumable(mission, node)) return null;
   return (
     <div className="flex flex-wrap gap-xs" data-panel-part="ways">
-      {resumable ? <ResumeNode mission={mission} node={node} actions={actions} /> : null}
-      {node.pr != null ? (
-        <Button variant="secondary" size="sm" disabled={!node.pr_url} onClick={() => node.pr_url && actions.openSessionPullRequest({ workspace_id: mission.workspace_id, url: node.pr_url, number: node.pr! })} data-node-pr-card="true">{t("mission.prCard")}</Button>
-      ) : null}
+      <ResumeNode mission={mission} node={node} actions={actions} />
     </div>
   );
 }

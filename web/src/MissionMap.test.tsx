@@ -613,11 +613,15 @@ it("opens the picked node's panel: its head, where it is, what it made, its fini
   try {
     await act(async () => card(map, "engine").click());
     const panel = map.q('[data-mission-detail="engine"]')!;
-    expect([...panel.querySelectorAll<HTMLElement>("[data-panel-part]")].map((part) => part.dataset.panelPart)).toEqual(["head", "now", "plan", "result", "criteria", "links", "ways", "events"]);
+    expect([...panel.querySelectorAll<HTMLElement>("[data-panel-part]")].map((part) => part.dataset.panelPart)).toEqual(["head", "now", "plan", "result", "criteria", "links", "events"]);
     // The head holds the ways to the worker's terminal and record, beside ✕, so they stay in reach while the panel scrolls.
     const head = panel.querySelector('[data-panel-part="head"]')!;
     expect(head.className).toContain("sticky");
     expect([head.querySelector("[data-node-terminal]")?.textContent, head.querySelector("[data-node-terminal]")?.getAttribute("aria-label"), head.querySelector("[data-node-record]")?.textContent]).toEqual(["Terminal", "Go to terminal", "Record"]);
+    // Its current pull request is the head's first way: its mark in its state, opening its PR card; a change says no kind.
+    const prCard = head.querySelector<HTMLElement>("[data-node-pr-card]")!;
+    expect([prCard.dataset.nodePrCard, prCard.getAttribute("aria-label"), prCard.querySelector("[data-pr-mark]")?.getAttribute("data-pr-mark"), prCard.textContent]).toEqual(["1704", `PR card · ${"#"}1704`, "mergeable", `${"#"}1704`]);
+    expect(head.querySelector("[data-panel-kind]")).toBeNull();
     expect(panel.querySelector("[data-panel-title]")?.textContent).toBe("조사 에이전트: Hide가 실행하는 명령 읽기");
     // No launch recorded for its pane: the plan's model and effort, marked planned.
     expect(panel.querySelector("[data-panel-meta] [data-run]")?.getAttribute("title")).toBe("opus·xhigh (planned)");
@@ -632,8 +636,8 @@ it("opens the picked node's panel: its head, where it is, what it made, its fini
     expect(panel.textContent).not.toContain("Now:");
     await act(async () => panel.querySelector<HTMLElement>("[data-panel-plan-large]")!.click());
     expect(map.events.filter((event) => event.kind === "detail_open").map((event) => event.payload)).toEqual([{ item: { kind: "plan", session: plan.session } }]);
-    // What it made: the PR in its state, the base it stacks on and the CI line.
-    expect(panel.querySelector("[data-pr-mark]")?.getAttribute("data-pr-mark")).toBe("mergeable");
+    // What it made: no second mark of the head's PR, the base it stacks on and the CI line.
+    expect(panel.querySelector('[data-panel-part="result"] [data-pr-mark]')).toBeNull();
     expect(panel.querySelector("[data-panel-base]")?.textContent).toBe(`on ${"#"}1703`);
     expect(panel.querySelector('[data-panel-part="result"]')?.textContent).toContain("✓rerun 1 time");
     // One list of ✓ ○ ⤳ ✕, each with a tag of who decides it, on one line with the whole text on hover; the review ends in its checker's chip.
@@ -665,9 +669,12 @@ it("opens the picked node's panel: its head, where it is, what it made, its fini
     // A connection picks its node.
     await act(async () => (panel.querySelector('[data-panel-link="verify"]') as HTMLElement).click());
     expect(map.q("[data-mission-panel]")?.getAttribute("data-mission-panel")).toBe("verify");
+    // A kind other than a change leads the facts line.
+    expect(map.q('[data-mission-detail="verify"] [data-panel-meta] [data-panel-kind]')?.textContent).toBe("Verify");
     await act(async () => (map.q('[data-panel-link="engine"]') as HTMLElement).click());
     const back = map.q('[data-mission-detail="engine"]')!;
-    expect(back.querySelector("[data-node-pr-card]")).not.toBeNull();
+    expect(back.querySelector('[data-panel-part="head"] [data-node-pr-card]')).not.toBeNull();
+    expect(back.querySelector('[data-panel-part="ways"]')).toBeNull();
     expect(back.querySelector("[data-node-terminal]")).not.toBeNull();
     expect(back.querySelector("[data-node-record]")).not.toBeNull();
     expect(back.querySelector("[data-panel-events-toggle]")?.textContent).toBe("2 events");
@@ -689,7 +696,7 @@ it("counts a worker's plan at the end of its card's run line, and keeps a finish
   const worker = { agent: "codex", model: "gpt-5.5", effort: "high", effort_auto: false };
   const nodes = [
     node("live", { status: "working", worker, plan: plan("live-session", 3, 5), change: "the operator asked for WASM" }),
-    node("over", { status: "done", worker, plan: plan("over-session", 4, 4), finished_at_unix_ms: 60, launched: { agent_id: "agent-2", agent: "codex", model: "gpt-5.5", effort: "high" } }),
+    node("over", { status: "done", worker, plan: plan("over-session", 4, 4), finished_at_unix_ms: 60, launched: { agent_id: "agent-2", agent: "codex", model: "gpt-5.5", effort: "high" }, kind: "research", delivery: null, pr: 1602, pr_state: "merged", prs: [{ number: 1601, state: "closed", url: null }, { number: 1602, state: "merged", url: null }] }),
     node("none", { status: "working", worker }),
   ];
   const map = await mount({ items: [mission({ nodes })] });
@@ -706,6 +713,9 @@ it("counts a worker's plan at the end of its card's run line, and keeps a finish
     expect(live.querySelector("[data-panel-meta]")?.textContent).toContain("Replanned");
     await act(async () => card(map, "over").click());
     const over = map.q('[data-mission-detail="over"]')!;
+    // Its current pull request is the head's; the earlier one stays in what it made. Research says its kind first.
+    expect([over.querySelector('[data-panel-part="head"] [data-node-pr-card]')?.getAttribute("data-node-pr-card"), over.querySelector("[data-panel-prs]")?.getAttribute("data-panel-prs")]).toEqual(["1602", "1601"]);
+    expect(over.querySelector("[data-panel-meta]")?.firstElementChild?.textContent).toBe("Research");
     // Finished: the plan its worker left, folded under its count.
     expect([over.querySelector("[data-panel-plan]")?.getAttribute("data-panel-plan"), over.querySelector("[data-panel-plan-count]")?.textContent, over.querySelector("[data-plan-row]")]).toEqual(["folded", "4/4", null]);
     const toggle = over.querySelector<HTMLElement>("[data-panel-plan-toggle]")!;
