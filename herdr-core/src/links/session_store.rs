@@ -15,15 +15,16 @@ pub struct ListedSession {
     pub cwd: Option<String>,
     pub started_at_unix_ms: Option<u64>,
     pub ended_at_unix_ms: Option<u64>,
-    /// The latest of its last request, its end and its start, as History
-    /// orders sessions.
+    /// Its latest request or judged turn; its start, else the last time a
+    /// pane showed it, for a session with neither.
     pub activity_unix_ms: u64,
     pub native_title: Option<String>,
     pub manual_title: Option<String>,
     /// The flow the operator asked the most in, the later one on a tie, as
     /// the record names a session; none while it has no flow.
     pub main_flow: Option<String>,
-    /// Its requests, letters left out.
+    /// Its requests, the operator's and a parent's, letters left out, as
+    /// the record numbers them.
     pub request_count: usize,
     /// The pull requests it made, newest first.
     pub prs: Vec<u64>,
@@ -181,29 +182,34 @@ impl LinkStore {
         since_unix_ms: u64,
         limit: usize,
     ) -> Result<SessionPage, String> {
-        // A request the ledger holds is activity even before the file
-        // reader dated the session.
-        let mut statement = self
-            .connection
-            .prepare("SELECT device,agent,id,MAX(at) FROM ledger_requests GROUP BY device,agent,id")
-            .map_err(failed)?;
+        // Activity is the conversation's: the latest request and the latest
+        // judged turn. A live pane stamps `ended_at` with the time it was
+        // seen, the same for every open pane, so it orders nothing and is
+        // read only for a session with no request or turn at all.
         let mut asked: HashMap<SessionIdentity, u64> = HashMap::new();
-        for row in statement
-            .query_map([], |r| {
-                Ok((
-                    SessionIdentity {
-                        device_id: r.get(0)?,
-                        agent: r.get(1)?,
-                        session_id: r.get(2)?,
-                    },
-                    r.get::<_, u64>(3)?,
-                ))
-            })
-            .map_err(failed)?
-        {
-            let (session, at) = row.map_err(failed)?;
-            if members.contains(&session) {
-                asked.insert(session, at);
+        for sql in [
+            "SELECT device,agent,id,MAX(at) FROM ledger_requests GROUP BY device,agent,id",
+            "SELECT device,agent,id,MAX(end_at) FROM ledger_turns GROUP BY device,agent,id",
+        ] {
+            let mut statement = self.connection.prepare(sql).map_err(failed)?;
+            for row in statement
+                .query_map([], |r| {
+                    Ok((
+                        SessionIdentity {
+                            device_id: r.get(0)?,
+                            agent: r.get(1)?,
+                            session_id: r.get(2)?,
+                        },
+                        r.get::<_, u64>(3)?,
+                    ))
+                })
+                .map_err(failed)?
+            {
+                let (session, at) = row.map_err(failed)?;
+                if members.contains(&session) {
+                    let held = asked.entry(session).or_default();
+                    *held = (*held).max(at);
+                }
             }
         }
         let mut statement = self
@@ -234,10 +240,12 @@ impl LinkStore {
             if !members.contains(&session) {
                 continue;
             }
-            let activity = [started, ended, requested, asked.get(&session).copied()]
+            let activity = [requested, asked.get(&session).copied()]
                 .into_iter()
                 .flatten()
                 .max()
+                .or(started)
+                .or(ended)
                 .unwrap_or(0);
             if activity < since_unix_ms {
                 continue;
@@ -289,7 +297,7 @@ impl LinkStore {
             .connection
             .prepare_cached(
                 "SELECT at FROM ledger_requests WHERE device=?1 AND agent=?2 AND id=?3 \
-                 AND author='\"operator\"' AND letter_from IS NULL ORDER BY at",
+                 AND letter_from IS NULL ORDER BY at",
             )
             .map_err(failed)?;
         let requests = statement

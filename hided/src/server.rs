@@ -5289,6 +5289,12 @@ mod tests {
         });
         assert!(!links.needs_renderer());
         assert!(
+            !ScopedRequest::Session(herdr_core::links::session_command::SessionCommand::Record {
+                id: "s-1".into()
+            })
+            .needs_renderer()
+        );
+        assert!(
             !ScopedRequest::Memory(herdr_core::memory_command::MemoryCommand::Show { number: 1 })
                 .needs_renderer()
         );
