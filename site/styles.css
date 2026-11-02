@@ -179,6 +179,10 @@ code, .mono { font-family: var(--font-mono); }
 .site-header nav a:hover { color: var(--ink); }
 .site-header nav .nav-cta { padding: 0 16px; min-height: 36px; border: 1px solid var(--line-strong); border-radius: var(--radius-pill); color: var(--ink); }
 .site-header nav .nav-cta:hover { border-color: var(--ink); }
+.site-header nav .nav-discord { gap: 8px; color: var(--ink); }
+.site-header nav .nav-discord:hover { color: var(--second); }
+.discord-mark { flex: none; }
+.text-link.help-discord { display: flex; width: fit-content; }
 
 /* Buttons */
 .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
@@ -229,6 +233,9 @@ code, .mono { font-family: var(--font-mono); }
 .hero-meta { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 28px; margin-top: 24px; font-family: var(--font-mono); font-size: var(--t-label); letter-spacing: 0.06em; color: var(--faint); }
 .hero-meta span { display: inline-flex; align-items: center; gap: 8px; }
 .hero-meta span::before { content: ""; width: 5px; height: 5px; border-radius: 1px; background: var(--second); opacity: 0.8; }
+.hero-meta .hero-discord { display: inline-flex; align-items: center; gap: 8px; color: var(--ink); text-decoration: none; }
+.hero-meta .hero-discord:hover { color: var(--second); }
+.hero-meta .hero-discord span::before { content: none; }
 
 /* Hero product shot: the real app, lifted on a quiet aurora. */
 .stage { position: relative; margin-top: 64px; }
@@ -464,6 +471,7 @@ select { width: 100%; min-height: 48px; padding: 0 40px 0 14px; border: 1px soli
   :root { --space-section: 112px; }
   .download, .split { grid-template-columns: minmax(0, 1fr); gap: 40px; }
   .site-header nav .nav-extra { display: none; }
+  .site-header nav .nav-discord span { display: none; }
   .ch-tabs { grid-auto-columns: minmax(132px, 1fr); overflow-x: auto; }
   .ch-line { display: none; }
   .slides { grid-template-columns: minmax(0, 1fr); gap: 16px; }
