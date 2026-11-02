@@ -24,10 +24,30 @@ pub const NOISE_MAX_PLAINTEXT: usize = 65_519;
 
 /// A raw X25519 private scalar and public key. This is not an Ed25519 seed.
 pub struct NoiseKeypair {
-    pub secret: Zeroizing<[u8; 32]>,
-    pub public: [u8; 32],
+    secret: Zeroizing<[u8; 32]>,
+    public: [u8; 32],
 }
 impl NoiseKeypair {
+    /// Restore a persisted raw X25519 scalar, never an Ed25519 signing seed.
+    pub fn from_secret(raw_secret: &[u8; 32]) -> Result<Self, Error> {
+        use snow::resolvers::{CryptoResolver, DefaultResolver};
+        let mut dh = DefaultResolver
+            .resolve_dh(&snow::params::DHChoice::Curve25519)
+            .ok_or(Error::InvalidKey)?;
+        dh.set(raw_secret);
+        let public = dh.pubkey().try_into().map_err(|_| Error::InvalidKey)?;
+        Ok(Self {
+            secret: Zeroizing::new(*raw_secret),
+            public,
+        })
+    }
+    pub fn secret(&self) -> Zeroizing<[u8; 32]> {
+        Zeroizing::new(*self.secret)
+    }
+    pub fn public_key(&self) -> [u8; 32] {
+        self.public
+    }
+
     pub fn generate() -> Result<Self, Error> {
         let mut pair = builder()?
             .generate_keypair()
@@ -85,12 +105,18 @@ impl Session {
             last_now_ms: None,
         })
     }
-    pub fn responder(raw_secret: &[u8; 32], connection: u32) -> Result<Self, Error> {
+    /// The responder accepts only the Noise key type, not a signing seed.
+    /// ```compile_fail
+    /// use hide_relay_protocol::noise::Session;
+    /// let signing_seed = [1_u8; 32];
+    /// Session::responder(&signing_seed, 7);
+    /// ```
+    pub fn responder(key: &NoiseKeypair, connection: u32) -> Result<Self, Error> {
         let prologue = prologue(connection)?;
         let state = builder()?
             .prologue(&prologue)
             .map_err(|_| Error::InvalidState)?
-            .local_private_key(raw_secret)
+            .local_private_key(&*key.secret)
             .map_err(|_| Error::InvalidKey)?
             .build_responder()
             .map_err(|_| Error::InvalidKey)?;
@@ -160,8 +186,8 @@ impl Session {
         };
         Ok(())
     }
-    /// Raw single-frame API. Application messages use send_message/recv_message.
-    pub fn encrypt(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, Error> {
+    /// Internal framing primitive; external callers always use application messages.
+    pub(crate) fn encrypt(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, Error> {
         let result = self.encrypt_frame(plaintext);
         if result.is_err() {
             self.close();
@@ -189,7 +215,7 @@ impl Session {
         self.state = State::Transport(transport);
         Ok(frame)
     }
-    pub fn decrypt(&mut self, bytes: &[u8]) -> Result<Vec<u8>, Error> {
+    pub(crate) fn decrypt(&mut self, bytes: &[u8]) -> Result<Vec<u8>, Error> {
         let result = self.decrypt_frame(bytes);
         if result.is_err() {
             self.close();
@@ -211,7 +237,7 @@ impl Session {
         Ok(result)
     }
     /// Ordered frames of one application message. Send every frame in order;
-    /// never interleave messages on a direction or use the raw frame API with it.
+    /// never interleave messages on a direction.
     pub fn send_message(&mut self, bytes: &[u8]) -> Result<Vec<Vec<u8>>, Error> {
         let result = self.split_message(bytes);
         if result.is_err() {
@@ -231,7 +257,7 @@ impl Session {
             chunk.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
             chunk.extend_from_slice(&(offset as u32).to_be_bytes());
             chunk.extend_from_slice(&bytes[offset..end]);
-            frames.push(self.encrypt_frame(&chunk)?);
+            frames.push(self.encrypt(&chunk)?);
             if end == bytes.len() {
                 return Ok(frames);
             }
@@ -249,7 +275,7 @@ impl Session {
     }
     fn join_message(&mut self, frame: &[u8], now_ms: u64) -> Result<Option<Vec<u8>>, Error> {
         self.check_timeout(now_ms)?;
-        let chunk = Zeroizing::new(self.decrypt_frame(frame)?);
+        let chunk = Zeroizing::new(self.decrypt(frame)?);
         if chunk.len() < CHUNK_HEADER {
             return Err(Error::InvalidMessage);
         }
@@ -330,3 +356,38 @@ fn prologue(connection: u32) -> Result<Vec<u8>, Error> {
 
 const _: () = assert!(MAX_PAYLOAD <= NOISE_MAX_MESSAGE);
 const _: () = assert!(MAX_PLAINTEXT <= NOISE_MAX_PLAINTEXT);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn pair() -> (Session, Session) {
+        let key = NoiseKeypair::generate().unwrap();
+        let mut phone = Session::initiator(&key.public_key(), 7).unwrap();
+        let mut device = Session::responder(&key, 7).unwrap();
+        device
+            .read_handshake(&phone.write_handshake().unwrap())
+            .unwrap();
+        phone
+            .read_handshake(&device.write_handshake().unwrap())
+            .unwrap();
+        (phone, device)
+    }
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn authenticated_malformed_chunks_are_fatal() {
+        for (total, offset, data) in [
+            (MAX_MESSAGE + 1, 0, vec![]),
+            (3, 1, vec![1, 2]),
+            (3, 0, vec![1]),
+            (0, 0, vec![1]),
+        ] {
+            let (mut phone, mut device) = pair();
+            let mut chunk = (total as u32).to_be_bytes().to_vec();
+            chunk.extend_from_slice(&(offset as u32).to_be_bytes());
+            chunk.extend_from_slice(&data);
+            let frame = phone.encrypt(&chunk).unwrap();
+            assert!(device.recv_message(&frame, 0).is_err());
+            assert_eq!(device.send_message(b"retry"), Err(Error::SessionClosed));
+        }
+    }
+}

@@ -10,10 +10,15 @@ use std::io::{self, BufRead, Write};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let key = NoiseKeypair::generate()?;
     let device = DeviceKey::generate()?;
-    let qr = PairingQr::new(&device.public_key(), &key.public, &[17; 16])?;
+    let qr = PairingQr::new(
+        &device.public_key(),
+        &key.public_key(),
+        &[17; 16],
+        "기기 <img src=x onerror=alert(1)>",
+    )?;
     println!("{}", qr.encode()?);
     io::stdout().flush()?;
-    let mut session = Session::responder(&key.secret, 7)?;
+    let mut session = Session::responder(&key, 7)?;
     let mut stdin = io::stdin().lock();
     let started = std::time::Instant::now();
     let mut step = 0;

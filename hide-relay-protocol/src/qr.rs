@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 pub const APP_URL: &str = "https://app.withhide.dev/";
 pub const MAX_QR_URL: usize = 1024;
+pub const MAX_DEVICE_NAME_BYTES: usize = 128;
 
 /// Keys are raw public bytes encoded base64url without padding. `device_key`
 /// is Ed25519; `noise_key` is X25519. `code` is the existing random 16-byte code.
@@ -12,6 +13,8 @@ pub const MAX_QR_URL: usize = 1024;
 #[serde(deny_unknown_fields)]
 pub struct PairingQr {
     pub v: u8,
+    /// Plain display text. Render with textContent or an escaped text binding.
+    pub name: String,
     pub device_key: String,
     pub noise_key: String,
     pub room: String,
@@ -22,9 +25,11 @@ impl PairingQr {
         device_key: &[u8; 32],
         noise_key: &[u8; 32],
         code: &[u8; 16],
+        name: &str,
     ) -> Result<Self, Error> {
         let value = Self {
             v: 2,
+            name: name.to_owned(),
             device_key: encode(device_key),
             noise_key: encode(noise_key),
             room: room_id(device_key),
@@ -36,6 +41,12 @@ impl PairingQr {
     pub fn validate(&self) -> Result<(), Error> {
         if self.v != 2 {
             return Err(Error::UnsupportedVersion);
+        }
+        if self.name.trim().is_empty()
+            || self.name.len() > MAX_DEVICE_NAME_BYTES
+            || self.name.chars().any(char::is_control)
+        {
+            return Err(Error::InvalidQr);
         }
         let key = decode::<32>(&self.device_key).map_err(|_| Error::InvalidQr)?;
         ed25519_dalek::VerifyingKey::from_bytes(&key).map_err(|_| Error::InvalidQr)?;
