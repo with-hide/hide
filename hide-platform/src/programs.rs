@@ -578,6 +578,25 @@ mod tests {
 
     use super::*;
 
+    /// Only a batch file on Windows runs through `cmd.exe`: npm's `.cmd`
+    /// shim, a `.bat`, either case; a `.exe`, or any program elsewhere,
+    /// takes its arguments itself.
+    #[test]
+    fn only_a_batch_file_on_windows_runs_through_cmd() {
+        for (path, batch) in [
+            ("C:/npm/codex.cmd", true),
+            ("C:/x/agent.BAT", true),
+            ("C:/x/claude.exe", false),
+            ("/usr/bin/codex", false),
+        ] {
+            assert_eq!(
+                runs_through_cmd(Path::new(path)),
+                batch && cfg!(windows),
+                "{path}"
+            );
+        }
+    }
+
     const LONG: Duration = Duration::from_secs(3600);
 
     fn latest() -> &'static Latest {

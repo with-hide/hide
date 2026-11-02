@@ -754,4 +754,17 @@ fn a_start_prompt_that_starts_with_a_dash_stays_one_word() {
         assert!(!dialect.carries_prompt(&other), "{dialect:?}");
     }
     assert!(LaunchDialect::OpenCode.carries_prompt(&["--prompt".to_owned(), "x".to_owned()]));
+    // agy's prompt option under its long name gives a prompt too.
+    for given in [
+        &["--prompt-interactive", "x"][..],
+        &["--prompt-interactive=x"],
+        &["-i", "x"],
+    ] {
+        let given: Vec<String> = given.iter().map(|word| (*word).to_owned()).collect();
+        assert!(
+            LaunchDialect::Antigravity.carries_prompt(&given),
+            "{given:?}"
+        );
+    }
+    assert!(!LaunchDialect::Antigravity.carries_prompt(&["--model".to_owned(), "x".to_owned()]));
 }

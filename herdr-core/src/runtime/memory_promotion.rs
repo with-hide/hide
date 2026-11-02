@@ -2383,7 +2383,6 @@ pub(super) fn spawn_hide_agent(
     start: &PromotionStart,
     spawn: &HideSpawn,
 ) -> Result<String, String> {
-    let args = start_arguments(&start.kind, &spawn.prompt)?;
     let view = crate::coordination::run(
         start.client.clone(),
         crate::delivery::worker::Authority {
@@ -2403,9 +2402,12 @@ pub(super) fn spawn_hide_agent(
             repo: start.repo.clone(),
             branch: spawn.branch.clone(),
             path: None,
-            args,
+            args: Vec::new(),
             launch: start.launch.clone(),
-            brief: None,
+            // The prompt is the spawn's brief, so it rides the start where the
+            // start carries it and is typed where it does not
+            // (`start_prompt`), like every brief.
+            brief: Some(spawn.prompt.clone()),
             task: Some(spawn.task.clone()),
             beside: false,
         },
@@ -2414,15 +2416,6 @@ pub(super) fn spawn_hide_agent(
         .as_str()
         .map(str::to_owned)
         .ok_or_else(|| "spawn_answer_unreadable".to_owned())
-}
-
-/// The native arguments that give a start of `kind` its first prompt, as
-/// one word in the agent's own form (`LaunchDialect::prompt_form`).
-fn start_arguments(kind: &str, prompt: &str) -> Result<Vec<String>, String> {
-    let dialect = hide_agent_adapter::adapter(kind)
-        .and_then(|row| row.start)
-        .ok_or("agent_not_startable")?;
-    Ok(dialect.prompt_arguments(&crate::worktree_control::prompt_argument(prompt)?))
 }
 
 /// What every start of a Project's promotions begins its intent with: the
@@ -4084,15 +4077,9 @@ pub(super) mod tests {
             assert!(prompt.contains(step), "{step}");
         }
         assert!(!prompt.contains("open one PR"), "a batch commits and stops");
-        assert!(crate::worktree_control::prompt_argument(&prompt).is_ok());
-        // A first prompt that starts with `-` stays one word no CLI reads as
-        // an option: OpenCode 2.0.29 prints its help and exits on
-        // `--prompt -x`, and starts on `--prompt=-x`.
-        assert_eq!(
-            super::start_arguments("opencode", "-x\tstep").unwrap(),
-            ["--prompt=-x    step"]
-        );
-        assert_eq!(super::start_arguments("codex", "-x").unwrap(), ["--", "-x"]);
+        // It is the spawn's brief, which a brief's limit takes whole.
+        assert!(prompt.len() <= crate::delivery::BODY_LIMIT && !prompt.trim().is_empty());
+        assert!(crate::start_prompt::prompt_argument(&prompt).is_ok());
         assert!(
             super::prompt(
                 &[7],

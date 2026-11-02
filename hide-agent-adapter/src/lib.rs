@@ -500,15 +500,22 @@ impl LaunchDialect {
     }
 
     /// Whether native arguments already give the start a prompt: they hold
-    /// the end of options, or the prompt's own option, alone or joined.
+    /// the end of options, or one of the prompt's own options under either
+    /// of its names (agy's `-i` is `--prompt-interactive`), alone or joined.
     pub fn carries_prompt(self, args: &[String]) -> bool {
-        let option = self.prompt_form()[0].trim_end_matches("={}");
+        let options: &[&str] = match self {
+            Self::OpenCode => &["--prompt"],
+            Self::Antigravity => &["-i", "--prompt-interactive"],
+            _ => &[],
+        };
         args.iter().any(|arg| {
             arg == "--"
-                || arg == option
-                || arg
-                    .strip_prefix(option)
-                    .is_some_and(|rest| rest.starts_with('='))
+                || options.iter().any(|option| {
+                    arg == option
+                        || arg
+                            .strip_prefix(option)
+                            .is_some_and(|rest| rest.starts_with('='))
+                })
         })
     }
 

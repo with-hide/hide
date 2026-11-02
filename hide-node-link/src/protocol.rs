@@ -285,14 +285,14 @@ use crate::error::HostError;
 /// 68: a node hands input to a running agent through the agent's own way
 /// in (`Call::Deliver`). A helper on 67 would refuse it, so it is refused
 /// at Hello and upgraded.
-/// 69: a node says how a start of an agent's CLI carries its arguments
-/// (`Call::AgentStartForm`), so a brief `cmd.exe` would cut or rewrite is
-/// typed instead. A helper on 68 would refuse it, so it is refused at Hello
-/// and upgraded.
+/// 69: a node answers `Call::AgentInstalled` with how the agent's program
+/// starts (a [`StartForm`], null when it is not on the `PATH`), not a bool,
+/// so a prompt `cmd.exe` would read again rides no start. A helper on 68
+/// would answer a bool, so it is refused at Hello and upgraded.
 pub const PROTOCOL_VERSION: u32 = 69;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
-/// runs it ([`Call::AgentStartForm`]).
+/// runs it ([`Call::AgentInstalled`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StartForm {
@@ -858,15 +858,11 @@ pub enum Call {
     TerminateGroup {
         leader: u32,
     },
-    /// Whether an agent CLI named `name` is on the node's `PATH`, answered
-    /// as a bool before a pane is asked to start it.
-    AgentInstalled {
-        name: String,
-    },
     /// How a start of the agent CLI named `name` on the node carries its
     /// arguments, a [`StartForm`], or null when it is not on the node's
-    /// `PATH`: asked before a spawn's brief rides the start as its prompt.
-    AgentStartForm {
+    /// `PATH`: asked before a pane is asked to start it, and before a prompt
+    /// rides that start (`herdr-core` `start_prompt`).
+    AgentInstalled {
         name: String,
     },
     /// What agy's index holds in `cwd` before Hide types `/fork` into a
@@ -1237,7 +1233,6 @@ impl Call {
             | Self::Git { .. }
             | Self::TerminateGroup { .. }
             | Self::AgentInstalled { .. }
-            | Self::AgentStartForm { .. }
             | Self::AntigravityForkMark { .. }
             | Self::AntigravityFork { .. }
             | Self::OpenCodeFork { .. }

@@ -352,22 +352,24 @@ fn brief_ready(engine: &dyn Engine, spawn: &str, pane: &str, name: &str) -> Resu
     }
 }
 
-/// How the pane's machine starts the agent's program
-/// (`Call::AgentStartForm`), asked only for a brief that would ride the
-/// start; an answer the node did not give is the reason it gave.
+/// How the pane's machine starts `kind`'s program (`Call::AgentInstalled`),
+/// asked by `start_prompt::carried` only for a brief every other check let
+/// through; a machine that did not answer, or found no such program, is the
+/// reason the brief is typed instead.
 fn start_form(
     node: Option<&dyn crate::node_access::NodeLink>,
     kind: &str,
-) -> Result<Option<StartForm>, String> {
+) -> Result<StartForm, String> {
     let node = node.ok_or("no machine runs the pane")?;
-    crate::node_access::call_as(
+    crate::node_access::call_as::<Option<StartForm>>(
         node,
-        hide_node_link::protocol::Call::AgentStartForm {
+        hide_node_link::protocol::Call::AgentInstalled {
             name: hide_agent_adapter::canonical_kind(kind).to_owned(),
         },
         TARGET_CHECK_TIMEOUT,
     )
-    .map_err(|error| format!("the pane's machine did not say how the agent starts ({error})"))
+    .map_err(|error| format!("the pane's machine did not say how the agent starts ({error})"))?
+    .ok_or_else(|| "the agent is not on the PATH of the pane's machine".to_owned())
 }
 
 fn brief_refused(spawn: &str, pane: &str, kind: &str, detail: String) -> String {
@@ -377,66 +379,29 @@ fn brief_refused(spawn: &str, pane: &str, kind: &str, detail: String) -> String 
     "brief_not_submitted".to_owned()
 }
 
-/// The most bytes a launched brief's prompt argument holds, on every
-/// system. Herdr's answer to `pane.process_info`, which every pane proof and
-/// session read asks for, lists each foreground process with its `argv` and
-/// its `cmdline`, and those reads stop at 64 KiB: a Codex started from npm
-/// runs a Node wrapper and its own program, so the argument is in the answer
-/// four times, and a 16 KiB brief pushed it past the cap, after which every
-/// hook of that Codex lost its pane and its letters went unanswered (the
-/// agent journey on Linux and macOS, 2026-11-02). Four copies of 6 KiB,
-/// each `"` or `\` escaped to two bytes, stay inside it, and so do the
-/// 8,191 characters `cmd.exe` reads for a program Windows runs through it.
-/// A longer brief is typed once the agent runs.
-const LAUNCH_PROMPT_BYTES: usize = 6 * 1024;
-
 /// The words a fresh start of `kind` adds to carry `brief` as its prompt
-/// argument (`AgentApi::LaunchPrompt`), or `None` where the brief is sent
+/// argument (`AgentApi::LaunchPrompt`), or `None` where the brief is typed
 /// once the agent runs: an agent that does not hold a launch prompt through
-/// its start screens, native arguments that already give one, a brief the
-/// command line cannot carry (`worktree_control::prompt_argument`) or past
-/// [`LAUNCH_PROMPT_BYTES`], or one `cmd.exe` would rewrite when the pane's
-/// machine runs the agent's program that way (`form`,
-/// `worktree_control::batch_carries`). A form the node could not tell is
-/// the error it answered, and the brief is typed.
+/// its start screens, or a start that cannot carry it
+/// (`start_prompt::carried`: native arguments that give a prompt already, a
+/// brief the command line refuses, a start through `cmd.exe`, a machine that
+/// did not say how the agent starts). Decided once, for the spawn's first
+/// start, and saved with `BriefLaunched`.
 fn launch_prompt(
     kind: &str,
     args: &[String],
     brief: &str,
-    form: Result<Option<StartForm>, String>,
+    form: impl FnOnce() -> Result<StartForm, String>,
 ) -> Option<Vec<String>> {
-    let row = hide_agent_adapter::adapter(kind).filter(|row| row.launch_prompt())?;
-    let dialect = row.start?;
-    if dialect.carries_prompt(args) {
-        return None;
-    }
-    let carried = crate::worktree_control::prompt_argument(brief).and_then(|argument| {
-        if argument.len() > LAUNCH_PROMPT_BYTES {
-            return Err(format!(
-                "the brief is longer than the {LAUNCH_PROMPT_BYTES} bytes a start carries"
-            ));
-        }
-        match form? {
-            Some(StartForm::Batch) => {
-                crate::worktree_control::batch_carries(&argument).map_err(|reason| {
-                    format!("the start runs through cmd.exe: the brief is {reason}")
-                })?
-            }
-            Some(StartForm::Program) => {}
-            None => return Err("the agent is not on the PATH of the pane's machine".to_owned()),
-        }
-        Ok(argument)
-    });
-    match carried {
-        Ok(argument) => Some(dialect.prompt_arguments(&argument)),
-        Err(detail) => {
+    hide_agent_adapter::adapter(kind).filter(|row| row.launch_prompt())?;
+    crate::start_prompt::carried(kind, args, brief, form)
+        .map_err(|refusal| {
             crate::diagnostic!(json!({
                 "component": "spawn", "kind": "brief.launch_refused", "agent_kind": kind,
-                "detail": detail,
+                "detail": refusal.detail(),
             }));
-            None
-        }
-    }
+        })
+        .ok()
 }
 
 /// Sends `brief` down its prepared route, the one submission path the
@@ -776,15 +741,15 @@ fn check_target(
     if !agent {
         return Ok(());
     }
-    match call_as::<bool>(
+    match call_as::<Option<StartForm>>(
         link.as_ref(),
         Call::AgentInstalled {
             name: hide_agent_adapter::canonical_kind(kind).to_owned(),
         },
         TARGET_CHECK_TIMEOUT,
     ) {
-        Ok(true) => Ok(()),
-        Ok(false) => Err("agent_not_installed".into()),
+        Ok(Some(_)) => Ok(()),
+        Ok(None) => Err("agent_not_installed".into()),
         Err(error) => {
             Err(unavailable("agent_installed", error).unwrap_or("agent_not_installed".into()))
         }
@@ -1333,28 +1298,45 @@ fn spawn(
             let mut start_args = with_permission(kind, &permissions, start_args);
             // A fresh start carries the brief as its prompt argument where
             // the agent holds that through its own start screens
-            // (`AgentApi::LaunchPrompt`): saved first, so a start typed again
-            // carries it again and nothing ever types it.
-            let launched = reserved.brief.as_deref().filter(|_| {
-                !reserved.briefed
-                    || reserved
-                        .brief_input
-                        .as_ref()
-                        .is_some_and(|input| input.route == SendRoute::Launch)
-            });
-            if let Some(prompt) = launched.and_then(|brief| {
-                launch_prompt(kind, &start_args, brief, start_form(node.as_deref(), kind))
-            }) {
-                reserved = serde_json::from_value(mutate(
-                    client,
-                    authority,
-                    actor,
-                    Mutation::BriefLaunched {
-                        id: reserved.id.clone(),
-                    },
-                )?)
-                .map_err(|_| "spawn_unavailable")?;
-                start_args.extend(prompt);
+            // (`AgentApi::LaunchPrompt`). The words are decided for the
+            // first start and saved before it, so a start typed again carries
+            // the same words and nothing ever types the brief.
+            let launched_before = reserved
+                .brief_input
+                .as_ref()
+                .is_some_and(|input| input.route == SendRoute::Launch);
+            let words = match reserved.brief.as_deref() {
+                Some(brief) if launched_before && reserved.launch_words.is_empty() => {
+                    // A transition path for a record an earlier build saved
+                    // without its words, when a start carried every launched
+                    // brief as given: the same words, with no machine asked.
+                    Some(
+                        crate::start_prompt::carried(kind, &start_args, brief, || {
+                            Ok(StartForm::Program)
+                        })
+                        .map_err(|_| "brief_launch_unrecorded")?,
+                    )
+                }
+                Some(_) if launched_before => Some(reserved.launch_words.clone()),
+                Some(brief) if !reserved.briefed => launch_prompt(kind, &start_args, brief, || {
+                    start_form(node.as_deref(), kind)
+                }),
+                _ => None,
+            };
+            if let Some(words) = words {
+                if !launched_before {
+                    reserved = serde_json::from_value(mutate(
+                        client,
+                        authority,
+                        actor,
+                        Mutation::BriefLaunched {
+                            id: reserved.id.clone(),
+                            words: words.clone(),
+                        },
+                    )?)
+                    .map_err(|_| "spawn_unavailable")?;
+                }
+                start_args.extend(words);
                 crate::diagnostic!(json!({
                     "component": "spawn", "kind": "brief.launched", "spawn": reserved.id,
                     "pane_id": pane,
@@ -2129,35 +2111,33 @@ mod tests {
     /// a brief past its line, or with a character it reads as its own, is
     /// typed, and so is one whose start form the node could not tell.
     #[test]
-    fn a_brief_rides_the_start_only_where_the_start_carries_it_whole() {
-        let launch = |brief: &str, form: Result<Option<StartForm>, String>| {
-            super::launch_prompt("opencode", &[], brief, form)
-        };
-        let program = || Ok(Some(StartForm::Program));
-        let batch = || Ok(Some(StartForm::Batch));
-        // At the bound, and one byte past it, typed on every system.
-        let at_bound = format!("-{}", "x".repeat(super::LAUNCH_PROMPT_BYTES - 1));
-        let past = format!("{at_bound}x");
+    fn a_brief_rides_the_start_only_where_the_start_carries_it_and_the_machine_is_asked_last() {
+        let program = || Ok(StartForm::Program);
+        // A whole brief rides the start, starting with `-` or not.
+        let brief = format!("-{}", "x".repeat(16 * 1024 - 1));
         assert_eq!(
-            launch("-go\tnow", program()).unwrap(),
-            ["--prompt=-go    now"]
+            super::launch_prompt("opencode", &[], &brief, program).unwrap(),
+            [format!("--prompt={brief}")]
         );
         assert_eq!(
-            launch(&at_bound, program()).unwrap(),
-            [format!("--prompt={at_bound}")]
+            super::launch_prompt("opencode", &[], "@a", || Ok(StartForm::Batch)),
+            None
         );
-        assert_eq!(launch(&past, program()), None);
-        // A line break is three bytes once it is U+2028.
-        let lines = format!("-{}", "\n".repeat(super::LAUNCH_PROMPT_BYTES / 3));
-        assert_eq!(launch(&lines, program()), None);
-        assert_eq!(launch("@a & b", batch()).unwrap(), ["--prompt=@a & b"]);
-        for typed in [&past[..], "50% done", "say \"hi\"", "a&b", "a^b"] {
-            assert_eq!(launch(typed, batch()), None, "{typed}");
-        }
-        assert_eq!(launch("go", Ok(None)), None);
-        assert_eq!(launch("go", Err("link_lost".into())), None);
-        // An agent that does not hold a launch prompt never takes one.
-        assert_eq!(super::launch_prompt("pi", &[], "go", program()), None);
+        assert_eq!(
+            super::launch_prompt("opencode", &[], "go", || Err("link_lost".into())),
+            None
+        );
+        // Nothing asks the pane's machine for an agent that holds no launch
+        // prompt, a spawn whose native arguments give one, or a brief the
+        // command line refuses.
+        let unasked = || -> Result<StartForm, String> { panic!("the machine was asked") };
+        assert_eq!(super::launch_prompt("pi", &[], "go", unasked), None);
+        assert_eq!(super::launch_prompt("cursor", &[], "go", unasked), None);
+        assert_eq!(
+            super::launch_prompt("codex", &["--".into(), "mine".into()], "go", unasked),
+            None
+        );
+        assert_eq!(super::launch_prompt("codex", &[], "a\u{7}b", unasked), None);
     }
 
     #[test]

@@ -1348,18 +1348,7 @@ pub fn handle_with_progress(
             crate::attachments::remove_clipboard(Path::new(&path))
                 .map_err(|reason| HostError::new(ErrorCode::InvalidPath, reason))?,
         ),
-        Call::AgentInstalled { name } => {
-            to_value(hide_ai::resolve_binary(Path::new(&name)).is_some())
-        }
-        Call::AgentStartForm { name } => {
-            to_value(hide_ai::resolve_binary(Path::new(&name)).map(|program| {
-                if hide_platform::programs::runs_through_cmd(&program) {
-                    crate::protocol::StartForm::Batch
-                } else {
-                    crate::protocol::StartForm::Program
-                }
-            }))
-        }
+        Call::AgentInstalled { name } => to_value(agent_start_form(Path::new(&name))),
         Call::AntigravityForkMark { source, cwd } => {
             let home = env.home("antigravity_fork_home_unavailable")?;
             let cwd = antigravity_fork_cwd(&cwd)?;
@@ -1849,6 +1838,19 @@ pub fn handle_with_progress(
         // no request to cancel.
         Call::Cancel { .. } => Ok(Value::Null),
     }
+}
+
+/// How the node starts the agent program `name` (`Call::AgentInstalled`):
+/// the program its `PATH` search finds, run through `cmd.exe` when that is a
+/// batch file on Windows, or `None` when nothing is found.
+fn agent_start_form(name: &Path) -> Option<crate::protocol::StartForm> {
+    hide_ai::resolve_binary(name).map(|program| {
+        if hide_platform::programs::runs_through_cmd(&program) {
+            crate::protocol::StartForm::Batch
+        } else {
+            crate::protocol::StartForm::Program
+        }
+    })
 }
 
 #[cfg(test)]

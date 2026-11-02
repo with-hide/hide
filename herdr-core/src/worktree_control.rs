@@ -22,7 +22,7 @@ use crate::live::{
 use crate::recent_closed::reopen::export_reopen_layout;
 use hide_node_link::git::{BranchConfigKey, GitCommand};
 use hide_node_link::process::ProcessStart;
-use hide_node_link::protocol::Call;
+use hide_node_link::protocol::{Call, StartForm};
 
 pub(crate) const CONFIRM_TIMEOUT: Duration = Duration::from_secs(5);
 const CONFIRM_POLL: Duration = Duration::from_millis(100);
@@ -1452,7 +1452,7 @@ fn launch_with_prompt_checked(
         pane_id,
         kind,
         prompt,
-        mut args,
+        args,
         codex_daemon,
         resume_scope,
         resume_reference,
@@ -1481,19 +1481,11 @@ fn launch_with_prompt_checked(
     {
         return TaskAgentOutcome::Failed(AgentFailure::reason("session_resume_scope_required"));
     }
-    let Some(dialect) = hide_agent_adapter::adapter(&kind).and_then(|row| row.start) else {
+    if hide_agent_adapter::adapter(&kind)
+        .and_then(|row| row.start)
+        .is_none()
+    {
         return TaskAgentOutcome::Failed(AgentFailure::reason("agent_start.no_start_dialect"));
-    };
-    if let Some(prompt) = prompt {
-        match prompt_argument(&prompt) {
-            Ok(argument) => args.extend(dialect.prompt_arguments(&argument)),
-            Err(message) => {
-                return TaskAgentOutcome::Failed(AgentFailure::with_detail(
-                    "agent_start.invalid_prompt",
-                    message,
-                ));
-            }
-        }
     }
     launch_agent(
         engine,
@@ -1504,6 +1496,7 @@ fn launch_with_prompt_checked(
         shell,
         &kind,
         args,
+        prompt.as_deref(),
         codex_daemon,
         &|| {
             current()?;
@@ -1520,68 +1513,6 @@ fn launch_with_prompt_checked(
         },
     )
     .into()
-}
-
-/// The longest first prompt, in bytes once encoded, that a start carries.
-/// Herdr types the command into the pane's shell, and the slowest shell
-/// measured bounds it: through the pinned Herdr, macOS bash took 27 s to take
-/// a 76 KB command and did not finish 300 KB within 60 s, where zsh took 5 s;
-/// 64 KB stays well inside the 120 s start wait on either.
-const MAX_PROMPT_BYTES: usize = 64 * 1024;
-
-/// The first prompt as one argument Herdr can type into the pane's shell,
-/// which refuses a line break or a tab in an argument. Each line break becomes
-/// U+2028 (LINE SEPARATOR), which Herdr passes through and the model reads as
-/// a line break, and a tab four spaces; any other control character is refused
-/// rather than dropped, and so is a prompt over [`MAX_PROMPT_BYTES`]. Every
-/// start event checks its prompt with this before anything is created, so a
-/// refused prompt leaves no tab or worktree behind; the worker encodes it.
-pub(crate) fn prompt_argument(prompt: &str) -> Result<String, String> {
-    let mut argument = String::with_capacity(prompt.len());
-    let mut chars = prompt.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '\r' => {
-                chars.next_if_eq(&'\n');
-                argument.push('\u{2028}');
-            }
-            '\n' => argument.push('\u{2028}'),
-            '\t' => argument.push_str("    "),
-            c if c.is_control() => {
-                return Err(format!(
-                    "The first prompt has a control character (U+{:04X}) that cannot be passed to the agent; remove it and start again.",
-                    u32::from(c)
-                ));
-            }
-            c => argument.push(c),
-        }
-    }
-    if argument.len() > MAX_PROMPT_BYTES {
-        return Err(format!(
-            "The first prompt is longer than {} KB, more than the agent's command line can carry; shorten it and start again.",
-            MAX_PROMPT_BYTES / 1024
-        ));
-    }
-    Ok(argument)
-}
-
-/// Whether `argument`, a prompt argument ([`prompt_argument`]), reaches a
-/// program that Windows runs through `cmd.exe` (`StartForm::Batch`) as it
-/// was given: with no `%` (which `cmd.exe` expands) or `"` (which the
-/// start's quoting escapes in a way `cmd.exe` does not read), and, when it
-/// holds no space and so is not quoted, none of `& | < > ^`. Its length is
-/// the launch's own bound (`coordination::executor::LAUNCH_PROMPT_BYTES`),
-/// inside the 8,191 characters `cmd.exe` reads. Refused with the reason,
-/// and the brief is typed instead.
-pub(crate) fn batch_carries(argument: &str) -> Result<(), String> {
-    let quoted = argument.contains(' ');
-    match argument
-        .chars()
-        .find(|c| matches!(c, '%' | '"') || (!quoted && matches!(c, '&' | '|' | '<' | '>' | '^')))
-    {
-        Some(c) => Err(format!("holds {c:?}, which cmd.exe reads as its own")),
-        None => Ok(()),
-    }
 }
 
 pub fn spawn_task_agent_start(context: WorktreeTarget, id: u64) -> Result<(), String> {
@@ -1642,6 +1573,25 @@ impl From<Launch> for TaskAgentOutcome {
     }
 }
 
+/// How the machine that runs the pane starts `kind` (`Call::AgentInstalled`),
+/// for a first prompt on a device, whose agent this machine's node does not
+/// answer for.
+fn first_prompt_form(
+    pane_node: Option<&dyn crate::node_access::NodeLink>,
+    kind: &str,
+) -> Result<StartForm, String> {
+    let node = pane_node.ok_or("no machine said how the agent starts")?;
+    crate::node_access::call_as::<Option<StartForm>>(
+        node,
+        Call::AgentInstalled {
+            name: kind.to_owned(),
+        },
+        AGENT_CHECK_TIMEOUT,
+    )
+    .map_err(|error| format!("the pane's machine did not say how the agent starts ({error})"))?
+    .ok_or_else(|| format!("{kind} is not on the PATH of the pane's machine"))
+}
+
 #[allow(clippy::too_many_arguments)] // the task/pane launch identity plus its effect admission
 fn launch_agent(
     engine: &dyn Engine,
@@ -1651,7 +1601,8 @@ fn launch_agent(
     pane_id: &str,
     shell: crate::agent_start::ShellStart,
     kind: &str,
-    args: Vec<String>,
+    mut args: Vec<String>,
+    prompt: Option<&str>,
     codex_daemon: crate::codex_launch::CodexDaemon,
     check: &dyn Fn() -> Result<(), String>,
 ) -> Launch {
@@ -1661,16 +1612,17 @@ fn launch_agent(
     // Herdr would type the command into the pane's shell and wait for an
     // agent that can never appear; say so before asking it. A device's PATH
     // is not this machine's, so there its Herdr answers for it.
+    let mut form = None;
     if let Some(node) = agent_node {
-        match crate::node_access::call_as::<bool>(
+        match crate::node_access::call_as::<Option<StartForm>>(
             node,
             Call::AgentInstalled {
                 name: kind.to_owned(),
             },
             AGENT_CHECK_TIMEOUT,
         ) {
-            Ok(true) => {}
-            Ok(false) => {
+            Ok(Some(answered)) => form = Some(answered),
+            Ok(None) => {
                 return Launch::Failed(AgentFailure::with_detail(
                     "agent_start.not_installed",
                     format!("{kind} is not installed on the daemon's PATH"),
@@ -1680,6 +1632,31 @@ fn launch_agent(
                 return Launch::Failed(AgentFailure::with_detail(
                     "agent_start.install_check_failed",
                     format!("Could not check whether {kind} is installed ({error})"),
+                ));
+            }
+        }
+    }
+    // The first prompt rides the start as the agent's own argument where the
+    // start carries it (`start_prompt`); nothing types it, so a start that
+    // cannot carry it fails with the reason and the surface keeps the text.
+    if let Some(prompt) = prompt {
+        let carried = crate::start_prompt::carried(kind, &args, prompt, || {
+            form.map_or_else(|| first_prompt_form(pane_node, kind), Ok)
+        });
+        match carried {
+            Ok(words) => args.extend(words),
+            Err(crate::start_prompt::Refusal::Prompt(detail)) => {
+                return Launch::Failed(AgentFailure::with_detail(
+                    "agent_start.invalid_prompt",
+                    detail,
+                ));
+            }
+            Err(crate::start_prompt::Refusal::Start(detail)) => {
+                return Launch::Failed(AgentFailure::with_detail(
+                    "agent_start.prompt_not_carried",
+                    format!(
+                        "The first prompt cannot ride this start: {detail}. Start the agent without it and send it once the agent runs."
+                    ),
                 ));
             }
         }
@@ -4667,7 +4644,7 @@ mod tests {
             ));
             let outcome = launch_with_prompt(
                 &*server,
-                None,
+                Some(&Starts(StartForm::Program)),
                 7,
                 PendingAgentStart {
                     resume_reference: None,
@@ -4756,7 +4733,7 @@ mod tests {
         let server = server(vec![]);
         let outcome = launch_with_prompt(
             &*server,
-            None,
+            Some(&Starts(StartForm::Program)),
             7,
             PendingAgentStart {
                 resume_reference: None,
@@ -4789,7 +4766,9 @@ mod tests {
                 _timeout: std::time::Duration,
             ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
                 self.0.lock().unwrap().push(call);
-                Ok(crate::node_access::LinkAnswer::Parsed(json!(false)))
+                Ok(crate::node_access::LinkAnswer::Parsed(
+                    serde_json::Value::Null,
+                ))
             }
         }
         let node = Missing(Mutex::default());
@@ -4834,7 +4813,7 @@ mod tests {
         ]);
         let outcome = launch_with_prompt(
             &*server,
-            None,
+            Some(&Starts(StartForm::Program)),
             7,
             PendingAgentStart {
                 resume_reference: None,
@@ -4867,7 +4846,7 @@ mod tests {
         ]);
         let outcome = launch_with_prompt(
             &*server,
-            None,
+            Some(&Starts(StartForm::Program)),
             7,
             PendingAgentStart {
                 resume_reference: None,
@@ -4902,7 +4881,7 @@ mod tests {
         let server = server(vec![]);
         let outcome = launch_with_prompt(
             &*server,
-            None,
+            Some(&Starts(StartForm::Program)),
             7,
             PendingAgentStart {
                 resume_reference: None,
@@ -4932,11 +4911,11 @@ mod tests {
     #[test]
     fn a_prompt_over_the_cap_fails_the_start_before_herdr() {
         let server = server(vec![]);
-        let at_cap = "가".repeat(MAX_PROMPT_BYTES / 3);
-        assert!(prompt_argument(&at_cap).is_ok());
+        let at_cap = "가".repeat(crate::start_prompt::MAX_PROMPT_BYTES / 3);
+        assert!(crate::start_prompt::prompt_argument(&at_cap).is_ok());
         let outcome = launch_with_prompt(
             &*server,
-            None,
+            Some(&Starts(StartForm::Program)),
             7,
             PendingAgentStart {
                 resume_reference: None,
@@ -4971,7 +4950,7 @@ mod tests {
         ]);
         let outcome = launch_with_prompt(
             &*server,
-            None,
+            Some(&Starts(StartForm::Program)),
             7,
             PendingAgentStart {
                 resume_reference: None,
@@ -5001,6 +4980,56 @@ mod tests {
             methods_of(&requests_of(&server)),
             ["pane.process_info", "agent.start"]
         );
+    }
+
+    /// A machine that has the agent and starts it as `0` says.
+    struct Starts(StartForm);
+    impl crate::node_access::NodeLink for Starts {
+        fn call(
+            &self,
+            call: hide_node_link::protocol::Call,
+            _timeout: std::time::Duration,
+        ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+            match call {
+                hide_node_link::protocol::Call::AgentInstalled { .. } => Ok(
+                    crate::node_access::LinkAnswer::Parsed(serde_json::to_value(self.0).unwrap()),
+                ),
+                other => Err(crate::node_access::LinkError::Unknown(format!("{other:?}"))),
+            }
+        }
+    }
+
+    /// On Windows a start through `cmd.exe` carries no first prompt: the
+    /// start fails with the reason before Herdr types anything, and the
+    /// surface keeps the text, rather than `cmd.exe` reading it again.
+    #[test]
+    fn a_first_prompt_to_a_batch_start_fails_before_herdr() {
+        let server = server(vec![]);
+        let outcome = launch_with_prompt(
+            &*server,
+            Some(&Starts(StartForm::Batch)),
+            7,
+            PendingAgentStart {
+                resume_reference: None,
+                resume_scope: None,
+                pane_id: "w1:p1".into(),
+                kind: "codex".into(),
+                prompt: Some("50% done, say \"hi\"".into()),
+                args: Vec::new(),
+                codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
+                shell: crate::agent_start::ShellStart::Plain,
+                made_worktree: None,
+            },
+        );
+        let TaskAgentOutcome::Failed(failure) = outcome else {
+            panic!("expected a failed start, got {outcome:?}");
+        };
+        assert_eq!(failure.reason, "agent_start.prompt_not_carried");
+        assert!(
+            failure.detail.as_deref().unwrap().contains("cmd.exe"),
+            "{failure:?}"
+        );
+        assert!(requests_of(&server).is_empty());
     }
 
     /// The host's own git answering for a real repository on this machine.
