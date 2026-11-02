@@ -2116,15 +2116,15 @@ mod tests {
         // A whole brief rides the start, starting with `-` or not.
         let brief = format!("-{}", "x".repeat(16 * 1024 - 1));
         assert_eq!(
-            super::launch_prompt("opencode", &[], &brief, program).unwrap(),
-            [format!("--prompt={brief}")]
+            super::launch_prompt("omp", &[], &brief, program).unwrap(),
+            ["--".to_owned(), brief.clone()]
         );
         assert_eq!(
-            super::launch_prompt("opencode", &[], "@a", || Ok(StartForm::Batch)),
+            super::launch_prompt("omp", &[], "@a", || Ok(StartForm::Batch)),
             None
         );
         assert_eq!(
-            super::launch_prompt("opencode", &[], "go", || Err("link_lost".into())),
+            super::launch_prompt("omp", &[], "go", || Err("link_lost".into())),
             None
         );
         // Nothing asks the pane's machine for an agent that holds no launch
@@ -2132,6 +2132,7 @@ mod tests {
         // command line refuses.
         let unasked = || -> Result<StartForm, String> { panic!("the machine was asked") };
         assert_eq!(super::launch_prompt("pi", &[], "go", unasked), None);
+        assert_eq!(super::launch_prompt("opencode", &[], "go", unasked), None);
         assert_eq!(super::launch_prompt("cursor", &[], "go", unasked), None);
         assert_eq!(
             super::launch_prompt("codex", &["--".into(), "mine".into()], "go", unasked),

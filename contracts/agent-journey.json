@@ -205,7 +205,7 @@
     "cells": {
       "start": true,
       "start_untrusted": true,
-      "launch_brief": true,
+      "launch_brief": false,
       "reply": true,
       "integration": true,
       "guidance_memory": true,
@@ -221,12 +221,11 @@
     },
     "letter": "next_prompt",
     "input": [
-      "launch_prompt",
       "typed"
     ],
     "wake": "sleeping_session",
     "title": "automatic",
-    "request_budget": 21,
+    "request_budget": 18,
     "fake_home": {
       "status": "proven",
       "key_env": "JOURNEY_FAKE_KEY",

@@ -630,12 +630,12 @@ pub const ADAPTERS: &[AgentAdapter] = &[
                 style: Style::Rgb(128, 128, 128),
             }],
         }),
-        // OpenCode 2.0.29 takes `--prompt=<prompt>` at a start with no
-        // screen before it (measured 2026-11-02).
-        input: &[
-            InputRung::AgentApi(AgentApi::LaunchPrompt),
-            InputRung::Typed,
-        ],
+        // OpenCode 2.0.29 submits a `--prompt=<prompt>` as soon as its model
+        // list arrives, without waiting for the configuration that names the
+        // operator's model, so a start that loses that race sends the prompt
+        // to the first model of the list, its own free hosted one (macOS
+        // agent journey, run 41415065150, 2026-11-02); its brief is typed.
+        input: TYPED_ONLY,
         start: Some(LaunchDialect::OpenCode),
         find: None,
         usage: UsageDeclaration {

@@ -893,7 +893,7 @@ The inline form keeps prompt and picker edits in page memory across navigation a
 Tab-bound input uses the stable tab identity rather than group membership; only a definite failed receipt can be retired after its authoritative target changes, allowing a new decision at the current target.
 Pending or unknown starts retain their original intent and target for read-only recovery.
 A start may also carry `stay_behind` (the phone's, see The mobile companion): its tab is made without moving the desktop's visible tab or keyboard focus.
-A first prompt goes as the CLI's own argument: `--prompt <text>` for OpenCode, whose positional argument is a project path, and a positional prompt after `--` for Claude Code, Codex, Grok, Pi and omp.
+A first prompt goes as the CLI's own argument (`LaunchDialect::prompt_form`): `--prompt=<text>` for OpenCode, whose positional argument is a project path and which can send it to a model the operator did not choose ([delivery.md](delivery.md#the-input-ladder)), `-i <text>` for agy, and a positional prompt after `--` for Claude Code, Codex, Grok, Pi and omp.
 Nothing is ever typed into the pane, where a startup question would take it.
 Home permission roots go as repeated `--add-dir` arguments only to Claude Code, Codex and omp; a checkout cwd remains available to every start independently of those optional roots.
 Start support grants no session reader, resume, fork, sleep, letter or bell capability.

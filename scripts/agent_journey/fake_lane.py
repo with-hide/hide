@@ -125,9 +125,11 @@ def opencode(home, url, root, local, key=KEY):
     `opencode.json` (opencode.ai/v2/docs/providers), its key read from the
     variable `env` names, and no update check. Every other provider is
     denied (`provider.use` policies, what its `enabled_providers` key reads
-    as): a start that carried its prompt once took OpenCode's own free hosted
-    model instead of the configured one (macOS, run 41415065150, 2026-11-02),
-    and a run's text must never reach a hosted model."""
+    as): OpenCode submits a start prompt before it has read this file, and a
+    start that lost that race took its own free hosted model (macOS, run
+    41415065150, 2026-11-02); Hide types OpenCode's brief since, but a first
+    prompt still rides the start, and a run's text must never reach a hosted
+    model."""
     del root, local
     folder = home / opencode_service.CONFIG
     private_directory(folder)
