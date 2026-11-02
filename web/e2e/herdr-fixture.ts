@@ -30,9 +30,8 @@ import net from "node:net";
 import { setTimeout as pause } from "node:timers/promises";
 import path from "node:path";
 import { afterCleanup, ownUntilWorkerExit } from "./worker-owned";
-import { endWindowsProcesses, fixtureExecutable, fixtureHomeEnv, fixtureToolPath, inheritedFixtureEnv, localEndpoint, windowsProcessTree, type WindowsProcess } from "./platform-fixture";
+import { endWindowsProcesses, fixtureExecutable, fixtureHomeEnv, fixturePrograms, inheritedFixtureEnv, localEndpoint, windowsProcessTree, type WindowsProcess } from "./platform-fixture";
 import { endProcessGroup } from "./process-tree";
-import { copyFixtureShim } from "./shims/build";
 
 /** What `pane process-info` answers about a pane's shell, as far as the fixture reads it. */
 type ShellProcessInfo = {
@@ -565,6 +564,16 @@ export function declareParent(fixture: Pick<HerdrFixture, "bin" | "env">, child:
   execFileSync(fixture.bin, ["pane", "report-metadata", child, "--source", "e2e-lineage", "--token", `parent_pane=${parent}`, "--token", `child_session=${session(child)}`, "--token", `parent_session=${session(parent)}`], { env: fixture.env, timeout: 30_000 });
 }
 
+/**
+ * Herdr's own record of the session the agent in `pane` runs, as Herdr's
+ * integration reports it for a real Claude Code: a Herdr pane learns its
+ * agent's session from that report, never from the start's arguments, so
+ * the engine-neutral fixture (`engine-fixture.ts`) declares it on Herdr.
+ */
+export function declareAgentSession(server: Pick<HerdrFixture, "env" | "bin">, pane: string, sessionId: string): void {
+  declareFixtureSession(server.env, server.bin, pane, "claude", sessionId);
+}
+
 export function setFixtureSession(fixture: HerdrFixture, pane: string, sessionId: string): void {
   declareFixtureSession(fixture.env, fixture.bin, pane, "claude", sessionId, true);
 }
@@ -836,14 +845,8 @@ export async function startHerdr({ agents = true, shortRoot = false, readiness =
   let fixturePath: string;
   try {
     env = isolatedEnv(root, socket);
-    const shim = path.join(root, "bin", fixtureExecutable("claude"));
-    copyFixtureShim("claude-shim", shim);
-    if (process.platform === "win32") {
-      copyFixtureShim("noop", path.join(root, "bin", "hide-open.exe"));
-      copyFixtureShim("hide-children", path.join(root, "bin", "hide-children.exe"));
-    }
     // Keep host-installed providers out while retaining system tools.
-    fixturePath = fixtureToolPath(path.join(root, "bin"));
+    fixturePath = fixturePrograms(path.join(root, "bin"));
   } catch (error) {
     throw afterCleanup(error, () => fs.rmSync(root, { recursive: true, force: true }));
   }

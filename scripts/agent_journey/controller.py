@@ -4,7 +4,7 @@
 commands run as descendants of an agent Herdr knows. The controller is the
 desktop e2e's spawn provider (`web/e2e/shims/spawn-provider.c`, built here):
 started as a Claude kind in its own private pane, it reports a synthetic
-native session to Herdr and, each time it reads `!`, runs the command
+native session to Herdr through `session_report.py` and, each time it reads `!`, runs the command
 `command.json` holds through `controller_command.py`, writing the command's
 exit status to a completion file. It is not under test.
 """
@@ -56,8 +56,16 @@ class Controller:
             runtime.owner.run([compiler, "-O2", "-o", str(shim), str(source)],
                               env={**clean_env(), **temp_env(runtime.run / "agent-tmp")})
         driver = Path(__file__).resolve().with_name("controller_command.py")
+        # The provider reports its session as `<python> <reporter> <pane> <session>`
+        # (spawn-provider.c): to the pinned Herdr, as Herdr's integration does.
+        reporter = self.root / "session_report.py"
+        write_private(reporter, (
+            "import subprocess, sys\n"
+            "pane, session = sys.argv[1:3]\n"
+            f"sys.exit(subprocess.run([{str(runtime.herdr_bin)!r}, 'pane', 'report-agent-session', pane, '--source', 'herdr:claude',"
+            " '--agent', 'claude', '--agent-session-id', session, '--seq', '1'], timeout=20).returncode)\n").encode())
         write_private(self.root / "provider.config", "\n".join(
-            [str(runtime.herdr_bin), str(self.completed), sys.executable, "-I", str(driver), str(self.command)]).encode())
+            [sys.executable, str(reporter), str(self.completed), sys.executable, "-I", str(driver), str(self.command)]).encode())
         recipe = {"id": "controller"}
         workspace, pane, _ = runtime.new_workspace(recipe, "journey", runtime.home, shim,
                                                    {"env": {"HIDE_E2E_ROOT": str(self.root)}})

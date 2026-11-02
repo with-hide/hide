@@ -14,9 +14,9 @@ import path from "node:path";
 import { expect, type Page } from "@playwright/test";
 import { toPage } from "../../desktop/src/main/wirePath";
 import { connectControl, type HidedControl, type Rest } from "./hided-control.mjs";
-import { paneShellOf, startHerdr, type PaneShell } from "./herdr-fixture";
+import { claudeProjects, declareAgentSession, paneShellOf, startHerdr, writeFixtureTranscript, type PaneShell } from "./herdr-fixture";
 import { startHided, type Daemon, type DaemonEngine } from "./hided-fixture";
-import { fixtureToolPath } from "./platform-fixture";
+import { fixtureExecutable, fixturePrograms } from "./platform-fixture";
 import { afterCleanup, ownUntilWorkerExit } from "./worker-owned";
 import { enterWorkspace } from "./wire";
 
@@ -70,7 +70,7 @@ function startOwnEngine(): EngineServer {
     const shell = process.platform === "win32" ? process.env.COMSPEC : "/bin/zsh";
     if (!shell || !path.isAbsolute(shell) || !fs.existsSync(shell)) throw new Error("fixture shell is unavailable: Windows needs ComSpec; Unix needs /bin/zsh");
     fs.writeFileSync(path.join(root, "home", ".zshrc"), "PS1='fixture %# '\n");
-    const fixturePath = fixtureToolPath(path.join(root, "bin"));
+    const fixturePath = fixturePrograms(path.join(root, "bin"));
     const daemonEnv: NodeJS.ProcessEnv = {
       SHELL: shell,
       ...(process.platform === "win32" ? { PROMPT: "fixture % " } : {}),
@@ -186,4 +186,164 @@ export async function openLayout(page: Page, stack: LayoutStack): Promise<void> 
   for (const pane of stack.panes) {
     await expect.poll(() => page.evaluate((id) => window.__hideProbe?.paneText(id) ?? "", pane), { timeout: 20_000, message: `the prompt in ${pane}` }).toContain("fixture %");
   }
+}
+
+type AreaNode = { area: { id: string; displays: { id: string }[] } } | { split: { first: AreaNode; second: AreaNode } } | Record<string, unknown>;
+type AgentAreas = { root: AreaNode; group_id?: string | null };
+
+/** The Agent area of the workspace in front that shows `tab`, as the start panel's target names it. */
+function areaShowing(rest: Rest, tab: string): { group_id: string | null; area_id: string } | undefined {
+  const layout = ((rest.workspace_view ?? null) as { agent_layout?: AgentAreas | null } | null)?.agent_layout;
+  if (!layout) return undefined;
+  const find = (node: AreaNode): string | undefined => {
+    if ("area" in node && node.area) {
+      const area = node.area as { id: string; displays: { id: string }[] };
+      return area.displays.some((display) => display.id === tab) ? area.id : undefined;
+    }
+    for (const child of Object.values(node)) {
+      if (child && typeof child === "object") {
+        const found = find(child as AreaNode);
+        if (found) return found;
+      }
+    }
+    return undefined;
+  };
+  const area = find(layout.root);
+  return area ? { group_id: layout.group_id ?? null, area_id: area } : undefined;
+}
+
+/** The checkout `folder` names in the navigator, with its tabs in order. */
+function checkoutAt(rest: Rest, folder: string): { workspace: string; checkout: string; tabs: string[] } | undefined {
+  const workspaces = ((rest.navigator as { workspaces?: NavigatorWorkspace[] } | undefined)?.workspaces ?? []);
+  const workspace = workspaces.find((row) => row.path === folder);
+  const checkout = workspace?.checkouts[0];
+  if (!workspace || !checkout) return undefined;
+  return { workspace: workspace.id, checkout: checkout.id, tabs: checkout.agent_groups?.groups.flatMap((group) => group.tabs) ?? [] };
+}
+
+/** The agent row the snapshot lists for `pane`, once an agent runs there. */
+export function agentIn(rest: Rest, pane: string): FixtureAgentRow | undefined {
+  const agents = ((rest.navigator as { agents?: FixtureAgentRow[] } | undefined)?.agents ?? []);
+  return agents.find((row) => row.pane_id === pane && row.agent_kind);
+}
+
+/** The fields of a sidebar agent row (`navigator.agents`) a fixture reads. */
+export type FixtureAgentRow = { pane_id: string; agent_kind?: string | null; status_code?: string | null };
+
+/** The file the `claude` shim in `pane` logs every byte its terminal delivered to, on the own engine (`HIDE_E2E_PANE_INPUT_LOGS`). */
+export function paneInputLog(root: string, pane: string): string {
+  return path.join(root, `input-${pane.replaceAll(":", "-")}.log`);
+}
+
+/** The session each of the fixture's two agents runs, whose transcript names its task. */
+const FIXTURE_AGENTS = [
+  { session: "fixture-one", task: "Agent one" },
+  { session: "fixture-two", task: "Agent two" },
+] as const;
+
+/**
+ * The default fixture of a spec that looks at Hide rather than at an engine,
+ * on the engine HIDE_E2E_ENGINE names: one checkout, the folder `fixture`
+ * under the run's root, whose one tab holds two panes side by side, each
+ * running the `claude` shim on a session whose transcript names it
+ * `Agent one` and `Agent two` (`agents: false` leaves two shells).
+ * Everything in it is made through the first daemon `startHided` starts on
+ * it, with the events the web shell sends: Add project, then the start
+ * panel's start twice, the second beside the first. So `workspace`, `tab`,
+ * `panes` and `inputLogs` are read only after `startHided` returned.
+ */
+export type AgentFixture = EngineServer & {
+  workspace: string;
+  tab: string;
+  panes: [string, string];
+  /** Per pane, the file its `claude` shim appends every byte its terminal delivered to. */
+  inputLogs: [string, string];
+  /** Resolves at once: the daemon that made the agents waited for both to run. */
+  ready: () => Promise<void>;
+};
+
+export async function startFixture({ agents = true }: { agents?: boolean } = {}): Promise<AgentFixture> {
+  const server = await startEngine();
+  const inputLogs = server.root;
+  let made: { workspace: string; tab: string; panes: [string, string] } | null = null;
+  const need = () => {
+    if (!made) throw new Error("the fixture's checkout and panes are made by its first daemon: read them after startHided");
+    return made;
+  };
+  const opened = async (daemon: Daemon) => {
+    if (made) return;
+    const control = await connectControl(daemon);
+    try {
+      made = await openFixture(control, server, agents);
+    } catch (error) {
+      // Run evidence for a reviewer: what the daemon published when the setup gave up.
+      const keep = process.env.HIDE_E2E_SCREENSHOT_DIR;
+      if (keep) {
+        const rest = await control.until((now) => now, "the last snapshot", 1_000).catch(() => null);
+        fs.writeFileSync(path.join(keep, `fixture-setup-${path.basename(server.root)}.json`), JSON.stringify(rest));
+      }
+      throw error;
+    } finally {
+      control.close();
+    }
+  };
+  return {
+    ...server,
+    // The stand-in reports a new session through Hide's own hook from inside its pane (`setAgentSession`).
+    daemonEnv: { ...server.daemonEnv, HIDE_E2E_PANE_INPUT_LOGS: inputLogs, HIDE_E2E_HOOKS: path.resolve("..", "target", "debug", fixtureExecutable("hide-agent-hooks")) },
+    opened,
+    get workspace() { return need().workspace; },
+    get tab() { return need().tab; },
+    get panes() { return need().panes; },
+    get inputLogs() { const [one, two] = need().panes; return [paneInputLog(inputLogs, one), paneInputLog(inputLogs, two)] as [string, string]; },
+    ready: async () => { need(); },
+  };
+}
+
+async function openFixture(control: HidedControl, server: EngineServer, agents: boolean): Promise<{ workspace: string; tab: string; panes: [string, string] }> {
+  const folder = toPage(fs.realpathSync.native(path.join(server.root, "fixture")));
+  control.send("create_workspace", { path: folder, label: "e2e", initialize_git: false, confirmed_outside_home: folder });
+  const first = await control.until((rest) => {
+    const checkout = checkoutAt(rest, folder);
+    const tab = checkout?.tabs[0];
+    const layout = tab ? tabLayout(rest, tab) : undefined;
+    return checkout && tab && layout ? { ...checkout, tab, pane: layoutPanes(layout.root)[0]! } : undefined;
+  }, `the checkout ${folder} with its first tab`, 30_000);
+  if (!agents) {
+    control.send("create_pane", { tab_id: first.tab, cwd: folder, command: null, direction: "right", request_id: `e2e-${crypto.randomUUID()}` });
+    const both = await control.until((rest) => {
+      const layout = tabLayout(rest, first.tab);
+      return layout && layoutPanes(layout.root).length === 2 ? layoutPanes(layout.root) as [string, string] : undefined;
+    }, `the split of ${first.tab}`, 30_000);
+    return { workspace: first.workspace, tab: first.tab, panes: both };
+  }
+  for (const agent of FIXTURE_AGENTS) writeFixtureTranscript(claudeProjects(server), agent.session, { task: agent.task });
+  const start = (session: string, target?: Record<string, unknown>) => control.send("agent_start_in_checkout", {
+    checkout_path: folder, provider: "claude", resume_session_id: session, request_id: `e2e-${crypto.randomUUID()}`, ...(target ? { target } : {}),
+  });
+  start(FIXTURE_AGENTS[0].session);
+  const one = await control.until((rest) => {
+    const tab = checkoutAt(rest, folder)?.tabs.find((id) => id !== first.tab);
+    const layout = tab ? tabLayout(rest, tab) : undefined;
+    const pane = layout ? layoutPanes(layout.root)[0] : undefined;
+    const area = tab ? areaShowing(rest, tab) : undefined;
+    return tab && pane && area && agentIn(rest, pane) ? { tab, pane, area } : undefined;
+  }, "the first fixture agent in a tab of its own", 30_000);
+  start(FIXTURE_AGENTS[1].session, { ...one.area, tab_id: one.tab, add_pane: true });
+  const panes = await control.until((rest) => {
+    const layout = tabLayout(rest, one.tab);
+    const listed = layout ? layoutPanes(layout.root) : [];
+    return listed.length === 2 && listed.every((pane) => agentIn(rest, pane)) ? listed as [string, string] : undefined;
+  }, "the second fixture agent beside the first", 30_000);
+  // Herdr learns a pane's session from its integration's report, the own
+  // engine from the start's `--resume` (docs/ARCHITECTURE.md, Agents on the
+  // core's own engine).
+  if (server.engine === "herdr") {
+    const herdr = server as EngineServer & { env: NodeJS.ProcessEnv; bin: string };
+    panes.forEach((pane, index) => declareAgentSession(herdr, pane, FIXTURE_AGENTS[index]!.session));
+  }
+  // The shell Add project opened is not the fixture's: its tab goes.
+  control.send("close_pane", { pane_id: first.pane, confirmed: true });
+  await control.until((rest) => !checkoutAt(rest, folder)?.tabs.includes(first.tab), `the close of ${first.tab}`, 30_000);
+  return { workspace: first.workspace, tab: one.tab, panes };
 }

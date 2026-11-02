@@ -196,12 +196,15 @@ static int complete_command(const char *filename, int status) {
   return moved != 0;
 }
 // Per-run values come from `provider.config` in $HIDE_E2E_ROOT, the folder the
-// fixture's Herdr panes are told about: line 1 is the Herdr binary, line 2 the
-// file the command's status is written to, and every line after is one
-// argument of the command run on `!`. The executable itself is built once.
+// fixture's panes are told about: lines 1 and 2 are the program and script
+// that report the agent's session the way the pane's engine learns it, run as
+// `<program> <script> <pane> <session>`; line 3 is the file the command's
+// status is written to, and every line after is one argument of the command
+// run on `!`. The executable itself is built once.
 #define MAX_COMMAND 16
 static char config_text[32768];
-static const char *herdr_binary;
+static const char *reporter_program;
+static const char *reporter_script;
 static const char *completion_file;
 static char *command[MAX_COMMAND + 1];
 static int load_config(void) {
@@ -226,16 +229,17 @@ static int load_config(void) {
     if (end) *end = 0;
     size_t length = strlen(line);
     if (length && line[length - 1] == '\r') line[length - 1] = 0;
-    if (count == 0) herdr_binary = line;
-    else if (count == 1) completion_file = line;
-    else if (count - 2 < MAX_COMMAND) command[count - 2] = line;
+    if (count == 0) reporter_program = line;
+    else if (count == 1) reporter_script = line;
+    else if (count == 2) completion_file = line;
+    else if (count - 3 < MAX_COMMAND) command[count - 3] = line;
     else { fputs("fixture provider: the command has too many arguments\n", stderr); return 1; }
     count++;
     if (!end) break;
     line = end + 1;
   }
-  if (count < 3) { fprintf(stderr, "fixture provider: %s is incomplete\n", path); return 1; }
-  command[count - 2] = NULL;
+  if (count < 4) { fprintf(stderr, "fixture provider: %s is incomplete\n", path); return 1; }
+  command[count - 3] = NULL;
   return 0;
 }
 int main(int argc, char **argv) {
@@ -248,7 +252,9 @@ int main(int argc, char **argv) {
   for (int i = 1; i < argc; i++) if (strcmp(argv[i], "--json-schema") == 0) return 1;
   initialize_runner();
   if (load_config() != 0) return 1;
-  const char *pane = getenv("HERDR_PANE_ID");
+  /* The pane names itself as `hide_agent_hooks::pane` reads it: HIDE_PANE_ID first. */
+  const char *pane = getenv("HIDE_PANE_ID");
+  if (!pane || !*pane) pane = getenv("HERDR_PANE_ID");
   if (!pane || !*pane) return 1;
   /* A resumed conversation keeps its id, as Claude Code's own does. */
   char session[80];
@@ -260,8 +266,7 @@ int main(int argc, char **argv) {
   const char *base = argv[0];
   for (const char *at = argv[0]; *at; at++) if (*at == '/' || *at == '\\') base = at + 1;
   int claude = strcmp(base, "claude") == 0 || strcmp(base, "claude.exe") == 0;
-  char *report[] = { (char *)herdr_binary, "pane", "report-agent-session", (char *)pane,
-    "--source", "herdr:claude", "--agent", "claude", "--agent-session-id", session, "--seq", "1", NULL };
+  char *report[] = { (char *)reporter_program, (char *)reporter_script, (char *)pane, session, NULL };
   if (claude && run_child(report) != 0) return 1;
   raw_terminal();
   static const char ready[] = "\r\nClaude Code fixture\r\nclaude fixture ready\r\n❯ ";

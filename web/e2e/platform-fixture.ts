@@ -13,6 +13,21 @@ export type { WindowsProcess };
 export const fixtureExecutable = (name: string): string => `${name}${process.platform === "win32" ? ".exe" : ""}`;
 
 /**
+ * Puts the fixture's own programs in `bin` (the `claude` stand-in, and on
+ * Windows the opener and the process lister the fixtures call) and returns
+ * the PATH every fixture pane and daemon runs with, `bin` first and the
+ * system's tools after it, on either engine.
+ */
+export function fixturePrograms(bin: string): string {
+  copyFixtureShim("claude-shim", path.join(bin, fixtureExecutable("claude")));
+  if (process.platform === "win32") {
+    copyFixtureShim("noop", path.join(bin, "hide-open.exe"));
+    copyFixtureShim("hide-children", path.join(bin, "hide-children.exe"));
+  }
+  return fixtureToolPath(bin);
+}
+
+/**
  * Where a client reaches the local stream Herdr names by `socket`: the path
  * itself on Unix, the pipe `\\.\pipe\<path>` on Windows (hide-platform's
  * `ipc` makes the same mapping, so a fixture standing in front of Herdr

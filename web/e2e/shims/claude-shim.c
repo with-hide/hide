@@ -8,6 +8,7 @@
 #include <io.h>
 #include <sys/stat.h>
 #include <process.h>
+#include <direct.h>
 #define read _read
 #define write _write
 #define open _open
@@ -386,6 +387,42 @@ static int native_session(int argc, char **argv) {
   return 0;
 }
 
+/* A new session, as Claude Code reports one after /clear: the fixture types
+   `ESC ] 7770 ; session=<id> BEL` into the pane, and the stand-in runs Hide's
+   SessionStart hook (`HIDE_E2E_HOOKS`, the built `hide-agent-hooks`) with
+   that session, from inside the pane, so the daemon proves it as the pane's
+   own report (`engine-fixture.ts`, `setAgentSession`). Returns 1 when `bytes`
+   was such a request, which is then not echoed. */
+static int session_request(const char *bytes, size_t size) {
+  static const char prefix[] = "\x1b]7770;session=";
+  const size_t length = sizeof prefix - 1;
+  if (size <= length + 1 || memcmp(bytes, prefix, length) != 0 || bytes[size - 1] != '\a') return 0;
+  const char *hooks = getenv("HIDE_E2E_HOOKS");
+  char session[256], command[4200], cwd[2048];
+  size_t id = size - length - 1;
+  if (!hooks || id >= sizeof session) return 1;
+  memcpy(session, bytes + length, id);
+  session[id] = 0;
+  for (size_t i = 0; i < id; i++) if (!(session[i] == '-' || session[i] == '_' || session[i] == '.' || (session[i] >= '0' && session[i] <= '9') || (session[i] >= 'a' && session[i] <= 'z') || (session[i] >= 'A' && session[i] <= 'Z'))) return 1;
+#ifdef _WIN32
+  if (!_getcwd(cwd, sizeof cwd)) return 1;
+  for (char *at = cwd; *at; at++) if (*at == '\\') *at = '/';
+  if (snprintf(command, sizeof command, "\"\"%s\" hook --runtime claude-code --event SessionStart >NUL 2>&1\"", hooks) >= (int)sizeof command) return 1;
+  FILE *hook = _popen(command, "w");
+#else
+  if (!getcwd(cwd, sizeof cwd)) return 1;
+  if (snprintf(command, sizeof command, "'%s' hook --runtime claude-code --event SessionStart >/dev/null 2>&1", hooks) >= (int)sizeof command) return 1;
+  FILE *hook = popen(command, "w");
+#endif
+  if (!hook) return 1;
+  fprintf(hook, "{\"session_id\":\"%s\",\"hook_event_name\":\"SessionStart\",\"source\":\"clear\",\"cwd\":\"%s\"}", session, cwd);
+#ifdef _WIN32
+  _pclose(hook);
+#else
+  pclose(hook);
+#endif
+  return 1;
+}
 static int has_option(int argc, char **argv, const char *name) {
   for (int i = 1; i < argc; i++) if (strcmp(argv[i], name) == 0) return 1;
   return 0;
@@ -414,6 +451,16 @@ int main(int argc, char **argv) {
   if (native_session(argc, argv) != 0) return 1;
   if (agent_pane_runner(argc, argv) != 0) return 1;
   const char *log_path = getenv("HIDE_E2E_INPUT_LOG");
+  /* On the core's own engine a pane's environment is its daemon's, so the
+     fixture names a folder and each pane logs under its own id there
+     (`engine-fixture.ts`, `paneInputLog`), `:` written as `-`. */
+  char pane_log[4096];
+  const char *pane_logs = getenv("HIDE_E2E_PANE_INPUT_LOGS"), *pane = getenv("HIDE_PANE_ID");
+  if (!log_path && pane_logs && pane && *pane) {
+    if (snprintf(pane_log, sizeof pane_log, "%s/input-%s.log", pane_logs, pane) >= (int)sizeof pane_log) return 1;
+    for (char *at = pane_log + strlen(pane_logs); *at; at++) if (*at == ':') *at = '-';
+    log_path = pane_log;
+  }
   int flags = O_WRONLY | O_CREAT | O_APPEND;
 #ifdef _WIN32
   flags |= _O_BINARY;
@@ -449,6 +496,7 @@ int main(int argc, char **argv) {
 #endif
   fixture_count_t n;
   while ((n = terminal_read(b, sizeof b)) > 0) {
+    if (session_request(b, (size_t)n)) continue;
     if (log >= 0 && write(log, b, (size_t)n) < 0) return 1;
 #ifdef _WIN32
     // A Unix tty turns Enter's CR into LF on input and LF into CRLF on

@@ -6,7 +6,7 @@ import type { HerdrFixture } from "./herdr-fixture";
 import { fixtureProgram } from "./platform-fixture";
 import { git } from "./work-prs-fixture";
 
-export function checkoutGitFixture(herdr: HerdrFixture, { divergedUpstream = false, historyCount = 1 } = {}) {
+export function checkoutGitFixture(herdr: Pick<HerdrFixture, "root">, { divergedUpstream = false, historyCount = 1 } = {}) {
   const root = fs.realpathSync(path.join(herdr.root, "fixture"));
   git(root, ["init"]);
   fs.writeFileSync(path.join(root, "tracked.txt"), "original\n");
