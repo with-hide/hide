@@ -7,7 +7,7 @@
 
 import { expect, test, type Page } from "@playwright/test";
 import { chord } from "./chords";
-import { corePaneFocus, openLayout, startLayoutStack, type LayoutStack } from "./engine-fixture";
+import { corePaneFocus, e2eEngine, openLayout, startLayoutStack, type LayoutStack } from "./engine-fixture";
 import { countSent, screenshot } from "./wire";
 
 test.describe.configure({ timeout: 90_000 });
@@ -250,9 +250,12 @@ test("Reopen closed tab gives back the tab just closed with a working shell", { 
     await expect.poll(() => sent.get("reopen_closed")).toBe(1);
     await expect(page.locator("[data-tab]")).toHaveCount(2);
     const reopened = (await page.locator("[data-tab]").evaluateAll((tabs) => tabs.map((el) => el.getAttribute("data-tab")!))).find((id) => id !== stack.tab)!;
-    // Whether the reopened tab takes the screen by itself is not this test's
-    // claim (on Windows it often stays behind, reported apart); its shell is.
-    await page.locator(`[data-tab="${reopened}"]`).click();
+    // The reopened tab takes the screen by itself. Windows on the Herdr
+    // engine is the one exception: Herdr's late confirmation of the focus sent
+    // just before the reopen is read as its own move back to the old tab (the
+    // shape of #425), a Herdr-path defect that goes with Herdr in bundle 4, so
+    // there the tab is clicked and only its shell is checked.
+    if (process.platform === "win32" && e2eEngine() === "herdr") await page.locator(`[data-tab="${reopened}"]`).click();
     await expect(page.locator("[data-canvas]")).toHaveAttribute("data-canvas", reopened);
     await expect(page.locator("[data-pane-view]")).toHaveCount(1);
     const pane = (await paneIds(page))[0]!;
