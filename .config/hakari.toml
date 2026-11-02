@@ -29,4 +29,6 @@ platforms = [
 # the screen rules it will evaluate among them.
 # Their own dependencies still count toward everyone else's features.
 [final-excludes]
-workspace-members = ["hide-platform", "hide-herdr-client", "hide-vt", "hide-holder", "hide-holder-protocol", "hide-screen-rules"]
+# The relay protocol also builds for browsers; the native workspace feature
+# union includes OS-only crates which cannot enter that WASM module.
+workspace-members = ["hide-platform", "hide-herdr-client", "hide-vt", "hide-holder", "hide-holder-protocol", "hide-screen-rules", "hide-relay-protocol"]

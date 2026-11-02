@@ -43,6 +43,11 @@ See [the build input](BUILD.md#product-analytics-build-input) and [Settings](UI_
 
 ## State placement and publication
 
+The standalone `hide-relay` service owns its room membership, connection routing, admission windows and byte counters in one memory-only state object.
+It does not link the core, read a credential store or persist state; protocol endpoints alone own Noise keys and ciphertext authentication.
+Its listener owns every connection task, each task owns its registration and bounded output queue, and dropping or stopping the service retires them all.
+[RELAY_PROTOCOL.md](RELAY_PROTOCOL.md#server-budgets-and-refusals) owns the refusal, restart and resource bounds, with real socket regressions in `hide-relay/tests/it`.
+
 The front Workspace's Git header is ephemeral core state (`runtime/checkout_git.rs`), projected only into that device/path's `workspace_view.git`, never persisted or inferred from visibility-gated Changes rows.
 The existing Changes pump drives two single-flight `BackgroundRead` readers (`checkout_git.rs`): one owning-node `Call::CheckoutGit` for the whole checkout, and one core-node exact-SHA GitHub read using fixed allowlisted arguments.
 Changing the target or channel advances a generation; ingests compare that identity and the CI repository and complete ordered SHA list before publishing, while a HEAD change immediately clears the preceding CI result.
@@ -2985,7 +2990,7 @@ The answers C runs beside a linked node's screens (a device checkout's file read
 A file an M screen pastes or drops is staged on M (`hided/src/node_uploads.rs`): for one of M's panes C is told only its path on M (`terminal_attachment` with `staged_on`, accepted only from that node's relay) and pastes it as it pastes any device's, keeping its hold on the keys typed behind it; for any other pane M sends the upload on to C as the screen sent it and keeps no copy, after holding the batch to C's own caps (8 files, 40 MiB) before a byte crosses the link.
 C reads M's machine as it reads its own wherever the result is M's: M's coordinator asks M's TCP listeners through the link every 5 s (`ports.rs`, `InboundLink`), and they are attributed to M's panes only, as C's own are to C's; an SSH device's listeners are not read, so its panes carry none.
 The size of an M project the Overview shows is measured on M the same way (`disk.rs`, `device_disk_request`): M's coordinator measures the M projects the Projects tab watches (`disk_watch`) and the one a cleanup sheet asks for, and the rows go onto M's own project rows only, never matched against C's paths.
-An M checkout's pull request is read on C with C's `gh` login (D-16): M's worktree read answers its repository's `origin` URL from the repository's own configuration, C names the GitHub repository from it (`gh::repository_of_remote`), and M's coordinator asks C's own node to run the same allow-listed `gh` command lines with `GH_REPO` set to that name and no folder (`Call::Gh` `repository`), each repository once and then every five minutes; the answers stay keyed to M, so an M path never matches a C project.
+An M checkout's pull request is read on C with C's `gh` login (D-16): M's worktree read answers its repository's `origin` URL from the repository's own configuration, C names the GitHub repository from it (`gh::repository_of_remote`), and M's coordinator asks C's own node to run the same allow-listed `gh` command lines with `GH_REPO` set to that name and no folder (`Call::Gh` `repository`), and `repo view`, which ignores `GH_REPO` and reads a folder's remotes, takes the name as its argument, each repository once and then every five minutes; the answers stay keyed to M, so an M path never matches a C project.
 An SSH device's checkouts are read the same way, on C with C's login by the repository its helper's worktree read names, since every device's coordinator is built with C's own node as its `gh` login (`SessionSyncContext::remote`); the answers give its checkouts their pull requests and its Project its repository for the link record, while its issues, source and PRs tab stay off as D-29 keeps them for a device the core dials.
 An M project lists every worktree M's worktree read reports, as one of C's own lists its worktrees, a worktree with no pane open included (`device_catalog::apply_worktrees`, D-29).
 Such a row has the id of its folder on M (`device_catalog::checkout_id`), the id a move gives that checkout (`node_migration::reown`), so the links, labels and folds kept under it meet the row, and it folds under Inactive by C's own rule (`project_context::inactive_checkout_group`); a device C dials shows only the checkouts its Herdr session opens.
@@ -3380,6 +3385,9 @@ The legacy store files are preserved during core moves; their presence starts no
 Memory retires its own worktrees through the ordinary `Call::WorktreeRetire` machine operation.
 
 ### The mobile companion
+
+The shared relay library and its WASM boundary are specified in [RELAY_PROTOCOL.md](RELAY_PROTOCOL.md).
+It is available for transport integration; the current transport behavior below is unchanged by adding that library.
 
 Phone transport, pairing, conversation reads and delivery live in `hided/src/mobile/`; status projection and notification transitions belong to `herdr-core/src/agent_state/`.
 `Runtime::remote_herdr_api` lends the Herdr API connection the core already holds for a connected SSH device.

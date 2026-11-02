@@ -17,9 +17,19 @@ export function sameSession(a: WorkSession, b: WorkSession): boolean {
   return a.device_id === b.device_id && a.agent === b.agent && a.session_id === b.session_id;
 }
 
-/** The plan of `session` while a pane runs it. */
+/**
+ * The plan of `session` while a pane runs it, else the one a mission node
+ * keeps for its worker after the pane closed, so `크게 ›` on a finished node
+ * still opens its map.
+ */
 export function planOfSession(rest: SnapshotRest | null | undefined, session: WorkSession): PlanView | null {
-  return rest?.plans?.items.find((plan) => sameSession(plan.session, session)) ?? null;
+  const shown = rest?.plans?.items.find((plan) => sameSession(plan.session, session));
+  if (shown) return shown;
+  for (const mission of rest?.missions?.items ?? []) {
+    const node = mission.nodes.find((one) => one.plan && sameSession(one.plan.session, session));
+    if (node?.plan) return node.plan;
+  }
+  return null;
 }
 
 /** Whether the plan waits for the operator's review: put up with `--ask` and not finished (B4, B14). */

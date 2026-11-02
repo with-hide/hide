@@ -2409,7 +2409,7 @@ impl Runtime {
                     ),
                     verdict: node.verdict,
                     checks: node.checks,
-                    plan: record.and_then(|record| self.worker_plan(&record.machine, &record.pane)),
+                    plan: record.and_then(|record| self.worker_plan(record)),
                     attention: node.attention.as_ref().map(|attention| {
                         let operator = attention.operator_at_unix_ms.is_some();
                         let on_row =

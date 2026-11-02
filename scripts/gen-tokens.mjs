@@ -52,6 +52,8 @@ export function generate(root = process.cwd()) {
   if (paneBreakpoint?.type !== 'number') throw new Error('Expected numeric --size-pane-parent-breakpoint');
   const missionWide = tokens['--size-mission-wide'];
   if (missionWide?.type !== 'number') throw new Error('Expected numeric --size-mission-wide');
+  const missionPanelWords = tokens['--size-mission-panel-words'];
+  if (missionPanelWords?.type !== 'number') throw new Error('Expected numeric --size-mission-panel-words');
   const taskTableWide = tokens['--size-task-table-wide'];
   if (taskTableWide?.type !== 'number') throw new Error('Expected numeric --size-task-table-wide');
   const theme = [], mapped = [], light = [], dark = [], hideLight = [], hideDark = [], rest = [];
@@ -96,6 +98,8 @@ export function generate(root = process.cwd()) {
     `@custom-variant pane-wide (@container pane (min-width: ${paneBreakpoint.value}px));`,
     // A mission page wide enough for its node panel beside the map, else under it (PRD mission-map-git-criteria D-04).
     `@custom-variant mission-wide (@container mission (min-width: ${missionWide.value}px));`,
+    // A mission node panel wide enough for its head's buttons to carry their words beside a long title, else their icons alone.
+    `@custom-variant mission-panel-words (@container mission-panel (min-width: ${missionPanelWords.value}px));`,
     // A 작업 비용 table wide enough for its tokens and working-time columns, else they ride under the task's name (PRD project-panel-results B27, B35).
     `@custom-variant task-table-wide (@container task-table (min-width: ${taskTableWide.value}px));`,
     '',
