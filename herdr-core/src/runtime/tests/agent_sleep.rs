@@ -110,7 +110,10 @@ fn a_sleep_whose_agent_left_the_session_before_its_end_landed_draws_its_row_on_t
     );
     runtime.take_republish_request();
     assert!(runtime.ingest_agent_sleep_end(SLEEPER, Ok(4)));
-    assert!(runtime.take_republish_request(), "the end asks for the session again");
+    assert!(
+        runtime.take_republish_request(),
+        "the end asks for the session again"
+    );
     runtime.ingest_session(Ok(session(None)));
     assert_eq!(row(&runtime)["sleep"]["state"], "sleeping");
 }

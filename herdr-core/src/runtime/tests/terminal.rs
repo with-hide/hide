@@ -47,10 +47,18 @@ fn the_answer_to_an_attach_the_core_asked_for_is_kept_before_a_layout_holds_the_
     let mut runtime = runtime();
     runtime.ingest_session(Ok(context_payload()));
     assert!(!runtime.snapshot.pane_layouts.is_empty());
-    assert!(!report_terminal(&mut runtime, "w9:p1", terminal_state("controlling", 1)));
+    assert!(!report_terminal(
+        &mut runtime,
+        "w9:p1",
+        terminal_state("controlling", 1)
+    ));
     assert!(!runtime.terminal_states.contains_key("w9:p1"));
     assert!(runtime.request_terminal_control("w1:p9"));
-    assert!(report_terminal(&mut runtime, "w1:p9", terminal_state("controlling", 2)));
+    assert!(report_terminal(
+        &mut runtime,
+        "w1:p9",
+        terminal_state("controlling", 2)
+    ));
     assert_eq!(runtime.terminal_states["w1:p9"].state, "controlling");
     assert!(!runtime.request_terminal_control("w1:p9"));
 }

@@ -1712,7 +1712,8 @@ impl Runtime {
                 // core's own engine can make a pane's session ready before
                 // the session read that lists it, and its node reports an
                 // unchanged state only once.
-                if !self.pane_still_terminal(&pane) && !self.terminal_attach_requested.contains(&pane)
+                if !self.pane_still_terminal(&pane)
+                    && !self.terminal_attach_requested.contains(&pane)
                 {
                     return false;
                 }
