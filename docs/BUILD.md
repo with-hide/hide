@@ -546,3 +546,18 @@ This gate proves the asset set and digests, not installation, terminal input/out
 The Windows and Linux package smoke checks cover bundled tools, daemon startup, the embedded shell and daemon shutdown; the macOS packaged-app specs and the Windows packaged window open the app itself, and the tagged commit's main `verify` run covers the end-to-end suites.
 `release-draft.mjs --publish` publishes the draft, as the latest release for a stable tag and as a pre-release for an `-rc.N` tag, only after that final read, and only when every one of those release gates passed ([CONTRIBUTING.md](../CONTRIBUTING.md#releases)); without `--publish` it prepares the draft only.
 Its source guard does not establish that the repository setting is on; verify it before release work.
+
+## Mobile relay WebAssembly
+
+`bash scripts/build-relay-wasm.sh` builds `hide-relay-protocol` for `wasm32-unknown-unknown` from source.
+The compiler comes from the root `rust-toolchain.toml`; the script installs that toolchain's WASM standard library and the exact `wasm-bindgen-cli` version matching `Cargo.lock`, with `--locked` CLI dependencies.
+Compiler output, binding tools and their build output all stay inside this worktree's `target/`.
+The crate retains `rlib` and `cdylib` outputs to use one standard Cargo build path for native and WASM; native verification also links the small cdylib, while consumers link the rlib.
+Generated browser bindings and `relay_bg.wasm` land in ignored `hide-relay-protocol/pkg/`; no compiled binary or third-party CDN script is committed.
+The library is excluded from hakari's native workspace feature union because the union includes operating-system dependencies that cannot compile for WASM; its own direct dependencies and target features remain locked.
+
+A phone bundle first runs that script, then imports `hide-relay-protocol/web/index.ts` and loads the generated local `relay_bg.wasm` asset with its exported initializer.
+The loader owns asset URL resolution, HTTP MIME/cache behavior and startup errors; this library does not install a phone loader or alter the existing shell build.
+Both hided and the browser therefore run one cryptographic implementation and one parser.
+The public checkout builds with the pinned Rust toolchain and registry dependencies, without a private binary, credential or design tool.
+`bash scripts/check-relay-protocol.sh` builds and tests both targets and their interoperability; after workspace dependency installation, `bash scripts/verify-web.sh relay-protocol typecheck` checks the TypeScript surface against the generated bindings.

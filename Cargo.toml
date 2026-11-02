@@ -15,6 +15,7 @@ members = [
     "hide-node-link",
     "hide-platform",
     "hide-project",
+    "hide-relay-protocol",
     "hide-session",
     "hide-screen-rules",
     "hide-shell",
