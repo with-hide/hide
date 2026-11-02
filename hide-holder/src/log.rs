@@ -3,9 +3,9 @@
 //! standard streams, so a holder started without a file logs nothing, and a
 //! file it cannot open fails its start.
 
+use std::cell::Cell;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::cell::Cell;
 use std::sync::{Arc, Mutex, PoisonError};
 
 /// How large the file grows before it is set aside as `<file>.1`, replacing
