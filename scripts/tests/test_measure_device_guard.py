@@ -128,7 +128,7 @@ class MeasureDeviceGuard(unittest.TestCase):
         run = (measure / 'run.sh').read_text()
         guarded = run.index('source "$measure_dir/device-guard.sh"')
         for dial in ('"$measure_dir/device-herdr.sh"', '"$measure_dir/device-front.mjs"',
-                     'spawn_owned hided', 'device_guard_config >'):
+                     'spawn_owned "hided', 'device_guard_config >'):
             self.assertLess(guarded, run.index(dial), f'run.sh reaches {dial} before the guard')
         self.assertNotIn('MEASURE_DEVICE_SSH_CONFIG', run)
         herdr = (measure / 'device-herdr.sh').read_text()
