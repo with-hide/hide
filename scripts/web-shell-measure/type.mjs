@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-// Types into the pane that holds the page's keyboard, the way the operator
-// does: CDP key events the web shell's own key path handles, so the same
-// input reaches a Herdr pane and an own-engine pane (PRD
-// engine-bundle-3-core-owns D-15). usage: type.mjs <cdp-port> <pane> [--interrupt] <line>
+// Types into the pane that holds the page's keyboard through the page, so the
+// same input reaches a Herdr pane and an own-engine pane (PRD
+// engine-bundle-3-core-owns D-15): the line is CDP `Input.insertText` into the
+// terminal's text field, as an input method delivers text, and Enter and
+// Ctrl+C are CDP key events the web shell's key path handles. usage: type.mjs <cdp-port> <pane> [--interrupt] <line>
 // `--interrupt` presses Ctrl+C first; the line is followed by Enter.
 // Refuses when the page's keyboard is in another pane.
 import { connectPage } from "./cdp.mjs";

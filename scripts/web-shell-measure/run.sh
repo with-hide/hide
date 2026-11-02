@@ -119,37 +119,15 @@ mkdir -m 700 "$hide_state"
 export MEASURE_HIDE_STATE="$hide_state"
 note() { printf 'measure: %s\n' "$*"; }
 # The own engine's pane holders outlive the daemon by design, so the run owns
-# them by the pid each record in its state folder names: a pid is ended only
-# while its command line names that record. `holder_pids` lists the holders
-# and their programs; `end_holders <signal>` ends them and waits up to ten
-# seconds; `holders_left` prints what still runs from the run's holder folder
-# (nothing, on a clean end: leaked holders once used up every PTY).
-holder_pids() {
-  local record pid program
-  for record in "$hide_state"/holders/records/*.json; do
-    [[ -f "$record" ]] || continue
-    read -r pid program < <(python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); print((r.get("holder") or {}).get("pid",""), (r.get("program") or {}).get("pid",""))' "$record")
-    [[ -n "$pid" ]] && ps -p "$pid" -o command= 2>/dev/null | grep -qF -- "$record" || continue
-    printf '%s\n' "$pid"
-    [[ -n "$program" ]] && printf '%s\n' "$program"
-  done
-}
-end_holders() {
-  local signal=$1 owned=() pid deadline
-  while read -r pid; do owned+=("$pid"); done < <(holder_pids)
-  (( ${#owned[@]} > 0 )) || return 0
-  kill "-$signal" "${owned[@]}" 2>/dev/null || true
-  deadline=$((SECONDS + 10))
-  while (( SECONDS < deadline )); do
-    local running=0
-    for pid in "${owned[@]}"; do kill -0 "$pid" 2>/dev/null && running=1; done
-    (( running )) || return 0
-    sleep 0.05
-  done
-  echo "pane holder processes still run after SIG$signal: ${owned[*]}" >&2
-  return 1
-}
-holders_left() { ps -Ao pid=,command= | grep -F -- "$hide_state/holders/" | grep -v grep || true; }
+# them by the pid each record in its state folder names, with the e2e
+# fixture's rule (web/e2e/pane-holders.mjs): `holder_pids` lists the holders
+# and their programs, `end_holders` ends them (failing when one still runs),
+# `holders_left` prints what still runs from the run's holder folder (nothing,
+# on a clean end: leaked holders once used up every PTY).
+pane_holders="$MEASURE_WORKTREE/web/e2e/pane-holders.mjs"
+holder_pids() { node "$pane_holders" pids "$hide_state"; }
+end_holders() { node "$pane_holders" end "$hide_state"; }
+holders_left() { node "$pane_holders" left "$hide_state" || true; }
 operator_counts() {
   if $isolated_headless; then
     printf '{"observed":false,"reason":"isolated-headless mode never reads the operator socket"}\n' > "$MEASURE_RUN_DIR/operator-$1.json"
@@ -158,6 +136,7 @@ operator_counts() {
   fi
 }
 cleanup() {
+  local cleanup_status=0
   trap - EXIT INT TERM
   set +e
   kill_owned() {
@@ -173,9 +152,10 @@ cleanup() {
   fi
   for pid in "${pids[@]:-}"; do [[ -n "$pid" ]] && wait "$pid" 2>/dev/null; done
   if [[ "$engine" == own ]]; then
-    end_holders TERM
+    # A holder left running fails the run, so a battery of runs stops there.
+    end_holders || cleanup_status=1
     left="$(holders_left)"
-    [[ -z "$left" ]] || printf 'pane holder processes left running:\n%s\n' "$left" >&2
+    [[ -z "$left" ]] || { printf 'pane holder processes left running:\n%s\n' "$left" >&2; cleanup_status=1; }
   fi
   if $core_started; then
     # A core left running on the device is said where the run is read.
@@ -192,6 +172,7 @@ cleanup() {
     [[ "$engine" != own ]] || printf 'holders left: %s\n' "$(holders_left | wc -l | tr -d ' ')"
   } > "$MEASURE_RUN_DIR/cleanup-processes.txt"
   operator_counts after
+  (( cleanup_status == 0 )) || exit "$cleanup_status"
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM

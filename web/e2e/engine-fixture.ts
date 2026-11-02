@@ -3,7 +3,7 @@
 // pinned Herdr in a private, empty server; `own` is the core's own engine,
 // a daemon with the development switch on and no Herdr at all. Either way the
 // fixture makes its workspace and panes with the events the web shell sends
-// (`hided-control.ts`) and reads them back from the snapshot, so a spec
+// (`hided-control.mjs`) and reads them back from the snapshot, so a spec
 // written on `startLayoutStack` runs unchanged on both. A spec that looks at
 // Herdr itself stays on `herdr-fixture.ts`.
 
@@ -13,7 +13,7 @@ import os from "node:os";
 import path from "node:path";
 import { expect, type Page } from "@playwright/test";
 import { toPage } from "../../desktop/src/main/wirePath";
-import { connectControl, type HidedControl, type Rest } from "./hided-control";
+import { connectControl, type HidedControl, type Rest } from "./hided-control.mjs";
 import { paneShellOf, startHerdr, type PaneShell } from "./herdr-fixture";
 import { startHided, type Daemon, type DaemonEngine } from "./hided-fixture";
 import { fixtureToolPath } from "./platform-fixture";

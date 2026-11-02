@@ -9,7 +9,8 @@ import path from "node:path";
 import { linkFixtureTranscripts, type HerdrFixture } from "./herdr-fixture";
 import { ownUntilWorkerExit } from "./worker-owned";
 import { bundledExecutable, linkBundle } from "./bundled-app";
-import { endPaneHolders, endWindowsProcesses, fixtureExecutable, fixtureHomeEnv, fixtureLoginShellPath, fixtureOpenCommand, inheritedFixtureEnv, windowsProcessTree, type WindowsProcess } from "./platform-fixture";
+import { endPaneHolders } from "./pane-holders.mjs";
+import { endWindowsProcesses, fixtureExecutable, fixtureHomeEnv, fixtureLoginShellPath, fixtureOpenCommand, inheritedFixtureEnv, windowsProcessTree, type WindowsProcess } from "./platform-fixture";
 
 /**
  * What a fixture daemon runs its panes on: a private Herdr server (`socket`
@@ -202,7 +203,7 @@ async function launch(herdr: DaemonEngine, label: string, dir: string, home: str
   // ends them, after the daemon and before its folders go.
   const { stop, disown } = ownUntilWorkerExit(() => {
     end();
-    if (!herdr.socket) endPaneHolders(path.join(dir, "hide"));
+    if (!herdr.socket) endPaneHolders(path.join(dir, "hide"), process.platform === "win32" ? { endTree: (pid) => endWindowsProcesses(windowsProcessTree(pid)) } : {});
     herdr.afterStop(removeDir);
   });
   // The product itself gives a started daemon `HEALTHY_WITHIN` (10 s, `hided/src/cli.rs`) to answer

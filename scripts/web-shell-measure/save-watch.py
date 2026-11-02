@@ -10,7 +10,10 @@ is one write, its bytes the size after it. A group names what its files are:
 `herdr` (the Herdr server's session files), `engine` (the own engine's saved
 session), `hide` (the daemon's screen saves). Locks, sockets and SQLite
 journals are not saves and are skipped. A write that lands twice within one
-10 ms poll counts once, the same for both engines.
+10 ms poll counts once, the same for both engines, and a save made through a
+temporary file and a rename counts the temporary file too when it lives past
+one poll: the count is what the folder showed changing, so an engine's way of
+saving is part of its number.
 """
 import json
 import os
@@ -75,7 +78,7 @@ def main():
         total["writes"] += row["writes"]
         total["bytes"] += row["bytes"]
     print(json.dumps({
-        "method": "stat every 10 ms; a change of size or mtime is one write, its bytes the size after it",
+        "method": "stat every 10 ms; a change of size or mtime is one write, its bytes the size after it; changes within one poll count once, and a temporary file seen before its rename counts as a write",
         "seconds": round(time.time() - started, 3),
         "polls": polls,
         "groups": {group: str(path) for group, path in groups},

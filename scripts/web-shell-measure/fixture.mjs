@@ -20,9 +20,11 @@ import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { connect } from "./hided-ws.mjs";
+import { connectStateDir } from "../../web/e2e/hided-control.mjs";
 
 const runDir = process.env.MEASURE_RUN_DIR;
+// How long a step waits for the snapshot to answer.
+const STEP_MS = 30_000;
 const stateDir = process.env.MEASURE_HIDE_STATE;
 if (!runDir || !stateDir) throw new Error("MEASURE_RUN_DIR and MEASURE_HIDE_STATE are required");
 
@@ -109,7 +111,7 @@ async function build(scaleName) {
   const scale = SCALES[scaleName];
   if (!scale) throw new Error("scale must be none, operator or double");
   const fixture = fs.realpathSync(process.env.MEASURE_FIXTURE ?? "");
-  const control = await connect(stateDir);
+  const control = await connectStateDir(stateDir, STEP_MS);
   try {
     const measured = await addCheckout(control, fixture, "measure");
     const switchTab = await addTab(control, measured, "switch");

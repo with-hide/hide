@@ -15,7 +15,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { connectPage } from "./cdp.mjs";
-import { connect } from "./hided-ws.mjs";
+import { connectStateDir } from "../../web/e2e/hided-control.mjs";
 
 const stateDir = process.env.MEASURE_HIDE_STATE;
 const cdpPort = process.env.MEASURE_CDP_PORT;
@@ -58,7 +58,7 @@ async function shellsBack() {
 async function tabsBack() {
   let control = null;
   try {
-    control = await connect(stateDir, Math.max(1, deadline - Date.now()));
+    control = await connectStateDir(stateDir, Math.max(1, deadline - Date.now()));
     await control.until((rest) => (rest?.pane_layouts ?? []).length >= tabs, `${tabs} tabs`);
     return since();
   } catch {
