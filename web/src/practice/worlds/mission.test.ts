@@ -62,9 +62,11 @@ describe("chapter 0's question, from 내 차례 to the map's banner (UI_BEHAVIOR
     expect(question.options![question.recommend! - 1]).toBeDefined();
   });
 
-  it("is looked at when the Conductor is opened while it asks", () => {
+  it("is looked at when the Conductor is opened while it asks, not when coming back from a worker", () => {
     const opened = apply(asking(), { kind: "focus_pane", payload: { pane_id: CONDUCTOR, origin: "operator" } });
     expect(doneAt("needsyou", opened)).toBe(true);
+    const back = apply(asking(), { kind: "focus_pane", payload: { pane_id: CONDUCTOR, origin: "operator", request_id: "r1" } });
+    expect(doneAt("needsyou", back)).toBe(false);
   });
 
   it("changes the plan on a pressed choice or a written answer, and the Conductor reads which", () => {

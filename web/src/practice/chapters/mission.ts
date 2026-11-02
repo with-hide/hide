@@ -2,24 +2,26 @@
 // carried from the learner's request to the report, as a mission, at the pace
 // an agent works: moving sign-in to email links, six parts two workers at a
 // time. The learner asks a Conductor for a plan with `/hide-mission`, opens it
-// from the pane's mission chip and approves it in the terminal; the workers it starts are listed from the pane head's second row, they run, and when the Conductor has a question it
+// from the pane's mission chip and approves it in the terminal; the pane head's second row lists the child agents it starts, one opens in its tab and its head leads back, they run, and when the Conductor has a question it
 // lands in the sidebar's 내 차례, where the learner opens it and answers on the
 // map. The Overview shows the team at work until it is done, and what the work
 // left is the Conductor's report and a new memory in the Project's Memory.
 
 import { chapter } from "../chapter";
-import { CONDUCTOR, MISSION_WORLD, missionInSlot, showsMemory, type MissionModel } from "../worlds/mission";
+import { CONDUCTOR, MISSION_WORLD, focusedOn, missionInSlot, showsMemory, type MissionModel } from "../worlds/mission";
 
 const PANE = `[data-pane-view="${CONDUCTOR}"]`;
 const CHIP = `${PANE} [data-pane-mission-chip]`;
 /** The banner's recommended choice, or, while the map is not open, the chip that opens it. */
 const ANSWER = `[data-mission-recommended], body:not(:has([data-mission-recommended])) ${CHIP}`;
 const GRAPH = "[data-overview-graph]";
+/** The sign-in screen's worker, the one that runs longest: the list holds it once the survey is done. */
+const SCREEN = "ui";
 
 export default chapter<MissionModel>({
   id: "mission",
   number: 0,
-  version: 8,
+  version: 9,
   world: MISSION_WORLD,
   quest: true,
   steps: [
@@ -33,8 +35,10 @@ export default chapter<MissionModel>({
     { id: "plan", target: "[data-mission]", side: "left" },
     // The go is said to the Conductor in the terminal, because Hide has no button that starts a mission.
     { id: "approve", quest: true, target: PANE, side: "center", gesture: { type: { pane: CONDUCTOR, words: "practice.mission.world.approve" } }, done: (model) => model.stage >= 3 },
-    // The pane head's second row is the Conductor's workers: pressing it lists who it started and what each is doing.
-    { id: "children", quest: true, target: `[data-pane-tree="${CONDUCTOR}"]`, side: "right", gesture: { click: true }, shown: `[data-agent-tree="${CONDUCTOR}"]` },
+    // The pane head's second row is the Conductor's child agents: it opens the list, a child opens its tab, and the child's head leads back.
+    { id: "children", quest: true, target: `[data-pane-tree="${CONDUCTOR}"]`, side: "right", gesture: { click: true }, shown: `[data-agent-child="${SCREEN}"]` },
+    { id: "child", quest: true, target: `[data-agent-child="${SCREEN}"]`, side: "right", gesture: { click: true }, done: (model) => focusedOn(model) === SCREEN },
+    { id: "back", quest: true, target: `[data-pane-return="${CONDUCTOR}"]`, side: "bottom", gesture: { click: true }, done: (model) => focusedOn(model) === CONDUCTOR },
     // The workers run until the Conductor has a question.
     { id: "running", target: "[data-mission]", side: "left", wait: true, done: (model) => model.stage >= 5 },
     // The question lands in 내 차례; the row opens the Conductor.
