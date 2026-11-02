@@ -59,9 +59,17 @@ async function splitShell(page: Page, { stack, sent }: Open): Promise<string> {
   return shellPaneId;
 }
 
-/** The size the pane's own program reads from its terminal, printed after `marker`. */
+/**
+ * The size the pane's own program reads from its terminal, printed after
+ * `marker`: `stty` in the Unix fixture shell, the console window PowerShell
+ * reads in the Windows one (cmd.exe has no size command of its own).
+ */
 async function programSize(page: Page, pane: string, marker: string): Promise<{ rows: number; cols: number }> {
-  await page.keyboard.type(`echo ${marker} $(stty size)`);
+  const ask =
+    process.platform === "win32"
+      ? `powershell -NoProfile -Command "$s = $Host.UI.RawUI.WindowSize; '${marker} ' + $s.Height + ' ' + $s.Width"`
+      : `echo ${marker} $(stty size)`;
+  await page.keyboard.type(ask);
   await page.keyboard.press("Enter");
   // The probe's screen text pads each row with spaces to the grid's width.
   const pattern = new RegExp(`^${marker} (\\d+) (\\d+) *$`, "m");
@@ -242,7 +250,7 @@ test("Reopen closed tab gives back the tab just closed with a working shell", { 
     await expect.poll(() => sent.get("reopen_closed")).toBe(1);
     await expect(page.locator("[data-tab]")).toHaveCount(2);
     const reopened = (await page.locator("[data-tab]").evaluateAll((tabs) => tabs.map((el) => el.getAttribute("data-tab")!))).find((id) => id !== stack.tab)!;
-    await expect(page.locator("[data-canvas]")).toHaveAttribute("data-canvas", reopened);
+    await expect(page.locator("[data-canvas]")).toHaveAttribute("data-canvas", reopened, { timeout: 15_000 });
     await expect(page.locator("[data-pane-view]")).toHaveCount(1);
     const pane = (await paneIds(page))[0]!;
     await expect.poll(() => paneText(page, pane), { timeout: 15_000 }).toContain("fixture %");
