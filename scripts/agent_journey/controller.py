@@ -64,8 +64,10 @@ class Controller:
             "pane, session = sys.argv[1:3]\n"
             f"sys.exit(subprocess.run([{str(runtime.herdr_bin)!r}, 'pane', 'report-agent-session', pane, '--source', 'herdr:claude',"
             " '--agent', 'claude', '--agent-session-id', session, '--seq', '1'], timeout=20).returncode)\n").encode())
-        write_private(self.root / "provider.config", "\n".join(
-            [sys.executable, str(reporter), str(self.completed), sys.executable, "-I", str(driver), str(self.command)]).encode())
+        write_private(self.root / "provider.config", b"")
+        runtime.owner.run([str(shim), "--write-config", str(self.root / "provider.config"),
+                           sys.executable, str(reporter), str(self.completed), sys.executable,
+                           "-I", str(driver), str(self.command)], env=clean_env())
         recipe = {"id": "controller"}
         workspace, pane, _ = runtime.new_workspace(recipe, "journey", runtime.home, shim,
                                                    {"env": {"HIDE_E2E_ROOT": str(self.root)}})

@@ -255,21 +255,37 @@ export async function runInPaneKeepingFocus(
     'const fs = require("node:fs");',
     'const { spawnSync } = require("node:child_process");',
     "const [program, ...args] = process.argv.slice(1);",
-    "const start = Date.now();",
-    `while (!fs.existsSync(${JSON.stringify(gate)})) {`,
-    "  if (Date.now() - start > 30000) process.exit(9);",
-    "  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);",
-    "}",
+    waitForInputGate(gate),
     'process.exit(spawnSync(program, args, { stdio: "inherit" }).status ?? 1);',
   ].join(" ");
-  const before = await withControl(daemon, (control) => control.until((rest) => corePaneFocus(rest) ?? undefined, "the focused pane", 20_000));
-  const running = runInPane(fixture, daemon, pane, name, { ...program, argv: [process.execPath, "-e", wait, ...program.argv] });
-  await withControl(daemon, async (control) => {
-    await control.until((rest) => corePaneFocus(rest) === pane || undefined, `the typed line to reach ${pane}`, 20_000);
-    if (before !== pane) await focusPane(control, before);
-  });
-  fs.writeFileSync(gate, "");
-  return running;
+  let running: ReturnType<typeof runInPane> | undefined;
+  try {
+    await withControl(daemon, (control) => restoreFocusAfterInput(control, pane, () => {
+      running = runInPane(fixture, daemon, pane, name, { ...program, argv: [process.execPath, "-e", wait, ...program.argv] });
+      // Keep an early process failure observed while the focus barrier waits.
+      void running.catch(() => undefined);
+    }));
+    fs.writeFileSync(gate, "");
+    return await running!;
+  } finally {
+    fs.rmSync(gate, { force: true });
+  }
+}
+
+/** Node source for a fixture command's bounded file gate; the caller already imports fs. */
+export function waitForInputGate(gate: string, deadlineMs = 30_000): string {
+  return `const gateStart = Date.now(); while (!fs.existsSync(${JSON.stringify(gate)})) {
+    if (Date.now() - gateStart > ${deadlineMs}) process.exit(9);
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+  }`;
+}
+
+/** Restore the keyboard after a fixture trigger reaches its pane, before releasing that command's gate. */
+export async function restoreFocusAfterInput(control: HidedControl, pane: string, trigger: () => void | Promise<void>): Promise<void> {
+  const before = await control.until((rest) => corePaneFocus(rest) ?? undefined, "the focused pane", 20_000);
+  await trigger();
+  await control.until((rest) => corePaneFocus(rest) === pane || undefined, `the fixture input to reach ${pane}`, 20_000);
+  if (before !== pane) await focusPane(control, before);
 }
 
 /**

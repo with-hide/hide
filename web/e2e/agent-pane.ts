@@ -14,6 +14,8 @@ import type { EngineServer } from "./engine-fixture";
 import { connectStateDir } from "./hided-control.mjs";
 import { fixtureExecutable } from "./platform-fixture";
 import { copyFixtureShim } from "./shims/build";
+import { configureSpawnProvider, writeSessionReporter } from "./spawn-provider";
+import { restoreFocusAfterInput, waitForInputGate } from "./daemon-actions";
 
 /** One `hide` command's exit status and standard output. */
 export type HideAnswer = { status: number; out: string };
@@ -77,14 +79,14 @@ export function installAgentRunner(fixture: AgentPaneFixture, stateDir: string, 
   const command = path.join(root, "agent-pane-command.json");
   const output = path.join(root, "agent-pane-output.json");
   const completed = path.join(root, "agent-pane-command.status");
+  const gate = path.join(root, "agent-pane-command.gate");
   const driver = path.join(root, "agent-pane-driver.cjs");
-  const reporter = path.join(root, "agent-pane-session.cjs");
   // Both suites run from their package folder (`web`, `desktop`), one below the repository.
   const hide = path.resolve("..", "target", "debug", fixtureExecutable("hide"));
-  const hooks = path.resolve("..", "target", "debug", fixtureExecutable("hide-agent-hooks"));
   fs.writeFileSync(driver, `
 const fs = require("node:fs");
 const { spawnSync } = require("node:child_process");
+${waitForInputGate(gate, 15_000)}
 const { args, program, input, env } = JSON.parse(fs.readFileSync(${JSON.stringify(command)}, "utf8"));
 const ran = spawnSync(program ?? ${JSON.stringify(hide)}, args, {
   env: { ...process.env, HIDE_STATE_DIR: ${JSON.stringify(stateDir)}, ...env },
@@ -92,26 +94,19 @@ const ran = spawnSync(program ?? ${JSON.stringify(hide)}, args, {
 });
 fs.writeFileSync(${JSON.stringify(output)}, JSON.stringify({ status: ran.status ?? -1, out: ran.stdout ?? "" }));
 `);
-  // Run by the stand-in from inside the pane as \`<node> <reporter> <pane> <session>\`.
-  const report = fixture.bin
-    ? `[${JSON.stringify(fixture.bin)}, ["pane", "report-agent-session", pane, "--source", "herdr:claude", "--agent", "claude", "--agent-session-id", session, "--seq", "1"], {}]`
-    : `[${JSON.stringify(hooks)}, ["hook", "--runtime", "claude-code", "--event", "SessionStart"], { input: JSON.stringify({ session_id: session, hook_event_name: "SessionStart", source: "startup", cwd: process.cwd() }) }]`;
-  fs.writeFileSync(reporter, `
-const fs = require("node:fs");
-const path = require("node:path");
-const { spawnSync } = require("node:child_process");
-const [pane, session] = process.argv.slice(2);
-const [program, args, options] = ${report};
-const ran = spawnSync(program, args, { ...options, encoding: "utf8", timeout: 20000 });
-if (ran.status !== 0) process.exit(1);
-fs.writeFileSync(path.join(${JSON.stringify(root)}, "session-reported-" + pane.replaceAll(":", "-")), session);
-`);
-  fs.writeFileSync(path.join(root, "provider.config"), [process.execPath, reporter, completed, process.execPath, driver, ""].join("\n"));
+  configureSpawnProvider(root, { reporter: writeSessionReporter(fixture), completed, command: [process.execPath, driver] });
   return (pane) => async (args, run = {}) => {
     fs.writeFileSync(command, JSON.stringify({ args, ...run }));
     fs.rmSync(completed, { force: true });
     fs.rmSync(output, { force: true });
-    await typeInto(stateDir, pane, "!");
+    fs.rmSync(gate, { force: true });
+    const control = await connectStateDir(stateDir);
+    try {
+      await restoreFocusAfterInput(control, pane, () => typeInto(stateDir, pane, "!"));
+      fs.writeFileSync(gate, "");
+    } finally {
+      control.close();
+    }
     await expect.poll(() => (fs.existsSync(completed) ? fs.readFileSync(completed, "utf8").trim() : null),
       { message: `hide ${args.join(" ")} ran in ${pane}`, timeout: 40_000 }).toBe("0");
     return JSON.parse(fs.readFileSync(output, "utf8")) as HideAnswer;

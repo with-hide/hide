@@ -200,13 +200,37 @@ static int complete_command(const char *filename, int status) {
 // that report the agent's session the way the pane's engine learns it, run as
 // `<program> <script> <pane> <session>`; line 3 is the file the command's
 // status is written to, and every line after is one argument of the command
-// run on `!`. The executable itself is built once.
+// run on `!`. Every fixture writes this format through --write-config below.
+// The executable itself is built once.
 #define MAX_COMMAND 16
 static char config_text[32768];
 static const char *reporter_program;
 static const char *reporter_script;
 static const char *completion_file;
 static char *command[MAX_COMMAND + 1];
+static int write_config(int argc, char **argv) {
+  // --write-config FILE REPORTER SCRIPT COMPLETION COMMAND [ARG...]
+  if (argc < 7 || argc - 6 > MAX_COMMAND) {
+    fputs("fixture provider: expected reporter, script, completion and 1..16 command arguments\n", stderr);
+    return 1;
+  }
+  size_t size = 0;
+  for (int i = 3; i < argc; i++) {
+    if (!*argv[i] || strpbrk(argv[i], "\r\n")) {
+      fputs("fixture provider: configuration fields must be nonempty single lines\n", stderr);
+      return 1;
+    }
+    size += strlen(argv[i]) + 1;
+  }
+  if (size >= sizeof config_text) { fputs("fixture provider: configuration exceeds its byte limit\n", stderr); return 1; }
+  FILE *file = file_open(argv[2]);
+  if (!file) { perror("fixture provider: write configuration"); return 1; }
+  int failed = 0;
+  for (int i = 3; i < argc; i++) if (fprintf(file, "%s\n", argv[i]) < 0) failed = 1;
+  if (fclose(file) != 0) failed = 1;
+  if (failed) fputs("fixture provider: writing configuration failed\n", stderr);
+  return failed;
+}
 static int load_config(void) {
   const char *root = getenv("HIDE_E2E_ROOT");
   if (!root || !*root) { fputs("fixture provider: HIDE_E2E_ROOT is not set\n", stderr); return 1; }
@@ -247,6 +271,7 @@ int main(int argc, char **argv) {
   _setmode(0, _O_BINARY);
   _setmode(1, _O_BINARY);
 #endif
+  if (argc > 1 && strcmp(argv[1], "--write-config") == 0) return write_config(argc, argv);
   if (argc > 1 && strcmp(argv[1], "--version") == 0) { puts("fixture"); return 0; }
   if (argc > 1 && strcmp(argv[1], "auth") == 0) { puts("{\"loggedIn\":true}"); return 0; }
   for (int i = 1; i < argc; i++) if (strcmp(argv[i], "--json-schema") == 0) return 1;
