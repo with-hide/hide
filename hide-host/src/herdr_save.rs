@@ -55,14 +55,24 @@ pub fn fetch(path: &Path) -> Fetched {
             };
         }
     };
-    let modified_ns = file
+    // The last change tells a save Herdr wrote again (D-9), so a save whose
+    // change the system will not say is not read as one never changed.
+    let modified_ns = match file
         .metadata()
-        .ok()
-        .and_then(|metadata| metadata.modified().ok())
-        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-        .map_or(0, |since| {
-            u64::try_from(since.as_nanos()).unwrap_or(u64::MAX)
-        });
+        .and_then(|metadata| metadata.modified())
+        .map_err(|error| error.to_string())
+        .and_then(|modified| {
+            modified
+                .duration_since(UNIX_EPOCH)
+                .map_err(|_| "it is dated before 1970".to_owned())
+        }) {
+        Ok(since) => u64::try_from(since.as_nanos()).unwrap_or(u64::MAX),
+        Err(error) => {
+            return Fetched::Unreadable {
+                reason: format!("its last change could not be read: {error}"),
+            };
+        }
+    };
     let mut text = String::new();
     if let Err(error) =
         std::io::Read::read_to_string(&mut std::io::Read::take(file, READ_CAP + 1), &mut text)
@@ -94,17 +104,57 @@ pub fn server(place: &Place, home: &Path) -> Server {
     };
     drop(stream);
     let pinned = hide_kit::device_herdr::herdr_dir(&hide_kit::layout::helper_root(home));
-    let ours = hide_platform::process::image_of(pid).is_ok_and(|image| {
-        image.path.starts_with(&pinned)
-            || image
-                .path
-                .parent()
-                .is_some_and(hide_kit::holds_package_runtime)
-    });
+    let ours = match hide_platform::process::image_of(pid) {
+        Ok(image) => {
+            image.path.starts_with(&pinned)
+                || image
+                    .path
+                    .parent()
+                    .is_some_and(hide_kit::holds_package_runtime)
+        }
+        // Windows names no process's program file, only the path it started
+        // from: the server is Hide's when it runs one of Hide's Herdr files
+        // where they are now (D-5, D-11).
+        Err(error) if error.kind() == std::io::ErrorKind::Unsupported => {
+            hide_herdr_files(home).iter().any(|file| {
+                hide_platform::process::running(file).is_ok_and(|pids| pids.contains(&pid))
+            })
+        }
+        Err(_) => false,
+    };
     match hide_platform::process::start_time(pid) {
         Ok(started) if ours => Server::Hide { pid, started },
         _ => Server::Other,
     }
+}
+
+/// The most folders read for Hide's Herdr files: the kit keeps two builds.
+const FOLDERS_CAP: usize = 64;
+
+/// Hide's Herdr program files where they are now, for the account whose
+/// home is `home`: each build's runtime copy's, which a Windows package runs
+/// (`hide_kit::runtime`), and each pinned copy a device's helper holds.
+fn hide_herdr_files(home: &Path) -> Vec<hide_platform::fs::identity::FileId> {
+    let program = format!(
+        "{}{}",
+        hide_kit::device_herdr::HERDR_PROGRAM,
+        std::env::consts::EXE_SUFFIX
+    );
+    let folders = |root: PathBuf| {
+        std::fs::read_dir(root)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .take(FOLDERS_CAP)
+            .map(|entry| entry.path())
+    };
+    folders(hide_kit::layout::runtime_root(home))
+        .filter(|dir| hide_kit::holds_package_runtime(dir))
+        .chain(folders(hide_kit::device_herdr::herdr_dir(
+            &hide_kit::layout::helper_root(home),
+        )))
+        .filter_map(|dir| hide_platform::fs::identity::file_id(&dir.join(&program)).ok())
+        .collect()
 }
 
 /// What this machine's node answers of the account whose home is `home`
@@ -216,9 +266,22 @@ mod tests {
         reaper: Option<std::thread::JoinHandle<()>>,
     }
 
+    /// Where a stand-in listens as Herdr's server, when it does.
+    const STAND_IN_SOCKET: &str = "HIDE_TEST_HERDR_STAND_IN_SOCKET";
+
     impl StandIn {
         fn start() -> Self {
-            let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            Self::start_from(&std::env::current_exe().unwrap(), None)
+        }
+
+        /// A stand-in run from `program`, a copy of this test binary,
+        /// listening on `socket` when given.
+        fn start_from(program: &Path, socket: Option<&Path>) -> Self {
+            let mut command = std::process::Command::new(program);
+            if let Some(socket) = socket {
+                command.env(STAND_IN_SOCKET, socket);
+            }
+            let mut child = command
                 .args([
                     "--exact",
                     "herdr_save::tests::a_stand_in_herdr_role",
@@ -272,6 +335,8 @@ mod tests {
         if std::env::var_os(STAND_IN).is_none() {
             return;
         }
+        let _listening = std::env::var_os(STAND_IN_SOCKET)
+            .map(|socket| hide_platform::ipc::LocalListener::bind(Path::new(&socket)).unwrap());
         println!("waiting");
         let mut line = String::new();
         let _ = std::io::stdin().read_line(&mut line);
@@ -350,6 +415,47 @@ mod tests {
         )
         .unwrap();
         assert!(other.running());
+    }
+
+    // D-5, D-11: a Herdr server running from a Hide build's runtime copy is
+    // Hide's on every system, Windows included, where the system names no
+    // process's program file.
+    #[test]
+    fn a_herdr_running_from_a_hide_runtime_copy_is_hide_s() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let build = "1.0.0-abcdef12";
+        let copy = hide_kit::layout::runtime_dir(&home, build);
+        std::fs::create_dir_all(&copy).unwrap();
+        let exe = |name: &str| copy.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+        for program in ["hided", "hide", "hide-agent-hooks"] {
+            std::fs::write(exe(program), "").unwrap();
+        }
+        std::fs::copy(std::env::current_exe().unwrap(), exe("herdr")).unwrap();
+        std::fs::write(copy.join(hide_kit::runtime::MARKER), build).unwrap();
+        let place = Place {
+            session: dir.path().join("session.json"),
+            socket: dir.path().join("herdr.sock"),
+        };
+        let herdr = StandIn::start_from(&exe("herdr"), Some(&place.socket));
+        assert_eq!(
+            server(&place, &home),
+            Server::Hide {
+                pid: herdr.pid,
+                started: herdr.started,
+            }
+        );
+        // One not run from a Hide file is someone else's.
+        let other = StandIn::start_from(
+            &std::env::current_exe().unwrap(),
+            Some(&dir.path().join("other.sock")),
+        );
+        let elsewhere = Place {
+            socket: dir.path().join("other.sock"),
+            ..place.clone()
+        };
+        assert_eq!(server(&elsewhere, &home), Server::Other);
+        drop(other);
     }
 
     #[test]
