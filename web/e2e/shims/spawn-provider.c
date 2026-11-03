@@ -64,6 +64,57 @@ static fixture_count_t terminal_write(const char *bytes, size_t size) {
   DWORD count;
   return WriteFile(GetStdHandle(STD_OUTPUT_HANDLE), bytes, (DWORD)size, &count, NULL) ? (fixture_count_t)count : -1;
 }
+// Follow the same kernel boundary as hide-platform's Windows job owner:
+// ActiveProcesses reaches zero before process objects finish releasing handles.
+#define MAX_JOB_PROCESSES 512
+typedef struct {
+  HANDLE port, job, held[MAX_JOB_PROCESSES];
+  DWORD count, announced;
+} job_members;
+static int member_error(DWORD error) {
+  cleanup_confirmed = 0; cleanup_error = error; return 0;
+}
+static int follow_members(job_members *members, DWORD *active) {
+  for (DWORD i = 0; i < members->count;) {
+    DWORD waited = WaitForSingleObject(members->held[i], 0);
+    if (waited == WAIT_TIMEOUT) { i++; continue; }
+    if (waited != WAIT_OBJECT_0) return member_error(GetLastError());
+    CloseHandle(members->held[i]);
+    members->held[i] = members->held[--members->count];
+  }
+  // Bound one poll even if children are being created continuously.
+  for (int n = 0; n < 64; n++) {
+    DWORD message;
+    ULONG_PTR key;
+    LPOVERLAPPED value;
+    if (!GetQueuedCompletionStatus(members->port, &message, &key, &value, 0)) {
+      DWORD error = GetLastError();
+      if (error == WAIT_TIMEOUT) break;
+      return member_error(error);
+    }
+    if (message != JOB_OBJECT_MSG_NEW_PROCESS) continue;
+    if (++members->announced > MAX_JOB_PROCESSES) return member_error(ERROR_TOO_MANY_OPEN_FILES);
+    HANDLE process = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)(ULONG_PTR)value);
+    if (!process) {
+      DWORD error = GetLastError();
+      // A process object already destroyed has released its handles.
+      if (error == ERROR_INVALID_PARAMETER) continue;
+      return member_error(error);
+    }
+    BOOL inside;
+    if (!IsProcessInJob(process, members->job, &inside)) {
+      DWORD error = GetLastError(); CloseHandle(process); return member_error(error);
+    }
+    // A reused pid outside this job means the original object was destroyed.
+    if (!inside) { CloseHandle(process); continue; }
+    members->held[members->count++] = process;
+  }
+  JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting;
+  if (!QueryInformationJobObject(members->job, JobObjectBasicAccountingInformation, &accounting, sizeof accounting, NULL)) return member_error(GetLastError());
+  *active = accounting.ActiveProcesses;
+  if (accounting.TotalProcesses > MAX_JOB_PROCESSES) return member_error(ERROR_TOO_MANY_OPEN_FILES);
+  return !*active && members->announced == accounting.TotalProcesses && !members->count ? 2 : 1;
+}
 static int run_child_within(char *const argv[], unsigned long within_ms) {
   // Quote each UTF-8 argument for CreateProcessW without a command interpreter.
   WCHAR command[32768];
@@ -96,12 +147,20 @@ static int run_child_within(char *const argv[], unsigned long within_ms) {
     DWORD error = GetLastError();
     free(binary); if (job) CloseHandle(job); return failed("job", error);
   }
+  job_members members = {0};
+  members.job = job;
+  members.port = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 1);
+  JOBOBJECT_ASSOCIATE_COMPLETION_PORT association = {job, members.port};
+  if (!members.port || !SetInformationJobObject(job, JobObjectAssociateCompletionPortInformation, &association, sizeof association)) {
+    DWORD error = GetLastError();
+    free(binary); if (members.port) CloseHandle(members.port); CloseHandle(job); return failed("job_port", error);
+  }
   STARTUPINFOW startup = {0};
   PROCESS_INFORMATION process = {0};
   startup.cb = sizeof startup;
   if (!CreateProcessW(binary, command, NULL, NULL, TRUE, CREATE_SUSPENDED, NULL, NULL, &startup, &process)) {
     DWORD error = GetLastError();
-    free(binary); CloseHandle(job); return failed("spawn", error);
+    free(binary); CloseHandle(members.port); CloseHandle(job); return failed("spawn", error);
   }
   free(binary);
   int owned = AssignProcessToJobObject(job, process.hProcess);
@@ -109,8 +168,15 @@ static int run_child_within(char *const argv[], unsigned long within_ms) {
   int resumed = owned && ResumeThread(process.hThread) != (DWORD)-1;
   if (owned && !resumed) failed("resume", GetLastError());
   DWORD status = 1;
-  DWORD waited = resumed ? WaitForSingleObject(process.hProcess, within_ms) : WAIT_OBJECT_0;
-  if (resumed && waited != WAIT_OBJECT_0) failed(waited == WAIT_TIMEOUT ? "deadline" : "wait", waited == WAIT_FAILED ? GetLastError() : 0);
+  DWORD waited = WAIT_OBJECT_0, active = 0;
+  ULONGLONG deadline = GetTickCount64() + within_ms;
+  while (resumed) {
+    if (!follow_members(&members, &active)) { failed("job_members", cleanup_error); waited = WAIT_FAILED; break; }
+    waited = WaitForSingleObject(process.hProcess, 0);
+    if (waited != WAIT_TIMEOUT || GetTickCount64() >= deadline) break;
+    Sleep(10);
+  }
+  if (resumed && waited != WAIT_OBJECT_0 && strcmp(run_phase, "exited") == 0) failed(waited == WAIT_TIMEOUT ? "deadline" : "wait", waited == WAIT_FAILED ? GetLastError() : 0);
   if (!resumed || waited != WAIT_OBJECT_0) {
     TerminateProcess(process.hProcess, 1);
     if (owned) TerminateJobObject(job, 1);
@@ -121,15 +187,16 @@ static int run_child_within(char *const argv[], unsigned long within_ms) {
   CloseHandle(process.hProcess);
   // Confirm every owned descendant exited before the next fixture command.
   if (!TerminateJobObject(job, 1)) { cleanup_confirmed = 0; cleanup_error = GetLastError(); }
-  ULONGLONG deadline = GetTickCount64() + 10000;
+  deadline = GetTickCount64() + 10000;
   for (;;) {
-    JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting;
-    if (!QueryInformationJobObject(job, JobObjectBasicAccountingInformation, &accounting, sizeof accounting, NULL)) { cleanup_confirmed = 0; cleanup_error = GetLastError(); break; }
-    if (!accounting.ActiveProcesses) break;
+    int state = follow_members(&members, &active);
+    if (!state || state == 2) break;
     if (GetTickCount64() >= deadline) { cleanup_confirmed = 0; cleanup_error = WAIT_TIMEOUT; break; }
     Sleep(10);
   }
+  for (DWORD i = 0; i < members.count; i++) CloseHandle(members.held[i]);
   CloseHandle(job);
+  CloseHandle(members.port);
   return cleanup_confirmed ? (int)status : 1;
 }
 static long long monotonic_ms(void) { return (long long)GetTickCount64(); }
@@ -186,9 +253,10 @@ static int run_child_within(char *const argv[], unsigned long within_ms) {
   long long deadline = monotonic_ms() + within_ms;
   int status = 0, killed = 0;
   for (;;) {
-    pid_t waited = waitpid(child, &status, WNOHANG);
-    if (waited == child) break;
-    if (waited < 0 && errno != EINTR) { int error = errno; kill(-child, SIGKILL); kill(child, SIGKILL); close(errors[0]); cleanup_confirmed = 0; return failed("wait", error); }
+    siginfo_t ended = {0};
+    int waited = waitid(P_PID, (id_t)child, &ended, WEXITED | WNOHANG | WNOWAIT);
+    if (waited == 0 && ended.si_pid == child) break;
+    if (waited < 0 && errno != EINTR) { int error = errno; close(errors[0]); cleanup_confirmed = 0; return failed("wait", error); }
     if ((!killed && stopping) || monotonic_ms() >= deadline) {
       if (killed) { close(errors[0]); cleanup_confirmed = 0; cleanup_error = ETIMEDOUT; return 1; }
       failed(stopping ? "cancelled" : "deadline", 0);
@@ -203,8 +271,10 @@ static int run_child_within(char *const argv[], unsigned long within_ms) {
   int error = 0;
   if (read(errors[0], &error, sizeof error) == sizeof error) failed("spawn", error);
   close(errors[0]);
-  // The script execs Hide; end and observe any owned remnants before reuse.
+  // Keep the unreaped leader's identity until the last group signal, so a
+  // recycled pid can never receive a signal belonging to this command.
   kill(-child, SIGKILL);
+  if (waitpid(child, &status, 0) != child) { cleanup_confirmed = 0; return failed("reap", errno); }
   long long cleanup_deadline = monotonic_ms() + 10000;
   while (kill(-child, 0) == 0 || errno != ESRCH) {
     if (monotonic_ms() >= cleanup_deadline) { cleanup_confirmed = 0; cleanup_error = ETIMEDOUT; break; }

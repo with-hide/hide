@@ -28,6 +28,21 @@ class StepCaps(unittest.TestCase):
                                       if "timeout-minutes" not in step], [])
                     self.assertGreaterEqual(job["timeout-minutes"], sum(step["timeout-minutes"] for step in steps))
 
+    def test_windows_pr_forms_exercise_the_compiled_controller_boundary(self):
+        job = yaml.safe_load((ROOT / WORKFLOWS[0]).read_text())["jobs"]["windows-forms"]
+        self.assertEqual(job["runs-on"], "windows-latest")
+        steps = job["steps"]
+        build = next(i for i, step in enumerate(steps) if "spawn-provider.c" in step.get("run", ""))
+        check = next(i for i, step in enumerate(steps) if "check-agent-journey-controller.py" in step.get("run", ""))
+        self.assertIn("clang ", steps[build]["run"])
+        self.assertLess(build, check)
+        self.assertIn("--provider", steps[check]["run"])
+        self.assertIn("--run-dir", steps[check]["run"])
+        upload = steps[-1]
+        self.assertTrue(upload["uses"].startswith("actions/upload-artifact@"))
+        self.assertEqual(upload["if"], "always()")
+        self.assertEqual(upload["with"]["path"], "${{ env.RUN_DIR }}/")
+
 
 class JourneyCap(unittest.TestCase):
     def test_the_journey_ends_itself_inside_its_step(self):

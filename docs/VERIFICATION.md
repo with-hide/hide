@@ -342,6 +342,9 @@ It preserves each command's bounded raw stdout and stderr (one MiB each), driver
 At most 512 controller commands run; the report carries byte counts and constant phase identifiers, and the retained raw streams stay out of the uploaded journey report.
 An empty or invalid answer remains a failure; a nonzero child exit carrying the product's structured refusal remains that refusal.
 The controller boundary check distinguishes stderr-only exits, OS launch errors, supervisor deadlines and inner structured timeouts on the actual compiled provider, without a desktop or agent CLI.
+It also retains a grandchild's process object on Windows and requires it signalled, with its open file released, when completion is published.
+The supervisor follows job membership before the root starts and waits for every announced process object, since an active-process count of zero alone precedes handle release; on Unix it keeps the group leader unreaped until the final group signal so a reused pid cannot be targeted.
+The ordinary PR's Windows forms job builds the same small C provider and runs this boundary check, as the full journey lanes do.
 Those controlled cases prove the boundary's behavior, not the historical cause of a Windows failure whose original stderr and supervisor phase were lost.
 
 `python3 scripts/agent-journey-check.py` follows each supported agent through what an operator does with it in Hide, on an isolated candidate, and says per agent and step whether it worked.

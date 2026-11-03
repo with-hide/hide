@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import time
 import unittest
 
 from agent_live_check.processes import OwnedProcesses
@@ -21,7 +22,7 @@ DRIVER = Path(__file__).resolve().with_name("agent_journey") / "controller_comma
 class Supervisor(unittest.TestCase):
     provider = root = None
 
-    def execute(self, name, code, *, within_ms=5000, executable=None):
+    def execute(self, name, code, *, within_ms=5000, executable=None, on_started=None):
         root = self.root / name
         root.mkdir(mode=0o700)
         command = {"id": 1, "argv": [executable or sys.executable, "-I", "-c", code], "env": {},
@@ -34,6 +35,8 @@ class Supervisor(unittest.TestCase):
         try:
             child = owner.spawn([str(self.provider), "--run-child", str(within_ms), str(completed),
                                  sys.executable, "-I", str(DRIVER), str(path)], env=dict(os.environ))
+            if on_started:
+                on_started(root)
             out, err = child.communicate(timeout=within_ms / 1000 + 25)
             (root / "provider.stdout").write_bytes(out)
             (root / "provider.stderr").write_bytes(err)
@@ -89,6 +92,55 @@ class Supervisor(unittest.TestCase):
         result = json.loads(completed.with_suffix(".json").read_text())
         self.assertEqual(result["phase"], "spawn")
         self.assertGreater(result["os_error"], 0)
+
+    def test_completion_waits_for_a_grandchild_to_release_its_file(self):
+        root = self.root / "descendant"
+        held = root / "held.txt"
+        ready, release = root / "ready", root / "release"
+        descendant = ("import os,time; from pathlib import Path; "
+                      f"f=open({str(held)!r},'w'); Path({str(ready)!r}).write_text(str(os.getpid())); time.sleep(30)")
+        code = ("import subprocess,sys,time; from pathlib import Path; "
+                f"subprocess.Popen([sys.executable,'-I','-c',{descendant!r}], "
+                "stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); "
+                f"release=Path({str(release)!r})\n"
+                "while not release.exists(): time.sleep(.01)\n"
+                "print('{\"ok\":true}',flush=True)")
+        handle, kernel = None, None
+
+        def observe(_):
+            nonlocal handle, kernel
+            deadline = time.monotonic() + 3
+            pid = ""
+            while not pid.isdigit():
+                if time.monotonic() >= deadline:
+                    self.fail("grandchild did not acquire its file")
+                time.sleep(.01)
+                pid = ready.read_text() if ready.is_file() else ""
+            if os.name == "nt":
+                import ctypes
+                from ctypes import wintypes
+                kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+                kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+                kernel.OpenProcess.restype = wintypes.HANDLE
+                kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+                kernel.WaitForSingleObject.restype = wintypes.DWORD
+                kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+                handle = kernel.OpenProcess(0x100000, False, int(pid))
+                self.assertTrue(handle, f"OpenProcess: {ctypes.get_last_error()}")
+            release.write_text("exit")
+
+        try:
+            _, supervisor, answer = self.execute("descendant", code, on_started=observe)
+            self.assertTrue(supervisor["cleanup_confirmed"])
+            if handle:
+                # This process object, not an active-process count, proves
+                # the descendant finished releasing its handles.
+                self.assertEqual(kernel.WaitForSingleObject(handle, 0), 0)
+            held.unlink()
+            self.assertEqual(answer, {"ok": True})
+        finally:
+            if handle:
+                kernel.CloseHandle(handle)
 
 
 class DeadlineComparison(Supervisor):

@@ -192,6 +192,8 @@ jobs:
     defaults:
       run:
         shell: bash
+    env:
+      RUN_DIR: agents/runs/agent-journey-controller-windows
     steps:
       - name: Keep line endings as committed
         timeout-minutes: 1
@@ -211,6 +213,20 @@ jobs:
         # writes work on Windows itself.
         timeout-minutes: 10
         run: python -m unittest scripts/tests/test_agent_live_windows.py -v
+      - name: Build the controller's spawn provider
+        timeout-minutes: 1
+        run: clang -O2 -o "$RUNNER_TEMP/journey-controller.exe" web/e2e/shims/spawn-provider.c
+      - name: Check the controller process boundary
+        timeout-minutes: 2
+        run: python scripts/check-agent-journey-controller.py --provider "$RUNNER_TEMP/journey-controller.exe" --run-dir "$RUN_DIR"
+      - name: Upload the controller outcomes
+        if: always()
+        timeout-minutes: 1
+        uses: actions/upload-artifact@v7
+        with:
+          name: agent-journey-controller-windows
+          path: ${{ env.RUN_DIR }}/
+          if-no-files-found: warn
 
   fake:
     name: agent journey fake model (${{ matrix.system }})
@@ -219,7 +235,7 @@ jobs:
     # Seven agents of eleven cells each, about 4 to 7 minutes an agent on
     # macOS and up to 9 on Windows (2026-10-18), inside the journey step's 85;
     # the job's cap is its steps' caps summed.
-    timeout-minutes: 170
+    timeout-minutes: 171
     strategy:
       fail-fast: false
       matrix:
