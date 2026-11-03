@@ -1359,6 +1359,16 @@ pub fn boot_id() -> io::Result<String> {
     sys::boot_id()
 }
 
+/// When this boot of the machine began, as the kernel tells it:
+/// `kern.boottime` on macOS, `btime` in `/proc/stat` on Linux, and on
+/// Windows the time of day less `GetTickCount64`, the milliseconds since
+/// the start. Nothing a process wrote before this moment was written by a
+/// process that still runs, since none outlives the boot. The kernel moves
+/// it with the clock, so it is exact only to the second.
+pub fn boot_time() -> io::Result<std::time::SystemTime> {
+    sys::boot_time()
+}
+
 /// How the terminal a process controls takes typed input, which decides
 /// whether a line typed into it before the process reads it can be cut.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -4218,6 +4228,17 @@ mod sys {
     }
 
     #[cfg(target_os = "linux")]
+    pub(super) fn boot_time() -> io::Result<std::time::SystemTime> {
+        let stat = std::fs::read_to_string("/proc/stat")?;
+        let seconds = stat
+            .lines()
+            .find_map(|line| line.strip_prefix("btime "))
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .ok_or_else(|| io::Error::other("/proc/stat names no boot time"))?;
+        Ok(std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds))
+    }
+
+    #[cfg(target_os = "linux")]
     pub(super) fn boot_id() -> io::Result<String> {
         let id = std::fs::read_to_string("/proc/sys/kernel/random/boot_id")?;
         let id = id.trim();
@@ -4225,6 +4246,35 @@ mod sys {
             return Err(io::Error::other("the kernel names no boot id"));
         }
         Ok(id.to_owned())
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(super) fn boot_time() -> io::Result<std::time::SystemTime> {
+        let mut booted = libc::timeval {
+            tv_sec: 0,
+            tv_usec: 0,
+        };
+        let mut size = std::mem::size_of::<libc::timeval>();
+        // SAFETY: the name is a nul-terminated string and `booted` is a
+        // `timeval` of `size` bytes, the type the kernel answers this name in.
+        if unsafe {
+            libc::sysctlbyname(
+                c"kern.boottime".as_ptr(),
+                (&raw mut booted).cast(),
+                &mut size,
+                std::ptr::null_mut(),
+                0,
+            )
+        } != 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        let seconds = u64::try_from(booted.tv_sec)
+            .map_err(|_| io::Error::other("the kernel names a boot before 1970"))?;
+        let micros = u64::try_from(booted.tv_usec).unwrap_or(0);
+        Ok(std::time::UNIX_EPOCH
+            + std::time::Duration::from_secs(seconds)
+            + std::time::Duration::from_micros(micros))
     }
 
     #[cfg(target_os = "macos")]
@@ -5888,6 +5938,14 @@ mod sys {
             io::ErrorKind::Unsupported,
             "a Windows start time is a time of day, which needs no boot to compare",
         ))
+    }
+
+    pub(super) fn boot_time() -> io::Result<std::time::SystemTime> {
+        // SAFETY: takes no arguments and cannot fail.
+        let since = unsafe { windows_sys::Win32::System::SystemInformation::GetTickCount64() };
+        std::time::SystemTime::now()
+            .checked_sub(std::time::Duration::from_millis(since))
+            .ok_or_else(|| io::Error::other("the machine started before the clock's epoch"))
     }
 
     pub(super) fn image_of(_: u32) -> io::Result<super::Image> {

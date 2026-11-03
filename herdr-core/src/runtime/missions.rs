@@ -320,6 +320,9 @@ pub(crate) struct MissionRuntime {
     pub(super) sleep_marks: Vec<super::agent_sleep::missions::SleepMark>,
     /// What the last health evaluation read (PRD mission-node-simple D-08).
     pub(super) health_made: super::mission_health::HealthMadeFrom,
+    /// The merged worktrees a done node's evaluation retires (Settings ›
+    /// Mission's cleanup switch).
+    pub(super) cleanup: super::mission_cleanup::MissionCleanup,
     /// The projects, by device and path, a worker's letter or a Conductor's
     /// node change asked to read again (D-09, B23), kept until that read is
     /// asked. Memory only: a restart reads every project anew.
@@ -2282,15 +2285,19 @@ impl Runtime {
         }
     }
 
-    /// Settings › Conductor (D-31, B48): a value checked before it is kept;
-    /// a mission already planned keeps its own.
+    /// Settings › Mission (D-31, B48): a value checked before it is kept;
+    /// a mission already planned keeps its own. The cleanup switch applies
+    /// to every mission: turned on, the merged worktrees are looked at now.
     pub(super) fn set_conductor_settings(&mut self, settings: ConductorSettings) -> bool {
         if let Err(code) = settings.validate() {
-            self.set_error(&code, "Conductor settings were not saved", false);
+            self.set_error(&code, "Mission settings were not saved", false);
             return true;
         }
         if self.snapshot.ui_state.conductor_settings == settings {
             return false;
+        }
+        if settings.clean_merged && !self.snapshot.ui_state.conductor_settings.clean_merged {
+            self.missions.cleanup.again = true;
         }
         self.snapshot.ui_state.conductor_settings = settings;
         self.persist_ui_state();

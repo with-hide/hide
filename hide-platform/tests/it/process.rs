@@ -2177,6 +2177,21 @@ fn the_boot_id_names_this_boot_and_holds_still() {
     assert_eq!(boot_id().unwrap(), first);
 }
 
+/// What tells a file written before this boot: the boot began before this
+/// test's process did, not long ago in the clock's terms, and holds still.
+#[test]
+fn the_boot_time_is_before_this_process_and_holds_still() {
+    let booted = hide_platform::process::boot_time().unwrap();
+    let now = std::time::SystemTime::now();
+    assert!(booted < now, "{booted:?} is not before {now:?}");
+    assert!(booted > std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_500_000_000));
+    let again = hide_platform::process::boot_time().unwrap();
+    let apart = again
+        .duration_since(booted)
+        .unwrap_or_else(|earlier| earlier.duration());
+    assert!(apart <= std::time::Duration::from_secs(2), "{apart:?}");
+}
+
 /// What keeps a device's old Herdr copy while a server runs it: the
 /// processes that run a file are found by the file, wherever it went, and a
 /// file no process runs has none.

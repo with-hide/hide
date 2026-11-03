@@ -1298,7 +1298,7 @@ A mission belongs to the front project when it was made in that project's Worksp
 With no mission in the project the tool is the start guide: a moving picture of a mission (the Conductor, three workers side by side, one decision, a check beside each part as it finishes, purple then green, two checking the demo, then main), `한 번 말하면, 여럿이 나눠서 끝까지`, three dots (나란히 일하고, 다른 모델이 검증, 판단만 나에게), the `/hide-mission` and `$hide-mission` calls, `아무 에이전트 터미널에서 부르면 여기에 미션이 생겨요`, and under it the defaults in three lines (동시에, 어디까지, 검증) with `바꾸기 ›`; there is no field and no example prompt (B3).
 The picture loops in about ten seconds and runs only while it is on screen in a window that shows; with reduced motion it is one finished frame; its colours are the mission tokens in both themes (B4).
 `+` unfolds the same guide above the list; `+` again or its `✕` folds it (B8).
-⚙, `바꾸기 ›` and the map head's ⚙ open the tool on its defaults: Settings › Conductor's own controls and values (how many at once, how far, the check strength, the cross-check, the candidates), `새 미션부터 적용`, and `완료` back to the list; a refused edit shows Settings › Conductor's words in place (B9).
+⚙, `바꾸기 ›` and the map head's ⚙ open the tool on its defaults: Settings › Mission's own controls and values (how many at once, how far, the check strength, the cross-check, the candidates), `새 미션부터 적용`, and `완료` back to the list; a refused edit shows Settings › Mission's words in place (B9).
 A mission record that cannot be read is one line, `미션 기록을 읽지 못했어요`, and the reason goes to the diagnostic log (B10).
 
 ## Terminal image attachment boundary
@@ -1707,7 +1707,7 @@ A hidden list draws no rows, the elapsed clock updates only its own text, and th
 
 The lane has one 보기 slot per window, which holds a pull request's card, a session's record or a mission's map and belongs to no checkout and no Agent tab, so changing either leaves it as it was (PRD sidebar-task-lens D-50, B48).
 Whatever opens a card or a record opens it there, in front of the documents in the lane's viewing column, and the Workspace in front, its Agent tab, the tool column and the keyboard stay (B14, B15, B50; PRD lane-two-columns B9); no `PR #N` or record tab appears among the documents.
-Its head reads `←`, the item's mark and name (`PR #N · <project>`, `기록 · <title>` or `미션 · <title>`), `↗` (GitHub) on a card, a gear on a map that opens Settings › Conductor, and `✕` (B47); a card's mark is its PR mark, in its state's icon and colour, here and on the rail.
+Its head reads `←`, the item's mark and name (`PR #N · <project>`, `기록 · <title>` or `미션 · <title>`), `↗` (GitHub) on a card, a gear on a map (hint `미션 설정`, Mission settings) that opens Settings › Mission, and `✕` (B47); a card's mark is its PR mark, in its state's icon and colour, here and on the rail.
 The head keeps the lane's surface and what the slot holds sits on the page's background, a card and a record alike, as the 보기 screens draw it.
 Opening another item puts it in front, and `←` steps back through the ones opened before, at most 20, the oldest leaving first; `✕` empties the slot and the viewing column goes back to what stood under it: the documents when they showed before the slot came forward, else the column closes, the lane closing with it when there is no tool column (PRD lane-two-columns B13; operator decision 2026-10-24).
 A slot that opens a closed lane, whatever the lane held when ⌘E or Escape closed it, stands alone, so its `✕` closes the lane again.
@@ -2808,7 +2808,7 @@ It remains independent of the inline group/draft start: a successful start makes
 ⌘N opens it in the desktop app, where it is also File › Start agent; in a browser tab ⌘N stays the browser's and `에이전트 시작…` in ⌘K, found by typing, opens it, on every screen.
 It floats at the ⌘P palette's place and width with no backdrop, and the keyboard lands in its one-line text box, `에이전트에게 무엇을 요청할까요?`.
 Opened while Settings is up, it takes Settings' place: Settings closes and the target is the front device's Home.
-Under the text are the target, the agent kind and the model menus, a `⏎` keycap and `시작`; Enter or `시작` sends one `agent_start_in_checkout` with a fresh request id, the text as the agent's first instruction, handed to the CLI as its own argument (ARCHITECTURE.md, the first prompt).
+Under the text are the target, the agent kind and the model menus, a `⏎` keycap and `시작`; Enter or `시작` sends one `agent_start_in_checkout` with a fresh request id, the text as the agent's first instruction, typed once the agent's screen takes input or handed to the CLI as its own argument where that is proven (ARCHITECTURE.md, the first prompt).
 The target defaults to what is in front: the checkout of the Workspace in front (a worktree when that is it), a project's main checkout while the Overview is filtered to that project, and the front device's Home while the Overview with no project chip or Settings is; a device's surface in front makes that device the target's.
 The target menu lists the front device's Home and checkouts, then each other device's Home and checkouts prefixed with its name, with a separator between devices and a check on the chosen item; a device that is not connected is listed disabled with `연결 안 됨`.
 The kind menu holds Claude Code, Codex, Grok, OpenCode, Pi, omp and Antigravity with their provider marks; the model menu is `CLI 기본값` then the chosen kind's catalog (Antigravity's from `agy models`, started with `--model`), and changing the kind takes that kind's list and the model last chosen for it.
@@ -3444,11 +3444,13 @@ A device that still waits after it was sent the choice is logged once (`first_ru
 Under `Continue`, one line names the agent Hide AI will use: the first agent in that fixed order that is switched on in the step and signed in (`firstRunAgent` in `web/src/hideAi.ts`, "Hide AI uses Claude Code", `Hide AI가 쓰는 에이전트: Claude Code`), read from this machine's rows of `status.background_ai.providers[].state`, which the step asks the core to probe while it is open; with no such agent the line is absent, and it follows each flip of a tile (PRD settings-cleanup D-18, B45, B46).
 An agent installed later appears in these rows off and is never turned on by a pass.
 
-### Conductor
+### Mission
 
-Settings › Conductor, in the machine group after Hide AI, keeps what a Conductor plans with on this machine (PRD software-factory-conductor D-31, B48, B49).
+Settings › Mission (`미션`; the tab was named Conductor until the skill and the map became hide-mission), in the machine group after Hide AI, keeps what a Conductor plans with on this machine (PRD software-factory-conductor D-31, B48, B49).
 `동시 실행 상한` is how many agents one mission runs at once, reviewers and verifiers included and the Conductor not counted, from 1 to 16; `기본 범위` is how far a mission goes when the operator does not say, up to ready pull requests or through the merge.
-Settings › Conductor has no cleanup item: a mission deletes no file, and a done node's worktree and build cache stay until the project's disk cleanup (`머지됨 N → 정리`) removes them when the operator chooses ([delivery.md: What Hide settles in a mission by itself](delivery.md#what-hide-settles-in-a-mission-by-itself)).
+`머지되면 작업 공간 정리` (Clean up a worktree once merged), right under them and on by default, is a switch with one line under it: `PR이 머지된 갈래의 워크트리와 빌드 캐시를 지워요. 고치던 파일이 남아 있거나 쓰는 중이면 그대로 둬요.`
+On, a done node whose pull request GitHub reports merged has that branch's worktree removed with its build cache when its tree is clean and no agent pane or running program is in it, the branch always kept; a worktree that holds changes or is in use stays, is named in the diagnostic log and stays in the project's disk cleanup (`머지됨 N → 정리`), and nothing is removed while GitHub's answer is missing ([delivery.md: What Hide settles in a mission by itself](delivery.md#what-hide-settles-in-a-mission-by-itself)).
+Off, missions delete nothing. Unlike the values below, the switch applies to every mission at once, a running or closed one included.
 `작업자 후보` lists the agents a Conductor chooses workers from, at most 16: each row's agent, its model from the start panel's list (disabled with why when that list cannot be read), its effort automatic or fixed, and what it is for; an agent this machine has not installed is dimmed with `설치 안 됨`.
 With no candidates the Conductor chooses among the installed agents; with some, Hide refuses a worker that is none of them (`mission_candidate_refused`, [delivery.md: Missions](delivery.md#missions)).
 `검증` holds two controls, and the checkers come from the candidates above.
@@ -3489,14 +3491,18 @@ Every value is the core's `status.background_ai`; the tab sends `ai_settings` ev
 
 ## Mobile companion
 
+The default connection works the same way on macOS, Windows and Linux: enable Mobile, show the QR and scan it with the phone camera.
+The phone and the computer are the only endpoints that can read their messages; Hide's relay cannot read the content it forwards.
+No Hide account, login, payment or Tailscale setup appears in this connection flow.
+
 The hosted phone app at `app.withhide.dev` and the advanced Tailscale app at `/m/` share every list, detail and command screen.
 The hosted start page shows the paired-device list; choosing a device opens the bundle matching its phone protocol at `/p/<n>/`.
-A QR opens a single-line, escaped `<device name>에 연결`, a line about viewing and replying to agents, the encryption assurance, 연결, and the existing five-minute expiry guidance.
+A QR opens the shared device-first page described below, with an escaped, wrapping device name, a short line about viewing and replying to agents, 연결, the encryption assurance and five-minute expiry guidance.
 Its code leaves the address before connection and is never stored.
 Expired and already-used codes retain the device's existing `code_expired` wording, and four paired phones retain the existing limit guidance.
-An unsupported device shows `<device>의 Hide를 업데이트해 주세요`, the available phone app and device protocol versions, and 다른 기기 고르기.
+An unsupported device uses the shared version guidance below, with the device name, labelled phone app and device protocol versions, and 다른 기기 고르기.
 
-In the hosted app, the header's device name opens a picker with each saved device's connection dot, 내 차례 and 작업 중 counts, or its last successful contact when offline.
+In the hosted app, the header's device name opens the shared bottom sheet with each saved device's labelled connection state, 내 차례 and 작업 중 counts, or its last successful contact when offline.
 A device whose protocol differs from the open bundle shows a warning dot and both versions instead of counts; selecting it asks the root loader for its matching bundle or update guidance.
 Neither the root list nor a bundle's picker authenticates to an incompatible device to read its status.
 Choosing another device replaces the page and closes the old connection; drafts and pending actions do not move between devices.
@@ -3540,9 +3546,14 @@ A reply or quick key sent while its pane is being forked waits for that fork und
 The phone reports success only after Herdr confirms the write; a holder refusal keeps the reply text and shows the existing send-failure line so the operator can retry once the pane is ready.
 A pane outside the desktop's attached tabs remains writable without attaching it or moving the desktop's keyboard.
 
-The QR opens a page with the hide icon, "<Mac>에 연결", a line on what the phone can do, 연결, and a note that the code expires in five minutes.
+The QR opens a quiet device-first page: the hide wordmark, a device icon and wrapping device name, one short line on what the phone can do, and a compact secondary 연결 button.
+The five-minute expiry and, on the hosted app, end-to-end encryption note sit below the main content.
+Pairing refusals use the same layout and keep their existing recovery actions.
 연결 opens the list and a one-time hint to keep hide on the Home Screen; an expired or spent code says so, a fifth phone is told the limit and to revoke one on the Mac, and a page opened with no code or credential says to scan the QR in Settings > Mobile.
-The list's header shows hide, the Mac's name, how many other phones are connected, and a connection dot.
+The list's header shows hide, the device name and how many other phones are connected; it has no unlabelled connection dot.
+On the hosted app the wrapping device name opens the shared bottom sheet: each device row shows its name, labelled connection state and counts or last-seen time, with remove and connect-another actions.
+A protocol mismatch uses the same device-first layout, the two version numbers with labels, and a secondary action to choose another device.
+Home-screen and notification prompts are plain rows separated by spacing, without repeated filled accent buttons or enclosing cards.
 Agents sit in 내 차례, 읽을 것, 작업 중 and 확인함, the sidebar's own section names, with their counts, each row with its status mark (the sidebar's five marks and the word that leads its line), task name, project and branch, the SSH device's chip, the elapsed time and the request or news line, and the list updates live.
 Local sleeping conversations appear as separate rows in the core-selected group, with Wake or Check status and no conversation detail or reply bar.
 Those controls are disabled while disconnected or while one sleep request is waiting; a refused request keeps the row and asks the operator to check connection and session status before trying again.
@@ -3554,7 +3565,7 @@ The desktop does not follow a phone start: the visible tab and the keyboard stay
 Pressing 시작 again for the same text and choice after a lost answer sends the same request id, and hided starts one agent for it.
 While hided is out of reach the sheet shows the unreachable line and keeps what was written; a refused start shows its reason inside the sheet and keeps the text, which is cleared only by a start that went.
 When hided is out of reach the last list stays dimmed under "연결 안 됨 · Mac의 Hide가 꺼져 있거나 폰의 Tailscale이 꺼져 있어요. 다시 시도 중", the app retries on its own, and it shows the same line when opened without a network.
-A Mac that went to sleep shows it too: the phone asks hided when it has heard nothing for 20 seconds and shows the line 10 seconds after an unanswered ask, and on returning to the phone it asks at once, so the green dot never outlasts a hided that has stopped answering by more than 30 seconds.
+A Mac that went to sleep shows it too: the phone asks hided when it has heard nothing for 20 seconds and shows the line 10 seconds after an unanswered ask, and on returning to the phone it asks at once, so the connected state never outlasts a hided that has stopped answering by more than 30 seconds.
 A row opens its detail: ← 목록, the elapsed time and the row's head, with 대화 | 터미널 between ← 목록 and the elapsed time when the agent has a conversation to show, a Claude Code, Codex, Grok, Pi, omp, Cursor or OpenCode agent on this Mac whose session Herdr reports.
 대화 is the agent's own conversation, its newest 30 messages with the newest at the bottom: the operator's messages as ❯ blocks on a grey ground, the agent's Markdown drawn at full width (headings, emphasis, lists, tables, and code wrapped without highlighting, a link or an image as its text), an interruption as 중단됨, and the time after each turn; pulling to the top loads 30 older messages at a time up to the first, and at 300 it says 최근 300개까지 볼 수 있어요.
 What the agent writes next arrives on its own, and tool output and injected context are never shown.
@@ -3562,7 +3573,7 @@ Pi, omp and Grok use their recorded native message units and times (a Grok promp
 Cursor uses its native graph units under the same page and text bounds; a recorded time is shown at minute precision and an unrecorded time is omitted.
 OpenCode uses its own messages from its database, paged by message with the same 30-message and text bounds; every page, idle poll and copied pager proves the root session and exact checkout again, and a session rewound under the phone is read anew.
 An unavailable or changed native source falls back through the existing feature-local refusal path; no transcript is borrowed from another session and no new banner is added.
-터미널, and the whole detail of any other agent, is the pane's recent rows read-only in the terminal's colours with the newest at the bottom, each row wrapped at the phone's width so the detail never scrolls sideways; pulling to the top loads older rows until the pane has no more.
+터미널, and the whole detail of any other agent, is the pane's recent rows read-only in the terminal's colours with the newest at the bottom, in the shared body text size, each row wrapped at the phone's width so the detail never scrolls sideways; pulling to the top loads older rows until the pane has no more.
 Every detail has the quick keys (Enter, Escape, 위 화살표, 아래 화살표, Ctrl-C by accessible name) and a one-line reply with 보내기; a reply is sent with Enter after it and clears on success, a failure keeps the text with the reason under it, and a reply over 2,000 characters is named before it is sent.
 When hide cannot tell whether a reply reached the pane, the line says so and asks the operator to check the terminal before sending it again.
 An agent whose process Hide ended and whose pane holds a bare shell (a keep-pane sleep, described with the pane body above) shows its state in the terminal's place, in the desktop pane's words: Sleeping with its last progress line and Wake agent; Waking… with how old the resumed conversation is; or `Couldn’t resume this conversation` with the core's reason, Retry and Start new session.

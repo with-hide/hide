@@ -29,7 +29,7 @@ import { useUiStore } from "./ui";
 // The rail's Mission tool (PRD mission-tool D-01..D-03, D-08..D-10, B1-B11):
 // the front project's missions in groups, each opening its map in the 보기
 // slot; with none, how a mission starts; and the Conductor defaults, edited
-// in place with Settings › Conductor's own controls. Every state and number
+// in place with Settings › Mission's own controls. Every state and number
 // is the core's mission record; what waits on the operator is the map's own
 // `내 차례` rule (`turnItems`).
 
@@ -353,7 +353,7 @@ function Fact({ label, value }: { label: string; value: string }) {
 
 /**
  * The defaults, edited in place (B9): the same values, edit events and
- * refusal words as Settings › Conductor, one line saying they apply from the
+ * refusal words as Settings › Mission, one line saying they apply from the
  * next new mission, and `완료` back to the list.
  */
 function Defaults({ actions }: { actions: Actions }) {

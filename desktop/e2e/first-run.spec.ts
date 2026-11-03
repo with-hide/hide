@@ -224,8 +224,8 @@ test("practice first ends the wizard over the empty Home and opens the practice 
   const opened = app.waitForEvent("window");
   await page.locator('[data-first-run-way="practice"]').click();
   const practice = await opened;
-  await expect(practice.locator('[data-practice-chapter="overview"]')).toBeVisible({ timeout: 30_000 });
-  expect(new URL(practice.url()).searchParams.get("chapter")).toBe("overview");
+  await expect(practice.locator('[data-practice-chapter="mission"]')).toBeVisible({ timeout: 30_000 });
+  expect(new URL(practice.url()).searchParams.get("chapter")).toBe("mission");
   await expect(wizard).toHaveCount(0);
   // Opening the chapter is practicing: the sidebar's invitation is gone with it.
   await expect(page.locator("[data-practice-invite]")).toHaveCount(0);

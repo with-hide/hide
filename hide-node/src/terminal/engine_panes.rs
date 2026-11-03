@@ -72,6 +72,7 @@ impl LocalPanes {
     /// The panes of `holders`, attached to `service`; a pane started with no
     /// program runs `shell`.
     pub fn new(holders: Arc<Holders>, service: Arc<Service>, shell: PaneShell) -> Self {
+        holders.own_every_pane();
         Self {
             holders,
             service,

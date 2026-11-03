@@ -226,7 +226,7 @@
               <div class="node laptop" aria-hidden="true"><b>MacBook</b><span class="node-tag"><span class="awake">your laptop</span><span class="lid">lid closed</span></span><span class="agent"><img src="./assets/agents/claude-code.png" width="128" height="128" alt="">Claude Code · lead</span></div>
               <div class="node server" aria-hidden="true"><b>Linux server</b><span class="node-tag">over SSH</span><span class="agent"><img src="./assets/agents/codex.png" width="128" height="128" alt="">Codex · tests</span></div>
               <div class="node core" aria-hidden="true"><b>Mac mini</b><span class="node-tag">core · always on</span><span class="agent"><img src="./assets/agents/codex.png" width="128" height="128" alt="">Codex · CSV export</span><span class="agent"><img src="./assets/agents/opencode.svg" width="512" height="512" alt="">OpenCode · fix</span></div>
-              <div class="node phone" aria-hidden="true"><b>Phone</b><span class="node-tag">over Tailscale</span><span class="phone-note">Approve #431 and #436?</span></div>
+              <div class="node phone" aria-hidden="true"><b>Phone</b><span class="node-tag">encrypted relay</span><span class="phone-note">Approve #431 and #436?</span></div>
               <span class="letter" aria-hidden="true"></span>
             </div>
             <figcaption class="mesh-caption" aria-hidden="true"><span class="mesh-route">Claude Code on MacBook → Codex on Linux server</span><span class="mesh-text">Run the export tests on the Linux box.</span></figcaption>
@@ -238,7 +238,7 @@
         <div class="section-head center reveal">
           <p class="label bare">Pricing</p>
           <h2 id="pricing-title">Free, on your own machines.</h2>
-          <p>The app, every agent, every machine and your phone. Fair source, with no hosted service and no new API key.</p>
+          <p>The app, every agent, every machine and your phone. Fair source, with a free encrypted phone relay and no new API key.</p>
         </div>
         <div class="plans solo reveal">
           <article class="plan free">
@@ -266,7 +266,8 @@
         <div class="faq reveal">
           <details open><summary>Is hide a wrapper around my agent?</summary><p>No. hide adds its hooks to each agent's own settings and a skill the agent can call, and the vendor's CLI runs as it does without hide. Your subscription, config, skills and MCP servers stay as they are.</p></details>
           <details><summary>Which agents work with it?</summary><p>Claude Code, Codex, Antigravity, OpenCode, Grok, Pi and omp, each with its own login. Every one gets the same status, title and place to answer. Grok takes messages only while it works and does not use Project Memory yet.</p></details>
-          <details><summary>Does my code leave my machines?</summary><p>Not through hide, which has no hosted service. Agents, the core and Hide AI run on machines you own, with the agent CLIs you already signed in to, so code goes only where those CLIs send it. Your phone reaches your machines over your own Tailscale.</p></details>
+          <details><summary>How do I connect my phone?</summary><p>On macOS, Windows or Linux, turn on Mobile in Settings and scan the QR with your phone camera. Open app.withhide.dev and connect, with no Hide account, payment or Tailscale installation. Keep your computer awake and connected. You can add the phone app to your Home Screen, enable notifications and switch between paired computers. Tailscale remains an advanced direct option where supported.</p></details>
+          <details><summary>Can the relay read my conversations?</summary><p>No. Your phone and computer encrypt their messages before sending them through Hide's relay in Tokyo. The relay forwards them and cannot read conversations, commands or phone credentials. It can see connection times, traffic sizes and the routing identifiers that join your devices. Agents, the core and Hide AI still run on machines you own, using the agent CLIs you already signed in to; those CLIs send data to their providers as before.</p></details>
         </div>
       </section>
 

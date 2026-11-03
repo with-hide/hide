@@ -415,6 +415,19 @@ enum PtyWrite {
     Answers(Vec<u8>),
 }
 
+/// When this process began and when it had written itself into its record,
+/// so `holder.started` says where its start went: the claim, the parser and
+/// socket, the program's spawn and the record's `running`.
+pub struct StartClock {
+    pub begun: Instant,
+    pub claimed: Duration,
+}
+
+/// `elapsed` in milliseconds to a tenth.
+fn millis(elapsed: Duration) -> f64 {
+    (elapsed.as_secs_f64() * 10_000.0).round() / 10.0
+}
+
 pub struct Holder {
     log: Log,
     socket: PathBuf,
@@ -456,13 +469,14 @@ impl Holder {
     /// Starts the program on a new PTY and listens at the socket. An error
     /// leaves nothing running.
     /// `job` names the job that holds the holder, for the log; `record` is
-    /// the pane's record, told the program once it runs and `running` once
-    /// the socket listens.
+    /// the pane's record, told the program and `running` in one write once
+    /// the program runs, the socket listening before it starts.
     pub fn start(
         config: &Config,
         log: Log,
         job: &str,
         record: Option<Claim>,
+        clock: &StartClock,
     ) -> Result<Self, String> {
         #[cfg(windows)]
         portable_pty::win::verify_runtime().map_err(|error| error.to_string())?;
@@ -476,6 +490,19 @@ impl Holder {
                 pixel_height: 0,
             })
             .map_err(|error| format!("the PTY could not be opened: {error}"))?;
+        // The parser and the socket before the program, so that once the
+        // program runs, one write of the record says it runs and the socket
+        // listens; a failure from here to the spawn leaves no program, and
+        // the dropped listener takes its endpoint with it.
+        let pane = Pane::new(size, config.theme.as_ref())?;
+        let listener = LocalListener::bind(&config.socket).map_err(|error| {
+            format!(
+                "{} could not be listened on: {error}",
+                config.socket.display()
+            )
+        })?;
+        let closer = listener.closer();
+        let listening_at = clock.begun.elapsed();
         let mut command = CommandBuilder::from_argv(config.program.clone());
         command.cwd(&config.cwd);
         // The terminal the program writes to is the holder's, and nothing
@@ -499,6 +526,7 @@ impl Holder {
         #[cfg(windows)]
         let spawned = pair.slave.spawn_command_in_job(command, session.job());
         let mut child = spawned.map_err(|error| format!("the program could not start: {error}"))?;
+        let spawned_at = clock.begun.elapsed();
         let program = child.process_id().unwrap_or(0);
         if let Err(error) = session.adopt(program) {
             let _ = child.kill();
@@ -509,11 +537,17 @@ impl Holder {
             session: Some(session),
             log: log.clone(),
         };
+        // The program and `running` in one write of the record: the window
+        // in which the program runs and the record does not name it is that
+        // write, as it was when the program had a write of its own, and a
+        // start writes its record once less (each write is flushed, and the
+        // start of every new pane waited for them).
         if let Some(record) = &record {
             record
-                .program(program)
+                .running(program)
                 .map_err(|reason| format!("the pane's record: {reason}"))?;
         }
+        let running_at = clock.begun.elapsed();
         drop(pair.slave);
         let master = pair.master;
         let reader = master
@@ -523,19 +557,6 @@ impl Holder {
             .take_writer()
             .map_err(|error| format!("the PTY's input: {error}"))?;
         let master = PtyMaster(Arc::new(Mutex::new(Some(master))));
-        let pane = Pane::new(size, config.theme.as_ref())?;
-        let listener = LocalListener::bind(&config.socket).map_err(|error| {
-            format!(
-                "{} could not be listened on: {error}",
-                config.socket.display()
-            )
-        })?;
-        let closer = listener.closer();
-        if let Some(record) = &record {
-            record
-                .running()
-                .map_err(|reason| format!("the pane's record: {reason}"))?;
-        }
         let session = started.keep();
 
         let (sender, events) = mpsc::channel();
@@ -622,6 +643,10 @@ impl Holder {
                 ("rows", size.rows.into()),
                 ("cols", size.cols.into()),
                 ("job", job.into()),
+                ("claimed_ms", millis(clock.claimed).into()),
+                ("listening_ms", millis(listening_at).into()),
+                ("spawned_ms", millis(spawned_at).into()),
+                ("running_ms", millis(running_at).into()),
             ],
         );
         Ok(Self {

@@ -999,7 +999,7 @@ fn conductor_settings_out_of_range_are_not_kept() {
     );
 }
 
-/// Each edit in Settings › Conductor sends only what it changes, so a second
+/// Each edit in Settings › Mission sends only what it changes, so a second
 /// edit sent before the first one's echo keeps the first.
 #[test]
 fn conductor_settings_change_only_what_an_edit_sends() {
@@ -1015,14 +1015,126 @@ fn conductor_settings_change_only_what_an_edit_sends() {
     assert!(runtime.dispatch_json(&event(json!({"default_scope": "merge"}))));
     assert!(runtime.dispatch_json(&event(json!({"default_strength": "thorough"}))));
     assert!(runtime.dispatch_json(&event(json!({"other_vendor": false}))));
+    assert!(runtime.snapshot.ui_state.conductor_settings.clean_merged);
+    assert!(runtime.dispatch_json(&event(json!({"clean_merged": false}))));
     let settings = &runtime.snapshot.ui_state.conductor_settings;
     assert_eq!(settings.concurrency, 6);
     assert_eq!(settings.default_scope, crate::missions::MissionScope::Merge);
     assert_eq!(settings.default_strength, Strength::Thorough);
     assert!(!settings.other_vendor);
+    assert!(!settings.clean_merged);
 }
 
-/// A mission takes Settings › Conductor's verification strength and choice
+/// A mission whose node `fix` is done with pull request 7, which GitHub
+/// answers with `badge` on a fresh list unless `github` says otherwise.
+fn done_with_pull(runtime: &mut Runtime) {
+    command(runtime, "sender", json!({"op": "create", "title": "Fix"})).unwrap();
+    command(
+        runtime,
+        "sender",
+        json!({"op": "plan", "plan": {"nodes": [
+            {"key": "fix", "title": "Fix it", "kind": "change", "criteria": ["it works"], "delivery": "pr"},
+        ]}}),
+    )
+    .unwrap();
+    command(runtime, "sender", json!({"op": "start"})).unwrap();
+    without_gate(runtime);
+    command(
+        runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"pr": 7, "status": "done"}}),
+    )
+    .unwrap();
+}
+
+fn merged_fix() -> crate::runtime::mission_cleanup::Target {
+    crate::runtime::mission_cleanup::Target {
+        mission: "mission-1".into(),
+        node: "fix".into(),
+        machine: crate::node::TEST_NODE.into(),
+        root: PROJECT.into(),
+        branch: "fix".into(),
+    }
+}
+
+/// Operator decision 2026-11-02: with the switch on, a done node's merged
+/// branch is retired, and only on GitHub's fresh answer holding every pull
+/// request the node names merged or closed; off, missions retire nothing.
+#[test]
+fn a_done_nodes_merged_worktree_is_retired_only_on_githubs_answer_and_with_the_switch_on() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    done_with_pull(&mut runtime);
+    let targets = |runtime: &mut Runtime, github: GithubSnapshot| {
+        runtime.github = github;
+        runtime.mission_cleanup_targets()
+    };
+    let merged = || vec![pull(7, "a1", PullRequestBadge::Merged, None)];
+
+    assert_eq!(
+        targets(&mut runtime, github(merged(), false)),
+        [merged_fix()]
+    );
+    // GitHub's answer is missing: never read, stale, or without the PR.
+    assert!(targets(&mut runtime, GithubSnapshot::default()).is_empty());
+    assert!(targets(&mut runtime, github(merged(), true)).is_empty());
+    let mut unread = github(merged(), false);
+    unread.projects[0].pull_requests_read = false;
+    assert!(targets(&mut runtime, unread).is_empty());
+    assert!(targets(&mut runtime, github(Vec::new(), false)).is_empty());
+    // Not merged yet: open, or closed without its merge.
+    let open = vec![pull(7, "a1", PullRequestBadge::Open, None)];
+    assert!(targets(&mut runtime, github(open, false)).is_empty());
+    let closed = vec![pull(7, "a1", PullRequestBadge::Closed, None)];
+    assert!(targets(&mut runtime, github(closed, false)).is_empty());
+    // Another open pull request on the same branch holds it.
+    let follow_up = pull(8, "b1", PullRequestBadge::Open, None);
+    assert!(
+        targets(
+            &mut runtime,
+            github(vec![merged().remove(0), follow_up], false)
+        )
+        .is_empty()
+    );
+
+    runtime.snapshot.ui_state.conductor_settings.clean_merged = false;
+    assert!(targets(&mut runtime, github(merged(), false)).is_empty());
+    runtime.snapshot.ui_state.conductor_settings.clean_merged = true;
+    // A node back at work is not retired.
+    runtime.missions.book.get_mut("mission-1").unwrap().nodes[0].status = NodeStatus::Working;
+    assert!(targets(&mut runtime, github(merged(), false)).is_empty());
+}
+
+/// A worktree kept for what the operator settles (changes) is not tried
+/// again this run; one kept for an agent or a program, or refused, is
+/// tried again on the next pass.
+#[test]
+fn a_kept_worktree_is_tried_again_only_when_what_keeps_it_may_leave() {
+    use crate::runtime::worktree_retire::{Kept, Outcome, Retirement};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    done_with_pull(&mut runtime);
+    runtime.github = github(vec![pull(7, "a1", PullRequestBadge::Merged, None)], false);
+    for (outcome, again) in [
+        (Outcome::Kept(Kept::AgentInside), true),
+        (Outcome::Kept(Kept::ProgramRunning), true),
+        (Outcome::Failed("agent.list is malformed".into()), true),
+        (Outcome::Kept(Kept::Uncommitted), false),
+    ] {
+        let retirement = Retirement {
+            path: Some(format!("{PROJECT}-fix")),
+            outcome: outcome.clone(),
+        };
+        runtime.note_mission_cleanup(vec![(merged_fix(), retirement)], false);
+        assert_eq!(
+            runtime.mission_cleanup_targets() == [merged_fix()],
+            again,
+            "{outcome:?}"
+        );
+    }
+}
+
+/// A mission takes Settings › Mission's verification strength and choice
 /// of another company when it is created; its plan changes the strength
 /// before or during the mission, each change one event with its reason, and
 /// a plan that names none, or a later settings edit, keeps it.

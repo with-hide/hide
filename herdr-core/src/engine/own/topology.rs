@@ -127,15 +127,43 @@ pub(super) struct Pane {
     pub(super) live: PaneLive,
     /// Why no holder runs the pane, once a restore could not start one.
     pub(super) failed: Option<String>,
+    /// Its holder is being started by the call that drew it (a new tab or
+    /// split is drawn before its holder starts, as Herdr's pane exists
+    /// once it forked). Whoever takes the pane out meanwhile leaves its
+    /// holder to that call, which ends it once it finds the pane gone.
+    /// Kept in memory only.
+    pub(super) starting: Option<std::sync::Arc<super::starts::Starting>>,
 }
 
 impl Pane {
+    pub(super) fn is_starting(&self) -> bool {
+        self.starting.as_ref().is_some_and(|start| start.pending())
+    }
+
     pub(super) fn new(cwd: &str, label: Option<&str>) -> Self {
         Self {
             cwd: cwd.to_owned(),
             label: label.map(str::to_owned),
             ..Self::default()
         }
+    }
+
+    /// A pane drawn before its holder starts, with `command` and `env`: its
+    /// `starting` field says so.
+    pub(super) fn starting(
+        cwd: &str,
+        label: Option<&str>,
+        command: Option<&[String]>,
+        env: &BTreeMap<String, String>,
+    ) -> (Self, std::sync::Arc<super::starts::Starting>) {
+        let starting = std::sync::Arc::default();
+        (
+            Self {
+                starting: Some(std::sync::Arc::clone(&starting)),
+                ..Self::started(cwd, label, command, env)
+            },
+            starting,
+        )
     }
 
     /// A pane started with `command` and `env`, which its export gives back.

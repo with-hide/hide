@@ -11,7 +11,7 @@ import { useShellStore } from "../store";
 import type { DispatchFn } from "../ws";
 import { ConductorTab } from "./ConductorTab";
 
-// Settings › Conductor's verification: one strength and one toggle, each edit
+// Settings › Mission's verification: one strength and one toggle, each edit
 // sending only its own field.
 
 const browserLayout = vi.hoisted(() => {
@@ -90,6 +90,26 @@ it("sends each edit as its own field, so a second edit before the first one's an
     await act(async () => tab.verification().querySelector<HTMLElement>('[role="switch"]')!.click());
     expect(tab.sent).toEqual([{ default_strength: "thorough" }, { other_vendor: false }]);
   } finally { await tab.unmount(); }
+});
+
+it("puts the merged-worktree cleanup switch right under the cap and the scope, on by default, with the line that says what it removes and keeps, and sends only its own field", async () => {
+  const tab = await mount(DEFAULT_CONDUCTOR);
+  try {
+    const rows = [...document.querySelectorAll<HTMLElement>("[data-settings-conductor] > :first-child > * > *")];
+    const cleanup = document.querySelector<HTMLElement>("[data-conductor-cleanup]")!;
+    expect(rows.slice(-1)[0]).toBe(cleanup);
+    expect(rows.length).toBe(3);
+    expect(cleanup.textContent).toContain("Clean up a worktree once merged");
+    expect(cleanup.textContent).toContain("Removes the worktree and build cache of a node whose PR merged. One that still holds files you were changing, or is in use, stays.");
+    const toggle = cleanup.querySelector<HTMLElement>('[role="switch"]')!;
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    await act(async () => toggle.click());
+    expect(tab.sent).toEqual([{ clean_merged: false }]);
+  } finally { await tab.unmount(); }
+  const off = await mount({ ...DEFAULT_CONDUCTOR, clean_merged: false });
+  try {
+    expect(document.querySelector("[data-conductor-cleanup] [role=switch]")?.getAttribute("aria-checked")).toBe("false");
+  } finally { await off.unmount(); }
 });
 
 it("leaves a purpose field focused on the Enter that confirms an input method's syllable, so the syllable is not committed twice, and the next Enter saves it", async () => {

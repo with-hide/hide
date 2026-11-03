@@ -24,7 +24,7 @@
 //! owned data the runtime assembled under its lock ([`InputTarget`]).
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use hide_agent_adapter::{AgentApi, InputRung};
 use hide_node_link::input::{Delivery, InputChannel};
@@ -106,6 +106,47 @@ pub(crate) fn prepare(target: &InputTarget) -> Prepared {
 pub(crate) fn typed_only() -> Prepared {
     Prepared {
         steps: vec![Step::Typed],
+    }
+}
+
+/// Why an agent was not ready for input within its wait ([`ready`]).
+#[derive(Debug)]
+pub(crate) enum NotReady {
+    /// Herdr refused the read's parameters.
+    Request(String),
+    /// The pane's agent could not be read.
+    Unread(String),
+    /// The agent did not take input within the wait; nothing was typed.
+    Late(String),
+}
+
+/// Waits until Herdr reports the agent `name` in `pane` ready for input,
+/// the moment an input that did not ride the start is typed after the
+/// agent's screen is drawn; `wait` bounds it.
+#[allow(clippy::disallowed_methods)] // a production wait on Herdr's readiness, bounded by the deadline
+pub(crate) fn ready(
+    engine: &dyn Engine,
+    pane: &str,
+    name: &str,
+    wait: Duration,
+) -> Result<(), NotReady> {
+    let deadline = Instant::now() + wait;
+    loop {
+        let agent = match engine.delivery_agent(Wait::Each(Duration::from_secs(5)), pane) {
+            Ok(agent) => agent,
+            Err(EngineError::Request(message)) => return Err(NotReady::Request(message)),
+            Err(error) => return Err(NotReady::Unread(error.to_string())),
+        };
+        if agent.pane_id == pane && agent.name == name && agent.readiness.accepts_input() {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(NotReady::Late(format!(
+                "readiness {:?} after {wait:?}",
+                agent.readiness
+            )));
+        }
+        std::thread::sleep(Duration::from_millis(250));
     }
 }
 
@@ -413,6 +454,39 @@ mod tests {
             );
             assert!(node.asked().is_empty(), "{kind}");
             assert_eq!(typed(&herdr), [json!("letter")], "{kind}");
+        }
+    }
+
+    /// An agent that never takes input within the wait is `Late`, with
+    /// nothing typed, and one ready under another name is not ready: the
+    /// wait reads the agent the start named.
+    #[test]
+    fn an_agent_that_never_takes_input_is_late_and_nothing_is_typed() {
+        for (name, interactive) in [("hide-codex-w1-p2", false), ("someone-else", true)] {
+            let herdr = FakeHerdr::start("ladder-never-ready", move |method, _| match method {
+                "agent.get" => json!({"type": "agent_info", "agent": {
+                    "pane_id": "w1:p2", "tab_id": "w1:t1", "workspace_id": "w1",
+                    "terminal_id": "term_1", "agent": "codex", "agent_status": "idle",
+                    "state_change_seq": 1, "focused": false, "interactive_ready": interactive,
+                    "name": name, "revision": 0}}),
+                other => panic!("unexpected {other}"),
+            });
+            let answer = ready(
+                herdr.engine().as_ref(),
+                "w1:p2",
+                "hide-codex-w1-p2",
+                Duration::from_millis(300),
+            );
+            assert!(
+                matches!(answer, Err(NotReady::Late(_))),
+                "{name}: {answer:?}"
+            );
+            assert!(
+                herdr
+                    .calls()
+                    .iter()
+                    .all(|(method, _)| method == "agent.get")
+            );
         }
     }
 }

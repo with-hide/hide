@@ -1520,9 +1520,9 @@ export type Mission = {
   cap: number;
   /** Made before node criteria: its nodes show their sentence only and nothing is gated (B23). */
   exempt: boolean;
-  /** Settings › Conductor's default when the mission was created, then what its plan names; null for one from before verification strength. */
+  /** Settings › Mission's default when the mission was created, then what its plan names; null for one from before verification strength. */
   strength: MissionStrength | null;
-  /** Whether a checker comes from another company than the node's worker, as Settings › Conductor said when the mission was created; null for one from before. */
+  /** Whether a checker comes from another company than the node's worker, as Settings › Mission said when the mission was created; null for one from before. */
   other_vendor: boolean | null;
   /** `takes_answers`: its agent takes an answer typed from the banner, which the doorbell types only into the agents it rings (B26). */
   conductor: { pane_id: string; name: string; agent_kind: string; session: WorkSession | null; present: boolean; takes_answers: boolean };
@@ -1616,9 +1616,9 @@ export type PlanView = {
 /** The plans the core keeps for the panes on screen, and the plans of the children their steps are handed to, whether or not those panes are shown (`pane_id` empty then). */
 export type PlansSnapshot = { items: PlanView[] };
 
-/** Settings › Conductor (D-31): the cap, the default scope, the worker candidates, a new mission's verification strength and whether its checkers come from another company. */
+/** Settings › Mission (D-31): the cap, the default scope, the worker candidates, a new mission's verification strength and whether its checkers come from another company. */
 export type ConductorCandidate = { agent: string; model?: string | null; effort?: string | null; purpose: string };
-export type ConductorSettings = { concurrency: number; default_scope: MissionScope; candidates: ConductorCandidate[]; default_strength: MissionStrength; other_vendor: boolean };
+export type ConductorSettings = { concurrency: number; default_scope: MissionScope; candidates: ConductorCandidate[]; default_strength: MissionStrength; other_vendor: boolean; clean_merged: boolean };
 
 /** The 보기 slot: what it opened, oldest first and the one it shows last, and whether the lane draws it. */
 export type DetailSlot = { items: DetailItem[]; shown: boolean };

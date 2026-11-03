@@ -1203,7 +1203,7 @@ pub fn next_action(code: &str) -> &'static str {
             "A step is handed to your own child: run hide agent spawn --parent here --plan-node <key> ..."
         }
         "plan_candidate_refused" => {
-            "Hand the step to an agent and model among Settings > Conductor's worker candidates (hide mission settings shows them), then run hide agent spawn again"
+            "Hand the step to an agent and model among Settings > Mission's worker candidates (hide mission settings shows them), then run hide agent spawn again"
         }
         "plan_delegate_full" => {
             "Three children of your plans are working already; wait for one to report and finish its step, or do this step yourself"

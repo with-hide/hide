@@ -14,7 +14,8 @@ use hide_holder_protocol::record::{self, EndReason, Identity, PaneRecord, Phase,
 use hide_holder_protocol::{PROTOCOL_VERSION, Size};
 use hide_kit::layout;
 use hide_kit::panes::{
-    HOLDER_CAP, Judgment, Panes, RECONCILE_BUDGET, START_LIMIT, StartRefusal, StartRequest, Started,
+    ENDED_KEPT, HOLDER_CAP, Judgment, Panes, RECONCILE_BUDGET, START_LIMIT, StartRefusal,
+    StartRequest, Started,
 };
 
 use crate::role::GO;
@@ -302,6 +303,8 @@ fn starts_at_once_stop_at_the_cap_and_say_so() {
     for number in 0..HOLDER_CAP - 2 {
         folder.write(&folder.reserved(&format!("f{number}"), Phase::Running));
     }
+    // An unreadable record may still name a live holder and spends a slot.
+    std::fs::write(layout::pane_record(&folder.state, "f0"), b"{").unwrap();
     let source = source();
     let requests: Vec<StartRequest> = (0..4)
         .map(|number| folder.request(&format!("a{number}"), shell(), Vec::new()))
@@ -331,6 +334,31 @@ fn starts_at_once_stop_at_the_cap_and_say_so() {
         logged.iter().all(|event| event["reason"] == "holder_cap"),
         "{logged:?}"
     );
+}
+
+/// A directory at the file-count boundary still has room when its records
+/// are ended. Admission counts their states, retains only the newest ended
+/// reasons, and treats an unreadable record as a possibly live holder.
+#[test]
+fn ended_records_at_the_capacity_boundary_leave_room_and_keep_their_retention_bound() {
+    let folder = Folder::new();
+    for number in 0..=ENDED_KEPT {
+        let mut ended = folder.reserved(&format!("e{number}"), Phase::Ended);
+        let mut end = record::End::new(EndReason::ProgramExited, "ended");
+        end.at_unix_ms = number as u64 + 1;
+        ended.end = Some(end);
+        folder.write(&ended);
+    }
+    std::fs::write(layout::pane_record(&folder.state, "unreadable"), b"{").unwrap();
+    let running = folder.start(&folder.request("fresh", shell(), Vec::new()));
+    assert_eq!(running.phase, Phase::Running);
+    assert_eq!(folder.panes.live().unwrap(), 2);
+    assert!(folder.panes.record("e0").unwrap().is_none());
+    for number in 1..=ENDED_KEPT {
+        assert_eq!(folder.record(&format!("e{number}")).phase, Phase::Ended);
+    }
+    assert!(folder.panes.record("unreadable").is_err());
+    folder.panes.close("fresh").unwrap();
 }
 
 #[test]
@@ -510,6 +538,97 @@ fn a_record_of_an_earlier_boot_ends_nothing_it_names() {
     assert_eq!(end_reason(ended), EndReason::MachineRestarted);
     assert!(named.process.is_running());
     assert!(named.program.is_running());
+}
+
+/// After a power loss the device may keep a pane record empty, cut off or
+/// older than the last write, and the incarnation counter the same way,
+/// since a record is flushed to the device but not past its cache (a pane
+/// record need not outlive the machine: its holder dies with it). None of
+/// that may stop the panes starting again: a node that opens the folder
+/// removes the unparseable records written before this boot, ends the
+/// older readable one as of an earlier boot, moves the counter past every
+/// incarnation a record holds, and every pane then starts as new. A record
+/// damaged in this boot is no crash's and is left as it is, refusing its
+/// pane as before, since its holder may run.
+#[test]
+fn records_a_power_loss_left_empty_cut_off_or_old_do_not_stop_the_panes_starting() {
+    let folder = Folder::new();
+    let records = layout::pane_records(&folder.state);
+    let before_boot = std::time::UNIX_EPOCH + Duration::from_secs(1_000_000_000);
+    let age = |path: &Path| {
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(before_boot)
+            .unwrap();
+    };
+
+    let mut old = folder.reserved("old", Phase::Running);
+    old.boot = Some("an-earlier-boot".to_owned());
+    old.incarnation = 500;
+    old.reserved_at_unix_ms = 1_000_000_000_000;
+    folder.write(&old);
+    let whole = serde_json::to_vec(&old).unwrap();
+    std::fs::write(records.join("empty.json"), b"").unwrap();
+    std::fs::write(records.join("cut.json"), &whole[..whole.len() / 2]).unwrap();
+    std::fs::write(layout::pane_incarnations(&folder.state), b"").unwrap();
+    for name in ["old.json", "empty.json", "cut.json", "next"] {
+        age(&records.join(name));
+    }
+    // Damaged in this boot: not a crash's.
+    std::fs::write(records.join("fresh.json"), b"").unwrap();
+
+    let reopened = Panes::open(folder.home.path(), &folder.state, sink).unwrap();
+    assert!(!records.join("empty.json").exists());
+    assert!(!records.join("cut.json").exists());
+    assert!(
+        records.join("fresh.json").exists(),
+        "a record of this boot is left"
+    );
+    let removed: Vec<_> = folder
+        .events("pane_holder.record_removed")
+        .into_iter()
+        .map(|event| event["pane"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(removed.len(), 2, "{removed:?}");
+    assert!(removed.contains(&"empty".to_owned()) && removed.contains(&"cut".to_owned()));
+    let next: u64 = std::fs::read_to_string(layout::pane_incarnations(&folder.state))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert!(
+        next > 500,
+        "the counter is past every incarnation a record holds: {next}"
+    );
+
+    let found = reopened.reconcile(RECONCILE_BUDGET);
+    let Some(Judgment::Ended(ended)) = found.panes.get("old") else {
+        panic!("{found:?}");
+    };
+    // Windows names no boot; the old reservation has no holder and is
+    // past START_LIMIT, so its interrupted start is ended.
+    let expected = if cfg!(unix) {
+        EndReason::MachineRestarted
+    } else {
+        EndReason::StartInterrupted
+    };
+    assert_eq!(end_reason(ended), expected);
+
+    for pane in ["empty", "cut", "old"] {
+        let started = match reopened.start(&folder.request(pane, shell(), Vec::new()), &source()) {
+            Ok(Started::Started(record)) => record,
+            other => panic!("{pane} did not start: {other:?}"),
+        };
+        assert!(started.incarnation > 500, "{pane}: {}", started.incarnation);
+        assert_eq!(started.phase, Phase::Running);
+    }
+    match reopened.start(&folder.request("fresh", shell(), Vec::new()), &source()) {
+        Err(StartRefusal::RecordUnreadable(_)) => {}
+        other => panic!("a record damaged in this boot refuses its pane: {other:?}"),
+    }
+    std::fs::remove_file(records.join("fresh.json")).unwrap();
 }
 
 /// A reconcile takes up no pane past its budget and leaves the rest to the

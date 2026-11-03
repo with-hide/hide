@@ -268,7 +268,7 @@ type UiStore = {
   /**
    * The Mission tool's page, its start guide unfolded above the list and its
    * 끝남 group opened whole (PRD mission-tool B7-B9). Page-local and never
-   * sent: the defaults it edits are the core's Settings › Conductor values.
+   * sent: the defaults it edits are the core's Settings › Mission values.
    */
   missionToolPage: MissionToolPage;
   missionGuideOpen: boolean;

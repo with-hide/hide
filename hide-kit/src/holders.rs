@@ -25,8 +25,10 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::sync::{Mutex, PoisonError};
+use std::time::{Duration, SystemTime};
 
+use hide_platform::fs::identity::{self, FileId};
 use hide_platform::fs::lock::{Lock, Mode, Waited, lock_file};
 use sha2::{Digest, Sha256};
 
@@ -109,11 +111,15 @@ fn collect(dir: &Path, name: &str, found: &mut Vec<(String, PathBuf)>) -> io::Re
 /// The folder name for `source` at protocol `version`: `v<version>-<hash>`,
 /// the hash taken over every file's name and bytes.
 pub fn version_name(version: u16, source: &Source) -> io::Result<String> {
+    name_of(version, &files(source)?)
+}
+
+fn name_of(version: u16, files: &[(String, PathBuf)]) -> io::Result<String> {
     let mut digest = Sha256::new();
-    for (name, path) in files(source)? {
+    for (name, path) in files {
         digest.update((name.len() as u64).to_le_bytes());
         digest.update(name.as_bytes());
-        let bytes = fs::read(&path)?;
+        let bytes = fs::read(path)?;
         digest.update((bytes.len() as u64).to_le_bytes());
         digest.update(&bytes);
     }
@@ -123,6 +129,62 @@ pub fn version_name(version: u16, source: &Source) -> io::Result<String> {
         .map(|byte| format!("{byte:02x}"))
         .collect();
     Ok(format!("v{version}-{}", &hash[..HASH_PREFIX]))
+}
+
+/// What one of a source's files was when its name was taken: its name in
+/// the folder, where it comes from, its identity, its length and when it
+/// was last written. A file replaced (a new identity) or written again (a
+/// new length or time) differs in one of them.
+type Stamp = (String, PathBuf, FileId, u64, Option<SystemTime>);
+
+fn stamps(files: &[(String, PathBuf)]) -> io::Result<Vec<Stamp>> {
+    files
+        .iter()
+        .map(|(name, path)| {
+            let metadata = fs::metadata(path)?;
+            Ok((
+                name.clone(),
+                path.clone(),
+                identity::file_id(path)?,
+                metadata.len(),
+                metadata.modified().ok(),
+            ))
+        })
+        .collect()
+}
+
+/// [`version_name`] as one process asks it again and again: the name last
+/// taken, kept with what its files were then, is answered while none of
+/// them changed, and taken again from the bytes once one did. Each start of
+/// a pane names its folder, and reading and hashing the holder (4 MB, and
+/// on Windows the ConPTY runtime beside it) there put that read in front of
+/// every new pane. What a folder's name promises is unchanged: a folder is
+/// made only under the name its files' bytes give, and a source replaced
+/// on disk (an update) is hashed again before its next start.
+#[derive(Default)]
+pub struct VersionNames {
+    last: Mutex<Option<(u16, Vec<Stamp>, String)>>,
+}
+
+impl VersionNames {
+    pub fn name(&self, version: u16, source: &Source) -> io::Result<String> {
+        let files = files(source)?;
+        let before = stamps(&files)?;
+        let mut last = self.last.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((known, stamps, name)) = last.as_ref()
+            && *known == version
+            && *stamps == before
+        {
+            return Ok(name.clone());
+        }
+        let name = name_of(version, &files)?;
+        // A file written while it was read gives a name for no one state of
+        // it: answered, since a start asked, but not kept.
+        if stamps(&files)? == before {
+            *last = Some((version, before, name.clone()));
+        }
+        Ok(name)
+    }
 }
 
 /// A folder made or found by [`prepare`], held as used until dropped: drop
@@ -135,9 +197,15 @@ pub struct Reservation {
 }
 
 /// Makes or finds the version folder of `source` under `home` and reserves
-/// it. A folder is made in a staging folder of its own and moved to its name
-/// whole, so a folder by that name is complete or absent.
-pub fn prepare(home: &Path, version: u16, source: &Source) -> Result<Reservation, String> {
+/// it, its name taken through `names`. A folder is made in a staging folder
+/// of its own and moved to its name whole, so a folder by that name is
+/// complete or absent.
+pub fn prepare(
+    home: &Path,
+    version: u16,
+    source: &Source,
+    names: &VersionNames,
+) -> Result<Reservation, String> {
     let root = layout::holders_root(home);
     hide_platform::fs::private::create_dir_all(&root)
         .map_err(|error| format!("{} could not be made: {error}", root.display()))?;
@@ -148,7 +216,8 @@ pub fn prepare(home: &Path, version: u16, source: &Source) -> Result<Reservation
             LOCK_WAIT.as_secs()
         )
     })?;
-    let name = version_name(version, source)
+    let name = names
+        .name(version, source)
         .map_err(|error| format!("the holder's files could not be read: {error}"))?;
     let dir = layout::holder_dir(home, &name);
     if !is_finished(&dir, &name) {

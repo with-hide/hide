@@ -40,6 +40,7 @@ use hide_node_link::protocol::Call;
 
 use super::agents::{self, PaneAgent};
 use super::shell_line::{self, Shell};
+use super::starts::STARTS_AT_ONCE;
 use super::store::{self, Read};
 use super::topology::{Pane, Topology};
 use super::{Env, OwnEngine};
@@ -59,10 +60,6 @@ pub(super) const BOUND: Duration = Duration::from_secs(180);
 /// How long the restore waits for the node to say whether a saved pane's
 /// folder is still there.
 const FOLDER_WAIT: Duration = Duration::from_secs(10);
-
-/// How many holders a restore starts at once, so a large session coming
-/// back after a reboot does not start every shell together.
-const STARTS_AT_ONCE: usize = 8;
 
 /// The name of the tab running holders the saved session does not place
 /// are gathered in.
@@ -91,13 +88,14 @@ pub(super) fn start(engine: OwnEngine<'static>, saved: BTreeSet<String>) -> Resu
         .spawn(move || {
             let gate = engine.restore_gate();
             let resumes = engine.restore(&saved);
+            // Release the restore's ownership before opening the gate, so
+            // a caller can drop the engine and reopen its completed save.
+            // Resumes hold it only while each one runs; the next stops when
+            // its owner has let the engine go (a device's, with its link).
+            let shared = std::sync::Arc::downgrade(&engine.shared);
+            drop(engine);
             gate.finish();
-            // Calls that make panes no longer wait for these: each agent
-            // waits for its own shell, one pane after another. The resumes
-            // hold the engine only while each one runs, so an engine its
-            // owner let go (a device's, with its link) ends them.
-            let engine = std::sync::Arc::downgrade(&engine.shared);
-            OwnEngine::resume_agents(&engine, &resumes);
+            OwnEngine::resume_agents(&shared, &resumes);
         })
         .map(|_| ())
         .map_err(|error| format!("the session restore thread could not start: {error}"))

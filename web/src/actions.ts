@@ -1951,7 +1951,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "mission_answer", payload: { mission: missionId, key, ...answer } });
     },
 
-    /** The fields of Settings › Conductor one edit changes (D-31, B48); the core keeps the rest and checks the result before it is kept. */
+    /** The fields of Settings › Mission one edit changes (D-31, B48); the core keeps the rest and checks the result before it is kept. */
     setConductorSettings(patch: Partial<import("./snapshot").ConductorSettings>) {
       dispatch({ schema_version: 2, kind: "conductor_settings_set", payload: patch });
     },

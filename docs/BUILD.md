@@ -442,20 +442,21 @@ A verify run that still waits behind another main run (`pending`) is read again 
 When the next push to main replaces that pending run, it ends `cancelled` and the candidate is refused, so the source stays a commit whose verify actually runs; a run still pending after 45 minutes refuses the candidate too.
 The candidate does not wait for that verify run to finish: it may build while the source's push verify runs, and the publish, not the candidate, requires that the run it names concluded success.
 The workflow revision is main's dispatch revision and may differ from the source revision it builds.
-`package.yml`, `device-helpers.yml` and `agent-journey.yml` run their steps from that dispatch revision on the source's checkout, so the workflow refuses a source at which any of them differs from main; choose a newer source instead.
+`package.yml`, `device-helpers.yml` and `agent-journey.yml` run their steps from that dispatch revision on the source's checkout, so the workflow refuses a source at which any of them or the phone deployment script differs from main; choose a newer source instead.
 
-The workflow reuses `package.yml` for unsigned Linux and Windows installers, including their installation, packaged-window and update checks, and for both [Linux device helpers](#device-helper-release-bundles), built beside them on public runners.
+The workflow first uploads and confirms [the hosted phone app](#the-hosted-phone-release), stopping desktop preparation if that fails.
+It then reuses `package.yml` for unsigned Linux and Windows installers, including their installation, packaged-window and update checks, and for both [Linux device helpers](#device-helper-release-bundles), built beside them on public runners.
 Beside them it compiles the Mac app's release binaries on the Mac mini ([The candidate's Mac build](#the-candidates-mac-build)).
 It runs the existing `agent-journey.yml` on the same source, with stand-ins on Linux and macOS, Windows form checks, and fake-model lanes on all three systems.
 It signs no agent in: since 2026-10-27, by the operator's decision, a real login is measured only by the release's local run on the Mac ([CONTRIBUTING.md: Releases](../CONTRIBUTING.md#releases)), so the workflow summary records signed-in providers as **not measured**; a package failure blocks the receipt, and a stand-in or fake-model failure fails the run, which no consumer takes.
 A successful candidate does not establish that any provider answered.
 The receipt waits for the builds and not for the journey, which uploads none of the artifacts a release takes, so when only journey jobs fail, **Re-run failed jobs** reruns them alone and the run's successful latest attempt is selectable: the private publisher takes every artifact from the one attempt that made them, and refuses the run if any job other than an `agent-journey / ` job ran after it.
-When a package, helper, Mac binary or receipt job fails, rerunning it alone mixes two attempts' artifacts and is refused; use **Re-run all jobs** or dispatch again with the same inputs.
+When a phone, package, helper, Mac binary or receipt job fails, use **Re-run all jobs** or dispatch again with the same inputs; a partial rerun can mix two attempts' artifacts and is refused.
 The reusable workflows' optional `source-sha` defaults to the caller commit, and `package.yml`'s optional `build-order` defaults to its existing history-based ordering, so existing callers keep their behavior.
 An explicit order allows separately prepared packages of one numeric version to share one build identity.
 The operator assigns a strictly increasing order within that numeric version, including release-candidate to stable transitions; a private-only change takes a new patch version.
 
-Only after packaging, both helpers and the Mac binaries succeed does the workflow upload `hide-release-candidate`, containing only `candidate.json`; the run succeeds only when the journey passes too, and a consumer takes only a successful run:
+Only after the phone upload and confirmation, packaging, both helpers and the Mac binaries succeed does the workflow upload `hide-release-candidate`, containing only `candidate.json`; the run succeeds only when the journey passes too, and a consumer takes only a successful run:
 
 ```json
 {"schema":4,"repository":"with-hide/hide","public_sha":"<source SHA>","tag":"vX.Y.Z","build_order":"<decimal>","verification_run_id":"<decimal>","workflow_sha":"<workflow SHA>","run_id":"<decimal>","run_attempt":1,"live_agents":false,
@@ -564,6 +565,70 @@ The web E2E lane prepares the locked binding tool and WASM in a separate bounded
 Both hided and the browser therefore run one cryptographic implementation and one parser.
 The public checkout builds with the pinned Rust toolchain and registry dependencies, without a private binary, credential or design tool.
 `bash scripts/check-relay-protocol.sh` builds and tests both targets and their interoperability; after workspace dependency installation, `bash scripts/verify-web.sh relay-protocol typecheck` checks the TypeScript surface against the generated bindings.
+
+## The hosted phone release
+
+The release candidate first builds and uploads its source commit's phone app to `https://app.withhide.dev/p/<PHONE_PROTOCOL>/`.
+Only `.github/workflows/release-candidate.yml`, manually dispatched on protected `main`, can perform this upload; a pull request, tag or workstation does not deploy it.
+The source is an exact commit already on main, built with the frozen dependency lockfile by `bash scripts/verify-web.sh web build:phone`.
+The phone job uses Vercel's [prebuilt deployment](https://vercel.com/docs/cli/deploy#prebuilt) and [Build Output API](https://vercel.com/docs/build-output-api/configuration); the host does not rebuild source or add analytics.
+This is a production side effect of preparing a candidate, including an RC or a candidate that later fails desktop checks.
+It creates no desktop tag or Release and does not replace the operator's installed app.
+
+The order is enforced by job dependencies: validate the main source, deploy and check the phone site, then prepare the desktop packages and Mac binaries, then write the candidate receipt.
+No phone step continues on error, and the receipt has the phone job as a required dependency under GitHub's normal success condition.
+Missing secrets, a failed build, a failed retention read, upload failure or failed production check prevents those downstream jobs from running.
+The publisher in `with-hide/hide-private` requires the selected candidate's current run to have succeeded, so it cannot publish a desktop release after this phone job fails.
+Before the first relay release, review and update the private `release/policy.json` candidate-workflow pin to the merged main workflow containing this gate, following that repository's `release/README.md`.
+Do not dispatch an older pinned candidate workflow to bypass a missing phone deployment credential.
+
+### Deployment credentials and host setup
+
+`scripts/phone-release.mjs` owns the required, server-only secret contract; `scripts/phone-release.env.example` contains placeholders, never credentials and never a default target.
+The public repository's `phone-production` GitHub environment supplies exactly these secrets:
+
+| Secret | Value supplied by the deployment owner |
+| --- | --- |
+| `PHONE_VERCEL_TOKEN` | Vercel deployment token scoped to the phone project's owner |
+| `PHONE_VERCEL_ORG_ID` | The existing Vercel team or account ID |
+| `PHONE_VERCEL_PROJECT_ID` | The existing phone project ID, separate from the introduction site |
+
+All are required; the credential check names every missing or invalid key and stops without printing values, installing dependencies or contacting the host.
+Only the credential check and retention step receive all three secrets; upload receives only the token, and public confirmation receives none.
+The phone job's external Actions are pinned to reviewed full commit SHAs with version comments, and neither those Actions nor the dependency installation or phone build receives deployment secrets.
+The deployment owner creates the project, domain and secrets, restricts `phone-production` to main, and gives the token to that environment only.
+Keep Git integration and deploy hooks disconnected, Web Analytics and Speed Insights off, and production deployment URLs publicly readable so CI can retain the previous static files.
+Attach `app.withhide.dev` to this project before the first run; production confirmation uses that exact address and fails if DNS or the domain points elsewhere.
+Keep the host account and GitHub account protected by two-factor authentication.
+Creating resources, changing DNS and installing secrets are deployment work requiring the operator's deployment authority, separate from implementing or testing this workflow.
+The scripts neither create the project nor configure its domain or secrets.
+
+### Retention and confirmation
+
+Every candidate's phone job holds the same `phone-production` concurrency group, with cancellation disabled, across reading the old site, upload and confirmation.
+It reads the project's current production deployment through Vercel's API, then downloads from that deployment's fixed URL rather than a moving custom-domain alias.
+`phone-site.json` records the source commit and every static file's size and SHA-256.
+Every old `p/<n>/` and root `assets/` file is checked against that inventory and copied into the new deployment.
+The new build refreshes the loader and its own protocol's entry pages and adds its assets.
+Root assets include the hashed WASM and lazy JavaScript modules an already-open loader can request when the person connects after a newer deployment.
+Previously referenced assets stay even when the same protocol is built again, and reusing an asset name for different bytes is refused.
+`protocols.json` is recomputed as the sorted union of all retained protocol directories, each of which must have an entry page.
+Only a project with no production deployment starts empty; a missing inventory, missing old asset, inconsistent protocol list or digest mismatch is a failure, never a reason to discard old bundles.
+The previous source must be an ancestor of the candidate source, preventing a delayed older candidate from replacing a newer phone app.
+There is no age-based deletion and no reliance on expiring Actions artifacts for retention.
+The assembled site is capped at 4,096 files and 256 MiB, with at most 16 MiB per file and 30 seconds per HTTP read; exceeding a cap stops the release and asks for a host-limit review, without pruning protocols.
+
+The existing phone build's CSP is checked before upload and also installed as an HTTP header, with `frame-ancestors 'none'`, `Referrer-Policy: no-referrer` and `X-Content-Type-Options: nosniff`.
+Scripts come only from the same site, with the narrow WASM compilation allowance; connections go only to the same site and `wss://relay.withhide.dev`.
+There are no external scripts or analytics in the phone app, and an analytics-enabled or Git-linked host project is refused.
+After upload, CI reads the inventory, protocol union and every listed file from `app.withhide.dev`, requiring the exact source, bytes and CSP headers before desktop preparation begins.
+A failed confirmation can leave the newly uploaded phone site online, but the desktop release remains stopped; repair the cause and retry from main instead of publishing past it.
+The 30-minute job limit bounds the whole operation, and Vercel upload has its own ten-minute limit.
+
+`python3 -m unittest scripts.tests.test_phone_release scripts.tests.test_release_candidate` checks the release dependency graph, secret contract and real filesystem assembly against fixture Vercel HTTP responses.
+It covers retained old files, same-protocol assets, the protocol union, missing secrets, upload prerequisites, refused rollback, corrupt or missing history, unsafe CSP and failed production confirmation, without any live upload.
+The existing phone browser journey checks that CSP blocks an external script.
+These checks prove the release contract, not actual credentials, hosting, DNS, a live upload or a physical phone; those remain the deployment node's acceptance checks.
 
 ## Mobile relay server
 

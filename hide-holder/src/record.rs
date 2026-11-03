@@ -1,10 +1,11 @@
 //! The holder's part in its pane's record (`hide_holder_protocol::record`):
-//! it writes itself in before it starts the pane's program, the program once
-//! it runs, `running` once its socket listens, and why the pane ended before
-//! it exits. Each change is made only while the record still reserves this
-//! holder's start (its incarnation, and the holder itself once it wrote
-//! itself in), so a holder whose start the node gave up on, or one of an
-//! earlier start of the same pane, never writes over the record.
+//! it writes itself in before it starts the pane's program, the program and
+//! `running` in one write once the program runs (its socket listens before
+//! the program starts), and why the pane ended before it exits. Each change
+//! is made only while the record still reserves this holder's start (its
+//! incarnation, and the holder itself once it wrote itself in), so a holder
+//! whose start the node gave up on, or one of an earlier start of the same
+//! pane, never writes over the record.
 
 use std::path::PathBuf;
 
@@ -56,25 +57,18 @@ impl Claim {
         self.incarnation
     }
 
-    /// Records the pane's program, which leads its terminal session, so what
-    /// it leaves can be found should this holder end without ending it.
-    pub fn program(&self, pid: u32) -> Result<(), String> {
-        // A program that already exited, and is not yet waited for, leaves
-        // nothing to find by its start time.
-        let Some(program) = Identity::of(pid) else {
-            return Ok(());
-        };
+    /// The program runs and the socket listens: records the program, which
+    /// leads its terminal session, so what it leaves can be found should
+    /// this holder end without ending it, and the phase `running`, in one
+    /// write. A program that already exited, and is not yet waited for,
+    /// leaves nothing to find by its start time, and is not named.
+    pub fn running(&self, pid: u32) -> Result<(), String> {
+        let program = Identity::of(pid);
         self.change(|record, _| {
             expect_phase(record, Phase::Preparing)?;
-            record.program = Some(program);
-            Ok(true)
-        })
-    }
-
-    /// The program runs and the socket listens.
-    pub fn running(&self) -> Result<(), String> {
-        self.change(|record, _| {
-            expect_phase(record, Phase::Preparing)?;
+            if program.is_some() {
+                record.program = program;
+            }
             record.phase = Phase::Running;
             Ok(true)
         })

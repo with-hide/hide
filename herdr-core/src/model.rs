@@ -4622,7 +4622,7 @@ pub struct UiStateSnapshot {
     /// How starting work from an issue behaves (Settings › Issues).
     #[serde(default)]
     pub issue_settings: IssueSettingsSnapshot,
-    /// Settings › Conductor: the values a new mission's plan starts from
+    /// Settings › Mission: the values a new mission's plan starts from
     /// (PRD software-factory-conductor D-31).
     #[serde(default)]
     pub conductor_settings: crate::missions::ConductorSettings,
