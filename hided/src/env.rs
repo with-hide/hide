@@ -590,7 +590,9 @@ fn resolve(mut read: impl FnMut(&str) -> Option<String>) -> (Env, Vec<EnvError>)
         }
         other => other,
     };
-    if read(HIDE_DEV_DEVICE_HOME).is_some_and(|value| hide_node::ssh::parse_device_home(&value).is_err()) {
+    if read(HIDE_DEV_DEVICE_HOME)
+        .is_some_and(|value| hide_node::ssh::parse_device_home(&value).is_err())
+    {
         errors.push(EnvError {
             key: HIDE_DEV_DEVICE_HOME,
             kind: "invalid",

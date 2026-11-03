@@ -1349,7 +1349,7 @@ fn owner_loop(
         .home
         .as_ref()
         .map(std::path::PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(std::path::PathBuf::from));
+        .or_else(|| hide_platform::host::home_dir().ok());
     let mut own_node = hide_node::Local::new(home.clone());
     // What the node measured of each repository's worktrees outlives the
     // daemon, in the core's state folder.

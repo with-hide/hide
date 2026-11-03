@@ -137,8 +137,9 @@ impl Device {
     }
 
     /// A batch file the steps can start in place of a program: it says what
-    /// it was started with and in which of the device's folders (`home`,
-    /// `own` or `other`), then repeats one line of its input.
+    /// it was started with, in which of the device's folders (`home`, `own`
+    /// or `other`), whether its per-user folders all follow the own home,
+    /// then repeats one line of its input.
     fn echoing_program(&self, path: &Path) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(
@@ -155,6 +156,9 @@ impl Device {
                 "if /i \"%USERPROFILE%\"==\"%HIDE_TEST_HOME%\" set where=home",
                 "if /i \"%USERPROFILE%\"==\"%HIDE_TEST_OWN_HOME%\" set where=own",
                 "echo home:%where%",
+                "set folders=other",
+                "if /i \"%HOME%\"==\"%HIDE_TEST_OWN_HOME%\" if /i \"%APPDATA%\"==\"%HIDE_TEST_OWN_HOME%\\AppData\\Roaming\" if /i \"%LOCALAPPDATA%\"==\"%HIDE_TEST_OWN_HOME%\\AppData\\Local\" if /i \"%TEMP%\"==\"%HIDE_TEST_OWN_HOME%\\AppData\\Local\\Temp\" if /i \"%TMP%\"==\"%TEMP%\" set folders=own",
+                "echo folders:%folders%",
                 "set /p line=",
                 "echo carried:%line%",
                 "",
@@ -206,10 +210,7 @@ fn every_login_shell_of_a_windows_sshd_reaches_the_powershell_script() {
         let device = Device::new();
         let mut pipe = device.connect_through(shell);
         let facts = probe(&mut pipe, soon()).unwrap_or_else(|error| {
-            panic!(
-                "{shell:?}: {error:?}; it last said {:?}",
-                pipe.last_error()
-            )
+            panic!("{shell:?}: {error:?}; it last said {:?}", pipe.last_error())
         });
         assert_eq!(facts.home, Device::wire(&device.home()), "{shell:?}");
         assert_eq!(
@@ -414,11 +415,14 @@ fn the_helper_starts_on_the_same_pipes_and_takes_no_herdr() {
     assert_eq!(line(&mut pipe), "third:--own-herdr");
     assert_eq!(line(&mut pipe), "cwd:home");
     assert_eq!(line(&mut pipe), "home:home");
+    assert_eq!(line(&mut pipe), "folders:other");
     pipe.send(b"through the link\r\n", soon()).unwrap();
     assert_eq!(line(&mut pipe), "carried:through the link");
 
     // A home of the node's own (`HIDE_DEV_DEVICE_HOME`) takes the account's
-    // place, made private where it was missing.
+    // place, made private where it was missing, and so do the per-user
+    // folders beside it, so neither the helper's kit nor a program in one of
+    // its panes writes the account's own.
     let own = device.own_home();
     let mut pipe = device.connect();
     let facts = probe(&mut pipe, soon()).unwrap();
@@ -439,7 +443,18 @@ fn the_helper_starts_on_the_same_pipes_and_takes_no_herdr() {
     line(&mut pipe);
     assert_eq!(line(&mut pipe), "cwd:own");
     assert_eq!(line(&mut pipe), "home:own");
-    assert!(hide_platform::fs::private::is_private(&own).unwrap());
+    assert_eq!(line(&mut pipe), "folders:own");
+    for folder in [
+        own.clone(),
+        own.join(r"AppData\Roaming"),
+        own.join(r"AppData\Local\Temp"),
+    ] {
+        assert!(
+            hide_platform::fs::private::is_private(&folder).unwrap(),
+            "{}",
+            folder.display()
+        );
+    }
 }
 
 /// A command answers its status and both outputs, its words arrive whole,

@@ -808,6 +808,47 @@ mod tests {
         );
     }
 
+    /// A device helper started with a home of its own
+    /// (`HIDE_DEV_DEVICE_HOME`) keeps every place its kit writes under that
+    /// home, whatever other variable still names the account's: Windows
+    /// OpenSSH sets `HOME` beside the `USERPROFILE` the start step replaces,
+    /// and a kit that read `HOME` there wrote the account's own hook files.
+    #[test]
+    fn every_kit_location_follows_the_home_the_platform_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let own = dir.path().join("own");
+        let account = dir.path().join("account");
+        let variables = |name: &str| {
+            if name == hide_platform::host::HOME_VARIABLE {
+                Some(own.clone().into_os_string())
+            } else if ["HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH"].contains(&name) {
+                Some(account.clone().into_os_string())
+            } else {
+                None
+            }
+        };
+        let env = Env::of_variables(&variables);
+        assert_eq!(env.home.as_deref(), Some(own.as_path()));
+        assert_eq!(
+            env.state,
+            Some(hide_kit::layout::state_dir_from_process(&own))
+        );
+        let home = env.home.unwrap();
+        let inputs = Inputs::read(&home, "~/.local/bin", None, &["~/work".to_owned()]).unwrap();
+        let mut locations = vec![hide_kit::kit_state_dir(&home), inputs.cli_dir];
+        locations.extend(inputs.projects);
+        locations.extend(
+            hide_agent_hooks::runtime::AgentRuntime::ALL.map(|runtime| runtime.config_path(&home)),
+        );
+        for location in locations {
+            assert!(
+                location.starts_with(&own),
+                "{} is outside the helper's home",
+                location.display()
+            );
+        }
+    }
+
     fn placed(dir: &Path, version: &str) -> Placement {
         let root = dir.join("host-helper");
         std::fs::create_dir_all(root.join(version)).unwrap();

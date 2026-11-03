@@ -166,7 +166,7 @@ if head -c "$d" | store "$t" && [ "$(sum "$t")" = "$b" ] && chmod -- "$c" "$t" &
 start) [ -n "$root" ] || { say fail "no install folder was chosen"; exit 65; }; h=$root/$a;
 case $b in session=*) unset HERDR_SOCKET_PATH; HERDR_SESSION=${b#session=}; export HERDR_SESSION;; socket=*) unset HERDR_SESSION; HERDR_SOCKET_PATH=${b#socket=}; export HERDR_SOCKET_PATH;; esac;
 [ -x "$h" ] || { say fail "the helper $h is missing"; exit 65; };
-case ${c:--} in -) ;; *) { (umask 077; mkdir -p -- "$c") && HOME=$c && export HOME; } || { say fail "the home $c could not be made"; exit 65; };; esac;
+case ${c:--} in -) ;; *) { (umask 077; mkdir -p -- "$c") && HOME=$c && export HOME && unset XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME; } || { say fail "the home $c could not be made"; exit 65; };; esac;
 cd -- "$HOME" 2>/dev/null || :;
 say start; exec "$h" node serve --own-herdr;;
 run) set --; i=0; while [ "$i" -lt "$a" ] && IFS= read -r w; do set -- "$@" "$w"; i=$((i+1)); done;
@@ -509,7 +509,10 @@ pub(crate) enum HerdrChoice {
 /// are the helper's link. `home`, an absolute path in the device's own wire
 /// spelling, is the home the helper runs with in place of the account's
 /// (`HIDE_DEV_DEVICE_HOME`, [`super::super::device::resolve_device_home`]),
-/// made private where it is missing.
+/// made private where it is missing. Every per-user folder the helper and
+/// what it starts read follows it: `HOME` with the `XDG_*` folders cleared
+/// to their defaults under it, and on Windows `USERPROFILE`, `HOME`,
+/// `APPDATA`, `LOCALAPPDATA`, `TEMP` and `TMP`, made under it.
 pub(crate) fn start(
     pipe: &mut dyn Pipe,
     helper_relative: &str,

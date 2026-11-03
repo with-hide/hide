@@ -58,6 +58,9 @@ impl Device {
             .env("PATH", std::env::join_paths(search).unwrap())
             .current_dir(self.home())
             .env("HOME", self.home())
+            // A state folder of the account's own, which a home of the
+            // node's own replaces with its default under that home.
+            .env("XDG_STATE_HOME", self.home().join("account-state"))
             .env("TMPDIR", self.tmp())
             .env_remove(hide_platform::host::MACHINE_ID_VARIABLE)
             .stdin(Stdio::piped())
@@ -188,7 +191,12 @@ fn an_msys_sh_on_windows_hands_the_link_to_the_powershell_script() {
     let wrapper = powershell_wrapper();
     assert_eq!(
         args.lines().collect::<Vec<_>>(),
-        ["-NoProfile", "-NonInteractive", "-Command", wrapper.as_str()]
+        [
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            wrapper.as_str()
+        ]
     );
     // What follows the request is the PowerShell script, which the sh
     // script had not taken.
@@ -205,7 +213,9 @@ fn an_msys_sh_on_windows_hands_the_link_to_the_powershell_script() {
 #[test]
 fn the_powershell_wrapper_holds_nothing_a_login_shell_reads_inside_quotes() {
     let wrapper = powershell_wrapper();
-    let read = ['\'', '"', '&', '|', '<', '>', '^', '%', '!', '\\', '`', '\n'];
+    let read = [
+        '\'', '"', '&', '|', '<', '>', '^', '%', '!', '\\', '`', '\n',
+    ];
     assert!(
         !wrapper.contains(&read[..]),
         "{:?}",
@@ -367,7 +377,7 @@ fn an_install_under_a_folder_others_can_change_is_refused() {
 #[test]
 fn the_helper_starts_on_the_same_pipes_with_the_chosen_herdr() {
     let device = Device::new();
-    let helper = "#!/bin/sh\necho \"args:$*\"\necho \"session:${HERDR_SESSION:-} socket:${HERDR_SOCKET_PATH:-}\"\necho \"home:$HOME pwd:$(pwd -P)\"\n";
+    let helper = "#!/bin/sh\necho \"args:$*\"\necho \"session:${HERDR_SESSION:-} socket:${HERDR_SOCKET_PATH:-}\"\necho \"home:$HOME pwd:$(pwd -P)\"\necho \"state:${XDG_STATE_HOME:-default}\"\n";
     let packages = device.packages(std::env::consts::OS, std::env::consts::ARCH, helper);
     let mut pipe = device.connect("");
     let facts = probe(&mut pipe, soon()).unwrap();
@@ -387,14 +397,25 @@ fn the_helper_starts_on_the_same_pipes_with_the_chosen_herdr() {
         String::from_utf8(pipe.line(soon()).unwrap()).unwrap(),
         format!("home:{} pwd:{}", facts.home, home.display())
     );
+    assert_eq!(
+        String::from_utf8(pipe.line(soon()).unwrap()).unwrap(),
+        format!("state:{}", device.home().join("account-state").display())
+    );
 
     // A home of the node's own (`HIDE_DEV_DEVICE_HOME`) takes the account's
-    // place, made private where it was missing.
+    // place, made private where it was missing, and the account's state
+    // folder gives way to the default under it.
     let own = format!("{}/candidate/home", facts.home);
     let mut pipe = device.connect("");
     let facts = probe(&mut pipe, soon()).unwrap();
     let installed = install(&mut pipe, "~/.hide/helper", &facts.home, &payload).unwrap();
-    start(&mut pipe, &installed.helper_relative, &HerdrChoice::Account, Some(&own)).unwrap();
+    start(
+        &mut pipe,
+        &installed.helper_relative,
+        &HerdrChoice::Account,
+        Some(&own),
+    )
+    .unwrap();
     pipe.line(soon()).unwrap();
     pipe.line(soon()).unwrap();
     let made = home.join("candidate/home");
@@ -402,6 +423,7 @@ fn the_helper_starts_on_the_same_pipes_with_the_chosen_herdr() {
         String::from_utf8(pipe.line(soon()).unwrap()).unwrap(),
         format!("home:{own} pwd:{}", made.display())
     );
+    assert_eq!(pipe.line(soon()).unwrap(), b"state:default");
     assert_eq!(mode(&made), 0o700);
 }
 
@@ -410,7 +432,11 @@ fn the_helper_starts_on_the_same_pipes_with_the_chosen_herdr() {
 #[test]
 fn a_device_home_is_below_the_account_s_or_absolute_on_the_device() {
     use super::super::super::device::{parse_device_home, resolve_device_home};
-    for good in ["~/.hide-dev/connect/home", "/srv/candidate", "C:/hide-dev/home"] {
+    for good in [
+        "~/.hide-dev/connect/home",
+        "/srv/candidate",
+        "C:/hide-dev/home",
+    ] {
         assert_eq!(parse_device_home(good).as_deref(), Ok(good));
     }
     for bad in ["relative", "~/", "~/a/../b", "/a//b", "~/a\nb", ""] {

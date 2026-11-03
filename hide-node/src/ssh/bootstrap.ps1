@@ -345,12 +345,27 @@ function Step-Start([string]$relative, [string]$herdr, [string]$homeWire) {
     $helper = Join-Root $relative
     if (-not [IO.File]::Exists($helper)) { Say fail "the helper $(Wire $helper) is missing"; exit 65 }
     # A home of the node's own in place of the account's, made private where
-    # it is missing: the account's home is what Windows programs read it from.
+    # it is missing, with the per-user folders beside it: Windows programs
+    # read the home from USERPROFILE (Git and shells from HOME) and keep
+    # their data, caches and scratch files in APPDATA, LOCALAPPDATA and TEMP,
+    # which would otherwise stay the account's, and a .NET program whose
+    # folder under the new home is missing gets no folder at all.
     if ($homeWire -and $homeWire -ne '-') {
         try {
             if (-not (Absolute $homeWire)) { throw 'not absolute' }
-            [void][IO.Directory]::CreateDirectory((Native $homeWire), (Private-Folder))
-            $env:USERPROFILE = Native $homeWire
+            $own = Native $homeWire
+            $local = [IO.Path]::Combine($own, 'AppData', 'Local')
+            $roaming = [IO.Path]::Combine($own, 'AppData', 'Roaming')
+            $temp = [IO.Path]::Combine($local, 'Temp')
+            foreach ($folder in @($own, $local, $roaming, $temp)) {
+                [void][IO.Directory]::CreateDirectory($folder, (Private-Folder))
+            }
+            $env:USERPROFILE = $own
+            $env:HOME = $own
+            $env:APPDATA = $roaming
+            $env:LOCALAPPDATA = $local
+            $env:TEMP = $temp
+            $env:TMP = $temp
         } catch { Say fail "the home $homeWire could not be made"; exit 65 }
     }
     Hand-Over $helper @('node', 'serve', '--own-herdr') 'start'

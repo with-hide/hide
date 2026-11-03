@@ -106,10 +106,8 @@ pub fn serve_with_terminals(
             browser: None,
             // A device's helper serves its core for the helper's whole life,
             // and keeps its worktree facts across its restarts.
-            worktree_facts: std::env::var_os("HOME").map(|home| {
-                hide_kit::layout::worktree_facts(&hide_kit::layout::state_dir_from_process(
-                    Path::new(&home),
-                ))
+            worktree_facts: hide_platform::host::home_dir().ok().map(|home| {
+                hide_kit::layout::worktree_facts(&hide_kit::layout::state_dir_from_process(&home))
             }),
             kit: KitPlace::Installed,
         },
@@ -1017,17 +1015,29 @@ impl KitPlace {
 
 impl Env {
     pub fn of_process() -> Self {
+        Self::of_variables(&|name| std::env::var_os(name))
+    }
+
+    /// [`Env::of_process`] from the caller's variables. The home, and the
+    /// kit and state under it, is the one the platform names
+    /// ([`hide_platform::host::home_dir_from`]: `HOME` on Unix, `USERPROFILE`
+    /// on Windows), which a device's start step replaces with a home of the
+    /// node's own, never another variable that still names the account's
+    /// (Windows OpenSSH sets `HOME` beside `USERPROFILE`).
+    pub(crate) fn of_variables(variables: hide_platform::host::Variables) -> Self {
         hide_session::environment::initialize();
+        let home = hide_platform::host::home_dir_from(variables).ok();
         Self {
-            home: std::env::var_os("HOME").map(PathBuf::from),
+            state: home
+                .as_deref()
+                .map(hide_kit::layout::state_dir_from_process),
+            home,
             kit: KitPlace::Installed,
             shell: crate::shell_integration::UserShell::of_process(),
             stop: Arc::default(),
             ai: process_ai(),
             label_locks: Arc::default(),
             worktrees: Arc::default(),
-            state: std::env::var_os("HOME")
-                .map(|home| hide_kit::layout::state_dir_from_process(Path::new(&home))),
             bridged_herdr: None,
             panes: Default::default(),
         }

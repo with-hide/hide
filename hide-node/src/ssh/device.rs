@@ -106,7 +106,11 @@ pub fn parse_device_home(value: &str) -> Result<String, String> {
 /// The home `configured` names on a device whose account's home is `home`
 /// and whose system is `os`: below that home for `~/`, else as given when
 /// it is absolute on that system.
-pub(super) fn resolve_device_home(configured: &str, home: &str, os: &str) -> Result<String, String> {
+pub(super) fn resolve_device_home(
+    configured: &str,
+    home: &str,
+    os: &str,
+) -> Result<String, String> {
     if let Some(rest) = configured.strip_prefix("~/") {
         return Ok(format!("{}/{rest}", home.trim_end_matches('/')));
     }
