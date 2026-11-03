@@ -589,7 +589,7 @@ The public repository's `phone-production` GitHub environment supplies exactly t
 
 | Secret | Value supplied by the deployment owner |
 | --- | --- |
-| `PHONE_VERCEL_TOKEN` | Vercel deployment token scoped to the phone project's owner |
+| `PHONE_VERCEL_TOKEN` | Vercel deployment token restricted to the phone project |
 | `PHONE_VERCEL_ORG_ID` | The existing Vercel team or account ID |
 | `PHONE_VERCEL_PROJECT_ID` | The existing phone project ID, separate from the introduction site |
 
@@ -624,9 +624,27 @@ There are no external scripts or analytics in the phone app, and an analytics-en
 After upload, CI reads the inventory, protocol union and every listed file from `app.withhide.dev`, requiring the exact source, bytes and CSP headers before desktop preparation begins.
 A failed confirmation can leave the newly uploaded phone site online, but the desktop release remains stopped; repair the cause and retry from main instead of publishing past it.
 The 30-minute job limit bounds the whole operation, and Vercel upload has its own ten-minute limit.
+The upload pins the npm-published Vercel CLI 65.10.0, whose deploy path accepts a project-scoped token when the project's GET succeeds but the owner team's GET returns `403 team_unauthorized`.
+CLI 50.1.3 rejected that combination before upload with "Could not retrieve Project Settings".
+Preparation still verifies the project's `id` and `accountId` before writing `.vercel/project.json`; no team-wide permission or Git integration is required.
 
 `python3 -m unittest scripts.tests.test_phone_release scripts.tests.test_release_candidate` checks the release dependency graph, secret contract and real filesystem assembly against fixture Vercel HTTP responses.
 It covers retained old files, same-protocol assets, the protocol union, missing secrets, upload prerequisites, refused rollback, corrupt or missing history, unsafe CSP and failed production confirmation, without any live upload.
+The opt-in real-CLI regression installs no dependency itself and needs no credentials.
+Install the two npm releases into ignored run directories with Node 22, then run:
+
+```sh
+npm install --prefix agents/runs/mission-27-phone-deploy/cli-new --ignore-scripts --no-audit --no-fund vercel@65.10.0
+npm install --prefix agents/runs/mission-27-phone-deploy/cli-old --ignore-scripts --no-audit --no-fund vercel@50.1.3
+PHONE_RELEASE_VERCEL_CLI="$PWD/agents/runs/mission-27-phone-deploy/cli-new/node_modules/vercel/dist/index.js" \
+PHONE_RELEASE_OLD_VERCEL_CLI="$PWD/agents/runs/mission-27-phone-deploy/cli-old/node_modules/vercel/dist/index.js" \
+python3 -m unittest scripts.tests.test_phone_release.PhoneReleaseCli
+```
+
+The fixture executes the workflow's deploy arguments against a loopback API using the CLI's `--api` option, with a private home and repository and a synthetic token.
+It runs real preparation, verifies the current CLI matches the workflow pin, reproduces the old CLI's team-403 failure, and checks the new CLI uploads exactly the prepared file bytes and exits successfully.
+A missing project, a different team error, and an upload refusal must still exit unsuccessfully; the ordinary workflow tests keep upload failure and confirmation ahead of packaging.
+Without both installed CLI paths this external-binary case is explicitly skipped, while the ordinary release contract tests still run.
 The existing phone browser journey checks that CSP blocks an external script.
 These checks prove the release contract, not actual credentials, hosting, DNS, a live upload or a physical phone; those remain the deployment node's acceptance checks.
 
