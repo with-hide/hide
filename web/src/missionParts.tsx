@@ -2,19 +2,36 @@ import { ChevronRightIcon, GitBranchIcon } from "lucide-react";
 import type { TFunction } from "i18next";
 import type { ReactNode } from "react";
 import { AgentMark } from "./AgentMark";
+import { DeviceChip } from "./components/device-chip";
 import { formatElapsed } from "./components/elapsed";
 import { MissionPrMark } from "./components/mission-pr";
+import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
 import { checkerState, launchSession, nodeTimes, runWords, shortCommit, workerAsleep, type NodeLook, type NodeResult } from "./missions";
 import { allAgents, agentsByPane } from "./paneAgents";
+import { machineName, windowDeviceId } from "./screenMachine";
 import type { Mission, MissionChecker, MissionEvent, MissionNode, MissionWorker } from "./snapshot";
 import { useShellStore } from "./store";
 
 // The parts a mission's map, its node panel and the Conductor pane's popover
 // draw alike: a node's result, its worker's live row, a look's word, a node's
 // times and one checker of a review or verification.
+
+/** A worker's device, only when it is away from the window reading the mission. */
+export function useMissionDeviceName(machine: string | null | undefined): string | null {
+  const { t } = useInterfaceTranslation();
+  return useShellStore((s) => {
+    const devices = s.rest?.navigator?.devices;
+    return machine && machine !== windowDeviceId(devices) ? machineName(devices, machine, t) : null;
+  });
+}
+
+/** A device in the worker's metadata, with the full name on hover. */
+export function MissionDevice({ name, className }: { name: string | null; className?: string }) {
+  return name ? <Hint label={name} reveals><span className={cn("flex min-w-0 max-w-full", className)}><DeviceChip label={name} variant="inline" className="max-w-full" /></span></Hint> : null;
+}
 
 /**
  * What a node left, by its kind, as the Conductor pane's popover lists it
@@ -92,15 +109,19 @@ export function CheckerRow({ mission, kind, checker }: { mission: Mission; kind:
   const { t } = useInterfaceTranslation();
   const state = checkerState(checker);
   const run = useRunWords(mission, checker.pane_id, checker.machine, checker.worker);
+  const device = useMissionDeviceName(checker.machine);
   const status = state === "pass" || state === "fail" ? t(`mission.checker.${state}`) : t(`mission.checker.${state}.${kind}`);
   return (
-    <span className="flex min-w-0 items-center gap-xs" data-node-checker={checker.worker.agent} data-checker-state={state}>
-      <AgentMark kind={checker.worker.agent} />
-      {run ? <RunText run={run} className="flex-1" /> : <span className="flex-1" />}
-      <span className={cn("shrink-0", CHECKER_TONE[state])}>
-        {state === "pass" ? "✓ " : state === "fail" ? "✕ " : ""}
-        {status}
+    <span className="flex min-w-0 flex-col gap-xxs" data-node-checker={checker.worker.agent} data-checker-state={state}>
+      <span className="flex min-w-0 items-center gap-xs">
+        <AgentMark kind={checker.worker.agent} />
+        {run ? <RunText run={run} className="flex-1" /> : <span className="flex-1" />}
+        <span className={cn("shrink-0", CHECKER_TONE[state])}>
+          {state === "pass" ? "✓ " : state === "fail" ? "✕ " : ""}
+          {status}
+        </span>
       </span>
+      <MissionDevice name={device} />
     </span>
   );
 }

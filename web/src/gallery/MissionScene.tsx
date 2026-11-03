@@ -32,7 +32,7 @@ import { requireInterfaceLanguage } from "../i18n/locale";
 import { MissionMap } from "../MissionMap";
 import { PaneWorkChip } from "../PaneMissionChip";
 import { ConductorTab } from "../settings/ConductorTab";
-import type { AgentRow, Mission, MissionChecker, MissionCriterion, MissionEvent, MissionLanding, MissionNode, MissionWorker, PlanView, SnapshotRest } from "../snapshot";
+import type { AgentRow, Device, Mission, MissionChecker, MissionCriterion, MissionEvent, MissionLanding, MissionNode, MissionWorker, PlanView, SnapshotRest } from "../snapshot";
 import { useShellStore } from "../store";
 import { useUiStore } from "../ui";
 
@@ -233,9 +233,18 @@ const OLD_CRITERION = "목록 화면이 새 API로 페이지를 넘기고, 필�
 export function missionFixture(shown: string, now: number): { mission: Mission; rest: SnapshotRest } {
   // An answer sent from the banner draws the decision with that answer on it.
   const answered = shown === "decision-sent" || shown === "decision-unreadable" || shown === "decision-unconfirmed";
-  const state = answered ? "decision" : shown === "exempt" ? "done" : shown === "rejected" ? "running" : shown;
+  const remote = shown === "remote" || shown === "remote-long";
+  const state = answered ? "decision" : shown === "exempt" ? "done" : shown === "rejected" || remote ? "running" : shown;
   // A mission from before finish lines keeps each node's one old sentence (B23); a rejected one has a reviewer say no.
   const nodes = shown === "exempt" ? plan(state, now).map((one) => ({ ...one, ...finish(own(1, OLD_CRITERION, "pass")) })) : shown === "rejected" ? plan(state, now).map(rejectedReview) : plan(state, now);
+  if (remote) {
+    for (const one of nodes) {
+      one.machine = one.key === "screen" || (shown === "remote-long" && one.key === "fix-1487") ? "mini" : one.pane_id ? "local" : null;
+      for (const check of one.criteria.flatMap((criterion) => criterion.checkers ?? [])) {
+        if (check.pane_id) check.machine = "mini";
+      }
+    }
+  }
   const mission: Mission = {
     id: "mission-1", title: "이슈 정리", workspace_id: "hide", project: "/projects/herdr-ide", checkout_path: "/projects/herdr-ide", device_id: "local",
     status: state === "plan" ? "planning" : state === "stack" ? "merge_wait" : state === "done" || state === "no-pr" ? "done" : state === "cancelled" ? "cancelled" : "running",
@@ -264,7 +273,7 @@ export function missionFixture(shown: string, now: number): { mission: Mission; 
   const rest = {
     missions: state === "failed" ? { items: [], failed: "unreadable" } : { items: [mission] },
     mission_events: { mission: mission.id, events: history(mission, now), dropped: 0 },
-    navigator: { devices: [{ id: "local", kind: "local", label: "This Mac", kit: { agents: [
+    navigator: { devices: [{ id: "local", kind: "local", label: remote ? "Studio Mac" : "This Mac", kit: { agents: [
       { id: "claude-code", label: "Claude Code", availability: "available", enabled: true },
       { id: "codex", label: "Codex", availability: "available", enabled: true },
       { id: "pi", label: "Pi", availability: "available", enabled: true },
@@ -283,6 +292,12 @@ export function missionFixture(shown: string, now: number): { mission: Mission; 
       { agent: "grok", effort: null, purpose: "" },
     ], default_strength: "normal", other_vendor: true, clean_merged: true } },
   } as unknown as SnapshotRest;
+  if (remote) {
+    rest.navigator!.devices!.push({ id: "mini", kind: "remote", label: shown === "remote-long" ? "맥 미니 · 빌드와 검증을 맡는 작업실의 데스크톱" : "Mac mini" } as Device);
+    for (const session of rest.overview_graph!.sessions) {
+      if (session.pane_id === SCREEN_PANE || session.pane_id === REVIEW_PANE) session.device_id = "mini";
+    }
+  }
   return { mission, rest };
 }
 

@@ -67,7 +67,7 @@ These already draw a thing Hide shows in several places; use them instead of dra
 | A settings form | `Group`, `Row`, `Disclosure`, `Value`, `Status`, `Note` (`settings-rows.tsx`) |
 | A pull request's mark or card | `pr-mark.tsx`, `pr-card.tsx` |
 | A file or folder mark | `FileMark` |
-| A device | `DeviceChip`, `device-rail.tsx` |
+| A device | `DeviceChip`, `device-rail.tsx`; the chip's `variant="inline"` puts its icon and name in a caption line without a border or padding |
 | What a close would take with it | `SubtreeList` |
 | A state that stands in a box | `StateBox` |
 | Desk: its chat, job and approval cards, composer and agent bar, `@` menu, Threads list, a thread, outputs, lane columns and rail, Settings › Desk | `components/desk/*`, drawn from props in the shape of `web/src/desk.ts`; the gallery's `scene=desk` shows every state. In Desk a session reads as `StatusMark`, agent mark and title wherever it appears; a card is unfilled with a `--border` line, `rounded-lg` and two lines, selected on `bg-accent`; nothing filled sits inside another filled box; the approval card's two answers are `Button variant="secondary"`, the composer's send a round `secondary` icon, and every other action is words (`variant="text"`, such as `답하기 ›`); Desk draws no `default` button, so lime marks focus and selection only; the lane's pin is `LanePinButton` (`components/lane-pin.tsx`), the same one the project lane draws, in the head of the column at the lane's edge just before `✕` |
