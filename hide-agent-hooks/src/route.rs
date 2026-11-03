@@ -191,6 +191,32 @@ fn parse_install(arguments: impl Iterator<Item = String>) -> Result<Option<Strin
     Ok(install)
 }
 
+/// The folder the hooks keep their records by pane in (subagent counts, plan
+/// records): Hide's own for a pane the desktop app started or one that names
+/// no installation, and one of its own for a pane another installation
+/// started, whose pane ids are that installation's core's and whose records
+/// the app's core neither reads nor sweeps.
+pub fn pane_records(home: &Path) -> PathBuf {
+    records_of(home, std::env::var(INSTALL_VARIABLE).ok().as_deref())
+}
+
+fn records_of(home: &Path, pane: Option<&str>) -> PathBuf {
+    let records = home.join(".hide").join("agent-hooks");
+    match pane {
+        Some(install) if !install.is_empty() && install != APP_INSTALL => {
+            use sha2::Digest;
+            let digest = sha2::Sha256::digest(install.as_bytes());
+            let name: String = digest
+                .iter()
+                .take(8)
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
+            records.join("installs").join(name)
+        }
+        _ => records,
+    }
+}
+
 /// Whether this process runs in a pane another Hide installation started:
 /// the pane names an installation ([`INSTALL_VARIABLE`]) and the entry that
 /// ran this helper names another. Such a call is that installation's own
@@ -198,16 +224,17 @@ fn parse_install(arguments: impl Iterator<Item = String>) -> Result<Option<Strin
 /// entry an earlier build wrote without an installation, and arguments that
 /// do not read are never foreign: the call goes on as before.
 pub fn foreign_pane() -> bool {
-    let Some(pane) = std::env::var(INSTALL_VARIABLE)
-        .ok()
-        .filter(|value| !value.is_empty())
-    else {
+    foreign(
+        std::env::var(INSTALL_VARIABLE).ok().as_deref(),
+        std::env::args().skip(1),
+    )
+}
+
+fn foreign(pane: Option<&str>, arguments: impl Iterator<Item = String>) -> bool {
+    let Some(pane) = pane.filter(|value| !value.is_empty()) else {
         return false;
     };
-    matches!(
-        parse_install(std::env::args().skip(1)),
-        Ok(Some(entry)) if entry != pane
-    )
+    matches!(parse_install(arguments), Ok(Some(entry)) if entry != pane)
 }
 
 /// Read a generated shell command's installation, for the kit's judgement of
@@ -299,5 +326,44 @@ mod tests {
         use std::os::unix::ffi::OsStringExt;
         let state = PathBuf::from(std::ffi::OsString::from_vec(b"/state/\xff".to_vec()));
         assert!(HookTarget::new(Path::new("/helper"), &state).is_err());
+    }
+
+    /// An entry acts only in a pane of its own installation; a pane that
+    /// names none, and an entry an earlier build wrote, act anywhere.
+    #[test]
+    fn an_entry_leaves_a_pane_another_installation_started() {
+        let helper = Path::new("/kit/hide-agent-hooks");
+        let state = Path::new("/state");
+        let entry = |install: Option<&str>| {
+            let target = HookTarget::new(helper, state).unwrap();
+            let target = match install {
+                Some(install) => target.of_install(install).unwrap(),
+                None => target,
+            };
+            target
+                .arguments()
+                .split_whitespace()
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        let app = entry(Some(APP_INSTALL));
+        let device = entry(Some("root:/helper"));
+        assert!(!foreign(Some(APP_INSTALL), app.clone().into_iter()));
+        assert!(foreign(Some(APP_INSTALL), device.clone().into_iter()));
+        assert!(foreign(Some("root:/helper"), app.clone().into_iter()));
+        assert!(!foreign(Some("root:/helper"), device.into_iter()));
+        assert!(!foreign(None, app.into_iter()));
+        assert!(!foreign(Some(APP_INSTALL), entry(None).into_iter()));
+    }
+
+    #[test]
+    fn a_pane_of_another_installation_keeps_its_records_apart() {
+        let home = Path::new("/home");
+        let own = home.join(".hide").join("agent-hooks");
+        assert_eq!(records_of(home, None), own);
+        assert_eq!(records_of(home, Some(APP_INSTALL)), own);
+        let device = records_of(home, Some("root:/helper"));
+        assert!(device.starts_with(own.join("installs")));
+        assert_ne!(device, records_of(home, Some("root:/other")));
     }
 }

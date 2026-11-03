@@ -139,8 +139,7 @@ fn record_path(home: &Path, pane_id: &str) -> PathBuf {
             }
         })
         .collect();
-    home.join(".hide")
-        .join("agent-hooks")
+    crate::route::pane_records(home)
         .join("plans")
         .join(format!("{safe}.json"))
 }
