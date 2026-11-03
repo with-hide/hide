@@ -811,14 +811,16 @@ mod tests {
     /// A device helper started with a home of its own
     /// (`HIDE_DEV_DEVICE_HOME`) keeps every place its kit and state write
     /// under that home, whatever the account's environment still says: the
-    /// start step replaces the platform's home variable and clears
-    /// [`HOME_FOLDER_VARIABLES`], and every other variable here names a
+    /// start step replaces the platform's home variable, clears
+    /// [`HOME_FOLDER_VARIABLES`] and sets each agent's home variable inside
+    /// it, and every other variable here names a
     /// folder of the account's (Windows OpenSSH sets `HOME` beside the
     /// `USERPROFILE` the start step replaces, and a kit that read `HOME`
     /// there wrote the account's own hook files).
     #[test]
     fn every_kit_location_follows_the_home_the_platform_names() {
-        use crate::serve::HOME_FOLDER_VARIABLES;
+        use crate::serve::{HOME_FOLDER_VARIABLES, agent_home_variables};
+        use hide_agent_adapter::{ADAPTERS, HomeScope};
         let dir = tempfile::tempdir().unwrap();
         let own = dir.path().join("own");
         let account = dir.path().join("account");
@@ -833,9 +835,13 @@ mod tests {
         let env = Env::of_variables(&inherited);
         assert!(!env.state.unwrap().starts_with(&own));
 
+        let agents = agent_home_variables();
         let started = |name: &str| {
             if HOME_FOLDER_VARIABLES.contains(&name) {
                 None
+            } else if let Some((_, folder)) = agents.iter().find(|(variable, _)| *variable == name)
+            {
+                Some(own.join(folder).into_os_string())
             } else {
                 inherited(name)
             }
@@ -853,6 +859,15 @@ mod tests {
         locations.extend(
             hide_agent_hooks::runtime::AgentRuntime::ALL.map(|runtime| runtime.config_path(&home)),
         );
+        // Each agent's folder as the agent itself reads it in a pane.
+        for agent in ADAPTERS {
+            let value = agent.home_variable.and_then(started);
+            locations.push(
+                agent
+                    .home(Some(&home), value.as_deref(), HomeScope::Read)
+                    .unwrap(),
+            );
+        }
         for location in locations {
             assert!(
                 location.starts_with(&own),

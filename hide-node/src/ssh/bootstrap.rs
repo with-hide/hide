@@ -41,7 +41,7 @@
 //! by `hide_platform::fs::private`'s rule, with no link anywhere on the path.
 
 use super::*;
-use hide_host::serve::HOME_FOLDER_VARIABLES;
+use hide_host::serve::{HOME_FOLDER_VARIABLES, agent_home_variables};
 
 /// The words that read the script as one line from the link's own input and
 /// run it, as a program run without a shell (`wsl.exe -e`) takes them.
@@ -118,14 +118,21 @@ const POWERSHELL_SCRIPT: &str = include_str!("bootstrap.ps1");
 const ASKS_FOR_POWERSHELL: [&str; 2] = ["script", "powershell"];
 
 /// The PowerShell script's text, with the variables a home of the node's
-/// own clears.
+/// own clears and the agent homes it sets.
 fn powershell_text() -> String {
     let variables = HOME_FOLDER_VARIABLES
         .iter()
         .map(|name| format!("'{name}'"))
         .collect::<Vec<_>>()
         .join(",");
-    POWERSHELL_SCRIPT.replace("@HOME_FOLDER_VARIABLES@", &variables)
+    let agents = agent_home_variables()
+        .iter()
+        .map(|(variable, folder)| format!("'{variable}={folder}'"))
+        .collect::<Vec<_>>()
+        .join(",");
+    POWERSHELL_SCRIPT
+        .replace("@HOME_FOLDER_VARIABLES@", &variables)
+        .replace("@AGENT_HOMES@", &agents)
 }
 
 /// The PowerShell script as the wrapper reads it: its size in bytes on a
@@ -180,7 +187,7 @@ if head -c "$d" | store "$t" && [ "$(sum "$t")" = "$b" ] && chmod -- "$c" "$t" &
 start) [ -n "$root" ] || { say fail "no install folder was chosen"; exit 65; }; h=$root/$a;
 case $b in session=*) unset HERDR_SOCKET_PATH; HERDR_SESSION=${b#session=}; export HERDR_SESSION;; socket=*) unset HERDR_SESSION; HERDR_SOCKET_PATH=${b#socket=}; export HERDR_SOCKET_PATH;; esac;
 below "$a" || { say fail "$ub"; exit 65; }; [ -x "$h" ] && mine "$h" || { say fail "the helper $h is missing or can be changed by other accounts"; exit 65; };
-case ${c:--} in -) ;; *) { (umask 077; mkdir -p -- "$c") && HOME=$c && export HOME && unset @HOME_FOLDER_VARIABLES@; } || { say fail "the home $c could not be made"; exit 65; };; esac;
+case ${c:--} in -) ;; *) { (umask 077; mkdir -p -- "$c") && HOME=$c && export HOME && unset @HOME_FOLDER_VARIABLES@@AGENT_HOMES@; } || { say fail "the home $c could not be made"; exit 65; };; esac;
 cd -- "$HOME" 2>/dev/null || :;
 say start; exec "$h" node serve --own-herdr;;
 run) set --; i=0; while [ "$i" -lt "$a" ] && IFS= read -r w; do set -- "$@" "$w"; i=$((i+1)); done;
@@ -200,6 +207,19 @@ esac;
 done
 "#;
 
+/// Each agent's home variable set to its folder inside the home `$c` names,
+/// made private, as the POSIX script's commands.
+fn posix_agent_homes() -> String {
+    agent_home_variables()
+        .iter()
+        .map(|(variable, folder)| {
+            format!(
+                " && (umask 077; mkdir -p -- \"$c/{folder}\") && {variable}=$c/{folder} && export {variable}"
+            )
+        })
+        .collect()
+}
+
 /// The script as the one line [`WRAPPER`] reads, with its line end. On
 /// Windows, under an MSYS or Cygwin `sh`, its first statement hands the link
 /// to the PowerShell wrapper, which asks for its own script as it does under
@@ -213,7 +233,8 @@ pub(crate) fn script_line() -> String {
         .join(" ")
         .replace("@POWERSHELL@", POWERSHELL)
         .replace("@WRAPPER@", &powershell_wrapper())
-        .replace("@HOME_FOLDER_VARIABLES@", &HOME_FOLDER_VARIABLES.join(" "));
+        .replace("@HOME_FOLDER_VARIABLES@", &HOME_FOLDER_VARIABLES.join(" "))
+        .replace("@AGENT_HOMES@", &posix_agent_homes());
     line.push('\n');
     line
 }
@@ -526,9 +547,10 @@ pub(crate) enum HerdrChoice {
 /// (`HIDE_DEV_DEVICE_HOME`, [`super::super::device::resolve_device_home`]),
 /// made private where it is missing. Every per-user folder the helper and
 /// what it starts read follows it: `HOME`, on Windows also `USERPROFILE`,
-/// `APPDATA`, `LOCALAPPDATA`, `TEMP` and `TMP` made under it, and every
+/// `APPDATA`, `LOCALAPPDATA`, `TEMP` and `TMP` made under it, every
 /// variable that would move one elsewhere ([`HOME_FOLDER_VARIABLES`])
-/// cleared, in both scripts.
+/// cleared, and each agent's own home variable set to its folder under it
+/// ([`agent_home_variables`]), in both scripts.
 pub(crate) fn start(
     pipe: &mut dyn Pipe,
     helper_relative: &str,

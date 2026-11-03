@@ -1013,25 +1013,44 @@ impl KitPlace {
     }
 }
 
-/// Every variable that moves a folder Hide or an agent keeps below the home
-/// somewhere else: Hide's state, the XDG base folders (the agents' config,
-/// OpenCode's database, the state Hide falls back to), the agents' own
-/// homes, and zsh's start files and history. A helper started with a home of
-/// the node's own (`HIDE_DEV_DEVICE_HOME`) starts with none of them, so
-/// whatever the account's environment names, every folder follows that home:
-/// hide-node's start scripts clear exactly these, and on Windows also move
-/// the per-user folders the system derives from the home.
+/// Every variable that moves a folder Hide keeps below the home, or one an
+/// agent keeps there by the home alone, somewhere else: Hide's state, the
+/// XDG base folders (the agents' config, OpenCode's database, the state Hide
+/// falls back to), Claude Code's and Cursor's folders, and zsh's start files
+/// and history. A helper started with a home of the node's own
+/// (`HIDE_DEV_DEVICE_HOME`) starts with none of them and with each agent's
+/// own home variable set inside that home ([`agent_home_variables`]), so
+/// whatever the account's environment names, every folder follows that
+/// home: hide-node's start scripts apply exactly these, and on Windows also
+/// move the per-user folders the system derives from the home.
 pub const HOME_FOLDER_VARIABLES: &[&str] = &[
     "HIDE_STATE_DIR",
     "XDG_CONFIG_HOME",
     "XDG_DATA_HOME",
     "XDG_STATE_HOME",
     "XDG_CACHE_HOME",
-    "CODEX_HOME",
     "CLAUDE_CONFIG_DIR",
     "CURSOR_CONFIG_DIR",
     "ZDOTDIR",
 ];
+
+/// Each agent's own home variable with its folder below the home, its parts
+/// joined by `/` (`CODEX_HOME`, `.codex`), from the agent declarations. Under
+/// a home of the node's own it is set to that folder, made private, rather
+/// than cleared: an agent need not take its home from the variables the
+/// start step replaces (Codex 0.166 on Windows reads the profile folder
+/// Windows keeps for the account, and wrote its trust table into the
+/// account's own `config.toml`, 2026-11-04).
+pub fn agent_home_variables() -> Vec<(&'static str, String)> {
+    hide_agent_adapter::ADAPTERS
+        .iter()
+        .filter_map(|agent| {
+            agent
+                .home_variable
+                .map(|variable| (variable, agent.folder.join("/")))
+        })
+        .collect()
+}
 
 impl Env {
     pub fn of_process() -> Self {

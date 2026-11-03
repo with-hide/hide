@@ -59,10 +59,13 @@ impl Device {
             .current_dir(self.home())
             .env("HOME", self.home())
             // Folders of the account's own named apart from its home, which
-            // a home of the node's own replaces with its defaults under it.
+            // a home of the node's own replaces with its defaults under it
+            // or, for an agent's home, its folder there.
             .envs(
                 HOME_FOLDER_VARIABLES
                     .iter()
+                    .copied()
+                    .chain(agent_home_variables().into_iter().map(|(name, _)| name))
                     .map(|name| (name, self.home().join("account").join(name))),
             )
             .env("TMPDIR", self.tmp())
@@ -386,13 +389,18 @@ fn an_install_under_a_folder_others_can_change_is_refused() {
 #[test]
 fn the_helper_starts_on_the_same_pipes_with_the_chosen_herdr() {
     let device = Device::new();
-    // It names each folder variable it was started with.
+    // It names each folder variable it was started with, and each agent's
+    // home.
     let moved: String = HOME_FOLDER_VARIABLES
         .iter()
         .map(|name| format!("${{{name}+ {name}}}"))
         .collect();
+    let agents: String = agent_home_variables()
+        .iter()
+        .map(|(name, _)| format!(" ${{{name}:-}}"))
+        .collect();
     let helper = format!(
-        "#!/bin/sh\necho \"args:$*\"\necho \"session:${{HERDR_SESSION:-}} socket:${{HERDR_SOCKET_PATH:-}}\"\necho \"home:$HOME pwd:$(pwd -P)\"\necho \"moved:{moved}\"\n"
+        "#!/bin/sh\necho \"args:$*\"\necho \"session:${{HERDR_SESSION:-}} socket:${{HERDR_SOCKET_PATH:-}}\"\necho \"home:$HOME pwd:$(pwd -P)\"\necho \"moved:{moved}\"\necho \"agents:{agents}\"\n"
     );
     let packages = device.packages(std::env::consts::OS, std::env::consts::ARCH, &helper);
     let mut pipe = device.connect("");
@@ -421,11 +429,20 @@ fn the_helper_starts_on_the_same_pipes_with_the_chosen_herdr() {
         String::from_utf8(pipe.line(soon()).unwrap()).unwrap(),
         format!("moved:{all}")
     );
+    let account: String = agent_home_variables()
+        .iter()
+        .map(|(name, _)| format!(" {}", device.home().join("account").join(name).display()))
+        .collect();
+    assert_eq!(
+        String::from_utf8(pipe.line(soon()).unwrap()).unwrap(),
+        format!("agents:{account}")
+    );
 
     // A home of the node's own (`HIDE_DEV_DEVICE_HOME`) takes the account's
-    // place, made private where it was missing, and none of the account's
+    // place, made private where it was missing, none of the account's
     // folders named apart from its home reaches the helper, so each one is
-    // the default under the new home.
+    // the default under the new home, and each agent's home is its folder
+    // there, made private.
     let own = format!("{}/candidate/home", facts.home);
     let mut pipe = device.connect("");
     let facts = probe(&mut pipe, soon()).unwrap();
@@ -445,7 +462,18 @@ fn the_helper_starts_on_the_same_pipes_with_the_chosen_herdr() {
         format!("home:{own} pwd:{}", made.display())
     );
     assert_eq!(pipe.line(soon()).unwrap(), b"moved:");
+    let agents: String = agent_home_variables()
+        .iter()
+        .map(|(_, folder)| format!(" {own}/{folder}"))
+        .collect();
+    assert_eq!(
+        String::from_utf8(pipe.line(soon()).unwrap()).unwrap(),
+        format!("agents:{agents}")
+    );
     assert_eq!(mode(&made), 0o700);
+    for (_, folder) in agent_home_variables() {
+        assert_eq!(mode(&made.join(&folder)), 0o700, "{folder}");
+    }
 }
 
 /// Every folder below the install folder must be a real folder of the

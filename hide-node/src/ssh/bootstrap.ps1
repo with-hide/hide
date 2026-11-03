@@ -537,9 +537,12 @@ function Step-Start([string]$relative, [string]$herdr, [string]$homeWire) {
     # which would otherwise stay the account's, and a .NET program whose
     # folder under the new home is missing gets no folder at all. Every
     # variable that moves a folder Hide or an agent keeps below the home
-    # somewhere else is cleared (hide_host::serve::HOME_FOLDER_VARIABLES), as
-    # the POSIX script clears them, so nothing the account's environment
-    # names takes a folder out of this home.
+    # somewhere else is cleared (hide_host::serve::HOME_FOLDER_VARIABLES), and
+    # each agent's own home variable is set to its folder inside this home
+    # (agent_home_variables), since Codex here reads the account's profile
+    # folder from Windows rather than USERPROFILE; the POSIX script does the
+    # same, so nothing the account's environment names takes a folder out of
+    # this home.
     if ($homeWire -and $homeWire -ne '-') {
         try {
             if (-not (Absolute $homeWire)) { throw 'not absolute' }
@@ -557,6 +560,12 @@ function Step-Start([string]$relative, [string]$herdr, [string]$homeWire) {
             $env:TEMP = $temp
             $env:TMP = $temp
             foreach ($name in @(@HOME_FOLDER_VARIABLES@)) { [Environment]::SetEnvironmentVariable($name, $null) }
+            foreach ($pair in @(@AGENT_HOMES@)) {
+                $name, $relative = $pair.Split([char[]]'=', 2)
+                $folder = [IO.Path]::Combine($own, $relative.Replace('/', '\'))
+                [void][IO.Directory]::CreateDirectory($folder, (Private-Folder))
+                [Environment]::SetEnvironmentVariable($name, $folder)
+            }
         } catch { Say fail "the home $homeWire could not be made"; exit 65 }
     }
     Hand-Over $helper @('node', 'serve', '--own-herdr') 'start'

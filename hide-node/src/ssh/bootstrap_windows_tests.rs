@@ -110,10 +110,13 @@ impl Device {
             .env("HIDE_TEST_OWN_HOME", self.own_home())
             .env("HIDE_TEST_STATE", self.state())
             // Folders of the account's own named apart from its home, which
-            // a home of the node's own replaces with its defaults under it.
+            // a home of the node's own replaces with its defaults under it
+            // or, for an agent's home, its folder there.
             .envs(
                 HOME_FOLDER_VARIABLES
                     .iter()
+                    .copied()
+                    .chain(agent_home_variables().into_iter().map(|(name, _)| name))
                     .map(|name| (name, self.home().join("account").join(name))),
             )
             .env_remove(hide_platform::host::MACHINE_ID_VARIABLE)
@@ -146,13 +149,20 @@ impl Device {
     /// A batch file the steps can start in place of a program: it says what
     /// it was started with, in which of the device's folders (`home`, `own`
     /// or `other`), whether its per-user folders all follow the own home,
-    /// which folder variables it was started with, then repeats one line of
-    /// its input.
+    /// which folder variables it was started with, whether every agent's
+    /// home is its folder under the own home, then repeats one line of its
+    /// input.
     fn echoing_program(&self, path: &Path) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let moved = HOME_FOLDER_VARIABLES
             .iter()
             .map(|name| format!("if defined {name} set moved=%moved% {name}"));
+        let agents = agent_home_variables().into_iter().map(|(name, folder)| {
+            format!(
+                "if /i not \"%{name}%\"==\"%HIDE_TEST_OWN_HOME%\\{}\" set agents=other",
+                folder.replace('/', "\\")
+            )
+        });
         std::fs::write(
             path,
             [
@@ -175,8 +185,10 @@ impl Device {
             .into_iter()
             .map(str::to_owned)
             .chain(moved)
+            .chain(["echo moved:%moved%", "set agents=own"].map(str::to_owned))
+            .chain(agents)
             .chain(
-                ["echo moved:%moved%", "set /p line=", "echo carried:%line%", ""]
+                ["echo agents:%agents%", "set /p line=", "echo carried:%line%", ""]
                     .map(str::to_owned),
             )
             .collect::<Vec<_>>()
@@ -507,14 +519,17 @@ fn the_helper_starts_on_the_same_pipes_and_takes_no_herdr() {
         .map(|name| format!(" {name}"))
         .collect();
     assert_eq!(line(&mut pipe), format!("moved:{all}"));
+    assert_eq!(line(&mut pipe), "agents:other");
     pipe.send(b"through the link\r\n", soon()).unwrap();
     assert_eq!(line(&mut pipe), "carried:through the link");
 
     // A home of the node's own (`HIDE_DEV_DEVICE_HOME`) takes the account's
     // place, made private where it was missing, and so do the per-user
     // folders beside it, and none of the account's folders named apart from
-    // its home reaches the helper, so neither the helper's kit and state nor
-    // a program in one of its panes writes the account's own.
+    // its home reaches the helper, and each agent's home is its folder under
+    // the own home, made private, so neither the helper's kit and state nor
+    // a program in one of its panes (Codex, which reads the account's profile
+    // folder from Windows) writes the account's own.
     let own = device.own_home();
     let mut pipe = device.connect();
     let facts = probe(&mut pipe, soon()).unwrap();
@@ -537,11 +552,18 @@ fn the_helper_starts_on_the_same_pipes_and_takes_no_herdr() {
     assert_eq!(line(&mut pipe), "home:own");
     assert_eq!(line(&mut pipe), "folders:own");
     assert_eq!(line(&mut pipe), "moved:");
+    assert_eq!(line(&mut pipe), "agents:own");
     for folder in [
         own.clone(),
         own.join(r"AppData\Roaming"),
         own.join(r"AppData\Local\Temp"),
-    ] {
+    ]
+    .into_iter()
+    .chain(
+        agent_home_variables()
+            .into_iter()
+            .map(|(_, folder)| own.join(folder.replace('/', "\\"))),
+    ) {
         assert!(
             hide_platform::fs::private::is_private(&folder).unwrap(),
             "{}",
