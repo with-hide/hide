@@ -8,10 +8,10 @@ build = "build.rs"
 [dependencies]
 hide-platform = { path = "../hide-platform" }
 serde = { version = "=1.0.229", features = ["derive"] }
-serde_json = "=1.0.151"
+serde_json = "=1.0.154"
 
 [build-dependencies]
-serde_json = "=1.0.151"
+serde_json = "=1.0.154"
 
 [dev-dependencies]
 base64 = "=0.23.1"
