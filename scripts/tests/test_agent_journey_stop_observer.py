@@ -10,6 +10,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agent_journey import stop_observer
@@ -45,6 +46,15 @@ class StopObservation(unittest.TestCase):
                 rows = observer.read()
                 self.assertEqual([row["active"] for row in rows], [False, True])
                 self.assertEqual([row["answers"] for row in rows], [["JOURNEY-1111AAAA"], ["JOURNEY-2222BBBB"]])
+                # A malformed third invocation must not vanish behind two
+                # already valid observations and certify a false pass.
+                with tempfile.TemporaryFile() as stream:
+                    stream.write(b"[]")
+                    stream.seek(0)
+                    result = owner.run([*shell, command], env={**clean_env(private=True), **home_env(home)},
+                                       stdin=stream, seconds=handler["timeout"])
+                self.assertEqual(result, (0, "", ""))
+                self.assertEqual(observer.read()[-1], {"error": "observer_failed"})
                 self.assertNotIn("private prose", json.dumps(rows))
                 self.assertTrue(all(row["session"] == "session" for row in rows))
             finally:
@@ -59,7 +69,7 @@ class StopObservation(unittest.TestCase):
             observer = stop_observer.Observer(root / "home", root, ["hooks", "observer.json"])
             try:
                 observer.arm("held", "letter", 60)
-                for raw in (b"{}", b"{", b"x" * (stop_observer.INPUT_CAP + 1)):
+                for raw in (b"[]", b"null", b"{}", b"{", b"x" * (stop_observer.INPUT_CAP + 1)):
                     stop_observer.observe(observer.directory, io.BytesIO(raw))
                 self.assertTrue(all(row.get("error") for row in observer.read()))
                 for _ in range(stop_observer.RECORD_CAP):
@@ -67,6 +77,57 @@ class StopObservation(unittest.TestCase):
                 self.assertEqual(observer.read(), [{"error": "observer_overflow"}])
                 self.assertEqual(len(list(observer.directory.glob("[0-9].json"))), stop_observer.RECORD_CAP)
             finally:
+                observer.close()
+
+    def test_interruption_and_failed_reservation_cannot_hide_behind_prior_records(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            observer = stop_observer.Observer(root / "home", root, ["hooks", "observer.json"])
+            try:
+                observer.arm("held", "letter", 60)
+                class Interrupted:
+                    def read(self, _limit):
+                        raise KeyboardInterrupt()
+                with self.assertRaises(KeyboardInterrupt):
+                    stop_observer.observe(observer.directory, Interrupted())
+                self.assertEqual(observer.read(), [{"error": "observer_incomplete"}])
+                original = Path.open
+                def fail_slot(path, *args, **kwargs):
+                    if path.name == "1.json":
+                        raise OSError("reservation refused")
+                    return original(path, *args, **kwargs)
+                with patch.object(Path, "open", fail_slot):
+                    self.assertEqual(stop_observer.main(observer.directory, io.BytesIO(b"{}")), 1)
+                self.assertEqual(observer.read(), [{"error": "observer_write_failed"}])
+            finally:
+                observer.close()
+
+    def test_linked_config_parent_and_rebound_cleanup_never_touch_outside_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            probe, outside = root / "probe", root / "outside"
+            probe.mkdir()
+            outside.mkdir()
+            home = probe / "home"
+            home.mkdir()
+            (home / "hooks").symlink_to(outside, target_is_directory=True)
+            with self.assertRaises(ValueError):
+                stop_observer.Observer(home, probe, ["hooks", "observer.json"])
+            self.assertEqual(list(outside.iterdir()), [])
+            (home / "hooks").unlink()
+            observer = stop_observer.Observer(home, probe, ["hooks", "observer.json"])
+            owned = home / "owned-hooks"
+            (home / "hooks").rename(owned)
+            sentinel = outside / "observer.json"
+            sentinel.write_text("keep")
+            (home / "hooks").symlink_to(outside, target_is_directory=True)
+            try:
+                with self.assertRaises(ValueError):
+                    observer.close()
+                self.assertEqual(sentinel.read_text(), "keep")
+            finally:
+                (home / "hooks").unlink()
+                owned.rename(home / "hooks")
                 observer.close()
 
     def test_observer_refuses_a_home_outside_its_private_probe(self):

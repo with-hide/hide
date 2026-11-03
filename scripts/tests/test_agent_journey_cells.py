@@ -1,6 +1,7 @@
 """The journey table's verdicts and exit codes, from synthetic answers; no agent runs."""
 
 import datetime
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -497,6 +498,23 @@ class BusyAndMenuLetters(unittest.TestCase):
                        dict(shown={"tool_handovers": 1})):
             with self.subTest(defect=defect):
                 self.assertEqual(self.busy(route="bell", texts=texts, **defect)[0], cells.FAIL)
+
+    def test_bell_hook_intake_is_owned_by_the_bell_turn_not_a_second_delivery(self):
+        texts = (("assistant", "JOURNEY-00000001"), ("user", "the bell"),
+                 ("assistant", "JOURNEY-00000002"))
+        shown = dict(tool_handovers=1, bell_line="the bell", bell_turn={"session": hashlib.sha256(b"s").hexdigest(),
+                                  "digest": hashlib.sha256(b"the bell").hexdigest()})
+        args = dict(route="bell", texts=texts, declared=["bell_hook", "turn_end"], shown=shown)
+        self.assertEqual(self.busy(**args)[0], cells.PASS)
+        for defect in (dict(declared=["bell", "turn_end"]),
+                       dict(shown={**shown, "bell_turn": None}),
+                       dict(shown={**shown, "bell_turn": {**shown["bell_turn"], "session": "wrong"}}),
+                       dict(shown={**shown, "bell_line": "another bell"}),
+                       dict(shown={**shown, "tool_handovers": 2}), dict(rungs=[]),
+                       dict(texts=(texts[1], texts[0], texts[2])),
+                       dict(stops=[{"error": "observer_failed"}])):
+            with self.subTest(defect=defect):
+                self.assertEqual(self.busy(**{**args, **defect})[0], cells.FAIL)
 
     def test_another_session_or_human_echo_is_not_an_answer(self):
         self.assertEqual(self.busy(session="other")[0], cells.FAIL)

@@ -8,6 +8,8 @@ report, or, for the composer, the verdicts the product's own composer parser
 gave the screens (`journey_composer`).
 """
 
+import hashlib
+
 PASS, FAIL, NOT_MEASURED, NA, EXCLUDED, PENDING = "pass", "fail", "not measured", "N/A", "excluded", "pending"
 # A failed turn the agent never answered at all, after its prompt: the one
 # failure a provider's refusal of that turn can explain (provider_limit.py).
@@ -254,13 +256,15 @@ def busy_letter_verdict(shown, read, session, held, token, *, declared, input_ru
     bells, handovers = shown.get("bell_attempts"), shown.get("tool_handovers")
     if (bells, handovers) == (1, 0):
         route = "bell"
+    elif (bells, handovers) == (1, 1):
+        route = "bell_hook"
     elif (bells, handovers) == (0, 1):
         route = "turn_end"
     else:
         return FAIL, "the letter did not take exactly one delivery path"
     if route not in declared:
         return FAIL, "the observed delivery path is not declared: " + route
-    if route == "bell":
+    if route in ("bell", "bell_hook"):
         rung = rung_verdict(input_rungs, rungs)
         if rung[0] != PASS:
             return rung
@@ -282,6 +286,16 @@ def busy_letter_verdict(shown, read, session, held, token, *, declared, input_ru
         positions.append(matches[0])
     if positions[0] >= positions[1]:
         return FAIL, "the letter answer did not follow the held answer"
+    if route == "bell_hook":
+        claim = shown.get("bell_turn")
+        after = bell_turn(events, shown.get("bell_line"))
+        if (not isinstance(claim, dict)
+                or claim.get("session") != hashlib.sha256(session.encode()).hexdigest()
+                or claim.get("digest") != hashlib.sha256(canonical_prompt(shown.get("bell_line") or "").encode()).hexdigest()
+                or after is None or not positions[0][0] < after - 1 < positions[1][0]):
+            return FAIL, "hook intake has no bell-owned turn between the held and letter answers"
+    if stops is not None and any(row.get("error") for row in stops):
+        return FAIL, "the Stop observer recorded an invalid invocation"
     merged = positions[0][0] == positions[1][0]
     # The ledger counter is shared by tool and Stop intake. Only these
     # independent payloads (or the no-tool fake) can distinguish them.
@@ -418,25 +432,27 @@ def reply_verdict(read, session, token, after=0):
     return FAIL, "no assistant message carries " + token
 
 
+def canonical_prompt(text):
+    # hide_agent_hooks::delivery::canonical_prompt: line breaks (CR, LF,
+    # U+2028, U+2029) and characters above U+FFFF removed, a tab read as
+    # four spaces. Trim Unicode White_Space. Python's default strip also
+    # removes the four C0 separators U+001C..U+001F, which remain part of
+    # the prompt.
+    return "".join("    " if char == "\t" else char for char in text
+                   if ord(char) <= 0xffff and char not in "\r\n\u2028\u2029").strip(
+        "\t\n\v\f\r \u0085\u00a0\u1680"
+        "\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a"
+        "\u2028\u2029\u202f\u205f\u3000")
+
+
 def bell_turn(events, bell_line):
     """The index just past the human event the doorbell typed, or None."""
     # The delivery contract ignores line breaks and characters above U+FFFF,
     # which a console reader may drop. Compare the whole prompt; a prefix
     # proves no bell turn.
-    def canonical(text):
-        # hide_agent_hooks::delivery::canonical_prompt: line breaks (CR, LF,
-        # U+2028, U+2029) and characters above U+FFFF removed, a tab read as
-        # four spaces. Trim Unicode White_Space. Python's default strip also
-        # removes the four C0 separators U+001C..U+001F, which remain part of
-        # the prompt.
-        return "".join("    " if char == "\t" else char for char in text
-                       if ord(char) <= 0xffff and char not in "\r\n\u2028\u2029").strip(
-            "\t\n\v\f\r \u0085\u00a0\u1680"
-            "\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a"
-            "\u2028\u2029\u202f\u205f\u3000")
-    line = canonical(bell_line or "")
+    line = canonical_prompt(bell_line or "")
     for index, event in enumerate(events):
-        if event.get("role") == "user" and line and line == canonical(event.get("text") or ""):
+        if event.get("role") == "user" and line and line == canonical_prompt(event.get("text") or ""):
             return index + 1
     return None
 

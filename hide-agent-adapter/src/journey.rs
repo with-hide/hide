@@ -218,7 +218,11 @@ fn own_way_in(row: &super::AgentAdapter) -> bool {
 fn busy_letter_paths(row: &super::AgentAdapter) -> Vec<&'static str> {
     let mut paths = Vec::new();
     if row.bell {
-        paths.push("bell");
+        paths.push(if row.tool_letters.is_some() {
+            "bell_hook"
+        } else {
+            "bell"
+        });
     }
     if row.turn_end_letters.is_some() {
         paths.push("turn_end");
@@ -344,6 +348,8 @@ mod tests {
         assert_eq!(busy_letter_paths(&row), ["bell"]);
         row.turn_end_letters = AgentId::Grok.adapter().turn_end_letters;
         assert_eq!(busy_letter_paths(&row), ["bell", "turn_end"]);
+        row.tool_letters = AgentId::Grok.adapter().tool_letters;
+        assert_eq!(busy_letter_paths(&row), ["bell_hook", "turn_end"]);
         row.bell = false;
         assert_eq!(busy_letter_paths(&row), ["turn_end"]);
         row.turn_end_letters = None;

@@ -172,7 +172,7 @@
     },
     "letter": "bell",
     "busy_letter": [
-      "bell",
+      "bell_hook",
       "turn_end"
     ],
     "stop_observer": [
