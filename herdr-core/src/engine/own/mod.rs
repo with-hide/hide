@@ -2593,11 +2593,14 @@ mod tests {
             })
         }
         fn processes(&self, pane: &str) -> Result<HolderProcesses, HolderError> {
-            let mut processes = self.processes.lock().unwrap().clone().ok_or_else(|| {
-                HolderError::Unreachable {
-                    message: "not asked".to_owned(),
-                }
-            })?;
+            let mut processes =
+                self.processes
+                    .lock()
+                    .unwrap()
+                    .clone()
+                    .ok_or_else(|| HolderError::Unreachable {
+                        message: "not asked".to_owned(),
+                    })?;
             if self.busy.lock().unwrap().contains(pane) {
                 processes.foreground = Some(hide_node_link::holders::HolderForeground {
                     group: processes.shell + 8,
@@ -4661,7 +4664,11 @@ mod tests {
             holders.typed(&tab)
         );
         assert_eq!(engine.topology().pane_place(&tab).unwrap().0, "w1");
-        assert_eq!(holders.typed(&busy), "", "nothing is typed over its program");
+        assert_eq!(
+            holders.typed(&busy),
+            "",
+            "nothing is typed over its program"
+        );
         assert!(crate::herdr_import::given_back(&place.engine_dir).is_empty());
         assert!(crate::herdr_import::waiting(&place.engine_dir).is_empty());
     }
