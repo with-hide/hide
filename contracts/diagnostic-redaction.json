@@ -62,37 +62,37 @@
       "replacement": "[redacted]"
     },
     {
-      "pattern": "([\"'])[A-Z]:[\\\\/]Users[\\\\/][^\\\\/\\r\\n\"'<>]+([\"'])",
+      "pattern": "([\"'])[A-Z]:[\\\\/]Users[\\\\/][^\\\\/\\r\\n<>]+([\"'])",
       "flags": "i",
       "replacement": "$1~$2"
     },
     {
-      "pattern": "^[A-Z]:[\\\\/]Users[\\\\/][^\\\\/\\r\\n\"'<>]+$",
+      "pattern": "^[A-Z]:[\\\\/]Users[\\\\/][^\\\\/\\r\\n<>]+$",
       "flags": "i",
       "replacement": "~"
     },
     {
-      "pattern": "[A-Z]:[\\\\/]Users[\\\\/][^\\\\/\\r\\n\"']+(?:[\\\\/]|$)",
+      "pattern": "[A-Z]:[\\\\/]Users[\\\\/][^\\\\/\\r\\n<>]+(?:[\\\\/]|$)",
       "flags": "i",
       "replacement": "~/"
     },
     {
-      "pattern": "(?:[/]Users[/]|[/]home[/])[^/\\r\\n\"'<>]+/",
+      "pattern": "(?:[/]Users[/]|[/]home[/])[^/\\r\\n<>]+/",
       "flags": "",
       "replacement": "~/"
     },
     {
-      "pattern": "([\"'])(?:[/]Users[/]|[/]home[/])[^/\\r\\n\"'<>]+([\"'])",
+      "pattern": "([\"'])(?:[/]Users[/]|[/]home[/])[^/\\r\\n<>]+([\"'])",
       "flags": "",
       "replacement": "$1~$2"
     },
     {
-      "pattern": "^(?:[/]Users[/]|[/]home[/])[^/\\r\\n\"'<>]+$",
+      "pattern": "^(?:[/]Users[/]|[/]home[/])[^/\\r\\n<>]+$",
       "flags": "",
       "replacement": "~"
     },
     {
-      "pattern": "(?:[/]Users[/]|[/]home[/])[^/\\s\"'<>]+",
+      "pattern": "(?:[/]Users[/]|[/]home[/])[^/\\s<>]+",
       "flags": "",
       "replacement": "~"
     }
