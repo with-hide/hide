@@ -1626,6 +1626,78 @@ fn a_followed_reopen_seed_that_goes_leaves_the_operator_on_the_restored_tab() {
     );
 }
 
+/// The core's own engine lists a reopened tab before the reopen's answer
+/// reaches the core, so the tab is first admitted to the area the operator
+/// is in; the answer's placement then moves it back to the area it was closed
+/// from without waiting for another topology (`agent-tab-groups.spec.ts`
+/// "New tab and Reopen use the requested area" on the own engine).
+#[test]
+fn a_reopened_tab_listed_before_its_answer_returns_to_the_area_it_was_closed_from() {
+    let (mut runtime, checkout) = two_areas_on_t1();
+    close_tab(&mut runtime, "w-order:t3");
+    answer_close(&mut runtime, Ok(()));
+    let after_close = ["w-order:t1", "w-order:t2"];
+    let mut engine = HerdrMoves::new();
+    runtime.ingest_session(Ok(engine.after(
+        &[],
+        tab_order_payload("/agent-groups", &after_close, &after_close, "w-order:t1"),
+    )));
+    action(
+        &mut runtime,
+        serde_json::json!({"action":"focus","tab_id":"w-order:t2"}),
+    );
+    let _ = runtime.advance_lane();
+    runtime.ingest_session(Ok(engine.after(
+        &["w-order:t2"],
+        tab_order_payload("/agent-groups", &after_close, &after_close, "w-order:t2"),
+    )));
+    let item = runtime.recent_closed.back().cloned().expect("t3 to reopen");
+    reopen(&mut runtime);
+    assert!(runtime.reopen_in_flight.is_some(), "the reopen started");
+
+    // The restored tab is listed while the reopen is still in flight.
+    let restored = ["w-order:t1", "w-order:t2", "w-order:t4"];
+    runtime.ingest_session(Ok(engine.after(
+        &[],
+        tab_order_payload("/agent-groups", &restored, &restored, "w-order:t2"),
+    )));
+    runtime.ingest_reopen_result(
+        &crate::recent_closed::reopen::ReopenRequest {
+            codex_daemon: Default::default(),
+            permissions: Default::default(),
+            item,
+            workspace_exists: true,
+            tab_exists: false,
+            fallback_pane_id: None,
+            owner: None,
+        },
+        Ok(
+            crate::recent_closed::reopen::FileReopenResultOrHerdr::Herdr(
+                crate::recent_closed::reopen::ReopenOutcome {
+                    tab_id: Some("w-order:t4".into()),
+                    consumed: true,
+                    focused_pane_id: Some("w-order:t4:p".into()),
+                    notices: vec![],
+                    agents: Vec::new(),
+                },
+            ),
+        ),
+    );
+
+    assert_eq!(
+        drawn(&mut runtime),
+        [
+            area("w-order:t4", &["w-order:t1", "w-order:t4"]),
+            area("w-order:t2", &["w-order:t2"])
+        ]
+    );
+    assert_eq!(
+        checkout_active_tab_id(&runtime, &checkout).as_deref(),
+        Some("w-order:t4")
+    );
+    assert_eq!(layout(&runtime).tree.active_area, "a1", "the left area is active");
+}
+
 fn order(runtime: &Runtime) -> Vec<String> {
     layout(runtime).tree.areas()[0]
         .displays
