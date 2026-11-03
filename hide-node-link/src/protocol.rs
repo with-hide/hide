@@ -295,7 +295,9 @@ use crate::error::HostError;
 /// starts (a [`StartForm`], null when it is not on the `PATH`), not a bool,
 /// so a prompt `cmd.exe` would read again rides no start. A helper on 69
 /// would answer a bool, so it is refused at Hello and upgraded.
-pub const PROTOCOL_VERSION: u32 = 70;
+/// 71: removes the running-agent queue call. Running input is typed through
+/// the engine so a letter reaches an ongoing turn; older helpers upgrade.
+pub const PROTOCOL_VERSION: u32 = 71;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
 /// runs it ([`Call::AgentInstalled`]).
@@ -925,14 +927,6 @@ pub enum Call {
     LineInput {
         pid: u32,
     },
-    /// Hands `text` to a running agent through its own way in
-    /// (`input::InputChannel`), on the machine whose pane runs it; answers
-    /// an [`crate::input::Delivery`] and never types into the pane
-    /// (`docs/delivery.md`, The input ladder).
-    Deliver {
-        channel: crate::input::InputChannel,
-        text: String,
-    },
     /// Measures each of `paths` (`disk::DiskUsage`), reporting each one as
     /// it finishes and answering them all. The entries of `shared_git` are
     /// a repository's shared Git directory, measured as one size.
@@ -1285,7 +1279,6 @@ impl Call {
             | Self::ProcessStarts { .. }
             | Self::ProcessDescendants { .. }
             | Self::LineInput { .. }
-            | Self::Deliver { .. }
             | Self::DiskUsage { .. }
             | Self::ListeningPorts
             | Self::VolumeFree { .. }

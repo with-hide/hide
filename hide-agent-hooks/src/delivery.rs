@@ -2,6 +2,7 @@
 //! successful stdout flush permits confirmation. All child processes are
 //! owned and their bounded stdout is drained while they run.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -89,6 +90,17 @@ pub fn prompt_digest(prompt: &str) -> String {
     full_prompt_digest(&canonical_prompt(prompt))
 }
 
+/// The text every input route sends. Expand tabs before the agent's editor
+/// chooses its own tab stops, using the same four spaces as prompt identity.
+/// Preserve every other character; the native record still decides intake.
+pub fn input_text(text: &str) -> Cow<'_, str> {
+    if text.contains('\t') {
+        Cow::Owned(text.replace('\t', "    "))
+    } else {
+        Cow::Borrowed(text)
+    }
+}
+
 /// What was typed, as each agent records it: Claude Code's record of a paste
 /// reads as the text that was pasted (`hide_session::pasted::typed_text`),
 /// line breaks (CR, LF, U+2028 and U+2029) and characters above U+FFFF are
@@ -101,10 +113,10 @@ pub fn prompt_digest(prompt: &str) -> String {
 /// above U+FFFF, including the leading owl.
 pub fn canonical_prompt(prompt: &str) -> String {
     let mut canonical = String::with_capacity(prompt.len());
-    for c in hide_session::pasted::typed_text(prompt).chars() {
+    let typed = hide_session::pasted::typed_text(prompt);
+    for c in input_text(&typed).chars() {
         match c {
             '\r' | '\n' | '\u{2028}' | '\u{2029}' => {}
-            '\t' => canonical.push_str("    "),
             c if c > '\u{ffff}' => {}
             c => canonical.push(c),
         }
@@ -278,10 +290,15 @@ fn intake(answer: serde_json::Value) -> Result<Option<Intake>, Failure> {
     }
 }
 
+/// The most letters one handover bundle carries, the letters it shows in
+/// full and those it folds, all confirmed together; the core's open-letter
+/// limit keeps a bundle under it.
+pub const BUNDLE_LETTERS: usize = 1_024;
+
 /// Whether `ids` may travel to `hide inbox --confirm` as its arguments: at
-/// most one hook's five letters, each a letter id rather than an option.
+/// most one bundle's letters, each a letter id rather than an option.
 pub fn valid_letter_ids(ids: &[String]) -> bool {
-    ids.len() <= 5
+    ids.len() <= BUNDLE_LETTERS
         && ids.iter().all(|id| {
             !id.is_empty()
                 && id.len() <= 256
@@ -599,6 +616,20 @@ mod tests {
             brief,
             &prompt_digest("# Brief\n  step one\nReport by letter.")
         ));
+        // A CLI's three-space tab expansion is not the text Hide sent.
+        assert!(!matches_prompt_digest(
+            brief,
+            &prompt_digest("# Brief\n   step one\nReport by letter.")
+        ));
+    }
+
+    #[test]
+    fn every_route_expands_tabs_before_an_agent_can_choose_its_tab_width() {
+        let brief = "@journey-missing-file.md names no file of this repository.\n\tIt needs no change.\n\nReply with exactly TOKEN";
+        let expected = "@journey-missing-file.md names no file of this repository.\n    It needs no change.\n\nReply with exactly TOKEN";
+        assert_eq!(input_text(brief), expected);
+        assert_eq!(prompt_digest(expected), prompt_digest(brief));
+        assert!(matches!(input_text(expected), Cow::Borrowed(_)));
     }
 
     #[test]

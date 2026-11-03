@@ -86,6 +86,7 @@ Keep one representative journey per user-visible flow; when a long spec carries 
   Count the diagnostics the daemon sent back against the changes the page sent, with a cumulative count (`observeDiagnostics(...).added` in `web/e2e/pane-focus-ordering.spec.ts`): the list is capped and drops from its front, so the number of entries of one kind in it falls while a burst appends.
   Playwright's `framereceived` fires before the page's handler runs, so before reading what the page shows, poll `window.__hideProbe.arrivals()` up to the frames Playwright has seen.
 - A test's own waiting must not compete with a deadline the product enforces.
+  A hook fixture that tests a decision with a finite payload prepares that payload and EOF before starting the hook; `agy_hooks` preloads at most `PIPE_BUF` bytes into an empty pipe and preserves stderr and guard diagnostics on a refusal mismatch, while a separate open-input case tests the actual payload cutoff.
   While the test holds a request the product will time out, run nothing slow between holding and releasing it, and give every observation poll in that window explicit `intervals`.
   Playwright's default poll backoff grows to a second between attempts, which is time taken from the product's deadline.
   A process start is slow in that sense: `a_slow_ask_for_one_home_does_not_hold_another_home_behind_it` in `hide-platform/tests/it/programs.rs` started the second home's login shell while it held the first home's ten-second ask, and at load 32 the first ask reached its deadline (issue 859); it now reads the second home's answer before the hold, so the held window starts no process, and counts the shell's starts to show it.
@@ -130,6 +131,8 @@ When the behavior depends on the order of two events, the test fixes that order;
 
 ## Writing a fixture
 
+- A provider stand-in used for letter delivery draws its declared empty composer, including Claude Code's rule frame or Codex's dim placeholder style.
+  A missing frame or a plain-text placeholder misrepresents an empty input; fix that fixture rather than bypassing the product's composer check or weakening the delivery assertion.
 - Set every fixture's `HOME` and Hide state folder to private paths before starting a candidate.
 - A restart fixture that requires completed native labels waits for the matching session, goal and end in the private `labels.json` before stopping the daemon; a rendered label alone does not prove its asynchronous save completed, and Windows fixture shutdown is forced.
 - The same boundary applies to Workspace views: `web/e2e/right-lane.spec.ts` waits for the expected tool, pin and active document in the private `workspace-views.json` before each restart, then checks the restored screen.
@@ -201,6 +204,10 @@ When the behavior depends on the order of two events, the test fixes that order;
   The native compiler is `cc` on Unix and `clang.exe` on Windows, and no test runs it: Playwright's `globalSetup` (`web/e2e/global-setup.ts`, used by the web and desktop configs) builds every program in `web/e2e/shims/*.c` that this system runs once into `web/.e2e-shims`, each named with a hash of its source, and a test only copies the finished program (`copyFixtureShim`).
   A compiler failure fails the run at that entry point with the compiler's name and output, a program that was not built fails the test that asked for it, and nothing in a test compiles, times a compiler or cleans one up; a per-test compile is what exceeded a 20-second bound on a cold Windows runner and left the killed compiler's children behind.
   The spawn provider is built once too; its run-specific values (Herdr binary, completion file, command) are read from `provider.config` in `$HIDE_E2E_ROOT`, which every fixture pane is given.
+  The journey may put `within-ms=N` before the command arguments; the desktop fixture keeps its existing 20-second budget.
+  Every completion retains the integer status and publishes a correlated `.json` sidecar first, with the supervisor's phase, OS error, elapsed time and cleanup result.
+  `python3 scripts/check-agent-journey-controller.py --provider <compiled-provider> --run-dir agents/runs/<run>/controller` exercises that same supervisor with real Python children, without a Herdr server or a model.
+  Its opt-in `--deadline-comparison` compares a controlled 21-second child under the old 20-second watchdog and the journey's protocol budget; it cannot establish why an earlier Windows command failed.
   The private Herdr server, panes and `hided` use `fixturePath`: the shim directory followed by system-tool directories, including `/usr/sbin` for `lsof` on Unix and native Windows and Git directories on Windows.
   `fixtureExecutable` supplies native `.exe` names and `fixtureToolPath` uses the native path delimiter while refusing missing or non-absolute Windows system-root or program-files values.
   Catalog discovery probes every provider, so appending the host's `PATH` also reaches its installed CLIs even when the test selects Claude.

@@ -28,6 +28,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
+import { copyTree } from "./copy-tree.mjs";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const LABELS = { win32: "windows", linux: "linux" };
@@ -59,25 +60,6 @@ async function daemonsEnded(pids) {
   while ([...pids].some(isAlive) && Date.now() < deadline) await delay(100);
   const running = [...pids].filter(isAlive);
   if (running.length > 0) throw new Error(`hided still running 10 seconds after hide stop (its files are in the scratch folder): pid ${running.join(", ")}`);
-}
-
-/**
- * Copies a package folder file by file, links as links. fs.cpSync left the
- * installed Windows package's resources/app.asar behind on the package lane,
- * so the copy is spelled out and every step that fails throws.
- */
-function copyTree(source, target) {
-  fs.mkdirSync(target, { recursive: true });
-  for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
-    const from = path.join(source, entry.name);
-    const to = path.join(target, entry.name);
-    if (entry.isSymbolicLink()) fs.symlinkSync(fs.readlinkSync(from), to);
-    else if (entry.isDirectory()) copyTree(from, to);
-    else if (entry.isFile()) {
-      fs.copyFileSync(from, to);
-      fs.chmodSync(to, fs.statSync(from).mode & 0o7777);
-    } else throw new Error(`${from} is neither a file, a folder nor a link`);
-  }
 }
 
 /** A program's stdout; a non-zero exit, a timeout or a spawn failure throws with its stderr. */

@@ -1,6 +1,6 @@
 use super::{AgentRecord, Command, Mutation, SpawnRecord, resolve_actor, view};
 use crate::agent_start::ShellStart;
-use crate::delivery::ladder::{Delivered, InputTarget, Prepared};
+use crate::delivery::ladder::{Delivered, InputTarget};
 use crate::delivery::typed::SendRoute;
 use crate::delivery::{
     Actor,
@@ -403,11 +403,11 @@ fn brief_words(
 /// stays spent.
 pub(crate) fn send_brief(
     engine: &dyn Engine,
-    (target, prepared): (&InputTarget, Prepared),
+    target: &InputTarget,
     spawn: &str,
     brief: &str,
 ) -> Result<SendRoute, String> {
-    let route = match prepared.deliver(engine, target, brief) {
+    let route = match crate::delivery::ladder::deliver(engine, target, brief) {
         Delivered::Sent(route) => route,
         Delivered::Lost(code) => {
             crate::diagnostic!(json!({
@@ -1389,18 +1389,11 @@ fn spawn(
             } else {
                 crate::address::scoped_pane_id(&child_device, pane)
             };
-            // The session Herdr names for the agent now, read off the lock:
-            // until it names one, the brief is typed.
-            let lineage = engine
-                .delivery_agent(Wait::Each(Duration::from_secs(5)), pane)
-                .ok()
-                .and_then(|agent| agent.session);
-            let target = {
-                let runtime = client.runtime.upgrade().ok_or("delivery_unavailable")?;
-                let guard = runtime.lock().map_err(|_| "delivery_unavailable")?;
-                guard.input_target_for(&pane_key, pane, kind, &child_device, lineage.as_deref())
+            let target = InputTarget {
+                pane_id: pane_key,
+                raw_pane_id: pane.to_owned(),
+                kind: kind.to_owned(),
             };
-            let prepared = crate::delivery::ladder::prepare(&target);
             // Saved before it is sent, so a send a crash interrupts is
             // counted and never repeated blindly (engineering #11).
             let reservation = mutate(
@@ -1434,7 +1427,7 @@ fn spawn(
                 Err(code) => return Err(code),
                 Ok(value) => {
                     reserved = serde_json::from_value(value).map_err(|_| "spawn_unavailable")?;
-                    match send_brief(engine.as_ref(), (&target, prepared), &reserved.id, &brief) {
+                    match send_brief(engine.as_ref(), &target, &reserved.id, &brief) {
                         Ok(sent) => sent,
                         Err(code) => {
                             // Nothing was sent: the brief may be typed again.

@@ -48,6 +48,7 @@ hide request show letter-1
 hide request ack letter-1
 hide request cancel letter-1
 hide inbox
+hide inbox --ack letter-9~3f9a1c2b7d4e
 hide watch start child-name
 hide watch list
 hide watch stop watch-2
@@ -58,6 +59,7 @@ hide request send child-name --intent task-stop-1 --body 'Stop and report what y
 
 A `request` or `block` letter waits for an answer; a `progress` letter is an interim report, such as a plan or a checkpoint, and a `report` letter says the work is finished.
 Only a `report` ends the parent's watch on its sender ([Watch activity and completion](#watch-activity-and-completion)), so a child that has more to do after what it writes sends `progress`.
+`hide guide` tells an agent to send `progress` at a plan, a change of direction or before a long wait, not at every step, since its recipient reads only its newest three in full ([One bundle per handover](#one-bundle-per-handover)).
 
 The recipient can acknowledge or reply; the sender can cancel.
 A `request` or `block` letter waits for its answer until one of four things ends the wait: the recipient replies, the sender cancels, either side's registration ends, or 24 hours pass since it was sent ([Persistence, clocks and limits](#persistence-clocks-and-limits)).
@@ -185,11 +187,11 @@ The ask (`Command::Pull { point: Tool }`, node protocol 47) names the pane's own
 Grok also asks at its root session's `Stop` with `hide inbox --hook --session <id> --turn-end`.
 A nonempty answer becomes `{"decision":"block","reason":<letters>}`, followed by confirmation after stdout flush; Grok feeds the reason to the model and continues the turn.
 A second Stop with `stopHookActive: true` makes no letter pull and ends normally even if confirmation of the first handover failed.
-Tool and turn-end intake share the three-handover limit and the five-letter, 8 KiB cap.
+Tool and turn-end intake share the three-handover limit and the prompt's bundle and 8 KiB cap ([One bundle per handover](#one-bundle-per-handover)).
 Parallel tool hooks in one batch may pull the same claimed letter before either confirms it: the claim binds the bell turn, not an exclusive tool invocation.
 The worker serializes pulls and durably counts each handover, so this at-least-once path remains bounded at three; confirmation makes later pulls empty.
 An operator turn's new letter still waits five minutes unless sent with `--now`; ending that turn does not skip the wait, and its rest bell brings the letter instead.
-The core answers from the caller's own observation: the letters whose wait is over for an agent whose turn works, as the core decides it for Herdr's current state, oldest first, under the prompt pull's caps (five letters, 8 KiB), and nothing for a resting agent without a bell-turn claim, a letter still waiting, a letter past its deadline or a kind whose adapter declares no `tool_letters`; a letter it hands over is confirmed by the script, not received, so one lost in the host stays pending for the next ask (D-11).
+The core answers from the caller's own observation: the letters whose wait is over for an agent whose turn works, as the core decides it for Herdr's current state, as one bundle under the prompt pull's 8 KiB cap, and nothing for a resting agent without a bell-turn claim, a letter still waiting, a letter past its deadline or a kind whose adapter declares no `tool_letters`; a letter it hands over is confirmed by the script, not received, so one lost in the host stays pending for the next ask (D-11).
 The plugin and the extension ask at every tool result of the pane's root session, so a `--now` letter goes at the next result (B6), and skip only the results that come while letters they handed over wait for their receipt; Grok's and Cursor's hook runs per tool call and adds one CLI call there, and agy's per model call after the first.
 Each handover the core answers is counted on the letter (`Letter.tool_handovers`), and after three without a receipt the letter is not handed over at a tool again: it waits for the next prompt or `hide inbox`, as a letter does after its three bells (`mailbox::TOOL_HANDOVERS`, D-11).
 [PERFORMANCE_TESTING.md](PERFORMANCE_TESTING.md#letters-at-a-tool-event) owns the cost per tool call and how it is measured, and [agent-hooks.md](agent-hooks.md) each script's and hook's part.
@@ -220,7 +222,7 @@ Legacy records with a successful bell but no total count conservatively have no 
 
 The `UserPromptSubmit` hook of a bell target reads the submitted prompt from its input payload and sends the core the SHA-256 of its canonical text (`hide inbox --hook --prompt-digest <sha256>`), never the text itself.
 The core alone knows which line its doorbell typed, so it alone decides whether the prompt was the bell ([Recognizing the bell](#recognizing-the-bell)).
-When it was, the pull takes the pending letters, oldest first, and after them the letters an earlier build acknowledged without a receipt (`hook_confirmed: false`), which the store's expiry pass before every request drops once their deadline passes, so such a backlog never displaces the letter the bell rang for; it emits their context, flushes stdout, then confirms those IDs.
+When it was, the pull takes the pending letters as one bundle ([One bundle per handover](#one-bundle-per-handover)), each sender's pending letters before the letters an earlier build acknowledged without a receipt (`hook_confirmed: false`), which the store's expiry pass before every request drops once their deadline passes, so such a backlog never displaces the letter the bell rang for; it emits their context, flushes stdout, then confirms those IDs.
 The pull marks the pending letters it hands over as handed (`Letter.handed`), saved before it answers, and no bell is typed for a handed letter again, whether or not the confirmation arrives: the confirmation is a second `hide` process inside the hook's last 400 ms (`CONFIRM_RESERVE`), which a loaded machine misses, and on 2026-11-01 one such miss had the doorbell type the same letter three times (letter-19680, load 110 to 140).
 A handed letter that no confirmation took in rides the next bell's batch for the same recipient, a tool or turn-end gap where the adapter has one, or `hide inbox`; it is not counted in the waiting line below and its sender is never told it was not taken ([Input an agent did not take](#input-an-agent-did-not-take)).
 Only that pull marks a letter handed: a hook with no context to print (Grok's claim below) hands nothing over at the prompt, and a session file that records the bell line shows only that the line was submitted.
@@ -247,11 +249,30 @@ A subagent's prompt and a prompt of only synthetic text pull nothing.
 The plugin forgets a pull it never saw stored after 10 minutes and keeps at most 16 waiting, so a stored part reported late can still confirm; past that the letter stays pending and comes again.
 Pi's and omp's extension attaches them as a hidden custom message (`display: false`) that `before_agent_start` returns for the pane's own session, and runs `hide inbox --confirm` once the host has written that message and then the reply after it; omp prepares a submission more than once, so each attempt's message carries its own id and only the written one confirms, once.
 A turn that ends before its reply leaves the letters pending, and an omp subagent's prompt pulls nothing.
-An agent with no prompt hook reads letters with `hide inbox`, which shows an `ack_command` for each, and `hide request ack` is its receipt, as it is for an agent with one: it records `hook_confirmed` and ends a matching report watch, as the flushed hook confirmation does.
+An agent with no prompt hook reads letters with `hide inbox`, which shows the same bundle and one `ack_command` for the whole of it, and that acknowledgement, or `hide request ack` for one letter, is its receipt, as it is for an agent with one: it records `hook_confirmed` and ends a matching report watch, as the flushed hook confirmation does.
 Transport arrival and the doorbell alone do not confirm intake.
 Interruption before confirmation can repeat the same letter ID; confirmed letters do not appear again in hook context.
-The hook emits at most five letters and 8 KiB of context, with a remaining-count line and `hide inbox` guidance when more are pending.
+The hook emits one bundle of at most 8 KiB of context, with a remaining-count line and `hide inbox` guidance when letters are left out.
 A large letter is truncated at a UTF-8 boundary and includes its ID and `hide request show` command for the complete body.
+
+#### One bundle per handover
+
+Every path that hands an agent its waiting letters gives them as one bundle, whatever their senders: the prompt hook, the tool-result and pre-tool handovers, the turn-end handover and `hide inbox` (`mailbox::bundle`, the one place it is decided, so every agent kind and system gets the same bundle).
+It exists because one chatty sender used to fill every handover: on 2026-11-03 a mission's Conductor received 505 letters in about 13 hours, 143 of them progress letters from one worker, and read each stale checkpoint in full, five at a time, while 109 of them were still unread when that worker's next one arrived.
+
+- The letters are grouped by sender, each sender's group where its first letter comes, the letters a bell rings for first.
+- A `request` or `block` is always shown in full and never folded: a folded question would go unanswered until it expires and its sender would stay stuck.
+- Of every other kind (`progress`, `report`, `reply` and the letters of Hide's own roles), each sender's newest three (`SHOWN_PER_SENDER`) are shown in full, and its older ones are folded into one line before them: the sender, how many in the interface language's words for the bell line's waiting count ([The bell line](#the-bell-line): `외 N통`, `and N more`, `另有 N 封`, `ほか N 通`), and `hide request show <id>` with the newest eight folded ids.
+- A sender with three or fewer such letters is shown exactly as before: all in full, no fold line.
+- A folded letter is neither deleted nor rewritten; it stays in the ledger, opens with `hide request show <id>`, and `hide inbox` lists every folded id under `folded`.
+
+Taking the bundle takes every letter in it, folded ones included, with one confirmation: a hook's flushed confirmation as before (`hide inbox --confirm` takes at most 1024 ids, `BUNDLE_LETTERS`, which the open-letter limit keeps a bundle under), and for an agent with no prompt hook the one `ack_command` `hide inbox` prints, `hide inbox --ack <bundle>`.
+The bundle token is the newest listed letter's id, `~`, and the first 12 hex digits of the SHA-256 of every pending letter the answer listed, shown or folded, in the ledger's order (`mailbox::bundle_token`), so it takes exactly the letters that answer carried: a letter that came after it stays pending, and a set below its newest that is not the one listed, such as one taken meanwhile by a hook, is refused `bundle_changed` with nothing taken, and `hide inbox` again prints the bundle as it is now.
+A folded `report` still ends its parent's watch.
+The 8 KiB cap still holds: each sender's fold line goes before its letters, and a sender whose fold line no longer fits, or a letter the cap leaves out, is neither shown nor taken; it waits for the next handover with the remaining-count line, so a folded letter is never shown in full later because its newer letters were taken first.
+When the questions and blocks alone pass the cap, the line and `hide inbox` guidance are what is left, as before.
+A connected device whose kit is older than this build is not held up by bundles: its `hide` sends no `bundle` on a pull or `hide inbox` (`Command::Pull`, `Command::Inbox`, `HookCommand::LetterPull`), and the core answers it as before bundles (`mailbox::Bundling::Legacy`): oldest first, nothing folded, at most five letters a handover, which is all its hook confirms, and `hide inbox` with a `hide request ack` per letter, since that `hide` has no `--ack`.
+So the operator can update the app before a device, and the device's letters keep flowing five at a time until its kit follows; the path goes once no kit older than this build can run.
 The installed prompt hook supervises one guarded internal operation with a 1.85-second deadline inside the two-second caller budget, including Memory, filesystem, output and diagnostic work.
 The internal operation requires positive owner proof and inherits the runtime payload and output streams; it confirms only after its output is successfully flushed.
 Failure leaves actual intake unconfirmed and attempts a rate-limited private diagnostic inside that same budget, under the cause of the step that failed ([agent-hooks.md](agent-hooks.md#what-a-hook-records-when-it-fails)).
@@ -366,11 +387,12 @@ Hide routes every key to a pane but cannot see the composer, so any key not foll
 Counting keys cannot tell a draft from an erased one: Claude Code folds a paste into `[Pasted text #1 +11 lines]`, and one Backspace removes it whole.
 So the screen decides, and only when it says the composer is empty.
 
-When the doorbell's verdict for a pending letter is `draft` and the pane is at rest (Herdr reports it `idle` or `done` and current, with no key and no change of status for the 30-second quiet period), the doorbell asks Herdr once for the pane's visible screen with its styling (`pane.read` with source `visible`, format `ansi`, `wire::composer_screen_params`).
-The read runs on the doorbell's own thread, off `Mutex<Runtime>` and never on the session-sync thread, at most once per draft episode (the input time that made the draft, `delivery/composer.rs`), and counts against the doorbell's eight Herdr calls a pass; a cut screen is a failed read.
+When the doorbell's verdict for a pending letter, or for the operator's answer to a mission's decision, is `draft` and input is quiet (Herdr reports it `idle`, `done` or `working` and current, with no key and no change of status for the 30-second quiet period), the doorbell asks Herdr once for the pane's visible screen with its styling (`pane.read` with source `visible`, format `ansi`, `wire::composer_screen_params`).
+The read runs on the doorbell's own thread, off `Mutex<Runtime>` and never on the session-sync thread, at most once per observed draft and state generation (`delivery/composer.rs`), and counts against the doorbell's eight Herdr calls a pass; a cut screen is a failed read.
 The screen is judged by the agent's composer declaration (below).
 Only a positive `empty` releases the draft, as [Deliver now](#delivering-a-held-letter-now) does: the input up to the read is no draft (`released_input_at_unix_ms`), the composer mark goes, and the doorbell's next pass rings with every guard it always applies.
-A key or a change of status between the read and the release keeps the hold (`composer.release_refused`).
+A key, even with the same timestamp, a session change or a change of status or state sequence between the read and the release keeps the hold (`composer.release_refused`).
+A working pane uses the same positive-empty decision as a resting pane; version calibration still runs only after a known-empty turn has ended.
 `not_empty`, `not_found`, a failed or timed-out read, an agent with no declaration and a version not checked keep today's hold, with the waiting mark after two minutes.
 Each read is logged as `composer.read` with the pane, agent, version, verdict and, for a screen not read empty, the parser step that stopped it (`reason`, below), and each draft not read as `composer.not_read` with its reason (`kind_undeclared`, `version_unknown`, `version_unchecked`, `version_unconfirmed`) once per draft; no record carries screen text.
 
@@ -424,8 +446,9 @@ A key typed into the pane restarts the two minutes, so the mark leaves while the
 
 Deliver now is one event, `deliver_letters_now {pane_id}`.
 The press is the operator saying the composer holds nothing of theirs: the pane's observation records the input it releases (`released_input_at_unix_ms`), so input up to it is no draft, the pane's composer mark is removed, and the mark leaves at once.
-The doorbell's next pass then rings with every guard it always applies (Herdr's readiness, the reservation, the last memory check) and types the same line ([The bell line](#the-bell-line)); the prompt hook takes the letters as it does for any bell turn.
-Nothing warns about a possible draft, because the mark sits right above the composer: a draft that is there is sent with the bell line after it.
+The doorbell's next eligible pass then rings with every guard it always applies (Herdr's readiness, the actual composer, the reservation, the last memory check) and types the same line ([The bell line](#the-bell-line)); the prompt hook takes the letters as it does for any bell turn.
+The press releases the recorded draft hold only: actual text, a menu or an unreadable composer still holds the letter until the composer reads empty.
+Nothing clears or submits the operator's draft.
 Input after the press is a draft again and holds the letter as before.
 A press the mark no longer stands for changes nothing and logs `deliver_now.refused` with `no_letter_waiting` (the doorbell has not shown it, or it left), `pane_unavailable`, or `pane_not_at_rest` (a key reached the pane or its status changed since the last pass); an accepted press logs `deliver_now.released` with the pane and count.
 Neither reaches the screen, and nothing changes on the sender's side.
@@ -458,10 +481,18 @@ The first start of a build with this rule resumes a stored session at its last p
 The rule reads the session Herdr reports for the pane, so a pane reported with another session is judged by that session.
 It guards against hide's own bell, not against a process of the same account, which could append records to the session file or type into the pane with `hide pane send` or through Herdr directly.
 
+Before typing a letter into an agent whose composer has a declaration, Hide also reads that composer and requires it to be empty, using the same parser as a forced send.
+This protects text even when a late status update covered the key in the draft record.
+A nonempty, unreadable or truncated screen keeps the letter pending without spending a bell; retry uses the existing bounded backoff, and a new key or state generation invalidates the read before any write.
+This adds one off-lock screen read per eligible attempt within the doorbell's existing eight-attempt pass cap, with no added work per key.
+
 ### The input ladder
 
-Hide hands a running agent a spawn's brief or a letter's bell line through the agent's own way in when it has one, and types it only when it has none (`herdr-core/src/delivery/ladder.rs`).
-Each supported agent declares its rungs once, in `hide-agent-adapter` (`AgentAdapter::input`), from a fixed set of kinds, its own way in first and typing last; an agent with no way in of its own declares typing alone (`TYPED_ONLY`), and the adapter's contract test fails a declaration that does not end in typing, repeats a rung or names another agent's API.
+Hide types a running agent's brief or letter bell line through the engine's guarded prompt operation (`herdr-core/src/delivery/ladder.rs`).
+Each supported agent declares its input rungs once, in `hide-agent-adapter` (`AgentAdapter::input`): an optional launch prompt for the first input, then typing for an already running agent; the adapter's contract test fails a declaration that does not end in typing or repeats a rung.
+Every route expands a tab to four spaces before handing the text to the agent (`hide_agent_hooks::delivery::input_text`), the same rule the launch argument and prompt identity use.
+An editor's own tab width cannot then change the native record: omp 18.7.0's Windows editor replaced a pasted tab with three spaces, so a brief whose answer arrived still had no matching record.
+The original brief and its digest stay unchanged; a three-space record still fails to match, and neither a successful send nor an answer alone confirms intake.
 
 The first input a start brings, a spawn's brief, a task's first prompt or a promoted Memory card, follows one standard for every agent on every system:
 
@@ -471,32 +502,27 @@ The first input a start brings, a spawn's brief, a task's first prompt or a prom
 
 [INSTALL.md](INSTALL.md#what-each-system-supports) shows each agent on each system as launch or typed, with the run that proves it.
 
-Every brief and letter goes through one entry, and its answer is always one of three, the only thing the rest of Hide reads, never the agent's kind:
+A fresh start can carry its brief as a launch prompt.
+Every subsequent brief, letter and operator answer uses the engine's prompt submission on the pane's owning machine (`delivery::ladder::deliver`).
+The doorbell decides when; the input path submits once, off the runtime lock.
 
 | Answer | Meaning | What follows |
 | --- | --- | --- |
-| Sent, with its route | sent whole, typed or through the agent's own way in; no way in says the agent took it (`codex queue` says only that it queued the message) | the agent's own record decides within `RECORD_WAIT_MS`, as for typing ([Input an agent did not take](#input-an-agent-did-not-take)); the route is saved (`SendRoute`: `typed`, `channel`, `launch`) |
-| NotYet, with a cause | nothing was sent: Herdr refused the typing's parameters (`herdr_parameters`) | the doorbell tries again; a brief fails the spawn with `brief.prompt_refused`, and the same command tries again |
-| Lost, with a cause | the send began and its answer was lost (`channel_answer_lost`, `link_answer_lost`, `herdr_format`, `herdr_call_failed`), so the input may have arrived | it is never sent again: a bell waits for the pane to move, as a failed typing did, and a brief is saved sent with the route `lost`, so the parent's retry of the spawn converges and the agent's record still decides |
+| Sent, `typed` | the engine acknowledged submission | the agent's own record decides intake |
+| NotYet, `herdr_parameters` | Herdr refused before typing | the doorbell may retry; a brief fails with `brief.prompt_refused` |
+| Lost, `herdr_format` or `herdr_call_failed` | submission may have arrived | never retry blindly; the agent's record decides |
 
-The doorbell's gates still decide when a bell goes (rest, draft, quiet period, menus); the ladder decides only how.
-The route is picked with nothing sent, before a bell or a brief typing is reserved.
-A rung that answers that it sent nothing (no such program, an unknown thread, a node that cannot be reached) passes the input to the next rung and is logged `input.rung_unavailable`; a rung that began and lost its answer (a timeout, a write cut short) answers Lost and is logged `input.rung_lost`, so the input is never sent again by a lower rung or a timer (engineering principle 11).
-Each send is logged `input.rung` with the rung's name and Hide's pane id; the text never reaches a log.
-Only a typed input is ever sent again, and only once someone answered the agent's screen: a launched brief is held by the agent's start, a channel keeps the input until the agent takes it, and a lost send may have arrived, so `BriefTyping` itself refuses a brief whose route is `launch` (`brief_launched`) or `lost` (`brief_send_lost`), whoever asks.
-The reservation itself saves the route as `lost` before anything is sent, and the send's outcome corrects it after (`Briefed` with the route, or `BriefUnsent` back to `typed` when Herdr refused and nothing was sent), so an outcome whose save never lands leaves the brief counted as possibly sent rather than free to be sent twice.
-A spawn asked again over such a brief sends nothing and answers as the lost send would have: sent and unconfirmed, logged `brief.send_unconfirmed`, with the agent's own record deciding and `hide agent show` saying which.
-A mission's answer to its Conductor is the operator's own words and takes the typed rung alone (`ladder::typed_only`), the same typing and the same reading of Herdr's errors as every other input.
-
-The ladder addresses only the session Herdr names for the pane: the hook facts of that session (`HookFacts::reported_session`, matched by Herdr's lineage), never another session the pane's hooks reported, such as a nested run, and never the newest one in its place.
-Until Herdr names a session, and while Herdr names one that Hide's hook did not report (its hooks are not connected, or the report is a moment late), the agent's own way in has no address and the input is typed.
-
-An agent's own way in runs on the node of the machine whose pane runs the agent (`Call::Deliver`, `hide_host::input`), so a connected device takes it as this machine does, and nothing runs under the runtime lock or on the session-sync thread: the doorbell thread and the spawn's worker call it with a target the runtime copied under its lock.
+The durable reservation still saves `lost` before sending and records the outcome afterwards.
+A save that never lands therefore cannot make a possibly submitted input free to send again (engineering principle 11).
+Only input saved as `typed` may be resubmitted once someone answered the agent's screen.
+Existing `channel` records from earlier builds remain non-retryable: Codex can still consume an already queued message after Hide upgrades.
+No new input is sent to `codex queue`, whose success means queued for a later turn and cannot satisfy delivery during ongoing work.
+Each send logs `input.rung` with its route and pane identity, never the text.
 
 | Agent | Rungs | What the agent's own rung is | macOS | Linux | Windows |
 | --- | --- | --- | --- | --- | --- |
 | Claude Code | launch prompt, typed | none Hide can use: its messaging socket holds a message for a session Hide starts (below) | yes | yes | yes |
-| Codex | launch prompt, `codex queue`, typed | `codex queue --thread <session> --message=<text>` with the account's Codex, its durable queue for the session, which the running TUI takes as a turn; the text is one argument, since Codex 0.166.0 reads `--message -x` as a missing value (exit 2) | yes | yes | yes |
+| Codex | launch prompt, typed | running input is typed so it reaches the current turn after the running tool | yes | yes | yes |
 | Antigravity | launch prompt, typed | none Hide can address: its language server takes a message only with a start flag of its own and a port read from its log | yes | yes | yes |
 | Grok | launch prompt, typed | none declared | yes | yes | yes |
 | OpenCode | typed | none: OpenCode 2.0.29 submits a start prompt (`--prompt=<text>`) as soon as its model list arrives, without waiting for the configuration that names the operator's model, so a start that loses that race sends the brief to the first model of the list, OpenCode's own free hosted one (below) | yes | yes | yes |
@@ -508,10 +534,8 @@ The launch prompt carries only a start's first input, as the agent's start argum
 Measured 2026-11-01 on macOS with an isolated HOME, a private terminal server and the fake model:
 
 - Codex 0.166.0 holds a start prompt through its "Hooks need review" screen and submits it once that is answered; its prompt hook records the argument's U+2028 line breaks.
-  `codex queue` answers in about 0.3 s that it queued the message, which is not that the session took it; the TUI takes it 7.4 to 7.7 s later as a turn of its own (`turn_trigger: queue`) whose prompt hook runs in the pane's environment with the exact text, and that hook's digest is the record.
-  While a turn runs the message waits for it; with a draft in the composer it waits until the composer is empty and leaves the draft alone; with the `/model` menu open it is taken and the menu stays.
-  An unknown thread exits 1 with `no rollout found` and starts nothing, and a freshly started Codex has no thread until its first turn, so a fresh Codex's later letters are typed until its session is known.
-  Every Codex Hide starts runs with `--no-daemon` ([agent-hooks.md](agent-hooks.md)), which exposes no app-server address, and `codex queue` works for that in-process form.
+  A controlled multi-step turn on Codex 0.166.0 (2026-11-03) took typed input at its next model step before the turn completed; queued input waited for the whole turn to complete.
+  This is why running input uses the engine's prompt submission, while an existing queued send is never repeated.
 - Claude Code 2.1.316 holds a start prompt through its folder trust screen; its prompt hook records the argument's U+2028 as line breaks, so the brief's own form is its record.
   Its messaging socket (`CLAUDE_CODE_MESSAGING_SOCKET`, opened with the token its SessionStart hook receives) runs a message with the exact text in a session that asks for permissions, but holds it, unrun, in a session that bypasses permission prompts unless the sender attests a matching permission mode or the session sets `crossSessionInbound` (Claude Code 2.1.302 in the agent journey and 2.1.316 by hand, 2026-11-01).
   Hide starts its agents with full access, so a letter written there waited for review instead of running; Hide attests nothing it cannot prove and changes no setting of the operator's, so Claude Code's later input is typed until Claude Code offers a way in for such a session.
@@ -661,7 +685,7 @@ Every `capacity` refusal of a letter writes one `letter.capacity_refused` diagno
 | Open / retained letters | 1024 / 5000; a letter is open while it awaits intake or a reply; at 5000 a new letter drops the finished letter that finished first (ties: the earlier sent), never an open one, and is refused with `capacity` only when none is finished |
 | Watches | 32 |
 | Letter body / ledger file | 16 KiB / 16 MiB |
-| Hook batch / context / total deadline | Five letters / 8 KiB / two seconds |
+| Hook bundle / context / total deadline | 1024 letters taken, each sender's three newest shown beside its questions and blocks / 8 KiB / two seconds |
 
 Automatic doorbells apply only to `pending` letters, and the deadline turns only a `pending` letter `undelivered`, while watch clocks remain distinct.
 
@@ -1088,6 +1112,7 @@ A node is `planned` (a plan sets it), `working`, `done` or `dropped`, and nothin
 The operator ends a mission from the map's `미션 종료` with `mission_end`, naming the mission: while its Conductor is present the core records an `end_asked` wake once, which `hide:conductor` sends as the other wakes are and which tells the Conductor to treat it as the operator's cancel, and keeps `end_asked` on the mission until it closes, so a second press asks nothing more; with no Conductor present the core closes it as cancelled itself, as `hide mission close --as cancelled` would, leaving its pull requests, branches and workers as they are (`mission.closed` with `by: operator`); a closed mission and one whose device does not answer change nothing and go to the log (`mission.end_refused`).
 The operator answers a decision from the map's banner (B26-B28, D-30): the shell sends `mission_answer` with the mission, the question's key (0 for a decision from before keys) and the choice counted from 1 or a written answer of at most 500 characters.
 The core keeps the answer on the mission, so a restart neither loses nor repeats it, and the doorbell's thread types it into the Conductor's conversation as the operator's own input, `[판단 답] <question> → <answer>` in the interface language, under a letter's rules: at once while the Conductor rests, after five minutes of its work as a letter waits, never over a draft, a menu or a question of its own ([Letters while the agent works](#letters-while-the-agent-works)).
+A draft holds the answer as it holds a letter and is released the same way, by a composer read empty, and the composer is read again right before the answer is typed ([Reading the composer](#reading-the-composer)); the letter's bell and the answer share both steps in `delivery::doorbell`, so neither waits on a draft longer than the other.
 An answer to a question the Conductor has since changed, or to a mission that is closed, is refused and only logged (`mission.answer_refused`); the same question answered again keeps the first answer.
 Only a Conductor whose agent the doorbell rings takes an answer from the banner (`conductor.takes_answers`); any other is refused `mission_answer_unsupported`, and the banner sends the operator to the conversation instead.
 An answer while no Conductor runs the mission, or while the mission's device does not answer, is refused and the banner says why (`answer_failed`: `conductor_gone`, `device_disconnected`); an answer the doorbell holds on a Conductor session Hide cannot read stays on the mission and the banner shows `session_unreadable` beside it for as long as the read refuses, a reason derived from the hold and never stored; an accepted answer whose Conductor has been gone for 30 seconds before it is typed is dropped with `conductor_gone` and the event `answer_undelivered` (a shorter absence, such as the panes not yet read after a restart, only waits), the reason showing only while no Conductor runs the mission or the device still does not answer, and one the doorbell could not type goes back with `send_failed`, so the operator can answer again.

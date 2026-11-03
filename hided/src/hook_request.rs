@@ -61,6 +61,7 @@ pub(crate) fn valid(request: &HookRequest) -> bool {
                 prompt_digest,
                 session,
                 point,
+                ..
             } => {
                 prompt_digest.as_ref().is_none_or(|digest| {
                     digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_hexdigit())
@@ -91,6 +92,7 @@ pub(crate) fn answer(
             prompt_digest,
             session,
             point,
+            bundle,
         } => delivery(
             core,
             cap,
@@ -98,6 +100,7 @@ pub(crate) fn answer(
                 prompt_digest: prompt_digest.clone(),
                 session: session.clone(),
                 point: *point,
+                bundle: *bundle,
             },
             None,
         )

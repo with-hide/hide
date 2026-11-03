@@ -12,10 +12,10 @@
 // builds an unsigned per-user installer and Linux x64 an unsigned deb and rpm
 // (operator decision 2026-10-03, PRD auto-update D-07: no paid signing outside
 // macOS). Each is built on its own system, because the release binaries come from that
-// system's cargo build. A release Mac app, and every Windows app, carries the
-// manifest of the two Linux device bundles a run made from device-helpers.yml
-// at this exact source, version and build order, publishing the archives
-// separately; a local Mac package carries none (see below).
+// system's cargo build. A release Mac or Windows app carries the manifest of
+// the two Linux device bundles a run made from device-helpers.yml at this
+// exact source, version and build order, publishing the archives
+// separately; a local package carries none (see below).
 //
 // `package.mjs compile` stops after the web shell and the release binaries,
 // recording them in desktop/out/release-binaries.json, and `package.mjs
@@ -35,6 +35,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { packager } from "@electron/packager";
 import { applyFuses, assertFuses } from "./fuses.mjs";
+import { copyTree } from "./copy-tree.mjs";
 import { APP_ID, buildInstallers } from "./installers.mjs";
 import { assertNotarized, developerIdOptions, macosSigning, notarizeApp } from "./macos-signing.mjs";
 import { orderOnMain, resolveVersion } from "./build-identity.mjs";
@@ -142,25 +143,26 @@ if (phase !== "assemble") {
 const order = process.env.HIDE_BUILD_ORDER || orderOnMain();
 if (!/^[0-9]+$/.test(order)) throw new Error(`the package's build order could not be read (got '${order}')`);
 // Required artifacts are checked before the native release build, or before
-// the app is assembled from compiled binaries. No release Mac app and no
-// Windows app may silently leave a Linux device, or a WSL distribution,
-// without its kit: they take the bundles a run's `device-bundles` job made,
-// downloaded here, as they are, so both apps ship one manifest. A local Mac
-// package (no HIDE_VERSION) carries no device manifest at all: its version
-// is a `-main.` build with no published release, which the daemon refuses to
-// download for anyway (hide-node device_bundles), so building both Linux
-// helpers for it would only make the operator wait; a device then reports
-// that this build has no device download manifest.
+// the app is assembled from compiled binaries. No release Mac or Windows app
+// may silently leave a Linux device, or a WSL distribution, without its kit:
+// they take the bundles a run's `device-bundles` job made, downloaded here,
+// as they are, so both apps ship one manifest. A local package (no
+// HIDE_VERSION) on either system carries no device manifest at all: its
+// version is a `-main.` build with no published release, which the daemon
+// refuses to download for anyway (hide-node device_bundles), and the Linux
+// helpers build only on Linux runners, so asking for them would leave a
+// source build on a Mac waiting and on Windows unable to finish
+// (with-hide/hide#2041); a device then reports that this build has no device
+// download manifest.
 const deviceBundles = path.join(out, "device-bundles");
 const releasing = Boolean(process.env.HIDE_VERSION);
-const carriesDeviceKit = ((platform === "darwin" && releasing) || platform === "win32") && phase !== "compile";
+const carriesDeviceKit = (platform === "darwin" || platform === "win32") && releasing && phase !== "compile";
 const identity = { version, commit, order };
 if (carriesDeviceKit && !fs.existsSync(path.join(deviceBundles, DEVICE_BUNDLE_MANIFEST))) {
-  const app = releasing ? `the ${version} release` : "the Windows app";
-  throw new Error(`${app} needs this run's device bundles in ${deviceBundles} (the hide-device-bundles artifact, made by desktop/scripts/device-helpers.mjs bundle)`);
+  throw new Error(`the ${version} release needs this run's device bundles in ${deviceBundles} (the hide-device-bundles artifact, made by desktop/scripts/device-helpers.mjs bundle)`);
 }
 const deviceManifest = carriesDeviceKit ? readDeviceBundles(deviceBundles, identity) : null;
-if (platform === "darwin" && !releasing && phase !== "compile") console.log("device_manifest=none (a local build has no device release)");
+if (platform !== "linux" && !releasing && phase !== "compile") console.log("device_manifest=none (a local build has no device release)");
 const cargoRelease = path.join(repo, "target", "release");
 const releaseBinaries = RELEASE_PROGRAMS.map((name) => `${name}${exe}`);
 if (phase === "assemble") {
@@ -203,7 +205,7 @@ const extraResource = shipped.map(([name, source]) => {
 if (deviceManifest) extraResource.push(deviceManifest);
 for (const companion of herdr.companions) {
   const target = path.join(staged, path.basename(companion));
-  fs.cpSync(companion, target, { recursive: true });
+  copyTree(companion, target);
   extraResource.push(target);
 }
 // A Windows holder runs its pane only on the pinned ConPTY runtime, which the

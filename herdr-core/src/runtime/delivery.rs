@@ -1044,8 +1044,7 @@ impl Runtime {
             .composer_version(&observation.actor)
             .ok_or("version_unknown")?;
         Ok(crate::delivery::composer::Read {
-            actor: observation.actor.clone(),
-            raw_pane_id: observation.raw_pane_id.clone(),
+            observed: observation.clone(),
             agent: row.id,
             composer,
             version,
@@ -1053,22 +1052,27 @@ impl Runtime {
         })
     }
 
-    /// Whether a pane at rest still shows the clocks a read was made for:
-    /// Herdr reports it `idle` or `done` and current, and neither a key nor
+    /// Whether a pane takes a composer read: Herdr reports a current resting
+    /// or working state, and neither a key nor
     /// a change of status came in the quiet period.
-    fn composer_at_rest(observation: &Observation, now: u64) -> bool {
+    fn composer_quiet(observation: &Observation, now: u64) -> bool {
         use crate::delivery::INPUT_QUIET_MS;
         !observation.telemetry_stale
-            && matches!(observation.status.as_str(), "idle" | "done")
+            && matches!(observation.status.as_str(), "idle" | "done" | "working")
             && observation.state_change_seq.is_some()
             && now.saturating_sub(observation.last_input_at_unix_ms) >= INPUT_QUIET_MS
             && now.saturating_sub(observation.status_changed_at_unix_ms) >= INPUT_QUIET_MS
     }
 
+    /// Calibration still needs a known-empty composer after a completed turn.
+    fn composer_at_rest(observation: &Observation, now: u64) -> bool {
+        matches!(observation.status.as_str(), "idle" | "done")
+            && Self::composer_quiet(observation, now)
+    }
+
     /// The composer read that may release `recipient`'s letters held on a
     /// possible draft (docs/delivery.md, Reading the composer). `None` while
-    /// the pane is not yet at rest on a draft; otherwise the draft episode,
-    /// the input time that made it, with the read or the reason there is
+    /// the input is not yet quiet on a draft; otherwise the draft generation, with the read or the reason there is
     /// none: no declaration, a version Hide does not know, or one whose
     /// check has not run or has not yet read empty.
     pub(crate) fn composer_release_due(
@@ -1083,39 +1087,35 @@ impl Runtime {
             .delivery_observations
             .get(&recipient.pane_id)
             .filter(|observation| observation.actor.same_identity(recipient))?;
-        if !observation.unsent_draft() || !Self::composer_at_rest(observation, now) {
+        if !observation.unsent_draft() || !Self::composer_quiet(observation, now) {
             return None;
         }
-        let episode = observation.last_input_at_unix_ms;
-        let read = self.composer_read(observation, episode).and_then(|read| {
-            match self.composer_check(read.agent, &read.version) {
-                Some(check) if check.passed => Ok(read),
-                Some(_) => Err("version_unconfirmed"),
-                None => Err("version_unchecked"),
-            }
-        });
+        let episode = observation.input_generation;
+        let read = self
+            .composer_read(observation, observation.last_input_at_unix_ms)
+            .and_then(
+                |read| match self.composer_check(read.agent, &read.version) {
+                    Some(check) if check.passed => Ok(read),
+                    Some(_) => Err("version_unconfirmed"),
+                    None => Err("version_unchecked"),
+                },
+            );
         Some((episode, read))
     }
 
     /// The doorbell read `actor`'s composer for the draft that the input at
-    /// `input_at_unix_ms` made, and the screen showed it empty. Like Deliver
+    /// `observed` described, and the screen showed it empty. Like Deliver
     /// now, input up to it is no draft any more and the pane's composer
     /// mark goes; the doorbell's next look rings with every guard it always
     /// applies. A key or a change of status since the read keeps the hold.
-    pub(crate) fn release_empty_composer(
-        &mut self,
-        actor: &Actor,
-        input_at_unix_ms: u64,
-        now: u64,
-    ) -> bool {
+    pub(crate) fn release_empty_composer(&mut self, observed: &Observation, now: u64) -> bool {
+        let actor = &observed.actor;
+        let unmoved = self.delivery_pane_unmoved(observed).is_ok();
         let Some(observation) =
             self.delivery_observations
                 .get_mut(&actor.pane_id)
                 .filter(|observation| {
-                    observation.actor.same_identity(actor)
-                        && observation.last_input_at_unix_ms == input_at_unix_ms
-                        && observation.unsent_draft()
-                        && Self::composer_at_rest(observation, now)
+                    unmoved && observation.unsent_draft() && Self::composer_quiet(observation, now)
                 })
         else {
             crate::diagnostic!(serde_json::json!({"component":"delivery",
@@ -1123,7 +1123,7 @@ impl Runtime {
                 "agent":actor.kind,"reason":"input_after_read"}));
             return false;
         };
-        observation.released_input_at_unix_ms = input_at_unix_ms;
+        observation.released_input_at_unix_ms = observed.last_input_at_unix_ms;
         crate::diagnostic!(serde_json::json!({"component":"delivery",
             "kind":"composer.released","pane_id":actor.pane_id,"agent":actor.kind}));
         self.sync_composer_mark(&actor.pane_id, now);
@@ -1328,6 +1328,7 @@ impl Runtime {
             session,
             prompt_digest,
             point,
+            ..
         } = &command
         {
             if prompt_digest
@@ -1519,6 +1520,7 @@ impl Runtime {
             target,
             command,
         )
+        .worded_in(self.interface_language())
         .then(after);
         let prepared = match forced {
             Some(engine) => prepared.forced_through(engine),
@@ -1845,54 +1847,15 @@ impl Runtime {
             .is_some_and(|observation| observation.actor.same_identity(actor))
     }
 
-    /// Where the input ladder hands `observed`'s agent its input
-    /// (`delivery::ladder`): what the pane's session reported through Hide's
-    /// own hook and the node of its machine, owned, so the send runs off the
-    /// lock. A session is pending only until Herdr names it.
+    /// Running input addresses the pane through its owning engine.
     pub(crate) fn input_target(
         &self,
         observed: &Observation,
     ) -> crate::delivery::ladder::InputTarget {
-        self.input_target_for(
-            &observed.actor.pane_id,
-            &observed.raw_pane_id,
-            &observed.actor.kind,
-            &observed.actor.device_id,
-            observed.actor.session.as_deref(),
-        )
-    }
-
-    /// [`Self::input_target`] for a pane the core keys as `pane_id` and its
-    /// Herdr names `raw_pane_id`, running `kind` on `device`, with `lineage`
-    /// the digest of the session Herdr names there when it names one.
-    pub(crate) fn input_target_for(
-        &self,
-        pane_id: &str,
-        raw_pane_id: &str,
-        kind: &str,
-        device: &str,
-        lineage: Option<&str>,
-    ) -> crate::delivery::ladder::InputTarget {
-        use crate::delivery::ladder::InputTarget;
-        // Only the session Herdr names for the pane is addressed
-        // (`HookFacts::reported_session`). Herdr learns it from the agent's
-        // own session start, the event Hide's hook reports from too: once
-        // Herdr names a session that Hide's hook did not report, the hook is
-        // not connected for it (or its report is a moment late), and the
-        // input is typed.
-        let session = lineage.and_then(|lineage| {
-            let row = hide_agent_adapter::adapter(kind)?;
-            self.hook_facts
-                .lock()
-                .ok()?
-                .reported_session(pane_id, row.id, lineage)
-        });
-        InputTarget {
-            pane_id: pane_id.to_owned(),
-            kind: kind.to_owned(),
-            raw_pane_id: raw_pane_id.to_owned(),
-            session,
-            node: self.linked_node(device).ok().map(|(_, node)| node),
+        crate::delivery::ladder::InputTarget {
+            pane_id: observed.actor.pane_id.clone(),
+            raw_pane_id: observed.raw_pane_id.clone(),
+            kind: observed.actor.kind.clone(),
         }
     }
 
@@ -3413,7 +3376,7 @@ pub(crate) mod tests {
                 "recipient",
                 &context,
                 None,
-                Command::Inbox,
+                Command::Inbox { bundle: true },
             )
             .unwrap();
         assert_eq!(written(&mut guard), (false, false, false));
@@ -3436,6 +3399,7 @@ pub(crate) mod tests {
                         prompt_digest: prompt_digest.clone(),
                         session: session.map(str::to_owned),
                         point: hide_node_link::panes::PullPoint::Prompt,
+                        bundle: true,
                     },
                 )
                 .unwrap();
@@ -3457,6 +3421,7 @@ pub(crate) mod tests {
                         prompt_digest: Some("prompt".into()),
                         session: None,
                         point: hide_node_link::panes::PullPoint::Prompt,
+                        bundle: true,
                     },
                 )
                 .err()
@@ -3467,6 +3432,7 @@ pub(crate) mod tests {
             prompt_digest: None,
             session: Some(session),
             point: hide_node_link::panes::PullPoint::Prompt,
+            bundle: true,
         };
         // An id past the session bound is refused before it is hashed under the lock.
         assert_eq!(
@@ -3651,6 +3617,7 @@ pub(crate) mod tests {
             prompt_digest: None,
             session: Some(session.into()),
             point: hide_node_link::panes::PullPoint::Tool,
+            bundle: true,
         };
         clocks(&mut guard, "recipient", true);
         let prepared = guard
@@ -3697,6 +3664,7 @@ pub(crate) mod tests {
                         prompt_digest: None,
                         session: None,
                         point: hide_node_link::panes::PullPoint::Tool,
+                        bundle: true,
                     },
                 )
                 .err()
@@ -3792,7 +3760,7 @@ pub(crate) mod tests {
                         caller,
                         &context,
                         Some("recipient"),
-                        Command::Inbox
+                        Command::Inbox { bundle: true }
                     )
                     .is_err()
             );
@@ -3803,7 +3771,7 @@ pub(crate) mod tests {
                         caller,
                         &context,
                         Some("remote:other:pane:sender"),
-                        Command::Inbox
+                        Command::Inbox { bundle: true }
                     )
                     .is_err()
             );
@@ -4074,7 +4042,7 @@ pub(crate) mod tests {
                 now: false,
                 force: false,
             },
-            Command::Inbox,
+            Command::Inbox { bundle: true },
             Command::WatchStart {
                 target: "recipient".into(),
                 observer: None,
@@ -4113,7 +4081,7 @@ pub(crate) mod tests {
                     "sender",
                     &context,
                     Some("recipient"),
-                    Command::Inbox
+                    Command::Inbox { bundle: true }
                 )
                 .err()
                 .as_deref(),
@@ -4773,10 +4741,11 @@ pub(crate) mod tests {
             },
         )
         .unwrap();
-        let inbox = run("recipient", Command::Inbox).unwrap();
-        assert_eq!(inbox.as_array().map(Vec::len), Some(1), "{inbox}");
-        assert_eq!(inbox[0]["id"], letter["id"]);
-        assert_eq!(inbox[0]["body"], "read me after a restart");
+        let inbox = run("recipient", Command::Inbox { bundle: true }).unwrap();
+        let letters = &inbox["letters"];
+        assert_eq!(letters.as_array().map(Vec::len), Some(1), "{inbox}");
+        assert_eq!(letters[0]["id"], letter["id"]);
+        assert_eq!(letters[0]["body"], "read me after a restart");
         drop(worker);
 
         let saved = crate::delivery::ledger::recover(&path).unwrap();

@@ -887,6 +887,10 @@ const SHIM: &str = r#"
 #include <unistd.h>
 #include <sys/wait.h>
 #include <time.h>
+static void composer(void) {
+  fputs("\r\n────────────────\r\n❯ \r\n────────────────\r\n", stdout);
+  fflush(stdout);
+}
 int main(int argc, char **argv) {
   if (argc > 1 && strcmp(argv[1], "--version") == 0) { puts("fixture provider"); return 0; }
   if (argc > 1 && strcmp(argv[1], "auth") == 0) { puts("{\"loggedIn\":false}"); return 0; }
@@ -900,6 +904,7 @@ int main(int argc, char **argv) {
     tcsetattr(0, TCSANOW, &t);
   }
   puts("DELIVERY_FIXTURE_READY"); fflush(stdout);
+  composer();
   char line[8192]; size_t size = 0; char byte;
   while (read(0, &byte, 1) == 1) {
     if (byte == '\r' || byte == '\n') {
@@ -924,6 +929,7 @@ int main(int argc, char **argv) {
         }
       }
       size = 0;
+      composer();
     } else if (size + 1 < sizeof line) { line[size++] = byte; }
   }
   return 0;
