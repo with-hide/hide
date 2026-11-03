@@ -95,7 +95,7 @@ pub fn clean_removal(root: &Path, checkout: &Path, common: &Path) -> CleanRemova
     let outcome = worktrees::remove_worktree(root, checkout, false).into();
     let trashed = worktrees::trash_entries(common)
         .difference(&before)
-        .map(|entry| crate::root::wire(&entry))
+        .map(|entry| crate::root::wire(entry))
         .collect();
     CleanRemoval { outcome, trashed }
 }
