@@ -231,14 +231,13 @@ mod tests {
                 .stderr(std::process::Stdio::null())
                 .spawn()
                 .unwrap();
-            // It says it runs once it waits on its input.
-            let mut said = String::new();
-            std::io::BufRead::read_line(
-                &mut std::io::BufReader::new(child.stdout.take().unwrap()),
-                &mut said,
-            )
-            .unwrap();
-            assert_eq!(said.trim(), "waiting");
+            // It says it runs once it waits on its input, after the lines
+            // the test harness prints first.
+            let waiting =
+                std::io::BufRead::lines(std::io::BufReader::new(child.stdout.take().unwrap()))
+                    .map_while(Result::ok)
+                    .any(|line| line.trim() == "waiting");
+            assert!(waiting, "the stand-in ended before it waited");
             let pid = child.id();
             Self {
                 pid,

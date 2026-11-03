@@ -346,7 +346,7 @@ mod tests {
             "{refused}"
         );
         assert!(refused.contains("not started again"), "{refused}");
-        assert_eq!(*starts.started.borrow(), [new.clone()]);
+        assert_eq!(*starts.started.borrow(), std::slice::from_ref(&new));
         assert!(hide_platform::fs::link::is_link_to(
             &root.path().join("builds").join(hide_kit::CURRENT),
             Path::new("bbbbbbbbbbbbbbbb"),
