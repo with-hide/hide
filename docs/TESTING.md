@@ -629,6 +629,10 @@ Reservation storage tests use real record files to prove cancel-before-reserve, 
 They complete 384 requests on one owner, prune ended records, then refuse old request numbers and admit another new pane without owner rotation.
 The request helper checks out-of-order gaps, no-send retirement, bounded high-number rejection and retirement while an admitted worker still owns its final mutation.
 Core creation tests lose reserve, cancellation and retirement answers independently, retaining the original placement and capacity until the matching decision is confirmed; an authority revoked behind a reservation barrier must publish and start nothing.
+The same engine fixture pauses after the post-reservation open check, before placement and inside a real spawn-ledger Place mutation to cross parent close with publication and placement.
+It requires no successful ID or visible pane when cancellation wins, exactly one withdrawal after an in-flight placement completes, an empty spawn pane and returned admission capacity.
+A holder-start barrier checks the opposite order: a split published first is included in its tab close; a termination barrier refuses new splits and tabs behind a close already in flight.
+These are engine and ledger boundary checks with a stand-in node, not daemon or OS-process evidence.
 These storage and handler tests complement the abrupt daemon restart journey; they do not substitute for it.
 The rejected-start closures panic if shell expansion is reached, so those tests prove the rejection precedes any program preparation.
 The ownership tests keep an admitted worker alive after its caller releases ownership and require a second connection's OS lock acquisition to fail until that worker finishes; the host handler also checks that a closed slot refuses a late mutation and cannot reacquire ownership.

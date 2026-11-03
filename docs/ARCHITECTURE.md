@@ -2292,6 +2292,11 @@ Unresolved ended reservations remain pinned in the record cap, while confirmed r
 A definitely unsent creation also retires its issued number; losing the retirement answer retains its core slot until the same retirement is confirmed.
 The core admits eight active and eight waiting creation intents before placement or durable reservation, and retains the original placement and request through unknown reserve/start/cancel outcomes.
 Only confirmed durable reservation permits publication; authority and parent existence are checked again after that answer, and failed publication cancels the exact intent.
+One intent state serializes the cancellation claim with topology publication, so a cancellation selected before publication cannot leave a visible cancelled pane.
+Placement starts, completion and withdrawal belong to that same intent; callbacks run outside all engine locks, and cancellation waits for an in-flight callback before withdrawing exactly the successful placements and retiring the request.
+A placement still in flight at the existing start bound leaves cancellation unanswered and retains its admission until a later resolution observes actual cleanup.
+Closing selects and marks its panes in one topology hold before node I/O; a late split into a closing pane or a new tab in a wholly closing workspace is refused, while a pane published before selection is included in a tab or workspace close.
+The in-memory closing mark remains after an unresolved close, so another close resolves the original scope instead of admitting new children behind it.
 Cancellation and a late successful start both finish terminal-service cleanup before their request guards leave.
 A later close of a started pane uses record ownership and incarnation checks, without reopening its retired creation request.
 A new owner reports interrupted reservations with their original pane ID, incarnation and recovery folder; legacy ended records report the incarnation but need a saved layout for the folder.

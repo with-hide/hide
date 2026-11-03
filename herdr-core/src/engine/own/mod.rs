@@ -519,8 +519,7 @@ impl OwnEngine<'_> {
             None,
         )?;
         if self.topology().pane(pane).is_ok() {
-            ticket.drawn.store(true, Ordering::Release);
-            ticket.accepted.store(true, Ordering::Release);
+            ticket.publish(true, || Ok(()))?;
         }
         creation::run(ticket, &*self.shared.holders, &Arc::downgrade(&self.shared))
     }
@@ -549,31 +548,6 @@ impl OwnEngine<'_> {
             return Err(error);
         }
         creation::run(ticket, &*self.shared.holders, &Arc::downgrade(&self.shared))
-    }
-
-    /// Records `pane`, whose id this call just reserved, on every gate's
-    /// [`super::Placement`] before anything shows it or starts its holder
-    /// (D-11). The order is the locks' order and never overlaps: the
-    /// topology lock was let go once the id was reserved (the caller's block
-    /// ended), a placement takes the lock its record needs (the runtime's,
-    /// for a spawn) and lets it go, and the holder starts outside every
-    /// lock. A placement that refuses takes back the ones before it and
-    /// leaves the pane unmade.
-    fn place(&self, pane: &str) -> Result<(), EngineError> {
-        let placements: Vec<_> = self
-            .gates
-            .iter()
-            .filter_map(|gate| gate.placement.as_ref())
-            .collect();
-        for (at, placement) in placements.iter().enumerate() {
-            if let Err(error) = placement.place(pane) {
-                for placed in &placements[..at] {
-                    placed.withdraw(pane);
-                }
-                return Err(error);
-            }
-        }
-        Ok(())
     }
 
     /// Starts the holder of `pane`, which this call has placed and drawn
@@ -632,7 +606,6 @@ impl OwnEngine<'_> {
     /// wait at most, admitted before a thread is made. An admission or
     /// thread failure marks the pane just like a holder start failure.
     fn start_after_answer(&self, ticket: creation::Ticket, starting: Arc<starts::Starting>) {
-        ticket.accepted.store(true, Ordering::Release);
         let topology = Arc::clone(&self.shared.topology);
         let holders = Arc::clone(&self.shared.holders);
         let shared = Arc::downgrade(&self.shared);
@@ -709,14 +682,27 @@ impl OwnEngine<'_> {
     /// end leaves every pane in place, as before.
     fn end_and_remove<R>(
         &self,
-        panes: &[String],
+        select: impl FnOnce(&Topology) -> Result<Vec<String>, EngineError>,
         remove: impl FnOnce(&mut Topology) -> R,
     ) -> Result<R, EngineError> {
         self.resolve_unpublished()?;
-        self.cancel_unpublished_for(panes)?;
-        self.end_panes(panes)?;
+        let panes = {
+            let mut topology = self.topology();
+            let panes = select(&topology)?;
+            // Selection and the fence share publication's topology lock.
+            // Keep the fence on an unresolved close; a later close retries
+            // the same panes rather than admitting new children behind it.
+            for pane in &panes {
+                if let Ok(pane) = topology.pane_mut(pane) {
+                    pane.closing = true;
+                }
+            }
+            panes
+        };
+        self.cancel_unpublished_for(&panes)?;
+        self.end_panes(&panes)?;
         let removed = remove(&mut self.topology());
-        self.release_closed(panes)?;
+        self.release_closed(&panes)?;
         Ok(removed)
     }
 
@@ -766,15 +752,15 @@ impl OwnEngine<'_> {
             return Err(error);
         }
         let (drawn, starting) = Pane::starting(cwd, pane_label, program, &env);
-        let added = self
-            .topology()
-            .add_tab(workspace, (tab, pane), label, drawn, focus);
+        let added = ticket.publish(replace.is_none() && !self.places(), || {
+            self.topology()
+                .add_tab(workspace, (tab, pane), label, drawn, focus)
+        });
         if let Err(error) = added {
             // The workspace closed since the id was reserved.
             self.cancel_start(ticket)?;
             return Err(error);
         }
-        ticket.drawn.store(true, Ordering::Release);
         self.changed();
         if replace.is_some() || self.places() {
             self.start_drawn(ticket, starting)?;
@@ -820,15 +806,15 @@ impl OwnEngine<'_> {
             return Err(error);
         }
         let (drawn, starting) = Pane::starting(&cwd, None, None, &env);
-        let added = self
-            .topology()
-            .add_split(target, direction, ratio, &pane, drawn, focus);
+        let added = ticket.publish(!self.places(), || {
+            self.topology()
+                .add_split(target, direction, ratio, &pane, drawn, focus)
+        });
         if let Err(error) = added {
             // The pane beside it closed since the id was reserved.
             self.cancel_start(ticket)?;
             return Err(error);
         }
-        ticket.drawn.store(true, Ordering::Release);
         self.changed();
         if self.places() {
             self.start_drawn(ticket, starting)?;
@@ -882,8 +868,10 @@ impl OwnEngine<'_> {
     }
 
     fn close_tab_now(&self, tab: &str) -> Answer<()> {
-        let panes = self.topology().tab_panes(tab)?;
-        match self.end_and_remove(&panes, |topology| topology.remove_tab(tab))? {
+        match self.end_and_remove(
+            |topology| topology.tab_panes(tab),
+            |topology| topology.remove_tab(tab),
+        )? {
             // A pane of it closed the tab while its holders ended.
             Ok(_) | Err(EngineError::Refused { .. }) => {}
             Err(error) => return Err(error),
@@ -1556,7 +1544,10 @@ impl<'g> Engine for OwnEngine<'g> {
     fn close_pane(&self, _wait: Wait, pane: &str) -> Answer<()> {
         self.check()?;
         self.known(pane)?;
-        match self.end_and_remove(&[pane.to_owned()], |topology| topology.remove_pane(pane))? {
+        match self.end_and_remove(
+            |_| Ok(vec![pane.to_owned()]),
+            |topology| topology.remove_pane(pane),
+        )? {
             Ok(Closed { .. }) => {}
             // Its tab closed while its holder ended.
             Err(EngineError::Refused { .. }) => {}
@@ -2237,6 +2228,14 @@ mod tests {
             )>,
         >,
         lose_cancel: AtomicBool,
+        cancel_notice: Mutex<Option<std::sync::mpsc::Sender<String>>>,
+        terminate_hold: Mutex<
+            Option<(
+                String,
+                std::sync::mpsc::Sender<()>,
+                std::sync::mpsc::Receiver<()>,
+            )>,
+        >,
         lose_retire: AtomicBool,
         issued: std::sync::atomic::AtomicU64,
         retired: Mutex<Vec<u64>>,
@@ -2416,6 +2415,9 @@ mod tests {
             _: hide_node_link::holders::HolderRequest,
         ) -> Result<(), HolderError> {
             self.terminate(&intent.pane)?;
+            if let Some(notice) = self.cancel_notice.lock().unwrap().take() {
+                notice.send(intent.pane.clone()).unwrap();
+            }
             if self.lose_cancel.swap(false, Ordering::AcqRel) {
                 Err(HolderError::Unreachable {
                     message: "cancel response lost".to_owned(),
@@ -2434,6 +2436,18 @@ mod tests {
         }
 
         fn terminate(&self, pane: &str) -> Result<(), HolderError> {
+            let hold = {
+                let mut hold = self.terminate_hold.lock().unwrap();
+                if hold.as_ref().is_some_and(|(target, _, _)| target == pane) {
+                    hold.take()
+                } else {
+                    None
+                }
+            };
+            if let Some((_, began, go)) = hold {
+                began.send(()).unwrap();
+                go.recv_timeout(Duration::from_secs(5)).unwrap();
+            }
             let mut ended = self.ended.lock().unwrap();
             if !ended.iter().any(|held| held == pane) {
                 ended.push(pane.to_owned());
@@ -2572,6 +2586,8 @@ mod tests {
             other => panic!("expected a refusal naming the source, got {other:?}"),
         }
     }
+
+    mod creation;
 
     /// What a placement saw: each call, in order, with whether the pane's
     /// holder had been asked to start by then and whether the topology could
@@ -2852,24 +2868,30 @@ mod tests {
                 .any(|start| start.pane == split)
         });
 
-        // A tab closed while its pane's holder starts is gone at once; the
-        // holder, which may not run yet, is ended by the start once it runs,
-        // never by the close under the start.
+        // Close fences the already published reservation before removing
+        // the tab. The delayed start must observe that terminal decision.
         let (starting, go) = held();
         let (tab, pane) = engine
             .create_tab(WAIT, &workspace, "/w", "t", false, Env::new())
             .unwrap();
         assert_eq!(starting.recv().unwrap(), pane);
+        let outcome = engine
+            .topology()
+            .pane(&pane)
+            .unwrap()
+            .starting
+            .clone()
+            .unwrap();
         engine.close_tab(WAIT, &tab).unwrap();
         assert!(!shown(&pane), "the closed tab's pane is gone at once");
         assert!(
-            !ended(&pane),
-            "the close leaves the starting holder to its start"
+            ended(&pane),
+            "close confirms termination before removing the published pane"
         );
         go.send(()).unwrap();
-        settles(
-            "the start ends the holder of a pane closed while it started",
-            || ended(&pane),
+        assert!(
+            outcome.wait().is_err(),
+            "the delayed start cannot reopen it"
         );
 
         // A holder that does not start leaves its pane where it was drawn,

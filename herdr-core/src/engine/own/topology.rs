@@ -127,6 +127,9 @@ pub(super) struct Pane {
     pub(super) live: PaneLive,
     /// Why no holder runs the pane, once a restore could not start one.
     pub(super) failed: Option<String>,
+    /// A close owns this pane until termination is confirmed. In-memory
+    /// only; no new split can publish behind an in-flight close.
+    pub(super) closing: bool,
     /// Its holder is being started by the call that drew it (a new tab or
     /// split is drawn before its holder starts, as Herdr's pane exists
     /// once it forked). Whoever takes the pane out meanwhile leaves its
@@ -313,6 +316,17 @@ impl Topology {
         focus: bool,
     ) -> Result<(), EngineError> {
         let found = self.workspace_mut(workspace)?;
+        if found
+            .tabs
+            .iter()
+            .flat_map(|tab| tab.panes.values())
+            .all(|pane| pane.closing)
+        {
+            return Err(refused(
+                "workspace_closing",
+                format!("workspace {workspace} is closing"),
+            ));
+        }
         found.tabs.push(Tab::new(tab, label, pane_id, pane));
         if focus {
             found.active_tab = tab.to_owned();
@@ -370,6 +384,9 @@ impl Topology {
         focus: bool,
     ) -> Result<(), EngineError> {
         let (workspace_index, tab_index) = self.position(target)?;
+        if self.pane(target)?.closing {
+            return Err(refused("pane_closing", format!("pane {target} is closing")));
+        }
         let workspace = &mut self.workspaces[workspace_index];
         let tab = &mut workspace.tabs[tab_index];
         split_leaf_at(&mut tab.root, target, direction, created, ratio);

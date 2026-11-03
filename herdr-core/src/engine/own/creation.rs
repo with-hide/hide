@@ -3,7 +3,7 @@
 //! an answer is unknown. Resolution is caller driven, never a retry timer.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 
 use hide_node_link::holders::{HolderRequest, HolderReservation, HolderStart, PaneHolders};
 
@@ -15,27 +15,48 @@ pub(super) type Ticket = Arc<Intent>;
 pub(super) struct Intent {
     pub start: HolderStart,
     request: HolderRequest,
-    submission_closed: Mutex<bool>,
+    state: Mutex<State>,
+    placement_done: Condvar,
     retiring: AtomicBool,
     reserved: OnceLock<HolderReservation>,
     _turn: starts::Turn,
     placements: Vec<Arc<dyn Placement>>,
     parent: Option<String>,
-    pub drawn: AtomicBool,
-    pub accepted: AtomicBool,
     unresolved: AtomicBool,
     resolving: AtomicBool,
-    canceled: AtomicBool,
-    withdrawn: AtomicBool,
+}
+
+/// This intent alone owns placement callbacks. No mutex is held while they
+/// run, and cancellation waits for their actual completion before withdrawal.
+/// Publication takes this lock before the topology lock; closers release
+/// topology before claiming cancellation here.
+#[derive(Default)]
+struct State {
+    submission_closed: bool,
+    drawn: bool,
+    accepted: bool,
+    canceled: bool,
+    cancellation_confirmed: bool,
+    placement: PlacementState,
+}
+
+#[derive(Default)]
+enum PlacementState {
+    #[default]
+    Pending,
+    Running,
+    Ready(usize),
+    Withdrawing,
+    Withdrawn,
 }
 
 impl Intent {
+    fn state(&self) -> MutexGuard<'_, State> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     fn submit(&self) -> Result<(), EngineError> {
-        if *self
-            .submission_closed
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-        {
+        if self.state().submission_closed {
             Err(EngineError::Unanswered(
                 "the pane request has closed submission".to_owned(),
             ))
@@ -44,26 +65,109 @@ impl Intent {
         }
     }
 
-    fn withdraw(&self) {
-        if !self.withdrawn.swap(true, Ordering::AcqRel) {
-            for placement in &self.placements {
-                placement.withdraw(&self.start.pane);
+    fn cancelled(&self) -> EngineError {
+        super::refused(
+            "pane_creation_cancelled",
+            format!(
+                "pane {} was cancelled while being reserved",
+                self.start.pane
+            ),
+        )
+    }
+
+    fn place(&self) -> Result<(), EngineError> {
+        {
+            let mut state = self.state();
+            if state.canceled || state.submission_closed {
+                return Err(self.cancelled());
             }
+            state.placement = PlacementState::Running;
         }
+        let mut placed = 0;
+        let result = self.placements.iter().try_for_each(|placement| {
+            self.check_open()?;
+            placement.place(&self.start.pane)?;
+            placed += 1;
+            Ok(())
+        });
+        self.state().placement = PlacementState::Ready(placed);
+        self.placement_done.notify_all();
+        result.and_then(|()| self.check_open())
+    }
+
+    fn withdraw(&self) -> Result<(), EngineError> {
+        let placed = {
+            let state = self.state();
+            let (mut state, _) = self
+                .placement_done
+                .wait_timeout_while(state, hide_kit::panes::START_LIMIT, |state| {
+                    matches!(
+                        state.placement,
+                        PlacementState::Running | PlacementState::Withdrawing
+                    )
+                })
+                .unwrap_or_else(PoisonError::into_inner);
+            match state.placement {
+                PlacementState::Ready(placed) => {
+                    state.placement = PlacementState::Withdrawing;
+                    placed
+                }
+                PlacementState::Pending | PlacementState::Withdrawn => {
+                    state.placement = PlacementState::Withdrawn;
+                    return Ok(());
+                }
+                PlacementState::Running | PlacementState::Withdrawing => {
+                    self.unresolved.store(true, Ordering::Release);
+                    return Err(EngineError::Unanswered(
+                        "the pane placement has not finished its cleanup".to_owned(),
+                    ));
+                }
+            }
+        };
+        for placement in &self.placements[..placed] {
+            placement.withdraw(&self.start.pane);
+        }
+        self.state().placement = PlacementState::Withdrawn;
+        self.placement_done.notify_all();
+        Ok(())
+    }
+
+    /// Selection and the cancellation claim are one transition, not a read
+    /// of drawn followed later by an unconditional cancellation.
+    fn claim_cancel(&self, only_unpublished: bool) -> bool {
+        let mut state = self.state();
+        if only_unpublished && state.drawn {
+            return false;
+        }
+        state.canceled = true;
+        true
     }
 
     pub fn check_open(&self) -> Result<(), EngineError> {
-        if self.canceled.load(Ordering::Acquire) {
-            Err(super::refused(
-                "pane_creation_cancelled",
-                format!(
-                    "pane {} was cancelled while being reserved",
-                    self.start.pane
-                ),
-            ))
+        if self.state().canceled {
+            Err(self.cancelled())
         } else {
             Ok(())
         }
+    }
+
+    pub fn accepted(&self) -> bool {
+        self.state().accepted
+    }
+
+    pub fn publish<R>(
+        &self,
+        accepted: bool,
+        add: impl FnOnce() -> Result<R, EngineError>,
+    ) -> Result<R, EngineError> {
+        let mut state = self.state();
+        if state.canceled || state.submission_closed {
+            return Err(self.cancelled());
+        }
+        let result = add()?;
+        state.drawn = true;
+        state.accepted = accepted;
+        Ok(result)
     }
 }
 
@@ -86,10 +190,7 @@ pub(super) fn retire(
     // Requests already admitted locally may still reach the node, but its
     // matching retire transition refuses them before storage work. Actual
     // node guards keep the slot until their final mutation and cleanup.
-    *ticket
-        .submission_closed
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner) = true;
+    ticket.state().submission_closed = true;
     ticket.retiring.store(true, Ordering::Release);
     match holders.retire(ticket.request) {
         Ok(()) => {
@@ -106,16 +207,24 @@ pub(super) fn retire(
 }
 
 fn cancel(holders: &dyn PaneHolders, ticket: &Intent) -> Result<(), EngineError> {
+    ticket.claim_cancel(false);
+    if ticket.state().cancellation_confirmed {
+        return ticket.withdraw();
+    }
     ticket.submit()?;
-    holders
-        .cancel(
-            &ticket.start.intent().map_err(holder_error)?,
-            ticket.request,
-        )
-        .map_err(holder_error)?;
-    ticket.canceled.store(true, Ordering::Release);
-    ticket.withdraw();
-    Ok(())
+    let result = holders.cancel(
+        &ticket.start.intent().map_err(holder_error)?,
+        ticket.request,
+    );
+    let mut state = ticket.state();
+    // Another cancellation may have confirmed and retired while this call
+    // was at the node. Its confirmed decision remains authoritative.
+    if !state.cancellation_confirmed {
+        result.map_err(holder_error)?;
+        state.cancellation_confirmed = true;
+    }
+    drop(state);
+    ticket.withdraw()
 }
 
 pub(super) fn run(
@@ -142,7 +251,7 @@ pub(super) fn run(
         return result;
     }
     if result.is_err()
-        && !ticket.accepted.load(Ordering::Acquire)
+        && !ticket.accepted()
         && let Err(error) = cancel(holders, &ticket)
     {
         ticket.unresolved.store(true, Ordering::Release);
@@ -159,6 +268,16 @@ impl OwnEngine<'_> {
         &self,
         start: HolderStart,
         previous: Option<u64>,
+        place: bool,
+        parent: Option<&str>,
+    ) -> Result<Ticket, EngineError> {
+        let ticket = self.admit_start(start, place, parent)?;
+        self.reserve_admitted(ticket, previous)
+    }
+
+    pub(super) fn admit_start(
+        &self,
+        start: HolderStart,
         place: bool,
         parent: Option<&str>,
     ) -> Result<Ticket, EngineError> {
@@ -180,7 +299,8 @@ impl OwnEngine<'_> {
         let ticket = Arc::new(Intent {
             start,
             request,
-            submission_closed: Mutex::new(false),
+            state: Mutex::default(),
+            placement_done: Condvar::new(),
             retiring: AtomicBool::new(false),
             reserved: OnceLock::new(),
             _turn: turn,
@@ -193,18 +313,21 @@ impl OwnEngine<'_> {
                 Vec::new()
             },
             parent: parent.map(str::to_owned),
-            drawn: AtomicBool::new(false),
-            accepted: AtomicBool::new(false),
             unresolved: AtomicBool::new(false),
             resolving: AtomicBool::new(false),
-            canceled: AtomicBool::new(false),
-            withdrawn: AtomicBool::new(false),
         });
         pending.insert(ticket.start.pane.clone(), Arc::clone(&ticket));
         drop(pending);
-        if place && let Err(error) = self.place(&ticket.start.pane) {
-            // place already withdrew precisely the preceding placements.
-            ticket.withdrawn.store(true, Ordering::Release);
+        Ok(ticket)
+    }
+
+    pub(super) fn reserve_admitted(
+        &self,
+        ticket: Ticket,
+        previous: Option<u64>,
+    ) -> Result<Ticket, EngineError> {
+        if let Err(error) = ticket.place() {
+            ticket.withdraw()?;
             retire(
                 &*self.shared.holders,
                 &ticket,
@@ -227,7 +350,7 @@ impl OwnEngine<'_> {
                 if error.reply_unknown() {
                     ticket.unresolved.store(true, Ordering::Release);
                 } else {
-                    ticket.withdraw();
+                    ticket.withdraw()?;
                     retire(
                         &*self.shared.holders,
                         &ticket,
@@ -264,14 +387,14 @@ impl OwnEngine<'_> {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .values()
-            .filter(|entry| {
-                entry.unresolved.load(Ordering::Acquire)
-                    && (entry.retiring.load(Ordering::Acquire)
-                        || !entry.drawn.load(Ordering::Acquire))
-            })
             .cloned()
             .collect();
         for ticket in pending {
+            if !ticket.unresolved.load(Ordering::Acquire)
+                || (!ticket.retiring.load(Ordering::Acquire) && ticket.state().drawn)
+            {
+                continue;
+            }
             if ticket.resolving.swap(true, Ordering::AcqRel) {
                 return Err(EngineError::Unanswered(format!(
                     "pane {} is still resolving its earlier request",
@@ -320,21 +443,22 @@ impl OwnEngine<'_> {
             .unwrap_or_else(PoisonError::into_inner)
             .values()
             .filter(|entry| {
-                !entry.drawn.load(Ordering::Acquire)
-                    && (entry
-                        .parent
-                        .as_ref()
-                        .is_some_and(|parent| panes.contains(parent))
-                        || entry
-                            .start
-                            .pane
-                            .split_once(':')
-                            .is_some_and(|(workspace, _)| closing.iter().any(|id| id == workspace)))
+                entry
+                    .parent
+                    .as_ref()
+                    .is_some_and(|parent| panes.contains(parent))
+                    || entry
+                        .start
+                        .pane
+                        .split_once(':')
+                        .is_some_and(|(workspace, _)| closing.iter().any(|id| id == workspace))
             })
             .cloned()
             .collect();
         for ticket in pending {
-            self.cancel_start(ticket)?;
+            if ticket.claim_cancel(true) {
+                self.cancel_start(ticket)?;
+            }
         }
         Ok(())
     }
@@ -352,9 +476,14 @@ impl OwnEngine<'_> {
                 .collect()
         };
         for ticket in released {
-            ticket.canceled.store(true, Ordering::Release);
-            if !ticket.accepted.load(Ordering::Acquire) {
-                ticket.withdraw();
+            let accepted = {
+                let mut state = ticket.state();
+                state.canceled = true;
+                state.cancellation_confirmed = true;
+                state.accepted
+            };
+            if !accepted {
+                ticket.withdraw()?;
             }
             retire(
                 &*self.shared.holders,

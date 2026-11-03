@@ -295,8 +295,10 @@ impl OwnEngine<'_> {
                 format!("{} is its repository's main worktree", bound.checkout_path),
             ));
         }
-        let panes = self.topology().workspace_panes(workspace)?;
-        match self.end_and_remove(&panes, |topology| topology.remove_workspace(workspace))? {
+        match self.end_and_remove(
+            |topology| topology.workspace_panes(workspace),
+            |topology| topology.remove_workspace(workspace),
+        )? {
             // Its last pane closed it while the holders ended.
             Ok(()) | Err(EngineError::Refused { .. }) => {}
             Err(error) => return Err(error),
