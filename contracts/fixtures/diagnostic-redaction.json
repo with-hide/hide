@@ -274,5 +274,32 @@
       "Example\"User'"
     ],
     "expected": "cannot read '~'"
+  },
+  {
+    "name": "double-quoted-apostrophe-windows-path",
+    "input": [
+      "cannot read \"",
+      "C:\\Users\\",
+      "O'Connor\\repo\""
+    ],
+    "expected": "cannot read \"~/repo\""
+  },
+  {
+    "name": "single-quoted-apostrophe-windows-path",
+    "input": [
+      "cannot read '",
+      "C:\\Users\\",
+      "O'Connor\\repo'"
+    ],
+    "expected": "cannot read '~/repo'"
+  },
+  {
+    "name": "unquoted-apostrophe-windows-home-detail",
+    "input": [
+      "cannot read ",
+      "C:\\Users\\",
+      "O'Connor"
+    ],
+    "expected": "cannot read ~"
   }
 ]
