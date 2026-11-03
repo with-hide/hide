@@ -161,7 +161,9 @@ impl Runtime {
                     .status
                     .herdr_import
                     .as_ref()
-                    .is_some_and(|shown| shown.kind == kind && shown.workspaces > 0);
+                    .is_some_and(|shown| {
+                        shown.kind == kind && (shown.workspaces > 0 || shown.waiting > 0)
+                    });
                 if !offered {
                     return refused(action, "no such move is offered");
                 }
@@ -262,6 +264,7 @@ fn shown(seen: &Seen, taking: bool) -> Option<HerdrImportSnapshot> {
         workspaces: 0,
         tabs: 0,
         agents: 0,
+        waiting: 0,
         herdr_running: seen.server != Server::Stopped,
         failure: None,
         reason: None,
@@ -274,7 +277,11 @@ fn shown(seen: &Seen, taking: bool) -> Option<HerdrImportSnapshot> {
             reason: Some(reason.clone()),
             ..base
         }),
-        Look::Offer(offer) => {
+        // Waiting conversations resume only once their Herdr no longer runs,
+        // so while another Herdr runs on, a save with nothing else is no offer.
+        Look::Offer(offer)
+            if offer.workspaces > 0 || seen.server != Server::Other =>
+        {
             let not_stopped =
                 !taking && kind == KIND_MOVE && seen.outcome == Some(Outcome::NotStopped);
             let stage = if not_stopped {
@@ -288,17 +295,18 @@ fn shown(seen: &Seen, taking: bool) -> Option<HerdrImportSnapshot> {
                 workspaces: offer.workspaces,
                 tabs: offer.tabs,
                 agents: offer.agents,
+                waiting: offer.waiting,
                 ..base
             })
         }
         // A move's left-out workspaces wait to be read once nothing else is
         // offered (B11).
-        Look::Nothing if !base.refused.is_empty() => Some(HerdrImportSnapshot {
+        Look::Nothing | Look::Offer(_) if !base.refused.is_empty() => Some(HerdrImportSnapshot {
             kind: "result".to_owned(),
             stage: "moved".to_owned(),
             ..base
         }),
-        Look::Nothing => None,
+        Look::Nothing | Look::Offer(_) => None,
     }
 }
 

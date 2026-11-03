@@ -415,6 +415,9 @@ pub struct Offer {
     pub workspaces: usize,
     pub tabs: usize,
     pub agents: usize,
+    /// Conversations an earlier import left waiting in the Herdr they came
+    /// from, which an import resumes once that Herdr no longer runs (B15).
+    pub waiting: usize,
 }
 
 /// Reads the Herdr save at `herdr_session`, only reading it, records what of
@@ -426,7 +429,18 @@ pub fn look(engine_dir: &Path, herdr_session: &Path) -> Result<Look, String> {
     let look = match herdr_session::read(herdr_session) {
         HerdrRead::Missing => {
             record.found = Found::Nothing;
-            Look::Nothing
+            // Conversations waiting from an earlier import go back without
+            // the save that held them.
+            if record.pending.is_empty() {
+                Look::Nothing
+            } else {
+                Look::Offer(Offer {
+                    workspaces: 0,
+                    tabs: 0,
+                    agents: 0,
+                    waiting: record.pending.len(),
+                })
+            }
         }
         HerdrRead::Unreadable(reason) => {
             record.found = Found::Unknown {
@@ -450,8 +464,9 @@ pub fn look(engine_dir: &Path, herdr_session: &Path) -> Result<Look, String> {
                 workspaces: converted.moved.len(),
                 tabs: converted.tabs(),
                 agents: converted.agents(),
+                waiting: record.pending.len(),
             };
-            if offer.workspaces == 0 {
+            if offer.workspaces == 0 && offer.waiting == 0 {
                 Look::Nothing
             } else {
                 Look::Offer(offer)
@@ -750,7 +765,8 @@ mod tests {
             Look::Offer(Offer {
                 workspaces: 2,
                 tabs: 3,
-                agents: 1
+                agents: 1,
+                waiting: 0,
             })
         );
         let before = held(&engine);

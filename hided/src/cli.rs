@@ -2566,6 +2566,20 @@ fn import_herdr_lines(result: &serde_json::Value, yes: bool) -> Vec<String> {
             ));
         }
     }
+    if count("workspaces") == 0 && count("waiting") > 0 && offered["kind"] == "import" {
+        lines.push(format!(
+            "Herdr closed, so {} conversations an earlier import left open in it can resume here.",
+            count("waiting")
+        ));
+        lines.push(if result["asked"] == true {
+            "Resuming: Hide starts again with them.".to_owned()
+        } else if yes {
+            "Nothing was resumed: a move is already under way.".to_owned()
+        } else {
+            "Run `hide import herdr --yes` to resume them.".to_owned()
+        });
+        return lines;
+    }
     if count("workspaces") == 0 {
         if lines.is_empty() {
             lines.push("This machine has no Herdr session left to move into Hide.".to_owned());
@@ -3410,7 +3424,7 @@ mod tests {
         let offered = |kind: &str, running: bool| {
             serde_json::json!({
                 "kind": kind, "stage": "offered", "workspaces": 2, "tabs": 3, "agents": 1,
-                "herdr_running": running, "failure": null, "reason": null, "refused": [],
+                "waiting": 0, "herdr_running": running, "failure": null, "reason": null, "refused": [],
             })
         };
         assert_eq!(
@@ -3434,6 +3448,19 @@ mod tests {
                 "Importing leaves Herdr as it is.",
                 "Herdr is running, so the conversations open in it open here as shells.",
                 "Importing: Hide starts again with them.",
+            ]
+        );
+        assert_eq!(
+            import_herdr_lines(
+                &serde_json::json!({"offered": {
+                    "kind": "import", "stage": "offered", "workspaces": 0, "tabs": 0, "agents": 0,
+                    "waiting": 2, "herdr_running": false, "failure": null, "reason": null, "refused": [],
+                }, "asked": false}),
+                false
+            ),
+            [
+                "Herdr closed, so 2 conversations an earlier import left open in it can resume here.",
+                "Run `hide import herdr --yes` to resume them.",
             ]
         );
         assert_eq!(

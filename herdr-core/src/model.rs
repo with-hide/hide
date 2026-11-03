@@ -7329,6 +7329,9 @@ pub struct HerdrImportSnapshot {
     pub workspaces: usize,
     pub tabs: usize,
     pub agents: usize,
+    /// Conversations an earlier import left waiting in the Herdr they came
+    /// from, which an import resumes once that Herdr no longer runs (B15).
+    pub waiting: usize,
     /// A Herdr runs on with the save's conversations open, so an import
     /// opens their panes as shells (B15).
     pub herdr_running: bool,

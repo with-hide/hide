@@ -22,6 +22,7 @@ const found = (overrides: Partial<HerdrImport> = {}): HerdrImport => ({
   workspaces: 2,
   tabs: 3,
   agents: 2,
+  waiting: 0,
   herdr_running: true,
   failure: null,
   reason: null,
@@ -119,6 +120,14 @@ it("lists the workspaces a move left out until they are read", async () => {
   expect(document.querySelector("[data-herdr-import-line=refused]")?.textContent).toContain("api: its layout names a pane twice");
   await act(async () => button("[data-herdr-import-done]")!.click());
   expect(sent(events)).toEqual([{ action: "continue" }]);
+});
+
+it("offers to resume the conversations an import left open once their Herdr closed", async () => {
+  const events = await mount(found({ kind: "import", workspaces: 0, tabs: 0, agents: 0, waiting: 2, herdr_running: false }));
+  expect(document.querySelector("[data-herdr-import-line=waiting]")?.textContent).toContain("2 conversations can resume here");
+  expect(document.querySelector("[data-herdr-import-settings]")).toBeNull();
+  await act(async () => button("[data-herdr-import-resume]")!.click());
+  expect(sent(events)).toEqual([{ action: "import" }]);
 });
 
 it("draws nothing while there is no save", async () => {

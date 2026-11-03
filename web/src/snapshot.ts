@@ -2184,6 +2184,8 @@ export type HerdrImport = {
   workspaces: number;
   tabs: number;
   agents: number;
+  /** Conversations an earlier import left open in their Herdr, which an import resumes now that it is closed (B15). */
+  waiting: number;
   herdr_running: boolean;
   failure: "not_stopped" | "unreadable" | null;
   reason: string | null;

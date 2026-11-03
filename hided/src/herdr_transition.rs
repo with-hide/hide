@@ -335,7 +335,7 @@ pub(crate) fn cli_answer(
     let shown = core.herdr_import_shown()?;
     let action = shown
         .as_ref()
-        .filter(|shown| shown.workspaces > 0 && shown.stage != "moving")
+        .filter(|shown| (shown.workspaces > 0 || shown.waiting > 0) && shown.stage != "moving")
         .and_then(|shown| match shown.kind.as_str() {
             "move" => Some("move"),
             "import" => Some("import"),
@@ -507,7 +507,8 @@ mod tests {
                 &Look::Offer(herdr_import::Offer {
                     workspaces: 2,
                     tabs: 3,
-                    agents: 1
+                    agents: 1,
+                    waiting: 0,
                 }),
                 herdr_import::Server::Stopped
             )

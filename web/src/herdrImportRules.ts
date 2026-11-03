@@ -16,6 +16,7 @@ export function asksToMove(found: HerdrImport | null | undefined, later: boolean
 export type ImportLine =
   | { kind: "move"; agents: number; tabs: number }
   | { kind: "import"; tabs: number; running: boolean }
+  | { kind: "waiting"; count: number }
   | { kind: "moving" }
   | { kind: "unreadable"; reason: string }
   | { kind: "refused"; refused: HerdrImport["refused"] };
@@ -25,7 +26,7 @@ export function importLine(found: HerdrImport | null | undefined, asking: boolea
   if (found.stage === "moving") return { kind: "moving" };
   if (found.failure === "unreadable") return { kind: "unreadable", reason: found.reason ?? "" };
   if (found.refused.length > 0) return { kind: "refused", refused: found.refused };
-  if (found.workspaces === 0) return null;
+  if (found.workspaces === 0) return found.kind === "import" && found.waiting > 0 ? { kind: "waiting", count: found.waiting } : null;
   if (found.kind === "move") return { kind: "move", agents: found.agents, tabs: found.tabs };
   if (found.kind === "import") return { kind: "import", tabs: found.tabs, running: found.herdr_running };
   return null;

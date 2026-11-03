@@ -43,6 +43,7 @@ fn offered(server: Server, outcome: Option<Outcome>) -> Seen {
             workspaces: 2,
             tabs: 3,
             agents: 1,
+            waiting: 0,
         }),
         server,
         outcome,
@@ -70,7 +71,7 @@ fn a_running_hide_herdr_is_asked_about_and_its_move_shows_until_the_core_starts_
         shown(&runtime),
         serde_json::json!({
             "kind": "move", "stage": "offered", "workspaces": 2, "tabs": 3, "agents": 1,
-            "herdr_running": true, "failure": null, "reason": null, "refused": [],
+            "waiting": 0, "herdr_running": true, "failure": null, "reason": null, "refused": [],
         })
     );
     assert!(act(&mut runtime, "move"));
@@ -138,7 +139,7 @@ fn an_unreadable_save_shows_why_and_no_save_shows_nothing() {
         shown(&runtime),
         serde_json::json!({
             "kind": "import", "stage": "failed", "workspaces": 0, "tabs": 0, "agents": 0,
-            "herdr_running": false, "failure": "unreadable",
+            "waiting": 0, "herdr_running": false, "failure": "unreadable",
             "reason": "session.json is not a Herdr session", "refused": [],
         })
     );
@@ -186,4 +187,31 @@ fn a_core_without_its_own_engine_offers_nothing() {
     let mut runtime = runtime();
     assert!(!act(&mut runtime, "move"));
     assert_eq!(shown(&runtime), serde_json::Value::Null);
+}
+
+/// B15: the conversations an import left open in a Herdr are offered to
+/// resume once no Herdr runs, and not while another one runs on.
+#[test]
+fn waiting_conversations_are_offered_only_once_their_herdr_no_longer_runs() {
+    let mut runtime = installed();
+    let waiting = |server| Seen {
+        look: Look::Offer(Offer {
+            workspaces: 0,
+            tabs: 0,
+            agents: 0,
+            waiting: 2,
+        }),
+        server,
+        outcome: None,
+    };
+    runtime.ingest_herdr_save(waiting(Server::Other));
+    assert_eq!(shown(&runtime), serde_json::Value::Null);
+    assert!(!act(&mut runtime, "import"));
+    runtime.ingest_herdr_save(waiting(Server::Stopped));
+    let offer = shown(&runtime);
+    assert_eq!(
+        (&offer["kind"], &offer["waiting"]),
+        (&serde_json::json!("import"), &serde_json::json!(2))
+    );
+    assert!(act(&mut runtime, "import"));
 }

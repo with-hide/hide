@@ -75,7 +75,8 @@ export function HerdrImportQuestion({ actions }: { actions: Actions }) {
 /**
  * The sidebar's line above its footer: what is not moved with its Move, which asks the question again (B4, B5); the
  * read-only import of a save no Hide Herdr runs (B16); a save that could not be read with its retry, or the
- * workspaces a move left out, each with why (B11).
+ * workspaces a move left out, each with why (B11); the conversations an import left open in a Herdr that has closed
+ * since, with their resume (B15).
  */
 export function HerdrImportLine({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -118,6 +119,13 @@ export function HerdrImportLine({ actions }: { actions: Actions }) {
           ))}
         </span>
         {action(t("herdrImport.line.done"), () => actions.herdrImport("continue"), "done")}
+      </>
+    );
+  } else if (line.kind === "waiting") {
+    body = (
+      <>
+        <span className="min-w-0 flex-1 truncate text-caption text-foreground">{t("herdrImport.line.waiting", { count: line.count })}</span>
+        {action(t("herdrImport.line.waitingAction"), () => actions.herdrImport("import"), "resume")}
       </>
     );
   } else if (line.kind === "move") {
