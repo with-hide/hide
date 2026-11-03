@@ -1,5 +1,6 @@
-//! Reading the composer of a pane whose letters wait on a possible draft
-//! (`docs/delivery.md`, Reading the composer).
+//! Reading the composer of a pane whose letters, or whose Conductor's
+//! mission answer, wait on a possible draft (`docs/delivery.md`, Reading the
+//! composer).
 //!
 //! Hide routes every key to a pane but cannot see the composer, so any key
 //! not followed by a submission holds the bell as a draft, and typing then
@@ -52,7 +53,7 @@ pub(crate) struct Read {
 
 /// What the reader keeps between doorbell passes. Each map is keyed by a pane
 /// and pruned to the panes of the pass (`retain`) or of the observations, so
-/// it is bounded by the open letters and the observation limit.
+/// it is bounded by the open letters and answers and the observation limit.
 #[derive(Default)]
 pub(crate) struct Reader {
     /// The draft episode each pane's composer was read for.
@@ -65,15 +66,15 @@ pub(crate) struct Reader {
 }
 
 impl Reader {
-    /// Forgets the panes that have no pending letter any more.
+    /// Forgets the panes that have no pending letter or answer any more.
     pub(crate) fn retain(&mut self, panes: impl Fn(&str) -> bool) {
         self.read.retain(|pane, _| panes(pane));
         self.skipped.retain(|pane, _| panes(pane));
     }
 
-    /// Reads the composer of `recipient`, held on a possible draft, once per
-    /// draft episode, and releases the draft when the screen shows the
-    /// composer empty. Returns whether a Herdr call was made, which counts
+    /// Reads the composer of `recipient`, a letter's or an answer's, held
+    /// on a possible draft, once per draft episode, and releases the draft
+    /// when the screen shows the composer empty. Returns whether a Herdr call was made, which counts
     /// against the doorbell's per-pass budget.
     pub(crate) fn release(&mut self, owner: &Mutex<Runtime>, recipient: &Actor, now: u64) -> bool {
         let Some((episode, read)) = owner
