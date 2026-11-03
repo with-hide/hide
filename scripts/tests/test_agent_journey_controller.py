@@ -60,7 +60,7 @@ class ControllerCommand(unittest.TestCase):
 
 class ControllerAnswer(unittest.TestCase):
     def diagnostic(self):
-        return {"id": 7, "exit": "1", "wait_error": None, "stdout": "", "stderr": "controlled refusal",
+        return {"id": 7, "exit": "1", "wait_error": None, "stdout_bytes": 0, "stderr_bytes": 18,
                 "supervisor": {"id": 7, "exit": 1, "phase": "exited", "cleanup_confirmed": True},
                 "driver": {"id": 7, "exit": 1, "phase": "exited"}}
 
@@ -68,10 +68,10 @@ class ControllerAnswer(unittest.TestCase):
         self.assertEqual(command_answer(self.diagnostic(), '{"ok":false,"reason":"request_timeout"}'),
                          {"ok": False, "reason": "request_timeout"})
 
-    def test_empty_output_retains_stderr_and_exit(self):
+    def test_empty_output_retains_stderr_size_and_exit(self):
         answer = command_answer(self.diagnostic(), "")
-        self.assertEqual((answer["ok"], answer["reason"], answer["exit"], answer["stderr"]),
-                         (False, "unreadable_answer", "1", "controlled refusal"))
+        self.assertEqual((answer["ok"], answer["reason"], answer["exit"], answer["stderr_bytes"]),
+                         (False, "unreadable_answer", "1", 18))
 
     def test_unsettled_or_stale_outcome_never_accepts_success_json(self):
         for change in ("deadline", "cleanup", "missing", "stale", "driver", "status"):

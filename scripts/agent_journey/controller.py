@@ -6,7 +6,8 @@ desktop e2e's spawn provider (`web/e2e/shims/spawn-provider.c`, built here):
 started as a Claude kind in its own private pane, it reports a synthetic
 native session to Herdr and, each time it reads `!`, runs the command
 `command.json` holds through `controller_command.py`, writing the command's
-exit status to a completion file. It is not under test.
+exit status to a completion file. Its process outcomes are part of the
+measurement boundary, checked independently of Herdr and the agent CLIs.
 """
 
 import json
