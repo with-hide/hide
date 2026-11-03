@@ -20,7 +20,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = ('toolchain-env.sh', 'verify-cargo.sh')
 # The binaries `release` builds, as the packager names them (desktop/scripts/package.mjs).
-RELEASE_BINARIES = ('hided', 'hide', 'hide-agent-hooks')
+RELEASE_BINARIES = ('hided', 'hide', 'hide-agent-hooks', 'hide-holder')
 
 
 class BuildFixture(unittest.TestCase):
@@ -74,9 +74,10 @@ class RealVerificationBuilds(BuildFixture):
     def workspace(self, parent, value):
         """The packages `release` names, each one binary that prints the core's value."""
         root = self.checkout(parent)
-        members = {'hided': ('hided', 'hide'), 'hide-agent-hooks': ('hide-agent-hooks',)}
+        members = {'hided': ('hided', 'hide'), 'hide-agent-hooks': ('hide-agent-hooks',),
+                   'hide-holder': ('hide-holder',)}
         (root / 'Cargo.toml').write_text(
-            '[workspace]\nmembers = ["herdr-core", "hided", "hide-agent-hooks"]'
+            '[workspace]\nmembers = ["herdr-core", "hided", "hide-agent-hooks", "hide-holder"]'
             '\nresolver = "2"\n')
         (root / 'herdr-core/src').mkdir(parents=True)
         (root / 'herdr-core/Cargo.toml').write_text(
