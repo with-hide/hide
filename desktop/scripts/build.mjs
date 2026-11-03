@@ -10,6 +10,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
+import { copyTree } from "./copy-tree.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const dist = path.join(root, "dist");
@@ -40,7 +41,7 @@ const common = {
 await build({ ...common, entryPoints: [path.join(root, "src/main/index.ts")], outfile: path.join(dist, "main.js"), define: { __HIDE_BACKGROUND__: JSON.stringify(background), __HIDE_WARNING__: JSON.stringify(warning) } });
 await build({ ...common, entryPoints: [path.join(root, "src/preload/index.ts")], outfile: path.join(dist, "preload.js") });
 
-fs.cpSync(path.join(root, "static"), path.join(dist, "static"), { recursive: true });
+copyTree(path.join(root, "static"), path.join(dist, "static"));
 // JSON is embedded in the local script: file: needs neither fetch nor a relaxed CSP.
 await build({ entryPoints: [path.join(root, "static/status.js")], outfile: path.join(dist, "static/status.js"), bundle: true, platform: "browser", format: "iife", target: "chrome144", minify: true, legalComments: "eof" });
 fs.rmSync(path.join(dist, "static/owl-motion.js"));
