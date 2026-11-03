@@ -81,6 +81,11 @@ impl Panes {
         let count = self.count_live_for(owner, &self.scan().map_err(StartRefusal::Failed)?);
         // A replacement already has its place in the record bound.
         if !replaces_live && count >= HOLDER_CAP {
+            drop(_lock);
+            self.emit(
+                "pane_holder.start_refused",
+                serde_json::json!({ "pane": pane, "reason": "holder_cap", "count": count, "cap": HOLDER_CAP }),
+            );
             return Err(StartRefusal::Cap { count });
         }
         let reserved = self.new_reservation(request_guard, pane, request, cwd)?;

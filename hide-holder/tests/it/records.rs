@@ -752,10 +752,10 @@ fn a_closing_pane_whose_holder_cannot_be_asked_is_ended_by_its_pids() {
     named.program.wait_gone();
 }
 
-/// A pane closing when it is started again is ended first, then started as
-/// a new incarnation.
+/// A closing pane cannot restart its retired creation request. An explicit
+/// replacement must confirm cleanup before it can take a new incarnation.
 #[test]
-fn a_closing_pane_started_again_ends_first() {
+fn a_closing_pane_requires_cleanup_before_an_explicit_replacement() {
     let folder = Folder::new();
     let request = folder.request("p1", shell(), Vec::new());
     let first = folder.start(&request);
@@ -764,10 +764,53 @@ fn a_closing_pane_started_again_ends_first() {
     closing.phase = Phase::Closing;
     folder.write(&closing);
 
-    let again = folder.start(&request);
+    assert!(matches!(
+        folder.panes.start(folder.owner(), &request, &source()),
+        Err(StartRefusal::Uncertain(_))
+    ));
+    assert!(holder.runs(), "a late original request performed cleanup");
+    let intent = first.reservation.as_ref().unwrap();
+    let replacement = folder.owner().issue("p1", &intent.request).unwrap();
+    let reserve = || {
+        folder.panes.reserve(
+            &replacement,
+            "p1",
+            &intent.request,
+            &intent.cwd,
+            Some(first.incarnation),
+        )
+    };
+    assert!(matches!(
+        reserve(),
+        Err(StartRefusal::EarlierRuns(left)) if left.contains(&holder.pid)
+    ));
+    assert_eq!(folder.record("p1").incarnation, first.incarnation);
+    let ended = folder.panes.close(folder.owner(), "p1").unwrap();
+    assert_eq!(ended.phase, Phase::Ended);
+    assert!(!holder.runs(), "cleanup must finish before replacement");
+    let reserved = reserve().unwrap();
+    let again = match folder.panes.start_reserved(
+        &replacement,
+        "p1",
+        reserved.incarnation,
+        &intent.request,
+        &source(),
+        || Ok(request.clone()),
+    ) {
+        Ok(Started::Started(record)) => record,
+        other => panic!("the explicit replacement did not start: {other:?}"),
+    };
     assert!(again.incarnation > first.incarnation, "{again:?}");
     assert!(!holder.runs());
     assert_ne!(again.holder, Some(holder));
+    let number = replacement.number();
+    drop(replacement);
+    assert!(
+        folder
+            .owner()
+            .retire(folder.owner().incarnation(), number)
+            .unwrap()
+    );
 }
 
 /// An earlier start that ended but left processes running holds the pane's
