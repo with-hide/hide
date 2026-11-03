@@ -49,8 +49,8 @@ FIXTURE_UNTRUSTED = "not measured: a stand-in has no folder question; the fake m
 FIXTURE_AGENTS = ("claude-code", "codex")
 # Why the stand-in lane leaves every other agent unstarted.
 FIXTURE_ONLY = "a stand-in imitates Claude Code and Codex only; the fake model lane measures this agent"
-# Cells the C stand-in does not imitate: it holds no turn and draws no
-# picker or composer, forks nothing, writes no title and no token usage. The keyless lane measures them
+# Cells the C stand-in does not imitate: it draws only fixed empty composers,
+# with no held turn, picker, composer editing, fork, task title or token usage. The keyless lane measures them
 # once it runs the pinned CLIs on a fake model. It does answer from its
 # start's Memory index, as the fake model does, so `guidance_memory` is its.
 FIXTURE_UNIMITATED = {cell: "the C stand-in does not imitate it; the fake model lane measures it"

@@ -408,20 +408,20 @@ class LaunchedBriefRecord(unittest.TestCase):
 
 
 class InputRung(unittest.TestCase):
-    CODEX = ["launch_prompt", "codex_queue", "typed"]
+    CODEX = ["launch_prompt", "typed"]
     CLAUDE = ["launch_prompt", "typed"]
 
     def test_a_letter_passes_through_the_first_rung_the_agent_declares(self):
-        used = [{"kind": "input.rung", "rung": "codex_queue", "outcome": "received"}]
-        self.assertEqual(cells.rung_verdict(self.CODEX, used), (cells.PASS, "carried by codex_queue"))
+        used = [{"kind": "input.rung", "rung": "typed"}]
+        self.assertEqual(cells.rung_verdict(self.CODEX, used), (cells.PASS, "carried by typed"))
         self.assertEqual(cells.rung_verdict(["typed"], [{"kind": "input.rung", "rung": "typed"}])[0], cells.PASS)
 
     def test_a_declared_rung_that_fell_to_typing_fails_with_its_reason(self):
-        fell = [{"kind": "input.rung_unavailable", "rung": "codex_queue", "reason": "codex_not_found"},
+        fell = [{"kind": "input.rung_unavailable", "rung": "agent_api", "reason": "agent_not_found"},
                 {"kind": "input.rung", "rung": "typed"}]
-        verdict = cells.rung_verdict(self.CODEX, fell)
+        verdict = cells.rung_verdict(["agent_api", "typed"], fell)
         self.assertEqual(verdict[0], cells.FAIL)
-        self.assertIn("codex_not_found", verdict[1])
+        self.assertIn("agent_not_found", verdict[1])
         self.assertEqual(cells.rung_verdict(self.CODEX, [])[0], cells.FAIL)
 
     def test_an_agent_whose_only_rung_after_its_start_is_typing_passes_typed(self):

@@ -1415,7 +1415,7 @@
                             "type": "string"
                         },
                         {
-                            "description": "Handed to the agent's own way in (`codex queue`), which keeps it until the agent takes it.",
+                            "description": "A queue send saved by an earlier build. Keep its receipt and never type it again: the queue can still deliver it after this upgrade.",
                             "enum": [
                                 "channel"
                             ],
@@ -1614,7 +1614,7 @@
                             "type": "string"
                         },
                         {
-                            "description": "Handed to the agent's own way in (`codex queue`), which keeps it until the agent takes it.",
+                            "description": "A queue send saved by an earlier build. Keep its receipt and never type it again: the queue can still deliver it after this upgrade.",
                             "enum": [
                                 "channel"
                             ],
@@ -5206,7 +5206,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:c23ceccb0930f0690b974e4659525a19bc464f421890f4ec801e0dac9683c77b",
+    "digest": "sha256:e17d435b7f4754fc8ae369e8f60100e120a4518a38b403b9304813b6386151db",
     "envelopes": {
         "agent": {
             "answer": "value",

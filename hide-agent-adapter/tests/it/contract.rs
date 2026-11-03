@@ -706,9 +706,6 @@ fn every_agent_declares_an_input_ladder_that_ends_typed() {
             let InputRung::AgentApi(api) = rung else {
                 continue;
             };
-            if let Some(agent) = api.agent() {
-                assert_eq!(agent, row.key, "{}: {api:?} is another agent's", row.id);
-            }
             if *api == AgentApi::LaunchPrompt {
                 assert!(
                     row.start.is_some(),
