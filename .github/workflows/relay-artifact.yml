@@ -1,0 +1,49 @@
+# Build only. Installation, cloud resources and DNS remain operator actions.
+name: relay artifact
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: github.repository == 'with-hide/hide' && github.ref == 'refs/heads/main' && github.ref_protected
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Build the exact protected main source
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          bash scripts/verify-cargo.sh build --release -p hide-relay --bin hide-relay
+      - name: Record source and binary digest
+        run: |
+          mkdir -p target/relay-artifact
+          cp target/release/hide-relay target/relay-artifact/hide-relay
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib
+          artifact = pathlib.Path('target/relay-artifact')
+          with (artifact / 'hide-relay').open('rb') as stream:
+              digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+          receipt = {
+              'repository': os.environ['GITHUB_REPOSITORY'],
+              'source': os.environ['GITHUB_SHA'],
+              'workflow': '.github/workflows/relay-artifact.yml',
+              'run_id': os.environ['GITHUB_RUN_ID'],
+              'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'target': 'x86_64-unknown-linux-gnu',
+              'sha256': digest,
+          }
+          (artifact / 'source.json').write_text(json.dumps(receipt, indent=2) + '\n')
+          (artifact / 'SHA256SUMS').write_text(digest + '  hide-relay\n')
+          PY
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hide-relay-linux-x64-${{ github.sha }}
+          path: target/relay-artifact/
+          if-no-files-found: error
+          retention-days: 7

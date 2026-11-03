@@ -19,6 +19,9 @@ struct HolderNode {
 
 impl NodeLink for HolderNode {
     fn call(&self, call: Call, _timeout: Duration) -> Result<LinkAnswer, LinkError> {
+        if let Call::Pane { call } = &call {
+            self.asked.lock().unwrap().push(format!("{call:?}"));
+        }
         let answer: hide_node_link::holders::PaneAnswer = match call {
             Call::Pane {
                 call: PaneCall::Recovered { .. },
@@ -31,8 +34,7 @@ impl NodeLink for HolderNode {
             Call::Pane {
                 call: PaneCall::ShellLaunch,
             } => Ok(serde_json::Value::Null),
-            other => {
-                self.asked.lock().unwrap().push(format!("{other:?}"));
+            _ => {
                 return Err(LinkError::Refused(hide_node_link::error::HostError::new(
                     hide_node_link::error::ErrorCode::Unsupported,
                     "the test's node answers no such call",
@@ -155,11 +157,8 @@ fn a_device_whose_holders_did_not_start_opens_no_engine_and_says_why() {
             && message.contains("the holder program could not start"),
         "{message}"
     );
-    assert!(
-        node.asked.lock().unwrap().is_empty(),
-        "no engine asked the node: {:?}",
-        node.asked.lock().unwrap()
-    );
+    let asked = node.asked.lock().unwrap().clone();
+    assert!(asked.is_empty(), "no engine asked the node: {asked:?}");
 }
 
 /// An engine that finished opening after its attempt was replaced is

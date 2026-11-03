@@ -1,0 +1,33 @@
+[Unit]
+Description=Hide mobile relay
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+User=hide-relay
+Group=hide-relay
+ExecStart=/opt/hide-relay/current/hide-relay --listen 127.0.0.1:8787 --trusted-proxy 127.0.0.1
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+KillMode=control-group
+MemoryMax=640M
+MemorySwapMax=0
+TasksMax=64
+LimitNOFILE=2048
+LimitCORE=0
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+LogNamespace=hide-relay
+StandardOutput=null
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

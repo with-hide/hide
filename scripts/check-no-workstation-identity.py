@@ -65,10 +65,16 @@ EMAIL = re.compile(r"(?<![\w.+-])[A-Za-z0-9][A-Za-z0-9._%+-]*@"
 # belong to people, and their addresses stay refused.
 PUBLIC_CONTACTS = frozenset({"hello@withhide.dev"})
 
+# Exact, code-owned systemd namespace identifiers, not contact addresses.
+# Do not exempt arbitrary unit suffixes: .service can also be an email domain.
+SYSTEMD_IDENTIFIERS = frozenset({
+    "systemd-journald@hide-relay.service", "journald@hide-relay.conf",
+})
+
 
 def email_findings(text):
     for match in EMAIL.finditer(text):
-        if match.group().lower() in PUBLIC_CONTACTS:
+        if match.group().lower() in PUBLIC_CONTACTS or match.group() in SYSTEMD_IDENTIFIERS:
             continue
         domain = match.group("domain").lower()
         if domain in {"example.com", "example.net", "example.org"} or domain.endswith(
