@@ -436,8 +436,18 @@ fn with_both_folders_the_new_one_is_used_and_the_old_one_logged() {
         "{\"old\":true}"
     );
     let entry = logged(&moved.join("Logs/core.jsonl"), "state.legacy_left");
-    assert!(entry.contains(&legacy.display().to_string()), "{entry}");
-    assert!(entry.contains(&moved.display().to_string()), "{entry}");
+    // The log masks a home folder (`/home/<name>/` becomes `~/`, the
+    // diagnostic redaction contract), so the fixture's `home/.local` and
+    // `home/.hide` each read as `~` and only the rest of the path tells the
+    // two folders apart.
+    let entry: Value = serde_json::from_str(&entry).unwrap();
+    let masked = |path: &Path| {
+        let rest = path.strip_prefix(&home).unwrap();
+        let rest: std::path::PathBuf = rest.components().skip(1).collect();
+        format!("{}~/{}", dir.path().display(), rest.display())
+    };
+    assert_eq!(entry["legacy"], masked(&legacy), "{entry}");
+    assert_eq!(entry["state_dir"], masked(&moved), "{entry}");
     let _ = isolated(&cli, &home, &moved).arg("stop").status();
     assert!(wait_gone(line["pid"].as_i64().unwrap() as i32));
 }
