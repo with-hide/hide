@@ -407,6 +407,14 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
     if (step.command && !shellLayerOpen(useUiStore.getState())) setFlash(commandLabel(step.command));
     if (step.done?.(model)) done();
   }, [done, model, step]);
+  // A step that opens on its scene keeps the guide out until the scene has been seen; a step the coach replays is no news.
+  const [scene, setScene] = useState(false);
+  useLayoutEffect(() => {
+    if (!step.scene || index < resume) return setScene(false);
+    setScene(true);
+    const timer = window.setTimeout(() => setScene(false), step.scene);
+    return () => window.clearTimeout(timer);
+  }, [index, resume, step]);
   // A step that waits on the world's own beat is over at once when the beat came while an earlier step was up.
   useEffect(() => {
     if (step.wait && step.done?.(current.current)) done();
@@ -462,6 +470,8 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
   const perform = useCallback(() => {
     // ⏎ while a performed step's result is shown moves on without waiting out the rest.
     if (settle.current) return settle.current.move();
+    // ⏎ over the scene brings the guide in, so the learner reads what the next ⏎ does before it does it.
+    if (scene) return setScene(false);
     if (playing.current === step || step.wait) return;
     if (!acts(step)) return advance();
     performed.current = step;
@@ -479,7 +489,7 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
     if (step.gesture && "drag" in step.gesture) return dragPane(step.gesture.drag, pace, setHand);
     if ((step.gesture && "click" in step.gesture) || pressed) return play(pressTarget(step.target, pace, setHand));
     if (step.command) pressCommand(step.command, pace);
-  }, [advance, chapter.world, pace, play, pressed, step]);
+  }, [advance, chapter.world, pace, play, pressed, scene, step]);
 
   useEffect(() => {
     if (index >= resume) return undefined;
@@ -558,7 +568,7 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
     // The guide is not part of the screen it teaches, so a press on its bubble or card is no press on the screen: the
     // keyboard stays in the pane that held it, so a chord the step presses (⌘W, ⌃⇥) acts there, as the learner's own
     // key does afterwards, and a popover or menu the screen has open stays open, as the next step may point into it.
-    <div className="pc-layer" data-practice-layer data-keyboard-stays="true" onPointerDown={(event) => event.stopPropagation()} onMouseDown={(event) => event.preventDefault()} data-practice-step={step.id} data-practice-index={index} data-practice-steps={chapter.steps.length} data-practice-ended={ended || undefined} data-practice-settling={settling || undefined} data-practice-waiting={(step.wait && !ended) || undefined}>
+    <div className="pc-layer" data-practice-layer data-keyboard-stays="true" onPointerDown={(event) => event.stopPropagation()} onMouseDown={(event) => event.preventDefault()} data-practice-step={step.id} data-practice-index={index} data-practice-steps={chapter.steps.length} data-practice-ended={ended || undefined} data-practice-settling={settling || undefined} data-practice-waiting={(step.wait && !ended) || undefined} data-practice-scene={(scene && !ended) || undefined}>
       <style>{COACH_CSS}</style>
       {/* What the coach points with, all of it stepping aside while the shell's palette or switcher is up; the chord, marks and hand still sit above the bubble (`z-index` in the style). */}
       {ended ? (chapter.id === FIRST_CHAPTER && next ? <ChoiceCard chapter={chapter} next={next} say={say} onNext={finish} onRestart={onRestart} onHub={onHub} onLeave={onLeave} /> : <EndCard chapter={chapter} next={next} title={title} say={say} onFinish={finish} onRestart={onRestart} onHub={onHub} />) : palette ? null : (
@@ -569,7 +579,7 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
               <div className="pc-tag">{say(`practice.zone.${ZONES[at]!.key}`)}<small>{say(`practice.zone.${ZONES[at]!.key}Sub`)}</small></div>
             </div>
           ) : null)}
-          <div className={`pc-spot${ring && !step.zones ? "" : " off"}`} style={ring ? { left: ring.x - 3, top: ring.y - 3, width: ring.w + 6, height: ring.h + 6 } : undefined} />
+          <div className={`pc-spot${ring && !step.zones && !scene ? "" : " off"}`} style={ring ? { left: ring.x - 3, top: ring.y - 3, width: ring.w + 6, height: ring.h + 6 } : undefined} />
           {flash ? <div className="pc-flash">{keyParts(flash).map((part, at) => <span key={at} className="pc-kc">{part}</span>)}</div> : null}
           {examples.map((at, i) => <span key={i} className="pc-example" style={{ left: at.x, top: at.y }} data-practice-example>{say("practice.example")}</span>)}
           {hand ? <svg className="pc-hand" style={{ left: hand.x - 3, top: hand.y - 2 }} width="24" height="24" viewBox="0 0 18 18" aria-hidden="true"><path d="M1 1l6 15 2.2-6.3L15.5 7.5z" /></svg> : null}
@@ -580,7 +590,7 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
         <span>{say("practice.mode", { number: chapter.number, title })}</span>
         <button type="button" className="pc-leave" onClick={onLeave} data-practice-leave>{say("practice.leave")}</button>
       </div>
-      {ended ? null : <div ref={bubble} key={step.id} className="pc-bubble" style={{ left: place.x, top: place.y }}>
+      {ended || scene ? null : <div ref={bubble} key={step.id} className="pc-bubble" style={{ left: place.x, top: place.y }}>
         {place.arrow ? <div className="pc-arrow" style={place.arrow} /> : null}
         <div className="pc-kick"><span>{words("kick")}</span><span>{say("practice.count", { index: index + 1, total: chapter.steps.length })}</span></div>
         <h3>{words("title")}</h3>
@@ -595,7 +605,7 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
           {palette ? null : <button type="button" className="pc-go" onClick={perform} data-practice-go>{go} <span className="pc-kc">⏎</span></button>}
         </div>
       </div>}
-      {chapter.quest && !ended ? <QuestCard chapter={chapter} index={index} title={title} say={say} onRestart={onRestart} /> : null}
+      {chapter.quest && !ended && !scene ? <QuestCard chapter={chapter} index={index} title={title} say={say} onRestart={onRestart} /> : null}
     </div>
   );
 }

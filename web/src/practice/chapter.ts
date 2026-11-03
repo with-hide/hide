@@ -49,6 +49,12 @@ export type PracticeStep<M = unknown> = {
   shown?: string;
   /** Done by the world on its own (`PracticeWorld.later`), an agent finishing its turn: ⏎ does nothing and the button says it waits. */
   wait?: true;
+  /**
+   * How long, in ms, the screen plays alone before the guide comes in: no dim,
+   * ring or bubble until then, so a scene the learner meets first is seen
+   * before anything covers it. ⏎ brings the guide in at once.
+   */
+  scene?: number;
 };
 
 export type PracticeChapter<M = unknown> = {

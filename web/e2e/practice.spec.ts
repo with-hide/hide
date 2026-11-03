@@ -39,7 +39,8 @@ function practiceState(page: Page): Promise<string> {
     const root = document.querySelector("[data-practice-chapter]");
     if (!root) return document.querySelector("[data-practice-hub]") ? "hub" : "none";
     const layer = document.querySelector("[data-practice-layer]");
-    const step = layer?.hasAttribute("data-practice-ended") ? "ended" : layer?.getAttribute("data-practice-step");
+    // A step that opens on its scene reads as its own state until the guide comes in, which a press does.
+    const step = layer?.hasAttribute("data-practice-ended") ? "ended" : `${layer?.getAttribute("data-practice-step")}${layer?.hasAttribute("data-practice-scene") ? "~scene" : ""}`;
     return `${root.getAttribute("data-practice-chapter")}:${step}:${root.getAttribute("data-practice-moves")}`;
   });
 }
@@ -83,7 +84,8 @@ const pressEnter: GuidePress = (practice) => practice.keyboard.press("Enter");
  */
 const pressButton: GuidePress = async (practice) => {
   const guiding = await practice.locator("[data-practice-layer]").count();
-  if (!guiding || (await practice.locator("[data-palette]").count())) return practice.keyboard.press("Enter");
+  // Before a step's scene is over there is no bubble yet, and ⏎ brings it in.
+  if (!guiding || (await practice.locator("[data-palette], [data-practice-scene]").count())) return practice.keyboard.press("Enter");
   await practice.locator("[data-practice-layer] [data-practice-go]").click();
 };
 
