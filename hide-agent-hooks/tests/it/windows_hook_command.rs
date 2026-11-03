@@ -326,7 +326,7 @@ fn grok_runs_the_helper_through_the_powershell_it_starts_only_while_it_is_there(
         std::fs::create_dir_all(agent.home_directory(&home)).unwrap();
         guidance::install(agent, &home, crate::hook_target(&helper)).unwrap();
         assert_eq!(
-            guidance::installed_helper_path(agent, &home).as_deref(),
+            guidance::installed_helper_path(agent, &home, None).as_deref(),
             helper.to_str(),
             "the path is read back from the PowerShell guard"
         );
@@ -419,12 +419,12 @@ fn retired_cursor_install_is_refused_and_removal_keeps_the_operators_hooks() {
         original,
         "refusal changes no existing bytes"
     );
-    let removed = guidance::remove(agent, &home).unwrap();
+    let removed = guidance::remove(agent, &home, None).unwrap();
     assert!(removed.changed);
     assert_eq!(removed.removed_entries, 2);
     let remaining: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(remaining, theirs);
-    assert!(!guidance::remove(agent, &home).unwrap().changed);
+    assert!(!guidance::remove(agent, &home, None).unwrap().changed);
 }
 
 /// agy's Go process launcher quotes its command argument for CommandLineToArgvW,
@@ -556,7 +556,7 @@ fn agys_windows_session_hook_reads_its_input_and_injects_guidance() {
     crate::stand_ins::ready(&helper);
     guidance::install(agent, &home, crate::hook_target(&helper)).unwrap();
     assert_eq!(
-        guidance::installed_helper_path(agent, &home).as_deref(),
+        guidance::installed_helper_path(agent, &home, None).as_deref(),
         helper.to_str()
     );
     let document: Value =

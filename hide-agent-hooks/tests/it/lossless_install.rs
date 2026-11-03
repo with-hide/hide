@@ -315,7 +315,7 @@ fn guidance_uses_the_same_source_preserving_writer() {
     );
     assert_eq!(fs::read_to_string(&path).unwrap(), installed);
     assert!(
-        guidance::remove(GuidanceAgent::Grok, home.path())
+        guidance::remove(GuidanceAgent::Grok, home.path(), None)
             .unwrap()
             .changed
     );
@@ -348,7 +348,7 @@ fn guidance_removal_retains_surviving_operator_event_spans_and_order() {
         Err(InstallFailure::UnexpectedShape { .. })
     ));
     assert_eq!(fs::read_to_string(&path).unwrap(), source);
-    let outcome = guidance::remove(GuidanceAgent::Cursor, home.path()).unwrap();
+    let outcome = guidance::remove(GuidanceAgent::Cursor, home.path(), None).unwrap();
     assert_eq!(outcome.removed_entries, 1);
     let removed = fs::read_to_string(&path).unwrap();
     for literal in [SETTING, first, second] {
@@ -358,7 +358,7 @@ fn guidance_removal_retains_surviving_operator_event_spans_and_order() {
     let parsed: serde_json::Value = serde_json::from_str(&removed).unwrap();
     assert!(parsed["hooks"].get("sessionStart").is_none());
     assert!(
-        !guidance::remove(GuidanceAgent::Cursor, home.path())
+        !guidance::remove(GuidanceAgent::Cursor, home.path(), None)
             .unwrap()
             .changed
     );

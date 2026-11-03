@@ -203,18 +203,31 @@ pub fn pane_records(home: &Path) -> PathBuf {
 fn records_of(home: &Path, pane: Option<&str>) -> PathBuf {
     let records = home.join(".hide").join("agent-hooks");
     match pane {
-        Some(install) if !install.is_empty() && install != APP_INSTALL => {
-            use sha2::Digest;
-            let digest = sha2::Sha256::digest(install.as_bytes());
-            let name: String = digest
-                .iter()
-                .take(8)
-                .map(|byte| format!("{byte:02x}"))
-                .collect();
-            records.join("installs").join(name)
-        }
-        _ => records,
+        Some(install) => match mark(install) {
+            Some(mark) => records.join("installs").join(mark),
+            None => records,
+        },
+        None => records,
     }
+}
+
+/// The short mark a file or folder of Hide's carries for an installation
+/// other than the desktop app, so two installations' never share a name;
+/// none for the app, or a caller that names no installation, whose names
+/// stay as earlier builds wrote them.
+pub fn mark(install: &str) -> Option<String> {
+    if install.is_empty() || install == APP_INSTALL {
+        return None;
+    }
+    use sha2::Digest;
+    let digest = sha2::Sha256::digest(install.as_bytes());
+    Some(
+        digest
+            .iter()
+            .take(8)
+            .map(|byte| format!("{byte:02x}"))
+            .collect(),
+    )
 }
 
 /// Whether this process runs in a pane another Hide installation started:
@@ -332,10 +345,11 @@ mod tests {
     /// names none, and an entry an earlier build wrote, act anywhere.
     #[test]
     fn an_entry_leaves_a_pane_another_installation_started() {
-        let helper = Path::new("/kit/hide-agent-hooks");
-        let state = Path::new("/state");
+        let root = std::env::temp_dir();
+        let helper = root.join("hide-agent-hooks");
+        let state = root.join("state");
         let entry = |install: Option<&str>| {
-            let target = HookTarget::new(helper, state).unwrap();
+            let target = HookTarget::new(&helper, &state).unwrap();
             let target = match install {
                 Some(install) => target.of_install(install).unwrap(),
                 None => target,
