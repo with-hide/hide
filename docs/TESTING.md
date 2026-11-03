@@ -668,6 +668,9 @@ Assembly alone starts no record recovery or pruning; the test keeps the acquired
 The own engine's `tests/rules_recovery.rs` holds the existing holder fixture's recovery answer while it reports facts.
 A test-only one-way signal in the rules worker's actual pending-before-ready wait proves that no rule call starts before recovery; the tests then check the latest decision, including removal, failed recovery, the pending cap and shutdown during an admitted call.
 The signal never waits while holding a lock, and no sleep substitutes for that ordering.
+The same core fixture checks a recovered shell's first explicit rule removal even when it never reported an agent to the new daemon.
+The holder integration test `node::rules_recovery` reopens a node around the same live holder records and checks retained OSC title and progress through the same-rule decision, then explicit removal and reapplication without fresh output.
+These are distinct boundaries: the core decides removal, while the actual node and holder must preserve or clear the retained screen state accordingly.
 The node's diagnostic sink is the test process's own, installed once: it passes every record on to the error stream as a node with no sink does, keeps records only while a test listens, and each test matches only the records that name its own folders or pane, since `cargo test` runs the binary's tests in one process.
 
 The tests link hide-vt, so they run in the `vt` lane, whose Zig inputs and caches are ready there, with the workspace dependency set restored, Node 22 and the xterm installed, and on Windows with `HIDE_HOLDER_CONPTY` naming the pinned ConPTY runtime the lane fetches with `scripts/fetch-conpty.py`; the `rust` lane, which tests the workspace on Linux, installs the xterm too, and the resident start and the session end themselves are `hide-platform` contracts, which run in the `os contract` lane without Zig.

@@ -103,6 +103,33 @@ fn failed_recovery_discards_rules_and_cannot_reopen_the_worker() {
 }
 
 #[test]
+fn a_recovered_shell_receives_the_first_explicit_removal_of_old_agent_rules() {
+    let root = tempfile::tempdir().unwrap();
+    let place = place(root.path());
+    let panes = saved(&place);
+    let holders = Arc::new(Holders::default());
+    let _release = Recovery(Arc::clone(&holders));
+    let next = OwnEngine::open(Arc::clone(&holders) as Arc<dyn PaneHolders>, place).unwrap();
+    let waiting = next.shared.rules.waiting();
+    // The agent ended while its daemon was gone; the holder kept its rules,
+    // but the first facts now name only the shell.
+    holders.say(&panes[0], &PaneFacts::default());
+    waiting
+        .recv_timeout(BOUND)
+        .expect("the initial removal is pending");
+    holders.say(&panes[0], &PaneFacts::default());
+    holders.hand(HolderRecovery {
+        present: panes.clone(),
+        ..HolderRecovery::default()
+    });
+    next.restored().unwrap();
+    assert_eq!(holders.rules_given(1), [(panes[0].clone(), None)]);
+    holders.say(&panes[0], &PaneFacts::default());
+    drop(next);
+    assert_eq!(*holders.rules.0.lock().unwrap(), [(panes[0].clone(), None)]);
+}
+
+#[test]
 fn waiting_rules_are_bounded_and_existing_panes_can_change_at_the_limit() {
     let holders = Arc::new(Holders::default());
     let worker =

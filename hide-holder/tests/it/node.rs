@@ -50,6 +50,7 @@ use crate::support::{
 };
 
 pub(crate) mod ownership;
+mod rules_recovery;
 
 /// The variables the `node` role reads.
 const NODE_HOME: &str = "HIDE_HOLDER_TEST_NODE_HOME";

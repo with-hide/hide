@@ -56,7 +56,9 @@ pub(super) struct Watches {
 /// One pane as its watch knows it.
 #[derive(Default)]
 struct Watched {
-    rules: Option<ScreenRules>,
+    /// No core decision yet, or its explicit rules/removal. Reconnecting
+    /// must not turn an undecided value into a removal on a live holder.
+    rules: Option<Option<ScreenRules>>,
     /// A thread follows the pane: opening its watch or reading it.
     following: bool,
     /// The watch open now, if one is.
@@ -194,10 +196,11 @@ impl Watches {
                     message: format!("pane {pane} has no holder on this machine"),
                 });
             };
-            watched.rules = rules;
+            watched.rules = Some(rules);
             match &watched.open {
                 Some(open) => {
-                    let (manifest, no_fit) = choose(watched.rules.as_ref(), open.engine);
+                    let (manifest, no_fit) =
+                        choose(watched.rules.as_ref().and_then(Option::as_ref), open.engine);
                     watched.no_fit = no_fit;
                     Some((Arc::clone(&open.writer), manifest))
                 }
@@ -271,6 +274,10 @@ impl Watches {
             Err(error) => return Ended::Lost(format!("the watch did not open: {error}")),
         };
         let writer = Arc::new(Mutex::new(stream.duplicate()));
+        // Reserve the first write before publishing Open. A newer decision
+        // may then wait on this writer, but cannot be overwritten by the
+        // initial decision. No panes lock is held across the write.
+        let mut initial = locked(&writer);
         let first = {
             let mut panes = locked(&self.panes);
             let Some(watched) = panes
@@ -279,16 +286,21 @@ impl Watches {
             else {
                 return Ended::Told;
             };
-            let (manifest, no_fit) = choose(watched.rules.as_ref(), watching.rules_engine);
-            watched.no_fit = no_fit;
+            let first = watched
+                .rules
+                .as_ref()
+                .map(|rules| choose(rules.as_ref(), watching.rules_engine));
+            watched.no_fit = first.as_ref().is_some_and(|(_, no_fit)| *no_fit);
             watched.open = Some(Open {
                 writer: Arc::clone(&writer),
                 shutdown: stream.shutdown_handle(),
                 engine: watching.rules_engine,
             });
-            manifest
+            first.map(|(manifest, _)| manifest)
         };
-        if let Err(error) = send_rules(&writer, first) {
+        if let Some(first) = first
+            && let Err(error) = write_rules(&mut initial, first)
+        {
             crate::diagnostic!(json!({
                 "component": "pane_holder",
                 "kind": "pane_holder.rules_unsent",
@@ -296,6 +308,7 @@ impl Watches {
                 "message": error.to_string(),
             }));
         }
+        drop(initial);
         loop {
             match read_holder(&mut stream) {
                 Ok(HolderMessage::Facts(facts)) => {
@@ -405,8 +418,12 @@ fn choose(rules: Option<&ScreenRules>, engine: u32) -> (Option<String>, bool) {
 
 fn send_rules(writer: &Mutex<LocalStream>, manifest: Option<String>) -> std::io::Result<()> {
     let mut writer = locked(writer);
+    write_rules(&mut writer, manifest)
+}
+
+fn write_rules(writer: &mut LocalStream, manifest: Option<String>) -> std::io::Result<()> {
     writer.set_deadline(Instant::now() + WRITE_LIMIT);
-    write_watch(&mut *writer, &WatchMessage::Rules(manifest))
+    write_watch(writer, &WatchMessage::Rules(manifest))
 }
 
 fn message_name(message: &HolderMessage) -> &'static str {

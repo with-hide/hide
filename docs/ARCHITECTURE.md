@@ -2492,6 +2492,10 @@ The rules worker keeps the latest decision per pane, including removing its rule
 Facts and ends continue to arrive during that wait, but no rule mutation bypasses the node's owner admission.
 The worker holds at most 128 pending panes and one batch of at most 128, reports a new pane beyond the pending cap, and lets an already pending pane replace its decision at the cap.
 Recovery failure or worker shutdown discards pending decisions and permanently closes admission; an admitted call may finish within its existing timeout, but the rest of its batch starts no more calls, and no pending decision transfers to a new link.
+Both the core's rule-decision cache and the node's watch distinguish an undecided value from explicit removal.
+A new node sends no default removal to a surviving holder: its first facts retain the existing rule set and title/progress, and giving the same rules again preserves them.
+The core sends its first decision even when the pane is now a shell and that decision removes the old agent's rules; later identical decisions coalesce, and an explicit removal or incompatible rule set keeps its existing meaning.
+The watch reserves its initial write before publishing its writer, so a newer decision follows the initial one rather than being overwritten by it; the pane map lock is released before any write.
 Facts for a pane that has not entered the topology yet wait, the latest per pane and 128 panes at most, and are laid on once it enters.
 
 Each holder reads its own screen with its agent's rules, on its own grid and title, so a pane's state is read the same whether or not it is attached ([The pane holder](#the-pane-holder)).

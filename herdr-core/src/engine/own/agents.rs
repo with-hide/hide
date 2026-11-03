@@ -312,10 +312,10 @@ pub(super) struct PaneLive {
     pub(super) facts: PaneFacts,
     /// The holder has said something since the pane was started or found.
     pub(super) heard: bool,
-    /// The agent whose rules this engine gave the pane's holder, `None` for
-    /// none: a new daemon's engine gives them again, since a new node keeps
-    /// none of the last one's.
-    pub(super) rules_sent: Option<String>,
+    /// The last requested decision: outer None is undecided, Some(None)
+    /// explicitly removes rules. A new engine must send its first decision
+    /// even for a shell whose holder kept the previous agent's rules.
+    pub(super) rules_sent: Option<Option<String>>,
 }
 
 impl PaneLive {
@@ -323,8 +323,8 @@ impl PaneLive {
     /// one it was given; recorded as given.
     pub(super) fn rules_due(&mut self, agent: Option<&PaneAgent>) -> Option<Option<String>> {
         let due = agent.map(|agent| agent.kind.clone());
-        (due != self.rules_sent).then(|| {
-            self.rules_sent.clone_from(&due);
+        (self.rules_sent.as_ref() != Some(&due)).then(|| {
+            self.rules_sent = Some(due.clone());
             due
         })
     }
