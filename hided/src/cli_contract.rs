@@ -12,7 +12,7 @@
 //! document and `hide version --json` its digest, and `contracts/hide-cli.json`
 //! is the committed copy a review sees change.
 
-use herdr_core::delivery::{BODY_LIMIT, HOOK_LETTERS};
+use herdr_core::delivery::{BODY_LIMIT, BUNDLE_LETTERS};
 use serde_json::{Map, Value, json};
 
 /// The document's own format; a caller that reads another refuses it.
@@ -743,13 +743,14 @@ pub const COMMANDS: &[Spec] = &[
     Spec {
         words: &["inbox", "--confirm"],
         arguments: ID,
-        repeats: Some(HOOK_LETTERS),
+        repeats: Some(BUNDLE_LETTERS),
         needs_one_of: &[],
         options: &[],
         rest: None,
         answers: &["confirmed"],
         refusals: &[],
     },
+    spec(&["inbox", "--ack"], ID, &[], &["acknowledged"]),
     spec(
         &["watch", "start"],
         TARGET,

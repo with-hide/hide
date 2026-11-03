@@ -83,7 +83,7 @@ pub(crate) fn valid_line(line: &str) -> bool {
 }
 
 /// The line's words in `language`.
-fn words(language: InterfaceLanguage) -> &'static BellWords {
+pub(crate) fn words(language: InterfaceLanguage) -> &'static BellWords {
     match language {
         InterfaceLanguage::English => &BELL_ENGLISH,
         InterfaceLanguage::Korean => &BELL_KOREAN,

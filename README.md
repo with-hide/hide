@@ -74,7 +74,7 @@ You need Rust with 2024 edition support, Node.js 22.12.0 or later and pnpm 10.
 git clone https://github.com/with-hide/hide.git
 cd hide
 pnpm install --frozen-lockfile
-HIDE_VERSION=0.0.0-local pnpm --dir desktop package
+pnpm --dir desktop package
 ```
 
 On macOS this writes an ad-hoc signed `hide.app` under `desktop/out/`, and the dmg, the zip the updater reads, their SHA-256 files and the update file under `desktop/out/release/`; install the app with:
@@ -84,7 +84,7 @@ sudo /usr/bin/ditto --rsrc --extattr --qtn desktop/out/hide-darwin-arm64/hide.ap
 open /Applications/hide.app
 ```
 
-`0.0.0-local` marks a local build; set the version you mean when packaging any other.
+A local build is named after the newest release before it and its commit, such as `1.1.1-main.6afb9543`; leave `HIDE_VERSION` unset, since it is the release workflow's switch.
 Windows and Linux source builds are in [Build and install from source](docs/INSTALL.md#build-and-install-from-source).
 
 To look at hide in a browser without installing the app, `bash scripts/web-dev.sh` builds the daemon, starts it with the pinned Herdr and opens the address ([Try hide in a browser](docs/INSTALL.md#try-hide-in-a-browser)).

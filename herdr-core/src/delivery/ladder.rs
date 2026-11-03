@@ -66,9 +66,12 @@ pub(crate) fn ready(
     }
 }
 
-/// Submits input once through the pane's engine, on its owning machine.
+/// Submits input once through the pane's engine, on its owning machine,
+/// with each tab expanded to four spaces first, the same rule the launch
+/// argument and prompt identity use (`hide_agent_hooks::delivery::input_text`).
 pub(crate) fn deliver(engine: &dyn Engine, target: &InputTarget, text: &str) -> Delivered {
-    match engine.prompt_agent(Wait::Small(PROMPT_TIMEOUT), &target.raw_pane_id, text) {
+    let text = hide_agent_hooks::delivery::input_text(text);
+    match engine.prompt_agent(Wait::Small(PROMPT_TIMEOUT), &target.raw_pane_id, &text) {
         Ok(()) => {
             logged(target, TYPED);
             Delivered::Sent(SendRoute::Typed)
@@ -138,6 +141,34 @@ mod tests {
         let calls = herdr.calls();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].1["text"], "letter");
+    }
+
+    #[test]
+    fn a_tab_in_the_input_reaches_the_agent_as_four_spaces() {
+        let herdr = FakeHerdr::start("ladder-tabs", |method, _| {
+            assert_eq!(method, "agent.prompt");
+            json!({"type":"agent_prompted","agent":{
+                "pane_id":"w1:p2","tab_id":"w1:t1","workspace_id":"w1",
+                "terminal_id":"term_1","agent":"omp","agent_status":"idle",
+                "state_change_seq":2,"focused":false,"interactive_ready":true,"revision":0}})
+        });
+        let target = InputTarget {
+            kind: "omp".into(),
+            pane_id: "pane".into(),
+            raw_pane_id: "w1:p2".into(),
+        };
+        assert_eq!(
+            deliver(
+                herdr.engine().as_ref(),
+                &target,
+                "names no file.\n\tIt needs no change.\nReply TOKEN"
+            ),
+            Delivered::Sent(SendRoute::Typed)
+        );
+        assert_eq!(
+            herdr.calls()[0].1["text"],
+            "names no file.\n    It needs no change.\nReply TOKEN"
+        );
     }
 
     /// An agent that never takes input within the wait is `Late`, with

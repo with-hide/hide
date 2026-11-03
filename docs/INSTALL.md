@@ -270,11 +270,12 @@ Clone the repository and build the release bundle:
 git clone https://github.com/with-hide/hide.git
 cd hide
 pnpm install --frozen-lockfile
-HIDE_VERSION=<version> pnpm --dir desktop package
+pnpm --dir desktop package
 ```
 
-`HIDE_VERSION` sets the version the packaged app reports.
-Omit it to build from a checkout that a Git tag matching `v[0-9]*` already describes; the packaging script fails rather than ship a version nothing was released under.
+A source build is named after the newest `v<version>` tag behind it and its commit, such as `1.1.1-main.6afb9543`, so it never claims a release and never updates itself; a clone without those tags fails with a named error.
+It carries no device download manifest, so a remote device or a WSL distribution connected to it reports that the build has none and is set up from a released app instead.
+Leave `HIDE_VERSION` unset: it is the release workflow's switch, and with it the package requires the Linux device bundles that only the release workflow's Linux runners build ([BUILD.md](BUILD.md)).
 
 Packaging builds the web shell, builds the release `hided`, `hide`, `hide-agent-hooks` and `hide-holder` binaries, fetches and digest-verifies the pinned Herdr binary, and stops with a named error and no app if any of those is missing or not executable.
 It then packages everything into `desktop/out/hide-darwin-arm64/hide.app`, ad-hoc signs it (or signs it with `HIDE_SIGN_IDENTITY`, which keeps macOS permissions such as Screen Recording across installs; see [BUILD.md](BUILD.md)), verifies the signature, and writes the release files into `desktop/out/release`: `hide-v<version>-macos-arm64.dmg` and the `.zip` the updater installs, each with its `.sha256`, `latest-mac.yml` and the zip's `.blockmap`.

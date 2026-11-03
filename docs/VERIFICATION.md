@@ -335,6 +335,21 @@ The scene preparation and overlay tests cover supported MCP formats, positive na
 
 ## Agent journey
 
+The journey's controller must outlive the local CLI protocol it measures: its 42-second command budget covers the 10-second bootstrap, 30-second spawn exchange and two-second claim.
+The observer allows the supervisor's separate 20-second cleanup bound and five seconds to publish completion; none of those reserves authorizes another command after an unsettled result.
+The controller requires matching command identities, ordinary child completion and confirmed cleanup before accepting a JSON answer, including one written before a later watchdog timeout.
+It preserves each command's bounded raw stdout and stderr (one MiB each), driver result and supervisor outcome under the ignored run directory, even when a later cell runs.
+The driver reads available chunks and flushes each retained chunk to its private file, rather than waiting for EOF or normal shutdown.
+At most 512 controller commands run; the report carries byte counts and constant phase identifiers, and the retained raw streams stay out of the uploaded journey report.
+An empty or invalid answer remains a failure; a nonzero child exit carrying the product's structured refusal remains that refusal.
+The controller boundary check distinguishes stderr-only exits, OS launch errors, supervisor deadlines and inner structured timeouts on the actual compiled provider, without a desktop or agent CLI.
+It also retains a grandchild's process object on Windows and requires it signalled, with its open file released, when completion is published.
+The supervisor follows job membership before the root starts and waits for every announced process object, since an active-process count of zero alone precedes handle release; on Unix it keeps the group leader unreaped until the final group signal so a reused pid cannot be targeted.
+On Linux the provider becomes a child subreaper and reaps its own adopted descendants, requiring both the kernel's no-child result and the group's absence before completion; leaving that work to an outer guardian would make each wait for the other.
+Each reap poll and the total reaped descendants are bounded, and exceeding the bound or failing to establish cleanup remains a failure.
+The ordinary PR's Windows forms job builds the same small C provider and runs this boundary check, as the full journey lanes do.
+Those controlled cases prove the boundary's behavior, not the historical cause of a Windows failure whose original stderr and supervisor phase were lost.
+
 `python3 scripts/agent-journey-check.py` follows each supported agent through what an operator does with it in Hide, on an isolated candidate, and says per agent and step whether it worked.
 It is the check a release runs on the Mac before its tag ([CONTRIBUTING.md: Releases](../CONTRIBUTING.md#releases)), and the one to run after a change to how Hide starts, wakes or writes to an agent, after moving the pinned Herdr and after a substantial agent CLI update.
 

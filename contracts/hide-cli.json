@@ -1,5 +1,25 @@
 {
     "answers": {
+        "acknowledged": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "description": "`hide inbox --ack`: the bundle it took and how many letters were in it.",
+            "properties": {
+                "acknowledged": {
+                    "format": "uint",
+                    "minimum": 0.0,
+                    "type": "integer"
+                },
+                "bundle": {
+                    "type": "string"
+                }
+            },
+            "required": [
+                "bundle",
+                "acknowledged"
+            ],
+            "title": "Acknowledged",
+            "type": "object"
+        },
         "agent": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "definitions": {
@@ -1140,16 +1160,31 @@
                     ],
                     "type": "object"
                 },
-                "InboxEntry": {
-                    "description": "One letter of `hide inbox`.",
+                "Folded": {
+                    "description": "One sender's folded letters in a bundle.",
                     "properties": {
-                        "ack_command": {
-                            "description": "The command that acknowledges the letter, for an agent with no prompt hook to confirm it.",
-                            "type": [
-                                "string",
-                                "null"
-                            ]
+                        "ids": {
+                            "items": {
+                                "type": "string"
+                            },
+                            "type": "array"
                         },
+                        "sender": {
+                            "type": "string"
+                        },
+                        "sender_kind": {
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "sender",
+                        "sender_kind",
+                        "ids"
+                    ],
+                    "type": "object"
+                },
+                "Letter": {
+                    "properties": {
                         "answer_wait_ended": {
                             "anyOf": [
                                 {
@@ -1436,11 +1471,36 @@
                     "type": "object"
                 }
             },
-            "items": {
-                "$ref": "#/definitions/InboxEntry"
+            "description": "`hide inbox`: the caller's letters as one bundle, as a handover gives them (`docs/delivery.md`, One bundle per handover).",
+            "properties": {
+                "ack_command": {
+                    "description": "The one command that acknowledges exactly the pending letters this answer lists, folded ones included, by a token naming the bundle, for an agent with no prompt hook to confirm it.",
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "folded": {
+                    "description": "Per sender, the older letters the bundle folded, oldest first; each opens with `hide request show <id>`.",
+                    "items": {
+                        "$ref": "#/definitions/Folded"
+                    },
+                    "type": "array"
+                },
+                "letters": {
+                    "description": "The letters shown in full, grouped by sender, then the caller's own letters that went undelivered.",
+                    "items": {
+                        "$ref": "#/definitions/Letter"
+                    },
+                    "type": "array"
+                }
             },
-            "title": "Array_of_InboxEntry",
-            "type": "array"
+            "required": [
+                "letters",
+                "folded"
+            ],
+            "title": "Inbox",
+            "type": "object"
         },
         "intake": {
             "$schema": "http://json-schema.org/draft-07/schema#",
@@ -3947,7 +4007,24 @@
             ],
             "command": "inbox --confirm",
             "options": [],
-            "repeats_at_most": 5,
+            "repeats_at_most": 1024,
+            "rest": null
+        },
+        {
+            "answers": [
+                "acknowledged"
+            ],
+            "arguments": [
+                {
+                    "name": "id",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "inbox --ack",
+            "options": [],
+            "repeats_at_most": null,
             "rest": null
         },
         {
@@ -5129,7 +5206,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:130affcaaec4a3d2090b69fc1c29d4b9d64436b708eb6a5c685b5dfdc9302ba3",
+    "digest": "sha256:e17d435b7f4754fc8ae369e8f60100e120a4518a38b403b9304813b6386151db",
     "envelopes": {
         "agent": {
             "answer": "value",
