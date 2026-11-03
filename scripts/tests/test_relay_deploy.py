@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("relay_deploy", ROOT / "scripts/relay-deploy.py")
@@ -15,6 +16,10 @@ SPEC.loader.exec_module(DEPLOY)
 
 
 class RelayDeploy(unittest.TestCase):
+    @staticmethod
+    def healthy(*args):
+        return b"ok\n\n200" if args[0] == "curl" else None
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -42,12 +47,13 @@ class RelayDeploy(unittest.TestCase):
 
     def test_success_retry_and_failed_update_restore_binary_and_configuration(self):
         old = self.release()
-        DEPLOY.install(old, self.root, lambda *args: None)
-        DEPLOY.install(old, self.root, lambda *args: None)
+        DEPLOY.install(old, self.root, self.healthy)
+        DEPLOY.install(old, self.root, self.healthy)
         candidate = self.release("2" * 40)
         def os_boundary(*args):
             if args[0] == "curl" and self.installed().resolve().name == "2" * 40:
                 raise RuntimeError("candidate health failed")
+            return self.healthy(*args)
         with self.assertRaisesRegex(RuntimeError, "previous state restored"):
             DEPLOY.install(candidate, self.root, os_boundary)
         self.assertEqual((self.installed() / "hide-relay").read_bytes(), (old / "hide-relay").read_bytes())
@@ -56,7 +62,7 @@ class RelayDeploy(unittest.TestCase):
 
     def test_failed_recovery_retains_intent_and_explicit_recovery_finishes_it(self):
         old = self.release()
-        DEPLOY.install(old, self.root, lambda *args: None)
+        DEPLOY.install(old, self.root, self.healthy)
         candidate = self.release("2" * 40)
         def unavailable(*args):
             if args[0] == "curl":
@@ -64,8 +70,54 @@ class RelayDeploy(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "recovery incomplete"):
             DEPLOY.install(candidate, self.root, unavailable)
         with self.assertRaisesRegex(ValueError, "interrupted install"):
-            DEPLOY.install(candidate, self.root, lambda *args: None)
-        DEPLOY.recover(self.root, lambda *args: None)
+            DEPLOY.install(candidate, self.root, self.healthy)
+        DEPLOY.recover(self.root, self.healthy)
+        self.assertEqual(self.installed().resolve().name, "1" * 40)
+
+    def test_interrupted_pending_write_leaves_running_release_retryable(self):
+        old = self.release()
+        DEPLOY.install(old, self.root, self.healthy)
+        candidate = self.release("2" * 40)
+        called = []
+        def interrupted(record, stream):
+            stream.write('{"previous":')
+            stream.flush()
+            raise KeyboardInterrupt("simulated process interruption")
+        with patch.object(DEPLOY.json, "dump", interrupted):
+            with self.assertRaises(KeyboardInterrupt):
+                DEPLOY.install(candidate, self.root, lambda *args: called.append(args))
+        self.assertFalse((self.root / "opt/hide-relay/pending.json").exists())
+        self.assertEqual(self.installed().resolve().name, "1" * 40)
+        self.assertFalse(any(args[:2] == ("systemctl", "stop") for args in called))
+        DEPLOY.install(candidate, self.root, self.healthy)
+        self.assertEqual(self.installed().resolve().name, "2" * 40)
+
+    def test_https_redirect_or_wrong_body_rolls_back(self):
+        old = self.release()
+        DEPLOY.install(old, self.root, self.healthy)
+        candidate = self.release("2" * 40)
+        for response in (b"\n308", b"wrong\n200"):
+            def boundary(*args):
+                if args[-1] == "https://relay.withhide.dev/health" and self.installed().resolve().name == "2" * 40:
+                    return response
+                return self.healthy(*args)
+            with self.assertRaisesRegex(RuntimeError, "previous state restored"):
+                DEPLOY.install(candidate, self.root, boundary)
+            self.assertEqual(self.installed().resolve().name, "1" * 40)
+
+    def test_interruption_after_intent_publication_is_recoverable(self):
+        old = self.release()
+        DEPLOY.install(old, self.root, self.healthy)
+        candidate = self.release("2" * 40)
+        def interrupt(*args):
+            if args[:2] == ("systemctl", "stop"):
+                raise KeyboardInterrupt("simulated process interruption")
+        with self.assertRaises(KeyboardInterrupt):
+            DEPLOY.install(candidate, self.root, interrupt)
+        pending = self.root / "opt/hide-relay/pending.json"
+        self.assertEqual(json.loads(pending.read_text()), {"previous": "releases/" + "1" * 40})
+        DEPLOY.recover(self.root, self.healthy)
+        self.assertFalse(pending.exists())
         self.assertEqual(self.installed().resolve().name, "1" * 40)
 
     def test_first_install_failure_leaves_no_active_release(self):

@@ -149,10 +149,12 @@ def stage(artifact, destination, values):
 def run(*argv):
     # OS boundary only. Output can include deployment values or request objects;
     # report the executable and exit status, never replay arbitrary stderr.
-    result = subprocess.run(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    result = subprocess.run(argv, stdout=subprocess.PIPE if argv[0] == "curl" else subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
                             timeout=90, check=False)
     if result.returncode:
         raise RuntimeError(f"{Path(argv[0]).name} failed (exit {result.returncode})")
+    return result.stdout
 
 
 def atomic_link(path, target):
@@ -193,9 +195,14 @@ def activate(root, command):
     command("systemctl", "start", *SERVICES)
     for endpoint in ("http://127.0.0.1:8787/health", "http://127.0.0.1:2020/api/v1/health"):
         command("curl", "--fail", "--silent", "--retry", "10", "--retry-connrefused",
-                "--retry-delay", "1", "--max-time", "2", "--retry-max-time", "30", endpoint)
-    command("curl", "--fail", "--silent", "--max-time", "5", "--header",
-            "Host: relay.withhide.dev", "http://127.0.0.1/health")
+                "--retry-delay", "1", "--max-time", "2", "--max-filesize", "32",
+                "--retry-max-time", "30", endpoint)
+    response = command("curl", "--fail", "--silent", "--max-time", "10", "--max-filesize", "32",
+                       "--retry", "5", "--retry-all-errors", "--retry-delay", "2", "--retry-max-time", "60",
+                       "--noproxy", "*", "--resolve", "relay.withhide.dev:443:127.0.0.1",
+                       "--write-out", "\n%{http_code}", "https://relay.withhide.dev/health")
+    if response != b"ok\n\n200":
+        raise RuntimeError("HTTPS relay health did not return the expected 200 response")
     for service in SERVICES:
         command("systemctl", "is-active", "--quiet", service)
     command("systemctl", "enable", *SERVICES, "hide-relay-retention.timer")
@@ -272,10 +279,14 @@ def install(release, root=Path("/"), command=run):
         if not path.is_symlink():
             path.symlink_to(link)
     pending = base / "pending.json"
-    with pending.open("x") as stream:
+    # An interrupted write may leave only this disposable temporary file.
+    # Publish a complete recovery intent before stopping any running service.
+    temporary_pending = pending.with_suffix(".next")
+    with temporary_pending.open("w") as stream:
         json.dump({"previous": previous}, stream)
         stream.flush()
         os.fsync(stream.fileno())
+    temporary_pending.replace(pending)
     sync_directory(base)
     try:
         command("systemctl", "stop", *SERVICES, "hide-relay-retention.timer")

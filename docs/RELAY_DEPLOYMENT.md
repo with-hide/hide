@@ -114,12 +114,14 @@ Installation verifies the staged inventory, target machine and ownership of ever
 Only trusted root-owned source and staging directories may be installed: the inventory detects damage, not an attacker able to replace both files and inventory.
 The installer takes `/run/lock/hide-relay-install.lock`, retains immutable releases under `/opt/hide-relay/releases/<SHA>`, and changes one `current` symlink for both binary and configuration.
 It refuses unmanaged units, conflicting bytes for an already-used SHA and more than three retained releases.
-It stops the three deployment services, switches the link, restarts the namespace journal and services, then requires local relay/collector health, proxy response and active services.
+It stops the three deployment services, switches the link, restarts the namespace journal and services, then requires local relay/collector health, a certificate-validated HTTPS proxy response with status 200 and the relay's exact health body, and active services.
+The HTTPS check resolves the production domain to loopback and does not follow HTTP redirects; public DNS must already allow Caddy to obtain its certificate.
 It also enables and runs the journal retention timer/service.
 Public certificate issuance and remote logging/notifications still require the acceptance checks below.
 
 A normal activation failure restores the previous link and restarts its services; on the first installation, failure leaves the services disabled with no active release.
 If recovery fails or installation is interrupted, `pending.json` remains and another install is refused.
+The recovery record is flushed and atomically published before any service stops; interruption while writing its temporary file leaves the running release retryable.
 Repair the reported prerequisite and run `sudo python3 scripts/relay-deploy.py recover`; a successful recovery clears the record.
 Never delete `pending.json` to bypass recovery.
 After a successful update, explicitly reinstall the retained previous release to roll back; its inputs and bytes stay available.
@@ -143,13 +145,17 @@ Do not retain snapshots or copies of those files.
 Host service-manager lifecycle records may remain in the default journal, but no relay event payload is forwarded there.
 
 Fluent Bit reads only that namespace directory and exact relay unit.
-Its parser drops original journal fields; its event filter permits only `cap_exceeded` and `server_failed`; its field allowlist sends only `event`, never room, content, credentials or client addresses.
+Its parser drops original journal fields; its event filter permits only `cap_exceeded`, `server_failed` and the collector's categorical `collector_canary`; its field allowlist sends only `event`, never room, content, credentials or client addresses.
 Unparseable messages are discarded rather than forwarded raw.
 The cursor database contains position metadata, not events.
-There is no disk spool; the input buffer is 8 MiB, output retry count is three with a 30-second scheduler cap, and systemd replaces the collector every twelve hours so buffered copies expire within the journal’s remaining retention margin.
+There is no disk spool; the journal input buffer is 8 MiB, the canary input buffer is 1 MiB, output retry count is three with a 30-second scheduler cap, and systemd replaces the collector every twelve hours so buffered copies expire within the journal’s remaining retention margin.
 The collector can lose events after exhausted delivery retries or restart; its health check exposes output errors/retry failures, and journal retention is not a promise of lossless delivery.
 In particular, a cursor advanced before an output failure does not rewind on restart.
 The separate `/collector-health` uptime alert is mandatory.
+The built-in dummy input sends one content-free canary at startup and every sixty seconds through the same parser, filters and Stackdriver destination.
+This keeps authentication/network delivery failures visible inside the five-minute health error window even when no real relay event occurs; without a canary, an exhausted retry could age out and falsely report recovery.
+The canary uses the same log ID, VM scope and seven-day destinations, adds 1,440 small records per day, and never triggers the two relay-event alerts.
+After a collector restart, allow one canary/flush cycle to establish delivery health; process startup alone is not proof of delivery.
 Do not enable debug/trace logs to diagnose production ingestion; inspect counts/status and use a private synthetic fixture instead.
 
 Memory limits are relay 640 MiB, proxy 256 MiB and collector 192 MiB; task limits are 64, 128 and 64 respectively.
@@ -174,14 +180,15 @@ Before accepting users, record these as separate observations:
 2. Public DNS, trusted TLS certificate and `/health` response; actual WSS/Noise pairing with private client state; spoofed incoming `X-Real-IP` does not control accounting.
 3. Kill only this deployment’s relay and observe restart and client recovery; verify certificate-renewal configuration separately from any future renewal observation.
 4. Trigger a controlled cap event and a controlled server failure through the real unit/collector path, and confirm the two log IDs/fields in the dedicated bucket and absence from `_Default` and every other destination.
-5. Stop the collector, then separately induce a controlled collector delivery refusal; observe `/collector-health` failure, uptime incident and actual email receipt, restoring it after each check.
+5. Stop the collector, then separately induce a controlled collector delivery refusal; observe `/collector-health` failure with no relay events for longer than five minutes, uptime incident and actual email receipt, restoring it after each check.
 6. Exercise relay health failure and restoration, confirm the notification outcome, read back budget scope/currency/thresholds, and record local/cloud retention including all copies.
 7. Confirm the retention timer’s last result and run the namespace-only vacuum manually; inspect no unrelated journal or log file.
 8. Ask the operator for the physical-phone QR/reply observation after the separate phone release; browser emulation does not satisfy it.
 
 Do not mark the deploy node’s production criteria passed from source tests or a running process.
 `python3 -m unittest scripts.tests.test_relay_deploy` exercises staging/installation failures with real files and an OS-service double.
-`relay-deploy-check.yml` additionally runs real systemd, Caddy and Fluent Bit on a disposable Ubuntu runner with a local process and HTTP sink fixture, including restart, rollback, forged-header overwrite, field removal and collector failure health.
+`relay-deploy-check.yml` additionally runs real systemd, Caddy and Fluent Bit on a disposable Ubuntu runner with a locally trusted fixture certificate, local relay process and metadata/Logging API fixtures.
+It exercises the actual Stackdriver plugin's token request and Logging envelope, restart, broken-HTTPS-proxy rollback, forged-header overwrite, field removal, and quiet persistent 403 delivery failure beyond the five-minute health window.
 It never reaches a certificate authority or a GCP account.
 
 ## Costs and official references
@@ -193,6 +200,6 @@ Tokyo E2 is not the US-region always-free allowance, and [budgets](https://cloud
 
 The choices above follow [IAP TCP forwarding](https://cloud.google.com/iap/docs/using-tcp-forwarding), [OS Login](https://cloud.google.com/compute/docs/oslogin/set-up-oslogin), [Caddy automatic HTTPS](https://caddyserver.com/docs/automatic-https) and [header replacement](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy#headers).
 The dedicated journal follows [systemd journal namespaces/retention](https://www.freedesktop.org/software/systemd/man/latest/journald.conf.html).
-Fluent Bit’s [systemd path/filter](https://docs.fluentbit.io/manual/data-pipeline/inputs/systemd), [memory buffering](https://docs.fluentbit.io/manual/administration/buffering-and-storage), [health](https://docs.fluentbit.io/manual/administration/monitoring) and [GCE Logging output](https://docs.fluentbit.io/manual/data-pipeline/outputs/stackdriver) provide the collection boundary.
+Fluent Bit’s [systemd path/filter](https://docs.fluentbit.io/manual/data-pipeline/inputs/systemd), [bounded canary input](https://docs.fluentbit.io/manual/data-pipeline/inputs/dummy), [memory buffering](https://docs.fluentbit.io/manual/administration/buffering-and-storage), [health](https://docs.fluentbit.io/manual/administration/monitoring) and [GCE Logging output](https://docs.fluentbit.io/manual/data-pipeline/outputs/stackdriver) provide the collection boundary.
 It is used instead of Ops Agent here because the latter’s documented journald receiver has no namespace-path selection; changing the shared journal’s retention would affect unrelated events.
 Cloud configuration follows [log routing](https://cloud.google.com/logging/docs/routing/overview), [bucket retention](https://cloud.google.com/logging/docs/buckets), [log alerts](https://cloud.google.com/logging/docs/alerting/log-based-alerts), [uptime API](https://cloud.google.com/monitoring/api/ref_v3/rest/v3/projects.uptimeCheckConfigs) and [budget currency/project filters](https://cloud.google.com/billing/docs/reference/budget/rest/v1/billingAccounts.budgets).
