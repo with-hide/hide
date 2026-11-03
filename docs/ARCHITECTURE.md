@@ -2552,7 +2552,7 @@ The move or import is then asked in the record, and hided starts the core role a
 Once committed, a failed update does not start the previous build again (`core_update.rs`, `rollback.refused`): that build's daemon would open a Herdr session that has moved.
 
 An import while the Herdr it reads runs does not resume its conversations, since one conversation open in two places goes wrong: each such pane opens as a shell with a line saying so, and its resume waits in the record (D-8).
-Once that Herdr no longer runs, the sidebar offers to resume them, and the next import gives each back to its pane: a pane whose shell holds its terminal resumes it there, and a pane that runs something else keeps it waiting.
+Once that Herdr no longer runs, the sidebar offers to resume them, and the next import gives each back to its pane: a pane whose shell holds its terminal resumes it there, and one whose pane runs something else, or whose system does not say what runs there (Windows), resumes in a new tab of the same workspace once the restore has finished; a tab that cannot open leaves it waiting for the next import.
 Until a workspace has moved, `hide` from one of its Herdr panes is refused `pane_not_moved` with the move as the next action (`pane_auth.rs`), and its hook reports reach only the log.
 
 A move or a reboot can end a turn an agent was in.

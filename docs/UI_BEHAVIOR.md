@@ -2937,7 +2937,7 @@ Pressing Move shows `Moving…` with a spinner in place of the buttons until Hid
 `Later` puts the question off on this page only, so the next launch of the app asks again: the sidebar shows one quiet row above the footer, `<n> Herdr agents not moved` (or tabs) with `Move`, which asks the question again.
 A save no Hide Herdr runs is offered read only: the sidebar's row says `Herdr has <n> tabs` with `Import`, adding `Conversations open in Herdr open here as shells` while that Herdr runs, and Settings > General shows `Import Herdr work` with the same note and an `Import` button.
 A save Hide could not read shows `Couldn't read the Herdr session` with the reason under it and `Try again`; once a move or an import has left workspaces out, the row lists each as `<workspace>: <reason>` with `OK`, which clears it.
-Conversations an import left open in a Herdr that has closed since show `Herdr closed: <n> conversations can resume here` with `Resume`, which resumes each in its pane.
+Conversations an import left open in a Herdr that has closed since show `Herdr closed: <n> conversations can resume here` with `Resume`, which resumes each in its pane, or in a new tab of the same workspace, named for the agent, when that pane runs something else.
 A dialed device asks the same, under its name, once its link is up: `Herdr on <device> is running <n> tabs and <n> agents`, one dialog at a time after this machine's; its sidebar row starts with the device's name, Settings names it in `Import Herdr work from <device>`, and `Later` puts off that machine's question only.
 With nothing to move, import or read, no dialog, row or Settings group shows.
 `hide import herdr` prints what would move or be imported and what ends, and moves or imports only with `--yes`.
