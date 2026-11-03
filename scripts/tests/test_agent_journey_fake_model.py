@@ -7,10 +7,11 @@ from pathlib import Path
 import socket
 import sys
 import tempfile
+import time
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from agent_journey import fake_model
+from agent_journey import cells, fake_model
 
 INDEX = '<hide-memory-index trust="untrusted-reference-data">\nm7 Marker JOURNEY-0000AAAA for journey checks\n</hide-memory-index>'
 CONTEXT = '<hide-memory-context trust="untrusted-reference-data">\n{"id":"m7","text":"Marker JOURNEY-0000BBBB"}\n</hide-memory-context>'
@@ -95,6 +96,38 @@ class Server(unittest.TestCase):
         answer = connection.getresponse()
         answer.read()
         return answer.status
+
+    def test_busy_verdict_cross_checks_merged_session_against_served_responses(self):
+        # docs/delivery.md: Stop continues the turn. Two real HTTP answers
+        # can be stored as one assistant event; neither evidence alone wins.
+        held, letter = "JOURNEY-1111AAAA", "JOURNEY-2222BBBB"
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        self.addCleanup(connection.close)
+        sent_at = int(time.time() * 1000)
+        conversation, answers = [], []
+        for value in (held, letter):
+            conversation.append(("user", "Reply with exactly " + value))
+            connection.request("POST", "/v1/chat/completions", json.dumps(messages(*conversation)),
+                               {"Content-Type": "application/json"})
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            message = json.loads(response.read())["choices"][0]["message"]
+            self.assertNotIn("tool_calls", message)
+            answers.append(message["content"])
+            conversation.append(("assistant", message["content"]))
+        trace = [json.loads(line) for line in self.log.read_text().splitlines()]
+        read = {"session": "s", "events": [{"role": "assistant", "text": "\n".join(answers),
+                                           "at": int(time.time() * 1000)}]}
+        shown = {"state": "delivered", "hook_confirmed": True, "bell_attempts": 0, "tool_handovers": 1}
+        args = dict(declared=["bell", "turn_end"], input_rungs=["typed"], rungs=[], sent_at=sent_at)
+        self.assertEqual(cells.busy_letter_verdict(shown, read, "s", held, letter,
+                                                  responses=trace, **args)[0], cells.PASS)
+        for changed in (list(reversed(trace)), trace + [trace[-1]], []):
+            self.assertEqual(cells.busy_letter_verdict(shown, read, "s", held, letter,
+                                                      responses=changed, **args)[0], cells.FAIL)
+        read["events"][0]["text"] = letter + "\n" + held
+        self.assertEqual(cells.busy_letter_verdict(shown, read, "s", held, letter,
+                                                  responses=trace, **args)[0], cells.FAIL)
 
     def test_past_the_budget_every_request_is_refused_and_logged_once(self):
         connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)

@@ -18,7 +18,7 @@ from agent_live_check.processes import ProcessError
 from agent_live_check.protection import write_private
 from agent_live_check.system import WINDOWS, git, same_path
 
-from . import cells, composer, fork, kit, memory, provider_limit, title, usage
+from . import cells, composer, fork, kit, memory, provider_limit, stop_observer, title, usage
 from .requests import model_requests
 
 SPAWN_SECONDS = 150
@@ -188,6 +188,9 @@ class Journey:
         # what was logged before it is another step's, and never settles
         # this one's cell (provider_limit.cursor).
         self.provider_mark = None
+        observer_path = contract_row.get("stop_observer")
+        self.stop_observer = (stop_observer.Observer(runtime.home, runtime.probe, observer_path,
+                                                    windows=WINDOWS) if observer_path else None)
 
     # Evidence -----------------------------------------------------------
 
@@ -612,12 +615,21 @@ class Journey:
     def letter_busy(self):
         """A letter sent with --now while the agent works on a turn the
         fake model holds: that turn keeps its own answer, and the letter
-        goes in once, after it, through the agent's declared rung."""
+        goes in once, after it, through a declared delivery path."""
         if not cells.measurable(self.table, self.id, "letter_busy"):
             return
         record = {"shown": []}
         self.record["letter_busy"] = record
+        try:
+            self._letter_busy(record)
+        finally:
+            if self.stop_observer:
+                self.stop_observer.close()
+
+    def _letter_busy(self, record):
         held, value = token(), token()
+        if self.stop_observer:
+            self.stop_observer.arm(held, value, WORKING_SECONDS + LETTER_SECONDS + CONFIRM_SECONDS)
         record.update(held=held, token=value)
         since = self.daemon.mark(self.pane)
         if not self.type_prompt(record, HELD_PROMPT.format(held)):
@@ -646,8 +658,19 @@ class Journey:
         shown = self.shown(letter, record, lambda shown: shown.get("state") == "delivered", CONFIRM_SECONDS)
         record["read"] = read
         record["rungs"] = self.rungs_since(log)
-        verdict = cells.with_turn(cells.busy_letter_verdict(shown, read, self.session, held, value), turn)
-        self.settle("letter_busy", self.with_rung(verdict, record["rungs"]), self.evidence("letter_busy", record))
+        trace = self.run / f"fake-model-{self.id}.jsonl"
+        # The fake logs metadata only, with its request budget bounding this
+        # file. Keep just this cell's tokens, never provider request bodies.
+        record["responses"] = ([row for line in trace.read_text().splitlines()
+                                if (row := json.loads(line)).get("answered") in (held, value)]
+                               if trace.is_file() else [] if self.record.get("fake_env") else None)
+        record["stops"] = self.stop_observer.read() if self.stop_observer else None
+        verdict = cells.with_turn(cells.busy_letter_verdict(
+            shown, read, self.session, held, value, declared=self.row["busy_letter"],
+            input_rungs=self.row["input"] if self.own_rungs else ["typed"],
+            rungs=record["rungs"], responses=record["responses"], sent_at=record["sent_at_ms"],
+            stops=record["stops"]), turn)
+        self.settle("letter_busy", verdict, self.evidence("letter_busy", record))
 
     def letter_menu(self):
         """A letter sent with --now while the agent's own picker is open:
@@ -1028,6 +1051,8 @@ class Journey:
         it came from and an untrusted start of omp held 2.17 GB at once on
         Linux (2026-10-18); a pane that does not close is named, and the run's
         teardown ends it."""
+        if keep is None and self.stop_observer:
+            self.stop_observer.close()
         closed = self.record.setdefault("closed", {})
         for pane in dict.fromkeys(pane for pane in self.opened if pane and pane != keep and pane not in closed):
             try:

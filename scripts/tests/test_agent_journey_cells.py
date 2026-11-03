@@ -441,18 +441,86 @@ class BusyAndMenuLetters(unittest.TestCase):
     def read(self, *texts):
         return {"session": "s", "events": [{"role": role, "text": text} for role, text in texts]}
 
-    def test_a_busy_letter_passes_after_the_held_turn_kept_its_answer(self):
-        shown = {"state": "delivered", "bell_attempts": 1}
-        read = self.read(("user", "hold"), ("assistant", "JOURNEY-00000001"), ("user", "bell"),
-                         ("assistant", "JOURNEY-00000002"))
-        self.assertEqual(cells.busy_letter_verdict(shown, read, "s", "JOURNEY-00000001", "JOURNEY-00000002")[0],
-                         cells.PASS)
-        lost = self.read(("user", "hold"), ("user", "bell"), ("assistant", "JOURNEY-00000002"))
-        self.assertEqual(cells.busy_letter_verdict(shown, lost, "s", "JOURNEY-00000001", "JOURNEY-00000002")[0],
-                         cells.FAIL)
-        twice = {**shown, "bell_attempts": 2}
-        self.assertEqual(cells.busy_letter_verdict(twice, read, "s", "JOURNEY-00000001", "JOURNEY-00000002")[0],
-                         cells.FAIL)
+    # docs/delivery.md: one path per letter; Stop continues the held turn.
+    # These are evidence-boundary tests, not copies of the verdict's branches.
+    def busy(self, *, route="turn_end", texts=None, shown=None, trace=None, session="s", **changes):
+        held, letter = "JOURNEY-00000001", "JOURNEY-00000002"
+        read = self.read(*(("assistant", held + "\n" + letter),) if texts is None else texts)
+        read["events"][-1]["at"] = 40
+        args = dict(declared=["bell", "turn_end"], input_rungs=["typed"], rungs=[],
+                    sent_at=10, responses=[
+                        {"generation": True, "schema": False, "answered": held, "at": 20},
+                        {"generation": True, "schema": False, "answered": letter, "at": 30}])
+        if route == "bell":
+            args["rungs"] = [{"kind": "input.rung", "rung": "typed"}]
+        if trace is not None:
+            args["responses"] = trace
+        args.update(changes)
+        evidence = dict(state="delivered", hook_confirmed=True,
+                        bell_attempts=int(route == "bell"), tool_handovers=int(route == "turn_end"))
+        if shown:
+            evidence.update(shown)
+        return cells.busy_letter_verdict(evidence, read, session, held, letter, **args)
+
+    def test_stop_continuation_accepts_merged_session_only_with_independent_ordered_responses(self):
+        self.assertEqual(self.busy()[0], cells.PASS)
+        for trace in ([], [{"generation": True, "schema": False, "answered": "JOURNEY-00000002", "at": 30}]):
+            with self.subTest(trace=trace):
+                self.assertEqual(self.busy(trace=trace)[0], cells.FAIL)
+        self.assertEqual(self.busy(responses=None)[0], cells.FAIL)
+
+    def test_live_stop_payloads_prove_order_without_a_fake_provider(self):
+        stops = [dict(session="s", reason="end_turn", subagent=False, active=active,
+                      answers=[answer], at=at) for active, answer, at in
+                 ((False, "JOURNEY-00000001", 20), (True, "JOURNEY-00000002", 30))]
+        self.assertEqual(self.busy(responses=None, stops=stops)[0], cells.PASS)
+        cumulative = [stops[0], {**stops[1], "answers": ["JOURNEY-00000001", "JOURNEY-00000002"]}]
+        self.assertEqual(self.busy(responses=None, stops=cumulative)[0], cells.PASS)
+        for changed in ([], stops[:1], stops + stops[-1:], list(reversed(stops)),
+                        [stops[0], {**stops[1], "session": "other"}],
+                        [stops[0], {**stops[1], "active": False}],
+                        [stops[0], {**stops[1], "reason": "shutdown"}],
+                        [stops[0], {**stops[1], "answers": ["JOURNEY-00000002"] * 2}],
+                        [stops[0], {**stops[1], "subagent": True}],
+                        [{**stops[0], "at": 9}, stops[1]]):
+            with self.subTest(changed=changed):
+                # A good provider trace cannot override broken Stop evidence.
+                self.assertEqual(self.busy(stops=changed)[0], cells.FAIL)
+
+    def test_bell_still_needs_its_declared_rung_and_one_confirmed_delivery(self):
+        texts = (("assistant", "JOURNEY-00000001"), ("user", "bell"), ("assistant", "JOURNEY-00000002"))
+        self.assertEqual(self.busy(route="bell", texts=texts, responses=None)[0], cells.PASS)
+        for defect in (dict(rungs=[]), dict(input_rungs=["codex_queue", "typed"]),
+                       dict(shown={"bell_attempts": 2}), dict(shown={"hook_confirmed": False}),
+                       dict(shown={"tool_handovers": 1})):
+            with self.subTest(defect=defect):
+                self.assertEqual(self.busy(route="bell", texts=texts, **defect)[0], cells.FAIL)
+
+    def test_another_session_or_human_echo_is_not_an_answer(self):
+        self.assertEqual(self.busy(session="other")[0], cells.FAIL)
+        self.assertEqual(self.busy(texts=(("user", "JOURNEY-00000001 JOURNEY-00000002"),))[0], cells.FAIL)
+
+    def test_stop_requires_declared_path_and_rejects_duplicate_or_unconfirmed_delivery(self):
+        for defect in (dict(declared=["bell"]), dict(shown={"state": "pending"}),
+                       dict(shown={"hook_confirmed": False}), dict(shown={"tool_handovers": 0}),
+                       dict(shown={"tool_handovers": 2}), dict(shown={"bell_attempts": 1}),
+                       dict(rungs=[{"kind": "input.rung", "rung": "typed"}])):
+            with self.subTest(defect=defect):
+                self.assertEqual(self.busy(**defect)[0], cells.FAIL)
+
+    def test_held_then_letter_must_occur_once_in_both_session_and_trace(self):
+        h, t = "JOURNEY-00000001", "JOURNEY-00000002"
+        for text in (t + h, h + t + t, h + h + t, t, h):
+            with self.subTest(text=text):
+                self.assertEqual(self.busy(texts=(("assistant", text),))[0], cells.FAIL)
+        for trace in ([t, h], [h, t, t], [h, h, t]):
+            rows = [{"generation": True, "schema": False, "answered": value, "at": 20 + i}
+                    for i, value in enumerate(trace)]
+            self.assertEqual(self.busy(trace=rows)[0], cells.FAIL)
+        for times in ((9, 30), (30, 20), (20, 41)):
+            rows = [{"generation": True, "schema": False, "answered": value, "at": at}
+                    for value, at in zip((h, t), times)]
+            self.assertEqual(self.busy(trace=rows)[0], cells.FAIL)
 
     def test_a_menu_letter_passes_only_answered_after_one_bell(self):
         read = self.read(("user", "/model"), ("user", "bell"), ("assistant", "JOURNEY-00000003"))

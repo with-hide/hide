@@ -239,27 +239,75 @@ def rung_verdict(declared, records):
                                                                   f" (the log names {used or 'none'})")
 
 
-def busy_letter_verdict(shown, read, session, held, token):
-    """A letter sent while the agent worked on a held turn: that turn ends
-    with its own answer, and the letter is delivered after one bell and
-    answered after it."""
+def busy_letter_verdict(shown, read, session, held, token, *, declared, input_rungs,
+                        rungs, responses=None, sent_at=None, stops=None):
+    """One declared delivery path and one held -> letter answer sequence.
+
+    Stop can continue the same assistant event. Such an event alone cannot
+    prove two responses: require Stop payloads or a fake provider trace.
+    docs/delivery.md, Letters while the agent works, owns these expectations.
+    """
     if not isinstance(shown, dict):
         return FAIL, "hide request show gave no letter"
-    if shown.get("state") != "delivered":
-        return FAIL, "letter state is " + str(shown.get("state")) + ", not delivered"
-    if shown.get("bell_attempts") != 1:
-        return FAIL, f"the letter took {shown.get('bell_attempts')} bells, not one"
-    if "error" in read:
-        return FAIL, "Hide's reader could not read the session: " + read["error"]
-    events = read.get("events", [])
-    held_at = next((index for index, event in enumerate(events)
-                    if event.get("role") == "assistant" and held in (event.get("text") or "")), None)
-    if held_at is None:
-        return FAIL, "the turn the letter waited behind never answered " + held
-    verdict = reply_verdict(read, session, token, held_at + 1)
+    if shown.get("state") != "delivered" or shown.get("hook_confirmed") is not True:
+        return FAIL, "the letter has no confirmed delivery"
+    bells, handovers = shown.get("bell_attempts"), shown.get("tool_handovers")
+    if (bells, handovers) == (1, 0):
+        route = "bell"
+    elif (bells, handovers) == (0, 1):
+        route = "turn_end"
+    else:
+        return FAIL, "the letter did not take exactly one delivery path"
+    if route not in declared:
+        return FAIL, "the observed delivery path is not declared: " + route
+    if route == "bell":
+        rung = rung_verdict(input_rungs, rungs)
+        if rung[0] != PASS:
+            return rung
+        if sum(record.get("kind") == "input.rung" for record in rungs) != 1:
+            return FAIL, "the bell did not take exactly one input rung"
+    elif rungs or shown.get("bell_line") or shown.get("bell_turn"):
+        return FAIL, "turn-end delivery also carried bell input evidence"
+    verdict = reply_verdict(read, session, token)
     if verdict[0] != PASS:
-        return verdict[0], verdict[1] + " after the held turn's answer"
-    return PASS, "delivered after the held turn, which kept its answer; " + verdict[1]
+        return verdict
+    events = read.get("events", [])
+    positions = []
+    for value in (held, token):
+        matches = [(index, (event.get("text") or "").find(value))
+                   for index, event in enumerate(events) if event.get("role") == "assistant"
+                   for _ in range((event.get("text") or "").count(value))]
+        if len(matches) != 1:
+            return FAIL, "the held and letter answers must each occur exactly once"
+        positions.append(matches[0])
+    if positions[0] >= positions[1]:
+        return FAIL, "the letter answer did not follow the held answer"
+    merged = positions[0][0] == positions[1][0]
+    # The ledger counter is shared by tool and Stop intake. Only these
+    # independent payloads (or the no-tool fake) can distinguish them.
+    if stops is not None and route == "turn_end":
+        if (len(stops) != 2 or any(row.get("error") or row.get("session") != session
+                                  or row.get("reason") != "end_turn" or row.get("subagent")
+                                  or type(row.get("active")) is not bool
+                                  for row in stops)
+                or [row.get("active") for row in stops] != [False, True]
+                or stops[0].get("answers") != [held]
+                or stops[1].get("answers") not in ([token], [held, token])):
+            return FAIL, "Stop evidence did not show one held completion then one continuation in this session"
+        times = [sent_at, *(row.get("at") for row in stops)]
+        if any(type(at) is not int or at <= 0 for at in times) or times != sorted(times):
+            return FAIL, "Stop observations are not ordered after send"
+    if responses is not None:
+        answers = [row for row in responses if row.get("generation") is True
+                   and row.get("schema") is False and row.get("answered") in (held, token)]
+        if [row.get("answered") for row in answers] != [held, token]:
+            return FAIL, "the fake trace did not answer held then letter exactly once"
+        times = [sent_at, *(row.get("at") for row in answers), events[positions[1][0]].get("at")]
+        if any(type(at) is not int or at <= 0 for at in times) or not times[0] <= times[1] <= times[2] <= times[3]:
+            return FAIL, "the fake responses are not ordered after send and before the session answer"
+    if (merged or route == "turn_end") and responses is None and (stops is None or route != "turn_end"):
+        return FAIL, "merged or turn-end answers have no independent response order evidence"
+    return PASS, "confirmed once through " + route + "; held then letter answered once in order"
 
 
 def composer_check(records, agent):

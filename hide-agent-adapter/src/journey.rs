@@ -33,6 +33,12 @@ pub struct JourneyAdapter {
     /// How the core hands a letter to the agent at rest; absent when the
     /// letter cell is not declared.
     pub letter: Option<JourneyLetter>,
+    /// Paths this no-tool busy probe can observe: a bell or a root Stop
+    /// continuation. Tool-only paths need a tool-using probe of their own.
+    pub busy_letter: Vec<&'static str>,
+    /// Private fixture Stop command-hook file, with sessionId,
+    /// lastAssistantMessage, stopHookActive and end_turn input semantics.
+    pub stop_observer: Option<&'static [&'static str]>,
     /// The agent's input ladder (`AgentAdapter::input`), each rung by its
     /// name, its own way in first and `typed` last: the cells check that a
     /// brief and a letter took the rung the agent declares.
@@ -167,8 +173,8 @@ pub struct JourneyCells {
     /// A letter reaches the agent and its reply.
     pub letter: bool,
     /// A letter sent while the agent works on a turn reaches it once, after
-    /// that turn, which ends with its own answer: for an agent the doorbell
-    /// rings.
+    /// that turn, which ends with its own answer: through a bell or a
+    /// declared turn-end hook, without asking the model to use a tool.
     pub letter_busy: bool,
     /// A letter sent while a picker of the agent's own is open reaches it
     /// once the picker is closed, never as the picker's choice: for an
@@ -209,6 +215,17 @@ fn own_way_in(row: &super::AgentAdapter) -> bool {
     })
 }
 
+fn busy_letter_paths(row: &super::AgentAdapter) -> Vec<&'static str> {
+    let mut paths = Vec::new();
+    if row.bell {
+        paths.push("bell");
+    }
+    if row.turn_end_letters.is_some() {
+        paths.push("turn_end");
+    }
+    paths
+}
+
 pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
     super::ADAPTERS.iter().map(|row| {
         let start = row.start.is_some();
@@ -220,7 +237,7 @@ pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
             integration: start,
             guidance_memory: context_cell(row),
             letter: start && (row.bell || row.tool_letters.is_some()),
-            letter_busy: start && row.bell,
+            letter_busy: start && !busy_letter_paths(row).is_empty(),
             letter_menu: start && row.bell && own_way_in(row),
             composer: start && row.composer.is_some(),
             sleep_wake: start && row.sleep.is_some(),
@@ -298,6 +315,11 @@ pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
             minimum_version: row.minimum.map(|minimum| minimum.version),
             update_commands: row.updates.iter().map(|route| route.command).collect(),
             letter,
+            busy_letter: busy_letter_paths(row),
+            stop_observer: row.turn_end_letters.map(|dialect| match dialect {
+                super::HookDialect::Grok => &[".grok", "hooks", "journey-stop-observer.json"][..],
+                _ => panic!("turn-end journey needs a declared Stop observer dialect"),
+            }),
             input: row.input.iter().map(|rung| rung.name()).collect(),
             wake,
             title,
@@ -315,6 +337,18 @@ mod tests {
         evidence: "docs/agent-hooks.md",
         would_change: "Implement and measure the host's delivery path.",
     };
+
+    #[test]
+    fn busy_probe_paths_follow_capabilities_not_agent_names() {
+        let mut row = *AgentId::Codex.adapter();
+        assert_eq!(busy_letter_paths(&row), ["bell"]);
+        row.turn_end_letters = AgentId::Grok.adapter().turn_end_letters;
+        assert_eq!(busy_letter_paths(&row), ["bell", "turn_end"]);
+        row.bell = false;
+        assert_eq!(busy_letter_paths(&row), ["turn_end"]);
+        row.turn_end_letters = None;
+        assert!(busy_letter_paths(&row).is_empty());
+    }
 
     #[test]
     fn supported_context_never_silently_becomes_an_undeclared_cell() {
