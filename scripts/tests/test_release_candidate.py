@@ -170,6 +170,38 @@ class ReleaseCandidate(unittest.TestCase):
         self.assertEqual(upload["with"]["name"], "hide-macos-release-binaries")
         self.assertEqual(upload["with"]["retention-days"], 7)
 
+    def test_mac_compile_prepares_tomllib_python_inside_the_job_cleanup_boundary(self):
+        # Candidate 41594338337 failed before compiling: the selected Python could
+        # not import tomllib, which Python added in 3.11. Both runner choices
+        # must prepare it before web typecheck invokes prepare:relay.
+        job = yaml.safe_load((WORKFLOWS / "release-candidate.yml").read_text())["jobs"]["macos-binaries"]
+        steps = job["steps"]
+        setup_index, setup = next((i, step) for i, step in enumerate(steps)
+                                  if step.get("uses", "").startswith("astral-sh/setup-uv@"))
+        self.assertRegex(setup["uses"], r"^astral-sh/setup-uv@[0-9a-f]{40}$")
+        self.assertNotIn("if", setup)
+        self.assertNotIn("continue-on-error", setup)
+        config = setup["with"]
+        self.assertRegex(config["version"], r"^\d+\.\d+\.\d+$")
+        self.assertRegex(config["python-version"], r"^3\.\d+$")
+        self.assertGreaterEqual(tuple(map(int, config["python-version"].split("."))), (3, 11))
+        self.assertIs(config["enable-cache"], False)
+        self.assertIs(config["activate-environment"], True)
+        self.assertEqual(setup["env"]["UV_PYTHON_PREFERENCE"], "only-managed")
+        # setup-uv caches its own binary in runner.tool_cache. Python, the
+        # venv, and download cache must not use its self-hosted HOME defaults.
+        for value in (setup["env"]["UV_PYTHON_INSTALL_DIR"], setup["env"]["UV_CACHE_DIR"],
+                      config["venv-path"], config["tool-bin-dir"]):
+            self.assertRegex(value, r"^\$\{\{ runner\.temp \}\}/[a-z-]+$")
+        probe_index, probe = next((i, step) for i, step in enumerate(steps)
+                                  if "import sys, tomllib" in step.get("run", ""))
+        self.assertLess(setup_index, probe_index)
+        self.assertNotIn("if", probe)
+        self.assertNotIn("continue-on-error", probe)
+        for i, step in enumerate(steps):
+            if step.get("uses") == "./.github/actions/vt-cache" or "verify-web.sh" in step.get("run", ""):
+                self.assertLess(probe_index, i)
+
     def test_no_workflow_but_the_candidate_names_the_mini_label(self):
         # The Mac mini's job-started hook refuses any other workflow anyway
         # (scripts/candidate-runner/job-started.sh); a workflow that asked for

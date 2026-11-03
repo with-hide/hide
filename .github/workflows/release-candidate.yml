@@ -167,6 +167,25 @@ jobs:
           # pnpm keeps its store beside itself (PNPM_HOME), so both stay in
           # the work folder the Mac mini empties after every job.
           dest: ${{ runner.tool_cache }}/setup-pnpm
+      # tomllib needs Python >=3.11. setup-python's macOS distribution needs
+      # a fixed path outside this runner's cleanup boundary; use managed Python.
+      - name: Prepare Python for the relay WASM build
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        timeout-minutes: 5
+        env:
+          UV_PYTHON_INSTALL_DIR: ${{ runner.temp }}/candidate-python
+          UV_CACHE_DIR: ${{ runner.temp }}/candidate-uv-cache
+          UV_PYTHON_PREFERENCE: only-managed
+        with:
+          # Keep a version whose download checksums are embedded in this action.
+          version: "0.10.10"
+          python-version: "3.12"
+          enable-cache: false
+          activate-environment: true
+          venv-path: ${{ runner.temp }}/candidate-python-venv
+          tool-bin-dir: ${{ runner.temp }}/candidate-uv-bin
+      - name: Require Python with standard TOML support
+        run: python3 -c 'import sys, tomllib; assert sys.version_info >= (3, 11)'
       - name: Install dependencies
         timeout-minutes: 5
         run: |
