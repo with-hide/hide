@@ -683,7 +683,10 @@ A passing fixture does not prove paid-service authentication or standalone suppo
 
 ### How many jobs a run starts
 
-A run that plans every lane a pull request can plan starts at most 51 jobs, eighteen more than the 2026-10-05 shape of run `37324202934` before the macOS and mailbox work: that work saved one, the e2e suites outgrew their shards' step caps, which took a second macOS desktop shard and two more web shards ([Balancing the e2e shards](#balancing-the-e2e-shards)), the agent journey's Linux stand-in job and Windows forms job added two, and the `agent CLIs` installs on Linux and Windows, which only a change to `contracts/agent-clis.json` or an installer plans, added two, building the shared web shell in parallel with the daemon adds one, the WSL device lane's Linux build and Windows run add two, and the `vt` lane's Linux, macOS and Windows builds of hide-vt, which only a change to hide-vt, the pane holder or their build scripts plans, add three, and the holder restart lane's Linux, macOS and Windows legs, which only a change to the holder, the node's holder code, the agent pins or the lane's scripts plans, add three; the refreshed twenty-run median requires six web shards; native and WASM relay interoperability adds one job on each system; and the core's own engine runs the web suite over as many shards again as Herdr's on Linux and once more on Windows, seven jobs, until the Herdr lane goes with Herdr (PRD engine-bundle-3-core-owns D-24).
+A run that plans every lane a pull request can plan starts at most 57 jobs.
+The earlier count of 51 omitted six jobs already running in the package lane: helper identity, two Linux device helpers, device bundles and the separate Windows and macOS compiles.
+Correcting that count adds no runner or workflow.
+The core's own engine adds seven web jobs beside Herdr's: six Linux shards and one Windows job, until the Herdr lane goes with Herdr (PRD engine-bundle-3-core-owns D-24).
 `scripts/tests/test_ci_plan.py` counts them from the workflows:
 
 | Jobs | Count | Why |
@@ -700,10 +703,11 @@ A run that plans every lane a pull request can plan starts at most 51 jobs, eigh
 | `windows wsl` (Linux, Windows) | 2 | a real WSL 2 distribution on the Windows runner connected as a device through `wsl.exe`, with this build's Linux programs, which only a Linux job can build, planned only for the crates the WSL link crosses (`hide-platform`, `hide-node`, `hide-node-link`, `hide-host`) and the node command ([WSL device lane](#wsl-device-lane)) |
 | `remote mailbox` | 1 | the lane that was the tail of the macOS `@platform` job, now on Linux and, in the nightly, on macOS |
 | `desktop e2e` | 2 | the only macOS lane of the desktop app's own changes, in two shards that build in place, because the whole suite outgrew one job's step cap ([Balancing the e2e shards](#balancing-the-e2e-shards)) |
-| `package` (Windows, Linux, macOS) | 3 | `package.yml`'s jobs, planned only for what goes into a package; before the lane its Windows and Linux jobs ran on the same paths outside `verify` |
+| `vt`, holder restart, relay interoperability | 9 | each lane runs once on Linux, macOS and Windows |
+| `package` (Windows, Linux, macOS) | 9 | helper identity, two Linux device helpers, device bundles, Windows and macOS compiles, and three packages; without macOS, its compile and package are omitted, leaving seven jobs |
 
-The common runs are smaller: a `herdr-core` or `hided` change starts 21 jobs, a web shell change 14, a desktop-only change 5 (6 for `desktop/src/main`, which adds `windows check`), a `hide-platform` change 25, a `hide-kit` or `hide-agent-hooks` change 24, all with none on macOS, and a documentation change 3, as does a push that reuses the pull request's last green run.
-A macOS path adds its macOS jobs: a change to a macOS file of `desktop/src/main` starts 8 jobs with two on macOS, and one to `hide-platform`'s macOS code 26 with two.
+The common runs are smaller: a `herdr-core` or `hided` change starts 27 jobs, a web shell change 19, a desktop-only change 5 (6 for `desktop/src/main`, which adds `windows check`), a `hide-platform` change 31, a `hide-kit` or `hide-agent-hooks` change 35, all with none on macOS, and a documentation change 3, as does a push that reuses the pull request's last green run.
+A macOS path adds its macOS jobs: a change to a macOS file of `desktop/src/main` starts 8 jobs with two on macOS, and one to `hide-platform`'s macOS code 33 with two.
 The median wall time and the share of runs whose Linux shards waited more than 10 minutes come from a measurement of the pull request runs after a change merges, taken the way issue #561 took its baseline; they are not in this guide because a pull request cannot prove them.
 The `plan` job's summary lists each lane with the paths that chose it.
 

@@ -868,12 +868,26 @@ def runner_jobs(block):
         return len([system for system in systems if system != "windows"]) + ("windows" in systems)
     if "uses: ./.github/workflows/package.yml" in block:
         package = (ROOT / ".github/workflows/package.yml").read_text()
-        return len(re.findall(r"\n    name: package \((?:linux|windows)\)\n", package)) + bool(re.search(INCLUDE_MACOS, block))
+        helpers = (ROOT / ".github/workflows/device-helpers.yml").read_text()
+        # Count every runner, including preparation and separate compiles, and
+        # expand the nested helper matrix. Both macOS jobs follow the caller.
+        count = len(re.findall(r"\n    runs-on:", package))
+        count += len(re.findall(r"\n          - platform:", helpers))
+        if not re.search(INCLUDE_MACOS, block):
+            count -= len(re.findall(r"\n    if: \$\{\{ inputs\.include-macos \}\}", package))
+        return count
     return 1
 
 
 class Workflows(unittest.TestCase):
     """`pr.yml` has the jobs the plan names, and the job count TESTING.md states."""
+
+    def test_package_counts_preparation_and_compile_jobs_as_well_as_packages(self):
+        call = pr_jobs()["package"]
+        # Identity, two Linux helpers, bundles, Windows compile and two packages.
+        self.assertEqual(runner_jobs(re.sub(INCLUDE_MACOS, "include-macos: false", call)), 7)
+        # macOS adds both a compile and a package runner.
+        self.assertEqual(runner_jobs(call), 9)
 
     def test_ci_definitions_exercise_every_lane_including_package(self):
         paths = [path.relative_to(ROOT).as_posix() for path in (ROOT / ".github/workflows").glob("*.yml")]
@@ -987,7 +1001,9 @@ class Workflows(unittest.TestCase):
         # The core's own engine runs the web suite over as many shards again
         # as Herdr's, on Linux and Windows, until the Herdr lane goes with
         # Herdr (PRD engine-bundle-3-core-owns D-24): seven more.
-        self.assertLessEqual(most, 51, "a run starts more jobs than the suites and native SDK contracts need")
+        # The package lane already ran six preparation/compile jobs omitted
+        # from the old count; correcting the accounting starts no new job.
+        self.assertLessEqual(most, 57, "a run starts more jobs than the suites and native SDK contracts need")
         testing = (ROOT / "docs/TESTING.md").read_text()
         self.assertIn(f"starts at most {most} jobs", testing)
 
