@@ -506,6 +506,8 @@ class BusyAndMenuLetters(unittest.TestCase):
                                   "digest": hashlib.sha256(b"the bell").hexdigest()})
         args = dict(route="bell", texts=texts, declared=["bell_hook", "turn_end"], shown=shown)
         self.assertEqual(self.busy(**args)[0], cells.PASS)
+        self.assertEqual(self.busy(**{**args, "texts": (("user", "the bell"), *texts)})[0], cells.PASS)
+        self.assertEqual(self.busy(**{**args, "texts": (texts[0], texts[1], texts[1], texts[2])})[0], cells.FAIL)
         for defect in (dict(declared=["bell", "turn_end"]),
                        dict(shown={**shown, "bell_turn": None}),
                        dict(shown={**shown, "bell_turn": {**shown["bell_turn"], "session": "wrong"}}),

@@ -382,14 +382,17 @@ Grok's letter uses the `bell` path: the bell wakes it at rest, its prompt hook r
 The journey judges its at-rest reply in that bell turn without asking the model to choose a tool.
 The busy probe exports `busy_letter` from the adapter's bell, tool-intake and turn-end capabilities, not from its name.
 A bell-owned hook handover delivers the body in the turn the bell opened; it is not a second delivery path.
+Exactly one matching bell user event must lie between this cell's held and letter answers; earlier identical bells do not belong to that interval.
 A single handover counter cannot distinguish tool intake from Stop.
-The exported `stop_observer` path declares a command-hook fixture with `sessionId`, `lastAssistantMessage`, `stopHookActive` and `reason: end_turn` inputs.
+The exported `stop_observer` path declares a native HTTP-hook fixture with `sessionId`, `lastAssistantMessage`, `stopHookActive` and `reason: end_turn` inputs.
 Before the agent starts, the journey installs an independent, output-free observer in its private HOME; it never wraps or changes the product hook.
 Only during the busy cell does it record the session, timestamp, active flag and probe-token sequence: one held-only Stop with `stopHookActive: false`, followed by one Stop with the letter added and `stopHookActive: true` in the same root session.
-It reads at most 1 MiB of hook input and writes at most eight 4 KiB metadata records, with a five-second command limit and the cell's existing deadline; overflow, malformed invocations (even after two valid observations), unreadable data and missing observations fail the cell.
+It binds only loopback and keeps at most eight 4 KiB metadata records in memory, with a 1 MiB request limit, five-second socket limit and the cell's existing deadline.
+Each accepted request reserves incomplete evidence before parsing; overflow, malformed or incomplete requests, handler failures, a stopped server and missing observations fail the cell even after two valid observations.
+No callback writes a file, so a failed disk cannot hide a later observation behind earlier records.
 A cumulative second payload may retain the held token once before the letter; the session still must contain each answer exactly once.
 Configuration paths must stay inside the probe with no linked parent, and cleanup checks the created file identity before deletion.
-It stores no assistant body, removes its hook and armed state after the cell, and runtime teardown removes the private probe on every exit.
+It stores no assistant body, closes its owned listener and removes its hook after the cell, and runtime teardown removes the private probe on every exit.
 A merged session event can retain its first response timestamp, so it is not a completion-time bound.
 The fake provider calls no tools and additionally proves `held response <= first Stop <= letter response <= second Stop <= observation end`; signed-in runs use the same Stop observation without requiring a fake trace.
 Archived fake traces predating the observer can be replayed with their session and confirmed delivery record, but are not evidence that the new observer ran.

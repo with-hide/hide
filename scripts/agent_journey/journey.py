@@ -189,8 +189,7 @@ class Journey:
         # this one's cell (provider_limit.cursor).
         self.provider_mark = None
         observer_path = contract_row.get("stop_observer")
-        self.stop_observer = (stop_observer.Observer(runtime.home, runtime.probe, observer_path,
-                                                    windows=WINDOWS) if observer_path else None)
+        self.stop_observer = (stop_observer.Observer(runtime.home, runtime.probe, observer_path) if observer_path else None)
 
     # Evidence -----------------------------------------------------------
 

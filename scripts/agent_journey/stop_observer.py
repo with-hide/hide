@@ -1,25 +1,25 @@
-"""Read-only Stop evidence in the journey's private HOME, never a delivery hook.
+"""A fixture-owned HTTP Stop observer, with no command or callback file writes.
 
-The command emits nothing. Its bounded records contain probe token positions,
-not assistant text. Missing, malformed or overflowed evidence fails the cell.
+The native host posts its original payload to loopback. The observer keeps
+only bounded probe metadata in memory and replies with no model feedback.
 """
+import copy
+from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 from pathlib import Path
 import re
-import shlex
-import sys
+import secrets
+import threading
 import time
-import tempfile
 
 INPUT_CAP = 1024 * 1024
 RECORD_CAP = 8
-STATE_CAP = 4096
 RECORD_BYTES = 4096
 HOOK_SECONDS = 5
 
 
 def contained(path, root):
-    """Refuse aliases at every component before creating, reading or removing."""
+    """Refuse aliases at every component before creating or removing config."""
     path.absolute().relative_to(root)
     path.resolve().relative_to(root)
     for part in (path, *path.parents):
@@ -31,128 +31,126 @@ def contained(path, root):
 
 
 def project(payload, state, now):
-    if not isinstance(payload, dict):
-        raise ValueError("payload_not_object")
-    text = payload.get("lastAssistantMessage")
-    if not isinstance(text, str):
-        raise ValueError("missing_response")
+    if not isinstance(payload, dict) or not isinstance(payload.get("lastAssistantMessage"), str):
+        raise ValueError("invalid_stop_payload")
     return {"session": payload.get("sessionId"), "active": payload.get("stopHookActive"),
             "reason": payload.get("reason"), "subagent": bool(payload.get("subagentType")),
-            "answers": re.findall("|".join(re.escape(state[key]) for key in ("held", "token")), text),
-            "at": now}
+            "answers": re.findall("|".join(re.escape(state[key]) for key in ("held", "token")),
+                                  payload["lastAssistantMessage"]), "at": now}
 
 
-def observe(directory, stream):
-    """Reserve a failure slot before parsing or reading the payload."""
-    contained(directory, directory.parent)
-    state_path = directory / "armed.json"
-    contained(state_path, directory.parent)
-    if not state_path.exists():
-        return
-    for index in range(RECORD_CAP):
-        try:
-            output = (directory / f"{index}.json").open("x+", encoding="utf-8")
-            break
-        except FileExistsError:
-            continue
-    else:
-        (directory / "overflow").touch(exist_ok=True)
-        return
-    with output:
-        # A killed command, parser exception or failed rewrite leaves a
-        # reserved incomplete/invalid record, never just the earlier passes.
-        json.dump({"error": "observer_incomplete"}, output)
-        output.flush()
-        try:
-            with state_path.open("rb") as source:
-                state = json.loads(source.read(STATE_CAP + 1))
-            now = time.time_ns() // 1_000_000
-            if not state["start"] <= now <= state["end"]:
-                raise ValueError("outside_window")
-            raw = stream.read(INPUT_CAP + 1)
-            if len(raw) > INPUT_CAP:
-                raise ValueError("input_cap")
-            record = project(json.loads(raw), state, now)
-            if len(json.dumps(record).encode()) > RECORD_BYTES:
-                raise ValueError("record_cap")
-        except Exception:
+class Server(HTTPServer):
+    def get_request(self):
+        connection, address = super().get_request()
+        connection.settimeout(HOOK_SECONDS)
+        return connection, address
+
+    def handle_error(self, _request, _address):
+        # Never print a payload/traceback. A handler or response-write failure
+        # is independent in-memory evidence, not a write to the failed disk.
+        with self.observer.lock:
+            self.observer.failure = "observer_transport_failed"
+
+
+class Handler(BaseHTTPRequestHandler):
+    def setup(self):
+        super().setup()
+        observer = self.server.observer
+        with observer.lock:
+            self.state = observer.state
+            self.slot = None
+            if self.state is not None:
+                if len(observer.records) == RECORD_CAP:
+                    observer.failure = "observer_overflow"
+                else:
+                    self.slot = len(observer.records)
+                    observer.records.append({"error": "observer_incomplete"})
+
+    def do_POST(self):
+        observer = self.server.observer
+        if self.state is not None and self.slot is not None:
             record = {"error": "observer_failed"}
-        output.seek(0)
-        json.dump(record, output)
-        output.truncate()
-        output.flush()
+            try:
+                if self.path != observer.route:
+                    raise ValueError("wrong_route")
+                size = int(self.headers.get("Content-Length", "-1"))
+                if not 0 <= size <= INPUT_CAP or self.headers.get("Transfer-Encoding"):
+                    raise ValueError("input_cap")
+                raw = self.rfile.read(size)
+                now = time.time_ns() // 1_000_000
+                if len(raw) != size or not self.state["start"] <= now <= self.state["end"]:
+                    raise ValueError("incomplete_or_expired")
+                record = project(json.loads(raw), self.state, now)
+                if len(json.dumps(record).encode()) > RECORD_BYTES:
+                    raise ValueError("record_cap")
+            except Exception:
+                record = {"error": "observer_failed"}
+            with observer.lock:
+                observer.records[self.slot] = record
+        self.send_response(200)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, _format, *_args):
+        pass
 
 
 class Observer:
-    def __init__(self, home, probe, relative, *, windows=False):
+    def __init__(self, home, probe, relative):
         from agent_live_check.protection import private_directory, write_private
-        self.write_private = write_private
-        # Installation must never reach the signed-in operator's HOME.
         self.probe = probe.resolve()
         home = self.probe / home.relative_to(probe)
         contained(home, self.probe)
-        self.directory = Path(tempfile.mkdtemp(prefix="journey-stop-", dir=self.probe))
         self.config = home.joinpath(*relative)
         contained(self.config, self.probe)
         if not self.config.parent.exists():
             private_directory(self.config.parent)
         contained(self.config, self.probe)
-        argv = [sys.executable, str(Path(__file__).resolve()), str(self.directory)]
-        command = ("& " + " ".join("'" + word.replace("'", "''") + "'" for word in argv)
-                   if windows else shlex.join(argv))
-        self.write_private(self.config, json.dumps({"hooks": {"Stop": [{"hooks": [
-            {"type": "command", "command": command, "timeout": HOOK_SECONDS}]}]}}).encode())
-        info = self.config.stat()
-        self.identity = (info.st_dev, info.st_ino)
+        self.lock = threading.Lock()
+        self.state, self.records, self.failure = None, [], None
+        self.route = "/" + secrets.token_hex(24)
+        self.server = Server(("127.0.0.1", 0), Handler)
+        self.server.observer = self
+        self.closed = False
+        self.thread = threading.Thread(target=self.server.serve_forever,
+                                       kwargs={"poll_interval": 0.05}, daemon=True)
+        try:
+            url = f"http://127.0.0.1:{self.server.server_address[1]}{self.route}"
+            write_private(self.config, json.dumps({"hooks": {"Stop": [{"hooks": [
+                {"type": "http", "url": url, "timeout": HOOK_SECONDS}]}]}}).encode())
+            info = self.config.stat()
+            self.identity = (info.st_dev, info.st_ino)
+            self.thread.start()
+        except Exception:
+            self.server.server_close()
+            raise
 
     def arm(self, held, token, seconds):
-        contained(self.directory / "armed.json", self.probe)
         now = time.time_ns() // 1_000_000
-        self.write_private(self.directory / "armed.json", json.dumps(
-            {"held": held, "token": token, "start": now, "end": now + seconds * 1000}).encode())
+        with self.lock:
+            if self.state is not None:
+                raise ValueError("observer_already_armed")
+            self.state = {"held": held, "token": token, "start": now, "end": now + seconds * 1000}
 
     def read(self):
-        contained(self.directory, self.probe)
-        if self.directory.with_suffix(".failed").exists():
-            return [{"error": "observer_write_failed"}]
-        if (self.directory / "overflow").exists():
-            return [{"error": "observer_overflow"}]
-        records = []
-        for index in range(RECORD_CAP):
-            path = self.directory / f"{index}.json"
-            contained(path, self.probe)
-            if path.exists():
-                try:
-                    with path.open("rb") as source:
-                        records.append(json.loads(source.read(RECORD_BYTES + 1)))
-                except (OSError, ValueError):
-                    return [{"error": "observer_unreadable"}]
-        return records
+        with self.lock:
+            if self.closed or not self.thread.is_alive():
+                return [{"error": "observer_not_running"}]
+            return [{"error": self.failure}] if self.failure else copy.deepcopy(self.records)
 
     def close(self):
-        contained(self.directory / "armed.json", self.probe)
-        (self.directory / "armed.json").unlink(missing_ok=True)
+        # End the owned listener even when configuration recovery refuses a
+        # replaced path. A request is capped at HOOK_SECONDS by the socket.
+        if not self.closed:
+            self.server.shutdown()
+            self.server.server_close()
+            self.thread.join(HOOK_SECONDS + 1)
+            self.closed = True
+            if self.thread.is_alive():
+                raise RuntimeError("observer_cleanup_unconfirmed")
         contained(self.config, self.probe)
         if self.config.exists():
             info = self.config.stat()
             if (info.st_dev, info.st_ino) != self.identity:
                 raise ValueError("observer_config_replaced")
             self.config.unlink()
-        # Metadata remains in the disposable probe until runtime teardown;
-        # Journey copies it to the cell's owned evidence before this close.
-
-
-def main(directory, stream):
-    try:
-        observe(directory, stream)
-    except Exception:
-        # A reservation failure is recorded separately from the bounded
-        # slots. Exit 1 is fail-open in the host, never Stop feedback (exit 2).
-        contained(directory.with_suffix(".failed"), directory.parent)
-        directory.with_suffix(".failed").touch(exist_ok=True)
-        return 1
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main(Path(sys.argv[1]), sys.stdin.buffer))

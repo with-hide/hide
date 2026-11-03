@@ -36,7 +36,7 @@ pub struct JourneyAdapter {
     /// Paths this no-tool busy probe can observe: a bell or a root Stop
     /// continuation. Tool-only paths need a tool-using probe of their own.
     pub busy_letter: Vec<&'static str>,
-    /// Private fixture Stop command-hook file, with sessionId,
+    /// Private fixture Stop HTTP-hook file, with sessionId,
     /// lastAssistantMessage, stopHookActive and end_turn input semantics.
     pub stop_observer: Option<&'static [&'static str]>,
     /// The agent's input ladder (`AgentAdapter::input`), each rung by its

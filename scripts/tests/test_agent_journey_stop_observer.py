@@ -1,112 +1,96 @@
-"""The private observation hook cannot feed back into the agent's turn.
-
-Exercise the installed command and stdin boundary, not a mocked projection:
-Stop evidence contains only probe metadata and is bounded and removable.
-"""
-import io
+"""Exercise native HTTP input and lifecycle without callback filesystem writes."""
+import http.client
 import json
 from pathlib import Path
-import shutil
+import socket
 import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agent_journey import stop_observer
-from agent_live_check.processes import OwnedProcesses
-from agent_live_check.system import WINDOWS, home_env
-from agent_live_check.runtime import clean_env
 
 
 class StopObservation(unittest.TestCase):
-    def test_installed_hook_emits_nothing_and_records_original_stop_sequence(self):
+    def make(self, root):
+        observer = stop_observer.Observer(root / "home", root, ["hooks", "observer.json"])
+        self.addCleanup(observer.close)
+        return observer
+
+    def post(self, observer, raw):
+        config = json.loads(observer.config.read_text())
+        hook = config["hooks"]["Stop"][0]["hooks"][0]
+        self.assertEqual(hook["type"], "http")
+        url = urlsplit(hook["url"])
+        connection = http.client.HTTPConnection(url.hostname, url.port, timeout=5)
+        try:
+            connection.request("POST", url.path, raw)
+            response = connection.getresponse()
+            self.assertEqual((response.status, response.read()), (200, b""))
+        finally:
+            connection.close()
+
+    def test_native_input_stays_in_memory_even_when_all_file_writes_fail(self):
         with tempfile.TemporaryDirectory() as directory:
-            probe = Path(directory)
-            home = probe / "home"
-            # The kit can create its hooks directory with ordinary modes;
-            # HOME is the private boundary. Do not chmod existing kit paths.
-            parent = home / ".agent" / "hooks"
+            root = Path(directory)
+            parent = root / "home" / "hooks"
             parent.mkdir(parents=True, mode=0o755)
-            before_mode = parent.stat().st_mode
-            observer = stop_observer.Observer(home, probe, [".agent", "hooks", "observer.json"], windows=WINDOWS)
-            self.addCleanup(observer.close)
-            self.assertEqual(parent.stat().st_mode, before_mode)
+            mode = parent.stat().st_mode
+            observer = self.make(root)
+            self.assertEqual(parent.stat().st_mode, mode)
+            self.post(observer, b"[]")
+            self.assertEqual(observer.read(), [])  # outside the armed cell
             observer.arm("JOURNEY-1111AAAA", "JOURNEY-2222BBBB", 60)
-            config = json.loads(observer.config.read_text())
-            handler = config["hooks"]["Stop"][0]["hooks"][0]
-            command = handler["command"]
-            shell = ([shutil.which("pwsh") or shutil.which("powershell"), "-NoProfile", "-Command"]
-                     if WINDOWS else ["/bin/sh", "-c"])
-            owner = OwnedProcesses()
-            try:
-                for active, answer in ((False, "JOURNEY-1111AAAA"), (True, "JOURNEY-2222BBBB")):
-                    payload = dict(sessionId="session", reason="end_turn", stopHookActive=active,
-                                   lastAssistantMessage="private prose " + answer)
-                    with tempfile.TemporaryFile() as stream:
-                        stream.write(json.dumps(payload).encode())
-                        stream.seek(0)
-                        code, out, err = owner.run([*shell, command], env={**clean_env(private=True), **home_env(home)}, stdin=stream,
-                                                   seconds=handler["timeout"])
-                    self.assertEqual((code, out, err), (0, "", ""))
-                rows = observer.read()
-                self.assertEqual([row["active"] for row in rows], [False, True])
-                self.assertEqual([row["answers"] for row in rows], [["JOURNEY-1111AAAA"], ["JOURNEY-2222BBBB"]])
-                # A malformed third invocation must not vanish behind two
-                # already valid observations and certify a false pass.
-                with tempfile.TemporaryFile() as stream:
-                    stream.write(b"[]")
-                    stream.seek(0)
-                    result = owner.run([*shell, command], env={**clean_env(private=True), **home_env(home)},
-                                       stdin=stream, seconds=handler["timeout"])
-                self.assertEqual(result, (0, "", ""))
-                self.assertEqual(observer.read()[-1], {"error": "observer_failed"})
-                self.assertNotIn("private prose", json.dumps(rows))
-                self.assertTrue(all(row["session"] == "session" for row in rows))
-            finally:
-                owner.close()
-                observer.close()
+            for active, answer in ((False, "JOURNEY-1111AAAA"), (True, "JOURNEY-2222BBBB")):
+                self.post(observer, json.dumps(dict(sessionId="session", reason="end_turn",
+                    stopHookActive=active, lastAssistantMessage="private prose " + answer)).encode())
+            rows = observer.read()
+            self.assertEqual([r["active"] for r in rows], [False, True])
+            self.assertEqual([r["answers"] for r in rows], [["JOURNEY-1111AAAA"], ["JOURNEY-2222BBBB"]])
+            self.assertNotIn("private prose", json.dumps(rows))
+            original = Path.open
+            def refuse_writes(path, mode="r", *args, **kwargs):
+                if any(flag in mode for flag in "wax+"):
+                    raise OSError("disk writes unavailable")
+                return original(path, mode, *args, **kwargs)
+            with patch.object(Path, "open", refuse_writes):
+                self.post(observer, b"[]")
+            self.assertEqual(observer.read()[-1], {"error": "observer_failed"})
+            port = observer.server.server_address[1]
+            observer.close()
+            self.assertFalse(observer.thread.is_alive())
             self.assertFalse(observer.config.exists())
-            self.assertFalse((observer.directory / "armed.json").exists())
+            with self.assertRaises(OSError):
+                socket.create_connection(("127.0.0.1", port), timeout=1)
 
     def test_bad_payload_and_record_overflow_are_failure_evidence(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            observer = stop_observer.Observer(root / "home", root, ["hooks", "observer.json"])
-            try:
-                observer.arm("held", "letter", 60)
-                for raw in (b"[]", b"null", b"{}", b"{", b"x" * (stop_observer.INPUT_CAP + 1)):
-                    stop_observer.observe(observer.directory, io.BytesIO(raw))
-                self.assertTrue(all(row.get("error") for row in observer.read()))
-                for _ in range(stop_observer.RECORD_CAP):
-                    stop_observer.observe(observer.directory, io.BytesIO(b"{}"))
-                self.assertEqual(observer.read(), [{"error": "observer_overflow"}])
-                self.assertEqual(len(list(observer.directory.glob("[0-9].json"))), stop_observer.RECORD_CAP)
-            finally:
-                observer.close()
+            observer = self.make(Path(directory))
+            observer.arm("held", "letter", 60)
+            for raw in (b"[]", b"null", b"{}", b"{"):
+                self.post(observer, raw)
+            self.assertTrue(all(row.get("error") for row in observer.read()))
+            for _ in range(stop_observer.RECORD_CAP):
+                self.post(observer, b"{}")
+            self.assertEqual(observer.read(), [{"error": "observer_overflow"}])
+            self.assertEqual(len(observer.records), stop_observer.RECORD_CAP)
 
-    def test_interruption_and_failed_reservation_cannot_hide_behind_prior_records(self):
+    def test_truncated_request_and_stopped_server_cannot_certify_prior_records(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            observer = stop_observer.Observer(root / "home", root, ["hooks", "observer.json"])
-            try:
-                observer.arm("held", "letter", 60)
-                class Interrupted:
-                    def read(self, _limit):
-                        raise KeyboardInterrupt()
-                with self.assertRaises(KeyboardInterrupt):
-                    stop_observer.observe(observer.directory, Interrupted())
-                self.assertEqual(observer.read(), [{"error": "observer_incomplete"}])
-                original = Path.open
-                def fail_slot(path, *args, **kwargs):
-                    if path.name == "1.json":
-                        raise OSError("reservation refused")
-                    return original(path, *args, **kwargs)
-                with patch.object(Path, "open", fail_slot):
-                    self.assertEqual(stop_observer.main(observer.directory, io.BytesIO(b"{}")), 1)
-                self.assertEqual(observer.read(), [{"error": "observer_write_failed"}])
-            finally:
-                observer.close()
+            observer = self.make(Path(directory))
+            observer.arm("held", "letter", 60)
+            # The accepted request reserves failure evidence before body parsing.
+            connection = socket.create_connection(observer.server.server_address, timeout=2)
+            connection.sendall(("POST " + observer.route + " HTTP/1.0\r\nContent-Length: 20\r\n\r\n{}").encode())
+            connection.shutdown(socket.SHUT_WR)
+            connection.recv(4096)
+            connection.close()
+            self.assertTrue(observer.read()[0].get("error"))
+            observer.server.shutdown()
+            observer.thread.join(2)
+            self.assertEqual(observer.read(), [{"error": "observer_not_running"}])
 
     def test_linked_config_parent_and_rebound_cleanup_never_touch_outside_files(self):
         with tempfile.TemporaryDirectory() as directory:

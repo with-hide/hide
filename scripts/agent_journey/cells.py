@@ -288,11 +288,14 @@ def busy_letter_verdict(shown, read, session, held, token, *, declared, input_ru
         return FAIL, "the letter answer did not follow the held answer"
     if route == "bell_hook":
         claim = shown.get("bell_turn")
-        after = bell_turn(events, shown.get("bell_line"))
+        between = events[positions[0][0] + 1:positions[1][0]]
+        line = canonical_prompt(shown.get("bell_line") or "")
+        bells_in_turn = sum(event.get("role") == "user" and line
+                            == canonical_prompt(event.get("text") or "") for event in between)
         if (not isinstance(claim, dict)
                 or claim.get("session") != hashlib.sha256(session.encode()).hexdigest()
                 or claim.get("digest") != hashlib.sha256(canonical_prompt(shown.get("bell_line") or "").encode()).hexdigest()
-                or after is None or not positions[0][0] < after - 1 < positions[1][0]):
+                or not line or bells_in_turn != 1):
             return FAIL, "hook intake has no bell-owned turn between the held and letter answers"
     if stops is not None and any(row.get("error") for row in stops):
         return FAIL, "the Stop observer recorded an invalid invocation"
