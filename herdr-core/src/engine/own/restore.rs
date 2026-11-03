@@ -138,6 +138,10 @@ pub(super) struct Resume {
     name: Option<String>,
     session: Option<String>,
     argv: Vec<String>,
+    /// Its hook last said its turn was running or waiting on the operator:
+    /// the turn was cut off, and the core tells the agent once it is back
+    /// (PRD engine-bundle-4-herdr-removal D-22).
+    cut: bool,
 }
 
 /// What each restarted pane's saved agent gets, in `restarts` order: a
@@ -201,6 +205,7 @@ fn plans(
                             name: agent.name.clone(),
                             session: agent.session.clone(),
                             argv,
+                            cut: false,
                         }),
                     },
                 }
@@ -209,6 +214,31 @@ fn plans(
         plans.insert(restart.pane.clone(), plan);
     }
     plans
+}
+
+/// Whether `resume`'s agent was cut off mid-turn: the last record its hook
+/// wrote in the pane's file under `home` for that agent, and for its
+/// conversation when both name one, says its turn was running or waiting on
+/// the operator. A pane no hook wrote, or an agent that rested, was not.
+fn was_cut(catalog: &Catalog, home: &Path, resume: &Resume) -> bool {
+    hide_agent_hooks::counters::records(home, &resume.pane)
+        .iter()
+        .rev()
+        .find(|record| {
+            agents::definition(catalog, &record.agent)
+                .is_some_and(|definition| definition.id == resume.kind)
+                && match (resume.session.as_deref(), record.session.as_deref()) {
+                    (Some(resumed), Some(reported)) => resumed == reported,
+                    _ => true,
+                }
+        })
+        .is_some_and(|record| {
+            matches!(
+                record.turn,
+                Some(hide_agent_hooks::report::HookTurn::Working)
+                    | Some(hide_agent_hooks::report::HookTurn::Waiting)
+            )
+        })
 }
 
 /// `argv`, a resume of `agent` in `restart`'s pane, followed by the model
@@ -399,13 +429,14 @@ impl OwnEngine<'static> {
             .as_ref()
             .map(|place| crate::herdr_import::waiting(&place.engine_dir))
             .unwrap_or_default();
-        let plans = plans(
+        let mut plans = plans(
             &self.shared.definitions.get(),
             launches,
             &both,
             running,
             &waiting,
         );
+        self.mark_cut(&mut plans);
         let (failures, mut resumes) = self.start_restarts(&restarts, &plans, home.as_deref());
         for restart in &idle {
             match plans.get(&restart.pane) {
@@ -622,9 +653,31 @@ impl OwnEngine<'static> {
         )
     }
 
+    /// Marks each resume whose agent's hook last said its turn was running or
+    /// waiting on the operator in that conversation: the move or the
+    /// machine's restart cut that turn off (D-22, B9). Read from the hook
+    /// files on this machine; a device's engine reads none (`hooks_home`).
+    fn mark_cut(&self, plans: &mut BTreeMap<String, Plan>) {
+        let Some(home) = self
+            .shared
+            .place
+            .as_ref()
+            .and_then(|place| place.hooks_home.as_deref())
+        else {
+            return;
+        };
+        let catalog = self.shared.definitions.get();
+        for plan in plans.values_mut() {
+            if let Plan::Resume(resume) = plan {
+                resume.cut = was_cut(&catalog, home, resume);
+            }
+        }
+    }
+
     /// Types each of `resumes` into its pane, one pane after another, each
     /// once its shell is ready; one that cannot be typed leaves its pane a
-    /// shell and logs why.
+    /// shell and logs why. A cut resume is owed its letter from before its
+    /// line is typed, so the agent's first hook report never comes first.
     pub(super) fn resume_agents(engine: &std::sync::Weak<super::Shared>, resumes: &[Resume]) {
         let mut shell = None;
         for resume in resumes {
@@ -647,6 +700,16 @@ impl OwnEngine<'static> {
                     ShellStart::of_tab(true, engine.shared.holders.shell_launch().as_ref())
                 })
                 .clone();
+            let cut = || {
+                engine
+                    .shared
+                    .cut
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+            };
+            if resume.cut {
+                cut().insert(resume.pane.clone(), resume.kind.clone());
+            }
             match engine.resume_agent(resume, shell) {
                 Ok(()) => crate::diagnostic!(serde_json::json!({
                     "component": "own_engine",
@@ -654,14 +717,19 @@ impl OwnEngine<'static> {
                     "pane_id": resume.pane,
                     "agent": resume.kind,
                     "by_session": resume.session.is_some(),
+                    "cut": resume.cut,
                 })),
-                Err(why) => crate::diagnostic!(serde_json::json!({
-                    "component": "own_engine",
-                    "kind": "agent.resume_not_typed",
-                    "pane_id": resume.pane,
-                    "agent": resume.kind,
-                    "message": why,
-                })),
+                Err(why) => {
+                    // An agent that never resumed is owed nothing.
+                    cut().remove(&resume.pane);
+                    crate::diagnostic!(serde_json::json!({
+                        "component": "own_engine",
+                        "kind": "agent.resume_not_typed",
+                        "pane_id": resume.pane,
+                        "agent": resume.kind,
+                        "message": why,
+                    }));
+                }
             }
         }
     }

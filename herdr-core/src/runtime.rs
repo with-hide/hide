@@ -106,6 +106,7 @@ mod tab_focus;
 mod terminal;
 mod terminal_input;
 mod tree_close;
+mod transition_letters;
 mod tree_reopen;
 pub(crate) mod typed_input;
 mod unreadable_letters;
@@ -1853,6 +1854,9 @@ pub struct Runtime {
     letter_wakes: agent_sleep::letters::LetterWakes,
     /// The letters held on a session Hide cannot read whose senders were told.
     unreadable_letters: unreadable_letters::UnreadableLetters,
+    /// The letters owed to agents whose turn a move or a machine restart cut
+    /// off (`transition_letters.rs`); session-only.
+    transition_letters: transition_letters::TransitionLetters,
     /// Panes with a Reopen running or just refused, until the pane connects,
     /// leaves, or stops showing a connection chip (B29). One entry per pane,
     /// so a second press while one runs starts nothing.
@@ -2591,6 +2595,7 @@ impl Runtime {
             agent_wake_started: HashMap::new(),
             letter_wakes: Default::default(),
             unreadable_letters: Default::default(),
+            transition_letters: Default::default(),
             pane_reopens: HashMap::new(),
             update_badges: HashMap::new(),
             fork_sequence: 0,

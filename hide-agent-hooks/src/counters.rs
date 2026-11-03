@@ -390,6 +390,31 @@ pub struct SessionRecord {
     pub version: u32,
     pub session: Option<String>,
     pub counters: PaneCounters,
+    /// The turn its last report said: a turn that stands at `Working` or
+    /// `Waiting` in a pane whose agent no longer runs was cut off (PRD
+    /// engine-bundle-4-herdr-removal D-22).
+    pub turn: Option<HookTurn>,
+}
+
+impl SessionRecord {
+    fn of(record: &Record) -> Option<Self> {
+        Some(Self {
+            agent: record.agent.clone()?,
+            version: record.version?,
+            session: record.session.clone(),
+            counters: record.counters(),
+            turn: record.turn,
+        })
+    }
+}
+
+/// The records of `pane_id`'s file, oldest first; none for a pane no hook
+/// wrote, or whose file cannot be read.
+pub fn records(home: &Path, pane_id: &str) -> Vec<SessionRecord> {
+    read_file(home, pane_id).map_or_else(
+        |_| Vec::new(),
+        |file| file.sessions.iter().filter_map(SessionRecord::of).collect(),
+    )
 }
 
 /// Every pane's records, oldest first, by the pane id its file is named for
@@ -428,18 +453,8 @@ pub fn every_pane(home: &Path, limit: usize) -> Vec<(String, Vec<SessionRecord>)
         let Ok(file) = read_file(home, &pane_id) else {
             continue;
         };
-        let records: Vec<SessionRecord> = file
-            .sessions
-            .iter()
-            .filter_map(|record| {
-                Some(SessionRecord {
-                    agent: record.agent.clone()?,
-                    version: record.version?,
-                    session: record.session.clone(),
-                    counters: record.counters(),
-                })
-            })
-            .collect();
+        let records: Vec<SessionRecord> =
+            file.sessions.iter().filter_map(SessionRecord::of).collect();
         if !records.is_empty() {
             panes.push((pane_id, records));
         }

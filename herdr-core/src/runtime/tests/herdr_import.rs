@@ -215,3 +215,29 @@ fn waiting_conversations_are_offered_only_once_their_herdr_no_longer_runs() {
     );
     assert!(act(&mut runtime, "import"));
 }
+
+/// B9: an agent whose turn was cut off is told once it is the agent seen in
+/// its pane, and one that never shows is given up on rather than kept.
+#[test]
+fn a_cut_agent_is_told_once_it_shows_and_given_up_on_when_it_never_does() {
+    let mut runtime = runtime();
+    runtime.owe_transition_letter("h1:p1", "s-1", 1_000);
+    runtime.owe_transition_letter("h1:p2", "s-2", 1_000);
+    runtime.drive_transition_letters(2_000);
+    assert_eq!(runtime.transition_letters_owed(), ["h1:p1", "h1:p2"]);
+    let actor = crate::delivery::Actor {
+        pane_id: "h1:p1".into(),
+        name: "worker".into(),
+        kind: "claude".into(),
+        device_id: runtime.node().as_str().into(),
+        session: None,
+    };
+    runtime.delivery_observations.insert(
+        "h1:p1".into(),
+        super::super::agent_sleep::letters::asleep_observation(actor),
+    );
+    runtime.drive_transition_letters(3_000);
+    assert_eq!(runtime.transition_letters_owed(), ["h1:p2"]);
+    runtime.drive_transition_letters(1_000 + 10 * 60 * 1000 + 1);
+    assert!(runtime.transition_letters_owed().is_empty());
+}

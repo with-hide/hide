@@ -790,14 +790,22 @@ impl Core {
                 .and_then(|_| runtime.delivery_engine(device))
         };
         // The engine is asked off the runtime lock, as every engine call is.
-        if let (Some(engine), Some(session)) = (engine, report.session.as_deref())
-            && let Err(error) = engine.hook_session(caller, &report.runtime, session)
-        {
-            crate::diagnostic!(serde_json::json!({
-                "component": "agent_hooks", "kind": "hook_session.refused",
-                "pane": caller, "device": device, "agent": report.runtime,
-                "message": error.to_string(),
-            }));
+        if let (Some(engine), Some(session)) = (engine, report.session.as_deref()) {
+            match engine.hook_session(caller, &report.runtime, session) {
+                Ok(false) => {}
+                // An agent resumed after its turn was cut off is owed one
+                // letter (PRD engine-bundle-4-herdr-removal D-22).
+                Ok(true) => lock_recover(&self.runtime).owe_transition_letter(
+                    caller,
+                    session,
+                    crate::links::now_ms(),
+                ),
+                Err(error) => crate::diagnostic!(serde_json::json!({
+                    "component": "agent_hooks", "kind": "hook_session.refused",
+                    "pane": caller, "device": device, "agent": report.runtime,
+                    "message": error.to_string(),
+                })),
+            }
         }
         Ok(())
     }

@@ -92,6 +92,11 @@ const UNKNOWN_SOURCE: &str = "unknown_read_source";
 pub(crate) struct Place {
     pub(crate) engine_dir: PathBuf,
     pub(crate) home: String,
+    /// The home whose Hide agent hook files this engine's panes write, when
+    /// those files are on the machine the core runs on: the daemon's own
+    /// engine. A device's engine has none; its panes' files are on the
+    /// device.
+    pub(crate) hooks_home: Option<PathBuf>,
     pub(crate) node: Arc<dyn NodeLink>,
     /// The agent definitions the operator's folder held when the daemon
     /// started, so a restore resumes their agents before the core's first
@@ -129,6 +134,11 @@ struct Shared {
     /// reserves its id and starts its holder first), laid on once it has.
     /// The oldest goes first past [`EARLY_FACTS_CAP`].
     early: Mutex<Vec<(String, PaneFacts)>>,
+    /// The panes whose agent the restore resumed after its turn was cut off,
+    /// by the definition resumed there, until its hook names its session
+    /// (PRD engine-bundle-4-herdr-removal D-22). Bounded by one restore's
+    /// resumes.
+    cut: Mutex<BTreeMap<String, String>>,
 }
 
 /// The most panes whose facts wait to enter the topology: a node's cap of
@@ -211,6 +221,7 @@ pub(crate) fn open_device(
         Place {
             engine_dir,
             home,
+            hooks_home: None,
             node,
             definitions,
             launches,
@@ -320,6 +331,7 @@ impl OwnEngine<'static> {
                 }),
                 definitions: agents::Definitions::new(definitions),
                 early: Mutex::default(),
+                cut: Mutex::default(),
             }),
             gates: Vec::new(),
         };
@@ -1314,7 +1326,7 @@ impl<'g> Engine for OwnEngine<'g> {
         self.changed();
     }
 
-    fn hook_session(&self, pane: &str, kind: &str, session: &str) -> Answer<()> {
+    fn hook_session(&self, pane: &str, kind: &str, session: &str) -> Answer<bool> {
         self.check()?;
         let catalog = self.shared.definitions.get();
         let definition =
@@ -1328,7 +1340,14 @@ impl<'g> Engine for OwnEngine<'g> {
         {
             self.changed();
         }
-        Ok(())
+        // The first session the resumed agent names is the conversation it
+        // resumed, whatever id its runtime gives it now.
+        let mut cut = self
+            .shared
+            .cut
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Ok(cut.get(pane) == Some(&definition.id) && cut.remove(pane).is_some())
     }
 
     fn session(&self, _wait: Wait) -> Answer<ProjectionState> {
@@ -3308,6 +3327,7 @@ mod tests {
             engine_dir: hide_kit::layout::engine_dir(&root.join("state")),
             node: Arc::new(hide_node::Local::new(Some(home.clone()))),
             home: wire(&home),
+            hooks_home: Some(home.clone()),
             definitions: Arc::new(hide_agent_adapter::definition::Catalog::read(Vec::new())),
             launches: Arc::default(),
         }
@@ -4483,6 +4503,92 @@ mod tests {
             "{:?}",
             holders.typed(&other)
         );
+    }
+
+    /// PRD engine-bundle-4-herdr-removal D-22, B9: an agent whose hook last
+    /// said its turn was running when the machine went down is resumed and,
+    /// once its hook names its session, said to be owed its letter, once; an
+    /// agent that had finished its turn is owed none.
+    #[test]
+    fn a_resumed_agent_whose_turn_was_cut_off_is_owed_one_letter_and_a_resting_one_none() {
+        use hide_agent_hooks::counters::{Change, Reporter, Said, apply};
+        use hide_agent_hooks::report::HookTurn;
+        let root = tempfile::tempdir().unwrap();
+        let place = place(root.path());
+        let folder = root.path().join("repo");
+        for dir in [&home(&place), &folder] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let first_holders = Holders::found(HolderRecovery::default());
+        first_holders.idle_shell(41, "zsh");
+        let first = OwnEngine::open(
+            Arc::clone(&first_holders) as Arc<dyn PaneHolders>,
+            place.clone(),
+        )
+        .unwrap();
+        let (_, _, working) = first
+            .create_workspace(WAIT, &wire(&folder), "w", true, Env::new())
+            .unwrap();
+        let resting = first
+            .split_pane_at(
+                WAIT,
+                &working,
+                ClosedSplitDirection::Right,
+                &wire(&folder),
+                0.5,
+                Env::new(),
+            )
+            .unwrap();
+        for (pane, session, turn) in [
+            (&working, "s-1", HookTurn::Working),
+            (&resting, "s-2", HookTurn::Done),
+        ] {
+            first
+                .report_agent_session(WAIT, pane, "claude", session, 1)
+                .unwrap();
+            // What the agent's hook wrote last in the pane's file.
+            apply(
+                &home(&place),
+                pane,
+                Change::None,
+                Reporter {
+                    agent: Some("claude"),
+                    session: Some(session),
+                },
+                Said::Turn(turn),
+                None,
+            )
+            .unwrap();
+        }
+        drop(first);
+
+        let holders = Arc::new(Holders::default());
+        holders.idle_shell(52, "zsh");
+        let next = OwnEngine::open(
+            Arc::clone(&holders) as Arc<dyn PaneHolders>,
+            place.clone(),
+        )
+        .unwrap();
+        holders.hand(HolderRecovery {
+            owner: 1,
+            ended: vec![working.clone(), resting.clone()],
+            ..HolderRecovery::default()
+        });
+        next.restored().unwrap();
+        for pane in [&working, &resting] {
+            assert!(
+                holders.wait_typed(pane).starts_with("claude --resume"),
+                "{:?}",
+                holders.typed(pane)
+            );
+        }
+
+        assert!(next.hook_session(&working, "claude", "s-1").unwrap());
+        assert!(
+            !next.hook_session(&working, "claude", "s-1").unwrap(),
+            "owed once"
+        );
+        assert!(!next.hook_session(&resting, "claude", "s-2").unwrap());
     }
 
     /// D-7: a pane whose holder outlived the daemon keeps its program, but
