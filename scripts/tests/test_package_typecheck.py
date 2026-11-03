@@ -27,7 +27,7 @@ class PackageTypecheck(unittest.TestCase):
         self.repo = Path(self.temp.name)
         scripts = self.repo / "desktop/scripts"
         scripts.mkdir(parents=True)
-        for name in ("package", "build-identity", "device-helpers", "fuses", "installers", "macos-signing", "release-binaries"):
+        for name in ("package", "build-identity", "copy-tree", "device-helpers", "fuses", "installers", "macos-signing", "release-binaries"):
             shutil.copyfile(ROOT / f"desktop/scripts/{name}.mjs", scripts / f"{name}.mjs")
         (self.repo / "scripts").mkdir()
         shutil.copyfile(ROOT / "scripts/check-release-assets.mjs", self.repo / "scripts/check-release-assets.mjs")

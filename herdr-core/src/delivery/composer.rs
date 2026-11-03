@@ -1,16 +1,17 @@
-//! Reading the composer of a pane whose letters wait on a possible draft
-//! (`docs/delivery.md`, Reading the composer).
+//! Reading the composer of a pane whose letters, or whose Conductor's
+//! mission answer, wait on a possible draft (`docs/delivery.md`, Reading the
+//! composer).
 //!
 //! Hide routes every key to a pane but cannot see the composer, so any key
 //! not followed by a submission holds the bell as a draft, and typing then
-//! erasing held letters for up to the hour. When such a pane rests, the
+//! erasing held letters for up to the hour. Once input is quiet, the
 //! doorbell asks Herdr once for its visible screen with styling and judges it
 //! by the agent's composer declaration (`hide_agent_adapter::composer`). Only
 //! a positive "empty" releases the draft; anything else keeps the hold as
 //! before and is logged without the screen's text.
 //!
 //! The read runs on the doorbell's thread, off the runtime lock, at most
-//! once per draft episode (the input time that made the draft) and within
+//! once per observed draft and state generation and within
 //! the doorbell's per-pass budget of Herdr calls. The same read checks each
 //! agent version at moments its composer is known empty, and only a version
 //! seen read empty there is released, so a screen that changed under the
@@ -27,7 +28,7 @@ use hide_agent_adapter::composer::{Composer, Miss, Verdict};
 use serde_json::json;
 
 use crate::engine::{Engine, EngineError, Wait};
-use crate::runtime::Runtime;
+use crate::runtime::{Runtime, delivery::Observation};
 
 use super::Actor;
 
@@ -40,8 +41,7 @@ pub(super) const CHECK_EVERY_MS: u64 = 5_000;
 
 /// A composer the doorbell may read, with the facts the read is made for.
 pub(crate) struct Read {
-    pub actor: Actor,
-    pub raw_pane_id: String,
+    pub observed: Observation,
     /// The adapter id.
     pub agent: &'static str,
     pub composer: Composer,
@@ -53,11 +53,11 @@ pub(crate) struct Read {
 
 /// What the reader keeps between doorbell passes. Each map is keyed by a pane
 /// and pruned to the panes of the pass (`retain`) or of the observations, so
-/// it is bounded by the open letters and the observation limit.
+/// it is bounded by the open letters and answers and the observation limit.
 #[derive(Default)]
 pub(crate) struct Reader {
     /// The draft episode each pane's composer was read for.
-    read: HashMap<String, u64>,
+    read: HashMap<String, (Actor, u64, Option<u64>)>,
     /// Why a pane's draft episode is not read, logged once per change.
     skipped: HashMap<String, (u64, &'static str)>,
     /// The prompt hook moment each pane was tried at for a version check.
@@ -66,15 +66,15 @@ pub(crate) struct Reader {
 }
 
 impl Reader {
-    /// Forgets the panes that have no pending letter any more.
+    /// Forgets the panes that have no pending letter or answer any more.
     pub(crate) fn retain(&mut self, panes: impl Fn(&str) -> bool) {
         self.read.retain(|pane, _| panes(pane));
         self.skipped.retain(|pane, _| panes(pane));
     }
 
-    /// Reads the composer of `recipient`, held on a possible draft, once per
-    /// draft episode, and releases the draft when the screen shows the
-    /// composer empty. Returns whether a Herdr call was made, which counts
+    /// Reads the composer of `recipient`, a letter's or an answer's, held
+    /// on a possible draft, once per draft episode, and releases the draft
+    /// when the screen shows the composer empty. Returns whether a Herdr call was made, which counts
     /// against the doorbell's per-pass budget.
     pub(crate) fn release(&mut self, owner: &Mutex<Runtime>, recipient: &Actor, now: u64) -> bool {
         let Some((episode, read)) = owner
@@ -85,9 +85,6 @@ impl Reader {
             return false;
         };
         let pane = &recipient.pane_id;
-        if self.read.get(pane) == Some(&episode) {
-            return false;
-        }
         let read = match read {
             Ok(read) => read,
             Err(reason) => {
@@ -98,7 +95,15 @@ impl Reader {
                 return false;
             }
         };
-        self.read.insert(pane.clone(), episode);
+        let key = (
+            read.observed.actor.clone(),
+            read.observed.input_generation,
+            read.observed.state_change_seq,
+        );
+        if self.read.get(pane) == Some(&key) {
+            return false;
+        }
+        self.read.insert(pane.clone(), key);
         let reading = screen(owner, &read);
         crate::diagnostic!(json!({"component":"delivery","kind":"composer.read",
             "pane_id":pane,"agent":read.agent,"version":read.version,
@@ -106,7 +111,7 @@ impl Reader {
         if reading == Ok(Ok(()))
             && let Ok(mut guard) = owner.lock()
         {
-            guard.release_empty_composer(&read.actor, read.input_at_unix_ms, now);
+            guard.release_empty_composer(&read.observed, now);
         }
         true
     }
@@ -128,7 +133,7 @@ impl Reader {
             return false;
         };
         self.attempted
-            .insert(read.actor.pane_id.clone(), read.input_at_unix_ms);
+            .insert(read.observed.actor.pane_id.clone(), read.input_at_unix_ms);
         let reading = screen(owner, &read);
         // A failed read says nothing about the screen, so it is no miss and
         // the version waits for its next known-empty moment.
@@ -139,7 +144,7 @@ impl Reader {
         });
         crate::diagnostic!(
             json!({"component":"delivery","kind":"composer.version_checked",
-            "pane_id":read.actor.pane_id,"agent":read.agent,"version":read.version,
+            "pane_id":read.observed.actor.pane_id,"agent":read.agent,"version":read.version,
             "verdict":verdict_code(reading),"reason":miss_code(reading),
             "misses":check.as_ref().map(|check| check.misses),
             "retry_after_ms":check.filter(|check| !check.passed)
@@ -172,7 +177,7 @@ fn screen(owner: &Mutex<Runtime>, read: &Read) -> Reading {
     let engine = owner
         .lock()
         .ok()
-        .and_then(|guard| guard.delivery_engine(&read.actor.device_id))
+        .and_then(|guard| guard.delivery_engine(&read.observed.actor.device_id))
         .ok_or("pane_unavailable")?;
     judge(engine.as_ref(), read)
 }
@@ -184,8 +189,8 @@ pub(crate) const NOT_EMPTY: &str = "composer_not_empty";
 /// menu or a dialog over it), or a failed or cut read.
 pub(crate) const UNCONFIRMED: &str = "composer_unconfirmed";
 
-/// Whether a forced letter may be typed into `pane`, whose agent is of
-/// `kind`, now (PRD engine-bundle-1 D-14): its visible screen read with
+/// Whether a letter may be typed into `pane`, whose agent is of
+/// `kind`, now: its visible screen read with
 /// styling and judged by the kind's composer declaration. Any version is
 /// judged, since a screen not read empty is never typed into. Runs off the
 /// runtime lock.
@@ -250,7 +255,7 @@ pub(crate) fn shows(
 
 fn judge(engine: &dyn Engine, read: &Read) -> Reading {
     let screen = engine
-        .read_screen(Wait::Small(READ_TIMEOUT), &read.raw_pane_id)
+        .read_screen(Wait::Small(READ_TIMEOUT), &read.observed.raw_pane_id)
         .map_err(|error| match error {
             EngineError::Request(_) => "herdr_parameters",
             EngineError::Answer(_) => "herdr_format",

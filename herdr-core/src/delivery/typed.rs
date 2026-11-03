@@ -88,8 +88,8 @@ pub enum SendRoute {
     /// (`AgentApi::LaunchPrompt`): the CLI holds it through its own start
     /// screens and submits it after them.
     Launch,
-    /// Handed to the agent's own way in (`codex queue`), which keeps it
-    /// until the agent takes it.
+    /// A queue send saved by an earlier build. Keep its receipt and never
+    /// type it again: the queue can still deliver it after this upgrade.
     Channel,
     /// The send's answer was lost: it may have arrived.
     Lost,

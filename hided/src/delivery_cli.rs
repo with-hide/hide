@@ -1,10 +1,10 @@
 //! Small typed command surface for the core-owned durable mailbox.
 
-use herdr_core::delivery::{BODY_LIMIT, Command, HOOK_LETTERS};
+use herdr_core::delivery::{BODY_LIMIT, BUNDLE_LETTERS, Command};
 
 use crate::env::Env;
 
-pub const USAGE: &str = "hide request send <target> --intent <key> --body <text> [--kind request|block|report|progress] [--now | --force]\nhide request reply <id> --intent <key> --body <text>\nhide request ack|cancel|show <id>\nhide inbox [--hook [--prompt-digest <sha256>] [--session <id>] [--tool|--turn-end]]\nhide watch start <target> [--observer <id>] [--actor <id>]\nhide watch assign <watch-or-target-id> --observer <id> [--actor <id>] [--expected-generation <n>] [--approval <text>]\nhide watch stop <id>\nhide watch list\nThese commands need a running Hide and a current agent pane; Hide's window does not have to be open.";
+pub const USAGE: &str = "hide request send <target> --intent <key> --body <text> [--kind request|block|report|progress] [--now | --force]\nhide request reply <id> --intent <key> --body <text>\nhide request ack|cancel|show <id>\nhide inbox [--hook [--prompt-digest <sha256>] [--session <id>] [--tool|--turn-end]]\nhide inbox --ack <bundle>\nhide watch start <target> [--observer <id>] [--actor <id>]\nhide watch assign <watch-or-target-id> --observer <id> [--actor <id>] [--expected-generation <n>] [--approval <text>]\nhide watch stop <id>\nhide watch list\nThese commands need a running Hide and a current agent pane; Hide's window does not have to be open.";
 
 pub fn parse<'a>(
     topic: &str,
@@ -13,7 +13,7 @@ pub fn parse<'a>(
     let verb = args.next().map(String::as_str);
     if topic == "inbox" {
         return match verb {
-            None => Ok(Command::Inbox),
+            None => Ok(Command::Inbox { bundle: true }),
             Some("--hook") => {
                 let mut prompt_digest = None;
                 let mut session = None;
@@ -51,19 +51,27 @@ pub fn parse<'a>(
                 if point != hide_node_link::panes::PullPoint::Prompt && session.is_none() {
                     return Err(USAGE.into());
                 }
+                // This `hide` confirms a whole bundle.
                 Ok(Command::Pull {
                     prompt_digest,
                     session,
                     point,
+                    bundle: true,
                 })
             }
             Some("--confirm") => {
                 let ids: Vec<_> = args.cloned().collect();
-                if ids.is_empty() || ids.len() > HOOK_LETTERS || !ids.iter().all(|id| key(id)) {
+                if ids.is_empty() || ids.len() > BUNDLE_LETTERS || !ids.iter().all(|id| key(id)) {
                     return Err(USAGE.into());
                 }
                 Ok(Command::Confirm { ids })
             }
+            Some("--ack") => match (args.next(), args.next()) {
+                (Some(bundle), None) if key(bundle) => Ok(Command::AckBundle {
+                    bundle: bundle.clone(),
+                }),
+                _ => Err(USAGE.into()),
+            },
             _ => Err(USAGE.into()),
         };
     }
@@ -196,6 +204,7 @@ pub fn run(env: &Env, command: Command) -> Result<(), String> {
             prompt_digest,
             session,
             point,
+            bundle,
         } = &command
         {
             return crate::workspace_cli::request_hook(
@@ -204,6 +213,7 @@ pub fn run(env: &Env, command: Command) -> Result<(), String> {
                     prompt_digest: prompt_digest.clone(),
                     session: session.clone(),
                     point: *point,
+                    bundle: *bundle,
                 },
             );
         }
@@ -242,7 +252,10 @@ mod tests {
     }
     #[test]
     fn typed_cli_requires_intent_and_has_no_wait_or_dispatch_surface() {
-        assert_eq!(parse_line(&["inbox"]).unwrap(), Command::Inbox);
+        assert_eq!(
+            parse_line(&["inbox"]).unwrap(),
+            Command::Inbox { bundle: true }
+        );
         assert!(parse_line(&["inbox", "wait"]).is_err());
         let digest = herdr_core::delivery::prompt_digest("prompt");
         assert_eq!(
@@ -251,6 +264,7 @@ mod tests {
                 prompt_digest: None,
                 session: None,
                 point: hide_node_link::panes::PullPoint::Prompt,
+                bundle: true,
             }
         );
         assert_eq!(
@@ -259,6 +273,7 @@ mod tests {
                 prompt_digest: Some(digest.clone()),
                 session: None,
                 point: hide_node_link::panes::PullPoint::Prompt,
+                bundle: true,
             }
         );
         assert_eq!(
@@ -275,6 +290,7 @@ mod tests {
                 prompt_digest: Some(digest.clone()),
                 session: Some("abc".into()),
                 point: hide_node_link::panes::PullPoint::Prompt,
+                bundle: true,
             }
         );
         assert_eq!(
@@ -282,7 +298,8 @@ mod tests {
             Command::Pull {
                 prompt_digest: None,
                 session: Some("abc".into()),
-                point: hide_node_link::panes::PullPoint::Tool
+                point: hide_node_link::panes::PullPoint::Tool,
+                bundle: true,
             }
         );
         assert!(parse_line(&["inbox", "--hook", "--tool"]).is_err());
@@ -292,6 +309,7 @@ mod tests {
                 prompt_digest: None,
                 session: Some("abc".into()),
                 point: hide_node_link::panes::PullPoint::TurnEnd,
+                bundle: true,
             }
         );
         assert!(parse_line(&["inbox", "--hook", "--turn-end"]).is_err());
@@ -331,7 +349,23 @@ mod tests {
             }
         );
         assert!(parse_line(&["watch", "start", "target", "--force"]).is_err());
-        assert!(parse_line(&["inbox", "--confirm", "a", "b", "c", "d", "e", "f"]).is_err());
+        let bundle: Vec<String> = (0..=BUNDLE_LETTERS)
+            .map(|n| format!("letter-{n}"))
+            .collect();
+        let mut args: Vec<&str> = vec!["inbox", "--confirm"];
+        args.extend(bundle[..BUNDLE_LETTERS].iter().map(String::as_str));
+        assert!(parse_line(&args).is_ok());
+        args.push(&bundle[BUNDLE_LETTERS]);
+        assert!(parse_line(&args).is_err());
+        assert_eq!(
+            parse_line(&["inbox", "--ack", "letter-2~0123456789ab"]).unwrap(),
+            Command::AckBundle {
+                bundle: "letter-2~0123456789ab".into()
+            }
+        );
+        assert!(parse_line(&["inbox", "--ack", "letter-1", "letter-2"]).is_err());
+        assert!(parse_line(&["inbox", "--ack"]).is_err());
+        assert!(parse_line(&["inbox", "--ack", "--hook"]).is_err());
     }
 
     #[test]

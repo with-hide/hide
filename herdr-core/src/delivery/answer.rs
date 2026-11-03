@@ -301,15 +301,36 @@ pub struct RegisterCheck {
     pub pane: String,
 }
 
-/// One letter of `hide inbox`.
+/// `hide inbox`: the caller's letters as one bundle, as a handover gives
+/// them (`docs/delivery.md`, One bundle per handover).
 #[derive(Serialize, JsonSchema)]
-pub struct InboxEntry {
-    #[serde(flatten)]
-    pub letter: Letter,
-    /// The command that acknowledges the letter, for an agent with no
-    /// prompt hook to confirm it.
+pub struct Inbox {
+    /// The letters shown in full, grouped by sender, then the caller's own
+    /// letters that went undelivered.
+    pub letters: Vec<Letter>,
+    /// Per sender, the older letters the bundle folded, oldest first; each
+    /// opens with `hide request show <id>`.
+    pub folded: Vec<Folded>,
+    /// The one command that acknowledges exactly the pending letters this
+    /// answer lists, folded ones included, by a token naming the bundle, for
+    /// an agent with no prompt hook to confirm it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ack_command: Option<String>,
+}
+
+/// One sender's folded letters in a bundle.
+#[derive(Serialize, JsonSchema)]
+pub struct Folded {
+    pub sender: String,
+    pub sender_kind: String,
+    pub ids: Vec<String>,
+}
+
+/// `hide inbox --ack`: the bundle it took and how many letters were in it.
+#[derive(Serialize, JsonSchema)]
+pub struct Acknowledged {
+    pub bundle: String,
+    pub acknowledged: usize,
 }
 
 /// `hide inbox --confirm`.
@@ -339,7 +360,8 @@ pub fn answer_schemas() -> Value {
         "agent_register_check": schemars::schema_for!(RegisterCheck),
         "ps": schemars::schema_for!(Ps),
         "letter": schemars::schema_for!(Letter),
-        "inbox": schemars::schema_for!(Vec<InboxEntry>),
+        "inbox": schemars::schema_for!(Inbox),
+        "acknowledged": schemars::schema_for!(Acknowledged),
         "intake": schemars::schema_for!(Intake),
         "confirmed": schemars::schema_for!(Confirmed),
         "watch": schemars::schema_for!(Watch),
@@ -404,16 +426,11 @@ mod tests {
         }
         let watch = &schemas["agent"]["definitions"]["Watch"]["required"];
         assert!(watch.as_array().unwrap().contains(&json!("generation")));
-        let entry = &schemas["inbox"]["items"]["required"];
-        let entry = match entry {
-            Value::Array(entry) => entry.clone(),
-            _ => schemas["inbox"]["definitions"]["InboxEntry"]["required"]
-                .as_array()
-                .unwrap()
-                .clone(),
-        };
-        assert!(entry.contains(&json!("reply_to")));
-        assert!(!entry.contains(&json!("ack_command")));
+        let inbox = schemas["inbox"]["required"].as_array().unwrap();
+        assert!(inbox.contains(&json!("folded")));
+        assert!(!inbox.contains(&json!("ack_command")));
+        let letter = &schemas["inbox"]["definitions"]["Letter"]["required"];
+        assert!(letter.as_array().unwrap().contains(&json!("reply_to")));
         assert_eq!(
             schemas["agent"]["definitions"]["Runtime"]["enum"],
             json!(["running", "asleep", "ended"])

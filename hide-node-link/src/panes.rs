@@ -108,6 +108,11 @@ pub enum HookCommand {
         session: Option<String>,
         #[serde(default)]
         point: PullPoint,
+        /// Set by a `hide` that confirms a whole letter bundle; a device kit
+        /// older than bundles leaves it out and is handed its letters as
+        /// before (`docs/delivery.md`, One bundle per handover).
+        #[serde(default)]
+        bundle: bool,
     },
     Memory {
         event: String,
@@ -278,6 +283,25 @@ pub struct PanesStarted {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// A device kit older than letter bundles asks without `bundle`, which
+    /// reads as false, so the core hands it its letters as before.
+    #[test]
+    fn a_letter_pull_from_an_older_kit_reads_as_no_bundle() {
+        let older: HookCommand = serde_json::from_value(
+            json!({"kind": "letter_pull", "prompt_digest": null, "session": "s", "point": "tool"}),
+        )
+        .unwrap();
+        assert_eq!(
+            older,
+            HookCommand::LetterPull {
+                prompt_digest: None,
+                session: Some("s".into()),
+                point: PullPoint::Tool,
+                bundle: false,
+            }
+        );
+    }
 
     /// A stream the node proved nothing for opens without `caller`, and the
     /// core reads that line as no proof; a proved stream names the pane and
