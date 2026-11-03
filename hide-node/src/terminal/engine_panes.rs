@@ -32,7 +32,6 @@ pub struct LocalPanes {
     service: Arc<Service>,
     shell: PaneShell,
     owner: Option<Arc<hide_kit::panes::Owner>>,
-    next_request: std::sync::atomic::AtomicU64,
 }
 
 /// How a pane started with no program runs this machine's shell.
@@ -81,7 +80,6 @@ impl LocalPanes {
             service,
             shell,
             owner: None,
-            next_request: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -223,24 +221,17 @@ impl PaneHolders for LocalPanes {
             service: Arc::clone(&self.service),
             shell: self.shell.clone(),
             owner: Some(owner),
-            next_request: std::sync::atomic::AtomicU64::new(0),
         }))
     }
 
     fn request(&self) -> Result<HolderRequest, HolderError> {
+        // The connection's owner numbers every request of its incarnation,
+        // the ones a library caller issues included, so none is issued twice.
         let owner = self.owner()?;
-        let number = self
-            .next_request
-            .try_update(
-                std::sync::atomic::Ordering::AcqRel,
-                std::sync::atomic::Ordering::Acquire,
-                |number| number.checked_add(1),
-            )
-            .map_err(|_| HolderError::Refused {
-                code: "pane_requests_exhausted".to_owned(),
-                message: "pane request numbers are exhausted".to_owned(),
-            })?
-            + 1;
+        let number = owner.number().map_err(|message| HolderError::Refused {
+            code: "pane_request_refused".to_owned(),
+            message,
+        })?;
         Ok(HolderRequest {
             owner: owner.incarnation(),
             number,
@@ -258,17 +249,6 @@ impl PaneHolders for LocalPanes {
                 message,
             }),
         }
-    }
-
-    fn start(&self, start: &HolderStart) -> Result<(), HolderError> {
-        let request = self.request()?;
-        let result = self
-            .reserve(start, None, request)
-            .and_then(|reserved| self.start_reserved(start, reserved, request));
-        if !matches!(result, Err(HolderError::Unreachable { .. })) {
-            self.retire(request)?;
-        }
-        result
     }
 
     fn reserve(

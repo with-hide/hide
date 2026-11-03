@@ -305,17 +305,6 @@ impl PaneHolders for LinkPanes {
         )
     }
 
-    fn start(&self, start: &HolderStart) -> Result<(), HolderError> {
-        let request = self.request()?;
-        let result = self
-            .reserve(start, None, request)
-            .and_then(|reserved| self.start_reserved(start, reserved, request));
-        if !matches!(result, Err(HolderError::Unreachable { .. })) {
-            self.retire(request)?;
-        }
-        result
-    }
-
     fn shell_launch(&self) -> Option<ShellLaunch> {
         // The trait answers no failure here: a node that cannot say how its
         // shells start is told apart in the log, and the start goes on as

@@ -47,18 +47,34 @@ impl Requests {
         self.high = number;
         Ok(())
     }
+
+    /// The next number, pending with no intent until its first admission.
+    fn next(&mut self) -> Result<u64, String> {
+        let number = self
+            .high
+            .checked_add(1)
+            .ok_or_else(|| "pane request numbers are exhausted".to_owned())?;
+        self.reach(number)?;
+        Ok(number)
+    }
 }
 
 impl Owner {
+    /// A new request number of this incarnation, which its first admission
+    /// binds to an intent. It is the one numbering of the connection, so a
+    /// number is never issued twice; one never sent must still be retired.
+    pub fn number(&self) -> Result<u64, String> {
+        self.requests
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .next()
+    }
+
     /// Synchronous library callers own one whole request, without a wire
     /// sender. They use the same admission and retirement state machine.
     pub fn issue(&self, pane: &str, digest: &str) -> Result<Request<'_>, String> {
         let mut requests = self.requests.lock().unwrap_or_else(PoisonError::into_inner);
-        let number = requests
-            .high
-            .checked_add(1)
-            .ok_or_else(|| "pane request numbers are exhausted".to_owned())?;
-        requests.reach(number)?;
+        let number = requests.next()?;
         let pending = requests
             .pending
             .get_mut(&number)

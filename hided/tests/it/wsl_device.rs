@@ -1024,21 +1024,25 @@ fn a_wsl_own_engine_device_runs_its_panes_in_holders_with_no_herdr() {
         Arc::new(|record| println!("pane record: {record}")),
     );
     panes.recovered(Duration::from_secs(10)).unwrap();
-    panes
-        .start(&HolderStart {
-            pane: "wsl-own-pane".to_owned(),
-            program: Some(vec![
-                "/bin/sh".to_owned(),
-                "-c".to_owned(),
-                "printf 'own_%s\\n' wsl; exec sleep 600".to_owned(),
-            ]),
-            cwd: home,
-            env: Vec::new(),
-            rows: 24,
-            cols: 80,
-            notice: None,
-        })
-        .unwrap();
+    // As the core's own engine starts a pane: a number, the pane's
+    // reservation, its start, then the number retired.
+    let start = HolderStart {
+        pane: "wsl-own-pane".to_owned(),
+        program: Some(vec![
+            "/bin/sh".to_owned(),
+            "-c".to_owned(),
+            "printf 'own_%s\\n' wsl; exec sleep 600".to_owned(),
+        ]),
+        cwd: home,
+        env: Vec::new(),
+        rows: 24,
+        cols: 80,
+        notice: None,
+    };
+    let request = panes.request().unwrap();
+    let reserved = panes.reserve(&start, None, request).unwrap();
+    panes.start_reserved(&start, reserved, request).unwrap();
+    panes.retire(request).unwrap();
     wait_for("the holder pane's output", || {
         panes
             .read("wsl-own-pane", 20)

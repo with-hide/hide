@@ -395,6 +395,36 @@ mod tests {
         assert_eq!(panes.record("p1").unwrap().unwrap(), next);
     }
 
+    /// A connection's numbers come from one place: a number handed out for
+    /// a later admission and a library caller's whole request never share
+    /// one, and an unsent number is retired like any other.
+    #[test]
+    fn a_handed_out_number_and_an_issued_request_never_share_a_number() {
+        let home = tempfile::tempdir().unwrap();
+        let panes = Panes::open(home.path(), &home.path().join("state"), |_| {}).unwrap();
+        let owner = panes.acquire(Duration::ZERO).unwrap();
+        let handed = owner.number().unwrap();
+        let issued = owner.issue("p1", DIGEST).unwrap();
+        assert_ne!(handed, issued.number());
+        let admitted = owner
+            .admit(owner.incarnation(), handed, "p2", DIGEST)
+            .unwrap();
+        assert!(
+            owner
+                .admit(owner.incarnation(), handed, "p1", DIGEST)
+                .is_err()
+        );
+        drop(admitted);
+        drop(issued);
+        let unsent = owner.number().unwrap();
+        assert!(owner.retire(owner.incarnation(), unsent).unwrap());
+        assert!(
+            owner
+                .admit(owner.incarnation(), unsent, "p3", DIGEST)
+                .is_err()
+        );
+    }
+
     #[test]
     fn unresolved_requests_keep_the_cap_but_a_confirmed_completion_releases_it() {
         let home = tempfile::tempdir().unwrap();
