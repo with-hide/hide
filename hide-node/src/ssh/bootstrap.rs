@@ -1,11 +1,21 @@
 //! A device's start script (PRD system-ssh-device-link D-02, B22-B24): one
 //! POSIX `sh` that runs over the same input and output the device's link
 //! then uses, so a device signs in once per connection. The `ssh` or
-//! `wsl.exe` that reaches the device runs [`WRAPPER`]; the node sends the
-//! script as its first line, and then, step by step, waiting for each
-//! answer: what the account is ([`probe`]), which of the build's files it
-//! already holds ([`install`]), each missing file whole, and the helper's
-//! start ([`start`]), after which the same pipes are the helper's link.
+//! `wsl.exe` that reaches the device runs [`remote_command`] or [`WRAPPER`];
+//! the node sends the script as its first line, and then, step by step,
+//! waiting for each answer: what the account is ([`probe`]), which of the
+//! build's files it already holds ([`install`]), each missing file whole, and
+//! the helper's start ([`start`]), after which the same pipes are the
+//! helper's link.
+//!
+//! A Windows device answers the same steps from a PowerShell form of the
+//! script (`bootstrap.ps1`). Its OpenSSH runs the remote command in `cmd.exe`
+//! by default, which has no `sh`: the one command every login shell is given
+//! starts `sh` where there is one and a small PowerShell wrapper where `cmd`
+//! runs it, and the wrapper asks for its own script in place of the `sh` one
+//! the node sent first ([`probe`]). An MSYS or Cygwin `sh` on Windows (Git
+//! Bash as the account's shell) hands over to the same wrapper, so a Windows
+//! machine always answers from the PowerShell script.
 //!
 //! The connection to a core on another machine runs the same script (PRD
 //! system-ssh-device-link B33, `super::super::session`), with steps of its
@@ -18,7 +28,8 @@
 //! `head -c <size>`, and macOS's `head` reads through a buffer that would
 //! take bytes past the file's end if they were already waiting; the node
 //! sends nothing after a file until the device has answered for it, so
-//! nothing is ever waiting.
+//! nothing is ever waiting. The PowerShell script reads through one buffer of
+//! its own, which the same rule leaves empty when it hands the link over.
 //!
 //! A file goes beside its final name in a folder only the account can
 //! enter, is checked against its digest and renamed into place, so the final
@@ -26,24 +37,81 @@
 //! file in use, and the next connection sends only what is missing (B23).
 //! The install folder and every folder above it must be ones no other
 //! account can change (OpenSSH's own rule for key files), checked on the
-//! path the folder really is.
+//! path the folder really is; on Windows by their owners and access lists,
+//! by `hide_platform::fs::private`'s rule, with no link anywhere on the path.
 
 use super::*;
 
-/// The remote command an `ssh` runs: reads the script as one line from the
-/// link's own input and runs it. It is the same in every login shell (sh,
-/// bash, zsh, fish, csh): single quotes, and nothing inside them any of
-/// those reads.
-pub(crate) const REMOTE_COMMAND: &str = "sh -c 'IFS= read -r s && eval \"$s\"'";
-
-/// [`REMOTE_COMMAND`] as the words of a program run without a shell
-/// (`wsl.exe -e`).
+/// The words that read the script as one line from the link's own input and
+/// run it, as a program run without a shell (`wsl.exe -e`) takes them.
 pub(crate) const WRAPPER: [&str; 3] = ["sh", "-c", "IFS= read -r s && eval \"$s\""];
+
+/// The remote command an `ssh` runs, in whichever shell the account logs in
+/// with. Every POSIX shell (sh, bash, zsh, fish, csh, tcsh) parses all of it
+/// and runs only its first statement, which replaces the shell with
+/// [`WRAPPER`]; the rest is a plain command and a single-quoted word, which
+/// none of them reads. `cmd.exe`, Windows OpenSSH's default, knows no single
+/// quote: the `&&` inside the first one ends a command, `exec` is no command
+/// there, and the `&` inside the last one starts the PowerShell wrapper, with
+/// `rem` taking what is left. A PowerShell login shell finds no `exec`, goes
+/// on to its next statement, the same wrapper, and casts the last word away.
+/// The wrapper is base64, which no shell reads anything into.
+pub(crate) fn remote_command() -> String {
+    let powershell = powershell_command();
+    format!(
+        "exec {} {} '{}' ; {powershell} ; [void]'& {powershell} & rem '",
+        WRAPPER[0], WRAPPER[1], WRAPPER[2]
+    )
+}
+
+/// The PowerShell that runs on a Windows device in place of `sh`: it says it
+/// wants its own script (`script powershell`), drops every line before it
+/// (the `sh` script the node sent before it knew), and runs the first line
+/// that is base64, the PowerShell script ([`powershell_line`]), with `$i` and
+/// `$o` the link's unbuffered input and output. It reads a byte at a time, so
+/// it takes nothing past its script's line.
+const POWERSHELL_WRAPPER: &str = r#"$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue'
+$i=[Console]::OpenStandardInput();$o=[Console]::OpenStandardOutput()
+$b=[Text.Encoding]::ASCII.GetBytes("HIDE1`tscript`tpowershell`n");$o.Write($b,0,$b.Length);$o.Flush()
+while(1){$m=New-Object IO.MemoryStream;while(1){$c=$i.ReadByte();if($c -lt 0){exit 0};if($c -eq 10){break};$m.WriteByte($c)};$l=[Text.Encoding]::ASCII.GetString($m.ToArray());if($l -match '^[A-Za-z0-9+/]+=*$'){break}}
+iex ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($l)))"#;
+
+/// The Windows device's script (`bootstrap.ps1`), which the wrapper runs.
+const POWERSHELL_SCRIPT: &str = include_str!("bootstrap.ps1");
+
+/// What the wrapper answers when it runs, asking for [`powershell_line`].
+const ASKS_FOR_POWERSHELL: [&str; 2] = ["script", "powershell"];
+
+/// `powershell.exe` and its arguments that run [`POWERSHELL_WRAPPER`]:
+/// Windows PowerShell 5.1, which every Windows 10 and 11 has, with no profile
+/// of the account's and nothing it could stop to ask, given the wrapper as
+/// base64 of its UTF-16 text, the form `-EncodedCommand` reads.
+fn powershell_command() -> String {
+    use base64::Engine as _;
+    let utf16: Vec<u8> = POWERSHELL_WRAPPER
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect();
+    format!(
+        "powershell.exe -NoProfile -NonInteractive -EncodedCommand {}",
+        base64::engine::general_purpose::STANDARD.encode(utf16)
+    )
+}
+
+/// The PowerShell script as the one line the wrapper reads: base64 of its
+/// UTF-8 text, so its own lines and characters arrive as written.
+fn powershell_line() -> String {
+    use base64::Engine as _;
+    let mut line = base64::engine::general_purpose::STANDARD.encode(POWERSHELL_SCRIPT);
+    line.push('\n');
+    line
+}
 
 /// The script, one statement per line; [`script_line`] joins it into the
 /// single line [`WRAPPER`] reads. Every line ends where a space may follow.
 const SCRIPT: &str = r#"
 set -fu;
+case $(uname -s) in MINGW*|MSYS*|CYGWIN*) MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' exec @POWERSHELL@;; esac;
 T=$(printf '\t');
 say() { printf 'HIDE1'; for w in "$@"; do printf '\t%s' "$w"; done; printf '\n'; };
 uid=$(id -u) || exit 65;
@@ -102,14 +170,18 @@ esac;
 done
 "#;
 
-/// The script as the one line [`WRAPPER`] reads, with its line end.
+/// The script as the one line [`WRAPPER`] reads, with its line end. On
+/// Windows, under an MSYS or Cygwin `sh`, its first statement hands the link
+/// to the PowerShell wrapper, which asks for its own script as it does under
+/// `cmd.exe`.
 pub(crate) fn script_line() -> String {
     let mut line = SCRIPT
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
-        .join(" ");
+        .join(" ")
+        .replace("@POWERSHELL@", &powershell_command());
     line.push('\n');
     line
 }
@@ -165,15 +237,25 @@ pub(crate) enum ProbeError {
 }
 
 /// Sends the script and reads the account's answer, skipping what a login
-/// file printed before it.
+/// file printed before it. A Windows device's wrapper asks for the
+/// PowerShell script first, which it is sent once.
 pub(crate) fn probe(pipe: &mut dyn Pipe, until: Instant) -> Result<Facts, ProbeError> {
-    pipe.send(script_line().as_bytes(), until)
-        .map_err(|reason| ProbeError::Stopped(Stop::Ended(reason)))?;
+    let send = |pipe: &mut dyn Pipe, line: String| {
+        pipe.send(line.as_bytes(), until)
+            .map_err(|reason| ProbeError::Stopped(Stop::Ended(reason)))
+    };
+    send(pipe, script_line())?;
+    let mut asked = false;
     for _ in 0..MAX_GREETING_LINES {
         let line = pipe.line(until).map_err(ProbeError::Stopped)?;
         let Some(fields) = answer(&line) else {
             continue;
         };
+        if !asked && fields == ASKS_FOR_POWERSHELL {
+            asked = true;
+            send(pipe, powershell_line())?;
+            continue;
+        }
         return read_probe(&fields).map_err(ProbeError::Unsupported);
     }
     Err(ProbeError::Unsupported(format!(
@@ -201,12 +283,26 @@ fn read_probe(fields: &[String]) -> Result<Facts, String> {
             fields.join(" ")
         ));
     }
-    if !hide_platform::wsl::valid_user_name(user) {
+    let (os, arch) = platform_of(&format!("{system} {machine}"))?;
+    let windows = os == "windows";
+    let named = if windows {
+        windows_user_name(user)
+    } else {
+        hide_platform::wsl::valid_user_name(user)
+    };
+    if !named {
         return Err(format!(
             "The device's account {user:?} is not a name Hide can run as"
         ));
     }
-    if !home.starts_with('/') || home.chars().any(char::is_control) {
+    // A home in the wire spelling of the device's own system: `/home/me`, or
+    // `C:/Users/me` on Windows.
+    let rooted = if windows {
+        !home.starts_with('/') && hide_platform::path::is_wire_absolute(home)
+    } else {
+        home.starts_with('/')
+    };
+    if !rooted || home.chars().any(char::is_control) {
         return Err("The device's account has no usable home folder".to_owned());
     }
     if digest != "yes" {
@@ -215,7 +311,6 @@ fn read_probe(fields: &[String]) -> Result<Facts, String> {
                 .to_owned(),
         );
     }
-    let (os, arch) = platform_of(&format!("{system} {machine}"))?;
     let machine_id = id.trim().to_lowercase();
     if !valid_machine_id(&machine_id) {
         return Err(NO_MACHINE_ID.to_owned());
@@ -233,6 +328,17 @@ fn read_probe(fields: &[String]) -> Result<Facts, String> {
 /// the consent binds to that id, and without it this machine cannot be told
 /// from another that answers at the same address.
 pub(crate) const NO_MACHINE_ID: &str = "The device reports no machine id (/etc/machine-id, or a Mac's hardware id), so Hide cannot tell it from another machine at this address and installs nothing; give it one (on Linux, `sudo systemd-machine-id-setup`) and connect again";
+
+/// A Windows account name as the system allows it: at most 256 characters
+/// (`UNLEN`), none of them a control character or one Windows reserves in
+/// account names. Any script may be in it, so a name such as `이호연` is one.
+fn windows_user_name(user: &str) -> bool {
+    !user.is_empty()
+        && user.chars().count() <= 256
+        && !user
+            .chars()
+            .any(|c| c.is_control() || "\"/\\[]:;|=,+*?<>".contains(c))
+}
 
 /// An id as a system writes it: letters, digits and `-`, `_` or `.`, at most
 /// 128 of them; `-` alone is the script's word for none.
@@ -266,7 +372,7 @@ pub(crate) fn install(
     let failed = |reason: String| EstablishError::Install(reason);
     let root = match helper_root.strip_prefix("~/") {
         Some(rest) => format!("{}/{rest}", home.trim_end_matches('/')),
-        None if helper_root.starts_with('/') => helper_root.to_owned(),
+        None if hide_platform::path::is_wire_absolute(helper_root) => helper_root.to_owned(),
         None => {
             return Err(failed(format!(
                 "The helper install root {helper_root:?} must be absolute or start with ~/"
@@ -279,7 +385,9 @@ pub(crate) fn install(
         ));
     }
     let resolved = match step(pipe, &format!("root\t{root}\n"), deadline)?.as_slice() {
-        [kind, resolved] if kind == "root" && resolved.starts_with('/') => resolved.clone(),
+        [kind, resolved] if kind == "root" && hide_platform::path::is_wire_absolute(resolved) => {
+            resolved.clone()
+        }
         other => return Err(failed(refusal(other))),
     };
     let version = &payload.version()[..16];
@@ -687,10 +795,12 @@ pub(crate) fn attach(
     }
 }
 
-/// An absolute path the script takes as one field: plain, `/`-separated,
-/// with no `.` or `..` step.
+/// An absolute path the script takes as one field: plain, in the wire
+/// spelling (`/srv/x`, or `C:/x` on Windows), with no `.` or `..` step.
 fn remote_path(path: &str) -> bool {
-    plain(path) && path.starts_with('/') && !path.split('/').any(|part| part == "." || part == "..")
+    plain(path)
+        && hide_platform::path::is_wire_absolute(path)
+        && !path.split('/').any(|part| part == "." || part == "..")
 }
 
 /// A field the script reads whole: no tab, no line end, no control
@@ -740,3 +850,7 @@ fn refusal(fields: &[String]) -> String {
 #[cfg(all(test, unix))]
 #[path = "bootstrap_tests.rs"]
 mod tests;
+
+#[cfg(all(test, windows))]
+#[path = "bootstrap_windows_tests.rs"]
+mod windows_tests;

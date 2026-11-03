@@ -38,13 +38,24 @@ impl Device {
         self.dir.path().join("home")
     }
 
-    /// One connection: `sh` running the wrapper in the account's home, as
-    /// the remote command of an `ssh` runs it; `greeting` is what a login
+    /// One connection: `sh` running the remote command in the account's
+    /// home, as `sshd` runs it in the login shell; `greeting` is what a login
     /// file prints before it.
     fn connect(&self, greeting: &str) -> UnaskedStart {
-        let mut command = std::process::Command::new("sh");
+        self.connect_through(Path::new("sh"), greeting, &[])
+    }
+
+    /// [`Device::connect`] with `shell` as the account's login shell, and
+    /// `path` before the `PATH` it finds programs on.
+    fn connect_through(&self, shell: &Path, greeting: &str, path: &[&Path]) -> UnaskedStart {
+        let mut command = std::process::Command::new(shell);
+        let mut search: Vec<PathBuf> = path.iter().map(|folder| folder.to_path_buf()).collect();
+        search.extend(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        ));
         command
-            .args(["-c", &format!("{greeting}{}", WRAPPER[2])])
+            .args(["-c", &format!("{greeting}{}", remote_command())])
+            .env("PATH", std::env::join_paths(search).unwrap())
             .current_dir(self.home())
             .env("HOME", self.home())
             .env("TMPDIR", self.tmp())
@@ -106,6 +117,86 @@ fn the_probe_reads_the_account_past_a_login_greeting() {
     assert_eq!(facts.arch, std::env::consts::ARCH);
 }
 
+/// The one remote command starts the script in every POSIX login shell an
+/// account may have: each parses the whole line and replaces itself with
+/// `sh` at its first statement, so the parts for `cmd.exe` and PowerShell
+/// never run. The shells are named in `HIDE_TEST_*_BIN`, so this is ignored
+/// by default; the rust lane's shell step runs it with `--ignored`.
+#[test]
+#[ignore = "needs zsh, bash, fish, tcsh and csh: set HIDE_TEST_ZSH_BIN, HIDE_TEST_BASH_BIN, HIDE_TEST_FISH_BIN, HIDE_TEST_TCSH_BIN and HIDE_TEST_CSH_BIN and run with --ignored"]
+fn the_remote_command_starts_the_script_in_every_login_shell() {
+    for variable in [
+        "HIDE_TEST_ZSH_BIN",
+        "HIDE_TEST_BASH_BIN",
+        "HIDE_TEST_FISH_BIN",
+        "HIDE_TEST_TCSH_BIN",
+        "HIDE_TEST_CSH_BIN",
+    ] {
+        let shell = PathBuf::from(
+            std::env::var_os(variable).unwrap_or_else(|| panic!("{variable} names the shell")),
+        );
+        let device = Device::new();
+        let mut pipe = device.connect_through(&shell, "", &[]);
+        let facts =
+            probe(&mut pipe, soon()).unwrap_or_else(|error| panic!("{variable}: {error:?}"));
+        assert_eq!(Path::new(&facts.home), device.home(), "{variable}");
+        assert_eq!(facts.os, std::env::consts::OS, "{variable}");
+    }
+}
+
+/// An MSYS or Cygwin `sh` on Windows (Git Bash as the account's shell) hands
+/// the link to the PowerShell wrapper at the script's first statement; the
+/// wrapper asks for its script, gets it once, and answers the probe as
+/// Windows. Here `uname` says MINGW and `powershell.exe` is a stand-in that
+/// records what it was started with and read.
+#[test]
+fn an_msys_sh_on_windows_hands_the_link_to_the_powershell_script() {
+    let device = Device::new();
+    let bin = device.dir.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let program = |name: &str, body: &str| {
+        let path = bin.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\n{body}")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    program("uname", "echo MINGW64_NT-10.0-26200\n");
+    let record = device.dir.path().join("powershell");
+    program(
+        "powershell.exe",
+        &format!(
+            "printf '%s\\n' \"$*\" > '{record}.args'\n\
+             printf 'HIDE1\\tscript\\tpowershell\\n'\n\
+             IFS= read -r line\n\
+             printf '%s\\n' \"$line\" > '{record}.line'\n\
+             printf 'HIDE1\\tprobe\\t이호연\\tC:/Users/이호연\\tWindows\\tamd64\\t4C4C4544-0042\\tyes\\n'\n",
+            record = record.display()
+        ),
+    );
+    let mut pipe = device.connect_through(Path::new("sh"), "", &[&bin]);
+    let facts = probe(&mut pipe, soon()).unwrap();
+    assert_eq!(
+        (
+            facts.user.as_str(),
+            facts.home.as_str(),
+            facts.os.as_str(),
+            facts.arch.as_str()
+        ),
+        ("이호연", "C:/Users/이호연", "windows", "x86_64")
+    );
+    assert_eq!(facts.machine_id, "4c4c4544-0042");
+    let args = std::fs::read_to_string(record.with_extension("args")).unwrap();
+    assert_eq!(
+        format!("powershell.exe {}", args.trim_end()),
+        powershell_command()
+    );
+    // The line after the request is the PowerShell script, which the sh
+    // script had not taken.
+    assert_eq!(
+        std::fs::read_to_string(record.with_extension("line")).unwrap(),
+        powershell_line()
+    );
+}
+
 #[test]
 fn a_probe_answer_names_only_a_machine_hide_runs_on() {
     let fields = |line: &str| line.split('\t').map(str::to_owned).collect::<Vec<_>>();
@@ -135,9 +226,28 @@ fn a_probe_answer_names_only_a_machine_hide_runs_on() {
         "probe\talice\t/home/alice\tFreeBSD\tx86_64\t-\tyes",
         "probe\talice\t/home/alice\tLinux\triscv64\t-\tyes",
         "fail\tsomething",
+        // A Windows account's home is a drive path, and its name has none
+        // of the characters Windows reserves in one.
+        "probe\talice\t/home/alice\tWindows\tamd64\tAB-12\tyes",
+        "probe\ta\\b\tC:/Users/a\tWindows\tamd64\tAB-12\tyes",
+        "probe\talice\tC:/Users/alice\tLinux\tx86_64\tAB-12\tyes",
     ] {
         assert!(read_probe(&fields(refused)).is_err(), "{refused}");
     }
+    let windows = read_probe(&fields(
+        "probe\tAlice Smith\tC:/Users/Alice Smith\tWindows\tamd64\t5A1B2C3D-0000-4E5F\tyes",
+    ))
+    .unwrap();
+    assert_eq!(
+        (
+            windows.user.as_str(),
+            windows.home.as_str(),
+            windows.os.as_str(),
+            windows.arch.as_str()
+        ),
+        ("Alice Smith", "C:/Users/Alice Smith", "windows", "x86_64")
+    );
+    assert_eq!(windows.machine_id, "5a1b2c3d-0000-4e5f");
 }
 
 /// B23: the install sends each file once, reuses what the device holds
