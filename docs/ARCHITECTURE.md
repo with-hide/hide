@@ -2278,8 +2278,18 @@ A node with the switch on prunes once each time it starts, after `Holders::recov
 ### Pane records and reconcile
 
 A holder outlives its node, so what owns it is its record, not the node (PRD engine-bundle-2-pane-holder D-13, D-14, D-17).
-Each pane of a state folder has one, `<state>/holders/records/<pane>.json` (`hide_kit::layout::pane_record`), in a versioned format (`hide_holder_protocol::record`, format 1, at most 64 KiB): the pane id, the state folder it belongs to (the folder's own file identity, which a rename keeps and a copy does not), the start's incarnation, the holder's and the program's pid with the start time each had, the protocol and version folder it runs, the digest of its command, the boot it started in, its phase (`preparing`, `running`, `closing`, `ended`) and, once ended, why, with the exit code and any pids left.
+Each pane of a state folder has one, `<state>/holders/records/<pane>.json` (`hide_kit::layout::pane_record`), in a versioned format (`hide_holder_protocol::record`, format 2, at most 64 KiB): the pane id, the state folder it belongs to (the folder's own file identity, which a rename keeps and a copy does not), the start's incarnation, the holder's and the program's pid with the start time each had, the protocol and version folder it runs, the digest of its command, the boot it started in, its phase (`reserved`, `preparing`, `running`, `closing`, `ended`) and, once ended, why, with the exit code and any pids left.
+Format 1 running records remain readable and retain their format when updated.
+Format 2 can also carry the reservation's connection owner, original request digest and recovery folder, without persisting its command or environment; `reserved` requires this metadata and names no process.
 `hide_kit::panes::Panes` is the node's side of it, a library hide-node calls; its diagnostics (`pane_holder.*`, naming the pane, the incarnation and the holder's pid, never the pane's output) go to the sink the caller gives.
+
+A connection acquires the state folder's exclusive `records/.owner-lock` through the platform file-lock implementation before crash repair or fresh reconciliation.
+Its `PaneSlot` and each admitted node request share the bound holder adapter, which retains that lock through the request's last mutation and cleanup, even when its caller times out or disconnects.
+Closing the connection permanently closes admission and releases only its own reference; queued requests cannot reactivate it, and an acquisition finishing after close cannot install a new owner.
+A new connection cannot reconcile or allocate pane IDs until every previous worker has finished and it acquires this same lock; failure to acquire is an unresolved outcome, never evidence that the old work ended.
+The stable lock file is never removed or replaced, and node start, close, forget and reconcile require the acquired ownership context.
+Holder processes retain their separate exact-incarnation record claim and do not inherit connection ownership.
+The pure liveness query counts records without pruning them.
 
 Every change of a record, a start's reservation, the count against the cap and a removal happen under one lock file, `records/.lock`, and nothing that waits on another process runs under it: a holder starts, a tree ends and a connection opens outside it, and what they found is written under it after a fresh read that shows the record has not moved.
 A start is keyed by its pane id, so a caller asks the same start again whatever became of the last one: a pane that lives (starting or running) is answered as it is when the command (program, working folder and added environment, compared by digest) is the same, and refused as a conflict when it is not, so starts asked at once converge on one holder; a pane that is closing or over (ended, or its holder gone) is ended and settled once outside the lock, its record and stale socket removed under it, and started again as a new incarnation.

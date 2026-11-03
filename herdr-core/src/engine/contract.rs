@@ -441,8 +441,12 @@ impl BuiltHolders {
         // machine's node, here this machine's in-process node, by the
         // requests a device's node answers over its link (D-22).
         let node = Arc::new(hide_node::Local::new(Some(home.clone())).with_panes(panes));
+        let linked = super::own::link_panes(node);
+        linked
+            .recovered(Duration::from_secs(120))
+            .expect("the contract acquires pane ownership");
         Self {
-            engine: super::own::OwnEngine::new(super::own::link_panes(node)),
+            engine: super::own::OwnEngine::new(linked),
             holders,
             service: terminals.service,
             folder: hide_platform::path::to_wire(&folder).unwrap(),

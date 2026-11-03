@@ -40,6 +40,7 @@ struct Folder {
     home: Home,
     state: PathBuf,
     panes: Panes,
+    owner: Option<hide_kit::panes::Owner>,
 }
 
 impl Folder {
@@ -47,7 +48,17 @@ impl Folder {
         let home = Home::new();
         let state = home.path().join("s");
         let panes = Panes::open(home.path(), &state, sink).unwrap();
-        Self { home, state, panes }
+        let owner = Some(panes.acquire(Duration::from_secs(5)).unwrap());
+        Self {
+            home,
+            state,
+            panes,
+            owner,
+        }
+    }
+
+    fn owner(&self) -> &hide_kit::panes::Owner {
+        self.owner.as_ref().expect("the fixture owns its records")
     }
 
     fn request(
@@ -89,7 +100,7 @@ impl Folder {
     }
 
     fn start(&self, request: &StartRequest) -> PaneRecord {
-        match self.panes.start(request, &source()) {
+        match self.panes.start(self.owner(), request, &source()) {
             Ok(Started::Started(record)) => record,
             other => panic!("the pane did not start: {other:?}"),
         }
@@ -143,6 +154,7 @@ impl Folder {
             protocol: PROTOCOL_VERSION,
             version_folder: String::new(),
             spec: String::new(),
+            reservation: None,
             reserved_at_unix_ms: record::now_unix_ms(),
             boot: hide_platform::process::boot_id().ok(),
             holder: None,
@@ -231,7 +243,14 @@ fn starts_of_one_pane_at_once_converge_on_one_holder_which_ends_when_closed() {
     let source = source();
     let answers: Vec<Started> = thread::scope(|scope| {
         let starts: Vec<_> = (0..4)
-            .map(|_| scope.spawn(|| folder.panes.start(&request, &source).unwrap()))
+            .map(|_| {
+                scope.spawn(|| {
+                    folder
+                        .panes
+                        .start(folder.owner(), &request, &source)
+                        .unwrap()
+                })
+            })
             .collect();
         starts
             .into_iter()
@@ -260,13 +279,13 @@ fn starts_of_one_pane_at_once_converge_on_one_holder_which_ends_when_closed() {
     let other = folder.request("p1", role_program("flood"), Vec::new());
     assert!(
         matches!(
-            folder.panes.start(&other, &source),
+            folder.panes.start(folder.owner(), &other, &source),
             Err(StartRefusal::Conflict(_))
         ),
         "a second command took pane p1"
     );
 
-    let ended = folder.panes.close("p1").unwrap();
+    let ended = folder.panes.close(folder.owner(), "p1").unwrap();
     assert_eq!(ended.phase, Phase::Ended, "{ended:?}");
     assert_eq!(end_reason(&ended), EndReason::Terminated, "{ended:?}");
     assert!(!holder.runs());
@@ -277,8 +296,8 @@ fn starts_of_one_pane_at_once_converge_on_one_holder_which_ends_when_closed() {
     let second = again.holder.expect("the holder wrote itself in");
     assert_ne!(second, holder);
     assert_eq!(holders_in(folder.home.path()), vec![second.pid]);
-    folder.panes.close("p1").unwrap();
-    folder.panes.forget("p1").unwrap();
+    folder.panes.close(folder.owner(), "p1").unwrap();
+    folder.panes.forget(folder.owner(), "p1").unwrap();
     assert!(folder.panes.record("p1").unwrap().is_none());
     assert!(!socket.exists());
 }
@@ -288,7 +307,7 @@ fn a_program_that_cannot_start_leaves_why_in_its_record() {
     let folder = Folder::new();
     let missing = folder.home.path().join("no-such-program");
     let request = folder.request("p1", vec![missing.into()], Vec::new());
-    let refused = folder.panes.start(&request, &source());
+    let refused = folder.panes.start(folder.owner(), &request, &source());
     assert!(
         matches!(refused, Err(StartRefusal::Failed(_))),
         "{refused:?}"
@@ -312,7 +331,7 @@ fn starts_at_once_stop_at_the_cap_and_say_so() {
     let answers: Vec<Result<Started, StartRefusal>> = thread::scope(|scope| {
         let starts: Vec<_> = requests
             .iter()
-            .map(|request| scope.spawn(|| folder.panes.start(request, &source)))
+            .map(|request| scope.spawn(|| folder.panes.start(folder.owner(), request, &source)))
             .collect();
         starts
             .into_iter()
@@ -358,7 +377,7 @@ fn ended_records_at_the_capacity_boundary_leave_room_and_keep_their_retention_bo
         assert_eq!(folder.record(&format!("e{number}")).phase, Phase::Ended);
     }
     assert!(folder.panes.record("unreadable").is_err());
-    folder.panes.close("fresh").unwrap();
+    folder.panes.close(folder.owner(), "fresh").unwrap();
 }
 
 #[test]
@@ -396,7 +415,7 @@ fn an_end_the_holder_could_not_record_is_settled_as_a_lost_holder() {
     drop(lock);
     assert_eq!(folder.record("p1").phase, Phase::Running);
 
-    let found = folder.panes.reconcile(RECONCILE_BUDGET);
+    let found = folder.panes.reconcile(folder.owner(), RECONCILE_BUDGET);
     let Some(Judgment::Ended(ended)) = found.panes.get("p1") else {
         panic!("{found:?}");
     };
@@ -424,7 +443,7 @@ fn holders_whose_records_cannot_be_judged_are_left_running() {
     theirs.holder = Some(identity(&elsewhere.process));
     folder.write(&theirs);
 
-    let found = folder.panes.reconcile(RECONCILE_BUDGET);
+    let found = folder.panes.reconcile(folder.owner(), RECONCILE_BUDGET);
     assert!(
         matches!(found.panes.get("c1"), Some(Judgment::Unreadable(_))),
         "{found:?}"
@@ -455,7 +474,7 @@ fn a_reservation_takes_the_holder_it_names_and_one_left_past_its_bound_ends() {
     stale.reserved_at_unix_ms -= (START_LIMIT + Duration::from_secs(1)).as_millis() as u64;
     folder.write(&stale);
 
-    let found = folder.panes.reconcile(RECONCILE_BUDGET);
+    let found = folder.panes.reconcile(folder.owner(), RECONCILE_BUDGET);
     assert!(
         matches!(found.panes.get("r1"), Some(Judgment::Alive(_))),
         "{found:?}"
@@ -497,7 +516,7 @@ fn a_killed_holders_pane_is_settled_by_the_next_reconcile() {
         "what ignores the hangup should outlive the holder"
     );
 
-    let found = folder.panes.reconcile(RECONCILE_BUDGET);
+    let found = folder.panes.reconcile(folder.owner(), RECONCILE_BUDGET);
     let Some(Judgment::Ended(ended)) = found.panes.get("p1") else {
         panic!("{found:?}");
     };
@@ -531,7 +550,7 @@ fn a_record_of_an_earlier_boot_ends_nothing_it_names() {
     earlier.program = Some(identity(&named.program));
     folder.write(&earlier);
 
-    let found = folder.panes.reconcile(RECONCILE_BUDGET);
+    let found = folder.panes.reconcile(folder.owner(), RECONCILE_BUDGET);
     let Some(Judgment::Ended(ended)) = found.panes.get("b1") else {
         panic!("{found:?}");
     };
@@ -552,7 +571,7 @@ fn a_record_of_an_earlier_boot_ends_nothing_it_names() {
 /// pane as before, since its holder may run.
 #[test]
 fn records_a_power_loss_left_empty_cut_off_or_old_do_not_stop_the_panes_starting() {
-    let folder = Folder::new();
+    let mut folder = Folder::new();
     let records = layout::pane_records(&folder.state);
     let before_boot = std::time::UNIX_EPOCH + Duration::from_secs(1_000_000_000);
     let age = |path: &Path| {
@@ -579,7 +598,9 @@ fn records_a_power_loss_left_empty_cut_off_or_old_do_not_stop_the_panes_starting
     // Damaged in this boot: not a crash's.
     std::fs::write(records.join("fresh.json"), b"").unwrap();
 
+    drop(folder.owner.take());
     let reopened = Panes::open(folder.home.path(), &folder.state, sink).unwrap();
+    let owner = reopened.acquire(Duration::from_secs(5)).unwrap();
     assert!(!records.join("empty.json").exists());
     assert!(!records.join("cut.json").exists());
     assert!(
@@ -603,7 +624,7 @@ fn records_a_power_loss_left_empty_cut_off_or_old_do_not_stop_the_panes_starting
         "the counter is past every incarnation a record holds: {next}"
     );
 
-    let found = reopened.reconcile(RECONCILE_BUDGET);
+    let found = reopened.reconcile(&owner, RECONCILE_BUDGET);
     let Some(Judgment::Ended(ended)) = found.panes.get("old") else {
         panic!("{found:?}");
     };
@@ -617,14 +638,22 @@ fn records_a_power_loss_left_empty_cut_off_or_old_do_not_stop_the_panes_starting
     assert_eq!(end_reason(ended), expected);
 
     for pane in ["empty", "cut", "old"] {
-        let started = match reopened.start(&folder.request(pane, shell(), Vec::new()), &source()) {
+        let started = match reopened.start(
+            &owner,
+            &folder.request(pane, shell(), Vec::new()),
+            &source(),
+        ) {
             Ok(Started::Started(record)) => record,
             other => panic!("{pane} did not start: {other:?}"),
         };
         assert!(started.incarnation > 500, "{pane}: {}", started.incarnation);
         assert_eq!(started.phase, Phase::Running);
     }
-    match reopened.start(&folder.request("fresh", shell(), Vec::new()), &source()) {
+    match reopened.start(
+        &owner,
+        &folder.request("fresh", shell(), Vec::new()),
+        &source(),
+    ) {
         Err(StartRefusal::RecordUnreadable(_)) => {}
         other => panic!("a record damaged in this boot refuses its pane: {other:?}"),
     }
@@ -659,7 +688,7 @@ fn a_reconcile_past_its_budget_leaves_the_rest_to_the_next() {
         wait_until("the holder's end", || !holder.runs());
     }
 
-    let none = folder.panes.reconcile(Duration::ZERO);
+    let none = folder.panes.reconcile(folder.owner(), Duration::ZERO);
     assert_eq!(none.pending(), PANES, "{none:?}");
     assert!(!none.is_complete());
     #[cfg(unix)]
@@ -669,7 +698,7 @@ fn a_reconcile_past_its_budget_leaves_the_rest_to_the_next() {
     );
 
     let started = Instant::now();
-    let found = folder.panes.reconcile(RECONCILE_BUDGET);
+    let found = folder.panes.reconcile(folder.owner(), RECONCILE_BUDGET);
     let took = started.elapsed();
     eprintln!("reconcile of {PANES} lost panes with hangup-ignoring trees took {took:?}");
     assert!(found.is_complete(), "{found:?}");
@@ -697,7 +726,7 @@ fn a_closing_pane_whose_holder_cannot_be_asked_is_ended_by_its_pids() {
     folder.write(&closing);
     std::fs::remove_file(&named.socket).unwrap();
 
-    let found = folder.panes.reconcile(RECONCILE_BUDGET);
+    let found = folder.panes.reconcile(folder.owner(), RECONCILE_BUDGET);
     let Some(Judgment::Ended(ended)) = found.panes.get("c1") else {
         panic!("{found:?}");
     };
@@ -739,7 +768,7 @@ fn an_earlier_start_that_left_processes_holds_its_id_until_they_end() {
     folder.write(&ended);
     let request = folder.request("e1", shell(), Vec::new());
 
-    match folder.panes.start(&request, &source()) {
+    match folder.panes.start(folder.owner(), &request, &source()) {
         Err(StartRefusal::EarlierRuns(left)) => assert!(left.contains(&program.pid), "{left:?}"),
         other => panic!("the pane's id was taken while its program ran: {other:?}"),
     }
@@ -753,7 +782,7 @@ fn an_earlier_start_that_left_processes_holds_its_id_until_they_end() {
 fn closing_a_pane_still_starting_says_so() {
     let folder = Folder::new();
     folder.write(&folder.reserved("s1", Phase::Preparing));
-    let answer = folder.panes.close("s1");
+    let answer = folder.panes.close(folder.owner(), "s1");
     assert!(
         matches!(answer, Err(hide_kit::panes::CloseError::Starting)),
         "{answer:?}"

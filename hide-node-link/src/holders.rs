@@ -276,6 +276,18 @@ impl std::error::Error for HolderError {}
 /// A node's pane holders as the core's own engine asks them. Every call
 /// blocks until the node answers, so none is made under the runtime lock.
 pub trait PaneHolders: Send + Sync {
+    /// Node-side binding for one connection. The returned adapter retains
+    /// its state-folder ownership guard, including while a timed-out call
+    /// still runs. Only the host's connection slot calls this method.
+    fn own(
+        self: std::sync::Arc<Self>,
+        _within: std::time::Duration,
+    ) -> Result<std::sync::Arc<dyn PaneHolders>, HolderError> {
+        Err(HolderError::Refused {
+            code: "pane_ownership_unsupported".to_owned(),
+            message: "this node cannot establish pane ownership".to_owned(),
+        })
+    }
     /// Starts `start`'s pane and attaches its screen to the node's terminal
     /// service. Asked again for a pane that lives, it answers that pane and
     /// starts no second holder.

@@ -301,7 +301,9 @@ use crate::error::HostError;
 /// search and shows its matches as Herdr's `pane.get`, `pane.scroll` and
 /// `visible` read let it. A helper on 70 would refuse both asks, so it is
 /// refused at Hello and upgraded.
-pub const PROTOCOL_VERSION: u32 = 71;
+/// 72: pane mutations require connection ownership and a durable reserved
+/// existence record. An older node cannot fence late requests on reconnect.
+pub const PROTOCOL_VERSION: u32 = 72;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
 /// runs it ([`Call::AgentInstalled`]).

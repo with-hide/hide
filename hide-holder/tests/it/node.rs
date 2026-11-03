@@ -341,6 +341,7 @@ impl Attacher for Herdr {
 struct Node {
     service: Service,
     holders: Option<Holders>,
+    owner: Option<hide_kit::panes::Owner>,
     screens: Arc<Screens>,
     reports: Arc<Reports>,
     herdr_opened: Mutex<Receiver<String>>,
@@ -374,9 +375,13 @@ impl Node {
             RetryPolicy::Automatic,
         )
         .unwrap();
+        let owner = holders
+            .as_ref()
+            .map(|holders| holders.acquire(Duration::from_secs(5)).unwrap());
         Self {
             service,
             holders,
+            owner,
             screens,
             reports,
             herdr_opened: Mutex::new(herdr_opened),
@@ -387,9 +392,13 @@ impl Node {
         self.holders.as_ref().expect("the switch is on")
     }
 
+    fn owner(&self) -> &hide_kit::panes::Owner {
+        self.owner.as_ref().expect("the fixture owns its records")
+    }
+
     fn start_pane(&self, request: &StartRequest) -> Started {
         self.holders()
-            .start(&self.service, request)
+            .start(self.owner(), &self.service, request)
             .unwrap_or_else(|refused| panic!("{} did not start: {refused}", request.pane))
     }
 
@@ -567,7 +576,10 @@ fn a_started_pane_shows_its_first_full_screen_takes_input_and_converges() {
     );
 
     let holder = first.holder.unwrap();
-    let ended = node.holders().terminate(&node.service, "s1").unwrap();
+    let ended = node
+        .holders()
+        .terminate(node.owner(), &node.service, "s1")
+        .unwrap();
     assert_eq!(ended.phase, Phase::Ended);
     assert_eq!(ended.end.map(|end| end.reason), Some(EndReason::Terminated));
     assert!(!holder.runs());
@@ -585,14 +597,18 @@ fn an_engine_pane_attaches_before_its_holder_start_is_registered() {
         screens,
         reports,
         herdr_opened,
+        owner,
     } = Node::start(Switch::On, folder.home.path(), &folder.state);
+    drop(owner);
     let service = Arc::new(service);
     let holders = Arc::new(holders.unwrap());
-    let engine = LocalPanes::new(
+    let engine = Arc::new(LocalPanes::new(
         Arc::clone(&holders),
         Arc::clone(&service),
         PaneShell::Fixed(shell()),
-    );
+    ))
+    .own(Duration::from_secs(5))
+    .unwrap();
     let pane = "w1:p1";
     assert!(holders.record(pane).unwrap().is_none());
     let (opened, _) = channel();
@@ -675,7 +691,9 @@ fn a_redraw_on_a_holder_pane_draws_its_screen_again_and_what_follows() {
         }
         node.screens.wait_drawn_after("r1", drawn, &printed);
     }
-    node.holders().terminate(&node.service, "r1").unwrap();
+    node.holders()
+        .terminate(node.owner(), &node.service, "r1")
+        .unwrap();
 }
 
 /// The `node` role: starts every pane of the kill test, eight at once as a
@@ -784,7 +802,7 @@ fn a_node_killed_outright_finds_its_holders_again_and_attaches_sixty_four() {
     let next = Node::start(Switch::On, folder.home.path(), &folder.state);
     let told = Arc::new(Told::default());
     next.holders().watch_facts(told.sink());
-    let recovered = next.holders().recover(&next.service);
+    let recovered = next.holders().recover(next.owner(), &next.service);
     assert!(recovered.complete, "{recovered:?}");
     let mut expected: Vec<String> = panes.iter().filter(|pane| *pane != ENDS).cloned().collect();
     expected.sort();
@@ -861,7 +879,7 @@ fn a_holder_whose_record_was_deleted_runs_on_until_its_shell_ends() {
     std::fs::remove_dir_all(&folder.state).unwrap();
 
     let next = Node::start(Switch::On, folder.home.path(), &folder.state);
-    let recovered = next.holders().recover(&next.service);
+    let recovered = next.holders().recover(next.owner(), &next.service);
     assert!(recovered.complete, "{recovered:?}");
     assert!(
         recovered.attached.is_empty() && recovered.ended.is_empty(),
@@ -948,6 +966,7 @@ fn fixture_record(folder: &Folder, pane: &str, protocol: u16, holder: u32, versi
         protocol,
         version_folder: version_folder.to_owned(),
         spec: String::new(),
+        reservation: None,
         reserved_at_unix_ms: record::now_unix_ms(),
         boot: hide_platform::process::boot_id().ok(),
         holder: Some(holder),
@@ -996,7 +1015,7 @@ fn a_node_works_a_holder_of_the_oldest_version_it_supports() {
     let node = Node::start(Switch::On, folder.home.path(), &folder.state);
     let told = Arc::new(Told::default());
     node.holders().watch_facts(told.sink());
-    let recovered = node.holders().recover(&node.service);
+    let recovered = node.holders().recover(node.owner(), &node.service);
     assert_eq!(recovered.attached, vec!["f1".to_owned()], "{recovered:?}");
     node.screens.wait_full("f1", fixture_v1::SCREEN_TEXT);
     // A version 1 holder built before watches refuses the watch opening,
@@ -1027,7 +1046,10 @@ fn a_node_works_a_holder_of_the_oldest_version_it_supports() {
         Answer::Text { text, .. } => assert_eq!(text, fixture_v1::READ_TEXT),
         other => panic!("a read answered {other:?}"),
     }
-    let ended = node.holders().terminate(&node.service, "f1").unwrap();
+    let ended = node
+        .holders()
+        .terminate(node.owner(), &node.service, "f1")
+        .unwrap();
     assert_eq!(ended.phase, Phase::Ended);
     let logged = logged();
     assert!(logged.contains("terminate"), "{logged}");
@@ -1122,7 +1144,9 @@ fn a_node_tells_its_panes_facts_read_by_the_rules_its_holder_reads() {
     let later = Arc::new(Told::default());
     node.holders().watch_facts(later.sink());
     assert_eq!(later.wait("w1", "the last facts", |_| true), last);
-    node.holders().terminate(&node.service, "w1").unwrap();
+    node.holders()
+        .terminate(node.owner(), &node.service, "w1")
+        .unwrap();
 }
 
 /// B19: a pane whose watch ends some other way than with the pane (here
@@ -1161,7 +1185,9 @@ fn a_pane_whose_watch_another_took_reads_unknown_with_why() {
             }
     });
     assert_eq!(lost.title.as_deref(), Some("job"));
-    node.holders().terminate(&node.service, "l1").unwrap();
+    node.holders()
+        .terminate(node.owner(), &node.service, "l1")
+        .unwrap();
 }
 
 /// B10: a holder older than the oldest version a node speaks to is reported
@@ -1182,7 +1208,7 @@ fn a_holder_older_than_the_oldest_supported_is_reported_and_left_running() {
     fixture_record(&folder, "o1", 0, old.0.id(), "v0-old");
 
     let node = Node::start(Switch::On, folder.home.path(), &folder.state);
-    let recovered = node.holders().recover(&node.service);
+    let recovered = node.holders().recover(node.owner(), &node.service);
     assert_eq!(
         recovered.unsupported,
         vec!["o1".to_owned()],

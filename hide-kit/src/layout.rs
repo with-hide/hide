@@ -565,6 +565,12 @@ pub fn pane_records_lock(state_dir: &Path) -> PathBuf {
     pane_records(state_dir).join(".lock")
 }
 
+/// Connection ownership of node record mutations. Never remove or replace
+/// this file: all processes must lock the same inode across reconnects.
+pub fn pane_owner_lock(state_dir: &Path) -> PathBuf {
+    pane_records(state_dir).join(".owner-lock")
+}
+
 /// The next incarnation no process has taken from the folder yet, which no
 /// earlier start of the folder had.
 pub fn pane_incarnations(state_dir: &Path) -> PathBuf {

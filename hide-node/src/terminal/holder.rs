@@ -29,6 +29,7 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
+#[cfg(test)]
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -625,6 +626,11 @@ pub struct HolderFolders<'a> {
 }
 
 impl Holders {
+    /// One connection's ownership, retained by its adapter and admitted
+    /// workers. Acquisition and crash repair happen off every runtime lock.
+    pub fn acquire(&self, within: Duration) -> Result<hide_kit::panes::Owner, String> {
+        self.panes.acquire(within)
+    }
     /// These holders are the node's only pane engine. Tell the shared
     /// attach owner before the engine exposes a saved or newly drawn pane;
     /// recovery and start registration may both happen after its attach.
@@ -674,8 +680,8 @@ impl Holders {
     /// `holders` (the switch on), their state folder's holder panes beside
     /// `herdr`'s sessions, the holder from [`Holders::local_source`], and
     /// the holders that ran on while no node was there found again, and the
-    /// version folders nothing runs from removed, in the background
-    /// ([`Holders::recover_in_background`]); given none (the switch off),
+    /// version folders nothing runs from removed when its connection has
+    /// acquired pane ownership; given none (the switch off),
     /// `herdr`'s sessions alone and nothing of holders opened, read or
     /// removed. hided and the tools that measure a node
     /// (`hide-node/examples/holder_node.rs`) start it here, so what they
@@ -715,9 +721,6 @@ impl Holders {
             Service::start(attacher, outputs, reports, super::RetryPolicy::Automatic)
                 .map_err(|error| format!("terminal service failed to start: {error}"))?,
         );
-        if let Some(holders) = &holders {
-            Arc::clone(holders).recover_in_background(Arc::clone(&service));
-        }
         Ok(LocalTerminals { service, holders })
     }
 
@@ -741,12 +744,14 @@ impl Holders {
     /// files by [`holder_pane`] of it.
     pub fn start(
         &self,
+        owner: &hide_kit::panes::Owner,
         service: &Service,
         request: &StartRequest,
     ) -> Result<Started, StartRefusal> {
         let holder = holder_pane(&request.pane);
         self.known.starting(&request.pane);
         let started = self.panes.start(
+            owner,
             &StartRequest {
                 pane: holder.clone(),
                 ..request.clone()
@@ -784,12 +789,17 @@ impl Holders {
     /// holder, within `hide_kit::panes::CLOSE_LIMIT`, and answers its record.
     /// The service's session of it ends as a close it asked for; the node
     /// forgets the pane once it ended.
-    pub fn terminate(&self, service: &Service, pane: &str) -> Result<PaneRecord, CloseError> {
+    pub fn terminate(
+        &self,
+        owner: &hide_kit::panes::Owner,
+        service: &Service,
+        pane: &str,
+    ) -> Result<PaneRecord, CloseError> {
         service.control(TerminalControl::Closing {
             pane: pane.to_owned(),
             closing: true,
         });
-        let closed = self.panes.close(&holder_pane(pane));
+        let closed = self.panes.close(owner, &holder_pane(pane));
         if closed.is_ok() || matches!(closed, Err(CloseError::NoRecord)) {
             self.known.remove(pane);
             self.watches.forget(pane);
@@ -893,12 +903,12 @@ impl Holders {
     /// `attach_limit`, as it does a start past its cap; they run on, their
     /// screens held by their holders. Each pane is reported once, by what the
     /// last round that took it up found.
-    pub fn recover(&self, service: &Service) -> Recovered {
+    pub fn recover(&self, owner: &hide_kit::panes::Owner, service: &Service) -> Recovered {
         let mut recovered = Recovered::default();
         let mut judged: BTreeMap<String, Judgment> = BTreeMap::new();
         let mut failed = None;
         for round in 1..=RECONCILE_ROUNDS {
-            let reconciled = self.panes.reconcile(RECONCILE_BUDGET);
+            let reconciled = self.panes.reconcile(owner, RECONCILE_BUDGET);
             let pending = reconciled.pending();
             recovered.complete = reconciled.is_complete();
             for (pane, judgment) in reconciled.panes {
@@ -1063,27 +1073,6 @@ impl Holders {
     /// lives while there is one (PRD engine-bundle-3-core-owns D-10).
     pub fn live_panes(&self) -> Result<usize, String> {
         self.panes.live()
-    }
-
-    /// [`Holders::recover`] and then [`Holders::prune_folders`] on a thread
-    /// of its own, so a node's start does not wait on its holders. The
-    /// folders are pruned after the holders are found again: the holders
-    /// that died, which the reconcile settled, leave their folders unused,
-    /// and this start removes them.
-    pub fn recover_in_background(self: Arc<Self>, service: Arc<Service>) {
-        if let Err(error) = thread::Builder::new()
-            .name("hide-node-pane-holder-recover".into())
-            .spawn(move || {
-                self.recover(&service);
-                self.prune_folders();
-            })
-        {
-            crate::diagnostic!(json!({
-                "component": "pane_holder",
-                "kind": "pane_holder.recover_not_started",
-                "message": error.to_string(),
-            }));
-        }
     }
 
     /// Removes the version folders under the home that are not this

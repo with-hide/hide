@@ -541,6 +541,7 @@ fn serve_in(
         // rather than keep the helper alive after it, and the pane service
         // ends its listener and streams so the scope can close.
         env.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        env.panes.close();
         panes.stop();
         result
     });

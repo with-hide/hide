@@ -49,6 +49,9 @@ use sha2::{Digest, Sha256};
 
 use crate::{holders, layout};
 
+mod ownership;
+pub use ownership::Owner;
+
 /// The most holders a state folder keeps: every record that is not ended
 /// counts, and so does one that cannot be read, since it may name a holder.
 pub const HOLDER_CAP: usize = 128;
@@ -330,7 +333,6 @@ impl Panes {
             names: holders::VersionNames::default(),
             incarnations: Mutex::new(0..0),
         };
-        panes.mend_after_a_crash()?;
         Ok(panes)
     }
 
@@ -466,9 +468,11 @@ impl Panes {
     /// again whatever became of the last one.
     pub fn start(
         &self,
+        owner: &Owner,
         request: &StartRequest,
         source: &holders::Source,
     ) -> Result<Started, StartRefusal> {
+        self.check_owner(owner).map_err(StartRefusal::Failed)?;
         let begun = Instant::now();
         record::check_pane(&request.pane).map_err(StartRefusal::InvalidPane)?;
         let spec = spec_of(request);
@@ -541,6 +545,7 @@ impl Panes {
                 protocol: PROTOCOL_VERSION,
                 version_folder: version_folder.clone(),
                 spec: spec.clone(),
+                reservation: None,
                 reserved_at_unix_ms: record::now_unix_ms(),
                 boot: self.boot.clone(),
                 holder: None,
@@ -607,6 +612,7 @@ impl Panes {
         let other_boot =
             existing.boot.is_some() && self.boot.is_some() && existing.boot != self.boot;
         match existing.phase {
+            Phase::Reserved => Earlier::Lives,
             Phase::Ended if self.still_running(existing).is_empty() => Earlier::Over,
             Phase::Ended => Earlier::Unsettled,
             _ if other_boot => Earlier::Unsettled,
@@ -818,7 +824,7 @@ impl Panes {
                 .holder
                 .is_some_and(|named| holder.is_none_or(|holder| holder == named));
             let took_place = match current.phase {
-                Phase::Preparing => false,
+                Phase::Reserved | Phase::Preparing => false,
                 Phase::Running | Phase::Closing => true,
                 Phase::Ended => !matches!(
                     current.end.as_ref().map(|end| end.reason),
@@ -878,7 +884,8 @@ impl Panes {
     /// Asks the pane to end and waits until it has, within [`CLOSE_LIMIT`],
     /// and answers its record. A pane that already ended answers its record
     /// at once; one whose holder is gone is settled as a reconcile settles it.
-    pub fn close(&self, pane: &str) -> Result<PaneRecord, CloseError> {
+    pub fn close(&self, owner: &Owner, pane: &str) -> Result<PaneRecord, CloseError> {
+        self.check_owner(owner).map_err(CloseError::Failed)?;
         let path = layout::pane_record(&self.state_dir, pane);
         let current = {
             let _lock = self.lock().map_err(CloseError::Failed)?;
@@ -942,7 +949,8 @@ impl Panes {
 
     /// Removes an ended pane's record, its log and any socket it left. A
     /// pane that has not ended, or whose holder still runs, is refused.
-    pub fn forget(&self, pane: &str) -> Result<(), ForgetRefusal> {
+    pub fn forget(&self, owner: &Owner, pane: &str) -> Result<(), ForgetRefusal> {
+        self.check_owner(owner).map_err(ForgetRefusal::Failed)?;
         let path = layout::pane_record(&self.state_dir, pane);
         let _lock = self.lock().map_err(ForgetRefusal::Failed)?;
         let current = match record::read(&path) {
@@ -978,7 +986,17 @@ impl Panes {
     /// above zero (PRD engine-bundle-3-core-owns D-10).
     pub fn live(&self) -> Result<usize, String> {
         let _lock = self.lock()?;
-        Ok(self.count_live(&self.scan()?))
+        // A liveness query does not own the connection and must not prune
+        // records while a previous connection's workers are draining.
+        Ok(self
+            .scan()?
+            .iter()
+            .filter(|(_, read)| {
+                !read
+                    .as_ref()
+                    .is_ok_and(|record| record.phase == Phase::Ended)
+            })
+            .count())
     }
 
     /// The records not ended, and the ones that cannot be read, which may
@@ -1111,7 +1129,13 @@ impl Panes {
     /// to its own bound, and what was not taken up is answered `Pending` for
     /// the next reconcile, which the
     /// caller asks for while [`Reconciled::is_complete`] says no.
-    pub fn reconcile(&self, budget: Duration) -> Reconciled {
+    pub fn reconcile(&self, owner: &Owner, budget: Duration) -> Reconciled {
+        if let Err(why) = self.check_owner(owner) {
+            return Reconciled {
+                failed: Some(why),
+                ..Reconciled::default()
+            };
+        }
         let started = Instant::now();
         let deadline = started + budget;
         let mut found = Reconciled::default();
@@ -1208,6 +1232,10 @@ impl Panes {
             let gone = current.holder.is_none_or(|holder| !holder.runs());
             self.remove_stale_socket(&pane, if gone { LOCK_RELEASE } else { Duration::ZERO });
             Judgment::Ended(current.clone())
+        } else if current.phase == Phase::Reserved {
+            // Accepted existence is not an expired attempt to start a holder.
+            // Only explicit cancellation or a fenced recovery consumes it.
+            Judgment::Starting(current.clone())
         } else if current.boot.is_some() && self.boot.is_some() && current.boot != self.boot {
             // Nothing a record of another boot names runs in this one; its
             // pids and start times may name processes of this boot.
@@ -1734,6 +1762,7 @@ mod tests {
             protocol: PROTOCOL_VERSION,
             version_folder: String::new(),
             spec: String::new(),
+            reservation: None,
             reserved_at_unix_ms: record::now_unix_ms(),
             boot: panes.boot.clone(),
             holder,

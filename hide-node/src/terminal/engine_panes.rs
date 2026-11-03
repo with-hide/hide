@@ -31,9 +31,11 @@ pub struct LocalPanes {
     holders: Arc<Holders>,
     service: Arc<Service>,
     shell: PaneShell,
+    owner: Option<Arc<hide_kit::panes::Owner>>,
 }
 
 /// How a pane started with no program runs this machine's shell.
+#[derive(Clone)]
 pub enum PaneShell {
     /// The account's shell with Hide's shell integration, prepared for each
     /// pane as the node prepares it for a tab Hide opens
@@ -77,6 +79,7 @@ impl LocalPanes {
             holders,
             service,
             shell,
+            owner: None,
         }
     }
 
@@ -94,10 +97,42 @@ impl LocalPanes {
             },
         )
     }
+
+    fn owner(&self) -> Result<&hide_kit::panes::Owner, HolderError> {
+        self.owner.as_deref().ok_or_else(|| HolderError::Refused {
+            code: "pane_owner_unavailable".to_owned(),
+            message: "this connection has not acquired its pane records".to_owned(),
+        })
+    }
 }
 
 impl PaneHolders for LocalPanes {
+    fn own(
+        self: Arc<Self>,
+        within: std::time::Duration,
+    ) -> Result<Arc<dyn PaneHolders>, HolderError> {
+        let owner = Arc::new(
+            self.holders
+                .acquire(within)
+                .map_err(|message| HolderError::Unreachable { message })?,
+        );
+        let found = self.holders.recover(&owner, &self.service);
+        if !found.complete || !found.unjudged.is_empty() {
+            return Err(HolderError::Unreachable {
+                message: "the node could not reconcile every pane record".to_owned(),
+            });
+        }
+        self.holders.prune_folders();
+        Ok(Arc::new(Self {
+            holders: Arc::clone(&self.holders),
+            service: Arc::clone(&self.service),
+            shell: self.shell.clone(),
+            owner: Some(owner),
+        }))
+    }
+
     fn start(&self, start: &HolderStart) -> Result<(), HolderError> {
+        let owner = self.owner()?;
         let size = Size::checked(start.rows, start.cols).map_err(|why| HolderError::Refused {
             code: "invalid_size".to_owned(),
             message: why,
@@ -172,7 +207,7 @@ impl PaneHolders for LocalPanes {
                 appearance: Appearance::Unknown,
             },
         };
-        match self.holders.start(&self.service, &request) {
+        match self.holders.start(owner, &self.service, &request) {
             Ok(Started::Started(record) | Started::Existing(record)) => match record.end {
                 None => Ok(()),
                 Some(end) => Err(HolderError::Refused {
@@ -192,7 +227,7 @@ impl PaneHolders for LocalPanes {
     }
 
     fn terminate(&self, pane: &str) -> Result<(), HolderError> {
-        match self.holders.terminate(&self.service, pane) {
+        match self.holders.terminate(self.owner()?, &self.service, pane) {
             Ok(_) => Ok(()),
             Err(CloseError::NoRecord) => Err(HolderError::NoPane {
                 message: format!("pane {pane} has no holder on this machine"),

@@ -31,11 +31,23 @@ use crate::{ErrorCode, HostError, HostResult};
 /// them (`Call::HoldersStart`). Shared by every copy of the node's
 /// environment.
 #[derive(Clone, Default)]
-pub struct PaneSlot(Arc<OnceLock<Arc<dyn PaneHolders>>>);
+pub struct PaneSlot {
+    holders: Arc<OnceLock<Arc<dyn PaneHolders>>>,
+    owner: Arc<Mutex<Ownership>>,
+}
+
+#[derive(Default)]
+enum Ownership {
+    #[default]
+    Unowned,
+    Acquiring,
+    Ready(Arc<dyn PaneHolders>),
+    Closed,
+}
 
 impl fmt::Debug for PaneSlot {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(if self.0.get().is_some() {
+        formatter.write_str(if self.holders.get().is_some() {
             "PaneSlot(running)"
         } else {
             "PaneSlot(none)"
@@ -53,11 +65,48 @@ impl PaneSlot {
 
     /// Puts `holders` in the slot; a slot that holds some keeps them.
     pub fn fill(&self, holders: Arc<dyn PaneHolders>) {
-        let _ = self.0.set(holders);
+        let _ = self.holders.set(holders);
     }
 
     pub fn holders(&self) -> Option<&Arc<dyn PaneHolders>> {
-        self.0.get()
+        self.holders.get()
+    }
+
+    /// Stop admission, but do not release the ownership retained by an
+    /// admitted worker. The next connection cannot acquire the state lock
+    /// until those workers actually return, even if their answers were lost.
+    pub fn close(&self) {
+        let previous = {
+            let mut owner = self.owner.lock().unwrap_or_else(PoisonError::into_inner);
+            std::mem::replace(&mut *owner, Ownership::Closed)
+        };
+        drop(previous);
+    }
+
+    fn owned(&self, acquire: Option<Duration>) -> Result<Arc<dyn PaneHolders>, HolderError> {
+        {
+            let mut owner = self.owner.lock().unwrap_or_else(PoisonError::into_inner);
+            match &*owner {
+                Ownership::Ready(holders) => return Ok(Arc::clone(holders)),
+                Ownership::Unowned if acquire.is_some() => *owner = Ownership::Acquiring,
+                _ => return Err(owner_unavailable()),
+            }
+        }
+        let result = self
+            .holders()
+            .ok_or_else(owner_unavailable)
+            .and_then(|holders| Arc::clone(holders).own(acquire.unwrap_or_default()));
+        let mut owner = self.owner.lock().unwrap_or_else(PoisonError::into_inner);
+        // Close can happen while acquisition or recovery blocks. It never
+        // reactivates this old slot, and drops a newly acquired guard here.
+        if matches!(*owner, Ownership::Closed) {
+            return Err(owner_unavailable());
+        }
+        *owner = match &result {
+            Ok(holders) => Ownership::Ready(Arc::clone(holders)),
+            Err(_) => Ownership::Unowned,
+        };
+        result
     }
 
     fn running(&self) -> HostResult<&Arc<dyn PaneHolders>> {
@@ -75,9 +124,24 @@ impl PaneSlot {
 /// kind and code as the holders gave them; only a node that runs no holders
 /// refuses the request itself.
 pub fn answer(slot: &PaneSlot, call: PaneCall) -> HostResult<Value> {
-    let holders = slot.running()?;
-    let answer: PaneAnswer = ask(holders.as_ref(), call);
+    slot.running()?;
+    let acquire = match &call {
+        PaneCall::Recovered { timeout_ms } => Some(Duration::from_millis(*timeout_ms)),
+        _ => None,
+    };
+    // This Arc, not the answer channel, owns every mutation until ask has
+    // really finished. Timeout/close cannot release it from another thread.
+    let answer: PaneAnswer = slot
+        .owned(acquire)
+        .and_then(|holders| ask(holders.as_ref(), call));
     serde_json::to_value(answer).map_err(|error| HostError::new(ErrorCode::Io, error.to_string()))
+}
+
+fn owner_unavailable() -> HolderError {
+    HolderError::Refused {
+        code: "pane_owner_unavailable".to_owned(),
+        message: "the pane connection is closed or has not finished recovery".to_owned(),
+    }
 }
 
 fn ask(holders: &dyn PaneHolders, call: PaneCall) -> PaneAnswer {
@@ -299,6 +363,9 @@ mod tests {
     }
 
     impl PaneHolders for Holders {
+        fn own(self: Arc<Self>, _: Duration) -> Result<Arc<dyn PaneHolders>, HolderError> {
+            Ok(self)
+        }
         fn start(&self, _: &HolderStart) -> Result<(), HolderError> {
             Err(HolderError::Refused {
                 code: "holder_cap".to_owned(),
@@ -368,6 +435,7 @@ mod tests {
     #[test]
     fn a_pane_request_is_answered_with_the_holders_own_answer_or_refusal() {
         let slot = PaneSlot::holding(Arc::new(Holders::default()));
+        slot.owned(Some(Duration::ZERO)).unwrap();
         let start = HolderStart {
             pane: "w1:p1".to_owned(),
             program: None,
@@ -421,6 +489,24 @@ mod tests {
                 .program,
             41
         );
+    }
+
+    #[test]
+    fn a_closed_connection_refuses_a_late_start_and_cannot_reacquire_ownership() {
+        let slot = PaneSlot::holding(Arc::new(Holders::default()));
+        slot.owned(Some(Duration::ZERO)).unwrap();
+        slot.close();
+        for call in [
+            PaneCall::Terminate {
+                pane: "w1:p1".to_owned(),
+            },
+            PaneCall::Recovered { timeout_ms: 1 },
+        ] {
+            assert!(matches!(
+                answered(&slot, call),
+                Err(HolderError::Refused { code, .. }) if code == "pane_owner_unavailable"
+            ));
+        }
     }
 
     /// A node that runs no holders refuses the request itself, so the core
