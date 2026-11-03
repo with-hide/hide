@@ -62,6 +62,7 @@ import { machineName, windowDeviceId, windowFirst } from "./screenMachine";
 import { focusedRemoteDevice, localDeviceId, type AgentRow, type Checkout, type HideAiCheckout, type SessionPull, type SleepingSession, type SnapshotRest, type Workspace } from "./snapshot";
 import { useStartPanel } from "./startDraft";
 import { PracticeInvite } from "./components/practice-invite";
+import { HerdrImportLine } from "./HerdrImport";
 import { SidebarMenus } from "./components/sidebar-menus";
 import { useShellStore } from "./store";
 import { draggedSidebarWidth, sidebarWidthToSend } from "./sidebarWidth";
@@ -159,6 +160,7 @@ export function Sidebar({ actions }: { actions: Actions }) {
           <SidebarLensSwitch actions={actions} />
           <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-sidebar-content="true">
             {list}
+            <HerdrImportLine actions={actions} />
             <PracticeInvite actions={actions} />
             <div data-sidebar-footer="true" className="flex shrink-0 flex-wrap items-center gap-xs border-t border-border px-sm py-xs">
               <Usage actions={actions} />

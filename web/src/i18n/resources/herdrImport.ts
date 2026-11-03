@@ -1,0 +1,108 @@
+import type { Catalog, Catalogs } from "../schema";
+
+// Moving this machine's Herdr save into Hide's own engine (PRD
+// engine-bundle-4-herdr-removal D-6 to D-8): the question while Hide's own
+// Herdr runs, the sidebar line until it moves, the read-only import in the
+// first run and Settings, and the line a move that left something out or
+// could not read the save leaves.
+export const herdrImportEnglish = {
+  "herdrImport.ask.title": "Herdr is running {{tabs}} tabs and {{agents}} agents",
+  "herdrImport.ask.titleNoAgents": "Herdr is running {{tabs}} tabs",
+  "herdrImport.ask.description": "Moving ends the commands running in them, and the agents reopen where their conversations left off.",
+  "herdrImport.ask.move": "Move {{count}} agents",
+  "herdrImport.ask.moveTabs": "Move {{count}} tabs",
+  "herdrImport.ask.later": "Later",
+  "herdrImport.ask.moving": "Moving…",
+  "herdrImport.failure.not_stopped": "Couldn't stop Herdr. Stop Herdr yourself, then move again.",
+  "herdrImport.line.move": "{{count}} Herdr agents not moved",
+  "herdrImport.line.moveTabs": "{{count}} Herdr tabs not moved",
+  "herdrImport.line.moveAction": "Move",
+  "herdrImport.line.import": "Herdr has {{count}} tabs",
+  "herdrImport.line.importAction": "Import",
+  "herdrImport.line.running": "Conversations open in Herdr open here as shells",
+  "herdrImport.line.unreadable": "Couldn't read the Herdr session",
+  "herdrImport.line.retry": "Try again",
+  "herdrImport.line.refused": "{{count}} Herdr workspaces weren't moved",
+  "herdrImport.line.refusedRow": "{{label}}: {{reason}}",
+  "herdrImport.line.done": "OK",
+  "herdrImport.import.title": "Import Herdr work",
+  "herdrImport.import.note": "{{count}} tabs open with the same layout and folders. Herdr is left as it is.",
+  "herdrImport.import.button": "Import",
+} as const;
+
+const ko = {
+  "herdrImport.ask.title": "Herdr에서 탭 {{tabs}}개, 에이전트 {{agents}}개가 돌고 있어요",
+  "herdrImport.ask.titleNoAgents": "Herdr에서 탭 {{tabs}}개가 돌고 있어요",
+  "herdrImport.ask.description": "옮기면 그 안에서 돌던 명령은 끝나고, 에이전트는 대화를 이어 다시 열려요.",
+  "herdrImport.ask.move": "에이전트 {{count}}개 옮기기",
+  "herdrImport.ask.moveTabs": "탭 {{count}}개 옮기기",
+  "herdrImport.ask.later": "나중에",
+  "herdrImport.ask.moving": "옮기는 중…",
+  "herdrImport.failure.not_stopped": "Herdr를 끄지 못했어요. Herdr를 직접 끈 뒤 다시 옮기세요.",
+  "herdrImport.line.move": "옮기지 않은 Herdr 에이전트 {{count}}개",
+  "herdrImport.line.moveTabs": "옮기지 않은 Herdr 탭 {{count}}개",
+  "herdrImport.line.moveAction": "옮기기",
+  "herdrImport.line.import": "Herdr 탭 {{count}}개",
+  "herdrImport.line.importAction": "가져오기",
+  "herdrImport.line.running": "Herdr에서 열려 있는 대화는 셸로 열려요",
+  "herdrImport.line.unreadable": "Herdr 저장본을 읽지 못했어요",
+  "herdrImport.line.retry": "다시 시도",
+  "herdrImport.line.refused": "옮기지 못한 Herdr 워크스페이스 {{count}}개",
+  "herdrImport.line.refusedRow": "{{label}}: {{reason}}",
+  "herdrImport.line.done": "확인",
+  "herdrImport.import.title": "Herdr 작업 가져오기",
+  "herdrImport.import.note": "탭 {{count}}개가 같은 배치와 폴더로 열려요. Herdr는 그대로 둬요.",
+  "herdrImport.import.button": "가져오기",
+} satisfies Catalog<typeof herdrImportEnglish>;
+
+const zhCN = {
+  "herdrImport.ask.title": "Herdr 正在运行 {{tabs}} 个标签页和 {{agents}} 个智能体",
+  "herdrImport.ask.titleNoAgents": "Herdr 正在运行 {{tabs}} 个标签页",
+  "herdrImport.ask.description": "迁移会结束其中正在运行的命令，智能体会接着原来的对话重新打开。",
+  "herdrImport.ask.move": "迁移 {{count}} 个智能体",
+  "herdrImport.ask.moveTabs": "迁移 {{count}} 个标签页",
+  "herdrImport.ask.later": "以后再说",
+  "herdrImport.ask.moving": "正在迁移…",
+  "herdrImport.failure.not_stopped": "无法停止 Herdr。请先手动停止 Herdr，再重新迁移。",
+  "herdrImport.line.move": "{{count}} 个 Herdr 智能体尚未迁移",
+  "herdrImport.line.moveTabs": "{{count}} 个 Herdr 标签页尚未迁移",
+  "herdrImport.line.moveAction": "迁移",
+  "herdrImport.line.import": "Herdr 有 {{count}} 个标签页",
+  "herdrImport.line.importAction": "导入",
+  "herdrImport.line.running": "在 Herdr 中打开的对话会在这里以 shell 打开",
+  "herdrImport.line.unreadable": "无法读取 Herdr 会话",
+  "herdrImport.line.retry": "重试",
+  "herdrImport.line.refused": "{{count}} 个 Herdr 工作区未能迁移",
+  "herdrImport.line.refusedRow": "{{label}}：{{reason}}",
+  "herdrImport.line.done": "好",
+  "herdrImport.import.title": "导入 Herdr 工作",
+  "herdrImport.import.note": "{{count}} 个标签页会以相同的布局和文件夹打开。Herdr 保持不变。",
+  "herdrImport.import.button": "导入",
+} satisfies Catalog<typeof herdrImportEnglish>;
+
+const ja = {
+  "herdrImport.ask.title": "Herdr でタブ {{tabs}} 個、エージェント {{agents}} 個が動いています",
+  "herdrImport.ask.titleNoAgents": "Herdr でタブ {{tabs}} 個が動いています",
+  "herdrImport.ask.description": "移すと、その中で動いていたコマンドは終わり、エージェントは会話の続きから開き直します。",
+  "herdrImport.ask.move": "エージェント {{count}} 個を移す",
+  "herdrImport.ask.moveTabs": "タブ {{count}} 個を移す",
+  "herdrImport.ask.later": "あとで",
+  "herdrImport.ask.moving": "移しています…",
+  "herdrImport.failure.not_stopped": "Herdr を止められませんでした。Herdr を自分で止めてから、もう一度移してください。",
+  "herdrImport.line.move": "移していない Herdr エージェント {{count}} 個",
+  "herdrImport.line.moveTabs": "移していない Herdr タブ {{count}} 個",
+  "herdrImport.line.moveAction": "移す",
+  "herdrImport.line.import": "Herdr のタブ {{count}} 個",
+  "herdrImport.line.importAction": "取り込む",
+  "herdrImport.line.running": "Herdr で開いている会話はシェルとして開きます",
+  "herdrImport.line.unreadable": "Herdr のセッションを読めませんでした",
+  "herdrImport.line.retry": "再試行",
+  "herdrImport.line.refused": "移せなかった Herdr ワークスペース {{count}} 個",
+  "herdrImport.line.refusedRow": "{{label}}：{{reason}}",
+  "herdrImport.line.done": "OK",
+  "herdrImport.import.title": "Herdr の作業を取り込む",
+  "herdrImport.import.note": "タブ {{count}} 個が同じ配置とフォルダーで開きます。Herdr はそのままです。",
+  "herdrImport.import.button": "取り込む",
+} satisfies Catalog<typeof herdrImportEnglish>;
+
+export const herdrImportCatalogs = { en: herdrImportEnglish, ko, "zh-CN": zhCN, ja } satisfies Catalogs<typeof herdrImportEnglish>;

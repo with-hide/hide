@@ -1425,6 +1425,14 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     herdrTakeover(action: "move" | "later" | "continue" | "look" | "stop_failed") {
       dispatch({ schema_version: 2, kind: "herdr_takeover", payload: { action } });
     },
+    /**
+     * The operator's answer to moving this machine's Herdr save into Hide's own engine (PRD engine-bundle-4-herdr-removal): `move`
+     * stops Hide's Herdr and moves its session, `import` imports a save read only, `look` reads it again, `continue` closes the
+     * last move's result. One press is one event; a second press while a move runs is the same move.
+     */
+    herdrImport(action: "move" | "import" | "look" | "continue") {
+      dispatch({ schema_version: 2, kind: "herdr_import", payload: { action } });
+    },
     saveFirstRunDraft(draft: { agents?: string[]; devices?: string[]; project_device?: string; project_path?: string; project_form?: import("./snapshot").FirstRunProjectForm }) {
       dispatch({ schema_version: 2, kind: "first_run_draft", payload: draft });
     },
