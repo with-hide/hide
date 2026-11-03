@@ -44,7 +44,7 @@ sudo useradd --system --user-group --no-create-home --shell /usr/sbin/nologin hi
 ```
 
 On a repeat run, inspect existing accounts instead of accepting a same-name interactive account.
-The relay has no writable application state; Caddy owns only its certificate state under `/var/lib/hide-relay-proxy`, and the collector owns only its cursor under `/var/lib/hide-relay-logs`.
+The relay has no writable application state; Caddy owns its certificate and configuration state under `/var/lib/hide-relay-proxy`, and the collector owns only its cursor under `/var/lib/hide-relay-logs`.
 `scripts/relay-deploy.py` owns the explicit input contract and validates all required values before staging; `deploy/relay-inputs.example.json` lists placeholders.
 Real input values, rendered cloud bodies, receipts and logs stay outside version control.
 The service runtime has no user-provided environment contract; Caddy’s two XDG variables name fixed service-owned paths.

@@ -1,6 +1,5 @@
 {
 	admin off
-	persist_config off
 	log {
 		output discard
 	}
