@@ -692,6 +692,60 @@ fn a_command_past_its_cap_is_ended_with_everything_it_started() {
     );
 }
 
+/// A command that starts an ordinary program with outputs of its own and
+/// exits 0 answers its status, and that program ends with it: only a
+/// resident that leaves the command's job outlives it.
+#[test]
+fn a_command_that_ends_leaves_nothing_it_started_running() {
+    let device = Device::new();
+    let launcher = device.home().join("launcher.ps1");
+    // Start-Process without redirection starts it through the shell, so it
+    // shares no handle of the command's, only its job.
+    std::fs::write(
+        &launcher,
+        format!(
+            "$p = Start-Process -PassThru -WindowStyle Hidden -FilePath '{}' -ArgumentList '-NoProfile','-NonInteractive','-Command','Start-Sleep -Seconds 600'\r\nSet-Content -Encoding ascii -LiteralPath $args[0] -Value $p.Id\r\nexit 0\r\n",
+            system32(r"WindowsPowerShell\v1.0\powershell.exe").display()
+        ),
+    )
+    .unwrap();
+    let pid_file = device.home().join("sleeper.pid");
+    let mut pipe = device.connect();
+    probe(&mut pipe, soon()).unwrap();
+    let ran = run(
+        &mut pipe,
+        &words(&[
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            launcher.to_str().unwrap(),
+            pid_file.to_str().unwrap(),
+        ]),
+        1024,
+        soon(),
+    )
+    .unwrap();
+    assert_eq!(ran.status, 0, "{}", String::from_utf8_lossy(&ran.stderr));
+    let pid: u32 = std::fs::read_to_string(&pid_file)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert!(
+        !hide_platform::process::is_alive(pid),
+        "the program the command started outlived it"
+    );
+    assert_eq!(
+        run(&mut pipe, &words(&["cmd.exe", "/c", "exit 0"]), 16, soon())
+            .unwrap()
+            .status,
+        0
+    );
+}
+
 /// A copied file lands whole and private, a damaged one leaves the file
 /// already there alone, and the same file reads back with the digest the
 /// machine states for it.

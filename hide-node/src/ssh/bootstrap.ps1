@@ -43,9 +43,10 @@ public static class HideLinkHandle {
 // A command the run step starts, with everything it starts in turn: the
 // process is made suspended, put in a job of its own and only then let run,
 // so nothing it starts can be outside the job, and ending the job ends the
-// whole tree whichever of its processes has already exited. A program that
-// asks to leave the job (a resident, hide_platform::process::start_resident)
-// may, since it is started to outlive the command.
+// whole tree whichever of its processes has already exited. Only a program
+// that asks to leave the job (a resident, hide_platform::process::
+// start_resident) may, since it is started to outlive the command; closing
+// the job, as this script's end does, ends whatever else is left.
 public sealed class HideRunTree : IDisposable {
     [StructLayout(LayoutKind.Sequential)]
     struct SecurityAttributes { public int Length; public IntPtr Descriptor; public int Inherit; }
@@ -105,6 +106,8 @@ public sealed class HideRunTree : IDisposable {
     public System.IO.FileStream Out;
     public System.IO.FileStream Err;
 
+    HideRunTree() {}
+
     static void Close(ref IntPtr handle) {
         if (handle != IntPtr.Zero) { CloseHandle(handle); handle = IntPtr.Zero; }
     }
@@ -118,16 +121,22 @@ public sealed class HideRunTree : IDisposable {
     }
 
     // Starts the command line with no input, its outputs on pipes of its
-    // own, as Process.Start finds and starts a program.
-    public HideRunTree(string commandLine) {
+    // own, as Process.Start finds and starts a program. Answers null, with
+    // the reason, when nothing of it runs: everything that can fail is done
+    // before the process is made, or while it is still suspended, when it is
+    // ended and its end awaited. Throws when that end is not confirmed.
+    public static HideRunTree Start(string commandLine, out string reason) {
+        HideRunTree tree = new HideRunTree();
+        reason = null;
         IntPtr inRead = IntPtr.Zero, inWrite = IntPtr.Zero, outRead = IntPtr.Zero, outWrite = IntPtr.Zero, errRead = IntPtr.Zero, errWrite = IntPtr.Zero;
         ProcessInformation started = new ProcessInformation();
         try {
-            job = CreateJobObjectW(IntPtr.Zero, null);
-            if (job == IntPtr.Zero) { throw Failed("CreateJobObject"); }
+            tree.job = CreateJobObjectW(IntPtr.Zero, null);
+            if (tree.job == IntPtr.Zero) { throw Failed("CreateJobObject"); }
             ExtendedLimits limits = new ExtendedLimits();
-            limits.Basic.Flags = 0x800; // JOB_OBJECT_LIMIT_BREAKAWAY_OK
-            if (!SetInformationJobObject(job, 9, ref limits, Marshal.SizeOf(typeof(ExtendedLimits)))) { throw Failed("SetInformationJobObject"); }
+            // JOB_OBJECT_LIMIT_BREAKAWAY_OK | JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            limits.Basic.Flags = 0x800 | 0x2000;
+            if (!SetInformationJobObject(tree.job, 9, ref limits, Marshal.SizeOf(typeof(ExtendedLimits)))) { throw Failed("SetInformationJobObject"); }
             SecurityAttributes inheritable = new SecurityAttributes();
             inheritable.Length = Marshal.SizeOf(typeof(SecurityAttributes));
             inheritable.Inherit = 1;
@@ -137,6 +146,8 @@ public sealed class HideRunTree : IDisposable {
             foreach (IntPtr own in new IntPtr[] { inWrite, outRead, errRead }) {
                 if (!SetHandleInformation(own, 1, 0)) { throw Failed("SetHandleInformation"); }
             }
+            tree.Out = Reader(ref outRead);
+            tree.Err = Reader(ref errRead);
             StartupInfo startup = new StartupInfo();
             startup.cb = Marshal.SizeOf(typeof(StartupInfo));
             startup.Flags = 0x100; // STARTF_USESTDHANDLES
@@ -144,17 +155,23 @@ public sealed class HideRunTree : IDisposable {
             startup.Output = outWrite;
             startup.Error = errWrite;
             if (!CreateProcessW(null, new System.Text.StringBuilder(commandLine), IntPtr.Zero, IntPtr.Zero, true, 0x4, IntPtr.Zero, null, ref startup, out started)) { throw Failed("CreateProcess"); }
-            if (!AssignProcessToJobObject(job, started.Process)) { throw Failed("AssignProcessToJobObject"); }
+            if (!AssignProcessToJobObject(tree.job, started.Process)) { throw Failed("AssignProcessToJobObject"); }
             if (ResumeThread(started.Thread) == uint.MaxValue) { throw Failed("ResumeThread"); }
-            process = started.Process;
+            tree.process = started.Process;
             started.Process = IntPtr.Zero;
-            Out = Reader(ref outRead);
-            Err = Reader(ref errRead);
-        } catch {
-            if (started.Process != IntPtr.Zero) { TerminateProcess(started.Process, 1); }
+            return tree;
+        } catch (Exception failure) {
+            // Suspended, so it started nothing: ending it ends all of it.
+            bool ended = true;
+            if (started.Process != IntPtr.Zero) {
+                TerminateProcess(started.Process, 1);
+                ended = WaitForSingleObject(started.Process, 10000) == 0;
+            }
             Close(ref started.Process);
-            Close(ref job);
-            throw;
+            tree.Dispose();
+            if (!ended) { throw new InvalidOperationException("a command that could not be started did not end: " + failure.Message); }
+            reason = failure.Message;
+            return null;
         } finally {
             Close(ref started.Thread);
             Close(ref inRead);
@@ -174,8 +191,8 @@ public sealed class HideRunTree : IDisposable {
         return unchecked((int)code);
     }
 
-    // Ends every process in the tree and answers whether Windows says none
-    // is left within the time given.
+    // Ends every process left in the tree and answers whether Windows says
+    // none is left within the time given.
     public bool End(int milliseconds) {
         TerminateJobObject(job, 1);
         DateTime until = DateTime.UtcNow.AddMilliseconds(milliseconds);
@@ -579,21 +596,24 @@ function Step-Attach([string]$program, [string]$stateDir) {
 
 # Runs the command with no input and answers its status and both outputs,
 # each kept to $cap bytes: one that writes past it is ended with everything
-# it started, and refused. A tree whose end Windows does not confirm, or a
-# failure part way, ends the script and with it the link, so the node never
-# reuses a connection with a command of its still running.
+# it started, and refused. When the command ends, whatever it started and
+# left running ends with it, save a resident that left its job. A tree whose
+# end Windows does not confirm, or a failure part way, ends the script and
+# with it the link, so the node never reuses a connection with a command of
+# its still running.
 function Step-Run([string]$count, [string]$cap) {
     $words = New-Object Collections.Generic.List[string]
     for ($n = 0; $n -lt [int]$count; $n++) { $words.Add((Read-Line)) }
     $limit = [long]$cap
-    try { $tree = New-Object HideRunTree -ArgumentList @(,(Command-Line $words)) } catch {
+    $reason = $null
+    $tree = [HideRunTree]::Start((Command-Line $words), [ref]$reason)
+    if ($null -eq $tree) {
         $said = $utf8.GetBytes("$($words[0]): the command could not be started`n")
         Say ran 127 0 $said.Length
         $stdout.Write($said, 0, $said.Length)
         $stdout.Flush()
         return
     }
-    $ended = $false
     try {
         $streams = @($tree.Out, $tree.Err)
         $kept = @((New-Object IO.MemoryStream), (New-Object IO.MemoryStream))
@@ -612,18 +632,17 @@ function Step-Run([string]$count, [string]$cap) {
                 $reads[$k] = $streams[$k].ReadAsync($chunks[$k], 0, 65536)
             }
         }
+        if (-not $big) { $status = $tree.Wait() }
+        if (-not $tree.End(10000)) { throw 'a command or a program it started did not end' }
         if ($big) {
-            $ended = $true
-            if (-not $tree.End(10000)) { throw 'a command past its output cap did not end' }
             # With every writer gone the reads still waiting end at once.
             $waiting = @($reads | Where-Object { $_ })
             if ($waiting) { [void][Threading.Tasks.Task]::WaitAll([Threading.Tasks.Task[]]$waiting, 5000) }
             Say big ($tree.Wait()) ([Math]::Min($kept[0].Length, $limit + 1)) ([Math]::Min($kept[1].Length, $limit + 1))
             return
         }
-        $status = $tree.Wait()
     } catch {
-        if (-not $ended) { [void]$tree.End(10000) }
+        [void]$tree.End(10000)
         throw
     } finally { $tree.Dispose() }
     Say ran $status $kept[0].Length $kept[1].Length
