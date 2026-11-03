@@ -188,8 +188,8 @@ pub(crate) const NOT_EMPTY: &str = "composer_not_empty";
 /// menu or a dialog over it), or a failed or cut read.
 pub(crate) const UNCONFIRMED: &str = "composer_unconfirmed";
 
-/// Whether a forced letter may be typed into `pane`, whose agent is of
-/// `kind`, now (PRD engine-bundle-1 D-14): its visible screen read with
+/// Whether a letter may be typed into `pane`, whose agent is of
+/// `kind`, now: its visible screen read with
 /// styling and judged by the kind's composer declaration. Any version is
 /// judged, since a screen not read empty is never typed into. Runs off the
 /// runtime lock.

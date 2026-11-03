@@ -425,8 +425,9 @@ A key typed into the pane restarts the two minutes, so the mark leaves while the
 
 Deliver now is one event, `deliver_letters_now {pane_id}`.
 The press is the operator saying the composer holds nothing of theirs: the pane's observation records the input it releases (`released_input_at_unix_ms`), so input up to it is no draft, the pane's composer mark is removed, and the mark leaves at once.
-The doorbell's next pass then rings with every guard it always applies (Herdr's readiness, the reservation, the last memory check) and types the same line ([The bell line](#the-bell-line)); the prompt hook takes the letters as it does for any bell turn.
-Nothing warns about a possible draft, because the mark sits right above the composer: a draft that is there is sent with the bell line after it.
+The doorbell's next eligible pass then rings with every guard it always applies (Herdr's readiness, the actual composer, the reservation, the last memory check) and types the same line ([The bell line](#the-bell-line)); the prompt hook takes the letters as it does for any bell turn.
+The press releases the recorded draft hold only: actual text, a menu or an unreadable composer still holds the letter until the composer reads empty.
+Nothing clears or submits the operator's draft.
 Input after the press is a draft again and holds the letter as before.
 A press the mark no longer stands for changes nothing and logs `deliver_now.refused` with `no_letter_waiting` (the doorbell has not shown it, or it left), `pane_unavailable`, or `pane_not_at_rest` (a key reached the pane or its status changed since the last pass); an accepted press logs `deliver_now.released` with the pane and count.
 Neither reaches the screen, and nothing changes on the sender's side.
@@ -458,6 +459,11 @@ Kinds whose session readers report no turns retain the other delivery guards; th
 The first start of a build with this rule resumes a stored session at its last person's message, after that turn's `task_started`, so a plan already waiting then is not known until Herdr's next state; that start holds the bell rather than ringing it.
 The rule reads the session Herdr reports for the pane, so a pane reported with another session is judged by that session.
 It guards against hide's own bell, not against a process of the same account, which could append records to the session file or type into the pane with `hide pane send` or through Herdr directly.
+
+Before typing a letter into an agent whose composer has a declaration, Hide also reads that composer and requires it to be empty, using the same parser as a forced send.
+This protects text even when a late status update covered the key in the draft record.
+A nonempty, unreadable or truncated screen keeps the letter pending without spending a bell; retry uses the existing bounded backoff, and a new key or state generation invalidates the read before any write.
+This adds one off-lock screen read per eligible attempt within the doorbell's existing eight-attempt pass cap, with no added work per key.
 
 ### The input ladder
 
