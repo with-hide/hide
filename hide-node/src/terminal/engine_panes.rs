@@ -435,8 +435,7 @@ impl PaneHolders for LocalPanes {
     }
 
     fn input(&self, pane: &str, input: PaneInput) -> Result<(), HolderError> {
-        self.service.type_input(pane, typed(input));
-        Ok(())
+        self.service.type_input(pane, typed(input))
     }
 
     fn letter(
@@ -447,8 +446,7 @@ impl PaneHolders for LocalPanes {
         gap: std::time::Duration,
     ) -> Result<(), HolderError> {
         self.service
-            .type_letter(pane, typed(body), typed(submit), gap);
-        Ok(())
+            .type_letter(pane, typed(body), typed(submit), gap)
     }
 
     fn watch_ends(&self, ended: PaneEnded) {

@@ -7,14 +7,24 @@ use hide_node_link::link_panes::LinkPanes;
 use hide_node_link::protocol::Call;
 use hide_node_link::{LinkError, NodeLink};
 
-struct Connection {
-    local: Arc<hide_node::Local>,
-    linked: LinkPanes,
-    service: Arc<Service>,
+pub(super) struct Connection {
+    pub(super) local: Arc<hide_node::Local>,
+    pub(super) linked: LinkPanes,
+    pub(super) service: Arc<Service>,
+    pub(super) reports: Arc<Reports>,
+    pub(super) screens: Arc<Screens>,
 }
 
 impl Connection {
     fn open(home: &Path, state: &Path) -> Self {
+        Self::with_attacher(home, state, |attacher| attacher)
+    }
+
+    pub(super) fn with_attacher(
+        home: &Path,
+        state: &Path,
+        wrap: impl FnOnce(Box<dyn Attacher>) -> Box<dyn Attacher>,
+    ) -> Self {
         let screens = Arc::new(Screens::default());
         let reports = Arc::new(Reports::default());
         let holders = Arc::new(
@@ -31,9 +41,9 @@ impl Connection {
         let (opened, _) = channel();
         let service = Arc::new(
             Service::start(
-                holders.attacher(Box::new(Herdr(Mutex::new(opened)))),
-                screens,
-                reports,
+                wrap(holders.attacher(Box::new(Herdr(Mutex::new(opened))))),
+                screens.clone(),
+                reports.clone(),
                 RetryPolicy::Automatic,
             )
             .unwrap(),
@@ -50,6 +60,8 @@ impl Connection {
             local,
             linked,
             service,
+            screens,
+            reports,
         }
     }
 }

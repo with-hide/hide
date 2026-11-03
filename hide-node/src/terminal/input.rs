@@ -96,6 +96,7 @@ pub(super) struct HeldChunk {
     pub(super) input: Typed,
     pub(super) by: Typist,
     pub(super) permit: Option<super::permit::Permit>,
+    pub(super) command: Option<super::command::Command>,
 }
 
 /// What a chunk types. The operator's keys are bytes; the core's own engine
@@ -579,6 +580,18 @@ impl PaneHold {
         true
     }
 
+    pub(super) fn discard_finished_commands(&mut self) {
+        if let Self::Holding { chunks, bytes, .. } = self {
+            chunks.retain(|chunk| {
+                chunk
+                    .command
+                    .as_ref()
+                    .is_none_or(|command| !command.finished())
+            });
+            *bytes = chunks.iter().map(|chunk| chunk.input.len()).sum();
+        }
+    }
+
     /// What the pane's control session, open at `now`, writes first.
     pub(super) fn take_chunks(&mut self, pane_id: &str, now: Instant) -> Vec<HeldChunk> {
         match std::mem::take(self) {
@@ -590,11 +603,13 @@ impl PaneHold {
                             Some(HeldChunk {
                                 input: Typed::Bytes(last),
                                 permit: None,
+                                command: None,
                                 ..
                             }),
                             HeldChunk {
                                 input: Typed::Bytes(bytes),
                                 permit: None,
+                                command: None,
                                 ..
                             },
                         ) => last.extend(bytes),
@@ -953,6 +968,7 @@ mod tests {
 
     fn chunk(bytes: &[u8], typed_at: Instant) -> HeldChunk {
         HeldChunk {
+            command: None,
             permit: None,
             typed_at,
             typed_at_unix_ms: 0,

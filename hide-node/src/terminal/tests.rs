@@ -1190,6 +1190,15 @@ fn a_node_keeps_at_most_its_cap_of_panes_attached() {
     harness
         .service
         .control(TerminalControl::Forget { pane: "p0".into() });
+    // The cap includes the retiring connection until its actual cleanup.
+    let deadline = Instant::now() + WAIT;
+    while harness.service.shared.children.contains("p0") {
+        assert!(
+            Instant::now() < deadline,
+            "the retired connection never ended"
+        );
+        thread::yield_now();
+    }
     harness.attach("over", Some(SIZE));
     assert_eq!(harness.opened().pane, "over");
 }
@@ -1862,12 +1871,15 @@ fn keys_typed_during_a_letter_follow_its_submit_in_order() {
     let opened = harness.controlling("w1:p1");
     thread::scope(|scope| {
         let letter = scope.spawn(|| {
-            harness.service.type_letter(
-                "w1:p1",
-                Typed::Bytes(b"letter".to_vec()),
-                Typed::Bytes(b"\r".to_vec()),
-                Duration::from_millis(300),
-            );
+            harness
+                .service
+                .type_letter(
+                    "w1:p1",
+                    Typed::Bytes(b"letter".to_vec()),
+                    Typed::Bytes(b"\r".to_vec()),
+                    Duration::from_millis(300),
+                )
+                .unwrap();
         });
         assert_eq!(input_bytes(&opened, b"letter".len()), b"letter");
         harness.key("w1:p1", b"x");
@@ -1888,12 +1900,15 @@ fn keys_held_for_a_letter_are_kept_when_another_letter_begins_and_follow_the_las
     let harness = harness(RetryPolicy::Automatic);
     let opened = harness.controlling("w1:p1");
     let letter = |body: &'static [u8], gap: u64| {
-        harness.service.type_letter(
-            "w1:p1",
-            Typed::Bytes(body.to_vec()),
-            Typed::Bytes(b"\r".to_vec()),
-            Duration::from_millis(gap),
-        );
+        harness
+            .service
+            .type_letter(
+                "w1:p1",
+                Typed::Bytes(body.to_vec()),
+                Typed::Bytes(b"\r".to_vec()),
+                Duration::from_millis(gap),
+            )
+            .unwrap();
     };
     thread::scope(|scope| {
         let first = scope.spawn(|| letter(b"a", 300));
@@ -1926,7 +1941,8 @@ fn the_engines_start_line_is_not_held_behind_a_forks_request() {
     harness.key("w1:p1", b"typed early");
     harness
         .service
-        .type_input("w1:p1", Typed::Bytes(b"claude --resume s\r".to_vec()));
+        .type_input("w1:p1", Typed::Bytes(b"claude --resume s\r".to_vec()))
+        .unwrap();
     assert_eq!(input_bytes(&opened, 18), b"claude --resume s\r");
     harness.service.control(TerminalControl::RequestResolve {
         request: "fork".into(),
@@ -1949,10 +1965,12 @@ fn the_engines_typing_reaches_a_sleeping_pane_and_the_operators_keys_do_not() {
     harness.key("w1:p1", b"lost");
     harness
         .service
-        .type_input("w1:p1", Typed::Bytes(b"\x03".to_vec()));
+        .type_input("w1:p1", Typed::Bytes(b"\x03".to_vec()))
+        .unwrap();
     harness
         .service
-        .type_input("w1:p1", Typed::Bytes(b"claude --resume s\r".to_vec()));
+        .type_input("w1:p1", Typed::Bytes(b"claude --resume s\r".to_vec()))
+        .unwrap();
     let typed = b"\x03claude --resume s\r";
     assert_eq!(input_bytes(&opened, typed.len()), typed);
     harness.service.control(TerminalControl::Asleep {
@@ -1971,7 +1989,8 @@ fn the_engines_typing_is_not_reported_as_the_operators() {
     let opened = harness.controlling("w1:p1");
     harness
         .service
-        .type_input("w1:p1", Typed::Bytes(b"ls\r".to_vec()));
+        .type_input("w1:p1", Typed::Bytes(b"ls\r".to_vec()))
+        .unwrap();
     assert_eq!(opened.next_input(), b"ls\r");
     harness.key("w1:p1", b"x");
     assert_eq!(opened.next_input(), b"x");
@@ -2001,7 +2020,8 @@ fn the_engines_typing_into_a_released_pane_attaches_it_and_is_written() {
     harness.state("w1:p1", "released");
     harness
         .service
-        .type_input("w1:p1", Typed::Bytes(b"resume\r".to_vec()));
+        .type_input("w1:p1", Typed::Bytes(b"resume\r".to_vec()))
+        .unwrap();
     let again = harness.opened();
     assert_eq!(input_bytes(&again, b"resume\r".len()), b"resume\r");
 }
@@ -2014,7 +2034,8 @@ fn named_keys_for_a_session_that_does_not_read_them_are_refused_with_why() {
     let opened = harness.controlling("w1:p1");
     harness
         .service
-        .type_input("w1:p1", Typed::Keys(vec![hide_holder_protocol::Key::Enter]));
+        .type_input("w1:p1", Typed::Keys(vec![hide_holder_protocol::Key::Enter]))
+        .unwrap_err();
     let refused = harness.report_where(|report| matches!(report, TerminalReport::Error { .. }));
     assert!(
         matches!(&refused, TerminalReport::Error { kind, .. } if kind == "terminal.unsupported_holder"),
@@ -2249,10 +2270,11 @@ fn a_view_that_arrives_while_a_holder_pane_opens_is_the_grid_it_takes() {
 }
 
 #[test]
-fn a_holder_started_while_its_refused_attach_is_still_on_its_way_attaches_at_once() {
+fn a_holder_started_during_an_old_open_attaches_once_that_open_ends_without_retry_delay() {
     // The core's attempt, made before the holder was started, has not been
     // refused yet when the holder's start asks for the pane: the pane
-    // attaches now, not once that attempt fails and its retry clock runs.
+    // queues the successor now. Its actual open waits for the old open's
+    // completion, but never waits for the failed attempt's retry clock.
     let (harness, panes) = holder_harness();
     let (began, answer) = panes.hold_next();
     harness.attach("w1:p1", Some(VIEW));
@@ -2260,8 +2282,9 @@ fn a_holder_started_while_its_refused_attach_is_still_on_its_way_attaches_at_onc
     harness.state("w1:p1", "starting");
     panes.holders.lock().unwrap().insert("w1:p1".into());
     harness.attach("w1:p1", None);
+    assert!(harness.opened.try_recv().is_err(), "opens overlapped");
+    answer.send(()).unwrap();
     let opened = harness.opened();
     assert_eq!(opened.size, VIEW);
     harness.state("w1:p1", "controlling");
-    answer.send(()).unwrap();
 }

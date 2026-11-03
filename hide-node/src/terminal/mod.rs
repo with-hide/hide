@@ -22,6 +22,7 @@
 //! large frame for the screens holds up no key or control. Each sink must
 //! return at once and never call back.
 
+mod command;
 pub mod device;
 pub mod engine_panes;
 pub mod holder;
@@ -199,6 +200,9 @@ struct Pane {
     /// The generation a session of this pane may deliver for.
     current_generation: Option<u64>,
     session: Option<Session>,
+    pending_spawn: Option<SpawnRequest>,
+    commands: Vec<command::Receipt>,
+    release_after_input: Option<String>,
     /// The PTY size last settled, which an attach asks for.
     size: Option<GridSize>,
     /// `size` is the one the pane's holder had when it attached with none
@@ -245,6 +249,8 @@ struct SpawnRequest {
     size: Option<GridSize>,
 }
 
+type SpawnedSession = (Session, Box<dyn SessionEvents>, Option<GridSize>);
+
 struct Attachment {
     pane: String,
     hold: AttachmentHold,
@@ -271,7 +277,8 @@ struct Inner {
     reports: Vec<TerminalReport>,
     /// Output decided by the work under the lock now, handed over after it.
     deliveries: Vec<Delivery>,
-    spawns: Vec<SpawnRequest>,
+    spawns: Vec<(SpawnRequest, ChildHold)>,
+    retired: Vec<Session>,
     /// Something may now be due earlier than the clock's current wait.
     wake_clock: bool,
     refusals: Refusals,
@@ -364,23 +371,74 @@ impl Service {
     /// whose session was released, since its tab left the last shown, is
     /// attached again for it, and the input waits in the pane's hold as a
     /// new pane's keys do (64 KiB, 3 s).
-    fn type_input(&self, pane: &str, input: Typed) {
+    fn type_input(
+        &self,
+        pane: &str,
+        input: Typed,
+    ) -> Result<(), hide_node_link::holders::HolderError> {
+        if input.len() > hide_node_link::terminal::INPUT_HOLD_LIMIT_BYTES {
+            return Err(command::refused(
+                "pane_input_limit",
+                "Pane input exceeds the held-input byte limit",
+            ));
+        }
         let now = Instant::now();
-        let chunk = HeldChunk {
-            typed_at: now,
-            typed_at_unix_ms: unix_ms(),
-            input,
-            by: Typist::Engine,
-            permit: None,
-        };
-        self.shared.run(|inner, shared| {
+        let receipt = self.shared.run(|inner, shared| {
+            if inner.closed || !inner.panes.contains_key(pane) {
+                return Err(command::refused(
+                    "pane_input_unavailable",
+                    "Pane input has no live terminal owner",
+                ));
+            }
+            let (receipt, command) = command::Receipt::take(&inner.permits)?;
             if inner.panes.get(pane).is_some_and(|entry| {
                 entry.session.is_none() && !entry.closing && entry.lifecycle.state == "released"
             }) {
                 inner.request_control(shared, pane, now);
             }
-            inner.route_input(KeyTarget::Pane(pane.to_owned()), chunk, now);
-        });
+            inner
+                .panes
+                .get_mut(pane)
+                .expect("checked above")
+                .commands
+                .push(receipt.clone());
+            inner.route_input(
+                KeyTarget::Pane(pane.to_owned()),
+                HeldChunk {
+                    typed_at: now,
+                    typed_at_unix_ms: unix_ms(),
+                    input,
+                    by: Typist::Engine,
+                    permit: None,
+                    command: Some(command),
+                },
+                now,
+            );
+            Ok(receipt)
+        })?;
+        struct Input<'a> {
+            service: &'a Service,
+            pane: &'a str,
+            receipt: command::Receipt,
+        }
+        impl Drop for Input<'_> {
+            fn drop(&mut self) {
+                self.receipt.cancel("Pane input caller ended");
+                self.service.shared.run(|inner, _| {
+                    if let Some(entry) = inner.panes.get_mut(self.pane) {
+                        entry.commands.retain(|receipt| receipt != &self.receipt);
+                        entry.hold.discard_finished_commands();
+                    }
+                    inner.finish_input_release(self.pane);
+                });
+            }
+        }
+        let input = Input {
+            service: self,
+            pane,
+            receipt,
+        };
+        input.receipt.wait()
     }
 
     /// Types a letter into `pane` as the core's own engine: `body`, then
@@ -390,8 +448,13 @@ impl Service {
     /// are, and written after the submit in the order typed, so none lands
     /// inside the letter and none is lost (PRD engine-bundle-3-core-owns
     /// D-13). The hold ends on every way out, a panic included.
-    #[allow(clippy::disallowed_methods)] // Herdr's submit delay, a production wait
-    fn type_letter(&self, pane: &str, body: Typed, submit: Typed, gap: Duration) {
+    fn type_letter(
+        &self,
+        pane: &str,
+        body: Typed,
+        submit: Typed,
+        gap: Duration,
+    ) -> Result<(), hide_node_link::holders::HolderError> {
         struct Letter<'a> {
             service: &'a Service,
             pane: &'a str,
@@ -416,21 +479,70 @@ impl Service {
                     for chunk in held.keys.take_in_order(self.pane, now) {
                         inner.route_input(KeyTarget::Pane(self.pane.to_owned()), chunk, now);
                     }
+                    inner.finish_input_release(self.pane);
                 });
             }
         }
-        self.shared.run(|inner, _| {
-            if let Some(entry) = inner.panes.get_mut(pane) {
-                entry.letter.get_or_insert_with(LetterHold::default).letters += 1;
+        let _work = self.shared.run(|inner, _| {
+            if inner.closed || inner.panes.get(pane).is_none_or(|entry| entry.closing) {
+                return Err(command::refused(
+                    "pane_input_unavailable",
+                    "Pane input has no live terminal owner",
+                ));
             }
-        });
+            let work = command::Work::take(&inner.permits)?;
+            inner
+                .panes
+                .get_mut(pane)
+                .expect("checked above")
+                .letter
+                .get_or_insert_with(LetterHold::default)
+                .letters += 1;
+            Ok(work)
+        })?;
         let _letter = Letter {
             service: self,
             pane,
         };
-        self.type_input(pane, body);
-        thread::sleep(gap);
-        self.type_input(pane, submit);
+        self.type_input(pane, body)?;
+        self.letter_gap(pane, gap).and_then(|()| self.type_input(pane, submit)).map_err(|error| hide_node_link::holders::HolderError::Unreachable {
+            message: format!("Letter body was delivered, but submit was not confirmed: {error}; do not resend automatically"),
+        })
+    }
+
+    /// The configured submit gap is unchanged, but closing the pane or
+    /// node wakes its caller instead of retaining the letter until the gap.
+    fn letter_gap(
+        &self,
+        pane: &str,
+        gap: Duration,
+    ) -> Result<(), hide_node_link::holders::HolderError> {
+        let began = Instant::now();
+        loop {
+            let version = self.shared.clock_lock().version;
+            {
+                let inner = self.shared.lock();
+                if inner.closed || inner.panes.get(pane).is_none_or(|entry| entry.closing) {
+                    return Err(command::refused(
+                        "pane_input_cancelled",
+                        "Pane closed during letter delivery",
+                    ));
+                }
+            }
+            let left = gap.saturating_sub(began.elapsed());
+            if left.is_zero() {
+                return Ok(());
+            }
+            let clock = self.shared.clock_lock();
+            if clock.version == version {
+                drop(
+                    self.shared
+                        .wake
+                        .wait_timeout(clock, left)
+                        .unwrap_or_else(|e| e.into_inner()),
+                );
+            }
+        }
     }
 }
 
@@ -511,10 +623,16 @@ impl Service {
     pub fn close(&self) {
         self.shared.run(|inner, _| {
             inner.closed = true;
+            inner.wake_clock = true;
             for (pane, session) in &mut inner.panes {
+                for receipt in &session.commands {
+                    receipt.cancel("Terminal service closed");
+                }
                 session.hold.discard(pane, "service_closed");
             }
-            inner.panes.clear();
+            for (_, mut pane) in inner.panes.drain() {
+                inner.retired.extend(pane.session.take());
+            }
             inner.requests.close();
         });
         let live = self.shared.children.wait_gone(CLOSE_WITHIN);
@@ -535,7 +653,7 @@ impl Drop for Service {
         self.shared.wake.notify_all();
         // Sessions end with their panes: their reapers release and end the
         // attach children.
-        self.shared.lock().panes.clear();
+        self.close();
         if let Some(clock) = self.clock.take() {
             let _ = clock.join();
         }
@@ -565,6 +683,7 @@ impl TerminalNode for Service {
                 typed_at_unix_ms: unix_ms(),
                 input: Typed::Bytes(vec![0; bytes.max(1)]),
                 by: Typist::Operator,
+                command: None,
                 permit: Some(permit),
             },
         );
@@ -578,6 +697,7 @@ impl TerminalNode for Service {
     fn key(&self, target: KeyTarget, bytes: Vec<u8>, typed_at_unix_ms: u64) {
         let now = Instant::now();
         let chunk = HeldChunk {
+            command: None,
             permit: None,
             typed_at: now,
             typed_at_unix_ms,
@@ -741,7 +861,7 @@ impl Shared {
         waits: bool,
         work: impl FnOnce(&mut Inner, &Arc<Shared>) -> T,
     ) -> T {
-        let (value, spawns, wake, batch) = {
+        let (value, spawns, retired, wake, batch) = {
             let mut inner = self.lock();
             let value = work(&mut inner, self);
             for report in inner.reports.drain(..) {
@@ -759,6 +879,7 @@ impl Shared {
             (
                 value,
                 std::mem::take(&mut inner.spawns),
+                std::mem::take(&mut inner.retired),
                 std::mem::take(&mut inner.wake_clock),
                 batch,
             )
@@ -766,8 +887,9 @@ impl Shared {
         if let Some((first, through)) = batch {
             self.hand_over(first, through, waits);
         }
-        for spawn in spawns {
-            self.spawn(spawn);
+        drop(retired);
+        for (spawn, child) in spawns {
+            self.spawn(spawn, child);
         }
         if wake {
             self.clock_lock().version += 1;
@@ -776,51 +898,71 @@ impl Shared {
         value
     }
 
-    fn spawn(self: &Arc<Self>, request: SpawnRequest) {
+    fn spawn(self: &Arc<Self>, request: SpawnRequest, child: ChildHold) {
         let shared = Arc::downgrade(self);
-        let name = format!(
-            "hide-node-terminal-{}-spawn-{}",
-            request.mode.as_str(),
-            request.pane
-        );
         let pane = request.pane.clone();
         let generation = request.generation;
         let mode = request.mode;
-        // Counted before its worker exists, so a close that runs before the
-        // worker does waits for it, and the worker then opens nothing.
-        let child = self.children.hold();
-        let started = thread::Builder::new().name(name).spawn(move || {
-            let Some(shared) = shared.upgrade() else {
-                return;
-            };
-            if shared.lock().closed {
-                return;
-            }
-            let began = Instant::now();
-            let result = shared
-                .attacher
-                .open_transport(&request.pane, request.mode, request.size);
-            let elapsed_ms = began.elapsed().as_millis();
-            shared.run(|inner, shared| {
+        let started = thread::Builder::new()
+            .name(format!("hide-node-terminal-{}-spawn-{pane}", mode.as_str()))
+            .spawn(move || {
+                let Some(shared) = shared.upgrade() else {
+                    return;
+                };
+                if !shared.lock().spawn_current(&request) {
+                    return;
+                }
+                let began = Instant::now();
+                let opened =
+                    shared
+                        .attacher
+                        .open_transport(&request.pane, request.mode, request.size);
+                // The pane lease spans the actual open, not just its result.
+                // A stale successful open is shut down before releasing it.
+                if !shared.lock().spawn_current(&request) {
+                    if let Ok(transport) = opened {
+                        transport.close(&request.pane);
+                    }
+                    return;
+                }
+                let result = opened.and_then(|transport| {
+                    let found_size = transport.size;
+                    let failure_shared = Arc::downgrade(&shared);
+                    let failure_pane = request.pane.clone();
+                    let on_failure = Box::new(move |message| {
+                        if let Some(shared) = failure_shared.upgrade() {
+                            shared.run(|inner, shared| {
+                                inner.write_failed(shared, &failure_pane, generation, message)
+                            });
+                        }
+                    });
+                    Session::start(&request.pane, generation, mode, transport, on_failure)
+                        .map(|(session, reader)| (session.counted(child), reader, found_size))
+                        .map_err(OpenFailure::retried)
+                });
+                shared.run(|inner, shared| {
+                    inner.ingest_spawn(
+                        shared,
+                        &request.pane,
+                        generation,
+                        mode,
+                        result,
+                        began.elapsed().as_millis(),
+                    )
+                });
+            });
+        if let Err(error) = started {
+            self.run(|inner, shared| {
                 inner.ingest_spawn(
                     shared,
-                    &request.pane,
-                    request.generation,
-                    request.mode,
-                    result,
-                    child,
-                    elapsed_ms,
+                    &pane,
+                    generation,
+                    mode,
+                    Err(OpenFailure::retried(format!(
+                        "terminal session worker could not be started: {error}"
+                    ))),
+                    0,
                 )
-            });
-        });
-        if let Err(error) = started {
-            // The worker never ran; its count went with it.
-            let failure = OpenFailure::retried(format!(
-                "terminal session worker could not be started: {error}"
-            ));
-            let child = self.children.hold();
-            self.run(|inner, shared| {
-                inner.ingest_spawn(shared, &pane, generation, mode, Err(failure), child, 0)
             });
         }
     }
@@ -934,6 +1076,13 @@ impl Inner {
 
     /// Output for the sink, handed over once the lock is released.
     fn output(&mut self, pane: &str, bytes: Vec<u8>, full: bool) {
+        if self
+            .panes
+            .get(pane)
+            .is_some_and(|entry| entry.release_after_input.is_some())
+        {
+            return;
+        }
         self.deliveries.push(Delivery::Output {
             pane: pane.to_owned(),
             bytes,
@@ -973,7 +1122,7 @@ impl Inner {
         let Some(pane) = self.panes.get_mut(pane_id) else {
             return;
         };
-        let state = PaneTerminalState {
+        let mut state = PaneTerminalState {
             state: pane.lifecycle.state.to_owned(),
             mode: pane.lifecycle.mode.map(|mode| mode.as_str().to_owned()),
             generation: pane.lifecycle.generation,
@@ -986,6 +1135,12 @@ impl Inner {
                 .as_ref()
                 .and_then(|recovery| recovery.last_attempt_at_unix_ms),
         };
+        if let Some(message) = &pane.release_after_input {
+            state.state = "released".to_owned();
+            state.mode = None;
+            state.message = Some(message.clone());
+            state.retry_decision = "on_next_visit".to_owned();
+        }
         if pane.reported.as_ref() == Some(&state) {
             return;
         }
@@ -1007,6 +1162,7 @@ impl Inner {
                 // holds the pane yet, so the attach it asks for once it does
                 // would otherwise go unanswered.
                 entry.reported = None;
+                let was_released = entry.release_after_input.take().is_some();
                 if entry.session.is_none()
                     && let Some(size) = size
                 {
@@ -1014,8 +1170,12 @@ impl Inner {
                     entry.size_from_holder = false;
                 }
                 if manual {
+                    for receipt in &entry.commands {
+                        receipt.cancel("Terminal connection was replaced");
+                    }
+                    entry.hold.discard_finished_commands();
                     entry.recovery = None;
-                    entry.session = None;
+                    self.retired.extend(entry.session.take());
                     entry.lifecycle = Lifecycle {
                         attempt: entry.lifecycle.attempt,
                         retry_decision: "manual",
@@ -1023,11 +1183,19 @@ impl Inner {
                     };
                 }
                 self.request_control(shared, &pane, now);
+                if was_released {
+                    self.redraw(shared, &pane, "visible_again");
+                }
             }
             TerminalControl::Release { pane, message } => self.release(&pane, message),
             TerminalControl::Forget { pane } => {
+                self.wake_clock = true;
                 self.requests.forget(&pane);
                 if let Some(mut entry) = self.panes.remove(&pane) {
+                    self.retired.extend(entry.session.take());
+                    for receipt in &entry.commands {
+                        receipt.cancel("Pane was forgotten");
+                    }
                     entry.hold.discard(&pane, "pane_gone");
                 }
                 self.facts.remove(&pane);
@@ -1035,7 +1203,16 @@ impl Inner {
                 self.deliveries.push(Delivery::Forget { pane });
             }
             TerminalControl::Closing { pane, closing } => match self.panes.get_mut(&pane) {
-                Some(entry) => entry.closing = closing,
+                Some(entry) => {
+                    entry.closing = closing;
+                    if closing {
+                        self.wake_clock = true;
+                        for receipt in &entry.commands {
+                            receipt.cancel("Pane is closing");
+                        }
+                        entry.hold.discard_finished_commands();
+                    }
+                }
                 // A pane this node never heard of is not closing; one told
                 // so first (a device's new link) is, before it attaches.
                 None if !closing => {}
@@ -1073,7 +1250,9 @@ impl Inner {
                 }
             }
             TerminalControl::Write { pane, data } => match protocol::decode_base64(&data) {
-                Ok(bytes) => self.write_control(&pane, Typed::Bytes(bytes), Typist::Operator, now),
+                Ok(bytes) => {
+                    self.write_control(&pane, Typed::Bytes(bytes), Typist::Operator, None, now)
+                }
                 Err(message) => self.error(&pane, "terminal.invalid_input", message),
             },
             TerminalControl::Asleep { pane, asleep } => match self.panes.get_mut(&pane) {
@@ -1405,7 +1584,9 @@ impl Inner {
         session: &Session,
         chunk: HeldChunk,
     ) -> Result<(), session::WriteRefused> {
-        if let Some(permit) = chunk.permit {
+        if let Some(command) = chunk.command {
+            session.command(chunk.input, command)
+        } else if let Some(permit) = chunk.permit {
             let done = permit.clone();
             let result = session.after_writes(session::Written::new(move |written| {
                 done.finish(if written && Instant::now() < done.deadline() {
@@ -1497,12 +1678,19 @@ impl Inner {
             entry.hold.hold(pane, chunk);
             return;
         }
-        self.write_control(pane, chunk.input, chunk.by, now);
+        self.write_control(pane, chunk.input, chunk.by, chunk.command, now);
     }
 
     /// Writes input to the pane's controller, or says why it cannot. `by`
     /// is who typed it; a screen's answer to its terminal is the operator's.
-    fn write_control(&mut self, pane: &str, input: Typed, by: Typist, now: Instant) {
+    fn write_control(
+        &mut self,
+        pane: &str,
+        input: Typed,
+        by: Typist,
+        command: Option<command::Command>,
+        now: Instant,
+    ) {
         let Some(entry) = self.panes.get(pane) else {
             self.refuse(
                 pane,
@@ -1528,7 +1716,10 @@ impl Inner {
             return;
         }
         let result = match entry.session.as_ref() {
-            Some(session) if session.mode == Mode::Control => Self::write_session(session, input),
+            Some(session) if session.mode == Mode::Control => match command {
+                Some(command) => session.command(input, command),
+                None => Self::write_session(session, input),
+            },
             Some(_) => {
                 self.refuse(
                     pane,
@@ -1710,18 +1901,24 @@ impl Inner {
         }
         self.next_generation = self.next_generation.saturating_add(1);
         let generation = self.next_generation;
-        let at_cap = self.attached() >= MAX_ATTACHED_PANES
-            && !self
+        let at_cap = !shared.children.contains(pane)
+            && self
                 .panes
                 .get(pane)
-                .is_some_and(|entry| entry.session.is_some());
+                .is_none_or(|entry| entry.pending_spawn.is_none())
+            && shared.children.occupied_with(
+                self.panes.iter().filter_map(|(pane, entry)| {
+                    entry.pending_spawn.as_ref().map(|_| pane.as_str())
+                }),
+            ) >= MAX_ATTACHED_PANES;
         let Some(entry) = self.panes.get_mut(pane) else {
             return;
         };
+        entry.pending_spawn = None;
         entry.need_full = true;
         entry.observer_resized_at = None;
         entry.current_generation = Some(generation);
-        entry.session = None;
+        self.retired.extend(entry.session.take());
         entry.first_frame_pending = true;
         entry.attempted_as_holder = shared.attacher.keeps_own_size(pane);
         entry.lifecycle = Lifecycle {
@@ -1810,12 +2007,56 @@ impl Inner {
             self.error(pane, "terminal.size_unknown", message);
             return;
         }
-        self.spawns.push(SpawnRequest {
+        self.panes
+            .get_mut(pane)
+            .expect("checked above")
+            .pending_spawn = Some(SpawnRequest {
             pane: pane.to_owned(),
             generation,
             mode,
             size,
         });
+        self.admit_spawn(shared, pane);
+    }
+
+    fn spawn_current(&self, request: &SpawnRequest) -> bool {
+        !self.closed
+            && self.panes.get(&request.pane).is_some_and(|entry| {
+                entry.current_generation == Some(request.generation)
+                    && entry.lifecycle.mode == Some(request.mode)
+                    && entry.lifecycle.state == "starting"
+            })
+    }
+
+    fn admit_spawn(&mut self, shared: &Arc<Shared>, pane: &str) {
+        let Some(entry) = self.panes.get_mut(pane) else {
+            return;
+        };
+        let Some(request) = entry.pending_spawn.as_ref() else {
+            return;
+        };
+        if self.closed
+            || entry.current_generation != Some(request.generation)
+            || entry.lifecycle.mode != Some(request.mode)
+            || entry.lifecycle.state != "starting"
+        {
+            entry.pending_spawn = None;
+            return;
+        }
+        let weak = Arc::downgrade(shared);
+        let Some(child) = shared.children.hold(
+            pane,
+            Box::new(move || {
+                if let Some(shared) = weak.upgrade() {
+                    shared.clock_lock().version += 1;
+                    shared.wake.notify_all();
+                }
+            }),
+        ) else {
+            return;
+        };
+        self.spawns
+            .push((entry.pending_spawn.take().expect("checked above"), child));
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1876,24 +2117,26 @@ impl Inner {
         pane: &str,
         generation: u64,
         mode: Mode,
-        result: Result<Transport, OpenFailure>,
-        child: ChildHold,
+        result: Result<SpawnedSession, OpenFailure>,
         elapsed_ms: u128,
     ) {
         let now = Instant::now();
         let current = self.panes.get(pane).is_some_and(|entry| {
-            entry.current_generation == Some(generation) && entry.lifecycle.mode == Some(mode)
+            entry.current_generation == Some(generation)
+                && entry.lifecycle.mode == Some(mode)
+                && entry.lifecycle.state == "starting"
         });
         if !current {
             // A late session for a pane that moved on ends with its parts,
             // which kill and reap its child, and only then is it gone.
-            drop(result);
-            drop(child);
+            if let Ok((session, _, _)) = result {
+                self.retired.push(session);
+            }
             return;
         }
         let attempt = self.panes[pane].lifecycle.attempt;
-        let transport = match result {
-            Ok(transport) => transport,
+        let (session, reader, found_size) = match result {
+            Ok(opened) => opened,
             Err(failure) if !failure.retried => {
                 self.ended_for_good(
                     pane,
@@ -1920,34 +2163,6 @@ impl Inner {
                 return;
             }
         };
-        let found_size = transport.size;
-        let failure_shared = Arc::downgrade(shared);
-        let failure_pane = pane.to_owned();
-        let on_write_failure: Box<dyn Fn(String) + Send> = Box::new(move |message| {
-            if let Some(shared) = failure_shared.upgrade() {
-                shared.run(|inner, shared| {
-                    inner.write_failed(shared, &failure_pane, generation, message)
-                });
-            }
-        });
-        let (session, reader) =
-            match Session::start(pane, generation, mode, transport, on_write_failure) {
-                Ok((session, reader)) => (session.counted(child), reader),
-                Err(message) => {
-                    self.spawn_failed(
-                        shared,
-                        pane,
-                        generation,
-                        attempt,
-                        mode,
-                        "spawn_failed",
-                        message,
-                        elapsed_ms,
-                        now,
-                    );
-                    return;
-                }
-            };
         let entry = self.panes.get_mut(pane).expect("checked above");
         // A pane attached with no size takes the one its transport found;
         // a size its transport already has is not sent again, since a
@@ -1999,7 +2214,7 @@ impl Inner {
             })
         });
         if let Err(message) = reader_started {
-            drop(session);
+            self.retired.push(session);
             self.spawn_failed(
                 shared,
                 pane,
@@ -2251,7 +2466,7 @@ impl Inner {
         {
             return;
         }
-        entry.session = None;
+        self.retired.extend(entry.session.take());
         let attempt = entry.lifecycle.attempt;
         let closing = entry.closing;
         let message = reason
@@ -2364,7 +2579,7 @@ impl Inner {
             return;
         };
         let state = final_close(category).unwrap_or("ended");
-        entry.session = None;
+        self.retired.extend(entry.session.take());
         entry.recovery = None;
         entry.lifecycle = Lifecycle {
             state,
@@ -2402,7 +2617,7 @@ impl Inner {
         }
         self.error(pane, "terminal.write_failed", message.clone());
         let entry = self.panes.get_mut(pane).expect("checked above");
-        entry.session = None;
+        self.retired.extend(entry.session.take());
         entry.lifecycle.state = "unavailable";
         self.schedule_recovery(shared, pane, message.clone(), now);
         self.sync(pane);
@@ -2416,6 +2631,19 @@ impl Inner {
         }));
     }
 
+    fn finish_input_release(&mut self, pane: &str) {
+        let message = self.panes.get_mut(pane).and_then(|entry| {
+            if entry.commands.is_empty() && entry.letter.is_none() {
+                entry.release_after_input.take()
+            } else {
+                None
+            }
+        });
+        if let Some(message) = message {
+            self.release(pane, message);
+        }
+    }
+
     fn release(&mut self, pane: &str, message: String) {
         let Some(entry) = self.panes.get_mut(pane) else {
             return;
@@ -2423,10 +2651,24 @@ impl Inner {
         if entry.lifecycle.state == "released" {
             return;
         }
+        if !entry.commands.is_empty() || entry.letter.is_some() {
+            let first = entry.release_after_input.is_none();
+            entry.release_after_input = Some(message);
+            self.watches.remove(pane);
+            self.sync(pane);
+            if first {
+                self.deliveries.push(Delivery::Forget {
+                    pane: pane.to_owned(),
+                });
+            }
+            return;
+        }
+        entry.release_after_input = None;
+        entry.pending_spawn = None;
         // A released pane draws no frame until it attaches again.
         self.watches.remove(pane);
         let generation = entry.current_generation.unwrap_or_default();
-        entry.session = None;
+        self.retired.extend(entry.session.take());
         entry.awaiting_size = false;
         entry.recovery = None;
         entry.hold.discard(pane, "released");
@@ -2547,6 +2789,14 @@ impl Inner {
 
     /// Advances what time alone moves, and answers when it must run next.
     fn tick(&mut self, shared: &Arc<Shared>, now: Instant) -> Option<Instant> {
+        let waiting = self
+            .panes
+            .iter()
+            .filter_map(|(pane, entry)| entry.pending_spawn.as_ref().map(|_| pane.clone()))
+            .collect::<Vec<_>>();
+        for pane in waiting {
+            self.admit_spawn(shared, &pane);
+        }
         self.expire_fork_input(now);
         self.requests.expire_permits(now);
         for entry in self.panes.values_mut() {
@@ -2628,7 +2878,7 @@ impl Inner {
             entry.lifecycle.retry_decision = if retry { "automatic_bounded" } else { "manual" };
             if !retry && entry.lifecycle.state != "observing" {
                 entry.lifecycle.state = "unavailable";
-                entry.session = None;
+                self.retired.extend(entry.session.take());
                 // A late spawn cannot revive an exhausted attempt.
                 entry.current_generation = None;
                 // The pane is no longer connecting; keys held for it would
