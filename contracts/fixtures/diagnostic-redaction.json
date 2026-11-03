@@ -364,5 +364,195 @@
       "Example User"
     ],
     "expected": "cannot read \"~"
+  },
+  {
+    "name": "mac-lf-closed-home",
+    "input": [
+      "cannot read \"",
+      "/Users/",
+      "O'Connor User\"\nnext error"
+    ],
+    "expected": "cannot read \"~\"\nnext error"
+  },
+  {
+    "name": "mac-lf-truncated-home",
+    "input": [
+      "cannot read \"",
+      "/Users/",
+      "O'Connor User\nnext error"
+    ],
+    "expected": "cannot read \"~\nnext error"
+  },
+  {
+    "name": "mac-crlf-closed-home",
+    "input": [
+      "cannot read \"",
+      "/Users/",
+      "O'Connor User\"\r\nnext error"
+    ],
+    "expected": "cannot read \"~\"\r\nnext error"
+  },
+  {
+    "name": "mac-crlf-truncated-home",
+    "input": [
+      "cannot read \"",
+      "/Users/",
+      "O'Connor User\r\nnext error"
+    ],
+    "expected": "cannot read \"~\r\nnext error"
+  },
+  {
+    "name": "mac-cr-closed-home",
+    "input": [
+      "cannot read \"",
+      "/Users/",
+      "O'Connor User\"\rnext error"
+    ],
+    "expected": "cannot read \"~\"\rnext error"
+  },
+  {
+    "name": "mac-cr-truncated-home",
+    "input": [
+      "cannot read \"",
+      "/Users/",
+      "O'Connor User\rnext error"
+    ],
+    "expected": "cannot read \"~\rnext error"
+  },
+  {
+    "name": "linux-lf-closed-home",
+    "input": [
+      "cannot read \"",
+      "/home/",
+      "O'Connor User\"\nnext error"
+    ],
+    "expected": "cannot read \"~\"\nnext error"
+  },
+  {
+    "name": "linux-lf-truncated-home",
+    "input": [
+      "cannot read \"",
+      "/home/",
+      "O'Connor User\nnext error"
+    ],
+    "expected": "cannot read \"~\nnext error"
+  },
+  {
+    "name": "linux-crlf-closed-home",
+    "input": [
+      "cannot read \"",
+      "/home/",
+      "O'Connor User\"\r\nnext error"
+    ],
+    "expected": "cannot read \"~\"\r\nnext error"
+  },
+  {
+    "name": "linux-crlf-truncated-home",
+    "input": [
+      "cannot read \"",
+      "/home/",
+      "O'Connor User\r\nnext error"
+    ],
+    "expected": "cannot read \"~\r\nnext error"
+  },
+  {
+    "name": "linux-cr-closed-home",
+    "input": [
+      "cannot read \"",
+      "/home/",
+      "O'Connor User\"\rnext error"
+    ],
+    "expected": "cannot read \"~\"\rnext error"
+  },
+  {
+    "name": "linux-cr-truncated-home",
+    "input": [
+      "cannot read \"",
+      "/home/",
+      "O'Connor User\rnext error"
+    ],
+    "expected": "cannot read \"~\rnext error"
+  },
+  {
+    "name": "windows-lf-closed-home",
+    "input": [
+      "cannot read \"",
+      "C:\\Users\\",
+      "O'Connor User\"\nnext error"
+    ],
+    "expected": "cannot read \"~\"\nnext error"
+  },
+  {
+    "name": "windows-lf-truncated-home",
+    "input": [
+      "cannot read \"",
+      "C:\\Users\\",
+      "O'Connor User\nnext error"
+    ],
+    "expected": "cannot read \"~\nnext error"
+  },
+  {
+    "name": "windows-crlf-closed-home",
+    "input": [
+      "cannot read \"",
+      "C:\\Users\\",
+      "O'Connor User\"\r\nnext error"
+    ],
+    "expected": "cannot read \"~\"\r\nnext error"
+  },
+  {
+    "name": "windows-crlf-truncated-home",
+    "input": [
+      "cannot read \"",
+      "C:\\Users\\",
+      "O'Connor User\r\nnext error"
+    ],
+    "expected": "cannot read \"~\r\nnext error"
+  },
+  {
+    "name": "windows-cr-closed-home",
+    "input": [
+      "cannot read \"",
+      "C:\\Users\\",
+      "O'Connor User\"\rnext error"
+    ],
+    "expected": "cannot read \"~\"\rnext error"
+  },
+  {
+    "name": "windows-cr-truncated-home",
+    "input": [
+      "cannot read \"",
+      "C:\\Users\\",
+      "O'Connor User\rnext error"
+    ],
+    "expected": "cannot read \"~\rnext error"
+  },
+  {
+    "name": "adjacent-home-lines",
+    "input": [
+      "\"",
+      "C:\\Users\\",
+      "O'Connor\"\n\"",
+      "/home/",
+      "Example User\"\r\nnext error"
+    ],
+    "expected": "\"~\"\n\"~\"\r\nnext error"
+  },
+  {
+    "name": "angle-bracket-unix-home",
+    "input": [
+      "/home/",
+      "Example<User>/repo"
+    ],
+    "expected": "~/repo"
+  },
+  {
+    "name": "angle-bracket-quoted-unix-home",
+    "input": [
+      "cannot read \"",
+      "/Users/",
+      "Example<User>\""
+    ],
+    "expected": "cannot read \"~\""
   }
 ]
