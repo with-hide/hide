@@ -2141,6 +2141,7 @@ mod tests {
                         prompt_digest: Some(hide_agent_hooks::delivery::prompt_digest(prompt)),
                         session: Some("recipient-native".into()),
                         point: hide_node_link::panes::PullPoint::Prompt,
+                        bundle: true,
                     }),
                     language: crate::model::InterfaceLanguage::English,
                 },

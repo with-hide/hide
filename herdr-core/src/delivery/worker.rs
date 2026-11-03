@@ -898,7 +898,15 @@ fn apply(ledger: &mut Ledger, request: &Request, now: u64) -> Result<(Value, boo
                     projected.turn.activity == crate::agent_state::AgentActivity::Working
                 })
                 .map(|projected| projected.working_since(observed));
-            let intake = mailbox::gap_pull(ledger, actor, *point, working_since, now, language)?;
+            let intake = mailbox::gap_pull(
+                ledger,
+                actor,
+                *point,
+                working_since,
+                now,
+                language,
+                mailbox::Bundling::of(command),
+            )?;
             // The handover is counted before the answer leaves, so a receipt
             // that never comes cannot make the same letter ride every tool;
             // the count moves nothing on screen.
@@ -1887,6 +1895,7 @@ mod tests {
                 prompt_digest: None,
                 session: None,
                 point: hide_node_link::panes::PullPoint::Prompt,
+                bundle: true,
             },
             Command::Confirm {
                 ids: vec![letter.id.clone()],

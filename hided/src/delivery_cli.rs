@@ -13,7 +13,7 @@ pub fn parse<'a>(
     let verb = args.next().map(String::as_str);
     if topic == "inbox" {
         return match verb {
-            None => Ok(Command::Inbox),
+            None => Ok(Command::Inbox { bundle: true }),
             Some("--hook") => {
                 let mut prompt_digest = None;
                 let mut session = None;
@@ -51,10 +51,12 @@ pub fn parse<'a>(
                 if point != hide_node_link::panes::PullPoint::Prompt && session.is_none() {
                     return Err(USAGE.into());
                 }
+                // This `hide` confirms a whole bundle.
                 Ok(Command::Pull {
                     prompt_digest,
                     session,
                     point,
+                    bundle: true,
                 })
             }
             Some("--confirm") => {
@@ -202,6 +204,7 @@ pub fn run(env: &Env, command: Command) -> Result<(), String> {
             prompt_digest,
             session,
             point,
+            bundle,
         } = &command
         {
             return crate::workspace_cli::request_hook(
@@ -210,6 +213,7 @@ pub fn run(env: &Env, command: Command) -> Result<(), String> {
                     prompt_digest: prompt_digest.clone(),
                     session: session.clone(),
                     point: *point,
+                    bundle: *bundle,
                 },
             );
         }
@@ -248,7 +252,10 @@ mod tests {
     }
     #[test]
     fn typed_cli_requires_intent_and_has_no_wait_or_dispatch_surface() {
-        assert_eq!(parse_line(&["inbox"]).unwrap(), Command::Inbox);
+        assert_eq!(
+            parse_line(&["inbox"]).unwrap(),
+            Command::Inbox { bundle: true }
+        );
         assert!(parse_line(&["inbox", "wait"]).is_err());
         let digest = herdr_core::delivery::prompt_digest("prompt");
         assert_eq!(
@@ -257,6 +264,7 @@ mod tests {
                 prompt_digest: None,
                 session: None,
                 point: hide_node_link::panes::PullPoint::Prompt,
+                bundle: true,
             }
         );
         assert_eq!(
@@ -265,6 +273,7 @@ mod tests {
                 prompt_digest: Some(digest.clone()),
                 session: None,
                 point: hide_node_link::panes::PullPoint::Prompt,
+                bundle: true,
             }
         );
         assert_eq!(
@@ -281,6 +290,7 @@ mod tests {
                 prompt_digest: Some(digest.clone()),
                 session: Some("abc".into()),
                 point: hide_node_link::panes::PullPoint::Prompt,
+                bundle: true,
             }
         );
         assert_eq!(
@@ -288,7 +298,8 @@ mod tests {
             Command::Pull {
                 prompt_digest: None,
                 session: Some("abc".into()),
-                point: hide_node_link::panes::PullPoint::Tool
+                point: hide_node_link::panes::PullPoint::Tool,
+                bundle: true,
             }
         );
         assert!(parse_line(&["inbox", "--hook", "--tool"]).is_err());
@@ -298,6 +309,7 @@ mod tests {
                 prompt_digest: None,
                 session: Some("abc".into()),
                 point: hide_node_link::panes::PullPoint::TurnEnd,
+                bundle: true,
             }
         );
         assert!(parse_line(&["inbox", "--hook", "--turn-end"]).is_err());
