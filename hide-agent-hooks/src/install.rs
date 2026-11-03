@@ -277,12 +277,14 @@ pub fn matches_helper(
         }
     }
     match state {
-        Some(state) => HookTarget::new(helper, &state)
-            .and_then(|target| match install {
-                Some(install) => target.of_install(install),
-                None => Ok(target),
-            })
-            .is_ok_and(|target| matches_install(runtime, home, target)),
+        // The entries are this helper's at another route, named for this
+        // installation or written by a build that named none.
+        Some(state) => HookTarget::new(helper, &state).is_ok_and(|target| {
+            matches_install(runtime, home, target)
+                || install
+                    .and_then(|install| target.of_install(install).ok())
+                    .is_some_and(|target| matches_install(runtime, home, target))
+        }),
         // This version always installs a route. Removing it is an edit;
         // older unbound versions are upgraded by the marker-version check.
         None => false,

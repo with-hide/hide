@@ -63,6 +63,16 @@ pub(crate) fn observe(target: &KitTarget, runtime: AgentRuntime) -> Observed {
                         hook_target,
                     ) {
                         Observed::Current
+                    } else if HookTarget::new(&wanted, &state).is_ok_and(|unnamed| {
+                        hide_agent_hooks::install::matches_install(runtime, &target.home, unnamed)
+                    }) {
+                        // An earlier build's entries, the same but for naming
+                        // no installation (docs/agent-hooks.md, More than one
+                        // Hide on an account).
+                        Observed::Stale(Reason::new(
+                            PartCause::OlderVersion,
+                            "the hook was written by a build that names no installation",
+                        ))
                     } else if hide_agent_hooks::install::matches_helper(
                         runtime,
                         &target.home,
