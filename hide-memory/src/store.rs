@@ -12120,6 +12120,63 @@ PRAGMA user_version=14;"#,
         drop(temp);
     }
 
+    /// A Windows root stored twice, under the id an earlier build derived
+    /// from its verbatim text and under the id its wire spelling derives,
+    /// becomes one Project when the store opens: the old copy's key and
+    /// numbers win, the wire copy's card is numbered after them, and a
+    /// second open changes nothing. Only Windows has two ids for one root.
+    #[cfg(windows)]
+    #[test]
+    fn a_root_stored_under_both_ids_is_folded_into_its_wire_id_once() {
+        let (temp, mut store, _other) = store();
+        let root = r"\\?\C:\Users\me\repo";
+        let written = hide_project::project_id_as_written("pc", root);
+        let wire = hide_project::project_id("pc", Path::new(root));
+        assert_ne!(wire, written);
+        for (id, root, text) in [
+            (&written, root, "Build from C:\\hide-dev"),
+            (&wire, "C:/Users/me/repo", "Run the formatter first"),
+        ] {
+            store.ensure_project(id, Path::new(root), "pc").unwrap();
+            store.set_enabled(id, true, true).unwrap();
+            store
+                .apply_candidates(
+                    &batch(id, &format!("b-{text}"), &format!("h-{text}")),
+                    &[candidate(text, CandidateRelation::New)],
+                )
+                .unwrap();
+        }
+        let key: Vec<u8> = store.receipt_auth_key(&written).unwrap();
+        let path = store.path().to_path_buf();
+        drop(store);
+
+        let rows = |store: &MemoryStore| -> Vec<(String, String)> {
+            store
+                .connection
+                .prepare("SELECT id, root FROM projects WHERE device_id='pc'")
+                .unwrap()
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap()
+        };
+        let one = vec![(wire.clone(), "C:/Users/me/repo".to_owned())];
+        let store = MemoryStore::open(&path).unwrap();
+        assert_eq!(rows(&store), one);
+        assert_eq!(card_numbers(&store, &wire), vec![1, 2]);
+        assert!(card_numbers(&store, &written).is_empty());
+        assert_eq!(store.search(&wire, "Build", 10).unwrap().len(), 1);
+        assert_eq!(store.search(&wire, "formatter", 10).unwrap().len(), 1);
+        assert_eq!(store.receipt_auth_key(&wire).unwrap(), key);
+        drop(store);
+
+        let store = MemoryStore::open(&path).unwrap();
+        assert_eq!(rows(&store), one);
+        assert_eq!(card_numbers(&store, &wire), vec![1, 2]);
+        assert_eq!(store.receipt_auth_key(&wire).unwrap(), key);
+        drop(temp);
+    }
+
     #[test]
     fn a_leftover_copy_of_the_project_is_folded_into_it_and_a_second_run_changes_nothing() {
         let (_temp, store, project, leftover) = leftover_store();
