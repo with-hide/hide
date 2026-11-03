@@ -301,11 +301,16 @@ export async function preparePaneInput(control: HidedControl, pane: string): Pro
   if (state.ready) return;
   await showTabOf(control, pane);
   viewPane(control, pane);
-  await control.until((rest) => terminalReady(rest, pane) || undefined, `${pane} controlling its terminal`, 20_000);
+  await waitForPaneInput(control, pane);
   if (state.focus && state.focus !== pane) {
     await showTabOf(control, state.focus);
     await focusPane(control, state.focus);
   }
+}
+
+/** Wait for an already requested terminal attachment without changing the selected checkout or tab. */
+export async function waitForPaneInput(control: HidedControl, pane: string): Promise<void> {
+  await control.until((rest) => terminalReady(rest, pane) || undefined, `${pane} controlling its terminal`, 20_000);
 }
 
 function terminalReady(rest: Rest, pane: string): boolean {

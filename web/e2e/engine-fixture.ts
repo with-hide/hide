@@ -13,7 +13,7 @@ import os from "node:os";
 import path from "node:path";
 import { expect, type Page } from "@playwright/test";
 import { connectControl, type HidedControl } from "./hided-control.mjs";
-import { agentIn, areaShowing, checkoutAt, closePane, focusPane, openProject, preparePaneInput, splitPane, tabPanes, viewPane } from "./daemon-actions";
+import { agentIn, areaShowing, checkoutAt, closePane, focusPane, openProject, splitPane, tabPanes, viewPane, waitForPaneInput } from "./daemon-actions";
 import { claudeProjects, declareAgentSession, panePrompt, paneShellOf, startHerdr, writeFixtureTranscript, type PaneShell } from "./herdr-fixture";
 import { startHided, type Daemon, type DaemonEngine } from "./hided-fixture";
 import { fixtureExecutable, fixturePrograms } from "./platform-fixture";
@@ -266,7 +266,8 @@ async function openFixture(control: HidedControl, server: EngineServer, daemon: 
     for (const pane of [first.pane, second]) viewPane(control, pane);
     // A published split can precede its holder. The fixture promises two
     // running shells, including to a spec that restarts the daemon at once.
-    for (const pane of [first.pane, second]) await preparePaneInput(control, pane);
+    // Waiting must not select a checkout before the spec opens its page.
+    for (const pane of [first.pane, second]) await waitForPaneInput(control, pane);
     return { workspace: first.workspace, checkout: first.checkout, tab: first.tab, panes: [first.pane, second] };
   }
   // A family's agents run `hide` as a real agent does, from inside their panes.
