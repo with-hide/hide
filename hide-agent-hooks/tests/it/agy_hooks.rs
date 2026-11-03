@@ -56,6 +56,7 @@ struct Machine {
 struct Run {
     stdout: String,
     status_ok: bool,
+    diagnostics: String,
 }
 
 impl Machine {
@@ -91,13 +92,25 @@ impl Machine {
 
     /// One run of the block's entry for `event`, as agy starts it in `pane`.
     fn run(&self, event: &str, payload: &Value, pane: Option<&str>) -> Run {
+        let payload = payload.to_string();
+        // The input is ready before the hook's 500 ms payload budget starts.
+        // PIPE_BUF fits in an empty pipe, so this write cannot wait for a
+        // reader that has not started yet. Larger fixture input fails here.
+        assert!(payload.len() <= libc::PIPE_BUF as usize);
+        let (reader, mut writer) = std::io::pipe().unwrap();
+        writer.write_all(payload.as_bytes()).unwrap();
+        drop(writer);
+        self.run_with_input(event, pane, reader.into())
+    }
+
+    fn run_with_input(&self, event: &str, pane: Option<&str>, input: Stdio) -> Run {
         let mut command = Command::new(&self.hook);
         command
             .args(["hook", "--runtime", "antigravity", "--event", event])
             .args(["--source", "hide-subagents@6"])
             .env(hide_platform::host::HOME_VARIABLE, &self.home)
             .env("PATH", &self.home)
-            .stdin(Stdio::piped())
+            .stdin(input)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         for (key, _) in std::env::vars_os() {
@@ -114,21 +127,18 @@ impl Machine {
             command.env("HERDR_PANE_ID", pane);
         }
         let mut child = OwnedChild::spawn(&mut command).unwrap();
-        let mut stdin = child.take_stdin().unwrap();
-        // A hook that decided before reading closes its input; agy then meets
-        // a closed pipe, and what it observes is still the answer.
-        match stdin.write_all(payload.to_string().as_bytes()) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => {}
-            Err(error) => panic!("the payload could not be written: {error}"),
-        }
-        drop(stdin);
         let output = child
             .capture_until(Instant::now() + Duration::from_secs(15), 64 * 1024)
             .expect("the hook ends within its bound");
         Run {
             stdout: String::from_utf8(output.stdout).unwrap(),
             status_ok: output.status.success(),
+            diagnostics: format!(
+                "stderr={:?}; guard={:?}; hide_calls={:?}",
+                String::from_utf8_lossy(&output.stderr),
+                std::fs::read_to_string(self.home.join(".hide/agent-hooks/spawn-guard.log")),
+                std::fs::read_to_string(self.root.join("hide-calls")),
+            ),
         }
     }
 
@@ -170,8 +180,19 @@ fn transcript(home: &Path, conversation: &str) -> PathBuf {
 }
 
 fn answer(run: &Run) -> Value {
-    assert!(run.status_ok, "agy refuses a call whose hook fails");
-    serde_json::from_str(run.stdout.trim()).unwrap_or_else(|_| panic!("{:?}", run.stdout))
+    assert!(
+        run.status_ok,
+        "agy refuses a call whose hook fails; {}",
+        run.diagnostics
+    );
+    serde_json::from_str(run.stdout.trim())
+        .unwrap_or_else(|_| panic!("{:?}; {}", run.stdout, run.diagnostics))
+}
+
+fn refusal(run: &Run) -> Value {
+    let answer = answer(run);
+    assert_eq!(answer["decision"], "deny", "{answer}; {}", run.diagnostics);
+    answer
 }
 
 /// The text of the one system message an answer injects.
@@ -189,8 +210,7 @@ fn injected(run: &Run) -> String {
 fn a_direct_agent_start_is_denied_in_agys_shape_and_every_other_call_is_left_to_agy() {
     let machine = Machine::new();
 
-    let denied = answer(&machine.run("PreToolUse", &machine.shell(START), Some(PANE)));
-    assert_eq!(denied["decision"], "deny", "{denied}");
+    let denied = refusal(&machine.run("PreToolUse", &machine.shell(START), Some(PANE)));
     let reason = denied["reason"].as_str().unwrap();
     assert!(
         reason.contains("hide agent spawn --parent here"),
@@ -215,14 +235,32 @@ fn a_direct_agent_start_is_denied_in_agys_shape_and_every_other_call_is_left_to_
 }
 
 #[test]
+fn an_open_pipe_without_a_payload_leaves_the_call_to_agy() {
+    let machine = Machine::new();
+    let (reader, held_open) = std::io::pipe().unwrap();
+    let run = machine.run_with_input("PreToolUse", Some(PANE), reader.into());
+    drop(held_open);
+    assert_eq!(
+        answer(&run),
+        json!({ "decision": "ask" }),
+        "{}",
+        run.diagnostics
+    );
+    assert!(
+        !machine.root.join("hide-calls").exists(),
+        "{}",
+        run.diagnostics
+    );
+}
+
+#[test]
 fn a_result_handed_to_the_system_opener_is_denied_in_agys_shape() {
     let machine = Machine::new();
-    let denied = answer(&machine.run(
+    let denied = refusal(&machine.run(
         "PreToolUse",
         &machine.shell("open out/report.html"),
         Some(PANE),
     ));
-    assert_eq!(denied["decision"], "deny", "{denied}");
     let reason = denied["reason"].as_str().unwrap();
     let hide = machine.hook.with_file_name("hide");
     assert!(
@@ -370,8 +408,7 @@ fn a_guarded_file_is_refused_to_each_of_agys_file_tools_and_its_shell() {
             json!({ "CommandLine": "cat .env", "Cwd": machine.checkout }),
         ),
     ] {
-        let denied = answer(&machine.run("PreToolUse", &payload, Some(PANE)));
-        assert_eq!(denied["decision"], "deny", "{payload}");
+        let denied = refusal(&machine.run("PreToolUse", &payload, Some(PANE)));
         assert!(
             denied["reason"].as_str().unwrap().contains("Guard files"),
             "{denied}"
