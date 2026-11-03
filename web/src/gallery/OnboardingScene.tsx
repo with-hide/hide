@@ -11,6 +11,7 @@ import { useLayoutEffect, useMemo, useState } from "react";
 import { createActions } from "../actions";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { FirstRunWizard, useSetupWalk } from "../FirstRunWizard";
+import { HerdrImportQuestion, useHerdrImportLater } from "../HerdrImport";
 import { HerdrGate } from "../HerdrTakeover";
 import { herdrGate } from "../herdrTakeoverRules";
 import type { HostBridge, NotificationPermission, UpdateStatus } from "../host";
@@ -20,7 +21,7 @@ import { OverviewPage } from "../Overview";
 import { SettingsGate } from "../SettingsSheet";
 import { SETTINGS_GROUPS, type SettingsTab } from "../settings";
 import { Sidebar } from "../sidebar";
-import type { AiProvider, HerdrProfile, HerdrTakeover, KitAgent, KitPiece, SnapshotRest } from "../snapshot";
+import type { AiProvider, HerdrImport, HerdrProfile, HerdrTakeover, KitAgent, KitPiece, SnapshotRest } from "../snapshot";
 import { StartPanelHost } from "../StartPanel";
 import { useStartPanel } from "../startDraft";
 import { useShellStore } from "../store";
@@ -114,6 +115,15 @@ export const ONBOARDING_STATES = [
   "herdr-look",
   "gate-newer",
   "gate-mismatch",
+  "import-ask",
+  "import-moving",
+  "import-not-stopped",
+  "import-later",
+  "import-offer",
+  "import-start",
+  "import-unreadable",
+  "import-refused",
+  "import-waiting",
 ] as const;
 
 export type OnboardingState = (typeof ONBOARDING_STATES)[number];
@@ -274,7 +284,7 @@ function sceneHost(system: OnboardingSystem, permission: NotificationPermission,
  * decision 2026-10-23): the move the core started on its own, its failure, its result with the terminal's `herdr`, a
  * restart, a look that could not read the server, a newer Herdr, and a mismatch the core offers nothing for.
  */
-function sceneHerdr(state: OnboardingState): { herdr: Record<string, unknown>; herdr_takeover?: HerdrTakeover; herdr_versions: Record<string, unknown> } {
+function sceneHerdr(state: OnboardingState): { herdr: Record<string, unknown>; herdr_takeover?: HerdrTakeover; herdr_import?: HerdrImport; herdr_versions: Record<string, unknown> } {
   const offer = (patch: Partial<HerdrTakeover>): HerdrTakeover => ({ kind: "move", stage: "moving", server_version: "0.8.2", version: "0.9.5", same_protocol: false, failure: null, path_herdr: null, ...patch });
   const older = { state: "protocol_mismatch", received_version: "0.8.2", received_protocol: 20, expected_protocol: 22 };
   const versions = { hide: "0.9.5", path_herdr: { version: "0.8.2", behind: true, update_command: "sudo install -m 755 '/Applications/hide.app/Contents/Resources/herdr' '/usr/local/bin/herdr'" } };
@@ -288,17 +298,38 @@ function sceneHerdr(state: OnboardingState): { herdr: Record<string, unknown>; h
     case "herdr-look": return { herdr: { state: "malformed" }, herdr_takeover: offer({ kind: "look", stage: "failed", failure: "unreadable", server_version: "", version: "" }), herdr_versions: versions };
     case "gate-newer": return { herdr: { state: "protocol_mismatch", received_version: "0.10.0", received_protocol: 23, expected_protocol: 22 }, herdr_takeover: offer({ kind: "update_hide", stage: "offered", server_version: "0.10.0" }), herdr_versions: versions };
     case "gate-mismatch": return { herdr: older, herdr_versions: versions };
-    default: return { herdr: connected, herdr_versions: versions };
+    default: return { herdr: connected, herdr_import: sceneHerdrImport(state), herdr_versions: versions };
+  }
+}
+
+/**
+ * This machine's Herdr save as the core offers it for the `import-*` states (PRD engine-bundle-4-herdr-removal B2 to
+ * B5, B11, B14 to B16): the question while Hide's Herdr runs, its move, a Herdr that would not stop, the line it was put
+ * off to, a save to import read only, a save that could not be read, workspaces a move left out, and conversations
+ * waiting for their Herdr to close. The refusal reasons are the converter's own.
+ */
+function sceneHerdrImport(state: OnboardingState): HerdrImport | undefined {
+  const found = (patch: Partial<HerdrImport>): HerdrImport => ({ kind: "move", stage: "offered", workspaces: 3, tabs: 5, agents: 4, waiting: 0, herdr_running: true, failure: null, reason: null, refused: [], ...patch });
+  const none = { workspaces: 0, tabs: 0, agents: 0, herdr_running: false };
+  switch (state) {
+    case "import-ask": case "import-later": return found({});
+    case "import-moving": return found({ stage: "moving" });
+    case "import-not-stopped": return found({ stage: "failed", failure: "not_stopped" });
+    case "import-offer": case "import-start": return found({ kind: "import" });
+    case "import-unreadable": return found({ kind: "import", stage: "failed", failure: "unreadable", reason: "it is format 4, newer than the format 3 this build reads", ...none });
+    case "import-refused": return found({ kind: "result", stage: "moved", ...none, refused: [{ label: "api", reason: "its tab 2 does not lay out exactly the panes it holds" }, { label: "docs", reason: "its tab 1 holds more than 24 panes" }] });
+    case "import-waiting": return found({ kind: "import", ...none, waiting: 2 });
+    default: return undefined;
   }
 }
 
 function sceneRest(state: OnboardingState, system: OnboardingSystem): SnapshotRest {
   const now = Math.floor(Date.now() / 1000);
-  const projects = state.startsWith("project") || state.startsWith("agents") || state.startsWith("devices") || state.startsWith("notifications") || state.startsWith("herdr") || state === "home-no-project" ? [] : [
+  const projects = state === "import-start" || state.startsWith("project") || state.startsWith("agents") || state.startsWith("devices") || state.startsWith("notifications") || state.startsWith("herdr") || state === "home-no-project" ? [] : [
     workspace("my-app", { path: "/work/my-app", checkouts: [checkout({ id: "my-app:main", workspace: "my-app", branch: "main", primary: true, age: 3600 }, now)] }, REFERENCE_FOLDS),
   ];
   // Help's walk is the page's own, over a first run that ended (B45).
-  const step = state === "agents-setup" ? "done" : state.startsWith("herdr") ? "herdr" : state.startsWith("agents") ? "agents" : state.startsWith("devices") ? "devices" : state.startsWith("notifications") ? "notifications" : state.startsWith("project") ? "project" : "done";
+  const step = state === "agents-setup" ? "done" : state === "import-start" ? "project" : state.startsWith("herdr") ? "herdr" : state.startsWith("agents") ? "agents" : state.startsWith("devices") ? "devices" : state.startsWith("notifications") ? "notifications" : state.startsWith("project") ? "project" : "done";
   // The switch is on once Turn on was pressed; macOS's answer is the host's (`permissionOf`).
   const enabled = (state.startsWith("notifications-") && state !== "notifications-no-service") || state === "settings-on" || state === "settings-blocked" || state === "settings-both";
   // A first pass that stopped before changing anything: a state folder HIDE_STATE_DIR chose that other
@@ -385,6 +416,7 @@ export function OnboardingScene({ theme, state, system, language, scale, page = 
     window.hideHost = sceneHost(system, permissionOf(state, system), update);
     useShellStore.setState({ connection: "live", rest: sceneRest(state, system), agents: [], revision: 1, mobile: SCENE_MOBILE } as never);
     useUiStore.setState({ screen: { kind: "main" }, overviewOpen: false, mainView: "backlog" } as never);
+    useHerdrImportLater.getState().set(state === "import-later");
   }, [state, system, update]);
 
   // Set once the presses below have landed and a frame has drawn them, so a capture waits for it.
@@ -443,6 +475,7 @@ export function OnboardingScene({ theme, state, system, language, scale, page = 
         <StartPanelHost actions={actions} />
         <SettingsGate actions={actions} />
         {state.startsWith("gate-") ? <SceneGate actions={actions} /> : <FirstRunWizard actions={actions} />}
+        <HerdrImportQuestion actions={actions} />
       </div>
     </TooltipProvider>
   );
