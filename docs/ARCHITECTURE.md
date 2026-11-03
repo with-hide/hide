@@ -2538,10 +2538,10 @@ Hooks reach the core from a pane on this engine as from a Herdr pane, through th
 
 With the development switch on, a Herdr session already on this machine becomes the engine's in one place (PRD engine-bundle-4-herdr-removal D-3 to D-9, D-24 to D-27): `own/herdr_session.rs` reads Herdr's `session.json` (version 3 and the versions before it, read only, never written or moved) into the engine's saved session, keeping Herdr's workspace, tab and pane ids, so every Hide state keyed by them needs no new key.
 A workspace whose save does not hold together is left out with its reason and the rest are moved.
-Which workspaces moved, which conversations wait, and whether this machine committed to the move are kept in the import record, `<state>/engine/herdr-import.json` (`herdr_core::herdr_import`, `hide_kit::layout::herdr_import_in`).
+Which workspaces moved, which conversations wait, and whether this machine committed to the move are kept in the import record, `<state>/engine/herdr-import.json` (`herdr_core::herdr_import`, `hide_kit::layout::herdr_import_in`); every change of a record is made under that module's one lock, so a look, a move and the engine's restore on their own threads never write over each other.
 
 There are two ways in, both through the same start of the core role (`hided/src/herdr_transition.rs`).
-A move takes Hide's own Herdr: the server Hide started, read by its socket's peer process and that process's program file.
+A move takes Hide's own Herdr: the server Hide started, read by its socket's peer process and that process's program file; Windows names no process's program file, so there the server is Hide's when it runs one of Hide's Herdr files where they are now (`hide_host::herdr_save::server`).
 An import reads any other Herdr's save and leaves that Herdr running beside Hide.
 When Hide's own Herdr has stopped and Hide used it, the move is made without asking once the core is ready; while it runs, the core shows the question (`status.herdr_import`, kind `move`), and a save no Hide Herdr runs is offered to import (kind `import`), from the sidebar's line, Settings, the first run and `hide import herdr [--yes]`.
 The operator's answer is one event (`herdr_import {action}`: `move`, `import`, `look`, `continue`), handled on a worker off the runtime lock through the machine hided installs (`Core::set_herdr_import`, `herdr_import::Machine`).
@@ -2549,6 +2549,10 @@ The operator's answer is one event (`herdr_import {action}`: `move`, `import`, `
 A move first writes the commit mark into the record (D-27), then stops Hide's Herdr through its socket (`server.stop`, `hide_host::herdr_save::stop`), ending the process by its pid when the socket does not answer and confirming the end by the pid and its start time, so a reused pid is never taken for it.
 Hide's Herdr that would not stop moves nothing, and the question says so and offers the move again.
 The move or import is then asked in the record, and hided starts the core role again (`Event::HerdrMove`); before the engine opens, `before_core` imports the asked workspaces and gives their panes' Hide state to the engine the core move's way (D-4), so the engine opens with them and restores them as a reboot does.
+A core role that does not start again ends the daemon with that failure (`Halt::Failed`, as any core start that fails), and the move stays asked in the record, so the next start makes it.
+A Herdr running on the socket again by then keeps its conversations: the start imports them waiting rather than resuming them (D-8).
+Only a step that cannot be undone is committed: a move, or an import that gives Hide's registrations to the engine; a read-only import of a save Hide never used commits nothing.
+The move reads Hide's Herdr on the socket `HERDR_SOCKET_PATH` names, where its registrations were made, else on the account's default socket.
 Once committed, a failed update does not start the previous build again (`core_update.rs`, `rollback.refused`): that build's daemon would open a Herdr session that has moved.
 
 An import while the Herdr it reads runs does not resume its conversations, since one conversation open in two places goes wrong: each such pane opens as a shell with a line saying so, and its resume waits in the record (D-8).
