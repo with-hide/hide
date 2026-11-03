@@ -1736,10 +1736,13 @@ impl Topology {
         let now = Instant::now();
         self.panes().any(|(id, held)| {
             id != pane
-                && held
-                    .agent
-                    .as_ref()
-                    .is_some_and(|agent| agent.listed(now) && agent.name.as_deref() == Some(name))
+                && held.agent.as_ref().is_some_and(|agent| {
+                    agent.listed(now)
+                        && (agent.name.as_deref() == Some(name)
+                            || (agent.starting(now)
+                                && agent.live.start_claim.is_some()
+                                && agent.live.start_previous_name.as_deref() == Some(name)))
+                })
         })
     }
 
@@ -1769,25 +1772,43 @@ impl Topology {
                 .filter(|agent| agent.live.shown || agent.live.started.is_none()),
             pending_session: held.pending_session.take(),
         };
+        agent.live.start_previous_name = previous
+            .agent
+            .as_ref()
+            .filter(|agent| agent.listed(now))
+            .and_then(|agent| agent.name.clone());
         held.agent = Some(agent);
         Ok(previous)
     }
 
     /// A definite non-delivery withdraws only its own, still unconfirmed
     /// metadata. A hook, foreground fact, expiry or newer start wins.
-    pub(super) fn refuse_agent_start(&mut self, pane: &str, start: AgentStart) -> bool {
+    pub(super) fn finish_agent_start(
+        &mut self,
+        pane: &str,
+        start: AgentStart,
+        not_delivered: bool,
+    ) -> bool {
         let Ok(held) = self.pane_mut(pane) else {
             return false;
         };
         let owns = held.agent.as_ref().is_some_and(|agent| {
-            agent.starting(Instant::now())
-                && agent
-                    .live
-                    .start_claim
-                    .as_ref()
-                    .is_some_and(|claim| Arc::ptr_eq(claim, &start.claim))
+            agent
+                .live
+                .start_claim
+                .as_ref()
+                .is_some_and(|claim| Arc::ptr_eq(claim, &start.claim))
         });
         if !owns {
+            return false;
+        }
+        let agent = held
+            .agent
+            .as_mut()
+            .expect("the claim belongs to this agent");
+        if !not_delivered || !agent.starting(Instant::now()) {
+            agent.live.start_claim = None;
+            agent.live.start_previous_name = None;
             return false;
         }
         held.agent = start.agent;
@@ -1828,6 +1849,7 @@ impl Topology {
         match held.agent.as_mut() {
             Some(agent) if agent.kind == kind => {
                 agent.live.start_claim = None;
+                agent.live.start_previous_name = None;
                 let changed = agent.session.as_deref() != Some(session);
                 agent.session = Some(session.to_owned());
                 Ok(changed)

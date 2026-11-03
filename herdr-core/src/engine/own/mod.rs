@@ -538,8 +538,10 @@ impl OwnEngine<'_> {
         self.give_rules(pane);
         self.changed();
         let result = self.type_bytes(pane, format!("{line}\r").into_bytes());
-        let withdrawn = matches!(&result, Err(EngineError::Refused { .. }))
-            && self.topology().refuse_agent_start(pane, start);
+        let not_delivered = matches!(&result, Err(EngineError::Refused { .. }));
+        let withdrawn = self
+            .topology()
+            .finish_agent_start(pane, start, not_delivered);
         if withdrawn {
             self.give_rules(pane);
             self.changed();
@@ -3851,6 +3853,77 @@ mod tests {
         );
         assert_eq!(agents[0].agent_status.as_deref(), Some("working"));
         assert!(!holders.typed(&pane).contains("codex"));
+    }
+
+    /// A rollback cannot restore a name another pane was allowed to take.
+    /// The backup reserves it only while restoration is still possible.
+    #[test]
+    fn a_start_reserves_its_previous_name_until_rollback_is_no_longer_possible() {
+        for outcome in ["refused", "written", "unanswered", "hook"] {
+            let holders = Arc::new(Holders::default());
+            holders.idle_shell(41, "zsh");
+            let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+            let (_, _, pane) = engine
+                .create_workspace(WAIT, "/w", "w", true, Env::new())
+                .unwrap();
+            let (_, _, other) = engine
+                .create_workspace(WAIT, "/other", "other", false, Env::new())
+                .unwrap();
+            let old = engine
+                .prepare_start(launch(&pane, "old", "claude", &[]))
+                .unwrap();
+            engine.start_agent(WAIT, &old).unwrap();
+            holders.say(
+                &pane,
+                &running("claude", hide_node_link::holders::ScreenState::Working),
+            );
+            let new = engine
+                .prepare_start(launch(&pane, "new", "codex", &[]))
+                .unwrap();
+            let reuse = engine
+                .prepare_start(launch(&other, "old", "claude", &[]))
+                .unwrap();
+            let (admitted, finish) = holders.hold_input();
+            std::thread::scope(|scope| {
+                let starting = scope.spawn(|| engine.start_agent(WAIT, &new));
+                admitted.recv_timeout(Duration::from_secs(5)).unwrap();
+                assert!(
+                    matches!(engine.start_agent(WAIT, &reuse), Err(EngineError::Refused { code, .. }) if code == "agent_name_taken")
+                );
+                if outcome == "hook" {
+                    engine.hook_session(&pane, "codex", "confirmed").unwrap();
+                    engine.start_agent(WAIT, &reuse).unwrap();
+                }
+                finish
+                    .send(match outcome {
+                        "written" => Ok(()),
+                        "unanswered" => Err(HolderError::Unreachable {
+                            message: "write outcome unknown".to_owned(),
+                        }),
+                        _ => Err(undelivered_input()),
+                    })
+                    .unwrap();
+                let result = starting.join().unwrap();
+                assert_eq!(result.is_ok(), outcome == "written");
+            });
+            if outcome == "refused" {
+                assert!(
+                    matches!(engine.start_agent(WAIT, &reuse), Err(EngineError::Refused { code, .. }) if code == "agent_name_taken")
+                );
+            } else if outcome != "hook" {
+                engine.start_agent(WAIT, &reuse).unwrap();
+            }
+            let agents = engine.agents(WAIT).unwrap();
+            let old = agents
+                .iter()
+                .filter(|agent| agent.name.as_deref() == Some("old"))
+                .collect::<Vec<_>>();
+            assert_eq!(old.len(), 1, "{outcome}");
+            assert_eq!(
+                old[0].pane_id,
+                if outcome == "refused" { &pane } else { &other }.as_str()
+            );
+        }
     }
 
     /// A write without an answer may already have reached the shell. It is

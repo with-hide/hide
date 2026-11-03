@@ -237,6 +237,8 @@ pub(super) struct Live {
     /// The start whose not-yet-delivered metadata can still be withdrawn.
     /// Foreground or session evidence invalidates it, even at the same value.
     pub(super) start_claim: Option<Arc<()>>,
+    /// A listed name the same attempt can still restore on non-delivery.
+    pub(super) start_previous_name: Option<String>,
     /// Its program is in the pane's foreground.
     pub(super) shown: bool,
     pub(super) status: Status,
@@ -267,6 +269,7 @@ impl PaneAgent {
         self.live.shown = true;
         self.live.started = None;
         self.live.start_claim = None;
+        self.live.start_previous_name = None;
         changed
     }
 
