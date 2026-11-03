@@ -1536,10 +1536,6 @@ pub fn handle_with_progress(
                 )
             })?)
         }
-        Call::Deliver { channel, text } => {
-            let home = env.home("deliver_home_unavailable")?;
-            to_value(crate::input::deliver(&home, &channel, &text, &env.stop))
-        }
         Call::LineInput { pid } => {
             use hide_platform::process::LineInput as Read;
             let input = hide_platform::process::line_input(pid).map_err(|error| {

@@ -338,14 +338,15 @@ mod tests {
             prepared.runtime = Arc::downgrade(&runtime);
             prepared
         };
-        let input =
-            || runtime.lock().unwrap().delivery_observations["recipient"].last_input_at_unix_ms;
+        // The pane's input generation, not its input time: the fixture's
+        // observation and a fast send can read the same millisecond.
+        let input = || runtime.lock().unwrap().input_fence("recipient").unwrap();
         let before = input();
         assert_eq!(send().run(), Err("pane_unavailable".into()));
         assert_eq!(input(), before, "a refused write is no input");
         refuse.store(false, Ordering::SeqCst);
         assert!(send().run().is_ok());
-        assert!(input() > before, "a completed write is input");
+        assert_eq!(input(), before + 1, "a completed write is one input");
     }
 
     /// How the fixture's Herdr answers a send: the screen a composer read
