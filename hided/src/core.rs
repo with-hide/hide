@@ -175,6 +175,9 @@ enum Command {
     SetDesk {
         platform: Arc<dyn herdr_core::desk::DeskPlatform>,
     },
+    SetHerdrImport {
+        machine: Arc<dyn herdr_core::herdr_import::Machine>,
+    },
     Dispatch {
         event: Vec<u8>,
         reply: Sender<Result<(), String>>,
@@ -798,6 +801,17 @@ impl CoreHandle {
             .map_err(|_| "core owner thread is gone".to_owned())
     }
 
+    /// Has the core offer this machine's Herdr save to move into its own
+    /// engine (PRD engine-bundle-4-herdr-removal D-6 to D-8).
+    pub fn set_herdr_import(
+        &self,
+        machine: Arc<dyn herdr_core::herdr_import::Machine>,
+    ) -> Result<(), String> {
+        self.commands
+            .send(Command::SetHerdrImport { machine })
+            .map_err(|_| "core owner thread is gone".to_owned())
+    }
+
     /// `own_engine` is the development switch (`crate::env::Env::own_engine`):
     /// on, this machine's panes run in the node's holders under the core's
     /// own engine, and `options` names no Herdr. `panes` is where each
@@ -1418,15 +1432,20 @@ fn owner_loop(
     // Only a daemon running from a desktop package with that package's own
     // Herdr offers to move the operator's older server onto it (PRD
     // herdr-takeover); any other installs one that finds nothing, so a
-    // Herdr step a packaged daemon saved still goes on.
-    let takeover = crate::herdr_handoff::LocalTakeover::for_daemon(
-        options.herdr_bin_path.as_deref().map(std::path::Path::new),
-        options
-            .herdr_socket_path
-            .as_deref()
-            .map(std::path::Path::new),
-        &state_dir,
-    );
+    // Herdr step a packaged daemon saved still goes on. A core on its own
+    // engine runs no Herdr: its Herdr session moves into the engine instead
+    // (`herdr_transition`).
+    let takeover = match own_engine {
+        Some(_) => None,
+        None => crate::herdr_handoff::LocalTakeover::for_daemon(
+            options.herdr_bin_path.as_deref().map(std::path::Path::new),
+            options
+                .herdr_socket_path
+                .as_deref()
+                .map(std::path::Path::new),
+            &state_dir,
+        ),
+    };
     let Some(core) = Core::create_with_product_analytics(
         options,
         std::sync::Arc::new(own_node),
@@ -1639,6 +1658,7 @@ fn owner_loop(
                 ));
             }
             Command::SetDesk { platform } => core.set_desk(platform),
+            Command::SetHerdrImport { machine } => core.set_herdr_import(machine),
             Command::SetFileRoots { roots, reply } => {
                 // This node holds the opened roots while the core pins their
                 // identities; the previous set closes once it is replaced.

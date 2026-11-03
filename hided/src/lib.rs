@@ -654,14 +654,26 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
     ));
     let idle = server::mount(&seat, app);
     // Once the core is ready, Hide's own Herdr session that no server runs
-    // moves without asking, and the core role starts again with it (PRD
-    // engine-bundle-4-herdr-removal D-6, D-27).
+    // moves without asking, and the core role starts again with it; any
+    // other save the core offers on the screen (PRD
+    // engine-bundle-4-herdr-removal D-6 to D-8, D-27).
     let herdr_move = Arc::new(tokio::sync::Notify::new());
-    {
+    if env.own_engine {
         let env = env.clone();
         let herdr_move = Arc::clone(&herdr_move);
+        let core = Arc::clone(&core);
         tokio::task::spawn_blocking(move || {
-            herdr_transition::after_ready(&env, &herdr_look, &herdr_move);
+            if herdr_transition::after_ready(&env, &herdr_look, &herdr_move) {
+                return;
+            }
+            let machine = herdr_transition::LocalMachine::new(&env, herdr_move);
+            if let Err(reason) = core.set_herdr_import(Arc::new(machine)) {
+                herdr_core::diagnostic!(serde_json::json!({
+                    "component": "herdr_transition",
+                    "kind": "herdr_transition.install_failed",
+                    "reason": reason,
+                }));
+            }
         });
     }
     Ok(RunningDaemon {
