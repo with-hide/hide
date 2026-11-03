@@ -116,7 +116,9 @@ const subs = new Map();
 let extension;
 
 (async () => {
-  announce();
+  // Only a Herdr pane is told what runs in it; on the core's own engine the extension's own session report is how
+  // Hide learns the session.
+  if (config.herdr) announce();
   // The kit writes a .ts file that is plain JavaScript; Node reads it as the ES module both hosts load.
   const copy = path.join(folder, "hide.mjs");
   fs.copyFileSync(config.extension[agent], copy);

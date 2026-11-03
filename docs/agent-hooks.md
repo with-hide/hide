@@ -216,9 +216,9 @@ A `SessionStart` of the same session (a resume or a compaction) keeps them, sinc
 
 #### Which session is the pane's
 
-The development engine still has a first-session reporting gap for Pi, omp, OpenCode, Grok and Cursor where the native integration only reports the first session to Herdr.
-Before that session is bound, mailbox commands have no positive native identity; bundle 4 PR A (`b4-transition`) owns the native session-start and session-switch path and its nested-session ownership checks.
-The corresponding web e2e exceptions are named in [TESTING.md](TESTING.md#writing-a-playwright-e2e-test), and do not establish own-engine support for these flows.
+On the core's own engine nothing but Hide's integration names a pane's session, where Herdr's integration did, so each agent's integration reports it when the session starts or the pane switches to another, before its first turn, and letters and the inbox reach the agent from then on (PRD engine-bundle-4-herdr-removal, mission c3).
+Claude Code's and Codex's `SessionStart` hook, Grok's `SessionStart` (its input's `sessionId`) and Cursor's `sessionStart` (its `conversation_id`) report it as a session start; Pi's and omp's extension at `session_start` and `session_switch` (the session's file, as Herdr's integration named it), OpenCode 1.x's plugin at a root `session.created`, and OpenCode 2's terminal half when the session it shows changes ask the helper's `session` operation, which reports the same.
+Only the pane's own session reports so: the integrations pass over a subagent's or a nested session's start (Grok reads no other event's session, since a subagent's events name the subagent's), and the engine takes a reported session only for the pane's agent of that kind, keeping one that comes before the agent is detected until it is (`engine/own/topology.rs`, `hook_session`).
 
 A session that is not the pane's agent runs the same hooks in the pane's environment: the operator's own Stop hook that starts `claude -p` is one, and it reset the pane's count to zero after every turn of a session that ran subagents (twenty-one of the forty panes on the operator's machine on 2026-10-15 held such a session's record).
 So the hook does not decide which session is the pane's: every session reports under its own id into a record of its own, and the core lays on the pane's agent only the report of the session Herdr reports for it (`agent_session` of kind `id`); an agent Herdr names no session for, or names by a path, takes the session of its runtime that reported last.

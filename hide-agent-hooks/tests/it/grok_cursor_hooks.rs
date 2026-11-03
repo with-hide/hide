@@ -464,6 +464,32 @@ fn pair(working: u32, done: u32) -> (String, String) {
     (working.to_string(), done.to_string())
 }
 
+// Mission c3: a session start names the pane's session to the core before
+// the first turn, so letters and the inbox reach the agent from its start on
+// the core's own engine, where no Herdr integration names it.
+#[test]
+fn a_grok_session_start_reports_the_session_it_starts() {
+    let machine = Machine::new("registered");
+    let env = [
+        ("GROK_HOOK_EVENT", "session_start"),
+        ("GROK_SESSION_ID", "grok-session"),
+    ];
+    let run = machine.run_event(
+        "grok",
+        "SessionStart",
+        r#"{"sessionId":"grok-session"}"#,
+        Some(PANE),
+        &env,
+    );
+    assert!(run.status_ok, "{run:?}");
+    let reports = machine.status_reports();
+    let started: Vec<_> = reports
+        .iter()
+        .map(|report| (report["session"].as_str(), report["session_start"].as_bool()))
+        .collect();
+    assert_eq!(started, [(Some("grok-session"), Some(true))]);
+}
+
 #[test]
 fn grok_counts_its_subagents_and_keeps_background_ones_past_the_turn() {
     let machine = Machine::new("registered");
