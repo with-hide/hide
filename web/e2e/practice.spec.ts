@@ -9,6 +9,7 @@
 // from the run before carries into the next.
 
 import fs from "node:fs";
+import path from "node:path";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { clickClosingItsPage } from "./closing-click";
 import { startHerdr } from "./herdr-fixture";
@@ -85,6 +86,14 @@ async function settled(practice: Page): Promise<void> {
   await expect(practice.locator("[data-practice-settling]")).toHaveCount(0);
 }
 
+/**
+ * Waits for the page to draw what the last change opened, two frames, before the next press: a person's next key
+ * never lands in the frame a palette opened in, and a press there finds the palette's field not yet drawn.
+ */
+async function drawn(practice: Page): Promise<void> {
+  await practice.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
+}
+
 /** One press of the guide: ⏎, or its bubble's button where the bubble shows one. */
 type GuidePress = (practice: Page) => Promise<void>;
 const pressEnter: GuidePress = (practice) => practice.keyboard.press("Enter");
@@ -106,6 +115,7 @@ async function playEveryChapter(practice: Page, chapters: number, press: GuidePr
   do {
     expect(presses, `the practice stopped moving at ${now}`).toBeLessThan(chapters * PRESSES_PER_CHAPTER);
     const before = now;
+    await drawn(practice);
     if (now.startsWith("delegate:mention:")) await pasteByHand(practice);
     else await press(practice);
     presses += 1;
@@ -182,6 +192,7 @@ async function pressTo(practice: Page, id: string, at: number | null, hurry: (()
     if (at !== null && Number(await layer.getAttribute("data-practice-index")) >= at) return;
     expect(presses, `the practice stopped moving at ${now}`).toBeLessThan(PRESSES_PER_CHAPTER);
     const waiting = (await layer.getAttribute("data-practice-waiting")) !== null;
+    await drawn(practice);
     if (waiting && hurry) await hurry();
     else if (!waiting) await practice.keyboard.press("Enter");
     try {
@@ -213,14 +224,17 @@ async function keepStall(practice: Page): Promise<void> {
   fs.writeFileSync(info.outputPath("practice-stall.json"), JSON.stringify(facts, null, 2));
 }
 
-test("every chapter started over from each of its steps plays to its end with Enter alone", async ({ page }) => {
-  test.setTimeout(600_000);
-  await withPractice(page, async (practice, chapters) => {
-    // Chapter 0 waits seconds at a time for its Conductor; replayed from each of its steps that would be minutes, so its clock runs ahead on those steps.
-    await practice.clock.install();
-    const hurry = () => practice.clock.fastForward(5_000);
-    const ids = await chapters.evaluateAll((rows) => rows.map((row) => row.getAttribute("data-practice-hub-chapter")!));
-    for (const id of ids) {
+/** Every chapter's id, one per file in `src/practice/chapters/`, as the practice lists them; each gets a journey of its own below. */
+const CHAPTER_IDS = fs.readdirSync(path.resolve("src/practice/chapters")).filter((file) => file.endsWith(".ts")).map((file) => file.slice(0, -".ts".length));
+
+// One test per chapter, so a chapter whose steps grow takes its own time budget and shard rather than every chapter's.
+for (const id of CHAPTER_IDS) {
+  test(`chapter ${id} started over from each of its steps plays to its end with Enter alone`, async ({ page }) => {
+    test.setTimeout(600_000);
+    await withPractice(page, async (practice) => {
+      // Chapter 0 waits seconds at a time for its Conductor; replayed from each of its steps that would be minutes, so its clock runs ahead on those steps.
+      await practice.clock.install();
+      const hurry = () => practice.clock.fastForward(5_000);
       const row = practice.locator(`[data-practice-hub-chapter="${id}"]`);
       const layer = practice.locator(`[data-practice-chapter="${id}"] [data-practice-layer]`);
       await row.locator("[data-practice-play]").click();
@@ -238,9 +252,9 @@ test("every chapter started over from each of its steps plays to its end with En
       await pressTo(practice, id, null, hurry);
       if ((await practiceState(practice)) !== "hub") await practice.locator("[data-practice-hub-open]").click();
       await expect(row).toHaveAttribute("data-status", "done");
-    }
+    });
   });
-});
+}
 
 test("Back over a step that changed the screen plays the chapter again up to that step as it began", async ({ page }) => {
   await withPractice(page, async (practice) => {

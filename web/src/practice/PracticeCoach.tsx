@@ -480,6 +480,9 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
     if (playing.current === step) return;
     if (step.wait) return over ? advance() : undefined;
     if (!acts(step)) return advance();
+    // A control the step's press already opened is not pressed again while the step waits for what shows in it:
+    // a second press would close it (the pane head's agent list before the next child has started).
+    if (step.shown && step.target && document.querySelector(step.target)?.getAttribute("aria-expanded") === "true") return;
     performed.current = step;
     // A field the step types into is opened first by the step's command: ⌘K, then the words.
     if (step.gesture && "type" in step.gesture && "input" in step.gesture.type && !document.querySelector(step.gesture.type.input) && step.command) return pressCommand(step.command, pace);
