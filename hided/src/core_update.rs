@@ -8,7 +8,9 @@
 //!
 //! The core is replaced by this build's through its starter (the account's
 //! login item, whose replacement ends the old job), and has 30 s to take
-//! links; one that does not is replaced by the previous build's again. Both
+//! links; one that does not is replaced by the previous build's again,
+//! unless this machine's Herdr session already moved into the new build's
+//! engine (PRD engine-bundle-4-herdr-removal D-27), which only goes forward. Both
 //! ends leave `current` at the build that runs and keep the other build of
 //! the update, so a later connection reuses its files and no more than two
 //! builds are kept. A move holds this machine's handover record while it
@@ -165,6 +167,17 @@ fn update(args: &Args) -> Result<Outcome, String> {
         }
         Err(reason) => {
             log(&args.intent, "update.failed", json!({"reason": reason}));
+            // Once this machine's Herdr session moved into the new build's
+            // engine, no path starts the previous build on this state folder
+            // again: its Herdr would restore what moved (PRD
+            // engine-bundle-4-herdr-removal D-13, D-27).
+            let engine_dir = hide_kit::layout::engine_dir(&args.state_dir);
+            if herdr_core::herdr_import::committed(&engine_dir) {
+                log(&args.intent, "rollback.refused", json!({"reason": "herdr_moved"}));
+                return Err(format!(
+                    "the update failed ({reason}); this machine's Herdr session moved into the new build, so the previous build is not started again"
+                ));
+            }
             let pid = starter
                 .replace(&args.state_dir, &args.previous)
                 .map_err(|again| {

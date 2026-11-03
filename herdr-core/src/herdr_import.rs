@@ -241,6 +241,25 @@ fn open(engine_dir: &Path) -> Result<Record, String> {
     Ok(record)
 }
 
+/// The workspaces moved into `engine_dir`'s engine.
+pub fn moved(engine_dir: &Path) -> Result<BTreeSet<String>, String> {
+    Ok(open(engine_dir)?.moved)
+}
+
+/// Whether Hide registered an agent of this machine on the Herdr socket
+/// `herdr_socket`, which makes a save beside a socket no server listens on
+/// Hide's (D-5). A ledger that cannot be read says no.
+pub fn hide_used(state_dir: &Path, herdr_socket: &str) -> bool {
+    crate::delivery::ledger::load(&hide_kit::layout::delivery_ledger(state_dir)).is_ok_and(
+        |ledger| {
+            ledger
+                .agents
+                .iter()
+                .any(|record| record.host_scope == herdr_socket)
+        },
+    )
+}
+
 /// What a machine's Herdr save offers to move.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub enum Look {
