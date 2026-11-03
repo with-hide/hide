@@ -20,8 +20,12 @@ import { agentIn, focusPane, restoreFocusAfterInput, waitForInputGate } from "./
 /** One `hide` command's exit status and standard output. */
 export type HideAnswer = { status: number; out: string };
 
-/** Another program to run as the agent instead of `hide`, such as the hook helper, its standard input and environment. */
-export type AgentRun = { program?: string; input?: string; env?: Record<string, string> };
+/**
+ * Another program to run as the agent instead of `hide`, such as the hook helper, its standard input and environment.
+ * `hook` runs it as the agent's own hook rather than a tool call: the stand-in leaves its screen as it was instead of
+ * returning to its composer, as Claude Code draws nothing for a hook.
+ */
+export type AgentRun = { program?: string; input?: string; env?: Record<string, string>; hook?: boolean };
 
 /** What a pane's agent runner needs of its fixture: its root, and on Herdr the CLI a session is reported with; the own engine has none. */
 export type AgentPaneFixture = Pick<EngineServer, "root"> & { bin?: string };
@@ -112,6 +116,9 @@ fs.writeFileSync(${JSON.stringify(output)}, JSON.stringify({ status: ran.status 
     fs.rmSync(output, { force: true });
     fs.rmSync(gate, { force: true });
     fs.rmSync(arrived, { force: true });
+    // Read by the stand-in (`spawn-provider.c`, `ran_as_hook`) once the command has run.
+    if (run.hook) fs.writeFileSync(`${completed}.hook`, "");
+    else fs.rmSync(`${completed}.hook`, { force: true });
     const control = await connectStateDir(stateDir);
     try {
       await restoreFocusAfterInput(control, pane, () => typeInto(stateDir, pane, "!"), arrived);

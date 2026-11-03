@@ -208,6 +208,25 @@ static const char *reporter_program;
 static const char *reporter_script;
 static const char *completion_file;
 static char *command[MAX_COMMAND + 1];
+/* Whether the command just run was the agent's own hook (`AgentRun.hook`,
+   marked by a file beside the completion file): Claude Code draws nothing
+   for a hook, so the screen stays as it was, a permission prompt included,
+   while a tool call's command returns to the composer. */
+static int ran_as_hook(void) {
+  size_t size = strlen(completion_file) + sizeof ".hook";
+  char *marker = malloc(size);
+  if (!marker) exit(1);
+  snprintf(marker, size, "%s.hook", completion_file);
+#ifdef _WIN32
+  WCHAR *name = wide(marker);
+  int found = GetFileAttributesW(name) != INVALID_FILE_ATTRIBUTES;
+  free(name);
+#else
+  int found = access(marker, F_OK) == 0;
+#endif
+  free(marker);
+  return found;
+}
 static int write_config(int argc, char **argv) {
   // --write-config FILE REPORTER SCRIPT COMPLETION COMMAND [ARG...]
   if (argc < 7 || argc - 6 > MAX_COMMAND) {
@@ -317,8 +336,9 @@ int main(int argc, char **argv) {
     for (fixture_count_t i = 0; i < count; i++) {
       if (bytes[i] != '!') continue;
       int status = run_child(command);
+      int hook = ran_as_hook();
       if (complete_command(completion_file, status) != 0) return 1;
-      if (terminal_write(prompt, sizeof prompt - 1) != (fixture_count_t)(sizeof prompt - 1)) return 1;
+      if (!hook && terminal_write(prompt, sizeof prompt - 1) != (fixture_count_t)(sizeof prompt - 1)) return 1;
     }
   }
   return count < 0 ? 1 : 0;

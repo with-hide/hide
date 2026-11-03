@@ -137,6 +137,7 @@ When the behavior depends on the order of two events, the test fixes that order;
 
 - A provider stand-in used for letter delivery draws its declared empty composer, including Claude Code's rule frame or Codex's dim placeholder style.
   A missing frame or a plain-text placeholder misrepresents an empty input; fix that fixture rather than bypassing the product's composer check or weakening the delivery assertion.
+  The family fixture's stand-in (`web/e2e/shims/spawn-provider.c`) draws that composer again after a command it runs as a tool call, but not after one it runs as the agent's own hook (`AgentRun.hook`, the session report `takeOverSession` makes on the core's own engine), since Claude Code draws nothing for a hook: a composer drawn under a permission prompt reads as an agent at rest, which moved an asking row out of Needs You.
 - Set every fixture's `HOME` and Hide state folder to private paths before starting a candidate.
 - A restart fixture that requires completed native labels waits for the matching session, goal and end in the private `labels.json` before stopping the daemon; a rendered label alone does not prove its asynchronous save completed, and Windows fixture shutdown is forced.
 - The same boundary applies to Workspace views: `web/e2e/right-lane.spec.ts` waits for the expected tool, pin and active document in the private `workspace-views.json` before each restart, then checks the restored screen.
