@@ -901,7 +901,10 @@ mod tests {
                 "native_machine": machine, "session": format!("s-{id}"),
                 "instance": terminal, "terminal_id": terminal, "pane": pane,
                 "parent": null, "project": "/work",
-                "actor": {"pane_id": pane, "name": id, "kind": "claude", "device_id": machine},
+                "actor": {
+                    "pane_id": pane, "name": id, "kind": "claude", "device_id": machine,
+                    "session": crate::engine::tokens::session_digest(&format!("s-{id}")),
+                },
                 "ended": false,
             })
         };

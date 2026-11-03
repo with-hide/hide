@@ -435,7 +435,11 @@ mod tests {
                     "host_scope": socket.to_string_lossy(), "native_machine": node,
                     "session": "s1", "instance": "term_1", "terminal_id": "term_1",
                     "pane": "w1:p1", "parent": null, "project": "/work",
-                    "actor": {"pane_id": "w1:p1", "name": "agent-1", "kind": "claude", "device_id": node},
+                    // The actor carries its session's digest, SHA-256 of `s1`.
+                    "actor": {
+                        "pane_id": "w1:p1", "name": "agent-1", "kind": "claude", "device_id": node,
+                        "session": "e8bc163c82eee18733288c7d4ac636db3a6deb013ef2d37b68322be20edc45cc",
+                    },
                     "ended": false,
                 }],
             })

@@ -49,7 +49,7 @@ const ko = {
   "herdrImport.line.running": "Herdr에서 열려 있는 대화는 셸로 열려요",
   "herdrImport.line.unreadable": "Herdr 저장본을 읽지 못했어요",
   "herdrImport.line.retry": "다시 시도",
-  "herdrImport.line.refused": "옮기지 못한 Herdr 워크스페이스 {{count}}개",
+  "herdrImport.line.refused": "옮기지 못한 Herdr 작업공간 {{count}}개",
   "herdrImport.line.refusedRow": "{{label}}: {{reason}}",
   "herdrImport.line.done": "확인",
   "herdrImport.line.waiting": "Herdr가 닫혀서 대화 {{count}}개를 여기서 이어 갈 수 있어요",
