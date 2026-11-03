@@ -23,7 +23,7 @@ import { markdownPlainText } from "./markdownPlain";
 import { MissionMapCanvas } from "./MissionMapCanvas";
 import { MissionNodePanel } from "./MissionNodePanel";
 import { MissionTurn } from "./MissionTurn";
-import { markWord, RunText, useNodeRun, useNodeTimes } from "./missionParts";
+import { markWord, MissionDevice, RunText, useMissionDeviceName, useNodeRun, useNodeTimes } from "./missionParts";
 import { planCount } from "./plans";
 import {
   attentionWords,
@@ -363,6 +363,7 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
   const satellites = satelliteLines(node.criteria);
   const word = markWord(node, look, t);
   const worker = useNodeRun(node);
+  const device = useMissionDeviceName(node.machine);
   const run = worker?.run ?? null;
   const took = useNodeTimes(mission, node, events, end)?.took ?? null;
   // The worker's plan is one number at the end of that line, never a line of its own.
@@ -381,6 +382,7 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
         word,
         ...(node.kind === "external" && look !== "external" ? [t("mission.look.external")] : []),
         ...(run ? [run.text] : []),
+        ...(device ? [device] : []),
         ...(plan ? [t("plan.chip", { progress: planCount(plan) })] : []),
         ...node.prs.map((pr) => t("mission.attention.pr", { number: String(pr.number) })),
         ...(attention ? [`${t("mission.attention")} · ${attention.who} · ${attention.why}`] : []),
@@ -408,6 +410,7 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
         {node.line ? <Hint label={`${node.title}\n${node.line}`} reveals contentClassName="max-w-(--size-mission-node)">{titleText}</Hint> : titleText}
         {hide ? <HideMark words={hide} /> : null}
       </span>
+      <MissionDevice name={device} />
       {/* Who works it and how long it has taken have a line of their own, so a long branch or several pull requests never push them out (operator decision 2026-11-02). */}
       {run || took ? (
         <span className="flex min-w-0 items-center gap-xxs text-caption text-muted-foreground" data-node-run={run?.from ?? "none"}>

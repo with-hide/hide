@@ -14,7 +14,7 @@ import { useInterfaceTranslation } from "./i18n/client";
 import { formatDateTime } from "./i18n/format";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
-import { CheckerRow, markWord, RunText, useNodeRun, useNodeTimes, useWorkerRow } from "./missionParts";
+import { CheckerRow, markWord, MissionDevice, RunText, useMissionDeviceName, useNodeRun, useNodeTimes, useWorkerRow } from "./missionParts";
 import {
   attentionWords,
   cardLine,
@@ -80,6 +80,7 @@ function Head({ mission, node, events, end, onClose, actions }: { mission: Missi
   const { t } = useInterfaceTranslation();
   const look = nodeLook(mission, node);
   const worker = useNodeRun(node);
+  const device = useMissionDeviceName(node.machine);
   const times = useNodeTimes(mission, node, events, end);
   const facts = [
     ...(times?.took ? [t("mission.elapsed.total", { elapsed: times.took })] : []),
@@ -94,6 +95,7 @@ function Head({ mission, node, events, end, onClose, actions }: { mission: Missi
   const parts: ReactNode[] = [
     ...(kind ? [<span key="kind" className="shrink-0 font-semibold text-subtle-foreground" data-panel-kind={node.kind}>{t(kind)}</span>] : []),
     ...(worker ? [<span key="run" className="flex min-w-0 items-center gap-xxs">{worker.agent ? <AgentMark kind={worker.agent} /> : null}<RunText run={worker.run} /></span>] : []),
+    ...(device ? [<MissionDevice key="device" name={device} />] : []),
     ...facts.map((fact) => <span key={fact} className="shrink-0 tabular-nums" data-panel-fact="true">{fact}</span>),
     ...(replan
       ? [
