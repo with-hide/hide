@@ -301,5 +301,68 @@
       "O'Connor"
     ],
     "expected": "cannot read ~"
+  },
+  {
+    "name": "truncated-double-quoted-apostrophe-windows-home",
+    "input": [
+      "cannot read \"",
+      "C:\\Users\\",
+      "O'Connor"
+    ],
+    "expected": "cannot read \"~"
+  },
+  {
+    "name": "truncated-double-quoted-apostrophe-linux-home",
+    "input": [
+      "cannot read \"",
+      "/home/",
+      "O'Connor"
+    ],
+    "expected": "cannot read \"~"
+  },
+  {
+    "name": "truncated-single-quoted-double-quote-linux-home",
+    "input": [
+      "cannot read '",
+      "/home/",
+      "Example\"User"
+    ],
+    "expected": "cannot read '~"
+  },
+  {
+    "name": "truncated-single-quoted-apostrophe-linux-home",
+    "input": [
+      "cannot read '",
+      "/home/",
+      "O'Connor"
+    ],
+    "expected": "cannot read '~"
+  },
+  {
+    "name": "truncated-double-quoted-double-quote-linux-home",
+    "input": [
+      "cannot read \"",
+      "/home/",
+      "Example\"User"
+    ],
+    "expected": "cannot read \"~"
+  },
+  {
+    "name": "truncated-spaced-mac-home",
+    "input": [
+      "cannot read \"",
+      "/Users/",
+      "Example User"
+    ],
+    "expected": "cannot read \"~"
+  },
+  {
+    "name": "truncated-spaced-windows-home",
+    "input": [
+      "cannot read \"",
+      "C:\\Users\\",
+      "Example User"
+    ],
+    "expected": "cannot read \"~"
   }
 ]

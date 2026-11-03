@@ -67,9 +67,9 @@
       "replacement": "~/"
     },
     {
-      "pattern": "([\"'])[A-Z]:[\\\\/]Users[\\\\/][^\\\\/\\r\\n<>]+([\"'])",
+      "pattern": "(\")[A-Z]:[\\\\/]Users[\\\\/][^\\\\/\\r\\n<>]+(\")$|(')[A-Z]:[\\\\/]Users[\\\\/][^\\\\/\\r\\n<>]+(')$",
       "flags": "i",
-      "replacement": "$1~$2"
+      "replacement": "$1$3~$2$4"
     },
     {
       "pattern": "[A-Z]:[\\\\/]Users[\\\\/][^\\\\/\\r\\n<>]+$",
@@ -82,12 +82,12 @@
       "replacement": "~/"
     },
     {
-      "pattern": "([\"'])(?:[/]Users[/]|[/]home[/])[^/\\r\\n<>]+([\"'])",
+      "pattern": "(\")(?:[/]Users[/]|[/]home[/])[^/\\r\\n<>]+(\")$|(')(?:[/]Users[/]|[/]home[/])[^/\\r\\n<>]+(')$",
       "flags": "",
-      "replacement": "$1~$2"
+      "replacement": "$1$3~$2$4"
     },
     {
-      "pattern": "^(?:[/]Users[/]|[/]home[/])[^/\\r\\n<>]+$",
+      "pattern": "(?:[/]Users[/]|[/]home[/])[^/\\r\\n<>]+$",
       "flags": "",
       "replacement": "~"
     },
