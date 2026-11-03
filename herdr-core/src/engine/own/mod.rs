@@ -96,6 +96,12 @@ pub(crate) struct Place {
     /// started, so a restore resumes their agents before the core's first
     /// read reaches the engine.
     pub(crate) definitions: Arc<hide_agent_adapter::definition::Catalog>,
+    /// The model and effort Hide started each pane's agent with, by this
+    /// engine's pane id, as the core keeps them (`ui_state.pane_launches`):
+    /// a restore resumes a saved agent with the choice whose record
+    /// describes it, so a mission worker does not come back on another
+    /// model (PRD engine-bundle-4-herdr-removal D-24).
+    pub(crate) launches: Arc<BTreeMap<String, crate::model::PaneLaunch>>,
 }
 
 /// The engine and whatever it holds, shared by every gated view of it.
@@ -196,6 +202,7 @@ pub(crate) fn open_device(
     state_dir: &std::path::Path,
     home: String,
     definitions: Arc<hide_agent_adapter::definition::Catalog>,
+    launches: Arc<BTreeMap<String, crate::model::PaneLaunch>>,
 ) -> Result<OwnEngine<'static>, String> {
     let engine_dir = hide_kit::layout::device_engine_dir(state_dir, device)?;
     OwnEngine::open(
@@ -205,6 +212,7 @@ pub(crate) fn open_device(
             home,
             node,
             definitions,
+            launches,
         },
     )
 }
@@ -3279,6 +3287,7 @@ mod tests {
             node: Arc::new(hide_node::Local::new(Some(home.clone()))),
             home: wire(&home),
             definitions: Arc::new(hide_agent_adapter::definition::Catalog::read(Vec::new())),
+            launches: Arc::default(),
         }
     }
 
@@ -4363,6 +4372,93 @@ mod tests {
         );
         let reader = next.delivery_agent(WAIT, "reader").unwrap();
         assert_eq!(reader.pane_id, gemini, "the resumed agent keeps its name");
+    }
+
+    /// PRD engine-bundle-4-herdr-removal D-24, B37: a rebooted agent resumes
+    /// with the model and effort Hide started it with when its pane's launch
+    /// record describes it; a record that names another agent is not read,
+    /// so that pane resumes on its CLI's defaults.
+    #[test]
+    fn a_reboot_resumes_an_agent_with_the_model_and_effort_it_was_started_with() {
+        let root = tempfile::tempdir().unwrap();
+        let place = place(root.path());
+        let folder = root.path().join("repo");
+        for dir in [&home(&place), &folder] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let first_holders = Holders::found(HolderRecovery::default());
+        first_holders.idle_shell(41, "zsh");
+        let first = OwnEngine::open(
+            Arc::clone(&first_holders) as Arc<dyn PaneHolders>,
+            place.clone(),
+        )
+        .unwrap();
+        let (_, _, worker) = first
+            .create_workspace(WAIT, &wire(&folder), "w", true, Env::new())
+            .unwrap();
+        let other = first
+            .split_pane_at(
+                WAIT,
+                &worker,
+                ClosedSplitDirection::Right,
+                &wire(&folder),
+                0.5,
+                Env::new(),
+            )
+            .unwrap();
+        for (pane, name, session) in [(&worker, "worker", "s-1"), (&other, "other", "s-2")] {
+            let start = first
+                .prepare_start(launch(pane, name, "claude", &[]))
+                .unwrap();
+            first.start_agent(WAIT, &start).unwrap();
+            first
+                .report_agent_session(WAIT, pane, "claude", session, 1)
+                .unwrap();
+        }
+        drop(first);
+
+        let chosen = hide_agent_adapter::LaunchChoice {
+            model: Some("opus".to_owned()),
+            effort: Some("high".to_owned()),
+        };
+        let record = |name: &str| crate::model::PaneLaunch {
+            kind: "claude".to_owned(),
+            name: name.to_owned(),
+            choice: chosen.clone(),
+            session: None,
+        };
+        let place = Place {
+            launches: Arc::new(BTreeMap::from([
+                (worker.clone(), record("worker")),
+                // The other pane's record names an agent it no longer runs.
+                (other.clone(), record("someone-else")),
+            ])),
+            ..place
+        };
+        let holders = Arc::new(Holders::default());
+        holders.idle_shell(52, "zsh");
+        let next = OwnEngine::open(Arc::clone(&holders) as Arc<dyn PaneHolders>, place).unwrap();
+        holders.hand(HolderRecovery {
+            owner: 1,
+            ended: vec![worker.clone(), other.clone()],
+            ..HolderRecovery::default()
+        });
+        next.restored().unwrap();
+
+        assert!(
+            holders
+                .wait_typed(&worker)
+                .starts_with("claude --resume s-1 --model opus --effort high || printf"),
+            "{:?}",
+            holders.typed(&worker)
+        );
+        assert!(
+            holders
+                .wait_typed(&other)
+                .starts_with("claude --resume s-2 || printf"),
+            "{:?}",
+            holders.typed(&other)
+        );
     }
 
     /// D-7: a pane whose holder outlived the daemon keeps its program, but

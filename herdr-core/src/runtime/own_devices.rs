@@ -72,6 +72,21 @@ impl Runtime {
                 .map(|state| state.catalog.clone())
                 .unwrap_or_else(|| hide_agent_adapter::definition::Catalog::read(Vec::new())),
         );
+        // The device's agents resume with the choices they were started
+        // with (D-24), keyed by the device's own pane ids as its engine's are.
+        let launches: std::collections::BTreeMap<String, crate::model::PaneLaunch> = self
+            .snapshot
+            .ui_state
+            .pane_launches
+            .iter()
+            .filter_map(|(pane, launch)| {
+                Some((
+                    crate::address::pane_of(pane, device_id)?.to_owned(),
+                    launch.clone(),
+                ))
+            })
+            .collect();
+        let launches = Arc::new(launches);
         let device = device_id.to_owned();
         let spawned = thread::Builder::new()
             .name("herdr-core-device-engine".to_owned())
@@ -85,6 +100,7 @@ impl Runtime {
                             &state_dir,
                             home,
                             definitions,
+                            launches,
                         )
                     })
                     .map(|engine| Arc::new(engine) as crate::engine::SharedEngine);

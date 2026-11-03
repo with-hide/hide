@@ -45,7 +45,9 @@ use super::store::{self, Read};
 use super::topology::{Pane, Topology};
 use super::{EngineError, Env, OwnEngine, holder_error};
 use crate::agent_start::{ShellStart, StartError};
+use crate::model::PaneLaunch;
 use crate::node_access::{NodeLink, call_as};
+use crate::runtime::agent_choice::{choice_arguments, launch_describes};
 
 /// How long the restore waits for the node to finish judging its records.
 /// A node judges each record in a few rounds of a bounded budget, so this
@@ -140,9 +142,14 @@ pub(super) struct Resume {
 
 /// What each restarted pane's saved agent gets, in `restarts` order: a
 /// conversation is resumed in one pane only, and never in a restarted pane
-/// while an adopted pane runs it (`running`, by [`conversation`]).
+/// while an adopted pane runs it (`running`, by [`conversation`]). A resume
+/// carries the model and effort Hide started the agent with when the pane's
+/// launch record in `launches` describes the saved agent (PRD
+/// engine-bundle-4-herdr-removal D-24); an agent with no such record resumes
+/// on its CLI's defaults.
 fn plans(
     catalog: &Catalog,
+    launches: &BTreeMap<String, PaneLaunch>,
     restarts: &[Restart],
     mut running: BTreeSet<(String, String)>,
 ) -> BTreeMap<String, Plan> {
@@ -158,11 +165,16 @@ fn plans(
             )),
             Some(definition) => {
                 let shown = definition.name.clone();
-                match agents::resume_argv(definition, agent.session.as_deref()) {
+                match agents::resume_argv(definition, agent.session.as_deref())
+                    .map(|argv| with_launch_choice(argv, launches, restart, agent))
+                {
                     None => Plan::Shell(format!(
                         "hide: {shown} says no way to resume a conversation, so this pane is a shell now."
                     )),
-                    Some(argv) => match shell_line::check_resume(&argv) {
+                    Some(Err(why)) => Plan::Shell(format!(
+                        "hide: {shown} was not resumed because {why}; this pane is a shell now."
+                    )),
+                    Some(Ok(argv)) => match shell_line::check_resume(&argv) {
                         Err(why) => Plan::Shell(format!(
                             "hide: {shown} was not resumed because {why}; this pane is a shell now."
                         )),
@@ -186,6 +198,34 @@ fn plans(
         plans.insert(restart.pane.clone(), plan);
     }
     plans
+}
+
+/// `argv`, a resume of `agent` in `restart`'s pane, followed by the model
+/// and effort its pane's launch record keeps when the record describes it
+/// (`launch_describes`, the rule a pane's row reads the record by). A saved
+/// choice the agent does not take is refused with why, as a restart Hide
+/// makes of it on Herdr refuses it, rather than resumed on another model.
+fn with_launch_choice(
+    mut argv: Vec<String>,
+    launches: &BTreeMap<String, PaneLaunch>,
+    restart: &Restart,
+    agent: &PaneAgent,
+) -> Result<Vec<String>, String> {
+    let Some(launch) = launches.get(&restart.pane).filter(|launch| {
+        launch_describes(
+            launch,
+            &agent.kind,
+            agent.name.as_deref(),
+            agent.session.as_deref(),
+        )
+    }) else {
+        return Ok(argv);
+    };
+    argv.extend(
+        choice_arguments(&agent.kind, &launch.choice)
+            .map_err(|why| format!("its saved model and effort do not fit it ({why})"))?,
+    );
+    Ok(argv)
 }
 
 /// Which conversation an agent holds, as far as a resume can tell: its
@@ -336,7 +376,13 @@ impl OwnEngine<'static> {
             (idle, running)
         };
         let both: Vec<Restart> = restarts.iter().chain(&idle).cloned().collect();
-        let plans = plans(&self.shared.definitions.get(), &both, running);
+        let no_launches = BTreeMap::new();
+        let launches = self
+            .shared
+            .place
+            .as_ref()
+            .map_or(&no_launches, |place| &*place.launches);
+        let plans = plans(&self.shared.definitions.get(), launches, &both, running);
         let (failures, mut resumes) = self.start_restarts(&restarts, &plans, home.as_deref());
         for restart in &idle {
             match plans.get(&restart.pane) {
