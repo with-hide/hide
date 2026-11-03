@@ -656,16 +656,17 @@ fi
 
 if [[ "$scenario" == keys || "$scenario" == remote-core ]]; then
   all_panes=("$MEASURE_PANE_ID" "${extra_panes[@]}")
-  # One line per 8 ms for the given seconds, beside the cat that echoes keys.
-  printf '%s\n' 'import sys, time' 'end = time.monotonic() + float(sys.argv[1]); i = 0' \
-    'while time.monotonic() < end:' "    print(f'drive {i:05d}', flush=True); i += 1; time.sleep(0.008)" > "$MEASURE_RUN_DIR/drive.py"
+  keys_printers="$measure_dir/keys_printers.py"
+  # Remote-core retains its pane-tagged driver; local keys uses first-flush receipts.
+  if ! $neutral; then
+    printf '%s\n' 'import sys, time' 'end = time.monotonic() + float(sys.argv[1]); i = 0' \
+      'while time.monotonic() < end:' "    print(f'drive {i:05d}', flush=True); i += 1; time.sleep(0.008)" > "$MEASURE_RUN_DIR/drive.py"
+  fi
   # Local printers run in the foreground, so Ctrl+C ends them on either
   # engine. The remote-core fixture retains its pane-tagged background job.
   reset_pane() {
     if $neutral; then
-      local command="cat"
-      [[ -z "${2:-}" ]] || command="/usr/bin/python3 $(printf '%q' "$MEASURE_RUN_DIR/drive.py") $2"
-      node "$measure_dir/type.mjs" "$MEASURE_CDP_PORT" "$1" --focus --interrupt "printf '\033c'; stty -echo -icanon; $command"
+      node "$measure_dir/type.mjs" "$MEASURE_CDP_PORT" "$1" --focus --interrupt "printf '\033c'; stty -echo -icanon; cat"
     else
       pkill -f "$MEASURE_RUN_DIR/drive\.py [0-9]+ $1\$" || true
       "$HERDR_BIN_PATH" pane send-keys "$1" ctrl+c >/dev/null
@@ -673,7 +674,20 @@ if [[ "$scenario" == keys || "$scenario" == remote-core ]]; then
       "$HERDR_BIN_PATH" pane run "$1" "printf '\033c'; stty -echo -icanon; ${2:+/usr/bin/python3 $MEASURE_RUN_DIR/drive.py $2 $1 & }cat" >/dev/null
     fi
   }
-  drive_all() { for pane in "${extra_panes[@]}" "$MEASURE_PANE_ID"; do reset_pane "$pane" "$1"; done; sleep 1; }
+  drive_all() {
+    if $neutral; then
+      printer_phase="$MEASURE_RUN_DIR/keys-printers-$2"
+      python3 "$keys_printers" start "$printer_phase" "$1" "${extra_panes[@]}" "$MEASURE_PANE_ID" \
+        node "$measure_dir/type.mjs" "$MEASURE_CDP_PORT"
+    else
+      # Keep remote-core's drive.py duration/pane argv and tagged pkill contract.
+      for pane in "${extra_panes[@]}" "$MEASURE_PANE_ID"; do reset_pane "$pane" "$1"; done
+      sleep 1
+    fi
+  }
+  check_printers() {
+    if $neutral; then python3 "$keys_printers" check "$printer_phase" "$@"; fi
+  }
   quiet_all() { for pane in "${extra_panes[@]}" "$MEASURE_PANE_ID"; do reset_pane "$pane"; done; sleep 0.5; }
   idle_seconds="${MEASURE_IDLE_SECONDS:-60}"
   driven_seconds="${MEASURE_DRIVEN_SECONDS:-120}"
@@ -684,7 +698,8 @@ if [[ "$scenario" == keys || "$scenario" == remote-core ]]; then
   note "keys: screen key echo, idle (50 samples)"
   MEASURE_PANE_ID="$echo_pane" MEASURE_ECHO_REPEATS=50 node "$measure_dir/key-echo.mjs" > "$MEASURE_RUN_DIR/key-echo-idle.json"
   note "keys: driven, $driven_seconds s at one line per 8 ms per pane"
-  drive_all $((driven_seconds + 120))
+  drive_all $((driven_seconds + 120)) driven
+  check_printers resources-before
   export MEASURE_RESOURCE_SECONDS="$driven_seconds"
   spawn_owned resources-driven python3 "$measure_dir/resources.py" "$hided_pid" "$resource_engine" "$chrome_pid"
   resource_pid=$owned_pid
@@ -693,6 +708,7 @@ if [[ "$scenario" == keys || "$scenario" == remote-core ]]; then
   MEASURE_WS_COUNT_SECONDS="$driven_seconds" spawn_owned ws-driven node "$measure_dir/ws-count.mjs"
   ws_pid=$owned_pid
   wait "$resource_pid" "$ws_pid"
+  check_printers resources-after
   cp "$MEASURE_RUN_DIR/logs/resources-driven.log" "$MEASURE_RUN_DIR/resources-driven.json"
   cp "$MEASURE_RUN_DIR/logs/ws-driven.log" "$MEASURE_RUN_DIR/ws-driven.json"
   python3 "$measure_dir/diag-counts.py" "$hide_state/Logs/core.jsonl" > "$MEASURE_RUN_DIR/driven-diagnostics-after.json"
@@ -700,8 +716,10 @@ if [[ "$scenario" == keys || "$scenario" == remote-core ]]; then
   # to a plain cat while the other four keep printing.
   reset_pane "$MEASURE_PANE_ID"
   sleep 0.5
+  check_printers echo-before --exclude "$MEASURE_PANE_ID"
   note "keys: screen key echo, driven (50 samples, the other four panes printing)"
   MEASURE_PANE_ID="$echo_pane" MEASURE_ECHO_REPEATS=50 node "$measure_dir/key-echo.mjs" > "$MEASURE_RUN_DIR/key-echo-driven.json"
+  check_printers echo-after --exclude "$MEASURE_PANE_ID"
   quiet_all
   if (( ${MEASURE_KEY_COUNT:-0} > 0 )); then
     note "keys: $MEASURE_KEY_COUNT distinct keys counted back from the pane"
@@ -719,13 +737,24 @@ if [[ "$scenario" == keys || "$scenario" == remote-core ]]; then
     quiet_all
   fi
   note "keys: windowless, $windowless_seconds s with every pane printing"
-  MEASURE_WS_COUNT_SECONDS=$((windowless_seconds + 30)) spawn_owned ws-reopen node "$measure_dir/ws-count.mjs"
-  ws_pid=$owned_pid
-  sleep 1
-  drive_all $((windowless_seconds + 10))
+  if $neutral; then
+    drive_all $((windowless_seconds + 10)) windowless
+    ws_ready="$MEASURE_RUN_DIR/ws-reopen-ready.json"
+    [[ ! -e "$ws_ready" ]] || { echo 'observer readiness file already exists' >&2; exit 1; }
+    MEASURE_WS_COUNT_SECONDS=$((windowless_seconds + 30)) spawn_owned ws-reopen node "$measure_dir/ws-count.mjs" --ready-file "$ws_ready"
+    ws_pid=$owned_pid
+    python3 "$keys_printers" observer "$ws_ready" "$ws_pid"
+    check_printers resources-before
+  else
+    MEASURE_WS_COUNT_SECONDS=$((windowless_seconds + 30)) spawn_owned ws-reopen node "$measure_dir/ws-count.mjs"
+    ws_pid=$owned_pid
+    sleep 1
+    drive_all $((windowless_seconds + 10)) windowless
+  fi
   printf 'about:blank' | node "$measure_dir/navigate.mjs" "$MEASURE_CDP_PORT"
   sleep 2
   MEASURE_RESOURCE_SECONDS="$windowless_seconds" python3 "$measure_dir/resources.py" "$hided_pid" "$resource_engine" 0 > "$MEASURE_RUN_DIR/resources-windowless.json"
+  check_printers resources-after
   printf '%s' "$page_url" | node "$measure_dir/navigate.mjs" "$MEASURE_CDP_PORT"
   wait_js "window.__hideProbe?.paneId() === '$echo_pane' && document.querySelectorAll('[data-pane-view]').length === 5"
   sleep 5
