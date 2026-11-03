@@ -809,29 +809,42 @@ mod tests {
     }
 
     /// A device helper started with a home of its own
-    /// (`HIDE_DEV_DEVICE_HOME`) keeps every place its kit writes under that
-    /// home, whatever other variable still names the account's: Windows
-    /// OpenSSH sets `HOME` beside the `USERPROFILE` the start step replaces,
-    /// and a kit that read `HOME` there wrote the account's own hook files.
+    /// (`HIDE_DEV_DEVICE_HOME`) keeps every place its kit and state write
+    /// under that home, whatever the account's environment still says: the
+    /// start step replaces the platform's home variable and clears
+    /// [`HOME_FOLDER_VARIABLES`], and every other variable here names a
+    /// folder of the account's (Windows OpenSSH sets `HOME` beside the
+    /// `USERPROFILE` the start step replaces, and a kit that read `HOME`
+    /// there wrote the account's own hook files).
     #[test]
     fn every_kit_location_follows_the_home_the_platform_names() {
+        use crate::serve::HOME_FOLDER_VARIABLES;
         let dir = tempfile::tempdir().unwrap();
         let own = dir.path().join("own");
         let account = dir.path().join("account");
-        let variables = |name: &str| {
+        let inherited = |name: &str| {
             if name == hide_platform::host::HOME_VARIABLE {
                 Some(own.clone().into_os_string())
-            } else if ["HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH"].contains(&name) {
-                Some(account.clone().into_os_string())
             } else {
-                None
+                Some(account.join(name).into_os_string())
             }
         };
-        let env = Env::of_variables(&variables);
+        // Left as the account has them, the state folder is theirs.
+        let env = Env::of_variables(&inherited);
+        assert!(!env.state.unwrap().starts_with(&own));
+
+        let started = |name: &str| {
+            if HOME_FOLDER_VARIABLES.contains(&name) {
+                None
+            } else {
+                inherited(name)
+            }
+        };
+        let env = Env::of_variables(&started);
         assert_eq!(env.home.as_deref(), Some(own.as_path()));
         assert_eq!(
-            env.state,
-            Some(hide_kit::layout::state_dir_from_process(&own))
+            env.state.as_deref(),
+            Some(own.join(".hide").join("state").as_path())
         );
         let home = env.home.unwrap();
         let inputs = Inputs::read(&home, "~/.local/bin", None, &["~/work".to_owned()]).unwrap();

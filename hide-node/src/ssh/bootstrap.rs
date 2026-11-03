@@ -41,6 +41,7 @@
 //! by `hide_platform::fs::private`'s rule, with no link anywhere on the path.
 
 use super::*;
+use hide_host::serve::HOME_FOLDER_VARIABLES;
 
 /// The words that read the script as one line from the link's own input and
 /// run it, as a program run without a shell (`wsl.exe -e`) takes them.
@@ -116,10 +117,22 @@ const POWERSHELL_SCRIPT: &str = include_str!("bootstrap.ps1");
 /// What the wrapper answers when it runs, asking for [`powershell_script`].
 const ASKS_FOR_POWERSHELL: [&str; 2] = ["script", "powershell"];
 
+/// The PowerShell script's text, with the variables a home of the node's
+/// own clears.
+fn powershell_text() -> String {
+    let variables = HOME_FOLDER_VARIABLES
+        .iter()
+        .map(|name| format!("'{name}'"))
+        .collect::<Vec<_>>()
+        .join(",");
+    POWERSHELL_SCRIPT.replace("@HOME_FOLDER_VARIABLES@", &variables)
+}
+
 /// The PowerShell script as the wrapper reads it: its size in bytes on a
 /// line, then its UTF-8 text.
 fn powershell_script() -> String {
-    format!("{}\n{POWERSHELL_SCRIPT}", POWERSHELL_SCRIPT.len())
+    let text = powershell_text();
+    format!("{}\n{text}", text.len())
 }
 
 /// The script, one statement per line; [`script_line`] joins it into the
@@ -141,6 +154,7 @@ else hs=none; sum() { echo none; }; fi;
 safe() { set -- $(ls -ldn -- "$1" 2>/dev/null); case ${1:-} in d*) ;; *) return 3;; esac; [ "${3:-}" = "$uid" ] || [ "${3:-}" = 0 ] || return 1; case $1 in ?????w*|????????w*) ;; *) return 0;; esac; [ "$3" = 0 ] || return 2; case $1 in ?????????[tT]*) return 0;; esac; return 2; };
 mine() { set -- $(ls -ldn -- "$1" 2>/dev/null); [ "${3:-}" = "$uid" ] || return 1; case ${1:-} in ?????w*|????????w*) return 1;; esac; return 0; };
 store() { { (umask 077; mkdir -p -- "${1%/*}") && cat > "$1"; } || { cat > /dev/null; return 1; }; };
+below() { u=$root; ur=$1; while :; do up=${ur%%/*}; case $up in ''|.|..) ub="$1 is not a path below the install folder"; return 1;; esac; u=$u/$up; [ ! -L "$u" ] || { ub="$u is a link, so the helper was not installed there; remove it on the device"; return 1; }; case $ur in */*) ur=${ur#*/};; *) return 0;; esac; if [ ! -d "$u" ]; then [ -n "${2:-}" ] || return 0; (umask 077; mkdir -- "$u") 2>/dev/null || { ub="$u could not be made"; return 1; }; fi; mine "$u" || { ub="$u belongs to another account or can be changed by one, so the helper was not installed there; remove it on the device"; return 1; }; done; };
 o= e= x= t=;
 trap 'rm -f -- ${o:+"$o"} ${e:+"$e"} ${x:+"$x"} ${t:+"$t"}' EXIT;
 trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 141' PIPE; trap 'exit 143' TERM;
@@ -158,15 +172,15 @@ chmod 700 -- "$r" 2>/dev/null;
 mine "$r" && [ ! -L "$a" ] || { say fail "$r must be a folder owned by the account and not writable by others; the helper was not installed"; continue; };
 root=$r; say root "$r";;
 held) [ -n "$root" ] || { say fail "no install folder was chosen"; exit 65; }; i=0;
-while [ "$i" -lt "$a" ] && IFS=$T read -r rel dig; do i=$((i+1)); f=$root/$rel; if [ -f "$f" ] && [ ! -L "$f" ] && mine "$f" && [ "$(sum "$f")" = "$dig" ]; then say held "$rel"; fi; done;
+while [ "$i" -lt "$a" ] && IFS=$T read -r rel dig; do i=$((i+1)); f=$root/$rel; if below "$rel" && [ -f "$f" ] && [ ! -L "$f" ] && mine "$f" && [ "$(sum "$f")" = "$dig" ]; then say held "$rel"; fi; done;
 say end;;
-put) [ -n "$root" ] || { say fail "no install folder was chosen"; exit 65; }; f=$root/$a; t=${f%/*}/.upload-${f##*/}-$$;
+put) [ -n "$root" ] || { say fail "no install folder was chosen"; exit 65; }; below "$a" make || { head -c "$d" >/dev/null; say fail "$ub"; continue; }; f=$root/$a; t=${f%/*}/.upload-${f##*/}-$$;
 find "${f%/*}" -maxdepth 1 -name '.upload-*' -mmin +10 -exec rm -f {} + 2>/dev/null;
 if head -c "$d" | store "$t" && [ "$(sum "$t")" = "$b" ] && chmod -- "$c" "$t" && mv -f -- "$t" "$f"; then t=; say ok; else rm -f -- "$t"; t=; say fail "$a did not arrive whole"; fi;;
 start) [ -n "$root" ] || { say fail "no install folder was chosen"; exit 65; }; h=$root/$a;
 case $b in session=*) unset HERDR_SOCKET_PATH; HERDR_SESSION=${b#session=}; export HERDR_SESSION;; socket=*) unset HERDR_SESSION; HERDR_SOCKET_PATH=${b#socket=}; export HERDR_SOCKET_PATH;; esac;
-[ -x "$h" ] || { say fail "the helper $h is missing"; exit 65; };
-case ${c:--} in -) ;; *) { (umask 077; mkdir -p -- "$c") && HOME=$c && export HOME && unset XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME; } || { say fail "the home $c could not be made"; exit 65; };; esac;
+below "$a" || { say fail "$ub"; exit 65; }; [ -x "$h" ] && mine "$h" || { say fail "the helper $h is missing or can be changed by other accounts"; exit 65; };
+case ${c:--} in -) ;; *) { (umask 077; mkdir -p -- "$c") && HOME=$c && export HOME && unset @HOME_FOLDER_VARIABLES@; } || { say fail "the home $c could not be made"; exit 65; };; esac;
 cd -- "$HOME" 2>/dev/null || :;
 say start; exec "$h" node serve --own-herdr;;
 run) set --; i=0; while [ "$i" -lt "$a" ] && IFS= read -r w; do set -- "$@" "$w"; i=$((i+1)); done;
@@ -198,7 +212,8 @@ pub(crate) fn script_line() -> String {
         .collect::<Vec<_>>()
         .join(" ")
         .replace("@POWERSHELL@", POWERSHELL)
-        .replace("@WRAPPER@", &powershell_wrapper());
+        .replace("@WRAPPER@", &powershell_wrapper())
+        .replace("@HOME_FOLDER_VARIABLES@", &HOME_FOLDER_VARIABLES.join(" "));
     line.push('\n');
     line
 }
@@ -510,9 +525,10 @@ pub(crate) enum HerdrChoice {
 /// spelling, is the home the helper runs with in place of the account's
 /// (`HIDE_DEV_DEVICE_HOME`, [`super::super::device::resolve_device_home`]),
 /// made private where it is missing. Every per-user folder the helper and
-/// what it starts read follows it: `HOME` with the `XDG_*` folders cleared
-/// to their defaults under it, and on Windows `USERPROFILE`, `HOME`,
-/// `APPDATA`, `LOCALAPPDATA`, `TEMP` and `TMP`, made under it.
+/// what it starts read follows it: `HOME`, on Windows also `USERPROFILE`,
+/// `APPDATA`, `LOCALAPPDATA`, `TEMP` and `TMP` made under it, and every
+/// variable that would move one elsewhere ([`HOME_FOLDER_VARIABLES`])
+/// cleared, in both scripts.
 pub(crate) fn start(
     pipe: &mut dyn Pipe,
     helper_relative: &str,

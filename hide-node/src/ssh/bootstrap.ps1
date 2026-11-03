@@ -39,6 +39,162 @@ public static class HideLinkHandle {
         return (mode & 0x30) == 0;
     }
 }
+
+// A command the run step starts, with everything it starts in turn: the
+// process is made suspended, put in a job of its own and only then let run,
+// so nothing it starts can be outside the job, and ending the job ends the
+// whole tree whichever of its processes has already exited. A program that
+// asks to leave the job (a resident, hide_platform::process::start_resident)
+// may, since it is started to outlive the command.
+public sealed class HideRunTree : IDisposable {
+    [StructLayout(LayoutKind.Sequential)]
+    struct SecurityAttributes { public int Length; public IntPtr Descriptor; public int Inherit; }
+    [StructLayout(LayoutKind.Sequential)]
+    struct StartupInfo {
+        public int cb; public IntPtr Reserved, Desktop, Title;
+        public int X, Y, XSize, YSize, XCountChars, YCountChars, FillAttribute, Flags;
+        public short ShowWindow, Reserved2Size; public IntPtr Reserved2, Input, Output, Error;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    struct ProcessInformation { public IntPtr Process, Thread; public int ProcessId, ThreadId; }
+    [StructLayout(LayoutKind.Sequential)]
+    struct BasicLimits {
+        public long PerProcessUserTime, PerJobUserTime; public uint Flags;
+        public UIntPtr MinimumWorkingSet, MaximumWorkingSet; public uint ActiveProcessLimit;
+        public UIntPtr Affinity; public uint PriorityClass, SchedulingClass;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    struct ExtendedLimits {
+        public BasicLimits Basic; public ulong ReadOperations, WriteOperations, OtherOperations, ReadBytes, WriteBytes, OtherBytes;
+        public UIntPtr ProcessMemory, JobMemory, PeakProcessMemory, PeakJobMemory;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    struct Accounting {
+        public long UserTime, KernelTime, PeriodUserTime, PeriodKernelTime;
+        public uint PageFaults, TotalProcesses, ActiveProcesses, TerminatedProcesses;
+    }
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool CreatePipe(out IntPtr read, out IntPtr write, ref SecurityAttributes attributes, int size);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool SetHandleInformation(IntPtr handle, int mask, int flags);
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    static extern IntPtr CreateJobObjectW(IntPtr attributes, string name);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool SetInformationJobObject(IntPtr job, int kind, ref ExtendedLimits limits, int length);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool QueryInformationJobObject(IntPtr job, int kind, out Accounting accounting, int length, IntPtr returned);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool TerminateJobObject(IntPtr job, uint code);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool TerminateProcess(IntPtr process, uint code);
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    static extern bool CreateProcessW(string application, System.Text.StringBuilder commandLine, IntPtr processAttributes, IntPtr threadAttributes, bool inherit, uint flags, IntPtr environment, string folder, ref StartupInfo startup, out ProcessInformation started);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern uint ResumeThread(IntPtr thread);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool GetExitCodeProcess(IntPtr process, out uint code);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool CloseHandle(IntPtr handle);
+
+    IntPtr job;
+    IntPtr process;
+    public System.IO.FileStream Out;
+    public System.IO.FileStream Err;
+
+    static void Close(ref IntPtr handle) {
+        if (handle != IntPtr.Zero) { CloseHandle(handle); handle = IntPtr.Zero; }
+    }
+    static System.ComponentModel.Win32Exception Failed(string call) {
+        return new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), call + " failed");
+    }
+    static System.IO.FileStream Reader(ref IntPtr handle) {
+        System.IO.FileStream stream = new System.IO.FileStream(new SafeFileHandle(handle, true), System.IO.FileAccess.Read, 1, false);
+        handle = IntPtr.Zero;
+        return stream;
+    }
+
+    // Starts the command line with no input, its outputs on pipes of its
+    // own, as Process.Start finds and starts a program.
+    public HideRunTree(string commandLine) {
+        IntPtr inRead = IntPtr.Zero, inWrite = IntPtr.Zero, outRead = IntPtr.Zero, outWrite = IntPtr.Zero, errRead = IntPtr.Zero, errWrite = IntPtr.Zero;
+        ProcessInformation started = new ProcessInformation();
+        try {
+            job = CreateJobObjectW(IntPtr.Zero, null);
+            if (job == IntPtr.Zero) { throw Failed("CreateJobObject"); }
+            ExtendedLimits limits = new ExtendedLimits();
+            limits.Basic.Flags = 0x800; // JOB_OBJECT_LIMIT_BREAKAWAY_OK
+            if (!SetInformationJobObject(job, 9, ref limits, Marshal.SizeOf(typeof(ExtendedLimits)))) { throw Failed("SetInformationJobObject"); }
+            SecurityAttributes inheritable = new SecurityAttributes();
+            inheritable.Length = Marshal.SizeOf(typeof(SecurityAttributes));
+            inheritable.Inherit = 1;
+            if (!CreatePipe(out inRead, out inWrite, ref inheritable, 0)) { throw Failed("CreatePipe"); }
+            if (!CreatePipe(out outRead, out outWrite, ref inheritable, 0)) { throw Failed("CreatePipe"); }
+            if (!CreatePipe(out errRead, out errWrite, ref inheritable, 0)) { throw Failed("CreatePipe"); }
+            foreach (IntPtr own in new IntPtr[] { inWrite, outRead, errRead }) {
+                if (!SetHandleInformation(own, 1, 0)) { throw Failed("SetHandleInformation"); }
+            }
+            StartupInfo startup = new StartupInfo();
+            startup.cb = Marshal.SizeOf(typeof(StartupInfo));
+            startup.Flags = 0x100; // STARTF_USESTDHANDLES
+            startup.Input = inRead;
+            startup.Output = outWrite;
+            startup.Error = errWrite;
+            if (!CreateProcessW(null, new System.Text.StringBuilder(commandLine), IntPtr.Zero, IntPtr.Zero, true, 0x4, IntPtr.Zero, null, ref startup, out started)) { throw Failed("CreateProcess"); }
+            if (!AssignProcessToJobObject(job, started.Process)) { throw Failed("AssignProcessToJobObject"); }
+            if (ResumeThread(started.Thread) == uint.MaxValue) { throw Failed("ResumeThread"); }
+            process = started.Process;
+            started.Process = IntPtr.Zero;
+            Out = Reader(ref outRead);
+            Err = Reader(ref errRead);
+        } catch {
+            if (started.Process != IntPtr.Zero) { TerminateProcess(started.Process, 1); }
+            Close(ref started.Process);
+            Close(ref job);
+            throw;
+        } finally {
+            Close(ref started.Thread);
+            Close(ref inRead);
+            Close(ref inWrite);
+            Close(ref outRead);
+            Close(ref outWrite);
+            Close(ref errRead);
+            Close(ref errWrite);
+        }
+    }
+
+    // The command's exit status, once it has exited.
+    public int Wait() {
+        if (WaitForSingleObject(process, 0xFFFFFFFF) != 0) { throw Failed("WaitForSingleObject"); }
+        uint code;
+        if (!GetExitCodeProcess(process, out code)) { throw Failed("GetExitCodeProcess"); }
+        return unchecked((int)code);
+    }
+
+    // Ends every process in the tree and answers whether Windows says none
+    // is left within the time given.
+    public bool End(int milliseconds) {
+        TerminateJobObject(job, 1);
+        DateTime until = DateTime.UtcNow.AddMilliseconds(milliseconds);
+        while (true) {
+            Accounting accounting;
+            if (!QueryInformationJobObject(job, 1, out accounting, Marshal.SizeOf(typeof(Accounting)), IntPtr.Zero)) { return false; }
+            if (accounting.ActiveProcesses == 0) { return true; }
+            if (DateTime.UtcNow >= until) { return false; }
+            System.Threading.Thread.Sleep(20);
+        }
+    }
+
+    public void Dispose() {
+        if (Out != null) { Out.Dispose(); }
+        if (Err != null) { Err.Dispose(); }
+        Close(ref process);
+        Close(ref job);
+    }
+}
 '@
 
 function Link-Stream($console, [IO.FileAccess]$access) {
@@ -286,13 +442,39 @@ function Step-Root([string]$wire) {
     Say root (Wire $full)
 }
 
+# Why $relative, a file below the install folder, may not be written or
+# used, or nothing: every folder on the way to it must be a real folder of
+# this account's that nobody else can change, as the install folder is, so
+# nothing under it leads a write or a start outside it or lets another
+# account swap what runs; and the file itself is no link. With $make, a
+# folder that is missing is made private.
+function Below([string]$relative, [bool]$make) {
+    $names = $relative.Split('/')
+    $path = $state.Root
+    for ($n = 0; $n -lt $names.Length; $n++) {
+        $name = $names[$n]
+        if (@('', '.', '..') -contains $name -or $name.IndexOfAny([char[]]'\:') -ge 0) { return "$relative is not a path below the install folder" }
+        $path = $path + '\' + $name
+        if (Is-Link $path) { return "$(Wire $path) is a link, so the helper was not installed there; remove it on the device" }
+        if ($n -eq $names.Length - 1) { return $null }
+        if (-not [IO.Directory]::Exists($path)) {
+            if (-not $make) { return $null }
+            try { [void][IO.Directory]::CreateDirectory($path, (Private-Folder)) } catch { return "$(Wire $path) could not be made" }
+        }
+        $mine = $false
+        try { $mine = Mine $path } catch { $mine = $false }
+        if (-not $mine) { return "$(Wire $path) belongs to another account or can be changed by one, so the helper was not installed there; remove it on the device" }
+    }
+    $null
+}
+
 function Step-Held([string]$count) {
     if (-not $state.Root) { Say fail 'no install folder was chosen'; exit 65 }
     for ($n = 0; $n -lt [int]$count; $n++) {
         $pair = (Read-Line).Split([char[]]@([char]9), 2)
         $file = Join-Root $pair[0]
         $held = $false
-        try { $held = [IO.File]::Exists($file) -and (Mine $file) -and (Sum $file) -eq $pair[1] } catch { $held = $false }
+        try { $held = -not (Below $pair[0] $false) -and [IO.File]::Exists($file) -and (Mine $file) -and (Sum $file) -eq $pair[1] } catch { $held = $false }
         if ($held) { Say held $pair[0] }
     }
     Say end
@@ -308,6 +490,8 @@ function Remove-Stale([string]$folder) {
 
 function Step-Put([string]$relative, [string]$digest, [string]$size) {
     if (-not $state.Root) { Say fail 'no install folder was chosen'; exit 65 }
+    $bad = Below $relative $true
+    if ($bad) { [void](Copy-Bytes ([long]$size) $null); Say fail $bad; return }
     $target = Join-Root $relative
     $folder = [IO.Path]::GetDirectoryName($target)
     $temp = [IO.Path]::Combine($folder, ".upload-$([IO.Path]::GetFileName($target))-$PID")
@@ -342,14 +526,20 @@ function Hand-Over([string]$program, $words, [string]$answer) {
 function Step-Start([string]$relative, [string]$herdr, [string]$homeWire) {
     if (-not $state.Root) { Say fail 'no install folder was chosen'; exit 65 }
     if ($herdr -ne '-') { Say fail 'a Windows device runs no Herdr, so it takes no Herdr session or socket'; exit 65 }
+    $bad = Below $relative $false
+    if ($bad) { Say fail $bad; exit 65 }
     $helper = Join-Root $relative
-    if (-not [IO.File]::Exists($helper)) { Say fail "the helper $(Wire $helper) is missing"; exit 65 }
+    if (-not [IO.File]::Exists($helper) -or -not (Mine $helper)) { Say fail "the helper $(Wire $helper) is missing or can be changed by other accounts"; exit 65 }
     # A home of the node's own in place of the account's, made private where
     # it is missing, with the per-user folders beside it: Windows programs
     # read the home from USERPROFILE (Git and shells from HOME) and keep
     # their data, caches and scratch files in APPDATA, LOCALAPPDATA and TEMP,
     # which would otherwise stay the account's, and a .NET program whose
-    # folder under the new home is missing gets no folder at all.
+    # folder under the new home is missing gets no folder at all. Every
+    # variable that moves a folder Hide or an agent keeps below the home
+    # somewhere else is cleared (hide_host::serve::HOME_FOLDER_VARIABLES), as
+    # the POSIX script clears them, so nothing the account's environment
+    # names takes a folder out of this home.
     if ($homeWire -and $homeWire -ne '-') {
         try {
             if (-not (Absolute $homeWire)) { throw 'not absolute' }
@@ -366,6 +556,7 @@ function Step-Start([string]$relative, [string]$herdr, [string]$homeWire) {
             $env:LOCALAPPDATA = $local
             $env:TEMP = $temp
             $env:TMP = $temp
+            foreach ($name in @(@HOME_FOLDER_VARIABLES@)) { [Environment]::SetEnvironmentVariable($name, $null) }
         } catch { Say fail "the home $homeWire could not be made"; exit 65 }
     }
     Hand-Over $helper @('node', 'serve', '--own-herdr') 'start'
@@ -378,66 +569,54 @@ function Step-Attach([string]$program, [string]$stateDir) {
 }
 
 # Runs the command with no input and answers its status and both outputs,
-# each kept to $cap bytes: one that writes past it is ended with what it
-# started, and refused.
+# each kept to $cap bytes: one that writes past it is ended with everything
+# it started, and refused. A tree whose end Windows does not confirm, or a
+# failure part way, ends the script and with it the link, so the node never
+# reuses a connection with a command of its still running.
 function Step-Run([string]$count, [string]$cap) {
     $words = New-Object Collections.Generic.List[string]
     for ($n = 0; $n -lt [int]$count; $n++) { $words.Add((Read-Line)) }
     $limit = [long]$cap
-    $info = New-Object Diagnostics.ProcessStartInfo
-    $info.FileName = $words[0]
-    $info.Arguments = Command-Line $words.GetRange(1, $words.Count - 1)
-    $info.UseShellExecute = $false
-    $info.RedirectStandardInput = $true
-    $info.RedirectStandardOutput = $true
-    $info.RedirectStandardError = $true
-    try { $child = [Diagnostics.Process]::Start($info) } catch {
+    try { $tree = New-Object HideRunTree -ArgumentList @(,(Command-Line $words)) } catch {
         $said = $utf8.GetBytes("$($words[0]): the command could not be started`n")
         Say ran 127 0 $said.Length
         $stdout.Write($said, 0, $said.Length)
         $stdout.Flush()
         return
     }
-    $child.StandardInput.Close()
-    $streams = @($child.StandardOutput.BaseStream, $child.StandardError.BaseStream)
-    $kept = @((New-Object IO.MemoryStream), (New-Object IO.MemoryStream))
-    $chunks = @((New-Object byte[] 65536), (New-Object byte[] 65536))
-    $reads = @($streams[0].ReadAsync($chunks[0], 0, 65536), $streams[1].ReadAsync($chunks[1], 0, 65536))
-    $big = $false
-    while (-not $big -and ($reads[0] -or $reads[1])) {
-        [void][Threading.Tasks.Task]::WaitAny([Threading.Tasks.Task[]]@($reads | Where-Object { $_ }))
-        for ($k = 0; $k -lt 2; $k++) {
-            $read = $reads[$k]
-            if (-not $read -or -not $read.IsCompleted) { continue }
-            $n = $read.Result
-            if ($n -le 0) { $reads[$k] = $null; continue }
-            $kept[$k].Write($chunks[$k], 0, $n)
-            if ($kept[$k].Length -gt $limit) { $big = $true; continue }
-            $reads[$k] = $streams[$k].ReadAsync($chunks[$k], 0, 65536)
+    $ended = $false
+    try {
+        $streams = @($tree.Out, $tree.Err)
+        $kept = @((New-Object IO.MemoryStream), (New-Object IO.MemoryStream))
+        $chunks = @((New-Object byte[] 65536), (New-Object byte[] 65536))
+        $reads = @($streams[0].ReadAsync($chunks[0], 0, 65536), $streams[1].ReadAsync($chunks[1], 0, 65536))
+        $big = $false
+        while (-not $big -and ($reads[0] -or $reads[1])) {
+            [void][Threading.Tasks.Task]::WaitAny([Threading.Tasks.Task[]]@($reads | Where-Object { $_ }))
+            for ($k = 0; $k -lt 2; $k++) {
+                $read = $reads[$k]
+                if (-not $read -or -not $read.IsCompleted) { continue }
+                $n = $read.Result
+                if ($n -le 0) { $reads[$k] = $null; continue }
+                $kept[$k].Write($chunks[$k], 0, $n)
+                if ($kept[$k].Length -gt $limit) { $big = $true; continue }
+                $reads[$k] = $streams[$k].ReadAsync($chunks[$k], 0, 65536)
+            }
         }
-    }
-    if ($big) {
-        # Its whole tree, so nothing it started keeps writing into a pipe
-        # nobody reads.
-        try {
-            $kill = New-Object Diagnostics.ProcessStartInfo "$env:SystemRoot\System32\taskkill.exe", "/T /F /PID $($child.Id)"
-            $kill.UseShellExecute = $false
-            $kill.RedirectStandardInput = $true
-            $kill.RedirectStandardOutput = $true
-            $kill.RedirectStandardError = $true
-            $killer = [Diagnostics.Process]::Start($kill)
-            $killer.StandardInput.Close()
-            [void]$killer.StandardOutput.ReadToEnd()
-            [void]$killer.StandardError.ReadToEnd()
-            $killer.WaitForExit()
-        } catch {}
-    }
-    $child.WaitForExit()
-    $status = $child.ExitCode
-    if ($big) {
-        Say big $status ([Math]::Min($kept[0].Length, $limit + 1)) ([Math]::Min($kept[1].Length, $limit + 1))
-        return
-    }
+        if ($big) {
+            $ended = $true
+            if (-not $tree.End(10000)) { throw 'a command past its output cap did not end' }
+            # With every writer gone the reads still waiting end at once.
+            $waiting = @($reads | Where-Object { $_ })
+            if ($waiting) { [void][Threading.Tasks.Task]::WaitAll([Threading.Tasks.Task[]]$waiting, 5000) }
+            Say big ($tree.Wait()) ([Math]::Min($kept[0].Length, $limit + 1)) ([Math]::Min($kept[1].Length, $limit + 1))
+            return
+        }
+        $status = $tree.Wait()
+    } catch {
+        if (-not $ended) { [void]$tree.End(10000) }
+        throw
+    } finally { $tree.Dispose() }
     Say ran $status $kept[0].Length $kept[1].Length
     $stdout.Write($kept[0].GetBuffer(), 0, [int]$kept[0].Length)
     $stdout.Write($kept[1].GetBuffer(), 0, [int]$kept[1].Length)

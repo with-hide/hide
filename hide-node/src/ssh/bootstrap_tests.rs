@@ -58,9 +58,13 @@ impl Device {
             .env("PATH", std::env::join_paths(search).unwrap())
             .current_dir(self.home())
             .env("HOME", self.home())
-            // A state folder of the account's own, which a home of the
-            // node's own replaces with its default under that home.
-            .env("XDG_STATE_HOME", self.home().join("account-state"))
+            // Folders of the account's own named apart from its home, which
+            // a home of the node's own replaces with its defaults under it.
+            .envs(
+                HOME_FOLDER_VARIABLES
+                    .iter()
+                    .map(|name| (name, self.home().join("account").join(name))),
+            )
             .env("TMPDIR", self.tmp())
             .env_remove(hide_platform::host::MACHINE_ID_VARIABLE)
             .stdin(Stdio::piped())
@@ -202,7 +206,7 @@ fn an_msys_sh_on_windows_hands_the_link_to_the_powershell_script() {
     // script had not taken.
     assert_eq!(
         std::fs::read_to_string(record.with_extension("script")).unwrap(),
-        POWERSHELL_SCRIPT
+        powershell_text()
     );
 }
 
@@ -382,8 +386,15 @@ fn an_install_under_a_folder_others_can_change_is_refused() {
 #[test]
 fn the_helper_starts_on_the_same_pipes_with_the_chosen_herdr() {
     let device = Device::new();
-    let helper = "#!/bin/sh\necho \"args:$*\"\necho \"session:${HERDR_SESSION:-} socket:${HERDR_SOCKET_PATH:-}\"\necho \"home:$HOME pwd:$(pwd -P)\"\necho \"state:${XDG_STATE_HOME:-default}\"\n";
-    let packages = device.packages(std::env::consts::OS, std::env::consts::ARCH, helper);
+    // It names each folder variable it was started with.
+    let moved: String = HOME_FOLDER_VARIABLES
+        .iter()
+        .map(|name| format!("${{{name}+ {name}}}"))
+        .collect();
+    let helper = format!(
+        "#!/bin/sh\necho \"args:$*\"\necho \"session:${{HERDR_SESSION:-}} socket:${{HERDR_SOCKET_PATH:-}}\"\necho \"home:$HOME pwd:$(pwd -P)\"\necho \"moved:{moved}\"\n"
+    );
+    let packages = device.packages(std::env::consts::OS, std::env::consts::ARCH, &helper);
     let mut pipe = device.connect("");
     let facts = probe(&mut pipe, soon()).unwrap();
     let payload = packages.payload(&facts.os, &facts.arch).unwrap();
@@ -402,14 +413,19 @@ fn the_helper_starts_on_the_same_pipes_with_the_chosen_herdr() {
         String::from_utf8(pipe.line(soon()).unwrap()).unwrap(),
         format!("home:{} pwd:{}", facts.home, home.display())
     );
+    let all: String = HOME_FOLDER_VARIABLES
+        .iter()
+        .map(|name| format!(" {name}"))
+        .collect();
     assert_eq!(
         String::from_utf8(pipe.line(soon()).unwrap()).unwrap(),
-        format!("state:{}", device.home().join("account-state").display())
+        format!("moved:{all}")
     );
 
     // A home of the node's own (`HIDE_DEV_DEVICE_HOME`) takes the account's
-    // place, made private where it was missing, and the account's state
-    // folder gives way to the default under it.
+    // place, made private where it was missing, and none of the account's
+    // folders named apart from its home reaches the helper, so each one is
+    // the default under the new home.
     let own = format!("{}/candidate/home", facts.home);
     let mut pipe = device.connect("");
     let facts = probe(&mut pipe, soon()).unwrap();
@@ -428,8 +444,65 @@ fn the_helper_starts_on_the_same_pipes_with_the_chosen_herdr() {
         String::from_utf8(pipe.line(soon()).unwrap()).unwrap(),
         format!("home:{own} pwd:{}", made.display())
     );
-    assert_eq!(pipe.line(soon()).unwrap(), b"state:default");
+    assert_eq!(pipe.line(soon()).unwrap(), b"moved:");
     assert_eq!(mode(&made), 0o700);
+}
+
+/// Every folder below the install folder must be a real folder of the
+/// account's that no other account can change, as the install folder is: a
+/// link there would take the files somewhere else, and a folder another
+/// account can change would let it swap what runs. Neither is used or
+/// written through, and the folder outside stays as it was.
+#[test]
+fn a_link_or_an_open_folder_below_the_install_folder_is_refused() {
+    let device = Device::new();
+    let packages = device.packages(std::env::consts::OS, std::env::consts::ARCH, "helper 1");
+    let install_once = || {
+        let mut pipe = device.connect("");
+        let facts = probe(&mut pipe, soon()).unwrap();
+        let payload = packages.payload(&facts.os, &facts.arch).unwrap();
+        install(&mut pipe, "~/.hide/helper", &facts.home, &payload)
+    };
+    let first = install_once().unwrap();
+    let (version, _) = first.helper_relative.split_once('/').unwrap();
+    let version = device.home().join(".hide/helper").join(version);
+    // A copy of the build elsewhere, beside a file of someone else's.
+    let outside = device.dir.path().join("outside");
+    std::fs::create_dir(&outside).unwrap();
+    for entry in std::fs::read_dir(&version).unwrap() {
+        let entry = entry.unwrap();
+        std::fs::copy(entry.path(), outside.join(entry.file_name())).unwrap();
+    }
+    std::fs::write(outside.join("sentinel"), b"untouched").unwrap();
+    let contents = || {
+        let mut files: Vec<(std::ffi::OsString, Vec<u8>)> = std::fs::read_dir(&outside)
+            .unwrap()
+            .map(|entry| {
+                let entry = entry.unwrap();
+                (entry.file_name(), std::fs::read(entry.path()).unwrap())
+            })
+            .collect();
+        files.sort();
+        files
+    };
+    let before = contents();
+
+    std::fs::remove_dir_all(&version).unwrap();
+    std::os::unix::fs::symlink(&outside, &version).unwrap();
+    let Err(EstablishError::Install(reason)) = install_once() else {
+        panic!("an install through a link below the install folder was accepted");
+    };
+    assert!(reason.contains("is a link"), "{reason}");
+    assert_eq!(contents(), before);
+
+    std::fs::remove_file(&version).unwrap();
+    std::fs::create_dir(&version).unwrap();
+    std::fs::set_permissions(&version, std::fs::Permissions::from_mode(0o770)).unwrap();
+    let Err(EstablishError::Install(reason)) = install_once() else {
+        panic!("an install into a folder others can change was accepted");
+    };
+    assert!(reason.contains("can be changed"), "{reason}");
+    assert_eq!(std::fs::read_dir(&version).unwrap().count(), 0);
 }
 
 /// `HIDE_DEV_DEVICE_HOME` names a home below the account's or an absolute

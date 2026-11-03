@@ -109,6 +109,13 @@ impl Device {
             .env("HIDE_TEST_HOME", self.home())
             .env("HIDE_TEST_OWN_HOME", self.own_home())
             .env("HIDE_TEST_STATE", self.state())
+            // Folders of the account's own named apart from its home, which
+            // a home of the node's own replaces with its defaults under it.
+            .envs(
+                HOME_FOLDER_VARIABLES
+                    .iter()
+                    .map(|name| (name, self.home().join("account").join(name))),
+            )
             .env_remove(hide_platform::host::MACHINE_ID_VARIABLE)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -139,9 +146,13 @@ impl Device {
     /// A batch file the steps can start in place of a program: it says what
     /// it was started with, in which of the device's folders (`home`, `own`
     /// or `other`), whether its per-user folders all follow the own home,
-    /// then repeats one line of its input.
+    /// which folder variables it was started with, then repeats one line of
+    /// its input.
     fn echoing_program(&self, path: &Path) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let moved = HOME_FOLDER_VARIABLES
+            .iter()
+            .map(|name| format!("if defined {name} set moved=%moved% {name}"));
         std::fs::write(
             path,
             [
@@ -159,10 +170,16 @@ impl Device {
                 "set folders=other",
                 "if /i \"%HOME%\"==\"%HIDE_TEST_OWN_HOME%\" if /i \"%APPDATA%\"==\"%HIDE_TEST_OWN_HOME%\\AppData\\Roaming\" if /i \"%LOCALAPPDATA%\"==\"%HIDE_TEST_OWN_HOME%\\AppData\\Local\" if /i \"%TEMP%\"==\"%HIDE_TEST_OWN_HOME%\\AppData\\Local\\Temp\" if /i \"%TMP%\"==\"%TEMP%\" set folders=own",
                 "echo folders:%folders%",
-                "set /p line=",
-                "echo carried:%line%",
-                "",
+                "set moved=",
             ]
+            .into_iter()
+            .map(str::to_owned)
+            .chain(moved)
+            .chain(
+                ["echo moved:%moved%", "set /p line=", "echo carried:%line%", ""]
+                    .map(str::to_owned),
+            )
+            .collect::<Vec<_>>()
             .join("\r\n"),
         )
         .unwrap();
@@ -358,6 +375,75 @@ fn an_install_under_a_folder_others_can_change_or_a_link_is_refused() {
     assert_eq!(std::fs::read_dir(real.join("helper")).unwrap().count(), 0);
 }
 
+/// Every folder below the install folder must be a real folder of the
+/// account's that no other account can change, as the install folder is: a
+/// junction there would take the files somewhere else, and a folder another
+/// account can change would let it swap what runs. Neither is used or
+/// written through, and the folder outside stays as it was.
+#[test]
+fn a_link_or_an_open_folder_below_the_install_folder_is_refused() {
+    let device = Device::new();
+    let packages = device.packages();
+    let install_once = || {
+        let mut pipe = device.connect();
+        let facts = probe(&mut pipe, soon()).unwrap();
+        let payload = packages.payload(&facts.os, &facts.arch).unwrap();
+        install(&mut pipe, "~/.hide/helper", &facts.home, &payload)
+    };
+    let first = install_once().unwrap();
+    let (version, _) = first.helper_relative.split_once('/').unwrap();
+    let version = device.home().join(r".hide\helper").join(version);
+    // A copy of the build elsewhere, beside a file of someone else's.
+    let outside = device.dir.path().join("outside");
+    std::fs::create_dir(&outside).unwrap();
+    for entry in std::fs::read_dir(&version).unwrap() {
+        let entry = entry.unwrap();
+        std::fs::copy(entry.path(), outside.join(entry.file_name())).unwrap();
+    }
+    std::fs::write(outside.join("sentinel"), b"untouched").unwrap();
+    let contents = || {
+        let mut files: Vec<(std::ffi::OsString, Vec<u8>)> = std::fs::read_dir(&outside)
+            .unwrap()
+            .map(|entry| {
+                let entry = entry.unwrap();
+                (entry.file_name(), std::fs::read(entry.path()).unwrap())
+            })
+            .collect();
+        files.sort();
+        files
+    };
+    let before = contents();
+
+    std::fs::remove_dir_all(&version).unwrap();
+    let linked = std::process::Command::new(system32("cmd.exe"))
+        .args(["/c", "mklink", "/J"])
+        .arg(&version)
+        .arg(&outside)
+        .output()
+        .unwrap();
+    assert!(linked.status.success(), "{linked:?}");
+    let Err(EstablishError::Install(reason)) = install_once() else {
+        panic!("an install through a junction below the install folder was accepted");
+    };
+    assert!(reason.contains("is a link"), "{reason}");
+    assert_eq!(contents(), before);
+
+    std::fs::remove_dir(&version).unwrap();
+    std::fs::create_dir(&version).unwrap();
+    // Everyone may change it and what it holds.
+    let granted = std::process::Command::new(system32("icacls.exe"))
+        .arg(&version)
+        .args(["/grant", "*S-1-1-0:(OI)(CI)M"])
+        .output()
+        .unwrap();
+    assert!(granted.status.success(), "{granted:?}");
+    let Err(EstablishError::Install(reason)) = install_once() else {
+        panic!("an install into a folder others can change was accepted");
+    };
+    assert!(reason.contains("can be changed"), "{reason}");
+    assert_eq!(std::fs::read_dir(&version).unwrap().count(), 0);
+}
+
 /// B24: the helper starts on the same pipes, from the account's home, and a
 /// Windows device takes no Herdr session or socket.
 #[test]
@@ -416,13 +502,19 @@ fn the_helper_starts_on_the_same_pipes_and_takes_no_herdr() {
     assert_eq!(line(&mut pipe), "cwd:home");
     assert_eq!(line(&mut pipe), "home:home");
     assert_eq!(line(&mut pipe), "folders:other");
+    let all: String = HOME_FOLDER_VARIABLES
+        .iter()
+        .map(|name| format!(" {name}"))
+        .collect();
+    assert_eq!(line(&mut pipe), format!("moved:{all}"));
     pipe.send(b"through the link\r\n", soon()).unwrap();
     assert_eq!(line(&mut pipe), "carried:through the link");
 
     // A home of the node's own (`HIDE_DEV_DEVICE_HOME`) takes the account's
     // place, made private where it was missing, and so do the per-user
-    // folders beside it, so neither the helper's kit nor a program in one of
-    // its panes writes the account's own.
+    // folders beside it, and none of the account's folders named apart from
+    // its home reaches the helper, so neither the helper's kit and state nor
+    // a program in one of its panes writes the account's own.
     let own = device.own_home();
     let mut pipe = device.connect();
     let facts = probe(&mut pipe, soon()).unwrap();
@@ -444,6 +536,7 @@ fn the_helper_starts_on_the_same_pipes_and_takes_no_herdr() {
     assert_eq!(line(&mut pipe), "cwd:own");
     assert_eq!(line(&mut pipe), "home:own");
     assert_eq!(line(&mut pipe), "folders:own");
+    assert_eq!(line(&mut pipe), "moved:");
     for folder in [
         own.clone(),
         own.join(r"AppData\Roaming"),
@@ -516,6 +609,58 @@ fn a_command_answers_its_status_and_output_and_the_next_step_follows() {
             .unwrap()
             .status,
         127
+    );
+    assert_eq!(
+        run(&mut pipe, &words(&["cmd.exe", "/c", "exit 0"]), 16, soon())
+            .unwrap()
+            .status,
+        0
+    );
+}
+
+/// A command that exits while a program it started keeps its outputs and
+/// writes past the cap is ended with that program too, so nothing it
+/// started outlives the refusal, and the connection stays in step.
+#[test]
+fn a_command_past_its_cap_is_ended_with_everything_it_started() {
+    let device = Device::new();
+    let writer = device.home().join("writer.ps1");
+    std::fs::write(
+        &writer,
+        "Set-Content -Encoding ascii -LiteralPath $args[0] -Value $PID; while ($true) { [Console]::Out.Write('y' * 4096) }",
+    )
+    .unwrap();
+    let pid_file = device.home().join("writer.pid");
+    let tree = device.home().join("tree.cmd");
+    std::fs::write(
+        &tree,
+        format!(
+            "@echo off\r\nstart /b \"\" \"{}\" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{}\" \"{}\"\r\nexit /b 0\r\n",
+            system32(r"WindowsPowerShell\v1.0\powershell.exe").display(),
+            writer.display(),
+            pid_file.display()
+        ),
+    )
+    .unwrap();
+    let mut pipe = device.connect();
+    probe(&mut pipe, soon()).unwrap();
+    assert!(matches!(
+        run(
+            &mut pipe,
+            &words(&["cmd.exe", "/c", tree.to_str().unwrap()]),
+            1024,
+            soon()
+        ),
+        Err(StepError::Refused(_))
+    ));
+    let pid: u32 = std::fs::read_to_string(&pid_file)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert!(
+        !hide_platform::process::is_alive(pid),
+        "the program the command started outlived the refusal"
     );
     assert_eq!(
         run(&mut pipe, &words(&["cmd.exe", "/c", "exit 0"]), 16, soon())

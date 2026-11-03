@@ -1013,6 +1013,26 @@ impl KitPlace {
     }
 }
 
+/// Every variable that moves a folder Hide or an agent keeps below the home
+/// somewhere else: Hide's state, the XDG base folders (the agents' config,
+/// OpenCode's database, the state Hide falls back to), the agents' own
+/// homes, and zsh's start files and history. A helper started with a home of
+/// the node's own (`HIDE_DEV_DEVICE_HOME`) starts with none of them, so
+/// whatever the account's environment names, every folder follows that home:
+/// hide-node's start scripts clear exactly these, and on Windows also move
+/// the per-user folders the system derives from the home.
+pub const HOME_FOLDER_VARIABLES: &[&str] = &[
+    "HIDE_STATE_DIR",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "XDG_STATE_HOME",
+    "XDG_CACHE_HOME",
+    "CODEX_HOME",
+    "CLAUDE_CONFIG_DIR",
+    "CURSOR_CONFIG_DIR",
+    "ZDOTDIR",
+];
+
 impl Env {
     pub fn of_process() -> Self {
         Self::of_variables(&|name| std::env::var_os(name))
@@ -1023,14 +1043,20 @@ impl Env {
     /// ([`hide_platform::host::home_dir_from`]: `HOME` on Unix, `USERPROFILE`
     /// on Windows), which a device's start step replaces with a home of the
     /// node's own, never another variable that still names the account's
-    /// (Windows OpenSSH sets `HOME` beside `USERPROFILE`).
+    /// (Windows OpenSSH sets `HOME` beside `USERPROFILE`); the state folder
+    /// is the one those variables choose below it.
     pub(crate) fn of_variables(variables: hide_platform::host::Variables) -> Self {
         hide_session::environment::initialize();
         let home = hide_platform::host::home_dir_from(variables).ok();
+        let text = |name: &str| variables(name).and_then(|value| value.into_string().ok());
         Self {
-            state: home
-                .as_deref()
-                .map(hide_kit::layout::state_dir_from_process),
+            state: home.as_deref().map(|home| {
+                hide_kit::layout::state_dir(
+                    home,
+                    text("HIDE_STATE_DIR").as_deref(),
+                    text("XDG_STATE_HOME").as_deref(),
+                )
+            }),
             home,
             kit: KitPlace::Installed,
             shell: crate::shell_integration::UserShell::of_process(),
