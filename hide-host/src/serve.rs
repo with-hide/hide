@@ -1588,6 +1588,40 @@ pub fn handle_with_progress(
             })?;
             to_value(hide_agent_hooks::Diagnosis::read(&home, &search))
         }
+        Call::HerdrSave => {
+            let home = env.home("HOME is not set, so this account has no Herdr save")?;
+            let found = crate::herdr_save::found(&home)
+                .map_err(|reason| HostError::new(ErrorCode::Io, reason))?;
+            to_value(found)
+        }
+        Call::HerdrStop { pid, started } => {
+            let home = env.home("HOME is not set, so this account has no Herdr to stop")?;
+            let place = crate::herdr_save::Place::of_account(&home)
+                .map_err(|reason| HostError::new(ErrorCode::Io, reason))?;
+            // Only the Hide Herdr `HerdrSave` found on that socket is ended,
+            // never a server that took its place since.
+            if crate::herdr_save::server(&place, &home)
+                != (crate::herdr_save::Server::Hide { pid, started })
+            {
+                return Err(HostError::new(
+                    ErrorCode::Conflict,
+                    "the Herdr on this account's socket is not the Hide Herdr that was found",
+                ));
+            }
+            // The node's log is its standard error, as its other lines.
+            let refused = |reason: &str| {
+                eprintln!(
+                    "{}",
+                    serde_json::json!({
+                        "component": "node", "kind": "herdr_save.stop_refused",
+                        "pid": pid, "reason": reason,
+                    })
+                );
+            };
+            crate::herdr_save::stop(&place.socket, pid, started, &refused)
+                .map_err(|reason| HostError::new(ErrorCode::Io, reason))?;
+            to_value(())
+        }
         Call::GuardrailPolicy { policy, sequence } => {
             // The last sequence written under each home, held across the
             // write so two writes in flight land in order.

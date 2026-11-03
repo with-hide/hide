@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
-use serde::{Deserialize, Serialize};
+pub use hide_node_link::herdr_save::{Fetched, Found, Server};
 
 /// The largest save read: an operator's session of 25 workspaces and 83
 /// panes took 51 KB on 2026-11-04, so this is far past any session and
@@ -42,22 +42,6 @@ impl Place {
             socket: config.join("herdr.sock"),
         })
     }
-}
-
-/// A save as read, with its length and last change, which tell a save Herdr
-/// wrote again (D-9).
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum Fetched {
-    /// No session was saved.
-    Missing,
-    Text {
-        text: String,
-        len: u64,
-        modified_ns: u64,
-    },
-    /// A session is there and could not be read: why, in one line.
-    Unreadable { reason: String },
 }
 
 /// Reads the save at `path`, at most [`READ_CAP`] bytes.
@@ -97,21 +81,6 @@ pub fn fetch(path: &Path) -> Fetched {
     }
 }
 
-/// Who runs the Herdr server on a place's socket.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum Server {
-    Stopped,
-    /// Hide's Herdr runs it, by the file it runs (D-5): a Hide package's
-    /// (also one renamed aside or in the Trash), a runtime copy's, or the
-    /// copy a device's helper pins, as the process `pid` that started at
-    /// `started`.
-    Hide { pid: u32, started: u64 },
-    /// Someone else's Herdr, or one whose program the system will not name:
-    /// read only, never stopped (D-8).
-    Other,
-}
-
 /// Who runs the Herdr server on `place`'s socket, for the account whose
 /// home is `home`.
 pub fn server(place: &Place, home: &Path) -> Server {
@@ -134,6 +103,18 @@ pub fn server(place: &Place, home: &Path) -> Server {
         Ok(started) if ours => Server::Hide { pid, started },
         _ => Server::Other,
     }
+}
+
+/// What this machine's node answers of the account whose home is `home`
+/// (`Call::HerdrSave`).
+pub fn found(home: &Path) -> Result<Found, String> {
+    let place = Place::of_account(home)?;
+    Ok(Found {
+        save: fetch(&place.session),
+        server: server(&place, home),
+        socket: hide_platform::path::to_wire(&place.socket)
+            .map_err(|error| format!("{}: {error}", place.socket.display()))?,
+    })
 }
 
 /// Stops the Herdr server `pid`, which started at `started`, on `socket`:
