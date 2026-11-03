@@ -462,6 +462,9 @@ It guards against hide's own bell, not against a process of the same account, wh
 
 Hide hands a running agent a spawn's brief or a letter's bell line through the agent's own way in when it has one, and types it only when it has none (`herdr-core/src/delivery/ladder.rs`).
 Each supported agent declares its rungs once, in `hide-agent-adapter` (`AgentAdapter::input`), from a fixed set of kinds, its own way in first and typing last; an agent with no way in of its own declares typing alone (`TYPED_ONLY`), and the adapter's contract test fails a declaration that does not end in typing, repeats a rung or names another agent's API.
+Every route expands a tab to four spaces before handing the text to the agent (`hide_agent_hooks::delivery::input_text`), the same rule the launch argument and prompt identity use.
+An editor's own tab width cannot then change the native record: omp 18.7.0's Windows editor replaced a pasted tab with three spaces, so a brief whose answer arrived still had no matching record.
+The original brief and its digest stay unchanged; a three-space record still fails to match, and neither a successful send nor an answer alone confirms intake.
 
 The first input a start brings, a spawn's brief, a task's first prompt or a promoted Memory card, follows one standard for every agent on every system:
 

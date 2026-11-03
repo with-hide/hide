@@ -171,6 +171,8 @@ impl Prepared {
         target: &InputTarget,
         text: &str,
     ) -> Delivered {
+        let text = hide_agent_hooks::delivery::input_text(text);
+        let text = text.as_ref();
         for step in self.steps {
             match step {
                 Step::Channel(channel) => {
@@ -379,6 +381,48 @@ mod tests {
             )]
         );
         assert!(typed(&herdr).is_empty(), "nothing is typed");
+    }
+
+    #[test]
+    fn typed_channel_and_fallback_send_the_same_tab_expansion() {
+        let brief = "@journey-missing-file.md names no file of this repository.\n\tIt needs no change.\n\nReply with exactly TOKEN";
+        let expected = "@journey-missing-file.md names no file of this repository.\n    It needs no change.\n\nReply with exactly TOKEN";
+        let herdr = herdr("ladder-tabs-typed");
+        let target = target("omp", None, None);
+        assert_eq!(
+            deliver(&herdr, &target, brief),
+            Delivered::Sent(SendRoute::Typed)
+        );
+        assert_eq!(
+            typed_only().deliver(herdr.engine().as_ref(), &target, brief),
+            Delivered::Sent(SendRoute::Typed)
+        );
+        assert_eq!(typed(&herdr), [json!(expected), json!(expected)]);
+
+        for answer in [
+            Delivery::Sent,
+            Delivery::Unavailable {
+                reason: "no_queue".into(),
+            },
+        ] {
+            let herdr = self::herdr("ladder-tabs-channel");
+            let sent = answer == Delivery::Sent;
+            let node = Node::answering(Ok(answer));
+            let target = self::target("codex", Some("thread-1"), Some(node.clone()));
+            assert_eq!(
+                deliver(&herdr, &target, brief),
+                Delivered::Sent(if sent {
+                    SendRoute::Channel
+                } else {
+                    SendRoute::Typed
+                })
+            );
+            assert_eq!(node.asked()[0].1, expected);
+            assert_eq!(
+                typed(&herdr),
+                if sent { vec![] } else { vec![json!(expected)] }
+            );
+        }
     }
 
     #[test]

@@ -87,6 +87,7 @@ pub(crate) const MAX_PROMPT_BYTES: usize = 64 * 1024;
 /// start event checks its prompt with this before anything is created, so a
 /// refused prompt leaves no tab or worktree behind; the worker encodes it.
 pub(crate) fn prompt_argument(prompt: &str) -> Result<String, String> {
+    let prompt = hide_agent_hooks::delivery::input_text(prompt);
     let mut argument = String::with_capacity(prompt.len());
     let mut chars = prompt.chars().peekable();
     while let Some(c) = chars.next() {
@@ -96,7 +97,6 @@ pub(crate) fn prompt_argument(prompt: &str) -> Result<String, String> {
                 argument.push('\u{2028}');
             }
             '\n' => argument.push('\u{2028}'),
-            '\t' => argument.push_str("    "),
             c if c.is_control() => {
                 return Err(format!(
                     "The first prompt has a control character (U+{:04X}) that cannot be passed to the agent; remove it and start again.",
@@ -118,6 +118,20 @@ pub(crate) fn prompt_argument(prompt: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_launched_prompt_uses_the_same_tab_width_as_typed_and_channel_input() {
+        let brief = "@missing.md\n\tIt needs no change.\n\nReply with exactly TOKEN";
+        let argument = prompt_argument(brief).unwrap();
+        assert_eq!(
+            argument,
+            "@missing.md\u{2028}    It needs no change.\u{2028}\u{2028}Reply with exactly TOKEN"
+        );
+        assert_eq!(
+            hide_agent_hooks::delivery::prompt_digest(&argument),
+            hide_agent_hooks::delivery::prompt_digest(brief)
+        );
+    }
 
     #[test]
     fn a_first_input_launches_only_where_the_agent_declares_it_and_the_journey_proves_it() {
