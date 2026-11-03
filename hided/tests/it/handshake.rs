@@ -16,6 +16,7 @@ fn test_env(keep_alive: bool) -> (tempfile::TempDir, Env) {
     let env = Env {
         home: dir.path().to_path_buf(),
         herdr_socket_path: None,
+        herdr_move_socket: None,
         herdr_bin_path: None,
         own_engine: false,
         login_shell: None,

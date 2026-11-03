@@ -9,7 +9,7 @@
 //! into an engine (D-7).
 
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use hide_node_link::herdr_save::{Found, Server as NodeServer};
@@ -24,10 +24,6 @@ const READ_WITHIN: Duration = Duration::from_secs(15);
 /// system's, each within `hide_host::herdr_save::STOP_WITHIN`, and the call.
 const STOP_WITHIN: Duration = Duration::from_secs(30);
 
-/// One look or move of a device's record at a time, as `hided` holds this
-/// machine's.
-static RECORD: Mutex<()> = Mutex::new(());
-
 /// A device whose Herdr session moves, on the link its engine opens on.
 pub(crate) struct Device {
     pub(crate) link: Arc<dyn NodeLink>,
@@ -39,12 +35,6 @@ pub(crate) struct Device {
     pub(crate) hide_used: bool,
     /// This machine's, whose restart starts the core role again.
     pub(crate) local: Arc<dyn Machine>,
-}
-
-fn held() -> std::sync::MutexGuard<'static, ()> {
-    RECORD
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 fn shown(server: NodeServer) -> Server {
@@ -68,9 +58,16 @@ impl Device {
             .map_err(|error| format!("the device did not say what its Herdr saved: {error}"))
     }
 
-    /// Commits the move, keeps the save it moves, and asks for it (D-27).
-    fn ask(&self, found: Found, resume: bool) -> Result<(), String> {
-        super::commit(&self.engine_dir)?;
+    /// Keeps the save the move takes and asks for it; `commit` marks it
+    /// committed first, when the start is to give Hide's registrations to
+    /// the engine (D-27). The move is made at the core's next start, before
+    /// any link to the device is up, so its server cannot be asked again
+    /// then: the save kept is one the node read with no Herdr running, and
+    /// only the core role's restart lies between them.
+    fn ask(&self, found: Found, resume: bool, commit: bool) -> Result<(), String> {
+        if commit {
+            super::commit(&self.engine_dir)?;
+        }
         super::keep_save(
             &self.engine_dir,
             &KeptSave {
@@ -85,7 +82,6 @@ impl Device {
     /// again with it: Hide's own session that no server runs on the device
     /// moves without asking, once (B1, B18), before its engine opens.
     pub(crate) fn look_first(&self) -> (Seen, bool) {
-        let _held = held();
         let found = match self.found() {
             Ok(found) => found,
             Err(reason) => {
@@ -108,7 +104,7 @@ impl Device {
             && self.hide_used
             && !super::committed(&self.engine_dir)
         {
-            match self.ask(found, true) {
+            match self.ask(found, true, true) {
                 Ok(()) => {
                     self.local.restart();
                     return (Seen::default(), true);
@@ -152,15 +148,18 @@ impl Device {
                     super::not_stopped(&self.engine_dir)?;
                     return Ok(Taken::NotStopped);
                 }
-                // The save Herdr wrote as it stopped is the one that moves.
-                (true, self.found()?)
+                // The save Herdr wrote as it stopped is the one that moves;
+                // a Herdr started again since keeps its conversations (D-8).
+                let after = self.found()?;
+                (after.server == NodeServer::Stopped, after)
             }
             // An import stops nothing: the conversations of a Herdr that
             // runs on wait until it no longer does (D-8, B15).
             (_, NodeServer::Stopped) => (true, found),
             (Take::Import, NodeServer::Hide { .. } | NodeServer::Other) => (false, found),
         };
-        self.ask(found, resume)?;
+        let commit = matches!(take, Take::Move) || self.hide_used;
+        self.ask(found, resume, commit)?;
         self.local.restart();
         Ok(Taken::Restarting)
     }
@@ -175,12 +174,10 @@ impl Machine for Device {
     /// moved (B18): Hide's Herdr on it is stopped first, by the node's code
     /// this machine's daemon runs, the same on every system.
     fn take(&self, take: Take) -> Taken {
-        let _held = held();
         self.take_or_fail(take).unwrap_or_else(Taken::Failed)
     }
 
     fn dismiss(&self) {
-        let _held = held();
         if let Err(reason) = super::dismiss(&self.engine_dir) {
             refused(self, &reason);
         }
@@ -194,6 +191,7 @@ impl Machine for Device {
 #[cfg(test)]
 mod tests {
     use std::path::Path;
+    use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
@@ -394,6 +392,31 @@ mod tests {
         assert_eq!(kept_save(&device.engine_dir).unwrap(), None);
         assert_eq!(device.take(Take::Import), Taken::Restarting);
         assert_eq!(node.stops.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            asked(&device.engine_dir).unwrap(),
+            Some(Asked { resume: false })
+        );
+        // A read-only import of a save Hide never used commits nothing (D-27).
+        assert!(!committed(&device.engine_dir));
+    }
+
+    // D-8: a Herdr started on the device again between the stop and the
+    // save read after it keeps its conversations: they wait, not open twice.
+    #[test]
+    fn a_device_herdr_started_again_after_the_stop_keeps_its_conversations() {
+        let dir = tempfile::tempdir().unwrap();
+        let running = NodeServer::Hide { pid: 7, started: 9 };
+        let again = NodeServer::Hide {
+            pid: 8,
+            started: 10,
+        };
+        let (device, _, _) = device(
+            dir.path(),
+            vec![found(running, 1), found(again, 2)],
+            false,
+            true,
+        );
+        assert_eq!(device.take(Take::Move), Taken::Restarting);
         assert_eq!(
             asked(&device.engine_dir).unwrap(),
             Some(Asked { resume: false })

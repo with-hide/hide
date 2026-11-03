@@ -14,26 +14,18 @@
 //! engine opens it moves the asked workspaces, gives their panes' Hide state
 //! to the engine, and records what of the save is not moved yet.
 //!
-//! Every step of the record runs under one lock in this process: the start,
-//! the unasked move and the core's looks and moves read and write the same
-//! record.
+//! The start, the unasked move and the core's looks and moves read and
+//! write the same record; each change is made under the record's own lock
+//! (`herdr_core::herdr_import`).
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 
 use herdr_core::herdr_import::{self, Asked, Look, Seen, Take, Taken};
 use hide_host::herdr_save;
 use serde_json::json;
 
 use crate::env::Env;
-
-static RECORD: Mutex<()> = Mutex::new(());
-
-fn hold_record() -> MutexGuard<'static, ()> {
-    RECORD
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
 
 /// This machine's default Herdr session and the engine it moves into.
 pub(crate) struct Place {
@@ -44,14 +36,21 @@ pub(crate) struct Place {
 
 impl Place {
     /// The place of `env`'s machine, when its core runs its own engine
-    /// (`herdr_save::Place`).
+    /// (`herdr_save::Place`): the socket `HERDR_SOCKET_PATH` names, which
+    /// Hide's Herdr ran on, else the account's default one.
     pub(crate) fn of(env: &Env) -> Option<Self> {
         if !env.own_engine {
             return None;
         }
+        let mut save = herdr_save::Place::of_account(&env.home)
+            .map_err(|reason| log("herdr_transition.unplaced", json!({ "reason": reason })))
+            .ok()?;
+        if let Some(socket) = &env.herdr_move_socket {
+            socket.clone_into(&mut save.socket);
+        }
         Some(Self {
             engine_dir: hide_kit::layout::engine_dir(&env.state_dir),
-            save: herdr_save::Place::of_account(&env.home).ok()?,
+            save,
             home: env.home.clone(),
         })
     }
@@ -97,7 +96,6 @@ fn devices_before_core(state_dir: &Path) {
             continue;
         };
         let engine_dir = entry.path();
-        let _held = hold_record();
         // The kept save goes once its panes' state is given, so a start cut
         // short after the import gives it on the next.
         let given = (|| {
@@ -139,10 +137,17 @@ fn devices_before_core(state_dir: &Path) {
 }
 
 fn before_core_at(place: &Place, state_dir: &Path, node: &str) -> Look {
-    let _held = hold_record();
     let look = (|| {
         let look = match herdr_import::asked(&place.engine_dir)? {
-            Some(asked) => {
+            Some(mut asked) => {
+                // A Herdr started again since the move was asked has its
+                // conversations open: they wait rather than open twice (D-8).
+                if asked.resume
+                    && herdr_save::server(&place.save, &place.home) != herdr_save::Server::Stopped
+                {
+                    log("herdr_transition.resume_withheld", json!({}));
+                    asked.resume = false;
+                }
                 let outcome = herdr_import::import(&place.engine_dir, &place.fetch(), asked)?;
                 log("herdr_transition.moved", json!({ "outcome": outcome }));
                 herdr_import::look(&place.engine_dir, &place.fetch())?
@@ -227,7 +232,6 @@ fn after_ready_at(
     let Look::Offer(offer) = look else {
         return false;
     };
-    let _held = hold_record();
     // Only the first move goes unasked: a save Herdr wrote after one is
     // offered on the screen (D-9), and a move that failed is not made again
     // at every start.
@@ -240,7 +244,7 @@ fn after_ready_at(
         "herdr_transition.move_unasked",
         json!({ "workspaces": offer.workspaces, "agents": offer.agents }),
     );
-    if let Err(reason) = ask(place, true) {
+    if let Err(reason) = ask(place, true, true) {
         log("herdr_transition.refused", json!({ "reason": reason }));
         return false;
     }
@@ -248,10 +252,14 @@ fn after_ready_at(
     true
 }
 
-/// Commits the move, before its first step that cannot be undone (D-27),
-/// and asks for it, for the core's next start.
-fn ask(place: &Place, resume: bool) -> Result<(), String> {
-    herdr_import::commit(&place.engine_dir)?;
+/// Asks for the move, for the core's next start; `commit` marks it
+/// committed first, when the start is to give Hide's registrations to the
+/// engine, a step that cannot be undone (D-27). A read-only import of a save
+/// Hide never used commits nothing, so a failed update may still go back.
+fn ask(place: &Place, resume: bool, commit: bool) -> Result<(), String> {
+    if commit {
+        herdr_import::commit(&place.engine_dir)?;
+    }
     herdr_import::ask(&place.engine_dir, Asked { resume })
 }
 
@@ -274,7 +282,12 @@ impl LocalMachine {
     }
 
     fn take_at(&self, place: &Place, take: Take) -> Result<Taken, String> {
-        let resume = match (take, server(place, &self.state_dir)) {
+        let server = server(place, &self.state_dir);
+        // The start gives registrations to the engine only when Hide made
+        // some on that socket; a move commits before it stops Hide's Herdr.
+        let commit = matches!(take, Take::Move)
+            || herdr_import::hide_used(&self.state_dir, &place.save.socket.to_string_lossy());
+        let resume = match (take, server) {
             (Take::Move, Server::Other) => {
                 return Ok(Taken::Failed(
                     "the Herdr on this machine's socket is not Hide's".to_owned(),
@@ -303,10 +316,10 @@ impl LocalMachine {
             (_, Server::Stopped { .. }) => true,
             (Take::Import, Server::Hide { .. } | Server::Other) => false,
         };
-        ask(place, resume)?;
+        ask(place, resume, commit)?;
         log(
             "herdr_transition.asked",
-            json!({ "take": format!("{take:?}"), "resume": resume }),
+            json!({ "take": format!("{take:?}"), "resume": resume, "committed": commit }),
         );
         self.restart.notify_one();
         Ok(Taken::Restarting)
@@ -318,7 +331,6 @@ impl herdr_import::Machine for LocalMachine {
         let Some(place) = &self.place else {
             return Seen::default();
         };
-        let _held = hold_record();
         let server = server(place, &self.state_dir);
         let look = herdr_import::look(&place.engine_dir, &place.fetch()).unwrap_or_else(|reason| {
             log("herdr_transition.refused", json!({ "reason": reason }));
@@ -350,7 +362,6 @@ impl herdr_import::Machine for LocalMachine {
         let Some(place) = &self.place else {
             return Taken::Failed("this core runs no engine of its own".to_owned());
         };
-        let _held = hold_record();
         self.take_at(place, take).unwrap_or_else(Taken::Failed)
     }
 
@@ -358,7 +369,6 @@ impl herdr_import::Machine for LocalMachine {
         let Some(place) = &self.place else {
             return;
         };
-        let _held = hold_record();
         if let Err(reason) = herdr_import::dismiss(&place.engine_dir) {
             log("herdr_transition.refused", json!({ "reason": reason }));
         }
@@ -506,6 +516,47 @@ mod tests {
         ));
     }
 
+    // D-8: a Herdr started again on the socket after the move was asked
+    // keeps its conversations: the start imports them waiting, not opened
+    // in two places.
+    #[test]
+    fn a_herdr_started_again_before_the_start_keeps_its_conversations_waiting() {
+        let dir = tempfile::tempdir().unwrap();
+        let (place, state) = place(dir.path());
+        herdr_import::ask(&place.engine_dir, Asked { resume: true }).unwrap();
+        let _herdr = hide_platform::ipc::LocalListener::bind(&place.save.socket).unwrap();
+        let look = before_core_at(&place, &state, "mac");
+        assert!(
+            matches!(
+                look,
+                Look::Offer(herdr_import::Offer {
+                    workspaces: 0,
+                    waiting: 1,
+                    ..
+                })
+            ),
+            "{look:?}"
+        );
+    }
+
+    // D-5: the move reads Hide's Herdr on the socket `HERDR_SOCKET_PATH`
+    // names, where Hide's registrations were made, not the default one.
+    #[test]
+    fn the_move_reads_the_named_herdr_socket() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let named = dir.path().join("named.sock");
+        let env = crate::env::load_from(|key| match key {
+            "HOME" | "USERPROFILE" => Some(home.to_string_lossy().into_owned()),
+            "HIDE_STATE_DIR" => Some(dir.path().join("state").to_string_lossy().into_owned()),
+            "HIDE_DEV_PANE_HOLDER" => Some("1".to_owned()),
+            "HERDR_SOCKET_PATH" => Some(named.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .unwrap();
+        assert_eq!(Place::of(&env).unwrap().save.socket, named);
+    }
+
     fn told(restart: &tokio::sync::Notify) -> bool {
         restart.notified().now_or_never().is_some()
     }
@@ -574,6 +625,11 @@ mod tests {
         );
         assert_eq!(machine.take(Take::Import), Taken::Restarting);
         assert!(told(&restart));
+        // A read-only import of a save Hide never used commits nothing, so a
+        // failed update may still go back (D-27).
+        assert!(!herdr_import::committed(
+            &machine.place.as_ref().unwrap().engine_dir
+        ));
         let place = machine.place.as_ref().unwrap();
         assert_eq!(before_core_at(place, &state, "mac"), Look::Nothing);
         assert_eq!(machine.look().look, Look::Nothing);
