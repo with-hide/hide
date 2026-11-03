@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-// PRD engine-bundle-4-herdr-removal B2 to B5, B11, B16: the question while Hide's own Herdr runs, the sidebar's line
-// and Settings' import, drawn from the core's `status.herdr_import`.
+// PRD engine-bundle-4-herdr-removal B2 to B5, B11, B16, B18: the question while Hide's own Herdr runs, the sidebar's
+// line and Settings' import, drawn from the core's `status.herdr_import` and, per device, `status.herdr_import_devices`.
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
@@ -35,7 +35,7 @@ const button = (selector: string) => document.querySelector(selector) as HTMLBut
 
 let unmounts: (() => Promise<void>)[] = [];
 
-async function mount(shown: HerdrImport | null) {
+async function mount(shown: HerdrImport | null, devices: HerdrImport[] = [], named: { id: string; label: string }[] = []) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} unobserve() {} });
   const events: Parameters<DispatchFn>[0][] = [];
@@ -45,7 +45,11 @@ async function mount(shown: HerdrImport | null) {
   const root = createRoot(container);
   const saved = useShellStore.getState();
   await act(async () => {
-    useShellStore.setState({ connection: "live", revision: 1, rest: { status: { herdr_import: shown } } } as never);
+    useShellStore.setState({
+      connection: "live",
+      revision: 1,
+      rest: { status: { herdr_import: shown, herdr_import_devices: devices }, navigator: { devices: named } },
+    } as never);
     root.render(
       <TooltipProvider>
         <HerdrImportQuestion actions={actions} />
@@ -133,4 +137,23 @@ it("offers to resume the conversations an import left open once their Herdr clos
 it("draws nothing while there is no save", async () => {
   await mount(null);
   expect(document.querySelector("[data-herdr-import-question], [data-herdr-import-line], [data-herdr-import-settings]")).toBeNull();
+});
+
+it("asks about a device's running Hide Herdr under its name, and its answers are that device's", async () => {
+  const events = await mount(null, [found({ device: "d1" })], [{ id: "d1", label: "Studio" }]);
+  expect(document.querySelector("[data-herdr-import-question]")?.textContent).toContain("Herdr on Studio is running 3 tabs and 2 agents");
+  await act(async () => button("[data-herdr-import-later]")!.click());
+  const line = document.querySelector('[data-herdr-import-line="move"][data-herdr-import-device="d1"]');
+  expect(line?.textContent).toContain("Studio");
+  await act(async () => button("[data-herdr-import-ask]")!.click());
+  await act(async () => button("[data-herdr-import-move]")!.click());
+  expect(sent(events)).toEqual([{ action: "move", device: "d1" }]);
+});
+
+it("puts off this machine's question alone, and asks a device's after it", async () => {
+  await mount(found(), [found({ device: "d1", agents: 0 })], [{ id: "d1", label: "Studio" }]);
+  expect(document.querySelector("[data-herdr-import-question]")?.getAttribute("data-herdr-import-device")).toBeNull();
+  await act(async () => button("[data-herdr-import-later]")!.click());
+  expect(document.querySelector("[data-herdr-import-question]")?.textContent).toContain("Herdr on Studio is running 3 tabs");
+  expect(document.querySelectorAll('[data-herdr-import-line="move"]')).toHaveLength(1);
 });

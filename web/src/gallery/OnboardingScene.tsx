@@ -124,6 +124,7 @@ export const ONBOARDING_STATES = [
   "import-unreadable",
   "import-refused",
   "import-waiting",
+  "import-device",
 ] as const;
 
 export type OnboardingState = (typeof ONBOARDING_STATES)[number];
@@ -284,7 +285,7 @@ function sceneHost(system: OnboardingSystem, permission: NotificationPermission,
  * decision 2026-10-23): the move the core started on its own, its failure, its result with the terminal's `herdr`, a
  * restart, a look that could not read the server, a newer Herdr, and a mismatch the core offers nothing for.
  */
-function sceneHerdr(state: OnboardingState): { herdr: Record<string, unknown>; herdr_takeover?: HerdrTakeover; herdr_import?: HerdrImport; herdr_versions: Record<string, unknown> } {
+function sceneHerdr(state: OnboardingState): { herdr: Record<string, unknown>; herdr_takeover?: HerdrTakeover; herdr_import?: HerdrImport; herdr_import_devices?: HerdrImport[]; herdr_versions: Record<string, unknown> } {
   const offer = (patch: Partial<HerdrTakeover>): HerdrTakeover => ({ kind: "move", stage: "moving", server_version: "0.8.2", version: "0.9.5", same_protocol: false, failure: null, path_herdr: null, ...patch });
   const older = { state: "protocol_mismatch", received_version: "0.8.2", received_protocol: 20, expected_protocol: 22 };
   const versions = { hide: "0.9.5", path_herdr: { version: "0.8.2", behind: true, update_command: "sudo install -m 755 '/Applications/hide.app/Contents/Resources/herdr' '/usr/local/bin/herdr'" } };
@@ -298,6 +299,7 @@ function sceneHerdr(state: OnboardingState): { herdr: Record<string, unknown>; h
     case "herdr-look": return { herdr: { state: "malformed" }, herdr_takeover: offer({ kind: "look", stage: "failed", failure: "unreadable", server_version: "", version: "" }), herdr_versions: versions };
     case "gate-newer": return { herdr: { state: "protocol_mismatch", received_version: "0.10.0", received_protocol: 23, expected_protocol: 22 }, herdr_takeover: offer({ kind: "update_hide", stage: "offered", server_version: "0.10.0" }), herdr_versions: versions };
     case "gate-mismatch": return { herdr: older, herdr_versions: versions };
+    case "import-device": return { herdr: connected, herdr_import_devices: [{ ...sceneHerdrImport("import-ask")!, tabs: 2, agents: 1, device: "build" }], herdr_versions: versions };
     default: return { herdr: connected, herdr_import: sceneHerdrImport(state), herdr_versions: versions };
   }
 }
@@ -306,7 +308,8 @@ function sceneHerdr(state: OnboardingState): { herdr: Record<string, unknown>; h
  * This machine's Herdr save as the core offers it for the `import-*` states (PRD engine-bundle-4-herdr-removal B2 to
  * B5, B11, B14 to B16): the question while Hide's Herdr runs, its move, a Herdr that would not stop, the line it was put
  * off to, a save to import read only, a save that could not be read, workspaces a move left out, and conversations
- * waiting for their Herdr to close. The refusal reasons are the converter's own.
+ * waiting for their Herdr to close; `import-device` asks the same question about a device's Herdr under its name (B18).
+ * The refusal reasons are the converter's own.
  */
 function sceneHerdrImport(state: OnboardingState): HerdrImport | undefined {
   const found = (patch: Partial<HerdrImport>): HerdrImport => ({ kind: "move", stage: "offered", workspaces: 3, tabs: 5, agents: 4, waiting: 0, herdr_running: true, failure: null, reason: null, refused: [], ...patch });
@@ -361,7 +364,7 @@ function sceneRest(state: OnboardingState, system: OnboardingSystem): SnapshotRe
       workspaces: projects,
       inactive_projects: [],
       agents: [],
-      devices: [{ agent_scope: EMPTY_GALLERY_SCOPE, id: "local", label: "This Mac", kind: "local", state: "local", message: null, ssh_alias: null, agent_count: 0, test: null, kit }, ...(state === "devices-partial" ? [{ agent_scope: EMPTY_GALLERY_SCOPE, id: "build", label: "Build server", kind: "remote", state: "connected", message: null, ssh_alias: "build", agent_count: 0, test: null, kit }] : []), ...sshDevices(state, kit)],
+      devices: [{ agent_scope: EMPTY_GALLERY_SCOPE, id: "local", label: "This Mac", kind: "local", state: "local", message: null, ssh_alias: null, agent_count: 0, test: null, kit }, ...(state === "devices-partial" || state === "import-device" ? [{ agent_scope: EMPTY_GALLERY_SCOPE, id: "build", label: "Build server", kind: "remote", state: "connected", message: null, ssh_alias: "build", agent_count: 0, test: null, kit }] : []), ...sshDevices(state, kit)],
       focused_device_id: "local",
       focused_checkout_id: null,
     },

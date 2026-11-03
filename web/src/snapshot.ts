@@ -2190,6 +2190,8 @@ export type HerdrImport = {
   failure: "not_stopped" | "unreadable" | null;
   reason: string | null;
   refused: { label: string; reason: string }[];
+  /** The device whose save this is; absent for this machine's (B18). */
+  device?: string;
 };
 
 /**
@@ -3288,6 +3290,8 @@ export type SnapshotRest = {
     herdr_takeover?: HerdrTakeover | null;
     /** What this machine's Herdr save offers to move into Hide's own engine; absent when nothing (B11). */
     herdr_import?: HerdrImport | null;
+    /** What each device of Hide's own engine offers, each naming its `device` (B18). */
+    herdr_import_devices?: HerdrImport[];
     herdr_versions?: HerdrVersions | null;
     remote?: RemoteStatus[];
     environment?: EnvironmentStatus[];

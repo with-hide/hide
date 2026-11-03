@@ -8,6 +8,8 @@ import type { Catalog, Catalogs } from "../schema";
 export const herdrImportEnglish = {
   "herdrImport.ask.title": "Herdr is running {{tabs}} tabs and {{agents}} agents",
   "herdrImport.ask.titleNoAgents": "Herdr is running {{tabs}} tabs",
+  "herdrImport.ask.deviceTitle": "Herdr on {{device}} is running {{tabs}} tabs and {{agents}} agents",
+  "herdrImport.ask.deviceTitleNoAgents": "Herdr on {{device}} is running {{tabs}} tabs",
   "herdrImport.ask.description": "Moving ends the commands running in them, and the agents reopen where their conversations left off.",
   "herdrImport.ask.move": "Move {{count}} agents",
   "herdrImport.ask.moveTabs": "Move {{count}} tabs",
@@ -28,6 +30,7 @@ export const herdrImportEnglish = {
   "herdrImport.line.waiting": "Herdr closed: {{count}} conversations can resume here",
   "herdrImport.line.waitingAction": "Resume",
   "herdrImport.import.title": "Import Herdr work",
+  "herdrImport.import.deviceTitle": "Import Herdr work from {{device}}",
   "herdrImport.import.note": "{{count}} tabs open with the same layout and folders. Herdr is left as it is.",
   "herdrImport.import.button": "Import",
 } as const;
@@ -35,6 +38,8 @@ export const herdrImportEnglish = {
 const ko = {
   "herdrImport.ask.title": "Herdr에서 탭 {{tabs}}개, 에이전트 {{agents}}개가 돌고 있어요",
   "herdrImport.ask.titleNoAgents": "Herdr에서 탭 {{tabs}}개가 돌고 있어요",
+  "herdrImport.ask.deviceTitle": "{{device}}의 Herdr에서 탭 {{tabs}}개, 에이전트 {{agents}}개가 돌고 있어요",
+  "herdrImport.ask.deviceTitleNoAgents": "{{device}}의 Herdr에서 탭 {{tabs}}개가 돌고 있어요",
   "herdrImport.ask.description": "옮기면 그 안에서 돌던 명령은 끝나고, 에이전트는 대화를 이어 다시 열려요.",
   "herdrImport.ask.move": "에이전트 {{count}}개 옮기기",
   "herdrImport.ask.moveTabs": "탭 {{count}}개 옮기기",
@@ -55,6 +60,7 @@ const ko = {
   "herdrImport.line.waiting": "Herdr가 닫혀서 대화 {{count}}개를 여기서 이어 갈 수 있어요",
   "herdrImport.line.waitingAction": "이어 가기",
   "herdrImport.import.title": "Herdr 작업 가져오기",
+  "herdrImport.import.deviceTitle": "{{device}}의 Herdr 작업 가져오기",
   "herdrImport.import.note": "탭 {{count}}개가 같은 배치와 폴더로 열려요. Herdr는 그대로 둬요.",
   "herdrImport.import.button": "가져오기",
 } satisfies Catalog<typeof herdrImportEnglish>;
@@ -62,6 +68,8 @@ const ko = {
 const zhCN = {
   "herdrImport.ask.title": "Herdr 正在运行 {{tabs}} 个标签页和 {{agents}} 个智能体",
   "herdrImport.ask.titleNoAgents": "Herdr 正在运行 {{tabs}} 个标签页",
+  "herdrImport.ask.deviceTitle": "{{device}} 上的 Herdr 正在运行 {{tabs}} 个标签页和 {{agents}} 个智能体",
+  "herdrImport.ask.deviceTitleNoAgents": "{{device}} 上的 Herdr 正在运行 {{tabs}} 个标签页",
   "herdrImport.ask.description": "迁移会结束其中正在运行的命令，智能体会接着原来的对话重新打开。",
   "herdrImport.ask.move": "迁移 {{count}} 个智能体",
   "herdrImport.ask.moveTabs": "迁移 {{count}} 个标签页",
@@ -82,6 +90,7 @@ const zhCN = {
   "herdrImport.line.waiting": "Herdr 已关闭：{{count}} 个对话可以在这里继续",
   "herdrImport.line.waitingAction": "继续",
   "herdrImport.import.title": "导入 Herdr 工作",
+  "herdrImport.import.deviceTitle": "导入 {{device}} 上的 Herdr 工作",
   "herdrImport.import.note": "{{count}} 个标签页会以相同的布局和文件夹打开。Herdr 保持不变。",
   "herdrImport.import.button": "导入",
 } satisfies Catalog<typeof herdrImportEnglish>;
@@ -89,6 +98,8 @@ const zhCN = {
 const ja = {
   "herdrImport.ask.title": "Herdr でタブ {{tabs}} 個、エージェント {{agents}} 個が動いています",
   "herdrImport.ask.titleNoAgents": "Herdr でタブ {{tabs}} 個が動いています",
+  "herdrImport.ask.deviceTitle": "{{device}} の Herdr でタブ {{tabs}} 個、エージェント {{agents}} 個が動いています",
+  "herdrImport.ask.deviceTitleNoAgents": "{{device}} の Herdr でタブ {{tabs}} 個が動いています",
   "herdrImport.ask.description": "移すと、その中で動いていたコマンドは終わり、エージェントは会話の続きから開き直します。",
   "herdrImport.ask.move": "エージェント {{count}} 個を移す",
   "herdrImport.ask.moveTabs": "タブ {{count}} 個を移す",
@@ -109,6 +120,7 @@ const ja = {
   "herdrImport.line.waiting": "Herdr が閉じたので、{{count}} 件の会話をここで再開できます",
   "herdrImport.line.waitingAction": "再開",
   "herdrImport.import.title": "Herdr の作業を取り込む",
+  "herdrImport.import.deviceTitle": "{{device}} の Herdr の作業を取り込む",
   "herdrImport.import.note": "タブ {{count}} 個が同じ配置とフォルダーで開きます。Herdr はそのままです。",
   "herdrImport.import.button": "取り込む",
 } satisfies Catalog<typeof herdrImportEnglish>;
