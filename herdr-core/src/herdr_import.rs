@@ -18,7 +18,7 @@
 //! move at a reboot, at the update, later, or for a read-only import (D-7),
 //! so nothing else writes the engine's session then.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
@@ -79,7 +79,7 @@ pub(crate) enum Found {
 #[serde(deny_unknown_fields)]
 pub(crate) struct Stamp {
     pub(crate) len: u64,
-    pub(crate) modified_ns: u128,
+    pub(crate) modified_ns: u64,
 }
 
 /// A move the operator asked for.
@@ -325,7 +325,7 @@ fn stamp(path: &Path) -> Stamp {
             .modified()
             .ok()
             .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-            .map_or(0, |since| since.as_nanos()),
+            .map_or(0, |since| u64::try_from(since.as_nanos()).unwrap_or(u64::MAX)),
     })
 }
 
@@ -435,6 +435,122 @@ pub fn import(engine_dir: &Path, herdr_session: &Path, asked: Asked) -> Result<O
     record.outcome = Some(outcome.clone());
     write(engine_dir, &record)?;
     Ok(outcome)
+}
+
+/// Gives the Hide state of the panes of the moved workspaces `moved` to the
+/// engine whose folder is `engine_dir` (D-4), in the state folder
+/// `state_dir` of the machine `node`, the core move's way
+/// (`node_migration/reown.rs`): each registration of this machine whose
+/// host scope is the Herdr socket `herdr_socket` and whose pane is in a
+/// moved workspace is scoped to the engine, and its Herdr terminal id
+/// becomes its pane's id, the engine's terminal id, in the registration and
+/// in each View opener that named it. Everything else Hide keeps of a pane
+/// is keyed by the pane, tab or workspace id the move keeps, or by the
+/// agent's session. A registration already given is left as it is, so a
+/// start that runs it again changes nothing (principle #11). It runs before
+/// the core starts, which owns both files once it runs. How many
+/// registrations it gave.
+pub fn adopt(
+    state_dir: &Path,
+    node: &str,
+    herdr_socket: &str,
+    engine_dir: &Path,
+    moved: &BTreeSet<String>,
+) -> Result<usize, String> {
+    let ledger_path = hide_kit::layout::delivery_ledger(state_dir);
+    if !ledger_path.exists() {
+        return Ok(0);
+    }
+    let mut ledger = crate::delivery::ledger::load(&ledger_path)
+        .map_err(|reason| format!("the delivery ledger could not be read: {reason}"))?;
+    let engine_scope = engine_dir.to_string_lossy().into_owned();
+    let mut terminals = BTreeMap::new();
+    let mut given = 0;
+    for record in &mut ledger.agents {
+        if record.machine != node
+            || record.host_scope != herdr_socket
+            || !moved.contains(workspace_of(&record.pane))
+        {
+            continue;
+        }
+        record.host_scope.clone_from(&engine_scope);
+        for terminal in std::iter::once(&record.instance).chain(record.terminal_id.as_ref()) {
+            if *terminal != record.pane {
+                terminals.insert(terminal.clone(), record.pane.clone());
+            }
+        }
+        record.instance.clone_from(&record.pane);
+        if record.terminal_id.is_some() {
+            record.terminal_id = Some(record.pane.clone());
+        }
+        given += 1;
+    }
+    if given == 0 {
+        return Ok(0);
+    }
+    // The Views first: a start cut short before the ledger is written finds
+    // its registrations still Herdr's and maps their openers again.
+    let views_path = state_dir.join(crate::node_migration::WORKSPACE_VIEWS);
+    if let Some(mut views) = crate::node_migration::read_json(&views_path)
+        .map_err(|error| format!("{} could not be read: {error}", views_path.display()))?
+        && rename_openers(&mut views, node, &terminals)
+    {
+        let bytes = serde_json::to_vec(&views)
+            .map_err(|error| format!("the Views could not be written out: {error}"))?;
+        crate::node_migration::write(&views_path, &bytes)
+            .map_err(|error| format!("{} could not be replaced: {error}", views_path.display()))?;
+    }
+    crate::delivery::ledger::save(&ledger_path, &ledger)
+        .map_err(|error| format!("the delivery ledger could not be written: {error}"))?;
+    Ok(given)
+}
+
+/// The workspace part of a pane, tab or workspace id.
+fn workspace_of(id: &str) -> &str {
+    id.split_once(':').map_or(id, |(workspace, _)| workspace)
+}
+
+/// Renames, at any depth of `value`, the terminal of each View opener on
+/// `node` that `terminals` maps; whether any moved.
+fn rename_openers(
+    value: &mut serde_json::Value,
+    node: &str,
+    terminals: &BTreeMap<String, String>,
+) -> bool {
+    use serde_json::Value;
+    let rename = |opener: &mut Value| {
+        if opener.get("device_id").and_then(Value::as_str) != Some(node) {
+            return false;
+        }
+        let Some(pane) = opener
+            .get("terminal_id")
+            .and_then(Value::as_str)
+            .and_then(|terminal| terminals.get(terminal))
+        else {
+            return false;
+        };
+        opener["terminal_id"] = Value::String(pane.clone());
+        true
+    };
+    match value {
+        Value::Object(map) => {
+            let mut changed = false;
+            for (key, entry) in map.iter_mut() {
+                changed |= match (key.as_str(), entry) {
+                    ("opener", opener @ Value::Object(_)) => rename(opener),
+                    ("openers", Value::Array(openers)) => openers
+                        .iter_mut()
+                        .fold(false, |changed, opener| rename(opener) | changed),
+                    (_, entry) => rename_openers(entry, node, terminals),
+                };
+            }
+            changed
+        }
+        Value::Array(items) => items
+            .iter_mut()
+            .fold(false, |changed, item| rename_openers(item, node, terminals) | changed),
+        _ => false,
+    }
 }
 
 #[cfg(test)]

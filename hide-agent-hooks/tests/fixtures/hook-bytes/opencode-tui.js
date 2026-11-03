@@ -1,4 +1,4 @@
-// hide-opencode-tui@3 sha256=e648c2463551887de231e8adff533e328325bd3a2349cb54becdc4caef7436bc
+// hide-opencode-tui@4 sha256=b570e64d7209200a272feff8f2302e18a83736743687949641b7cfc21a749dea
 // Hide's OpenCode 2 plugin, its TUI half, written by Hide's install kit (hide-agent-hooks).
 // An edit is kept and shown as edited in Settings; Reinstall puts Hide's back.
 // It runs in the terminal, so in a Herdr pane it is that pane: it attaches to the root session the pane shows,
@@ -194,6 +194,8 @@ function setup(api) {
     state.turn = null;
     place = root ? api.data.session.get(root)?.location : undefined;
     attach(false);
+    // The session the pane now shows is its session, so letters and the inbox reach it before its first turn.
+    if (root) void helper(state, "session", { session_id: root }, COUNT_BUDGET_MS, state.pane);
     void publishCounts(state, api, true);
   };
   const offAsk = rpc.events.on("ask", (event) => {

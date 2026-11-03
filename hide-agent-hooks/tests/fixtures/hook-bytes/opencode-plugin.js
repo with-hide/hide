@@ -1,4 +1,4 @@
-// hide-opencode-plugin@12 sha256=887dac2f496e336a68b6fd13025116e0e6edbb8841c719b49ceefe640f4ea1ee
+// hide-opencode-plugin@13 sha256=d673546ef45b68ca5b946e875cec31bbdf8c3bf248215bd0ea5cfdbb29ef6263
 // Hide's OpenCode 1.x plugin, written by Hide's install kit (hide-agent-hooks).
 // An edit is kept and shown as edited in Settings; Reinstall puts Hide's back.
 // Outside a Herdr pane Hide manages, or when its helper is gone, it does nothing.
@@ -379,6 +379,8 @@ async function onEvent(state, client, event) {
     remember(state, state.parents, info.id, info.parentID ?? null, parentEviction(state));
     // A child still running is never forgotten: it would leave the working count while it works.
     if (info.parentID) remember(state, state.children, info.id, { busy: false, ran: false }, [(child) => !child.busy]);
+    // A new root session is the pane's from its start, so letters and the inbox reach it before its first turn.
+    else await helper(state, "session", { session_id: info.id }, COUNT_BUDGET_MS);
     return;
   }
   if (type === "session.status") {

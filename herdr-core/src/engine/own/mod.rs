@@ -3503,10 +3503,12 @@ mod tests {
             .expect("the running panes' tab");
         assert_eq!(gathered.label, "restored");
         assert_eq!(layout_of(&session, &gathered.tab_id), ["w2:p1", "w2:p3"]);
+        // The engine numbers its own workspaces apart from the gathered
+        // Herdr ones (PRD engine-bundle-4-herdr-removal D-26).
         assert_eq!(
             (workspace.as_str(), pane.as_str()),
-            ("w3", "w3:p1"),
-            "a new workspace past the recorded ones"
+            ("h1", "h1:p1"),
+            "a new workspace numbered apart from the gathered ones"
         );
         assert_eq!(holders.started().len(), 1, "only the new pane started");
         assert!(holders.ended.lock().unwrap().is_empty(), "nothing ended");
