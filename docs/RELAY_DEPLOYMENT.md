@@ -85,7 +85,7 @@ Before starting the collector, the deployment owner applies this routing, using 
 
 - Create `hide-relay` in Logging location `asia-northeast1` with retention **7 days**, then create a sink to `logging.googleapis.com/projects/<project-id>/locations/asia-northeast1/buckets/hide-relay` with that filter.
 - Add a named `hide-relay` exclusion with exactly the same filter to the `_Default` sink, preserving all other exclusions and its inclusion filter.
-  `gcloud logging sinks update _Default --project <project-id> --add-exclusions='name=hide-relay,filter=<rendered-filter>'` adds the owned exclusion; do not use a replacement exclusion list or disable the sink.
+  `gcloud logging sinks update _Default --project <project-id> --add-exclusion='name=hide-relay,filter=<rendered-filter>'` adds the owned exclusion; do not use a replacement exclusion list or disable the sink.
 - Inspect every project, folder and organization sink that can also route the same events.
   An additional destination must have a seven-day-or-shorter lifecycle or exclude just these events; an unmodifiable ancestor sink blocks rollout.
 - Read back the bucket, sink and exclusions and keep that effective configuration in the private deployment record before service start.

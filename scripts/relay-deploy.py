@@ -114,8 +114,8 @@ def cloud_config(values, destination):
                          "creditTypesTreatment": "EXCLUDE_ALL_CREDITS"},
         "amount": {"specifiedAmount": {"currencyCode": "KRW", "units": "100000"}},
         "thresholdRules": [{"thresholdPercent": n} for n in (0.5, 0.9, 1.0)],
-        "allUpdatesRule": {"monitoringNotificationChannels": [values["channel"]],
-                           "disableDefaultIamRecipients": False},
+        "notificationsRule": {"monitoringNotificationChannels": [values["channel"]],
+                              "disableDefaultIamRecipients": False},
     })
 
 

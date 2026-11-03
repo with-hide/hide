@@ -170,6 +170,11 @@ class RelayDeploy(unittest.TestCase):
         budget = json.loads((output / "budget.json").read_text())
         self.assertEqual(budget["amount"]["specifiedAmount"], {"currencyCode": "KRW", "units": "100000"})
         self.assertEqual(budget["budgetFilter"]["projects"], ["projects/123456789"])
+        # Billing Budgets v1 accepts notificationsRule, not allUpdatesRule.
+        self.assertEqual(set(budget), {"displayName", "budgetFilter", "amount", "thresholdRules", "notificationsRule"})
+        self.assertEqual(budget["notificationsRule"], {
+            "monitoringNotificationChannels": [values["channel"]], "disableDefaultIamRecipients": False,
+        })
         scope = (output / "relay-filter.txt").read_text().strip()
         self.assertIn('resource.labels.instance_id="1234"', scope)
         self.assertIn('log_id("hide-relay")', scope)
