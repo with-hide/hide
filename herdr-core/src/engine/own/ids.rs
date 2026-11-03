@@ -111,6 +111,12 @@ pub(super) fn workspace_id(number: usize) -> String {
     format!("{ENGINE_WORKSPACE}{}", encode_public_number(number))
 }
 
+/// Whether the workspace, tab or pane id `id` is in a workspace this engine
+/// numbered (`h<n>`), not one moved from Herdr or of another shape.
+pub(super) fn made_by_engine(id: &str) -> bool {
+    let workspace = id.split_once(':').map_or(id, |(workspace, _)| workspace);
+    matches!(workspace_of(workspace), Some((Numbered::Engine, _)))
+}
 
 pub(super) fn pane_id(workspace_id: &str, pane_number: usize) -> String {
     format!("{workspace_id}:p{}", encode_public_number(pane_number))

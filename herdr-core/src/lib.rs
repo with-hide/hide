@@ -46,6 +46,7 @@ mod github_poll;
 mod github_store;
 pub mod global_instruction;
 mod handle;
+pub mod herdr_import;
 pub mod herdr_takeover;
 pub mod input_gate;
 pub mod issues;

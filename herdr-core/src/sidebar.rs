@@ -2531,10 +2531,10 @@ mod tests {
             "an empty agent list must not wipe a pane record"
         );
         let live = HashSet::from(["a".to_owned()]);
-        assert!(prune_read_records(&mut records, &live, ReadRecordScope::Local).is_empty());
+        assert!(prune_read_records(&mut records, &live, ReadRecordScope::Local(&crate::herdr_import::Held::Nothing)).is_empty());
         let gone = HashSet::new();
         assert_eq!(
-            prune_read_records(&mut records, &gone, ReadRecordScope::Local).len(),
+            prune_read_records(&mut records, &gone, ReadRecordScope::Local(&crate::herdr_import::Held::Nothing)).len(),
             1
         );
         assert!(

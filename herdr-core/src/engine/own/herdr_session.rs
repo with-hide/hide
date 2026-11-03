@@ -59,6 +59,21 @@ pub(crate) struct HerdrSession {
     pub(crate) workspaces: Vec<Result<HerdrWorkspace, Refused>>,
 }
 
+impl HerdrSession {
+    /// The id of every workspace of the save that has one (all but the form
+    /// before tabs), read or left out.
+    pub(crate) fn ids(&self) -> impl Iterator<Item = &str> {
+        self.workspaces.iter().filter_map(|read| match read {
+            Ok(workspace) => workspace.id.as_deref(),
+            Err(refused) => matches!(
+                ids::workspace_of(&refused.workspace),
+                Some((Numbered::Herdr, _))
+            )
+            .then_some(refused.workspace.as_str()),
+        })
+    }
+}
+
 /// A workspace Herdr saved, in Herdr's form.
 #[derive(Clone, Debug, Deserialize)]
 pub(crate) struct HerdrWorkspace {

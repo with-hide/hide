@@ -21,7 +21,7 @@
 //! Only a daemon with the development
 //! switch `HIDE_DEV_PANE_HOLDER` on builds this engine (D-5).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
@@ -47,7 +47,7 @@ use crate::sidebar::{SessionLayoutPayload, SessionSnapshotPayload};
 
 mod agents;
 mod creation;
-mod herdr_session;
+pub(crate) mod herdr_session;
 mod ids;
 pub(crate) mod layout;
 mod restore;
@@ -216,6 +216,27 @@ pub(crate) fn open_device(
             launches,
         },
     )
+}
+
+/// Whether the workspace, tab or pane id `id` is in a workspace this engine
+/// numbered (PRD engine-bundle-4-herdr-removal D-26): the only ids a
+/// machine's cleanup owns while its Herdr save cannot be read (D-25).
+pub(crate) fn made_by_engine(id: &str) -> bool {
+    ids::made_by_engine(id)
+}
+
+/// The workspaces the engine whose folder is `engine_dir` saved, read as its
+/// open reads them, while no engine is open there.
+pub(crate) fn saved_workspaces(engine_dir: &std::path::Path) -> BTreeSet<String> {
+    restore::read(
+        &hide_kit::layout::engine_session_in(engine_dir),
+        &hide_kit::layout::engine_backups_in(engine_dir),
+    )
+    .to_saved()
+    .workspaces
+    .into_iter()
+    .map(|workspace| workspace.id)
+    .collect()
 }
 
 impl OwnEngine<'static> {

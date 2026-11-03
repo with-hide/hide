@@ -304,6 +304,14 @@ impl Core {
         }
         // Before the runtime exists, so the read is never made under its lock.
         let system_language = crate::runtime::output_language::read_system_language();
+        // What the import record keeps of this machine's Herdr panes, set
+        // before the engine's first publish reaches the cleanup (PRD
+        // engine-bundle-4-herdr-removal D-25).
+        let herdr_held = own_engine
+            .as_ref()
+            .and_then(|engine| engine.own_scope())
+            .map(crate::herdr_import::held)
+            .unwrap_or_default();
         let runtime = Arc::new(Mutex::new(Runtime::new(
             options.clone(),
             environment,
@@ -314,6 +322,7 @@ impl Core {
             lock_recover(&runtime).install_product_analytics(sink);
         }
         lock_recover(&runtime).set_system_language(system_language);
+        lock_recover(&runtime).hold_herdr_state(herdr_held);
         let notifier = ChangeNotifier::new();
         lock_recover(&runtime).install_worker_context(Arc::downgrade(&runtime), notifier.clone());
         lock_recover(&runtime).set_guardrails_own_file(options.account_state_folder);

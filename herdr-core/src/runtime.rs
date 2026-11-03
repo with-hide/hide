@@ -1338,6 +1338,10 @@ pub struct Runtime {
     /// them which panes attach and hears their state back; keys and output
     /// never pass here.
     terminals: Arc<dyn hide_node_link::terminal::TerminalRoutes>,
+    /// What this machine's import record keeps of the Herdr panes not moved
+    /// into the core's own engine yet, which the local cleanup leaves alone
+    /// (PRD engine-bundle-4-herdr-removal D-25); nothing on Herdr.
+    herdr_held: Arc<crate::herdr_import::Held>,
     /// Each pane's attach state as its node last reported it, which the
     /// terminal projection shows.
     terminal_states: HashMap<String, hide_node_link::terminal::PaneTerminalState>,
@@ -2382,6 +2386,7 @@ impl Runtime {
             remote_tab_creations_in_flight: HashSet::new(),
             registration_terminals: VecDeque::new(),
             terminals: Arc::new(terminal::NoTerminals),
+            herdr_held: Arc::default(),
             terminal_states: HashMap::new(),
             terminal_attach_requested: HashSet::new(),
             terminal_intents: terminal::TerminalIntents::default(),
@@ -2669,6 +2674,12 @@ impl Runtime {
         terminals: Arc<dyn hide_node_link::terminal::TerminalRoutes>,
     ) {
         self.terminals = terminals;
+    }
+
+    /// What the local cleanup leaves alone of the Herdr panes this machine's
+    /// import record keeps, set once before the engine's first publish.
+    pub(crate) fn hold_herdr_state(&mut self, held: crate::herdr_import::Held) {
+        self.herdr_held = Arc::new(held);
     }
 
     /// Whether this core still waits for its move's link before it acts
