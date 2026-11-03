@@ -231,7 +231,7 @@ impl PaneHolders for LocalPanes {
         let owner = self.owner()?;
         let number = self
             .next_request
-            .fetch_update(
+            .try_update(
                 std::sync::atomic::Ordering::AcqRel,
                 std::sync::atomic::Ordering::Acquire,
                 |number| number.checked_add(1),

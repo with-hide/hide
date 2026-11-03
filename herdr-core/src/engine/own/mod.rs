@@ -3099,12 +3099,6 @@ mod tests {
             first.read_pane(WAIT, &tab, "recent", 1).unwrap();
             panes.push(tab);
         }
-        settles("the first daemon's panes started", || {
-            first
-                .topology()
-                .panes()
-                .all(|(_, pane)| !pane.is_starting())
-        });
         drop(first);
 
         // After the reboot nothing of them runs; one pane's holder refuses.
@@ -3422,12 +3416,9 @@ mod tests {
             .unwrap();
         // A program exits only once its holder runs, and these start after
         // their answers.
-        settles("the new panes' holders started", || {
-            engine
-                .topology()
-                .panes()
-                .all(|(_, pane)| !pane.is_starting())
-        });
+        for pane in [&first, &second, &lone] {
+            engine.read_pane(WAIT, pane, "recent", 1).unwrap();
+        }
         let exited = holders
             .ends
             .lock()
