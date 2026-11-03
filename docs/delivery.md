@@ -366,11 +366,12 @@ Hide routes every key to a pane but cannot see the composer, so any key not foll
 Counting keys cannot tell a draft from an erased one: Claude Code folds a paste into `[Pasted text #1 +11 lines]`, and one Backspace removes it whole.
 So the screen decides, and only when it says the composer is empty.
 
-When the doorbell's verdict for a pending letter is `draft` and the pane is at rest (Herdr reports it `idle` or `done` and current, with no key and no change of status for the 30-second quiet period), the doorbell asks Herdr once for the pane's visible screen with its styling (`pane.read` with source `visible`, format `ansi`, `wire::composer_screen_params`).
-The read runs on the doorbell's own thread, off `Mutex<Runtime>` and never on the session-sync thread, at most once per draft episode (the input time that made the draft, `delivery/composer.rs`), and counts against the doorbell's eight Herdr calls a pass; a cut screen is a failed read.
+When the doorbell's verdict for a pending letter is `draft` and input is quiet (Herdr reports it `idle`, `done` or `working` and current, with no key and no change of status for the 30-second quiet period), the doorbell asks Herdr once for the pane's visible screen with its styling (`pane.read` with source `visible`, format `ansi`, `wire::composer_screen_params`).
+The read runs on the doorbell's own thread, off `Mutex<Runtime>` and never on the session-sync thread, at most once per observed draft and state generation (`delivery/composer.rs`), and counts against the doorbell's eight Herdr calls a pass; a cut screen is a failed read.
 The screen is judged by the agent's composer declaration (below).
 Only a positive `empty` releases the draft, as [Deliver now](#delivering-a-held-letter-now) does: the input up to the read is no draft (`released_input_at_unix_ms`), the composer mark goes, and the doorbell's next pass rings with every guard it always applies.
-A key or a change of status between the read and the release keeps the hold (`composer.release_refused`).
+A key, even with the same timestamp, a session change or a change of status or state sequence between the read and the release keeps the hold (`composer.release_refused`).
+A working pane uses the same positive-empty decision as a resting pane; version calibration still runs only after a known-empty turn has ended.
 `not_empty`, `not_found`, a failed or timed-out read, an agent with no declaration and a version not checked keep today's hold, with the waiting mark after two minutes.
 Each read is logged as `composer.read` with the pane, agent, version, verdict and, for a screen not read empty, the parser step that stopped it (`reason`, below), and each draft not read as `composer.not_read` with its reason (`kind_undeclared`, `version_unknown`, `version_unchecked`, `version_unconfirmed`) once per draft; no record carries screen text.
 
@@ -460,8 +461,8 @@ It guards against hide's own bell, not against a process of the same account, wh
 
 ### The input ladder
 
-Hide hands a running agent a spawn's brief or a letter's bell line through the agent's own way in when it has one, and types it only when it has none (`herdr-core/src/delivery/ladder.rs`).
-Each supported agent declares its rungs once, in `hide-agent-adapter` (`AgentAdapter::input`), from a fixed set of kinds, its own way in first and typing last; an agent with no way in of its own declares typing alone (`TYPED_ONLY`), and the adapter's contract test fails a declaration that does not end in typing, repeats a rung or names another agent's API.
+Hide types a running agent's brief or letter bell line through the engine's guarded prompt operation (`herdr-core/src/delivery/ladder.rs`).
+Each supported agent declares its input rungs once, in `hide-agent-adapter` (`AgentAdapter::input`): an optional launch prompt for the first input, then typing for an already running agent; the adapter's contract test fails a declaration that does not end in typing or repeats a rung.
 
 The first input a start brings, a spawn's brief, a task's first prompt or a promoted Memory card, follows one standard for every agent on every system:
 
@@ -471,32 +472,27 @@ The first input a start brings, a spawn's brief, a task's first prompt or a prom
 
 [INSTALL.md](INSTALL.md#what-each-system-supports) shows each agent on each system as launch or typed, with the run that proves it.
 
-Every brief and letter goes through one entry, and its answer is always one of three, the only thing the rest of Hide reads, never the agent's kind:
+A fresh start can carry its brief as a launch prompt.
+Every subsequent brief, letter and operator answer uses the engine's prompt submission on the pane's owning machine (`delivery::ladder::deliver`).
+The doorbell decides when; the input path submits once, off the runtime lock.
 
 | Answer | Meaning | What follows |
 | --- | --- | --- |
-| Sent, with its route | sent whole, typed or through the agent's own way in; no way in says the agent took it (`codex queue` says only that it queued the message) | the agent's own record decides within `RECORD_WAIT_MS`, as for typing ([Input an agent did not take](#input-an-agent-did-not-take)); the route is saved (`SendRoute`: `typed`, `channel`, `launch`) |
-| NotYet, with a cause | nothing was sent: Herdr refused the typing's parameters (`herdr_parameters`) | the doorbell tries again; a brief fails the spawn with `brief.prompt_refused`, and the same command tries again |
-| Lost, with a cause | the send began and its answer was lost (`channel_answer_lost`, `link_answer_lost`, `herdr_format`, `herdr_call_failed`), so the input may have arrived | it is never sent again: a bell waits for the pane to move, as a failed typing did, and a brief is saved sent with the route `lost`, so the parent's retry of the spawn converges and the agent's record still decides |
+| Sent, `typed` | the engine acknowledged submission | the agent's own record decides intake |
+| NotYet, `herdr_parameters` | Herdr refused before typing | the doorbell may retry; a brief fails with `brief.prompt_refused` |
+| Lost, `herdr_format` or `herdr_call_failed` | submission may have arrived | never retry blindly; the agent's record decides |
 
-The doorbell's gates still decide when a bell goes (rest, draft, quiet period, menus); the ladder decides only how.
-The route is picked with nothing sent, before a bell or a brief typing is reserved.
-A rung that answers that it sent nothing (no such program, an unknown thread, a node that cannot be reached) passes the input to the next rung and is logged `input.rung_unavailable`; a rung that began and lost its answer (a timeout, a write cut short) answers Lost and is logged `input.rung_lost`, so the input is never sent again by a lower rung or a timer (engineering principle 11).
-Each send is logged `input.rung` with the rung's name and Hide's pane id; the text never reaches a log.
-Only a typed input is ever sent again, and only once someone answered the agent's screen: a launched brief is held by the agent's start, a channel keeps the input until the agent takes it, and a lost send may have arrived, so `BriefTyping` itself refuses a brief whose route is `launch` (`brief_launched`) or `lost` (`brief_send_lost`), whoever asks.
-The reservation itself saves the route as `lost` before anything is sent, and the send's outcome corrects it after (`Briefed` with the route, or `BriefUnsent` back to `typed` when Herdr refused and nothing was sent), so an outcome whose save never lands leaves the brief counted as possibly sent rather than free to be sent twice.
-A spawn asked again over such a brief sends nothing and answers as the lost send would have: sent and unconfirmed, logged `brief.send_unconfirmed`, with the agent's own record deciding and `hide agent show` saying which.
-A mission's answer to its Conductor is the operator's own words and takes the typed rung alone (`ladder::typed_only`), the same typing and the same reading of Herdr's errors as every other input.
-
-The ladder addresses only the session Herdr names for the pane: the hook facts of that session (`HookFacts::reported_session`, matched by Herdr's lineage), never another session the pane's hooks reported, such as a nested run, and never the newest one in its place.
-Until Herdr names a session, and while Herdr names one that Hide's hook did not report (its hooks are not connected, or the report is a moment late), the agent's own way in has no address and the input is typed.
-
-An agent's own way in runs on the node of the machine whose pane runs the agent (`Call::Deliver`, `hide_host::input`), so a connected device takes it as this machine does, and nothing runs under the runtime lock or on the session-sync thread: the doorbell thread and the spawn's worker call it with a target the runtime copied under its lock.
+The durable reservation still saves `lost` before sending and records the outcome afterwards.
+A save that never lands therefore cannot make a possibly submitted input free to send again (engineering principle 11).
+Only input saved as `typed` may be resubmitted once someone answered the agent's screen.
+Existing `channel` records from earlier builds remain non-retryable: Codex can still consume an already queued message after Hide upgrades.
+No new input is sent to `codex queue`, whose success means queued for a later turn and cannot satisfy delivery during ongoing work.
+Each send logs `input.rung` with its route and pane identity, never the text.
 
 | Agent | Rungs | What the agent's own rung is | macOS | Linux | Windows |
 | --- | --- | --- | --- | --- | --- |
 | Claude Code | launch prompt, typed | none Hide can use: its messaging socket holds a message for a session Hide starts (below) | yes | yes | yes |
-| Codex | launch prompt, `codex queue`, typed | `codex queue --thread <session> --message=<text>` with the account's Codex, its durable queue for the session, which the running TUI takes as a turn; the text is one argument, since Codex 0.166.0 reads `--message -x` as a missing value (exit 2) | yes | yes | yes |
+| Codex | launch prompt, typed | running input is typed so it reaches the current turn after the running tool | yes | yes | yes |
 | Antigravity | launch prompt, typed | none Hide can address: its language server takes a message only with a start flag of its own and a port read from its log | yes | yes | yes |
 | Grok | launch prompt, typed | none declared | yes | yes | yes |
 | OpenCode | typed | none: OpenCode 2.0.29 submits a start prompt (`--prompt=<text>`) as soon as its model list arrives, without waiting for the configuration that names the operator's model, so a start that loses that race sends the brief to the first model of the list, OpenCode's own free hosted one (below) | yes | yes | yes |
@@ -508,10 +504,8 @@ The launch prompt carries only a start's first input, as the agent's start argum
 Measured 2026-11-01 on macOS with an isolated HOME, a private terminal server and the fake model:
 
 - Codex 0.166.0 holds a start prompt through its "Hooks need review" screen and submits it once that is answered; its prompt hook records the argument's U+2028 line breaks.
-  `codex queue` answers in about 0.3 s that it queued the message, which is not that the session took it; the TUI takes it 7.4 to 7.7 s later as a turn of its own (`turn_trigger: queue`) whose prompt hook runs in the pane's environment with the exact text, and that hook's digest is the record.
-  While a turn runs the message waits for it; with a draft in the composer it waits until the composer is empty and leaves the draft alone; with the `/model` menu open it is taken and the menu stays.
-  An unknown thread exits 1 with `no rollout found` and starts nothing, and a freshly started Codex has no thread until its first turn, so a fresh Codex's later letters are typed until its session is known.
-  Every Codex Hide starts runs with `--no-daemon` ([agent-hooks.md](agent-hooks.md)), which exposes no app-server address, and `codex queue` works for that in-process form.
+  A controlled multi-step turn on Codex 0.166.0 (2026-11-03) took typed input at its next model step before the turn completed; queued input waited for the whole turn to complete.
+  This is why running input uses the engine's prompt submission, while an existing queued send is never repeated.
 - Claude Code 2.1.316 holds a start prompt through its folder trust screen; its prompt hook records the argument's U+2028 as line breaks, so the brief's own form is its record.
   Its messaging socket (`CLAUDE_CODE_MESSAGING_SOCKET`, opened with the token its SessionStart hook receives) runs a message with the exact text in a session that asks for permissions, but holds it, unrun, in a session that bypasses permission prompts unless the sender attests a matching permission mode or the session sets `crossSessionInbound` (Claude Code 2.1.302 in the agent journey and 2.1.316 by hand, 2026-11-01).
   Hide starts its agents with full access, so a letter written there waited for review instead of running; Hide attests nothing it cannot prove and changes no setting of the operator's, so Claude Code's later input is typed until Claude Code offers a way in for such a session.

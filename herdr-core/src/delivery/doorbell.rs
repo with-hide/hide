@@ -1037,8 +1037,7 @@ fn resubmit_brief(
                 .lock()
                 .map_err(|_| "pane_unavailable")?
                 .input_target(observed);
-            let prepared = super::ladder::prepare(&target);
-            Some((target, prepared))
+            Some(target)
         }
     };
     let (client, authority, actor) = delivery;
@@ -1069,9 +1068,9 @@ fn resubmit_brief(
             Err(EngineError::Request(_)) => (None, Err("prompt_failed")),
             Err(_) => (Some(super::typed::SendRoute::Lost), Err("prompt_failed")),
         },
-        Some((target, prepared)) => match crate::coordination::executor::send_brief(
+        Some(target) => match crate::coordination::executor::send_brief(
             engine.as_ref(),
-            (&target, prepared),
+            &target,
             id,
             &resubmit.brief,
         ) {
@@ -1281,7 +1280,6 @@ fn deliver(
         .lock()
         .map_err(|_| SendFailure::NotTyped("runtime_unavailable"))?
         .input_target(observed);
-    let prepared = super::ladder::prepare(&target);
     let reservation = client
         .submit(
             Effect::BellAttempt {
@@ -1335,7 +1333,7 @@ fn deliver(
         .record_bell(&observed.actor.pane_id, line, (sender, kind));
     // Arrival is not intake. Only a flushed prompt-hook confirmation clears
     // it, even where the agent's own way in took the line.
-    sent(prepared.deliver(engine, &target, line))
+    sent(super::ladder::deliver(engine, &target, line))
 }
 
 /// A ladder's answer as one attempt's outcome: a lost answer may have
@@ -1383,7 +1381,7 @@ fn type_answer(
         .lock()
         .map_err(|_| SendFailure::NotTyped("runtime_unavailable"))?
         .input_target(observed);
-    sent(super::ladder::typed_only().deliver(engine, &target, &work.line))
+    sent(super::ladder::deliver(engine, &target, &work.line))
 }
 
 #[cfg(test)]
@@ -3252,6 +3250,56 @@ mod tests {
         assert_eq!(typed.len(), 1);
         assert_eq!(typed[0]["text"], "🦉 Codex report: private · hide inbox");
         assert_eq!(bell.reads(), 1, "a released draft is not read again");
+    }
+
+    /// An erased draft must not wait for the long-running turn to end.
+    /// A real draft or picker keeps the same protection during that turn.
+    #[test]
+    fn a_working_panes_empty_composer_releases_its_draft_but_text_and_menus_hold() {
+        for (screen, sent) in [(CODEX_EMPTY, 1), (CODEX_DRAFT, 0), ("model picker", 0)] {
+            let bell = Bell::start(json!({}));
+            bell.know_version(Some(true));
+            *bell.screen.lock().unwrap() = screen.into();
+            let start = now();
+            bell.working_since(start - 60_000);
+            bell.send_another("urgent", true);
+            bell.runtime
+                .lock()
+                .unwrap()
+                .note_delivery_key_at("recipient", start - 40_000);
+            let mut doorbell = Doorbell::default();
+            for at in [start, start + 250, start + 1_000] {
+                bell.pass(&mut doorbell, at);
+            }
+            assert_eq!(bell.typed().len(), sent, "{screen:?}");
+            assert_eq!(bell.reads(), 1, "read once for the unchanged working draft");
+            assert_eq!(
+                bell.attempts(),
+                0,
+                "the ordinary letter retains its five-minute wait"
+            );
+        }
+    }
+
+    #[test]
+    fn a_status_change_or_same_timestamp_key_invalidates_an_empty_composer_read() {
+        use crate::runtime::delivery::tests::{end_turn, observed};
+        for new_key in [false, true] {
+            let bell = Bell::start(json!({}));
+            let start = now();
+            bell.working_since(start - 60_000);
+            let mut guard = bell.runtime.lock().unwrap();
+            let key = start - 40_000;
+            guard.note_delivery_key_at("recipient", key);
+            let read_for = observed(&guard, "recipient");
+            if new_key {
+                guard.note_delivery_key_at("recipient", key);
+            } else {
+                end_turn(&mut guard, "recipient", start - 35_000);
+            }
+            assert!(!guard.release_empty_composer(&read_for, start));
+            assert!(observed(&guard, "recipient").unsent_draft());
+        }
     }
 
     /// A composer that shows text keeps the hold, and the screen is read

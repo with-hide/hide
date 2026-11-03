@@ -31,7 +31,6 @@ pub mod git_run;
 pub mod git_watch;
 pub mod home;
 pub mod index;
-pub mod input;
 pub mod kit;
 pub mod label_lock;
 pub mod link_bridge;
