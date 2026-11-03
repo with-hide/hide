@@ -171,7 +171,7 @@ fn an_msys_sh_on_windows_hands_the_link_to_the_powershell_script() {
              printf 'HIDE1\\tscript\\tpowershell\\n'\n\
              IFS= read -r size\n\
              head -c \"$size\" > '{record}.script'\n\
-             printf 'HIDE1\\tprobe\\t이호연\\tC:/Users/이호연\\tWindows\\tamd64\\t4C4C4544-0042\\tyes\\n'\n",
+             printf 'HIDE1\\tprobe\\t사용자\\tD:/계정/사용자\\tWindows\\tamd64\\t4C4C4544-0042\\tyes\\n'\n",
             record = record.display()
         ),
     );
@@ -184,7 +184,7 @@ fn an_msys_sh_on_windows_hands_the_link_to_the_powershell_script() {
             facts.os.as_str(),
             facts.arch.as_str()
         ),
-        ("이호연", "C:/Users/이호연", "windows", "x86_64")
+        ("사용자", "D:/계정/사용자", "windows", "x86_64")
     );
     assert_eq!(facts.machine_id, "4c4c4544-0042");
     let args = std::fs::read_to_string(record.with_extension("args")).unwrap();
@@ -255,13 +255,13 @@ fn a_probe_answer_names_only_a_machine_hide_runs_on() {
         // A Windows account's home is a drive path, and its name has none
         // of the characters Windows reserves in one.
         "probe\talice\t/home/alice\tWindows\tamd64\tAB-12\tyes",
-        "probe\ta\\b\tC:/Users/a\tWindows\tamd64\tAB-12\tyes",
-        "probe\talice\tC:/Users/alice\tLinux\tx86_64\tAB-12\tyes",
+        "probe\ta\\b\tD:/profiles/a\tWindows\tamd64\tAB-12\tyes",
+        "probe\talice\tD:/profiles/alice\tLinux\tx86_64\tAB-12\tyes",
     ] {
         assert!(read_probe(&fields(refused)).is_err(), "{refused}");
     }
     let windows = read_probe(&fields(
-        "probe\tAlice Smith\tC:/Users/Alice Smith\tWindows\tamd64\t5A1B2C3D-0000-4E5F\tyes",
+        "probe\tAlice Smith\tD:/profiles/Alice Smith\tWindows\tamd64\t5A1B2C3D-0000-4E5F\tyes",
     ))
     .unwrap();
     assert_eq!(
@@ -271,7 +271,12 @@ fn a_probe_answer_names_only_a_machine_hide_runs_on() {
             windows.os.as_str(),
             windows.arch.as_str()
         ),
-        ("Alice Smith", "C:/Users/Alice Smith", "windows", "x86_64")
+        (
+            "Alice Smith",
+            "D:/profiles/Alice Smith",
+            "windows",
+            "x86_64"
+        )
     );
     assert_eq!(windows.machine_id, "5a1b2c3d-0000-4e5f");
 }
@@ -443,8 +448,8 @@ fn a_device_home_is_below_the_account_s_or_absolute_on_the_device() {
         assert!(parse_device_home(bad).is_err(), "{bad:?}");
     }
     assert_eq!(
-        resolve_device_home("~/.hide-dev/home", "C:/Users/이호연", "windows").unwrap(),
-        "C:/Users/이호연/.hide-dev/home"
+        resolve_device_home("~/.hide-dev/home", "D:/계정/사용자", "windows").unwrap(),
+        "D:/계정/사용자/.hide-dev/home"
     );
     assert_eq!(
         resolve_device_home("C:/hide-dev/home", "C:/Users/me", "windows").unwrap(),
