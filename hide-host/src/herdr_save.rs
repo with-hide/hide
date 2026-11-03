@@ -269,6 +269,11 @@ mod tests {
     /// Where a stand-in listens as Herdr's server, when it does.
     const STAND_IN_SOCKET: &str = "HIDE_TEST_HERDR_STAND_IN_SOCKET";
 
+    /// The line a stand-in prints once it waits; the test harness prints the
+    /// test's name on the same line before it, so it is printed after a
+    /// line break.
+    const STAND_IN_WAITING: &str = "hide-test-herdr-stand-in-waiting";
+
     impl StandIn {
         fn start() -> Self {
             Self::start_from(&std::env::current_exe().unwrap(), None)
@@ -294,13 +299,23 @@ mod tests {
                 .stderr(std::process::Stdio::null())
                 .spawn()
                 .unwrap();
-            // It says it runs once it waits on its input, after the lines
-            // the test harness prints first.
-            let waiting =
-                std::io::BufRead::lines(std::io::BufReader::new(child.stdout.take().unwrap()))
+            // It says it runs once it waits on its input, on a line of its
+            // own after what the test harness prints; one that has not said
+            // so in time is ended, so a test never waits on it unbounded.
+            let output = child.stdout.take().unwrap();
+            let (said, heard) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let waiting = std::io::BufRead::lines(std::io::BufReader::new(output))
                     .map_while(Result::ok)
-                    .any(|line| line.trim() == "waiting");
-            assert!(waiting, "the stand-in ended before it waited");
+                    .any(|line| line == STAND_IN_WAITING);
+                let _ = said.send(waiting);
+            });
+            let waiting = heard.recv_timeout(Duration::from_secs(10));
+            if waiting != Ok(true) {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("the stand-in did not say it waits: {waiting:?}");
+            }
             let pid = child.id();
             Self {
                 pid,
@@ -337,7 +352,7 @@ mod tests {
         }
         let _listening = std::env::var_os(STAND_IN_SOCKET)
             .map(|socket| hide_platform::ipc::LocalListener::bind(Path::new(&socket)).unwrap());
-        println!("waiting");
+        println!("\n{STAND_IN_WAITING}");
         let mut line = String::new();
         let _ = std::io::stdin().read_line(&mut line);
     }
