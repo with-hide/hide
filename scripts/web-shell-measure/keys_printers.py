@@ -87,7 +87,7 @@ def start(folder, seconds, panes, sender):
     deadline = began + START_SECONDS
     try:
         for index, pane in enumerate(panes):
-            command = shlex.join(["/usr/bin/python3", str(Path(__file__).resolve()),
+            command = shlex.join([sys.executable, str(Path(__file__).resolve()),
                                   "print", str(folder), request["nonce"], str(index), str(seconds)])
             command = "printf '\\033c'; stty -echo -icanon; " + command
             remaining(deadline)

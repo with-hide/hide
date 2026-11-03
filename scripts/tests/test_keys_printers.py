@@ -133,21 +133,36 @@ class PrinterBoundary(unittest.TestCase):
         self.assertNotEqual(self.command("check", self.phase, "resources-after")[0], 0)
         self.assertFalse(json.loads((self.phase / "resources-after.json").read_text())["complete"])
 
-    def reject_receipt(self, mode):
-        self.assertNotEqual(self.launch(mode)[0], 0)
-        self.assertFalse(json.loads((self.phase / "start.json").read_text())["complete"])
+    def reject_receipt(self, mode, reason):
+        code, _, error = self.launch(mode)
+        self.assertEqual(code, 1, error)
+        # Refusal is meaningful only after the real printers reached first flush.
+        request = json.loads((self.phase / "request.json").read_text())
+        originals = []
+        for index in range(2):
+            original = json.loads((self.root / f"pane-{index}.printer.json").read_text())
+            self.assertEqual(original["pane"], PANES[index])
+            self.assertEqual(original["nonce"], request["nonce"])
+            self.assertTrue(type(original["birth"]) is int and original["birth"] > 0)
+            self.assertTrue(runs(original["pid"], original["birth"]))
+            self.assertIn(b"drive 00000", (self.root / f"pane-{index}.out").read_bytes())
+            originals.append(original)
+        self.assertNotEqual(originals[0]["pid"], originals[1]["pid"])
+        report = json.loads((self.phase / "start.json").read_text())
+        self.assertFalse(report["complete"])
+        self.assertEqual(report["error"], reason)
 
     def test_a_previous_nonce_cannot_admit_a_phase(self):
-        self.reject_receipt("stale")
+        self.reject_receipt("stale", "stale or mismatched first-flush receipt")
 
     def test_a_duplicate_pid_cannot_admit_a_phase(self):
-        self.reject_receipt("duplicate")
+        self.reject_receipt("duplicate", "duplicate printer pid")
 
     def test_a_wrong_birth_cannot_admit_a_phase(self):
-        self.reject_receipt("birth")
+        self.reject_receipt("birth", "printer ended or changed identity: pane-1")
 
     def test_an_unknown_birth_cannot_admit_a_phase(self):
-        self.reject_receipt("missing-birth")
+        self.reject_receipt("missing-birth", "invalid printer identity")
 
     def test_delivery_and_partial_readiness_share_one_thirty_second_budget(self):
         began = time.monotonic()
