@@ -306,7 +306,10 @@ impl Core {
         let system_language = crate::runtime::output_language::read_system_language();
         // What the import record keeps of this machine's Herdr panes, set
         // before the engine's first publish reaches the cleanup (PRD
-        // engine-bundle-4-herdr-removal D-25).
+        // engine-bundle-4-herdr-removal D-25). Read once, at the start: every
+        // move or import starts the core role again, which reads it again,
+        // and a workspace Herdr makes meanwhile is numbered apart from the
+        // engine's (D-26), so nothing the cleanup sees until then is one.
         let herdr_held = own_engine
             .as_ref()
             .and_then(|engine| engine.own_scope())

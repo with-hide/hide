@@ -20,6 +20,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use serde::{Deserialize, Serialize};
 
@@ -235,9 +236,23 @@ fn write(engine_dir: &Path, record: &Record) -> Result<(), String> {
     .map_err(|error| format!("{} could not be replaced: {error}", path.display()))
 }
 
-/// Reads `engine_dir`'s record, or starts one; a record that cannot be read
-/// is refused, so no step runs on a guess of what it held.
-fn open(engine_dir: &Path) -> Result<Record, String> {
+/// One change of an import record at a time in this process: each change
+/// reads the record, changes it and writes it back holding this, so a look,
+/// a move and the engine's restore, each on its own thread, never write over
+/// what another changed meanwhile.
+static CHANGING: Mutex<()> = Mutex::new(());
+
+/// This thread's turn to change a record, which [`open`] asks for.
+type Changing = MutexGuard<'static, ()>;
+
+fn changing() -> Changing {
+    CHANGING.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Reads `engine_dir`'s record, or starts one, for a change made in `turn`;
+/// a record that cannot be read is refused, so no step runs on a guess of
+/// what it held.
+fn open(engine_dir: &Path, _turn: &Changing) -> Result<Record, String> {
     let mut record = read(engine_dir)?.unwrap_or_else(Record::new);
     // An import that ended while it wrote the engine's session: what the
     // engine holds of it moved, the rest did not (principle #11).
@@ -294,7 +309,8 @@ pub(crate) fn wait_again(
     engine_dir: &Path,
     busy: impl IntoIterator<Item = (String, String, Option<String>, Option<String>)>,
 ) -> Result<(), String> {
-    let mut record = open(engine_dir)?;
+    let turn = changing();
+    let mut record = open(engine_dir, &turn)?;
     record.given_back.clear();
     record.pending.extend(
         busy.into_iter()
@@ -310,7 +326,7 @@ pub(crate) fn wait_again(
 
 /// The workspaces moved into `engine_dir`'s engine.
 pub fn moved(engine_dir: &Path) -> Result<BTreeSet<String>, String> {
-    Ok(open(engine_dir)?.moved)
+    Ok(open(engine_dir, &changing())?.moved)
 }
 
 /// A device's save as its node read it when a move of it was asked, with
@@ -455,7 +471,8 @@ pub fn outcome(engine_dir: &Path) -> Result<Option<Outcome>, String> {
 
 /// The operator read the last move's result.
 pub fn dismiss(engine_dir: &Path) -> Result<(), String> {
-    let mut record = open(engine_dir)?;
+    let turn = changing();
+    let mut record = open(engine_dir, &turn)?;
     if record.outcome.take().is_none() {
         return Ok(());
     }
@@ -489,7 +506,8 @@ pub struct Offer {
 /// move. It runs at every start of the core before the engine opens, so the
 /// engine's cleanup never owns a pane of the save before it is moved.
 pub fn look(engine_dir: &Path, save: &Fetched) -> Result<Look, String> {
-    let mut record = open(engine_dir)?;
+    let turn = changing();
+    let mut record = open(engine_dir, &turn)?;
     let look = match herdr_session::of(save) {
         HerdrRead::Missing => {
             record.found = Found::Nothing;
@@ -567,7 +585,8 @@ fn stamp(save: &Fetched) -> Stamp {
 
 /// Records the move the operator asked for, which the core starts with next.
 pub fn ask(engine_dir: &Path, asked: Asked) -> Result<(), String> {
-    let mut record = open(engine_dir)?;
+    let turn = changing();
+    let mut record = open(engine_dir, &turn)?;
     record.asked = Some(asked);
     write(engine_dir, &record)
 }
@@ -580,7 +599,8 @@ pub fn asked(engine_dir: &Path) -> Result<Option<Asked>, String> {
 /// Marks the move committed (D-27), right before its first step that cannot
 /// be undone: from then on no older build is started on this state folder.
 pub fn commit(engine_dir: &Path) -> Result<(), String> {
-    let mut record = open(engine_dir)?;
+    let turn = changing();
+    let mut record = open(engine_dir, &turn)?;
     if record.committed {
         return Ok(());
     }
@@ -598,7 +618,8 @@ pub fn committed(engine_dir: &Path) -> bool {
 /// Records that Hide's Herdr could not be stopped, so nothing was moved, and
 /// puts the asked move away: the operator asks again from the screen.
 pub fn not_stopped(engine_dir: &Path) -> Result<(), String> {
-    let mut record = open(engine_dir)?;
+    let turn = changing();
+    let mut record = open(engine_dir, &turn)?;
     record.asked = None;
     record.outcome = Some(Outcome::NotStopped);
     write(engine_dir, &record)
@@ -610,7 +631,8 @@ pub fn not_stopped(engine_dir: &Path) -> Result<(), String> {
 /// when `asked.resume` is false; the asked move is done after it, whatever
 /// it came to. A save that cannot be read moves nothing and says why.
 pub fn import(engine_dir: &Path, save: &Fetched, asked: Asked) -> Result<Outcome, String> {
-    let mut record = open(engine_dir)?;
+    let turn = changing();
+    let mut record = open(engine_dir, &turn)?;
     record.asked = None;
     // The conversations that waited while their Herdr ran go back to their
     // panes once it no longer does (D-8, B15).
@@ -951,6 +973,33 @@ mod tests {
         .unwrap();
         assert!(given_back(&engine).is_empty());
         assert!(waiting(&engine).contains("w1:p1"));
+    }
+
+    // A look and the engine's restore change one record from their own
+    // threads: neither writes over what the other changed meanwhile, so no
+    // waiting conversation is lost.
+    #[test]
+    fn changes_from_many_threads_at_once_lose_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = dir.path().join("engine");
+        let save = fetch(&fixture(dir.path()));
+        std::thread::scope(|scope| {
+            for n in 0..16 {
+                let (engine, save) = (&engine, &save);
+                scope.spawn(move || {
+                    look(engine, save).unwrap();
+                    wait_again(
+                        engine,
+                        [(format!("w{n}:p1"), "claude".to_owned(), None, None)],
+                    )
+                    .unwrap();
+                });
+            }
+        });
+        assert_eq!(
+            waiting(&engine),
+            (0..16).map(|n| format!("w{n}:p1")).collect::<BTreeSet<_>>()
+        );
     }
 
     // D-27: a move is committed once, and a record that cannot be read
