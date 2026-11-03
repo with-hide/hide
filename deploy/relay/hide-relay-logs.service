@@ -1,0 +1,33 @@
+[Unit]
+Description=Hide relay log collection
+After=network-online.target systemd-journald@hide-relay.service
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+User=hide-relay-logs
+Group=hide-relay-logs
+SupplementaryGroups=systemd-journal
+ExecStart=/opt/fluent-bit/bin/fluent-bit -c /opt/hide-relay/current/fluent-bit.conf
+StateDirectory=hide-relay-logs
+Restart=always
+RestartSec=5
+# Also bounds the lifetime of every memory-only retry buffer.
+RuntimeMaxSec=12h
+TimeoutStopSec=20
+MemoryMax=192M
+MemorySwapMax=0
+TasksMax=64
+LimitCORE=0
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+# Never retain collector diagnostics which may quote a rejected payload.
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=multi-user.target

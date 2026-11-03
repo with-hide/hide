@@ -1,0 +1,23 @@
+{
+	admin off
+	persist_config off
+	log {
+		output discard
+	}
+}
+
+relay.withhide.dev {
+	@relay path /health /ws
+	handle @relay {
+		reverse_proxy 127.0.0.1:8787 {
+			header_up X-Real-IP {remote_host}
+		}
+	}
+	handle /collector-health {
+		rewrite * /api/v1/health
+		reverse_proxy 127.0.0.1:2020
+	}
+	handle {
+		respond 404
+	}
+}

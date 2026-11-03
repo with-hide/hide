@@ -1,0 +1,40 @@
+name: relay deployment check
+on:
+  pull_request:
+    paths:
+      - deploy/relay/**
+      - deploy/relay-inputs.example.json
+      - scripts/relay-deploy.py
+      - scripts/tests/*relay_deploy*
+      - .github/workflows/relay-deploy-check.yml
+  push:
+    branches: [main]
+    paths:
+      - deploy/relay/**
+      - scripts/relay-deploy.py
+      - scripts/tests/*relay_deploy*
+      - .github/workflows/relay-deploy-check.yml
+permissions:
+  contents: read
+jobs:
+  services:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Install the real proxy and collector without their default services
+        run: |
+          sudo systemctl mask caddy.service fluent-bit.service
+          curl --fail --silent --show-error https://packages.fluentbit.io/fluentbit.key -o "$RUNNER_TEMP/fluentbit.key"
+          sudo gpg --dearmor -o /usr/share/keyrings/fluentbit-keyring.gpg "$RUNNER_TEMP/fluentbit.key"
+          echo 'deb [signed-by=/usr/share/keyrings/fluentbit-keyring.gpg] https://packages.fluentbit.io/ubuntu/noble noble main' | sudo tee /etc/apt/sources.list.d/fluent-bit.list
+          sudo apt-get update -qq
+          sudo apt-get install -y caddy fluent-bit=5.1.5
+          /usr/bin/caddy version
+          /opt/fluent-bit/bin/fluent-bit --version
+      - name: Observe installation, rollback, proxy privacy and collector failure
+        run: |
+          mkdir -p agents/runs
+          sudo --preserve-env=GITHUB_ACTIONS python3 scripts/tests/relay_deploy_linux.py

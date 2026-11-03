@@ -10,6 +10,8 @@ Product usage statistics: [wire, ownership and privacy](ARCHITECTURE.md#product-
 
 Hosted phone releases: [upload ordering, retained protocols, secrets and CSP](BUILD.md#the-hosted-phone-release); owners are `.github/workflows/release-candidate.yml`, `scripts/phone-release.mjs` and `scripts/tests/test_phone_release.py`.
 
+Single-VM relay deployment: [source artifact, installation, recovery, private logs and cloud alerts](RELAY_DEPLOYMENT.md); owners are `deploy/relay/`, `scripts/relay-deploy.py`, `.github/workflows/relay-artifact.yml` and `.github/workflows/relay-deploy-check.yml`.
+
 | Question | Read | Executable authority or enforcement |
 | --- | --- | --- |
 | Working rules, routing, and the invariants that hold everywhere | [AGENTS.md](../AGENTS.md) | `herdr-core/`, `hided/`, `web/`, `desktop/`, relevant local rules |
