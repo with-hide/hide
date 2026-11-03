@@ -446,9 +446,9 @@ class BusyAndMenuLetters(unittest.TestCase):
     def busy(self, *, route="turn_end", texts=None, shown=None, trace=None, session="s", **changes):
         held, letter = "JOURNEY-00000001", "JOURNEY-00000002"
         read = self.read(*(("assistant", held + "\n" + letter),) if texts is None else texts)
-        read["events"][-1]["at"] = 40
+        read["events"][-1]["at"] = 20  # Merged sessions retain the first response time.
         args = dict(declared=["bell", "turn_end"], input_rungs=["typed"], rungs=[],
-                    sent_at=10, responses=[
+                    sent_at=10, observed_at=40, responses=[
                         {"generation": True, "schema": False, "answered": held, "at": 20},
                         {"generation": True, "schema": False, "answered": letter, "at": 30}])
         if route == "bell":
@@ -482,7 +482,9 @@ class BusyAndMenuLetters(unittest.TestCase):
                         [stops[0], {**stops[1], "reason": "shutdown"}],
                         [stops[0], {**stops[1], "answers": ["JOURNEY-00000002"] * 2}],
                         [stops[0], {**stops[1], "subagent": True}],
-                        [{**stops[0], "at": 9}, stops[1]]):
+                        [{**stops[0], "at": 9}, stops[1]],
+                        [stops[0], {**stops[1], "at": 41}],
+                        [{**stops[0], "at": 31}, {**stops[1], "at": 32}]):
             with self.subTest(changed=changed):
                 # A good provider trace cannot override broken Stop evidence.
                 self.assertEqual(self.busy(stops=changed)[0], cells.FAIL)

@@ -665,11 +665,12 @@ class Journey:
                                 if (row := json.loads(line)).get("answered") in (held, value)]
                                if trace.is_file() else [] if self.record.get("fake_env") else None)
         record["stops"] = self.stop_observer.read() if self.stop_observer else None
+        record["observed_at_ms"] = int(time.time() * 1000)
         verdict = cells.with_turn(cells.busy_letter_verdict(
             shown, read, self.session, held, value, declared=self.row["busy_letter"],
             input_rungs=self.row["input"] if self.own_rungs else ["typed"],
             rungs=record["rungs"], responses=record["responses"], sent_at=record["sent_at_ms"],
-            stops=record["stops"]), turn)
+            stops=record["stops"], observed_at=record["observed_at_ms"]), turn)
         self.settle("letter_busy", verdict, self.evidence("letter_busy", record))
 
     def letter_menu(self):

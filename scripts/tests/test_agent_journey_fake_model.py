@@ -119,7 +119,8 @@ class Server(unittest.TestCase):
         read = {"session": "s", "events": [{"role": "assistant", "text": "\n".join(answers),
                                            "at": int(time.time() * 1000)}]}
         shown = {"state": "delivered", "hook_confirmed": True, "bell_attempts": 0, "tool_handovers": 1}
-        args = dict(declared=["bell", "turn_end"], input_rungs=["typed"], rungs=[], sent_at=sent_at)
+        args = dict(declared=["bell", "turn_end"], input_rungs=["typed"], rungs=[], sent_at=sent_at,
+                    observed_at=int(time.time() * 1000))
         self.assertEqual(cells.busy_letter_verdict(shown, read, "s", held, letter,
                                                   responses=trace, **args)[0], cells.PASS)
         for changed in (list(reversed(trace)), trace + [trace[-1]], []):

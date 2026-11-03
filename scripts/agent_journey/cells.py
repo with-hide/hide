@@ -240,7 +240,7 @@ def rung_verdict(declared, records):
 
 
 def busy_letter_verdict(shown, read, session, held, token, *, declared, input_rungs,
-                        rungs, responses=None, sent_at=None, stops=None):
+                        rungs, responses=None, sent_at=None, stops=None, observed_at=None):
     """One declared delivery path and one held -> letter answer sequence.
 
     Stop can continue the same assistant event. Such an event alone cannot
@@ -294,7 +294,7 @@ def busy_letter_verdict(shown, read, session, held, token, *, declared, input_ru
                 or stops[0].get("answers") != [held]
                 or stops[1].get("answers") not in ([token], [held, token])):
             return FAIL, "Stop evidence did not show one held completion then one continuation in this session"
-        times = [sent_at, *(row.get("at") for row in stops)]
+        times = [sent_at, *(row.get("at") for row in stops), observed_at]
         if any(type(at) is not int or at <= 0 for at in times) or times != sorted(times):
             return FAIL, "Stop observations are not ordered after send"
     if responses is not None:
@@ -302,9 +302,12 @@ def busy_letter_verdict(shown, read, session, held, token, *, declared, input_ru
                    and row.get("schema") is False and row.get("answered") in (held, token)]
         if [row.get("answered") for row in answers] != [held, token]:
             return FAIL, "the fake trace did not answer held then letter exactly once"
-        times = [sent_at, *(row.get("at") for row in answers), events[positions[1][0]].get("at")]
+        times = [sent_at, *(row.get("at") for row in answers), observed_at]
         if any(type(at) is not int or at <= 0 for at in times) or not times[0] <= times[1] <= times[2] <= times[3]:
-            return FAIL, "the fake responses are not ordered after send and before the session answer"
+            return FAIL, "the fake responses are not ordered within the observation window"
+        if stops is not None and route == "turn_end":
+            if not answers[0]["at"] <= stops[0]["at"] <= answers[1]["at"] <= stops[1]["at"]:
+                return FAIL, "fake responses and Stop observations do not alternate in causal order"
     if (merged or route == "turn_end") and responses is None and (stops is None or route != "turn_end"):
         return FAIL, "merged or turn-end answers have no independent response order evidence"
     return PASS, "confirmed once through " + route + "; held then letter answered once in order"
