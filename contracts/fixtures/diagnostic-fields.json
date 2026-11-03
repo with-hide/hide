@@ -1,0 +1,63 @@
+[
+  {
+    "name": "operational-identifiers",
+    "input": {
+      "node": "0123456789abcdef0123456789abcdef",
+      "core": "fedcba9876543210fedcba9876543210",
+      "device_id": "0123456789abcdef0123456789abcdef",
+      "machine_id": "fedcba9876543210fedcba9876543210",
+      "node_build": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "core_build": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "build": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "running_build": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "commit": "0123456789abcdef0123456789abcdef01234567",
+      "sha": "0123456789abcdef0123456789abcdef01234567"
+    },
+    "expected": {
+      "node": "0123456789abcdef0123456789abcdef",
+      "core": "fedcba9876543210fedcba9876543210",
+      "device_id": "0123456789abcdef0123456789abcdef",
+      "machine_id": "fedcba9876543210fedcba9876543210",
+      "node_build": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "core_build": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "build": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "running_build": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "commit": "0123456789abcdef0123456789abcdef01234567",
+      "sha": "0123456789abcdef0123456789abcdef01234567"
+    }
+  },
+  {
+    "name": "unknown-fields-still-mask-hex",
+    "input": {
+      "detail": "0123456789abcdef0123456789abcdef",
+      "id": "0123456789abcdef0123456789abcdef",
+      "NODE": "0123456789abcdef0123456789abcdef",
+      "node_token": "opaque",
+      "password": "q7Z"
+    },
+    "expected": {
+      "detail": "[redacted]",
+      "id": "[redacted]",
+      "NODE": "[redacted]",
+      "node_token": "[redacted]",
+      "password": "[redacted]"
+    }
+  },
+  {
+    "name": "identity-fields-still-mask-credentials-and-personal-data",
+    "input": {
+      "node": "ghp_Q9zR2wK7mN5pT8vS3uX6yL4gH1jV0qB",
+      "core": "Bearer q7Z",
+      "node_build": "password=hunter2",
+      "core_build": "someone@example.invalid",
+      "build": "/home/example/cache"
+    },
+    "expected": {
+      "node": "[redacted]",
+      "core": "Bearer [redacted]",
+      "node_build": "password=[redacted]",
+      "core_build": "[redacted]",
+      "build": "~/cache"
+    }
+  }
+]

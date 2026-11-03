@@ -54,7 +54,8 @@
     {
       "pattern": "\\b[0-9a-f]{32,}\\b",
       "flags": "i",
-      "replacement": "[redacted]"
+      "replacement": "[redacted]",
+      "preserve_identifiers": true
     },
     {
       "pattern": "\\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}\\b",
@@ -96,6 +97,10 @@
       "flags": "",
       "replacement": "~"
     }
+  ],
+  "identifier_fields": [
+    "node", "core", "device_id", "machine_id", "build",
+    "node_build", "core_build", "running_build", "commit", "sha"
   ],
   "secret_field": {
     "pattern": "(?:^|[_-])(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|secret[_-]?access[_-]?key|secret[_-]?key|private[_-]?key|password|passwd|secret|token|key|passphrase|authorization|cookie|set[_-]cookie)$",

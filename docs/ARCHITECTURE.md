@@ -4451,6 +4451,9 @@ The menu is rebuilt when its language changes as well as when its chords do; the
 The main process imports a catalog and the translator only, never the shell's store or its React modules.
 The host log is JSON lines in `<profile>/logs/desktop.log`, rotated once at 5 MB; it never carries the daemon URL, because the URL carries the token.
 The shared privacy policy in `contracts/diagnostic-redaction.json` masks recognized credentials (named assignments, provider tokens, Bearer credentials, connection URL passwords and private keys), email addresses and token-shaped hex runs; macOS, Linux and Windows home prefixes become `~` while path suffixes stay useful.
+Structured identity fields declared by that policy retain hex correlation IDs and build hashes, so records still distinguish the nodes and builds they describe.
+This exception applies only to generic hex matching; credentials, email addresses and home paths are still masked in those fields, and unknown fields and unstructured text retain the hex rule.
+The shared `contracts/fixtures/diagnostic-fields.json` cases exercise both the core's real stderr/file entrypoints and the desktop host's file/stderr log.
 A home component may contain spaces, so ambiguous unquoted prose between a home prefix and the next separator is also removed rather than exposing part of an account name.
 `hide-memory` owns its Rust implementation and retains its original credential-only, quote-safe match extents for serialized project knowledge; diagnostic text overrides for quoted secrets and truncated keys live alongside those patterns; `web/src/redact.ts` reads the same policy for the shell and host.
 Fields named for credentials or authorization/cookie headers lose their whole value, even when opaque; quoted secrets include escaped quotes and whitespace, and an unfinished private-key block is removed through the end of the text.

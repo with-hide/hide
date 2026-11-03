@@ -27,7 +27,9 @@ pub use reconcile::{
     COMPARISON_EXCERPT_BYTES, COMPARISON_SENTENCE_CHARS, DocumentAuthority, DocumentComparison,
     PROMOTION_BATCH_LIMIT, accepted_sentence_pair,
 };
-pub use redaction::{RedactedText, is_invisible, is_secret_field, redact, redact_diagnostic};
+pub use redaction::{
+    RedactedText, is_invisible, is_secret_field, redact, redact_diagnostic, redact_diagnostic_field,
+};
 pub use store::hold::{
     CardHold, EndedHold, ReleasedReport, StaleOutcome, StaleRefusal, StaleReporter,
 };

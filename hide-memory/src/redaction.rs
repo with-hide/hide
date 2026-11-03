@@ -17,13 +17,16 @@ struct Rule {
     diagnostic_pattern: Option<String>,
     #[serde(default)]
     replacement: String,
+    #[serde(default)]
+    preserve_identifiers: bool,
 }
 
 struct Policy {
     secrets: Vec<Regex>,
     diagnostic_secrets: Vec<Regex>,
     secret_field: Regex,
-    diagnostic: Vec<(Regex, String)>,
+    identifier_fields: Vec<String>,
+    diagnostic: Vec<(Regex, String, bool)>,
 }
 
 fn policy() -> &'static Policy {
@@ -33,6 +36,7 @@ fn policy() -> &'static Policy {
         struct Source {
             secrets: Vec<Rule>,
             secret_field: Rule,
+            identifier_fields: Vec<String>,
             diagnostic: Vec<Rule>,
         }
         let source: Source =
@@ -62,10 +66,17 @@ fn policy() -> &'static Policy {
                 })
                 .collect(),
             secret_field: compile(&source.secret_field.pattern, &source.secret_field.flags),
+            identifier_fields: source.identifier_fields,
             diagnostic: source
                 .diagnostic
                 .into_iter()
-                .map(|rule| (compile(&rule.pattern, &rule.flags), rule.replacement))
+                .map(|rule| {
+                    (
+                        compile(&rule.pattern, &rule.flags),
+                        rule.replacement,
+                        rule.preserve_identifiers,
+                    )
+                })
                 .collect(),
         }
     })
@@ -105,11 +116,20 @@ pub fn is_secret_field(name: &str) -> bool {
 /// The shell and desktop host consume the same policy. Memory keeps its
 /// credential-only policy, so paths in project knowledge stay useful.
 pub fn redact_diagnostic(input: &str) -> String {
+    redact_diagnostic_field(input, "")
+}
+
+/// Structured identity fields retain correlation hashes. Credential, email
+/// and home-path rules still apply, including inside identity fields.
+pub fn redact_diagnostic_field(input: &str, field: &str) -> String {
     let mut text = input.to_owned();
     for pattern in &policy().diagnostic_secrets {
         text = pattern.replace_all(&text, "[redacted]").into_owned();
     }
-    for (pattern, replacement) in &policy().diagnostic {
+    for (pattern, replacement, preserve_identifiers) in &policy().diagnostic {
+        if *preserve_identifiers && policy().identifier_fields.iter().any(|name| name == field) {
+            continue;
+        }
         text = pattern
             .replace_all(&text, replacement.as_str())
             .into_owned();

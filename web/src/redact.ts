@@ -2,12 +2,16 @@ import policy from "../../contracts/diagnostic-redaction.json";
 
 // Shared with Rust: apply to string values before serializing JSON.
 const rules = [
-  ...policy.secrets.map((rule) => ({ pattern: new RegExp(rule.diagnostic_pattern ?? rule.pattern, `g${rule.flags}`), replacement: "[redacted]" })),
-  ...policy.diagnostic.map(({ pattern, flags, replacement }) => ({ pattern: new RegExp(pattern, `g${flags}`), replacement })),
+  ...policy.secrets.map((rule) => ({ pattern: new RegExp(rule.diagnostic_pattern ?? rule.pattern, `g${rule.flags}`), replacement: "[redacted]", preserveIdentifiers: false })),
+  ...policy.diagnostic.map((rule) => ({ pattern: new RegExp(rule.pattern, `g${rule.flags}`), replacement: rule.replacement, preserveIdentifiers: "preserve_identifiers" in rule && rule.preserve_identifiers })),
 ];
+const identifierFields = new Set<string>(policy.identifier_fields);
 
-export function redact(text: string): string {
-  for (const { pattern, replacement } of rules) text = text.replace(pattern, replacement);
+export function redact(text: string, field?: string): string {
+  for (const { pattern, replacement, preserveIdentifiers } of rules) {
+    if (preserveIdentifiers && field !== undefined && identifierFields.has(field)) continue;
+    text = text.replace(pattern, replacement);
+  }
   return text;
 }
 

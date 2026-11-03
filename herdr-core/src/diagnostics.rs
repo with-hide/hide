@@ -248,27 +248,29 @@ fn write_stderr_line(message: &str) {
 }
 
 /// Mask before serialization so quotes and backslashes cannot hide values,
-/// and JSON types, record boundaries and numeric correlation IDs survive.
+/// and JSON types, record boundaries and declared correlation IDs survive.
 /// Installed sinks do this on the existing writer, outside the runtime lock;
 /// queue capacity, line cap and notification fan-out stay unchanged.
 fn diagnostic_line(mut record: serde_json::Value) -> String {
-    fn mask(value: &mut serde_json::Value) {
+    fn mask(value: &mut serde_json::Value, field: &str) {
         match value {
-            serde_json::Value::String(text) => *text = hide_memory::redact_diagnostic(text),
-            serde_json::Value::Array(values) => values.iter_mut().for_each(mask),
+            serde_json::Value::String(text) => {
+                *text = hide_memory::redact_diagnostic_field(text, field)
+            }
+            serde_json::Value::Array(values) => values.iter_mut().for_each(|value| mask(value, "")),
             serde_json::Value::Object(fields) => {
                 for (name, value) in fields {
                     if hide_memory::is_secret_field(name) {
                         *value = serde_json::Value::String("[redacted]".into());
                     } else {
-                        mask(value);
+                        mask(value, name);
                     }
                 }
             }
             _ => {}
         }
     }
-    mask(&mut record);
+    mask(&mut record, "");
     let line = record.to_string();
     if line.len() > LINE_LIMIT {
         serde_json::json!({"kind":"diagnostics.line_too_large", "bytes":line.len()}).to_string()
@@ -347,12 +349,17 @@ mod tests {
                 "../../contracts/fixtures/diagnostic-redaction.json"
             ))
             .unwrap();
+            let field_cases: serde_json::Value = serde_json::from_str(include_str!(
+                "../../contracts/fixtures/diagnostic-fields.json"
+            ))
+            .unwrap();
             let record = |kind: &str| {
                 serde_json::json!({
                     "kind": kind, "pid": 42, "retry": false,
                 "password": "q7Z", "accessToken": "opaque-private-value",
                 "headers": {"Authorization": "Basic cXVpZXQ6c2VjcmV0", "Cookie": "session=opaque"},
-                    "nested": {"messages": cases.as_array().unwrap().iter().map(|case| case["input"].as_str().map(str::to_owned).unwrap_or_else(|| case["input"].as_array().unwrap().iter().map(|part| part.as_str().unwrap()).collect::<String>())).collect::<Vec<_>>()}
+                    "nested": {"messages": cases.as_array().unwrap().iter().map(|case| case["input"].as_str().map(str::to_owned).unwrap_or_else(|| case["input"].as_array().unwrap().iter().map(|part| part.as_str().unwrap()).collect::<String>())).collect::<Vec<_>>()},
+                    "identity_records": field_cases.as_array().unwrap().iter().map(|case| case["input"].clone()).collect::<Vec<_>>()
                 })
             };
             emit(record("before_install"));
@@ -394,6 +401,16 @@ mod tests {
             .iter()
             .map(|case| case["expected"].clone())
             .collect();
+        let field_cases: serde_json::Value = serde_json::from_str(include_str!(
+            "../../contracts/fixtures/diagnostic-fields.json"
+        ))
+        .unwrap();
+        let expected_fields: Vec<_> = field_cases
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|case| case["expected"].clone())
+            .collect();
         let parse = |text: &str| {
             text.lines()
                 .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
@@ -409,6 +426,7 @@ mod tests {
         );
         for record in &records {
             assert_eq!(record["nested"]["messages"], serde_json::json!(expected));
+            assert_eq!(record["identity_records"], serde_json::json!(expected_fields));
             assert_eq!(record["pid"], 42);
             assert_eq!(record["retry"], false);
             for name in ["password", "accessToken"] {

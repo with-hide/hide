@@ -24,7 +24,7 @@ export class HostLog {
   }
 
   event(event: string, fields: LogFields = {}): void {
-    const safeFields = Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, isSecretField(key) ? "[redacted]" : typeof value === "string" ? redact(value) : value]));
+    const safeFields = Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, isSecretField(key) ? "[redacted]" : typeof value === "string" ? redact(value, key) : value]));
     const line = `${JSON.stringify({ ts: new Date().toISOString(), event: redact(event), ...safeFields })}\n`;
     process.stderr.write(line);
     try {

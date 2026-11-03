@@ -4,8 +4,27 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { HostLog, loadFailureFields } from "./log";
 import cases from "../../../contracts/fixtures/diagnostic-redaction.json";
+import fieldCases from "../../../contracts/fixtures/diagnostic-fields.json";
 
 describe("the host log", () => {
+  it("keeps declared correlation hashes while masking credentials and personal data in those fields", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hide-desktop-log-"));
+    const log = new HostLog(dir);
+    const stderr = process.stderr.write;
+    let echoed = "";
+    process.stderr.write = ((chunk: string) => ((echoed += chunk), true)) as typeof process.stderr.write;
+    try {
+      for (const { input } of fieldCases) log.event("link.failed", input);
+      const written = fs.readFileSync(log.path, "utf8");
+      expect(echoed).toBe(written);
+      const records = written.trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+      for (const [index, { expected }] of fieldCases.entries()) expect(records[index]).toMatchObject({ event: "link.failed", ...expected });
+    } finally {
+      process.stderr.write = stderr;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("masks ordinary records in both the file and stderr while retaining field types", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hide-desktop-log-"));
     const log = new HostLog(dir);
