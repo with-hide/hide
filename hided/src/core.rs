@@ -178,6 +178,9 @@ enum Command {
     SetHerdrImport {
         machine: Arc<dyn herdr_core::herdr_import::Machine>,
     },
+    HerdrImportShown {
+        reply: Sender<Option<herdr_core::HerdrImportSnapshot>>,
+    },
     Dispatch {
         event: Vec<u8>,
         reply: Sender<Result<(), String>>,
@@ -810,6 +813,16 @@ impl CoreHandle {
         self.commands
             .send(Command::SetHerdrImport { machine })
             .map_err(|_| "core owner thread is gone".to_owned())
+    }
+
+    /// What the core offers for this machine's Herdr save now (B17).
+    pub fn herdr_import_shown(&self) -> Result<Option<herdr_core::HerdrImportSnapshot>, String> {
+        let (reply, rx) = mpsc::channel();
+        self.commands
+            .send(Command::HerdrImportShown { reply })
+            .map_err(|_| "core owner thread is gone".to_owned())?;
+        rx.recv()
+            .map_err(|_| "core owner thread dropped the Herdr import reply".to_owned())
     }
 
     /// `own_engine` is the development switch (`crate::env::Env::own_engine`):
@@ -1659,6 +1672,9 @@ fn owner_loop(
             }
             Command::SetDesk { platform } => core.set_desk(platform),
             Command::SetHerdrImport { machine } => core.set_herdr_import(machine),
+            Command::HerdrImportShown { reply } => {
+                let _ = reply.send(core.herdr_import_shown());
+            }
             Command::SetFileRoots { roots, reply } => {
                 // This node holds the opened roots while the core pins their
                 // identities; the previous set closes once it is replaced.

@@ -1020,6 +1020,17 @@ impl Core {
         }
     }
 
+    /// What the screen offers for this machine's Herdr save now
+    /// (`status.herdr_import`), for `hide import herdr` (PRD
+    /// engine-bundle-4-herdr-removal B17).
+    pub fn herdr_import_shown(&self) -> Option<crate::model::HerdrImportSnapshot> {
+        lock_recover(&self.runtime)
+            .snapshot()
+            .status
+            .herdr_import
+            .clone()
+    }
+
     /// What gives the Desk process its identity and places (PRD Desk 1차);
     /// starts Desk's worker, which looks at the agents at once.
     pub fn set_desk(&self, platform: Arc<dyn crate::desk::DeskPlatform>) {

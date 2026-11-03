@@ -13,6 +13,12 @@ use crate::state_file::{self, DaemonState};
 #[derive(Debug, Eq, PartialEq)]
 pub enum CommandKind {
     Delivery(herdr_core::delivery::Command),
+    /// `hide import herdr [--yes]`: what this machine's Herdr session would
+    /// bring into Hide's own engine, and with `--yes` the move (PRD
+    /// engine-bundle-4-herdr-removal B17).
+    ImportHerdr {
+        yes: bool,
+    },
     /// `hide agent spawn … --brief-file <path>`: the spawn, whose brief is
     /// read from `path` in the caller's account when it runs.
     AgentSpawnBriefFile {
@@ -145,6 +151,8 @@ const DIFF_USAGE: &str = "usage: hide diff open <path> [--request-id <id>]";
 
 const OPEN_USAGE: &str = "usage: hide [open] [<path>]";
 
+const IMPORT_USAGE: &str = "usage: hide import herdr [--yes]";
+
 const VIEW_USAGE: &str = "usage: hide view list [--session <id|here>] | status <view-id> | select <view-id> [--request-id <id>] | close <view-id> [--request-id <id>] | split <view-id> --area <area-id> --edge left|right|up|down [--request-id <id>] | move <view-id> --area <area-id> --index <n> [--request-id <id>]";
 
 /// A topic's command lines as a wrong command or `--help` prints them: one
@@ -190,6 +198,7 @@ fn topic_usage(topic: &str) -> Option<String> {
             "hide workspace info\nhide workspace purpose <text>\nhide workspace remove <path> [--delete-branch] [--force]",
         ),
         "status" => "usage: hide status [--json]".to_owned(),
+        "import" => IMPORT_USAGE.to_owned(),
         "stop" => "usage: hide stop".to_owned(),
         "open" => OPEN_USAGE.to_owned(),
         "version" => "usage: hide version [--json]".to_owned(),
@@ -304,6 +313,15 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
             Ok(CommandKind::Status { json })
         }
         Some("stop") => Ok(CommandKind::Stop),
+        Some("import") => match (
+            iter.next().map(String::as_str),
+            iter.next().map(String::as_str),
+            iter.next(),
+        ) {
+            (Some("herdr"), None, None) => Ok(CommandKind::ImportHerdr { yes: false }),
+            (Some("herdr"), Some("--yes"), None) => Ok(CommandKind::ImportHerdr { yes: true }),
+            _ => Err(IMPORT_USAGE.to_owned()),
+        },
         Some("runtime") => match (iter.next().map(String::as_str), iter.next()) {
             (Some("prepare"), None) => Ok(CommandKind::RuntimePrepare),
             _ => Err("usage: hide runtime prepare".to_owned()),
@@ -883,6 +901,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         CommandKind::Status { json: true } => status_json(&env.state_dir),
         CommandKind::Status { json: false } => status(&env.state_dir, env.idle_secs),
         CommandKind::Stop => stop(&env.state_dir),
+        CommandKind::ImportHerdr { yes } => import_herdr(&env, yes),
         CommandKind::RuntimePrepare => runtime_prepare(&env.home),
         CommandKind::Serve { keep_alive } => serve(env, keep_alive),
         CommandKind::Dev => dev(env),
@@ -2499,6 +2518,89 @@ fn screen_node(health: &serde_json::Value) -> Result<Option<String>, String> {
         .ok_or_else(|| "the node daemon names a machine this build does not take".to_owned())
 }
 
+/// `hide import herdr [--yes]` (B17): what this machine's Herdr session
+/// would bring in and what moving it ends, and with `--yes` the same move or
+/// import the screen's button makes, through the daemon's token as `hide
+/// <path>` asks.
+fn import_herdr(env: &Env, yes: bool) -> Result<(), String> {
+    let (state, _) = connect(env).map_err(|error| error.detail())?;
+    let answer =
+        crate::workspace_cli::request_herdr_import_with_token(state.port, &state.token, yes)?;
+    if answer["ok"] != true {
+        return Err(format!(
+            "{}: {}",
+            answer["reason"]
+                .as_str()
+                .unwrap_or("herdr_import_unavailable"),
+            answer["next_action"]
+                .as_str()
+                .unwrap_or("Run the command again")
+        ));
+    }
+    for line in import_herdr_lines(&answer["result"], yes) {
+        println!("{line}");
+    }
+    Ok(())
+}
+
+/// The lines `hide import herdr` prints for the daemon's `result`.
+fn import_herdr_lines(result: &serde_json::Value, yes: bool) -> Vec<String> {
+    if result["own_engine"] == false {
+        return vec!["Hide runs on Herdr here, so there is no Herdr session to move: this command moves one into Hide's own engine (HIDE_DEV_PANE_HOLDER=1).".to_owned()];
+    }
+    let offered = &result["offered"];
+    let count = |field: &str| offered[field].as_u64().unwrap_or(0);
+    let mut lines = Vec::new();
+    if offered["failure"] == "unreadable" {
+        lines.push(format!(
+            "Hide could not read the Herdr session: {}",
+            offered["reason"].as_str().unwrap_or("no reason given")
+        ));
+    }
+    if let Some(refused) = offered["refused"].as_array() {
+        for workspace in refused {
+            lines.push(format!(
+                "Not moved: {}: {}",
+                workspace["label"].as_str().unwrap_or(""),
+                workspace["reason"].as_str().unwrap_or("")
+            ));
+        }
+    }
+    if count("workspaces") == 0 {
+        if lines.is_empty() {
+            lines.push("This machine has no Herdr session left to move into Hide.".to_owned());
+        }
+        return lines;
+    }
+    let what = format!(
+        "{} workspaces, {} tabs and {} agents",
+        count("workspaces"),
+        count("tabs"),
+        count("agents")
+    );
+    let moving = offered["kind"] == "move";
+    if moving {
+        lines.push(format!("Hide's Herdr is running {what}."));
+        lines.push("Moving stops it: the commands running in it end, and the agents reopen where their conversations left off.".to_owned());
+    } else {
+        lines.push(format!("The Herdr session holds {what}."));
+        lines.push("Importing leaves Herdr as it is.".to_owned());
+        if offered["herdr_running"] == true {
+            lines.push(
+                "Herdr is running, so the conversations open in it open here as shells.".to_owned(),
+            );
+        }
+    }
+    lines.push(match (result["asked"] == true, yes, moving) {
+        (true, _, true) => "Moving: Hide starts again with them.".to_owned(),
+        (true, _, false) => "Importing: Hide starts again with them.".to_owned(),
+        (false, true, _) => "Nothing was moved: a move is already under way.".to_owned(),
+        (false, false, true) => "Run `hide import herdr --yes` to move them.".to_owned(),
+        (false, false, false) => "Run `hide import herdr --yes` to import them.".to_owned(),
+    });
+    lines
+}
+
 fn status(state_dir: &Path, idle_secs: u64) -> Result<(), String> {
     match healthy_daemon_in(state_dir).map(|(state, _)| state) {
         Some(state) => {
@@ -3285,6 +3387,65 @@ mod tests {
     fn a_state_with_no_recorded_start_is_judged_by_liveness() {
         assert!(still_the_daemon(&recorded(std::process::id(), None)));
         assert!(!still_the_daemon(&recorded(0, None)));
+    }
+
+    /// B17: `hide import herdr` reads, `--yes` moves, and anything else is
+    /// its usage; what it prints says what moves and what moving ends.
+    #[test]
+    fn import_herdr_says_what_moves_and_moves_only_with_yes() {
+        let parse = |args: &[&str]| {
+            parse_args(&args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>())
+        };
+        assert_eq!(
+            parse(&["hide", "import", "herdr"]).unwrap(),
+            CommandKind::ImportHerdr { yes: false }
+        );
+        assert_eq!(
+            parse(&["hide", "import", "herdr", "--yes"]).unwrap(),
+            CommandKind::ImportHerdr { yes: true }
+        );
+        for wrong in [&["hide", "import"][..], &["hide", "import", "orca"][..]] {
+            assert_eq!(parse(wrong).unwrap_err(), IMPORT_USAGE, "{wrong:?}");
+        }
+        let offered = |kind: &str, running: bool| {
+            serde_json::json!({
+                "kind": kind, "stage": "offered", "workspaces": 2, "tabs": 3, "agents": 1,
+                "herdr_running": running, "failure": null, "reason": null, "refused": [],
+            })
+        };
+        assert_eq!(
+            import_herdr_lines(
+                &serde_json::json!({"offered": offered("move", true), "asked": false}),
+                false
+            ),
+            [
+                "Hide's Herdr is running 2 workspaces, 3 tabs and 1 agents.",
+                "Moving stops it: the commands running in it end, and the agents reopen where their conversations left off.",
+                "Run `hide import herdr --yes` to move them.",
+            ]
+        );
+        assert_eq!(
+            import_herdr_lines(
+                &serde_json::json!({"offered": offered("import", true), "asked": true}),
+                true
+            ),
+            [
+                "The Herdr session holds 2 workspaces, 3 tabs and 1 agents.",
+                "Importing leaves Herdr as it is.",
+                "Herdr is running, so the conversations open in it open here as shells.",
+                "Importing: Hide starts again with them.",
+            ]
+        );
+        assert_eq!(
+            import_herdr_lines(&serde_json::json!({"offered": null, "asked": false}), false),
+            ["This machine has no Herdr session left to move into Hide."]
+        );
+        assert_eq!(
+            import_herdr_lines(&serde_json::json!({"own_engine": false}), false),
+            [
+                "Hide runs on Herdr here, so there is no Herdr session to move: this command moves one into Hide's own engine (HIDE_DEV_PANE_HOLDER=1)."
+            ]
+        );
     }
 
     #[test]

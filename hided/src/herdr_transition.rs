@@ -320,6 +320,42 @@ impl herdr_import::Machine for LocalMachine {
     }
 }
 
+/// `hide import herdr [--yes]` (B17): what the core offers for this
+/// machine's Herdr save, and with `yes` the move or import the screen's
+/// button makes, asked of the core as one event: the core role then starts
+/// again with it, so the answer says it was asked, not what it came to.
+pub(crate) fn cli_answer(
+    core: &crate::core::CoreHandle,
+    yes: bool,
+) -> Result<serde_json::Value, String> {
+    // A core on Herdr has no session of Herdr's to move.
+    if core.pane_holders().is_none() {
+        return Ok(json!({ "own_engine": false }));
+    }
+    let shown = core.herdr_import_shown()?;
+    let action = shown
+        .as_ref()
+        .filter(|shown| shown.workspaces > 0 && shown.stage != "moving")
+        .and_then(|shown| match shown.kind.as_str() {
+            "move" => Some("move"),
+            "import" => Some("import"),
+            _ => None,
+        });
+    let asked = match (yes, action) {
+        (true, Some(action)) => {
+            let event = json!({
+                "schema_version": herdr_core::SCHEMA_VERSION,
+                "kind": "herdr_import",
+                "payload": { "action": action },
+            });
+            core.dispatch(event.to_string().into_bytes())?;
+            true
+        }
+        _ => false,
+    };
+    Ok(json!({ "offered": shown, "asked": asked }))
+}
+
 /// Stops the Herdr server `pid`, which started at `started`, on `socket`:
 /// by its own `server.stop`, which saves its session as its quit does, else
 /// by the system's polite end (D-6); either way it is confirmed gone by its
