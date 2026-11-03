@@ -1528,6 +1528,11 @@ impl OfferedCard {
 #[test]
 fn a_pressed_memory_row_reads_working_before_its_write_runs() {
     use crate::model::{SuggestionAttemptPhase, SuggestionGroup, SuggestionState};
+    // This promotion uses the process-wide spawn lock, like the spawn fixtures.
+    // Hold their turn until its worker has reported the failed start.
+    let _turn = crate::coordination::SPAWN_TURN
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let offered = offered_card();
     let ledger = scratch_dir("herdr-core-press-ledger-");
     let (_worker, client) = crate::delivery::worker::Worker::spawn(
