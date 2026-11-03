@@ -641,10 +641,12 @@ fn run_coordinator(
         }
 
         let timeout = coordinator_wait(
-            subscription.is_some() || pulled.is_some(),
+            subscription.is_some(),
+            pulled.is_some(),
             reconnect_at,
             next_agent_refresh,
             next_operation_tick,
+            Instant::now(),
         );
         match receiver.recv_timeout(timeout) {
             Ok(CoordinatorMessage::RefreshTopology) => {
@@ -2610,13 +2612,19 @@ fn publish_ports(
 
 fn coordinator_wait(
     subscribed: bool,
+    pulled: bool,
     reconnect_at: Instant,
     next_agent_refresh: Instant,
     next_operation_tick: Instant,
+    now: Instant,
 ) -> Duration {
-    let now = Instant::now();
     let deadline = if subscribed {
         next_agent_refresh.min(next_operation_tick)
+    } else if pulled {
+        // Pulled engines wake this mailbox on changes. They neither refresh
+        // Herdr agents nor reconnect while connected, so those clocks can
+        // stay in the past without making the coordinator spin.
+        next_operation_tick
     } else {
         reconnect_at.min(next_operation_tick)
     };
@@ -2635,6 +2643,70 @@ fn stale_if_projected(
         return error;
     }
     SessionFetchError::Stale(error.message().to_owned())
+}
+
+#[cfg(test)]
+mod coordinator_wait_tests {
+    use super::*;
+
+    #[test]
+    fn a_pulled_connection_waits_for_its_tick_after_other_deadlines_expire() {
+        let now = Instant::now();
+        let expired = now - Duration::from_secs(1);
+        assert_eq!(
+            coordinator_wait(
+                false,
+                true,
+                expired,
+                expired,
+                now + Duration::from_millis(250),
+                now,
+            ),
+            Duration::from_millis(250),
+        );
+        assert_eq!(
+            coordinator_wait(false, true, expired, expired, now, now),
+            Duration::ZERO,
+        );
+    }
+
+    #[test]
+    fn a_subscription_waits_for_agent_refresh_or_the_operation_tick() {
+        let now = Instant::now();
+        let expired = now - Duration::from_secs(1);
+        for (refresh_ms, expected_ms) in [(100, 100), (1000, 250)] {
+            assert_eq!(
+                coordinator_wait(
+                    true,
+                    false,
+                    expired,
+                    now + Duration::from_millis(refresh_ms),
+                    now + Duration::from_millis(250),
+                    now,
+                ),
+                Duration::from_millis(expected_ms),
+            );
+        }
+    }
+
+    #[test]
+    fn a_disconnected_coordinator_waits_for_reconnect_or_the_operation_tick() {
+        let now = Instant::now();
+        let expired = now - Duration::from_secs(1);
+        for (reconnect_ms, expected_ms) in [(0, 0), (100, 100), (5000, 250)] {
+            assert_eq!(
+                coordinator_wait(
+                    false,
+                    false,
+                    now + Duration::from_millis(reconnect_ms),
+                    expired,
+                    now + Duration::from_millis(250),
+                    now,
+                ),
+                Duration::from_millis(expected_ms),
+            );
+        }
+    }
 }
 
 #[cfg(test)]
