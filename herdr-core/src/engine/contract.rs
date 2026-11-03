@@ -437,6 +437,7 @@ impl BuiltHolders {
             Arc::clone(&holders),
             Arc::clone(&terminals.service),
             PaneShell::Fixed(shell),
+            None,
         ));
         // Asked as every own engine asks its machine's holders: through the
         // machine's node, here this machine's in-process node, by the

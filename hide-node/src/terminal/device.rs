@@ -585,6 +585,9 @@ impl hide_host::serve::Terminals for NodeTerminals {
                     home,
                     user: hide_host::shell_integration::UserShell::of_process(),
                 },
+                std::env::current_exe()
+                    .ok()
+                    .and_then(|program| hide_host::kit::pane_install(&program)),
             ));
         *service = Some(started);
         *holders = Some(Arc::clone(&panes));

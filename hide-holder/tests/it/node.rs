@@ -592,6 +592,7 @@ fn an_engine_pane_attaches_before_its_holder_start_is_registered() {
         Arc::clone(&holders),
         Arc::clone(&service),
         PaneShell::Fixed(shell()),
+        None,
     );
     let pane = "w1:p1";
     assert!(holders.record(pane).unwrap().is_none());

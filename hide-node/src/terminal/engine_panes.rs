@@ -12,6 +12,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use hide_host::kit::PaneInstall;
 use hide_host::shell_integration::{ShellLaunch, ShellReadiness, UserShell};
 
 use super::Service;
@@ -30,6 +31,7 @@ pub struct LocalPanes {
     holders: Arc<Holders>,
     service: Arc<Service>,
     shell: PaneShell,
+    install: Option<PaneInstall>,
 }
 
 /// How a pane started with no program runs this machine's shell.
@@ -69,13 +71,22 @@ impl PaneShell {
 
 impl LocalPanes {
     /// The panes of `holders`, attached to `service`; a pane started with no
-    /// program runs `shell`.
-    pub fn new(holders: Arc<Holders>, service: Arc<Service>, shell: PaneShell) -> Self {
+    /// program runs `shell`, and every pane names `install`, the Hide
+    /// installation this node belongs to, so a hook entry or a `hide` command
+    /// another installation wrote leaves the pane to this one's
+    /// (docs/agent-hooks.md, More than one Hide on an account).
+    pub fn new(
+        holders: Arc<Holders>,
+        service: Arc<Service>,
+        shell: PaneShell,
+        install: Option<PaneInstall>,
+    ) -> Self {
         holders.own_every_pane();
         Self {
             holders,
             service,
             shell,
+            install,
         }
     }
 }
@@ -128,9 +139,10 @@ impl PaneHolders for LocalPanes {
             program,
             cwd,
             // The shell's own variables, then the caller's, then the pane's
-            // own name for itself, which no caller's variable replaces (PRD
-            // engine-bundle-3-core-owns D-9): the holder removes every
-            // Herdr variable, so a process in the pane names this pane alone.
+            // own name for itself and its installation, which no caller's
+            // variable replaces (PRD engine-bundle-3-core-owns D-9): the
+            // holder removes every Herdr variable, so a process in the pane
+            // names this pane alone.
             env: env
                 .into_iter()
                 .chain(
@@ -143,6 +155,7 @@ impl PaneHolders for LocalPanes {
                     OsString::from(hide_node_link::holders::PANE_ID_VARIABLE),
                     OsString::from(&start.pane),
                 )])
+                .chain(self.install.iter().flat_map(PaneInstall::variables))
                 .collect(),
             size,
             // The screen's colors reach a holder by a theme message once a

@@ -165,9 +165,38 @@ pub fn bootstrap(env: &Env, one_shot: bool) -> Result<PathBuf, String> {
     let mut nonce = [0u8; 16];
     getrandom::getrandom(&mut nonce).map_err(|_| "reference_unavailable".to_owned())?;
     let request = json!({"pane_id":pane_id,"nonce":hex::encode(nonce),"one_shot":one_shot});
-    match bootstrap_local(env, &request) {
+    let device_pane = env
+        .install
+        .as_deref()
+        .is_some_and(|install| install != hide_agent_hooks::route::APP_INSTALL);
+    in_pane_order(
+        device_pane,
+        || bootstrap_local(env, &request),
+        || bootstrap_remote(env, &request),
+    )
+}
+
+/// Asks this account's daemon (`local`) and the device bridges (`remote`) for
+/// the pane in the order its installation calls for. A pane another
+/// installation's node started, a device helper's, is that node's: its
+/// bridges answer first, since this account's own daemon would bind the pane
+/// by its folder alone. A pane the desktop app started, or one that names no
+/// installation, asks the daemon first.
+fn in_pane_order(
+    device_pane: bool,
+    local: impl FnOnce() -> Result<PathBuf, String>,
+    remote: impl FnOnce() -> Result<Option<PathBuf>, String>,
+) -> Result<PathBuf, String> {
+    if device_pane {
+        return match remote() {
+            Ok(Some(path)) => Ok(path),
+            Ok(None) => local(),
+            Err(remote_reason) => local().map_err(|_| remote_reason),
+        };
+    }
+    match local() {
         Ok(path) => Ok(path),
-        Err(local_reason) => match bootstrap_remote(env, &request) {
+        Err(local_reason) => match remote() {
             Ok(Some(path)) => Ok(path),
             Ok(None) => Err(local_reason),
             Err(remote_reason) => Err(remote_reason),
@@ -1732,6 +1761,31 @@ mod tests {
         assert_eq!(bootstrap_bridges(&bridges, &request), Ok(None));
     }
 
+    /// A device helper's pane reaches its own node through the bridges even
+    /// while this account's daemon would answer for it; the desktop app's
+    /// pane, and a pane that names no installation, reach the daemon first.
+    #[test]
+    fn a_panes_hide_reaches_the_installation_that_started_it() {
+        let daemon = || Ok(PathBuf::from("daemon"));
+        let bridge = || Ok(Some(PathBuf::from("bridge")));
+        assert_eq!(in_pane_order(true, daemon, bridge), Ok("bridge".into()));
+        assert_eq!(in_pane_order(false, daemon, bridge), Ok("daemon".into()));
+        // A node that does not hold the pane leaves it to the daemon.
+        assert_eq!(
+            in_pane_order(true, daemon, || Ok(None)),
+            Ok("daemon".into())
+        );
+        // Refused by both, a device pane says why its node refused.
+        assert_eq!(
+            in_pane_order(
+                true,
+                || Err("hide_unavailable".to_owned()),
+                || Err("pane_unavailable".to_owned())
+            ),
+            Err("pane_unavailable".to_owned())
+        );
+    }
+
     /// A plain shell's `hide <path>` on a device asks the one node of its
     /// link and reads the core's answer; with that node stopped, or a second
     /// core's node beside it, it is refused with a reason at once.
@@ -1866,6 +1920,7 @@ mod tests {
             host_helper_root: None,
             host_cli_dir: None,
             pane_id: None,
+            install: None,
             tailscale_bin: Some(directory.join("no-tailscale")),
             relay_url: "ws://127.0.0.1:9/ws".to_owned(),
             search_path: None,
