@@ -44,6 +44,17 @@
     }
   },
   {
+    "name": "identity-fields-do-not-exempt-prose",
+    "input": {
+      "node": "unlabelled 0123456789abcdef0123456789abcdef",
+      "core_build": "0123456789abcdef0123456789abcdef detail"
+    },
+    "expected": {
+      "node": "unlabelled [redacted]",
+      "core_build": "[redacted] detail"
+    }
+  },
+  {
     "name": "identity-fields-still-mask-credentials-and-personal-data",
     "input": {
       "node": "ghp_Q9zR2wK7mN5pT8vS3uX6yL4gH1jV0qB",

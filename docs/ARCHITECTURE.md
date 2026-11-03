@@ -4451,7 +4451,7 @@ The menu is rebuilt when its language changes as well as when its chords do; the
 The main process imports a catalog and the translator only, never the shell's store or its React modules.
 The host log is JSON lines in `<profile>/logs/desktop.log`, rotated once at 5 MB; it never carries the daemon URL, because the URL carries the token.
 The shared privacy policy in `contracts/diagnostic-redaction.json` masks recognized credentials (named assignments, provider tokens, Bearer credentials, connection URL passwords and private keys), email addresses and token-shaped hex runs; macOS, Linux and Windows home prefixes become `~` while path suffixes stay useful.
-Structured identity fields declared by that policy retain hex correlation IDs and build hashes, so records still distinguish the nodes and builds they describe.
+Structured identity fields declared by that policy retain complete hex correlation IDs and build hashes, so records still distinguish the nodes and builds they describe; a hex run inside prose is still masked.
 This exception applies only to generic hex matching; credentials, email addresses and home paths are still masked in those fields, and unknown fields and unstructured text retain the hex rule.
 The shared `contracts/fixtures/diagnostic-fields.json` cases exercise both the core's real stderr/file entrypoints and the desktop host's file/stderr log.
 A home component may contain spaces, so ambiguous unquoted prose between a home prefix and the next separator is also removed rather than exposing part of an account name.

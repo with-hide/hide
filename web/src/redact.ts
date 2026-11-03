@@ -9,7 +9,7 @@ const identifierFields = new Set<string>(policy.identifier_fields);
 
 export function redact(text: string, field?: string): string {
   for (const { pattern, replacement, preserveIdentifiers } of rules) {
-    if (preserveIdentifiers && field !== undefined && identifierFields.has(field)) continue;
+    if (preserveIdentifiers && field !== undefined && identifierFields.has(field) && text.match(pattern)?.[0] === text) continue;
     text = text.replace(pattern, replacement);
   }
   return text;

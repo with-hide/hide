@@ -127,7 +127,12 @@ pub fn redact_diagnostic_field(input: &str, field: &str) -> String {
         text = pattern.replace_all(&text, "[redacted]").into_owned();
     }
     for (pattern, replacement, preserve_identifiers) in &policy().diagnostic {
-        if *preserve_identifiers && policy().identifier_fields.iter().any(|name| name == field) {
+        if *preserve_identifiers
+            && policy().identifier_fields.iter().any(|name| name == field)
+            && pattern
+                .find(&text)
+                .is_some_and(|found| found.start() == 0 && found.end() == text.len())
+        {
             continue;
         }
         text = pattern
