@@ -415,9 +415,7 @@ fn a_relocated_state_folder_moves_nothing() {
 #[test]
 fn with_both_folders_the_new_one_is_used_and_the_old_one_logged() {
     let dir = tempfile::tempdir().unwrap();
-    // Not `home`: the log writes a `/home/<name>/` segment as `~/`
-    // (contracts/diagnostic-redaction.json), which would hide the paths read here.
-    let home = dir.path().join("operator");
+    let home = dir.path().join("home");
     let legacy = home.join(".local/state/hide");
     let moved = home.join(".hide/state");
     std::fs::create_dir_all(&legacy).unwrap();
@@ -438,8 +436,18 @@ fn with_both_folders_the_new_one_is_used_and_the_old_one_logged() {
         "{\"old\":true}"
     );
     let entry = logged(&moved.join("Logs/core.jsonl"), "state.legacy_left");
-    assert!(entry.contains(&legacy.display().to_string()), "{entry}");
-    assert!(entry.contains(&moved.display().to_string()), "{entry}");
+    // The log masks the account's home folder in a path as `~/` (the
+    // diagnostic redaction contract), and the masked part is the home folder
+    // plus the one name under it, so the fixture's `.local` and `.hide` each
+    // read as `~` and only the rest of the path tells the two folders apart.
+    let entry: Value = serde_json::from_str(&entry).unwrap();
+    let masked = |path: &Path| {
+        let rest = path.strip_prefix(&home).unwrap();
+        let rest: std::path::PathBuf = rest.components().skip(1).collect();
+        format!("{}~/{}", dir.path().display(), rest.display())
+    };
+    assert_eq!(entry["legacy"], masked(&legacy), "{entry}");
+    assert_eq!(entry["state_dir"], masked(&moved), "{entry}");
     let _ = isolated(&cli, &home, &moved).arg("stop").status();
     assert!(wait_gone(line["pid"].as_i64().unwrap() as i32));
 }

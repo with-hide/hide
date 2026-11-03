@@ -2372,6 +2372,15 @@ mod tests {
         }
 
         /// A start as the node answers it, once counted.
+        /// A start, counted while it runs, so a test sees how many ran at once.
+        fn counted_start(&self, start: &HolderStart) -> Result<(), HolderError> {
+            let now = self.starting.0.fetch_add(1, Ordering::AcqRel) + 1;
+            self.starting.1.fetch_max(now, Ordering::AcqRel);
+            let answer = self.start_now(start);
+            self.starting.0.fetch_sub(1, Ordering::AcqRel);
+            answer
+        }
+
         fn start_now(&self, start: &HolderStart) -> Result<(), HolderError> {
             let hold = self.hold.lock().unwrap().take();
             if let Some((began, go)) = hold {
@@ -2530,7 +2539,7 @@ mod tests {
                     .any(|reserved| reserved == start),
                 "a start must have its original reservation"
             );
-            self.start(start)
+            self.counted_start(start)
         }
 
         fn cancel(
@@ -2549,14 +2558,6 @@ mod tests {
             } else {
                 Ok(())
             }
-        }
-
-        fn start(&self, start: &HolderStart) -> Result<(), HolderError> {
-            let now = self.starting.0.fetch_add(1, Ordering::AcqRel) + 1;
-            self.starting.1.fetch_max(now, Ordering::AcqRel);
-            let answer = self.start_now(start);
-            self.starting.0.fetch_sub(1, Ordering::AcqRel);
-            answer
         }
 
         fn terminate(&self, pane: &str) -> Result<(), HolderError> {

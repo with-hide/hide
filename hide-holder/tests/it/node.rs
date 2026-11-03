@@ -498,6 +498,20 @@ fn request(
 /// On Windows the caret keeps the typed line from holding it; a variable
 /// would not do twice in one shell, since cmd expands `%B%` when it reads
 /// the line, before its `set` runs, and prints the word set before.
+/// Starts `start`'s pane as the core's own engine does: a request number,
+/// the pane's reservation, its start, and the number retired unless the
+/// answer was lost.
+fn start_pane(holders: &dyn PaneHolders, start: &HolderStart) -> Result<(), HolderError> {
+    let request = holders.request()?;
+    let result = holders
+        .reserve(start, None, request)
+        .and_then(|reserved| holders.start_reserved(start, reserved, request));
+    if !matches!(result, Err(HolderError::Unreachable { .. })) {
+        holders.retire(request)?;
+    }
+    result
+}
+
 fn print_node(word: &str) -> Vec<u8> {
     if cfg!(windows) {
         format!("echo {word}^-node\r").into_bytes()
@@ -628,8 +642,9 @@ fn an_engine_pane_attaches_before_its_holder_start_is_registered() {
         manual: false,
     });
     reports.wait_state(pane, "starting");
-    engine
-        .start(&HolderStart {
+    start_pane(
+        &*engine,
+        &HolderStart {
             pane: pane.to_owned(),
             program: None,
             cwd: hide_platform::path::to_wire(folder.home.path()).unwrap(),
@@ -637,8 +652,9 @@ fn an_engine_pane_attaches_before_its_holder_start_is_registered() {
             rows: SIZE.rows,
             cols: SIZE.cols,
             notice: None,
-        })
-        .unwrap();
+        },
+    )
+    .unwrap();
     screens.first_full(pane);
     service.key(KeyTarget::Pane(pane.to_owned()), print_ok().to_vec(), 0);
     screens.wait_drawn_after(pane, 0, "hide-ok");
@@ -716,11 +732,11 @@ fn unreadable_records_do_not_reject_the_nodes_healthy_panes() {
         cols: SIZE.cols,
         notice: None,
     };
-    linked.start(&start("w1:p4")).unwrap();
+    start_pane(&linked, &start("w1:p4")).unwrap();
     screens.first_full("w1:p4");
     for (pane, bytes) in invalid {
         assert!(matches!(
-            linked.start(&start(pane)),
+            start_pane(&linked, &start(pane)),
             Err(HolderError::Refused { .. })
         ));
         assert_eq!(

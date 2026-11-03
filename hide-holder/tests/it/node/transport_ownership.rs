@@ -206,9 +206,9 @@ fn connection(folder: &Folder) -> (Connection, Arc<Gates>, Script) {
     });
     connection.linked.recovered(HANG_LIMIT).unwrap();
     let script = Script::new(&folder.home, vec![b"input-ready".to_vec()]);
-    connection
-        .linked
-        .start(&HolderStart {
+    super::start_pane(
+        &connection.linked,
+        &HolderStart {
             pane: "p".into(),
             program: Some(
                 role_program("script")
@@ -224,8 +224,9 @@ fn connection(folder: &Folder) -> (Connection, Arc<Gates>, Script) {
             rows: SIZE.rows,
             cols: SIZE.cols,
             notice: None,
-        })
-        .unwrap();
+        },
+    )
+    .unwrap();
     connection.screens.wait_drawn_after("p", 0, "input-ready");
     connection.reports.wait_state("p", "controlling");
     (connection, gates, script)

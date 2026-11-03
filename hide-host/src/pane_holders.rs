@@ -379,20 +379,16 @@ mod tests {
         fn own(self: Arc<Self>, _: Duration) -> Result<Arc<dyn PaneHolders>, HolderError> {
             Ok(self)
         }
-        fn start(&self, _: &HolderStart) -> Result<(), HolderError> {
+        fn reserve(
+            &self,
+            _: &HolderStart,
+            _: Option<u64>,
+            _: hide_node_link::holders::HolderRequest,
+        ) -> Result<hide_node_link::holders::HolderReservation, HolderError> {
             Err(HolderError::Refused {
                 code: "holder_cap".to_owned(),
                 message: "128 holders run".to_owned(),
             })
-        }
-        fn reserve(
-            &self,
-            start: &HolderStart,
-            _: Option<u64>,
-            _: hide_node_link::holders::HolderRequest,
-        ) -> Result<hide_node_link::holders::HolderReservation, HolderError> {
-            self.start(start)?;
-            unreachable!()
         }
         fn terminate(&self, pane: &str) -> Result<(), HolderError> {
             Err(HolderError::NoPane {

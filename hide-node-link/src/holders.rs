@@ -338,10 +338,6 @@ pub trait PaneHolders: Send + Sync {
             message: "this node cannot establish pane ownership".to_owned(),
         })
     }
-    /// Starts `start`'s pane and attaches its screen to the node's terminal
-    /// service. Asked again for a pane that lives, it answers that pane and
-    /// starts no second holder.
-    fn start(&self, start: &HolderStart) -> Result<(), HolderError>;
     /// Issue locally before submission; a definitely unsent request must
     /// also be retired, so a later number cannot strand its gap.
     fn request(&self) -> Result<HolderRequest, HolderError> {
@@ -450,7 +446,7 @@ pub trait PaneHolders: Send + Sync {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "ask", rename_all = "snake_case")]
 pub enum PaneCall {
-    /// [`PaneHolders::start`]; answers nothing.
+    /// [`PaneHolders::reserve`]; answers the reservation.
     Reserve {
         start: HolderStart,
         previous: Option<u64>,

@@ -402,8 +402,10 @@ static int ran_as_hook(void) {
   return found;
 }
 static int write_config(int argc, char **argv) {
-  // --write-config FILE REPORTER SCRIPT COMPLETION COMMAND [ARG...]
-  if (argc < 7 || argc - 6 > MAX_COMMAND) {
+  // --write-config FILE REPORTER SCRIPT COMPLETION [within-ms=N] COMMAND [ARG...]
+  // The budget is no argument of the command, as load_config reads it.
+  int budget = argc > 6 && strncmp(argv[6], "within-ms=", 10) == 0;
+  if (argc - 6 - budget < 1 || argc - 6 - budget > MAX_COMMAND) {
     fputs("fixture provider: expected reporter, script, completion and 1..16 command arguments\n", stderr);
     return 1;
   }
