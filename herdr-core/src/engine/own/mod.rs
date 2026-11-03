@@ -2197,6 +2197,12 @@ mod tests {
 
     use super::*;
 
+    type TerminateHold = (
+        String,
+        std::sync::mpsc::Sender<()>,
+        std::sync::mpsc::Receiver<()>,
+    );
+
     /// Holders that start every pane until told to refuse, as a node whose
     /// holder program cannot start refuses, and say what they found of the
     /// last daemon's holders once the test hands them that.
@@ -2229,13 +2235,7 @@ mod tests {
         >,
         lose_cancel: AtomicBool,
         cancel_notice: Mutex<Option<std::sync::mpsc::Sender<String>>>,
-        terminate_hold: Mutex<
-            Option<(
-                String,
-                std::sync::mpsc::Sender<()>,
-                std::sync::mpsc::Receiver<()>,
-            )>,
-        >,
+        terminate_hold: Mutex<Option<TerminateHold>>,
         lose_retire: AtomicBool,
         issued: std::sync::atomic::AtomicU64,
         retired: Mutex<Vec<u64>>,
