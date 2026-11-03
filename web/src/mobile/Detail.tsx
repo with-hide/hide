@@ -77,9 +77,9 @@ export function Detail({ onBack }: { onBack: () => void }) {
   return (
     <main className="flex h-full flex-col" data-phone-detail={detail ? `${detail.key.device_id}|${detail.key.pane_id}` : ""}>
       <header className="phone-safe-top shrink-0 border-b border-border bg-background px-lg pb-md">
-        {/* ← List, Conversation | Terminal in the middle, and the elapsed time share one row, so the switch costs no height. */}
-        <div className="flex items-center gap-sm pt-sm">
-          <div className="flex min-w-0 flex-1 basis-0">
+        {/* Keep each label's width; wrap when the phone cannot fit all three items. */}
+        <div className="flex flex-wrap items-center gap-sm pt-sm">
+          <div className="flex min-w-max flex-1 basis-0">
             <Button variant="ghost" onClick={onBack} className="-ml-sm flex min-h-(--size-touch-target) items-center gap-xs px-sm text-body text-foreground" data-phone-back="true">
               <ArrowLeftIcon aria-hidden="true" className="size-(--size-icon-lg)" />
               {t("mobile.list")}
@@ -97,7 +97,7 @@ export function Detail({ onBack }: { onBack: () => void }) {
               </TabsList>
             </Tabs>
           ) : null}
-          <span className="min-w-0 flex-1 basis-0 text-right font-mono text-body text-muted-foreground">
+          <span className="min-w-max flex-1 basis-0 text-right font-mono text-body text-muted-foreground">
             <Elapsed since={agent?.changed_at_unix_ms} />
           </span>
         </div>
