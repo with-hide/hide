@@ -241,15 +241,21 @@ def recover(root, command=run):
     previous = json.loads(pending.read_text())["previous"]
     if previous is not None and not re.fullmatch("releases/" + SHA, previous):
         raise ValueError("invalid recovery record")
-    command("systemctl", "stop", *SERVICES, "hide-relay-retention.timer")
+    current = base / "current"
+    if current.is_symlink():
+        # A first installation can fail its syntax check before activate loads
+        # the new units. Make the published unit files visible before cleanup.
+        command("systemctl", "daemon-reload")
+        command("systemctl", "stop", *SERVICES, "hide-relay-retention.timer")
     if previous:
         verify_release(base / previous)
-        atomic_link(base / "current", previous)
+        atomic_link(current, previous)
         sync_directory(base)
         activate(root, command)
-    else:
+    elif current.is_symlink():
         command("systemctl", "disable", *SERVICES, "hide-relay-retention.timer")
-        (base / "current").unlink(missing_ok=True)
+        current.unlink()
+        command("systemctl", "daemon-reload")
     pending.unlink()
     sync_directory(base)
 
@@ -313,7 +319,8 @@ def install(release, root=Path("/"), command=run):
     temporary_pending.replace(pending)
     sync_directory(base)
     try:
-        command("systemctl", "stop", *SERVICES, "hide-relay-retention.timer")
+        if previous is not None:
+            command("systemctl", "stop", *SERVICES, "hide-relay-retention.timer")
         atomic_link(current, "releases/" + values["source"])
         sync_directory(base)
         command("/opt/fluent-bit/bin/fluent-bit", "--dry-run", "-c", str(base / "current/fluent-bit.conf"))

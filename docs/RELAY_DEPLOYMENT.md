@@ -114,12 +114,15 @@ Installation verifies the staged inventory, target machine and ownership of ever
 Only trusted root-owned source and staging directories may be installed: the inventory detects damage, not an attacker able to replace both files and inventory.
 The installer takes `/run/lock/hide-relay-install.lock`, retains immutable releases under `/opt/hide-relay/releases/<SHA>`, and changes one `current` symlink for both binary and configuration.
 It refuses unmanaged units, conflicting bytes for an already-used SHA and more than three retained releases.
-It stops the three deployment services, switches the link, restarts the namespace journal and services, then requires local relay/collector health, a certificate-validated HTTPS proxy response with status 200 and the relay's exact health body, and active services.
+When updating an existing release, it stops the three deployment services before switching the link.
+A first installation has no loaded services to stop.
+It then reloads the published units, restarts the namespace journal and services, and requires local relay/collector health, a certificate-validated HTTPS proxy response with status 200 and the relay's exact health body, and active services.
 The HTTPS check resolves the production domain to loopback and does not follow HTTP redirects; public DNS must already allow Caddy to obtain its certificate.
 It also enables and runs the journal retention timer/service.
 Public certificate issuance and remote logging/notifications still require the acceptance checks below.
 
 A normal activation failure restores the previous link and restarts its services; on the first installation, failure leaves the services disabled with no active release.
+Recovery before the first link switch clears the pending intent without addressing absent services; after the switch it reloads the new units before stopping and disabling them.
 If recovery fails or installation is interrupted, `pending.json` remains and another install is refused.
 The recovery record is flushed and atomically published before any service stops; interruption while writing its temporary file leaves the running release retryable.
 Repair the reported prerequisite and run `sudo python3 scripts/relay-deploy.py recover`; a successful recovery clears the record.

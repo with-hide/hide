@@ -45,6 +45,45 @@ class RelayDeploy(unittest.TestCase):
     def installed(self):
         return self.root / "opt/hide-relay/current"
 
+    def unloaded_systemd(self, reject_collector=False):
+        # A newly created unit symlink is not loaded until daemon-reload.
+        # Real Ubuntu systemctl refuses stop/disable/reset-failed for it.
+        loaded = False
+
+        def boundary(*args):
+            nonlocal loaded
+            if args[:2] == ("systemctl", "daemon-reload"):
+                loaded = self.installed().exists()
+            elif args[0] == "systemctl" and args[1] in ("stop", "disable", "reset-failed", "start"):
+                if not loaded:
+                    raise RuntimeError("unit not loaded (exit 5)")
+            elif args[0] == "/opt/fluent-bit/bin/fluent-bit" and reject_collector:
+                raise RuntimeError("collector configuration refused")
+            return self.healthy(*args)
+
+        return boundary
+
+    def test_first_install_loads_new_units_before_using_them(self):
+        release = self.release()
+        DEPLOY.install(release, self.root, self.unloaded_systemd())
+        self.assertEqual((self.installed() / "hide-relay").read_bytes(), (release / "hide-relay").read_bytes())
+        self.assertFalse((self.root / "opt/hide-relay/pending.json").exists())
+
+    def test_first_install_configuration_failure_removes_active_release(self):
+        with self.assertRaisesRegex(RuntimeError, "collector configuration refused.*previous state restored"):
+            DEPLOY.install(self.release(), self.root, self.unloaded_systemd(reject_collector=True))
+        self.assertFalse(self.installed().is_symlink())
+        self.assertFalse((self.root / "opt/hide-relay/pending.json").exists())
+
+    def test_first_install_interrupted_before_switch_recovers_without_loaded_units(self):
+        base = self.root / "opt/hide-relay"
+        base.mkdir(parents=True)
+        pending = base / "pending.json"
+        pending.write_text('{"previous": null}')
+        DEPLOY.recover(self.root, self.unloaded_systemd())
+        self.assertFalse(self.installed().is_symlink())
+        self.assertFalse(pending.exists())
+
     def test_success_retry_and_failed_update_restore_binary_and_configuration(self):
         old = self.release()
         DEPLOY.install(old, self.root, self.healthy)
