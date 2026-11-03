@@ -74,6 +74,7 @@ set -euo pipefail
 # Optional unattended mode: no native window and no operator socket read.
 isolated_headless=false
 memory_series=false
+fixture_only=false
 case "${1:-}" in
   '') ;;
   --isolated-headless) isolated_headless=true ;;
@@ -82,7 +83,8 @@ esac
 case "${2:-}" in
   '') ;;
   --memory-series) memory_series=true; export MEASURE_FRAME_WINDOW_MS=600000 ;;
-  *) echo 'second argument must be --memory-series' >&2; exit 2 ;;
+  --fixture-only) fixture_only=true ;;
+  *) echo 'second argument must be --memory-series or --fixture-only' >&2; exit 2 ;;
 esac
 measure_dir="$(cd "$(dirname "$0")" && pwd)"
 source "$measure_dir/isolated-env.sh"
@@ -94,6 +96,7 @@ case "$engine" in herdr|own) ;; *) echo "MEASURE_ENGINE must be herdr or own" >&
 # The local fixtures are made through the daemon on either engine.
 neutral=false
 [[ "$scenario" != topology && "$scenario" != restore && "$scenario" != keys ]] || neutral=true
+! $fixture_only || $neutral || { echo '--fixture-only needs MEASURE_SCENARIO=keys, topology or restore' >&2; exit 2; }
 [[ "$engine" == herdr ]] || $neutral || { echo "MEASURE_ENGINE=own measures only MEASURE_SCENARIO=keys, topology or restore" >&2; exit 2; }
 scale="${MEASURE_SCALE:-none}"
 case "$scale" in none|operator|double) ;; *) echo "MEASURE_SCALE must be none, operator or double" >&2; exit 2;; esac
@@ -248,6 +251,7 @@ reset_fixture() {
   echo "scale=$scale"
   echo "isolated_headless=$isolated_headless"
   echo "memory_series=$memory_series"
+  echo "fixture_only=$fixture_only"
   echo "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   uptime
 } > "$MEASURE_RUN_DIR/identity.txt"
@@ -261,11 +265,17 @@ if [[ ! -d "$MEASURE_FIXTURE/.git" ]]; then
   git -C "$MEASURE_FIXTURE" add README
   git -C "$MEASURE_FIXTURE" -c commit.gpgsign=false -c user.email="measure@example.invalid" -c user.name="measure" commit --quiet -m "measure fixture"
 fi
-measure_checkout="$(cd "$MEASURE_RUN_DIR" && pwd)/checkout"
-if [[ ! -f "$measure_checkout/.git" ]]; then
-  git -C "$MEASURE_FIXTURE" worktree add --quiet -b measure-worktree "$measure_checkout"
+# A linked checkout makes Herdr open its primary workspace as well, while
+# the own engine opens only the requested checkout. Neutral comparisons use
+# the primary Git checkout on both engines, keeping their total shape equal.
+# The legacy Herdr-only scenarios retain their linked-checkout fixture.
+if ! $neutral; then
+  measure_checkout="$(cd "$MEASURE_RUN_DIR" && pwd)/checkout"
+  if [[ ! -f "$measure_checkout/.git" ]]; then
+    git -C "$MEASURE_FIXTURE" worktree add --quiet -b measure-worktree "$measure_checkout"
+  fi
+  export MEASURE_FIXTURE="$measure_checkout"
 fi
-export MEASURE_FIXTURE="$measure_checkout"
 start_server() {
   env HOME="$MEASURE_PRIVATE/home" "$HERDR_BIN_PATH" server >>"$MEASURE_RUN_DIR/logs/herdr-server.log" 2>&1 &
   server_pid=$!
@@ -385,7 +395,14 @@ if $neutral; then
   mkdir -p "$MEASURE_READY_DIR"
   cat >> "$MEASURE_PRIVATE/home/.zshrc" <<ZSHRC
 : >| "$MEASURE_READY_DIR/\$\$"
-[[ -p .measure-go ]] && { read -r _ < .measure-go; /usr/bin/python3 -u -c 'import time,collections; collections.deque(((print("fixture output %08d" % i, flush=True),time.sleep(0.05)) for i in range(20000)),maxlen=0)'; }
+[[ -p .measure-go ]] && { read -r _ < .measure-go; /usr/bin/python3 -u -c '
+import os, pathlib, time
+for i in range(20000):
+    print("fixture output %08d" % i, flush=True)
+    if i == 0:
+        pathlib.Path(".measure-printing").write_text(str(os.getpid()) + "\\n")
+    time.sleep(0.05)
+'; }
 ZSHRC
 fi
 # The own engine takes no Herdr: a socket beside its switch fails the daemon.
@@ -417,6 +434,7 @@ if $neutral; then
   export MEASURE_PANE_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pane"])' "$MEASURE_RUN_DIR/fixture.json")"
   export MEASURE_SWITCH_TAB="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["switch_tab"])' "$MEASURE_RUN_DIR/fixture.json")"
   measure_tab="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["tab"])' "$MEASURE_RUN_DIR/fixture.json")"
+  measure_checkout_json="$(python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))["checkout"]))' "$MEASURE_RUN_DIR/fixture.json")"
   echo "engine=$engine" >> "$MEASURE_RUN_DIR/identity.txt"
 fi
 
@@ -449,6 +467,9 @@ if [[ "$scenario" == remote-core ]]; then
   node "$measure_dir/core-front.mjs" screen > "$MEASURE_RUN_DIR/front-screen.txt"
   screen_pane="remote:$screen_node:pane:$MEASURE_PANE_ID"
   echo "screen_pane=$screen_pane" >> "$MEASURE_RUN_DIR/identity.txt"
+fi
+if $neutral; then
+  wait_js "(() => { window.__measureCheckoutId = $measure_checkout_json; return true; })()"
 fi
 wait_js "$(cat "$measure_dir/open-fixture.js")"
 # The fixture made the switch target last, which a new tab brings to the
@@ -488,6 +509,11 @@ fi
 node -e "
 import('$measure_dir/cdp.mjs').then(async ({connectPage}) => { const p = await connectPage('$MEASURE_CDP_PORT'); console.log(JSON.stringify(await p.evaluate('({scenario: \"$scenario\", pane: window.__hideProbe.paneId(), pane_views: document.querySelectorAll(\"[data-pane-view]\").length, splits: document.querySelectorAll(\"[data-split]\").length, tabs: document.querySelectorAll(\"[role=tab]\").length, attached_panes: window.__hideProbe.attachedPanes(), live_terminals: window.__hideProbe.liveTerminals(), ua: navigator.userAgent, dpr: devicePixelRatio, inner: [innerWidth, innerHeight]})'))); p.close(); })" > "$MEASURE_RUN_DIR/page.json"
 cat "$MEASURE_RUN_DIR/page.json"
+if $fixture_only; then
+  if [[ "$scenario" != keys && "$scale" != none ]]; then node "$measure_dir/fixture.mjs" drive; fi
+  note 'fixture-only: exact topology and browser pane readiness confirmed; no performance samples collected'
+  exit 0
+fi
 # Resident memory with every attached pane's terminal alive (D-05): sampled
 # before the echo trials and again after the driven window.
 python3 "$measure_dir/memory.py" settled "$chrome_pid" "$hided_pid" "$MEASURE_CDP_PORT" > "$MEASURE_RUN_DIR/memory-settled.json"

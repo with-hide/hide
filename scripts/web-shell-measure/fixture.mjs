@@ -4,7 +4,8 @@
 // is one typed event on the daemon's WebSocket (`create_workspace`,
 // `create_tab`, `create_pane`), and the ids come back from the snapshot
 // frames, so a Herdr run and an own-engine run of the same build start from
-// the same fixture. Scales (PRD instant-pane-topology D-18):
+// the same fixture, measured in a primary Git checkout on both engines.
+// Scales (PRD instant-pane-topology D-18):
 //   keys:     the measured checkout with five panes in one tab
 //   none:     the measured checkout, its pane and the tab switch target
 //   operator: 43 workspaces, 62 tabs, 66 panes, 5 printing
@@ -21,6 +22,7 @@ import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { connectStateDir } from "../../web/e2e/hided-control.mjs";
 
 const runDir = process.env.MEASURE_RUN_DIR;
@@ -116,6 +118,11 @@ async function build(scaleName) {
   const scale = keys ? { workspaces: 1, tabs: 1, panes: 5, printing: 0 } : SCALES[scaleName];
   if (!scale) throw new Error("scale must be none, operator, double or keys");
   const fixture = fs.realpathSync(process.env.MEASURE_FIXTURE ?? "");
+  const extraTabs = keys ? 0 : scale.tabs - 2 - (scale.workspaces - 1);
+  const rootPrinters = Math.max(0, scale.printing - (scale.panes - scale.tabs));
+  // Extra tabs use the first projects. Root printers use the last ones so
+  // their FIFO cannot also block an unlisted new tab in the same folder.
+  if (rootPrinters && extraTabs + rootPrinters > scale.workspaces - 1) throw new Error("scale has too few projects without extra tabs for its root printers");
   const control = await connectStateDir(stateDir, STEP_MS);
   try {
     const measured = await addCheckout(control, fixture, "measure");
@@ -130,21 +137,24 @@ async function build(scaleName) {
     }
     const tabPanes = [];
     const others = [];
+    const printing = [];
     const root = path.join(runDir, "scale");
     for (let n = 1; n < scale.workspaces; n += 1) {
       const repo = path.join(root, `project-${n}`);
       gitProject(repo, n);
+      const rootPrinter = n >= scale.workspaces - rootPrinters;
+      if (rootPrinter) execFileSync("mkfifo", [path.join(repo, ".measure-go")]);
       const made = await addCheckout(control, fs.realpathSync(repo), `project-${n}`);
       others.push({ ...made, repo: fs.realpathSync(repo) });
       tabPanes.push({ tab: made.tab, pane: made.pane, cwd: fs.realpathSync(repo) });
+      if (rootPrinter) printing.push({ pane: made.pane, fifo: path.join(repo, ".measure-go") });
     }
-    const extraTabs = scale.tabs - 2 - others.length;
     for (let n = 0; n < extraTabs; n += 1) await addTab(control, others[n % others.length], `extra-${n}`);
-    const printing = [];
     for (let n = 0; !keys && n < scale.panes - scale.tabs; n += 1) {
       const target = tabPanes[n];
       let cwd = target.cwd;
-      if (n < scale.printing) {
+      const printer = printing.length < scale.printing;
+      if (printer) {
         // The printer waits in its shell on this FIFO until `drive`.
         cwd = path.join(root, `print-${n}`);
         fs.mkdirSync(cwd, { recursive: true });
@@ -152,7 +162,7 @@ async function build(scaleName) {
         cwd = fs.realpathSync(cwd);
       }
       const pane = await split(control, target.tab, target.pane, cwd);
-      if (n < scale.printing) printing.push({ pane, fifo: path.join(cwd, ".measure-go") });
+      if (printer) printing.push({ pane, fifo: path.join(cwd, ".measure-go") });
     }
     // The measured checkout in front again, as its row's click and its pane's
     // focus bring it: each registration brought its own checkout forward.
@@ -164,24 +174,56 @@ async function build(scaleName) {
       // A workspace is the engine's: a project row lists the session workspaces under it.
       const workspaces = new Set((rest.navigator?.workspaces ?? []).flatMap((row) => row.session_workspace_ids ?? [])).size;
       const front = rest.navigator?.focused_checkout_id === measured.checkout && rest.terminal?.pane_id === measured.pane;
-      return front && all.length >= scale.tabs && panes.length >= scale.panes && { tabs: all.length, panes: panes.length, workspaces };
+      return front && workspaces >= scale.workspaces && all.length >= scale.tabs && panes.length >= scale.panes && { tabs: all.length, panes: panes.length, workspaces };
     }, `${scale.tabs} tabs and ${scale.panes} panes with the measured pane in front`);
-    const out = { scale: scaleName, pane: measured.pane, tab: measured.tab, workspace: measured.workspace, switch_tab: switchTab?.tab ?? null, switch_pane: switchTab?.pane ?? null, printing, key_panes: keyPanes };
+    const valid = ["workspaces", "tabs", "panes"].every((key) => counted[key] === scale[key]) && printing.length === scale.printing;
+    fs.writeFileSync(path.join(runDir, "scale.json"), JSON.stringify({ ...counted, scale: scaleName, agents_reported: 0, printing_targets: scale.printing, printing_panes: printing.length, target: scale, valid }));
+    if (!valid) throw new Error(`fixture shape mismatch: expected ${JSON.stringify(scale)}, observed ${JSON.stringify({ ...counted, printing: printing.length })}`);
+    const out = { scale: scaleName, pane: measured.pane, tab: measured.tab, workspace: measured.workspace, checkout: measured.checkout, switch_tab: switchTab?.tab ?? null, switch_pane: switchTab?.pane ?? null, printing, key_panes: keyPanes };
     fs.writeFileSync(path.join(runDir, "fixture.json"), JSON.stringify(out, null, 2));
-    fs.writeFileSync(path.join(runDir, "scale.json"), JSON.stringify({ ...counted, scale: scaleName, agents_reported: 0, printing_targets: scale.printing, target: scale }));
     console.log(JSON.stringify(out));
   } finally {
     control.close();
   }
 }
 
-function drive() {
+async function drive() {
   const { printing } = JSON.parse(fs.readFileSync(path.join(runDir, "fixture.json"), "utf8"));
-  // Opening a FIFO for writing waits for its reader: the pane's shell.
-  for (const { fifo } of printing) fs.writeFileSync(fifo, "go\n");
+  const deadline = Date.now() + STEP_MS;
+  const started = [];
+  let complete = false;
+  try {
+    for (const { pane, fifo } of printing) {
+      let fd;
+      while (fd === undefined) {
+        try {
+          fd = fs.openSync(fifo, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK);
+        } catch (error) {
+          if (error.code !== "ENXIO" || Date.now() >= deadline) throw error;
+          await delay(50);
+        }
+      }
+      try { fs.writeSync(fd, "go\n"); } finally { fs.closeSync(fd); }
+      // The private shell writes this once, after its first flushed output.
+      // This is startup evidence outside the measured window, not a claim of
+      // uninterrupted progress throughout the later measurement.
+      const marker = path.join(path.dirname(fifo), ".measure-printing");
+      let pid;
+      while (pid === undefined) {
+        const text = fs.existsSync(marker) ? fs.readFileSync(marker, "utf8") : "";
+        if (/^[1-9][0-9]*\n$/.test(text)) pid = Number(text.trim());
+        else if (Date.now() >= deadline) throw new Error(`printer ${pane} did not confirm its first output`);
+        else await delay(50);
+      }
+      started.push({ pane, program_pid: pid });
+    }
+    complete = true;
+  } finally {
+    fs.writeFileSync(path.join(runDir, "printing-start.json"), JSON.stringify({ started, count: started.length, complete, boundary: "marker after first flushed line, before measurement" }));
+  }
 }
 
 const [mode, ...args] = process.argv.slice(2);
 if (mode === "build") await build(args[0] ?? "none");
-else if (mode === "drive") drive();
+else if (mode === "drive") await drive();
 else throw new Error("usage: fixture.mjs build <none|operator|double|keys> | drive");

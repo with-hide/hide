@@ -547,7 +547,7 @@ That report is an observed candidate result, not a new threshold or a replacemen
 
 `scripts/web-shell-measure/run.sh` exercises the product `hided` with separate screen-key and driven-output workloads.
 Baseline and candidate must use the same driver revision, fixture, browser mode and measurement boundary.
-It owns every process it starts: an isolated pinned Herdr server on a socket inside a run-specific mode-0700 directory under `/tmp` (`isolated-env.sh`, the same routing table as section 3), one linked Git checkout and workspace with a `stty -echo -icanon; cat` pane, the release `hided` with its embedded `web/dist`, and one Google Chrome with an automatically assigned CDP port on the page opened with `?probe=1`.
+It owns every process it starts: an isolated pinned Herdr server on a socket inside a run-specific mode-0700 directory under `/tmp` (`isolated-env.sh`, the same routing table as section 3), one measured Git checkout and workspace with a `stty -echo -icanon; cat` pane, the release `hided` with its embedded `web/dist`, and one Google Chrome with an automatically assigned CDP port on the page opened with `?probe=1`.
 The runner reads Chrome's CDP port from its own profile and sends the page URL over standard input so the token is absent from the Chrome command line.
 The operator's socket is only read, before and after, for the topology counts written beside the results.
 
@@ -582,8 +582,17 @@ All shown panes receive the same line-every-8-ms driver during the frame window;
 Each sample also keeps the root's own RSS and each child's RSS by its accounting name, because a child caught between fork and exec reads as a second copy of its parent's pages: a bound on hided's memory reads `hided_self_rss_max_kb` (hided alone), and the tree sum says what its children add.
 For `single`, `multi`, `areas2` or `areas3`, append `--memory-series` after `--isolated-headless` to extend the driven frame window to ten minutes and collect eleven one-minute process-tree RSS samples in `memory-series.json`.
 The `keys`, `device`, `remote-core` and `topology` branches exit before that sampler; the flag does not add a series to them.
-A first run opens on Main (PRD S6), so the harness uses the Projects sidebar to open its linked fixture checkout before measuring.
-The fixture workspace reports the checkout's `hide_owner` token before startup so the core reuses the prepared pane rather than creating a different workspace.
+A first run opens on Main (PRD S6), so the harness uses the Projects sidebar to open its fixture checkout before measuring.
+The engine-neutral `keys`, `topology` and `restore` scenarios use the private primary Git checkout on both engines and select its exact checkout id in the sidebar.
+A linked checkout makes Herdr also open its primary workspace, so measuring that child alone would leave an extra workspace, tab and pane on only one side.
+This primary-checkout fixture measures equal total topology; it is not performance evidence for opening linked worktrees.
+Before starting Chrome or collecting any performance sample, `fixture.mjs` writes the actual and target workspace, tab, pane and configured printer counts to `scale.json` and refuses any mismatch.
+The operator shape has four split printers and one existing project pane printer, for five printers inside the same 43-workspace, 62-tab, 66-pane total; the double shape similarly uses eight splits and two existing panes.
+Root printers belong to projects without extra tabs, so their startup FIFO cannot capture another tab's shell.
+Starting the output waits at most 30 seconds for the FIFOs and one marker per printer, written after its first flushed line; `printing-start.json` records that startup observation outside the measured window, not continuous output coverage.
+The marker adds one file write per printer before measurement and none inside the printing loop after its first line, identically on both engines.
+Append `--fixture-only` after `--isolated-headless` to exercise an engine-neutral scenario through exact topology and browser pane readiness, then clean up without collecting echo, frame or resource samples.
+The older Herdr-only scenarios keep a linked checkout whose prepared workspace reports its `hide_owner` token before startup so the core reuses its pane.
 The Projects control is a tab, so readiness reads `aria-selected`; opening the fixture is one click after its checkout row appears.
 At a scale the fixture's project is the one without agents, so its row waits behind the No agents fold, its project's own fold and its empty or inactive worktrees; the harness opens those folds on the fixture's project alone, each once, because a fold is the core's state and a second click closes it.
 Cleanup removes the private socket's label-generator lock as well as its socket before removing the owned socket directory.
