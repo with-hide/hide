@@ -8,6 +8,8 @@ report, or, for the composer, the verdicts the product's own composer parser
 gave the screens (`journey_composer`).
 """
 
+import hashlib
+
 PASS, FAIL, NOT_MEASURED, NA, EXCLUDED, PENDING = "pass", "fail", "not measured", "N/A", "excluded", "pending"
 # A failed turn the agent never answered at all, after its prompt: the one
 # failure a provider's refusal of that turn can explain (provider_limit.py).
@@ -239,27 +241,93 @@ def rung_verdict(declared, records):
                                                                   f" (the log names {used or 'none'})")
 
 
-def busy_letter_verdict(shown, read, session, held, token):
-    """A letter sent while the agent worked on a held turn: that turn ends
-    with its own answer, and the letter is delivered after one bell and
-    answered after it."""
+def busy_letter_verdict(shown, read, session, held, token, *, declared, input_rungs,
+                        rungs, responses=None, sent_at=None, stops=None, observed_at=None):
+    """One declared delivery path and one held -> letter answer sequence.
+
+    Stop can continue the same assistant event. Such an event alone cannot
+    prove two responses: require Stop payloads or a fake provider trace.
+    docs/delivery.md, Letters while the agent works, owns these expectations.
+    """
     if not isinstance(shown, dict):
         return FAIL, "hide request show gave no letter"
-    if shown.get("state") != "delivered":
-        return FAIL, "letter state is " + str(shown.get("state")) + ", not delivered"
-    if shown.get("bell_attempts") != 1:
-        return FAIL, f"the letter took {shown.get('bell_attempts')} bells, not one"
-    if "error" in read:
-        return FAIL, "Hide's reader could not read the session: " + read["error"]
-    events = read.get("events", [])
-    held_at = next((index for index, event in enumerate(events)
-                    if event.get("role") == "assistant" and held in (event.get("text") or "")), None)
-    if held_at is None:
-        return FAIL, "the turn the letter waited behind never answered " + held
-    verdict = reply_verdict(read, session, token, held_at + 1)
+    if shown.get("state") != "delivered" or shown.get("hook_confirmed") is not True:
+        return FAIL, "the letter has no confirmed delivery"
+    bells, handovers = shown.get("bell_attempts"), shown.get("tool_handovers")
+    if (bells, handovers) == (1, 0):
+        route = "bell"
+    elif (bells, handovers) == (1, 1):
+        route = "bell_hook"
+    elif (bells, handovers) == (0, 1):
+        route = "turn_end"
+    else:
+        return FAIL, "the letter did not take exactly one delivery path"
+    if route not in declared:
+        return FAIL, "the observed delivery path is not declared: " + route
+    if route in ("bell", "bell_hook"):
+        rung = rung_verdict(input_rungs, rungs)
+        if rung[0] != PASS:
+            return rung
+        if sum(record.get("kind") == "input.rung" for record in rungs) != 1:
+            return FAIL, "the bell did not take exactly one input rung"
+    elif rungs or shown.get("bell_line") or shown.get("bell_turn"):
+        return FAIL, "turn-end delivery also carried bell input evidence"
+    verdict = reply_verdict(read, session, token)
     if verdict[0] != PASS:
-        return verdict[0], verdict[1] + " after the held turn's answer"
-    return PASS, "delivered after the held turn, which kept its answer; " + verdict[1]
+        return verdict
+    events = read.get("events", [])
+    positions = []
+    for value in (held, token):
+        matches = [(index, (event.get("text") or "").find(value))
+                   for index, event in enumerate(events) if event.get("role") == "assistant"
+                   for _ in range((event.get("text") or "").count(value))]
+        if len(matches) != 1:
+            return FAIL, "the held and letter answers must each occur exactly once"
+        positions.append(matches[0])
+    if positions[0] >= positions[1]:
+        return FAIL, "the letter answer did not follow the held answer"
+    if route == "bell_hook":
+        claim = shown.get("bell_turn")
+        between = events[positions[0][0] + 1:positions[1][0]]
+        line = canonical_prompt(shown.get("bell_line") or "")
+        bells_in_turn = sum(event.get("role") == "user" and line
+                            == canonical_prompt(event.get("text") or "") for event in between)
+        if (not isinstance(claim, dict)
+                or claim.get("session") != hashlib.sha256(session.encode()).hexdigest()
+                or claim.get("digest") != hashlib.sha256(canonical_prompt(shown.get("bell_line") or "").encode()).hexdigest()
+                or not line or bells_in_turn != 1):
+            return FAIL, "hook intake has no bell-owned turn between the held and letter answers"
+    if stops is not None and any(row.get("error") for row in stops):
+        return FAIL, "the Stop observer recorded an invalid invocation"
+    merged = positions[0][0] == positions[1][0]
+    # The ledger counter is shared by tool and Stop intake. Only these
+    # independent payloads (or the no-tool fake) can distinguish them.
+    if stops is not None and route == "turn_end":
+        if (len(stops) != 2 or any(row.get("error") or row.get("session") != session
+                                  or row.get("reason") != "end_turn" or row.get("subagent")
+                                  or type(row.get("active")) is not bool
+                                  for row in stops)
+                or [row.get("active") for row in stops] != [False, True]
+                or stops[0].get("answers") != [held]
+                or stops[1].get("answers") not in ([token], [held, token])):
+            return FAIL, "Stop evidence did not show one held completion then one continuation in this session"
+        times = [sent_at, *(row.get("at") for row in stops), observed_at]
+        if any(type(at) is not int or at <= 0 for at in times) or times != sorted(times):
+            return FAIL, "Stop observations are not ordered after send"
+    if responses is not None:
+        answers = [row for row in responses if row.get("generation") is True
+                   and row.get("schema") is False and row.get("answered") in (held, token)]
+        if [row.get("answered") for row in answers] != [held, token]:
+            return FAIL, "the fake trace did not answer held then letter exactly once"
+        times = [sent_at, *(row.get("at") for row in answers), observed_at]
+        if any(type(at) is not int or at <= 0 for at in times) or not times[0] <= times[1] <= times[2] <= times[3]:
+            return FAIL, "the fake responses are not ordered within the observation window"
+        if stops is not None and route == "turn_end":
+            if not answers[0]["at"] <= stops[0]["at"] <= answers[1]["at"] <= stops[1]["at"]:
+                return FAIL, "fake responses and Stop observations do not alternate in causal order"
+    if (merged or route == "turn_end") and responses is None and (stops is None or route != "turn_end"):
+        return FAIL, "merged or turn-end answers have no independent response order evidence"
+    return PASS, "confirmed once through " + route + "; held then letter answered once in order"
 
 
 def composer_check(records, agent):
@@ -367,25 +435,27 @@ def reply_verdict(read, session, token, after=0):
     return FAIL, "no assistant message carries " + token
 
 
+def canonical_prompt(text):
+    # hide_agent_hooks::delivery::canonical_prompt: line breaks (CR, LF,
+    # U+2028, U+2029) and characters above U+FFFF removed, a tab read as
+    # four spaces. Trim Unicode White_Space. Python's default strip also
+    # removes the four C0 separators U+001C..U+001F, which remain part of
+    # the prompt.
+    return "".join("    " if char == "\t" else char for char in text
+                   if ord(char) <= 0xffff and char not in "\r\n\u2028\u2029").strip(
+        "\t\n\v\f\r \u0085\u00a0\u1680"
+        "\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a"
+        "\u2028\u2029\u202f\u205f\u3000")
+
+
 def bell_turn(events, bell_line):
     """The index just past the human event the doorbell typed, or None."""
     # The delivery contract ignores line breaks and characters above U+FFFF,
     # which a console reader may drop. Compare the whole prompt; a prefix
     # proves no bell turn.
-    def canonical(text):
-        # hide_agent_hooks::delivery::canonical_prompt: line breaks (CR, LF,
-        # U+2028, U+2029) and characters above U+FFFF removed, a tab read as
-        # four spaces. Trim Unicode White_Space. Python's default strip also
-        # removes the four C0 separators U+001C..U+001F, which remain part of
-        # the prompt.
-        return "".join("    " if char == "\t" else char for char in text
-                       if ord(char) <= 0xffff and char not in "\r\n\u2028\u2029").strip(
-            "\t\n\v\f\r \u0085\u00a0\u1680"
-            "\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a"
-            "\u2028\u2029\u202f\u205f\u3000")
-    line = canonical(bell_line or "")
+    line = canonical_prompt(bell_line or "")
     for index, event in enumerate(events):
-        if event.get("role") == "user" and line and line == canonical(event.get("text") or ""):
+        if event.get("role") == "user" and line and line == canonical_prompt(event.get("text") or ""):
             return index + 1
     return None
 
