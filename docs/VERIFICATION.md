@@ -345,6 +345,8 @@ An empty or invalid answer remains a failure; a nonzero child exit carrying the 
 The controller boundary check distinguishes stderr-only exits, OS launch errors, supervisor deadlines and inner structured timeouts on the actual compiled provider, without a desktop or agent CLI.
 It also retains a grandchild's process object on Windows and requires it signalled, with its open file released, when completion is published.
 The supervisor follows job membership before the root starts and waits for every announced process object, since an active-process count of zero alone precedes handle release; on Unix it keeps the group leader unreaped until the final group signal so a reused pid cannot be targeted.
+On Linux the provider becomes a child subreaper and reaps its own adopted descendants, requiring both the kernel's no-child result and the group's absence before completion; leaving that work to an outer guardian would make each wait for the other.
+Each reap poll and the total reaped descendants are bounded, and exceeding the bound or failing to establish cleanup remains a failure.
 The ordinary PR's Windows forms job builds the same small C provider and runs this boundary check, as the full journey lanes do.
 Those controlled cases prove the boundary's behavior, not the historical cause of a Windows failure whose original stderr and supervisor phase were lost.
 

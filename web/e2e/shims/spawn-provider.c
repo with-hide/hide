@@ -207,6 +207,9 @@ static long long monotonic_ms(void) { return (long long)GetTickCount64(); }
 #include <signal.h>
 #include <sys/wait.h>
 #include <fcntl.h>
+#ifdef __linux__
+#include <sys/prctl.h>
+#endif
 #define process_id getpid
 #define file_open(value) fopen(value, "wb")
 typedef ssize_t fixture_count_t;
@@ -234,7 +237,33 @@ static long long monotonic_ms(void) {
   if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) exit(1);
   return (long long)now.tv_sec * 1000 + now.tv_nsec / 1000000;
 }
+#ifdef __linux__
+static int adopted_children_remain(unsigned int *reaped) {
+  // This single-threaded runner starts only this command's children. Reap
+  // adopted descendants here, rather than waiting on an outer subreaper.
+  for (int n = 0; n < 64; n++) {
+    int status;
+    pid_t child = waitpid(-1, &status, WNOHANG | __WALL);
+    if (child > 0) {
+      if (++*reaped <= 512) continue;
+      cleanup_confirmed = 0; cleanup_error = EOVERFLOW; return -1;
+    }
+    if (child == 0) return 1;
+    if (errno == ECHILD) return 0;
+    if (errno == EINTR) continue;
+    cleanup_confirmed = 0; cleanup_error = errno; return -1;
+  }
+  return 1;
+}
+#endif
 static int run_child_within(char *const argv[], unsigned long within_ms) {
+#ifdef __linux__
+  struct sigaction action = {0};
+  action.sa_handler = SIG_DFL;
+  sigemptyset(&action.sa_mask);
+  if (sigaction(SIGCHLD, &action, NULL) != 0) return failed("child_signal", errno);
+  if (prctl(PR_SET_CHILD_SUBREAPER, 1L, 0L, 0L, 0L) != 0) return failed("subreaper", errno);
+#endif
   int errors[2];
   if (pipe(errors) != 0) return failed("error_pipe", errno);
   if (fcntl(errors[1], F_SETFD, FD_CLOEXEC) != 0 || fcntl(errors[0], F_SETFL, O_NONBLOCK) != 0) {
@@ -276,7 +305,16 @@ static int run_child_within(char *const argv[], unsigned long within_ms) {
   kill(-child, SIGKILL);
   if (waitpid(child, &status, 0) != child) { cleanup_confirmed = 0; return failed("reap", errno); }
   long long cleanup_deadline = monotonic_ms() + 10000;
-  while (kill(-child, 0) == 0 || errno != ESRCH) {
+#ifdef __linux__
+  unsigned int reaped = 0;
+#endif
+  for (;;) {
+    int remaining = 0;
+#ifdef __linux__
+    remaining = adopted_children_remain(&reaped);
+    if (remaining < 0) break;
+#endif
+    if (kill(-child, 0) == -1 && errno == ESRCH && !remaining) break;
     if (monotonic_ms() >= cleanup_deadline) { cleanup_confirmed = 0; cleanup_error = ETIMEDOUT; break; }
     struct timespec delay = {0, 10000000};
     nanosleep(&delay, NULL);
