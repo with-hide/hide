@@ -653,23 +653,31 @@ fn a_command_past_its_cap_is_ended_with_everything_it_started() {
     )
     .unwrap();
     let pid_file = device.home().join("writer.pid");
-    let tree = device.home().join("tree.cmd");
-    std::fs::write(
-        &tree,
-        format!(
-            "@echo off\r\nstart /b \"\" \"{}\" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{}\" \"{}\"\r\nexit /b 0\r\n",
-            system32(r"WindowsPowerShell\v1.0\powershell.exe").display(),
-            writer.display(),
-            pid_file.display()
-        ),
-    )
-    .unwrap();
+    let powershell = system32(r"WindowsPowerShell\v1.0\powershell.exe");
     let mut pipe = device.connect();
     probe(&mut pipe, soon()).unwrap();
+    // `cmd` starts the writer in the background and ends at once; its words
+    // travel in the command line rather than a batch file, which `cmd`
+    // would read in the console's code page.
     assert!(matches!(
         run(
             &mut pipe,
-            &words(&["cmd.exe", "/c", tree.to_str().unwrap()]),
+            &words(&[
+                "cmd.exe",
+                "/c",
+                "start",
+                // A quoted first word is the window title `start` takes.
+                "hide writer",
+                "/b",
+                powershell.to_str().unwrap(),
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                writer.to_str().unwrap(),
+                pid_file.to_str().unwrap(),
+            ]),
             1024,
             soon()
         ),
