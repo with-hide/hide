@@ -1695,7 +1695,11 @@ fn a_reopened_tab_listed_before_its_answer_returns_to_the_area_it_was_closed_fro
         checkout_active_tab_id(&runtime, &checkout).as_deref(),
         Some("w-order:t4")
     );
-    assert_eq!(layout(&runtime).tree.active_area, "a1", "the left area is active");
+    assert_eq!(
+        layout(&runtime).tree.active_area,
+        "a1",
+        "the left area is active"
+    );
 }
 
 fn order(runtime: &Runtime) -> Vec<String> {
