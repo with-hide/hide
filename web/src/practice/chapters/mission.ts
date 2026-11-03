@@ -9,7 +9,7 @@
 // changed files in the Explorer, one of them opened beside it.
 
 import { chapter } from "../chapter";
-import { CONDUCTOR, MISSION_WORLD, SIGN_IN_FILE, focusedOn, missionInSlot, openedFile, showsExplorer, showsMemory, type MissionModel } from "../worlds/mission";
+import { CONDUCTOR, DECISION_CARD, MISSION_WORLD, SIGN_IN_FILE, focusedOn, missionInSlot, openedFile, showsExplorer, showsMemory, type MissionModel } from "../worlds/mission";
 
 const PANE = `[data-pane-view="${CONDUCTOR}"]`;
 const CHIP = `${PANE} [data-pane-mission-chip]`;
@@ -22,12 +22,13 @@ const SCREEN = "ui";
 export default chapter<MissionModel>({
   id: "mission",
   number: 0,
-  version: 10,
+  version: 13,
   world: MISSION_WORLD,
   quest: true,
   steps: [
     // The situation, handed over with `/hide-mission` from the first step: the Conductor plans for a few seconds before the plan stands.
-    { id: "intro", quest: true, target: PANE, side: "center", gesture: { type: { pane: CONDUCTOR, words: "practice.mission.world.example" } }, done: (model) => model.stage >= 1 },
+    // The screen is seen alone a moment first, since it is the first a newcomer meets.
+    { id: "intro", quest: true, target: PANE, side: "center", scene: 2400, gesture: { type: { pane: CONDUCTOR, words: "practice.mission.world.example" } }, done: (model) => model.stage >= 1 },
     { id: "thinking", target: PANE, side: "center", wait: true, done: (model) => model.stage >= 2 },
     // The chip opens the whole plan in the 보기 slot; a first plan also opens the chip's popover once.
     { id: "chip", quest: true, target: CHIP, side: "right", gesture: { click: true }, done: missionInSlot },
@@ -53,6 +54,8 @@ export default chapter<MissionModel>({
     { id: "report", target: "[data-mission]", side: "left" },
     // ⇧⌘L opens Hide AI on its Memory tab; the rail icon would open it on 제안.
     { id: "memory", quest: true, target: '[data-lane-tool="memory"]', side: "left", command: "open_project_memory", done: showsMemory },
+    // What Memory is, on the card the decision became, before the Explorer takes the lane.
+    { id: "kept", target: `[data-memory-card="${DECISION_CARD}"]`, side: "left" },
     // The files the parts changed, in the Explorer, and one of them opened beside it.
     { id: "explorer", quest: true, target: '[data-lane-tool="explorer"]', side: "left", command: "toggle_lane_explorer", done: showsExplorer },
     { id: "file", quest: true, target: `[data-explorer-row="${SIGN_IN_FILE}"]`, side: "left", gesture: { click: true }, done: (model) => openedFile(model) === SIGN_IN_FILE },
