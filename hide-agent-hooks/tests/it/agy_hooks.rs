@@ -96,7 +96,7 @@ impl Machine {
         // The input is ready before the hook's 500 ms payload budget starts.
         // PIPE_BUF fits in an empty pipe, so this write cannot wait for a
         // reader that has not started yet. Larger fixture input fails here.
-        assert!(payload.len() <= libc::PIPE_BUF as usize);
+        assert!(payload.len() <= libc::PIPE_BUF);
         let (reader, mut writer) = std::io::pipe().unwrap();
         writer.write_all(payload.as_bytes()).unwrap();
         drop(writer);
