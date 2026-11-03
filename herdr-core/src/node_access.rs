@@ -244,3 +244,46 @@ mod tests {
         );
     }
 }
+
+/// Why a start's pane could not be proved to run the terminal and shell it
+/// chose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PaneUnconfirmed {
+    /// Nothing can ever confirm it: the engine refused the pane, or the
+    /// node has no Herdr server to name any pane's shell.
+    Certain,
+    /// The answer did not come; a later look may still confirm it.
+    Uncertain,
+}
+
+/// The terminal and shell `pane` runs, as a start checks it typed into the
+/// pane it chose (PRD engine-bundle-3-core-owns D-9): the core's own engine
+/// proves its pane by the pane's record (`Engine::inspect_pane`), and
+/// Herdr's pane is asked of the node that holds its socket
+/// (`Call::PaneInspect`). The one place a start asks it.
+pub(crate) fn pane_terminal(
+    engine: &dyn crate::engine::Engine,
+    node: &dyn NodeLink,
+    pane: &str,
+    wait: Duration,
+) -> Result<hide_node_link::panes::PaneIdentity, PaneUnconfirmed> {
+    if let Some(answer) = engine.inspect_pane(crate::engine::Wait::Each(wait), pane) {
+        return answer.map_err(|error| match error {
+            crate::engine::EngineError::Refused { .. } => PaneUnconfirmed::Certain,
+            _ => PaneUnconfirmed::Uncertain,
+        });
+    }
+    call_as(
+        node,
+        Call::PaneInspect {
+            pane_id: pane.to_owned(),
+        },
+        wait,
+    )
+    .map_err(|error| match error {
+        LinkError::Refused(refusal) if refusal.code == ErrorCode::Unsupported => {
+            PaneUnconfirmed::Certain
+        }
+        _ => PaneUnconfirmed::Uncertain,
+    })
+}

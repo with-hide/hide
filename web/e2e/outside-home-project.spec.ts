@@ -7,9 +7,9 @@ import { expect, test, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { dumpOnFailure, herdrTabs } from "./failure-dump";
-import { startHerdr } from "./herdr-fixture";
-import { startHided, type Daemon } from "./hided-fixture";
+import { dumpOnFailure } from "./failure-dump";
+import { startFixture } from "./engine-fixture";
+import { asFirstRun, startHided, type Daemon } from "./hided-fixture";
 import { sendEvent, showExplorer } from "./wire";
 import { toPage } from "../../desktop/src/main/wirePath";
 
@@ -52,7 +52,7 @@ function worktreesOf(repo: string): string[] {
 
 test("a project outside home is asked about again after its removal, and its worktree is made, selected and read", async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 });
-  const herdr = await startHerdr();
+  const herdr = await startFixture();
   let daemon: Daemon | null = null;
   try {
     // The fixture root is not the daemon's home, so this repository is outside it.
@@ -63,7 +63,7 @@ test("a project outside home is asked about again after its removal, and its wor
     fs.writeFileSync(path.join(repo, "README.md"), "# outside\n");
     git(repo, ["add", "README.md"]);
     git(repo, ["commit", "-q", "-m", "initial"]);
-    daemon = await startHided(herdr, "outside-home-project");
+    daemon = await asFirstRun(await startHided(herdr, "outside-home-project"));
     expect(path.relative(daemon.home, repo).startsWith("..")).toBe(true);
     const registered = watchCore(page);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
@@ -90,7 +90,7 @@ test("a project outside home is asked about again after its removal, and its wor
     const id = await project.first().getAttribute("data-project");
     await expect.poll(() => registered.paned.has(id!), { timeout: 30_000 }).toBe(true);
     await sendEvent(page, daemon, "remove_workspace", { workspace_id: id });
-    await dumpOnFailure("registrations after removal", () => ({ registered: registered.paths, paned: [...registered.paned], herdr: herdrTabs(herdr) }), () =>
+    await dumpOnFailure("registrations after removal", () => ({ registered: registered.paths, paned: [...registered.paned] }), () =>
       expect.poll(() => registered.paths, { timeout: 30_000 }).not.toContain(toPage(repo)),
     );
     expect(await asked()).toBe("needs_confirmation");

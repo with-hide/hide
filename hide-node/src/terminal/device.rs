@@ -577,15 +577,9 @@ impl hide_host::serve::Terminals for NodeTerminals {
             Arc::new(UplinkReports(Arc::clone(&self.uplink))),
         )?;
         let opened = opened.ok_or("the node's pane holders did not open")?;
-        let panes: Arc<dyn hide_node_link::holders::PaneHolders> =
-            Arc::new(super::engine_panes::LocalPanes::new(
-                opened,
-                Arc::clone(&started),
-                super::engine_panes::PaneShell::Account {
-                    home,
-                    user: hide_host::shell_integration::UserShell::of_process(),
-                },
-            ));
+        let panes: Arc<dyn hide_node_link::holders::PaneHolders> = Arc::new(
+            super::engine_panes::LocalPanes::for_account(opened, Arc::clone(&started), home),
+        );
         *service = Some(started);
         *holders = Some(Arc::clone(&panes));
         *lock(DIAGNOSTICS.get_or_init(|| Mutex::new(Weak::new()))) = Arc::downgrade(&self.uplink);

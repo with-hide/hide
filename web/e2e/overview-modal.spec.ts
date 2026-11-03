@@ -1,16 +1,17 @@
 import { expect, test } from "@playwright/test";
-import { startHerdr } from "./herdr-fixture";
-import { startHided, type Daemon } from "./hided-fixture";
+import { startFixture } from "./engine-fixture";
+import { asFirstRun, startHided, type Daemon } from "./hided-fixture";
 import { countSent, enterWorkspace, screenshot } from "./wire";
 import { chord, held } from "./chords";
 
 test("shared Overview preserves work, returns the keyboard and has direct sidebar commands", async ({ page }) => {
   test.setTimeout(120_000);
-  const herdr = await startHerdr();
+  const herdr = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "overview-modal");
+    daemon = await asFirstRun(await startHided(herdr, "overview-modal"));
     const sent = countSent(page);
+    await page.goto("about:blank");
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     const sidebar = page.locator("[data-sidebar-overview]");
     const modal = page.getByRole("dialog", { name: "Overview", exact: true });

@@ -1,4 +1,4 @@
-// A Conductor's worker on an isolated pinned Herdr and hided (PRD
+// A Conductor's worker on either engine and an isolated hided (PRD
 // mission-worker-sleep B1-B3, B5, B8, B14): `hide agent sleep` ends the
 // worker in its pane, a report letter to it waits while a request letter
 // wakes it into the same conversation and then rings, the operator's pane
@@ -7,11 +7,13 @@
 // second time. B12 (no sleep again after a wake) is the runtime test's.
 
 import { expect, test } from "@playwright/test";
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { agentPane, type HideAnswer } from "./agent-pane";
-import { claudeProjects, herdrHasFocus, startHerdr, writeFixtureTranscript } from "./herdr-fixture";
+import type { HideAnswer } from "./agent-pane";
+import { agentIn, closePane, corePaneFocus, tabOfPane, withControl } from "./daemon-actions";
+import { startFixture } from "./engine-fixture";
+import { spawnChild } from "./fixture-agents";
+import { claudeProjects, writeFixtureTranscript } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace, screenshot } from "./wire";
 import { chord } from "./chords";
@@ -21,9 +23,6 @@ test.describe.configure({ timeout: 300_000 });
 
 type Hide = (args: string[]) => Promise<HideAnswer>;
 type Answer = { ok: boolean; reason?: string; value?: Record<string, unknown>; result?: Record<string, unknown> };
-type ProcessInfo = {
-  result: { process_info: { shell_pid: number; foreground_process_group_id: number; foreground_processes: { argv?: string[] | null }[] } };
-};
 
 /** The last JSON line one `hide` command printed. */
 async function answer(hide: Hide, args: string[]): Promise<Answer> {
@@ -62,46 +61,46 @@ async function ok(hide: Hide, args: string[]): Promise<Answer> {
 
 test("a finished worker sleeps, a request letter wakes it into the same conversation, and its node's finish sleeps it again", async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 1000 });
-  const herdr = await startHerdr({ agents: false });
+  const fixture = await startFixture({ family: true });
   let daemon: Daemon | null = null;
   try {
-    const repoDir = path.join(herdr.root, "missions-repo");
-    fs.mkdirSync(repoDir);
-    const repo = fs.realpathSync(repoDir);
-    for (const args of [["init", "-q", "-b", "main"], ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-q", "--allow-empty", "-m", "baseline"]]) {
-      const git = spawnSync("git", ["-C", repo, ...args], { encoding: "utf8" });
-      expect(git.status, git.stderr).toBe(0);
-    }
-    const created = herdr.run(["workspace", "create", "--cwd", repo, "--label", "missions-repo", "--env", `PATH=${herdr.fixturePath}`, "--focus"]) as { result: { root_pane: { pane_id: string } } };
-    daemon = await startHided(herdr, "mission-worker-sleep");
-    const lead = created.result.root_pane.pane_id;
-    const conductor = await agentPane(herdr, daemon.stateDir, lead);
-    const snapshotAgents = () => (herdr.run(["api", "snapshot"]) as { result: { snapshot: { agents: { pane_id: string; terminal_id: string; agent_session?: { value: string } }[] } } }).result.snapshot.agents;
-    const listed = snapshotAgents().find((agent) => agent.pane_id === lead)!;
-    const self = await ok(conductor, ["agent", "register", "--host-scope", herdr.socket, "--session", listed.agent_session!.value, "--instance", listed.terminal_id, "--name", "conductor", "--pane", lead]);
-    const conductorId = (self.value as { id: string }).id;
+    daemon = await startHided(fixture, "mission-worker-sleep");
+    const [lead, beside] = fixture.panes;
+    const live = daemon;
+    // The Conductor is alone in its project, as a mission's lead is: its one worker is spawned below.
+    await withControl(live, (control) => closePane(control, beside));
+    const conductor = fixture.runAs(lead);
+    const repo = fs.realpathSync(path.join(fixture.root, "fixture"));
+    const conductorId = ((await ok(conductor, ["agent", "show", "here"])).value as { id: string }).id;
 
-    // The worker is the Conductor's child, in a tab of its own.
-    const spawned = await ok(conductor, ["agent", "spawn", "--parent", "here", "--name", "worker", "--intent", "worker", "--kind", "claude", "--repo", repo, "--branch", "worker-task"]);
-    const worker = spawned.value as { id: string; pane: string; session: string };
-    expect(worker.pane.split(":")[0]).not.toBe(lead.split(":")[0]);
-    const nativeSession = () => snapshotAgents().find((agent) => agent.pane_id === worker.pane)?.agent_session?.value ?? null;
-    await expect.poll(nativeSession, { timeout: 20_000 }).toBeTruthy();
-    const session = nativeSession()!;
     // The conversation file a real Claude writes; the bell reads its turns before it rings.
     // Written now, so turning sleep on later does not find it hours idle.
-    writeFixtureTranscript(claudeProjects(herdr), session, { task: "Review fix worker", at: Date.now() });
-    const processInfo = () => (herdr.run(["pane", "process-info", "--pane", worker.pane]) as ProcessInfo).result.process_info;
-    const asleep = () => { const info = processInfo(); return info.foreground_process_group_id === info.shell_pid; };
+    const session = `worker-session-${process.pid}`;
+    writeFixtureTranscript(claudeProjects(fixture), session, { task: "Review fix worker", at: Date.now() });
+    // The worker is the Conductor's child, in a tab of its own.
+    const workerPane = await spawnChild(fixture, live, lead, { name: "worker", repo, branch: "worker-task", session });
+    const listed = (await ok(conductor, ["agent", "list"])).value as { items: { id: string; pane: string }[] };
+    const worker = { id: listed.items.find((agent) => agent.pane === workerPane)!.id, pane: workerPane };
+    await withControl(live, async (control) => {
+      const tabs = await control.until((rest) => {
+        const [leadTab, workerTab] = [tabOfPane(rest, lead), tabOfPane(rest, worker.pane)];
+        return leadTab && workerTab ? { leadTab, workerTab } : undefined;
+      }, "the Conductor's and the worker's tabs", 20_000);
+      expect(tabs.workerTab).not.toBe(tabs.leadTab);
+    });
+    // Whether Hide holds the worker asleep, as its registration reads: an asleep agent no longer runs, so its pane belongs to its shell.
+    const lifecycle = async () => ((await answer(conductor, ["agent", "show", worker.id])).value as { state?: { lifecycle?: string } } | undefined)?.state?.lifecycle;
+    const asleep = async () => (await lifecycle()) === "asleep";
+    const sessionNow = () => withControl(live, (control) => control.until((rest) => agentIn(rest, worker.pane)?.session_id ?? undefined, `the session of ${worker.pane}`, 20_000));
 
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
-    await enterWorkspace(page, "missions-repo");
+    await enterWorkspace(page, "fixture");
     const leadView = page.locator(`[data-pane-view="${lead}"]`);
     await expect(leadView).toBeVisible({ timeout: 20_000 });
 
     // Control: an awake worker's request rings in this fixture.
     const show = async (id: string) => JSON.stringify(await answer(conductor, ["request", "show", id]));
-    const holds = (id: string) => JSON.stringify(diagnostics(daemon!, "doorbell.held").filter((record) => record.letter_id === id).slice(-6));
+    const holds = (id: string) => JSON.stringify(diagnostics(live, "doorbell.held").filter((record) => record.letter_id === id).slice(-6));
     const control = await ok(conductor, ["request", "send", worker.id, "--intent", "control", "--kind", "request", "--body", "깨어 있는 동안의 확인"]);
     const controlId = ((control.value ?? control.result) as { id: string }).id;
     await expect.poll(() => show(controlId), { message: `an awake worker's request rings; holds ${holds(controlId)}`, timeout: 40_000 })
@@ -119,22 +118,22 @@ test("a finished worker sleeps, a request letter wakes it into the same conversa
     const report = await ok(conductor, ["request", "send", worker.id, "--intent", "status-report", "--kind", "report", "--body", "참고: 리뷰가 시작됐어요"]);
     expect(JSON.stringify(report)).toContain('"state":"pending"');
     const reportId = ((report.value ?? report.result) as { id: string }).id;
-    const sleepRecords = () => JSON.stringify(diagnostics(daemon!, "agent_sleep.").slice(-12));
+    const sleepRecords = () => JSON.stringify(diagnostics(live, "agent_sleep.").slice(-12));
     await quietFor(page, 8_000, "a report letter starts no wake; a request starts one within a tick");
-    expect(asleep(), `a report wakes no one; ${sleepRecords()}`).toBe(true);
+    expect(await asleep(), `a report wakes no one; ${sleepRecords()}`).toBe(true);
 
     // B2, B5: a request wakes it into the same conversation; the operator's pane keeps the focus.
     const request = await ok(conductor, ["request", "send", worker.id, "--intent", "review-fix", "--kind", "request", "--body", "리뷰 지적 하나를 고쳐 주세요"]);
     const requestId = ((request.value ?? request.result) as { id: string }).id;
     await expect.poll(asleep, { message: "the request wakes the worker", timeout: 60_000 }).toBe(false);
     // The wake was the letter's, resuming the conversation rather than starting a new one.
-    const wakes = () => diagnostics(daemon!, '"agent_sleep.waking"').filter((record) => record.pane_id === worker.pane);
+    const wakes = () => diagnostics(live, '"agent_sleep.waking"').filter((record) => record.pane_id === worker.pane);
     const letterWakes = () => wakes().filter((record) => record.trigger === "letter").length;
     await expect.poll(letterWakes, { timeout: 20_000 }).toBe(1);
     expect(wakes().every((record) => record.mode === "resume"), JSON.stringify(wakes())).toBe(true);
-    await expect.poll(nativeSession, { message: "the worker resumed its own conversation", timeout: 20_000 }).toBe(session);
+    expect(await sessionNow(), "the worker resumed its own conversation").toBe(session);
     await expect(leadView).toHaveAttribute("data-focused", "true");
-    expect(herdrHasFocus(herdr, lead)).toBe(true);
+    await withControl(live, (control) => control.until((rest) => corePaneFocus(rest) === lead || undefined, "the Conductor's pane holding the focus", 20_000));
     // One bell rings for the worker's turn: the oldest letter's, which counts the request with it.
     await expect.poll(async () => {
       const [reportShown, requestShown] = [await show(reportId), await show(requestId)];
@@ -155,23 +154,23 @@ test("a finished worker sleeps, a request letter wakes it into the same conversa
     await ok(conductor, ["mission", "start"]);
     await ok(conductor, ["mission", "node", "fix", "--status", "working", "--agent-id", worker.id, "--line", "고치는 중"]);
     await quietFor(page, 5_000, "a working node marks no one; a finish marks its worker at once");
-    expect(asleep(), `a working node sleeps no one; ${sleepRecords()}`).toBe(false);
+    expect(await asleep(), `a working node sleeps no one; ${sleepRecords()}`).toBe(false);
     await ok(conductor, ["mission", "node", "fix", "--status", "dropped"]);
     await expect.poll(asleep, { message: `the finished node's worker sleeps within the minute pass; ${sleepRecords()}`, timeout: 150_000, intervals: [2_000] }).toBe(true);
-    const missionSleeps = diagnostics(daemon!, '"agent_sleep.ending"').filter((record) => record.pane_id === worker.pane && record.trigger === "mission");
+    const missionSleeps = diagnostics(live, '"agent_sleep.ending"').filter((record) => record.pane_id === worker.pane && record.trigger === "mission");
     expect(missionSleeps.length, `the node's finish put it to sleep; ${sleepRecords()}`).toBeGreaterThan(0);
     // The request still pending woke it once already, so it does not wake it again.
     expect(await show(requestId), "the request is still pending, so only the once rule keeps the worker asleep").toContain('"state":"pending"');
     await quietFor(page, 10_000, "a pending letter's wake starts within a tick of the sleep landing");
-    expect(asleep(), `a letter wakes its recipient once; ${sleepRecords()}`).toBe(true);
+    expect(await asleep(), `a letter wakes its recipient once; ${sleepRecords()}`).toBe(true);
     expect(letterWakes()).toBe(1);
     // The Conductor itself never sleeps for its mission.
-    expect(snapshotAgents().some((agent) => agent.pane_id === lead)).toBe(true);
+    await withControl(live, (control) => control.until((rest) => agentIn(rest, lead) || undefined, "the Conductor's row", 20_000));
     expect(conductorId).toBeTruthy();
     await expect(leadView).toHaveAttribute("data-focused", "true");
     await screenshot(page, "mission-worker-sleep-node-done");
   } finally {
     daemon?.stop();
-    herdr.stop();
+    fixture.stop();
   }
 });

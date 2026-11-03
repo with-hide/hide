@@ -1,4 +1,4 @@
-// The mobile companion on an isolated pinned Herdr and a debug hided (PRD
+// The mobile companion on an isolated engine and a debug hided, either engine (PRD
 // mobile-companion D-11): Settings > Mobile walks a fake `tailscale` through
 // its four checklist states to a QR; an iPhone-sized touch page pairs with the
 // QR's code, lists the agents in four groups, opens a detail, and its reply
@@ -14,12 +14,15 @@
 // only a debug hided accepts.
 
 import { devices, expect, test, type Browser, type BrowserContext, type Page } from "@playwright/test";
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
-import { elsewhereTab, finishFixtureTurn, labelAgent, labelMarker, setFixtureLifecycle, setFixtureSession, startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { startFixture, type AgentFixture } from "./engine-fixture";
+import { closePane, sendKeys, withControl } from "./daemon-actions";
+import { elsewhereTab, finishUnseenTurn, sessionIn, setAgentAsking, setAgentSession, setAgentState } from "./fixture-agents";
+import { claudeProjects, continueFixtureTranscript, labelMarker } from "./herdr-fixture";
 import { DNS, FakeTailscale } from "./fake-tailscale";
 import { startHided, type Daemon } from "./hided-fixture";
 import { screenshot, THIS_MACHINE } from "./wire";
@@ -141,18 +144,23 @@ function toolOutput(text: string): string {
 }
 
 /** The fixture's titles, which the core keeps on every label it makes. */
-function title(herdr: HerdrFixture, pane: string): string {
-  return pane === herdr.panes[0] ? "Agent one" : "Agent two";
+function title(fixture: AgentFixture, pane: string): string {
+  return pane === fixture.panes[0] ? "Agent one" : "Agent two";
 }
 
-/** The agent stops and its label asks the operator `question`. */
-async function ask(herdr: HerdrFixture, pane: string, question: string): Promise<void> {
-  await setFixtureLifecycle(herdr, pane, "idle");
-  labelAgent(herdr, pane, { task: title(herdr, pane), reply: question, question: true });
+/**
+ * The agent writes its question to the current session before it stops, as
+ * a real turn does. Replacing the session after stopping publishes an ended
+ * turn on the old session first, which can already send a done notification.
+ */
+async function ask(fixture: AgentFixture, daemon: Daemon, pane: string, question: string): Promise<void> {
+  await setAgentState(daemon, pane, "working");
+  continueFixtureTranscript(fixture, await sessionIn(daemon, pane), { task: title(fixture, pane), reply: question, question: true });
+  await setAgentAsking(daemon, pane);
 }
 
-async function work(herdr: HerdrFixture, pane: string): Promise<void> {
-  await setFixtureLifecycle(herdr, pane, "working");
+async function work(daemon: Daemon, pane: string): Promise<void> {
+  await setAgentState(daemon, pane, "working");
 }
 
 async function openMobileSettings(page: Page, daemon: Daemon): Promise<void> {
@@ -237,17 +245,17 @@ async function noPushFor(received: Push[], count: number, ms = 3_000): Promise<v
 
 test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push rules and revoke", async ({ browser, page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  const herdr = await startHerdr();
+  const fixture = await startFixture();
   const tailscale = new FakeTailscale();
   const push = await pushService();
   let daemon: Daemon | null = null;
   const contexts: BrowserContext[] = [];
   try {
-    const [one, two] = herdr.panes;
-    // Herdr's clients look here while a turn ends, so it ends unseen: done.
-    const elsewhere = elsewhereTab(herdr);
-    const finish = (pane: string) => finishFixtureTurn(herdr, pane, elsewhere);
-    daemon = await startHided(herdr, "mobile", undefined, { HIDE_TAILSCALE_BIN: tailscale.bin });
+    daemon = await startHided(fixture, "mobile", undefined, { HIDE_TAILSCALE_BIN: tailscale.bin });
+    const [one, two] = fixture.panes;
+    // The engine's clients look here while a turn ends, so it ends unseen.
+    const elsewhere = await elsewhereTab(fixture, daemon);
+    const finish = (pane: string) => finishUnseenTurn(fixture, daemon!, pane, elsewhere);
 
     // B1: off by default, and nothing asked Tailscale anything.
     await openMobileSettings(page, daemon);
@@ -298,8 +306,8 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     await expect(stale.locator('[data-phone-guidance="code_expired"]')).toHaveText("코드가 만료됐어요. Mac에서 QR을 다시 여세요.", { timeout: 20_000 });
 
     // Agent states before the phone opens: one asks, two works.
-    await ask(herdr, one, "배포 전에 테스트를 다시 돌릴까요?");
-    await work(herdr, two);
+    await ask(fixture, daemon!, one, "배포 전에 테스트를 다시 돌릴까요?");
+    await work(daemon!, two);
 
     // B11: the QR opens the pairing page; Connect lands on the list and the Mac lists the phone.
     const phoneContextOne = await phoneContext(browser, push);
@@ -337,7 +345,7 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     await expect(phone.locator('[data-phone-group="working"]').locator(`[data-phone-agent$="|${two}"]`)).toBeVisible();
     await expect(phone.locator("[data-phone-group] h2").first()).toContainText("Needs You");
     // B21: live; two asks and joins one under Needs You without a reload.
-    await ask(herdr, two, "어느 브랜치에 올릴까요?");
+    await ask(fixture, daemon!, two, "어느 브랜치에 올릴까요?");
     await expect(phone.locator('[data-phone-group="needs_you"] [data-phone-group-count]')).toHaveText("2", { timeout: 20_000 });
     // B41: an idle list sends nothing; the phone hears only changes.
     const agentFrames = () => frames.filter((frame) => frame.includes('"type":"agents"')).length;
@@ -348,7 +356,7 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
 
     // The agent's conversation: Herdr reports one's Claude session, whose
     // transcript holds 70 turns with tool output and injected context among them.
-    const transcript = path.join(daemon.home, ".claude", "projects", "-fixture", `${SESSION}.jsonl`);
+    const transcript = path.join(claudeProjects(fixture), "e2e", `${SESSION}.jsonl`);
     fs.mkdirSync(path.dirname(transcript), { recursive: true });
     const turns = Array.from({ length: 70 }, (_, index) => turn(index % 2 === 0 ? "user" : "assistant", `turn ${String(index).padStart(2, "0")}`, index));
     // The first request carries what the fixture provider answers, so the
@@ -357,11 +365,11 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     turns[69] = turn("assistant", "turn 69 **굵게**\n\n- 항목 하나\n- 항목 둘\n\n```\ncode line\n```", 69);
     turns.splice(66, 0, toolOutput("SECRET-TOOL-OUTPUT"), turn("user", "<system-reminder>INJECTED-CONTEXT</system-reminder>", 66));
     fs.writeFileSync(transcript, `${turns.join("\n")}\n`);
-    setFixtureSession(herdr, one, SESSION);
+    await setAgentSession(fixture, daemon, one, SESSION);
 
     // B24: the detail shows the head and the agent's newest 30 messages, newest at the bottom.
     const history = [...Array.from({ length: 260 }, (_, index) => `line ${String(index + 1).padStart(3, "0")}`), `wide ${"w".repeat(300)}`].join("\n");
-    execFileSync(herdr.bin, ["pane", "send-text", one, `${history}\n`], { env: herdr.env, timeout: 30_000 });
+    await withControl(daemon, async (control) => sendKeys(control, one, `${history}\n`));
     await oneRow.tap();
     const detail = phone.locator("[data-phone-detail]");
     await expect(detail).toHaveAttribute("data-phone-detail", new RegExp(`\\|${one}$`));
@@ -431,18 +439,18 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     await phone.locator('[data-phone-reply="true"]').fill("yes please");
     await phone.locator('[data-phone-send="true"]').tap();
     await expect(phone.locator('[data-phone-reply="true"]')).toHaveValue("", { timeout: 20_000 });
-    await expect.poll(() => (fs.existsSync(herdr.inputLogs[0]) ? fs.readFileSync(herdr.inputLogs[0], "utf8") : "")).toMatch(/yes please[\r\n]/);
+    await expect.poll(() => (fs.existsSync(fixture.inputLogs[0]) ? fs.readFileSync(fixture.inputLogs[0], "utf8") : "")).toMatch(/yes please[\r\n]/);
     // B27: exactly once.
-    expect(fs.readFileSync(herdr.inputLogs[0], "utf8").split("yes please").length - 1).toBe(1);
+    expect(fs.readFileSync(fixture.inputLogs[0], "utf8").split("yes please").length - 1).toBe(1);
     // B25: the echoed reply reaches the scrollback on its own.
     await expect(phone.locator('[aria-label="Recent terminal output"]')).toContainText("yes please", { timeout: 20_000 });
     // B26: one key each.
-    const logLength = fs.readFileSync(herdr.inputLogs[0], "utf8").length;
+    const logLength = fs.readFileSync(fixture.inputLogs[0], "utf8").length;
     await phone.locator('[data-phone-key="escape"]').tap();
-    await expect.poll(() => fs.readFileSync(herdr.inputLogs[0], "utf8").slice(logLength)).toBe("\u001b");
+    await expect.poll(() => fs.readFileSync(fixture.inputLogs[0], "utf8").slice(logLength)).toBe("\u001b");
     await phone.locator('[data-phone-key="up"]').tap();
     // Up is CSI A, or SS3 A in the application cursor mode a TUI may set.
-    await expect.poll(() => ["\u001b\u001b[A", "\u001b\u001bOA"].includes(fs.readFileSync(herdr.inputLogs[0], "utf8").slice(logLength))).toBe(true);
+    await expect.poll(() => ["\u001b\u001b[A", "\u001b\u001bOA"].includes(fs.readFileSync(fixture.inputLogs[0], "utf8").slice(logLength))).toBe(true);
     // B27: a reply over the limit is named before it is sent.
     await phone.locator('[data-phone-reply="true"]').fill("x".repeat(2001));
     await expect(phone.locator('[data-phone-input-error="true"]')).toContainText("up to 2,000 characters");
@@ -476,9 +484,9 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     // B33: while the phone views one, one's request sends nothing.
     await oneRow.tap();
     await expect(detail).toBeVisible();
-    await work(herdr, one);
+    await work(daemon!, one);
     await expect.poll(() => groupOf(frames, one)).toBe("working");
-    await ask(herdr, one, "정말 배포할까요?");
+    await ask(fixture, daemon!, one, "정말 배포할까요?");
     await expect.poll(() => groupOf(frames, one)).toBe("needs_you");
     await noPushFor(push.received, 1);
     await expect.poll(() => coreLog(daemon as Daemon)).toContain('"reason":"viewing"');
@@ -486,16 +494,16 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
 
     // B33 (off): nothing.
     await choosePush(page, "off");
-    await work(herdr, two);
+    await work(daemon!, two);
     await expect.poll(() => groupOf(frames, two)).toBe("working");
-    await ask(herdr, two, "끔에서는 조용히");
+    await ask(fixture, daemon!, two, "끔에서는 조용히");
     await expect.poll(() => groupOf(frames, two)).toBe("needs_you");
     await noPushFor(push.received, 1);
 
     // B33 (only while the app is closed): nothing while the desktop is connected. The
     // desktop then reads two, which clears its notification (B34).
     await choosePush(page, "app_closed");
-    await work(herdr, two);
+    await work(daemon!, two);
     await expect.poll(() => groupOf(frames, two)).toBe("working");
     await finish(two);
     await expect.poll(() => groupOf(frames, two)).toBe("done");
@@ -506,9 +514,9 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     await page.locator(`nav[data-sidebar] [data-project] [data-agent-open="${two}"]`).click();
     await expect(phone.locator('[data-phone-group="seen"]').locator(`[data-phone-agent$="|${two}"]`)).toBeVisible({ timeout: 20_000 });
     await page.close();
-    await work(herdr, one);
+    await work(daemon!, one);
     await expect.poll(() => groupOf(frames, one)).toBe("working");
-    await ask(herdr, one, "데스크톱이 닫혔을 때");
+    await ask(fixture, daemon!, one, "데스크톱이 닫혔을 때");
     await expect.poll(() => push.received.length, { timeout: 20_000 }).toBe(2);
     const closed = push.received[1]!;
     expect(closed.payload.title).toBe("Agent one");
@@ -519,7 +527,7 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     await twoRow.tap();
     await phone.locator('[data-phone-view="terminal"]').tap();
     await expect(phone.locator("[data-phone-scrollback]")).toBeVisible({ timeout: 20_000 });
-    execFileSync(herdr.bin, ["pane", "close", two], { env: herdr.env, timeout: 30_000 });
+    await withControl(daemon, (control) => closePane(control, two));
     await expect(phone.locator('[data-phone-rows-state="gone"]')).toHaveText("This pane is no longer open.", { timeout: 20_000 });
     await expect(phone.locator('[data-phone-reply="true"]')).toBeDisabled();
     await screenshot(phone, "mobile-phone-gone");
@@ -553,21 +561,21 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     for (const context of contexts) await context.close();
     push.close();
     daemon?.stop();
-    herdr.stop();
+    fixture.stop();
     tailscale.remove();
   }
 });
 
 test("the phone caches group and row status words in the desktop language", async ({ browser, page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  const herdr = await startHerdr({ agents: false });
+  const fixture = await startFixture({ agents: false });
   const tailscale = new FakeTailscale();
   tailscale.install();
   tailscale.ready();
   let daemon: Daemon | null = null;
   let context: BrowserContext | null = null;
   try {
-    daemon = await startHided(herdr, "mobile-language", undefined, { HIDE_TAILSCALE_BIN: tailscale.bin });
+    daemon = await startHided(fixture, "mobile-language", undefined, { HIDE_TAILSCALE_BIN: tailscale.bin });
     await openMobileSettings(page, daemon);
     await page.locator('[data-mobile-switch="true"]').click();
     await choosePush(page, "app_closed");
@@ -628,21 +636,21 @@ test("the phone caches group and row status words in the desktop language", asyn
   } finally {
     await context?.close();
     daemon?.stop();
-    herdr.stop();
+    fixture.stop();
     tailscale.remove();
   }
 });
 
 test("an empty list, the unreachable line, the phone limit and the seven-day revoke", async ({ browser, page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  const herdr = await startHerdr({ agents: false });
+  const fixture = await startFixture({ agents: false });
   const tailscale = new FakeTailscale();
   tailscale.install();
   tailscale.ready();
   let daemon: Daemon | null = null;
   const contexts: BrowserContext[] = [];
   try {
-    daemon = await startHided(herdr, "mobile-limits", undefined, { HIDE_TAILSCALE_BIN: tailscale.bin });
+    daemon = await startHided(fixture, "mobile-limits", undefined, { HIDE_TAILSCALE_BIN: tailscale.bin });
     await openMobileSettings(page, daemon);
     await page.locator('[data-mobile-switch="true"]').click();
     await choosePush(page, "app_closed");
@@ -745,21 +753,21 @@ test("an empty list, the unreachable line, the phone limit and the seven-day rev
   } finally {
     for (const context of contexts) await context.close();
     daemon?.stop();
-    herdr.stop();
+    fixture.stop();
     tailscale.remove();
   }
 });
 
 test("the phone's start sheet starts an agent in a checkout and in Home, and keeps its text while the phone is away", async ({ browser, page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  const herdr = await startHerdr({ agents: false });
+  const fixture = await startFixture({ agents: false });
   const tailscale = new FakeTailscale();
   tailscale.install();
   tailscale.ready();
   let daemon: Daemon | null = null;
   const contexts: BrowserContext[] = [];
   try {
-    daemon = await startHided(herdr, "mobile-start", undefined, { HIDE_TAILSCALE_BIN: tailscale.bin });
+    daemon = await startHided(fixture, "mobile-start", undefined, { HIDE_TAILSCALE_BIN: tailscale.bin });
     await openMobileSettings(page, daemon);
     await page.locator('[data-mobile-switch="true"]').click();
     const phoneContextA = await phoneContext(browser);
@@ -797,15 +805,19 @@ test("the phone's start sheet starts an agent in a checkout and in Home, and kee
     await expect(detail).toBeVisible({ timeout: 45_000 });
     const pane = ((await detail.getAttribute("data-phone-detail")) ?? "").split("|").slice(1).join("|");
     expect(pane).not.toBe("");
-    await expect
-      .poll(
-        () => {
-          const info = spawnSync(herdr.bin, ["pane", "process-info", "--pane", pane], { env: herdr.env, encoding: "utf8", timeout: 10_000 }).stdout;
-          return info.includes("--model") && info.includes("opus");
-        },
-        { timeout: 30_000 },
-      )
-      .toBe(true);
+    // The model the agent was started with is the engine's to say; nothing Hide publishes carries the argument list.
+    if (fixture.engine === "herdr") {
+      const server = fixture as typeof fixture & { bin: string; env: NodeJS.ProcessEnv };
+      await expect
+        .poll(
+          () => {
+            const info = spawnSync(server.bin, ["pane", "process-info", "--pane", pane], { env: server.env, encoding: "utf8", timeout: 10_000 }).stdout;
+            return info.includes("--model") && info.includes("opus");
+          },
+          { timeout: 30_000 },
+        )
+        .toBe(true);
+    }
     await screenshot(phone, "mobile-phone-start-detail");
 
     // B44: the text was spent by the start; the remembered model is now the sheet's; offline keeps a new draft.
@@ -831,7 +843,7 @@ test("the phone's start sheet starts an agent in a checkout and in Home, and kee
   } finally {
     for (const context of contexts) await context.close();
     daemon?.stop();
-    herdr.stop();
+    fixture.stop();
     tailscale.remove();
   }
 });

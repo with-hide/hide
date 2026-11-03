@@ -216,6 +216,10 @@ A `SessionStart` of the same session (a resume or a compaction) keeps them, sinc
 
 #### Which session is the pane's
 
+The development engine still has a first-session reporting gap for Pi, omp, OpenCode, Grok and Cursor where the native integration only reports the first session to Herdr.
+Before that session is bound, mailbox commands have no positive native identity; bundle 4 PR A (`b4-transition`) owns the native session-start and session-switch path and its nested-session ownership checks.
+The corresponding web e2e exceptions are named in [TESTING.md](TESTING.md#writing-a-playwright-e2e-test), and do not establish own-engine support for these flows.
+
 A session that is not the pane's agent runs the same hooks in the pane's environment: the operator's own Stop hook that starts `claude -p` is one, and it reset the pane's count to zero after every turn of a session that ran subagents (twenty-one of the forty panes on the operator's machine on 2026-10-15 held such a session's record).
 So the hook does not decide which session is the pane's: every session reports under its own id into a record of its own, and the core lays on the pane's agent only the report of the session Herdr reports for it (`agent_session` of kind `id`); an agent Herdr names no session for, or names by a path, takes the session of its runtime that reported last.
 Herdr can keep naming the session of an agent that ended in the pane when the operator starts it again there, so where no session reported under the id Herdr names and a hook reported since Herdr last changed that id, the session that reported last speaks for the pane: the hook's report is proven to come from the pane, and it is the later word (`agent_hooks::facts::tests::the_session_the_hook_reported_since_herdr_last_changed_its_id_speaks_for_the_pane`).

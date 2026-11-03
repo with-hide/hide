@@ -7,7 +7,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { linkFixtureTranscripts, type HerdrFixture } from "./herdr-fixture";
-import { ownUntilWorkerExit } from "./worker-owned";
+import { afterCleanup, ownUntilWorkerExit } from "./worker-owned";
 import { bundledExecutable, linkBundle } from "./bundled-app";
 import { endPaneHolders } from "./pane-holders.mjs";
 import { endWindowsProcesses, fixtureExecutable, fixtureHomeEnv, fixtureLoginShellPath, fixtureOpenCommand, inheritedFixtureEnv, windowsProcessTree, type WindowsProcess } from "./platform-fixture";
@@ -18,7 +18,15 @@ import { endWindowsProcesses, fixtureExecutable, fixtureHomeEnv, fixtureLoginShe
  * development switch `HIDE_DEV_PANE_HOLDER` on (`engine-fixture.ts`).
  * `daemonEnv` is laid over the daemon's environment before a spec's own.
  */
-export type DaemonEngine = Pick<HerdrFixture, "root" | "fixturePath" | "afterStop"> & { socket?: string; bin?: string; daemonEnv?: NodeJS.ProcessEnv };
+export type DaemonEngine = Pick<HerdrFixture, "root" | "fixturePath" | "afterStop"> & {
+  socket?: string;
+  bin?: string;
+  daemonEnv?: NodeJS.ProcessEnv;
+  /** The HOME the daemon runs in when a spec names none: the own engine's panes are its children and read their shell's files there. */
+  home?: string;
+  /** Makes what the fixture holds through its first daemon, once that daemon answers (`startFixture`). */
+  opened?: (daemon: Daemon) => Promise<void>;
+};
 
 /**
  * `restart` stops the daemon and starts it again on the same state directory
@@ -53,16 +61,15 @@ export function spawnDaemon(binary: string, env: NodeJS.ProcessEnv): ChildProces
 }
 
 /**
- * Ends a fixture daemon on Unix through `hide stop`, which sends SIGTERM,
- * gives the graceful stop five seconds, then ends the daemon's tree and fails
- * if it still runs. A stopped daemon holds that SIGTERM pending, so it is
+ * Ends a fixture daemon through `hide stop`, using the platform's termination
+ * and exit proof. On Unix a stopped daemon holds SIGTERM pending, so it is
  * continued first. True once the end is confirmed; a daemon that never wrote
  * its state has nothing to save and is killed, and false says its exit is not
  * observed yet. Throws, naming `root` to keep, when the stop is not confirmed.
  */
 export function stopDaemon(child: ChildProcess, binary: string, env: NodeJS.ProcessEnv, root: string): boolean {
   if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return true;
-  child.kill("SIGCONT");
+  if (process.platform !== "win32") child.kill("SIGCONT");
   if (!fs.existsSync(path.join(env.HIDE_STATE_DIR!, "hided.json"))) {
     child.kill("SIGKILL");
     return false;
@@ -89,7 +96,7 @@ export async function startHided(herdr: DaemonEngine, label = "s2", homeOverride
   // The daemon places pane-bootstrap.sock below this directory. Keep the
   // fixture root short enough for macOS's Unix socket path limit.
   const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "hde-")));
-  const home = homeOverride ?? path.join(dir, "home");
+  const home = homeOverride ?? herdr.home ?? path.join(dir, "home");
   fs.mkdirSync(path.join(home, "projects", "alpha"), { recursive: true });
   fs.mkdirSync(path.join(home, "projects", ".hidden"), { recursive: true });
   fs.writeFileSync(path.join(home, "projects", "notes.txt"), "x");
@@ -105,10 +112,33 @@ export async function startHided(herdr: DaemonEngine, label = "s2", homeOverride
   if (options.bundledHerdr && !herdr.bin) throw new Error("a bundle with the pinned Herdr needs a Herdr fixture");
   const bundle = options.bundledHerdr ? "herdr" : "plain";
   if (bundled) linkBundle(bundle, options.bundledHerdr ? herdr.bin : undefined);
-  return launch(herdr, label, dir, home, "0", extraEnv, bundled ? bundledExecutable("hided", bundle) : undefined);
+  const daemon = await launch(herdr, label, dir, home, "0", extraEnv, bundled ? bundledExecutable("hided", bundle) : undefined);
+  if (herdr.opened) {
+    try {
+      await herdr.opened(daemon);
+    } catch (error) {
+      throw afterCleanup(error, daemon.stop);
+    }
+  }
+  return daemon;
 }
 
 /** Where the daemon keeps Hide AI's choice under a home: the platform's state folder, `hide/ai.json`. */
+/**
+ * The same daemon started again as on a first run, with no Workspace in
+ * front: a fixture made through the daemon brings its Workspace forward, so
+ * its page would open on it. Open its page through `about:blank` afterwards
+ * (docs/TESTING.md, Writing a Playwright e2e test, step 7).
+ */
+export async function asFirstRun(daemon: Daemon): Promise<Daemon> {
+  return daemon.restart((stateDir) => {
+    const file = path.join(stateDir, "workspace-views.json");
+    const saved = JSON.parse(fs.readFileSync(file, "utf8")) as { workspaces: { last_used_unix_ms: number }[] };
+    for (const workspace of saved.workspaces) workspace.last_used_unix_ms = 0;
+    fs.writeFileSync(file, JSON.stringify(saved));
+  });
+}
+
 export function aiSettingsFile(home: string): string {
   const stateUnderHome = process.platform === "darwin" ? path.join("Library", "Application Support") : process.platform === "win32" ? path.join("AppData", "Local") : path.join(".local", "state");
   return path.join(home, stateUnderHome, "hide", "ai.json");
@@ -231,7 +261,9 @@ async function launch(herdr: DaemonEngine, label: string, dir: string, home: str
           const hostId = fs.readFileSync(path.join(dir, "hide", "host-id"), "utf8").trim();
           const node = (JSON.parse(fs.readFileSync(path.join(dir, "hide", "node.json"), "utf8")) as { node: string }).node;
           const restart = async (beforeStart?: (stateDir: string) => void | Promise<void>) => {
-            end();
+            // A restart ends only the daemon. Windows fixture teardown's
+            // descendant sweep would also kill the holders it must adopt.
+            stopDaemon(child, binary, daemonEnv, dir);
             await exited;
             await beforeStart?.(path.join(dir, "hide"));
             // The next daemon takes over the directory and its removal.

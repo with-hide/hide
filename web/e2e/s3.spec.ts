@@ -1,3 +1,4 @@
+import { skipOwnWindowsAgentStart } from "./own-windows-agent-start";
 // S3 Explorer and editor flows on an isolated pinned Herdr (PRD
 // web-shell-pivot-s3 B1, B3, B4, B5): a real git checkout listed lazily in the
 // Explorer, a folder expanded through the core's ui state, a file opened into
@@ -11,7 +12,8 @@ import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
 import { toPage } from "../../desktop/src/main/wirePath";
-import { startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { openProject, withControl } from "./daemon-actions";
+import { startFixture, type AgentFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { countSent, enterWorkspace, screenshot, showDocuments, showExplorer, showProjectRow } from "./wire";
 import { chord, mod } from "./chords";
@@ -89,7 +91,7 @@ function gitFixture(dir: string): void {
 }
 
 type Fixture = {
-  herdr: HerdrFixture;
+  herdr: AgentFixture;
   daemon: Daemon;
   /** The resolved checkout root in the core's wire spelling. */
   repo: string;
@@ -104,7 +106,7 @@ async function openCheckout(
   beforeLoad?: (page: Page) => Promise<void>,
   extraFiles: Record<string, string> = {},
 ): Promise<Fixture> {
-  const herdr = await startHerdr();
+  const herdr = await startFixture();
   let daemon: Daemon | null = null;
   try {
     const repoDir = path.join(herdr.root, "repo");
@@ -135,12 +137,9 @@ async function openCheckout(
     fs.writeFileSync(path.join(repoDir, "huge.txt"), "");
     fs.truncateSync(path.join(repoDir, "huge.txt"), 17 * 1024 * 1024);
     const repo = toPage(fs.realpathSync(repoDir));
-    herdr.run([
-      "workspace", "create", "--cwd", repoDir, "--label", "repo",
-      "--env", `PATH=${herdr.fixturePath}`, "--no-focus",
-    ]);
 
     daemon = await startHided(herdr, "s3");
+    await withControl(daemon, (control) => openProject(control, repoDir, "repo"));
     const lastSent = new Map<string, Record<string, unknown>>();
     const sent = countSent(page, lastSent);
     await beforeLoad?.(page);
@@ -542,6 +541,7 @@ test("the Explorer filter keeps matches under their folders and Escape restores 
 
 // @platform: A save and a change on disk, on the platform's filesystem.
 test("editing a document marks it dirty, saves it, and a disk change asks how to resolve", { tag: "@platform" }, async ({ page }) => {
+  skipOwnWindowsAgentStart();
   const fixture = await openCheckout(page);
   const { file, sent, lastSent } = fixture;
   try {
@@ -1081,6 +1081,7 @@ async function dragRow(page: Page, from: string, to: string): Promise<void> {
 
 // @platform: Trash is a system call on macOS.
 test("the Explorer creates, renames, moves and trashes entries", { tag: "@platform" }, async ({ page }) => {
+  skipOwnWindowsAgentStart();
   const fixture = await openCheckout(page);
   const { repo, sent, lastSent } = fixture;
   try {
@@ -1269,6 +1270,7 @@ test("a preview-only document closes without a save", async ({ page }) => {
 
 // @platform: File watching is FSEvents on macOS and inotify on Linux.
 test("a change in an expanded folder refreshes the tree without a reload", { tag: "@platform" }, async ({ page }) => {
+  skipOwnWindowsAgentStart();
   const fixture = await openCheckout(page);
   const { repo } = fixture;
   try {
@@ -1294,6 +1296,7 @@ test("a change in an expanded folder refreshes the tree without a reload", { tag
 
 // @platform: ⌘ chords, the command key of the system hide ships on.
 test("⌘P opens a file by name and ⌘K switches checkout", { tag: "@platform" }, async ({ page }) => {
+  skipOwnWindowsAgentStart();
   const fixture = await openCheckout(page);
   const { repo, sent } = fixture;
   try {
@@ -1343,6 +1346,7 @@ test("⌘P opens a file by name and ⌘K switches checkout", { tag: "@platform" 
 });
 
 test("Explorer files paste paths and images attach to the receiving terminal", { tag: "@platform" }, async ({ page }) => {
+  skipOwnWindowsAgentStart();
   const fixture = await openCheckout(page);
   const { herdr, sent } = fixture;
   try {
@@ -1452,8 +1456,7 @@ test("a dropped file reaches the terminal as an attachment", async ({ page }) =>
       () => ({
         log: { exists: fs.existsSync(log), bytes: read().length, tail: read().slice(-200) },
         sent: Object.fromEntries([...sent]),
-        process: herdr.run(["pane", "process-info", "--pane", target]),
-        screen: herdr.run(["pane", "read", target, "--source", "recent-unwrapped", "--lines", "20"]),
+        screen: page.evaluate((id) => window.__hideProbe?.paneText(id) ?? "", target),
       }),
       () => expect.poll(read, { timeout: 15_000 }).toContain("dropped.png"),
     );

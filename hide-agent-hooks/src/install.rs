@@ -538,25 +538,13 @@ impl Quoting {
         Self::Posix
     };
 
-    pub(crate) const POWERSHELL_QUOTES: [char; 5] =
-        ['\'', '\u{2018}', '\u{2019}', '\u{201A}', '\u{201B}'];
+    pub(crate) const POWERSHELL_QUOTES: [char; 5] = hide_shell::quote::POWERSHELL_QUOTES;
 
     pub(crate) fn quote(self, value: &str) -> String {
         match self {
             Self::Cmd => format!("\"{value}\""),
-            Self::Posix => format!("'{}'", value.replace('\'', "'\\''")),
-            Self::PowerShell => {
-                let mut quoted = String::with_capacity(value.len() + 2);
-                quoted.push('\'');
-                for character in value.chars() {
-                    if Self::POWERSHELL_QUOTES.contains(&character) {
-                        quoted.push(character);
-                    }
-                    quoted.push(character);
-                }
-                quoted.push('\'');
-                quoted
-            }
+            Self::Posix => hide_shell::quote::posix_single_quoted(value),
+            Self::PowerShell => hide_shell::quote::powershell_single_quoted(value),
         }
     }
 

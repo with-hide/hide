@@ -336,6 +336,7 @@ struct AnalysisMeta {
     flow_at_unix_ms: u64,
     pane: String,
     generation: u64,
+    state_change_seq: u64,
     owner: String,
     turn: u64,
     phase: AnalysisPhase,
@@ -642,6 +643,33 @@ impl LabelWorker {
             } else {
                 record.turn_end_owed
             };
+            let reference_moved = self
+                .panes
+                .get(&observed.pane_id)
+                .is_some_and(|pane| pane.reported_reference != reference_token);
+            if seq_moved || reference_moved {
+                record.notice_finalized = None;
+            }
+            if reference_moved {
+                record.provider_waiting = false;
+            }
+            // Only an observed turn ending owes a notice judgment. A
+            // restart seeds notifications without replaying past work.
+            record.notice_owed = if !self.summaries
+                || !self.generator.held()
+                || reference_token.is_none()
+                || !matches!(status.as_str(), "idle" | "done")
+            {
+                None
+            } else if seq_moved {
+                (was_working || was_stopped || record.notice_owed.is_some())
+                    .then_some(observed.state_change_seq)
+            } else {
+                record.notice_owed
+            };
+            if record.provider_waiting {
+                changed |= settle_recovery_notice(record, &self.target, &observed.pane_id);
+            }
             match self.panes.get_mut(&observed.pane_id) {
                 None => {
                     // Import a resumable legacy record even if no lifecycle
@@ -1102,6 +1130,9 @@ impl LabelWorker {
             self.schedule(now);
         } else {
             self.waiting.clear();
+            for record in self.records.values_mut() {
+                record.finalize_notice();
+            }
             if self.analysis_in_flight.is_some() {
                 self.analyzer.cancel_running();
             }
@@ -2039,11 +2070,10 @@ impl LabelWorker {
     /// The hold ends on every path of the read, not on a timer: the read has
     /// its own bound (`DEVICE_READ_TIMEOUT`).
     fn release_turn_end(&mut self, pane_id: &str) -> bool {
-        let Some(owed) = self
-            .records
-            .get_mut(pane_id)
-            .and_then(|record| record.turn_end_owed.take())
-        else {
+        let Some(owed) = self.records.get_mut(pane_id).and_then(|record| {
+            let notice = record.finalize_notice();
+            record.turn_end_owed.take().or(notice)
+        }) else {
             return false;
         };
         crate::diagnostic!(json!({
@@ -2110,6 +2140,11 @@ impl LabelWorker {
         if !record.proven_for(Some(&reference)) || !pane.events_loaded {
             return false;
         }
+        // A previous turn's cached events cannot settle a new stop while
+        // its own read is still in flight.
+        if record.notice_owed.is_some() && record.turns_seq != record.notice_owed {
+            return false;
+        }
         let events = pane.events.make_contiguous();
         let working = pane.status == "working";
         // An interruption is the user's own act, not a new task: the turn is
@@ -2121,10 +2156,10 @@ impl LabelWorker {
                 record.analysis_turn_end = turn;
                 self.dirty = true;
             }
-            return false;
+            return record.notice_owed.take().is_some();
         }
         let Some(turn) = turn_key(events) else {
-            return false;
+            return record.notice_owed.take().is_some();
         };
         let initial_context = record.needs_initial_context();
         let Some(phase) = analysis_phase(
@@ -2134,7 +2169,7 @@ impl LabelWorker {
             record.analysis_turn_end == Some(turn),
         ) else {
             pane.next_analysis_at = None;
-            return false;
+            return record.notice_owed.take().is_some();
         };
         // The turn ended while its start was held: the end is due now.
         if phase == AnalysisPhase::TurnEnd
@@ -2168,10 +2203,10 @@ impl LabelWorker {
                 return false;
             }
         }
-        if self.analysis_in_flight.as_deref() == Some(pane_id) {
-            return false;
-        }
         if self.analysis_in_flight.is_some() {
+            // A newer read can finish before this pane's older analysis.
+            // Reconsider it when that analysis lands, just like another
+            // pane; otherwise no further read may wake the owed turn.
             if !self.waiting.iter().any(|id| id == pane_id) {
                 self.waiting.push_back(pane_id.to_owned());
             }
@@ -2302,7 +2337,7 @@ impl LabelWorker {
                 record.analysis_turn_end = Some(turn);
             }
             self.dirty = true;
-            return false;
+            return record.notice_owed.take().is_some();
         }
         if phase == AnalysisPhase::TurnEnd
             && let Some(session) = ledger_session.as_ref()
@@ -2328,6 +2363,7 @@ impl LabelWorker {
             pane.context_wait = None;
             pane.next_analysis_at = None;
             let cleared = record.end.is_some() || !record.line.is_empty();
+            let released = record.finalize_notice().is_some();
             record.end = None;
             record.line.clear();
             record.analysis_turn_start = Some(turn);
@@ -2356,7 +2392,7 @@ impl LabelWorker {
                 "turn": format!("{turn:016x}"),
                 "waited_ms": waited.as_millis() as u64,
             }));
-            return cleared;
+            return cleared || released;
         }
         pane.context_wait = None;
         let ledger = ledger.unwrap_or_default();
@@ -2427,6 +2463,7 @@ impl LabelWorker {
             &context,
         );
         let meta = AnalysisMeta {
+            state_change_seq: record.state_change_seq,
             ledger_session,
             work_author,
             asks_answered,
@@ -2532,6 +2569,7 @@ impl LabelWorker {
         match result {
             Ok((provider, analysis)) => {
                 let record = self.records.get_mut(pane_id).expect("checked above");
+                record.provider_waiting = false;
                 let previous_goal = record.goal.clone();
                 // Only the operator's turn moves the goal; another agent's
                 // letter cannot. Either boundary may open a flow, the turn's
@@ -2766,6 +2804,11 @@ impl LabelWorker {
                     // A late summary still reaches the header it names.
                     return goal_changed || turns_changed;
                 }
+                if outcome.phase == AnalysisPhase::TurnEnd
+                    && record.notice_owed == Some(outcome.state_change_seq)
+                {
+                    record.notice_owed = None;
+                }
                 // A reply that answers the question ending a turn this
                 // label read as finished: a missed question, kept as a
                 // signal for checking the verdict, with ids only
@@ -2863,7 +2906,7 @@ impl LabelWorker {
                 // its facts and never stops on a guess; the goal stays
                 // (D-33, B20).
                 let record = self.records.get_mut(pane_id).expect("checked above");
-                let cleared = record.end.is_some() || !record.line.is_empty();
+                let mut cleared = record.end.is_some() || !record.line.is_empty();
                 if cleared {
                     record.end = None;
                     record.line.clear();
@@ -2903,6 +2946,9 @@ impl LabelWorker {
                 }
                 match failure.retry_after() {
                     Some(wait) => {
+                        let record = self.records.get_mut(pane_id).expect("checked above");
+                        record.provider_waiting = true;
+                        cleared |= settle_recovery_notice(record, &self.target, pane_id);
                         if let Some(pane) = self.panes.get_mut(pane_id) {
                             pane.next_analysis_at = Some(now + wait);
                         }
@@ -2918,6 +2964,7 @@ impl LabelWorker {
                         let record = self.records.get_mut(pane_id).expect("checked above");
                         record.analysis_turn_start = Some(outcome.turn);
                         record.analysis_turn_end = Some(outcome.turn);
+                        cleared |= record.finalize_notice().is_some();
                         self.dirty = true;
                         self.log_failure(pane_id, "analysis.abandoned", &failure.detail());
                     }
@@ -2926,6 +2973,19 @@ impl LabelWorker {
             }
         }
     }
+}
+
+/// Recovery retries keep updating labels, but the turn's notification has
+/// finished. This one bounded marker is cleared by the next lifecycle state.
+fn settle_recovery_notice(record: &mut PaneRecord, target: &str, pane_id: &str) -> bool {
+    let Some(seq) = record.finalize_notice() else {
+        return false;
+    };
+    crate::diagnostic!(json!({
+        "component": "labels", "kind": "notification.provider_recovery",
+        "target": target, "pane_id": pane_id, "state_change_seq": seq,
+    }));
+    true
 }
 
 /// Whether a parent's letter can answer what its delegated session asked: a

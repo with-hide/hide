@@ -1,5 +1,5 @@
 // The ⌘K palette as a navigation palette (PRD cmdk-navigation) on an
-// isolated pinned Herdr and hided: the sidebar's Search icon and ⌘K open the
+// isolated engine and hided: the sidebar's Search icon and ⌘K open the
 // same overlay; on a screen with nothing in front it is the input alone, and a
 // query lists its results under one group per kind with the highlighted row's
 // detail beside them; an agent row is its mark, its title and its state line
@@ -8,8 +8,10 @@
 // no GitHub project here, offers no GitHub search. Captured in Dark and Light.
 
 import { expect, test, type Page } from "@playwright/test";
-import { labelAgent, setFixtureLifecycle, startHerdr } from "./herdr-fixture";
-import { startHided, type Daemon } from "./hided-fixture";
+import { startFixture, type AgentFixture } from "./engine-fixture";
+import { labelAgentPane, setAgentState } from "./fixture-agents";
+import type { FixtureLabel } from "./herdr-fixture";
+import { asFirstRun, startHided, type Daemon } from "./hided-fixture";
 import { countSent, screenshot } from "./wire";
 import { chord } from "./chords";
 
@@ -20,20 +22,34 @@ function headings(page: Page) {
   return page.locator('[data-palette="Search"] [cmdk-group-heading]');
 }
 
+
+/** Opens the restarted daemon's page through a blank page, so the new token mounts a new connection. */
+async function openAfterRestart(page: Page, daemon: Daemon): Promise<void> {
+  await page.goto("about:blank");
+  await page.goto(`${daemon.origin}/#token=${daemon.token}`);
+}
+
+/** Labels the agent in `pane` on the turn it is in: its session is taken while it works, and it works again for the line to show. */
+async function labelWorking(fixture: AgentFixture, daemon: Daemon, pane: string, label: FixtureLabel): Promise<void> {
+  await setAgentState(daemon, pane, "working");
+  await labelAgentPane(fixture, daemon, pane, label);
+  await setAgentState(daemon, pane, "working");
+}
+
 test("⌘K lists results by kind with a detail beside them, and the sidebar Search icon opens the same palette", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  const herdr = await startHerdr();
+  const fixture = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    const [one, two] = herdr.panes;
-    daemon = await startHided(herdr, "palette");
+    daemon = await startHided(fixture, "palette");
+    const [one, two] = fixture.panes;
+    daemon = await asFirstRun(daemon);
     const last = new Map<string, Record<string, unknown>>();
     const sent = countSent(page, last);
-    await page.goto(`${daemon.origin}/#token=${daemon.token}`);
+    await openAfterRestart(page, daemon);
     // One sidebar exposes the project and its root agents.
     await expect(page.locator('[data-sidebar="projects"]')).toBeVisible();
-    labelAgent(herdr, one, { task: "Agent one", progress: "팔레트 그룹 검증 중" });
-    await setFixtureLifecycle(herdr, one, "working");
+    await labelWorking(fixture, daemon, one, { task: "Agent one", progress: "팔레트 그룹 검증 중" });
     // A tree row is one line (agent-hierarchy-screens B14): the label's title says it landed.
     await expect(page.locator(`nav[data-sidebar] [data-pane="${one}"] [data-agent-title]`)).toHaveText("Agent one", { timeout: 20_000 });
 
@@ -137,6 +153,6 @@ test("⌘K lists results by kind with a detail beside them, and the sidebar Sear
     await page.keyboard.press("Escape");
   } finally {
     daemon?.stop();
-    herdr.stop();
+    fixture.stop();
   }
 });

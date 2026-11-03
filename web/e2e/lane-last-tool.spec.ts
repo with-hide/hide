@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
-import { startHerdr } from "./herdr-fixture";
+import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { chord, commandLabel, mod } from "./chords";
 import { chooseLane, enterWorkspace, screenshot, showExplorer } from "./wire";
@@ -25,7 +25,7 @@ async function open(page: Page, daemon: Daemon): Promise<void> {
 test("⌘E reopens the tool a whole-lane close kept, and the Explorer for a lane with no column to bring back", async ({ page }) => {
   test.setTimeout(90_000);
   await page.setViewportSize({ width: 1600, height: 900 });
-  const herdr = await startHerdr({ agents: false });
+  const herdr = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
     daemon = await startHided(herdr, "lane-last-tool");
@@ -81,7 +81,7 @@ test("⌘E reopens the tool a whole-lane close kept, and the Explorer for a lane
 test("a tool pressed into a lane ⌘E or Escape closed opens alone, and the documents wait on their rail button (B15)", async ({ page }) => {
   test.setTimeout(90_000);
   await page.setViewportSize({ width: 1600, height: 900 });
-  const herdr = await startHerdr({ agents: false });
+  const herdr = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
     fs.writeFileSync(path.join(herdr.root, "fixture", "notes.md"), "# Notes\n");
@@ -137,7 +137,7 @@ test("a tool pressed into a lane ⌘E or Escape closed opens alone, and the docu
 test("⌘E bringing the documents back hands the keyboard to the shown document", async ({ page }) => {
   test.setTimeout(90_000);
   await page.setViewportSize({ width: 1600, height: 900 });
-  const herdr = await startHerdr({ agents: false });
+  const herdr = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
     fs.writeFileSync(path.join(herdr.root, "fixture", "notes.md"), "# Notes\n");
@@ -166,7 +166,7 @@ test("⌘E bringing the documents back hands the keyboard to the shown document"
 test("⇧⌘L opens the Project's Memory tool, ⇧⌘R the sidebar's PR list, ⇧⌘G Changes and closes it showing, ⌥⌘1-4 do nothing, and the last tool survives a restart (B24, B25)", async ({ page }) => {
   test.setTimeout(120_000);
   await page.setViewportSize({ width: 1600, height: 900 });
-  const herdr = await startHerdr({ agents: false });
+  const herdr = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
     daemon = await startHided(herdr, "lane-tool-chords");

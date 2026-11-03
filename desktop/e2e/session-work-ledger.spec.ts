@@ -3,7 +3,7 @@
 import { expect, type ElectronApplication, type Locator } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import { continueFixtureTranscript, setFixtureLifecycle, startHerdr } from "../../web/e2e/herdr-fixture";
-import { FIRST_GOAL, NEXT_GOAL, nextWork, seedFirstWork, workFixture, workRepositoryReady } from "../../web/e2e/session-work-fixture";
+import { FIRST_GOAL, NEXT_GOAL, nextWork, seedFirstWorkOnHerdr, workFixture, workRepositoryReady } from "../../web/e2e/session-work-fixture";
 import { chord } from "../../web/e2e/chords";
 import { enterWorkspace, openTaskFolds, setLanePinned, showExplorer, taskRow } from "../../web/e2e/wire";
 import { fitWindow, isolate, launchShell, REPO, test } from "./fixture";
@@ -37,7 +37,7 @@ test("@platform session records by goal flow, ended work and search render in bo
     await setLanePinned(page, true);
     const first = Date.now();
     github.clock(first, first);
-    const { session, child } = seedFirstWork(herdr, first);
+    const { session, child } = seedFirstWorkOnHerdr(herdr, first);
     const root = await taskRow(page, herdr.panes[0], FIRST_GOAL);
     const tasks = page.locator("[data-task-lens]");
     await root.hover();

@@ -3,7 +3,7 @@
 import { expect, test } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
-import { startHerdr } from "./herdr-fixture";
+import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace, screenshot } from "./wire";
 import { afterCleanup } from "./worker-owned";
@@ -12,7 +12,7 @@ test.skip(process.platform === "win32", "the kit installs POSIX hooks");
 
 test("Basic chips expose three accessible groups in all four languages and return keyboard focus", async ({ page }) => {
   test.setTimeout(180_000);
-  const herdr = await startHerdr({ readiness: "registered" });
+  const herdr = await startFixture();
   let daemon: Daemon | undefined;
   try {
     const home = path.join(fs.mkdtempSync(path.join(herdr.root, "ad-")), "home");

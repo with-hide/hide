@@ -1,4 +1,4 @@
-// The link record on an isolated pinned Herdr and hided (PRD link-graph D-34):
+// The link record on an isolated engine and hided, either engine (PRD link-graph D-34):
 // Claude Code session files under the daemon's HOME, one that printed the
 // pull request's address when GitHub made it and two that worked on its
 // branch afterwards, and a fake `gh` that lists the pull request. With no
@@ -14,10 +14,12 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { agentsIn, claudeProjects, startHerdr } from "./herdr-fixture";
+import { claudeProjects, type HerdrFixture } from "./herdr-fixture";
+import { startEngine } from "./engine-fixture";
+import { openProject, withControl } from "./daemon-actions";
 import { OMP_ID, PI_ID, prepareNativeWriter } from "./session-reader-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
-import { fixtureProgram } from "./platform-fixture";
+import { fixtureExecutable, fixtureProgram } from "./platform-fixture";
 import { countSent, screenshot, showProjectRow, showSidebarPrs } from "./wire";
 import { chord } from "./chords";
 import { animationsFinished } from "./wait";
@@ -72,6 +74,26 @@ if (a === "issue" && b === "list") { out([]); process.exit(0); }
 if (a === "api" && b === "graphql") { out({ data: {} }); process.exit(0); }
 process.stderr.write("unsupported: " + args.join(" ") + "\\n");
 process.exit(1);
+`,
+  );
+  return bin;
+}
+
+/**
+ * A `pi` or `omp` ahead of the stand-in that answers Hide AI's model listing
+ * itself and hands everything else to the stand-in. The daemon of an engine
+ * whose panes read the run's root carries it too, and the stand-in would take
+ * the listing for a start and seed the session file again.
+ */
+function modelListing(root: string, kind: string): string {
+  const bin = path.join(root, "model-listing", kind);
+  fixtureProgram(
+    bin,
+    kind,
+    `const args = process.argv.slice(2);
+if (args.includes("--list-models")) { process.stdout.write("xai/fixture-model\\n"); process.exit(0); }
+const run = require("child_process").spawnSync(${JSON.stringify(path.join(root, "bin", fixtureExecutable(kind)))}, args, { stdio: "inherit" });
+process.exit(run.status ?? 1);
 `,
   );
   return bin;
@@ -138,23 +160,23 @@ async function chooseTheme(page: Page, theme: "light" | "dark"): Promise<void> {
 
 test("a pull request's panel shows the sessions that made it and worked on it after their panes closed", async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 1000 });
-  const herdr = await startHerdr();
+  const engine = await startEngine();
   let daemon: Daemon | null = null;
   try {
-    fs.writeFileSync(path.join(herdr.root, "home", ".zshenv"), `export PATH="${path.join(herdr.root, "bin")}:$PATH"\n`);
-    const repo = path.join(fs.realpathSync(herdr.root), "repo");
-    const tree = path.join(fs.realpathSync(herdr.root), "repo-link");
+    fs.writeFileSync(path.join(engine.root, "home", ".zshenv"), `export PATH="${path.join(engine.root, "bin")}:$PATH"\n`);
+    const repo = path.join(fs.realpathSync(engine.root), "repo");
+    const tree = path.join(fs.realpathSync(engine.root), "repo-link");
     fs.mkdirSync(repo);
     initGithubRepository(repo);
     fs.writeFileSync(path.join(repo, "README.md"), "# repo\n");
     git(repo, ["add", "README.md"]);
     git(repo, ["commit", "-m", "initial"]);
     git(repo, ["worktree", "add", "-b", BRANCH, tree]);
-    const files = writeSessions(claudeProjects(herdr), tree);
-    herdr.run(["workspace", "create", "--cwd", repo, "--label", "repo", "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]);
+    const files = writeSessions(claudeProjects(engine), tree);
 
-    const gh = fakeGh(herdr.root);
-    daemon = await startHided(herdr, "link-graph", undefined, { PATH: `${gh}${path.delimiter}${herdr.fixturePath}` });
+    const gh = fakeGh(engine.root);
+    daemon = await startHided(engine, "link-graph", undefined, { PATH: `${gh}${path.delimiter}${engine.fixturePath}` });
+    await withControl(daemon, (control) => openProject(control, repo, "repo"));
     const last = new Map<string, Record<string, unknown>>();
     const sent = countSent(page, last);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
@@ -221,7 +243,7 @@ test("a pull request's panel shows the sessions that made it and worked on it af
     expect(last.get("agent_start_in_checkout")).toMatchObject({ checkout_path: tree, provider: "claude", resume_session_id: "s-maker" });
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });
 
@@ -229,28 +251,30 @@ test("a pull request's panel shows the sessions that made it and worked on it af
 // The last column is the option the default 전부 허용 adds to every restart; Pi never asks and has none.
 for (const [kind, id, resumeFlag, fullAccess] of [["pi", PI_ID, "--session", []], ["omp", OMP_ID, "--resume", ["--auto-approve"]]] as const) {
 test(`a ${kind} archive resume keeps its selected source and uses the current control`, async ({ page }) => {
-  const herdr = await startHerdr({ agents: false });
+  const engine = await startEngine();
   let daemon: Daemon | null = null;
   try {
-    fs.writeFileSync(path.join(herdr.root, "home", ".zshenv"), `export PATH="${path.join(herdr.root, "bin")}:$PATH"\n`);
-    const repo = path.join(fs.realpathSync(herdr.root), "repo");
-    const tree = path.join(fs.realpathSync(herdr.root), "repo-link");
+    fs.writeFileSync(path.join(engine.root, "home", ".zshenv"), `export PATH="${path.join(engine.root, "bin")}:$PATH"\n`);
+    const repo = path.join(fs.realpathSync(engine.root), "repo");
+    const tree = path.join(fs.realpathSync(engine.root), "repo-link");
     fs.mkdirSync(repo);
     initGithubRepository(repo);
     fs.writeFileSync(path.join(repo, "README.md"), "# repo\n");
     git(repo, ["add", "README.md"]);
     git(repo, ["commit", "-m", "initial"]);
     git(repo, ["worktree", "add", "-b", BRANCH, tree]);
-    const session = prepareNativeWriter(herdr, kind, tree);
-    const source = fs.readFileSync(path.join(herdr.root, `${kind}-session-seed.jsonl`), "utf8") + `${JSON.stringify({
+    // The writer reads only the run's root and HOME, which an engine without a CLI environment has as well.
+    const session = prepareNativeWriter({ root: engine.root, env: { HOME: path.join(engine.root, "home") } } as unknown as HerdrFixture, kind, tree);
+    const source = fs.readFileSync(path.join(engine.root, `${kind}-session-seed.jsonl`), "utf8") + `${JSON.stringify({
       type: "message", id: "pr-tool-result", timestamp: at(CREATED + 1_000),
       message: { role: "toolResult", toolCallId: "pr-tool", toolName: "bash", isError: false,
         content: [{ type: "text", text: "https://github.com/acme/repo/pull/31" }], timestamp: CREATED + 1_000 },
     })}\n`;
     fs.writeFileSync(session, source);
-    herdr.run(["workspace", "create", "--cwd", repo, "--label", "repo", "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]);
-    const gh = fakeGh(herdr.root);
-    daemon = await startHided(herdr, `${kind}-archive`, herdr.env.HOME, { PATH: `${gh}${path.delimiter}${herdr.fixturePath}` });
+    const gh = fakeGh(engine.root);
+    const listing = modelListing(engine.root, kind);
+    daemon = await startHided(engine, `${kind}-archive`, path.join(engine.root, "home"), { PATH: `${listing}${path.delimiter}${gh}${path.delimiter}${engine.fixturePath}` });
+    await withControl(daemon, (control) => openProject(control, repo, "repo"));
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     const panel = await openCard(page, 31);
     const archived = panel.locator(`[data-link-session="${id}"]`);
@@ -278,15 +302,15 @@ test(`a ${kind} archive resume keeps its selected source and uses the current co
     await expect(resume).toBeEnabled();
     await archived.hover();
     await resume.click();
-    await expect.poll(() => agentsIn(herdr, tree), { timeout: 60_000 }).toContain(kind);
-    await expect.poll(() => fs.existsSync(path.join(herdr.root, `${kind}-launches.jsonl`))).toBe(true);
-    const launches = fs.readFileSync(path.join(herdr.root, `${kind}-launches.jsonl`), "utf8").trim().split("\n").map(line => JSON.parse(line) as string[]);
+    await withControl(daemon, (control) => control.until((rest) => (rest.navigator as { agents?: { agent_kind?: string | null }[] }).agents?.some((row) => row.agent_kind === kind), `a ${kind} agent started`, 60_000));
+    await expect.poll(() => fs.existsSync(path.join(engine.root, `${kind}-launches.jsonl`))).toBe(true);
+    const launches = fs.readFileSync(path.join(engine.root, `${kind}-launches.jsonl`), "utf8").trim().split("\n").map(line => JSON.parse(line) as string[]);
     expect(launches).toEqual([[resumeFlag, id, ...fullAccess]]);
     expect(fs.readFileSync(session, "utf8")).toBe(source);
     await screenshot(page, `${kind}-archive-resume`);
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });
 }

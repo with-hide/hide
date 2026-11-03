@@ -234,6 +234,11 @@ pub(super) struct PaneAgent {
 pub(super) struct Live {
     /// When the engine typed its start, until its program showed.
     pub(super) started: Option<Instant>,
+    /// The start whose not-yet-delivered metadata can still be withdrawn.
+    /// Foreground or session evidence invalidates it, even at the same value.
+    pub(super) start_claim: Option<Arc<()>>,
+    /// A listed name the same attempt can still restore on non-delivery.
+    pub(super) start_previous_name: Option<String>,
     /// Its program is in the pane's foreground.
     pub(super) shown: bool,
     pub(super) status: Status,
@@ -263,6 +268,8 @@ impl PaneAgent {
         let changed = !self.live.shown;
         self.live.shown = true;
         self.live.started = None;
+        self.live.start_claim = None;
+        self.live.start_previous_name = None;
         changed
     }
 
@@ -312,10 +319,10 @@ pub(super) struct PaneLive {
     pub(super) facts: PaneFacts,
     /// The holder has said something since the pane was started or found.
     pub(super) heard: bool,
-    /// The agent whose rules this engine gave the pane's holder, `None` for
-    /// none: a new daemon's engine gives them again, since a new node keeps
-    /// none of the last one's.
-    pub(super) rules_sent: Option<String>,
+    /// The last requested decision: outer None is undecided, Some(None)
+    /// explicitly removes rules. A new engine must send its first decision
+    /// even for a shell whose holder kept the previous agent's rules.
+    pub(super) rules_sent: Option<Option<String>>,
 }
 
 impl PaneLive {
@@ -323,8 +330,8 @@ impl PaneLive {
     /// one it was given; recorded as given.
     pub(super) fn rules_due(&mut self, agent: Option<&PaneAgent>) -> Option<Option<String>> {
         let due = agent.map(|agent| agent.kind.clone());
-        (due != self.rules_sent).then(|| {
-            self.rules_sent.clone_from(&due);
+        (self.rules_sent.as_ref() != Some(&due)).then(|| {
+            self.rules_sent = Some(due.clone());
             due
         })
     }

@@ -76,8 +76,22 @@ export async function buildFixtureShims(packageDir: string, programs: readonly F
     try {
       // The steps share one compile's bounds.
       const until = Date.now() + COMPILE.timeoutMs;
+      let step = 0;
       const done = windows && !processTool
-        ? await compileInSteps(compiler, source, partial, (program, args, env) => runAlone(program, args, { ...COMPILE, timeoutMs: Math.max(0, until - Date.now()), env }))
+        ? await compileInSteps(compiler, source, partial, async (program, args, env) => {
+          const stage = ["compile", "plan-link", "link"][step++]!;
+          const started = performance.now();
+          const remainingMs = Math.max(0, until - Date.now());
+          console.error(JSON.stringify({ kind: "fixture.compile.started", shim: name, stage, remaining_ms: remainingMs }));
+          try {
+            const result = await runAlone(program, args, { ...COMPILE, timeoutMs: remainingMs, env });
+            console.error(JSON.stringify({ kind: "fixture.compile.ended", shim: name, stage, elapsed_ms: Math.round(performance.now() - started), status: result.status, signal: result.signal }));
+            return result;
+          } catch (error) {
+            console.error(JSON.stringify({ kind: "fixture.compile.failed", shim: name, stage, elapsed_ms: Math.round(performance.now() - started), tree_ended: error instanceof BoundedChildError ? error.treeEnded : null }));
+            throw error;
+          }
+        })
         : await runBounded(compiler, ["-O1", "-o", partial, source], { ...COMPILE, processTool });
       if (done.status !== 0) failure = new Error(`exit status ${done.status}, signal ${done.signal}`);
       output = done.stdout + done.stderr;

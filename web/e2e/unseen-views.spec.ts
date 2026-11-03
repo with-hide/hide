@@ -2,7 +2,9 @@ import { expect, test, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 import { agentPane } from "./agent-pane";
-import { startHerdr } from "./herdr-fixture";
+import { withControl } from "./daemon-actions";
+import { startFixture } from "./engine-fixture";
+import { dumpOnFailure } from "./failure-dump";
 import { startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace, screenshot } from "./wire";
 
@@ -18,15 +20,15 @@ const front = (page: Page) => page.locator('[data-view-tab-bar] [role="tab"][ari
 
 test("an agent's open the operator has not looked at waits on its row until the row brings it forward", async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
-  const herdr = await startHerdr({ agents: false });
+  const herdr = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
     const fixture = path.join(herdr.root, "fixture");
     fs.writeFileSync(path.join(fixture, "login.md"), "# Login\n");
     fs.writeFileSync(path.join(fixture, "notes.md"), "# Notes\n");
     fs.writeFileSync(path.join(fixture, "plan.md"), "# Plan\n");
-    const [pane, other] = herdr.panes;
     daemon = await startHided(herdr, "unseen-views");
+    const [pane, other] = herdr.panes;
     const agent = await agentPane(herdr, daemon.stateDir, pane);
     const hide = async (args: string[]) => {
       const answer = await agent(args);
@@ -70,7 +72,12 @@ test("an agent's open the operator has not looked at waits on its row until the 
     await page.locator(`[data-pane-view="${other}"] .xterm-screen`).click();
     await expect(page.locator(`[data-pane-view="${other}"]`)).toHaveAttribute("data-focused", "true");
     await hide(["file", "open", "plan.md"]);
-    await expect(mark).toHaveAttribute("data-agent-status-mark", "look");
+    await dumpOnFailure("unseen plan", async () => ({
+      focused: await page.locator('[data-pane-view][data-focused="true"]').getAttribute("data-pane-view"),
+      front: await front(page).getAttribute("aria-label"),
+      row: await row.textContent(),
+      snapshot: await withControl(daemon!, (control) => control.until((rest) => rest, "the failure snapshot")),
+    }), () => expect(mark).toHaveAttribute("data-agent-status-mark", "look"));
     await page.locator(`[data-pane-view="${pane}"] button[data-pane-status-mark="look"]`).click();
     await expect(front(page)).toHaveAttribute("aria-label", /\/plan\.md/);
     await expect(mark).not.toHaveAttribute("data-agent-status-mark", "look");

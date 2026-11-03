@@ -3070,10 +3070,15 @@ impl Runtime {
                             tab_id,
                             &format!("reopen:{key}"),
                         ) {
-                            Ok(()) => self.finish_agent_effect(
-                                &context.checkout_path,
-                                &format!("reopen:{key}"),
-                            ),
+                            Ok(()) => {
+                                self.finish_agent_effect(
+                                    &context.checkout_path,
+                                    &format!("reopen:{key}"),
+                                );
+                                // An engine that listed the tab before this
+                                // answer admitted it to the operator's area.
+                                self.apply_known_agent_placement(tab_id, "Reopen");
+                            }
                             Err(message) => self
                                 .push_diagnostic("agent_layout.reopen_placement_failed", message),
                         }
@@ -3102,6 +3107,10 @@ impl Runtime {
                     self.snapshot.focused.pane_id = Some(pane_id.clone());
                     self.snapshot.ui_state.selected_pane_id = Some(pane_id);
                     self.yield_surface_to_terminal();
+                    // A restore moves the visible tab to the pane; a tab the
+                    // engine listed before this answer gets no later topology
+                    // to do it.
+                    self.align_visible_tab_with_selected_pane();
                     // Saved now, as every other move of the keyboard is: the
                     // daemon started next shows the tab that holds it.
                     self.persist_ui_state();

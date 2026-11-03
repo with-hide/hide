@@ -8,7 +8,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
-import { startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { startFixture, type AgentFixture } from "./engine-fixture";
 import { aiSettingsFile, startHided, type Daemon } from "./hided-fixture";
 import { fixtureProgram } from "./platform-fixture";
 import { enterWorkspace, screenshot } from "./wire";
@@ -19,7 +19,7 @@ type Stored = { enabled?: boolean; provider?: string; fallback?: { provider: str
 const stored = (daemon: Daemon): Stored => JSON.parse(fs.readFileSync(aiSettingsFile(daemon.home), "utf8")) as Stored;
 
 /** Programs the machine does not have, standing in for the agents Hide AI can name. */
-function standIns(herdr: HerdrFixture): string {
+function standIns(herdr: AgentFixture): string {
   const dir = path.join(herdr.root, "stand-ins");
   // `grok models` lists the account's models, one per line, `*` marking the default.
   fixtureProgram(dir, "grok", `const args = process.argv.slice(2);\nif (args[0] === "models") { console.log("* grok-fixture (default)\\n- grok-fixture-mini"); process.exit(0); }\nprocess.exit(1);\n`);
@@ -33,7 +33,7 @@ function standIns(herdr: HerdrFixture): string {
 }
 
 async function start(label: string, agents: boolean) {
-  const herdr = await startHerdr();
+  const herdr = await startFixture();
   const extra = agents ? { PATH: `${standIns(herdr)}${path.delimiter}${herdr.fixturePath}` } : {};
   const daemon = await startHided(herdr, label, undefined, extra);
   return { herdr, daemon };
@@ -165,7 +165,7 @@ test("Add agent offers the agents Hide AI can use, dims the one it cannot, and t
 });
 
 test("a saved retired Gemini choice stays unchosen, preserves model data and never invokes its installed CLI", async ({ page }) => {
-  const herdr = await startHerdr();
+  const herdr = await startFixture();
   const home = path.join(herdr.root, "retired-ai-home");
   const settings = aiSettingsFile(home);
   fs.mkdirSync(path.dirname(settings), { recursive: true });

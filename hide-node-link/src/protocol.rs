@@ -295,9 +295,17 @@ use crate::error::HostError;
 /// starts (a [`StartForm`], null when it is not on the `PATH`), not a bool,
 /// so a prompt `cmd.exe` would read again rides no start. A helper on 69
 /// would answer a bool, so it is refused at Hello and upgraded.
-/// 71: removes the running-agent queue call. Running input is typed through
+/// 71: a node answers where a holder pane's screen is in its scrollback,
+/// moves it, and reads the rows it shows (`holders::PaneCall::Scroll`,
+/// `holders::PaneCall::ReadVisible`), so the core's own engine routes a pane
+/// search and shows its matches as Herdr's `pane.get`, `pane.scroll` and
+/// `visible` read let it. A helper on 70 would refuse both asks, so it is
+/// refused at Hello and upgraded.
+/// 72: pane mutations require connection ownership and a durable reserved
+/// existence record. An older node cannot fence late requests on reconnect.
+/// 73: removes the running-agent queue call. Running input is typed through
 /// the engine so a letter reaches an ongoing turn; older helpers upgrade.
-pub const PROTOCOL_VERSION: u32 = 71;
+pub const PROTOCOL_VERSION: u32 = 73;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
 /// runs it ([`Call::AgentInstalled`]).

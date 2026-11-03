@@ -3,8 +3,8 @@
 // ⌘/ sheet lists every family as not on this host.
 
 import { expect, test } from "@playwright/test";
-import path from "node:path";
-import { startHerdr } from "./herdr-fixture";
+import { focusTab, newTab, withControl } from "./daemon-actions";
+import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { countSent, enterWorkspace, screenshot } from "./wire";
 import { chord, MOD_KEYS } from "./chords";
@@ -14,18 +14,21 @@ test.describe.configure({ timeout: 120_000 });
 
 test("no keycap on a ⌘ or ⌥ hold, nothing on ⌘2 or ⌥2, and the sheet says so", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  const herdr = await startHerdr();
+  const herdr = await startFixture();
   let daemon: Daemon | null = null;
-  const made = herdr.run([
-    "tab", "create", "--workspace", herdr.workspace, "--cwd", path.join(herdr.root, "fixture"), "--label", "second", "--env", `PATH=${herdr.fixturePath}`, "--no-focus",
-  ]) as { result: { tab: { tab_id: string } } };
   try {
     daemon = await startHided(herdr, "digit-hints");
+    // A second tab, with the first still the one shown.
+    const made = await withControl(daemon, async (control) => {
+      const second = await newTab(control, herdr, "second");
+      await focusTab(control, herdr, herdr.tab);
+      return second;
+    });
     const sent = countSent(page);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     const canvas = page.locator("[data-canvas]").first();
-    await expect(page.locator(`[data-tab="${made.result.tab.tab_id}"]`)).toBeVisible();
+    await expect(page.locator(`[data-tab="${made.tab}"]`)).toBeVisible();
     await expect(canvas).toHaveAttribute("data-canvas", herdr.tab);
     await page.locator("[data-pane-view] .xterm-helper-textarea").first().focus();
 
@@ -68,7 +71,6 @@ test("no keycap on a ⌘ or ⌥ hold, nothing on ⌘2 or ⌥2, and the sheet say
     await page.keyboard.press("Escape");
     await expect(sheet).toHaveCount(0);
   } finally {
-    herdr.run(["tab", "close", made.result.tab.tab_id]);
     daemon?.stop();
     herdr.stop();
   }

@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 
 use hide_platform::fs::lock::{self, Mode, Waited};
 use hide_platform::fs::{Access, atomic, identity, link, private};
+use hide_platform::path::to_wire_lossy;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{ErrorCode, HostError, HostResult};
@@ -123,7 +124,7 @@ pub fn sync(user_home: &Path, projects: &[String]) -> HostResult<HomeSynced> {
             };
             dropped.push(HomeDrop {
                 name: name.clone(),
-                target: recorded.clone(),
+                target: to_wire_lossy(Path::new(recorded)),
                 reason: reason.to_owned(),
             });
         }
@@ -182,7 +183,7 @@ pub fn sync(user_home: &Path, projects: &[String]) -> HostResult<HomeSynced> {
             }
             Action::Taken => {
                 skipped.push(HomeSkip {
-                    target: target_text,
+                    target: to_wire_lossy(target),
                     reason: "name_taken".to_owned(),
                 });
                 continue;
@@ -192,7 +193,7 @@ pub fn sync(user_home: &Path, projects: &[String]) -> HostResult<HomeSynced> {
         // too long) is that project's skip, not the whole Home's failure.
         if made.is_err() {
             skipped.push(HomeSkip {
-                target: target_text,
+                target: to_wire_lossy(target),
                 reason: "link_failed".to_owned(),
             });
             continue;
@@ -209,13 +210,16 @@ pub fn sync(user_home: &Path, projects: &[String]) -> HostResult<HomeSynced> {
         .map_err(|error| io_error(&error, "Hide's Home cannot be read"))?;
     let links = next
         .into_iter()
-        .map(|(name, target)| HomeLink { name, target })
+        .map(|(name, target)| HomeLink {
+            name,
+            target: to_wire_lossy(Path::new(&target)),
+        })
         .collect::<Vec<_>>();
     write_atomic(&home, AGENTS_FILE, agents_text(&links).as_bytes())?;
     link_claude_file(&home)?;
 
     Ok(HomeSynced {
-        home: home.to_string_lossy().into_owned(),
+        home: to_wire_lossy(&home),
         created,
         links,
         dropped,
@@ -278,7 +282,7 @@ fn candidates(projects: &[String], skipped: &mut Vec<HomeSkip>) -> HostResult<BT
         let path = Path::new(project);
         if !path.is_absolute() {
             skipped.push(HomeSkip {
-                target: project.clone(),
+                target: to_wire_lossy(path),
                 reason: "not_absolute".to_owned(),
             });
             continue;
@@ -287,7 +291,7 @@ fn candidates(projects: &[String], skipped: &mut Vec<HomeSkip>) -> HostResult<BT
         // its own, and Herdr cannot pass it to the agent as a root.
         if project.chars().any(char::is_control) {
             skipped.push(HomeSkip {
-                target: project.clone(),
+                target: to_wire_lossy(path),
                 reason: "control_character".to_owned(),
             });
             continue;
@@ -315,7 +319,7 @@ fn name_projects(
     let mut named = Vec::new();
     let mut shared: BTreeMap<String, usize> = BTreeMap::new();
     for path in candidates {
-        let target = path.to_string_lossy().into_owned();
+        let target = to_wire_lossy(&path);
         let Some(base) = path
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
@@ -482,6 +486,30 @@ fn agents_text(links: &[HomeLink]) -> String {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn a_synced_home_returns_wire_paths_for_its_folder_and_links() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let synced = sync(dir.path(), &[project.to_string_lossy().into_owned()]).unwrap();
+        assert!(synced.home.ends_with("/hide"), "{}", synced.home);
+        assert_eq!(synced.links.len(), 1);
+        let target = &synced.links[0].target;
+        assert!(target.ends_with("/project"), "{target}");
+        if cfg!(windows) {
+            assert!(!synced.home.contains('\\'));
+            assert!(!target.contains('\\'));
+        }
+        assert_eq!(
+            identity::canonical(&Path::new(&synced.home).join(&synced.links[0].name)).unwrap(),
+            identity::canonical(&project).unwrap()
+        );
+        let removed = sync(dir.path(), &[]).unwrap();
+        assert_eq!(removed.home, synced.home);
+        assert_eq!(removed.dropped[0].target, *target);
+        assert!(removed.links.is_empty());
+    }
 
     /// A holder that never lets go is reported as busy within the wait,
     /// rather than keeping the sync, and the helper thread, waiting forever.

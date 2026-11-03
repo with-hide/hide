@@ -39,6 +39,53 @@ pub struct HolderStart {
     pub notice: Option<String>,
 }
 
+/// A creation request within the recovered node connection, never reused.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct HolderRequest {
+    pub owner: u64,
+    pub number: u64,
+}
+
+/// A start's durable identity, computed before shell setup. No command or
+/// environment is stored in a pane record.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct HolderIntent {
+    pub pane: String,
+    pub digest: String,
+    pub cwd: String,
+}
+
+impl HolderStart {
+    pub fn intent(&self) -> Result<HolderIntent, HolderError> {
+        use sha2::{Digest, Sha256};
+        let bytes = serde_json::to_vec(self).map_err(|error| HolderError::Refused {
+            code: "invalid_start".to_owned(),
+            message: error.to_string(),
+        })?;
+        Ok(HolderIntent {
+            pane: self.pane.clone(),
+            cwd: self.cwd.clone(),
+            digest: format!("{:x}", Sha256::digest(bytes)),
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct HolderReservation {
+    pub incarnation: u64,
+}
+
+/// An interrupted existence record whose original process is gone. The
+/// replacement must consume this exact incarnation under the same pane ID.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct RecoverablePane {
+    pub pane: String,
+    /// Legacy records have no recovery folder; only a saved layout can
+    /// supply their place and folder.
+    pub cwd: Option<String>,
+    pub incarnation: u64,
+}
+
 /// Told the id of a pane whose program exited on its own
 /// ([`PaneHolders::watch_ends`]).
 pub type PaneEnded = std::sync::Arc<dyn Fn(&str) + Send + Sync>;
@@ -48,6 +95,7 @@ pub type PaneEnded = std::sync::Arc<dyn Fn(&str) + Send + Sync>;
 /// holds a record of in exactly one list.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct HolderRecovery {
+    pub owner: u64,
     /// Panes that finished while no node ran: their program exited or a node
     /// ended them, so they close, as a pane whose program exits closes.
     pub closed: Vec<String>,
@@ -58,6 +106,16 @@ pub struct HolderRecovery {
     /// Panes whose holders run or may still run, never started a second
     /// time.
     pub present: Vec<String>,
+    /// A subset of `ended`, including records not yet saved in the layout.
+    pub recoverable: Vec<RecoverablePane>,
+}
+
+/// Where a pane's screen is in its scrollback, in rows above the bottom
+/// (Herdr's `pane.get` scroll metrics).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct HolderScroll {
+    pub offset_from_bottom: u64,
+    pub max_offset_from_bottom: u64,
 }
 
 /// The processes a pane's terminal holds: its program, which is the shell
@@ -268,10 +326,47 @@ impl std::error::Error for HolderError {}
 /// A node's pane holders as the core's own engine asks them. Every call
 /// blocks until the node answers, so none is made under the runtime lock.
 pub trait PaneHolders: Send + Sync {
-    /// Starts `start`'s pane and attaches its screen to the node's terminal
-    /// service. Asked again for a pane that lives, it answers that pane and
-    /// starts no second holder.
-    fn start(&self, start: &HolderStart) -> Result<(), HolderError>;
+    /// Node-side binding for one connection. The returned adapter retains
+    /// its state-folder ownership guard, including while a timed-out call
+    /// still runs. Only the host's connection slot calls this method.
+    fn own(
+        self: std::sync::Arc<Self>,
+        _within: std::time::Duration,
+    ) -> Result<std::sync::Arc<dyn PaneHolders>, HolderError> {
+        Err(HolderError::Refused {
+            code: "pane_ownership_unsupported".to_owned(),
+            message: "this node cannot establish pane ownership".to_owned(),
+        })
+    }
+    /// Issue locally before submission; a definitely unsent request must
+    /// also be retired, so a later number cannot strand its gap.
+    fn request(&self) -> Result<HolderRequest, HolderError> {
+        Err(reservation_unsupported())
+    }
+    fn retire(&self, _request: HolderRequest) -> Result<(), HolderError> {
+        Err(reservation_unsupported())
+    }
+    /// Persist existence before publication. A restart must explicitly name
+    /// the previous incarnation; ordinary retries pass the same intent.
+    fn reserve(
+        &self,
+        _start: &HolderStart,
+        _previous: Option<u64>,
+        _request: HolderRequest,
+    ) -> Result<HolderReservation, HolderError> {
+        Err(reservation_unsupported())
+    }
+    fn start_reserved(
+        &self,
+        _start: &HolderStart,
+        _reserved: HolderReservation,
+        _request: HolderRequest,
+    ) -> Result<(), HolderError> {
+        Err(reservation_unsupported())
+    }
+    fn cancel(&self, _intent: &HolderIntent, _request: HolderRequest) -> Result<(), HolderError> {
+        Err(reservation_unsupported())
+    }
     /// How a pane started with no program runs its shell, when it runs one
     /// with Hide's shell integration, which marks its first prompt on its
     /// screen: what a start into such a pane waits for. `None` for a shell
@@ -289,6 +384,16 @@ pub trait PaneHolders: Send + Sync {
     /// were left out; a holder built before styled reads is refused
     /// [`UNSUPPORTED_HOLDER`].
     fn read_styled(&self, pane: &str, read: StyledRead) -> Result<(String, bool), HolderError>;
+    /// The rows the pane's screen shows now, wherever it is scrolled to,
+    /// as text with soft wraps joined (Herdr's `visible` read); a holder
+    /// built before visible reads is refused [`UNSUPPORTED_HOLDER`].
+    fn read_visible(&self, pane: &str) -> Result<String, HolderError>;
+    /// Where the pane's screen is in its scrollback, after moving it to
+    /// `to` rows above the bottom when asked (Herdr's `pane.get` and
+    /// `pane.scroll`); the connection that holds the screen is sent the
+    /// moved screen. A holder built before scroll asks is refused
+    /// [`UNSUPPORTED_HOLDER`].
+    fn scroll(&self, pane: &str, to: Option<u64>) -> Result<HolderScroll, HolderError>;
     /// The pane's program and its terminal's foreground processes.
     fn processes(&self, pane: &str) -> Result<HolderProcesses, HolderError>;
     /// Which start of the pane runs now and the program it runs, as the
@@ -341,23 +446,63 @@ pub trait PaneHolders: Send + Sync {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "ask", rename_all = "snake_case")]
 pub enum PaneCall {
-    /// [`PaneHolders::start`]; answers nothing.
-    Start { start: HolderStart },
+    /// [`PaneHolders::reserve`]; answers the reservation.
+    Reserve {
+        start: HolderStart,
+        previous: Option<u64>,
+        request: HolderRequest,
+    },
+    StartReserved {
+        start: HolderStart,
+        reserved: HolderReservation,
+        request: HolderRequest,
+    },
+    Cancel {
+        intent: HolderIntent,
+        request: HolderRequest,
+    },
+    Retire {
+        request: HolderRequest,
+    },
     /// [`PaneHolders::shell_launch`]; answers an optional
     /// [`crate::protocol::ShellLaunch`].
     ShellLaunch,
     /// [`PaneHolders::terminate`]; answers nothing.
-    Terminate { pane: String },
+    Terminate {
+        pane: String,
+    },
     /// [`PaneHolders::read`]; answers a [`PaneText`].
-    Read { pane: String, lines: u16 },
+    Read {
+        pane: String,
+        lines: u16,
+    },
     /// [`PaneHolders::read_styled`]; answers a [`PaneText`].
-    ReadStyled { pane: String, read: StyledRead },
+    ReadStyled {
+        pane: String,
+        read: StyledRead,
+    },
+    /// [`PaneHolders::read_visible`]; answers a [`PaneText`].
+    ReadVisible {
+        pane: String,
+    },
+    /// [`PaneHolders::scroll`]; answers a [`HolderScroll`].
+    Scroll {
+        pane: String,
+        to: Option<u64>,
+    },
     /// [`PaneHolders::processes`]; answers [`HolderProcesses`].
-    Processes { pane: String },
+    Processes {
+        pane: String,
+    },
     /// [`PaneHolders::proof`]; answers a [`HolderProof`].
-    Proof { pane: String },
+    Proof {
+        pane: String,
+    },
     /// [`PaneHolders::input`]; answers nothing.
-    Input { pane: String, input: PaneInput },
+    Input {
+        pane: String,
+        input: PaneInput,
+    },
     /// [`PaneHolders::letter`]; answers nothing once the submit was handed
     /// over.
     Letter {
@@ -367,7 +512,9 @@ pub enum PaneCall {
         gap_ms: u64,
     },
     /// [`PaneHolders::recovered`]; answers [`HolderRecovery`].
-    Recovered { timeout_ms: u64 },
+    Recovered {
+        timeout_ms: u64,
+    },
     /// [`PaneHolders::set_rules`]; answers nothing.
     SetRules {
         pane: String,
@@ -429,5 +576,12 @@ mod base64_bytes {
         base64::engine::general_purpose::STANDARD
             .decode(text)
             .map_err(serde::de::Error::custom)
+    }
+}
+
+fn reservation_unsupported() -> HolderError {
+    HolderError::Refused {
+        code: "pane_reservation_unsupported".to_owned(),
+        message: "this node cannot reserve a pane before publication".to_owned(),
     }
 }

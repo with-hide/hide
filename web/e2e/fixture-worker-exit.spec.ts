@@ -156,7 +156,8 @@ async function withPendingWorker(refuse: boolean, check: (root: string, fixture:
   if (failure !== undefined) throw failure;
 }
 
-test("worker exit ends pending CLI trees before server and root cleanup", { tag: "@platform" }, async () => {
+// Herdr only: it is the Herdr fixture's own exit, ending its pending CLI trees before it stops its private Herdr server.
+test("worker exit ends pending CLI trees before server and root cleanup @herdr", { tag: "@platform" }, async () => {
   await withPendingWorker(false, (root, fixture, stderr) => {
     expect(JSON.parse(fs.readFileSync(path.join(root, "server-stop.json"), "utf8"))).toEqual([]);
     expect(fs.existsSync(fixture.root)).toBe(false);
@@ -164,7 +165,8 @@ test("worker exit ends pending CLI trees before server and root cleanup", { tag:
   });
 });
 
-test("worker exit preserves the root and reports unconfirmed CLI termination", { tag: "@platform" }, async () => {
+// Herdr only: same subject, the Herdr fixture refusing to remove its root while a CLI tree is not confirmed ended.
+test("worker exit preserves the root and reports unconfirmed CLI termination @herdr", { tag: "@platform" }, async () => {
   await withPendingWorker(true, (root, fixture, stderr) => {
     expect(JSON.parse(fs.readFileSync(path.join(root, "server-stop.json"), "utf8")).length).toBeGreaterThan(0);
     expect(fs.existsSync(fixture.root)).toBe(true);

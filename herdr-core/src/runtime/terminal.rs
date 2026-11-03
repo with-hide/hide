@@ -1707,8 +1707,14 @@ impl Runtime {
             TerminalReport::InputPermit { .. } => false,
             TerminalReport::State { pane, state } => {
                 // A pane Herdr no longer lists is not brought back by a late
-                // report from its node.
-                if !self.pane_still_terminal(&pane) {
+                // report from its node. The answer to an attach this core
+                // asked for is kept even before a layout holds the pane: the
+                // core's own engine can make a pane's session ready before
+                // the session read that lists it, and its node reports an
+                // unchanged state only once.
+                if !self.pane_still_terminal(&pane)
+                    && !self.terminal_attach_requested.contains(&pane)
+                {
                     return false;
                 }
                 if state.state == "controlling" {

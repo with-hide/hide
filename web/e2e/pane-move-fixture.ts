@@ -1,48 +1,113 @@
 import { expect, type Locator, type Page } from "@playwright/test";
 import path from "node:path";
+import { startFixture } from "./engine-fixture";
+import { focusTab, newTab, tabOfPane, viewPane } from "./daemon-actions";
+import { connectControl, type HidedControl, type Rest } from "./hided-control.mjs";
 import { startHerdr, type HerdrFixture } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { countSent, enterWorkspace } from "./wire";
 
+/** What `pane list` says of a pane, which only Herdr answers. */
 export type PaneFact = { pane_id: string; terminal_id: string; tab_id: string };
-export function paneFacts(herdr: HerdrFixture): PaneFact[] {
+export function paneFacts(herdr: Pick<HerdrFixture, "run">): PaneFact[] {
   return (herdr.run(["pane", "list"]) as { result: { panes: PaneFact[] } }).result.panes;
 }
-export function processFacts(herdr: HerdrFixture, paneId: string) {
+/** The shell, terminal and foreground processes of a pane as Herdr reports them. */
+export function processFacts(herdr: Pick<HerdrFixture, "run">, paneId: string) {
   const info = (herdr.run(["pane", "process-info", "--pane", paneId]) as { result: { process_info: { shell_pid: number | null; tty: string | null; foreground_process_group_id: number | null; foreground_processes: { pid: number }[] } } }).result.process_info;
   expect(info.shell_pid).toBeGreaterThan(0);
   return { shell: info.shell_pid, tty: info.tty, group: info.foreground_process_group_id, foreground: info.foreground_processes.map(process => process.pid) };
 }
 export const paneView = (page: Page, paneId: string) => page.locator(`[data-pane-view="${paneId}"]`);
 export const tabTitle = (page: Page, tabId: string) => page.locator(`[data-agent-tab-bar] [role=tab][data-tab="${tabId}"]`);
-export async function startMove(page: Page, crossWorkspace = false) {
-  const herdr = await startHerdr();
+
+/** A move journey: the page on a Workspace of two panes, and a second tab to move one of them to. */
+type Drive = {
+  daemon: Daemon;
+  control: HidedControl;
+  panes: string[];
+  target: { tab: string; pane: string };
+  sent: Map<string, number>;
+  payloads: Map<string, Record<string, unknown>>;
+  completed: (count?: number) => Promise<void>;
+};
+
+/**
+ * Opens the page on the daemon and watches the moves it sends. Geometry may
+ * already match the desired edge, so `completed` awaits this exact request's
+ * authoritative receipt before another gesture is attempted on the pane.
+ */
+async function drive(page: Page, daemon: Daemon, control: HidedControl, panes: string[], shown: string, target: { tab: string; pane: string }): Promise<Drive> {
+  const payloads = new Map<string, Record<string, unknown>>();
+  const sent = countSent(page, payloads);
+  const operations = new Map<string, string>();
+  page.on("websocket", socket => socket.on("framereceived", ({ payload }) => {
+    const frame = JSON.parse(String(payload)) as { payload?: { rest?: { status?: { async_operations?: { id: string; kind: string; phase: string }[] } } } };
+    for (const operation of frame.payload?.rest?.status?.async_operations ?? []) if (operation.kind === "pane.move") operations.set(operation.id, operation.phase);
+  }));
+  const completed = async (count = sent.get("pane_move") ?? 1) => {
+    await expect.poll(() => sent.get("pane_move")).toBe(count);
+    await expect.poll(() => operations.get(String(payloads.get("pane_move")?.request_id))).toBe("completed");
+  };
+  await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
+  await enterWorkspace(page, "fixture");
+  for (const pane of panes) await expect(paneView(page, pane)).toHaveAttribute("data-transport", "controlling");
+  await expect(tabTitle(page, target.tab)).toBeVisible();
+  await expect(tabTitle(page, shown)).toHaveAttribute("aria-selected", "true");
+  // The page takes a tab as a drop target only once its pane's terminal is live or was never attached (paneMove.ts).
+  let state = "unlisted";
+  await control.until((rest: Rest) => {
+    const row = ((rest.terminal as { panes?: { pane_id: string; transport_state: string }[] } | undefined)?.panes ?? []).find((pane) => pane.pane_id === target.pane);
+    state = row?.transport_state ?? "unlisted";
+    return ["unlisted", "connected", "controlling", "observing", "idle", "released"].includes(state) || undefined;
+  }, `the destination pane ${target.pane} a drop target`, 30_000).catch((error: unknown) => { throw new Error(`${String(error)}; its terminal stayed ${state}`); });
+  return { daemon, control, panes, target, sent, payloads, completed };
+}
+
+/** The tab the daemon's snapshot puts `pane` in, if it lists the pane. */
+export async function tabNow(flow: Pick<Drive, "control">, pane: string): Promise<string | undefined> {
+  return flow.control.until((rest: Rest) => tabOfPane(rest, pane), `the tab of ${pane}`, 2_000).catch(() => undefined);
+}
+
+/**
+ * The fixture's checkout with its two agent panes in one tab, and a second
+ * tab, "Move destination", that stays behind the first, on either engine.
+ */
+export async function startMove(page: Page) {
+  const fixture = await startFixture();
   let daemon: Daemon | undefined;
-  const stop = () => { try { daemon?.stop(); } finally { herdr.stop(); } };
+  let control: HidedControl | undefined;
+  const stop = () => { control?.close(); try { daemon?.stop(); } finally { fixture.stop(); } };
   try {
-    const args = crossWorkspace ? ["workspace", "create", "--cwd", path.join(herdr.root, "fixture"), "--label", "Move destination", "--env", `PATH=${herdr.fixturePath}`, "--no-focus"] : ["tab", "create", "--workspace", herdr.workspace, "--cwd", path.join(herdr.root, "fixture"), "--label", "Move destination", "--env", `PATH=${herdr.fixturePath}`, "--no-focus"];
-    const target = (herdr.run(args) as { result: { tab: { tab_id: string }; root_pane: { pane_id: string } } }).result;
-    daemon = await startHided(herdr, "pane-move");
-    const payloads = new Map<string, Record<string, unknown>>();
-    const sent = countSent(page, payloads);
-    const operations = new Map<string, string>();
-    page.on("websocket", socket => socket.on("framereceived", ({ payload }) => {
-      const frame = JSON.parse(String(payload)) as { payload?: { rest?: { status?: { async_operations?: { id: string; kind: string; phase: string }[] } } } };
-      for (const operation of frame.payload?.rest?.status?.async_operations ?? []) if (operation.kind === "pane.move") operations.set(operation.id, operation.phase);
-    }));
-    // Geometry may already match the desired edge. Await this exact request's
-    // authoritative receipt before attempting another gesture on the pane.
-    const completed = async (count = sent.get("pane_move") ?? 1) => {
-      await expect.poll(() => sent.get("pane_move")).toBe(count);
-      await expect.poll(() => operations.get(String(payloads.get("pane_move")?.request_id))).toBe("completed");
-    };
-    await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
-    await enterWorkspace(page, "fixture");
-    for (const pane of herdr.panes) await expect(paneView(page, pane)).toHaveAttribute("data-transport", "controlling");
-    await expect(tabTitle(page, target.tab.tab_id)).toBeVisible();
-    return { herdr, daemon, target, sent, payloads, completed, stop };
+    daemon = await startHided(fixture, "pane-move");
+    control = await connectControl(daemon);
+    const target = await newTab(control, fixture, "Move destination");
+    // It came forward with no page to size it, as no operator's New tab does; sized here, its terminal attaches on Herdr too.
+    viewPane(control, target.pane);
+    // The new tab came forward as New tab makes it; the pair of panes stays in front.
+    await focusTab(control, fixture, fixture.tab);
+    return { fixture, ...(await drive(page, daemon, control, fixture.panes, fixture.tab, target)), stop };
   } catch (error) { stop(); throw error; }
 }
+
+/**
+ * The same journey with the destination tab in a second native Herdr
+ * workspace, where Herdr changes the public pane id of a pane moved to it.
+ */
+export async function startCrossWorkspaceMove(page: Page) {
+  const herdr = await startHerdr();
+  let daemon: Daemon | undefined;
+  let control: HidedControl | undefined;
+  const stop = () => { control?.close(); try { daemon?.stop(); } finally { herdr.stop(); } };
+  try {
+    const made = (herdr.run(["workspace", "create", "--cwd", path.join(herdr.root, "fixture"), "--label", "Move destination", "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]) as { result: { tab: { tab_id: string }; root_pane: { pane_id: string } } }).result;
+    daemon = await startHided(herdr, "pane-move");
+    control = await connectControl(daemon);
+    const target = { tab: made.tab.tab_id, pane: made.root_pane.pane_id };
+    return { herdr, ...(await drive(page, daemon, control, herdr.panes, herdr.tab, target)), stop };
+  } catch (error) { stop(); throw error; }
+}
+
 export async function beginDrag(page: Page, paneId: string, target: Locator, edge: "left" | "right" | "up" | "down" = "right") {
   const title = paneView(page, paneId).locator("[data-pane-move-title]").first();
   await target.scrollIntoViewIfNeeded();

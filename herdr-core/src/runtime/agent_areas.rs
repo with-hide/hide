@@ -507,6 +507,55 @@ impl Runtime {
         }
     }
 
+    /// The catalog may already list a tab before the answer that queued its
+    /// placement: apply that placement to the full known checkout topology
+    /// now rather than at the next topology. An unanswered catalog or an
+    /// unlisted tab leaves the placement for normal admission.
+    pub(super) fn apply_known_agent_placement(&mut self, tab_id: &str, purpose: &str) {
+        let known = (|| {
+            let key = &self
+                .workspace_views
+                .as_ref()?
+                .agent_placements
+                .get(tab_id)?
+                .0;
+            if self.catalog_from_coordinator && !self.catalog_paths.knows(&key.1) {
+                return None;
+            }
+            let checkout = self
+                .snapshot
+                .navigator
+                .workspaces
+                .iter()
+                .filter(|workspace| workspace.device_id == key.0)
+                .flat_map(|workspace| &workspace.checkouts)
+                .find(|checkout| {
+                    checkout.path == key.1
+                        && checkout
+                            .tabs
+                            .iter()
+                            .any(|tab| tab.id.as_deref() == Some(tab_id))
+                })?;
+            let topology = checkout
+                .tabs
+                .iter()
+                .filter_map(|tab| Some((tab.id.clone()?, tab.delegated)))
+                .collect::<Vec<_>>();
+            Some((key.clone(), topology))
+        })();
+        let Some((key, topology)) = known else {
+            return;
+        };
+        match self.reconcile_agent_topology(&key, &topology) {
+            Ok(true) => self.persist_workspace_views(),
+            Ok(false) => {}
+            Err(error) => self.push_diagnostic(
+                "agent_layout.reconcile_refused",
+                format!("{purpose} placement for {}: {error:?}", key.1),
+            ),
+        }
+    }
+
     pub(super) fn apply_agent_layout(&mut self, payload: AgentLayoutPayload) -> bool {
         let key = (payload.workspace.device_id, payload.workspace.path);
         if !self.area_workspace_is_current(&key, "agent") {

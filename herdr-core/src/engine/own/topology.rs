@@ -12,6 +12,7 @@
 //! it moves, so a letter, a mission or a parent that names it still finds it.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 use std::time::Instant;
 
 use hide_agent_adapter::definition::Catalog;
@@ -120,10 +121,16 @@ pub(super) struct Pane {
     pub(super) env: BTreeMap<String, String>,
     /// The agent the pane runs and its session, saved for a restore.
     pub(super) agent: Option<PaneAgent>,
+    /// The latest hook report that arrived before foreground detection.
+    /// Never saved; a pane owns at most one and drops it when it ends.
+    pending_session: Option<(String, String)>,
     /// What its holder last said of it.
     pub(super) live: PaneLive,
     /// Why no holder runs the pane, once a restore could not start one.
     pub(super) failed: Option<String>,
+    /// A close owns this pane until termination is confirmed. In-memory
+    /// only; no new split can publish behind an in-flight close.
+    pub(super) closing: bool,
     /// Its holder is being started by the call that drew it (a new tab or
     /// split is drawn before its holder starts, as Herdr's pane exists
     /// once it forked). Whoever takes the pane out meanwhile leaves its
@@ -132,11 +139,15 @@ pub(super) struct Pane {
     pub(super) starting: Option<std::sync::Arc<super::starts::Starting>>,
 }
 
-impl Pane {
-    pub(super) fn is_starting(&self) -> bool {
-        self.starting.as_ref().is_some_and(|start| start.pending())
-    }
+/// Only this unconfirmed start may restore the metadata it replaced.
+/// The caller owns the backup until the input result; nothing is saved.
+pub(super) struct AgentStart {
+    claim: Arc<()>,
+    agent: Option<PaneAgent>,
+    pending_session: Option<(String, String)>,
+}
 
+impl Pane {
     pub(super) fn new(cwd: &str, label: Option<&str>) -> Self {
         Self {
             cwd: cwd.to_owned(),
@@ -314,6 +325,17 @@ impl Topology {
         focus: bool,
     ) -> Result<(), EngineError> {
         let found = self.workspace_mut(workspace)?;
+        if found
+            .tabs
+            .iter()
+            .flat_map(|tab| tab.panes.values())
+            .all(|pane| pane.closing)
+        {
+            return Err(refused(
+                "workspace_closing",
+                format!("workspace {workspace} is closing"),
+            ));
+        }
         found.tabs.push(Tab::new(tab, label, pane_id, pane));
         if focus {
             found.active_tab = tab.to_owned();
@@ -371,6 +393,9 @@ impl Topology {
         focus: bool,
     ) -> Result<(), EngineError> {
         let (workspace_index, tab_index) = self.position(target)?;
+        if self.pane(target)?.closing {
+            return Err(refused("pane_closing", format!("pane {target} is closing")));
+        }
         let workspace = &mut self.workspaces[workspace_index];
         let tab = &mut workspace.tabs[tab_index];
         split_leaf_at(&mut tab.root, target, direction, created, ratio);
@@ -1201,10 +1226,17 @@ impl Topology {
                 let root = tree_of(&tab.root)?;
                 let laid: BTreeSet<String> = leaves(&root).into_iter().collect();
                 let mut panes = BTreeMap::new();
-                for pane in tab.panes {
+                for mut pane in tab.panes {
                     if !seen.insert(pane.id.clone()) {
                         return Err(format!("pane id {:?} is repeated", pane.id));
                     }
+                    // Hide's server mark vouches that a saved read state's
+                    // sequence was numbered by the engine the pane is on now
+                    // (`crate::engine::tokens::SERVER_MARK_TOKEN`). The agents'
+                    // sequences start again with the engine and are not saved,
+                    // so a restored pane carries no mark, as a pane on a
+                    // restarted Herdr server carries none.
+                    pane.tokens.remove(crate::engine::tokens::SERVER_MARK_TOKEN);
                     panes.insert(
                         pane.id,
                         Pane {
@@ -1659,7 +1691,7 @@ impl Topology {
     ) -> Result<agents::Applied, EngineError> {
         let mut seq = self.agent_seq;
         let held = self.pane_mut(pane)?;
-        let applied = agents::apply(
+        let mut applied = agents::apply(
             catalog,
             &mut held.cwd,
             &mut held.agent,
@@ -1667,6 +1699,13 @@ impl Topology {
             facts,
             &mut seq,
         );
+        if let Some(agent) = held.agent.as_mut()
+            && let Some((kind, session)) = held.pending_session.take()
+            && agent.kind == kind
+        {
+            applied.changed |= agent.session.as_ref() != Some(&session);
+            agent.session = Some(session);
+        }
         self.agent_seq = seq;
         Ok(applied)
     }
@@ -1697,17 +1736,103 @@ impl Topology {
         let now = Instant::now();
         self.panes().any(|(id, held)| {
             id != pane
-                && held
-                    .agent
-                    .as_ref()
-                    .is_some_and(|agent| agent.listed(now) && agent.name.as_deref() == Some(name))
+                && held.agent.as_ref().is_some_and(|agent| {
+                    agent.listed(now)
+                        && (agent.name.as_deref() == Some(name)
+                            || (agent.starting(now)
+                                && agent.live.start_claim.is_some()
+                                && agent.live.start_previous_name.as_deref() == Some(name)))
+                })
         })
     }
 
-    /// Records that the engine typed `agent`'s start into `pane`.
-    pub(super) fn start_agent(&mut self, pane: &str, agent: PaneAgent) -> Result<(), EngineError> {
-        self.pane_mut(pane)?.agent = Some(agent);
-        Ok(())
+    /// Reserves the metadata of a start while its input is being delivered.
+    pub(super) fn start_agent(
+        &mut self,
+        pane: &str,
+        mut agent: PaneAgent,
+    ) -> Result<AgentStart, EngineError> {
+        let held = self.pane_mut(pane)?;
+        let now = Instant::now();
+        if held.agent.as_ref().is_some_and(|agent| agent.starting(now)) {
+            return Err(EngineError::Refused {
+                code: "agent_pane_busy".to_owned(),
+                message: format!("pane {pane} is already starting an agent"),
+            });
+        }
+        let claim = Arc::new(());
+        agent.live.start_claim = Some(Arc::clone(&claim));
+        let previous = AgentStart {
+            claim,
+            // An expired provisional record must not regain its old claim
+            // when a later start is refused.
+            agent: held
+                .agent
+                .take()
+                .filter(|agent| agent.live.shown || agent.live.started.is_none()),
+            pending_session: held.pending_session.take(),
+        };
+        agent.live.start_previous_name = previous
+            .agent
+            .as_ref()
+            .filter(|agent| agent.listed(now))
+            .and_then(|agent| agent.name.clone());
+        held.agent = Some(agent);
+        Ok(previous)
+    }
+
+    /// A definite non-delivery withdraws only its own, still unconfirmed
+    /// metadata. A hook, foreground fact, expiry or newer start wins.
+    pub(super) fn finish_agent_start(
+        &mut self,
+        pane: &str,
+        start: AgentStart,
+        not_delivered: bool,
+    ) -> bool {
+        let Ok(held) = self.pane_mut(pane) else {
+            return false;
+        };
+        let owns = held.agent.as_ref().is_some_and(|agent| {
+            agent
+                .live
+                .start_claim
+                .as_ref()
+                .is_some_and(|claim| Arc::ptr_eq(claim, &start.claim))
+        });
+        if !owns {
+            return false;
+        }
+        let agent = held
+            .agent
+            .as_mut()
+            .expect("the claim belongs to this agent");
+        if !not_delivered || !agent.starting(Instant::now()) {
+            agent.live.start_claim = None;
+            agent.live.start_previous_name = None;
+            return false;
+        }
+        held.agent = start.agent;
+        held.pending_session = start.pending_session;
+        true
+    }
+
+    /// A hook cannot claim another kind of agent. Before detection, keep
+    /// only its latest report until the pane's foreground identifies it.
+    pub(super) fn hook_session(
+        &mut self,
+        pane: &str,
+        kind: &str,
+        session: &str,
+    ) -> Result<bool, EngineError> {
+        let held = self.pane_mut(pane)?;
+        match held.agent.as_ref() {
+            Some(agent) if agent.kind == kind => self.set_agent_session(pane, kind, session),
+            Some(_) => Ok(false),
+            None => {
+                held.pending_session = Some((kind.to_owned(), session.to_owned()));
+                Ok(false)
+            }
+        }
     }
 
     /// Records the session the `kind` agent in `pane` runs: on the agent the
@@ -1720,8 +1845,11 @@ impl Topology {
         session: &str,
     ) -> Result<bool, EngineError> {
         let held = self.pane_mut(pane)?;
+        held.pending_session = None;
         match held.agent.as_mut() {
             Some(agent) if agent.kind == kind => {
+                agent.live.start_claim = None;
+                agent.live.start_previous_name = None;
                 let changed = agent.session.as_deref() != Some(session);
                 agent.session = Some(session.to_owned());
                 Ok(changed)
@@ -2103,6 +2231,35 @@ mod tests {
         );
         assert_eq!(read.reserve_pane(&first.workspace).unwrap(), "w1:p4");
         assert_eq!(read.reserve_workspace().workspace, "w2");
+    }
+
+    // The agents' state sequences start again with the engine, so the mark
+    // that vouches for a saved sequence does not outlive it; every other
+    // token does.
+    #[test]
+    fn a_restored_pane_keeps_its_tokens_but_not_the_server_mark() {
+        let mut topology = Topology::default();
+        let first = workspace(&mut topology);
+        topology
+            .set_pane_tokens(
+                &first.pane,
+                &BTreeMap::from([
+                    ("purpose".to_owned(), Some("kept".to_owned())),
+                    (
+                        crate::engine::tokens::SERVER_MARK_TOKEN.to_owned(),
+                        Some("server-before".to_owned()),
+                    ),
+                ]),
+            )
+            .unwrap();
+        let saved = serde_json::to_string(&topology.to_saved()).unwrap();
+        let read = Topology::from_saved(serde_json::from_str(&saved).unwrap()).unwrap();
+        let tokens = &read.pane(&first.pane).unwrap().tokens;
+        assert_eq!(
+            tokens.get("purpose"),
+            Some(&Value::String("kept".to_owned()))
+        );
+        assert!(!tokens.contains_key(crate::engine::tokens::SERVER_MARK_TOKEN));
     }
 
     #[test]

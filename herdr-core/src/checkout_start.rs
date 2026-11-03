@@ -11,9 +11,7 @@ use crate::recent_closed::{ClosedLayout, ClosedLayoutNode};
 use crate::start_claim::{BoundPane, Effect};
 use crate::worktree_control::{CheckoutTabRequest, WorktreeTaskOutcome};
 use hide_node_link::panes::PaneIdentity;
-use hide_node_link::protocol::Call;
 use hide_node_link::protocol::ShellLaunch;
-use hide_node_link::{ErrorCode, LinkError};
 
 #[cfg(test)]
 #[path = "checkout_start_tests.rs"]
@@ -37,34 +35,16 @@ fn uncertain(message: &str) -> ControlFailure {
 
 fn inspect(control: &Control<'_>, pane: &str) -> Result<PaneIdentity, ControlFailure> {
     (control.check)().map_err(ControlFailure::Ambiguous)?;
-    // The core's own engine proves the pane by its record; Herdr's is asked
-    // of the node that holds its socket.
-    if let Some(answer) = control
-        .engine
-        .inspect_pane(crate::engine::Wait::Each(INSPECT_WAIT), pane)
-    {
-        return answer.map_err(|error| match error {
-            EngineError::Refused { .. } => {
+    crate::node_access::pane_terminal(control.engine, control.node, pane, INSPECT_WAIT).map_err(
+        |unconfirmed| match unconfirmed {
+            crate::node_access::PaneUnconfirmed::Certain => {
                 ControlFailure::Definite("agent_start.terminal_unchecked".into())
             }
-            _ => uncertain("agent_start.terminal_unchecked"),
-        });
-    }
-    crate::node_access::call_as(
-        control.node,
-        Call::PaneInspect {
-            pane_id: pane.to_owned(),
+            crate::node_access::PaneUnconfirmed::Uncertain => {
+                uncertain("agent_start.terminal_unchecked")
+            }
         },
-        INSPECT_WAIT,
     )
-    .map_err(|error| match error {
-        // A node with no Herdr server names no pane's shell at all: nothing
-        // can ever confirm the start, so it fails for certain.
-        LinkError::Refused(refusal) if refusal.code == ErrorCode::Unsupported => {
-            ControlFailure::Definite("agent_start.terminal_unchecked".into())
-        }
-        _ => uncertain("agent_start.terminal_unchecked"),
-    })
 }
 
 fn save(control: &Control<'_>, effect: &Effect) -> Result<(), ControlFailure> {

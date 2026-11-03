@@ -126,6 +126,7 @@ Each record names the server it was read on (`PaneReadRecord::server`).
 Every connection Hide makes to a Herdr server, this machine's or a device's, starts with a fresh mark, and once a saved record or completion names that mark the lineage writer writes it on the pane as the `hide_server` token (`wire::SERVER_MARK_TOKEN`).
 A pane that carries a mark is on the server that mark names; a pane that carries none is on the server Hide is connected to now, because Herdr drops the mark with its server.
 So a hided restart against a running server finds its old mark and keeps comparing sequences, and a turn the agent finished while Hide was away is news.
+On the core's own engine the agents' sequences start again with the daemon, so the engine keeps every token of a pane it saved except this mark, and a restored pane is judged as a pane on a restarted Herdr server is (`own/topology.rs`, `Topology::from_saved`).
 
 A record saved on another server is carried over instead of compared.
 Each record holds its verdict (`PaneReadRecord::unread`), saved whenever it flips, and until the pane settles on the new server the row keeps that verdict.
@@ -1293,6 +1294,8 @@ A waiting root intentionally keeps its hollow row glyph with a working tone, and
 `agent_state/turn.rs::push` owns the effective notification state and transition ledger; hided keeps pairing, push encryption, transport and delivery policy.
 A read root question clears the server’s effective push state, while the phone’s existing open-page rule keeps its notification while the demand remains.
 The phone reads the core’s `holds_notification` value, and `emphasized` controls its compact title.
+When a new turn's read finishes before that pane's previous analysis, the label worker keeps one entry in its existing analysis queue and reconsiders the current turn after the old result lands.
+The old result cannot release the new turn's notice, and the new turn needs no further read to receive its judgment (`labels::notification_tests::a_late_analysis_cannot_release_the_next_turns_notice`).
 The projection and push regression tests remain in `hided/src/mobile/{projection,push}.rs`, exercising the same public core functions the transport calls.
 The desktop app's agent notifications run the same transitions on their own ledger (`hided/src/desktop_notices.rs`, PRD first-run-onboarding D-09), so a desktop notification and a phone push agree on what is new without either one's seed or mode moving the other.
 A Hide AI row for a home is on the phone's list, and in these transitions, only while it is in Needs You, so the notification follows the group: one notice when it enters, none when the home's turn changes inside it, and none for its progress (PRD hide-ai-work-home B2, B10); the phone opens the agent's detail from it.

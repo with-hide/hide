@@ -75,9 +75,8 @@ fn shows(engine: &dyn Engine, pane: &str, text: &str) {
 }
 
 /// Waits until the pane's shell has drawn something, its prompt, so typed
-/// text reaches a shell that reads it. `visible` is Herdr's drawn screen and
-/// the own engine's last rows of screen and scrollback, which both hold a
-/// new pane's prompt.
+/// text reaches a shell that reads it. `visible` is the drawn screen, which
+/// holds a new pane's prompt.
 #[allow(clippy::disallowed_methods)] // a polling helper: it sleeps between observations of a state, bounded by a deadline
 fn prompted(engine: &dyn Engine, pane: &str) {
     let deadline = Instant::now() + SHOWN_WITHIN;
@@ -356,7 +355,7 @@ fn the_pinned_herdr_meets_the_engine_contract() {
 /// Windows) in a folder of their own; the holders end with it.
 struct BuiltHolders {
     engine: super::own::OwnEngine<'static>,
-    holders: std::sync::Arc<hide_node::terminal::holder::Holders>,
+    panes: std::sync::Arc<dyn hide_node_link::holders::PaneHolders>,
     service: std::sync::Arc<hide_node::terminal::Service>,
     folder: String,
     _root: tempfile::TempDir,
@@ -442,9 +441,13 @@ impl BuiltHolders {
         // machine's node, here this machine's in-process node, by the
         // requests a device's node answers over its link (D-22).
         let node = Arc::new(hide_node::Local::new(Some(home.clone())).with_panes(panes));
+        let linked = super::own::link_panes(node);
+        linked
+            .recovered(Duration::from_secs(120))
+            .expect("the contract acquires pane ownership");
         Self {
-            engine: super::own::OwnEngine::new(super::own::link_panes(node)),
-            holders,
+            engine: super::own::OwnEngine::new(std::sync::Arc::clone(&linked)),
+            panes: linked,
             service: terminals.service,
             folder: hide_platform::path::to_wire(&folder).unwrap(),
             _root: root,
@@ -457,7 +460,7 @@ impl BuiltHolders {
         let left = self.engine.pane_folders(WAIT).expect("the session reads");
         self.engine.stop();
         for (pane, _) in left {
-            let _ = self.holders.terminate(&self.service, &pane);
+            let _ = self.panes.terminate(&pane);
         }
     }
 }

@@ -368,16 +368,64 @@ static int complete_command(const char *filename, int status, unsigned long with
   return publish(filename, text);
 }
 // Per-run values come from `provider.config` in $HIDE_E2E_ROOT, the folder the
-// fixture's Herdr panes are told about: line 1 is the Herdr binary, line 2 the
-// file the command's status is written to, and every line after is one
-// argument of the command run on `!`. An optional `within-ms=N` before those
-// arguments gives the journey's explicit command budget (desktop keeps 20s).
+// fixture's panes are told about: lines 1 and 2 are the program and script
+// that report the agent's session the way the pane's engine learns it, run as
+// `<program> <script> <pane> <session>`; line 3 is the file the command's
+// status is written to, and every line after is one argument of the command
+// run on `!`. An optional `within-ms=N` before those arguments gives the
+// journey's explicit command budget (desktop keeps 20s). Every fixture writes
+// this format through --write-config below.
 // The executable itself is built once.
 #define MAX_COMMAND 16
 static char config_text[32768];
-static const char *herdr_binary;
+static const char *reporter_program;
+static const char *reporter_script;
 static const char *completion_file;
 static char *command[MAX_COMMAND + 1];
+/* Whether the command just run was the agent's own hook (`AgentRun.hook`,
+   marked by a file beside the completion file): Claude Code draws nothing
+   for a hook, so the screen stays as it was, a permission prompt included,
+   while a tool call's command returns to the composer. */
+static int ran_as_hook(void) {
+  size_t size = strlen(completion_file) + sizeof ".hook";
+  char *marker = malloc(size);
+  if (!marker) exit(1);
+  snprintf(marker, size, "%s.hook", completion_file);
+#ifdef _WIN32
+  WCHAR *name = wide(marker);
+  int found = GetFileAttributesW(name) != INVALID_FILE_ATTRIBUTES;
+  free(name);
+#else
+  int found = access(marker, F_OK) == 0;
+#endif
+  free(marker);
+  return found;
+}
+static int write_config(int argc, char **argv) {
+  // --write-config FILE REPORTER SCRIPT COMPLETION [within-ms=N] COMMAND [ARG...]
+  // The budget is no argument of the command, as load_config reads it.
+  int budget = argc > 6 && strncmp(argv[6], "within-ms=", 10) == 0;
+  if (argc - 6 - budget < 1 || argc - 6 - budget > MAX_COMMAND) {
+    fputs("fixture provider: expected reporter, script, completion and 1..16 command arguments\n", stderr);
+    return 1;
+  }
+  size_t size = 0;
+  for (int i = 3; i < argc; i++) {
+    if (!*argv[i] || strpbrk(argv[i], "\r\n")) {
+      fputs("fixture provider: configuration fields must be nonempty single lines\n", stderr);
+      return 1;
+    }
+    size += strlen(argv[i]) + 1;
+  }
+  if (size >= sizeof config_text) { fputs("fixture provider: configuration exceeds its byte limit\n", stderr); return 1; }
+  FILE *file = file_open(argv[2]);
+  if (!file) { perror("fixture provider: write configuration"); return 1; }
+  int failed = 0;
+  for (int i = 3; i < argc; i++) if (fprintf(file, "%s\n", argv[i]) < 0) failed = 1;
+  if (fclose(file) != 0) failed = 1;
+  if (failed) fputs("fixture provider: writing configuration failed\n", stderr);
+  return failed;
+}
 static int load_config(void) {
   const char *root = getenv("HIDE_E2E_ROOT");
   if (!root || !*root) { fputs("fixture provider: HIDE_E2E_ROOT is not set\n", stderr); return 1; }
@@ -400,9 +448,10 @@ static int load_config(void) {
     if (end) *end = 0;
     size_t length = strlen(line);
     if (length && line[length - 1] == '\r') line[length - 1] = 0;
-    if (count == 0) herdr_binary = line;
-    else if (count == 1) completion_file = line;
-    else if (count == 2 && strncmp(line, "within-ms=", 10) == 0) {
+    if (count == 0) reporter_program = line;
+    else if (count == 1) reporter_script = line;
+    else if (count == 2) completion_file = line;
+    else if (count == 3 && strncmp(line, "within-ms=", 10) == 0) {
       char *end;
       command_ms = strtoul(line + 10, &end, 10);
       if (*end || command_ms < 1 || command_ms > 120000) { fputs("fixture provider: invalid command budget\n", stderr); return 1; }
@@ -413,7 +462,7 @@ static int load_config(void) {
     if (!end) break;
     line = end + 1;
   }
-  if (!arguments) { fprintf(stderr, "fixture provider: %s is incomplete\n", path); return 1; }
+  if (count < 3 || !arguments) { fprintf(stderr, "fixture provider: %s is incomplete\n", path); return 1; }
   command[arguments] = NULL;
   return 0;
 }
@@ -422,6 +471,7 @@ int main(int argc, char **argv) {
   _setmode(0, _O_BINARY);
   _setmode(1, _O_BINARY);
 #endif
+  if (argc > 1 && strcmp(argv[1], "--write-config") == 0) return write_config(argc, argv);
   if (argc > 1 && strcmp(argv[1], "--version") == 0) { puts("fixture"); return 0; }
   if (argc > 1 && strcmp(argv[1], "auth") == 0) { puts("{\"loggedIn\":true}"); return 0; }
   for (int i = 1; i < argc; i++) if (strcmp(argv[i], "--json-schema") == 0) return 1;
@@ -436,7 +486,9 @@ int main(int argc, char **argv) {
     return status;
   }
   if (load_config() != 0) return 1;
-  const char *pane = getenv("HERDR_PANE_ID");
+  /* The pane names itself as `hide_agent_hooks::pane` reads it: HIDE_PANE_ID first. */
+  const char *pane = getenv("HIDE_PANE_ID");
+  if (!pane || !*pane) pane = getenv("HERDR_PANE_ID");
   if (!pane || !*pane) return 1;
   /* A resumed conversation keeps its id, as Claude Code's own does. */
   char session[80];
@@ -448,8 +500,7 @@ int main(int argc, char **argv) {
   const char *base = argv[0];
   for (const char *at = argv[0]; *at; at++) if (*at == '/' || *at == '\\') base = at + 1;
   int claude = strcmp(base, "claude") == 0 || strcmp(base, "claude.exe") == 0;
-  char *report[] = { (char *)herdr_binary, "pane", "report-agent-session", (char *)pane,
-    "--source", "herdr:claude", "--agent", "claude", "--agent-session-id", session, "--seq", "1", NULL };
+  char *report[] = { (char *)reporter_program, (char *)reporter_script, (char *)pane, session, NULL };
   if (claude && run_child(report, 20000) != 0) return 1;
   raw_terminal();
   static const char ready[] = "\r\nClaude Code fixture\r\nclaude fixture ready\r\n";
@@ -457,13 +508,27 @@ int main(int argc, char **argv) {
   static const char prompt[] = "\r\n────────────────\r\n❯ \r\n────────────────\r\n";
   if (terminal_write(prompt, sizeof prompt - 1) != (fixture_count_t)(sizeof prompt - 1)) return 1;
   char bytes[16384];
+  /* Everything else typed is echoed, as the `claude` stand-in echoes it
+     (`claude-shim.c`), so a spec draws the screens an engine reads an
+     agent's state from; a console's lone CR is echoed as a line end. */
+  static char echo[sizeof bytes * 2];
   fixture_count_t count;
   while ((count = terminal_read(bytes, sizeof bytes)) > 0) {
+    size_t out = 0;
+    for (fixture_count_t i = 0; i < count; i++) {
+      if (bytes[i] == '!') continue;
+      echo[out++] = bytes[i];
+#ifdef _WIN32
+      if (bytes[i] == '\r' && (i + 1 == count || bytes[i + 1] != '\n')) echo[out++] = '\n';
+#endif
+    }
+    if (out && terminal_write(echo, out) != (fixture_count_t)out) return 1;
     for (fixture_count_t i = 0; i < count; i++) {
       if (bytes[i] != '!') continue;
       int status = run_child(command, command_ms);
+      int hook = ran_as_hook();
       if (complete_command(completion_file, status, command_ms) != 0 || !cleanup_confirmed) return 1;
-      if (terminal_write(prompt, sizeof prompt - 1) != (fixture_count_t)(sizeof prompt - 1)) return 1;
+      if (!hook && terminal_write(prompt, sizeof prompt - 1) != (fixture_count_t)(sizeof prompt - 1)) return 1;
     }
   }
   return count < 0 ? 1 : 0;

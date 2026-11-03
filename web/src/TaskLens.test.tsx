@@ -118,6 +118,23 @@ it("groups the device's tasks as 내 차례 (a block included), 읽을 것, 작�
   expect(rows(container)).not.toContain("rest");
 });
 
+it.each(["status", "project"] as const)("in %s keeps a read question's core-owned line after its unread ask clears", async (view) => {
+  const question = "긴 한국어 요청을 읽은 뒤 질문 표시가 흐려지는지 확인해 주세요";
+  const agent = row("question", { status_code: "question", demand: "question", mark: "turn" }, { group: "idle", line: null });
+  agent.state = {
+    ...agent.state,
+    ask: null,
+    line: { text: question, mode: "request", tone: { kind: "warning", read: true } },
+  };
+  agent.revisit = { starred: false, read_ask: true, since_unix_ms: 1 };
+  const agents = [agent];
+  const { container } = await render(snapshot(agents, [{ ...card("question", "needs_you", "hide-main"), read: true }], view), agents);
+  const task = container.querySelector('[data-task-row="question"]')!;
+  expect(task.getAttribute("data-task-read")).toBe("true");
+  expect(task.querySelector('[data-task-line="needs_you"]')?.textContent).toContain(question);
+  expect(task.querySelector('[data-task-line="needs_you"] [data-line-part]')?.textContent).toContain("질문");
+});
+
 it("in 상태별 holds 내 차례 and 읽을 것 still above the rest, arrows crossing both, and not when nothing is under them", async () => {
   const agents = [row("ask", {}, { group: "needs_you" }), row("done"), row("works"), row("rest")];
   const cards = [card("ask", "needs_you", "hide-main"), card("done", "done", "hide-main"), card("works", "working", "hide-main"), card("rest", "resting", "hide-main")];

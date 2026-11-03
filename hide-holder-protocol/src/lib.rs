@@ -46,9 +46,12 @@
 //! that misses one asks [`ClientMessage::Redraw`], and the next is full.
 //!
 //! A connection whose first message is an [`Ask`] instead of a hello asks one
-//! question, the pane's recent text or its processes, and is answered once
-//! and closed; it never takes the holder over and leaves the screen
-//! connection and its scroll position as they were (D-11, D-18).
+//! question, the pane's recent or visible text, its processes or its scroll
+//! position,
+//! and is answered once and closed; it never takes the holder over and
+//! leaves the screen connection and its scroll position as they were
+//! (D-11, D-18), except [`Ask::ScrollTo`], which moves the screen as Herdr's
+//! `pane.scroll` lets any client do, so a pane search can show its match.
 //!
 //! A connection whose first message is a watch ([`Opening::Watch`]) follows
 //! the pane's facts (PRD engine-bundle-3-core-owns D-18, D-21): it takes
@@ -776,6 +779,17 @@ pub enum Ask {
     /// sequences (Herdr's `recent` read in its `ansi` format), at most
     /// [`MAX_READ_LINES`]; the rows are the ones [`Ask::Read`] reads.
     Rows { lines: u16 },
+    /// Where the screen is scrolled to in its scrollback, answered
+    /// [`Answer::Scroll`] (Herdr's `pane.get` scroll metrics).
+    Scroll,
+    /// Moves the screen to `offset_from_bottom` rows above the bottom of
+    /// its scrollback, past the top clamped to it, and answers where it is
+    /// then (Herdr's `pane.scroll`); the connection that holds the pane is
+    /// sent the moved screen. The only ask that changes the screen.
+    ScrollTo { offset_from_bottom: u64 },
+    /// The rows the screen shows now, wherever it is scrolled to, as text
+    /// with soft wraps joined (Herdr's `visible` read).
+    Visible,
 }
 
 /// Why a holder does not know a pane's foreground.
@@ -822,6 +836,11 @@ pub enum Answer {
         /// The pane's program, the one the holder started.
         shell: u32,
         foreground: Foreground,
+    },
+    /// The screen's place in its scrollback, in rows above the bottom.
+    Scroll {
+        offset_from_bottom: u64,
+        max_offset_from_bottom: u64,
     },
 }
 
@@ -1251,6 +1270,12 @@ pub fn write_ask(writer: &mut impl Write, ask: &Ask, version: u16) -> io::Result
             payload.push(4);
             payload.extend_from_slice(&lines.to_le_bytes());
         }
+        Ask::Scroll => payload.push(5),
+        Ask::Visible => payload.push(7),
+        Ask::ScrollTo { offset_from_bottom } => {
+            payload.push(6);
+            payload.extend_from_slice(&offset_from_bottom.to_le_bytes());
+        }
     }
     write_frame(writer, kind::ASK, &payload)
 }
@@ -1302,6 +1327,11 @@ pub fn read_opening(reader: &mut impl Read) -> Result<Opening, FrameError> {
             4 => Opening::Ask(Ask::Rows {
                 lines: payload.u16()?,
             }),
+            5 => Opening::Ask(Ask::Scroll),
+            6 => Opening::Ask(Ask::ScrollTo {
+                offset_from_bottom: payload.u64()?,
+            }),
+            7 => Opening::Ask(Ask::Visible),
             other => {
                 return Err(FrameError::Malformed(format!("an unknown ask {other}")));
             }
@@ -1467,6 +1497,14 @@ pub fn write_holder(writer: &mut impl Write, message: &HolderMessage) -> io::Res
                         }),
                     }
                 }
+                Answer::Scroll {
+                    offset_from_bottom,
+                    max_offset_from_bottom,
+                } => {
+                    payload.push(3);
+                    payload.extend_from_slice(&offset_from_bottom.to_le_bytes());
+                    payload.extend_from_slice(&max_offset_from_bottom.to_le_bytes());
+                }
             }
             write_frame(writer, kind::ANSWER, &payload)
         }
@@ -1593,6 +1631,10 @@ pub fn read_holder(reader: &mut impl Read) -> Result<HolderMessage, FrameError> 
                 };
                 Answer::Processes { shell, foreground }
             }
+            3 => Answer::Scroll {
+                offset_from_bottom: payload.u64()?,
+                max_offset_from_bottom: payload.u64()?,
+            },
             other => {
                 return Err(FrameError::Malformed(format!("an unknown answer {other}")));
             }
@@ -2064,6 +2106,11 @@ mod tests {
             Opening::Ask(Ask::Processes),
             Opening::Ask(Ask::Screen),
             Opening::Ask(Ask::Rows { lines: 2000 }),
+            Opening::Ask(Ask::Scroll),
+            Opening::Ask(Ask::Visible),
+            Opening::Ask(Ask::ScrollTo {
+                offset_from_bottom: u64::MAX,
+            }),
             Opening::Watch(Hello::current(vec![Capability::Facts])),
         ] {
             assert_eq!(round_opening(opening.clone()), opening);
@@ -2163,6 +2210,10 @@ mod tests {
             HolderMessage::Answer(Answer::Processes {
                 shell: 10,
                 foreground: Foreground::Unknown(Unknown::NotOnThisSystem),
+            }),
+            HolderMessage::Answer(Answer::Scroll {
+                offset_from_bottom: 3,
+                max_offset_from_bottom: 40,
             }),
             HolderMessage::Notice(Notice::new(
                 NoticeReason::AnswersRefused,
@@ -2309,7 +2360,7 @@ mod tests {
     fn an_ask_this_holder_does_not_know_is_not_read() {
         let mut payload = MAGIC.to_vec();
         payload.extend_from_slice(&PROTOCOL_VERSION.to_le_bytes());
-        payload.push(5);
+        payload.push(8);
         let mut bytes = Vec::new();
         write_frame(&mut bytes, kind::ASK, &payload).unwrap();
         assert!(matches!(

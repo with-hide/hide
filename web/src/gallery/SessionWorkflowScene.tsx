@@ -109,15 +109,15 @@ export function SessionWorkflowScene({ scene: kind, theme, content, scale, width
     const agents: AgentRow[] = EXAMPLES.map((example, index) => {
       const [mark, tone, verb] = MARKS[index]!;
       return {
-        ...seed, id: `s${index}`, pane_id: `s${index}`, mark, agent_kind: index % 2 ? "codex" : "claude",
+        ...seed, status_code: example.read ? "question" : seed.status_code, id: `s${index}`, pane_id: `s${index}`, mark, agent_kind: index % 2 ? "codex" : "claude",
         identity_label: content === "long" ? `${example.title} - 긴 한국어 제목과 변경 사항을 좁은 화면에서 확인하는 작업` : example.title,
         lineage_child_pane_ids: index === 5 ? ["a1c1", "a1c2"] : [],
         // One Working root is a fork of the row beside it (PRD fork-operator-root B8).
         forked_from: index === 4 ? { pane_id: "s5", label: EXAMPLES[5]!.title } : null,
         descendant_mark: example.mark ?? null,
         wait: example.wait, descendant_counts: example.wait === "children" ? { error: 0, approval: 0, question: 0, working: 2, done: 0 } : undefined,
-        state: { ...seed.state, verb, mark_tone: { kind: tone, read: example.read ?? false }, chip_tone: { kind: tone, read: example.read ?? false }, session: { group: example.group, line: example.line, unfinished: example.unfinished ?? false }, ask: example.ask ?? null, tree_rank: 1,
-          request_since: Date.now() - 180_000, line: example.wait ? { text: "", mode: "waiting", tone: { kind: "working", read: false }, pull_request: example.pull } : example.line ? { text: example.line, mode: "request", tone: { kind: "subtle", read: false } } : null },
+        state: { ...seed.state, verb, mark_tone: { kind: tone, read: example.read ?? false }, chip_tone: { kind: tone, read: example.read ?? false }, session: { group: example.group, line: example.line, unfinished: example.unfinished ?? false }, ask: example.read ? null : example.ask ?? null, tree_rank: 1,
+          request_since: Date.now() - 180_000, line: example.read && example.ask?.what ? { text: example.ask.what, mode: "request", tone: { kind: "warning", read: true } } : example.wait ? { text: "", mode: "waiting", tone: { kind: "working", read: false }, pull_request: example.pull } : example.line ? { text: example.line, mode: "request", tone: { kind: "subtle", read: false } } : null },
         request: { verb, verb_since_unix_ms: Date.now(), line: example.line ?? undefined, request: null, later_by: null, pull_requests: example.pr ? [{ number: 220 + index, title: example.title, url: `https://example.invalid/pull/${220 + index}`, badge: example.pr === "merged" ? "merged" : "open", checks: example.pr === "failed" ? "failed" : example.pr === "pending" ? "pending" : "passing", review: example.pr === "mergeable" ? "approved" : "review_required", head_branch: "prd/session-ui", closing_issues: [], live: true, duty: true, created: true, settled_at_unix_ms: null }] : [] },
         pulls: example.pr ? { pulls: [listedPull(220 + index, example.title, example.pr, null, `https://example.invalid/pull/${220 + index}`)] } : null,
         resolved: example.group === "resolved" ? { at_unix_ms: Date.now(), source: "operator" } : null,

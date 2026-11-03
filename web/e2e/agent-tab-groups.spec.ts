@@ -1,8 +1,10 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { startHerdr, declareParent, printLinesCommand } from "./herdr-fixture";
+import { startLayoutStack, startFixture } from "./engine-fixture";
+import { closePane, focusTab, newTab, sendKeys, tabPanes, tabsOf, withControl } from "./daemon-actions";
+import { spawnChild } from "./fixture-agents";
 import { herdrGate } from "./herdr-gate";
 import { waitForTerminal } from "./group-start-helper";
 import { startHided, type Daemon } from "./hided-fixture";
@@ -34,27 +36,45 @@ async function shape(page: Page) {
   })));
 }
 
-// Three tabs in one Agent area, hided running. Each contract below starts
+// Tabs in one Agent area, hided running. Each contract below starts
 // here and puts itself into the shape it needs, so a failure names one contract.
-async function startGroups(page: Page, name: string) {
+// `tabs` are the checkout's tabs in order, each with its shell in `panes`.
+async function openGroups(page: Page, name: string, labels: string[]) {
   await page.setViewportSize({ width: 1920, height: 1080 });
-  const herdr = await startHerdr({ agents: false });
+  const stack = await startLayoutStack({ panes: 1, label: name });
   try {
-    const created = ["second", "third"].map((label) => herdr.run(["tab", "create", "--workspace", herdr.workspace, "--cwd", path.join(herdr.root, "fixture"), "--label", label, "--no-focus"]) as { result: { tab: { tab_id: string }; root_pane: { pane_id: string } } });
-    const [first, second, third] = [herdr.tab, ...created.map((row) => row.result.tab.tab_id)] as [string, string, string];
-    const group = { herdr, created, first, second, third, daemon: await startHided(herdr, name), sent: countSent(page) };
+    // The strip's order is what the daemon publishes: a tab made while the first one is still
+    // being placed can be listed ahead of it, so each tab is waited for before the next is made.
+    for (const [index, label] of labels.entries()) {
+      await newTab(stack.control, stack, label);
+      await stack.control.until((rest) => (tabsOf(rest, stack.workspace)?.length === index + 2 ? true : undefined), `${index + 2} tabs listed`, 30_000);
+    }
+    const listed = await stack.control.until((rest) => {
+      const order = tabsOf(rest, stack.workspace);
+      const first = order?.map((id) => tabPanes(rest, id)[0]);
+      return order?.length === labels.length + 1 && first?.every(Boolean) ? { order, first: first as string[] } : undefined;
+    }, "every tab listed with its shell", 30_000);
+    const { order: tabs, first: panes } = listed;
+    // New tab shows the tab it makes; every contract starts with the first one shown.
+    await focusTab(stack.control, stack, tabs[0]!);
+    const group = { stack, tabs, panes, daemon: stack.daemon, sent: countSent(page) };
     await page.goto(`${group.daemon.origin}/?probe=1#token=${group.daemon.token}`);
     await enterWorkspace(page, "fixture");
-    await expect(tab(page, third)).toBeVisible();
-    expect((await shape(page))[0]?.tabs).toEqual([first, second, third]);
+    await expect(tab(page, tabs.at(-1)!)).toBeVisible();
+    await expect.poll(async () => (await shape(page))[0]?.tabs).toEqual(tabs);
     // `stop` reads the daemon from the object it returns: a test that
     // restarts hided puts the new daemon there, and the old one is gone.
-    const groups = { ...group, stop: () => { groups.daemon.stop(); herdr.stop(); } };
+    const groups = { ...group, stop: () => { stack.control.close(); groups.daemon.stop(); stack.server.stop(); } };
     return groups;
   } catch (error) {
-    herdr.stop();
+    stack.stop();
     throw error;
   }
+}
+async function startGroups(page: Page, name: string) {
+  const group = await openGroups(page, name, ["second", "third"]);
+  const [first, second, third] = group.tabs as [string, string, string];
+  return { ...group, first, second, third };
 }
 type Groups = Awaited<ReturnType<typeof startGroups>>;
 // Moves the third tab into an area of its own on the right, as a setup step.
@@ -79,7 +99,7 @@ async function gatherRight(page: Page, group: Groups) {
 test("dragging a tab to the right edge previews a split, then splits into two live canvases", async ({ page }) => {
   const group = await startGroups(page, "agent-groups-split");
   try {
-    const { herdr, created, first, third, sent } = group;
+    const { stack, first, third, sent } = group;
     const original = await shape(page);
     const body = await box(page.locator("[data-agent-body]").first());
     const beforeResize = sent.get("terminal_resize") ?? 0;
@@ -96,8 +116,8 @@ test("dragging a tab to the right edge previews a split, then splits into two li
     expect(sent.get("agent_layout.split")).toBe(1);
     await expect(page.locator('[data-transport="released"]')).toHaveCount(0);
     // Both shown tabs keep receiving fresh output while the other owns focus.
-    const live = [herdr.panes[0], created[1]!.result.root_pane.pane_id];
-    for (const [index, pane] of live.entries()) execFileSync(herdr.bin, ["pane", "run", pane, printLinesCommand(herdr.shell, `area-${index}-live-`, 3)], { env: herdr.env, timeout: 10_000 });
+    const live = [group.panes[0]!, group.panes[2]!];
+    for (const [index, pane] of live.entries()) sendKeys(stack.control, pane, `${printLinesCommand(stack.server.shell, `area-${index}-live-`, 3)}\r`);
     for (const [index, pane] of live.entries()) await expect.poll(() => page.evaluate((id) => window.__hideProbe?.paneText(id) ?? "", pane)).toContain(`area-${index}-live-3`);
     await screenshot(page, "agent-groups-two-live-areas");
   } finally { group.stop(); }
@@ -291,16 +311,10 @@ test("a tab dragged onto the lane over Agent Views is refused and the areas stay
 });
 
 test("New tab and Reopen use the requested area and Rename works in either bar", async ({ page }) => {
-  await page.setViewportSize({ width: 1920, height: 1080 });
-  const herdr = await startHerdr({ agents: false });
-  let daemon: Daemon | null = null;
+  const group = await openGroups(page, "agent-placement", ["second"]);
   try {
-    const second = herdr.run(["tab", "create", "--workspace", herdr.workspace, "--cwd", path.join(herdr.root, "fixture"), "--no-focus"]) as { result: { tab: { tab_id: string } } };
-    const secondId = second.result.tab.tab_id;
-    daemon = await startHided(herdr, "agent-placement");
-    const sent = countSent(page);
-    await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
-    await enterWorkspace(page, "fixture");
+    const [firstId, secondId] = group.tabs as [string, string];
+    const { sent } = group;
     const body = await box(page.locator("[data-agent-body]"));
     await drag(page, tab(page, secondId), { x: body.x + body.width * .95, y: body.y + body.height / 2 });
     await expect(areas(page)).toHaveCount(2);
@@ -308,7 +322,7 @@ test("New tab and Reopen use the requested area and Rename works in either bar",
     const left = page.locator(`[data-agent-area-id="${leftId}"]`);
     await left.getByRole("button", { name: /^New tab/ }).click();
     await expect(left.locator('[role="tab"]')).toHaveCount(2);
-    const createdId = (await shape(page))[0]!.tabs.find((id) => id !== herdr.tab)!;
+    const createdId = (await shape(page))[0]!.tabs.find((id) => id !== firstId)!;
     // New tab opens its terminal in this area before Rename and close/reopen apply.
     await waitForTerminal(left, createdId);
     await expect(left.locator("[data-canvas]")).toHaveAttribute("data-canvas", createdId);
@@ -346,13 +360,14 @@ test("New tab and Reopen use the requested area and Rename works in either bar",
     expect(sent.get("reopen_closed")).toBe(2);
     await expect(areas(page)).toHaveCount(1);
     await screenshot(page, "agent-groups-reopen-placement");
-  } finally { daemon?.stop(); herdr.stop(); }
+  } finally { group.stop(); }
 });
 
 // The chip's focus is held at the Herdr socket, so the click on the normal tab
 // lands while the chip's focus is still unanswered: the order is the test's,
 // not the runner's speed.
-test("Delegated canvas returns to its normal tab while the chip's focus is still waiting for Herdr", async ({ page }) => {
+// Herdr only: it holds Herdr's pane.focus answer at the socket and reads the tab.focus Hide then sends it.
+test("Delegated canvas returns to its normal tab while the chip's focus is still waiting for Herdr @herdr", async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
   const herdr = await startHerdr();
   let daemon: Daemon | null = null;
@@ -398,14 +413,18 @@ test("Delegated canvas returns to its normal tab while the chip's focus is still
 
 test("A delegated canvas's normal tab keeps the Agent commands in its menu", async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
-  const herdr = await startHerdr();
+  const fixture = await startFixture({ family: true });
   let daemon: Daemon | null = null;
   try {
-    const [parent, child] = herdr.panes;
-    daemon = await startHided(herdr, "agent-delegated-menu");
+    daemon = await startHided(fixture, "agent-delegated-menu");
+    const [parent, beside] = fixture.panes;
+    const live = daemon;
+    // The parent has one delegated child, in a tab of its own: the fixture's own child, beside it, goes.
+    await withControl(live, (control) => closePane(control, beside));
+    const child = await spawnChild(fixture, live, parent, { name: "delegate", repo: path.join(fixture.root, "fixture") });
+    const normal = fixture.tab;
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
-    declareParent(herdr, child, parent);
     const treeButton = page.locator(`[data-pane-view="${parent}"] [data-pane-tree="${parent}"]`);
     await expect(treeButton).toBeVisible({ timeout: 20_000 });
     await expect(page.locator(`[data-pane-view="${child}"]`)).toHaveCount(0);
@@ -416,19 +435,20 @@ test("A delegated canvas's normal tab keeps the Agent commands in its menu", asy
     // The child pane view is focused before the core has switched the drawn
     // canvas to the delegated tab; until then the normal tab is the selected one
     // and a click on it is a no-op. Wait for the delegated canvas to be drawn.
-    await expect(tab(page, herdr.tab)).toHaveAttribute("aria-selected", "false");
+    await expect(tab(page, normal)).toHaveAttribute("aria-selected", "false");
     await expect(page.locator(`[data-pane-view="${child}"]`)).toHaveAttribute("data-focused", "true");
-    await tab(page, herdr.tab).click();
+    await tab(page, normal).click();
     await expect(page.locator(`[data-pane-view="${parent}"]`)).toHaveAttribute("data-focused", "true");
-    await tab(page, herdr.tab).click({ button: "right" });
+    await tab(page, normal).click({ button: "right" });
     await expect(page.locator('[role="menu"] [data-menu-group="split"]')).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(page.locator('[role="menu"]')).toHaveCount(0);
     await screenshot(page, "agent-groups-delegated-return");
-  } finally { daemon?.stop(); herdr.stop(); }
+  } finally { daemon?.stop(); fixture.stop(); }
 });
 
-test("An external focused creation joins a bar without replacing either shown canvas", async ({ page }) => {
+// Herdr only: Hide following a tab Herdr created and focused outside Hide.
+test("An external focused creation joins a bar without replacing either shown canvas @herdr", async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
   const herdr = await startHerdr({ agents: false });
   let daemon: Daemon | null = null;

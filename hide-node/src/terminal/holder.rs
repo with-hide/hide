@@ -29,6 +29,7 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
+#[cfg(test)]
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -43,7 +44,7 @@ use hide_kit::panes::{
     CloseError, Judgment, Panes, RECONCILE_BUDGET, StartRefusal, StartRequest, Started, core_pane,
     holder_pane,
 };
-use hide_node_link::holders::HolderRecovery;
+use hide_node_link::holders::{HolderIntent, HolderRecovery, HolderReservation, RecoverablePane};
 use hide_node_link::terminal::{
     GridSize, MAX_ATTACHED_PANES, PaneTerminalState, ReportSink, TerminalControl, TerminalNode,
     TerminalReport,
@@ -121,7 +122,7 @@ pub fn device_switch() -> Result<(), String> {
 }
 
 /// How long opening a holder's connection may take: its connect and its
-/// hello's answer.
+/// hello's answer, a screen's or a watch's (`watch.rs`).
 const OPEN_LIMIT: Duration = Duration::from_secs(5);
 
 /// How long one question to a holder may take.
@@ -625,6 +626,11 @@ pub struct HolderFolders<'a> {
 }
 
 impl Holders {
+    /// One connection's ownership, retained by its adapter and admitted
+    /// workers. Acquisition and crash repair happen off every runtime lock.
+    pub fn acquire(&self, within: Duration) -> Result<hide_kit::panes::Owner, String> {
+        self.panes.acquire(within)
+    }
     /// These holders are the node's only pane engine. Tell the shared
     /// attach owner before the engine exposes a saved or newly drawn pane;
     /// recovery and start registration may both happen after its attach.
@@ -674,8 +680,8 @@ impl Holders {
     /// `holders` (the switch on), their state folder's holder panes beside
     /// `herdr`'s sessions, the holder from [`Holders::local_source`], and
     /// the holders that ran on while no node was there found again, and the
-    /// version folders nothing runs from removed, in the background
-    /// ([`Holders::recover_in_background`]); given none (the switch off),
+    /// version folders nothing runs from removed when its connection has
+    /// acquired pane ownership; given none (the switch off),
     /// `herdr`'s sessions alone and nothing of holders opened, read or
     /// removed. hided and the tools that measure a node
     /// (`hide-node/examples/holder_node.rs`) start it here, so what they
@@ -715,9 +721,6 @@ impl Holders {
             Service::start(attacher, outputs, reports, super::RetryPolicy::Automatic)
                 .map_err(|error| format!("terminal service failed to start: {error}"))?,
         );
-        if let Some(holders) = &holders {
-            Arc::clone(holders).recover_in_background(Arc::clone(&service));
-        }
         Ok(LocalTerminals { service, holders })
     }
 
@@ -741,39 +744,143 @@ impl Holders {
     /// files by [`holder_pane`] of it.
     pub fn start(
         &self,
+        owner: &hide_kit::panes::Owner,
         service: &Service,
         request: &StartRequest,
     ) -> Result<Started, StartRefusal> {
         let holder = holder_pane(&request.pane);
         self.known.starting(&request.pane);
         let started = self.panes.start(
+            owner,
             &StartRequest {
                 pane: holder.clone(),
                 ..request.clone()
             },
             &self.source,
         );
+        self.attach_started(service, &request.pane, started)
+    }
+
+    pub fn reserve(
+        &self,
+        guard: &hide_kit::panes::Request<'_>,
+        intent: &HolderIntent,
+        previous: Option<u64>,
+    ) -> Result<HolderReservation, StartRefusal> {
+        self.panes
+            .reserve(
+                guard,
+                &holder_pane(&intent.pane),
+                &intent.digest,
+                &intent.cwd,
+                previous,
+            )
+            .map(|record| HolderReservation {
+                incarnation: record.incarnation,
+            })
+    }
+
+    pub fn start_reserved(
+        &self,
+        guard: &hide_kit::panes::Request<'_>,
+        service: &Service,
+        intent: &HolderIntent,
+        reserved: HolderReservation,
+        request: impl FnOnce() -> Result<StartRequest, StartRefusal>,
+    ) -> Result<Started, StartRefusal> {
+        self.known.starting(&intent.pane);
+        let holder = holder_pane(&intent.pane);
+        let result = self.panes.start_reserved(
+            guard,
+            &holder,
+            reserved.incarnation,
+            &intent.digest,
+            &self.source,
+            || {
+                let mut request = request()?;
+                request.pane = holder.clone();
+                Ok(request)
+            },
+        );
+        let attached = self.attach_started(service, &intent.pane, result)?;
+        // Cancellation can finish while this worker is attaching an earlier
+        // successful start. Observe storage after enqueueing Attach: either
+        // this forget follows it, or the later cancel enqueues its own forget.
+        // The admitted request guard stays alive through this cleanup.
+        match self.panes.record(&holder) {
+            Ok(Some(current))
+                if current.incarnation == reserved.incarnation && !current.cancelled() =>
+            {
+                Ok(attached)
+            }
+            Ok(Some(current)) => {
+                self.forget_screen(service, &intent.pane);
+                Err(StartRefusal::Conflict(Box::new(current)))
+            }
+            other => {
+                self.forget_screen(service, &intent.pane);
+                Err(StartRefusal::Uncertain(format!(
+                    "the attached reservation could not be confirmed: {other:?}"
+                )))
+            }
+        }
+    }
+
+    pub fn cancel(
+        &self,
+        guard: &hide_kit::panes::Request<'_>,
+        service: &Service,
+        intent: &HolderIntent,
+    ) -> Result<(), StartRefusal> {
+        self.panes.cancel_reservation(
+            guard,
+            &holder_pane(&intent.pane),
+            &intent.digest,
+            &intent.cwd,
+        )?;
+        self.forget_screen(service, &intent.pane);
+        Ok(())
+    }
+
+    fn forget_screen(&self, service: &Service, pane: &str) {
+        service.control(TerminalControl::Closing {
+            pane: pane.to_owned(),
+            closing: true,
+        });
+        self.known.remove(pane);
+        self.watches.forget(pane);
+        service.control(TerminalControl::Forget {
+            pane: pane.to_owned(),
+        });
+    }
+
+    fn attach_started(
+        &self,
+        service: &Service,
+        pane: &str,
+        started: Result<Started, StartRefusal>,
+    ) -> Result<Started, StartRefusal> {
         let started = match started {
             Ok(started) => started,
             Err(refusal) => {
-                self.known.not_started(&request.pane);
+                self.known.not_started(pane);
                 return Err(refusal);
             }
         };
         let (Started::Started(record) | Started::Existing(record)) = &started;
         if record.end.is_some() {
-            self.known.not_started(&request.pane);
-            self.report_ended(&request.pane, record);
+            self.known.not_started(pane);
+            self.report_ended(pane, record);
             return Ok(started);
         }
-        let socket = hide_kit::layout::holder_socket(&self.state_dir, &holder);
-        self.known.insert(&request.pane, socket.clone());
-        self.watches.watch(&request.pane, socket);
+        let socket = hide_kit::layout::holder_socket(&self.state_dir, &holder_pane(pane));
+        self.known.insert(pane, socket.clone());
+        self.watches.watch(pane, socket);
         // No size: the start's is the holder's own, not a decision, and it
         // must not replace a size the core already named for the pane (a
         // daemon that starts again names the one it saved).
         service.control(TerminalControl::Attach {
-            pane: request.pane.clone(),
+            pane: pane.to_owned(),
             size: None,
             manual: false,
         });
@@ -784,18 +891,19 @@ impl Holders {
     /// holder, within `hide_kit::panes::CLOSE_LIMIT`, and answers its record.
     /// The service's session of it ends as a close it asked for; the node
     /// forgets the pane once it ended.
-    pub fn terminate(&self, service: &Service, pane: &str) -> Result<PaneRecord, CloseError> {
+    pub fn terminate(
+        &self,
+        owner: &hide_kit::panes::Owner,
+        service: &Service,
+        pane: &str,
+    ) -> Result<PaneRecord, CloseError> {
         service.control(TerminalControl::Closing {
             pane: pane.to_owned(),
             closing: true,
         });
-        let closed = self.panes.close(&holder_pane(pane));
+        let closed = self.panes.close(owner, &holder_pane(pane));
         if closed.is_ok() || matches!(closed, Err(CloseError::NoRecord)) {
-            self.known.remove(pane);
-            self.watches.forget(pane);
-            service.control(TerminalControl::Forget {
-                pane: pane.to_owned(),
-            });
+            self.forget_screen(service, pane);
         } else {
             service.control(TerminalControl::Closing {
                 pane: pane.to_owned(),
@@ -806,8 +914,12 @@ impl Holders {
     }
 
     /// The pane's last `lines` rows, on a connection of its own that leaves
-    /// the screen connection and its scroll position as they are.
+    /// the screen connection and its scroll position as they are. A holder
+    /// answers at most [`hide_holder_protocol::MAX_READ_LINES`] rows, so a
+    /// longer ask (a pane search reads up to 10,000) reads that many, marked
+    /// truncated when older rows exist, instead of being refused.
     pub fn read(&self, pane: &str, lines: u16) -> Result<Answer, OpenError> {
+        let lines = lines.min(hide_holder_protocol::MAX_READ_LINES);
         self.ask(pane, Ask::Read { lines })
     }
 
@@ -818,7 +930,28 @@ impl Holders {
             pane,
             match rows {
                 None => Ask::Screen,
-                Some(lines) => Ask::Rows { lines },
+                Some(lines) => Ask::Rows {
+                    lines: lines.min(hide_holder_protocol::MAX_READ_LINES),
+                },
+            },
+        )
+    }
+
+    /// The rows the pane's screen shows now, as text, as [`Holders::read`]
+    /// asks.
+    pub fn read_visible(&self, pane: &str) -> Result<Answer, OpenError> {
+        self.ask(pane, Ask::Visible)
+    }
+
+    /// Where the pane's screen is in its scrollback, after moving it to `to`
+    /// rows above the bottom when asked; the holder sends the connection
+    /// that holds the screen the moved screen.
+    pub fn scroll(&self, pane: &str, to: Option<u64>) -> Result<Answer, OpenError> {
+        self.ask(
+            pane,
+            match to {
+                None => Ask::Scroll,
+                Some(offset_from_bottom) => Ask::ScrollTo { offset_from_bottom },
             },
         )
     }
@@ -868,12 +1001,12 @@ impl Holders {
     /// `attach_limit`, as it does a start past its cap; they run on, their
     /// screens held by their holders. Each pane is reported once, by what the
     /// last round that took it up found.
-    pub fn recover(&self, service: &Service) -> Recovered {
+    pub fn recover(&self, owner: &hide_kit::panes::Owner, service: &Service) -> Recovered {
         let mut recovered = Recovered::default();
         let mut judged: BTreeMap<String, Judgment> = BTreeMap::new();
         let mut failed = None;
         for round in 1..=RECONCILE_ROUNDS {
-            let reconciled = self.panes.reconcile(RECONCILE_BUDGET);
+            let reconciled = self.panes.reconcile(owner, RECONCILE_BUDGET);
             let pending = reconciled.pending();
             recovered.complete = reconciled.is_complete();
             for (pane, judgment) in reconciled.panes {
@@ -900,11 +1033,27 @@ impl Holders {
         }
         let mut alive = Vec::new();
         let mut waiting = Vec::new();
+        let mut recoverable = Vec::new();
         // A record is named by its holder id; the service, the reports and
         // the core name the pane by its own id.
         for (holder, judgment) in judged {
             let pane = core_pane(&holder);
+            let interrupted = match &judgment {
+                Judgment::Recoverable(record) => Some(record),
+                Judgment::Ended(record) if !finished(record.end.as_ref().map(|end| end.reason)) => {
+                    Some(record)
+                }
+                _ => None,
+            };
+            if let Some(record) = interrupted {
+                recoverable.push(RecoverablePane {
+                    pane: pane.clone(),
+                    cwd: record.reservation.as_ref().map(|intent| intent.cwd.clone()),
+                    incarnation: record.incarnation,
+                });
+            }
             match judgment {
+                Judgment::Recoverable(_) => recovered.ended.push((pane, None)),
                 Judgment::Alive(_) => alive.push((pane, holder)),
                 Judgment::Ended(record) => {
                     self.report_ended(&pane, &record);
@@ -991,9 +1140,11 @@ impl Holders {
             ended.into_iter().map(|(pane, _)| pane.clone()).collect()
         };
         *found.lock().unwrap_or_else(PoisonError::into_inner) = Some(HolderRecovery {
+            owner: owner.incarnation(),
             closed: panes(closed),
             ended: panes(ended),
             present,
+            recoverable,
         });
         settled.notify_all();
         recovered
@@ -1038,27 +1189,6 @@ impl Holders {
     /// lives while there is one (PRD engine-bundle-3-core-owns D-10).
     pub fn live_panes(&self) -> Result<usize, String> {
         self.panes.live()
-    }
-
-    /// [`Holders::recover`] and then [`Holders::prune_folders`] on a thread
-    /// of its own, so a node's start does not wait on its holders. The
-    /// folders are pruned after the holders are found again: the holders
-    /// that died, which the reconcile settled, leave their folders unused,
-    /// and this start removes them.
-    pub fn recover_in_background(self: Arc<Self>, service: Arc<Service>) {
-        if let Err(error) = thread::Builder::new()
-            .name("hide-node-pane-holder-recover".into())
-            .spawn(move || {
-                self.recover(&service);
-                self.prune_folders();
-            })
-        {
-            crate::diagnostic!(json!({
-                "component": "pane_holder",
-                "kind": "pane_holder.recover_not_started",
-                "message": error.to_string(),
-            }));
-        }
     }
 
     /// Removes the version folders under the home that are not this

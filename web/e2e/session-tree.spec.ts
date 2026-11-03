@@ -3,10 +3,12 @@
 // level, a child in another checkout than its parent names that branch, and
 // the row of the focused pane is selected (PRD sidebar-task-lens B10, B11, B13).
 import { expect, test } from "@playwright/test";
-import { execFileSync, spawnSync } from "node:child_process";
-import fs from "node:fs";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
-import { declareParent, labelAgent, setFixtureLifecycle, startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { closePane, showTabOf, viewPane, withControl } from "./daemon-actions";
+import { startFixture } from "./engine-fixture";
+import { setAgentState, spawnChild } from "./fixture-agents";
+import { claudeProjects, continueFixtureTranscript, writeFixtureTranscript } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { measure } from "./session-panel-geometry.mjs";
 import { chooseTheme, screenshot, showTasks } from "./wire";
@@ -18,52 +20,39 @@ function git(cwd: string, args: string[]): void {
   execFileSync("git", ["-c", "user.name=e2e", "-c", "user.email=e2e@example.invalid", "-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false", ...args], { cwd, stdio: "ignore" });
 }
 
-async function prompt(herdr: HerdrFixture, pane: string): Promise<void> {
-  const deadline = Date.now() + 15_000;
-  while (Date.now() < deadline) {
-    const read = spawnSync(herdr.bin, ["pane", "read", pane, "--source", "visible", "--format", "text"], { env: herdr.env, encoding: "utf8", timeout: 10_000 });
-    if (read.status === 0 && read.stdout.includes("fixture %")) return;
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error(`no prompt in pane ${pane}`);
-}
-
-/** A Herdr workspace at `cwd` running the fake `claude`, named `name`. */
-async function agentAt(herdr: HerdrFixture, cwd: string, name: string): Promise<string> {
-  const created = herdr.run(["workspace", "create", "--cwd", cwd, "--label", name, "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]) as {
-    result: { root_pane: { pane_id: string } };
-  };
-  const pane = created.result.root_pane.pane_id;
-  await prompt(herdr, pane);
-  herdr.run(["agent", "start", `agent-${name}`, "--kind", "claude", "--pane", pane]);
-  return pane;
-}
-
 test("the 태스크 list opens a five-level tree, stops the indent at three and names a child's other checkout", async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 1000 });
-  const herdr = await startHerdr();
+  // The fixture's parent is the tree's root; each level below it is spawned by the level above, as a real agent delegates.
+  const fixture = await startFixture({ family: true });
   let daemon: Daemon | null = null;
   try {
-    const repo = path.join(herdr.root, "repo");
-    fs.mkdirSync(repo);
-    git(repo, ["init"]);
-    git(repo, ["commit", "--allow-empty", "-m", "initial"]);
-    const tree = (name: string) => path.join(herdr.root, `repo-${name}`);
+    daemon = await startHided(fixture, "session-tree");
+    const repo = path.join(fixture.root, "fixture");
+    const tree = (name: string) => path.join(fixture.root, `repo-${name}`);
     git(repo, ["worktree", "add", "-b", "prd/child", tree("child")]);
     git(repo, ["worktree", "add", "-b", "fix/deep-fixture", tree("deep")]);
     // root (main) > child (prd/child) > grandchild (same checkout) > deep (fix/deep-fixture) > deeper (same checkout)
-    const root = await agentAt(herdr, repo, "root");
-    labelAgent(herdr, root, { task: "다섯 단계 트리 조율", progress: "자식의 결과를 기다리는 중" });
+    const [root, beside] = fixture.panes;
+    // The fixture's own second agent would be a second child of the root: the tree here has one chain.
+    await withControl(daemon, (control) => closePane(control, beside));
+    continueFixtureTranscript(fixture, "fixture-one", { task: "다섯 단계 트리 조율", progress: "자식의 결과를 기다리는 중" });
+    await setAgentState(daemon, root, "working");
+    await setAgentState(daemon, root, "idle");
     const chain: { pane: string; task: string }[] = [];
-    for (const [name, cwd, task] of [["child", tree("child"), "하위 작업 검증"], ["grandchild", tree("child"), "같은 체크아웃 손자"], ["deep", tree("deep"), "다른 체크아웃 증손"], ["deeper", tree("deep"), "넷째 단계 로그 확인"]] as const) {
-      const pane = await agentAt(herdr, cwd, name);
-      labelAgent(herdr, pane, { task, progress: `${task} 진행 중` });
-      declareParent(herdr, pane, chain.at(-1)?.pane ?? root);
-      await setFixtureLifecycle(herdr, pane, "working");
+    for (const [name, branch, task] of [["child", "prd/child", "하위 작업 검증"], ["grandchild", "prd/child", "같은 체크아웃 손자"], ["deep", "fix/deep-fixture", "다른 체크아웃 증손"], ["deeper", "fix/deep-fixture", "넷째 단계 로그 확인"]] as const) {
+      // A child resumes the session whose transcript names it.
+      const session = `tree-${name}`;
+      writeFixtureTranscript(claudeProjects(fixture), session, { task, progress: `${task} 진행 중` });
+      const pane = await spawnChild(fixture, daemon, chain.at(-1)?.pane ?? root, { name, repo, branch, session });
+      // No page shows the spawned tab yet, and Herdr attaches only a tab that was shown.
+      await withControl(daemon, async (control) => {
+        viewPane(control, pane);
+        await showTabOf(control, pane);
+      });
+      await setAgentState(daemon, pane, "working");
       chain.push({ pane, task });
     }
     const [child, grandchild, deep, deeper] = chain.map((entry) => entry.pane) as [string, string, string, string];
-    daemon = await startHided(herdr, "session-tree");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await page.locator(`nav[data-sidebar] [data-agent-open="${root}"]`).first().click();
     const panel = await showTasks(page);
@@ -116,6 +105,6 @@ test("the 태스크 list opens a five-level tree, stops the indent at three and 
     await expect(panel.locator('[aria-current="true"]')).toHaveCount(1);
   } finally {
     daemon?.stop();
-    herdr.stop();
+    fixture.stop();
   }
 });

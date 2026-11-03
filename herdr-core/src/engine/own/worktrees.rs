@@ -250,7 +250,8 @@ impl OwnEngine<'_> {
         focus: bool,
     ) -> Answer<OpenedWorktree> {
         let bound = self.binding(path)?;
-        if let Some(open) = self.topology().bound_to(&bound.checkout_path) {
+        let open = self.topology().bound_to(&bound.checkout_path);
+        if let Some(open) = open {
             if focus {
                 self.topology().focus_tab(&open.tab)?;
                 self.changed();
@@ -295,8 +296,10 @@ impl OwnEngine<'_> {
                 format!("{} is its repository's main worktree", bound.checkout_path),
             ));
         }
-        let panes = self.topology().workspace_panes(workspace)?;
-        match self.end_and_remove(&panes, |topology| topology.remove_workspace(workspace))? {
+        match self.end_and_remove(
+            |topology| topology.workspace_panes(workspace),
+            |topology| topology.remove_workspace(workspace),
+        )? {
             // Its last pane closed it while the holders ended.
             Ok(()) | Err(EngineError::Refused { .. }) => {}
             Err(error) => return Err(error),
@@ -339,6 +342,7 @@ impl OwnEngine<'_> {
         bound: Bound,
     ) -> Answer<(String, String, String)> {
         self.restored()?;
+        self.resolve_unpublished()?;
         let reserved = self.topology().reserve_workspace();
         self.start_placed(&reserved.pane, None, checkout, Env::new())?;
         {

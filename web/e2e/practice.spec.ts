@@ -12,7 +12,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { clickClosingItsPage } from "./closing-click";
-import { startHerdr } from "./herdr-fixture";
+import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 
 test.describe.configure({ timeout: 180_000 });
@@ -128,7 +128,7 @@ async function playEveryChapter(practice: Page, chapters: number, press: GuidePr
 /** Opens the practice window from the shell's Help menu of an isolated stack, runs `journey` on it, and stops the stack. */
 async function withPractice(page: Page, journey: (practice: Page, chapters: Locator) => Promise<void>): Promise<void> {
   await page.setViewportSize({ width: 1280, height: 800 });
-  const herdr = await startHerdr();
+  const herdr = await startFixture();
   let daemon: Daemon | null = null;
   try {
     daemon = await startHided(herdr, "practice");
@@ -325,7 +325,7 @@ test("the chapter list leads back to Hide, and a finished chapter stops on its e
 /** An isolated stack's shell, signed in, for `journey`; the stack stops after it. */
 async function withShell(page: Page, journey: (origin: string) => Promise<void>): Promise<void> {
   await page.setViewportSize({ width: 1280, height: 800 });
-  const herdr = await startHerdr();
+  const herdr = await startFixture();
   let daemon: Daemon | null = null;
   try {
     daemon = await startHided(herdr, "practice-invite");

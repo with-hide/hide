@@ -1,15 +1,18 @@
-// Synthetic native-format writers on actual pinned Herdr and hided.
+// Synthetic native-format writers on an isolated engine and hided.
 // Installed CLI measurements remain a separate acceptance boundary.
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { startHerdr } from "./herdr-fixture";
+import { startFixture, type AgentFixture } from "./engine-fixture";
+import { agentIn, sendKeys, tabOfPane, withControl } from "./daemon-actions";
+import { startHerdr, type HerdrFixture } from "./herdr-fixture";
+import type { Rest } from "./hided-control.mjs";
 import { startHided, type Daemon } from "./hided-fixture";
 import crypto from "node:crypto";
 import {
   CURSOR_GOAL, CURSOR_ID, GROK_ID, GROK_PLAN, GROK_TITLE, OMP_ID, OMP_TITLE, OMP_UPDATED_TITLE, OPENCODE_CHILD_TITLE, OPENCODE_ID, OPENCODE_TITLE, PI_ID,
-  PI_TITLE, appendOmpQuestion, prepareNativeWriter, prepareOpenCodeWriter, reportNativeWriter, reportOpenCodeState, setGrokPlanApproval, updateOmpTitle,
+  PI_TITLE, type NativeFileReader, appendOmpQuestion, prepareNativeWriter, prepareOpenCodeWriter, reportNativeWriter, reportOpenCodeState, setGrokPlanApproval, updateOmpTitle,
   writeOpenCodeQuestion,
 } from "./session-reader-fixture";
 import { openSleepingProject, screenshot, sendEvent } from "./wire";
@@ -21,6 +24,46 @@ import type { AgentRow } from "../src/snapshot";
 type QuestionRow = AgentRow & { user_turn?: { kind: string; content: { text: string; choices: string[]; truncated: boolean } | null } };
 
 test.describe.configure({ timeout: 150_000 });
+
+/** The writer reads only the run's root and HOME, which every engine's fixture has. */
+const writerOf = (fixture: AgentFixture) => ({ root: fixture.root, env: { HOME: path.join(fixture.root, "home") } }) as unknown as HerdrFixture;
+
+/** The program a native writer runs as: Cursor's CLI is `cursor-agent`. */
+const programOf = (kind: NativeFileReader) => (kind === "cursor" ? "cursor-agent" : kind);
+
+/** The sidebar agent row of `kind` in `pane`, once the engine lists it. */
+function nativeAgent(rest: Rest, pane: string, kind: string): true | undefined {
+  return agentIn(rest, pane)?.agent_kind === kind ? true : undefined;
+}
+
+/** A fresh pane (not `except`) the sidebar lists a `kind` agent in. */
+function freshAgent(rest: Rest, kind: string, except: string): string | undefined {
+  return ((rest.navigator as { agents?: AgentRow[] } | undefined)?.agents ?? []).find((row) => row.agent_kind === kind && row.pane_id !== except)?.pane_id;
+}
+
+/**
+ * Starts the stand-in `kind` at the shell prompt of `pane`, as the operator
+ * starts one, and waits until its session file exists and the engine lists
+ * the agent. The session then reaches Hide as the agent's own report: Herdr's
+ * integration report (`report-agent-session`), which the stand-in has no
+ * Hide hook to replace.
+ */
+async function startNative(fixture: AgentFixture, daemon: Daemon, kind: NativeFileReader, pane: string, session: string): Promise<void> {
+  await withControl(daemon, async (control) => sendKeys(control, pane, `${programOf(kind)}\r`));
+  await expect.poll(() => fs.existsSync(session)).toBe(true);
+  await withControl(daemon, (control) => control.until((rest) => nativeAgent(rest, pane, kind), `a ${kind} agent in ${pane}`, 30_000));
+  reportSession(fixture, kind, pane, session);
+}
+
+/** The agent's session report, which only Herdr takes from a native writer. */
+function reportSession(fixture: AgentFixture, kind: NativeFileReader, pane: string, session: string): void {
+  if (fixture.engine === "herdr") reportNativeWriter(fixture as unknown as HerdrFixture, kind, pane, session);
+}
+
+/** Waits until the daemon publishes no layout holding `pane`: its agent's pane was closed. */
+async function paneGone(daemon: Daemon, pane: string): Promise<void> {
+  await withControl(daemon, (control) => control.until((rest) => (tabOfPane(rest, pane) === undefined ? true : undefined), `${pane} closed`, 30_000));
+}
 
 async function disableAgentSummaries(page: Page): Promise<void> {
   await page.locator("[data-open-settings]").click();
@@ -35,23 +78,22 @@ async function disableAgentSummaries(page: Page): Promise<void> {
 
 // The last column is the option the default 전부 허용 adds to every restart; Pi never asks and has none.
 for (const [kind, id, initialTitle, resumeFlag, fullAccess] of [["pi", PI_ID, PI_TITLE, "--session", []], ["omp", OMP_ID, OMP_TITLE, "--resume", ["--auto-approve"]], ["grok", GROK_ID, GROK_TITLE, "--resume", ["--always-approve"]]] as const) {
-test(`${kind} native title and durable sleep wake the exact conversation in a fresh pane`, async ({ page }) => {
+// Herdr only: 새 엔진 첫 세션 보고는 묶음 4 PR A(b4-transition). These native writers bind their initial session through Herdr report-agent-session; the own engine needs the corresponding native integration boundary.
+test(`${kind} native title and durable sleep wake the exact conversation in a fresh pane @herdr`, async ({ page }) => {
   let agents: QuestionRow[] = [];
   page.on("websocket", (socket) => socket.on("framereceived", (frame) => {
     if (typeof frame.payload !== "string") return;
     const incoming = JSON.parse(frame.payload) as { type: string; payload?: { rest?: { navigator?: { agents?: QuestionRow[] } } } };
     if (["snapshot", "delta"].includes(incoming.type) && incoming.payload?.rest?.navigator?.agents) agents = incoming.payload.rest.navigator.agents;
   }));
-  const herdr = await startHerdr({ agents: false });
+  const herdr = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
+    daemon = await startHided(herdr, `${kind}-reader`, path.join(herdr.root, "home"));
     const sourcePane = herdr.panes[0];
-    const session = prepareNativeWriter(herdr, kind);
+    const session = prepareNativeWriter(writerOf(herdr), kind);
     expect(fs.existsSync(session)).toBe(false);
-    herdr.run(["agent", "start", `${kind}-reader`, "--kind", kind, "--pane", sourcePane]);
-    await expect.poll(() => fs.existsSync(session)).toBe(true);
-    reportNativeWriter(herdr, kind, sourcePane, session);
-    daemon = await startHided(herdr, `${kind}-reader`, herdr.env.HOME);
+    await startNative(herdr, daemon, kind, sourcePane, session);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await page.locator("[data-checkout]").first().click();
     const row = page.locator(`nav[data-sidebar] [data-checkout-agents-open] [data-pane="${sourcePane}"]`);
@@ -100,19 +142,13 @@ test(`${kind} native title and durable sleep wake the exact conversation in a fr
     const sleeping = page.locator('[data-sleeping-session]');
     await expect(sleeping).toContainText(title, { timeout: 30_000 });
     await expect(row).toHaveCount(0);
-    await expect.poll(() => JSON.stringify(herdr.run(["pane", "list"]))).not.toContain(`"pane_id":"${sourcePane}"`);
+    await paneGone(daemon, sourcePane);
     await screenshot(page, `${kind}-durable-sleep`);
     const prior = fs.readFileSync(session);
     await sleeping.getByRole("button", { name: "Wake agent" }).click();
-    type Listed = { result: { agents: { pane_id: string; agent: string }[] } };
-    let fresh = "";
-    await expect.poll(() => {
-      const agents = (herdr.run(["agent", "list"]) as Listed).result.agents;
-      fresh = agents.find(agent => agent.agent === kind && agent.pane_id !== sourcePane)?.pane_id ?? "";
-      return fresh;
-    }, { timeout: 30_000 }).not.toBe("");
+    const fresh = await withControl(daemon, (control) => control.until((rest) => freshAgent(rest, kind, sourcePane), `a fresh ${kind} agent`, 30_000));
     await expect.poll(() => fs.readFileSync(path.join(herdr.root, `${kind}-launches.jsonl`), "utf8").trim().split("\n").map(line => JSON.parse(line) as string[])).toContainEqual([resumeFlag, id, ...fullAccess]);
-    reportNativeWriter(herdr, kind, fresh, session);
+    reportSession(herdr, kind, fresh, session);
     await expect(sleeping).toHaveCount(0, { timeout: 30_000 });
     await expect(page.locator(`nav[data-sidebar] [data-pane="${fresh}"]`)).toContainText(title);
     expect(fs.readFileSync(session)).toEqual(prior);
@@ -126,16 +162,20 @@ test(`${kind} native title and durable sleep wake the exact conversation in a fr
 }
 
 for (const refusal of ["override", "duplicate"] as const) {
-test(`Cursor ${refusal} root retains its historical goal while retired Sleep refuses to close its pane`, async ({ page }) => {
-  const herdr = await startHerdr({ agents: false });
+// Herdr only: 새 엔진 첫 세션 보고는 묶음 4 PR A(b4-transition). These native writers bind their initial session through Herdr report-agent-session; the own engine needs the corresponding native integration boundary.
+test(`Cursor ${refusal} root retains its historical goal while retired Sleep refuses to close its pane @herdr`, async ({ page }) => {
+  const herdr = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
+    const home = path.join(herdr.root, "home");
+    const alternate = path.join(home, "alternate-config");
+    const env = refusal === "override"
+      ? { CURSOR_CONFIG_DIR: path.join(alternate, "cursor"), XDG_CONFIG_HOME: undefined }
+      : { CURSOR_CONFIG_DIR: path.join(home, ".cursor"), XDG_CONFIG_HOME: alternate };
+    daemon = await startHided(herdr, `cursor-root-${refusal}`, home, env);
     const pane = herdr.panes[0];
-    const session = prepareNativeWriter(herdr, "cursor");
-    herdr.run(["agent", "start", "cursor-root", "--kind", "cursor", "--pane", pane]);
-    await expect.poll(() => fs.existsSync(session)).toBe(true);
-    reportNativeWriter(herdr, "cursor", pane, session);
-    const alternate = path.join(herdr.env.HOME, "alternate-config");
+    const session = prepareNativeWriter(writerOf(herdr), "cursor");
+    await startNative(herdr, daemon, "cursor", pane, session);
     const other = path.join(alternate, "cursor", "chats", path.basename(path.dirname(path.dirname(session))), CURSOR_ID);
     fs.cpSync(path.dirname(session), other, { recursive: true });
     const copied = new DatabaseSync(path.join(other, "store.db"));
@@ -151,10 +191,6 @@ test(`Cursor ${refusal} root retains its historical goal while retired Sleep ref
     expect(otherBefore).not.toEqual(before);
     const launches = path.join(herdr.root, "cursor-launches.jsonl");
     const starts = fs.readFileSync(launches, "utf8");
-    const env = refusal === "override"
-      ? { CURSOR_CONFIG_DIR: path.join(alternate, "cursor"), XDG_CONFIG_HOME: undefined }
-      : { CURSOR_CONFIG_DIR: path.join(herdr.env.HOME, ".cursor"), XDG_CONFIG_HOME: alternate };
-    daemon = await startHided(herdr, `cursor-root-${refusal}`, herdr.env.HOME, env);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await page.locator("[data-checkout]").first().click();
     const row = page.locator(`nav[data-sidebar] [data-checkout-agents-open] [data-pane="${pane}"]`);
@@ -170,7 +206,7 @@ test(`Cursor ${refusal} root retains its historical goal while retired Sleep ref
     await expect.poll(log).toContain("This agent's reader does not support sleep");
     await expect(row).toContainText(CURSOR_GOAL);
     await expect(page.locator('[data-sleeping-session]')).toHaveCount(0);
-    expect(JSON.stringify(herdr.run(["pane", "list"]))).toContain(`"pane_id":"${pane}"`);
+    await withControl(daemon, (control) => control.until((rest) => (tabOfPane(rest, pane) ? true : undefined), `${pane} still open`, 15_000));
     expect(fs.readFileSync(launches, "utf8")).toEqual(starts);
     expect(fs.readFileSync(session)).toEqual(before);
     expect(fs.readFileSync(path.join(other, "store.db"))).toEqual(otherBefore);
@@ -183,8 +219,9 @@ test(`Cursor ${refusal} root retains its historical goal while retired Sleep ref
 });
 }
 
-test("Cursor phone reads native message units and omits an unrecorded time", async ({ browser, page }) => {
-  const herdr = await startHerdr({ agents: false });
+// Herdr only: 새 엔진 첫 세션 보고는 묶음 4 PR A(b4-transition). These native writers bind their initial session through Herdr report-agent-session; the own engine needs the corresponding native integration boundary.
+test("Cursor phone reads native message units and omits an unrecorded time @herdr", async ({ browser, page }) => {
+  const herdr = await startFixture({ agents: false });
   const tailscale = new FakeTailscale();
   let daemon: Daemon | null = null;
   let phoneContext: BrowserContext | undefined;
@@ -192,12 +229,10 @@ test("Cursor phone reads native message units and omits an unrecorded time", asy
   try {
     tailscale.ready();
     tailscale.install();
+    daemon = await startHided(herdr, "cursor-phone", path.join(herdr.root, "home"), { HIDE_TAILSCALE_BIN: tailscale.bin });
     const pane = herdr.panes[0];
-    const session = prepareNativeWriter(herdr, "cursor");
-    herdr.run(["agent", "start", "cursor-phone", "--kind", "cursor", "--pane", pane]);
-    await expect.poll(() => fs.existsSync(session)).toBe(true);
-    reportNativeWriter(herdr, "cursor", pane, session);
-    daemon = await startHided(herdr, "cursor-phone", herdr.env.HOME, { HIDE_TAILSCALE_BIN: tailscale.bin });
+    const session = prepareNativeWriter(writerOf(herdr), "cursor");
+    await startNative(herdr, daemon, "cursor", pane, session);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await page.locator("[data-open-settings]").click();
     await page.locator('[data-settings-tab="mobile"]').click();
@@ -233,7 +268,8 @@ test("Cursor phone reads native message units and omits an unrecorded time", asy
   if (errors.length) throw new AggregateError(errors, "Cursor phone fixture or cleanup failed");
 });
 
-test("OpenCode's root session titles its row, waits on its question and wakes by id in a fresh pane", async ({ page }) => {
+// Herdr only: 새 엔진 첫 세션 보고는 묶음 4 PR A(b4-transition). These native writers bind their initial session through Herdr report-agent-session; the own engine needs the corresponding native integration boundary.
+test("OpenCode's root session titles its row, waits on its question and wakes by id in a fresh pane @herdr", async ({ page }) => {
   let agents: QuestionRow[] = [];
   page.on("websocket", (socket) => socket.on("framereceived", (frame) => {
     if (typeof frame.payload !== "string") return;

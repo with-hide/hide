@@ -1,4 +1,4 @@
-// The Project tool's results column on an isolated pinned Herdr and hided
+// The Project tool's results column on an isolated engine and hided
 // (PRD project-panel-results): a private repository with two worktrees, each
 // holding a build folder. Opening the tool counts the project's worktrees
 // (B1) and measures the project's disk while it shows (B18, B19), and closing
@@ -10,7 +10,8 @@ import { expect, test } from "@playwright/test";
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { startHerdr } from "./herdr-fixture";
+import { openProject, withControl } from "./daemon-actions";
+import { startEngine } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { chooseTheme, countSent, screenshot, showProjectRow, showTool } from "./wire";
 import { initGithubRepository } from "./github-remote";
@@ -32,32 +33,32 @@ function cpuMs(pid: number): number {
 // @platform: disk measuring on the platform's filesystem.
 test("the Project tool counts the worktrees, and measures the project's disk only while it shows (project-panel-results B1, B18-B20)", { tag: "@platform" }, async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 1000 });
-  const herdr = await startHerdr();
+  const engine = await startEngine();
   let daemon: Daemon | null = null;
   try {
-    const repo = path.join(herdr.root, "repo");
+    const repo = path.join(engine.root, "repo");
     fs.mkdirSync(repo);
     initGithubRepository(repo);
     fs.writeFileSync(path.join(repo, "README.md"), "# repo\n");
     fs.writeFileSync(path.join(repo, ".gitignore"), "target/\n");
     git(repo, ["add", "."]);
     git(repo, ["commit", "-m", "initial"]);
-    const origin = path.join(herdr.root, "origin.git");
-    git(herdr.root, ["init", "--bare", origin]);
+    const origin = path.join(engine.root, "origin.git");
+    git(engine.root, ["init", "--bare", origin]);
     git(repo, ["remote", "add", "origin", origin]);
     git(repo, ["push", "-q", "origin", "main"]);
     git(repo, ["remote", "set-head", "origin", "main"]);
-    const first = path.join(herdr.root, "repo-first");
-    const second = path.join(herdr.root, "repo-second");
+    const first = path.join(engine.root, "repo-first");
+    const second = path.join(engine.root, "repo-second");
     git(repo, ["worktree", "add", "-q", "-b", "prd/first", first]);
     git(repo, ["worktree", "add", "-q", "-b", "prd/second", second]);
     for (const dir of [repo, first, second]) {
       fs.mkdirSync(path.join(dir, "target", "debug"), { recursive: true });
       fs.writeFileSync(path.join(dir, "target", "debug", "blob"), Buffer.alloc(256 * 1024, 1));
     }
-    herdr.run(["workspace", "create", "--cwd", repo, "--label", "repo", "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]);
 
-    daemon = await startHided(herdr, "project-panel");
+    daemon = await startHided(engine, "project-panel");
+    await withControl(daemon, (control) => openProject(control, repo, "repo"));
     const last = new Map<string, Record<string, unknown>>();
     const sent = countSent(page, last);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
@@ -91,6 +92,6 @@ test("the Project tool counts the worktrees, and measures the project's disk onl
     expect((last.get("disk_watch")?.workspace_ids as string[] | undefined) ?? []).toEqual([]);
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

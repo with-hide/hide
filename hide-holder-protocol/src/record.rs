@@ -27,8 +27,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::CloseReason;
 
-/// The format this build reads and writes.
-pub const RECORD_FORMAT: u64 = 1;
+/// The format written for a recoverable pane reservation. Existing format-1
+/// holders keep their format when they update their running record.
+pub const RECORD_FORMAT: u64 = 2;
+pub const LEGACY_RECORD_FORMAT: u64 = 1;
 
 /// The most bytes a record file holds; a larger one is unreadable.
 pub const MAX_RECORD: usize = 64 * 1024;
@@ -44,6 +46,8 @@ pub const LOCK_WAIT: Duration = Duration::from_secs(5);
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Phase {
+    /// Accepted pane existence; no holder has been allowed to start yet.
+    Reserved,
     /// Reserved by a node; the holder may not have started, or may be
     /// starting the pane's program.
     Preparing,
@@ -178,6 +182,11 @@ pub struct PaneRecord {
     /// A digest of the command, working folder and environment the start
     /// asked for; a start of the same pane with another one is a conflict.
     pub spec: String,
+    /// The accepted request, before shell integration expands its command.
+    /// Absent only for a legacy start. Neither the command nor its secrets
+    /// are persisted; recovery starts a shell in this folder instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reservation: Option<Reservation>,
     pub reserved_at_unix_ms: u64,
     /// The boot the record was made in, where the system names one.
     pub boot: Option<String>,
@@ -187,6 +196,48 @@ pub struct PaneRecord {
     /// the holder started it.
     pub program: Option<Identity>,
     pub end: Option<End>,
+}
+
+/// Recoverable existence owned by one node connection. Its owner number is
+/// allocated from the existing incarnation allocator and is never reused.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Reservation {
+    pub owner: u64,
+    pub request: String,
+    pub cwd: String,
+    /// A durable decision to close this exact intent. Holder exit and node
+    /// cleanup preserve it even when the holder cannot report its own end.
+    #[serde(default)]
+    pub cancelled: bool,
+    /// The connection's creation request; zero only for pre-numbered records.
+    #[serde(default)]
+    pub number: u64,
+}
+
+impl PaneRecord {
+    pub fn cancelled(&self) -> bool {
+        self.reservation
+            .as_ref()
+            .is_some_and(|intent| intent.cancelled)
+    }
+
+    /// Preserve the requested termination through every writer. Unconfirmed
+    /// cleanup remains closing, so a caller cannot report cancellation done.
+    pub fn finish(&mut self, mut end: End) {
+        self.phase = Phase::Ended;
+        if self.cancelled() {
+            if end.left.is_empty() {
+                end.reason = EndReason::Terminated;
+            }
+            if self.holder.is_some() || self.program.is_some() || !end.left.is_empty() {
+                // A holder cannot prove its own exit while writing. The node
+                // completes Closing only after it observes actual cleanup.
+                self.phase = Phase::Closing;
+            }
+        }
+        self.end = Some(end);
+    }
 }
 
 /// Why a record could not be read. None of these is "no record".
@@ -263,10 +314,29 @@ pub fn parse(bytes: &[u8]) -> Result<PaneRecord, Unreadable> {
     }
     let head: Head =
         serde_json::from_slice(bytes).map_err(|error| Unreadable::Corrupt(error.to_string()))?;
-    if head.format != RECORD_FORMAT {
+    if ![LEGACY_RECORD_FORMAT, RECORD_FORMAT].contains(&head.format) {
         return Err(Unreadable::UnknownFormat(head.format));
     }
-    serde_json::from_slice(bytes).map_err(|error| Unreadable::Corrupt(error.to_string()))
+    let record: PaneRecord =
+        serde_json::from_slice(bytes).map_err(|error| Unreadable::Corrupt(error.to_string()))?;
+    if record.format == LEGACY_RECORD_FORMAT
+        && (record.reservation.is_some() || record.phase == Phase::Reserved)
+    {
+        return Err(Unreadable::Corrupt(
+            "format 1 carries no recoverable reservation".to_owned(),
+        ));
+    }
+    if record.phase == Phase::Reserved
+        && (record.reservation.is_none()
+            || record.holder.is_some()
+            || record.program.is_some()
+            || record.end.is_some())
+    {
+        return Err(Unreadable::Corrupt(
+            "a reserved pane needs its request and cannot already name a process".to_owned(),
+        ));
+    }
+    Ok(record)
 }
 
 fn read_bounded(path: &Path) -> Result<Vec<u8>, Unreadable> {
@@ -350,6 +420,7 @@ mod tests {
             protocol: 1,
             version_folder: "v1-0123456789abcdef".to_owned(),
             spec: "s".to_owned(),
+            reservation: None,
             reserved_at_unix_ms: 1,
             boot: Some("b".to_owned()),
             holder: Some(Identity {
@@ -379,13 +450,87 @@ mod tests {
         assert_eq!(read(&path).unwrap(), Some(record()));
     }
 
+    #[test]
+    fn updating_a_legacy_holder_keeps_its_format_and_adds_no_recovery_intent() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("p1.json");
+        let mut legacy = record();
+        legacy.format = LEGACY_RECORD_FORMAT;
+        write(&path, &legacy).unwrap();
+        let mut read = read(&path).unwrap().unwrap();
+        read.phase = Phase::Ended;
+        write(&path, &read).unwrap();
+        let value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(value["format"], 1);
+        assert!(value.get("reservation").is_none());
+    }
+
+    #[test]
+    fn an_accepted_reservation_round_trips_before_any_process_exists() {
+        let mut reserved = record();
+        reserved.phase = Phase::Reserved;
+        reserved.holder = None;
+        reserved.program = None;
+        reserved.end = None;
+        reserved.reservation = Some(Reservation {
+            owner: 8,
+            request: "a".repeat(64),
+            cwd: "/project".to_owned(),
+            cancelled: false,
+            number: 0,
+        });
+        let bytes = serde_json::to_vec(&reserved).unwrap();
+        assert_eq!(parse(&bytes).unwrap(), reserved);
+        reserved.format = LEGACY_RECORD_FORMAT;
+        assert!(matches!(
+            parse(&serde_json::to_vec(&reserved).unwrap()),
+            Err(Unreadable::Corrupt(_))
+        ));
+        reserved.format = RECORD_FORMAT;
+        reserved.reservation = None;
+        assert!(matches!(
+            parse(&serde_json::to_vec(&reserved).unwrap()),
+            Err(Unreadable::Corrupt(_))
+        ));
+    }
+
+    #[test]
+    fn cancellation_survives_exit_but_never_claims_unconfirmed_cleanup_finished() {
+        let mut record = record();
+        record.reservation = Some(Reservation {
+            owner: 7,
+            request: "a".repeat(64),
+            cwd: "/project".to_owned(),
+            cancelled: true,
+            number: 0,
+        });
+        let mut uncertain = End::new(EndReason::HolderLost, "lost");
+        uncertain.left.push(123);
+        record.finish(uncertain);
+        assert_eq!(record.phase, Phase::Closing);
+        assert!(record.cancelled());
+        let bytes = serde_json::to_vec(&record).unwrap();
+        let mut recovered = parse(&bytes).unwrap();
+        recovered.finish(End::new(EndReason::ProgramExited, "exited"));
+        assert_eq!(recovered.phase, Phase::Closing);
+        assert_eq!(
+            recovered.end.as_ref().unwrap().reason,
+            EndReason::Terminated
+        );
+        recovered.holder = None;
+        recovered.program = None;
+        recovered.finish(End::new(EndReason::Terminated, "never started"));
+        assert_eq!(recovered.phase, Phase::Ended);
+    }
+
     /// What a node must not take for "no record": each is its own reason.
     #[test]
     fn a_record_this_build_cannot_read_says_why() {
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join("p1.json");
-        std::fs::write(&path, br#"{"format":2,"anything":"else"}"#).unwrap();
-        assert!(matches!(read(&path), Err(Unreadable::UnknownFormat(2))));
+        std::fs::write(&path, br#"{"format":3,"anything":"else"}"#).unwrap();
+        assert!(matches!(read(&path), Err(Unreadable::UnknownFormat(3))));
         std::fs::write(&path, b"{\"format\":1,\"pane\":").unwrap();
         assert!(matches!(read(&path), Err(Unreadable::Corrupt(_))));
         std::fs::write(&path, br#"{"format":1,"pane":"p1"}"#).unwrap();

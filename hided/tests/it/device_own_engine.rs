@@ -237,16 +237,26 @@ fn a_device_of_the_own_engine_runs_no_herdr_and_its_pane_outlives_the_node() -> 
     );
     let cwd = hide_platform::path::to_wire(&device.environment.home.join("project"))?;
     let start = |pane: &str, line: String| {
+        // As the core's own engine starts a pane: a number, the pane's
+        // reservation, its start, then the number retired.
+        let start = HolderStart {
+            pane: pane.to_owned(),
+            program: Some(vec!["/bin/sh".to_owned(), "-c".to_owned(), line]),
+            cwd: cwd.clone(),
+            env: Vec::new(),
+            rows: 24,
+            cols: 120,
+            notice: None,
+        };
+        let request = panes
+            .request()
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
         panes
-            .start(&HolderStart {
-                pane: pane.to_owned(),
-                program: Some(vec!["/bin/sh".to_owned(), "-c".to_owned(), line]),
-                cwd: cwd.clone(),
-                env: Vec::new(),
-                rows: 24,
-                cols: 120,
-                notice: None,
-            })
+            .reserve(&start, None, request)
+            .and_then(|reserved| panes.start_reserved(&start, reserved, request))
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        panes
+            .retire(request)
             .map_err(|error| anyhow::anyhow!("{error:?}"))?;
         panes
             .proof(pane)

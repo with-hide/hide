@@ -3,7 +3,8 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fixtureExecutable } from "./platform-fixture";
-import { runInPane, startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { openProject, runInPaneKeepingFocus, withControl } from "./daemon-actions";
+import { startFixture, type AgentFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace, showDocuments, showProjectRow } from "./wire";
 import { toPage } from "../../desktop/src/main/wirePath";
@@ -22,16 +23,16 @@ type CliAnswer = {
   };
 };
 
-async function fromPane(herdr: HerdrFixture, daemon: Daemon, args: string[], sequence: number, expectedStatus = 0): Promise<CliAnswer> {
+async function fromPane(herdr: AgentFixture, daemon: Daemon, args: string[], sequence: number, expectedStatus = 0): Promise<CliAnswer> {
   const hide = path.resolve("..", "target", "debug", fixtureExecutable("hide"));
-  const ran = await runInPane(herdr, herdr.panes[0], `cli-${sequence}`, { env: { HIDE_STATE_DIR: daemon.stateDir }, argv: [hide, ...args], stdout: true });
+  const ran = await runInPaneKeepingFocus(herdr, daemon, herdr.panes[0], `cli-${sequence}`, { env: { HIDE_STATE_DIR: daemon.stateDir }, argv: [hide, ...args], stdout: true });
   expect(ran.status, ran.stderr).toBe(expectedStatus);
   return JSON.parse(ran.stdout) as CliAnswer;
 }
 
 test("pane CLI opens its own file and diff while another Workspace remains in front", async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
-  const herdr = await startHerdr({ agents: false });
+  const herdr = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
     const first = path.join(herdr.root, "fixture");
@@ -62,9 +63,9 @@ test("pane CLI opens its own file and diff while another Workspace remains in fr
       const result = spawnSync("git", ["-C", beta, ...args], { encoding: "utf8" });
       expect(result.status, result.stderr).toBe(0);
     }
-    herdr.run(["workspace", "create", "--cwd", beta, "--label", "beta", "--env", `PATH=${herdr.fixturePath}`, "--focus"]);
 
     daemon = await startHided(herdr, "workspace-cli");
+    await withControl(daemon, (control) => openProject(control, beta, "beta"));
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page);
     // Neither project has an agent, so the one not in front waits behind the

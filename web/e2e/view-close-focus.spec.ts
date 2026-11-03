@@ -1,14 +1,14 @@
 import { expect, test } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
-import { startHerdr } from "./herdr-fixture";
+import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { chooseExpand, enterWorkspace, setLanePinned, showExplorer } from "./wire";
 import { chord } from "./chords";
 
 test("View close follows MRU, preserves background input and hands collapsed areas their keyboard", async ({ page }) => {
   test.setTimeout(90_000);
-  const herdr = await startHerdr({ agents: false });
+  const herdr = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
     for (const name of ["a.txt", "b.txt", "c.txt", "d.txt"]) fs.writeFileSync(path.join(herdr.root, "fixture", name), `${name}\n`);

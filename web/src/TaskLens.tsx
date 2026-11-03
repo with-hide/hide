@@ -628,7 +628,7 @@ function agentLineParts(t: ReturnType<typeof useInterfaceTranslation>["t"], agen
   const own = stateLine(agent);
   if (own === null) return null;
   const row = own ?? rowLine(agent);
-  if (own || row?.mode === "waiting") return lineParts(t, agent, row!);
+  if (own || row?.mode === "waiting" || row?.mode === "request") return lineParts(t, agent, row!);
   const text = agent.state.session.line;
   if (!text) return null;
   return { lead: agent.mark === "going" || agent.mark === "waiting" ? null : leadWord(t, agent), text, tail: backgroundTail(t, agent) };

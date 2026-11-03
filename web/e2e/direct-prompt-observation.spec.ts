@@ -45,7 +45,8 @@ async function newPane(herdr: HerdrFixture): Promise<string> {
   return pane;
 }
 
-test("piped, named and loop-free direct prompts draw lines and an unseen start keeps only its origin", async ({ page }) => {
+// Herdr only: the calls it observes are the agent's own `herdr agent prompt` and `herdr agent start` command lines and Herdr's answers to them, which the own engine has none of.
+test("piped, named and loop-free direct prompts draw lines and an unseen start keeps only its origin @herdr", async ({ page }) => {
   const herdr = await startHerdr({ agents: false });
   let daemon: Daemon | undefined;
   try {

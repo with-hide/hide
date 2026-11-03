@@ -13,10 +13,13 @@
 // Dark captures land in HIDE_E2E_SCREENSHOT_DIR.
 
 import { expect, test, type Page } from "@playwright/test";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { startHerdr, setFixtureLifecycle, type HerdrFixture } from "./herdr-fixture";
+import { agentIn, focusTab, openProject, openWorktree, sendKeys, tabOfPane, viewPane, withControl } from "./daemon-actions";
+import type { HidedControl } from "./hided-control.mjs";
+import { startEngine } from "./engine-fixture";
+import { setAgentState } from "./fixture-agents";
 import { startHided, type Daemon } from "./hided-fixture";
 import { fixtureProgram } from "./platform-fixture";
 import { countSent, screenshot } from "./wire";
@@ -74,14 +77,13 @@ process.exit(1);
   return bin;
 }
 
-async function prompt(herdr: HerdrFixture, pane: string): Promise<void> {
-  const deadline = Date.now() + 15_000;
-  while (Date.now() < deadline) {
-    const read = spawnSync(herdr.bin, ["pane", "read", pane, "--source", "visible", "--format", "text"], { env: herdr.env, encoding: "utf8", timeout: 10_000 });
-    if (read.status === 0 && read.stdout.includes("fixture %")) return;
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error(`no prompt in pane ${pane}`);
+/** The agent the stand-in runs in the shell of a first terminal in the linked worktree `dir`, typed at its prompt; no page shows the pane, so it is sized first. */
+async function agentInWorktree(control: HidedControl, dir: string): Promise<string> {
+  const { pane } = await openWorktree(control, dir);
+  viewPane(control, pane);
+  sendKeys(control, pane, "claude\r");
+  await control.until((rest) => agentIn(rest, pane), `an agent in ${pane}`, 30_000);
+  return pane;
 }
 
 /** What a build leaves in a checkout: ignored folders, sized so each layer has bytes. */
@@ -121,7 +123,7 @@ async function showTheme(page: Page, theme: "light" | "dark"): Promise<void> {
 // @platform: Disk measuring and removal, and Trash, on the platform's filesystem.
 test("the disk cleanup sheet: layers, a cache-only cleanup at once, and a worktree after one confirmation", { tag: "@platform" }, async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 1000 });
-  const herdr = await startHerdr();
+  const herdr = await startEngine();
   let daemon: Daemon | null = null;
   try {
     const repo = path.join(herdr.root, "repo");
@@ -148,10 +150,8 @@ test("the disk cleanup sheet: layers, a cache-only cleanup at once, and a worktr
     git(active, ["commit", "--allow-empty", "-m", "active work"]);
     for (const dir of [repo, shipped, active]) build(dir);
 
-    const created = herdr.run(["workspace", "create", "--cwd", repo, "--label", "repo", "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]) as { result: { root_pane: { pane_id: string } } };
-    await prompt(herdr, created.result.root_pane.pane_id);
-
     daemon = await startHided(herdr, "disk-cleanup", undefined, { PATH: `${fakeGh(herdr.root, "prd/shipped", git(shipped, ["rev-parse", "HEAD"]).trim())}${path.delimiter}${herdr.fixturePath}` });
+    await withControl(daemon, (control) => openProject(control, repo, "repo"));
     const sent = countSent(page);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await expect(page.locator("[data-main-screen]").or(page.locator("[data-workspace-screen]"))).toBeVisible({ timeout: 20_000 });
@@ -277,7 +277,7 @@ test("the disk cleanup sheet: layers, a cache-only cleanup at once, and a worktr
 
 test("a checkout with a working agent cannot be ticked, and an open pane alone does not block main", async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 1000 });
-  const herdr = await startHerdr();
+  const herdr = await startEngine();
   let daemon: Daemon | null = null;
   try {
     fs.writeFileSync(path.join(herdr.root, "home", ".zshenv"), `export PATH="${path.join(herdr.root, "bin")}:$PATH"\n`);
@@ -293,20 +293,18 @@ test("a checkout with a working agent cannot be ticked, and an open pane alone d
     git(busy, ["commit", "--allow-empty", "-m", "busy work"]);
     for (const dir of [repo, busy]) build(dir);
 
-    const at = async (cwd: string) => {
-      const created = herdr.run(["workspace", "create", "--cwd", cwd, "--label", path.basename(cwd), "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]) as { result: { root_pane: { pane_id: string } } };
-      const pane = created.result.root_pane.pane_id;
-      await prompt(herdr, pane);
-      return pane;
-    };
-    await at(repo);
-    const pane = await at(busy);
-    herdr.run(["agent", "start", "agent-busy", "--kind", "claude", "--pane", pane]);
-    await setFixtureLifecycle(herdr, pane, "working");
-
     daemon = await startHided(herdr, "disk-cleanup-busy");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await expect(page.locator("[data-main-screen]").or(page.locator("[data-workspace-screen]"))).toBeVisible({ timeout: 20_000 });
+    // The core lists the worktree once a client shows its repository, so the page is open first.
+    const pane = await withControl(daemon, async (control) => {
+      const main = await openProject(control, repo, "repo");
+      const pane = await agentInWorktree(control, busy);
+      // The worktree's first terminal took the screen; the checkout in front is not one to clean up, so main is shown again.
+      await focusTab(control, main, main.tab);
+      return pane;
+    });
+    await setAgentState(daemon, pane, "working");
     await (await projectRow(page, "repo")).locator("[data-projects-disk-open]").click({ timeout: 30_000 });
     const sheet = page.locator("[data-disk-sheet]");
     await expect(sheet).toHaveAttribute("data-disk-state", "ready", { timeout: 60_000 });
@@ -334,7 +332,7 @@ test("a checkout with a working agent cannot be ticked, and an open pane alone d
 // approval still blocks it.
 test("a worktree left with only a finished agent's pane is chosen and its pane closes with it, and a waiting agent blocks it", async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 1000 });
-  const herdr = await startHerdr();
+  const herdr = await startEngine();
   let daemon: Daemon | null = null;
   try {
     fs.writeFileSync(path.join(herdr.root, "home", ".zshenv"), `export PATH="${path.join(herdr.root, "bin")}:$PATH"\n`);
@@ -357,24 +355,22 @@ test("a worktree left with only a finished agent's pane is chosen and its pane c
     git(repo, ["push", "-q", "origin", "main"]);
     build(shipped);
 
-    const at = async (cwd: string) => {
-      const created = herdr.run(["workspace", "create", "--cwd", cwd, "--label", path.basename(cwd), "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]) as { result: { root_pane: { pane_id: string } } };
-      const pane = created.result.root_pane.pane_id;
-      await prompt(herdr, pane);
-      return pane;
-    };
-    await at(repo);
-    const pane = await at(shipped);
-    herdr.run(["agent", "start", "agent-shipped", "--kind", "claude", "--pane", pane]);
-    await setFixtureLifecycle(herdr, pane, "blocked");
-
     daemon = await startHided(herdr, "disk-cleanup-panes");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await expect(page.locator("[data-main-screen]").or(page.locator("[data-workspace-screen]"))).toBeVisible({ timeout: 20_000 });
-    const entrance = (await projectRow(page, "repo")).locator("[data-projects-disk-open]");
+    // The core lists the worktree once a client shows its repository, so the page is open first.
+    const pane = await withControl(daemon, async (control) => {
+      const main = await openProject(control, repo, "repo");
+      const pane = await agentInWorktree(control, shipped);
+      // The worktree's first terminal took the screen; the checkout in front is not one to clean up, so main is shown again.
+      await focusTab(control, main, main.tab);
+      return pane;
+    });
+    await setAgentState(daemon, pane, "blocked");
     const sheet = page.locator("[data-disk-sheet]");
     const open = async () => {
-      await entrance.click({ timeout: 30_000 });
+      // The project rests once its turn is over and folds under Quiet projects, so its row is found again each time.
+      await (await projectRow(page, "repo")).locator("[data-projects-disk-open]").click({ timeout: 30_000 });
       await expect(sheet).toHaveAttribute("data-disk-state", "ready", { timeout: 60_000 });
       await sheet.locator("[data-disk-fold-toggle]").click();
     };
@@ -388,10 +384,9 @@ test("a worktree left with only a finished agent's pane is chosen and its pane c
     await expect(sheet).toHaveCount(0);
 
     // Once its turn is over, the same worktree is chosen and the sheet counts the pane that closes with it.
-    const status = await setFixtureLifecycle(herdr, pane, "idle");
-    // The core hears Herdr's status change a moment after Herdr reports it, and a review reads the agents the
-    // core holds, the same rows the sidebar draws: the review opens once the agent's row shows the turn over.
-    // Herdr's `done` with no label verdict is a stop to read, worded Stopped (status-marks D-03).
+    const status = (await setAgentState(daemon, pane, "idle")).status_code;
+    // A review reads the agents the core holds, the same rows the sidebar draws: the review opens once the
+    // agent's row shows the turn over. A `done` with no label verdict is a stop to read, worded Stopped (status-marks D-03).
     await expect(page.locator(`[data-pane="${pane}"] [data-agent-status]`).first()).toHaveAttribute("data-agent-status", status === "done" ? "stopped" : status, { timeout: 30_000 });
     await open();
     await expect(row().locator("[data-disk-in-use]")).toHaveCount(0);
@@ -410,8 +405,7 @@ test("a worktree left with only a finished agent's pane is chosen and its pane c
     expect(fs.existsSync(shipped)).toBe(false);
     expect(git(repo, ["worktree", "list", "--porcelain"])).not.toContain("repo-shipped");
     expect(git(repo, ["branch", "--list", "prd/shipped"]).trim()).not.toBe("");
-    const listed = herdr.run(["pane", "list"]) as { result: { panes: { pane_id: string }[] } };
-    expect(listed.result.panes.map((row) => row.pane_id)).not.toContain(pane);
+    await withControl(daemon, (control) => control.until((rest) => tabOfPane(rest, pane) === undefined || undefined, `${pane} closed`, 20_000));
   } finally {
     daemon?.stop();
     herdr.stop();

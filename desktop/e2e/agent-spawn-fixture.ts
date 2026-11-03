@@ -7,16 +7,12 @@ import path from "node:path";
 import type { HerdrFixture } from "../../web/e2e/herdr-fixture";
 import { fixtureExecutable, fixtureToolPath, inheritedFixtureEnv } from "../../web/e2e/platform-fixture";
 import { copyFixtureShim } from "../../web/e2e/shims/build";
+import { configureSpawnProvider, writeSessionReporter } from "../../web/e2e/spawn-provider";
+import { powershellQuote, windowsArgument } from "../../web/e2e/windows-command";
 
 type SpawnProvider = { script: string; completed: string };
 export type SpawnedAgent = { id: string; pane: string; machine: string; parent: string | null; origin: string | null; watch: string | null; session: string };
 const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-const powershellQuote = (value: string) => `'${value.replaceAll("'", "''")}'`;
-
-/** The native Windows argv convention, used by ProcessStartInfo.Arguments. */
-function windowsArgument(value: string): string {
-  return `"${value.replace(/(\\*)"/g, "$1$1\\\"").replace(/(\\+)$/g, "$1$1")}"`;
-}
 
 function powershellBinary(bin: string): string {
   // Reuse the controlled system-tool boundary, never the account's PATH.
@@ -35,8 +31,7 @@ export function installSpawnProvider(herdr: HerdrFixture, root: string): SpawnPr
   const runner = process.platform === "win32"
     ? [powershellBinary(path.join(herdr.root, "bin")), "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", provider.script]
     : ["/bin/sh", provider.script];
-  // The program is built once; this run's values are its config (e2e/shims/spawn-provider.c).
-  fs.writeFileSync(path.join(herdr.root, "provider.config"), [herdr.bin, provider.completed, ...runner].join("\n"));
+  configureSpawnProvider(herdr.root, { reporter: writeSessionReporter(herdr), completed: provider.completed, command: runner });
   copyFixtureShim("spawn-provider", path.join(herdr.root, "bin", fixtureExecutable("claude")));
   return provider;
 }

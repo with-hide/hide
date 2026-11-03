@@ -1252,6 +1252,7 @@ dependencies = [
  "hide-kit",
  "hide-node-link",
  "hide-platform",
+ "hide-shell",
  "libc",
  "serde",
  "serde_json",

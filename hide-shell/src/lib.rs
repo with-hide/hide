@@ -9,6 +9,10 @@
 //! the plan record), and the session reader reads the calls a session file
 //! recorded through it (`hide-session`, the pull requests a call names). It
 //! reads text only: it starts nothing, opens nothing and keeps no state.
+//! [`quote`] is the other direction, how a word is written for a shell to
+//! read it back.
+
+pub mod quote;
 
 /// The simple commands of a shell line, each as its words with quoting
 /// removed. A substitution (`$(...)`, `` `...` ``) stays inside its word as

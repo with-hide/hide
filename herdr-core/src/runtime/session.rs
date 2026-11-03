@@ -5077,8 +5077,14 @@ impl Runtime {
             kind: operation.agent_kind.clone()?,
             prompt: launch.and_then(|launch| launch.prompt.clone()),
             args: launch.map(|launch| launch.args.clone()).unwrap_or_default(),
-            codex_daemon: self
-                .codex_daemon(operation.device_id.as_deref().unwrap_or(self.node.as_str())),
+            // A kit answer belongs to the intent only for a start that uses
+            // it. Learning about Codex must not supersede another agent.
+            codex_daemon: if crate::codex_launch::needs_kit_answer(operation.agent_kind.as_deref()?)
+            {
+                self.codex_daemon(operation.device_id.as_deref().unwrap_or(self.node.as_str()))
+            } else {
+                Default::default()
+            },
             shell: self
                 .task_pane_shell
                 .clone()
@@ -5485,43 +5491,10 @@ impl Runtime {
                         }
                     }
                 }
-                // The catalog may already contain the tab before its answer
-                // supplies the captured group and area. Apply that receipt to
-                // the full known checkout topology before selection reads the
-                // tab's temporary Ungrouped membership. An unanswered catalog
-                // or an unlisted tab leaves the receipt for normal admission.
-                let known_placement = created_tab_id.as_ref().and_then(|id| {
-                    let key = &self.workspace_views.as_ref()?.agent_placements.get(id)?.0;
-                    if self.catalog_from_coordinator && !self.catalog_paths.knows(&key.1) {
-                        return None;
-                    }
-                    let checkout = self
-                        .snapshot
-                        .navigator
-                        .workspaces
-                        .iter()
-                        .filter(|workspace| workspace.device_id == key.0)
-                        .flat_map(|workspace| &workspace.checkouts)
-                        .find(|checkout| {
-                            checkout.path == key.1
-                                && checkout.tabs.iter().any(|tab| tab.id.as_ref() == Some(id))
-                        })?;
-                    let topology = checkout
-                        .tabs
-                        .iter()
-                        .filter_map(|tab| Some((tab.id.clone()?, tab.delegated)))
-                        .collect::<Vec<_>>();
-                    Some((key.clone(), topology))
-                });
-                if let Some((key, topology)) = known_placement {
-                    match self.reconcile_agent_topology(&key, &topology) {
-                        Ok(true) => self.persist_workspace_views(),
-                        Ok(false) => {}
-                        Err(error) => self.push_diagnostic(
-                            "agent_layout.reconcile_refused",
-                            format!("Creation placement for {}: {error:?}", key.1),
-                        ),
-                    }
+                // The captured group and area apply before selection reads
+                // the tab's temporary Ungrouped membership.
+                if let Some(id) = created_tab_id.as_deref() {
+                    self.apply_known_agent_placement(id, "Creation");
                 }
                 let can_show_created = match (&action, created_tab_id.as_deref()) {
                     (

@@ -4,12 +4,16 @@
 // rows at a scale, and the checkout itself, each once, because a fold is the
 // core's state and a second click closes it.
 (() => {
-  if (document.querySelector('[data-workspace-screen]')) return true;
+  const wanted = window.__measureCheckoutId;
+  const current = document.querySelector('[data-workspace-screen]');
+  if (current && (!wanted || current.dataset.workspaceScreen === wanted)) return true;
   const opened = (window.__measureOpened ??= new Set());
   const once = (key, element) => { if (!element || opened.has(key)) return false; opened.add(key); element.click(); return true; };
   const projects = document.querySelector('[data-sidebar-mode="projects"]');
   if (projects && projects.getAttribute('aria-selected') !== 'true') { projects.click(); return false; }
-  const checkout = document.querySelector('[data-checkout-kind="branch"]:not([disabled])');
+  const checkout = wanted
+    ? [...document.querySelectorAll('[data-checkout]:not([disabled])')].find((row) => row.dataset.checkout === wanted)
+    : document.querySelector('[data-checkout-kind="branch"]:not([disabled])');
   if (checkout) { once('checkout', checkout); return false; }
   // The fixture's project is the one a scale did not add: fixture.mjs (and scale.sh) label each of their own project-N.
   const project = [...document.querySelectorAll('[data-project]')].find((row) => !/^project-\d+$/.test(row.querySelector('[data-row-name]')?.textContent?.trim() ?? ''));

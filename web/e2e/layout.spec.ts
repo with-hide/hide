@@ -2,12 +2,14 @@
 // engine HIDE_E2E_ENGINE names (PRD engine-bundle-3-core-owns D-14, D-24,
 // B37): each test starts its own checkout of two shell panes made through
 // the daemon (`engine-fixture.ts`), so the same body runs on the pinned
-// Herdr and on the core's own engine. `@own` puts a test in the own engine's
-// lane (`web-e2e.yml`, `engine: own`); the Herdr lane runs every test.
+// Herdr and on the core's own engine.
 
 import { expect, test, type Page } from "@playwright/test";
 import { chord } from "./chords";
-import { corePaneFocus, e2eEngine, openLayout, startLayoutStack, type LayoutStack } from "./engine-fixture";
+import { e2eEngine } from "./e2e-engine";
+import { openLayout, startLayoutStack, type LayoutStack } from "./engine-fixture";
+import { corePaneFocus } from "./daemon-actions";
+import { panePrompt, paneSizeCommand, type PaneShell } from "./herdr-fixture";
 import { countSent, screenshot } from "./wire";
 
 test.describe.configure({ timeout: 90_000 });
@@ -54,7 +56,7 @@ async function splitShell(page: Page, { stack, sent }: Open): Promise<string> {
   const shellPaneId = created[0]!;
   await expect.poll(() => probePane(page)).toBe(shellPaneId);
   await expect(page.locator(`[data-pane-view="${shellPaneId}"]`)).toHaveAttribute("data-transport", /connected|controlling|idle/, { timeout: 15_000 });
-  await expect.poll(() => paneText(page, shellPaneId), { timeout: 15_000 }).toContain("fixture %");
+  await expect.poll(() => paneText(page, shellPaneId), { timeout: 15_000 }).toMatch(panePrompt(stack.server.shell));
   await focusPane(page, stack, shellPaneId);
   return shellPaneId;
 }
@@ -62,14 +64,10 @@ async function splitShell(page: Page, { stack, sent }: Open): Promise<string> {
 /**
  * The size the pane's own program reads from its terminal, printed after
  * `marker`: `stty` in the Unix fixture shell, the console window PowerShell
- * reads in the Windows one (cmd.exe has no size command of its own).
+ * reads directly or as a child of the Windows CMD pane.
  */
-async function programSize(page: Page, pane: string, marker: string): Promise<{ rows: number; cols: number }> {
-  const ask =
-    process.platform === "win32"
-      ? `powershell -NoProfile -Command "$s = $Host.UI.RawUI.WindowSize; '${marker} ' + $s.Height + ' ' + $s.Width"`
-      : `echo ${marker} $(stty size)`;
-  await page.keyboard.type(ask);
+async function programSize(page: Page, pane: string, shell: PaneShell, marker: string): Promise<{ rows: number; cols: number }> {
+  await page.keyboard.type(paneSizeCommand(shell, marker));
   await page.keyboard.press("Enter");
   // The probe's screen text pads each row with spaces to the grid's width.
   const pattern = new RegExp(`^${marker} (\\d+) (\\d+) *$`, "m");
@@ -78,7 +76,7 @@ async function programSize(page: Page, pane: string, marker: string): Promise<{ 
   return { rows: Number(rows), cols: Number(cols) };
 }
 
-test("⌘D splits the focused pane, a divider drag sends one resize_pane, and ⌥⇧W closes the focused idle pane without a confirmation", { tag: ["@platform", "@own"] }, async ({ page }) => {
+test("⌘D splits the focused pane, a divider drag sends one resize_pane, and ⌥⇧W closes the focused idle pane without a confirmation", { tag: "@platform" }, async ({ page }) => {
   const open = await startOpen(page);
   try {
     const { sent } = open;
@@ -120,7 +118,7 @@ test("⌘D splits the focused pane, a divider drag sends one resize_pane, and �
   }
 });
 
-test("of three panes the focused one is outlined, and zoom hides the other two behind a chip", { tag: ["@platform", "@own"] }, async ({ page }) => {
+test("of three panes the focused one is outlined, and zoom hides the other two behind a chip", { tag: "@platform" }, async ({ page }) => {
   const open = await startOpen(page);
   try {
     const { sent } = open;
@@ -150,7 +148,7 @@ test("of three panes the focused one is outlined, and zoom hides the other two b
   }
 });
 
-test("a right-click focuses its pane and opens the terminal menu, whose Zoom pane fills the canvas", { tag: ["@platform", "@own"] }, async ({ page }) => {
+test("a right-click focuses its pane and opens the terminal menu, whose Zoom pane fills the canvas", { tag: "@platform" }, async ({ page }) => {
   const open = await startOpen(page);
   try {
     const { stack, sent } = open;
@@ -207,11 +205,11 @@ async function newTab(page: Page, { stack, sent }: Open): Promise<string> {
   await expect(page.locator("[data-canvas]")).toHaveAttribute("data-canvas", tab);
   await expect(page.locator("[data-pane-view]")).toHaveCount(1);
   const pane = (await paneIds(page))[0]!;
-  await expect.poll(() => paneText(page, pane), { timeout: 15_000 }).toContain("fixture %");
+  await expect.poll(() => paneText(page, pane), { timeout: 15_000 }).toMatch(panePrompt(stack.server.shell));
   return tab;
 }
 
-test("New tab opens a terminal in front, a tab click switches back, and its close control closes it", { tag: ["@platform", "@own"] }, async ({ page }) => {
+test("New tab opens a terminal in front, a tab click switches back, and its close control closes it", { tag: "@platform" }, async ({ page }) => {
   const open = await startOpen(page);
   try {
     const { stack, sent } = open;
@@ -235,7 +233,7 @@ test("New tab opens a terminal in front, a tab click switches back, and its clos
   }
 });
 
-test("Reopen closed tab gives back the tab just closed with a working shell", { tag: ["@platform", "@own"] }, async ({ page }) => {
+test("Reopen closed tab gives back the tab just closed with a working shell", { tag: "@platform" }, async ({ page }) => {
   const open = await startOpen(page);
   try {
     const { stack, sent } = open;
@@ -259,31 +257,31 @@ test("Reopen closed tab gives back the tab just closed with a working shell", { 
     await expect(page.locator("[data-canvas]")).toHaveAttribute("data-canvas", reopened);
     await expect(page.locator("[data-pane-view]")).toHaveCount(1);
     const pane = (await paneIds(page))[0]!;
-    await expect.poll(() => paneText(page, pane), { timeout: 15_000 }).toContain("fixture %");
+    await expect.poll(() => paneText(page, pane), { timeout: 15_000 }).toMatch(panePrompt(stack.server.shell));
     await focusPane(page, stack, pane);
-    expect(await programSize(page, pane, "reopened")).toEqual(await page.evaluate((id) => window.__hideProbe!.paneGrid(id), pane));
+    expect(await programSize(page, pane, stack.server.shell, "reopened")).toEqual(await page.evaluate((id) => window.__hideProbe!.paneGrid(id), pane));
   } finally {
     open.stack.stop();
   }
 });
 
-test("a narrower window reaches each pane's program as a narrower terminal", { tag: ["@platform", "@own"] }, async ({ page }) => {
+test("a narrower window reaches each pane's program as a narrower terminal", { tag: "@platform" }, async ({ page }) => {
   const open = await startOpen(page);
   try {
     const { stack } = open;
     const [left, right] = stack.panes as [string, string];
     const grid = (pane: string) => page.evaluate((id) => window.__hideProbe!.paneGrid(id), pane);
     await focusPane(page, stack, left);
-    const wide = await programSize(page, left, "wide");
+    const wide = await programSize(page, left, stack.server.shell, "wide");
     expect(wide).toEqual(await grid(left));
 
     await page.setViewportSize({ width: 1200, height: 900 });
     await expect.poll(async () => (await grid(left))!.cols).toBeLessThan(wide.cols);
     await expect.poll(async () => (await grid(right))!.cols).toBeLessThan(wide.cols);
     // The engine sizes the program's terminal to the grid the screen drew.
-    expect(await programSize(page, left, "narrow")).toEqual(await grid(left));
+    expect(await programSize(page, left, stack.server.shell, "narrow")).toEqual(await grid(left));
     await focusPane(page, stack, right);
-    expect(await programSize(page, right, "narrow")).toEqual(await grid(right));
+    expect(await programSize(page, right, stack.server.shell, "narrow")).toEqual(await grid(right));
   } finally {
     open.stack.stop();
   }
