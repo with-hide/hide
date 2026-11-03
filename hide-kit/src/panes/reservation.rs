@@ -102,6 +102,7 @@ impl Panes {
                 owner: owner.incarnation(),
                 request: request.to_owned(),
                 cwd: cwd.to_owned(),
+                cancelled: false,
             }),
             reserved_at_unix_ms: record::now_unix_ms(),
             boot: self.boot.clone(),
@@ -124,7 +125,7 @@ impl Panes {
         self.check_owner(owner).map_err(StartRefusal::Failed)?;
         validate(pane, digest, cwd)?;
         let path = layout::pane_record(&self.state_dir, pane);
-        {
+        let current = {
             let _lock = self.lock().map_err(StartRefusal::Failed)?;
             let mut current = match self.record(pane).map_err(StartRefusal::RecordUnreadable)? {
                 Some(current)
@@ -145,18 +146,12 @@ impl Panes {
                     self.new_reservation(owner, pane, digest, cwd)?
                 }
             };
-            if current.holder.is_none() || current.phase == Phase::Ended {
-                current.phase = Phase::Ended;
-                current.end = Some(End::new(
-                    EndReason::Terminated,
-                    "the original request was cancelled",
-                ));
-                record::write(&path, &current)
-                    .map_err(|error| StartRefusal::Uncertain(error.to_string()))?;
-                return Ok(current);
-            }
-        }
-        self.close(owner, pane)
+            self.prepare_close(&mut current);
+            record::write(&path, &current)
+                .map_err(|error| StartRefusal::Uncertain(error.to_string()))?;
+            current
+        };
+        self.finish_close(owner, current)
             .map_err(|error| StartRefusal::Uncertain(error.to_string()))
     }
 

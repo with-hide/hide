@@ -2299,7 +2299,11 @@ A failed or incomplete record scan refuses connection ownership; a completed sca
 Those unreadable IDs remain present, count against the record cap and refuse their own starts without changing their bytes.
 
 Every change of a record, a start's reservation, the count against the cap and a removal happen under one lock file, `records/.lock`, and nothing that waits on another process runs under it: a holder starts, a tree ends and a connection opens outside it, and what they found is written under it after a fresh read that shows the record has not moved.
-A start is keyed by its pane id, so a caller asks the same start again whatever became of the last one: a pane that lives (starting or running) is answered as it is when the command (program, working folder and added environment, compared by digest) is the same, and refused as a conflict when it is not, so starts asked at once converge on one holder; a pane that is closing or over (ended, or its holder gone) is ended and settled once outside the lock, its record and stale socket removed under it, and started again as a new incarnation.
+A start is keyed by its pane id and original request digest: concurrent claims create one holder, a running match answers that holder, and a still-preparing match reports an unresolved start.
+An ended reservation refuses the original start; a deliberate replacement names its previous incarnation and starts only once the earlier processes are confirmed gone.
+Legacy records retain their prior adoption and restart path until replaced by a format 2 reservation.
+Cancellation writes its intent under the same record lock that matches the request, before any process cleanup.
+The holder's final write and the node's lost-holder settlement both preserve that decision; confirmed cleanup ends as terminated, while unconfirmed leftovers remain closing and cancellation reports an unresolved outcome.
 While something of the earlier start runs on, its holder by pid and start time or on Unix a member of its program's session (elsewhere a pid its end says was left), the start is refused with those pids.
 A record of another state folder or one that cannot be read refuses the start.
 A state folder keeps at most 128 holders: every record not ended counts, and so does one that cannot be read, since it may name a holder; the 129th start is refused `holder_cap` with a `pane_holder.start_refused` line, however many ask at once.

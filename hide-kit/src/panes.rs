@@ -835,36 +835,52 @@ impl Panes {
             if current.owner != self.owner {
                 return Err(CloseError::OtherOwner);
             }
-            if current.phase == Phase::Ended {
-                return Ok(current);
-            }
-            if current.reservation.is_some() && current.holder.is_none() {
-                current.phase = Phase::Ended;
-                current.end = Some(End::new(
-                    EndReason::Terminated,
-                    "the pane was closed before its holder claimed it",
-                ));
-                record::write(&path, &current)
-                    .map_err(|error| CloseError::Failed(error.to_string()))?;
-                return Ok(current);
-            }
-            // Written `closing`, a start whose holder has not written itself
-            // in yet finds the record no longer reserves it and stops.
-            if current.phase == Phase::Preparing && current.holder.is_none() {
-                current.phase = Phase::Closing;
-                record::write(&path, &current).map_err(|error| {
-                    CloseError::Failed(format!("the record could not be written: {error}"))
-                })?;
-                return Err(CloseError::Starting);
-            }
-            if current.phase != Phase::Closing {
-                current.phase = Phase::Closing;
-                record::write(&path, &current).map_err(|error| {
-                    CloseError::Failed(format!("the record could not be written: {error}"))
-                })?;
-            }
+            self.prepare_close(&mut current);
+            record::write(&path, &current)
+                .map_err(|error| CloseError::Failed(error.to_string()))?;
             current
         };
+        self.finish_close(owner, current)
+    }
+
+    // Called under the records lock, including by exact-intent cancellation.
+    // No gap separates matching the key from committing its close decision.
+    fn prepare_close(&self, current: &mut PaneRecord) {
+        if let Some(intent) = &mut current.reservation {
+            intent.cancelled = true;
+        }
+        if current.phase == Phase::Ended
+            && current
+                .end
+                .as_ref()
+                .is_some_and(|end| end.left.is_empty() && end.reason != EndReason::StartUnconfirmed)
+        {
+            current.finish(current.end.clone().expect("the end was checked"));
+        } else if current.reservation.is_some()
+            && current.holder.is_none()
+            && current.program.is_none()
+        {
+            current.finish(End::new(
+                EndReason::Terminated,
+                "the pane was closed before its holder claimed it",
+            ));
+        } else {
+            current.phase = Phase::Closing;
+        }
+    }
+
+    fn finish_close(&self, owner: &Owner, current: PaneRecord) -> Result<PaneRecord, CloseError> {
+        if current.phase == Phase::Ended {
+            if let Some(holder) = current.holder.filter(|holder| holder.runs()) {
+                end_holder_tree(holder).map_err(|left| {
+                    CloseError::Failed(format!(
+                        "the ended holder still has processes running: {left:?}"
+                    ))
+                })?;
+            }
+            return Ok(current);
+        }
+        let pane = &current.pane;
         self.emit(
             "pane_holder.closing",
             json!({ "pane": pane, "incarnation": current.incarnation, "holder": current.holder.map(|h| h.pid) }),
@@ -874,13 +890,20 @@ impl Panes {
             // The holder is gone: the record says why, or it is settled as a
             // reconcile settles a lost holder.
             _ => match self.record(pane) {
-                Ok(Some(after)) => self.judge(owner, &after),
+                Ok(Some(after)) if after.incarnation == current.incarnation => {
+                    self.judge(owner, &after)
+                }
+                Ok(Some(_)) => {
+                    return Err(CloseError::Failed(
+                        "the pane changed during close".to_owned(),
+                    ));
+                }
                 Ok(None) => return Err(CloseError::NoRecord),
                 Err(error) => return Err(CloseError::RecordUnreadable(error)),
             },
         };
         match judgment {
-            Judgment::Ended(record) => Ok(record),
+            Judgment::Ended(record) if record.incarnation == current.incarnation => Ok(record),
             Judgment::LeftoversLeft(record) => Err(CloseError::Failed(format!(
                 "its holder is gone and left {:?} running",
                 record.end.map(|end| end.left).unwrap_or_default()
@@ -1230,6 +1253,7 @@ impl Panes {
                 }
                 Some(holder) if holder.runs() => Judgment::Alive(current.clone()),
                 Some(_) => self.settle_lost(current),
+                None if current.cancelled() => self.settle_lost(current),
                 None => {
                     let age = record::now_unix_ms().saturating_sub(current.reserved_at_unix_ms);
                     if Duration::from_millis(age) < START_LIMIT {
@@ -1339,8 +1363,7 @@ impl Panes {
     /// was read, and answers its judgment.
     fn end_record(&self, current: &PaneRecord, end: End) -> Judgment {
         let mut ended = current.clone();
-        ended.phase = Phase::Ended;
-        ended.end = Some(end);
+        ended.finish(end);
         match self.write_if_unchanged(current, &ended) {
             Ok(()) => Judgment::Ended(ended),
             Err(why) => Judgment::Unsettled(why),

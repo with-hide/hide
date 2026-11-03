@@ -734,6 +734,77 @@ fn unreadable_records_do_not_reject_the_nodes_healthy_panes() {
     service.close();
 }
 
+/// A cancellation that finds an unreported holder death is still a close,
+/// including a start whose cleanup was previously uncertain. Recovery must
+/// not convert the cancelled intent into a replacement shell.
+#[test]
+fn cancelled_dead_holders_stay_closed_on_the_next_owner() {
+    use hide_node_link::holders::HolderIntent;
+
+    let folder = Folder::new();
+    let mut node = Node::start(Switch::On, folder.home.path(), &folder.state);
+    for (pane, phase) in [("p1", Phase::Running), ("p2", Phase::Ended)] {
+        node.start_pane(&folder.shell(pane));
+        let mut abandoned = folder.record(pane);
+        let holder = abandoned.holder.unwrap();
+        hide_platform::process::kill_tree(holder.pid).unwrap();
+        wait_until("the test holder to exit", || !holder.runs());
+        // Model the durable record left when its final write never arrives.
+        abandoned.phase = phase;
+        abandoned.end = (phase == Phase::Ended).then(|| {
+            record::End::new(
+                EndReason::StartUnconfirmed,
+                "the original start did not answer",
+            )
+        });
+        {
+            let _lock = record::lock(&layout::pane_records_lock(&folder.state), record::LOCK_WAIT)
+                .unwrap()
+                .unwrap();
+            record::write(&layout::pane_record(&folder.state, pane), &abandoned).unwrap();
+        }
+        let original = abandoned.reservation.as_ref().unwrap();
+        node.holders()
+            .cancel(
+                node.owner(),
+                &node.service,
+                &HolderIntent {
+                    pane: pane.to_owned(),
+                    digest: original.request.clone(),
+                    cwd: original.cwd.clone(),
+                },
+            )
+            .unwrap();
+        let ended = folder.record(pane);
+        assert_eq!(ended.phase, Phase::Ended);
+        assert!(ended.cancelled());
+        assert_eq!(ended.end.unwrap().reason, EndReason::Terminated);
+        let panes =
+            hide_kit::panes::Panes::open(folder.home.path(), &folder.state, |_| {}).unwrap();
+        assert!(
+            panes
+                .start_reserved(
+                    node.owner(),
+                    pane,
+                    abandoned.incarnation,
+                    &original.request,
+                    &source(),
+                    || panic!("a cancelled start expanded its shell")
+                )
+                .is_err()
+        );
+    }
+    drop(node.owner.take());
+    node.owner = Some(node.holders().acquire(Duration::from_secs(5)).unwrap());
+    node.holders().recover(node.owner(), &node.service);
+    let recovered = node.holders().recovered(Duration::from_secs(5)).unwrap();
+    assert_eq!(recovered.closed, vec!["p1", "p2"]);
+    assert!(recovered.ended.is_empty(), "{recovered:?}");
+    assert!(recovered.recoverable.is_empty(), "{recovered:?}");
+    assert!(recovered.present.is_empty(), "{recovered:?}");
+    node.service.close();
+}
+
 /// A redraw, and a view at the grid the pane already runs at, each bring a
 /// full frame from the holder, and what the program prints after either is
 /// drawn: the node waits for a full frame after both, and a holder answers

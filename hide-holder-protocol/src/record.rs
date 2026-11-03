@@ -206,6 +206,32 @@ pub struct Reservation {
     pub owner: u64,
     pub request: String,
     pub cwd: String,
+    /// A durable decision to close this exact intent. Holder exit and node
+    /// cleanup preserve it even when the holder cannot report its own end.
+    #[serde(default)]
+    pub cancelled: bool,
+}
+
+impl PaneRecord {
+    pub fn cancelled(&self) -> bool {
+        self.reservation
+            .as_ref()
+            .is_some_and(|intent| intent.cancelled)
+    }
+
+    /// Preserve the requested termination through every writer. Unconfirmed
+    /// cleanup remains closing, so a caller cannot report cancellation done.
+    pub fn finish(&mut self, mut end: End) {
+        self.phase = Phase::Ended;
+        if self.cancelled() {
+            if end.left.is_empty() {
+                end.reason = EndReason::Terminated;
+            } else {
+                self.phase = Phase::Closing;
+            }
+        }
+        self.end = Some(end);
+    }
 }
 
 /// Why a record could not be read. None of these is "no record".
@@ -445,6 +471,7 @@ mod tests {
             owner: 8,
             request: "a".repeat(64),
             cwd: "/project".to_owned(),
+            cancelled: false,
         });
         let bytes = serde_json::to_vec(&reserved).unwrap();
         assert_eq!(parse(&bytes).unwrap(), reserved);
@@ -459,6 +486,27 @@ mod tests {
             parse(&serde_json::to_vec(&reserved).unwrap()),
             Err(Unreadable::Corrupt(_))
         ));
+    }
+
+    #[test]
+    fn cancellation_survives_exit_but_never_claims_unconfirmed_cleanup_finished() {
+        let mut record = record();
+        record.reservation = Some(Reservation {
+            owner: 7,
+            request: "a".repeat(64),
+            cwd: "/project".to_owned(),
+            cancelled: true,
+        });
+        let mut uncertain = End::new(EndReason::HolderLost, "lost");
+        uncertain.left.push(123);
+        record.finish(uncertain);
+        assert_eq!(record.phase, Phase::Closing);
+        assert!(record.cancelled());
+        let bytes = serde_json::to_vec(&record).unwrap();
+        let mut recovered = parse(&bytes).unwrap();
+        recovered.finish(End::new(EndReason::ProgramExited, "exited"));
+        assert_eq!(recovered.phase, Phase::Ended);
+        assert_eq!(recovered.end.unwrap().reason, EndReason::Terminated);
     }
 
     /// What a node must not take for "no record": each is its own reason.

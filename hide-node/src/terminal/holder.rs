@@ -821,7 +821,11 @@ impl Holders {
             pane: intent.pane.clone(),
             closing: true,
         });
-        self.known.not_started(&intent.pane);
+        self.known.remove(&intent.pane);
+        self.watches.forget(&intent.pane);
+        service.control(TerminalControl::Forget {
+            pane: intent.pane.clone(),
+        });
         Ok(())
     }
 

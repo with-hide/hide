@@ -238,19 +238,12 @@ fn holders_in(home: &Path) -> Vec<u32> {
 
 #[test]
 fn starts_of_one_pane_at_once_converge_on_one_holder_which_ends_when_closed() {
-    let folder = Folder::new();
+    let mut folder = Folder::new();
     let request = folder.request("p1", shell(), Vec::new());
     let source = source();
-    let answers: Vec<Started> = thread::scope(|scope| {
+    let answers: Vec<Result<Started, StartRefusal>> = thread::scope(|scope| {
         let starts: Vec<_> = (0..4)
-            .map(|_| {
-                scope.spawn(|| {
-                    folder
-                        .panes
-                        .start(folder.owner(), &request, &source)
-                        .unwrap()
-                })
-            })
+            .map(|_| scope.spawn(|| folder.panes.start(folder.owner(), &request, &source)))
             .collect();
         starts
             .into_iter()
@@ -260,14 +253,19 @@ fn starts_of_one_pane_at_once_converge_on_one_holder_which_ends_when_closed() {
     let started: Vec<&PaneRecord> = answers
         .iter()
         .filter_map(|answer| match answer {
-            Started::Started(record) => Some(record),
-            Started::Existing(_) => None,
+            Ok(Started::Started(record)) => Some(record),
+            _ => None,
         })
         .collect();
     assert_eq!(started.len(), 1, "{answers:?}");
     for answer in &answers {
-        let (Started::Started(record) | Started::Existing(record)) = answer;
-        assert_eq!(record.incarnation, started[0].incarnation, "{answers:?}");
+        match answer {
+            Ok(Started::Started(record) | Started::Existing(record)) => {
+                assert_eq!(record.incarnation, started[0].incarnation, "{answers:?}");
+            }
+            Err(StartRefusal::Uncertain(_)) => {}
+            other => panic!("a concurrent same-intent start was refused: {other:?}"),
+        }
     }
     let socket = layout::holder_socket(&folder.state, "p1");
     let holder = folder
@@ -290,13 +288,32 @@ fn starts_of_one_pane_at_once_converge_on_one_holder_which_ends_when_closed() {
     assert_eq!(end_reason(&ended), EndReason::Terminated, "{ended:?}");
     assert!(!holder.runs());
 
-    // The same start asked again once the pane ended starts it again.
+    // The original request stays fenced. A deliberate replacement names
+    // the exact ended incarnation instead of retrying the original start.
+    assert!(matches!(
+        folder.panes.start(folder.owner(), &request, &source),
+        Err(StartRefusal::Conflict(_))
+    ));
+    let intent = ended.reservation.as_ref().unwrap();
+    folder
+        .panes
+        .reserve(
+            folder.owner(),
+            "p1",
+            &intent.request,
+            &intent.cwd,
+            Some(ended.incarnation),
+        )
+        .unwrap();
     let again = folder.start(&request);
     assert!(again.incarnation > ended.incarnation, "{again:?}");
     let second = again.holder.expect("the holder wrote itself in");
     assert_ne!(second, holder);
     assert_eq!(holders_in(folder.home.path()), vec![second.pid]);
     folder.panes.close(folder.owner(), "p1").unwrap();
+    assert!(folder.panes.forget(folder.owner(), "p1").is_err());
+    drop(folder.owner.take());
+    folder.owner = Some(folder.panes.acquire(Duration::from_secs(5)).unwrap());
     folder.panes.forget(folder.owner(), "p1").unwrap();
     assert!(folder.panes.record("p1").unwrap().is_none());
     assert!(!socket.exists());
@@ -309,7 +326,7 @@ fn a_program_that_cannot_start_leaves_why_in_its_record() {
     let request = folder.request("p1", vec![missing.into()], Vec::new());
     let refused = folder.panes.start(folder.owner(), &request, &source());
     assert!(
-        matches!(refused, Err(StartRefusal::Failed(_))),
+        matches!(refused, Err(StartRefusal::Uncertain(_))),
         "{refused:?}"
     );
     let ended = folder.record("p1");
