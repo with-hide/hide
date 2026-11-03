@@ -35,7 +35,7 @@ const button = (selector: string) => document.querySelector(selector) as HTMLBut
 
 let unmounts: (() => Promise<void>)[] = [];
 
-async function mount(shown: HerdrImport | null, devices: HerdrImport[] = [], named: { id: string; label: string }[] = []) {
+async function mount(shown: HerdrImport | null, devices: HerdrImport[] = [], named: { id: string; label: string; kind: "local" | "remote" }[] = []) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} unobserve() {} });
   const events: Parameters<DispatchFn>[0][] = [];
@@ -140,7 +140,7 @@ it("draws nothing while there is no save", async () => {
 });
 
 it("asks about a device's running Hide Herdr under its name, and its answers are that device's", async () => {
-  const events = await mount(null, [found({ device: "d1" })], [{ id: "d1", label: "Studio" }]);
+  const events = await mount(null, [found({ device: "d1" })], [{ id: "local", label: "Mac", kind: "local" }, { id: "d1", label: "Studio", kind: "remote" }]);
   expect(document.querySelector("[data-herdr-import-question]")?.textContent).toContain("Herdr on Studio is running 3 tabs and 2 agents");
   await act(async () => button("[data-herdr-import-later]")!.click());
   const line = document.querySelector('[data-herdr-import-line="move"][data-herdr-import-device="d1"]');
@@ -151,7 +151,7 @@ it("asks about a device's running Hide Herdr under its name, and its answers are
 });
 
 it("puts off this machine's question alone, and asks a device's after it", async () => {
-  await mount(found(), [found({ device: "d1", agents: 0 })], [{ id: "d1", label: "Studio" }]);
+  await mount(found(), [found({ device: "d1", agents: 0 })], [{ id: "local", label: "Mac", kind: "local" }, { id: "d1", label: "Studio", kind: "remote" }]);
   expect(document.querySelector("[data-herdr-import-question]")?.getAttribute("data-herdr-import-device")).toBeNull();
   await act(async () => button("[data-herdr-import-later]")!.click());
   expect(document.querySelector("[data-herdr-import-question]")?.textContent).toContain("Herdr on Studio is running 3 tabs");
