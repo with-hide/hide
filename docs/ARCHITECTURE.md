@@ -2534,6 +2534,31 @@ A pane that is not resumed (its definition is gone or says no resume, the resume
 
 Hooks reach the core from a pane on this engine as from a Herdr pane, through the credential its record proves: a hook's report lays its cells on the pane's state as on Herdr's (`agent_hooks/facts.rs`, [status-model.md](status-model.md)), and the session it names is saved on the pane off the lock (`Engine::hook_session`, a no-op on Herdr), so a Claude Code pane resumes its conversation by its id after a reboot.
 
+#### Moving a Herdr session into the core's own engine
+
+With the development switch on, a Herdr session already on this machine becomes the engine's in one place (PRD engine-bundle-4-herdr-removal D-3 to D-9, D-24 to D-27): `own/herdr_session.rs` reads Herdr's `session.json` (version 3 and the versions before it, read only, never written or moved) into the engine's saved session, keeping Herdr's workspace, tab and pane ids, so every Hide state keyed by them needs no new key.
+A workspace whose save does not hold together is left out with its reason and the rest are moved.
+Which workspaces moved, which conversations wait, and whether this machine committed to the move are kept in the import record, `<state>/engine/herdr-import.json` (`herdr_core::herdr_import`, `hide_kit::layout::herdr_import_in`).
+
+There are two ways in, both through the same start of the core role (`hided/src/herdr_transition.rs`).
+A move takes Hide's own Herdr: the server Hide started, read by its socket's peer process and that process's program file.
+An import reads any other Herdr's save and leaves that Herdr running beside Hide.
+When Hide's own Herdr has stopped and Hide used it, the move is made without asking once the core is ready; while it runs, the core shows the question (`status.herdr_import`, kind `move`), and a save no Hide Herdr runs is offered to import (kind `import`), from the sidebar's line, Settings, the first run and `hide import herdr [--yes]`.
+The operator's answer is one event (`herdr_import {action}`: `move`, `import`, `look`, `continue`), handled on a worker off the runtime lock through the machine hided installs (`Core::set_herdr_import`, `herdr_import::Machine`).
+
+A move first writes the commit mark into the record (D-27), then stops Hide's Herdr through its socket (`server.stop`, `engine::herdr::transition::stop_server`), ending the process by its pid when the socket does not answer and confirming the end by the pid and its start time, so a reused pid is never taken for it.
+Hide's Herdr that would not stop moves nothing, and the question says so and offers the move again.
+The move or import is then asked in the record, and hided starts the core role again (`Event::HerdrMove`); before the engine opens, `before_core` imports the asked workspaces and gives their panes' Hide state to the engine the core move's way (D-4), so the engine opens with them and restores them as a reboot does.
+Once committed, a failed update does not start the previous build again (`core_update.rs`, `rollback.refused`): that build's daemon would open a Herdr session that has moved.
+
+An import while the Herdr it reads runs does not resume its conversations, since one conversation open in two places goes wrong: each such pane opens as a shell with a line saying so, and its resume waits in the record (D-8).
+Once that Herdr no longer runs, the sidebar offers to resume them, and the next import gives each back to its pane: a pane whose shell holds its terminal resumes it there, and a pane that runs something else keeps it waiting.
+Until a workspace has moved, `hide` from one of its Herdr panes is refused `pane_not_moved` with the move as the next action (`pane_auth.rs`), and its hook reports reach only the log.
+
+A move or a reboot can end a turn an agent was in.
+The restore reads each resumed pane's hook file (`hide_agent_hooks::counters::records`, by the same pane id) and marks a resume whose agent's last turn was running or waiting on the operator; when the resumed agent's hook names its session, `Engine::hook_session` answers true once, and the core sends that agent one letter from `hide:transition` saying its work was cut off (`runtime/transition_letters.rs`, D-22), once it is the agent seen in its pane and within 10 minutes; an agent that was resting gets none.
+A device's engine reads no hook files (`Place::hooks_home`), since they are on the device.
+
 ## Desk
 
 Desk (PRD Desk 1차) is a room where the operator talks to an agent they choose, one of the agents switched on in Settings › Agents, over ACP, and that agent starts and follows real sessions through the `hide` CLI.
