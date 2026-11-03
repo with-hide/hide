@@ -8,6 +8,7 @@
 // from any step plays to its end the same way: nothing the shell's screen held
 // from the run before carries into the next.
 
+import fs from "node:fs";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { clickClosingItsPage } from "./closing-click";
 import { startHerdr } from "./herdr-fixture";
@@ -15,8 +16,12 @@ import { startHided, type Daemon } from "./hided-fixture";
 
 test.describe.configure({ timeout: 180_000 });
 
-/** More presses than any chapter's steps and the press that starts it; a practice that needs more has stopped moving. */
-const PRESSES_PER_CHAPTER = 25;
+/**
+ * More presses than any chapter needs: its steps, the press that starts it, one that brings in a step's scene, one
+ * past each waiting step once its beat came, and, where the clock is run ahead, one per beat; a practice that needs
+ * more has stopped moving.
+ */
+const PRESSES_PER_CHAPTER = 40;
 
 /**
  * Records each call a page makes to the system clipboard in `window.clipboardCalls`; the practice window makes none.
@@ -179,9 +184,33 @@ async function pressTo(practice: Page, id: string, at: number | null, hurry: (()
     const waiting = (await layer.getAttribute("data-practice-waiting")) !== null;
     if (waiting && hurry) await hurry();
     else if (!waiting) await practice.keyboard.press("Enter");
-    await expect.poll(() => practiceState(practice), { message: `Enter at ${now} moved nothing`, timeout: 10_000 }).not.toBe(now);
+    try {
+      await expect.poll(() => practiceState(practice), { message: `Enter at ${now} moved nothing`, timeout: 10_000 }).not.toBe(now);
+    } catch (error) {
+      await keepStall(practice);
+      throw error;
+    }
     await settled(practice);
   }
+}
+
+/** Keeps what the practice window showed where it stopped moving: its screen, and whether the step's target was there to press. */
+async function keepStall(practice: Page): Promise<void> {
+  const info = test.info();
+  // Written under the test's own output folder, which CI keeps with the run's logs.
+  await practice.screenshot({ path: info.outputPath("practice-stall.png") });
+  const facts = await practice.evaluate(() => {
+    const layer = document.querySelector("[data-practice-layer]");
+    return {
+      step: layer?.getAttribute("data-practice-step"),
+      settling: layer?.hasAttribute("data-practice-settling"),
+      waiting: layer?.hasAttribute("data-practice-waiting"),
+      children: [...document.querySelectorAll("[data-agent-child]")].map((row) => row.getAttribute("data-agent-child")),
+      trees: [...document.querySelectorAll("[data-pane-tree]")].map((tree) => `${tree.getAttribute("data-pane-tree")}:${tree.getAttribute("aria-expanded")}`),
+      focused: document.querySelector("[data-pane-view][data-focused='true']")?.getAttribute("data-pane-view") ?? null,
+    };
+  });
+  fs.writeFileSync(info.outputPath("practice-stall.json"), JSON.stringify(facts, null, 2));
 }
 
 test("every chapter started over from each of its steps plays to its end with Enter alone", async ({ page }) => {
