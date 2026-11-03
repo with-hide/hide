@@ -57,7 +57,7 @@ impl Home {
     }
 
     pub fn prepare(&self, version: u16, source: &Source) -> Reservation {
-        hide_kit::holders::prepare(self.path(), version, source).unwrap()
+        hide_kit::holders::prepare(self.path(), version, source, &Default::default()).unwrap()
     }
 }
 

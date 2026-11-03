@@ -27,6 +27,7 @@
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -134,30 +135,98 @@ const ASK_LIMIT: Duration = Duration::from_secs(5);
 const RECONCILE_ROUNDS: usize = 8;
 
 /// The panes this node opens through their holders, by pane id: those it
-/// started or adopted and has not ended. Read under the service's lock, so
-/// it does nothing but look up a name.
+/// started or adopted and has not ended, and those whose holder it is
+/// starting. Looked up under the service's lock, where it does nothing but
+/// look up a name; only an open, on its own worker, waits on it.
 #[derive(Default)]
-struct Known(Mutex<BTreeMap<String, PathBuf>>);
+struct Known {
+    panes: Mutex<BTreeMap<String, Holder>>,
+    /// Set before the core's own engine can publish any pane. An unseen
+    /// pane then belongs to a holder whose start has not been registered
+    /// yet, including a saved pane waiting for record recovery.
+    owns_every_pane: AtomicBool,
+    /// Told whenever a start under way ends, either way.
+    settled: Condvar,
+}
+
+/// A pane's holder as the node knows it.
+enum Holder {
+    /// Being started: its socket may not listen yet.
+    Starting,
+    Running(PathBuf),
+}
 
 impl Known {
-    fn socket(&self, pane: &str) -> Option<PathBuf> {
-        self.lock().get(pane).cloned()
+    /// The socket of `pane`'s holder, waiting until `deadline` for a start
+    /// under way: a pane is drawn, and its view attaches, while its holder
+    /// starts (the core's own engine answers a new tab or split first), and
+    /// that attach is the holder's to answer, not Herdr's. `None` for a
+    /// pane no holder runs or starts on a node that also runs Herdr.
+    /// A node of the core's own engine waits for even an unseen pane: the
+    /// layout may be drawn before its start is registered. A deadline is
+    /// a holder failure, never a reason to open that pane through Herdr.
+    fn socket_once_started(
+        &self,
+        pane: &str,
+        deadline: Instant,
+    ) -> Result<Option<PathBuf>, String> {
+        let mut panes = self.lock();
+        loop {
+            match panes.get(pane) {
+                Some(Holder::Running(socket)) => return Ok(Some(socket.clone())),
+                None if !self.owns_every_pane.load(Ordering::Acquire) => return Ok(None),
+                None => {}
+                Some(Holder::Starting) => {}
+            }
+            let left = deadline
+                .checked_duration_since(Instant::now())
+                .ok_or_else(|| {
+                    format!("Pane {pane}'s holder did not become ready before the start deadline")
+                })?;
+            panes = self
+                .settled
+                .wait_timeout(panes, left)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
     }
 
+    /// Whether `pane` is a holder pane: one that runs, or one being started.
     fn contains(&self, pane: &str) -> bool {
-        self.lock().contains_key(pane)
+        self.owns_every_pane.load(Ordering::Acquire) || self.lock().contains_key(pane)
+    }
+
+    /// A start of `pane`'s holder begins; a pane that already runs keeps
+    /// its socket, since a start asked again answers it.
+    fn starting(&self, pane: &str) {
+        self.lock()
+            .entry(pane.to_owned())
+            .or_insert(Holder::Starting);
+    }
+
+    /// A start of `pane` that left nothing running ends: an open waiting on
+    /// it goes on without it.
+    fn not_started(&self, pane: &str) {
+        let mut panes = self.lock();
+        if matches!(panes.get(pane), Some(Holder::Starting)) {
+            panes.remove(pane);
+        }
+        drop(panes);
+        self.settled.notify_all();
     }
 
     fn insert(&self, pane: &str, socket: PathBuf) {
-        self.lock().insert(pane.to_owned(), socket);
+        self.lock().insert(pane.to_owned(), Holder::Running(socket));
+        self.settled.notify_all();
     }
 
     fn remove(&self, pane: &str) {
         self.lock().remove(pane);
+        self.settled.notify_all();
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, PathBuf>> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    fn lock(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, Holder>> {
+        self.panes.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -203,7 +272,12 @@ impl Attacher for PaneAttacher {
         mode: Mode,
         size: Option<GridSize>,
     ) -> Result<Transport, OpenFailure> {
-        match self.known.socket(pane_id) {
+        let deadline = Instant::now() + hide_kit::panes::START_LIMIT;
+        match self
+            .known
+            .socket_once_started(pane_id, deadline)
+            .map_err(OpenFailure::retried)?
+        {
             Some(socket) => open_watched(pane_id, &socket, size, Some(Arc::clone(&self.ends))),
             None => self.herdr.open_transport(pane_id, mode, size),
         }
@@ -551,6 +625,13 @@ pub struct HolderFolders<'a> {
 }
 
 impl Holders {
+    /// These holders are the node's only pane engine. Tell the shared
+    /// attach owner before the engine exposes a saved or newly drawn pane;
+    /// recovery and start registration may both happen after its attach.
+    pub(super) fn own_every_pane(&self) {
+        self.known.owns_every_pane.store(true, Ordering::Release);
+    }
+
     /// The holder panes of `folders.state_dir`, whose holders are copied
     /// from `source` into version folders under `folders.home`.
     pub fn open(
@@ -664,15 +745,24 @@ impl Holders {
         request: &StartRequest,
     ) -> Result<Started, StartRefusal> {
         let holder = holder_pane(&request.pane);
+        self.known.starting(&request.pane);
         let started = self.panes.start(
             &StartRequest {
                 pane: holder.clone(),
                 ..request.clone()
             },
             &self.source,
-        )?;
+        );
+        let started = match started {
+            Ok(started) => started,
+            Err(refusal) => {
+                self.known.not_started(&request.pane);
+                return Err(refusal);
+            }
+        };
         let (Started::Started(record) | Started::Existing(record)) = &started;
         if record.end.is_some() {
+            self.known.not_started(&request.pane);
             self.report_ended(&request.pane, record);
             return Ok(started);
         }
@@ -1078,6 +1168,112 @@ fn finished(reason: Option<EndReason>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A Herdr attacher that counts its opens and refuses them all, as a
+    /// daemon with no Herdr server does.
+    #[derive(Default)]
+    struct NoHerdr(std::sync::atomic::AtomicUsize);
+
+    impl Attacher for NoHerdr {
+        fn open(&self, _: &str, _: Mode, _: u16, _: u16) -> Result<SessionParts, String> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            Err("This daemon runs without a Herdr server".to_owned())
+        }
+    }
+
+    /// The core's own engine draws a new tab or split before its holder
+    /// starts, and the view attaches at once: that attach waits for the
+    /// start and opens the holder, never Herdr, whose refusal used to reach
+    /// the pane's screen and the core's error. A pane whose start fails, or
+    /// that no holder runs, goes to Herdr as before.
+    #[test]
+    fn an_attach_to_a_pane_whose_holder_is_starting_waits_for_it_and_never_asks_herdr() {
+        let herdr = Arc::new(NoHerdr::default());
+        struct Shared(Arc<NoHerdr>);
+        impl Attacher for Shared {
+            fn open(
+                &self,
+                pane: &str,
+                mode: Mode,
+                rows: u16,
+                cols: u16,
+            ) -> Result<SessionParts, String> {
+                self.0.open(pane, mode, rows, cols)
+            }
+        }
+        let known = Arc::new(Known::default());
+        let attacher = PaneAttacher {
+            herdr: Box::new(Shared(Arc::clone(&herdr))),
+            known: Arc::clone(&known),
+            ends: Arc::default(),
+        };
+        let size = Some(GridSize { rows: 24, cols: 80 });
+        let asked = || herdr.0.load(std::sync::atomic::Ordering::Acquire);
+        let missing = tempfile::tempdir().unwrap();
+
+        known.starting("w1:p2");
+        assert!(
+            attacher.keeps_own_size("w1:p2"),
+            "a starting pane is a holder pane"
+        );
+        // While the start runs the open waits, out to its deadline, rather
+        // than answer the pane through Herdr.
+        let began = Instant::now();
+        let wait = Duration::from_millis(30);
+        assert!(known.socket_once_started("w1:p2", began + wait).is_err());
+        assert!(
+            began.elapsed() >= wait,
+            "the lookup did not wait for the start"
+        );
+        // A start that ends wakes the open, which takes the holder's socket.
+        let socket = missing.path().join("w1_p2.sock");
+        thread::scope(|scope| {
+            let waiting = scope.spawn(|| {
+                known.socket_once_started("w1:p2", Instant::now() + Duration::from_secs(10))
+            });
+            known.insert("w1:p2", socket.clone());
+            assert_eq!(waiting.join().unwrap().unwrap(), Some(socket.clone()));
+        });
+        // No holder listens there, so the open itself fails, at the holder.
+        assert!(
+            attacher
+                .open_transport("w1:p2", Mode::Control, size)
+                .is_err()
+        );
+        assert_eq!(asked(), 0, "the starting pane's attach never reached Herdr");
+
+        known.starting("w1:p3");
+        thread::scope(|scope| {
+            let open = scope.spawn(|| attacher.open_transport("w1:p3", Mode::Control, size));
+            known.not_started("w1:p3");
+            assert!(open.join().unwrap().is_err());
+        });
+        assert!(!attacher.keeps_own_size("w1:p3"));
+        assert_eq!(asked(), 1, "a start that left nothing goes to Herdr");
+
+        assert!(
+            attacher
+                .open_transport("w1:p9", Mode::Control, size)
+                .is_err()
+        );
+        assert_eq!(asked(), 2, "a pane no holder starts goes to Herdr at once");
+    }
+
+    #[test]
+    fn an_unregistered_pane_of_the_only_engine_has_no_herdr_fallback_at_its_deadline() {
+        let known = Known::default();
+        assert_eq!(
+            known.socket_once_started("w1:p1", Instant::now()).unwrap(),
+            None
+        );
+        known.owns_every_pane.store(true, Ordering::Release);
+        assert!(known.contains("w1:p1"));
+        assert!(known.socket_once_started("w1:p1", Instant::now()).is_err());
+        assert!(
+            known.lock().is_empty(),
+            "a waiting attach retains no pane entry"
+        );
+    }
 
     #[test]
     fn a_pane_its_program_or_a_node_ended_is_finished_and_one_its_holder_lost_is_not() {

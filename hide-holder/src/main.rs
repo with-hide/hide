@@ -228,6 +228,7 @@ fn on_panic(info: &std::panic::PanicHookInfo<'_>) {
 }
 
 fn main() -> ExitCode {
+    let begun = std::time::Instant::now();
     std::panic::set_hook(Box::new(on_panic));
     // The pipe the starter reads this holder's start from; a holder started
     // by hand has none and says it on its standard error instead.
@@ -290,7 +291,11 @@ fn main() -> ExitCode {
     // The start's own failure goes into the record too, so the node reads
     // why rather than a holder that ended without a word.
     let failure = claim.clone();
-    match holder::Holder::start(&config, log.clone(), &job, claim) {
+    let clock = holder::StartClock {
+        begun,
+        claimed: begun.elapsed(),
+    };
+    match holder::Holder::start(&config, log.clone(), &job, claim, &clock) {
         Ok(holder) => {
             report(&format!(
                 "ready holder={} program={} job={job}",

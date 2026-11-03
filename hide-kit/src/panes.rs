@@ -68,6 +68,18 @@ pub const START_LIMIT: Duration = Duration::from_secs(10);
 /// its terminal's drain (5 s) and its last message.
 pub const CLOSE_LIMIT: Duration = Duration::from_secs(20);
 
+/// Whether `path` was last written before `booted`. A file whose time
+/// cannot be read is not known to be old.
+fn written_before(path: &Path, booted: std::time::SystemTime) -> bool {
+    std::fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .is_ok_and(|written| written < booted)
+}
+
+/// How many incarnations a process takes from the folder's file at once
+/// ([`Panes::next_incarnation`]).
+const INCARNATIONS_TAKEN: u64 = 64;
+
 /// How many panes a reconcile judges at once.
 pub const RECONCILE_WORKERS: usize = 8;
 
@@ -289,6 +301,11 @@ pub struct Panes {
     owner: String,
     boot: Option<String>,
     sink: Sink,
+    /// The version folder names this process took (`holders::prepare`).
+    names: holders::VersionNames,
+    /// Incarnations this process took from the folder's file and has not
+    /// given yet ([`Panes::next_incarnation`]).
+    incarnations: Mutex<std::ops::Range<u64>>,
 }
 
 impl Panes {
@@ -304,13 +321,111 @@ impl Panes {
             Err(error) if error.kind() == std::io::ErrorKind::Unsupported => None,
             Err(error) => return Err(format!("this boot could not be named: {error}")),
         };
-        Ok(Self {
+        let panes = Self {
             home: home.to_owned(),
             state_dir: state_dir.to_owned(),
             owner,
             boot,
             sink,
-        })
+            names: holders::VersionNames::default(),
+            incarnations: Mutex::new(0..0),
+        };
+        panes.mend_after_a_crash()?;
+        Ok(panes)
+    }
+
+    /// Mends what a machine that stopped mid-write leaves, before anything
+    /// reads the records. A record and the incarnation counter are replaced
+    /// whole (`hide_platform::fs::atomic::write_file`) and flushed to the
+    /// device but not past its cache, since a pane record need not outlive
+    /// the machine: after a power loss every holder it names is gone too.
+    /// What the device then kept may be an empty or cut-off file, or an
+    /// older one, and none of it may stop the panes starting again:
+    ///
+    /// - a record that cannot be parsed and was last written before this
+    ///   boot began names nothing that runs (no process outlives its boot),
+    ///   so it is removed (`pane_holder.record_removed`) and its pane
+    ///   starts again as one with no record; one written in this boot, or of
+    ///   a format this build does not know (a newer build's), is left as it
+    ///   is and reported, as before, since its holder may run;
+    /// - an older readable record is one of an earlier boot, which the
+    ///   reconcile ends `machine_restarted` without touching what it names;
+    /// - a counter that cannot be read, or that is behind an incarnation a
+    ///   record holds, is moved past every one of them
+    ///   (`pane_holder.incarnations_mended`), so no start takes a number a
+    ///   record still names.
+    fn mend_after_a_crash(&self) -> Result<(), String> {
+        let booted = match hide_platform::process::boot_time() {
+            Ok(booted) => booted,
+            Err(error) => {
+                // Without the boot's start nothing is known to be old:
+                // every record is left as it is, as before.
+                self.emit(
+                    "pane_holder.mend_skipped",
+                    json!({ "reason": format!("this boot's start could not be read: {error}") }),
+                );
+                return Ok(());
+            }
+        };
+        let _lock = self.lock()?;
+        let records = layout::pane_records(&self.state_dir);
+        let entries = std::fs::read_dir(&records)
+            .map_err(|error| format!("{} could not be listed: {error}", records.display()))?;
+        let mut highest = 0_u64;
+        for entry in entries {
+            let entry = entry
+                .map_err(|error| format!("{} could not be listed: {error}", records.display()))?;
+            let path = entry.path();
+            if path.extension().is_none_or(|extension| extension != "json") {
+                continue;
+            }
+            match record::read(&path) {
+                Ok(Some(found)) => highest = highest.max(found.incarnation),
+                Ok(None) => {}
+                Err(Unreadable::Corrupt(why)) if written_before(&path, booted) => {
+                    std::fs::remove_file(&path).map_err(|error| {
+                        format!("{} could not be removed: {error}", path.display())
+                    })?;
+                    self.emit(
+                        "pane_holder.record_removed",
+                        json!({
+                            "pane": path.file_stem().map(|stem| stem.to_string_lossy().into_owned()),
+                            "reason": "written before this boot and cannot be parsed",
+                            "detail": why,
+                        }),
+                    );
+                }
+                Err(_) => {}
+            }
+        }
+        let counter = layout::pane_incarnations(&self.state_dir);
+        let next = match std::fs::read_to_string(&counter) {
+            Ok(text) => text.trim().parse::<u64>().ok(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(1),
+            Err(error) => {
+                return Err(format!("{} could not be read: {error}", counter.display()));
+            }
+        };
+        let floor = highest.saturating_add(1);
+        if next.is_none_or(|next| next < floor) {
+            if next.is_none() && !written_before(&counter, booted) {
+                // Damaged in this boot: not a crash's, so not ours to mend.
+                return Ok(());
+            }
+            hide_platform::fs::atomic::write_file(
+                &counter,
+                floor.to_string().as_bytes(),
+                hide_platform::fs::atomic::WriteOptions::UntilReboot(
+                    hide_platform::fs::Access::Private,
+                ),
+            )
+            .map_err(|error| format!("{} could not be written: {error}", counter.display()))?;
+            self.emit(
+                "pane_holder.incarnations_mended",
+                json!({ "found": next, "next": floor }),
+            );
+        }
+        Ok(())
     }
 
     /// The identity this state folder's records name as their owner.
@@ -354,10 +469,12 @@ impl Panes {
         request: &StartRequest,
         source: &holders::Source,
     ) -> Result<Started, StartRefusal> {
+        let begun = Instant::now();
         record::check_pane(&request.pane).map_err(StartRefusal::InvalidPane)?;
         let spec = spec_of(request);
-        let reservation =
-            holders::prepare(&self.home, PROTOCOL_VERSION, source).map_err(StartRefusal::Failed)?;
+        let reservation = holders::prepare(&self.home, PROTOCOL_VERSION, source, &self.names)
+            .map_err(StartRefusal::Failed)?;
+        let prepared = begun.elapsed();
         let version_folder = reservation
             .dir
             .file_name()
@@ -397,7 +514,16 @@ impl Panes {
                 Err(error) => return Err(StartRefusal::RecordUnreadable(error)),
                 Ok(None) => {}
             }
-            let count = self.count_live().map_err(StartRefusal::Failed)?;
+            let paths = self.record_paths().map_err(StartRefusal::Failed)?;
+            // Each record names at most one live or ended pane. Below both
+            // bounds even treating every file as live proves admission, and
+            // no ended record can need pruning. At either bound read the
+            // records as before, including unreadable ones in the live count.
+            let count = if paths.len() < HOLDER_CAP && paths.len() <= ENDED_KEPT {
+                paths.len()
+            } else {
+                self.count_live(&Self::read_records(paths))
+            };
             if count >= HOLDER_CAP {
                 self.emit(
                     "pane_holder.start_refused",
@@ -426,7 +552,12 @@ impl Panes {
             })?;
             break reserved;
         };
-        let started = self.start_holder(request, &reservation, &reserved);
+        let stages = StartStages {
+            begun,
+            prepared,
+            reserved: begun.elapsed(),
+        };
+        let started = self.start_holder(request, &reservation, &reserved, &stages);
         drop(reservation);
         started.map(Started::Started).map_err(StartRefusal::Failed)
     }
@@ -540,6 +671,7 @@ impl Panes {
         request: &StartRequest,
         reservation: &holders::Reservation,
         reserved: &PaneRecord,
+        stages: &StartStages,
     ) -> Result<PaneRecord, String> {
         let pane = &request.pane;
         let mut command = ResidentCommand::new(&reservation.program);
@@ -585,6 +717,7 @@ impl Panes {
             }
         };
         drop(writer);
+        let spawned = stages.begun.elapsed();
         let holder = Identity::of(resident.pid);
         if resident.outer_job {
             self.emit(
@@ -594,7 +727,12 @@ impl Panes {
         }
         match first_line(reader, START_LIMIT) {
             Report::Line(line) if line.starts_with("ready ") => {
-                let _lock = self.lock()?;
+                let ready = stages.begun.elapsed();
+                // Records are replaced atomically, as `record()` reads
+                // them without the writer lock. This read changes nothing
+                // and checks the reserved incarnation below; taking every
+                // holder's writer lock here held a completed start behind
+                // unrelated starts before its worker could take another.
                 match record::read(&layout::pane_record(&self.state_dir, pane)) {
                     // A program that exits at once may have ended the pane
                     // by now; the start still took place.
@@ -614,6 +752,11 @@ impl Panes {
                                 "incarnation": written.incarnation,
                                 "holder": resident.pid,
                                 "job": job,
+                                "prepared_ms": millis(stages.prepared),
+                                "reserved_ms": millis(stages.reserved),
+                                "spawned_ms": millis(spawned),
+                                "ready_ms": millis(ready),
+                                "took_ms": millis(stages.begun.elapsed()),
                             }),
                         );
                         Ok(written)
@@ -835,16 +978,15 @@ impl Panes {
     /// above zero (PRD engine-bundle-3-core-owns D-10).
     pub fn live(&self) -> Result<usize, String> {
         let _lock = self.lock()?;
-        self.count_live()
+        Ok(self.count_live(&self.scan()?))
     }
 
     /// The records not ended, and the ones that cannot be read, which may
     /// name a holder. Ended records past [`ENDED_KEPT`] go, oldest first.
-    fn count_live(&self) -> Result<usize, String> {
-        let scan = self.scan()?;
+    fn count_live(&self, scan: &[(String, RecordRead)]) -> usize {
         let mut live = 0;
         let mut ended = Vec::new();
-        for (pane, read) in &scan {
+        for (pane, read) in scan {
             match read {
                 Ok(record) if record.phase == Phase::Ended => ended.push((
                     record.end.as_ref().map_or(0, |end| end.at_unix_ms),
@@ -873,11 +1015,29 @@ impl Panes {
                 );
             }
         }
-        Ok(live)
+        live
     }
 
     /// Every record file, by pane, read. The caller holds the lock.
     fn scan(&self) -> Result<Vec<(String, RecordRead)>, String> {
+        Ok(Self::read_records(self.record_paths()?))
+    }
+
+    fn read_records(paths: Vec<(String, PathBuf)>) -> Vec<(String, RecordRead)> {
+        paths
+            .into_iter()
+            .map(|(pane, path)| {
+                let read = record::read(&path).and_then(|found| {
+                    found.ok_or(Unreadable::Corrupt("removed while read".into()))
+                });
+                (pane, read)
+            })
+            .collect()
+    }
+
+    /// Lists under the records lock, with the same bound for an admission
+    /// and a full scan. Counting names alone never understates live panes.
+    fn record_paths(&self) -> Result<Vec<(String, PathBuf)>, String> {
         let dir = layout::pane_records(&self.state_dir);
         let entries = std::fs::read_dir(&dir)
             .map_err(|error| format!("{} could not be listed: {error}", dir.display()))?;
@@ -894,9 +1054,7 @@ impl Panes {
                     dir.display()
                 ));
             }
-            let read = record::read(&entry.path())
-                .and_then(|found| found.ok_or(Unreadable::Corrupt("removed while read".into())));
-            scan.push((pane.to_owned(), read));
+            scan.push((pane.to_owned(), entry.path()));
         }
         scan.sort_by(|left, right| left.0.cmp(&right.0));
         Ok(scan)
@@ -904,24 +1062,45 @@ impl Panes {
 
     /// The next incarnation, kept in a file of its own so a pane forgotten
     /// and started again never has an earlier start's number. The caller
-    /// holds the lock.
+    /// holds the lock. The file is moved on by [`INCARNATIONS_TAKEN`] at a
+    /// time and this process gives those out itself, so one start in that
+    /// many writes it rather than every start: each write is flushed, and
+    /// it stood in front of every new pane. A number is never given twice,
+    /// whichever process takes the next ones, and one taken but not given
+    /// (the process ended) is simply never used.
     fn next_incarnation(&self) -> Result<u64, String> {
-        let path = layout::pane_incarnations(&self.state_dir);
-        let next = match std::fs::read_to_string(&path) {
-            Ok(text) => text
-                .trim()
-                .parse::<u64>()
-                .map_err(|_| format!("{} does not hold a number", path.display()))?,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => 1,
-            Err(error) => return Err(format!("{} could not be read: {error}", path.display())),
-        };
-        hide_platform::fs::atomic::write_file(
-            &path,
-            (next + 1).to_string().as_bytes(),
-            hide_platform::fs::Access::Private,
-        )
-        .map_err(|error| format!("{} could not be written: {error}", path.display()))?;
-        Ok(next)
+        let mut taken = self
+            .incarnations
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if taken.is_empty() {
+            let path = layout::pane_incarnations(&self.state_dir);
+            let next = match std::fs::read_to_string(&path) {
+                Ok(text) => text
+                    .trim()
+                    .parse::<u64>()
+                    .map_err(|_| format!("{} does not hold a number", path.display()))?,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => 1,
+                Err(error) => {
+                    return Err(format!("{} could not be read: {error}", path.display()));
+                }
+            };
+            let end = next
+                .checked_add(INCARNATIONS_TAKEN)
+                .ok_or_else(|| format!("{} holds no next number", path.display()))?;
+            hide_platform::fs::atomic::write_file(
+                &path,
+                end.to_string().as_bytes(),
+                hide_platform::fs::atomic::WriteOptions::UntilReboot(
+                    hide_platform::fs::Access::Private,
+                ),
+            )
+            .map_err(|error| format!("{} could not be written: {error}", path.display()))?;
+            *taken = next..end;
+        }
+        taken
+            .next()
+            .ok_or_else(|| "no incarnation was taken".to_owned())
     }
 
     /// Reads every record, adopts the holders they name and settles what
@@ -1279,6 +1458,22 @@ enum NotAsked {
     /// It was reached and refused, answered out of protocol or did not say
     /// it ended.
     Refused(String),
+}
+
+/// When a start reached each of its steps, for its `pane_holder.started`
+/// event: the version folder found or made, the record reserved under the
+/// lock, then (in `start_holder`) the holder process started and its
+/// `ready` read. A new tab or split on the core's own engine is answered
+/// once the start returns, so these are where its time goes.
+struct StartStages {
+    begun: Instant,
+    prepared: Duration,
+    reserved: Duration,
+}
+
+/// `elapsed` in milliseconds to a tenth, as the diagnostics give times.
+fn millis(elapsed: Duration) -> f64 {
+    (elapsed.as_secs_f64() * 10_000.0).round() / 10.0
 }
 
 /// How an earlier start of a pane stands to a new start of it.

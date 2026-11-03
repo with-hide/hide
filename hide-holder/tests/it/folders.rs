@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::thread;
 
 use hide_holder_protocol::ClientMessage;
-use hide_kit::holders::{Pruned, Source, program_name, prune, version_name};
+use hide_kit::holders::{Pruned, Source, VersionNames, prepare, program_name, prune, version_name};
 use hide_kit::layout;
 
 use crate::support::{Holder, Home, current_version, print_ok, shell, source, start_ready};
@@ -23,6 +23,35 @@ fn answers(holder: &Holder) {
         .send(ClientMessage::Input(print_ok().to_vec()))
         .unwrap();
     connection.wait_for_text("hide-ok");
+}
+
+#[test]
+fn a_holder_replaced_on_disk_starts_from_a_folder_named_for_its_new_bytes() {
+    // A start names its folder through the names its process took, which
+    // read the holder once; an update that replaces the holder beside a
+    // daemon that runs on must still give the next start the new bytes, in
+    // the folder their hash names.
+    let home = Home::new();
+    let program = home.path().join("holder-source");
+    std::fs::write(&program, b"the first build's holder").unwrap();
+    let source = Source {
+        program: program.clone(),
+        conpty: None,
+    };
+    let names = VersionNames::default();
+    let first = prepare(home.path(), 7, &source, &names).unwrap();
+    assert_eq!(name_of(&first.dir), version_name(7, &source).unwrap());
+    drop(first);
+
+    let replacement = home.path().join("holder-source.new");
+    std::fs::write(&replacement, b"the second build's holder").unwrap();
+    std::fs::rename(&replacement, &program).unwrap();
+    let second = prepare(home.path(), 7, &source, &names).unwrap();
+    assert_eq!(name_of(&second.dir), version_name(7, &source).unwrap());
+    assert_eq!(
+        std::fs::read(&second.program).unwrap(),
+        b"the second build's holder"
+    );
 }
 
 #[test]
