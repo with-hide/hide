@@ -25,6 +25,8 @@ use serde::{Deserialize, Serialize};
 
 pub use hide_host::herdr_save::Fetched;
 
+pub(crate) mod device;
+
 use crate::engine::own::herdr_session::{self, HerdrRead, PendingResume};
 
 /// The format this build writes and reads.
@@ -310,6 +312,63 @@ pub fn moved(engine_dir: &Path) -> Result<BTreeSet<String>, String> {
     Ok(open(engine_dir)?.moved)
 }
 
+/// A device's save as its node read it when a move of it was asked, with
+/// the device's machine id, which its registrations name: the core's next
+/// start moves it before any link to the device is up (D-7, D-10).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct KeptSave {
+    pub machine: String,
+    pub save: Fetched,
+}
+
+/// Keeps `kept` in the device's engine folder `engine_dir`.
+pub fn keep_save(engine_dir: &Path, kept: &KeptSave) -> Result<(), String> {
+    let path = hide_kit::layout::herdr_save_kept_in(engine_dir);
+    let bytes = serde_json::to_vec(kept)
+        .map_err(|error| format!("the device's save could not be written out: {error}"))?;
+    hide_platform::fs::private::create_dir_all(engine_dir)
+        .map_err(|error| format!("{} could not be made: {error}", engine_dir.display()))?;
+    hide_platform::fs::atomic::write_file_durable(
+        &path,
+        &bytes,
+        hide_platform::fs::atomic::DurableAccess::Private,
+    )
+    .map(|_| ())
+    .map_err(|error| format!("{} could not be replaced: {error}", path.display()))
+}
+
+/// The save kept in `engine_dir`, `None` when none is.
+pub fn kept_save(engine_dir: &Path) -> Result<Option<KeptSave>, String> {
+    let path = hide_kit::layout::herdr_save_kept_in(engine_dir);
+    let file = match std::fs::File::open(&path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("{} could not be opened: {error}", path.display())),
+    };
+    // The save and its JSON quoting.
+    let cap = 2 * hide_host::herdr_save::READ_CAP + 4096;
+    let mut text = String::new();
+    std::io::Read::read_to_string(&mut std::io::Read::take(file, cap + 1), &mut text)
+        .map_err(|error| format!("{} could not be read: {error}", path.display()))?;
+    if text.len() as u64 > cap {
+        return Err(format!("{} is larger than {cap} bytes", path.display()));
+    }
+    serde_json::from_str(&text)
+        .map(Some)
+        .map_err(|error| format!("{} is not a kept save: {error}", path.display()))
+}
+
+/// Forgets the save kept in `engine_dir` once its move is made.
+pub fn drop_kept_save(engine_dir: &Path) -> Result<(), String> {
+    let path = hide_kit::layout::herdr_save_kept_in(engine_dir);
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("{} could not be removed: {error}", path.display())),
+    }
+}
+
 /// Whether Hide registered an agent of this machine on the Herdr socket
 /// `herdr_socket`, which makes a save beside a socket no server listens on
 /// Hide's (D-5). A ledger that cannot be read says no.
@@ -339,6 +398,9 @@ pub trait Machine: Send + Sync {
     fn take(&self, take: Take) -> Taken;
     /// The last move's result was read.
     fn dismiss(&self);
+    /// Starts the core role again, whose start makes the move a device's
+    /// record asks for before any link to it is up (D-7, D-10).
+    fn restart(&self);
 }
 
 /// One look at this machine's Herdr save.
@@ -621,14 +683,25 @@ pub fn import(engine_dir: &Path, save: &Fetched, asked: Asked) -> Result<Outcome
     Ok(outcome)
 }
 
+/// Whose registrations a handover gives, and the scope they take: this
+/// machine's are scoped by its Herdr socket and take the engine's folder; a
+/// device's are scoped by its device id, which they keep (D-4, D-10).
+pub struct Handover<'a> {
+    /// The machine id the registrations name.
+    pub machine: &'a str,
+    /// The device id the View openers name.
+    pub device: &'a str,
+    pub from_scope: &'a str,
+    pub to_scope: &'a str,
+}
+
 /// Gives the Hide state of the panes of the moved workspaces `moved` to the
-/// engine whose folder is `engine_dir` (D-4), in the state folder
-/// `state_dir` of the machine `node`, the core move's way
-/// (`node_migration/reown.rs`): each registration of this machine whose
-/// host scope is the Herdr socket `herdr_socket` and whose pane is in a
-/// moved workspace is scoped to the engine, and its Herdr terminal id
-/// becomes its pane's id, the engine's terminal id, in the registration and
-/// in each View opener that named it. Everything else Hide keeps of a pane
+/// engine (D-4), in the state folder `state_dir`, the core move's way
+/// (`node_migration/reown.rs`): each registration of `handover`'s machine
+/// whose host scope is its `from_scope` and whose pane is in a moved
+/// workspace takes its `to_scope`, and its Herdr terminal id becomes its
+/// pane's id, the engine's terminal id, in the registration and in each View
+/// opener of its device that named it. Everything else Hide keeps of a pane
 /// is keyed by the pane, tab or workspace id the move keeps, or by the
 /// agent's session. A registration already given is left as it is, so a
 /// start that runs it again changes nothing (principle #11). It runs before
@@ -636,9 +709,7 @@ pub fn import(engine_dir: &Path, save: &Fetched, asked: Asked) -> Result<Outcome
 /// registrations it gave.
 pub fn adopt(
     state_dir: &Path,
-    node: &str,
-    herdr_socket: &str,
-    engine_dir: &Path,
+    handover: &Handover<'_>,
     moved: &BTreeSet<String>,
 ) -> Result<usize, String> {
     let ledger_path = hide_kit::layout::delivery_ledger(state_dir);
@@ -647,17 +718,19 @@ pub fn adopt(
     }
     let mut ledger = crate::delivery::ledger::load(&ledger_path)
         .map_err(|reason| format!("the delivery ledger could not be read: {reason}"))?;
-    let engine_scope = engine_dir.to_string_lossy().into_owned();
     let mut terminals = BTreeMap::new();
     let mut given = 0;
     for record in &mut ledger.agents {
-        if record.machine != node
-            || record.host_scope != herdr_socket
+        if record.machine != handover.machine
+            || record.host_scope != handover.from_scope
             || !moved.contains(workspace_of(&record.pane))
+            || (record.instance == record.pane
+                && record.terminal_id.as_ref().is_none_or(|id| *id == record.pane)
+                && record.host_scope == handover.to_scope)
         {
             continue;
         }
-        record.host_scope.clone_from(&engine_scope);
+        handover.to_scope.clone_into(&mut record.host_scope);
         for terminal in std::iter::once(&record.instance).chain(record.terminal_id.as_ref()) {
             if *terminal != record.pane {
                 terminals.insert(terminal.clone(), record.pane.clone());
@@ -677,7 +750,7 @@ pub fn adopt(
     let views_path = state_dir.join(crate::node_migration::WORKSPACE_VIEWS);
     if let Some(mut views) = crate::node_migration::read_json(&views_path)
         .map_err(|error| format!("{} could not be read: {error}", views_path.display()))?
-        && rename_openers(&mut views, node, &terminals)
+        && rename_openers(&mut views, handover.device, &terminals)
     {
         let bytes = serde_json::to_vec(&views)
             .map_err(|error| format!("the Views could not be written out: {error}"))?;
@@ -941,7 +1014,14 @@ mod tests {
         .unwrap();
         let moved = BTreeSet::from(["w1".to_owned()]);
 
-        assert_eq!(adopt(state, "mac", socket, &engine, &moved).unwrap(), 1);
+        let scope = engine.to_string_lossy();
+        let handover = Handover {
+            machine: "mac",
+            device: "mac",
+            from_scope: socket,
+            to_scope: &scope,
+        };
+        assert_eq!(adopt(state, &handover, &moved).unwrap(), 1);
         let ledger = crate::delivery::ledger::load(&ledger_path).unwrap();
         let given = |id: &str| {
             let record = ledger.agents.iter().find(|record| record.id == id).unwrap();
@@ -976,7 +1056,7 @@ mod tests {
             std::fs::read(&ledger_path).unwrap(),
             std::fs::read(&views_path).unwrap(),
         );
-        assert_eq!(adopt(state, "mac", socket, &engine, &moved).unwrap(), 0);
+        assert_eq!(adopt(state, &handover, &moved).unwrap(), 0);
         assert_eq!(
             (
                 std::fs::read(&ledger_path).unwrap(),

@@ -25,6 +25,8 @@ impl Machine for StandIn {
     }
 
     fn dismiss(&self) {}
+
+    fn restart(&self) {}
 }
 
 fn installed() -> Runtime {
@@ -240,4 +242,35 @@ fn a_cut_agent_is_told_once_it_shows_and_given_up_on_when_it_never_does() {
     assert_eq!(runtime.transition_letters_owed(), ["h1:p2"]);
     runtime.drive_transition_letters(1_000 + 10 * 60 * 1000 + 1);
     assert!(runtime.transition_letters_owed().is_empty());
+}
+
+/// B18: a device's save is offered under its own name, beside this
+/// machine's, moved by its own mover, and goes with its link.
+#[test]
+fn a_device_s_save_is_offered_under_its_name_and_goes_with_its_link() {
+    let mut runtime = installed();
+    assert!(runtime.install_device_herdr_import("d1", Arc::new(StandIn), offered(Server::Hide, None)));
+    let status = &serde_json::to_value(runtime.snapshot()).unwrap()["status"];
+    assert_eq!(status["herdr_import"], serde_json::Value::Null);
+    assert_eq!(
+        status["herdr_import_devices"],
+        serde_json::json!([{
+            "kind": "move", "stage": "offered", "workspaces": 2, "tabs": 3, "agents": 1,
+            "waiting": 0, "herdr_running": true, "failure": null, "reason": null, "refused": [],
+            "device": "d1",
+        }])
+    );
+    // This machine offers nothing, so its move is not the device's.
+    assert!(!act(&mut runtime, "move"));
+    let device_move = event("herdr_import", serde_json::json!({"action": "move", "device": "d1"}));
+    assert!(runtime.dispatch_json(&device_move));
+    let devices = |runtime: &Runtime| {
+        serde_json::to_value(runtime.snapshot()).unwrap()["status"]["herdr_import_devices"].clone()
+    };
+    assert_eq!(devices(&runtime)[0]["stage"], "moving");
+    runtime.ingest_device_herdr_take("d1", Take::Move, Taken::NotStopped);
+    assert_eq!(devices(&runtime)[0]["stage"], "offered");
+    assert!(runtime.retire_device_herdr_import("d1"));
+    assert_eq!(devices(&runtime), serde_json::json!([]));
+    assert!(!runtime.dispatch_json(&device_move));
 }

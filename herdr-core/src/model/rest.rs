@@ -138,6 +138,7 @@ section!(StatusSections, StatusSnapshot, s, {
     herdr: ProviderStatusSnapshot => s.herdr,
     herdr_takeover: Option<HerdrTakeoverSnapshot> => s.herdr_takeover,
     herdr_import: Option<HerdrImportSnapshot> => s.herdr_import,
+    herdr_import_devices: Vec<HerdrImportSnapshot> => s.herdr_import_devices,
     herdr_versions: Option<HerdrVersionsSnapshot> => s.herdr_versions,
     remote: Vec<RemoteStatusSnapshot> => s.remote,
     environment: Vec<EnvironmentStatusSnapshot> => s.environment,

@@ -75,9 +75,66 @@ fn log(kind: &str, fields: serde_json::Value) {
 /// failure is logged and leaves the start to go on with what the engine
 /// saved: the record holds what is not moved, and the screen offers it.
 pub(crate) fn before_core(env: &Env, node: &str) -> Look {
+    devices_before_core(&env.state_dir);
     match Place::of(env) {
         Some(place) => before_core_at(&place, &env.state_dir, node),
         None => Look::Nothing,
+    }
+}
+
+/// Each device whose move was asked (D-10, B18): the save its node read is
+/// moved into the device's engine and its panes' Hide state given to it,
+/// before any link to the device is up, so the device's engine opens with
+/// them as this machine's does. A device's registrations are scoped by its
+/// id, which they keep.
+fn devices_before_core(state_dir: &Path) {
+    let devices = hide_kit::layout::engine_dir(state_dir).join("devices");
+    let Ok(entries) = std::fs::read_dir(&devices) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Some(device) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        let engine_dir = entry.path();
+        let _held = hold_record();
+        // The kept save goes once its panes' state is given, so a start cut
+        // short after the import gives it on the next.
+        let given = (|| {
+            let Some(kept) = herdr_import::kept_save(&engine_dir)? else {
+                return Ok(None);
+            };
+            if let Some(asked) = herdr_import::asked(&engine_dir)? {
+                let outcome = herdr_import::import(&engine_dir, &kept.save, asked)?;
+                log(
+                    "herdr_transition.device_moved",
+                    json!({ "device": device, "outcome": outcome }),
+                );
+            }
+            let given = herdr_import::adopt(
+                state_dir,
+                &herdr_import::Handover {
+                    machine: &kept.machine,
+                    device: &device,
+                    from_scope: &device,
+                    to_scope: &device,
+                },
+                &herdr_import::moved(&engine_dir)?,
+            )?;
+            herdr_import::drop_kept_save(&engine_dir)?;
+            Ok::<_, String>(Some(given))
+        })();
+        match given {
+            Ok(Some(given)) => log(
+                "herdr_transition.device_adopted",
+                json!({ "device": device, "registrations": given }),
+            ),
+            Ok(None) => {}
+            Err(reason) => log(
+                "herdr_transition.refused",
+                json!({ "device": device, "reason": reason }),
+            ),
+        }
     }
 }
 
@@ -95,9 +152,12 @@ fn before_core_at(place: &Place, state_dir: &Path, node: &str) -> Look {
         let moved = herdr_import::moved(&place.engine_dir)?;
         let given = herdr_import::adopt(
             state_dir,
-            node,
-            &place.save.socket.to_string_lossy(),
-            &place.engine_dir,
+            &herdr_import::Handover {
+                machine: node,
+                device: node,
+                from_scope: &place.save.socket.to_string_lossy(),
+                to_scope: &place.engine_dir.to_string_lossy(),
+            },
             &moved,
         )?;
         if given > 0 {
@@ -303,6 +363,10 @@ impl herdr_import::Machine for LocalMachine {
             log("herdr_transition.refused", json!({ "reason": reason }));
         }
     }
+
+    fn restart(&self) {
+        self.restart.notify_one();
+    }
 }
 
 /// `hide import herdr [--yes]` (B17): what the core offers for this
@@ -395,6 +459,48 @@ mod tests {
         .unwrap();
         herdr_core::delivery::ledger::save(&hide_kit::layout::delivery_ledger(state), &ledger)
             .unwrap();
+    }
+
+    // D-10, B18: a device's move, asked with the save its node read, is made
+    // at the next start before any link is up; its registration keeps the
+    // device's id as its scope and takes its pane's id, and a later start
+    // moves nothing again.
+    #[test]
+    fn a_device_s_asked_move_is_made_at_the_next_start_with_the_save_its_node_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let (place, state) = place(dir.path());
+        registered(&state, "m1", Path::new("d1"));
+        let engine_dir = hide_kit::layout::device_engine_dir(&state, "d1").unwrap();
+        herdr_import::commit(&engine_dir).unwrap();
+        herdr_import::keep_save(
+            &engine_dir,
+            &herdr_import::KeptSave {
+                machine: "m1".into(),
+                save: place.fetch(),
+            },
+        )
+        .unwrap();
+        herdr_import::ask(&engine_dir, herdr_import::Asked { resume: true }).unwrap();
+
+        devices_before_core(&state);
+        assert_eq!(
+            herdr_import::moved(&engine_dir).unwrap(),
+            ["w1".to_owned(), "w2".to_owned()].into()
+        );
+        assert_eq!(herdr_import::kept_save(&engine_dir).unwrap(), None);
+        let ledger =
+            herdr_core::delivery::ledger::load(&hide_kit::layout::delivery_ledger(&state)).unwrap();
+        assert_eq!(
+            (
+                ledger.agents[0].host_scope.as_str(),
+                ledger.agents[0].instance.as_str()
+            ),
+            ("d1", "w1:p1")
+        );
+        devices_before_core(&state);
+        assert_eq!(herdr_import::asked(&engine_dir).unwrap(), None);
+        // This machine's save is not the device's: it is still offered.
+        assert!(matches!(before_core_at(&place, &state, "mac"), Look::Offer(_)));
     }
 
     fn told(restart: &tokio::sync::Notify) -> bool {

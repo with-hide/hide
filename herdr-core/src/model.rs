@@ -6815,6 +6815,9 @@ pub struct StatusSnapshot {
     /// engine (PRD engine-bundle-4-herdr-removal); absent while there is
     /// nothing to show.
     pub herdr_import: Option<HerdrImportSnapshot>,
+    /// What each device of that engine offers, on the link its engine
+    /// opened on (B18), each naming its `device`.
+    pub herdr_import_devices: Vec<HerdrImportSnapshot>,
     pub herdr_versions: Option<HerdrVersionsSnapshot>,
     pub remote: Vec<RemoteStatusSnapshot>,
     pub environment: Vec<EnvironmentStatusSnapshot>,
@@ -7342,6 +7345,9 @@ pub struct HerdrImportSnapshot {
     pub reason: Option<String>,
     /// The workspaces the last move left out, with why (B11).
     pub refused: Vec<HerdrImportRefusedSnapshot>,
+    /// The device whose save this is; absent for this machine's (B18).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
 }
 
 /// A workspace a move left out.
@@ -7634,6 +7640,7 @@ impl Snapshot {
                 },
                 herdr_takeover: None,
                 herdr_import: None,
+                herdr_import_devices: Vec::new(),
                 herdr_versions: None,
                 remote: Vec::new(),
                 environment: Vec::new(),

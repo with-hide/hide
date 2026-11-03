@@ -1,16 +1,19 @@
-//! What the screen offers for moving this machine's Herdr save into the
-//! core's own engine, and the move itself (PRD engine-bundle-4-herdr-removal
-//! D-6 to D-8, B2 to B5, B11, B14 to B17).
+//! What the screen offers for moving a machine's Herdr save into the core's
+//! own engine, and the move itself (PRD engine-bundle-4-herdr-removal D-6 to
+//! D-8, D-10, B2 to B5, B11, B14 to B18).
 //!
-//! `hided` installs the [`Machine`] that reads the save and the server on
-//! its socket and makes the move, only on a core that runs its own engine;
-//! the core asks it on a worker of its own, one call at a time, when it is
-//! installed and when the operator asks, never under the runtime lock. What
-//! it last saw decides `status.herdr_import`. A move that is asked for has
-//! the core role start again (D-7), so the step shows it moving until this
-//! core stops; one that could not be made is looked at again, and the
-//! record's result says why.
+//! `hided` installs the [`Machine`] that reads this machine's save and the
+//! server on its socket and makes the move, only on a core that runs its own
+//! engine; a device of that engine gets one of its own on each link its
+//! engine opens on (`herdr_import::device`), whose node reads and stops for
+//! it. The core asks each on a worker of its own, one call at a time per
+//! machine, never under the runtime lock. What each last saw decides
+//! `status.herdr_import` and `status.herdr_import_devices`. A move that is
+//! asked for has the core role start again (D-7), so the step shows it
+//! moving until this core stops; one that could not be made is looked at
+//! again, and the record's result says why.
 
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, Weak};
 use std::thread;
 
@@ -19,10 +22,18 @@ use crate::handle::ChangeNotifier;
 use crate::herdr_import::{Look, Machine, Outcome, Seen, Server, Take, Taken};
 use crate::model::{HerdrImportRefusedSnapshot, HerdrImportSnapshot};
 
-/// The installed machine and the one call it is making.
+/// Whose save: this machine's (`None`) or a device's, by its id.
+type Place = Option<String>;
+
+/// The installed machines and the one call each is making.
 #[derive(Default)]
 pub(super) struct Import {
     worker: Option<Worker>,
+    places: BTreeMap<Place, PlaceImport>,
+}
+
+struct PlaceImport {
+    machine: Arc<dyn Machine>,
     looking: bool,
     /// The operator asked to look again while a look or a move ran.
     look_again: bool,
@@ -33,14 +44,27 @@ pub(super) struct Import {
     seen: Option<Seen>,
 }
 
+impl PlaceImport {
+    fn new(machine: Arc<dyn Machine>, seen: Option<Seen>) -> Self {
+        Self {
+            machine,
+            looking: false,
+            look_again: false,
+            taking: false,
+            seen,
+        }
+    }
+}
+
 #[derive(Clone)]
 struct Worker {
-    machine: Arc<dyn Machine>,
+    /// This machine's, whose restart starts the core role again.
+    local: Arc<dyn Machine>,
     runtime: Weak<Mutex<Runtime>>,
     notifier: ChangeNotifier,
 }
 
-/// What the operator pressed (`herdr_import {action}`).
+/// What the operator pressed (`herdr_import {action, device}`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum ImportAction {
@@ -62,140 +86,219 @@ impl Runtime {
         notifier: ChangeNotifier,
     ) {
         self.herdr_import.worker = Some(Worker {
-            machine,
+            local: Arc::clone(&machine),
             runtime,
             notifier,
         });
-        self.look_at_herdr_save();
+        self.herdr_import
+            .places
+            .insert(None, PlaceImport::new(machine, None));
+        self.look_at_herdr_save(&None);
     }
 
-    fn look_at_herdr_save(&mut self) {
-        let import = &mut self.herdr_import;
-        let Some(worker) = import.worker.clone() else {
+    /// This machine's mover, which a device's restarts the core role with;
+    /// `None` on a core that does not run its own engine.
+    pub(super) fn herdr_import_local(&self) -> Option<Arc<dyn Machine>> {
+        self.herdr_import
+            .worker
+            .as_ref()
+            .map(|worker| Arc::clone(&worker.local))
+    }
+
+    /// The device's engine opened on a link whose look at its save saw
+    /// `seen`: `machine` answers for it until that link ends (B18).
+    pub(super) fn install_device_herdr_import(
+        &mut self,
+        device: &str,
+        machine: Arc<dyn Machine>,
+        seen: Seen,
+    ) -> bool {
+        self.herdr_import.places.insert(
+            Some(device.to_owned()),
+            PlaceImport::new(machine, Some(seen)),
+        );
+        self.show_herdr_import()
+    }
+
+    /// The device's link ended, and its mover with it; a move it asked for
+    /// stands in its record.
+    pub(super) fn retire_device_herdr_import(&mut self, device: &str) -> bool {
+        self.herdr_import
+            .places
+            .remove(&Some(device.to_owned()))
+            .is_some()
+            && self.show_herdr_import()
+    }
+
+    fn look_at_herdr_save(&mut self, place: &Place) {
+        let Some(worker) = self.herdr_import.worker.clone() else {
             return;
         };
-        if import.looking || import.taking {
-            import.look_again = true;
+        let Some(entry) = self.herdr_import.places.get_mut(place) else {
+            return;
+        };
+        if entry.looking || entry.taking {
+            entry.look_again = true;
             return;
         }
-        import.looking = true;
+        entry.looking = true;
+        let machine = Arc::clone(&entry.machine);
+        let key = place.clone();
         let spawned = thread::Builder::new()
             .name("herdr-core-herdr-import-look".into())
             .spawn(move || {
                 let seen = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    worker.machine.look()
+                    machine.look()
                 }))
                 .unwrap_or_else(|_| Seen {
                     look: Look::Unreadable("the look stopped unexpectedly".into()),
                     ..Seen::default()
                 });
-                answer(&worker, |runtime| runtime.ingest_herdr_save(seen));
+                answer(&worker, |runtime| {
+                    runtime.ingest_herdr_save_of(&key, &machine, seen)
+                });
             });
         if let Err(error) = spawned {
-            self.herdr_import.looking = false;
+            if let Some(entry) = self.herdr_import.places.get_mut(place) {
+                entry.looking = false;
+            }
             crate::diagnostic!(serde_json::json!({
                 "component": "herdr_import",
                 "kind": "herdr_import.look_failed",
+                "device": place,
                 "message": error.to_string(),
             }));
         }
     }
 
-    pub(super) fn ingest_herdr_save(&mut self, seen: Seen) -> bool {
-        let import = &mut self.herdr_import;
-        import.looking = false;
-        import.seen = Some(seen);
+    /// The place's look answered, unless the mover that looked was let go
+    /// since.
+    fn ingest_herdr_save_of(
+        &mut self,
+        place: &Place,
+        machine: &Arc<dyn Machine>,
+        seen: Seen,
+    ) -> bool {
+        let Some(entry) = self
+            .herdr_import
+            .places
+            .get_mut(place)
+            .filter(|entry| Arc::ptr_eq(&entry.machine, machine))
+        else {
+            return false;
+        };
+        entry.looking = false;
+        entry.seen = Some(seen);
+        let again = std::mem::take(&mut entry.look_again);
         let changed = self.show_herdr_import();
-        if std::mem::take(&mut self.herdr_import.look_again) {
-            self.look_at_herdr_save();
+        if again {
+            self.look_at_herdr_save(place);
         }
         changed
     }
 
-    pub(super) fn herdr_import_action(&mut self, action: ImportAction) -> bool {
+    pub(super) fn herdr_import_action(
+        &mut self,
+        action: ImportAction,
+        device: Option<String>,
+    ) -> bool {
         if self.herdr_import.worker.is_none() {
-            return refused(action, "this core does not run its own engine");
+            return refused(action, &device, "this core does not run its own engine");
         }
+        let Some(entry) = self.herdr_import.places.get_mut(&device) else {
+            return refused(action, &device, "no such machine offers a move");
+        };
         match action {
             ImportAction::Look => {
-                self.look_at_herdr_save();
+                self.look_at_herdr_save(&device);
                 false
             }
             ImportAction::Continue => {
-                let Some(worker) = self.herdr_import.worker.clone() else {
-                    return false;
-                };
-                if self
-                    .herdr_import
+                if entry
                     .seen
                     .as_ref()
                     .is_none_or(|seen| seen.outcome.is_none())
                 {
-                    return refused(action, "no result waits to be read");
+                    return refused(action, &device, "no result waits to be read");
                 }
-                if let Some(seen) = &mut self.herdr_import.seen {
+                if let Some(seen) = &mut entry.seen {
                     seen.outcome = None;
                 }
+                let machine = Arc::clone(&entry.machine);
                 let spawned = thread::Builder::new()
                     .name("herdr-core-herdr-import-dismiss".into())
-                    .spawn(move || worker.machine.dismiss());
+                    .spawn(move || machine.dismiss());
                 if let Err(error) = spawned {
                     crate::diagnostic!(serde_json::json!({
                         "component": "herdr_import",
                         "kind": "herdr_import.dismiss_failed",
+                        "device": device,
                         "message": error.to_string(),
                     }));
                 }
                 self.show_herdr_import()
             }
             ImportAction::Move | ImportAction::Import => {
-                if self.herdr_import.taking {
+                if entry.taking {
                     return false;
                 }
                 let (kind, take) = match action {
                     ImportAction::Move => (KIND_MOVE, Take::Move),
                     _ => (KIND_IMPORT, Take::Import),
                 };
-                let offered = self
-                    .snapshot
-                    .status
-                    .herdr_import
+                let offered = entry
+                    .seen
                     .as_ref()
+                    .and_then(|seen| shown(seen, false))
                     .is_some_and(|shown| {
                         shown.kind == kind && (shown.workspaces > 0 || shown.waiting > 0)
                     });
                 if !offered {
-                    return refused(action, "no such move is offered");
+                    return refused(action, &device, "no such move is offered");
                 }
-                self.take_herdr_save(take)
+                self.take_herdr_save(&device, take)
             }
         }
     }
 
     /// Asks for the move on a worker off the lock and shows it moving.
-    fn take_herdr_save(&mut self, take: Take) -> bool {
+    fn take_herdr_save(&mut self, place: &Place, take: Take) -> bool {
         let Some(worker) = self.herdr_import.worker.clone() else {
             return false;
         };
-        self.herdr_import.taking = true;
+        let Some(entry) = self.herdr_import.places.get_mut(place) else {
+            return false;
+        };
+        entry.taking = true;
+        let machine = Arc::clone(&entry.machine);
+        let key = place.clone();
         let spawned = thread::Builder::new()
             .name("herdr-core-herdr-import-take".into())
             .spawn(move || {
                 // A move that panics still answers, so the step is not held
                 // on its spinner.
                 let taken = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    worker.machine.take(take)
+                    machine.take(take)
                 }))
                 .unwrap_or_else(|_| Taken::Failed("the move stopped unexpectedly".into()));
-                answer(&worker, |runtime| runtime.ingest_herdr_take(take, taken));
+                answer(&worker, |runtime| {
+                    runtime.ingest_herdr_take_of(&key, &machine, take, taken)
+                });
             });
         if let Err(error) = spawned {
-            return self.ingest_herdr_take(take, Taken::Failed(error.to_string()));
+            let machine = Arc::clone(&self.herdr_import.places[place].machine);
+            return self.ingest_herdr_take_of(place, &machine, take, Taken::Failed(error.to_string()));
         }
         self.show_herdr_import()
     }
 
-    pub(super) fn ingest_herdr_take(&mut self, take: Take, taken: Taken) -> bool {
+    fn ingest_herdr_take_of(
+        &mut self,
+        place: &Place,
+        machine: &Arc<dyn Machine>,
+        take: Take,
+        taken: Taken,
+    ) -> bool {
         let outcome = match &taken {
             Taken::Restarting => "restarting",
             Taken::NotStopped => "not_stopped",
@@ -204,6 +307,7 @@ impl Runtime {
         crate::diagnostic!(serde_json::json!({
             "component": "herdr_import",
             "kind": "herdr_import.take",
+            "device": place,
             "take": format!("{take:?}"),
             "outcome": outcome,
             "message": match &taken {
@@ -216,24 +320,69 @@ impl Runtime {
         if taken == Taken::Restarting {
             return false;
         }
-        self.herdr_import.taking = false;
+        let Some(entry) = self
+            .herdr_import
+            .places
+            .get_mut(place)
+            .filter(|entry| Arc::ptr_eq(&entry.machine, machine))
+        else {
+            return false;
+        };
+        entry.taking = false;
+        entry.look_again = false;
         let changed = self.show_herdr_import();
-        self.herdr_import.look_again = false;
-        self.look_at_herdr_save();
+        self.look_at_herdr_save(place);
         changed
     }
 
     fn show_herdr_import(&mut self) -> bool {
-        let next = self
-            .herdr_import
-            .seen
-            .as_ref()
-            .and_then(|seen| shown(seen, self.herdr_import.taking));
-        if self.snapshot.status.herdr_import == next {
+        let mut here = None;
+        let mut devices = Vec::new();
+        for (place, entry) in &self.herdr_import.places {
+            let Some(mut shown) = entry
+                .seen
+                .as_ref()
+                .and_then(|seen| shown(seen, entry.taking))
+            else {
+                continue;
+            };
+            match place {
+                None => here = Some(shown),
+                Some(device) => {
+                    shown.device = Some(device.clone());
+                    devices.push(shown);
+                }
+            }
+        }
+        let status = &mut self.snapshot.status;
+        if status.herdr_import == here && status.herdr_import_devices == devices {
             return false;
         }
-        self.snapshot.status.herdr_import = next;
+        status.herdr_import = here;
+        status.herdr_import_devices = devices;
         true
+    }
+}
+
+#[cfg(test)]
+impl Runtime {
+    /// This machine's look answered.
+    pub(super) fn ingest_herdr_save(&mut self, seen: Seen) -> bool {
+        let machine = Arc::clone(&self.herdr_import.places[&None].machine);
+        self.ingest_herdr_save_of(&None, &machine, seen)
+    }
+
+    /// This machine's move answered.
+    pub(super) fn ingest_herdr_take(&mut self, take: Take, taken: Taken) -> bool {
+        let machine = Arc::clone(&self.herdr_import.places[&None].machine);
+        self.ingest_herdr_take_of(&None, &machine, take, taken)
+    }
+
+    /// The device's move answered.
+    pub(super) fn ingest_device_herdr_take(&mut self, device: &str, take: Take, taken: Taken) -> bool {
+        let place = Some(device.to_owned());
+        let machine = Arc::clone(&self.herdr_import.places[&place].machine);
+        self.ingest_herdr_take_of(&place, &machine, take, taken)
     }
 }
 
@@ -269,6 +418,7 @@ fn shown(seen: &Seen, taking: bool) -> Option<HerdrImportSnapshot> {
         failure: None,
         reason: None,
         refused,
+        device: None,
     };
     match &seen.look {
         Look::Unreadable(reason) => Some(HerdrImportSnapshot {
@@ -325,11 +475,12 @@ fn answer(worker: &Worker, ingest: impl FnOnce(&mut Runtime) -> bool) {
     }
 }
 
-fn refused(action: ImportAction, reason: &str) -> bool {
+fn refused(action: ImportAction, device: &Place, reason: &str) -> bool {
     crate::diagnostic!(serde_json::json!({
         "component": "herdr_import",
         "kind": "herdr_import.refused",
         "action": format!("{action:?}"),
+        "device": device,
         "reason": reason,
     }));
     false

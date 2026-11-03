@@ -1455,6 +1455,9 @@ pub(super) struct HerdrTakeoverPayload {
 #[derive(Debug, Deserialize)]
 pub(super) struct HerdrImportPayload {
     pub(super) action: super::herdr_import::ImportAction,
+    /// The device whose save it is; absent for this machine's (B18).
+    #[serde(default)]
+    pub(super) device: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -4211,7 +4214,7 @@ impl Runtime {
             }
             Event::FirstRunBack(payload) => self.back_first_run(payload.from),
             Event::HerdrTakeover(payload) => self.herdr_takeover_action(payload.action),
-            Event::HerdrImport(payload) => self.herdr_import_action(payload.action),
+            Event::HerdrImport(payload) => self.herdr_import_action(payload.action, payload.device),
             Event::Desk(event) => self.desk_event(event),
             Event::FirstRunDraft(payload) => self.update_first_run_draft(payload),
             Event::DesktopNotificationsSet(payload) => self
