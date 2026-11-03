@@ -22,8 +22,8 @@ use hide_holder_protocol::{Answer, Appearance, Foreground, OpenError, Size, Them
 use hide_kit::panes::{CloseError, StartRefusal, StartRequest, Started};
 use hide_node_link::holders::{
     HolderError, HolderForeground, HolderIntent, HolderProcesses, HolderProof, HolderRecovery,
-    HolderReservation, HolderScroll, HolderStart, PaneEnded, PaneFactsSink, PaneHolders, PaneInput,
-    ScreenRules, StyledRead, UNSUPPORTED_HOLDER,
+    HolderRequest, HolderReservation, HolderScroll, HolderStart, PaneEnded, PaneFactsSink,
+    PaneHolders, PaneInput, ScreenRules, StyledRead, UNSUPPORTED_HOLDER,
 };
 
 /// This machine's holders and the service that shows their screens.
@@ -32,6 +32,7 @@ pub struct LocalPanes {
     service: Arc<Service>,
     shell: PaneShell,
     owner: Option<Arc<hide_kit::panes::Owner>>,
+    next_request: std::sync::atomic::AtomicU64,
 }
 
 /// How a pane started with no program runs this machine's shell.
@@ -80,6 +81,7 @@ impl LocalPanes {
             service,
             shell,
             owner: None,
+            next_request: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -175,6 +177,19 @@ impl LocalPanes {
         })
     }
 
+    fn admit(
+        &self,
+        request: HolderRequest,
+        intent: &HolderIntent,
+    ) -> Result<hide_kit::panes::Request<'_>, HolderError> {
+        self.owner()?
+            .admit(request.owner, request.number, &intent.pane, &intent.digest)
+            .map_err(|message| HolderError::Refused {
+                code: "pane_request_refused".to_owned(),
+                message,
+            })
+    }
+
     fn owner(&self) -> Result<&hide_kit::panes::Owner, HolderError> {
         self.owner.as_deref().ok_or_else(|| HolderError::Refused {
             code: "pane_owner_unavailable".to_owned(),
@@ -208,19 +223,62 @@ impl PaneHolders for LocalPanes {
             service: Arc::clone(&self.service),
             shell: self.shell.clone(),
             owner: Some(owner),
+            next_request: std::sync::atomic::AtomicU64::new(0),
         }))
     }
 
+    fn request(&self) -> Result<HolderRequest, HolderError> {
+        let owner = self.owner()?;
+        let number = self
+            .next_request
+            .fetch_update(
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+                |number| number.checked_add(1),
+            )
+            .map_err(|_| HolderError::Refused {
+                code: "pane_requests_exhausted".to_owned(),
+                message: "pane request numbers are exhausted".to_owned(),
+            })?
+            + 1;
+        Ok(HolderRequest {
+            owner: owner.incarnation(),
+            number,
+        })
+    }
+
+    fn retire(&self, request: HolderRequest) -> Result<(), HolderError> {
+        match self.owner()?.retire(request.owner, request.number) {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(HolderError::Unreachable {
+                message: "the pane request still has workers draining".to_owned(),
+            }),
+            Err(message) => Err(HolderError::Refused {
+                code: "pane_request_refused".to_owned(),
+                message,
+            }),
+        }
+    }
+
     fn start(&self, start: &HolderStart) -> Result<(), HolderError> {
-        let reserved = self.reserve(start, None)?;
-        self.start_reserved(start, reserved)
+        let request = self.request()?;
+        let result = self
+            .reserve(start, None, request)
+            .and_then(|reserved| self.start_reserved(start, reserved, request));
+        if !matches!(result, Err(HolderError::Unreachable { .. })) {
+            self.retire(request)?;
+        }
+        result
     }
 
     fn reserve(
         &self,
         start: &HolderStart,
         previous: Option<u64>,
+        request: HolderRequest,
     ) -> Result<HolderReservation, HolderError> {
+        let intent = start.intent()?;
+        let guard = self.admit(request, &intent)?;
         // Validate without expanding the shell or modifying configuration.
         Size::checked(start.rows, start.cols).map_err(|message| HolderError::Refused {
             code: "invalid_size".to_owned(),
@@ -236,9 +294,8 @@ impl PaneHolders for LocalPanes {
                 message: "the pane's program or notice is invalid".to_owned(),
             });
         }
-        let intent = start.intent()?;
         self.holders
-            .reserve(self.owner()?, &intent, previous)
+            .reserve(&guard, &intent, previous)
             .map_err(start_refusal)
     }
 
@@ -246,11 +303,13 @@ impl PaneHolders for LocalPanes {
         &self,
         start: &HolderStart,
         reserved: HolderReservation,
+        request: HolderRequest,
     ) -> Result<(), HolderError> {
         let intent = start.intent()?;
+        let guard = self.admit(request, &intent)?;
         match self
             .holders
-            .start_reserved(self.owner()?, &self.service, &intent, reserved, || {
+            .start_reserved(&guard, &self.service, &intent, reserved, || {
                 self.expand(start)
                     .map_err(|error| StartRefusal::Failed(format!("{error:?}")))
             }) {
@@ -265,9 +324,10 @@ impl PaneHolders for LocalPanes {
         }
     }
 
-    fn cancel(&self, intent: &HolderIntent) -> Result<(), HolderError> {
+    fn cancel(&self, intent: &HolderIntent, request: HolderRequest) -> Result<(), HolderError> {
+        let guard = self.admit(request, intent)?;
         self.holders
-            .cancel(self.owner()?, &self.service, intent)
+            .cancel(&guard, &self.service, intent)
             .map_err(start_refusal)
     }
 

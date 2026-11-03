@@ -136,10 +136,6 @@ pub(super) struct Pane {
 }
 
 impl Pane {
-    pub(super) fn is_starting(&self) -> bool {
-        self.starting.as_ref().is_some_and(|start| start.pending())
-    }
-
     pub(super) fn new(cwd: &str, label: Option<&str>) -> Self {
         Self {
             cwd: cwd.to_owned(),

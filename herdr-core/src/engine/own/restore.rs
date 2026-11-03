@@ -43,7 +43,7 @@ use super::shell_line::{self, Shell};
 use super::starts::STARTS_AT_ONCE;
 use super::store::{self, Read};
 use super::topology::{Pane, Topology};
-use super::{Env, OwnEngine};
+use super::{EngineError, Env, OwnEngine, holder_error};
 use crate::agent_start::{ShellStart, StartError};
 use crate::node_access::{NodeLink, call_as};
 
@@ -94,8 +94,13 @@ pub(super) fn start(engine: OwnEngine<'static>, saved: BTreeSet<String>) -> Resu
             // its owner has let the engine go (a device's, with its link).
             let shared = std::sync::Arc::downgrade(&engine.shared);
             drop(engine);
-            gate.finish();
-            OwnEngine::resume_agents(&shared, &resumes);
+            match resumes {
+                Ok(resumes) => {
+                    gate.finish(Ok(()));
+                    OwnEngine::resume_agents(&shared, &resumes);
+                }
+                Err(error) => gate.finish(Err(error)),
+            }
         })
         .map(|_| ())
         .map_err(|error| format!("the session restore thread could not start: {error}"))
@@ -108,6 +113,7 @@ struct Restart {
     pane: String,
     cwd: String,
     agent: Option<PaneAgent>,
+    previous: Option<u64>,
 }
 
 /// What a restarted pane's agent gets: its resume, typed once its shell is
@@ -192,7 +198,7 @@ fn conversation(agent: &PaneAgent, cwd: &str) -> (String, String) {
 }
 
 impl OwnEngine<'static> {
-    fn restore(&self, saved: &BTreeSet<String>) -> Vec<Resume> {
+    fn restore(&self, saved: &BTreeSet<String>) -> Result<Vec<Resume>, EngineError> {
         let recovery = match self.shared.holders.recovered(RECOVERY_WAIT) {
             Ok(recovery) => recovery,
             Err(error) => {
@@ -205,10 +211,10 @@ impl OwnEngine<'static> {
                     saved,
                     &format!("the node did not say which panes still run: {error}"),
                 );
-                return Vec::new();
+                return Err(holder_error(error));
             }
         };
-        self.adopt(saved, &recovery)
+        Ok(self.adopt(saved, &recovery))
     }
 
     /// Lays the panes `saved` names out around what `recovery` found: the
@@ -235,10 +241,30 @@ impl OwnEngine<'static> {
                 .filter(|id| saved.contains(*id) && topology.remove_pane(id).is_ok())
                 .cloned()
                 .collect();
+            // Existence is durable before the coalesced layout save. Gather
+            // those recorded IDs before selecting the one bounded restart set.
+            let missing = recovery
+                .recoverable
+                .iter()
+                .filter_map(|record| {
+                    if topology.pane(&record.pane).is_ok() {
+                        return None;
+                    }
+                    record
+                        .cwd
+                        .as_ref()
+                        .map(|cwd| (record.pane.clone(), Pane::new(cwd, None)))
+                })
+                .collect();
+            topology.gather(missing, GATHERED_LABEL);
             let placed: BTreeSet<String> = topology.panes().map(|(id, _)| id.to_owned()).collect();
             let restarted: Vec<String> = topology
                 .panes()
-                .filter(|(id, _)| saved.contains(*id) && !present.contains(id))
+                .filter(|(id, _)| {
+                    (saved.contains(*id)
+                        || recovery.recoverable.iter().any(|record| record.pane == *id))
+                        && !present.contains(id)
+                })
                 .map(|(id, _)| id.to_owned())
                 .collect();
             // A restarted pane's agent ended with its holder: the pane is a
@@ -250,6 +276,11 @@ impl OwnEngine<'static> {
                     Some(Restart {
                         cwd: pane.cwd.clone(),
                         agent: pane.agent.take(),
+                        previous: recovery
+                            .recoverable
+                            .iter()
+                            .find(|record| record.pane == id)
+                            .map(|record| record.incarnation),
                         pane: id,
                     })
                 })
@@ -281,6 +312,11 @@ impl OwnEngine<'static> {
                     Some(Restart {
                         cwd: pane.cwd.clone(),
                         agent: pane.agent.take(),
+                        previous: recovery
+                            .recoverable
+                            .iter()
+                            .find(|record| record.pane == id)
+                            .map(|record| record.incarnation),
                         pane: id,
                     })
                 })
@@ -415,12 +451,13 @@ impl OwnEngine<'static> {
                             (None, _) => None,
                         };
                         let resumable = notice.is_none() && matches!(plan, Some(Plan::Resume(_)));
-                        match self.start_pane(
+                        match self.start_pane_replacing(
                             &restart.pane,
                             None,
                             &cwd,
                             Env::new(),
                             notice.as_deref(),
+                            restart.previous,
                         ) {
                             Ok(()) if resumable => {
                                 started

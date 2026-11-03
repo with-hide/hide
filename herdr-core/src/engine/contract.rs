@@ -355,7 +355,7 @@ fn the_pinned_herdr_meets_the_engine_contract() {
 /// Windows) in a folder of their own; the holders end with it.
 struct BuiltHolders {
     engine: super::own::OwnEngine<'static>,
-    holders: std::sync::Arc<hide_node::terminal::holder::Holders>,
+    panes: std::sync::Arc<dyn hide_node_link::holders::PaneHolders>,
     service: std::sync::Arc<hide_node::terminal::Service>,
     folder: String,
     _root: tempfile::TempDir,
@@ -446,8 +446,8 @@ impl BuiltHolders {
             .recovered(Duration::from_secs(120))
             .expect("the contract acquires pane ownership");
         Self {
-            engine: super::own::OwnEngine::new(linked),
-            holders,
+            engine: super::own::OwnEngine::new(std::sync::Arc::clone(&linked)),
+            panes: linked,
             service: terminals.service,
             folder: hide_platform::path::to_wire(&folder).unwrap(),
             _root: root,
@@ -460,7 +460,7 @@ impl BuiltHolders {
         let left = self.engine.pane_folders(WAIT).expect("the session reads");
         self.engine.stop();
         for (pane, _) in left {
-            let _ = self.holders.terminate(&self.service, &pane);
+            let _ = self.panes.terminate(&pane);
         }
     }
 }

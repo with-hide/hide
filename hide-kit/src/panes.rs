@@ -49,9 +49,11 @@ use crate::{holders, layout};
 
 mod ownership;
 pub use ownership::Owner;
+mod requests;
 mod reservation;
 #[cfg(test)]
 use hide_holder_protocol::{PROTOCOL_VERSION, record::RECORD_FORMAT};
+pub use requests::Request;
 
 /// The most holders a state folder keeps: every record that is not ended
 /// counts, and so does one that cannot be read, since it may name a holder.
@@ -513,15 +515,97 @@ impl Panes {
                 Earlier::Over | Earlier::Unsettled => break Some(existing.incarnation),
             }
         };
-        let reserved = self.reserve(owner, &request.pane, &digest, &cwd, previous)?;
-        self.start_reserved(
-            owner,
+        // A concurrent synchronous caller joins the original numbered
+        // request; after it retires, a running record answers without any
+        // new start. Product callers carry their number over the node link.
+        let existing = self
+            .record(&request.pane)
+            .map_err(StartRefusal::RecordUnreadable)?;
+        if let Some(record) = &existing
+            && record.phase == Phase::Running
+            && record.spec == digest
+        {
+            return Ok(Started::Existing(record.clone()));
+        }
+        if let Some(record) = &existing
+            && record.phase == Phase::Ended
+            && record.reservation.is_some()
+        {
+            return Err(StartRefusal::Conflict(Box::new(record.clone())));
+        }
+        let number = existing
+            .as_ref()
+            .and_then(|record| record.reservation.as_ref())
+            .filter(|intent| intent.owner == owner.incarnation() && intent.request == digest)
+            .map(|intent| intent.number);
+        let admitted = match number {
+            Some(number) if number != 0 => {
+                owner.admit(owner.incarnation(), number, &request.pane, &digest)
+            }
+            _ => owner.issue(&request.pane, &digest),
+        };
+        let guard = match admitted {
+            Ok(guard) => guard,
+            Err(why) if number.is_some() => {
+                // The concurrent original may have completed and retired
+                // after our Preparing read. Adoption performs no mutation.
+                let current = self
+                    .record(&request.pane)
+                    .map_err(StartRefusal::RecordUnreadable)?;
+                if let Some(current) = current
+                    && current.phase == Phase::Running
+                    && current.spec == digest
+                {
+                    return Ok(Started::Existing(current));
+                }
+                return Err(StartRefusal::Uncertain(why));
+            }
+            Err(why) => return Err(StartRefusal::Failed(why)),
+        };
+        let reserved = match self.reserve(&guard, &request.pane, &digest, &cwd, previous) {
+            Ok(reserved) => reserved,
+            Err(StartRefusal::Conflict(record))
+                if record.phase != Phase::Ended
+                    && record.reservation.as_ref().is_some_and(|intent| {
+                        intent.owner == owner.incarnation() && intent.request == digest
+                    }) =>
+            {
+                // Another synchronous caller admitted this intent first.
+                // This number made no storage change and has no later work.
+                owner
+                    .retire(owner.incarnation(), guard.number())
+                    .map_err(StartRefusal::Failed)?;
+                return if record.phase == Phase::Running {
+                    Ok(Started::Existing(*record))
+                } else {
+                    Err(StartRefusal::Uncertain(
+                        "the original holder is still starting".to_owned(),
+                    ))
+                };
+            }
+            Err(error) => {
+                if !matches!(error, StartRefusal::Uncertain(_)) {
+                    owner
+                        .retire(owner.incarnation(), guard.number())
+                        .map_err(StartRefusal::Failed)?;
+                }
+                return Err(error);
+            }
+        };
+        let result = self.start_reserved(
+            &guard,
             &request.pane,
             reserved.incarnation,
             &digest,
             source,
             || Ok(request.clone()),
-        )
+        );
+        if !matches!(result, Err(StartRefusal::Uncertain(_))) {
+            owner
+                .retire(owner.incarnation(), guard.number())
+                .map_err(StartRefusal::Failed)?;
+        }
+        result
     }
 
     /// Settle a legacy start before explicitly replacing its incarnation.
@@ -900,11 +984,9 @@ impl Panes {
         if current.phase != Phase::Ended {
             return Err(ForgetRefusal::NotEnded(current.phase));
         }
-        if current
-            .reservation
-            .as_ref()
-            .is_some_and(|intent| intent.owner == owner.incarnation())
-        {
+        if current.reservation.as_ref().is_some_and(|intent| {
+            intent.owner == owner.incarnation() && owner.request_pending(intent.number)
+        }) {
             return Err(ForgetRefusal::Failed(
                 "the current owner can still send this reservation".to_owned(),
             ));
@@ -956,10 +1038,10 @@ impl Panes {
             match read {
                 Ok(record)
                     if record.phase == Phase::Ended
-                        && !record
-                            .reservation
-                            .as_ref()
-                            .is_some_and(|intent| intent.owner == owner.incarnation()) =>
+                        && !record.reservation.as_ref().is_some_and(|intent| {
+                            intent.owner == owner.incarnation()
+                                && owner.request_pending(intent.number)
+                        }) =>
                 {
                     ended.push((
                         record.end.as_ref().map_or(0, |end| end.at_unix_ms),

@@ -1019,9 +1019,12 @@ fn spawn(
             // engine-bundle-3-core-owns D-11). Herdr names a pane only once
             // it runs, so its pane is recorded below, after the call.
             let engine = engine.gated(crate::engine::Gate::placing(SpawnPlacement {
-                client,
-                authority,
-                actor,
+                client: client.clone(),
+                authority: Authority {
+                    caller: authority.caller.clone(),
+                    context: authority.context.clone(),
+                },
+                actor: actor.clone(),
                 spawn: reserved.id.clone(),
             }));
             // How the pane's shell says it has finished starting, recorded
@@ -1585,19 +1588,19 @@ fn spawn(
 /// runs anything ([`crate::engine::Placement`]): the record's mutation takes
 /// the delivery store's turn and the runtime's lock, never the engine's
 /// topology lock, which the engine let go before it asked.
-struct SpawnPlacement<'c> {
-    client: &'c Client,
-    authority: &'c Authority,
-    actor: &'c Actor,
+struct SpawnPlacement {
+    client: Client,
+    authority: Authority,
+    actor: Actor,
     spawn: String,
 }
 
-impl crate::engine::Placement for SpawnPlacement<'_> {
+impl crate::engine::Placement for SpawnPlacement {
     fn place(&self, pane: &str) -> Result<(), EngineError> {
         mutate(
-            self.client,
-            self.authority,
-            self.actor,
+            &self.client,
+            &self.authority,
+            &self.actor,
             Mutation::Place {
                 id: self.spawn.clone(),
                 pane: pane.to_owned(),
@@ -1612,9 +1615,9 @@ impl crate::engine::Placement for SpawnPlacement<'_> {
 
     fn withdraw(&self, pane: &str) {
         let withdrawn = mutate(
-            self.client,
-            self.authority,
-            self.actor,
+            &self.client,
+            &self.authority,
+            &self.actor,
             Mutation::Withdraw {
                 id: self.spawn.clone(),
                 pane: pane.to_owned(),

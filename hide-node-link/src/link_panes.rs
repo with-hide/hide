@@ -13,9 +13,9 @@ use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::Duration;
 
 use crate::holders::{
-    HolderError, HolderIntent, HolderProcesses, HolderProof, HolderRecovery, HolderReservation,
-    HolderScroll, HolderStart, PaneCall, PaneEnded, PaneFactsSink, PaneHolders, PaneInput,
-    PaneText, PaneWatchReport, ScreenRules, StyledRead,
+    HolderError, HolderIntent, HolderProcesses, HolderProof, HolderRecovery, HolderRequest,
+    HolderReservation, HolderScroll, HolderStart, PaneCall, PaneEnded, PaneFactsSink, PaneHolders,
+    PaneInput, PaneText, PaneWatchReport, ScreenRules, StyledRead,
 };
 use crate::link::{LinkAnswer, LinkError, NodeLink};
 use crate::protocol::{Call, ShellLaunch};
@@ -50,6 +50,7 @@ struct Inner {
     link: Arc<dyn NodeLink>,
     diagnose: Diagnose,
     sinks: Mutex<Sinks>,
+    requests: Mutex<(u64, u64)>,
     /// Raised when the engine lets go of these holders: the watch answers
     /// its next report with false and ends, and a watch waiting to open
     /// again is woken by `stop` and ends.
@@ -74,6 +75,7 @@ impl LinkPanes {
                 link,
                 diagnose,
                 sinks: Mutex::default(),
+                requests: Mutex::default(),
                 stopped: Mutex::new(false),
                 stop: Condvar::new(),
             }),
@@ -232,15 +234,46 @@ impl Inner {
 }
 
 impl PaneHolders for LinkPanes {
+    fn request(&self) -> Result<HolderRequest, HolderError> {
+        let mut issued = self
+            .inner
+            .requests
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if issued.0 == 0 {
+            return Err(HolderError::Refused {
+                code: "pane_owner_unavailable".to_owned(),
+                message: "pane recovery has not established its owner".to_owned(),
+            });
+        }
+        issued.1 = issued
+            .1
+            .checked_add(1)
+            .ok_or_else(|| HolderError::Refused {
+                code: "pane_requests_exhausted".to_owned(),
+                message: "pane request numbers are exhausted".to_owned(),
+            })?;
+        Ok(HolderRequest {
+            owner: issued.0,
+            number: issued.1,
+        })
+    }
+
+    fn retire(&self, request: HolderRequest) -> Result<(), HolderError> {
+        self.done(PaneCall::Retire { request }, ASK_WAIT)
+    }
+
     fn reserve(
         &self,
         start: &HolderStart,
         previous: Option<u64>,
+        request: HolderRequest,
     ) -> Result<HolderReservation, HolderError> {
         self.answer(
             PaneCall::Reserve {
                 start: start.clone(),
                 previous,
+                request,
             },
             ASK_WAIT,
         )
@@ -250,32 +283,37 @@ impl PaneHolders for LinkPanes {
         &self,
         start: &HolderStart,
         reserved: HolderReservation,
+        request: HolderRequest,
     ) -> Result<(), HolderError> {
         self.done(
             PaneCall::StartReserved {
                 start: start.clone(),
                 reserved,
+                request,
             },
             START_WAIT,
         )
     }
 
-    fn cancel(&self, intent: &HolderIntent) -> Result<(), HolderError> {
+    fn cancel(&self, intent: &HolderIntent, request: HolderRequest) -> Result<(), HolderError> {
         self.done(
             PaneCall::Cancel {
                 intent: intent.clone(),
+                request,
             },
             END_WAIT,
         )
     }
 
     fn start(&self, start: &HolderStart) -> Result<(), HolderError> {
-        self.done(
-            PaneCall::Start {
-                start: start.clone(),
-            },
-            START_WAIT,
-        )
+        let request = self.request()?;
+        let result = self
+            .reserve(start, None, request)
+            .and_then(|reserved| self.start_reserved(start, reserved, request));
+        if !matches!(result, Err(HolderError::Unreachable { .. })) {
+            self.retire(request)?;
+        }
+        result
     }
 
     fn shell_launch(&self) -> Option<ShellLaunch> {
@@ -393,12 +431,24 @@ impl PaneHolders for LinkPanes {
     }
 
     fn recovered(&self, timeout: Duration) -> Result<HolderRecovery, HolderError> {
-        self.answer(
+        let recovery: HolderRecovery = self.answer(
             PaneCall::Recovered {
                 timeout_ms: u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX),
             },
             timeout.saturating_add(ASK_WAIT),
-        )
+        )?;
+        let mut issued = self
+            .inner
+            .requests
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if recovery.owner == 0 || (issued.0 != 0 && issued.0 != recovery.owner) {
+            return Err(HolderError::Unreachable {
+                message: "the recovered pane owner changed on this link".to_owned(),
+            });
+        }
+        issued.0 = recovery.owner;
+        Ok(recovery)
     }
 
     fn watch_ends(&self, ended: PaneEnded) {

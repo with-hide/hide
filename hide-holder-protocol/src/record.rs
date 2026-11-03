@@ -210,6 +210,9 @@ pub struct Reservation {
     /// cleanup preserve it even when the holder cannot report its own end.
     #[serde(default)]
     pub cancelled: bool,
+    /// The connection's creation request; zero only for pre-numbered records.
+    #[serde(default)]
+    pub number: u64,
 }
 
 impl PaneRecord {
@@ -475,6 +478,7 @@ mod tests {
             request: "a".repeat(64),
             cwd: "/project".to_owned(),
             cancelled: false,
+            number: 0,
         });
         let bytes = serde_json::to_vec(&reserved).unwrap();
         assert_eq!(parse(&bytes).unwrap(), reserved);
@@ -499,6 +503,7 @@ mod tests {
             request: "a".repeat(64),
             cwd: "/project".to_owned(),
             cancelled: true,
+            number: 0,
         });
         let mut uncertain = End::new(EndReason::HolderLost, "lost");
         uncertain.left.push(123);

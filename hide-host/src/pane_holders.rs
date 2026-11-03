@@ -152,12 +152,20 @@ fn ask(holders: &dyn PaneHolders, call: PaneCall) -> PaneAnswer {
     }
     let text = |(text, truncated)| value(PaneText { text, truncated });
     match call {
-        PaneCall::Start { start } => holders.start(&start).and_then(value),
-        PaneCall::Reserve { start, previous } => holders.reserve(&start, previous).and_then(value),
-        PaneCall::StartReserved { start, reserved } => {
-            holders.start_reserved(&start, reserved).and_then(value)
-        }
-        PaneCall::Cancel { intent } => holders.cancel(&intent).and_then(value),
+        PaneCall::Reserve {
+            start,
+            previous,
+            request,
+        } => holders.reserve(&start, previous, request).and_then(value),
+        PaneCall::StartReserved {
+            start,
+            reserved,
+            request,
+        } => holders
+            .start_reserved(&start, reserved, request)
+            .and_then(value),
+        PaneCall::Cancel { intent, request } => holders.cancel(&intent, request).and_then(value),
+        PaneCall::Retire { request } => holders.retire(request).and_then(value),
         PaneCall::ShellLaunch => value(holders.shell_launch()),
         PaneCall::Terminate { pane } => holders.terminate(&pane).and_then(value),
         PaneCall::Read { pane, lines } => holders.read(&pane, lines).and_then(text),
@@ -377,6 +385,15 @@ mod tests {
                 message: "128 holders run".to_owned(),
             })
         }
+        fn reserve(
+            &self,
+            start: &HolderStart,
+            _: Option<u64>,
+            _: hide_node_link::holders::HolderRequest,
+        ) -> Result<hide_node_link::holders::HolderReservation, HolderError> {
+            self.start(start)?;
+            unreachable!()
+        }
         fn terminate(&self, pane: &str) -> Result<(), HolderError> {
             Err(HolderError::NoPane {
                 message: format!("no {pane}"),
@@ -451,7 +468,17 @@ mod tests {
             notice: None,
         };
         assert_eq!(
-            answered(&slot, PaneCall::Start { start }),
+            answered(
+                &slot,
+                PaneCall::Reserve {
+                    start,
+                    previous: None,
+                    request: hide_node_link::holders::HolderRequest {
+                        owner: 1,
+                        number: 1
+                    }
+                }
+            ),
             Err(HolderError::Refused {
                 code: "holder_cap".to_owned(),
                 message: "128 holders run".to_owned(),

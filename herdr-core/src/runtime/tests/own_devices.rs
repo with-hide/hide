@@ -23,6 +23,7 @@ impl NodeLink for HolderNode {
             Call::Pane {
                 call: PaneCall::Recovered { .. },
             } => Ok(serde_json::to_value(HolderRecovery {
+                owner: 1,
                 closed: Vec::new(),
                 ended: Vec::new(),
                 present: Vec::new(),

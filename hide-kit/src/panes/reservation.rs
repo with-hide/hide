@@ -9,7 +9,7 @@ use hide_holder_protocol::record::{
     self, End, EndReason, PaneRecord, Phase, RECORD_FORMAT, Reservation,
 };
 
-use super::{HOLDER_CAP, Owner, Panes, StartRefusal, StartRequest, StartStages, Started, spec_of};
+use super::{HOLDER_CAP, Panes, StartRefusal, StartRequest, StartStages, Started, spec_of};
 use crate::{holders, layout};
 
 impl Panes {
@@ -17,12 +17,13 @@ impl Panes {
     /// replacement explicitly names the earlier incarnation it consumes.
     pub fn reserve(
         &self,
-        owner: &Owner,
+        request_guard: &super::Request<'_>,
         pane: &str,
         request: &str,
         cwd: &str,
         previous: Option<u64>,
     ) -> Result<PaneRecord, StartRefusal> {
+        let owner = request_guard.owner();
         self.check_owner(owner).map_err(StartRefusal::Failed)?;
         validate(pane, request, cwd)?;
         let _lock = self.lock().map_err(StartRefusal::Failed)?;
@@ -30,10 +31,9 @@ impl Panes {
         let existing = record::read(&path).map_err(StartRefusal::RecordUnreadable)?;
         let replaces_live = existing.as_ref().is_some_and(|record| {
             record.phase != Phase::Ended
-                || record
-                    .reservation
-                    .as_ref()
-                    .is_some_and(|intent| intent.owner == owner.incarnation())
+                || record.reservation.as_ref().is_some_and(|intent| {
+                    intent.owner == owner.incarnation() && owner.request_pending(intent.number)
+                })
         });
         if let Some(existing) = existing {
             if existing.owner != self.owner {
@@ -41,13 +41,22 @@ impl Panes {
             }
             if existing.phase != Phase::Ended
                 && existing.reservation.as_ref().is_some_and(|intent| {
-                    intent.owner == owner.incarnation() && intent.request == request
+                    intent.owner == owner.incarnation()
+                        && intent.request == request
+                        && intent.number == request_guard.number()
                 })
             {
                 return Ok(existing);
             }
             if previous != Some(existing.incarnation) {
                 return Err(StartRefusal::Conflict(Box::new(existing)));
+            }
+            if existing.reservation.as_ref().is_some_and(|intent| {
+                intent.owner == owner.incarnation() && owner.request_pending(intent.number)
+            }) {
+                return Err(StartRefusal::Uncertain(
+                    "the earlier reservation still has an unresolved request".to_owned(),
+                ));
             }
             // Replacing an unclaimed attempt fences a late holder's Claim.
             // A named holder must be established dead, not merely unreadable.
@@ -74,7 +83,7 @@ impl Panes {
         if !replaces_live && count >= HOLDER_CAP {
             return Err(StartRefusal::Cap { count });
         }
-        let reserved = self.new_reservation(owner, pane, request, cwd)?;
+        let reserved = self.new_reservation(request_guard, pane, request, cwd)?;
         record::write(&path, &reserved)
             .map_err(|error| StartRefusal::Uncertain(error.to_string()))?;
         Ok(reserved)
@@ -84,11 +93,12 @@ impl Panes {
     // decision even when cancel arrives before the original reserve.
     fn new_reservation(
         &self,
-        owner: &Owner,
+        request_guard: &super::Request<'_>,
         pane: &str,
         request: &str,
         cwd: &str,
     ) -> Result<PaneRecord, StartRefusal> {
+        let owner = request_guard.owner();
         Ok(PaneRecord {
             format: RECORD_FORMAT,
             pane: pane.to_owned(),
@@ -103,6 +113,7 @@ impl Panes {
                 request: request.to_owned(),
                 cwd: cwd.to_owned(),
                 cancelled: false,
+                number: request_guard.number(),
             }),
             reserved_at_unix_ms: record::now_unix_ms(),
             boot: self.boot.clone(),
@@ -117,11 +128,12 @@ impl Panes {
     /// until this connection's workers can no longer submit a late call.
     pub fn cancel_reservation(
         &self,
-        owner: &Owner,
+        request_guard: &super::Request<'_>,
         pane: &str,
         digest: &str,
         cwd: &str,
     ) -> Result<PaneRecord, StartRefusal> {
+        let owner = request_guard.owner();
         self.check_owner(owner).map_err(StartRefusal::Failed)?;
         validate(pane, digest, cwd)?;
         let path = layout::pane_record(&self.state_dir, pane);
@@ -131,7 +143,9 @@ impl Panes {
                 Some(current)
                     if current.owner == self.owner
                         && current.reservation.as_ref().is_some_and(|intent| {
-                            intent.owner == owner.incarnation() && intent.request == digest
+                            intent.owner == owner.incarnation()
+                                && intent.request == digest
+                                && intent.number == request_guard.number()
                         }) =>
                 {
                     current
@@ -143,7 +157,7 @@ impl Panes {
                     if count >= HOLDER_CAP {
                         return Err(StartRefusal::Cap { count });
                     }
-                    self.new_reservation(owner, pane, digest, cwd)?
+                    self.new_reservation(request_guard, pane, digest, cwd)?
                 }
             };
             self.prepare_close(&mut current);
@@ -159,19 +173,20 @@ impl Panes {
     /// ownership through preparation, process start and failure cleanup.
     pub fn start_reserved(
         &self,
-        owner: &Owner,
+        request_guard: &super::Request<'_>,
         pane: &str,
         incarnation: u64,
         digest: &str,
         source: &holders::Source,
         request: impl FnOnce() -> Result<StartRequest, StartRefusal>,
     ) -> Result<Started, StartRefusal> {
+        let owner = request_guard.owner();
         self.check_owner(owner).map_err(StartRefusal::Failed)?;
         let begun = Instant::now();
         let path = layout::pane_record(&self.state_dir, pane);
         let mut current = {
             let _lock = self.lock().map_err(StartRefusal::Failed)?;
-            let mut current = self.exact_reservation(owner, pane, incarnation, digest)?;
+            let mut current = self.exact_reservation(request_guard, pane, incarnation, digest)?;
             match current.phase {
                 Phase::Running => return Ok(Started::Existing(current)),
                 Phase::Preparing => {
@@ -197,7 +212,7 @@ impl Panes {
             let version = holders::prepare(&self.home, PROTOCOL_VERSION, source, &self.names)
                 .map_err(StartRefusal::Failed)?;
             let _lock = self.lock().map_err(StartRefusal::Failed)?;
-            let found = self.exact_reservation(owner, pane, incarnation, digest)?;
+            let found = self.exact_reservation(request_guard, pane, incarnation, digest)?;
             if found != current {
                 return Err(StartRefusal::Conflict(Box::new(found)));
             }
@@ -231,11 +246,12 @@ impl Panes {
 
     fn exact_reservation(
         &self,
-        owner: &Owner,
+        request_guard: &super::Request<'_>,
         pane: &str,
         incarnation: u64,
         digest: &str,
     ) -> Result<PaneRecord, StartRefusal> {
+        let owner = request_guard.owner();
         let current = self
             .record(pane)
             .map_err(StartRefusal::RecordUnreadable)?
@@ -243,7 +259,9 @@ impl Panes {
         if current.owner != self.owner
             || current.incarnation != incarnation
             || !current.reservation.as_ref().is_some_and(|intent| {
-                intent.owner == owner.incarnation() && intent.request == digest
+                intent.owner == owner.incarnation()
+                    && intent.request == digest
+                    && intent.number == request_guard.number()
             })
         {
             return Err(StartRefusal::Conflict(Box::new(current)));
@@ -291,12 +309,13 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let panes = Panes::open(home.path(), &home.path().join("state"), |_| {}).unwrap();
         let owner = panes.acquire(Duration::ZERO).unwrap();
+        let request = owner.issue("p1", DIGEST).unwrap();
         let cwd = hide_platform::path::to_wire(home.path()).unwrap();
         let canceled = panes
-            .cancel_reservation(&owner, "p1", DIGEST, &cwd)
+            .cancel_reservation(&request, "p1", DIGEST, &cwd)
             .unwrap();
         assert!(matches!(
-            panes.reserve(&owner, "p1", DIGEST, &cwd, None),
+            panes.reserve(&request, "p1", DIGEST, &cwd, None),
             Err(StartRefusal::Conflict(_))
         ));
         let source = holders::Source {
@@ -305,7 +324,7 @@ mod tests {
         };
         assert!(matches!(
             panes.start_reserved(
-                &owner,
+                &request,
                 "p1",
                 canceled.incarnation,
                 DIGEST,
@@ -315,33 +334,42 @@ mod tests {
             Err(StartRefusal::Conflict(_))
         ));
         assert_eq!(panes.record("p1").unwrap().unwrap(), canceled);
+        let number = request.number();
+        assert!(!owner.retire(owner.incarnation(), number).unwrap());
+        drop(request);
+        panes.forget(&owner, "p1").unwrap();
+        assert!(
+            owner
+                .admit(owner.incarnation(), number, "p1", DIGEST)
+                .is_err()
+        );
     }
 
     #[test]
     fn a_new_owner_recovers_the_id_but_fences_the_previous_start_incarnation() {
         let home = tempfile::tempdir().unwrap();
-        let state = home.path().join("state");
-        let panes = Panes::open(home.path(), &state, |_| {}).unwrap();
+        let panes = Panes::open(home.path(), &home.path().join("state"), |_| {}).unwrap();
         let owner = panes.acquire(Duration::ZERO).unwrap();
         let cwd = hide_platform::path::to_wire(home.path()).unwrap();
-        let first = panes.reserve(&owner, "p1", DIGEST, &cwd, None).unwrap();
+        let request = owner.issue("p1", DIGEST).unwrap();
+        let first = panes.reserve(&request, "p1", DIGEST, &cwd, None).unwrap();
         assert_eq!(
-            panes.reserve(&owner, "p1", DIGEST, &cwd, None).unwrap(),
+            panes.reserve(&request, "p1", DIGEST, &cwd, None).unwrap(),
             first
         );
+        let previous_owner = owner.incarnation();
+        drop(request);
         drop(owner);
         let owner = panes.acquire(Duration::ZERO).unwrap();
         let recovered = panes.reconcile(&owner, Duration::from_secs(2));
         assert!(matches!(
-            recovered
-                .panes
-                .iter()
-                .find(|(pane, _)| pane.as_str() == "p1")
-                .map(|(_, judgment)| judgment),
+            recovered.panes.get("p1"),
             Some(super::super::Judgment::Recoverable(_))
         ));
+        assert!(owner.admit(previous_owner, 1, "p1", DIGEST).is_err());
+        let request = owner.issue("p1", DIGEST).unwrap();
         let next = panes
-            .reserve(&owner, "p1", DIGEST, &cwd, Some(first.incarnation))
+            .reserve(&request, "p1", DIGEST, &cwd, Some(first.incarnation))
             .unwrap();
         assert_ne!(first.incarnation, next.incarnation);
         let source = holders::Source {
@@ -349,32 +377,69 @@ mod tests {
             conpty: None,
         };
         assert!(matches!(
-            panes.start_reserved(&owner, "p1", first.incarnation, DIGEST, &source, || panic!(
-                "an old incarnation must not expand the shell"
-            )),
+            panes.start_reserved(
+                &request,
+                "p1",
+                first.incarnation,
+                DIGEST,
+                &source,
+                || panic!("an old incarnation must not expand the shell")
+            ),
             Err(StartRefusal::Conflict(_))
         ));
         assert_eq!(panes.record("p1").unwrap().unwrap(), next);
     }
 
     #[test]
-    fn canceled_intents_keep_their_capacity_until_the_owner_is_fenced() {
+    fn unresolved_requests_keep_the_cap_but_a_confirmed_completion_releases_it() {
         let home = tempfile::tempdir().unwrap();
         let panes = Panes::open(home.path(), &home.path().join("state"), |_| {}).unwrap();
         let owner = panes.acquire(Duration::ZERO).unwrap();
         let cwd = hide_platform::path::to_wire(home.path()).unwrap();
         for n in 0..HOLDER_CAP {
+            let request = owner.issue(&format!("p{n}"), DIGEST).unwrap();
             panes
-                .cancel_reservation(&owner, &format!("p{n}"), DIGEST, &cwd)
+                .reserve(&request, &format!("p{n}"), DIGEST, &cwd, None)
                 .unwrap();
+            // Its answer was lost; no retirement is implied by worker exit.
         }
-        assert!(matches!(
-            panes.reserve(&owner, "new", DIGEST, &cwd, None),
-            Err(StartRefusal::Cap { count: HOLDER_CAP })
-        ));
+        assert!(owner.issue("new", DIGEST).is_err());
+        let request = owner.admit(owner.incarnation(), 1, "p0", DIGEST).unwrap();
+        panes
+            .cancel_reservation(&request, "p0", DIGEST, &cwd)
+            .unwrap();
         assert!(panes.forget(&owner, "p0").is_err());
-        drop(owner);
+        assert!(!owner.retire(owner.incarnation(), 1).unwrap());
+        drop(request);
+        let request = owner.issue("new", DIGEST).unwrap();
+        panes.reserve(&request, "new", DIGEST, &cwd, None).unwrap();
+        assert_eq!(panes.live().unwrap(), HOLDER_CAP);
+    }
+
+    #[test]
+    fn normal_completion_does_not_turn_the_live_cap_into_a_lifetime_limit() {
+        let home = tempfile::tempdir().unwrap();
+        let panes = Panes::open(home.path(), &home.path().join("state"), |_| {}).unwrap();
         let owner = panes.acquire(Duration::ZERO).unwrap();
-        panes.reserve(&owner, "new", DIGEST, &cwd, None).unwrap();
+        let cwd = hide_platform::path::to_wire(home.path()).unwrap();
+        for n in 1..=HOLDER_CAP * 3 {
+            let pane = format!("p{n}");
+            let request = owner.issue(&pane, DIGEST).unwrap();
+            let mut current = panes.reserve(&request, &pane, DIGEST, &cwd, None).unwrap();
+            // Exercise storage transitions without starting 384 processes.
+            current.finish(End::new(EndReason::ProgramExited, "completed"));
+            {
+                let _lock = panes.lock().unwrap();
+                record::write(&layout::pane_record(&panes.state_dir, &pane), &current).unwrap();
+            }
+            assert!(!owner.retire(owner.incarnation(), request.number()).unwrap());
+            drop(request);
+        }
+        assert_eq!(panes.live().unwrap(), 0);
+        let request = owner.issue("next", DIGEST).unwrap();
+        panes.reserve(&request, "next", DIGEST, &cwd, None).unwrap();
+        assert!(panes.record("p1").unwrap().is_none());
+        assert!(owner.admit(owner.incarnation(), 1, "p1", DIGEST).is_err());
+        assert_eq!(panes.scan().unwrap().len(), super::super::ENDED_KEPT + 1);
     }
 }

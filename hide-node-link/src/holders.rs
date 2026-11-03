@@ -39,6 +39,13 @@ pub struct HolderStart {
     pub notice: Option<String>,
 }
 
+/// A creation request within the recovered node connection, never reused.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct HolderRequest {
+    pub owner: u64,
+    pub number: u64,
+}
+
 /// A start's durable identity, computed before shell setup. No command or
 /// environment is stored in a pane record.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -88,6 +95,7 @@ pub type PaneEnded = std::sync::Arc<dyn Fn(&str) + Send + Sync>;
 /// holds a record of in exactly one list.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct HolderRecovery {
+    pub owner: u64,
     /// Panes that finished while no node ran: their program exited or a node
     /// ended them, so they close, as a pane whose program exits closes.
     pub closed: Vec<String>,
@@ -334,12 +342,21 @@ pub trait PaneHolders: Send + Sync {
     /// service. Asked again for a pane that lives, it answers that pane and
     /// starts no second holder.
     fn start(&self, start: &HolderStart) -> Result<(), HolderError>;
+    /// Issue locally before submission; a definitely unsent request must
+    /// also be retired, so a later number cannot strand its gap.
+    fn request(&self) -> Result<HolderRequest, HolderError> {
+        Err(reservation_unsupported())
+    }
+    fn retire(&self, _request: HolderRequest) -> Result<(), HolderError> {
+        Err(reservation_unsupported())
+    }
     /// Persist existence before publication. A restart must explicitly name
     /// the previous incarnation; ordinary retries pass the same intent.
     fn reserve(
         &self,
         _start: &HolderStart,
         _previous: Option<u64>,
+        _request: HolderRequest,
     ) -> Result<HolderReservation, HolderError> {
         Err(reservation_unsupported())
     }
@@ -347,10 +364,11 @@ pub trait PaneHolders: Send + Sync {
         &self,
         _start: &HolderStart,
         _reserved: HolderReservation,
+        _request: HolderRequest,
     ) -> Result<(), HolderError> {
         Err(reservation_unsupported())
     }
-    fn cancel(&self, _intent: &HolderIntent) -> Result<(), HolderError> {
+    fn cancel(&self, _intent: &HolderIntent, _request: HolderRequest) -> Result<(), HolderError> {
         Err(reservation_unsupported())
     }
     /// How a pane started with no program runs its shell, when it runs one
@@ -433,19 +451,22 @@ pub trait PaneHolders: Send + Sync {
 #[serde(tag = "ask", rename_all = "snake_case")]
 pub enum PaneCall {
     /// [`PaneHolders::start`]; answers nothing.
-    Start {
-        start: HolderStart,
-    },
     Reserve {
         start: HolderStart,
         previous: Option<u64>,
+        request: HolderRequest,
     },
     StartReserved {
         start: HolderStart,
         reserved: HolderReservation,
+        request: HolderRequest,
     },
     Cancel {
         intent: HolderIntent,
+        request: HolderRequest,
+    },
+    Retire {
+        request: HolderRequest,
     },
     /// [`PaneHolders::shell_launch`]; answers an optional
     /// [`crate::protocol::ShellLaunch`].

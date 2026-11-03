@@ -16,6 +16,7 @@ pub struct Owner {
     identity: String,
     incarnation: u64,
     _lock: Lock,
+    pub(super) requests: std::sync::Mutex<super::requests::Requests>,
 }
 
 impl Owner {
@@ -40,6 +41,7 @@ impl Panes {
             identity: self.owner.clone(),
             incarnation: self.next_incarnation()?,
             _lock: lock,
+            requests: std::sync::Mutex::default(),
         })
     }
 

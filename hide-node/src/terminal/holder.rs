@@ -763,13 +763,13 @@ impl Holders {
 
     pub fn reserve(
         &self,
-        owner: &hide_kit::panes::Owner,
+        guard: &hide_kit::panes::Request<'_>,
         intent: &HolderIntent,
         previous: Option<u64>,
     ) -> Result<HolderReservation, StartRefusal> {
         self.panes
             .reserve(
-                owner,
+                guard,
                 &holder_pane(&intent.pane),
                 &intent.digest,
                 &intent.cwd,
@@ -782,7 +782,7 @@ impl Holders {
 
     pub fn start_reserved(
         &self,
-        owner: &hide_kit::panes::Owner,
+        guard: &hide_kit::panes::Request<'_>,
         service: &Service,
         intent: &HolderIntent,
         reserved: HolderReservation,
@@ -791,7 +791,7 @@ impl Holders {
         self.known.starting(&intent.pane);
         let holder = holder_pane(&intent.pane);
         let result = self.panes.start_reserved(
-            owner,
+            guard,
             &holder,
             reserved.incarnation,
             &intent.digest,
@@ -802,31 +802,56 @@ impl Holders {
                 Ok(request)
             },
         );
-        self.attach_started(service, &intent.pane, result)
+        let attached = self.attach_started(service, &intent.pane, result)?;
+        // Cancellation can finish while this worker is attaching an earlier
+        // successful start. Observe storage after enqueueing Attach: either
+        // this forget follows it, or the later cancel enqueues its own forget.
+        // The admitted request guard stays alive through this cleanup.
+        match self.panes.record(&holder) {
+            Ok(Some(current))
+                if current.incarnation == reserved.incarnation && !current.cancelled() =>
+            {
+                Ok(attached)
+            }
+            Ok(Some(current)) => {
+                self.forget_screen(service, &intent.pane);
+                Err(StartRefusal::Conflict(Box::new(current)))
+            }
+            other => {
+                self.forget_screen(service, &intent.pane);
+                Err(StartRefusal::Uncertain(format!(
+                    "the attached reservation could not be confirmed: {other:?}"
+                )))
+            }
+        }
     }
 
     pub fn cancel(
         &self,
-        owner: &hide_kit::panes::Owner,
+        guard: &hide_kit::panes::Request<'_>,
         service: &Service,
         intent: &HolderIntent,
     ) -> Result<(), StartRefusal> {
         self.panes.cancel_reservation(
-            owner,
+            guard,
             &holder_pane(&intent.pane),
             &intent.digest,
             &intent.cwd,
         )?;
+        self.forget_screen(service, &intent.pane);
+        Ok(())
+    }
+
+    fn forget_screen(&self, service: &Service, pane: &str) {
         service.control(TerminalControl::Closing {
-            pane: intent.pane.clone(),
+            pane: pane.to_owned(),
             closing: true,
         });
-        self.known.remove(&intent.pane);
-        self.watches.forget(&intent.pane);
+        self.known.remove(pane);
+        self.watches.forget(pane);
         service.control(TerminalControl::Forget {
-            pane: intent.pane.clone(),
+            pane: pane.to_owned(),
         });
-        Ok(())
     }
 
     fn attach_started(
@@ -878,11 +903,7 @@ impl Holders {
         });
         let closed = self.panes.close(owner, &holder_pane(pane));
         if closed.is_ok() || matches!(closed, Err(CloseError::NoRecord)) {
-            self.known.remove(pane);
-            self.watches.forget(pane);
-            service.control(TerminalControl::Forget {
-                pane: pane.to_owned(),
-            });
+            self.forget_screen(service, pane);
         } else {
             service.control(TerminalControl::Closing {
                 pane: pane.to_owned(),
@@ -1119,6 +1140,7 @@ impl Holders {
             ended.into_iter().map(|(pane, _)| pane.clone()).collect()
         };
         *found.lock().unwrap_or_else(PoisonError::into_inner) = Some(HolderRecovery {
+            owner: owner.incarnation(),
             closed: panes(closed),
             ended: panes(ended),
             present,

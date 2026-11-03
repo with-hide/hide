@@ -17,13 +17,6 @@ pub(super) struct Starting {
 }
 
 impl Starting {
-    pub(super) fn pending(&self) -> bool {
-        self.result
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .is_none()
-    }
-
     pub(super) fn finish(&self, result: Result<(), EngineError>) {
         *self.result.lock().unwrap_or_else(PoisonError::into_inner) = Some(result);
         self.settled.notify_all();
@@ -68,6 +61,14 @@ pub(super) struct Turn {
 }
 
 impl Starts {
+    #[cfg(test)]
+    pub(super) fn waiting(&self) -> usize {
+        self.counts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .waiting
+    }
+
     pub(super) fn reserve(self: &Arc<Self>) -> Result<Turn, EngineError> {
         let mut counts = self.counts.lock().unwrap_or_else(PoisonError::into_inner);
         let running = counts.running < STARTS_AT_ONCE;

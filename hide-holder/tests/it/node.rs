@@ -744,7 +744,18 @@ fn cancelled_dead_holders_stay_closed_on_the_next_owner() {
     let folder = Folder::new();
     let mut node = Node::start(Switch::On, folder.home.path(), &folder.state);
     for (pane, phase) in [("p1", Phase::Running), ("p2", Phase::Ended)] {
-        node.start_pane(&folder.shell(pane));
+        let intent = HolderIntent {
+            pane: pane.to_owned(),
+            digest: "a".repeat(64),
+            cwd: hide_platform::path::to_wire(folder.home.path()).unwrap(),
+        };
+        let guard = node.owner().issue(pane, &intent.digest).unwrap();
+        let reserved = node.holders().reserve(&guard, &intent, None).unwrap();
+        node.holders()
+            .start_reserved(&guard, &node.service, &intent, reserved, || {
+                Ok(folder.shell(pane))
+            })
+            .unwrap();
         let mut abandoned = folder.record(pane);
         let holder = abandoned.holder.unwrap();
         hide_platform::process::kill_tree(holder.pid).unwrap();
@@ -766,7 +777,7 @@ fn cancelled_dead_holders_stay_closed_on_the_next_owner() {
         let original = abandoned.reservation.as_ref().unwrap();
         node.holders()
             .cancel(
-                node.owner(),
+                &guard,
                 &node.service,
                 &HolderIntent {
                     pane: pane.to_owned(),
@@ -784,7 +795,7 @@ fn cancelled_dead_holders_stay_closed_on_the_next_owner() {
         assert!(
             panes
                 .start_reserved(
-                    node.owner(),
+                    &guard,
                     pane,
                     abandoned.incarnation,
                     &original.request,

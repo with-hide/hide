@@ -540,7 +540,7 @@ pub(crate) struct Gate<'a> {
     pub(crate) at_send: Arc<GateCheck<'a>>,
     /// Told the id of a pane a call makes before anything runs in it, on
     /// an engine that names a pane before it starts one ([`Placement`]).
-    pub(crate) placement: Option<Arc<dyn Placement + 'a>>,
+    pub(crate) placement: Option<Arc<dyn Placement>>,
 }
 
 type GateCheck<'a> = dyn Fn() -> Result<(), EngineError> + Send + Sync + 'a;
@@ -589,7 +589,7 @@ impl<'a> Gate<'a> {
     }
 
     /// No check, and `placement` told each pane a call makes.
-    pub(crate) fn placing(placement: impl Placement + 'a) -> Self {
+    pub(crate) fn placing(placement: impl Placement + 'static) -> Self {
         Self {
             before: Arc::new(|| Ok(())),
             at_send: Arc::new(|| Ok(())),

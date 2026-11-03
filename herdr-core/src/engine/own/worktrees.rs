@@ -339,6 +339,7 @@ impl OwnEngine<'_> {
         bound: Bound,
     ) -> Answer<(String, String, String)> {
         self.restored()?;
+        self.resolve_unpublished()?;
         let reserved = self.topology().reserve_workspace();
         self.start_placed(&reserved.pane, None, checkout, Env::new())?;
         {

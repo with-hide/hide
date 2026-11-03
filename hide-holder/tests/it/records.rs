@@ -238,7 +238,7 @@ fn holders_in(home: &Path) -> Vec<u32> {
 
 #[test]
 fn starts_of_one_pane_at_once_converge_on_one_holder_which_ends_when_closed() {
-    let mut folder = Folder::new();
+    let folder = Folder::new();
     let request = folder.request("p1", shell(), Vec::new());
     let source = source();
     let answers: Vec<Result<Started, StartRefusal>> = thread::scope(|scope| {
@@ -295,10 +295,11 @@ fn starts_of_one_pane_at_once_converge_on_one_holder_which_ends_when_closed() {
         Err(StartRefusal::Conflict(_))
     ));
     let intent = ended.reservation.as_ref().unwrap();
+    let replacement = folder.owner().issue("p1", &intent.request).unwrap();
     folder
         .panes
         .reserve(
-            folder.owner(),
+            &replacement,
             "p1",
             &intent.request,
             &intent.cwd,
@@ -312,8 +313,7 @@ fn starts_of_one_pane_at_once_converge_on_one_holder_which_ends_when_closed() {
     assert_eq!(holders_in(folder.home.path()), vec![second.pid]);
     folder.panes.close(folder.owner(), "p1").unwrap();
     assert!(folder.panes.forget(folder.owner(), "p1").is_err());
-    drop(folder.owner.take());
-    folder.owner = Some(folder.panes.acquire(Duration::from_secs(5)).unwrap());
+    drop(replacement);
     folder.panes.forget(folder.owner(), "p1").unwrap();
     assert!(folder.panes.record("p1").unwrap().is_none());
     assert!(!socket.exists());
