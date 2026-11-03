@@ -49,6 +49,8 @@ use crate::support::{
     shell, source, wait_until,
 };
 
+pub(crate) mod ownership;
+
 /// The variables the `node` role reads.
 const NODE_HOME: &str = "HIDE_HOLDER_TEST_NODE_HOME";
 const NODE_STATE: &str = "HIDE_HOLDER_TEST_NODE_STATE";
