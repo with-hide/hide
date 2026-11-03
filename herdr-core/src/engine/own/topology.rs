@@ -12,6 +12,7 @@
 //! it moves, so a letter, a mission or a parent that names it still finds it.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 use std::time::Instant;
 
 use hide_agent_adapter::definition::Catalog;
@@ -136,6 +137,14 @@ pub(super) struct Pane {
     /// holder to that call, which ends it once it finds the pane gone.
     /// Kept in memory only.
     pub(super) starting: Option<std::sync::Arc<super::starts::Starting>>,
+}
+
+/// Only this unconfirmed start may restore the metadata it replaced.
+/// The caller owns the backup until the input result; nothing is saved.
+pub(super) struct AgentStart {
+    claim: Arc<()>,
+    agent: Option<PaneAgent>,
+    pending_session: Option<(String, String)>,
 }
 
 impl Pane {
@@ -1734,12 +1743,56 @@ impl Topology {
         })
     }
 
-    /// Records that the engine typed `agent`'s start into `pane`.
-    pub(super) fn start_agent(&mut self, pane: &str, agent: PaneAgent) -> Result<(), EngineError> {
+    /// Reserves the metadata of a start while its input is being delivered.
+    pub(super) fn start_agent(
+        &mut self,
+        pane: &str,
+        mut agent: PaneAgent,
+    ) -> Result<AgentStart, EngineError> {
         let held = self.pane_mut(pane)?;
-        held.pending_session = None;
+        let now = Instant::now();
+        if held.agent.as_ref().is_some_and(|agent| agent.starting(now)) {
+            return Err(EngineError::Refused {
+                code: "agent_pane_busy".to_owned(),
+                message: format!("pane {pane} is already starting an agent"),
+            });
+        }
+        let claim = Arc::new(());
+        agent.live.start_claim = Some(Arc::clone(&claim));
+        let previous = AgentStart {
+            claim,
+            // An expired provisional record must not regain its old claim
+            // when a later start is refused.
+            agent: held
+                .agent
+                .take()
+                .filter(|agent| agent.live.shown || agent.live.started.is_none()),
+            pending_session: held.pending_session.take(),
+        };
         held.agent = Some(agent);
-        Ok(())
+        Ok(previous)
+    }
+
+    /// A definite non-delivery withdraws only its own, still unconfirmed
+    /// metadata. A hook, foreground fact, expiry or newer start wins.
+    pub(super) fn refuse_agent_start(&mut self, pane: &str, start: AgentStart) -> bool {
+        let Ok(held) = self.pane_mut(pane) else {
+            return false;
+        };
+        let owns = held.agent.as_ref().is_some_and(|agent| {
+            agent.starting(Instant::now())
+                && agent
+                    .live
+                    .start_claim
+                    .as_ref()
+                    .is_some_and(|claim| Arc::ptr_eq(claim, &start.claim))
+        });
+        if !owns {
+            return false;
+        }
+        held.agent = start.agent;
+        held.pending_session = start.pending_session;
+        true
     }
 
     /// A hook cannot claim another kind of agent. Before detection, keep
@@ -1774,6 +1827,7 @@ impl Topology {
         held.pending_session = None;
         match held.agent.as_mut() {
             Some(agent) if agent.kind == kind => {
+                agent.live.start_claim = None;
                 let changed = agent.session.as_deref() != Some(session);
                 agent.session = Some(session.to_owned());
                 Ok(changed)

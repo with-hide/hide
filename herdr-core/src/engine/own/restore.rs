@@ -584,32 +584,12 @@ impl OwnEngine<'static> {
             .ok_or_else(|| "the pane's shell is cmd.exe, which takes no resume line".to_owned())?;
         let line = shell_line::resume_command(&resume.argv, &resume.shown, shell)
             .ok_or_else(|| "the resume names no program".to_owned())?;
-        {
-            let catalog = self.shared.definitions.get();
-            let mut topology = self.topology();
-            if resume
-                .name
-                .as_deref()
-                .is_some_and(|name| topology.name_taken(name, &resume.pane))
-            {
-                return Err("another pane runs an agent under its name".to_owned());
-            }
-            topology
-                .start_agent(
-                    &resume.pane,
-                    PaneAgent::started(
-                        &resume.kind,
-                        resume.name.as_deref(),
-                        resume.session.clone(),
-                    ),
-                )
-                .map_err(|error| error.to_string())?;
-            drop(topology);
-            self.give_rules(&resume.pane, Some(&resume.kind), &catalog);
-        }
-        self.changed();
-        self.type_bytes(&resume.pane, format!("{line}\r").into_bytes())
-            .map_err(|error| error.to_string())
+        self.type_agent_start(
+            &resume.pane,
+            PaneAgent::started(&resume.kind, resume.name.as_deref(), resume.session.clone()),
+            &line,
+        )
+        .map_err(|error| error.to_string())
     }
 
     /// Where a saved pane whose folder was `cwd` starts again: there, or in

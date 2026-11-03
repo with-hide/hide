@@ -668,6 +668,8 @@ A node's own holder transport (`open_holder`) accepts notices and logs a refusal
 A node assembled through `Holders::start_from` acquires its connection's ownership through `LocalPanes::own`, completes recovery, then removes an older build's version folder nothing runs from and keeps its own build's folder and an older one whose holder, too old to speak to, still runs, and logs `pane_holder.folders_pruned` naming them.
 Assembly alone starts no record recovery or pruning; the test keeps the acquired owner through all its assertions.
 The own engine's `tests/rules_recovery.rs` holds the existing holder fixture's recovery answer while it reports facts.
+The own engine's agent-start tests hold the existing in-memory holder boundary's input result and check definite refusal, unanswered delivery, hook and foreground confirmation, expiry and a newer attempt, and queued screen rules through the engine's caller-visible agent list and delivery state.
+The input and rule workers use channel barriers, and expiry is positioned on the existing start clock rather than waited for; these tests prove the core's metadata decisions, while the holder integration tests prove actual input and connection ownership.
 A test-only one-way signal in the rules worker's actual pending-before-ready wait proves that no rule call starts before recovery; the tests then check the latest decision, including removal, failed recovery, the pending cap and shutdown during an admitted call.
 The signal never waits while holding a lock, and no sleep substitutes for that ordering.
 The same core fixture checks a recovered shell's first explicit rule removal even when it never reported an agent to the new daemon.

@@ -420,8 +420,8 @@ impl OwnEngine<'_> {
         let applied = self.topology().apply_facts(pane, facts, &catalog);
         match applied {
             Ok(applied) => {
-                if let Some(kind) = applied.rules_for {
-                    self.give_rules(pane, kind.as_deref(), &catalog);
+                if applied.rules_for.is_some() {
+                    self.give_rules(pane);
                 }
                 if applied.changed {
                     self.changed();
@@ -470,24 +470,72 @@ impl OwnEngine<'_> {
         let catalog = self.shared.definitions.get();
         for (pane, facts) in entered {
             if let Ok(applied) = self.topology().apply_facts(&pane, &facts, &catalog)
-                && let Some(kind) = applied.rules_for
+                && applied.rules_for.is_some()
             {
-                self.give_rules(&pane, kind.as_deref(), &catalog);
+                self.give_rules(&pane);
             }
         }
     }
 
-    /// Gives `pane`'s holder the screen rules of the agent `kind`, or none.
-    fn give_rules(
-        &self,
-        pane: &str,
-        kind: Option<&str>,
-        catalog: &hide_agent_adapter::definition::Catalog,
-    ) {
+    /// Queues the pane's current decision in topology order. A caller that
+    /// lost a race with a new agent must not enqueue the previous agent's
+    /// rules afterwards. Only the queue insertion is under this lock; the
+    /// rules worker owns the actual holder call.
+    fn give_rules(&self, pane: &str) {
+        let kind = {
+            let topology = self.topology();
+            let Ok(held) = topology.pane(pane) else {
+                return;
+            };
+            held.agent.as_ref().map(|agent| agent.kind.clone())
+        };
+        let catalog = self.shared.definitions.get();
         let rules = kind
-            .and_then(|kind| agents::definition(catalog, kind))
+            .as_deref()
+            .and_then(|kind| agents::definition(&catalog, kind))
             .and_then(agents::screen_rules);
+        let mut topology = self.topology();
+        let Ok(held) = topology.pane_mut(pane) else {
+            return;
+        };
+        if held.agent.as_ref().map(|agent| &agent.kind) != kind.as_ref()
+            || !Arc::ptr_eq(&catalog, &self.shared.definitions.get())
+        {
+            // The newer topology/catalog transition owns its publication.
+            return;
+        }
+        held.live.rules_sent = Some(kind.clone());
         self.shared.rules.give(pane, rules);
+    }
+
+    /// Publishes a start provisionally so early hooks have their identity,
+    /// then withdraws only proven non-delivery of that same attempt.
+    /// An unanswered write may already have reached the program.
+    fn type_agent_start(&self, pane: &str, agent: agents::PaneAgent, line: &str) -> Answer<()> {
+        let start = {
+            let mut topology = self.topology();
+            if agent
+                .name
+                .as_deref()
+                .is_some_and(|name| topology.name_taken(name, pane))
+            {
+                return Err(refused(
+                    "agent_name_taken",
+                    "another pane runs an agent under its name".to_owned(),
+                ));
+            }
+            topology.start_agent(pane, agent)?
+        };
+        self.give_rules(pane);
+        self.changed();
+        let result = self.type_bytes(pane, format!("{line}\r").into_bytes());
+        let withdrawn = matches!(&result, Err(EngineError::Refused { .. }))
+            && self.topology().refuse_agent_start(pane, start);
+        if withdrawn {
+            self.give_rules(pane);
+            self.changed();
+        }
+        result
     }
 
     /// Starts `pane`'s holder running `program`, or the machine's shell
@@ -1219,7 +1267,7 @@ impl<'g> Engine for OwnEngine<'g> {
             let rules = |catalog| agents::definition(catalog, &kind).and_then(agents::screen_rules);
             let now = rules(&catalog);
             if rules(&before) != now {
-                self.shared.rules.give(&pane, now);
+                self.give_rules(&pane);
             }
         }
         self.changed();
@@ -2007,26 +2055,15 @@ impl<'g> Engine for OwnEngine<'g> {
                 format!("the {} start cannot be typed into a shell", definition.id),
             )
         })?;
-        {
-            let mut topology = self.topology();
-            if topology.name_taken(&launch.name, pane) {
-                return Err(refused(
-                    "agent_name_taken",
-                    format!("another pane runs an agent named {}", launch.name),
-                ));
-            }
-            topology.start_agent(
-                pane,
-                agents::PaneAgent::started(
-                    &definition.id,
-                    Some(&launch.name),
-                    agents::resumed_in(definition, &argv),
-                ),
-            )?;
-        }
-        self.give_rules(pane, Some(&definition.id), &catalog);
-        self.changed();
-        self.type_bytes(pane, format!("{line}\r").into_bytes())?;
+        self.type_agent_start(
+            pane,
+            agents::PaneAgent::started(
+                &definition.id,
+                Some(&launch.name),
+                agents::resumed_in(definition, &argv),
+            ),
+            &line,
+        )?;
         Ok(StartedAgent {
             pane_id: pane.to_owned(),
             terminal_id: Some(pane.to_owned()),
@@ -2202,6 +2239,10 @@ mod tests {
         std::sync::mpsc::Sender<()>,
         std::sync::mpsc::Receiver<()>,
     );
+    type InputHold = (
+        std::sync::mpsc::Sender<()>,
+        std::sync::mpsc::Receiver<Result<(), HolderError>>,
+    );
 
     /// Holders that start every pane until told to refuse, as a node whose
     /// holder program cannot start refuses, and say what they found of the
@@ -2247,11 +2288,25 @@ mod tests {
         rules: (Mutex<Given>, Condvar),
         rules_hold: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
         typed: (Mutex<Typed>, Condvar),
+        /// The next input announces admission and waits for its outcome.
+        input_hold: Mutex<Option<InputHold>>,
         /// What every pane's terminal holds; `None` answers unreachable.
         processes: Mutex<Option<HolderProcesses>>,
     }
 
     impl Holders {
+        fn hold_input(
+            &self,
+        ) -> (
+            std::sync::mpsc::Receiver<()>,
+            std::sync::mpsc::Sender<Result<(), HolderError>>,
+        ) {
+            let (began, admitted) = std::sync::mpsc::channel();
+            let (outcome, finish) = std::sync::mpsc::channel();
+            *self.input_hold.lock().unwrap() = Some((began, finish));
+            (admitted, outcome)
+        }
+
         /// A start as the node answers it, once counted.
         fn start_now(&self, start: &HolderStart) -> Result<(), HolderError> {
             let hold = self.hold.lock().unwrap().take();
@@ -2492,6 +2547,11 @@ mod tests {
             })
         }
         fn input(&self, pane: &str, input: PaneInput) -> Result<(), HolderError> {
+            let hold = self.input_hold.lock().unwrap().take();
+            if let Some((began, finish)) = hold {
+                began.send(()).unwrap();
+                finish.recv_timeout(Duration::from_secs(10)).unwrap()?;
+            }
             self.typed
                 .0
                 .lock()
@@ -3660,6 +3720,293 @@ mod tests {
         assert_eq!(listed[0].name.as_deref(), Some("worker"));
         assert_eq!(listed[0].agent_status.as_deref(), Some("done"));
         assert_eq!(engine.pane_agent_status(WAIT, &pane).unwrap(), "done");
+    }
+
+    fn undelivered_input() -> HolderError {
+        HolderError::Refused {
+            code: "pane_input_expired".to_owned(),
+            message: "the queued input expired before writing".to_owned(),
+        }
+    }
+
+    /// A refused launch leaves neither a listed agent nor a held name,
+    /// and does not erase a hook that preceded the provisional launch.
+    #[test]
+    fn an_undelivered_agent_start_releases_its_name_and_restores_the_pending_session() {
+        let holders = Arc::new(Holders::default());
+        holders.idle_shell(41, "zsh");
+        let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+        let (_, _, pane) = engine
+            .create_workspace(WAIT, "/w", "w", true, Env::new())
+            .unwrap();
+        let (_, _, other) = engine
+            .create_workspace(WAIT, "/other", "other", false, Env::new())
+            .unwrap();
+        engine
+            .hook_session(&pane, "claude", "before-start")
+            .unwrap();
+        let start = engine
+            .prepare_start(launch(&pane, "worker", "claude", &[]))
+            .unwrap();
+        let (admitted, finish) = holders.hold_input();
+        std::thread::scope(|scope| {
+            let starting = scope.spawn(|| engine.start_agent(WAIT, &start));
+            admitted.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert_eq!(holders.rules_given(1)[0].1.as_deref(), Some("claude-code"));
+            finish.send(Err(undelivered_input())).unwrap();
+            assert!(
+                matches!(starting.join().unwrap(), Err(EngineError::Refused { code, .. }) if code == "pane_input_expired")
+            );
+        });
+        assert!(engine.agents(WAIT).unwrap().is_empty());
+        assert!(holders.typed(&pane).is_empty());
+        assert_eq!(holders.rules_given(2)[1], (pane.clone(), None));
+        let reused = engine
+            .prepare_start(launch(&other, "worker", "claude", &[]))
+            .unwrap();
+        engine.start_agent(WAIT, &reused).unwrap();
+        holders.say(
+            &pane,
+            &running("claude", hide_node_link::holders::ScreenState::Working),
+        );
+        let agents = engine.agents(WAIT).unwrap();
+        let restored = agents.iter().find(|agent| agent.pane_id == pane).unwrap();
+        assert_eq!(
+            restored.agent_session.as_ref().unwrap().value,
+            "before-start"
+        );
+    }
+
+    #[test]
+    fn an_undelivered_agent_start_restores_the_preceding_agent() {
+        let holders = Arc::new(Holders::default());
+        holders.idle_shell(41, "zsh");
+        let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+        let (_, _, pane) = engine
+            .create_workspace(WAIT, "/w", "w", true, Env::new())
+            .unwrap();
+        let old = engine
+            .prepare_start(launch(&pane, "old", "claude", &[]))
+            .unwrap();
+        engine.start_agent(WAIT, &old).unwrap();
+        engine.hook_session(&pane, "claude", "old-session").unwrap();
+        holders.say(
+            &pane,
+            &running("claude", hide_node_link::holders::ScreenState::Working),
+        );
+        // The processes read says the shell is idle before the next facts
+        // arrive. A refused start must preserve the last observed identity.
+        let new = engine
+            .prepare_start(launch(&pane, "new", "codex", &[]))
+            .unwrap();
+        let (_admitted, finish) = holders.hold_input();
+        finish.send(Err(undelivered_input())).unwrap();
+        assert!(engine.start_agent(WAIT, &new).is_err());
+        let agents = engine.agents(WAIT).unwrap();
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].name.as_deref(), Some("old"));
+        assert_eq!(
+            agents[0].agent_session.as_ref().unwrap().value,
+            "old-session"
+        );
+        assert_eq!(agents[0].agent_status.as_deref(), Some("working"));
+        assert!(!holders.typed(&pane).contains("codex"));
+    }
+
+    /// A write without an answer may already have reached the shell. It is
+    /// not undone or resent, and another pane cannot claim its name.
+    #[test]
+    fn an_unanswered_agent_start_keeps_its_identity() {
+        let holders = Arc::new(Holders::default());
+        holders.idle_shell(41, "zsh");
+        let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+        let (_, _, pane) = engine
+            .create_workspace(WAIT, "/w", "w", true, Env::new())
+            .unwrap();
+        let (_, _, other) = engine
+            .create_workspace(WAIT, "/other", "other", false, Env::new())
+            .unwrap();
+        let start = engine
+            .prepare_start(launch(&pane, "worker", "claude", &[]))
+            .unwrap();
+        let (_admitted, finish) = holders.hold_input();
+        finish
+            .send(Err(HolderError::Unreachable {
+                message: "the writer stopped answering".to_owned(),
+            }))
+            .unwrap();
+        assert!(matches!(
+            engine.start_agent(WAIT, &start),
+            Err(EngineError::Unanswered(_))
+        ));
+        assert_eq!(
+            engine.delivery_agent(WAIT, "worker").unwrap().readiness,
+            Readiness::Launching
+        );
+        let duplicate = engine
+            .prepare_start(launch(&other, "worker", "claude", &[]))
+            .unwrap();
+        assert!(
+            matches!(engine.start_agent(WAIT, &duplicate), Err(EngineError::Refused { code, .. }) if code == "agent_name_taken")
+        );
+    }
+
+    /// A session report, even at the value the launch already carried, or
+    /// a real foreground observation is newer authority than input refusal.
+    #[test]
+    fn an_undelivered_start_cannot_erase_a_hook_or_foreground_observation() {
+        for observation in ["hook", "claude", "wrapper", "gemini"] {
+            let holders = Arc::new(Holders::default());
+            holders.idle_shell(41, "zsh");
+            let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+            let (_, _, pane) = engine
+                .create_workspace(WAIT, "/w", "w", true, Env::new())
+                .unwrap();
+            let start = engine
+                .prepare_start(launch(
+                    &pane,
+                    "worker",
+                    "claude",
+                    &["--resume", "same-session"],
+                ))
+                .unwrap();
+            let (admitted, finish) = holders.hold_input();
+            std::thread::scope(|scope| {
+                let starting = scope.spawn(|| engine.start_agent(WAIT, &start));
+                admitted.recv_timeout(Duration::from_secs(5)).unwrap();
+                if observation == "hook" {
+                    engine
+                        .hook_session(&pane, "claude", "same-session")
+                        .unwrap();
+                    let duplicate = engine
+                        .prepare_start(launch(&pane, "second", "codex", &[]))
+                        .unwrap();
+                    assert!(
+                        matches!(engine.start_agent(WAIT, &duplicate), Err(EngineError::Refused { code, .. }) if code == "agent_pane_busy")
+                    );
+                } else {
+                    holders.say(
+                        &pane,
+                        &running(observation, hide_node_link::holders::ScreenState::Working),
+                    );
+                }
+                finish.send(Err(undelivered_input())).unwrap();
+                assert!(matches!(
+                    starting.join().unwrap(),
+                    Err(EngineError::Refused { .. })
+                ));
+            });
+            let agents = engine.agents(WAIT).unwrap();
+            assert_eq!(agents.len(), 1, "{observation}");
+            assert_eq!(
+                agents[0].agent.as_deref(),
+                Some(if observation == "gemini" {
+                    "gemini"
+                } else {
+                    "claude"
+                })
+            );
+            if observation == "hook" {
+                assert_eq!(
+                    agents[0].agent_session.as_ref().unwrap().value,
+                    "same-session"
+                );
+            }
+        }
+    }
+
+    /// The old response can arrive after the original start deadline and
+    /// a new start. Neither it nor the new refusal revives the expired one.
+    #[test]
+    fn an_expired_agent_start_cannot_withdraw_or_return_after_a_new_attempt() {
+        for new_refused in [false, true] {
+            let holders = Arc::new(Holders::default());
+            holders.idle_shell(41, "zsh");
+            let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+            let (_, _, pane) = engine
+                .create_workspace(WAIT, "/w", "w", true, Env::new())
+                .unwrap();
+            let old = engine
+                .prepare_start(launch(&pane, "old", "claude", &[]))
+                .unwrap();
+            let (admitted, finish) = holders.hold_input();
+            std::thread::scope(|scope| {
+                let starting = scope.spawn(|| engine.start_agent(WAIT, &old));
+                admitted.recv_timeout(Duration::from_secs(5)).unwrap();
+                engine
+                    .topology()
+                    .pane_mut(&pane)
+                    .unwrap()
+                    .agent
+                    .as_mut()
+                    .unwrap()
+                    .live
+                    .started = Some(
+                    std::time::Instant::now() - agents::START_DEADLINE - Duration::from_secs(1),
+                );
+                let new = engine
+                    .prepare_start(launch(&pane, "new", "codex", &[]))
+                    .unwrap();
+                if new_refused {
+                    let (_admitted, reject) = holders.hold_input();
+                    reject.send(Err(undelivered_input())).unwrap();
+                    assert!(engine.start_agent(WAIT, &new).is_err());
+                } else {
+                    engine.start_agent(WAIT, &new).unwrap();
+                }
+                finish.send(Err(undelivered_input())).unwrap();
+                assert!(starting.join().unwrap().is_err());
+            });
+            let agents = engine.agents(WAIT).unwrap();
+            if new_refused {
+                assert!(
+                    agents.is_empty(),
+                    "neither expired nor refused starts survive"
+                );
+            } else {
+                assert_eq!(agents.len(), 1);
+                assert_eq!(agents[0].name.as_deref(), Some("new"));
+                assert_eq!(agents[0].agent.as_deref(), Some("codex"));
+                assert!(!holders.typed(&pane).contains("claude"));
+            }
+        }
+    }
+
+    /// Rules in flight for an old start may finish, but the queued decision
+    /// after refusal and a new launch belongs to the new agent.
+    #[test]
+    fn a_refused_start_and_its_successor_leave_the_new_agents_rules() {
+        let holders = Arc::new(Holders::default());
+        holders.idle_shell(41, "zsh");
+        let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+        let (_, _, pane) = engine
+            .create_workspace(WAIT, "/w", "w", true, Env::new())
+            .unwrap();
+        let (began, waiting) = std::sync::mpsc::channel();
+        let (finish, go) = std::sync::mpsc::channel();
+        *holders.rules_hold.lock().unwrap() = Some((began, go));
+        let start = engine
+            .prepare_start(launch(&pane, "old", "claude", &[]))
+            .unwrap();
+        let (admitted, reject) = holders.hold_input();
+        std::thread::scope(|scope| {
+            let starting = scope.spawn(|| engine.start_agent(WAIT, &start));
+            admitted.recv_timeout(Duration::from_secs(5)).unwrap();
+            waiting.recv_timeout(Duration::from_secs(5)).unwrap();
+            reject.send(Err(undelivered_input())).unwrap();
+            assert!(starting.join().unwrap().is_err());
+            let new = engine
+                .prepare_start(launch(&pane, "new", "codex", &[]))
+                .unwrap();
+            engine.start_agent(WAIT, &new).unwrap();
+            finish.send(()).unwrap();
+        });
+        assert_eq!(
+            holders.rules_given(2).last().unwrap().1.as_deref(),
+            Some("codex")
+        );
+        let agents = engine.agents(WAIT).unwrap();
+        assert_eq!(agents[0].name.as_deref(), Some("new"));
     }
 
     /// A typed agent can report its first session before the holder has

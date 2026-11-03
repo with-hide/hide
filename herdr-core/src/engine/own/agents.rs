@@ -234,6 +234,9 @@ pub(super) struct PaneAgent {
 pub(super) struct Live {
     /// When the engine typed its start, until its program showed.
     pub(super) started: Option<Instant>,
+    /// The start whose not-yet-delivered metadata can still be withdrawn.
+    /// Foreground or session evidence invalidates it, even at the same value.
+    pub(super) start_claim: Option<Arc<()>>,
     /// Its program is in the pane's foreground.
     pub(super) shown: bool,
     pub(super) status: Status,
@@ -263,6 +266,7 @@ impl PaneAgent {
         let changed = !self.live.shown;
         self.live.shown = true;
         self.live.started = None;
+        self.live.start_claim = None;
         changed
     }
 
