@@ -469,7 +469,8 @@ impl OwnEngine<'_> {
         };
         let catalog = self.shared.definitions.get();
         for (pane, facts) in entered {
-            if let Ok(applied) = self.topology().apply_facts(&pane, &facts, &catalog)
+            let applied = self.topology().apply_facts(&pane, &facts, &catalog);
+            if let Ok(applied) = applied
                 && applied.rules_for.is_some()
             {
                 self.give_rules(&pane);
