@@ -9,7 +9,7 @@
 // changed files in the Explorer, one of them opened beside it.
 
 import { chapter } from "../chapter";
-import { CONDUCTOR, DECISION_CARD, MISSION_WORLD, PLAN_SEEN_MS, SIGN_IN_FILE, focusedOn, missionInSlot, openedFile, showsExplorer, showsMemory, type MissionModel } from "../worlds/mission";
+import { CONDUCTOR, DECISION_CARD, MISSION_WORLD, SIGN_IN_FILE, focusedOn, missionInSlot, openedFile, showsExplorer, showsMemory, type MissionModel } from "../worlds/mission";
 
 const PANE = `[data-pane-view="${CONDUCTOR}"]`;
 const CHIP = `${PANE} [data-pane-mission-chip]`;
@@ -22,7 +22,7 @@ const SCREEN = "ui";
 export default chapter<MissionModel>({
   id: "mission",
   number: 0,
-  version: 12,
+  version: 13,
   world: MISSION_WORLD,
   quest: true,
   steps: [
@@ -31,8 +31,7 @@ export default chapter<MissionModel>({
     { id: "intro", quest: true, target: PANE, side: "center", scene: 2400, gesture: { type: { pane: CONDUCTOR, words: "practice.mission.world.example" } }, done: (model) => model.stage >= 1 },
     { id: "thinking", target: PANE, side: "center", wait: true, done: (model) => model.stage >= 2 },
     // The chip opens the whole plan in the 보기 slot; a first plan also opens the chip's popover once.
-    // The guide waits until the Conductor has written the plan and its question, so they are read before the chip is ringed.
-    { id: "chip", quest: true, target: CHIP, side: "right", scene: PLAN_SEEN_MS, gesture: { click: true }, done: missionInSlot },
+    { id: "chip", quest: true, target: CHIP, side: "right", gesture: { click: true }, done: missionInSlot },
     { id: "plan", target: "[data-mission]", side: "left" },
     // The go is said to the Conductor in the terminal, because Hide has no button that starts a mission.
     { id: "approve", quest: true, target: PANE, side: "center", gesture: { type: { pane: CONDUCTOR, words: "practice.mission.world.approve" } }, done: (model) => model.stage >= 3 },
