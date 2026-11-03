@@ -37,7 +37,14 @@ pub const WATCH_LIMIT: usize = 32;
 pub const BODY_LIMIT: usize = 16 * 1_024;
 pub const FILE_LIMIT: usize = 16 * 1_024 * 1_024;
 pub const HOOK_LIMIT: usize = 8 * 1_024;
-pub const HOOK_LETTERS: usize = 5;
+/// The most letters one handover bundle confirms, shown and folded together
+/// (`mailbox::render`). Every letter awaiting intake is open, so a bundle of
+/// all of them stays under it.
+pub const BUNDLE_LETTERS: usize = hide_agent_hooks::delivery::BUNDLE_LETTERS;
+const _: () = assert!(OPEN_LIMIT <= BUNDLE_LETTERS);
+/// How many of one sender's letters a bundle shows in full, newest first,
+/// beside its questions and blocks, which it always shows.
+pub const SHOWN_PER_SENDER: usize = 3;
 
 #[derive(
     Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,

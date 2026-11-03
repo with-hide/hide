@@ -1328,6 +1328,7 @@ impl Runtime {
             session,
             prompt_digest,
             point,
+            ..
         } = &command
         {
             if prompt_digest
@@ -1519,6 +1520,7 @@ impl Runtime {
             target,
             command,
         )
+        .worded_in(self.interface_language())
         .then(after);
         let prepared = match forced {
             Some(engine) => prepared.forced_through(engine),
@@ -3374,7 +3376,7 @@ pub(crate) mod tests {
                 "recipient",
                 &context,
                 None,
-                Command::Inbox,
+                Command::Inbox { bundle: true },
             )
             .unwrap();
         assert_eq!(written(&mut guard), (false, false, false));
@@ -3397,6 +3399,7 @@ pub(crate) mod tests {
                         prompt_digest: prompt_digest.clone(),
                         session: session.map(str::to_owned),
                         point: hide_node_link::panes::PullPoint::Prompt,
+                        bundle: true,
                     },
                 )
                 .unwrap();
@@ -3418,6 +3421,7 @@ pub(crate) mod tests {
                         prompt_digest: Some("prompt".into()),
                         session: None,
                         point: hide_node_link::panes::PullPoint::Prompt,
+                        bundle: true,
                     },
                 )
                 .err()
@@ -3428,6 +3432,7 @@ pub(crate) mod tests {
             prompt_digest: None,
             session: Some(session),
             point: hide_node_link::panes::PullPoint::Prompt,
+            bundle: true,
         };
         // An id past the session bound is refused before it is hashed under the lock.
         assert_eq!(
@@ -3612,6 +3617,7 @@ pub(crate) mod tests {
             prompt_digest: None,
             session: Some(session.into()),
             point: hide_node_link::panes::PullPoint::Tool,
+            bundle: true,
         };
         clocks(&mut guard, "recipient", true);
         let prepared = guard
@@ -3658,6 +3664,7 @@ pub(crate) mod tests {
                         prompt_digest: None,
                         session: None,
                         point: hide_node_link::panes::PullPoint::Tool,
+                        bundle: true,
                     },
                 )
                 .err()
@@ -3753,7 +3760,7 @@ pub(crate) mod tests {
                         caller,
                         &context,
                         Some("recipient"),
-                        Command::Inbox
+                        Command::Inbox { bundle: true }
                     )
                     .is_err()
             );
@@ -3764,7 +3771,7 @@ pub(crate) mod tests {
                         caller,
                         &context,
                         Some("remote:other:pane:sender"),
-                        Command::Inbox
+                        Command::Inbox { bundle: true }
                     )
                     .is_err()
             );
@@ -4035,7 +4042,7 @@ pub(crate) mod tests {
                 now: false,
                 force: false,
             },
-            Command::Inbox,
+            Command::Inbox { bundle: true },
             Command::WatchStart {
                 target: "recipient".into(),
                 observer: None,
@@ -4074,7 +4081,7 @@ pub(crate) mod tests {
                     "sender",
                     &context,
                     Some("recipient"),
-                    Command::Inbox
+                    Command::Inbox { bundle: true }
                 )
                 .err()
                 .as_deref(),
@@ -4734,10 +4741,11 @@ pub(crate) mod tests {
             },
         )
         .unwrap();
-        let inbox = run("recipient", Command::Inbox).unwrap();
-        assert_eq!(inbox.as_array().map(Vec::len), Some(1), "{inbox}");
-        assert_eq!(inbox[0]["id"], letter["id"]);
-        assert_eq!(inbox[0]["body"], "read me after a restart");
+        let inbox = run("recipient", Command::Inbox { bundle: true }).unwrap();
+        let letters = &inbox["letters"];
+        assert_eq!(letters.as_array().map(Vec::len), Some(1), "{inbox}");
+        assert_eq!(letters[0]["id"], letter["id"]);
+        assert_eq!(letters[0]["body"], "read me after a restart");
         drop(worker);
 
         let saved = crate::delivery::ledger::recover(&path).unwrap();

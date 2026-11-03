@@ -48,6 +48,7 @@ hide request show letter-1
 hide request ack letter-1
 hide request cancel letter-1
 hide inbox
+hide inbox --ack letter-9~3f9a1c2b7d4e
 hide watch start child-name
 hide watch list
 hide watch stop watch-2
@@ -58,6 +59,7 @@ hide request send child-name --intent task-stop-1 --body 'Stop and report what y
 
 A `request` or `block` letter waits for an answer; a `progress` letter is an interim report, such as a plan or a checkpoint, and a `report` letter says the work is finished.
 Only a `report` ends the parent's watch on its sender ([Watch activity and completion](#watch-activity-and-completion)), so a child that has more to do after what it writes sends `progress`.
+`hide guide` tells an agent to send `progress` at a plan, a change of direction or before a long wait, not at every step, since its recipient reads only its newest three in full ([One bundle per handover](#one-bundle-per-handover)).
 
 The recipient can acknowledge or reply; the sender can cancel.
 A `request` or `block` letter waits for its answer until one of four things ends the wait: the recipient replies, the sender cancels, either side's registration ends, or 24 hours pass since it was sent ([Persistence, clocks and limits](#persistence-clocks-and-limits)).
@@ -185,11 +187,11 @@ The ask (`Command::Pull { point: Tool }`, node protocol 47) names the pane's own
 Grok also asks at its root session's `Stop` with `hide inbox --hook --session <id> --turn-end`.
 A nonempty answer becomes `{"decision":"block","reason":<letters>}`, followed by confirmation after stdout flush; Grok feeds the reason to the model and continues the turn.
 A second Stop with `stopHookActive: true` makes no letter pull and ends normally even if confirmation of the first handover failed.
-Tool and turn-end intake share the three-handover limit and the five-letter, 8 KiB cap.
+Tool and turn-end intake share the three-handover limit and the prompt's bundle and 8 KiB cap ([One bundle per handover](#one-bundle-per-handover)).
 Parallel tool hooks in one batch may pull the same claimed letter before either confirms it: the claim binds the bell turn, not an exclusive tool invocation.
 The worker serializes pulls and durably counts each handover, so this at-least-once path remains bounded at three; confirmation makes later pulls empty.
 An operator turn's new letter still waits five minutes unless sent with `--now`; ending that turn does not skip the wait, and its rest bell brings the letter instead.
-The core answers from the caller's own observation: the letters whose wait is over for an agent whose turn works, as the core decides it for Herdr's current state, oldest first, under the prompt pull's caps (five letters, 8 KiB), and nothing for a resting agent without a bell-turn claim, a letter still waiting, a letter past its deadline or a kind whose adapter declares no `tool_letters`; a letter it hands over is confirmed by the script, not received, so one lost in the host stays pending for the next ask (D-11).
+The core answers from the caller's own observation: the letters whose wait is over for an agent whose turn works, as the core decides it for Herdr's current state, as one bundle under the prompt pull's 8 KiB cap, and nothing for a resting agent without a bell-turn claim, a letter still waiting, a letter past its deadline or a kind whose adapter declares no `tool_letters`; a letter it hands over is confirmed by the script, not received, so one lost in the host stays pending for the next ask (D-11).
 The plugin and the extension ask at every tool result of the pane's root session, so a `--now` letter goes at the next result (B6), and skip only the results that come while letters they handed over wait for their receipt; Grok's and Cursor's hook runs per tool call and adds one CLI call there, and agy's per model call after the first.
 Each handover the core answers is counted on the letter (`Letter.tool_handovers`), and after three without a receipt the letter is not handed over at a tool again: it waits for the next prompt or `hide inbox`, as a letter does after its three bells (`mailbox::TOOL_HANDOVERS`, D-11).
 [PERFORMANCE_TESTING.md](PERFORMANCE_TESTING.md#letters-at-a-tool-event) owns the cost per tool call and how it is measured, and [agent-hooks.md](agent-hooks.md) each script's and hook's part.
@@ -220,7 +222,7 @@ Legacy records with a successful bell but no total count conservatively have no 
 
 The `UserPromptSubmit` hook of a bell target reads the submitted prompt from its input payload and sends the core the SHA-256 of its canonical text (`hide inbox --hook --prompt-digest <sha256>`), never the text itself.
 The core alone knows which line its doorbell typed, so it alone decides whether the prompt was the bell ([Recognizing the bell](#recognizing-the-bell)).
-When it was, the pull takes the pending letters, oldest first, and after them the letters an earlier build acknowledged without a receipt (`hook_confirmed: false`), which the store's expiry pass before every request drops once their deadline passes, so such a backlog never displaces the letter the bell rang for; it emits their context, flushes stdout, then confirms those IDs.
+When it was, the pull takes the pending letters as one bundle ([One bundle per handover](#one-bundle-per-handover)), each sender's pending letters before the letters an earlier build acknowledged without a receipt (`hook_confirmed: false`), which the store's expiry pass before every request drops once their deadline passes, so such a backlog never displaces the letter the bell rang for; it emits their context, flushes stdout, then confirms those IDs.
 The pull marks the pending letters it hands over as handed (`Letter.handed`), saved before it answers, and no bell is typed for a handed letter again, whether or not the confirmation arrives: the confirmation is a second `hide` process inside the hook's last 400 ms (`CONFIRM_RESERVE`), which a loaded machine misses, and on 2026-11-01 one such miss had the doorbell type the same letter three times (letter-19680, load 110 to 140).
 A handed letter that no confirmation took in rides the next bell's batch for the same recipient, a tool or turn-end gap where the adapter has one, or `hide inbox`; it is not counted in the waiting line below and its sender is never told it was not taken ([Input an agent did not take](#input-an-agent-did-not-take)).
 Only that pull marks a letter handed: a hook with no context to print (Grok's claim below) hands nothing over at the prompt, and a session file that records the bell line shows only that the line was submitted.
@@ -247,11 +249,30 @@ A subagent's prompt and a prompt of only synthetic text pull nothing.
 The plugin forgets a pull it never saw stored after 10 minutes and keeps at most 16 waiting, so a stored part reported late can still confirm; past that the letter stays pending and comes again.
 Pi's and omp's extension attaches them as a hidden custom message (`display: false`) that `before_agent_start` returns for the pane's own session, and runs `hide inbox --confirm` once the host has written that message and then the reply after it; omp prepares a submission more than once, so each attempt's message carries its own id and only the written one confirms, once.
 A turn that ends before its reply leaves the letters pending, and an omp subagent's prompt pulls nothing.
-An agent with no prompt hook reads letters with `hide inbox`, which shows an `ack_command` for each, and `hide request ack` is its receipt, as it is for an agent with one: it records `hook_confirmed` and ends a matching report watch, as the flushed hook confirmation does.
+An agent with no prompt hook reads letters with `hide inbox`, which shows the same bundle and one `ack_command` for the whole of it, and that acknowledgement, or `hide request ack` for one letter, is its receipt, as it is for an agent with one: it records `hook_confirmed` and ends a matching report watch, as the flushed hook confirmation does.
 Transport arrival and the doorbell alone do not confirm intake.
 Interruption before confirmation can repeat the same letter ID; confirmed letters do not appear again in hook context.
-The hook emits at most five letters and 8 KiB of context, with a remaining-count line and `hide inbox` guidance when more are pending.
+The hook emits one bundle of at most 8 KiB of context, with a remaining-count line and `hide inbox` guidance when letters are left out.
 A large letter is truncated at a UTF-8 boundary and includes its ID and `hide request show` command for the complete body.
+
+#### One bundle per handover
+
+Every path that hands an agent its waiting letters gives them as one bundle, whatever their senders: the prompt hook, the tool-result and pre-tool handovers, the turn-end handover and `hide inbox` (`mailbox::bundle`, the one place it is decided, so every agent kind and system gets the same bundle).
+It exists because one chatty sender used to fill every handover: on 2026-11-03 a mission's Conductor received 505 letters in about 13 hours, 143 of them progress letters from one worker, and read each stale checkpoint in full, five at a time, while 109 of them were still unread when that worker's next one arrived.
+
+- The letters are grouped by sender, each sender's group where its first letter comes, the letters a bell rings for first.
+- A `request` or `block` is always shown in full and never folded: a folded question would go unanswered until it expires and its sender would stay stuck.
+- Of every other kind (`progress`, `report`, `reply` and the letters of Hide's own roles), each sender's newest three (`SHOWN_PER_SENDER`) are shown in full, and its older ones are folded into one line before them: the sender, how many in the interface language's words for the bell line's waiting count ([The bell line](#the-bell-line): `외 N통`, `and N more`, `另有 N 封`, `ほか N 通`), and `hide request show <id>` with the newest eight folded ids.
+- A sender with three or fewer such letters is shown exactly as before: all in full, no fold line.
+- A folded letter is neither deleted nor rewritten; it stays in the ledger, opens with `hide request show <id>`, and `hide inbox` lists every folded id under `folded`.
+
+Taking the bundle takes every letter in it, folded ones included, with one confirmation: a hook's flushed confirmation as before (`hide inbox --confirm` takes at most 1024 ids, `BUNDLE_LETTERS`, which the open-letter limit keeps a bundle under), and for an agent with no prompt hook the one `ack_command` `hide inbox` prints, `hide inbox --ack <bundle>`.
+The bundle token is the newest listed letter's id, `~`, and the first 12 hex digits of the SHA-256 of every pending letter the answer listed, shown or folded, in the ledger's order (`mailbox::bundle_token`), so it takes exactly the letters that answer carried: a letter that came after it stays pending, and a set below its newest that is not the one listed, such as one taken meanwhile by a hook, is refused `bundle_changed` with nothing taken, and `hide inbox` again prints the bundle as it is now.
+A folded `report` still ends its parent's watch.
+The 8 KiB cap still holds: each sender's fold line goes before its letters, and a sender whose fold line no longer fits, or a letter the cap leaves out, is neither shown nor taken; it waits for the next handover with the remaining-count line, so a folded letter is never shown in full later because its newer letters were taken first.
+When the questions and blocks alone pass the cap, the line and `hide inbox` guidance are what is left, as before.
+A connected device whose kit is older than this build is not held up by bundles: its `hide` sends no `bundle` on a pull or `hide inbox` (`Command::Pull`, `Command::Inbox`, `HookCommand::LetterPull`), and the core answers it as before bundles (`mailbox::Bundling::Legacy`): oldest first, nothing folded, at most five letters a handover, which is all its hook confirms, and `hide inbox` with a `hide request ack` per letter, since that `hide` has no `--ack`.
+So the operator can update the app before a device, and the device's letters keep flowing five at a time until its kit follows; the path goes once no kit older than this build can run.
 The installed prompt hook supervises one guarded internal operation with a 1.85-second deadline inside the two-second caller budget, including Memory, filesystem, output and diagnostic work.
 The internal operation requires positive owner proof and inherits the runtime payload and output streams; it confirms only after its output is successfully flushed.
 Failure leaves actual intake unconfirmed and attempts a rate-limited private diagnostic inside that same budget, under the cause of the step that failed ([agent-hooks.md](agent-hooks.md#what-a-hook-records-when-it-fails)).
@@ -661,7 +682,7 @@ Every `capacity` refusal of a letter writes one `letter.capacity_refused` diagno
 | Open / retained letters | 1024 / 5000; a letter is open while it awaits intake or a reply; at 5000 a new letter drops the finished letter that finished first (ties: the earlier sent), never an open one, and is refused with `capacity` only when none is finished |
 | Watches | 32 |
 | Letter body / ledger file | 16 KiB / 16 MiB |
-| Hook batch / context / total deadline | Five letters / 8 KiB / two seconds |
+| Hook bundle / context / total deadline | 1024 letters taken, each sender's three newest shown beside its questions and blocks / 8 KiB / two seconds |
 
 Automatic doorbells apply only to `pending` letters, and the deadline turns only a `pending` letter `undelivered`, while watch clocks remain distinct.
 
