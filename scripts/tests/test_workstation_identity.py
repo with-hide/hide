@@ -85,6 +85,18 @@ class WorkstationIdentityTests(unittest.TestCase):
             self.tracked("contact.txt", value)
             self.assertEqual(self.classes(self.check()), ["contact_email"])
 
+    def test_only_code_owned_systemd_namespace_identifiers_are_allowed(self):
+        self.tracked("service.conf", "After=systemd-journald" + "@" + "hide-relay.service\n"
+                     "/etc/systemd/journald" + "@" + "hide-relay.conf\n")
+        for scope in ("checkout", "index"):
+            self.assertEqual(self.check(scope).returncode, 0)
+        for value in ("person" + "@" + "hide-relay.service",
+                      "systemd-journald" + "@" + "other.service",
+                      "systemd-journald" + "@" + "hide-relay.service.example.org",
+                      "journald" + "@" + "other.conf"):
+            self.tracked("service.conf", value)
+            self.assertEqual(self.classes(self.check()), ["contact_email"])
+
     def test_only_a_registry_deprecation_notice_in_the_lockfile_may_name_its_author(self):
         author = "package-author" + "@" + "mail.vendor.com"
         notice = "  glob@7.2.3:\n    deprecated: Old versions are unsupported, contact " + author + "\n"
