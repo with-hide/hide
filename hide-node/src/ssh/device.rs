@@ -558,10 +558,11 @@ impl DialedTransport for SshDevice {
         let rest = link.take_rest();
         let host = link.into_host(rest, self.panes.clone(), on_close);
         stage("hello");
-        let hello: Hello = call_as(&host, Call::Hello, host::HELLO_TIMEOUT).map_err(|error| {
-            host.close("the helper did not answer Hello");
-            EstablishError::Helper(format!("The device helper did not start: {error}"))
-        })?;
+        let hello: Hello = call_as(&host, Call::Hello, host::hello_timeout(installed.fresh))
+            .map_err(|error| {
+                host.close("the helper did not answer Hello");
+                EstablishError::Helper(format!("The device helper did not start: {error}"))
+            })?;
         if let Some(reason) = host::helper_protocol_refusal(&hello) {
             host.close("helper protocol mismatch");
             return Err(EstablishError::Helper(reason));

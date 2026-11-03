@@ -170,6 +170,24 @@ const DRAIN_BOUND: Duration = Duration::from_secs(250);
 /// own timeout whatever happens to the cancel.
 const CANCEL_TIMEOUT: Duration = Duration::from_secs(5);
 pub(super) const HELLO_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long the first Hello waits when the helper program was written by
+/// this very connection's install: a program's first start after it is
+/// written can take tens of seconds while the system scans it (Windows
+/// Defender on a new `.exe`; on a real Windows 11 PC on 2026-11-04 the
+/// first Hello passed [`HELLO_TIMEOUT`] once, and the row showed the helper
+/// unavailable until the retry), while a helper the device already held
+/// starts well inside [`HELLO_TIMEOUT`].
+pub(super) const FIRST_HELLO_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// The bound for a connection's first Hello: [`FIRST_HELLO_TIMEOUT`] when
+/// its install wrote the helper (`fresh`), [`HELLO_TIMEOUT`] otherwise.
+pub(super) fn hello_timeout(fresh: bool) -> Duration {
+    if fresh {
+        FIRST_HELLO_TIMEOUT
+    } else {
+        HELLO_TIMEOUT
+    }
+}
 
 /// A device test's Git stage: the node runs `git --version` over the link
 /// the device has, read-only and with no login of its own (PRD
@@ -2631,6 +2649,16 @@ fn deliver_event(inner: &Arc<Inner>, panes: Option<&PaneHook>, line: &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The first Hello after the connection's install wrote the helper
+    /// waits long enough for a scanned first start, past the bound a helper
+    /// the device already held gets; it is a fixed bound, not a retry.
+    #[test]
+    fn a_freshly_installed_helper_gets_a_longer_first_hello() {
+        assert_eq!(hello_timeout(false), Duration::from_secs(15));
+        assert_eq!(hello_timeout(true), Duration::from_secs(60));
+        assert!(hello_timeout(true) > hello_timeout(false));
+    }
 
     /// A device's terminal line past its cap ends the link, and an answer
     /// keeps its own, larger cap: a device's node is another machine's
