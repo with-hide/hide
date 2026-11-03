@@ -189,11 +189,11 @@ def atomic_link(path, target):
 
 
 def sync_directory(path):
-    fd = os.open(path, os.O_RDONLY)
+    descriptor = os.open(path, os.O_RDONLY)
     try:
-        os.fsync(fd)
+        os.fsync(descriptor)
     finally:
-        os.close(fd)
+        os.close(descriptor)
 
 
 def verify_release(release):
