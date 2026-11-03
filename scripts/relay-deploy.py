@@ -168,11 +168,16 @@ def stage(artifact, destination, values):
 def run(*argv):
     # OS boundary only. Output can include deployment values or request objects;
     # report the executable and exit status, never replay arbitrary stderr.
-    result = subprocess.run(argv, stdout=subprocess.PIPE if argv[0] == "curl" else subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                            timeout=90, check=False)
+    operation = Path(argv[0]).name
+    if operation == "systemctl":
+        operation += " " + argv[1]
+    try:
+        result = subprocess.run(argv, stdout=subprocess.PIPE if argv[0] == "curl" else subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, timeout=90, check=False)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(operation + " timed out") from None
     if result.returncode:
-        raise RuntimeError(f"{Path(argv[0]).name} failed (exit {result.returncode})")
+        raise RuntimeError(f"{operation} failed (exit {result.returncode})")
     return result.stdout
 
 
@@ -317,8 +322,8 @@ def install(release, root=Path("/"), command=run):
         try:
             recover(root, command)
         except Exception as rollback:
-            raise RuntimeError("installation failed; recovery incomplete, run recover") from rollback
-        raise RuntimeError("installation failed; previous state restored") from failure
+            raise RuntimeError(f"installation failed ({failure}); recovery incomplete ({rollback}), run recover") from rollback
+        raise RuntimeError(f"installation failed ({failure}); previous state restored") from failure
     pending.unlink()
     sync_directory(base)
 
