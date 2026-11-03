@@ -8,6 +8,8 @@ A document's location or an old PRD citation does not make it current authority.
 
 Product usage statistics: [wire, ownership and privacy](ARCHITECTURE.md#product-usage-statistics), [Settings](UI_BEHAVIOR.md#privacy), [build input](BUILD.md#product-analytics-build-input); owners are `hided/src/product_analytics.rs`, `herdr-core/src/product_analytics.rs`, the AI router, the link worker's pane pass (`herdr-core/src/links/`), and `web/e2e/product-analytics.spec.ts`.
 
+Hosted phone releases: [upload ordering, retained protocols, secrets and CSP](BUILD.md#the-hosted-phone-release); owners are `.github/workflows/release-candidate.yml`, `scripts/phone-release.mjs` and `scripts/tests/test_phone_release.py`.
+
 | Question | Read | Executable authority or enforcement |
 | --- | --- | --- |
 | Working rules, routing, and the invariants that hold everywhere | [AGENTS.md](../AGENTS.md) | `herdr-core/`, `hided/`, `web/`, `desktop/`, relevant local rules |

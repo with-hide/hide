@@ -166,6 +166,11 @@ The relay never receives the QR, code or encrypted phone credential in a routing
 
 ## Build and evidence
 
+[BUILD.md](BUILD.md#the-hosted-phone-release) owns the hosted phone release: main CI uploads the matching `/p/<phone_protocol>/` before desktop release preparation, keeps every older protocol bundle and stops the release on upload or production-check failure.
+The relay's `phone_protocol` is only a routing hint for selecting that bundle; it grants no credential and does not bypass the Noise handshake or hided's phone admission.
+The hosted app loads no external scripts or analytics, and its production CSP permits connections only to its own origin and the relay.
+The relay forwards encrypted content without reading it; the phone-site build and its host remain trusted endpoints because the browser executes that site's code.
+
 [BUILD.md](BUILD.md#mobile-relay-webassembly) owns the reproducible source build and browser import.
 `bash scripts/check-relay-protocol.sh` runs the official cacophony NK vector through native Rust and WASM, the same malformed/replay/limit/QR tests on both targets, and a TypeScript-driven native-to-WASM exchange in both directions, including a 256 KiB message.
 `tests/fixtures/README.md` pins the upstream vector source and checksum; the fixture's public deterministic secrets must never be used in production.

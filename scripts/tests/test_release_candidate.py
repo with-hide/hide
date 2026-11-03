@@ -55,14 +55,15 @@ class ReleaseCandidate(unittest.TestCase):
         runs = ROOT / "agents/runs/release-candidate-tests"
         runs.mkdir(parents=True, exist_ok=True)
         for changed, refused in [("README.md", False), (".github/workflows/agent-journey.yml", True),
-                                 (".github/workflows/package.yml", True), (".github/workflows/device-helpers.yml", True)]:
+                                 (".github/workflows/package.yml", True), (".github/workflows/device-helpers.yml", True),
+                                 ("scripts/phone-release.mjs", True)]:
             with self.subTest(changed=changed), tempfile.TemporaryDirectory(dir=runs) as temp:
                 repo = Path(temp)
                 git = lambda *args: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
                                                    cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
                 git("init", "-q")
                 for name in ("README.md", ".github/workflows/agent-journey.yml", ".github/workflows/package.yml",
-                             ".github/workflows/device-helpers.yml"):
+                             ".github/workflows/device-helpers.yml", "scripts/phone-release.mjs"):
                     (repo / name).parent.mkdir(parents=True, exist_ok=True)
                     (repo / name).write_text("first\n")
                 git("add", "-A")
@@ -102,7 +103,7 @@ class ReleaseCandidate(unittest.TestCase):
         # the journey and the journey uploads none of these names.
         jobs = yaml.safe_load((WORKFLOWS / "release-candidate.yml").read_text())["jobs"]
         receipt = jobs["receipt"]
-        self.assertEqual(set(receipt["needs"]), {"validate", "packages", "macos-binaries"})
+        self.assertEqual(set(receipt["needs"]), {"validate", "phone", "packages", "macos-binaries"})
         self.assertNotIn("if", receipt)  # default success(), never always()
         taken = {"hide-release-candidate", "hide-package-linux", "hide-package-windows", "hide-device-helper-linux-x86_64",
                  "hide-device-helper-linux-aarch64", "hide-macos-release-binaries", "hide-device-bundles"}
@@ -113,8 +114,9 @@ class ReleaseCandidate(unittest.TestCase):
         for name in uploads:
             self.assertFalse(name.startswith("hide-") or name in taken, name)
         for job in [jobs["packages"], jobs["agent-journey"]]:
-            self.assertEqual(job["needs"], "validate")
             self.assertEqual(job["with"]["source-sha"], "${{ inputs.public_sha }}")
+        self.assertEqual(jobs["agent-journey"]["needs"], "validate")
+        self.assertEqual(set(jobs["packages"]["needs"]), {"validate", "phone"})
         self.assertEqual(jobs["packages"]["with"]["build-order"], "${{ inputs.build_order }}")
         journey = jobs["agent-journey"]["with"]
         self.assertEqual(journey["systems"], '["linux","macos","windows"]')
@@ -155,7 +157,7 @@ class ReleaseCandidate(unittest.TestCase):
         runner = workflow[True]["workflow_dispatch"]["inputs"]["macos_runner"]
         self.assertEqual((runner["options"], runner["default"]), (["mini", "hosted"], "mini"))
         job = workflow["jobs"]["macos-binaries"]
-        self.assertEqual(job["needs"], "validate")
+        self.assertEqual(set(job["needs"]), {"validate", "phone"})
         self.assertEqual(job["runs-on"], "${{ inputs.macos_runner == 'hosted' && fromJSON('[\"macos-15\"]') "
                                          "|| fromJSON('[\"self-hosted\",\"macOS\",\"ARM64\",\"hide-candidate\"]') }}")
         self.assertNotIn("environment", job)

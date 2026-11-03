@@ -397,6 +397,8 @@ Public CI keeps the source, installation and update checks; official macOS signi
 
 An official release requires:
 
+- The candidate's phone job uploads that source's bundle to `app.withhide.dev` and confirms the retained protocol union, exact production bytes and CSP before desktop preparation ([the hosted phone release](docs/BUILD.md#the-hosted-phone-release)).
+  A missing deployment secret or a failed upload stops the candidate; only main CI deploys the phone site, and older protocol folders remain available.
 - The source commit's own `verify` push run on main passed, including its full Rust, web, desktop and package lanes; the publish checks this run, which the candidate's receipt names.
 - The [agent journey](docs/VERIFICATION.md#agent-journey) ran on the source locally on the Mac, the fake model first and then with the agents signed in there ([A release's run on the Mac](docs/VERIFICATION.md#local-mode-macos)), which is a release's only evidence of a real login, and in the public candidate's stand-in and fake-model CI lanes.
   A failed local journey cell stops the release unless the operator explicitly approves and records that exception for this version; every unmeasured cell and its reason is shown in the version approval.

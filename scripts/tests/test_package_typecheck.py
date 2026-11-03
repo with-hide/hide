@@ -174,7 +174,7 @@ class PackageTypecheckWorkflow(unittest.TestCase):
         jobs = yaml.safe_load((WORKFLOWS / "release-candidate.yml").read_text())["jobs"]
         self.assertIs(jobs["packages"]["with"]["web-typechecked"], True)
         self.assertEqual(jobs["packages"]["with"]["source-sha"], "${{ inputs.public_sha }}")
-        self.assertEqual(jobs["packages"]["needs"], "validate")
+        self.assertEqual(set(jobs["packages"]["needs"]), {"validate", "phone"})
         source = next(step for step in jobs["validate"]["steps"] if step.get("id") == "source")
         # The run id reaches the checker through the dispatch event's inputs,
         # which it validates before reading the run.
