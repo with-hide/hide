@@ -117,11 +117,14 @@ impl PaneHolders for LocalPanes {
                 .map_err(|message| HolderError::Unreachable { message })?,
         );
         let found = self.holders.recover(&owner, &self.service);
-        if !found.complete || !found.unjudged.is_empty() {
+        if !found.complete {
             return Err(HolderError::Unreachable {
-                message: "the node could not reconcile every pane record".to_owned(),
+                message: "the node could not complete its pane record scan".to_owned(),
             });
         }
+        // A complete scan retains unreadable IDs in `present` and in the
+        // record cap. Quarantine those records, not this connection's
+        // healthy panes; starting an unreadable ID still refuses in Panes.
         self.holders.prune_folders();
         Ok(Arc::new(Self {
             holders: Arc::clone(&self.holders),

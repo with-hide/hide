@@ -649,6 +649,91 @@ fn an_engine_pane_attaches_before_its_holder_start_is_registered() {
     service.close();
 }
 
+/// An unreadable neighbour stays quarantined while the node connection
+/// recovers a live pane and admits a new, distinct pane.
+#[test]
+fn unreadable_records_do_not_reject_the_nodes_healthy_panes() {
+    use hide_node_link::holders::PaneInput;
+    use hide_node_link::link::NodeLink;
+    use hide_node_link::link_panes::LinkPanes;
+
+    let folder = Folder::new();
+    let node = Node::start(Switch::On, folder.home.path(), &folder.state);
+    node.start_pane(&folder.shell("w1:p1"));
+    node.screens.first_full("w1:p1");
+    let invalid = [
+        ("w1:p2", b"{cut off".as_slice()),
+        ("w1:p3", b"{\"format\":999}".as_slice()),
+    ];
+    for (pane, bytes) in invalid {
+        std::fs::write(
+            layout::pane_record(&folder.state, &hide_kit::panes::holder_pane(pane)),
+            bytes,
+        )
+        .unwrap();
+    }
+    let Node {
+        service,
+        holders,
+        owner,
+        screens,
+        ..
+    } = node;
+    drop(owner);
+    let service = Arc::new(service);
+    let local = Arc::new(
+        hide_node::Local::new(Some(folder.home.path().to_owned())).with_panes(Arc::new(
+            LocalPanes::new(
+                Arc::new(holders.unwrap()),
+                Arc::clone(&service),
+                PaneShell::Fixed(shell()),
+            ),
+        )),
+    );
+    let linked = LinkPanes::new(Arc::clone(&local) as Arc<dyn NodeLink>, Arc::new(|_| {}));
+    let found = linked.recovered(Duration::from_secs(5)).unwrap();
+    for pane in ["w1:p1", "w1:p2", "w1:p3"] {
+        assert!(
+            found.present.contains(&pane.to_owned()),
+            "{pane} was lost: {found:?}"
+        );
+    }
+    linked
+        .input("w1:p1", PaneInput::Bytes(print_ok().to_vec()))
+        .unwrap();
+    screens.wait_drawn_after("w1:p1", 0, "hide-ok");
+    assert!(linked.read("w1:p1", 200).unwrap().0.contains("hide-ok"));
+    let start = |pane: &str| HolderStart {
+        pane: pane.to_owned(),
+        program: None,
+        cwd: hide_platform::path::to_wire(folder.home.path()).unwrap(),
+        env: Vec::new(),
+        rows: SIZE.rows,
+        cols: SIZE.cols,
+        notice: None,
+    };
+    linked.start(&start("w1:p4")).unwrap();
+    screens.first_full("w1:p4");
+    for (pane, bytes) in invalid {
+        assert!(matches!(
+            linked.start(&start(pane)),
+            Err(HolderError::Refused { .. })
+        ));
+        assert_eq!(
+            std::fs::read(layout::pane_record(
+                &folder.state,
+                &hide_kit::panes::holder_pane(pane)
+            ))
+            .unwrap(),
+            bytes
+        );
+    }
+    linked.terminate("w1:p4").unwrap();
+    linked.terminate("w1:p1").unwrap();
+    local.close("test finished");
+    service.close();
+}
+
 /// A redraw, and a view at the grid the pane already runs at, each bring a
 /// full frame from the holder, and what the program prints after either is
 /// drawn: the node waits for a full frame after both, and a holder answers

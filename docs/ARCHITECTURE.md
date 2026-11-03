@@ -2290,6 +2290,8 @@ A new connection cannot reconcile or allocate pane IDs until every previous work
 The stable lock file is never removed or replaced, and node start, close, forget and reconcile require the acquired ownership context.
 Holder processes retain their separate exact-incarnation record claim and do not inherit connection ownership.
 The pure liveness query counts records without pruning them.
+A failed or incomplete record scan refuses connection ownership; a completed scan with individual unreadable records retains the bound owner and usable panes.
+Those unreadable IDs remain present, count against the record cap and refuse their own starts without changing their bytes.
 
 Every change of a record, a start's reservation, the count against the cap and a removal happen under one lock file, `records/.lock`, and nothing that waits on another process runs under it: a holder starts, a tree ends and a connection opens outside it, and what they found is written under it after a fresh read that shows the record has not moved.
 A start is keyed by its pane id, so a caller asks the same start again whatever became of the last one: a pane that lives (starting or running) is answered as it is when the command (program, working folder and added environment, compared by digest) is the same, and refused as a conflict when it is not, so starts asked at once converge on one holder; a pane that is closing or over (ended, or its holder gone) is ended and settled once outside the lock, its record and stale socket removed under it, and started again as a new incarnation.
