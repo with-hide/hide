@@ -117,6 +117,7 @@ It refuses unmanaged units, conflicting bytes for an already-used SHA and more t
 When updating an existing release, it stops the three deployment services before switching the link.
 A first installation has no loaded services to stop.
 It then reloads the published units, restarts the namespace journal and services, and requires local relay/collector health, a certificate-validated HTTPS proxy response with status 200 and the relay's exact health body, and active services.
+Only a service reported as failed has its failure and start-limit counters reset; an inactive unit can already have left systemd's memory.
 The HTTPS check resolves the production domain to loopback and does not follow HTTP redirects; public DNS must already allow Caddy to obtain its certificate.
 It also enables and runs the journal retention timer/service.
 Public certificate issuance and remote logging/notifications still require the acceptance checks below.

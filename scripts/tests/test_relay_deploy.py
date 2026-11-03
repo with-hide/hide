@@ -18,6 +18,8 @@ SPEC.loader.exec_module(DEPLOY)
 class RelayDeploy(unittest.TestCase):
     @staticmethod
     def healthy(*args):
+        if args[:2] == ("systemctl", "show"):
+            return b"inactive\n"
         return b"ok\n\n200" if args[0] == "curl" else None
 
     def setUp(self):
@@ -54,6 +56,8 @@ class RelayDeploy(unittest.TestCase):
             nonlocal loaded
             if args[:2] == ("systemctl", "daemon-reload"):
                 loaded = self.installed().exists()
+            elif args[:2] == ("systemctl", "reset-failed"):
+                raise RuntimeError("inactive unit was released from memory")
             elif args[0] == "systemctl" and args[1] in ("stop", "disable", "reset-failed", "start"):
                 if not loaded:
                     raise RuntimeError("unit not loaded (exit 5)")
@@ -62,6 +66,22 @@ class RelayDeploy(unittest.TestCase):
             return self.healthy(*args)
 
         return boundary
+
+    def test_install_recovers_services_which_reached_the_start_limit(self):
+        failed = set(DEPLOY.SERVICES)
+
+        def boundary(*args):
+            if args[:2] == ("systemctl", "show"):
+                return b"failed\n" if args[-1] in failed else b"inactive\n"
+            if args[:2] == ("systemctl", "reset-failed"):
+                failed.difference_update(args[2:])
+            if args[:2] == ("systemctl", "start") and failed.intersection(args[2:]):
+                raise RuntimeError("service start limit reached")
+            return self.healthy(*args)
+
+        DEPLOY.install(self.release(), self.root, boundary)
+        self.assertTrue(self.installed().exists())
+        self.assertFalse(failed)
 
     def test_first_install_loads_new_units_before_using_them(self):
         release = self.release()

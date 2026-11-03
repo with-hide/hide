@@ -172,7 +172,8 @@ def run(*argv):
     if operation == "systemctl":
         operation += " " + argv[1]
     try:
-        result = subprocess.run(argv, stdout=subprocess.PIPE if argv[0] == "curl" else subprocess.DEVNULL,
+        capture = argv[0] == "curl" or argv[:2] == ("systemctl", "show")
+        result = subprocess.run(argv, stdout=subprocess.PIPE if capture else subprocess.DEVNULL,
                                 stderr=subprocess.DEVNULL, timeout=90, check=False)
     except subprocess.TimeoutExpired:
         raise RuntimeError(operation + " timed out") from None
@@ -215,7 +216,12 @@ def verify_release(release):
 def activate(root, command):
     command("systemctl", "daemon-reload")
     command("systemctl", "restart", "systemd-journald@hide-relay.service")
-    command("systemctl", "reset-failed", *SERVICES)
+    for service in SERVICES:
+        # Inactive units may already have been released from systemd's memory;
+        # reset-failed only applies to retained failures (including start limits).
+        state = command("systemctl", "show", "--property=ActiveState", "--value", service)
+        if state == b"failed\n":
+            command("systemctl", "reset-failed", service)
     command("systemctl", "start", *SERVICES)
     for endpoint in ("http://127.0.0.1:8787/health", "http://127.0.0.1:2020/api/v1/health"):
         command("curl", "--fail", "--silent", "--retry", "10", "--retry-connrefused",
