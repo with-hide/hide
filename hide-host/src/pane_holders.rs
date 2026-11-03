@@ -153,6 +153,11 @@ fn ask(holders: &dyn PaneHolders, call: PaneCall) -> PaneAnswer {
     let text = |(text, truncated)| value(PaneText { text, truncated });
     match call {
         PaneCall::Start { start } => holders.start(&start).and_then(value),
+        PaneCall::Reserve { start, previous } => holders.reserve(&start, previous).and_then(value),
+        PaneCall::StartReserved { start, reserved } => {
+            holders.start_reserved(&start, reserved).and_then(value)
+        }
+        PaneCall::Cancel { intent } => holders.cancel(&intent).and_then(value),
         PaneCall::ShellLaunch => value(holders.shell_launch()),
         PaneCall::Terminate { pane } => holders.terminate(&pane).and_then(value),
         PaneCall::Read { pane, lines } => holders.read(&pane, lines).and_then(text),

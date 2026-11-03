@@ -44,7 +44,7 @@ use hide_kit::panes::{
     CloseError, Judgment, Panes, RECONCILE_BUDGET, StartRefusal, StartRequest, Started, core_pane,
     holder_pane,
 };
-use hide_node_link::holders::HolderRecovery;
+use hide_node_link::holders::{HolderIntent, HolderRecovery, HolderReservation, RecoverablePane};
 use hide_node_link::terminal::{
     GridSize, MAX_ATTACHED_PANES, PaneTerminalState, ReportSink, TerminalControl, TerminalNode,
     TerminalReport,
@@ -758,27 +758,100 @@ impl Holders {
             },
             &self.source,
         );
+        self.attach_started(service, &request.pane, started)
+    }
+
+    pub fn reserve(
+        &self,
+        owner: &hide_kit::panes::Owner,
+        intent: &HolderIntent,
+        previous: Option<u64>,
+    ) -> Result<HolderReservation, StartRefusal> {
+        self.panes
+            .reserve(
+                owner,
+                &holder_pane(&intent.pane),
+                &intent.digest,
+                &intent.cwd,
+                previous,
+            )
+            .map(|record| HolderReservation {
+                incarnation: record.incarnation,
+            })
+    }
+
+    pub fn start_reserved(
+        &self,
+        owner: &hide_kit::panes::Owner,
+        service: &Service,
+        intent: &HolderIntent,
+        reserved: HolderReservation,
+        request: impl FnOnce() -> Result<StartRequest, StartRefusal>,
+    ) -> Result<Started, StartRefusal> {
+        self.known.starting(&intent.pane);
+        let holder = holder_pane(&intent.pane);
+        let result = self.panes.start_reserved(
+            owner,
+            &holder,
+            reserved.incarnation,
+            &intent.digest,
+            &self.source,
+            || {
+                let mut request = request()?;
+                request.pane = holder.clone();
+                Ok(request)
+            },
+        );
+        self.attach_started(service, &intent.pane, result)
+    }
+
+    pub fn cancel(
+        &self,
+        owner: &hide_kit::panes::Owner,
+        service: &Service,
+        intent: &HolderIntent,
+    ) -> Result<(), StartRefusal> {
+        self.panes.cancel_reservation(
+            owner,
+            &holder_pane(&intent.pane),
+            &intent.digest,
+            &intent.cwd,
+        )?;
+        service.control(TerminalControl::Closing {
+            pane: intent.pane.clone(),
+            closing: true,
+        });
+        self.known.not_started(&intent.pane);
+        Ok(())
+    }
+
+    fn attach_started(
+        &self,
+        service: &Service,
+        pane: &str,
+        started: Result<Started, StartRefusal>,
+    ) -> Result<Started, StartRefusal> {
         let started = match started {
             Ok(started) => started,
             Err(refusal) => {
-                self.known.not_started(&request.pane);
+                self.known.not_started(pane);
                 return Err(refusal);
             }
         };
         let (Started::Started(record) | Started::Existing(record)) = &started;
         if record.end.is_some() {
-            self.known.not_started(&request.pane);
-            self.report_ended(&request.pane, record);
+            self.known.not_started(pane);
+            self.report_ended(pane, record);
             return Ok(started);
         }
-        let socket = hide_kit::layout::holder_socket(&self.state_dir, &holder);
-        self.known.insert(&request.pane, socket.clone());
-        self.watches.watch(&request.pane, socket);
+        let socket = hide_kit::layout::holder_socket(&self.state_dir, &holder_pane(pane));
+        self.known.insert(pane, socket.clone());
+        self.watches.watch(pane, socket);
         // No size: the start's is the holder's own, not a decision, and it
         // must not replace a size the core already named for the pane (a
         // daemon that starts again names the one it saved).
         service.control(TerminalControl::Attach {
-            pane: request.pane.clone(),
+            pane: pane.to_owned(),
             size: None,
             manual: false,
         });
@@ -935,11 +1008,27 @@ impl Holders {
         }
         let mut alive = Vec::new();
         let mut waiting = Vec::new();
+        let mut recoverable = Vec::new();
         // A record is named by its holder id; the service, the reports and
         // the core name the pane by its own id.
         for (holder, judgment) in judged {
             let pane = core_pane(&holder);
+            let interrupted = match &judgment {
+                Judgment::Recoverable(record) => Some(record),
+                Judgment::Ended(record) if !finished(record.end.as_ref().map(|end| end.reason)) => {
+                    Some(record)
+                }
+                _ => None,
+            };
+            if let Some(record) = interrupted {
+                recoverable.push(RecoverablePane {
+                    pane: pane.clone(),
+                    cwd: record.reservation.as_ref().map(|intent| intent.cwd.clone()),
+                    incarnation: record.incarnation,
+                });
+            }
             match judgment {
+                Judgment::Recoverable(_) => recovered.ended.push((pane, None)),
                 Judgment::Alive(_) => alive.push((pane, holder)),
                 Judgment::Ended(record) => {
                     self.report_ended(&pane, &record);
@@ -1029,6 +1118,7 @@ impl Holders {
             closed: panes(closed),
             ended: panes(ended),
             present,
+            recoverable,
         });
         settled.notify_all();
         recovered

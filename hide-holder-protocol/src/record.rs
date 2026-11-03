@@ -295,7 +295,10 @@ pub fn parse(bytes: &[u8]) -> Result<PaneRecord, Unreadable> {
         ));
     }
     if record.phase == Phase::Reserved
-        && (record.reservation.is_none() || record.holder.is_some() || record.program.is_some())
+        && (record.reservation.is_none()
+            || record.holder.is_some()
+            || record.program.is_some()
+            || record.end.is_some())
     {
         return Err(Unreadable::Corrupt(
             "a reserved pane needs its request and cannot already name a process".to_owned(),

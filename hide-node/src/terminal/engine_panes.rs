@@ -21,9 +21,9 @@ use hide_holder_protocol::record::Phase;
 use hide_holder_protocol::{Answer, Appearance, Foreground, OpenError, Size, Theme};
 use hide_kit::panes::{CloseError, StartRefusal, StartRequest, Started};
 use hide_node_link::holders::{
-    HolderError, HolderForeground, HolderProcesses, HolderProof, HolderRecovery, HolderScroll,
-    HolderStart, PaneEnded, PaneFactsSink, PaneHolders, PaneInput, ScreenRules, StyledRead,
-    UNSUPPORTED_HOLDER,
+    HolderError, HolderForeground, HolderIntent, HolderProcesses, HolderProof, HolderRecovery,
+    HolderReservation, HolderScroll, HolderStart, PaneEnded, PaneFactsSink, PaneHolders, PaneInput,
+    ScreenRules, StyledRead, UNSUPPORTED_HOLDER,
 };
 
 /// This machine's holders and the service that shows their screens.
@@ -98,44 +98,7 @@ impl LocalPanes {
         )
     }
 
-    fn owner(&self) -> Result<&hide_kit::panes::Owner, HolderError> {
-        self.owner.as_deref().ok_or_else(|| HolderError::Refused {
-            code: "pane_owner_unavailable".to_owned(),
-            message: "this connection has not acquired its pane records".to_owned(),
-        })
-    }
-}
-
-impl PaneHolders for LocalPanes {
-    fn own(
-        self: Arc<Self>,
-        within: std::time::Duration,
-    ) -> Result<Arc<dyn PaneHolders>, HolderError> {
-        let owner = Arc::new(
-            self.holders
-                .acquire(within)
-                .map_err(|message| HolderError::Unreachable { message })?,
-        );
-        let found = self.holders.recover(&owner, &self.service);
-        if !found.complete {
-            return Err(HolderError::Unreachable {
-                message: "the node could not complete its pane record scan".to_owned(),
-            });
-        }
-        // A complete scan retains unreadable IDs in `present` and in the
-        // record cap. Quarantine those records, not this connection's
-        // healthy panes; starting an unreadable ID still refuses in Panes.
-        self.holders.prune_folders();
-        Ok(Arc::new(Self {
-            holders: Arc::clone(&self.holders),
-            service: Arc::clone(&self.service),
-            shell: self.shell.clone(),
-            owner: Some(owner),
-        }))
-    }
-
-    fn start(&self, start: &HolderStart) -> Result<(), HolderError> {
-        let owner = self.owner()?;
+    fn expand(&self, start: &HolderStart) -> Result<StartRequest, HolderError> {
         let size = Size::checked(start.rows, start.cols).map_err(|why| HolderError::Refused {
             code: "invalid_size".to_owned(),
             message: why,
@@ -177,7 +140,7 @@ impl PaneHolders for LocalPanes {
                 code: "invalid_cwd".to_owned(),
                 message: format!("{} is not a folder path: {error}", start.cwd),
             })?;
-        let request = StartRequest {
+        Ok(StartRequest {
             pane: start.pane.clone(),
             program,
             cwd,
@@ -209,8 +172,88 @@ impl PaneHolders for LocalPanes {
                 palette: Vec::new(),
                 appearance: Appearance::Unknown,
             },
-        };
-        match self.holders.start(owner, &self.service, &request) {
+        })
+    }
+
+    fn owner(&self) -> Result<&hide_kit::panes::Owner, HolderError> {
+        self.owner.as_deref().ok_or_else(|| HolderError::Refused {
+            code: "pane_owner_unavailable".to_owned(),
+            message: "this connection has not acquired its pane records".to_owned(),
+        })
+    }
+}
+
+impl PaneHolders for LocalPanes {
+    fn own(
+        self: Arc<Self>,
+        within: std::time::Duration,
+    ) -> Result<Arc<dyn PaneHolders>, HolderError> {
+        let owner = Arc::new(
+            self.holders
+                .acquire(within)
+                .map_err(|message| HolderError::Unreachable { message })?,
+        );
+        let found = self.holders.recover(&owner, &self.service);
+        if !found.complete {
+            return Err(HolderError::Unreachable {
+                message: "the node could not complete its pane record scan".to_owned(),
+            });
+        }
+        // A complete scan retains unreadable IDs in `present` and in the
+        // record cap. Quarantine those records, not this connection's
+        // healthy panes; starting an unreadable ID still refuses in Panes.
+        self.holders.prune_folders();
+        Ok(Arc::new(Self {
+            holders: Arc::clone(&self.holders),
+            service: Arc::clone(&self.service),
+            shell: self.shell.clone(),
+            owner: Some(owner),
+        }))
+    }
+
+    fn start(&self, start: &HolderStart) -> Result<(), HolderError> {
+        let reserved = self.reserve(start, None)?;
+        self.start_reserved(start, reserved)
+    }
+
+    fn reserve(
+        &self,
+        start: &HolderStart,
+        previous: Option<u64>,
+    ) -> Result<HolderReservation, HolderError> {
+        // Validate without expanding the shell or modifying configuration.
+        Size::checked(start.rows, start.cols).map_err(|message| HolderError::Refused {
+            code: "invalid_size".to_owned(),
+            message,
+        })?;
+        if start
+            .program
+            .as_ref()
+            .is_some_and(|program| program.is_empty() || start.notice.is_some())
+        {
+            return Err(HolderError::Refused {
+                code: "invalid_program".to_owned(),
+                message: "the pane's program or notice is invalid".to_owned(),
+            });
+        }
+        let intent = start.intent()?;
+        self.holders
+            .reserve(self.owner()?, &intent, previous)
+            .map_err(start_refusal)
+    }
+
+    fn start_reserved(
+        &self,
+        start: &HolderStart,
+        reserved: HolderReservation,
+    ) -> Result<(), HolderError> {
+        let intent = start.intent()?;
+        match self
+            .holders
+            .start_reserved(self.owner()?, &self.service, &intent, reserved, || {
+                self.expand(start)
+                    .map_err(|error| StartRefusal::Failed(format!("{error:?}")))
+            }) {
             Ok(Started::Started(record) | Started::Existing(record)) => match record.end {
                 None => Ok(()),
                 Some(end) => Err(HolderError::Refused {
@@ -220,6 +263,12 @@ impl PaneHolders for LocalPanes {
             },
             Err(refusal) => Err(start_refusal(refusal)),
         }
+    }
+
+    fn cancel(&self, intent: &HolderIntent) -> Result<(), HolderError> {
+        self.holders
+            .cancel(self.owner()?, &self.service, intent)
+            .map_err(start_refusal)
     }
 
     fn shell_launch(&self) -> Option<ShellLaunch> {
@@ -427,6 +476,11 @@ fn start_refusal(refusal: StartRefusal) -> HolderError {
         StartRefusal::RecordUnreadable(_) => "record_unreadable",
         StartRefusal::OtherOwner(_) => "other_owner",
         StartRefusal::Failed(_) => "holder_start_failed",
+        StartRefusal::Uncertain(message) => {
+            return HolderError::Unreachable {
+                message: message.clone(),
+            };
+        }
         StartRefusal::EarlierRuns(_) => "earlier_start_runs",
     };
     HolderError::Refused {

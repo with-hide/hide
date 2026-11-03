@@ -3030,6 +3030,7 @@ mod tests {
             closed: vec![exited.clone()],
             ended: vec![ended.clone()],
             present: vec![running.clone(), shown, unplaced.clone()],
+            recoverable: Vec::new(),
         });
         next.restored().unwrap();
         let active = |engine: &OwnEngine<'_>| {
@@ -3112,6 +3113,7 @@ mod tests {
             closed: Vec::new(),
             ended: Vec::new(),
             present: vec!["w2:p1".to_owned(), "w2:p3".to_owned()],
+            recoverable: Vec::new(),
         });
         let engine =
             OwnEngine::open(Arc::clone(&holders) as Arc<dyn PaneHolders>, place.clone()).unwrap();

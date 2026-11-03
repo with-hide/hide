@@ -1,0 +1,385 @@
+//! Durable existence before the core publishes a pane. The request digest
+//! is stable before shell setup, and only the worker claiming this exact
+//! incarnation expands the shell or starts a process.
+
+use std::time::Instant;
+
+use hide_holder_protocol::PROTOCOL_VERSION;
+use hide_holder_protocol::record::{
+    self, End, EndReason, PaneRecord, Phase, RECORD_FORMAT, Reservation,
+};
+
+use super::{HOLDER_CAP, Owner, Panes, StartRefusal, StartRequest, StartStages, Started, spec_of};
+use crate::{holders, layout};
+
+impl Panes {
+    /// Persist a new intent or answer that exact intent's reservation. A
+    /// replacement explicitly names the earlier incarnation it consumes.
+    pub fn reserve(
+        &self,
+        owner: &Owner,
+        pane: &str,
+        request: &str,
+        cwd: &str,
+        previous: Option<u64>,
+    ) -> Result<PaneRecord, StartRefusal> {
+        self.check_owner(owner).map_err(StartRefusal::Failed)?;
+        validate(pane, request, cwd)?;
+        let _lock = self.lock().map_err(StartRefusal::Failed)?;
+        let path = layout::pane_record(&self.state_dir, pane);
+        let existing = record::read(&path).map_err(StartRefusal::RecordUnreadable)?;
+        let replaces_live = existing.as_ref().is_some_and(|record| {
+            record.phase != Phase::Ended
+                || record
+                    .reservation
+                    .as_ref()
+                    .is_some_and(|intent| intent.owner == owner.incarnation())
+        });
+        if let Some(existing) = existing {
+            if existing.owner != self.owner {
+                return Err(StartRefusal::OtherOwner(Box::new(existing)));
+            }
+            if existing.phase != Phase::Ended
+                && existing.reservation.as_ref().is_some_and(|intent| {
+                    intent.owner == owner.incarnation() && intent.request == request
+                })
+            {
+                return Ok(existing);
+            }
+            if previous != Some(existing.incarnation) {
+                return Err(StartRefusal::Conflict(Box::new(existing)));
+            }
+            // Replacing an unclaimed attempt fences a late holder's Claim.
+            // A named holder must be established dead, not merely unreadable.
+            if let Some(holder) = existing.holder
+                && hide_platform::process::is_alive(holder.pid)
+            {
+                match hide_platform::process::start_time(holder.pid) {
+                    Ok(started) if started != holder.started => {}
+                    Ok(_) => return Err(StartRefusal::EarlierRuns(vec![holder.pid])),
+                    Err(error) => return Err(StartRefusal::Uncertain(error.to_string())),
+                }
+            }
+            let left = self.still_running(&existing);
+            if !left.is_empty() {
+                return Err(StartRefusal::EarlierRuns(left));
+            }
+        } else if previous.is_some() {
+            return Err(StartRefusal::Failed(
+                "the replaced reservation is missing".to_owned(),
+            ));
+        }
+        let count = self.count_live_for(owner, &self.scan().map_err(StartRefusal::Failed)?);
+        // A replacement already has its place in the record bound.
+        if !replaces_live && count >= HOLDER_CAP {
+            return Err(StartRefusal::Cap { count });
+        }
+        let reserved = self.new_reservation(owner, pane, request, cwd)?;
+        record::write(&path, &reserved)
+            .map_err(|error| StartRefusal::Uncertain(error.to_string()))?;
+        Ok(reserved)
+    }
+
+    // Caller holds the records lock; allocation and installation are one
+    // decision even when cancel arrives before the original reserve.
+    fn new_reservation(
+        &self,
+        owner: &Owner,
+        pane: &str,
+        request: &str,
+        cwd: &str,
+    ) -> Result<PaneRecord, StartRefusal> {
+        Ok(PaneRecord {
+            format: RECORD_FORMAT,
+            pane: pane.to_owned(),
+            owner: self.owner.clone(),
+            incarnation: self.next_incarnation().map_err(StartRefusal::Failed)?,
+            phase: Phase::Reserved,
+            protocol: PROTOCOL_VERSION,
+            version_folder: String::new(),
+            spec: String::new(),
+            reservation: Some(Reservation {
+                owner: owner.incarnation(),
+                request: request.to_owned(),
+                cwd: cwd.to_owned(),
+            }),
+            reserved_at_unix_ms: record::now_unix_ms(),
+            boot: self.boot.clone(),
+            holder: None,
+            program: None,
+            end: None,
+        })
+    }
+
+    /// Cancel the exact original intent, including an unpublished reserve
+    /// that has not reached this node yet. Its terminal record stays pinned
+    /// until this connection's workers can no longer submit a late call.
+    pub fn cancel_reservation(
+        &self,
+        owner: &Owner,
+        pane: &str,
+        digest: &str,
+        cwd: &str,
+    ) -> Result<PaneRecord, StartRefusal> {
+        self.check_owner(owner).map_err(StartRefusal::Failed)?;
+        validate(pane, digest, cwd)?;
+        let path = layout::pane_record(&self.state_dir, pane);
+        {
+            let _lock = self.lock().map_err(StartRefusal::Failed)?;
+            let mut current = match self.record(pane).map_err(StartRefusal::RecordUnreadable)? {
+                Some(current)
+                    if current.owner == self.owner
+                        && current.reservation.as_ref().is_some_and(|intent| {
+                            intent.owner == owner.incarnation() && intent.request == digest
+                        }) =>
+                {
+                    current
+                }
+                Some(current) => return Err(StartRefusal::Conflict(Box::new(current))),
+                None => {
+                    let count =
+                        self.count_live_for(owner, &self.scan().map_err(StartRefusal::Failed)?);
+                    if count >= HOLDER_CAP {
+                        return Err(StartRefusal::Cap { count });
+                    }
+                    self.new_reservation(owner, pane, digest, cwd)?
+                }
+            };
+            if current.holder.is_none() || current.phase == Phase::Ended {
+                current.phase = Phase::Ended;
+                current.end = Some(End::new(
+                    EndReason::Terminated,
+                    "the original request was cancelled",
+                ));
+                record::write(&path, &current)
+                    .map_err(|error| StartRefusal::Uncertain(error.to_string()))?;
+                return Ok(current);
+            }
+        }
+        self.close(owner, pane)
+            .map_err(|error| StartRefusal::Uncertain(error.to_string()))
+    }
+
+    /// Claim before expanding the command, and retain the connection's
+    /// ownership through preparation, process start and failure cleanup.
+    pub fn start_reserved(
+        &self,
+        owner: &Owner,
+        pane: &str,
+        incarnation: u64,
+        digest: &str,
+        source: &holders::Source,
+        request: impl FnOnce() -> Result<StartRequest, StartRefusal>,
+    ) -> Result<Started, StartRefusal> {
+        self.check_owner(owner).map_err(StartRefusal::Failed)?;
+        let begun = Instant::now();
+        let path = layout::pane_record(&self.state_dir, pane);
+        let mut current = {
+            let _lock = self.lock().map_err(StartRefusal::Failed)?;
+            let mut current = self.exact_reservation(owner, pane, incarnation, digest)?;
+            match current.phase {
+                Phase::Running => return Ok(Started::Existing(current)),
+                Phase::Preparing => {
+                    return Err(StartRefusal::Uncertain(
+                        "this holder is still starting".to_owned(),
+                    ));
+                }
+                Phase::Reserved => {}
+                _ => return Err(StartRefusal::Conflict(Box::new(current))),
+            }
+            current.phase = Phase::Preparing;
+            record::write(&path, &current)
+                .map_err(|error| StartRefusal::Uncertain(error.to_string()))?;
+            current
+        };
+        let prepared = (|| {
+            let request = request()?;
+            if request.pane != pane {
+                return Err(StartRefusal::Failed(
+                    "the expanded request names another pane".to_owned(),
+                ));
+            }
+            let version = holders::prepare(&self.home, PROTOCOL_VERSION, source, &self.names)
+                .map_err(StartRefusal::Failed)?;
+            let _lock = self.lock().map_err(StartRefusal::Failed)?;
+            let found = self.exact_reservation(owner, pane, incarnation, digest)?;
+            if found != current {
+                return Err(StartRefusal::Conflict(Box::new(found)));
+            }
+            current.spec = spec_of(&request);
+            current.version_folder = version
+                .dir
+                .file_name()
+                .ok_or_else(|| StartRefusal::Failed("the holder version has no name".to_owned()))?
+                .to_string_lossy()
+                .into_owned();
+            record::write(&path, &current)
+                .map_err(|error| StartRefusal::Uncertain(error.to_string()))?;
+            Ok((request, version))
+        })();
+        let (request, version) = match prepared {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                self.fail_reservation(&current, &error.to_string())?;
+                return Err(error);
+            }
+        };
+        let stages = StartStages {
+            begun,
+            prepared: begun.elapsed(),
+            reserved: begun.elapsed(),
+        };
+        self.start_holder(&request, &version, &current, &stages)
+            .map(Started::Started)
+            .map_err(StartRefusal::Uncertain)
+    }
+
+    fn exact_reservation(
+        &self,
+        owner: &Owner,
+        pane: &str,
+        incarnation: u64,
+        digest: &str,
+    ) -> Result<PaneRecord, StartRefusal> {
+        let current = self
+            .record(pane)
+            .map_err(StartRefusal::RecordUnreadable)?
+            .ok_or_else(|| StartRefusal::Failed("the reservation is missing".to_owned()))?;
+        if current.owner != self.owner
+            || current.incarnation != incarnation
+            || !current.reservation.as_ref().is_some_and(|intent| {
+                intent.owner == owner.incarnation() && intent.request == digest
+            })
+        {
+            return Err(StartRefusal::Conflict(Box::new(current)));
+        }
+        Ok(current)
+    }
+
+    fn fail_reservation(&self, current: &PaneRecord, reason: &str) -> Result<(), StartRefusal> {
+        let mut ended = current.clone();
+        ended.phase = Phase::Ended;
+        ended.end = Some(End::new(EndReason::StartFailed, reason));
+        if let Err(why) = self.write_if_unchanged(current, &ended) {
+            self.emit(
+                "pane_holder.reservation_failure_unwritten",
+                serde_json::json!({
+                    "pane": current.pane, "incarnation": current.incarnation, "error": why,
+                }),
+            );
+            return Err(StartRefusal::Uncertain(why));
+        }
+        Ok(())
+    }
+}
+
+fn validate(pane: &str, digest: &str, cwd: &str) -> Result<(), StartRefusal> {
+    record::check_pane(pane).map_err(StartRefusal::InvalidPane)?;
+    if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(StartRefusal::Failed(
+            "the request digest is invalid".to_owned(),
+        ));
+    }
+    hide_platform::path::from_wire(cwd).map_err(|error| StartRefusal::Failed(error.to_string()))?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    const DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    #[test]
+    fn cancelling_before_reserve_fences_the_late_request_without_starting_a_program() {
+        let home = tempfile::tempdir().unwrap();
+        let panes = Panes::open(home.path(), &home.path().join("state"), |_| {}).unwrap();
+        let owner = panes.acquire(Duration::ZERO).unwrap();
+        let cwd = hide_platform::path::to_wire(home.path()).unwrap();
+        let canceled = panes
+            .cancel_reservation(&owner, "p1", DIGEST, &cwd)
+            .unwrap();
+        assert!(matches!(
+            panes.reserve(&owner, "p1", DIGEST, &cwd, None),
+            Err(StartRefusal::Conflict(_))
+        ));
+        let source = holders::Source {
+            program: home.path().join("must-not-run"),
+            conpty: None,
+        };
+        assert!(matches!(
+            panes.start_reserved(
+                &owner,
+                "p1",
+                canceled.incarnation,
+                DIGEST,
+                &source,
+                || panic!("a cancelled request must not expand the shell")
+            ),
+            Err(StartRefusal::Conflict(_))
+        ));
+        assert_eq!(panes.record("p1").unwrap().unwrap(), canceled);
+    }
+
+    #[test]
+    fn a_new_owner_recovers_the_id_but_fences_the_previous_start_incarnation() {
+        let home = tempfile::tempdir().unwrap();
+        let state = home.path().join("state");
+        let panes = Panes::open(home.path(), &state, |_| {}).unwrap();
+        let owner = panes.acquire(Duration::ZERO).unwrap();
+        let cwd = hide_platform::path::to_wire(home.path()).unwrap();
+        let first = panes.reserve(&owner, "p1", DIGEST, &cwd, None).unwrap();
+        assert_eq!(
+            panes.reserve(&owner, "p1", DIGEST, &cwd, None).unwrap(),
+            first
+        );
+        drop(owner);
+        let owner = panes.acquire(Duration::ZERO).unwrap();
+        let recovered = panes.reconcile(&owner, Duration::from_secs(2));
+        assert!(matches!(
+            recovered
+                .panes
+                .iter()
+                .find(|(pane, _)| pane.as_str() == "p1")
+                .map(|(_, judgment)| judgment),
+            Some(super::super::Judgment::Recoverable(_))
+        ));
+        let next = panes
+            .reserve(&owner, "p1", DIGEST, &cwd, Some(first.incarnation))
+            .unwrap();
+        assert_ne!(first.incarnation, next.incarnation);
+        let source = holders::Source {
+            program: home.path().join("must-not-run"),
+            conpty: None,
+        };
+        assert!(matches!(
+            panes.start_reserved(&owner, "p1", first.incarnation, DIGEST, &source, || panic!(
+                "an old incarnation must not expand the shell"
+            )),
+            Err(StartRefusal::Conflict(_))
+        ));
+        assert_eq!(panes.record("p1").unwrap().unwrap(), next);
+    }
+
+    #[test]
+    fn canceled_intents_keep_their_capacity_until_the_owner_is_fenced() {
+        let home = tempfile::tempdir().unwrap();
+        let panes = Panes::open(home.path(), &home.path().join("state"), |_| {}).unwrap();
+        let owner = panes.acquire(Duration::ZERO).unwrap();
+        let cwd = hide_platform::path::to_wire(home.path()).unwrap();
+        for n in 0..HOLDER_CAP {
+            panes
+                .cancel_reservation(&owner, &format!("p{n}"), DIGEST, &cwd)
+                .unwrap();
+        }
+        assert!(matches!(
+            panes.reserve(&owner, "new", DIGEST, &cwd, None),
+            Err(StartRefusal::Cap { count: HOLDER_CAP })
+        ));
+        assert!(panes.forget(&owner, "p0").is_err());
+        drop(owner);
+        let owner = panes.acquire(Duration::ZERO).unwrap();
+        panes.reserve(&owner, "new", DIGEST, &cwd, None).unwrap();
+    }
+}

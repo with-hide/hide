@@ -2281,6 +2281,11 @@ A holder outlives its node, so what owns it is its record, not the node (PRD eng
 Each pane of a state folder has one, `<state>/holders/records/<pane>.json` (`hide_kit::layout::pane_record`), in a versioned format (`hide_holder_protocol::record`, format 2, at most 64 KiB): the pane id, the state folder it belongs to (the folder's own file identity, which a rename keeps and a copy does not), the start's incarnation, the holder's and the program's pid with the start time each had, the protocol and version folder it runs, the digest of its command, the boot it started in, its phase (`reserved`, `preparing`, `running`, `closing`, `ended`) and, once ended, why, with the exit code and any pids left.
 Format 1 running records remain readable and retain their format when updated.
 Format 2 can also carry the reservation's connection owner, original request digest and recovery folder, without persisting its command or environment; `reserved` requires this metadata and names no process.
+The node exposes reserve, exact-incarnation start and cancel as typed pane calls, with the original request digest computed before shell integration changes its command.
+Only the worker changing that reservation from `reserved` to `preparing` expands the shell and starts its holder; an old incarnation or a cancelled request is refused before expansion.
+Cancel can precede reserve and writes a terminal record for that same intent, so a delayed reserve cannot recreate it.
+Current-owner ended reservations count against the 128-record cap and cannot be forgotten or pruned until that connection and all its admitted workers have released ownership.
+A new owner reports interrupted reservations with their original pane ID, incarnation and recovery folder; legacy ended records report the incarnation but need a saved layout for the folder.
 `hide_kit::panes::Panes` is the node's side of it, a library hide-node calls; its diagnostics (`pane_holder.*`, naming the pane, the incarnation and the holder's pid, never the pane's output) go to the sink the caller gives.
 
 A connection acquires the state folder's exclusive `records/.owner-lock` through the platform file-lock implementation before crash repair or fresh reconciliation.

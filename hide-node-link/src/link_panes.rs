@@ -13,9 +13,9 @@ use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::Duration;
 
 use crate::holders::{
-    HolderError, HolderProcesses, HolderProof, HolderRecovery, HolderScroll, HolderStart, PaneCall,
-    PaneEnded, PaneFactsSink, PaneHolders, PaneInput, PaneText, PaneWatchReport, ScreenRules,
-    StyledRead,
+    HolderError, HolderIntent, HolderProcesses, HolderProof, HolderRecovery, HolderReservation,
+    HolderScroll, HolderStart, PaneCall, PaneEnded, PaneFactsSink, PaneHolders, PaneInput,
+    PaneText, PaneWatchReport, ScreenRules, StyledRead,
 };
 use crate::link::{LinkAnswer, LinkError, NodeLink};
 use crate::protocol::{Call, ShellLaunch};
@@ -232,6 +232,43 @@ impl Inner {
 }
 
 impl PaneHolders for LinkPanes {
+    fn reserve(
+        &self,
+        start: &HolderStart,
+        previous: Option<u64>,
+    ) -> Result<HolderReservation, HolderError> {
+        self.answer(
+            PaneCall::Reserve {
+                start: start.clone(),
+                previous,
+            },
+            ASK_WAIT,
+        )
+    }
+
+    fn start_reserved(
+        &self,
+        start: &HolderStart,
+        reserved: HolderReservation,
+    ) -> Result<(), HolderError> {
+        self.done(
+            PaneCall::StartReserved {
+                start: start.clone(),
+                reserved,
+            },
+            START_WAIT,
+        )
+    }
+
+    fn cancel(&self, intent: &HolderIntent) -> Result<(), HolderError> {
+        self.done(
+            PaneCall::Cancel {
+                intent: intent.clone(),
+            },
+            END_WAIT,
+        )
+    }
+
     fn start(&self, start: &HolderStart) -> Result<(), HolderError> {
         self.done(
             PaneCall::Start {
@@ -390,6 +427,14 @@ fn link_failure(error: LinkError) -> HolderError {
         LinkError::Refused(error) => HolderError::Refused {
             code: error.code.as_str().to_owned(),
             message: error.message,
+        },
+        LinkError::NotConnected(message) => HolderError::Refused {
+            code: "node_not_connected".to_owned(),
+            message,
+        },
+        LinkError::Busy => HolderError::Refused {
+            code: "node_busy".to_owned(),
+            message: LinkError::Busy.to_string(),
         },
         error => HolderError::Unreachable {
             message: error.to_string(),

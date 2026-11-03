@@ -26,6 +26,7 @@ impl NodeLink for HolderNode {
                 closed: Vec::new(),
                 ended: Vec::new(),
                 present: Vec::new(),
+                recoverable: Vec::new(),
             })
             .unwrap()),
             Call::Pane {

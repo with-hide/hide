@@ -36,12 +36,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, PoisonError, mpsc};
 use std::time::{Duration, Instant};
 
-use hide_holder_protocol::record::{
-    self, End, EndReason, Identity, PaneRecord, Phase, RECORD_FORMAT, Unreadable,
-};
+use hide_holder_protocol::record::{self, End, EndReason, Identity, PaneRecord, Phase, Unreadable};
 use hide_holder_protocol::{
-    ClientMessage, FrameError, HolderMessage, OLDEST_HOLDER_VERSION, OpenError, PROTOCOL_VERSION,
-    Size, Theme, read_holder, write_client,
+    ClientMessage, FrameError, HolderMessage, OLDEST_HOLDER_VERSION, OpenError, Size, Theme,
+    read_holder, write_client,
 };
 use hide_platform::process::{ResidentCommand, start_resident};
 use serde_json::json;
@@ -51,6 +49,9 @@ use crate::{holders, layout};
 
 mod ownership;
 pub use ownership::Owner;
+mod reservation;
+#[cfg(test)]
+use hide_holder_protocol::{PROTOCOL_VERSION, record::RECORD_FORMAT};
 
 /// The most holders a state folder keeps: every record that is not ended
 /// counts, and so does one that cannot be read, since it may name a holder.
@@ -167,6 +168,9 @@ pub enum StartRefusal {
     OtherOwner(Box<PaneRecord>),
     /// The holder could not be started, or said it failed.
     Failed(String),
+    /// A record replacement or start may have happened; reconcile this
+    /// exact request before trying another intent.
+    Uncertain(String),
     /// An earlier start of the pane is over but these processes of it still
     /// run, so the pane's id is not free yet.
     EarlierRuns(Vec<u32>),
@@ -192,6 +196,7 @@ impl std::fmt::Display for StartRefusal {
                 record.pane
             ),
             Self::Failed(why) => write!(f, "the holder did not start: {why}"),
+            Self::Uncertain(why) => write!(f, "the pane's outcome is unknown: {why}"),
             Self::EarlierRuns(left) => write!(
                 f,
                 "an earlier start of the pane is over and {left:?} of it still run"
@@ -207,6 +212,9 @@ pub enum Judgment {
     Alive(PaneRecord),
     /// Reserved, with no holder written in yet, within [`START_LIMIT`].
     Starting(PaneRecord),
+    /// A former owner's accepted intent, with no holder claim. Recovery
+    /// replaces its incarnation before starting a shell under the same ID.
+    Recoverable(PaneRecord),
     /// The pane ended, now or before; the record says why.
     Ended(PaneRecord),
     /// The holder speaks a version older than this build speaks to; it is
@@ -462,10 +470,9 @@ impl Panes {
 
     /// Starts `request`'s pane from `source`'s version folder, or answers
     /// the pane its id already started. The pane id is the start's key: a
-    /// pane that lives (starting, running or closing) is answered as it is,
-    /// one that is over (ended, or its holder gone) is settled, cleared and
-    /// started again as a new incarnation, so a caller asks the same start
-    /// again whatever became of the last one.
+    /// live legacy pane is adopted; a new pane follows reserve and exact
+    /// claim. An ended reservation needs an explicit replacement, so a late
+    /// original request cannot restart a cancelled pane.
     pub fn start(
         &self,
         owner: &Owner,
@@ -473,134 +480,59 @@ impl Panes {
         source: &holders::Source,
     ) -> Result<Started, StartRefusal> {
         self.check_owner(owner).map_err(StartRefusal::Failed)?;
-        let begun = Instant::now();
-        record::check_pane(&request.pane).map_err(StartRefusal::InvalidPane)?;
-        let spec = spec_of(request);
-        let reservation = holders::prepare(&self.home, PROTOCOL_VERSION, source, &self.names)
-            .map_err(StartRefusal::Failed)?;
-        let prepared = begun.elapsed();
-        let version_folder = reservation
-            .dir
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let path = layout::pane_record(&self.state_dir, &request.pane);
-        // One settle of an earlier start that is over but not yet written so,
-        // outside the lock, then one more look.
+        let digest = spec_of(request);
+        let cwd = hide_platform::path::to_wire(&request.cwd)
+            .map_err(|error| StartRefusal::Failed(error.to_string()))?;
+        // Compatibility for records written before existence reservations.
+        // New starts, including this synchronous API, use the one claim path.
         let mut settled = false;
-        let reserved = loop {
+        let previous = loop {
             let lock = self.lock().map_err(StartRefusal::Failed)?;
-            match record::read(&path) {
-                Ok(Some(existing)) if existing.owner != self.owner => {
-                    return Err(StartRefusal::OtherOwner(Box::new(existing)));
+            let Some(existing) = self
+                .record(&request.pane)
+                .map_err(StartRefusal::RecordUnreadable)?
+            else {
+                break None;
+            };
+            if existing.owner != self.owner {
+                return Err(StartRefusal::OtherOwner(Box::new(existing)));
+            }
+            if existing.reservation.is_some() {
+                break None;
+            }
+            match self.state_of(&existing) {
+                Earlier::Lives if existing.spec == digest => {
+                    return Ok(Started::Existing(existing));
                 }
-                Ok(Some(existing)) => match self.state_of(&existing) {
-                    Earlier::Lives if existing.spec == spec => {
-                        return Ok(Started::Existing(existing));
-                    }
-                    Earlier::Lives => return Err(StartRefusal::Conflict(Box::new(existing))),
-                    Earlier::Over => self.clear_earlier(&existing, &path)?,
-                    Earlier::Unsettled if !settled => {
-                        drop(lock);
-                        settled = true;
-                        self.settle_earlier(&existing);
-                        continue;
-                    }
-                    Earlier::Unsettled => {
-                        let left = self.still_running(&existing);
-                        if !left.is_empty() {
-                            return Err(StartRefusal::EarlierRuns(left));
-                        }
-                        // Not written so, but nothing of it runs: over.
-                        self.clear_earlier(&existing, &path)?;
-                    }
-                },
-                Err(error) => return Err(StartRefusal::RecordUnreadable(error)),
-                Ok(None) => {}
+                Earlier::Lives => return Err(StartRefusal::Conflict(Box::new(existing))),
+                Earlier::Unsettled if !settled => {
+                    drop(lock);
+                    settled = true;
+                    self.settle_earlier(owner, &existing);
+                }
+                Earlier::Over | Earlier::Unsettled => break Some(existing.incarnation),
             }
-            let paths = self.record_paths().map_err(StartRefusal::Failed)?;
-            // Each record names at most one live or ended pane. Below both
-            // bounds even treating every file as live proves admission, and
-            // no ended record can need pruning. At either bound read the
-            // records as before, including unreadable ones in the live count.
-            let count = if paths.len() < HOLDER_CAP && paths.len() <= ENDED_KEPT {
-                paths.len()
-            } else {
-                self.count_live(&Self::read_records(paths))
-            };
-            if count >= HOLDER_CAP {
-                self.emit(
-                    "pane_holder.start_refused",
-                    json!({ "pane": request.pane, "reason": "holder_cap", "count": count, "cap": HOLDER_CAP }),
-                );
-                return Err(StartRefusal::Cap { count });
-            }
-            let incarnation = self.next_incarnation().map_err(StartRefusal::Failed)?;
-            let reserved = PaneRecord {
-                format: RECORD_FORMAT,
-                pane: request.pane.clone(),
-                owner: self.owner.clone(),
-                incarnation,
-                phase: Phase::Preparing,
-                protocol: PROTOCOL_VERSION,
-                version_folder: version_folder.clone(),
-                spec: spec.clone(),
-                reservation: None,
-                reserved_at_unix_ms: record::now_unix_ms(),
-                boot: self.boot.clone(),
-                holder: None,
-                program: None,
-                end: None,
-            };
-            record::write(&path, &reserved).map_err(|error| {
-                StartRefusal::Failed(format!("the record could not be written: {error}"))
-            })?;
-            break reserved;
         };
-        let stages = StartStages {
-            begun,
-            prepared,
-            reserved: begun.elapsed(),
-        };
-        let started = self.start_holder(request, &reservation, &reserved, &stages);
-        drop(reservation);
-        started.map(Started::Started).map_err(StartRefusal::Failed)
+        let reserved = self.reserve(owner, &request.pane, &digest, &cwd, previous)?;
+        self.start_reserved(
+            owner,
+            &request.pane,
+            reserved.incarnation,
+            &digest,
+            source,
+            || Ok(request.clone()),
+        )
     }
 
-    /// Removes an earlier start that is over, under the lock, for a new start
-    /// of its pane. Its log stays: the next holder writes on after it, and
-    /// its lines name their own incarnation.
-    fn clear_earlier(&self, existing: &PaneRecord, path: &Path) -> Result<(), StartRefusal> {
-        let _ = hide_platform::ipc::remove_leftover(
-            &layout::holder_socket(&self.state_dir, &existing.pane),
-            LOCK_RELEASE,
-        );
-        std::fs::remove_file(path).map_err(|error| {
-            StartRefusal::Failed(format!("the earlier record could not be removed: {error}"))
-        })?;
-        self.emit(
-            "pane_holder.start_again",
-            json!({
-                "pane": existing.pane,
-                "earlier": existing.incarnation,
-                "phase": existing.phase,
-                "reason": existing.end.as_ref().map(|end| end.reason.name()),
-            }),
-        );
-        Ok(())
-    }
-
-    /// Settles an earlier start that is over but not written so, outside
-    /// the lock: a holder that wrote its end is given its bound to exit, and
-    /// anything else is judged as a reconcile judges it.
-    fn settle_earlier(&self, existing: &PaneRecord) {
+    /// Settle a legacy start before explicitly replacing its incarnation.
+    fn settle_earlier(&self, owner: &Owner, existing: &PaneRecord) {
         match existing.holder {
             Some(holder) if existing.phase == Phase::Ended && holder.runs() => {
                 self.end_unconfirmed_start(existing);
                 wait_gone(holder, START_LIMIT);
             }
             _ => {
-                let _ = self.judge(existing);
+                let _ = self.judge(owner, existing);
             }
         }
     }
@@ -840,6 +772,12 @@ impl Panes {
             let holder = current.holder.or(holder);
             match holder.filter(|holder| holder.runs()) {
                 None => {
+                    if current.reservation.is_some() {
+                        current.phase = Phase::Ended;
+                        current.end = Some(End::new(EndReason::StartFailed, reason.as_str()));
+                        record::write(&path, &current).map_err(|error| error.to_string())?;
+                        return Ok(FailedStart::Recorded);
+                    }
                     std::fs::remove_file(&path).map_err(|error| error.to_string())?;
                     Ok(FailedStart::Removed)
                 }
@@ -858,7 +796,7 @@ impl Panes {
             Ok(FailedStart::Unconfirmed(holder)) => end_holder_tree(*holder).err(),
             // No record names the pane now, so its socket goes with the
             // reservation.
-            Ok(FailedStart::Removed) => {
+            Ok(FailedStart::Removed | FailedStart::Recorded) => {
                 self.remove_stale_socket(&reserved.pane, LOCK_RELEASE);
                 None
             }
@@ -900,6 +838,16 @@ impl Panes {
             if current.phase == Phase::Ended {
                 return Ok(current);
             }
+            if current.reservation.is_some() && current.holder.is_none() {
+                current.phase = Phase::Ended;
+                current.end = Some(End::new(
+                    EndReason::Terminated,
+                    "the pane was closed before its holder claimed it",
+                ));
+                record::write(&path, &current)
+                    .map_err(|error| CloseError::Failed(error.to_string()))?;
+                return Ok(current);
+            }
             // Written `closing`, a start whose holder has not written itself
             // in yet finds the record no longer reserves it and stops.
             if current.phase == Phase::Preparing && current.holder.is_none() {
@@ -926,7 +874,7 @@ impl Panes {
             // The holder is gone: the record says why, or it is settled as a
             // reconcile settles a lost holder.
             _ => match self.record(pane) {
-                Ok(Some(after)) => self.judge(&after),
+                Ok(Some(after)) => self.judge(owner, &after),
                 Ok(None) => return Err(CloseError::NoRecord),
                 Err(error) => return Err(CloseError::RecordUnreadable(error)),
             },
@@ -960,6 +908,15 @@ impl Panes {
         };
         if current.phase != Phase::Ended {
             return Err(ForgetRefusal::NotEnded(current.phase));
+        }
+        if current
+            .reservation
+            .as_ref()
+            .is_some_and(|intent| intent.owner == owner.incarnation())
+        {
+            return Err(ForgetRefusal::Failed(
+                "the current owner can still send this reservation".to_owned(),
+            ));
         }
         if let Some(holder) = current.holder
             && holder.runs()
@@ -1001,16 +958,24 @@ impl Panes {
 
     /// The records not ended, and the ones that cannot be read, which may
     /// name a holder. Ended records past [`ENDED_KEPT`] go, oldest first.
-    fn count_live(&self, scan: &[(String, RecordRead)]) -> usize {
+    fn count_live_for(&self, owner: &Owner, scan: &[(String, RecordRead)]) -> usize {
         let mut live = 0;
         let mut ended = Vec::new();
         for (pane, read) in scan {
             match read {
-                Ok(record) if record.phase == Phase::Ended => ended.push((
-                    record.end.as_ref().map_or(0, |end| end.at_unix_ms),
-                    pane.clone(),
-                    record.holder,
-                )),
+                Ok(record)
+                    if record.phase == Phase::Ended
+                        && !record
+                            .reservation
+                            .as_ref()
+                            .is_some_and(|intent| intent.owner == owner.incarnation()) =>
+                {
+                    ended.push((
+                        record.end.as_ref().map_or(0, |end| end.at_unix_ms),
+                        pane.clone(),
+                        record.holder,
+                    ))
+                }
                 _ => live += 1,
             }
         }
@@ -1162,7 +1127,7 @@ impl Panes {
                 }
             }
         }
-        let judged = self.bounded(&readable, deadline, |current| self.judge(current));
+        let judged = self.bounded(&readable, deadline, |current| self.judge(owner, current));
         for (current, judgment) in readable.into_iter().zip(judged) {
             let judgment = judgment.unwrap_or_else(|| Judgment::Pending(current.clone()));
             found.panes.insert(current.pane, judgment);
@@ -1221,7 +1186,7 @@ impl Panes {
     }
 
     /// Judges one record and does what it calls for.
-    fn judge(&self, current: &PaneRecord) -> Judgment {
+    fn judge(&self, owner: &Owner, current: &PaneRecord) -> Judgment {
         let pane = current.pane.clone();
         let judgment = if current.owner != self.owner {
             Judgment::OtherOwner(current.clone())
@@ -1232,6 +1197,14 @@ impl Panes {
             let gone = current.holder.is_none_or(|holder| !holder.runs());
             self.remove_stale_socket(&pane, if gone { LOCK_RELEASE } else { Duration::ZERO });
             Judgment::Ended(current.clone())
+        } else if matches!(current.phase, Phase::Reserved | Phase::Preparing)
+            && current.holder.is_none()
+            && current
+                .reservation
+                .as_ref()
+                .is_some_and(|intent| intent.owner != owner.incarnation())
+        {
+            Judgment::Recoverable(current.clone())
         } else if current.phase == Phase::Reserved {
             // Accepted existence is not an expired attempt to start a holder.
             // Only explicit cancellation or a fenced recovery consumes it.
@@ -1517,6 +1490,7 @@ enum Earlier {
 
 /// What a start that did not say it was ready left in its record.
 enum FailedStart {
+    Recorded,
     /// The holder wrote itself running after all.
     Started(Box<PaneRecord>),
     Gone,
@@ -1534,6 +1508,7 @@ impl FailedStart {
             Self::Gone => "record_gone",
             Self::MovedOn => "record_moved_on",
             Self::Removed => "removed",
+            Self::Recorded => "recorded",
             Self::Unconfirmed(_) => "start_unconfirmed",
         }
     }
