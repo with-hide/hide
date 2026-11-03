@@ -1347,3 +1347,144 @@ fn the_endpoint_is_private_to_the_account() {
         assert!(!sddl.contains(everyone), "others can connect: {sddl}");
     }
 }
+
+/// A program Git Bash starts runs with the same elevated token as a
+/// PowerShell beside it, except that its default owner is the user rather
+/// than the Administrators group. What the elevated side made (a private
+/// folder, a pipe) stays the account's own to that program.
+#[cfg(windows)]
+#[test]
+fn an_elevated_account_whose_default_owner_is_the_user_reaches_what_it_made() {
+    use hide_platform::fs::private;
+
+    let folder = tempfile::Builder::new().prefix("hp").tempdir().unwrap();
+    let made = folder.path().join("bridge");
+    private::create_dir(&made).unwrap();
+    let path = made.join("s.sock");
+    let listener = LocalListener::bind(&path).unwrap();
+    let accepted = thread::spawn(move || listener.accept().map(|_| ()));
+
+    let acting = UserOwner::act();
+    let owned = private::owned_by_current_user(&made);
+    let connected = LocalStream::connect(&path).map(|_| ());
+    drop(acting);
+
+    assert!(owned.unwrap(), "the folder an elevated process made");
+    connected.unwrap();
+    accepted.join().unwrap().unwrap();
+}
+
+/// The calling thread acting with the process's own token, its default
+/// owner set to the user the way Git Bash's runtime sets it. The test runs
+/// elevated (the Windows runner and a device's ssh session both do), so
+/// before the act that owner is the Administrators group. Dropping it ends
+/// the act on every exit; it never leaves its thread.
+#[cfg(windows)]
+struct UserOwner(std::marker::PhantomData<*const ()>);
+
+#[cfg(windows)]
+impl UserOwner {
+    fn act() -> Self {
+        use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+        use windows_sys::Win32::Security::{
+            DuplicateTokenEx, EqualSid, GetTokenInformation, SecurityImpersonation,
+            SetTokenInformation, TOKEN_ADJUST_DEFAULT, TOKEN_DUPLICATE, TOKEN_IMPERSONATE,
+            TOKEN_OWNER, TOKEN_QUERY, TOKEN_USER, TokenImpersonation, TokenOwner, TokenUser,
+        };
+        use windows_sys::Win32::System::Threading::{
+            GetCurrentProcess, OpenProcessToken, SetThreadToken,
+        };
+
+        fn information(token: HANDLE, class: i32) -> Vec<u64> {
+            let mut size = 0u32;
+            // SAFETY: a size query with no buffer.
+            unsafe { GetTokenInformation(token, class, std::ptr::null_mut(), 0, &mut size) };
+            let mut buffer = vec![0u64; (size as usize).div_ceil(8)];
+            // SAFETY: `buffer` holds at least `size` writable bytes.
+            let read = unsafe {
+                GetTokenInformation(token, class, buffer.as_mut_ptr().cast(), size, &mut size)
+            };
+            assert_ne!(read, 0, "{}", std::io::Error::last_os_error());
+            buffer
+        }
+
+        let mut process = std::ptr::null_mut();
+        // SAFETY: the current-process pseudo handle is always valid.
+        let opened = unsafe {
+            OpenProcessToken(
+                GetCurrentProcess(),
+                TOKEN_DUPLICATE | TOKEN_QUERY,
+                &mut process,
+            )
+        };
+        assert_ne!(opened, 0, "{}", std::io::Error::last_os_error());
+        let mut acting = std::ptr::null_mut();
+        // SAFETY: `process` is open with TOKEN_DUPLICATE.
+        let duplicated = unsafe {
+            DuplicateTokenEx(
+                process,
+                TOKEN_ADJUST_DEFAULT | TOKEN_IMPERSONATE | TOKEN_QUERY,
+                std::ptr::null(),
+                SecurityImpersonation,
+                TokenImpersonation,
+                &mut acting,
+            )
+        };
+        let duplicated_error = std::io::Error::last_os_error();
+        // SAFETY: the handle is open and owned here.
+        unsafe { CloseHandle(process) };
+        assert_ne!(duplicated, 0, "{duplicated_error}");
+
+        let user = information(acting, TokenUser);
+        let owner = information(acting, TokenOwner);
+        // SAFETY: both buffers hold what GetTokenInformation wrote for
+        // their classes, and the SIDs they point at lie inside them.
+        let (user_sid, owner_sid) = unsafe {
+            (
+                (*user.as_ptr().cast::<TOKEN_USER>()).User.Sid,
+                (*owner.as_ptr().cast::<TOKEN_OWNER>()).Owner,
+            )
+        };
+        // SAFETY: both SIDs are valid for the life of their buffers.
+        assert_eq!(
+            unsafe { EqualSid(user_sid, owner_sid) },
+            0,
+            "the test has to run elevated, where the default owner is the Administrators group"
+        );
+        let set_owner = TOKEN_OWNER { Owner: user_sid };
+        // SAFETY: `acting` is open with TOKEN_ADJUST_DEFAULT and `set_owner`
+        // names a SID the token holds.
+        let set = unsafe {
+            SetTokenInformation(
+                acting,
+                TokenOwner,
+                std::ptr::addr_of!(set_owner).cast(),
+                size_of::<TOKEN_OWNER>() as u32,
+            )
+        };
+        let set_error = std::io::Error::last_os_error();
+        // SAFETY: a null thread is the calling thread; it keeps its own
+        // reference to `acting`, so this one is closed either way.
+        let applied = if set != 0 {
+            unsafe { SetThreadToken(std::ptr::null(), acting) }
+        } else {
+            0
+        };
+        let applied_error = std::io::Error::last_os_error();
+        unsafe { CloseHandle(acting) };
+        assert_ne!(set, 0, "{set_error}");
+        assert_ne!(applied, 0, "{applied_error}");
+        Self(std::marker::PhantomData)
+    }
+}
+
+#[cfg(windows)]
+impl Drop for UserOwner {
+    fn drop(&mut self) {
+        use windows_sys::Win32::Security::RevertToSelf;
+        // SAFETY: ends this thread's impersonation, which `act` began.
+        if unsafe { RevertToSelf() } == 0 && !thread::panicking() {
+            panic!("{}", std::io::Error::last_os_error());
+        }
+    }
+}
