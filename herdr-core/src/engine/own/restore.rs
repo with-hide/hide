@@ -152,10 +152,21 @@ fn plans(
     launches: &BTreeMap<String, PaneLaunch>,
     restarts: &[Restart],
     mut running: BTreeSet<(String, String)>,
+    waiting: &BTreeSet<String>,
 ) -> BTreeMap<String, Plan> {
     let mut plans = BTreeMap::new();
     for restart in restarts {
         let Some(agent) = &restart.agent else {
+            // An imported pane whose conversation the Herdr it came from
+            // still has open (PRD engine-bundle-4-herdr-removal D-8, B15).
+            if waiting.contains(&restart.pane) {
+                plans.insert(
+                    restart.pane.clone(),
+                    Plan::Shell(
+                        "hide: this pane's conversation is open in Herdr, so it was not resumed here; this pane is a shell now.".to_owned(),
+                    ),
+                );
+            }
             continue;
         };
         let plan = match agents::definition(catalog, &agent.kind) {
@@ -345,10 +356,10 @@ impl OwnEngine<'static> {
             (finished, restarts, orphans, adopted_agents)
         };
         // Asked of each holder off the topology lock.
-        let idle: Vec<String> = adopted_agents
+        let (idle, busy): (Vec<String>, Vec<String>) = adopted_agents
             .into_iter()
-            .filter(|pane| self.at_its_prompt(pane))
-            .collect();
+            .partition(|pane| self.at_its_prompt(pane));
+        self.settle_given_back(&busy);
         let (idle, running) = {
             let mut topology = self.topology();
             let idle: Vec<Restart> = idle
@@ -382,7 +393,19 @@ impl OwnEngine<'static> {
             .place
             .as_ref()
             .map_or(&no_launches, |place| &*place.launches);
-        let plans = plans(&self.shared.definitions.get(), launches, &both, running);
+        let waiting = self
+            .shared
+            .place
+            .as_ref()
+            .map(|place| crate::herdr_import::waiting(&place.engine_dir))
+            .unwrap_or_default();
+        let plans = plans(
+            &self.shared.definitions.get(),
+            launches,
+            &both,
+            running,
+            &waiting,
+        );
         let (failures, mut resumes) = self.start_restarts(&restarts, &plans, home.as_deref());
         for restart in &idle {
             match plans.get(&restart.pane) {
@@ -461,6 +484,51 @@ impl OwnEngine<'static> {
                 }));
                 false
             }
+        }
+    }
+
+    /// A conversation an import gave back to its pane once the Herdr it
+    /// came from stopped (PRD engine-bundle-4-herdr-removal D-8, B15) is
+    /// resumed there only at the pane's prompt: one whose pane runs another
+    /// command (`busy`, adopted panes off their prompt) waits again for the
+    /// next import, and is no agent of the pane meanwhile.
+    fn settle_given_back(&self, busy: &[String]) {
+        let Some(place) = self.shared.place.as_ref() else {
+            return;
+        };
+        let given = crate::herdr_import::given_back(&place.engine_dir);
+        if given.is_empty() {
+            return;
+        }
+        let waiting: Vec<(String, PaneAgent)> = {
+            let mut topology = self.topology();
+            busy.iter()
+                .filter(|pane| given.contains(*pane))
+                .filter_map(|pane| {
+                    let agent = topology.pane_mut(pane).ok()?.agent.take()?;
+                    Some((pane.clone(), agent))
+                })
+                .collect()
+        };
+        for (pane, _) in &waiting {
+            crate::diagnostic!(serde_json::json!({
+                "component": "own_engine",
+                "kind": "engine.restore_not_resumed",
+                "pane_id": pane,
+                "message": "the pane runs another command, so the conversation Herdr had open waits for the next import",
+            }));
+        }
+        if let Err(reason) = crate::herdr_import::wait_again(
+            &place.engine_dir,
+            waiting
+                .into_iter()
+                .map(|(pane, agent)| (pane, agent.kind, agent.name, agent.session)),
+        ) {
+            crate::diagnostic!(serde_json::json!({
+                "component": "own_engine",
+                "kind": "engine.restore_given_back_unsaved",
+                "message": reason,
+            }));
         }
     }
 

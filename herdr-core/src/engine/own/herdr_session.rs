@@ -719,6 +719,44 @@ pub(crate) fn import(
     Ok(imported)
 }
 
+/// Gives each conversation of `pending` back to its pane in the engine's
+/// saved session in `engine_dir`, where that pane is still saved with no
+/// agent of its own: the engine's open resumes it there (D-8, B15). The
+/// panes given back.
+pub(crate) fn give_back(
+    engine_dir: &Path,
+    pending: &[PendingResume],
+) -> Result<BTreeSet<String>, String> {
+    let path = hide_kit::layout::engine_session_in(engine_dir);
+    let backups = hide_kit::layout::engine_backups_in(engine_dir);
+    let mut saved = super::restore::read(&path, &backups).to_saved();
+    let mut given = BTreeSet::new();
+    for pane in saved
+        .workspaces
+        .iter_mut()
+        .flat_map(|workspace| &mut workspace.tabs)
+        .flat_map(|tab| &mut tab.panes)
+        .filter(|pane| pane.agent.is_none())
+    {
+        if let Some(waiting) = pending.iter().find(|waiting| waiting.pane == pane.id) {
+            pane.agent = Some(super::store::SavedAgent {
+                kind: waiting.kind.clone(),
+                name: waiting.name.clone(),
+                session: waiting.session.clone(),
+            });
+            given.insert(pane.id.clone());
+        }
+    }
+    if given.is_empty() {
+        return Ok(given);
+    }
+    let topology = super::topology::Topology::from_saved(saved).map_err(|why| {
+        format!("the session with its conversations back does not hold together: {why}")
+    })?;
+    super::store::write(&path, &topology.to_saved())?;
+    Ok(given)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -984,6 +1022,41 @@ mod tests {
                 .flat_map(|tab| &tab.panes)
                 .all(|pane| pane.agent.is_none())
         );
+    }
+
+    // B15: once the Herdr stops, a waiting conversation goes back to its
+    // pane, and only to a pane still saved with no agent of its own.
+    #[test]
+    fn a_waiting_conversation_goes_back_to_its_pane() {
+        let dir = tempfile::tempdir().unwrap();
+        let session = parse(&fixture("0.9.5")).unwrap();
+        let imported = import(dir.path(), &session, &BTreeSet::new(), false).unwrap();
+        let mut pending = imported.pending.clone();
+        pending.push(PendingResume {
+            pane: "w9:p1".to_owned(),
+            kind: "codex".to_owned(),
+            name: None,
+            session: None,
+        });
+        assert_eq!(
+            give_back(dir.path(), &pending).unwrap(),
+            BTreeSet::from(["w1:p1".to_owned()])
+        );
+        let opened = super::super::restore::read(
+            &hide_kit::layout::engine_session_in(dir.path()),
+            &hide_kit::layout::engine_backups_in(dir.path()),
+        )
+        .to_saved();
+        let agents: Vec<(&str, &str)> = opened
+            .workspaces
+            .iter()
+            .flat_map(|workspace| &workspace.tabs)
+            .flat_map(|tab| &tab.panes)
+            .filter_map(|pane| Some((pane.id.as_str(), pane.agent.as_ref()?.kind.as_str())))
+            .collect();
+        assert_eq!(agents, [("w1:p1", "claude")]);
+        // A second pass finds the pane taken and gives nothing.
+        assert!(give_back(dir.path(), &pending).unwrap().is_empty());
     }
 
     // B11: a session this build cannot read says why; a missing one is none.

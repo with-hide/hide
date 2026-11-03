@@ -47,6 +47,10 @@ pub(crate) struct Record {
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub(crate) moving: BTreeSet<String>,
     pub(crate) pending: Vec<PendingResume>,
+    /// The panes the last import gave a waiting conversation back to, until
+    /// the engine's open resumed it there or set it waiting again (B15).
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub(crate) given_back: BTreeSet<String>,
     /// The move the core starts with next.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) asked: Option<Asked>,
@@ -251,6 +255,53 @@ fn open(engine_dir: &Path) -> Result<Record, String> {
 /// what it reports changes nothing on screen (D-7, B10).
 pub fn holds(engine_dir: &Path, id: &str) -> bool {
     !held(engine_dir).releases(id)
+}
+
+/// The panes whose conversation waits in the Herdr it came from (D-8,
+/// B15): a restore opens their shell saying so. A record that cannot be read
+/// names none.
+pub(crate) fn waiting(engine_dir: &Path) -> BTreeSet<String> {
+    read(engine_dir)
+        .ok()
+        .flatten()
+        .map(|record| {
+            record
+                .pending
+                .into_iter()
+                .map(|pending| pending.pane)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The panes the last import gave a waiting conversation back to (B15).
+pub(crate) fn given_back(engine_dir: &Path) -> BTreeSet<String> {
+    read(engine_dir)
+        .ok()
+        .flatten()
+        .map(|record| record.given_back)
+        .unwrap_or_default()
+}
+
+/// The engine's open settled the conversations given back: the `busy` ones,
+/// whose pane ran another command, wait again for the next import, as
+/// `(pane, kind, name, session)`; the rest were resumed in their pane.
+pub(crate) fn wait_again(
+    engine_dir: &Path,
+    busy: impl IntoIterator<Item = (String, String, Option<String>, Option<String>)>,
+) -> Result<(), String> {
+    let mut record = open(engine_dir)?;
+    record.given_back.clear();
+    record.pending.extend(
+        busy.into_iter()
+            .map(|(pane, kind, name, session)| PendingResume {
+                pane,
+                kind,
+                name,
+                session,
+            }),
+    );
+    write(engine_dir, &record)
 }
 
 /// The workspaces moved into `engine_dir`'s engine.
@@ -483,6 +534,17 @@ pub fn not_stopped(engine_dir: &Path) -> Result<(), String> {
 pub fn import(engine_dir: &Path, herdr_session: &Path, asked: Asked) -> Result<Outcome, String> {
     let mut record = open(engine_dir)?;
     record.asked = None;
+    // The conversations that waited while their Herdr ran go back to their
+    // panes once it no longer does (D-8, B15).
+    let given = if asked.resume && !record.pending.is_empty() {
+        herdr_session::give_back(engine_dir, &record.pending)?
+    } else {
+        BTreeSet::new()
+    };
+    record
+        .pending
+        .retain(|waiting| !given.contains(&waiting.pane));
+    record.given_back.extend(given.iter().cloned());
     let outcome = match herdr_session::read(herdr_session) {
         HerdrRead::Missing => {
             record.found = Found::Nothing;
@@ -770,6 +832,28 @@ mod tests {
         assert!(!holds(&engine, "h1:p1"));
         import(&engine, &save, Asked { resume: true }).unwrap();
         assert!(!holds(&engine, "w1:p1"));
+    }
+
+    // D-8, B15: an import beside a running Herdr leaves its conversation
+    // waiting; one once Herdr stopped gives it back, and a pane that ran
+    // another command at the open has it wait again.
+    #[test]
+    fn a_waiting_conversation_is_given_back_once_and_waits_again_when_its_pane_is_busy() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = dir.path().join("engine");
+        let save = fixture(dir.path());
+        import(&engine, &save, Asked { resume: false }).unwrap();
+        assert!(waiting(&engine).contains("w1:p1"));
+        import(&engine, &save, Asked { resume: true }).unwrap();
+        assert!(waiting(&engine).is_empty());
+        assert_eq!(given_back(&engine), BTreeSet::from(["w1:p1".to_owned()]));
+        wait_again(
+            &engine,
+            [("w1:p1".to_owned(), "claude".to_owned(), None, None)],
+        )
+        .unwrap();
+        assert!(given_back(&engine).is_empty());
+        assert!(waiting(&engine).contains("w1:p1"));
     }
 
     // D-27: a move is committed once, and a record that cannot be read
