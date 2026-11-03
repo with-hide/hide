@@ -165,8 +165,11 @@ impl Device {
     }
 }
 
+/// A step's deadline: the one the node gives a device to sign in and answer
+/// its probe, since a PowerShell login shell that starts Windows PowerShell
+/// takes seconds of its own on a busy machine.
 fn soon() -> Instant {
-    Instant::now() + Duration::from_secs(30)
+    Instant::now() + crate::ssh::session::SIGN_IN_TIMEOUT
 }
 
 fn digest(bytes: &[u8]) -> String {
@@ -202,7 +205,12 @@ fn every_login_shell_of_a_windows_sshd_reaches_the_powershell_script() {
     for shell in SHELLS {
         let device = Device::new();
         let mut pipe = device.connect_through(shell);
-        let facts = probe(&mut pipe, soon()).unwrap_or_else(|error| panic!("{shell:?}: {error:?}"));
+        let facts = probe(&mut pipe, soon()).unwrap_or_else(|error| {
+            panic!(
+                "{shell:?}: {error:?}; it last said {:?}",
+                pipe.last_error()
+            )
+        });
         assert_eq!(facts.home, Device::wire(&device.home()), "{shell:?}");
         assert_eq!(
             (facts.os.as_str(), facts.arch.as_str()),
