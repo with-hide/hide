@@ -21,11 +21,13 @@ fn helper(target: &KitTarget) -> PathBuf {
 pub(crate) fn observe(target: &KitTarget, runtime: AgentRuntime) -> Observed {
     let wanted = helper(target);
     let state = crate::layout::state_dir_from_process(&target.home);
-    let hook_target = match HookTarget::new(&wanted, &state) {
-        Ok(target) => target,
-        Err(reason) => return Observed::Blocked(Reason::not_changed(reason)),
-    };
-    let status = hide_agent_hooks::install::status(runtime, &target.home);
+    let hook_target =
+        match HookTarget::new(&wanted, &state).and_then(|hook| hook.of_install(&target.install)) {
+            Ok(target) => target,
+            Err(reason) => return Observed::Blocked(Reason::not_changed(reason)),
+        };
+    let install = Some(target.install.as_str());
+    let status = hide_agent_hooks::install::status(runtime, &target.home, install);
     let observed = match status {
         HookStatus::RuntimeAbsent => {
             return Observed::Absent(Reason::new(
@@ -53,7 +55,7 @@ pub(crate) fn observe(target: &KitTarget, runtime: AgentRuntime) -> Observed {
             return Observed::Blocked(Reason::new(PartCause::Unreadable, reason.message()));
         }
         HookStatus::Installed { .. } => {
-            match hide_agent_hooks::installed_helper_path(runtime, &target.home) {
+            match hide_agent_hooks::installed_helper_path(runtime, &target.home, install) {
                 Some(found) if Path::new(&found) == wanted => {
                     if hide_agent_hooks::install::matches_install(
                         runtime,
@@ -65,6 +67,7 @@ pub(crate) fn observe(target: &KitTarget, runtime: AgentRuntime) -> Observed {
                         runtime,
                         &target.home,
                         &wanted,
+                        install,
                     ) {
                         Observed::Stale(Reason::new(
                             PartCause::RouteChanged,
@@ -122,7 +125,7 @@ pub(crate) fn observe(target: &KitTarget, runtime: AgentRuntime) -> Observed {
 pub(crate) fn install(target: &KitTarget, runtime: AgentRuntime) -> Result<(), String> {
     let helper = helper(target);
     let state = crate::layout::state_dir_from_process(&target.home);
-    let hook_target = HookTarget::new(&helper, &state)?;
+    let hook_target = HookTarget::new(&helper, &state)?.of_install(&target.install)?;
     hide_agent_hooks::install(runtime, &target.home, hook_target)
         .map(|_| ())
         .map_err(|failure| failure.message())
@@ -133,7 +136,7 @@ pub(crate) fn install(target: &KitTarget, runtime: AgentRuntime) -> Result<(), S
 /// does (docs/agent-hooks.md, Folder trust for the worktrees Hide makes).
 pub(crate) fn remove(target: &KitTarget, runtime: AgentRuntime) -> RemoveOutcome {
     use hide_agent_hooks::folder_trust::{self, Agent, Tools};
-    let removed = match hide_agent_hooks::remove(runtime, &target.home) {
+    let removed = match hide_agent_hooks::remove(runtime, &target.home, Some(&target.install)) {
         Ok(outcome) => outcome.removed_entries,
         Err(failure) => {
             return RemoveOutcome::Failed {

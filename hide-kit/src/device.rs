@@ -39,6 +39,7 @@ pub fn device_target(
         .map(PathBuf::from);
     KitTarget {
         home: home.to_path_buf(),
+        install: hide_agent_hooks::route::install_of_root(root),
         kit_dir: root.join(CURRENT),
         cli_dir: cli_dir.to_path_buf(),
         // The old layout's root too, so its `hide` link is re-pointed rather

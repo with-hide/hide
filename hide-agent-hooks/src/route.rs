@@ -4,6 +4,14 @@
 //! home. The installed command therefore carries the kit's state folder.
 //! An explicit pane route still wins; the captured route replaces only the
 //! environment-based default, never the daemon's caller authentication.
+//!
+//! The command also carries the installation that wrote it (`--install-b64`):
+//! an account can hold more than one Hide installation, a desktop app and a
+//! device helper a Hide on another machine put there, each with its own hook
+//! entry, and a pane names the installation that started it
+//! ([`INSTALL_VARIABLE`]). An entry acts only in a pane of its own
+//! installation, or in one that names none (docs/agent-hooks.md, More than
+//! one Hide on an account).
 
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
@@ -14,14 +22,38 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
 pub(crate) const ARGUMENT: &str = "--state-dir-b64";
+pub(crate) const INSTALL_ARGUMENT: &str = "--install-b64";
 const STATE_VARIABLE: &str = "HIDE_STATE_DIR";
+/// The variable a pane names the Hide installation that started it by: a
+/// pane holder's pane carries its node's ([`APP_INSTALL`] or [`install_of_root`]), and a
+/// pane that names none (a Herdr pane, a plain terminal) is anyone's.
+pub const INSTALL_VARIABLE: &str = "HIDE_INSTALL";
+/// The variable a pane names its installation's own `hide` command by: a
+/// `hide` that another installation put first on the pane's `PATH` hands the
+/// call to this one, which speaks its own daemon's protocol.
+pub const CLI_VARIABLE: &str = "HIDE_INSTALL_CLI";
 const ENCODED_LIMIT: usize = 32 * 1024;
+/// The longest installation name an entry carries.
+const INSTALL_LIMIT: usize = 4 * 1024;
 
-/// The installed helper and the daemon state folder its kit serves.
+/// The installation of a desktop package's kit: one per account, whose
+/// parts are the package's own.
+pub const APP_INSTALL: &str = "app";
+
+/// The installation whose kit lives under the helper root `root`, a device
+/// helper's or a build Hide placed there: named by the root, which each of
+/// its builds shares.
+pub fn install_of_root(root: &Path) -> String {
+    format!("root:{}", root.display())
+}
+
+/// The installed helper, the daemon state folder its kit serves and the
+/// installation the kit belongs to.
 #[derive(Clone, Copy, Debug)]
 pub struct HookTarget<'a> {
     helper: &'a Path,
     state: Option<&'a Path>,
+    install: Option<&'a str>,
 }
 
 impl<'a> HookTarget<'a> {
@@ -38,13 +70,31 @@ impl<'a> HookTarget<'a> {
         Ok(Self {
             helper,
             state: Some(state),
+            install: None,
         })
+    }
+
+    /// The same target, its entry naming `install` as the installation that
+    /// wrote it.
+    pub fn of_install(self, install: &'a str) -> Result<Self, &'static str> {
+        if install.is_empty() || install.len() > INSTALL_LIMIT || install.contains('\0') {
+            return Err("the installation name must be 1 to 4096 bytes without NUL");
+        }
+        Ok(Self {
+            install: Some(install),
+            ..self
+        })
+    }
+
+    /// The installation this target's entry names, if any.
+    pub fn install(self) -> Option<&'a str> {
+        self.install
     }
 
     /// Shell-safe on POSIX and PowerShell, including paths containing quotes,
     /// dollars or spaces. These are arguments, not shell environment syntax.
     pub(crate) fn arguments(self) -> String {
-        self.state.map_or_else(String::new, |state| {
+        let route = self.state.map_or_else(String::new, |state| {
             format!(
                 " {ARGUMENT} {}",
                 URL_SAFE_NO_PAD.encode(
@@ -54,7 +104,14 @@ impl<'a> HookTarget<'a> {
                         .as_bytes()
                 )
             )
-        })
+        });
+        let install = self.install.map_or_else(String::new, |install| {
+            format!(
+                " {INSTALL_ARGUMENT} {}",
+                URL_SAFE_NO_PAD.encode(install.as_bytes())
+            )
+        });
+        format!("{route}{install}")
     }
 }
 
@@ -74,6 +131,7 @@ impl<'a> From<&'a Path> for HookTarget<'a> {
         Self {
             helper,
             state: None,
+            install: None,
         }
     }
 }
@@ -105,6 +163,61 @@ fn parse(arguments: impl Iterator<Item = String>) -> Result<Option<PathBuf>, ()>
         route = Some(path);
     }
     Ok(route)
+}
+
+/// The installation an entry's arguments name, `Ok(None)` for an entry an
+/// earlier build wrote without one.
+fn parse_install(arguments: impl Iterator<Item = String>) -> Result<Option<String>, ()> {
+    let mut arguments = arguments;
+    let mut install = None;
+    while let Some(argument) = arguments.next() {
+        if argument != INSTALL_ARGUMENT {
+            continue;
+        }
+        if install.is_some() {
+            return Err(());
+        }
+        let encoded = arguments.next().ok_or(())?;
+        if encoded.len() > ENCODED_LIMIT {
+            return Err(());
+        }
+        let bytes = URL_SAFE_NO_PAD.decode(encoded).map_err(|_| ())?;
+        let name = String::from_utf8(bytes).map_err(|_| ())?;
+        if name.is_empty() || name.len() > INSTALL_LIMIT {
+            return Err(());
+        }
+        install = Some(name);
+    }
+    Ok(install)
+}
+
+/// Whether this process runs in a pane another Hide installation started:
+/// the pane names an installation ([`INSTALL_VARIABLE`]) and the entry that
+/// ran this helper names another. Such a call is that installation's own
+/// entry's to answer, so this one does nothing. A pane that names none, an
+/// entry an earlier build wrote without an installation, and arguments that
+/// do not read are never foreign: the call goes on as before.
+pub fn foreign_pane() -> bool {
+    let Some(pane) = std::env::var(INSTALL_VARIABLE)
+        .ok()
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+    matches!(
+        parse_install(std::env::args().skip(1)),
+        Ok(Some(entry)) if entry != pane
+    )
+}
+
+/// Read a generated shell command's installation, for the kit's judgement of
+/// whose entry it is.
+pub(crate) fn install_in_command(command: &str) -> Result<Option<String>, ()> {
+    parse_install(
+        command
+            .split_whitespace()
+            .map(|word| word.trim_end_matches(';').to_owned()),
+    )
 }
 
 /// Give every sibling CLI call the same captured route. An invalid installed

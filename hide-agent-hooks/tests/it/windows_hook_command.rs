@@ -191,7 +191,7 @@ fn the_windows_entries_run_the_helper_through_powershell_only_while_it_is_there(
     for runtime in AgentRuntime::ALL {
         hide_agent_hooks::install(runtime, &home, crate::hook_target(&helper)).unwrap();
         assert_eq!(
-            hide_agent_hooks::installed_helper_path(runtime, &home).as_deref(),
+            hide_agent_hooks::installed_helper_path(runtime, &home, None).as_deref(),
             helper.to_str(),
             "{runtime:?}: the path is read back from the PowerShell guard"
         );

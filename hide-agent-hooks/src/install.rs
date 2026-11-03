@@ -108,8 +108,9 @@ pub struct RemoveOutcome {
 /// The `hooks` object every runtime keeps at the top level of its file.
 const HOOKS_KEY: &str = "hooks";
 
-/// Judges one runtime without changing anything.
-pub fn status(runtime: AgentRuntime, home: &Path) -> HookStatus {
+/// Judges one runtime's entries of the installation `install` without
+/// changing anything; another installation's entries are not looked at.
+pub fn status(runtime: AgentRuntime, home: &Path, install: Option<&str>) -> HookStatus {
     if !runtime.home_directory(home).is_dir() {
         return HookStatus::RuntimeAbsent;
     }
@@ -134,7 +135,7 @@ pub fn status(runtime: AgentRuntime, home: &Path) -> HookStatus {
         // would write.
         missing_event |= groups.is_some_and(|groups| {
             groups.iter().any(|group| {
-                group_marker_version(group).is_some()
+                group_version(group, install).is_some()
                     && (group.get("matcher").and_then(Value::as_str)
                         != hook_matcher(runtime, event)
                         || group["hooks"][0]["timeout"].as_u64()
@@ -142,7 +143,7 @@ pub fn status(runtime: AgentRuntime, home: &Path) -> HookStatus {
             })
         });
         let version = groups
-            .map(|groups| owned_versions(groups))
+            .map(|groups| owned_versions(groups, install))
             .and_then(|versions| versions.into_iter().min());
         match version {
             Some(version) => lowest = Some(lowest.map_or(version, |best| best.min(version))),
@@ -152,7 +153,7 @@ pub fn status(runtime: AgentRuntime, home: &Path) -> HookStatus {
     let Some(version) = lowest else {
         return HookStatus::NotInstalled;
     };
-    if let Some(helper) = installed_helper(hooks)
+    if let Some(helper) = installed_helper(hooks, install)
         && !Path::new(&helper).exists()
     {
         return HookStatus::Failed {
@@ -189,10 +190,10 @@ pub fn install<'a>(
     let mut preserved = 0usize;
     for event in runtime.events() {
         let groups = event_array_mut(hooks, event, &path)?;
-        // Remove Hide's own entries first so a second install converges on
-        // one entry per event rather than appending another
-        // (engineering rule 11, PRD B25).
-        strip_owned(groups);
+        // Remove this installation's own entries first so a second install
+        // converges on one entry per event rather than appending another
+        // (engineering rule 11, PRD B25); another installation's stay.
+        strip_owned(groups, helper.install());
         preserved += groups.len();
         groups.push(hook_group(helper, runtime, event));
     }
@@ -229,14 +230,19 @@ pub fn matches_install<'a>(
         };
         let mut owned = groups
             .iter()
-            .filter(|group| group_marker_version(group).is_some());
+            .filter(|group| group_version(group, helper.install()).is_some());
         owned.next() == Some(&hook_group(helper, runtime, event)) && owned.next().is_none()
     })
 }
 
 /// A generated entry for this helper at a previous state route is stale;
 /// arbitrary edits are not permission for the kit to replace the entry.
-pub fn matches_helper(runtime: AgentRuntime, home: &Path, helper: &Path) -> bool {
+pub fn matches_helper(
+    runtime: AgentRuntime,
+    home: &Path,
+    helper: &Path,
+    install: Option<&str>,
+) -> bool {
     let Ok(Some(document)) = read_document(&runtime.config_path(home)) else {
         return false;
     };
@@ -248,7 +254,7 @@ pub fn matches_helper(runtime: AgentRuntime, home: &Path, helper: &Path) -> bool
         .values()
         .filter_map(Value::as_array)
         .flatten()
-        .filter(|group| group_marker_version(group).is_some())
+        .filter(|group| group_version(group, install).is_some())
     {
         for hook in group
             .get("hooks")
@@ -272,6 +278,10 @@ pub fn matches_helper(runtime: AgentRuntime, home: &Path, helper: &Path) -> bool
     }
     match state {
         Some(state) => HookTarget::new(helper, &state)
+            .and_then(|target| match install {
+                Some(install) => target.of_install(install),
+                None => Ok(target),
+            })
             .is_ok_and(|target| matches_install(runtime, home, target)),
         // This version always installs a route. Removing it is an edit;
         // older unbound versions are upgraded by the marker-version check.
@@ -279,8 +289,13 @@ pub fn matches_helper(runtime: AgentRuntime, home: &Path, helper: &Path) -> bool
     }
 }
 
-/// Takes out only the entries carrying Hide's marker.
-pub fn remove(runtime: AgentRuntime, home: &Path) -> Result<RemoveOutcome, InstallFailure> {
+/// Takes out only the entries carrying Hide's marker that are the
+/// installation `install`'s ([`hook_is_mine`]).
+pub fn remove(
+    runtime: AgentRuntime,
+    home: &Path,
+    install: Option<&str>,
+) -> Result<RemoveOutcome, InstallFailure> {
     let path = runtime.config_path(home);
     let Some(mut document) = read_document(&path)? else {
         return Ok(RemoveOutcome {
@@ -297,7 +312,7 @@ pub fn remove(runtime: AgentRuntime, home: &Path) -> Result<RemoveOutcome, Insta
         let Some(groups) = value.as_array_mut() else {
             continue;
         };
-        let taken = strip_owned(groups);
+        let taken = strip_owned(groups, install);
         removed += taken;
         preserved += groups.len();
         if taken != 0 && groups.is_empty() {
@@ -639,13 +654,15 @@ fn hook_texts(hook: &Value) -> impl Iterator<Item = &str> {
     command.into_iter().chain(args)
 }
 
-fn group_marker_version(group: &Value) -> Option<u32> {
+/// The version of the entries of `group` that are the installation
+/// `install`'s ([`hook_is_mine`]), when it holds any.
+fn group_version(group: &Value, install: Option<&str>) -> Option<u32> {
     group
         .get("hooks")?
         .as_array()?
         .iter()
-        .flat_map(hook_texts)
-        .filter_map(marker_version_in)
+        .filter(|hook| hook_is_mine(hook, install))
+        .filter_map(hook_marker_version)
         .min()
 }
 
@@ -653,15 +670,43 @@ fn hook_marker_version(hook: &Value) -> Option<u32> {
     hook_texts(hook).filter_map(marker_version_in).min()
 }
 
-/// A group can belong to several writers. Only a marked command is Hide's.
-fn strip_owned(groups: &mut Vec<Value>) -> usize {
+/// Whether `hook` is a Hide entry the installation `install` may judge and
+/// replace: one that names that installation, one an earlier build wrote
+/// without naming any, or one whose helper is gone, which no installation
+/// runs any more. Another installation's entry on the same account is that
+/// installation's, and stays (docs/agent-hooks.md, More than one Hide on an
+/// account). With no `install` (a caller that names none), every Hide entry
+/// is.
+pub(crate) fn hook_is_mine(hook: &Value, install: Option<&str>) -> bool {
+    if hook_marker_version(hook).is_none() {
+        return false;
+    }
+    let Some(install) = install else {
+        return true;
+    };
+    let named = hook_texts(hook)
+        .map(crate::route::install_in_command)
+        .find_map(|found| found.ok().flatten());
+    match named {
+        None => true,
+        Some(named) if named == install => true,
+        Some(_) => hook_texts(hook)
+            .filter(|text| text.contains('\''))
+            .find_map(|text| Quoting::NATIVE.first_quoted(text))
+            .is_some_and(|helper| !Path::new(&helper).exists()),
+    }
+}
+
+/// A group can belong to several writers. Only a marked command of the
+/// installation `install` ([`hook_is_mine`]) is taken.
+fn strip_owned(groups: &mut Vec<Value>, install: Option<&str>) -> usize {
     let mut removed = 0;
     groups.retain_mut(|group| {
         let Some(hooks) = group.get_mut("hooks").and_then(Value::as_array_mut) else {
             return true;
         };
         let before = hooks.len();
-        hooks.retain(|hook| hook_marker_version(hook).is_none());
+        hooks.retain(|hook| !hook_is_mine(hook, install));
         let taken = before - hooks.len();
         removed += taken;
         taken == 0 || !hooks.is_empty()
@@ -669,20 +714,24 @@ fn strip_owned(groups: &mut Vec<Value>) -> usize {
     removed
 }
 
-fn owned_versions(groups: &[Value]) -> Vec<u32> {
-    groups.iter().filter_map(group_marker_version).collect()
+fn owned_versions(groups: &[Value], install: Option<&str>) -> Vec<u32> {
+    groups
+        .iter()
+        .filter_map(|group| group_version(group, install))
+        .collect()
 }
 
-/// The helper path recorded in the first entry Hide owns.
-fn installed_helper(hooks: &Map<String, Value>) -> Option<String> {
+/// The helper path recorded in the first entry of the installation
+/// `install`.
+fn installed_helper(hooks: &Map<String, Value>, install: Option<&str>) -> Option<String> {
     hooks
         .values()
         .filter_map(Value::as_array)
         .flatten()
-        .filter(|group| group_marker_version(group).is_some())
+        .filter(|group| group_version(group, install).is_some())
         .filter_map(|group| group.get("hooks")?.as_array())
         .flatten()
-        .filter(|hook| hook_marker_version(hook).is_some())
+        .filter(|hook| hook_is_mine(hook, install))
         .find_map(|hook| {
             hook_texts(hook)
                 .filter(|text| text.contains('\''))
@@ -693,10 +742,14 @@ fn installed_helper(hooks: &Map<String, Value>) -> Option<String> {
 /// The helper Hide's entries in `runtime`'s file name, when there are any.
 /// The kit compares it with the helper it would install, so an entry left by
 /// an app at another path is replaced rather than taken as current.
-pub fn installed_helper_path(runtime: AgentRuntime, home: &Path) -> Option<String> {
+pub fn installed_helper_path(
+    runtime: AgentRuntime,
+    home: &Path,
+    install: Option<&str>,
+) -> Option<String> {
     let document = read_document(&runtime.config_path(home)).ok()??;
     let hooks = hooks_object(&document, &runtime.config_path(home)).ok()??;
-    installed_helper(hooks)
+    installed_helper(hooks, install)
 }
 
 /// The common read/modify/write boundary for instrumented and guidance hooks.
@@ -1010,11 +1063,11 @@ mod tests {
         );
 
         // And removal works without the binary, because it reads the file.
-        let outcome = remove(runtime, fixture.home()).unwrap();
+        let outcome = remove(runtime, fixture.home(), None).unwrap();
         assert!(outcome.changed);
         assert_eq!(outcome.removed_entries, runtime.events().count());
         assert!(matches!(
-            status(runtime, fixture.home()),
+            status(runtime, fixture.home(), None),
             HookStatus::NotInstalled
         ));
     }
@@ -1191,7 +1244,7 @@ mod tests {
         for hook in [claude, codex] {
             let group = serde_json::json!({ "hooks": [hook] });
             assert_eq!(
-                group_marker_version(&group),
+                group_version(&group, None),
                 Some(crate::runtime::HOOK_ENTRY_VERSION)
             );
             let text = hook_texts(&group["hooks"][0])
@@ -1226,7 +1279,7 @@ mod tests {
         for event in AgentRuntime::Codex.events() {
             let groups = first["hooks"][event.name()].as_array().unwrap();
             assert_eq!(
-                owned_versions(groups).len(),
+                owned_versions(groups, None).len(),
                 1,
                 "{} has one Hide entry",
                 event.name()
@@ -1313,11 +1366,11 @@ mod tests {
             assert_eq!(groups.len(), 3, "two of theirs and one of Hide's");
             assert_eq!(groups[0]["hooks"][0]["command"], "/opt/guard/root-only.sh");
             assert_eq!(groups[1]["hooks"][0]["command"], "/opt/audit/every-tool.sh");
-            assert!(group_marker_version(&groups[2]).is_some());
+            assert!(group_version(&groups[2], None).is_some());
             let second = install(runtime, fixture.home(), &path).unwrap();
             assert!(!second.changed, "a second install writes nothing");
             assert_eq!(fixture.read(runtime), after);
-            let removed = remove(runtime, fixture.home()).unwrap();
+            let removed = remove(runtime, fixture.home(), None).unwrap();
             assert_eq!(removed.removed_entries, runtime.events().count());
             let left = fixture.read(runtime);
             assert_eq!(
@@ -1342,12 +1395,12 @@ mod tests {
                 .remove("PreToolUse");
             fixture.write(runtime, &serde_json::to_string_pretty(&document).unwrap());
             assert!(
-                matches!(status(runtime, fixture.home()), HookStatus::Outdated { version } if version == crate::runtime::HOOK_ENTRY_VERSION),
+                matches!(status(runtime, fixture.home(), None), HookStatus::Outdated { version } if version == crate::runtime::HOOK_ENTRY_VERSION),
                 "{runtime:?}"
             );
             install(runtime, fixture.home(), &path).unwrap();
             assert!(matches!(
-                status(runtime, fixture.home()),
+                status(runtime, fixture.home(), None),
                 HookStatus::Installed { .. }
             ));
         }
@@ -1377,7 +1430,7 @@ mod tests {
             fixture.write(runtime, &serde_json::to_string_pretty(&document).unwrap());
             assert!(
                 matches!(
-                    status(runtime, fixture.home()),
+                    status(runtime, fixture.home(), None),
                     HookStatus::Outdated { version } if version == crate::runtime::HOOK_ENTRY_VERSION
                 ),
                 "{runtime:?}"
@@ -1385,7 +1438,7 @@ mod tests {
             install(runtime, fixture.home(), &path).unwrap();
             assert!(
                 matches!(
-                    status(runtime, fixture.home()),
+                    status(runtime, fixture.home(), None),
                     HookStatus::Installed { .. }
                 ),
                 "{runtime:?}"
@@ -1412,7 +1465,7 @@ mod tests {
             "the operator's bytes are untouched"
         );
         assert!(matches!(
-            status(AgentRuntime::Codex, fixture.home()),
+            status(AgentRuntime::Codex, fixture.home(), None),
             HookStatus::Failed {
                 reason: InstallFailure::Unparsable { .. }
             }
@@ -1425,7 +1478,7 @@ mod tests {
         fixture.write(AgentRuntime::Codex, OCCUPIED);
         install(AgentRuntime::Codex, fixture.home(), &helper(&fixture)).unwrap();
 
-        let outcome = remove(AgentRuntime::Codex, fixture.home()).unwrap();
+        let outcome = remove(AgentRuntime::Codex, fixture.home(), None).unwrap();
         assert!(outcome.changed);
         assert_eq!(
             outcome.removed_entries,
@@ -1448,7 +1501,7 @@ mod tests {
             "an event Hide emptied is dropped"
         );
         assert!(matches!(
-            status(AgentRuntime::Codex, fixture.home()),
+            status(AgentRuntime::Codex, fixture.home(), None),
             HookStatus::NotInstalled
         ));
     }
@@ -1458,7 +1511,7 @@ mod tests {
         let fixture = Fixture::new("absent");
         fs::remove_dir_all(fixture.home().join(".codex")).unwrap();
         assert_eq!(
-            status(AgentRuntime::Codex, fixture.home()),
+            status(AgentRuntime::Codex, fixture.home(), None),
             HookStatus::RuntimeAbsent
         );
         assert!(!AgentRuntime::Codex.config_path(fixture.home()).exists());
@@ -1480,7 +1533,7 @@ mod tests {
         }
         fixture.write(AgentRuntime::Codex, &document.to_string());
         assert_eq!(
-            status(AgentRuntime::Codex, fixture.home()),
+            status(AgentRuntime::Codex, fixture.home(), None),
             HookStatus::Outdated { version: 0 }
         );
     }
@@ -1492,7 +1545,7 @@ mod tests {
         install(AgentRuntime::Codex, fixture.home(), &helper_path).unwrap();
         fs::remove_file(&helper_path).unwrap();
         assert!(matches!(
-            status(AgentRuntime::Codex, fixture.home()),
+            status(AgentRuntime::Codex, fixture.home(), None),
             HookStatus::Failed {
                 reason: InstallFailure::HelperMissing { .. }
             }
@@ -1524,7 +1577,7 @@ mod tests {
             .join(crate::HELPER_BINARY_NAME);
         install(AgentRuntime::Codex, fixture.home(), &helper).unwrap();
         assert_eq!(
-            installed_helper_path(AgentRuntime::Codex, fixture.home()).as_deref(),
+            installed_helper_path(AgentRuntime::Codex, fixture.home(), None).as_deref(),
             Some(helper.to_str().unwrap()),
             "the path is read back from the guarded command"
         );
@@ -1607,7 +1660,7 @@ mod tests {
         );
 
         for runtime in [AgentRuntime::ClaudeCode, AgentRuntime::Codex] {
-            remove(runtime, fixture.home()).unwrap();
+            remove(runtime, fixture.home(), None).unwrap();
         }
         assert_eq!(kept(&claude), claude_before);
         assert!(link::is_link_to(&codex, &real));
@@ -1621,12 +1674,12 @@ mod tests {
     fn a_runtime_with_no_config_file_yet_installs_into_a_new_one() {
         let fixture = Fixture::new("fresh");
         assert_eq!(
-            status(AgentRuntime::ClaudeCode, fixture.home()),
+            status(AgentRuntime::ClaudeCode, fixture.home(), None),
             HookStatus::NotInstalled
         );
         install(AgentRuntime::ClaudeCode, fixture.home(), &helper(&fixture)).unwrap();
         assert_eq!(
-            status(AgentRuntime::ClaudeCode, fixture.home()),
+            status(AgentRuntime::ClaudeCode, fixture.home(), None),
             HookStatus::Installed {
                 version: crate::runtime::HOOK_ENTRY_VERSION
             }

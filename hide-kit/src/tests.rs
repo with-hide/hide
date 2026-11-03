@@ -478,7 +478,12 @@ fn a_second_apply_of_the_same_build_changes_nothing() {
 fn a_part_the_operator_removed_stays_removed_until_reinstall_asks_for_it() {
     let fixture = Fixture::new();
     apply(&fixture.target, &Scope::automatic());
-    hide_agent_hooks::remove(hide_agent_hooks::AgentRuntime::ClaudeCode, fixture.home()).unwrap();
+    hide_agent_hooks::remove(
+        hide_agent_hooks::AgentRuntime::ClaudeCode,
+        fixture.home(),
+        None,
+    )
+    .unwrap();
 
     let report = apply(&fixture.target, &Scope::automatic());
     assert_eq!(

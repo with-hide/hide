@@ -51,7 +51,7 @@ fn install_update_and_remove_keep_unrelated_source_spans_and_repeat_without_writ
         assert!(installed.starts_with(" \r\n{\t"));
         assert!(installed.ends_with(" } \r\n"));
         assert!(matches!(
-            status(runtime, home.path()),
+            status(runtime, home.path(), None),
             HookStatus::Installed { .. }
         ));
         assert!(
@@ -83,7 +83,7 @@ fn install_update_and_remove_keep_unrelated_source_spans_and_repeat_without_writ
         );
         assert_eq!(read(runtime, home.path()), updated);
 
-        let outcome = remove(runtime, home.path()).unwrap();
+        let outcome = remove(runtime, home.path(), None).unwrap();
         // The active hook contract includes passive observations and the
         // permission waits: Claude has Post, Failure and Notification, while
         // Codex reports failures through Post and an interrupt of its own.
@@ -102,10 +102,10 @@ fn install_update_and_remove_keep_unrelated_source_spans_and_repeat_without_writ
             "unrelated empty event survives"
         );
         assert!(matches!(
-            status(runtime, home.path()),
+            status(runtime, home.path(), None),
             HookStatus::NotInstalled
         ));
-        assert!(!remove(runtime, home.path()).unwrap().changed);
+        assert!(!remove(runtime, home.path(), None).unwrap().changed);
         assert_eq!(read(runtime, home.path()), removed);
     }
 }
@@ -125,7 +125,7 @@ fn mixed_groups_keep_each_unowned_handler_and_group_metadata_when_owned_commands
                 r#"{{"hooks":{{"Stop":[{{"matcher" : "\u002a", "hooks" : [{handlers}], "extra" : {{"name":"\u2603"}} }},{GROUP}]}}}}"#
             );
             let (home, helper) = fixture(runtime, &source);
-            let removed = remove(runtime, home.path()).unwrap();
+            let removed = remove(runtime, home.path(), None).unwrap();
             assert_eq!(
                 removed.removed_entries, 2,
                 "counts commands, including multiple in one group"
@@ -141,7 +141,7 @@ fn mixed_groups_keep_each_unowned_handler_and_group_metadata_when_owned_commands
                 literal_survives(&after, literal);
             }
             assert!(!after.contains("hide-subagents@0"));
-            assert!(!remove(runtime, home.path()).unwrap().changed);
+            assert!(!remove(runtime, home.path(), None).unwrap().changed);
 
             fs::write(runtime.config_path(home.path()), &source).unwrap();
             assert!(
@@ -179,12 +179,15 @@ fn removing_owned_first_event_retains_later_operator_event_bytes_and_order() {
     let source = format!(r#"{{"hooks":{{"Stop":[{owned}],{first},{second}}}}}"#);
     for runtime in AgentRuntime::ALL {
         let (home, _) = fixture(runtime, &source);
-        assert_eq!(remove(runtime, home.path()).unwrap().removed_entries, 1);
+        assert_eq!(
+            remove(runtime, home.path(), None).unwrap().removed_entries,
+            1
+        );
         let removed = read(runtime, home.path());
         literal_survives(&removed, &first);
         literal_survives(&removed, &second);
         assert!(removed.find(&first).unwrap() < removed.find(&second).unwrap());
-        assert!(!remove(runtime, home.path()).unwrap().changed);
+        assert!(!remove(runtime, home.path(), None).unwrap().changed);
         assert_eq!(read(runtime, home.path()), removed);
     }
 }
@@ -203,7 +206,7 @@ fn equal_handlers_in_distinct_groups_keep_their_own_spelling_and_order() {
     literal_survives(&installed, mixed_handler);
     literal_survives(&installed, standalone);
     assert!(installed.find(mixed_handler).unwrap() < installed.find(standalone).unwrap());
-    remove(runtime, home.path()).unwrap();
+    remove(runtime, home.path(), None).unwrap();
     let removed = read(runtime, home.path());
     literal_survives(&removed, mixed_handler);
     literal_survives(&removed, standalone);
@@ -232,14 +235,14 @@ fn ambiguous_duplicate_members_and_malformed_json_are_refused_without_mutation()
             );
             assert!(
                 matches!(
-                    remove(runtime, home.path()),
+                    remove(runtime, home.path(), None),
                     Err(InstallFailure::Unparsable { .. })
                 ),
                 "{source}"
             );
             assert!(
                 matches!(
-                    status(runtime, home.path()),
+                    status(runtime, home.path(), None),
                     HookStatus::Failed {
                         reason: InstallFailure::Unparsable { .. }
                     }

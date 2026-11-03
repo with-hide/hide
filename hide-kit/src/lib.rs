@@ -268,6 +268,12 @@ pub fn login_agents(home: &Path) -> hide_platform::user_agents::UserAgents {
 pub struct KitTarget {
     /// The account's home, whose configuration files the hooks go into.
     pub home: PathBuf,
+    /// The Hide installation this kit belongs to on the account
+    /// (`hide_agent_hooks::route::APP_INSTALL` for a desktop package's,
+    /// `install_of_root` for a helper root's): each installation keeps its
+    /// own hook entries, plugin files and record beside another's
+    /// (docs/agent-hooks.md, More than one Hide on an account).
+    pub install: String,
     /// The folder holding `hide` and `hide-agent-hooks`. The hooks and
     /// command link name this folder, so it must outlive the
     /// process: the desktop package's resources on this machine, the helper
