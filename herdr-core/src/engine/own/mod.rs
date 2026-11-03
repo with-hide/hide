@@ -482,30 +482,38 @@ impl OwnEngine<'_> {
     /// rules afterwards. Only the queue insertion is under this lock; the
     /// rules worker owns the actual holder call.
     fn give_rules(&self, pane: &str) {
-        let kind = {
-            let topology = self.topology();
-            let Ok(held) = topology.pane(pane) else {
+        loop {
+            let kind = {
+                let topology = self.topology();
+                let Ok(held) = topology.pane(pane) else {
+                    return;
+                };
+                held.agent.as_ref().map(|agent| agent.kind.clone())
+            };
+            let catalog = self.shared.definitions.get();
+            let rules = kind
+                .as_deref()
+                .and_then(|kind| agents::definition(&catalog, kind))
+                .and_then(agents::screen_rules);
+            let mut topology = self.topology();
+            let Ok(held) = topology.pane_mut(pane) else {
                 return;
             };
-            held.agent.as_ref().map(|agent| agent.kind.clone())
-        };
-        let catalog = self.shared.definitions.get();
-        let rules = kind
-            .as_deref()
-            .and_then(|kind| agents::definition(&catalog, kind))
-            .and_then(agents::screen_rules);
-        let mut topology = self.topology();
-        let Ok(held) = topology.pane_mut(pane) else {
-            return;
-        };
-        if held.agent.as_ref().map(|agent| &agent.kind) != kind.as_ref()
-            || !Arc::ptr_eq(&catalog, &self.shared.definitions.get())
-        {
-            // The newer topology/catalog transition owns its publication.
+            if held.agent.as_ref().map(|agent| &agent.kind) != kind.as_ref() {
+                // The newer topology transition owns its publication.
+                return;
+            }
+            if !Arc::ptr_eq(&catalog, &self.shared.definitions.get()) {
+                // A catalog update queues only changed rules. It may have
+                // nothing to publish for this kind, so recompute outside the
+                // lock instead of dropping the pane's first decision.
+                drop(topology);
+                continue;
+            }
+            held.live.rules_sent = Some(kind.clone());
+            self.shared.rules.give(pane, rules);
             return;
         }
-        held.live.rules_sent = Some(kind.clone());
-        self.shared.rules.give(pane, rules);
     }
 
     /// Publishes a start provisionally so early hooks have their identity,
