@@ -426,7 +426,10 @@ mod tests {
         );
         for record in &records {
             assert_eq!(record["nested"]["messages"], serde_json::json!(expected));
-            assert_eq!(record["identity_records"], serde_json::json!(expected_fields));
+            assert_eq!(
+                record["identity_records"],
+                serde_json::json!(expected_fields)
+            );
             assert_eq!(record["pid"], 42);
             assert_eq!(record["retry"], false);
             for name in ["password", "accessToken"] {
