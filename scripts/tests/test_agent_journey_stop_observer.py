@@ -5,6 +5,7 @@ from pathlib import Path
 import socket
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 from urllib.parse import urlsplit
@@ -91,6 +92,29 @@ class StopObservation(unittest.TestCase):
             observer.server.shutdown()
             observer.thread.join(2)
             self.assertEqual(observer.read(), [{"error": "observer_not_running"}])
+
+    def test_owner_close_interrupts_an_accepted_incomplete_request(self):
+        with tempfile.TemporaryDirectory() as directory:
+            observer = self.make(Path(directory))
+            observer.arm("held", "letter", 60)
+            accepted = threading.Event()
+            setup = stop_observer.Handler.setup
+            def signal(handler):
+                setup(handler)
+                accepted.set()
+            with patch.object(stop_observer.Handler, "setup", signal):
+                connection = socket.create_connection(observer.server.server_address, timeout=2)
+                connection.sendall(b"POST / HTTP/1.0\r\nUnfinished: ")
+                self.assertTrue(accepted.wait(2))
+                closer = threading.Thread(target=observer.close)
+                closer.start()
+                closer.join(1)
+                try:
+                    self.assertFalse(closer.is_alive(), "owner close waited for unfinished input")
+                    self.assertFalse(observer.thread.is_alive())
+                finally:
+                    connection.close()
+                    closer.join(6)
 
     def test_linked_config_parent_and_rebound_cleanup_never_touch_outside_files(self):
         with tempfile.TemporaryDirectory() as directory:

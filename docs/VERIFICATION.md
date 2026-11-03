@@ -387,12 +387,12 @@ A single handover counter cannot distinguish tool intake from Stop.
 The exported `stop_observer` path declares a native HTTP-hook fixture with `sessionId`, `lastAssistantMessage`, `stopHookActive` and `reason: end_turn` inputs.
 Before the agent starts, the journey installs an independent, output-free observer in its private HOME; it never wraps or changes the product hook.
 Only during the busy cell does it record the session, timestamp, active flag and probe-token sequence: one held-only Stop with `stopHookActive: false`, followed by one Stop with the letter added and `stopHookActive: true` in the same root session.
-It binds only loopback and keeps at most eight 4 KiB metadata records in memory, with a 1 MiB request limit, five-second socket limit and the cell's existing deadline.
+It binds only loopback and keeps at most eight 4 KiB metadata records in memory, with a 1 MiB request limit, five-second total request deadline and the cell's existing deadline.
 Each accepted request reserves incomplete evidence before parsing; overflow, malformed or incomplete requests, handler failures, a stopped server and missing observations fail the cell even after two valid observations.
 No callback writes a file, so a failed disk cannot hide a later observation behind earlier records.
 A cumulative second payload may retain the held token once before the letter; the session still must contain each answer exactly once.
 Configuration paths must stay inside the probe with no linked parent, and cleanup checks the created file identity before deletion.
-It stores no assistant body, closes its owned listener and removes its hook after the cell, and runtime teardown removes the private probe on every exit.
+It stores no assistant body, interrupts any active request, closes its owned listener and removes its hook after the cell, and runtime teardown removes the private probe on every exit.
 A merged session event can retain its first response timestamp, so it is not a completion-time bound.
 The fake provider calls no tools and additionally proves `held response <= first Stop <= letter response <= second Stop <= observation end`; signed-in runs use the same Stop observation without requiring a fake trace.
 Archived fake traces predating the observer can be replayed with their session and confirmed delivery record, but are not evidence that the new observer ran.

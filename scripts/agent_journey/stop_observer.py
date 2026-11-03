@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import re
 import secrets
+import socket
 import threading
 import time
 
@@ -40,10 +41,48 @@ def project(payload, state, now):
 
 
 class Server(HTTPServer):
+    def __init__(self, *args):
+        self.request_lock = threading.Lock()
+        self.active = self.timer = None
+        self.closing = False
+        super().__init__(*args)
+
+    @staticmethod
+    def interrupt(connection):
+        if connection is not None:
+            try:
+                connection.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass  # Already closed by its handler.
+
     def get_request(self):
         connection, address = super().get_request()
         connection.settimeout(HOOK_SECONDS)
+        with self.request_lock:
+            if self.closing:
+                connection.close()
+                raise OSError("observer_closing")
+            self.active = connection
+            # A socket timeout alone restarts with each byte. This deadline
+            # ends the whole accepted request, including trickled headers.
+            self.timer = threading.Timer(HOOK_SECONDS, self.interrupt, (connection,))
+            self.timer.daemon = True
+            self.timer.start()
         return connection, address
+
+    def shutdown_request(self, request):
+        with self.request_lock:
+            timer = self.timer
+            self.active = self.timer = None
+        if timer is not None:
+            timer.cancel()
+            timer.join()
+        super().shutdown_request(request)
+
+    def interrupt_active(self):
+        with self.request_lock:
+            self.closing = True
+            self.interrupt(self.active)
 
     def handle_error(self, _request, _address):
         # Never print a payload/traceback. A handler or response-write failure
@@ -142,6 +181,7 @@ class Observer:
         # End the owned listener even when configuration recovery refuses a
         # replaced path. A request is capped at HOOK_SECONDS by the socket.
         if not self.closed:
+            self.server.interrupt_active()
             self.server.shutdown()
             self.server.server_close()
             self.thread.join(HOOK_SECONDS + 1)
