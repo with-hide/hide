@@ -4,6 +4,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { isSecretField, redact } from "../../../web/src/redact";
 
 /** Past this size the log rotates once to `desktop.log.1` (engineering 15). */
 export const MAX_LOG_BYTES = 5 * 1024 * 1024;
@@ -23,13 +24,14 @@ export class HostLog {
   }
 
   event(event: string, fields: LogFields = {}): void {
-    const line = `${JSON.stringify({ ts: new Date().toISOString(), event, ...fields })}\n`;
+    const safeFields = Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, isSecretField(key) ? "[redacted]" : typeof value === "string" ? redact(value) : value]));
+    const line = `${JSON.stringify({ ts: new Date().toISOString(), event: redact(event), ...safeFields })}\n`;
     process.stderr.write(line);
     try {
       if (fs.existsSync(this.file) && fs.statSync(this.file).size > MAX_LOG_BYTES) fs.renameSync(this.file, `${this.file}.1`);
       fs.appendFileSync(this.file, line);
     } catch (error) {
-      process.stderr.write(`${JSON.stringify({ event: "log.write_failed", detail: String(error) })}\n`);
+      process.stderr.write(`${JSON.stringify({ event: "log.write_failed", detail: redact(String(error)) })}\n`);
     }
   }
 }

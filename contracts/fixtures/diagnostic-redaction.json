@@ -1,0 +1,211 @@
+[
+  {
+    "name": "github",
+    "input": "failed ghp_Q9zR2wK7mN5pT8vS3uX6yL4gH1jV0qB",
+    "expected": "failed [redacted]"
+  },
+  {
+    "name": "provider",
+    "input": "sk-proj-Q9zR2wK7mN5pT8vS3uX6yL4gH1jV0qB",
+    "expected": "[redacted]"
+  },
+  {
+    "name": "bearer",
+    "input": "Authorization: Bearer Q9zR2wK7mN5pT8vS3uX6yL4gH1jV0qB",
+    "expected": "Authorization: [redacted]"
+  },
+  {
+    "name": "short-bearer",
+    "input": "Bearer q7Z",
+    "expected": "Bearer [redacted]"
+  },
+  {
+    "name": "json-password",
+    "input": "{\"password\":\"q7Z\"}",
+    "expected": "{[redacted]}"
+  },
+  {
+    "name": "short-assignment",
+    "input": "password=hunter2 ok",
+    "expected": "password=[redacted] ok"
+  },
+  {
+    "name": "environment",
+    "input": "PASSWORD=long-private-value",
+    "expected": "[redacted]"
+  },
+  {
+    "name": "connection-url",
+    "input": "postgres://service:pw@db.invalid:5432/data",
+    "expected": "[redacted]db.invalid:5432/data"
+  },
+  {
+    "name": "private-key",
+    "input": "PRIVATE_KEY=-----BEGIN PRIVATE KEY-----\nYWJjZGVmZ2hpams=\n-----END PRIVATE KEY-----",
+    "expected": "[redacted]"
+  },
+  {
+    "name": "page-token",
+    "input": "#token=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "expected": "#[redacted]"
+  },
+  {
+    "name": "email",
+    "input": "contact someone@example.invalid",
+    "expected": "contact [redacted]"
+  },
+  {
+    "name": "mac-home",
+    "input": [
+      "/Users/",
+      "example/checkout/src/main.rs:42"
+    ],
+    "expected": "~/checkout/src/main.rs:42"
+  },
+  {
+    "name": "linux-home",
+    "input": [
+      "/home/",
+      "사용자/checkout/file"
+    ],
+    "expected": "~/checkout/file"
+  },
+  {
+    "name": "windows-home",
+    "input": [
+      "C:\\Users\\",
+      "Example User\\checkout\\file"
+    ],
+    "expected": "~/checkout\\file"
+  },
+  {
+    "name": "windows-wire",
+    "input": [
+      "C:/Users/",
+      "example/checkout/file"
+    ],
+    "expected": "~/checkout/file"
+  },
+  {
+    "name": "ordinary",
+    "input": "worker.failed pid=42 attempt=3 true http://127.0.0.1:7001 /opt/hide/runtime",
+    "expected": "worker.failed pid=42 attempt=3 true http://127.0.0.1:7001 /opt/hide/runtime"
+  },
+  {
+    "name": "quoted-passphrase",
+    "input": "password=\"correct horse battery staple\" trailing detail",
+    "expected": "[redacted] trailing detail"
+  },
+  {
+    "name": "escaped-json-secret",
+    "input": "{\"password\":\"p\\\"tail-of-password\"}",
+    "expected": "{[redacted]}"
+  },
+  {
+    "name": "truncated-quoted-secret",
+    "input": "password=\"unfinished private text",
+    "expected": "[redacted]"
+  },
+  {
+    "name": "truncated-pem",
+    "input": "-----BEGIN PRIVATE KEY-----\nYWJjZGVmZ2hpams=\n[truncated]",
+    "expected": "[redacted]"
+  },
+  {
+    "name": "repeated-pem",
+    "input": "-----BEGIN PRIVATE KEY-----\n-----BEGIN PRIVATE KEY-----\nYWJjZGVmZ2hpams=",
+    "expected": "[redacted]"
+  },
+  {
+    "name": "quoted-mac-home",
+    "input": [
+      "cannot read \"",
+      "/Users/",
+      "example\""
+    ],
+    "expected": "cannot read \"~\""
+  },
+  {
+    "name": "bare-linux-home",
+    "input": [
+      "/home/",
+      "example"
+    ],
+    "expected": "~"
+  },
+  {
+    "name": "quoted-windows-home",
+    "input": [
+      "cannot read \"",
+      "C:\\Users\\",
+      "Example User\""
+    ],
+    "expected": "cannot read \"~\""
+  },
+  {
+    "name": "bare-windows-home",
+    "input": [
+      "C:\\Users\\",
+      "Example User"
+    ],
+    "expected": "~"
+  },
+  {
+    "name": "ambiguous-home-component",
+    "input": [
+      "error /Users/",
+      "example permission denied in /opt/hide"
+    ],
+    "expected": "error ~/opt/hide"
+  },
+  {
+    "name": "quoted-key",
+    "input": "key=\"one two three\" rest",
+    "expected": "[redacted] rest"
+  },
+  {
+    "name": "quoted-passphrase-field",
+    "input": "passphrase=\"one two three\" rest",
+    "expected": "[redacted] rest"
+  },
+  {
+    "name": "spaced-mac-home",
+    "input": [
+      "/Users/",
+      "Example User/repo"
+    ],
+    "expected": "~/repo"
+  },
+  {
+    "name": "quoted-spaced-mac-home",
+    "input": [
+      "cannot read \"",
+      "/Users/",
+      "Example User\""
+    ],
+    "expected": "cannot read \"~\""
+  },
+  {
+    "name": "bare-spaced-mac-home",
+    "input": [
+      "/Users/",
+      "Example User"
+    ],
+    "expected": "~"
+  },
+  {
+    "name": "comma-password",
+    "input": "password=a,b",
+    "expected": "password=[redacted]"
+  },
+  {
+    "name": "semicolon-token",
+    "input": "token=q7Z;a",
+    "expected": "token=[redacted]"
+  },
+  {
+    "name": "unquoted-embedded-quote",
+    "input": "password=longvalue'private-tail",
+    "expected": "[redacted]"
+  }
+]

@@ -1,4 +1,5 @@
-use regex::Regex;
+use regex::{Regex, RegexBuilder};
+use serde::Deserialize;
 use std::sync::OnceLock;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -8,26 +9,65 @@ pub struct RedactedText {
     pub contains_secret_candidate: bool,
 }
 
-fn patterns() -> &'static [Regex] {
-    static PATTERNS: OnceLock<Vec<Regex>> = OnceLock::new();
-    PATTERNS.get_or_init(|| {
-        [
-            // A name may end an environment variable's (`JWT_SECRET=`), so it
-            // starts at a word boundary or after `_`, and may be a quoted
-            // key (`"password": "…"`).
-            r#"(?i)(?:\b|_)(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|secret[_-]?access[_-]?key|secret[_-]?key|private[_-]?key|password|passwd|secret|token)['"]?\s*[:=]\s*['"]?[^\s'"]{8,}"#,
-            // The password in an address's user part (`postgres://app:pw@db`).
-            r"(?i)\b[a-z][a-z0-9+.-]*://[^\s:/@]+:[^\s@/]+@",
-            r"\bsk-[A-Za-z0-9_-]{16,}\b",
-            r"\b(?:ghp|gho|ghs|ghu|ghr|github_pat)_[A-Za-z0-9_]{20,}\b",
-            r"\b(?:xox[abprs]-[A-Za-z0-9-]{10,}|npm_[A-Za-z0-9]{20,}|glpat-[A-Za-z0-9_-]{20,})",
-            r"(?s)-----BEGIN (?:RSA |EC |OPENSSH |ENCRYPTED )?PRIVATE KEY-----.*?-----END (?:RSA |EC |OPENSSH |ENCRYPTED )?PRIVATE KEY-----",
-            r"\bAKIA[0-9A-Z]{16}\b",
-            r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{16,}\b",
-        ]
-        .into_iter()
-        .map(|pattern| Regex::new(pattern).expect("static credential pattern"))
-        .collect()
+#[derive(Deserialize)]
+struct Rule {
+    pattern: String,
+    flags: String,
+    #[serde(default)]
+    diagnostic_pattern: Option<String>,
+    #[serde(default)]
+    replacement: String,
+}
+
+struct Policy {
+    secrets: Vec<Regex>,
+    diagnostic_secrets: Vec<Regex>,
+    secret_field: Regex,
+    diagnostic: Vec<(Regex, String)>,
+}
+
+fn policy() -> &'static Policy {
+    static POLICY: OnceLock<Policy> = OnceLock::new();
+    POLICY.get_or_init(|| {
+        #[derive(Deserialize)]
+        struct Source {
+            secrets: Vec<Rule>,
+            secret_field: Rule,
+            diagnostic: Vec<Rule>,
+        }
+        let source: Source =
+            serde_json::from_str(include_str!("../../contracts/diagnostic-redaction.json"))
+                .expect("static redaction policy");
+        let compile = |pattern: &str, flags: &str| {
+            RegexBuilder::new(pattern)
+                .case_insensitive(flags.contains('i'))
+                .dot_matches_new_line(flags.contains('s'))
+                .build()
+                .expect("static redaction pattern")
+        };
+        Policy {
+            secrets: source
+                .secrets
+                .iter()
+                .map(|rule| compile(&rule.pattern, &rule.flags))
+                .collect(),
+            diagnostic_secrets: source
+                .secrets
+                .iter()
+                .map(|rule| {
+                    compile(
+                        rule.diagnostic_pattern.as_deref().unwrap_or(&rule.pattern),
+                        &rule.flags,
+                    )
+                })
+                .collect(),
+            secret_field: compile(&source.secret_field.pattern, &source.secret_field.flags),
+            diagnostic: source
+                .diagnostic
+                .into_iter()
+                .map(|rule| (compile(&rule.pattern, &rule.flags), rule.replacement))
+                .collect(),
+        }
     })
 }
 
@@ -42,7 +82,7 @@ pub fn is_invisible(character: char) -> bool {
 pub fn redact(input: &str) -> RedactedText {
     let mut text = input.to_owned();
     let mut redactions = 0;
-    for pattern in patterns() {
+    for pattern in &policy().secrets {
         let count = pattern.find_iter(&text).count();
         if count > 0 {
             redactions += count;
@@ -56,9 +96,61 @@ pub fn redact(input: &str) -> RedactedText {
     }
 }
 
+/// A field whose name supplies credential context for an otherwise opaque value.
+pub fn is_secret_field(name: &str) -> bool {
+    policy().secret_field.is_match(name)
+}
+
+/// Text leaving the process through diagnostic logs or Copy diagnostics.
+/// The shell and desktop host consume the same policy. Memory keeps its
+/// credential-only policy, so paths in project knowledge stay useful.
+pub fn redact_diagnostic(input: &str) -> String {
+    let mut text = input.to_owned();
+    for pattern in &policy().diagnostic_secrets {
+        text = pattern.replace_all(&text, "[redacted]").into_owned();
+    }
+    for (pattern, replacement) in &policy().diagnostic {
+        text = pattern
+            .replace_all(&text, replacement.as_str())
+            .into_owned();
+    }
+    text
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn diagnostics_follow_the_same_privacy_contract_as_the_shell() {
+        let cases: serde_json::Value = serde_json::from_str(include_str!(
+            "../../contracts/fixtures/diagnostic-redaction.json"
+        ))
+        .unwrap();
+        for case in cases.as_array().unwrap() {
+            assert_eq!(
+                redact_diagnostic(&case["input"].as_str().map(str::to_owned).unwrap_or_else(
+                    || {
+                        case["input"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .map(|part| part.as_str().unwrap())
+                            .collect::<String>()
+                    }
+                )),
+                case["expected"].as_str().unwrap(),
+                "{}",
+                case["name"]
+            );
+        }
+        // Project knowledge retains paths and addresses: the extra privacy
+        // rules apply to diagnostic exports, not Memory's content.
+        assert_eq!(
+            redact("/home/example/repo someone@example.invalid").text,
+            "/home/example/repo someone@example.invalid"
+        );
+    }
 
     #[test]
     fn credentials_named_like_environment_variables_and_tokens_are_removed() {

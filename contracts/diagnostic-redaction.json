@@ -1,0 +1,104 @@
+{
+  "secrets": [
+    {
+      "pattern": "-----BEGIN (?:RSA |EC |OPENSSH |ENCRYPTED )?PRIVATE KEY-----.*?-----END (?:RSA |EC |OPENSSH |ENCRYPTED )?PRIVATE KEY-----",
+      "flags": "s",
+      "diagnostic_pattern": "-----BEGIN (?:RSA |EC |OPENSSH |ENCRYPTED )?PRIVATE KEY-----.*?(?:-----END (?:RSA |EC |OPENSSH |ENCRYPTED )?PRIVATE KEY-----|$)"
+    },
+    {
+      "pattern": "(?:\\b|_)(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|secret[_-]?access[_-]?key|secret[_-]?key|private[_-]?key|password|passwd|secret|token)['\"]?\\s*[:=]\\s*['\"]?[^\\s'\"]{8,}",
+      "flags": "i",
+      "diagnostic_pattern": "['\"]?(?:\\b|_)(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|secret[_-]?access[_-]?key|secret[_-]?key|private[_-]?key|password|passwd|secret|token|passphrase)['\"]?\\s*[:=]\\s*(?:\"(?:\\\\[\\s\\S]?|[^\"\\\\])*(?:\"|$)|'(?:\\\\[\\s\\S]?|[^'\\\\])*(?:'|$)|[^\\s&]{8,})"
+    },
+    {
+      "pattern": "\\b[a-z][a-z0-9+.-]*://[^\\s:/@]+:[^\\s@/]+@",
+      "flags": "i"
+    },
+    {
+      "pattern": "\\bsk-[A-Za-z0-9_-]{16,}\\b",
+      "flags": ""
+    },
+    {
+      "pattern": "\\b(?:ghp|gho|ghs|ghu|ghr|github_pat)_[A-Za-z0-9_]{20,}\\b",
+      "flags": ""
+    },
+    {
+      "pattern": "\\b(?:xox[abprs]-[A-Za-z0-9-]{10,}|npm_[A-Za-z0-9]{20,}|glpat-[A-Za-z0-9_-]{20,})",
+      "flags": ""
+    },
+    {
+      "pattern": "\\bAKIA[0-9A-Z]{16}\\b",
+      "flags": ""
+    },
+    {
+      "pattern": "\\bBearer\\s+[A-Za-z0-9._~+/=-]{16,}\\b",
+      "flags": "i"
+    }
+  ],
+  "diagnostic": [
+    {
+      "pattern": "['\"]?\\bkey['\"]?\\s*[:=]\\s*(?:\"(?:\\\\[\\s\\S]?|[^\"\\\\])*(?:\"|$)|'(?:\\\\[\\s\\S]?|[^'\\\\])*(?:'|$))",
+      "flags": "i",
+      "replacement": "[redacted]"
+    },
+    {
+      "pattern": "(\\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|secret[_-]?access[_-]?key|secret[_-]?key|private[_-]?key|password|passwd|secret|token|key|passphrase))(['\"]?\\s*=\\s*['\"]?)[^\\s&]+",
+      "flags": "i",
+      "replacement": "$1$2[redacted]"
+    },
+    {
+      "pattern": "\\bBearer\\s+[^\\s\\x22\\x27,;}]+",
+      "flags": "i",
+      "replacement": "Bearer [redacted]"
+    },
+    {
+      "pattern": "\\b[0-9a-f]{32,}\\b",
+      "flags": "i",
+      "replacement": "[redacted]"
+    },
+    {
+      "pattern": "\\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}\\b",
+      "flags": "i",
+      "replacement": "[redacted]"
+    },
+    {
+      "pattern": "([\"'])[A-Z]:[\\\\/]Users[\\\\/][^\\\\/\\r\\n\"'<>]+([\"'])",
+      "flags": "i",
+      "replacement": "$1~$2"
+    },
+    {
+      "pattern": "^[A-Z]:[\\\\/]Users[\\\\/][^\\\\/\\r\\n\"'<>]+$",
+      "flags": "i",
+      "replacement": "~"
+    },
+    {
+      "pattern": "[A-Z]:[\\\\/]Users[\\\\/][^\\\\/\\r\\n\"']+(?:[\\\\/]|$)",
+      "flags": "i",
+      "replacement": "~/"
+    },
+    {
+      "pattern": "(?:[/]Users[/]|[/]home[/])[^/\\r\\n\"'<>]+/",
+      "flags": "",
+      "replacement": "~/"
+    },
+    {
+      "pattern": "([\"'])(?:[/]Users[/]|[/]home[/])[^/\\r\\n\"'<>]+([\"'])",
+      "flags": "",
+      "replacement": "$1~$2"
+    },
+    {
+      "pattern": "^(?:[/]Users[/]|[/]home[/])[^/\\r\\n\"'<>]+$",
+      "flags": "",
+      "replacement": "~"
+    },
+    {
+      "pattern": "(?:[/]Users[/]|[/]home[/])[^/\\s\"'<>]+",
+      "flags": "",
+      "replacement": "~"
+    }
+  ],
+  "secret_field": {
+    "pattern": "(?:^|[_-])(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|secret[_-]?access[_-]?key|secret[_-]?key|private[_-]?key|password|passwd|secret|token|key|passphrase|authorization|cookie|set[_-]cookie)$",
+    "flags": "i"
+  }
+}

@@ -28,7 +28,7 @@ static WRITERS: OnceLock<Mutex<Vec<WriterEnd>>> = OnceLock::new();
 
 #[derive(Clone)]
 struct DiagnosticSink {
-    sender: SyncSender<String>,
+    sender: SyncSender<serde_json::Value>,
     dropped: Arc<AtomicU64>,
 }
 
@@ -121,7 +121,7 @@ fn end_writers(sink: Option<DiagnosticSink>, writers: &[WriterEnd], within: Dura
 /// written what the queue held.
 fn start_writer(directory: PathBuf) -> io::Result<(DiagnosticSink, WriterEnd)> {
     let writer = RotatingLog::open(directory, FILE_LIMIT)?;
-    let (sender, receiver) = mpsc::sync_channel::<String>(QUEUE);
+    let (sender, receiver) = mpsc::sync_channel::<serde_json::Value>(QUEUE);
     let (ended, end) = mpsc::channel::<()>();
     let dropped = Arc::new(AtomicU64::new(0));
     let writer_dropped = Arc::clone(&dropped);
@@ -139,25 +139,16 @@ fn start_writer(directory: PathBuf) -> io::Result<(DiagnosticSink, WriterEnd)> {
                     serde_json::json!({
                         "kind": "diagnostics.queue_overflow", "dropped": dropped
                     })
-                    .to_string()
                 });
-                for raw in overflow.iter().chain(std::iter::once(&message)) {
-                    let line = if raw.len() > LINE_LIMIT {
-                        serde_json::json!({"kind":"diagnostics.line_too_large", "bytes":raw.len()})
-                            .to_string()
-                    } else {
-                        raw.clone()
-                    };
+                for raw in overflow.into_iter().chain(std::iter::once(message)) {
+                    let line = diagnostic_line(raw);
                     write_stderr_line(&line);
                     match writer.append(&line) {
                         Ok(()) => write_failed = false,
                         Err(error) if !write_failed => {
-                            write_stderr_line(
-                                &serde_json::json!({
-                                    "kind": "diagnostics.write_failed", "message": error.to_string()
-                                })
-                                .to_string(),
-                            );
+                            write_stderr_line(&diagnostic_line(serde_json::json!({
+                                "kind": "diagnostics.write_failed", "message": error.to_string()
+                            })));
                             write_failed = true;
                         }
                         Err(_) => {}
@@ -196,14 +187,13 @@ pub fn emit(record: serde_json::Value) {
             records.push(record.clone());
         }
     });
-    let message = record.to_string();
     let sink = lock(sink_slot()).clone();
     if let Some(sink) = sink {
-        if sink.sender.try_send(message).is_err() {
+        if sink.sender.try_send(record).is_err() {
             sink.dropped.fetch_add(1, Ordering::Relaxed);
         }
     } else {
-        write_stderr_line(&message);
+        write_stderr_line(&diagnostic_line(record));
     }
 }
 
@@ -212,7 +202,7 @@ pub fn emit(record: serde_json::Value) {
 /// its operator reads, since a detached daemon's stderr goes nowhere, and a
 /// record written this way is on disk even when [`drain`] ran out of time.
 pub fn record_now(state_path: &Path, record: serde_json::Value) -> io::Result<()> {
-    let line = record.to_string();
+    let line = diagnostic_line(record);
     write_stderr_line(&line);
     let directory = state_path
         .parent()
@@ -255,6 +245,36 @@ fn write_stderr_line(message: &str) {
     line.push_str(message);
     line.push('\n');
     let _ = io::stderr().lock().write_all(line.as_bytes());
+}
+
+/// Mask before serialization so quotes and backslashes cannot hide values,
+/// and JSON types, record boundaries and numeric correlation IDs survive.
+/// Installed sinks do this on the existing writer, outside the runtime lock;
+/// queue capacity, line cap and notification fan-out stay unchanged.
+fn diagnostic_line(mut record: serde_json::Value) -> String {
+    fn mask(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::String(text) => *text = hide_memory::redact_diagnostic(text),
+            serde_json::Value::Array(values) => values.iter_mut().for_each(mask),
+            serde_json::Value::Object(fields) => {
+                for (name, value) in fields {
+                    if hide_memory::is_secret_field(name) {
+                        *value = serde_json::Value::String("[redacted]".into());
+                    } else {
+                        mask(value);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    mask(&mut record);
+    let line = record.to_string();
+    if line.len() > LINE_LIMIT {
+        serde_json::json!({"kind":"diagnostics.line_too_large", "bytes":line.len()}).to_string()
+    } else {
+        line
+    }
 }
 
 struct RotatingLog {
@@ -314,6 +334,91 @@ impl RotatingLog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Run the public entrypoints in a fresh process: stderr is a real pipe,
+    /// and no process-global sink can interfere with another test's logs.
+    #[test]
+    fn diagnostics_mask_stderr_and_disk_at_every_entrypoint() {
+        const PROBE: &str = "HIDE_TEST_DIAGNOSTIC_PROBE";
+        if let Some(directory) = std::env::var_os(PROBE) {
+            let directory = PathBuf::from(directory);
+            let state_path = directory.join("core-state.json");
+            let cases: serde_json::Value = serde_json::from_str(include_str!(
+                "../../contracts/fixtures/diagnostic-redaction.json"
+            ))
+            .unwrap();
+            let record = |kind: &str| {
+                serde_json::json!({
+                    "kind": kind, "pid": 42, "retry": false,
+                "password": "q7Z", "accessToken": "opaque-private-value",
+                "headers": {"Authorization": "Basic cXVpZXQ6c2VjcmV0", "Cookie": "session=opaque"},
+                    "nested": {"messages": cases.as_array().unwrap().iter().map(|case| case["input"].as_str().map(str::to_owned).unwrap_or_else(|| case["input"].as_array().unwrap().iter().map(|part| part.as_str().unwrap()).collect::<String>())).collect::<Vec<_>>()}
+                })
+            };
+            emit(record("before_install"));
+            record_now(&state_path, record("record_now")).unwrap();
+            let (sink, end) = start_writer(directory.join("Logs")).unwrap();
+            *lock(sink_slot()) = Some(sink);
+            emit(record("queued"));
+            assert_eq!(
+                end_writers(lock(sink_slot()).take(), &[end], Duration::from_secs(10)),
+                0
+            );
+            emit(record("after_drain"));
+            return;
+        }
+        let folder = tempfile::tempdir().unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "diagnostics::tests::diagnostics_mask_stderr_and_disk_at_every_entrypoint",
+                "--nocapture",
+            ])
+            .env(PROBE, folder.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        let disk = fs::read_to_string(folder.path().join("Logs/core.jsonl")).unwrap();
+        let cases: serde_json::Value = serde_json::from_str(include_str!(
+            "../../contracts/fixtures/diagnostic-redaction.json"
+        ))
+        .unwrap();
+        let expected: Vec<_> = cases
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|case| case["expected"].clone())
+            .collect();
+        let parse = |text: &str| {
+            text.lines()
+                .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+                .collect::<Vec<_>>()
+        };
+        let records = parse(&stderr);
+        assert_eq!(
+            records
+                .iter()
+                .map(|record| record["kind"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["before_install", "record_now", "queued", "after_drain"]
+        );
+        for record in &records {
+            assert_eq!(record["nested"]["messages"], serde_json::json!(expected));
+            assert_eq!(record["pid"], 42);
+            assert_eq!(record["retry"], false);
+            for name in ["password", "accessToken"] {
+                assert_eq!(record[name], "[redacted]");
+            }
+            assert_eq!(record["headers"]["Authorization"], "[redacted]");
+            assert_eq!(record["headers"]["Cookie"], "[redacted]");
+        }
+        assert_eq!(parse(&disk), records[1..3]);
+    }
 
     #[test]
     fn diagnostics_rotate_without_splitting_json_records() {
@@ -376,7 +481,7 @@ mod tests {
         for sink in [&replaced, &current] {
             for n in 0..QUEUE {
                 sink.sender
-                    .try_send(serde_json::json!({"kind": "test", "n": n}).to_string())
+                    .try_send(serde_json::json!({"kind": "test", "n": n}))
                     .unwrap();
             }
         }
