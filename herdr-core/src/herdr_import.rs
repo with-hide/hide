@@ -286,9 +286,10 @@ pub(crate) fn given_back(engine_dir: &Path) -> BTreeSet<String> {
         .unwrap_or_default()
 }
 
-/// The engine's open settled the conversations given back: the `busy` ones,
-/// whose pane ran another command, wait again for the next import, as
-/// `(pane, kind, name, session)`; the rest were resumed in their pane.
+/// The engine's open settled the conversations given back, each resumed in
+/// its pane or a new tab of its workspace; `busy`, as `(pane, kind, name,
+/// session)`, are the ones whose tab could not open, which wait again for
+/// the next import.
 pub(crate) fn wait_again(
     engine_dir: &Path,
     busy: impl IntoIterator<Item = (String, String, Option<String>, Option<String>)>,

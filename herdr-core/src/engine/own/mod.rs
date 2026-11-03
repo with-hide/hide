@@ -2354,6 +2354,8 @@ mod tests {
         start_facts: Mutex<Option<PaneFacts>>,
         /// What every pane's terminal holds; `None` answers unreachable.
         processes: Mutex<Option<HolderProcesses>>,
+        /// Panes whose terminal runs another program in its foreground.
+        busy: Mutex<BTreeSet<String>>,
     }
 
     impl Holders {
@@ -2590,14 +2592,19 @@ mod tests {
                 message: "not asked".to_owned(),
             })
         }
-        fn processes(&self, _: &str) -> Result<HolderProcesses, HolderError> {
-            self.processes
-                .lock()
-                .unwrap()
-                .clone()
-                .ok_or_else(|| HolderError::Unreachable {
+        fn processes(&self, pane: &str) -> Result<HolderProcesses, HolderError> {
+            let mut processes = self.processes.lock().unwrap().clone().ok_or_else(|| {
+                HolderError::Unreachable {
                     message: "not asked".to_owned(),
-                })
+                }
+            })?;
+            if self.busy.lock().unwrap().contains(pane) {
+                processes.foreground = Some(hide_node_link::holders::HolderForeground {
+                    group: processes.shell + 8,
+                    members: vec![(processes.shell + 8, "vim".to_owned())],
+                });
+            }
+            Ok(processes)
         }
         fn proof(&self, _: &str) -> Result<hide_node_link::holders::HolderProof, HolderError> {
             // Every pane's program is this test's own process.
@@ -4586,6 +4593,77 @@ mod tests {
             "owed once"
         );
         assert!(!next.hook_session(&resting, "claude", "s-2").unwrap());
+    }
+
+    /// D-8, B15: a conversation an import gave back once its Herdr stopped,
+    /// whose pane runs another command, resumes in a new tab of the pane's
+    /// workspace; nothing is typed over the program, and the give-back is
+    /// settled, so nothing waits for the next import.
+    #[test]
+    fn a_given_back_conversation_whose_pane_is_busy_resumes_in_a_new_tab_of_its_workspace() {
+        let root = tempfile::tempdir().unwrap();
+        let place = place(root.path());
+        std::fs::create_dir_all(home(&place)).unwrap();
+        let save = hide_host::herdr_save::fetch(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/herdr-session/herdr-0.9.5.json"),
+        );
+        // Imported beside its running Herdr, then again once it stopped.
+        for resume in [false, true] {
+            crate::herdr_import::import(
+                &place.engine_dir,
+                &save,
+                crate::herdr_import::Asked { resume },
+            )
+            .unwrap();
+        }
+        let busy = "w1:p1".to_owned();
+        assert_eq!(
+            crate::herdr_import::given_back(&place.engine_dir),
+            BTreeSet::from([busy.clone()])
+        );
+        let saved: BTreeSet<String> = restore::read(
+            &hide_kit::layout::engine_session_in(&place.engine_dir),
+            &hide_kit::layout::engine_backups_in(&place.engine_dir),
+        )
+        .panes()
+        .map(|(id, _)| id.to_owned())
+        .collect();
+
+        let holders = Arc::new(Holders::default());
+        holders.idle_shell(52, "zsh");
+        holders.busy.lock().unwrap().insert(busy.clone());
+        let engine =
+            OwnEngine::open(Arc::clone(&holders) as Arc<dyn PaneHolders>, place.clone()).unwrap();
+        holders.hand(HolderRecovery {
+            owner: 1,
+            present: vec![busy.clone()],
+            ..HolderRecovery::default()
+        });
+        engine.restored().unwrap();
+        settles("the conversation's new tab started", || {
+            holders
+                .started()
+                .iter()
+                .any(|start| !saved.contains(&start.pane))
+        });
+        let tab = holders
+            .started()
+            .into_iter()
+            .find(|start| !saved.contains(&start.pane))
+            .unwrap()
+            .pane;
+        assert!(
+            holders
+                .wait_typed(&tab)
+                .starts_with("claude --resume 0b6a3f1e-claude-session"),
+            "{:?}",
+            holders.typed(&tab)
+        );
+        assert_eq!(engine.topology().pane_place(&tab).unwrap().0, "w1");
+        assert_eq!(holders.typed(&busy), "", "nothing is typed over its program");
+        assert!(crate::herdr_import::given_back(&place.engine_dir).is_empty());
+        assert!(crate::herdr_import::waiting(&place.engine_dir).is_empty());
     }
 
     /// D-7: a pane whose holder outlived the daemon keeps its program, but

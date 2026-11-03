@@ -142,6 +142,18 @@ pub(super) struct Resume {
     /// the turn was cut off, and the core tells the agent once it is back
     /// (PRD engine-bundle-4-herdr-removal D-22).
     cut: bool,
+    /// Set when its own pane runs another command: it resumes in a new tab
+    /// opened for it (PRD engine-bundle-4-herdr-removal D-8, B15).
+    new_tab: Option<NewTab>,
+}
+
+/// Where a conversation an import gave back resumes when its pane runs
+/// another command, or its system does not say what runs there (Windows): a
+/// new tab of the pane's workspace, in the conversation's folder.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct NewTab {
+    workspace: String,
+    cwd: String,
 }
 
 /// What each restarted pane's saved agent gets, in `restarts` order: a
@@ -206,6 +218,7 @@ fn plans(
                             session: agent.session.clone(),
                             argv,
                             cut: false,
+                            new_tab: None,
                         }),
                     },
                 }
@@ -389,7 +402,7 @@ impl OwnEngine<'static> {
         let (idle, busy): (Vec<String>, Vec<String>) = adopted_agents
             .into_iter()
             .partition(|pane| self.at_its_prompt(pane));
-        self.settle_given_back(&busy);
+        let given_back = self.settle_given_back(&busy);
         let (idle, running) = {
             let mut topology = self.topology();
             let idle: Vec<Restart> = idle
@@ -438,6 +451,7 @@ impl OwnEngine<'static> {
         );
         self.mark_cut(&mut plans);
         let (failures, mut resumes) = self.start_restarts(&restarts, &plans, home.as_deref());
+        resumes.extend(given_back);
         for restart in &idle {
             match plans.get(&restart.pane) {
                 Some(Plan::Resume(resume)) => resumes.push(resume.clone()),
@@ -520,47 +534,75 @@ impl OwnEngine<'static> {
 
     /// A conversation an import gave back to its pane once the Herdr it
     /// came from stopped (PRD engine-bundle-4-herdr-removal D-8, B15) is
-    /// resumed there only at the pane's prompt: one whose pane runs another
-    /// command (`busy`, adopted panes off their prompt) waits again for the
-    /// next import, and is no agent of the pane meanwhile.
-    fn settle_given_back(&self, busy: &[String]) {
+    /// resumed there at the pane's prompt, as any adopted pane's agent is;
+    /// one whose pane runs another command (`busy`: adopted panes off their
+    /// prompt, every adopted pane where the system does not say) resumes in
+    /// a new tab of the same workspace, opened once the restore has
+    /// finished. Either way the record's give-back is settled.
+    fn settle_given_back(&self, busy: &[String]) -> Vec<Resume> {
         let Some(place) = self.shared.place.as_ref() else {
-            return;
+            return Vec::new();
         };
         let given = crate::herdr_import::given_back(&place.engine_dir);
         if given.is_empty() {
-            return;
+            return Vec::new();
         }
-        let waiting: Vec<(String, PaneAgent)> = {
+        let moved: Vec<(Restart, String)> = {
             let mut topology = self.topology();
             busy.iter()
                 .filter(|pane| given.contains(*pane))
                 .filter_map(|pane| {
-                    let agent = topology.pane_mut(pane).ok()?.agent.take()?;
-                    Some((pane.clone(), agent))
+                    let (workspace, _) = topology.pane_place(pane).ok()?;
+                    let found = topology.pane_mut(pane).ok()?;
+                    let agent = found.agent.take()?;
+                    Some((
+                        Restart {
+                            pane: pane.clone(),
+                            cwd: found.cwd.clone(),
+                            agent: Some(agent),
+                            previous: None,
+                        },
+                        workspace,
+                    ))
                 })
                 .collect()
         };
-        for (pane, _) in &waiting {
-            crate::diagnostic!(serde_json::json!({
-                "component": "own_engine",
-                "kind": "engine.restore_not_resumed",
-                "pane_id": pane,
-                "message": "the pane runs another command, so the conversation Herdr had open waits for the next import",
-            }));
+        let restarts: Vec<Restart> = moved.iter().map(|(restart, _)| restart.clone()).collect();
+        let plans = plans(
+            &self.shared.definitions.get(),
+            &place.launches,
+            &restarts,
+            BTreeSet::new(),
+            &BTreeSet::new(),
+        );
+        let mut resumes = Vec::new();
+        for (restart, workspace) in moved {
+            match plans.get(&restart.pane) {
+                Some(Plan::Resume(resume)) => resumes.push(Resume {
+                    new_tab: Some(NewTab {
+                        workspace,
+                        cwd: restart.cwd,
+                    }),
+                    ..resume.clone()
+                }),
+                Some(Plan::Shell(why)) => crate::diagnostic!(serde_json::json!({
+                    "component": "own_engine",
+                    "kind": "engine.restore_not_resumed",
+                    "pane_id": restart.pane,
+                    "message": why,
+                })),
+                None => {}
+            }
         }
-        if let Err(reason) = crate::herdr_import::wait_again(
-            &place.engine_dir,
-            waiting
-                .into_iter()
-                .map(|(pane, agent)| (pane, agent.kind, agent.name, agent.session)),
-        ) {
+        if let Err(reason) = crate::herdr_import::wait_again(&place.engine_dir, std::iter::empty())
+        {
             crate::diagnostic!(serde_json::json!({
                 "component": "own_engine",
                 "kind": "engine.restore_given_back_unsaved",
                 "message": reason,
             }));
         }
+        resumes
     }
 
     /// Starts every pane of `restarts`, [`STARTS_AT_ONCE`] at a time, each
@@ -707,6 +749,33 @@ impl OwnEngine<'static> {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
             };
+            let opened;
+            let resume = match &resume.new_tab {
+                None => resume,
+                Some(tab) => match engine.open_tab(
+                    &tab.workspace,
+                    None,
+                    &resume.shown,
+                    None,
+                    false,
+                    &tab.cwd,
+                    Env::new(),
+                    None,
+                ) {
+                    Ok((_, pane)) => {
+                        opened = Resume {
+                            pane,
+                            new_tab: None,
+                            ..resume.clone()
+                        };
+                        &opened
+                    }
+                    Err(error) => {
+                        engine.wait_again(resume, &error.to_string());
+                        continue;
+                    }
+                },
+            };
             if resume.cut {
                 cut().insert(resume.pane.clone(), resume.kind.clone());
             }
@@ -731,6 +800,36 @@ impl OwnEngine<'static> {
                     }));
                 }
             }
+        }
+    }
+
+    /// A given-back conversation whose tab could not open (`why`) waits
+    /// for the next import again, so it is offered rather than lost.
+    fn wait_again(&self, resume: &Resume, why: &str) {
+        crate::diagnostic!(serde_json::json!({
+            "component": "own_engine",
+            "kind": "agent.resume_tab_unopened",
+            "pane_id": resume.pane,
+            "agent": resume.kind,
+            "message": why,
+        }));
+        let Some(place) = self.shared.place.as_ref() else {
+            return;
+        };
+        if let Err(reason) = crate::herdr_import::wait_again(
+            &place.engine_dir,
+            [(
+                resume.pane.clone(),
+                resume.kind.clone(),
+                resume.name.clone(),
+                resume.session.clone(),
+            )],
+        ) {
+            crate::diagnostic!(serde_json::json!({
+                "component": "own_engine",
+                "kind": "engine.restore_given_back_unsaved",
+                "message": reason,
+            }));
         }
     }
 
