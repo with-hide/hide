@@ -499,7 +499,6 @@ mod tests {
             request: "a".repeat(64),
             cwd: "/project".to_owned(),
             cancelled: true,
-            number: 0,
         });
         let mut uncertain = End::new(EndReason::HolderLost, "lost");
         uncertain.left.push(123);

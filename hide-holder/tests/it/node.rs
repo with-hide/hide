@@ -805,6 +805,50 @@ fn cancelled_dead_holders_stay_closed_on_the_next_owner() {
     node.service.close();
 }
 
+/// Reboot fences old process identities but cannot turn a completed pane
+/// into a recoverable shell. Exercise the node's actual closed partition.
+#[test]
+fn completed_panes_from_another_boot_stay_closed() {
+    let folder = Folder::new();
+    let panes = hide_kit::panes::Panes::open(folder.home.path(), &folder.state, |_| {}).unwrap();
+    let reasons = [
+        EndReason::ProgramExited,
+        EndReason::Terminated,
+        EndReason::TreeEndUnconfirmed,
+    ];
+    for (i, reason) in reasons.into_iter().enumerate() {
+        let pane = format!("p{i}");
+        let record = PaneRecord {
+            format: record::LEGACY_RECORD_FORMAT,
+            pane: pane.clone(),
+            owner: panes.owner().to_owned(),
+            incarnation: i as u64 + 1,
+            phase: Phase::Ended,
+            protocol: hide_holder_protocol::PROTOCOL_VERSION,
+            version_folder: String::new(),
+            spec: String::new(),
+            reservation: None,
+            reserved_at_unix_ms: record::now_unix_ms(),
+            boot: Some("test-earlier-boot".to_owned()),
+            holder: None,
+            program: None,
+            end: Some(record::End::new(reason, "already completed")),
+        };
+        record::write(&layout::pane_record(&folder.state, &pane), &record).unwrap();
+    }
+    let node = Node::start(Switch::On, folder.home.path(), &folder.state);
+    node.holders().recover(node.owner(), &node.service);
+    let recovered = node.holders().recovered(Duration::from_secs(5)).unwrap();
+    assert_eq!(recovered.closed, vec!["p0", "p1", "p2"]);
+    assert!(recovered.ended.is_empty(), "{recovered:?}");
+    assert!(recovered.recoverable.is_empty(), "{recovered:?}");
+    assert!(recovered.present.is_empty(), "{recovered:?}");
+    for (i, reason) in reasons.into_iter().enumerate() {
+        assert_eq!(folder.record(&format!("p{i}")).end.unwrap().reason, reason);
+    }
+    node.service.close();
+}
+
 /// A redraw, and a view at the grid the pane already runs at, each bring a
 /// full frame from the holder, and what the program prints after either is
 /// drawn: the node waits for a full frame after both, and a holder answers

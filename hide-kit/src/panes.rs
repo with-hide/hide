@@ -1186,13 +1186,20 @@ impl Panes {
         } else if current.boot.is_some() && self.boot.is_some() && current.boot != self.boot {
             // Nothing a record of another boot names runs in this one; its
             // pids and start times may name processes of this boot.
-            let ended = self.end_record(
-                current,
-                End::new(
-                    EndReason::MachineRestarted,
-                    "the record is from an earlier boot of the machine",
-                ),
-            );
+            let ended = if current.phase == Phase::Ended && !current.cancelled() {
+                // A boot fence forbids process cleanup, not the completed
+                // outcome: changing ProgramExited to MachineRestarted would
+                // make node recovery start a shell the user already ended.
+                Judgment::Ended(current.clone())
+            } else {
+                self.end_record(
+                    current,
+                    End::new(
+                        EndReason::MachineRestarted,
+                        "the record is from an earlier boot of the machine",
+                    ),
+                )
+            };
             // No process of another boot holds a lock in this one.
             self.remove_stale_socket(&pane, Duration::ZERO);
             ended
