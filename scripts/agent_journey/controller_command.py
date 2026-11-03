@@ -37,9 +37,11 @@ def run(command):
         def drain(pipe, output):
             retained = 0
             try:
-                while data := pipe.read(8192):
+                while data := pipe.read1(8192):
                     keep = data[:max(0, OUTPUT_BYTES - retained)]
                     output.write(keep)
+                    # A supervisor kill cannot run this driver's close path.
+                    output.flush()
                     retained += len(keep)
                     if len(keep) != len(data):
                         overflow.set()

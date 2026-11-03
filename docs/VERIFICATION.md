@@ -339,6 +339,7 @@ The journey's controller must outlive the local CLI protocol it measures: its 42
 The observer allows the supervisor's separate 20-second cleanup bound and five seconds to publish completion; none of those reserves authorizes another command after an unsettled result.
 The controller requires matching command identities, ordinary child completion and confirmed cleanup before accepting a JSON answer, including one written before a later watchdog timeout.
 It preserves each command's bounded raw stdout and stderr (one MiB each), driver result and supervisor outcome under the ignored run directory, even when a later cell runs.
+The driver reads available chunks and flushes each retained chunk to its private file, rather than waiting for EOF or normal shutdown.
 At most 512 controller commands run; the report carries byte counts and constant phase identifiers, and the retained raw streams stay out of the uploaded journey report.
 An empty or invalid answer remains a failure; a nonzero child exit carrying the product's structured refusal remains that refusal.
 The controller boundary check distinguishes stderr-only exits, OS launch errors, supervisor deadlines and inner structured timeouts on the actual compiled provider, without a desktop or agent CLI.

@@ -67,8 +67,11 @@ class Supervisor(unittest.TestCase):
         self.assertFalse(answer["ok"])
 
     def test_deadline_cannot_accept_success_written_before_exit(self):
-        root, supervisor, answer = self.execute("deadline", "import time; print('{\"ok\":true}', flush=True); time.sleep(5)", within_ms=1500)
+        code = ("import sys,time; print('{\"ok\":true}', flush=True); "
+                "sys.stderr.write('before deadline'); sys.stderr.flush(); time.sleep(5)")
+        root, supervisor, answer = self.execute("deadline", code, within_ms=1500)
         self.assertEqual((root / "response.json").read_text().strip(), '{"ok":true}')
+        self.assertEqual((root / "stderr.txt").read_text(), "before deadline")
         self.assertEqual(supervisor["phase"], "deadline")
         self.assertTrue(supervisor["cleanup_confirmed"])
         self.assertEqual(answer["reason"], "controller_command_failed")
