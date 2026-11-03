@@ -589,7 +589,9 @@ pub(crate) fn lock_account(target: &KitTarget) -> Result<AccountLock, KitRefusal
 /// a re-read never lists parts and agents a pass could not install, and the
 /// operator's Try again is answered by the same check.
 pub fn status(target: &KitTarget) -> KitReport {
-    let mut record = match retirement_preflight(target).and_then(|()| record::load(&target.home)) {
+    let mut record = match retirement_preflight(target)
+        .and_then(|()| record::load(&target.home, &target.install))
+    {
         Ok(record) => record,
         Err(refusal) => return KitReport::refused(refusal),
     };
@@ -781,7 +783,7 @@ fn apply_scope(target: &KitTarget, scope: &Scope) -> KitReport {
     };
     // Without its record the kit cannot tell which parts are Hide's, so the
     // pass stops here, before anything below changes (engineering rule 4).
-    let mut record = match record::load(&target.home) {
+    let mut record = match record::load(&target.home, &target.install) {
         Ok(record) => record,
         Err(refusal) => return KitReport::refused(refusal),
     };
@@ -1109,11 +1111,11 @@ pub fn remove(target: &KitTarget) -> RemoveReport {
         components.push((id, outcome));
     }
     // Before the record goes: it is what says which integrations were Hide's.
-    let herdr = match record::load(&target.home) {
+    let herdr = match record::load(&target.home, &target.install) {
         Ok(record) => agent_kit::remove_herdr(target, &record),
         Err(_) => Vec::new(),
     };
-    if let Err(reason) = record::forget(&target.home) {
+    if let Err(reason) = record::forget(&target.home, &target.install) {
         components.push((
             ComponentId::Cli,
             RemoveOutcome::Failed {

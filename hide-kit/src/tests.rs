@@ -274,6 +274,7 @@ impl Fixture {
         let herdr = FakeHerdr::start(&root);
         let target = KitTarget {
             home: home.clone(),
+            install: hide_agent_hooks::route::APP_INSTALL.to_owned(),
             kit_dir: kit,
             cli_dir: home.join(".local/bin"),
             owned_roots: vec![root.join("helper-root")],
@@ -666,6 +667,79 @@ fn another_programs_hide_is_left_and_an_older_hide_link_is_replaced() {
     let report = apply(&fixture.target, &Scope::automatic());
     assert_eq!(state(&report, ComponentId::Cli), ComponentState::Failed);
     assert_eq!(std::fs::read_link(&link).unwrap(), climbing);
+}
+
+/// Entries an earlier build wrote name no installation: an upgrade reads
+/// them as an older version and replaces them with ones that do.
+#[test]
+fn an_earlier_builds_unnamed_hook_entries_are_upgraded() {
+    use hide_agent_hooks::{AgentRuntime, route::HookTarget};
+    let fixture = Fixture::new();
+    let helper = fixture
+        .target
+        .kit_dir
+        .join(hide_agent_hooks::HELPER_BINARY_NAME);
+    let route = crate::layout::state_dir_from_process(fixture.home());
+    let unnamed = HookTarget::new(&helper, &route).unwrap();
+    hide_agent_hooks::install(AgentRuntime::ClaudeCode, fixture.home(), unnamed).unwrap();
+    assert_eq!(
+        state(&status(&fixture.target), ComponentId::ClaudeCodeHook),
+        ComponentState::Outdated
+    );
+    let report = apply(&fixture.target, &Scope::automatic());
+    assert_eq!(
+        state(&report, ComponentId::ClaudeCodeHook),
+        ComponentState::Installed
+    );
+    assert!(fixture.settings().contains("--install-b64"));
+}
+
+/// Two Hide installations on one account, the desktop app and a device
+/// helper, each leave the `hide` the other holds while that one's command is
+/// there, and take the name back once it is gone.
+#[test]
+fn another_installations_hide_is_left_until_its_command_is_gone() {
+    let fixture = Fixture::new();
+    let link = fixture.home().join(".local/bin/hide");
+    let helper_root = fixture.root.join("helper-root");
+    let device_hide = helper_root.join("current/hide");
+    executable(&device_hide, "#!/bin/sh\n");
+    std::os::unix::fs::symlink(&device_hide, &link).unwrap();
+
+    let report = apply(&fixture.target, &Scope::automatic());
+    assert_eq!(state(&report, ComponentId::Cli), ComponentState::Absent);
+    assert_eq!(std::fs::read_link(&link).unwrap(), device_hide);
+    assert!(matches!(
+        crate::cli::remove(&fixture.target),
+        RemoveOutcome::Kept { .. }
+    ));
+    assert_eq!(std::fs::read_link(&link).unwrap(), device_hide);
+
+    std::fs::remove_file(&device_hide).unwrap();
+    let report = apply(&fixture.target, &Scope::automatic());
+    assert_eq!(state(&report, ComponentId::Cli), ComponentState::Installed);
+    let app_hide = fixture.target.kit_dir.join("hide");
+    assert_eq!(std::fs::read_link(&link).unwrap(), app_hide);
+
+    // The device helper's kit, beside a desktop package whose command is
+    // there.
+    let device = KitTarget {
+        install: hide_agent_hooks::route::install_of_root(&helper_root),
+        kit_dir: helper_root.join("current"),
+        ..fixture.target.clone()
+    };
+    executable(&device_hide, "#!/bin/sh\n");
+    let package_hide = fixture.root.join("Hide.app/Contents/Resources/hide");
+    executable(&package_hide, "#!/bin/sh\n");
+    std::fs::remove_file(&link).unwrap();
+    std::os::unix::fs::symlink(&package_hide, &link).unwrap();
+    assert_eq!(
+        state(&status(&device), ComponentId::Cli),
+        ComponentState::Absent
+    );
+    let report = apply(&device, &Scope::automatic());
+    assert_eq!(state(&report, ComponentId::Cli), ComponentState::Absent);
+    assert_eq!(std::fs::read_link(&link).unwrap(), package_hide);
 }
 
 /// PRD labels-in-hided B2: an upgrade takes the plugin out of Herdr and off
