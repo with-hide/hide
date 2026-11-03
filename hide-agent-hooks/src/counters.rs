@@ -392,12 +392,16 @@ pub struct SessionRecord {
     pub counters: PaneCounters,
 }
 
-/// Every pane's records, oldest first, by the Herdr pane id its file is named
-/// for (`w7B_pM.json` for `w7B:pM`), at most `limit` panes. A core that has no
+/// Every pane's records, oldest first, by the pane id its file is named for
+/// (`w7B_pM.json` for `w7B:pM`), at most `limit` panes. A core that has no
 /// facts of its own yet reads them once, so a pane whose agent last reported
 /// to Herdr keeps its connection after the hooks start reporting to the core.
-/// A file whose name no pane id makes, or that holds no record of an agent
-/// and its version, is passed over.
+/// A pane of a workspace Herdr made (`w`) and one the core's own engine made
+/// (`h`, PRD engine-bundle-4-herdr-removal D-26) are both read: the hook
+/// reads only the shape of the file's name and never the engine's ids, since
+/// a pane is named by its record, not by its id. A file whose name no pane id
+/// makes, or that holds no record of an agent and its version, is passed
+/// over.
 pub fn every_pane(home: &Path, limit: usize) -> Vec<(String, Vec<SessionRecord>)> {
     let Ok(entries) = fs::read_dir(state_directory(home)) else {
         return Vec::new();
@@ -412,10 +416,12 @@ pub fn every_pane(home: &Path, limit: usize) -> Vec<(String, Vec<SessionRecord>)
             .and_then(|name| name.to_str())
             .and_then(|name| name.strip_suffix(".json"))
             .and_then(|stem| stem.split_once('_'))
-            .filter(|(tab, pane)| {
-                tab.starts_with('w') && pane.starts_with('p') && !pane.contains('_')
+            .filter(|(workspace, pane)| {
+                (workspace.starts_with('w') || workspace.starts_with('h'))
+                    && pane.starts_with('p')
+                    && !pane.contains('_')
             })
-            .map(|(tab, pane)| format!("{tab}:{pane}"))
+            .map(|(workspace, pane)| format!("{workspace}:{pane}"))
         else {
             continue;
         };
@@ -1479,6 +1485,27 @@ mod tests {
             of(claude, HookEvent::UserPromptSubmit, &blank),
             Change::None
         );
+    }
+
+    // B44: a core that starts with no facts file of its own takes the
+    // records of a Herdr pane and of a pane its own engine made alike.
+    #[test]
+    fn every_pane_reads_the_records_of_herdr_and_engine_panes_alike() {
+        let root = home("both-engines");
+        change(&root, "w1:p1", Change::Started(None), WHO).unwrap();
+        change(&root, "h1:p2", Change::Started(None), WHO).unwrap();
+        change(&root, "h1:p2", Change::Started(None), WHO).unwrap();
+        fs::write(state_directory(&root).join("x1_p3.json"), "{}").unwrap();
+        let mut found: Vec<(String, u32)> = every_pane(&root, 16)
+            .into_iter()
+            .map(|(pane, records)| (pane, records[0].counters.working))
+            .collect();
+        found.sort();
+        assert_eq!(
+            found,
+            [("h1:p2".to_owned(), 2), ("w1:p1".to_owned(), 1)]
+        );
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
