@@ -192,8 +192,9 @@ public sealed class HideRunTree : IDisposable {
     }
 
     // Ends every process left in the tree and answers whether Windows says
-    // none is left within the time given.
-    public bool End(int milliseconds) {
+    // none is left within the time given. Not named End: Windows PowerShell
+    // 5.1 cannot call a .NET method of that name.
+    public bool Finish(int milliseconds) {
         TerminateJobObject(job, 1);
         DateTime until = DateTime.UtcNow.AddMilliseconds(milliseconds);
         while (true) {
@@ -633,7 +634,7 @@ function Step-Run([string]$count, [string]$cap) {
             }
         }
         if (-not $big) { $status = $tree.Wait() }
-        if (-not $tree.End(10000)) { throw 'a command or a program it started did not end' }
+        if (-not $tree.Finish(10000)) { throw 'a command or a program it started did not end' }
         if ($big) {
             # With every writer gone the reads still waiting end at once.
             $waiting = @($reads | Where-Object { $_ })
@@ -642,7 +643,7 @@ function Step-Run([string]$count, [string]$cap) {
             return
         }
     } catch {
-        [void]$tree.End(10000)
+        [void]$tree.Finish(10000)
         throw
     } finally { $tree.Dispose() }
     Say ran $status $kept[0].Length $kept[1].Length
