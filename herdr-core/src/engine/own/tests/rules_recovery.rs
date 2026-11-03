@@ -29,6 +29,7 @@ fn saved(place: &Place) -> Vec<String> {
     let (_, second) = first
         .create_tab(WAIT, &workspace, &place.home, "second", false, Env::new())
         .unwrap();
+    first.read_pane(WAIT, &second, "recent", 1).unwrap();
     drop(first);
     vec![pane, second]
 }
