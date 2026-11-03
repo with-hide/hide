@@ -517,7 +517,7 @@ fn a_window_newer_than_its_core_updates_it_and_links() -> Result<()> {
             placed_build == newer_build,
             "the placement runs {placed_build}"
         );
-        // The log masks the fixture's /home/helper prefix too. Placement
+        // The log masks the fixture's home/helper prefix too. Placement
         // above remains the authoritative, unredacted installed path.
         let logged_program = format!("{}~/{version}/hided", fixture.root.join("c").display());
         ensure!(done["program"] == logged_program, "{done}");
@@ -1053,7 +1053,7 @@ fn a_resumed_move_whose_alias_cannot_be_read_waits_for_its_peer() -> Result<()> 
         fixture.start_source()?;
         let failed = fixture.logged_after_link_wait(&fixture.source, "status.failed")?;
         // `ssh` names the configuration it could not read; the diagnostic
-        // masks /home/.ssh in the fixture path as a home-directory prefix.
+        // masks the fixture's SSH folder as a home-directory prefix.
         let logged_config = format!("{}~/config", fixture.root.join("m").display());
         ensure!(
             failed["failure"]["kind"] == "unreachable"
