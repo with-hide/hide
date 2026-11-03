@@ -68,6 +68,25 @@ def cloud_config(values, destination):
                 "filter": scope + f' AND jsonPayload.event="{event}"'}}],
             "alertStrategy": {"notificationRateLimit": {"period": "300s"}, "autoClose": "1800s"},
         })
+    # Cloud-observed delivery survives collector restart and its initially
+    # empty local health window. This stores counts, never payload labels.
+    write("collector-delivery-metric.json", {
+        "name": "hide-relay-delivery",
+        "description": "Content-free relay collector canaries received by Logging",
+        "filter": scope + ' AND jsonPayload.event="collector_canary"',
+        "metricDescriptor": {"metricKind": "DELTA", "valueType": "INT64", "unit": "1"},
+    })
+    write("collector-delivery-alert.json", {
+        "displayName": "hide-relay-delivery-absent", "enabled": True, "combiner": "OR",
+        "notificationChannels": [values["channel"]],
+        "conditions": [{"displayName": "No received collector canaries", "conditionAbsent": {
+            "filter": 'resource.type="gce_instance" AND '
+                      'metric.type="logging.googleapis.com/user/hide-relay-delivery" '
+                      f'AND resource.labels.project_id="{values["project"]}" '
+                      f'AND resource.labels.instance_id="{values["instance_id"]}"',
+            "duration": "300s", "trigger": {"count": 1},
+        }}],
+    })
     for name, path in (("relay", "/health"), ("collector", "/collector-health")):
         write(name + "-uptime.json", {
             "displayName": "hide-relay-" + name, "period": "60s", "timeout": "10s",

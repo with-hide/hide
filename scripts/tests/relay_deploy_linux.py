@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import socket
 import ssl
 import subprocess
 import tempfile
@@ -53,6 +54,8 @@ def main():
     received = []
     rejected = threading.Event()
     token_requested = threading.Event()
+    delivered = threading.Event()
+    disconnected = threading.Event()
 
     class Sink(BaseHTTPRequestHandler):
         def reply(self, status, body):
@@ -79,8 +82,14 @@ def main():
             assert self.path == "/v2/entries:write"
             assert self.headers.get("Authorization") == "Bearer fixture-token"
             body = self.rfile.read(int(self.headers["Content-Length"]))
+            if disconnected.is_set():
+                self.close_connection = True
+                self.connection.shutdown(socket.SHUT_RDWR)
+                return
             assert len(received) < 4096, "fixture request cap exceeded"
             received.append(json.loads(body))
+            if not rejected.is_set():
+                delivered.set()
             self.reply(403 if rejected.is_set() else 200,
                        b'{"error":{"code":403,"status":"PERMISSION_DENIED"}}' if rejected.is_set() else b"{}")
 
@@ -190,10 +199,22 @@ HTTPServer(("127.0.0.1", 8787), Handler).serve_forever()
             while time.monotonic() < until:
                 assert unhealthy(), "quiet persistent delivery failure became healthy"
                 threading.Event().wait(5)
-            rejected.clear()
-            # Restore a clean collector before testing candidate rollback.
+            delivered.clear()
             subprocess.run(["systemctl", "restart", "hide-relay-logs"], check=True)
+            wait_for(unhealthy, "restarted collector concealed ongoing delivery refusal", seconds=90)
+            assert not delivered.is_set(), "refused delivery was recorded as successful"
+            rejected.clear()
+            subprocess.run(["systemctl", "restart", "hide-relay-logs"], check=True)
+            wait_for(delivered.is_set, "delivery did not actually resume", seconds=90)
             wait_for(lambda: request("https://relay.withhide.dev/collector-health"), "collector did not recover")
+            disconnected.set()
+            delivered.clear()
+            subprocess.run(["systemctl", "restart", "hide-relay-logs"], check=True)
+            wait_for(unhealthy, "transport disconnection remained healthy", seconds=90)
+            assert not delivered.is_set()
+            disconnected.clear()
+            subprocess.run(["systemctl", "restart", "hide-relay-logs"], check=True)
+            wait_for(delivered.is_set, "delivery did not resume after transport recovery", seconds=90)
             inputs = json.loads((staged / "inputs.json").read_text())
             inputs["source"] = "2" * 40
             (staged / "inputs.json").write_text(json.dumps(inputs))

@@ -156,6 +156,7 @@ The built-in dummy input sends one content-free canary at startup and every sixt
 This keeps authentication/network delivery failures visible inside the five-minute health error window even when no real relay event occurs; without a canary, an exhausted retry could age out and falsely report recovery.
 The canary uses the same log ID, VM scope and seven-day destinations, adds 1,440 small records per day, and never triggers the two relay-event alerts.
 After a collector restart, allow one canary/flush cycle to establish delivery health; process startup alone is not proof of delivery.
+The mandatory cloud delivery-absence alert observes received canaries independently of local health, so restarting the collector does not reset the delivery observation.
 Do not enable debug/trace logs to diagnose production ingestion; inspect counts/status and use a private synthetic fixture instead.
 
 Memory limits are relay 640 MiB, proxy 256 MiB and collector 192 MiB; task limits are 64, 128 and 64 respectively.
@@ -167,6 +168,11 @@ These are resource guards, not evidence of production throughput or of a hard bi
 
 Apply `cap_exceeded.json` and `server_failed.json` through the Monitoring alert-policy API or `gcloud monitoring policies create --policy-from-file <file>`.
 Use the already verified email channel; a configured channel is not delivered-mail evidence.
+Create `collector-delivery-metric.json` through Logging's `projects.metrics.create`, then create `collector-delivery-alert.json` through the Monitoring alert-policy API.
+The counter selects only this VM's received canaries, with no extracted payload labels; Monitoring stores aggregate counts, not another copy of a relay event.
+The absence policy requires an established time series: observe the first nonzero counter point before accepting the deployment, and fail acceptance if it never appears.
+It detects five minutes without metric data, plus Logging/Monitoring processing delay and a possible adjacent zero-count interval; do not claim a precise five-minute delivery SLA.
+Confirm the absence incident stays open across a collector restart during an ongoing delivery failure and clears only after real delivery resumes.
 Create both `relay-uptime.json` and `collector-uptime.json` through `projects.uptimeCheckConfigs.create`.
 Replace only `REPLACE_WITH_CREATED_CHECK_ID` in each corresponding uptime-alert body with that check’s returned ID, then create its alert policy.
 The checks require valid HTTPS on 443 every minute; two failed locations for two minutes alert, and missing evaluation data is active.
@@ -180,7 +186,7 @@ Before accepting users, record these as separate observations:
 2. Public DNS, trusted TLS certificate and `/health` response; actual WSS/Noise pairing with private client state; spoofed incoming `X-Real-IP` does not control accounting.
 3. Kill only this deployment’s relay and observe restart and client recovery; verify certificate-renewal configuration separately from any future renewal observation.
 4. Trigger a controlled cap event and a controlled server failure through the real unit/collector path, and confirm the two log IDs/fields in the dedicated bucket and absence from `_Default` and every other destination.
-5. Stop the collector, then separately induce a controlled collector delivery refusal; observe `/collector-health` failure with no relay events for longer than five minutes, uptime incident and actual email receipt, restoring it after each check.
+5. Observe a nonzero canary delivery metric, then stop the collector and separately induce a controlled collector delivery refusal; observe `/collector-health` failure with no relay events for longer than five minutes, uptime/delivery-absence incidents and actual email receipt, restoring it after each check.
 6. Exercise relay health failure and restoration, confirm the notification outcome, read back budget scope/currency/thresholds, and record local/cloud retention including all copies.
 7. Confirm the retention timer’s last result and run the namespace-only vacuum manually; inspect no unrelated journal or log file.
 8. Ask the operator for the physical-phone QR/reply observation after the separate phone release; browser emulation does not satisfy it.
@@ -203,3 +209,4 @@ The dedicated journal follows [systemd journal namespaces/retention](https://www
 Fluent Bit’s [systemd path/filter](https://docs.fluentbit.io/manual/data-pipeline/inputs/systemd), [bounded canary input](https://docs.fluentbit.io/manual/data-pipeline/inputs/dummy), [memory buffering](https://docs.fluentbit.io/manual/administration/buffering-and-storage), [health](https://docs.fluentbit.io/manual/administration/monitoring) and [GCE Logging output](https://docs.fluentbit.io/manual/data-pipeline/outputs/stackdriver) provide the collection boundary.
 It is used instead of Ops Agent here because the latter’s documented journald receiver has no namespace-path selection; changing the shared journal’s retention would affect unrelated events.
 Cloud configuration follows [log routing](https://cloud.google.com/logging/docs/routing/overview), [bucket retention](https://cloud.google.com/logging/docs/buckets), [log alerts](https://cloud.google.com/logging/docs/alerting/log-based-alerts), [uptime API](https://cloud.google.com/monitoring/api/ref_v3/rest/v3/projects.uptimeCheckConfigs) and [budget currency/project filters](https://cloud.google.com/billing/docs/reference/budget/rest/v1/billingAccounts.budgets).
+Delivery freshness uses [counter metrics](https://cloud.google.com/logging/docs/logs-based-metrics/counter-metrics) and [metric-absence alerts](https://cloud.google.com/monitoring/alerts/metric-absence); counter zero values and gaps follow [Logging's documented time-series rules](https://cloud.google.com/logging/docs/logs-based-metrics).
