@@ -28,9 +28,9 @@ export function useMissionDeviceName(machine: string | null | undefined): string
   });
 }
 
-/** The same device chip on a node and its checkers, with the full name on hover. */
-export function MissionDevice({ name }: { name: string | null }) {
-  return name ? <Hint label={name} reveals><span className="flex min-w-0 max-w-full"><DeviceChip label={name} className="max-w-full" /></span></Hint> : null;
+/** A device in the worker's metadata, with the full name on hover. */
+export function MissionDevice({ name, className }: { name: string | null; className?: string }) {
+  return name ? <Hint label={name} reveals><span className={cn("flex min-w-0 max-w-full", className)}><DeviceChip label={name} variant="inline" className="max-w-full" /></span></Hint> : null;
 }
 
 /**

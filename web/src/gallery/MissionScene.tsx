@@ -239,7 +239,7 @@ export function missionFixture(shown: string, now: number): { mission: Mission; 
   const nodes = shown === "exempt" ? plan(state, now).map((one) => ({ ...one, ...finish(own(1, OLD_CRITERION, "pass")) })) : shown === "rejected" ? plan(state, now).map(rejectedReview) : plan(state, now);
   if (remote) {
     for (const one of nodes) {
-      one.machine = one.key === "screen" ? "mini" : one.pane_id ? "local" : null;
+      one.machine = one.key === "screen" || (shown === "remote-long" && one.key === "fix-1487") ? "mini" : one.pane_id ? "local" : null;
       for (const check of one.criteria.flatMap((criterion) => criterion.checkers ?? [])) {
         if (check.pane_id) check.machine = "mini";
       }
