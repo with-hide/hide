@@ -6,7 +6,8 @@ desktop e2e's spawn provider (`web/e2e/shims/spawn-provider.c`, built here):
 started as a Claude kind in its own private pane, it reports a synthetic
 native session to Herdr through `session_report.py` and, each time it reads `!`, runs the command
 `command.json` holds through `controller_command.py`, writing the command's
-exit status to a completion file. It is not under test.
+exit status to a completion file. Its process outcomes are part of the
+measurement boundary, checked independently of Herdr and the agent CLIs.
 """
 
 import json
@@ -20,8 +21,34 @@ from agent_live_check.protection import private_directory, write_private
 from agent_live_check.runtime import clean_env
 from agent_live_check.system import WINDOWS, exe, home_env, remove_pane_files, temp_env
 
-COMMAND_SECONDS = 25
+# The local CLI may bootstrap (10s), exchange a spawn (30s), then claim (2s).
+# Its supervisor must outlive that protocol, rather than cut it off at 20s.
+COMMAND_SECONDS = 10 + 30 + 2
+SUPERVISOR_CLEANUP_SECONDS = 20
+COMPLETION_SECONDS = COMMAND_SECONDS + SUPERVISOR_CLEANUP_SECONDS + 5
+OUTPUT_BYTES = 1024 * 1024
+MAX_COMMANDS = 512
 START_SECONDS = 60
+
+
+def command_answer(diagnostic, text):
+    """A settled, correlated child result is required before trusting JSON."""
+    supervisor, driver = diagnostic["supervisor"], diagnostic["driver"]
+    settled = (not diagnostic["wait_error"] and isinstance(supervisor, dict)
+               and supervisor.get("id") == diagnostic["id"] and supervisor.get("phase") == "exited"
+               and supervisor.get("cleanup_confirmed") is True and isinstance(driver, dict)
+               and driver.get("id") == diagnostic["id"] and driver.get("phase") == "exited"
+               and str(supervisor.get("exit")) == diagnostic["exit"]
+               and driver.get("exit") == supervisor.get("exit"))
+    if not settled:
+        return {"ok": False, "reason": "controller_command_failed", **diagnostic}
+    try:
+        answer = json.loads(text)
+    except ValueError:
+        answer = None
+    if not isinstance(answer, dict) or (answer.get("ok") is True and driver["exit"] != 0):
+        return {"ok": False, "reason": "unreadable_answer", **diagnostic}
+    return answer
 
 
 class Controller:
@@ -36,7 +63,11 @@ class Controller:
         self.command = self.root / "command.json"
         self.completed = self.root / "command-completed"
         self.response = self.root / "response.json"
+        self.stderr = self.root / "stderr.txt"
+        self.result = self.root / "command-result.json"
+        self.outcome = self.root / "command-completed.json"
         self.sequence = 0
+        self.unsettled = False
         self.pane = self.agent_id = None
 
     def start(self):
@@ -66,7 +97,8 @@ class Controller:
             " '--agent', 'claude', '--agent-session-id', session, '--seq', '1'], timeout=20).returncode)\n").encode())
         write_private(self.root / "provider.config", b"")
         runtime.owner.run([str(shim), "--write-config", str(self.root / "provider.config"),
-                           sys.executable, str(reporter), str(self.completed), sys.executable,
+                           sys.executable, str(reporter), str(self.completed),
+                           f"within-ms={COMMAND_SECONDS * 1000}", sys.executable,
                            "-I", str(driver), str(self.command)], env=clean_env())
         recipe = {"id": "controller"}
         workspace, pane, _ = runtime.new_workspace(recipe, "journey", runtime.home, shim,
@@ -107,23 +139,47 @@ class Controller:
         self.agent_id = answer["value"]["id"]
         return self.agent_id
 
-    def hide(self, args, seconds=COMMAND_SECONDS):
+    def hide(self, args, seconds=COMPLETION_SECONDS):
         """One `hide` command run by the controller agent; its JSON answer."""
         runtime = self.runtime
+        if self.unsettled:
+            raise ProcessError("controller_previous_command_unsettled")
+        if self.sequence >= MAX_COMMANDS:
+            raise ProcessError("controller_command_limit")
         self.sequence += 1
-        remove_pane_files(self.completed, self.response)
+        remove_pane_files(self.completed, self.response, self.stderr, self.result, self.outcome)
         environment = {**home_env(runtime.home), "HIDE_STATE_DIR": str(runtime.state),
                        "PATH": runtime.env["PATH"], **temp_env(runtime.run / "agent-tmp")}
         remove_pane_files(self.command)
-        write_private(self.command, json.dumps({"argv": [str(runtime.hide), *args], "env": environment,
-                                                "response": str(self.response)}).encode())
+        write_private(self.command, json.dumps({"id": self.sequence, "argv": [str(runtime.hide), *args],
+                                                "env": environment, "response": str(self.response),
+                                                "stderr": str(self.stderr), "result": str(self.result)}).encode())
         runtime.command(["pane", "send-text", self.pane, "!"])
-        status = runtime.wait(lambda: self.completed.is_file() and self.completed.read_text().strip(), seconds)
-        text = self.response.read_text() if self.response.is_file() else ""
+        wait_error, status = None, None
         try:
-            answer = json.loads(text)
-        except ValueError:
-            answer = None
-        if not isinstance(answer, dict):
-            return {"ok": False, "reason": "unreadable_answer", "exit": status, "stdout": text[:500]}
+            status = runtime.wait(lambda: self.completed.is_file() and self.completed.read_text().strip(), seconds)
+        except ProcessError as error:
+            wait_error = str(error)
+            self.unsettled = True
+        def output(path):
+            if not path.is_file():
+                return b""
+            with path.open("rb") as stream:
+                return stream.read(OUTPUT_BYTES)
+        raw_response, raw_stderr = output(self.response), output(self.stderr)
+        diagnostic = {"id": self.sequence, "exit": status, "wait_error": wait_error,
+                      "stdout_bytes": len(raw_response), "stderr_bytes": len(raw_stderr)}
+        for key, path in (("supervisor", self.outcome), ("driver", self.result)):
+            try:
+                diagnostic[key] = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                diagnostic[key] = None
+        # Preserve each command's adverse evidence even when later cells run.
+        evidence = runtime.run / f"controller-{self.sequence:04d}.json"
+        write_private(evidence.with_suffix(".stdout"), raw_response)
+        write_private(evidence.with_suffix(".stderr"), raw_stderr)
+        write_private(evidence, json.dumps(diagnostic).encode())
+        answer = command_answer(diagnostic, raw_response)
+        if answer.get("reason") == "controller_command_failed":
+            self.unsettled = True
         return answer

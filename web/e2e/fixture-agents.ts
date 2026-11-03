@@ -205,6 +205,8 @@ export async function takeOverSession(fixture: AgentFixture, daemon: Pick<Daemon
   const answer = await fixture.runAs(pane)(["hook", "--runtime", "claude-code", "--event", "SessionStart"], {
     program: hooks,
     input: JSON.stringify({ session_id: session, hook_event_name: "SessionStart", source: "clear", cwd }),
+    // The report leaves the agent's screen as it was: a permission prompt the spec drew keeps the agent asking.
+    hook: true,
   });
   if (answer.status !== 0) throw new Error(`${pane} could not report ${session}: ${answer.out}`);
   await withControl(daemon, (control) => control.until((rest) => agentIn(rest, pane)?.session_id === session, `${pane} on session ${session}`, 20_000));
