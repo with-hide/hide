@@ -259,6 +259,11 @@ static int run_as_codex(const char *argv0) {
   return strncmp(base, "codex", 5) == 0;
 }
 
+// Delivery checks the declared composer, including its frame and placeholder
+// style. These fixed empty screens do not imitate editing or menu handling.
+#define CLAUDE_EMPTY_COMPOSER "────────────────\r\n❯ \r\n────────────────\r\n"
+#define CODEX_EMPTY_COMPOSER "› \033[2mAsk Codex to do anything\033[0m\r\n\r\n"
+
 #include "live-check.h"
 
 // An agent pane fixture needs the existing owned-command runner's native
@@ -397,14 +402,6 @@ int main(int argc, char **argv) {
   _setmode(1, _O_BINARY);
 #endif
   if (getenv("HIDE_E2E_LIVE_CHECK")) return live_check(argc, argv);
-  /* `codex queue` hands a running session a message (docs/delivery.md, The
-     input ladder). The stand-in keeps no queue its running copy could take,
-     so it refuses as a Codex without the command does, and Hide types the
-     input instead; the fake-model lane measures the real queue. */
-  if (run_as_codex(argv[0]) && argc > 1 && strcmp(argv[1], "queue") == 0) {
-    fputs("error: unrecognized subcommand 'queue'\n", stderr);
-    return 2;
-  }
   for (int i = 1; i < argc; i++) {
     if (strcmp(argv[i], "--json-schema") == 0 || (i == 1 && strcmp(argv[i], "auth") == 0)) return provider(argc, argv);
     if (i == 1 && strcmp(argv[i], "-p") == 0 && has_option(argc, argv, "--system-prompt")) return provider(argc, argv);
@@ -434,10 +431,9 @@ int main(int argc, char **argv) {
     static const char ready[] = "\r\nFORK_INPUT_READY\r\n";
     if (terminal_write(ready, sizeof ready - 1) != (fixture_count_t)(sizeof ready - 1)) return 1;
   }
-  if (run_as_codex(argv[0])) {
-    static const char composer[] = "\xe2\x80\xba Ask Codex to do anything\r\n";
-    if (terminal_write(composer, sizeof composer - 1) != (fixture_count_t)(sizeof composer - 1)) return 1;
-  }
+  const char *composer = run_as_codex(argv[0]) ? CODEX_EMPTY_COMPOSER : CLAUDE_EMPTY_COMPOSER;
+  size_t composer_length = strlen(composer);
+  if (terminal_write(composer, composer_length) != (fixture_count_t)composer_length) return 1;
 #ifdef _WIN32
   // Herdr's encoded PowerShell launch has no visible agent name.
   // Announce from the initialized interactive process before reading input.

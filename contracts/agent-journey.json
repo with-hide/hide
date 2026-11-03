@@ -110,7 +110,6 @@
     "stop_observer": null,
     "input": [
       "launch_prompt",
-      "codex_queue",
       "typed"
     ],
     "wake": "pane",

@@ -306,11 +306,12 @@ fn confirm_confirms_exactly_the_letters_the_plugin_saw_stored() {
         machine.run("confirm", &json!({"letters": []}), true),
         json!({})
     );
-    // An id that would read as an option, or more than a hook's five, asks nothing.
-    for letters in [
-        json!(["--hook"]),
-        json!(["l1", "l2", "l3", "l4", "l5", "l6"]),
-    ] {
+    // An id that would read as an option, or more than one bundle's letters,
+    // asks nothing.
+    let past_a_bundle: Vec<String> = (0..=hide_agent_hooks::delivery::BUNDLE_LETTERS)
+        .map(|n| format!("letter-{n}"))
+        .collect();
+    for letters in [json!(["--hook"]), json!(past_a_bundle)] {
         assert_eq!(
             machine.run("confirm", &json!({ "letters": letters }), true),
             json!({})

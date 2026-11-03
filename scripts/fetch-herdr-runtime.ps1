@@ -9,6 +9,11 @@
 # is reused; a file that no longer matches the pin is discarded, not trusted.
 # Usage: pwsh -NoProfile -File scripts/fetch-herdr-runtime.ps1
 $ErrorActionPreference = 'Stop'
+# The path printed below is read by its callers as UTF-8 (package.mjs, the
+# workflows' bash). PowerShell writes a redirected stdout in the console's
+# code page, which on a Korean Windows is not UTF-8, so a user folder named
+# in Korean reached package.mjs garbled (with-hide/hide#2042).
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 
 $root = Split-Path -Parent $PSScriptRoot
 $manifest = Get-Content -Raw -LiteralPath (Join-Path $root 'contracts/herdr-bundle.json') | ConvertFrom-Json

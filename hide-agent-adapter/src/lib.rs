@@ -904,27 +904,6 @@ pub enum AgentApi {
     /// with `@` as a file to attach and exits when there is none, so it does
     /// not declare it. Only a fresh start's first input takes it.
     LaunchPrompt,
-    /// `codex queue --thread <session> --message=<text>`: the session's own
-    /// durable queue, which the running TUI takes as a turn once it rests
-    /// with an empty composer (Codex 0.166.0, measured 2026-11-01). A Codex
-    /// has no thread before its first turn, so this rung needs the session
-    /// its hook reported.
-    CodexQueue,
-}
-
-impl AgentApi {
-    /// Whether the rung takes only a fresh start's first input.
-    pub const fn first_input_only(self) -> bool {
-        matches!(self, Self::LaunchPrompt)
-    }
-
-    /// The agent whose own API this is.
-    pub const fn agent(self) -> Option<AgentId> {
-        match self {
-            Self::LaunchPrompt => None,
-            Self::CodexQueue => Some(AgentId::Codex),
-        }
-    }
 }
 
 impl InputRung {
@@ -932,7 +911,6 @@ impl InputRung {
     pub const fn name(self) -> &'static str {
         match self {
             Self::AgentApi(AgentApi::LaunchPrompt) => "launch_prompt",
-            Self::AgentApi(AgentApi::CodexQueue) => "codex_queue",
             Self::Typed => "typed",
         }
     }

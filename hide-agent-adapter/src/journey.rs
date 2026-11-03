@@ -206,15 +206,6 @@ fn context_cell(row: &super::AgentAdapter) -> bool {
     start && (guidance || memory)
 }
 
-/// Whether a letter can reach the agent through a way in of its own, not
-/// only typed (`docs/delivery.md`, The input ladder).
-fn own_way_in(row: &super::AgentAdapter) -> bool {
-    row.input.iter().any(|rung| match rung {
-        super::InputRung::AgentApi(api) => !api.first_input_only(),
-        super::InputRung::Typed => false,
-    })
-}
-
 fn busy_letter_paths(row: &super::AgentAdapter) -> Vec<&'static str> {
     let mut paths = Vec::new();
     if row.bell {
@@ -242,7 +233,9 @@ pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
             guidance_memory: context_cell(row),
             letter: start && (row.bell || row.tool_letters.is_some()),
             letter_busy: start && !busy_letter_paths(row).is_empty(),
-            letter_menu: start && row.bell && own_way_in(row),
+            // Keep the measured Codex picker journey when input becomes typed:
+            // a draft hold must survive the picker and release after Esc.
+            letter_menu: start && row.bell && row.key == super::AgentId::Codex,
             composer: start && row.composer.is_some(),
             sleep_wake: start && row.sleep.is_some(),
             resume: start && row.sleep.is_some() && row.resume.is_some(),
