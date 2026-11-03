@@ -294,8 +294,10 @@ int main(int argc, char **argv) {
   char *report[] = { (char *)reporter_program, (char *)reporter_script, (char *)pane, session, NULL };
   if (claude && run_child(report) != 0) return 1;
   raw_terminal();
-  static const char ready[] = "\r\nClaude Code fixture\r\nclaude fixture ready\r\n❯ ";
+  static const char ready[] = "\r\nClaude Code fixture\r\nclaude fixture ready\r\n";
   if (terminal_write(ready, sizeof ready - 1) != (fixture_count_t)(sizeof ready - 1)) return 1;
+  static const char prompt[] = "\r\n────────────────\r\n❯ \r\n────────────────\r\n";
+  if (terminal_write(prompt, sizeof prompt - 1) != (fixture_count_t)(sizeof prompt - 1)) return 1;
   char bytes[16384];
   /* Everything else typed is echoed, as the `claude` stand-in echoes it
      (`claude-shim.c`), so a spec draws the screens an engine reads an
@@ -316,7 +318,6 @@ int main(int argc, char **argv) {
       if (bytes[i] != '!') continue;
       int status = run_child(command);
       if (complete_command(completion_file, status) != 0) return 1;
-      static const char prompt[] = "\r\n❯ ";
       if (terminal_write(prompt, sizeof prompt - 1) != (fixture_count_t)(sizeof prompt - 1)) return 1;
     }
   }

@@ -1,11 +1,9 @@
 //! The doorbell submits one short line through Herdr's `agent.prompt` so a
-//! pending letter wakes its idle agent. Herdr has no atomic composer guard, so the rule is
-//! conservative: a letter waits unless every fact hide owns says the pane is
-//! at rest. The verdict reads no terminal, and nothing clears or restores
-//! input; a TUI that redraws its footer or statusline cannot change a verdict.
-//! The one screen read is the composer of a pane held on a possible draft,
-//! whose positive "empty" releases that draft before the next verdict
-//! (`composer.rs`).
+//! pending letter reaches its resting or eligible working agent. Herdr has no
+//! atomic composer guard: memory facts and the native owner must agree, and
+//! an agent with a composer declaration must also read empty before typing.
+//! A held draft is released only by a confirmed version's positive empty
+//! read (`composer.rs`). Nothing clears or restores the person's input.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -473,10 +471,17 @@ impl Doorbell {
                 .iter()
                 .any(|letter| &letter.recipient.pane_id == pane)
         });
+        let answers = owner
+            .lock()
+            .map(|mut guard| guard.mission_answers_due())
+            .unwrap_or_default();
+        // A Conductor's pane keeps its composer read as a recipient's does,
+        // so a draft that did not read empty is not read again every pass.
         self.composer.retain(|pane| {
             pending
                 .iter()
                 .any(|letter| letter.recipient.pane_id == pane)
+                || answers.iter().any(|work| work.conductor.pane_id == pane)
         });
         let mut count = 0;
         for &letter in &pending {
@@ -553,31 +558,13 @@ impl Doorbell {
                     other.id != letter.id && other.recipient.same_identity(&letter.recipient)
                 })
                 .count();
-            // A forced letter is typed only over a composer read empty now;
-            // one that shows text stays, as an ordinary letter (D-14).
-            if letter.forced
-                && let Err(reason) = super::composer::forced_clear(
-                    engine.as_ref(),
-                    &observed.raw_pane_id,
-                    &observed.actor.kind,
-                )
-            {
-                defer(client, letter, reason);
-                let hold = if reason == super::composer::NOT_EMPTY {
-                    Hold::Draft
-                } else {
-                    Hold::ComposerUnread
-                };
-                self.hold(&letter.id, pane, hold);
-                continue;
-            }
             let sender = bell_sender(owner, &ledger, letter);
             let line = bell_line(&sender, letter, others, language);
             match deliver(
                 owner,
                 client,
                 engine.as_ref(),
-                &letter.id,
+                letter,
                 &observed,
                 (&line, &sender, &letter.kind),
                 stop,
@@ -639,7 +626,7 @@ impl Doorbell {
                 }
             }
         }
-        self.answers(owner, stop, now, &mut count);
+        self.answers(owner, answers, stop, now, &mut count);
         self.inputs(owner, stop, now, &mut count);
         if count < WORK_PER_PASS && !stop.load(Ordering::Acquire) {
             self.composer.check(owner, now);
@@ -659,11 +646,16 @@ impl Doorbell {
     /// mission-plan-visibility B26, B28), under the verdict a letter's bell
     /// waits for: at rest, or mid-turn once it has worked as long as a
     /// letter waits, never over a draft, a menu or a question of its own.
-    fn answers(&mut self, owner: &Mutex<Runtime>, stop: &AtomicBool, now: u64, count: &mut usize) {
-        let due = owner
-            .lock()
-            .map(|mut guard| guard.mission_answers_due())
-            .unwrap_or_default();
+    /// A draft is read and released, and the composer read right before
+    /// typing, as for a letter (`composer::Reader::release`, `clear_to_type`).
+    fn answers(
+        &mut self,
+        owner: &Mutex<Runtime>,
+        due: Vec<crate::runtime::mission_events::AnswerWork>,
+        stop: &AtomicBool,
+        now: u64,
+        count: &mut usize,
+    ) {
         self.answer_tried
             .retain(|mission, _| due.iter().any(|work| &work.mission == mission));
         self.answer_held
@@ -680,6 +672,9 @@ impl Doorbell {
                 Ok(observed) => observed,
                 Err(reason) => {
                     self.answer_hold(owner, &work, reason);
+                    if reason == Hold::Draft && self.composer.release(owner, &work.conductor, now) {
+                        *count += 1;
+                    }
                     continue;
                 }
             };
@@ -1037,8 +1032,7 @@ fn resubmit_brief(
                 .lock()
                 .map_err(|_| "pane_unavailable")?
                 .input_target(observed);
-            let prepared = super::ladder::prepare(&target);
-            Some((target, prepared))
+            Some(target)
         }
     };
     let (client, authority, actor) = delivery;
@@ -1069,9 +1063,9 @@ fn resubmit_brief(
             Err(EngineError::Request(_)) => (None, Err("prompt_failed")),
             Err(_) => (Some(super::typed::SendRoute::Lost), Err("prompt_failed")),
         },
-        Some((target, prepared)) => match crate::coordination::executor::send_brief(
+        Some(target) => match crate::coordination::executor::send_brief(
             engine.as_ref(),
-            (&target, prepared),
+            &target,
             id,
             &resubmit.brief,
         ) {
@@ -1257,6 +1251,53 @@ fn native_current(
     })
 }
 
+/// What kept a pane from clearing the last checks before typing.
+#[derive(Clone, Copy)]
+enum NotClear {
+    /// Herdr no longer reports the agent the verdict was read for, ready.
+    Native(Hold),
+    /// The composer did not read empty: [`super::composer::NOT_EMPTY`] or
+    /// [`super::composer::UNCONFIRMED`].
+    Composer(&'static str),
+}
+
+impl NotClear {
+    fn hold(self) -> Hold {
+        match self {
+            Self::Native(hold) => hold,
+            Self::Composer(super::composer::NOT_EMPTY) => Hold::Draft,
+            Self::Composer(_) => Hold::ComposerUnread,
+        }
+    }
+}
+
+/// The last checks before the doorbell types into a pane, a letter's bell
+/// and an operator's mission answer alike, made off the lock right before
+/// the input: Herdr still reports the agent the verdict was read for, and
+/// an agent with a composer declaration shows its composer empty now, since
+/// a delayed state update may cover a key the draft record has not seen
+/// (docs/delivery.md, Reading the composer). `forced` reads the composer of
+/// every kind, so one with no declaration is not clear. A refusal is held
+/// and tried again on the caller's bounded retry.
+fn clear_to_type(
+    engine: &dyn Engine,
+    observed: &Observation,
+    forced: bool,
+) -> Result<Result<(), NotClear>, &'static str> {
+    if let Err(hold) = native_current(engine, observed)? {
+        return Ok(Err(NotClear::Native(hold)));
+    }
+    let declared = hide_agent_adapter::adapter(&observed.actor.kind)
+        .is_some_and(|row| row.composer.supported().is_some());
+    if !forced && !declared {
+        return Ok(Ok(()));
+    }
+    Ok(
+        super::composer::forced_clear(engine, &observed.raw_pane_id, &observed.actor.kind)
+            .map_err(NotClear::Composer),
+    )
+}
+
 /// All delivery pane writes go through this function. The last memory check
 /// cannot eliminate an external socket/TUI input race (the approved D-18 limit).
 /// A failure before `agent.prompt` is asked typed nothing; one after it may
@@ -1265,7 +1306,7 @@ fn deliver(
     owner: &Mutex<Runtime>,
     client: &Client,
     engine: &dyn Engine,
-    id: &str,
+    letter: &Letter,
     observed: &Observation,
     (line, sender, kind): (&str, &str, &str),
     stop: &AtomicBool,
@@ -1273,15 +1314,22 @@ fn deliver(
     if stop.load(Ordering::Acquire) {
         return Ok(Outcome::Stopped);
     }
-    if let Err(reason) = native_current(engine, observed).map_err(SendFailure::NotTyped)? {
-        return Ok(Outcome::Held(reason));
+    if let Err(unclear) =
+        clear_to_type(engine, observed, letter.forced).map_err(SendFailure::NotTyped)?
+    {
+        if letter.forced
+            && let NotClear::Composer(reason) = unclear
+        {
+            defer(client, letter, reason);
+        }
+        return Ok(Outcome::Held(unclear.hold()));
     }
+    let id = &letter.id;
     // The ladder's route is decided before a bell is spent.
     let target = owner
         .lock()
         .map_err(|_| SendFailure::NotTyped("runtime_unavailable"))?
         .input_target(observed);
-    let prepared = super::ladder::prepare(&target);
     let reservation = client
         .submit(
             Effect::BellAttempt {
@@ -1335,7 +1383,7 @@ fn deliver(
         .record_bell(&observed.actor.pane_id, line, (sender, kind));
     // Arrival is not intake. Only a flushed prompt-hook confirmation clears
     // it, even where the agent's own way in took the line.
-    sent(prepared.deliver(engine, &target, line))
+    sent(super::ladder::deliver(engine, &target, line))
 }
 
 /// A ladder's answer as one attempt's outcome: a lost answer may have
@@ -1348,9 +1396,10 @@ fn sent(delivered: super::ladder::Delivered) -> Result<Outcome, SendFailure> {
     }
 }
 
-/// Types one answer, after the same last checks a bell makes: Herdr still
-/// reports the agent the verdict was read for, the pane has not moved, and
-/// the answer still waits. Nothing is recorded as a letter's bell: the
+/// Types one answer, after the same last checks a bell makes
+/// (`clear_to_type`): Herdr still reports the agent the verdict was read
+/// for, its composer reads empty, the pane has not moved, and the answer
+/// still waits. Nothing is recorded as a letter's bell: the
 /// conversation reads it as the operator's own message (D-13). Once
 /// `agent.prompt` is asked, a failed or timed-out reply or one Hide cannot
 /// read may follow a typed answer, so it is never typed again on its own.
@@ -1364,8 +1413,8 @@ fn type_answer(
     if stop.load(Ordering::Acquire) {
         return Ok(Outcome::Stopped);
     }
-    if let Err(reason) = native_current(engine, observed).map_err(SendFailure::NotTyped)? {
-        return Ok(Outcome::Held(reason));
+    if let Err(unclear) = clear_to_type(engine, observed, false).map_err(SendFailure::NotTyped)? {
+        return Ok(Outcome::Held(unclear.hold()));
     }
     {
         let mut guard = owner
@@ -1383,7 +1432,7 @@ fn type_answer(
         .lock()
         .map_err(|_| SendFailure::NotTyped("runtime_unavailable"))?
         .input_target(observed);
-    sent(super::ladder::typed_only().deliver(engine, &target, &work.line))
+    sent(super::ladder::deliver(engine, &target, &work.line))
 }
 
 #[cfg(test)]
@@ -1742,7 +1791,7 @@ mod tests {
             let (runtime, sender, _, path) = fixture(root.path());
             let flags = Arc::new(Mutex::new(flags));
             let answer = Arc::clone(&flags);
-            let screen = Arc::new(Mutex::new(String::new()));
+            let screen = Arc::new(Mutex::new(CODEX_EMPTY.to_owned()));
             let shown = Arc::clone(&screen);
             let read_answer = Arc::new(Mutex::new(ReadAnswer::Screen));
             let answered = Arc::clone(&read_answer);
@@ -3251,7 +3300,164 @@ mod tests {
         let typed = bell.typed();
         assert_eq!(typed.len(), 1);
         assert_eq!(typed[0]["text"], "🦉 Codex report: private · hide inbox");
-        assert_eq!(bell.reads(), 1, "a released draft is not read again");
+        assert_eq!(
+            bell.reads(),
+            2,
+            "one draft release and one final input guard"
+        );
+    }
+
+    /// An erased draft must not wait for the long-running turn to end.
+    /// A real draft or picker keeps the same protection during that turn.
+    #[test]
+    fn a_working_panes_empty_composer_releases_its_draft_but_text_and_menus_hold() {
+        for (screen, sent) in [(CODEX_EMPTY, 1), (CODEX_DRAFT, 0), ("model picker", 0)] {
+            let bell = Bell::start(json!({}));
+            bell.know_version(Some(true));
+            *bell.screen.lock().unwrap() = screen.into();
+            let start = now();
+            bell.working_since(start - 60_000);
+            bell.send_another("urgent", true);
+            bell.runtime
+                .lock()
+                .unwrap()
+                .note_delivery_key_at("recipient", start - 40_000);
+            let mut doorbell = Doorbell::default();
+            for at in [start, start + 250, start + 1_000] {
+                bell.pass(&mut doorbell, at);
+            }
+            assert_eq!(bell.typed().len(), sent, "{screen:?}");
+            assert_eq!(
+                bell.reads(),
+                1 + sent,
+                "one draft read, then a final guard only for a send"
+            );
+            assert_eq!(
+                bell.attempts(),
+                0,
+                "the ordinary letter retains its five-minute wait"
+            );
+        }
+    }
+
+    #[test]
+    fn a_letter_checks_the_actual_composer_even_when_the_draft_record_is_clear() {
+        let bell = Bell::start(json!({}));
+        *bell.screen.lock().unwrap() = CODEX_DRAFT.into();
+        let start = now();
+        let mut doorbell = Doorbell::default();
+        bell.pass(&mut doorbell, start);
+        assert!(
+            bell.typed().is_empty(),
+            "a late state update cannot lend a draft to the bell"
+        );
+        assert_eq!(bell.attempts(), 0, "no reservation before a clear composer");
+        bell.pass(&mut doorbell, start + RETRY_FIRST_MS - 1);
+        assert_eq!(
+            bell.reads(),
+            1,
+            "the refused read uses the existing retry bound"
+        );
+        *bell.screen.lock().unwrap() = CODEX_EMPTY.into();
+        bell.pass(&mut doorbell, start + RETRY_FIRST_MS);
+        assert_eq!(bell.typed().len(), 1);
+        assert_eq!(bell.attempts(), 1);
+    }
+
+    /// A Bell whose only pending input is the operator's answer to a
+    /// mission its recipient conducts: the fixture's letter is taken in.
+    fn conductor_with_answer() -> Bell {
+        let bell = Bell::start(json!({}));
+        bell.ack(&bell.letter);
+        crate::runtime::delivery::tests::answered_mission(
+            &mut bell.runtime.lock().unwrap(),
+            "recipient",
+        );
+        bell
+    }
+
+    /// How many times the operator's answer was typed into the Conductor.
+    fn answers_typed(bell: &Bell) -> usize {
+        bell.typed()
+            .into_iter()
+            .filter(|params| params.to_string().contains("Which base?"))
+            .count()
+    }
+
+    /// docs/delivery.md, Reading the composer: the operator typed into the
+    /// Conductor and erased it, then answered the mission's decision. The
+    /// answer is held on the draft as a letter is, and released the same
+    /// way once the screen shows the composer empty; a composer that still
+    /// holds text keeps it held and is not read again while nothing moves.
+    #[test]
+    fn an_answer_held_on_a_draft_is_typed_once_the_screen_shows_the_composer_empty() {
+        for (screen, typed) in [(CODEX_EMPTY, 1), (CODEX_DRAFT, 0)] {
+            let bell = conductor_with_answer();
+            bell.know_version(Some(true));
+            *bell.screen.lock().unwrap() = screen.into();
+            let start = now();
+            bell.runtime
+                .lock()
+                .unwrap()
+                .note_delivery_key_at("recipient", start - 40_000);
+            let mut doorbell = Doorbell::default();
+            for at in [start, start + 250, start + 1_000, start + 2_000] {
+                bell.pass(&mut doorbell, at);
+            }
+            assert_eq!(answers_typed(&bell), typed, "{screen:?}");
+            assert_eq!(
+                bell.reads(),
+                1 + typed,
+                "{screen:?}: one draft read, then a final guard only for a send"
+            );
+            let answer = mission_answer(&bell).unwrap();
+            assert_eq!(answer.delivered, typed == 1, "{screen:?}");
+        }
+    }
+
+    /// The answer is typed only over a composer read empty right before
+    /// it, as a letter's bell is: text a late state update has not reported
+    /// holds the answer, which stays the operator's to wait on (not
+    /// `unconfirmed`), and is typed once the composer empties.
+    #[test]
+    fn an_answer_is_never_typed_over_text_in_the_conductors_composer() {
+        let bell = conductor_with_answer();
+        *bell.screen.lock().unwrap() = CODEX_DRAFT.into();
+        let start = now();
+        let mut doorbell = Doorbell::default();
+        bell.pass(&mut doorbell, start);
+        assert_eq!(answers_typed(&bell), 0);
+        let answer = mission_answer(&bell).unwrap();
+        assert!(!answer.delivered && !answer.unconfirmed);
+        *bell.screen.lock().unwrap() = CODEX_EMPTY.into();
+        bell.pass(&mut doorbell, start + RETRY_FIRST_MS);
+        assert_eq!(answers_typed(&bell), 1);
+        assert!(mission_answer(&bell).unwrap().delivered);
+    }
+
+    fn mission_answer(bell: &Bell) -> Option<crate::missions::Answer> {
+        crate::runtime::delivery::tests::mission_answer(&bell.runtime.lock().unwrap())
+    }
+
+    #[test]
+    fn a_status_change_or_same_timestamp_key_invalidates_an_empty_composer_read() {
+        use crate::runtime::delivery::tests::{end_turn, observed};
+        for new_key in [false, true] {
+            let bell = Bell::start(json!({}));
+            let start = now();
+            bell.working_since(start - 60_000);
+            let mut guard = bell.runtime.lock().unwrap();
+            let key = start - 40_000;
+            guard.note_delivery_key_at("recipient", key);
+            let read_for = observed(&guard, "recipient");
+            if new_key {
+                guard.note_delivery_key_at("recipient", key);
+            } else {
+                end_turn(&mut guard, "recipient", start - 35_000);
+            }
+            assert!(!guard.release_empty_composer(&read_for, start));
+            assert!(observed(&guard, "recipient").unsent_draft());
+        }
     }
 
     /// A composer that shows text keeps the hold, and the screen is read
@@ -3360,7 +3566,6 @@ mod tests {
             assert_eq!(checked.len(), 1, "{verdict}");
             assert_eq!(checked[0]["verdict"], verdict);
             assert_eq!(checked[0]["version"], "0.163.0");
-            assert_eq!(bell.reads(), 1);
             if verdict == "empty" {
                 assert!(checked[0]["reason"].is_null());
                 assert!(checked[0]["retry_after_ms"].is_null());
@@ -3373,12 +3578,17 @@ mod tests {
                 );
             }
             // The same moment is not checked again, nor is a checked version.
-            pass_logged(
+            let again = pass_logged(
                 &bell,
                 &mut doorbell,
                 start + super::super::composer::CHECK_EVERY_MS,
             );
-            assert_eq!(bell.reads(), 1, "{verdict}");
+            assert!(
+                again
+                    .iter()
+                    .all(|record| record["kind"] != "composer.version_checked"),
+                "{verdict}"
+            );
             // A draft after the check is read only when the version passed.
             *bell.screen.lock().unwrap() = CODEX_EMPTY.into();
             bell.runtime
@@ -3428,7 +3638,6 @@ mod tests {
         observe_turn_ended(&mut bell.runtime.lock().unwrap(), "recipient", start);
         let waiting = pass_logged(&bell, &mut doorbell, start + 40_000);
         assert!(checks(&waiting).is_empty(), "{waiting:?}");
-        assert_eq!(bell.reads(), 1);
         // Past the wait, the same moment is checked and passes the version.
         let passed = checks(&pass_logged(&bell, &mut doorbell, start + RETRY_FIRST_MS));
         assert_eq!(passed.len(), 1);

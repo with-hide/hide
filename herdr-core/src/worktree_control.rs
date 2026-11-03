@@ -1697,7 +1697,7 @@ fn launch_agent(
 }
 
 /// Types a started agent's first prompt once its screen takes input, the
-/// typed rung's one typing (`ladder::typed_only`). A task start has no retype
+/// typed rung's one typing (`ladder::deliver`). A task start has no retype
 /// and no notice: the operator is looking at the tab they opened. An agent
 /// that never takes input, a typing Herdr refused, and one whose answer was
 /// lost and may have landed are told alike on the task's surface, which asks
@@ -1733,10 +1733,8 @@ fn type_first_prompt(
         kind: kind.to_owned(),
         pane_id: pane_id.to_owned(),
         raw_pane_id: pane_id.to_owned(),
-        session: None,
-        node: None,
     };
-    match ladder::typed_only().deliver(engine, &target, prompt) {
+    match ladder::deliver(engine, &target, prompt) {
         Delivered::Sent(_) => Launch::Started,
         Delivered::NotYet(cause) | Delivered::Lost(cause) => failed(cause.to_owned()),
     }

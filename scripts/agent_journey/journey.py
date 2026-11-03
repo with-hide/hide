@@ -160,9 +160,8 @@ class Journey:
         # The real CLIs start on Hide's brief, which their own record has to
         # confirm; the stand-ins imitate only the agent's prompt argument.
         self.brief_start = brief_start
-        # A stand-in has no way in of its own (its Codex refuses `codex
-        # queue`), so only a real CLI's input is
-        # held to the rungs its agent declares.
+        # Only a real CLI proves the input rungs its agent declares; a
+        # stand-in imitates the prompt without proving the CLI's intake.
         self.own_rungs = brief_start
         self.table, self.row, self.repository = table, contract_row, repository
         self.record, self.reader = record, reader
