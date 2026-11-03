@@ -167,7 +167,7 @@ pub fn run(agent: &str, operation: Option<&str>, started: Instant) {
             subagents(&home, &agent, input, started)
         }
         Some("turn") => turn(&home, &agent, input, started),
-        Some("session") => session(&home, &agent, input, started),
+        Some("session") => session_start(&home, &agent, input, started),
         _ => json!({}),
     };
     answer(&output);
@@ -551,7 +551,7 @@ fn turn(home: &Path, agent: &Agent, input: Input, started: Instant) -> Value {
 /// (PRD engine-bundle-4-herdr-removal, mission c3): on the core's own engine
 /// nothing else names it, where Herdr's integration did. The counts are the
 /// script's to send; a session start says nothing of them.
-fn session(home: &Path, agent: &Agent, input: Input, started: Instant) -> Value {
+fn session_start(home: &Path, agent: &Agent, input: Input, started: Instant) -> Value {
     let Some(pane) = pane() else {
         return json!({});
     };

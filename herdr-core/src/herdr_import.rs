@@ -292,18 +292,8 @@ pub fn look(engine_dir: &Path, herdr_session: &Path) -> Result<Look, String> {
                 herdr_session::convert(&session, &record.moved, &held, String::new);
             let offer = Offer {
                 workspaces: converted.moved.len(),
-                tabs: converted
-                    .moved
-                    .iter()
-                    .map(|moved| moved.saved.tabs.len())
-                    .sum(),
-                agents: converted
-                    .moved
-                    .iter()
-                    .flat_map(|moved| &moved.saved.tabs)
-                    .flat_map(|tab| &tab.panes)
-                    .filter(|pane| pane.agent.is_some())
-                    .count(),
+                tabs: converted.tabs(),
+                agents: converted.agents(),
             };
             if offer.workspaces == 0 {
                 Look::Nothing

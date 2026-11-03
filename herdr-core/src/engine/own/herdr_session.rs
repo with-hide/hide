@@ -323,6 +323,23 @@ pub(crate) struct Converted {
     pub(crate) refused: Vec<Refused>,
 }
 
+impl Converted {
+    /// How many tabs the moved workspaces hold.
+    pub(crate) fn tabs(&self) -> usize {
+        self.moved.iter().map(|moved| moved.saved.tabs.len()).sum()
+    }
+
+    /// How many of their panes ran an agent Herdr saved.
+    pub(crate) fn agents(&self) -> usize {
+        self.moved
+            .iter()
+            .flat_map(|moved| &moved.saved.tabs)
+            .flat_map(|tab| &tab.panes)
+            .filter(|pane| pane.agent.is_some())
+            .count()
+    }
+}
+
 /// Moves every workspace of `session` into the engine's saved form, except
 /// one an earlier import moved (`moved_before`), which is Hide's from then on
 /// and is passed over (D-9), and one the engine already holds an id of
