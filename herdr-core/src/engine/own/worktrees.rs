@@ -250,7 +250,8 @@ impl OwnEngine<'_> {
         focus: bool,
     ) -> Answer<OpenedWorktree> {
         let bound = self.binding(path)?;
-        if let Some(open) = self.topology().bound_to(&bound.checkout_path) {
+        let open = self.topology().bound_to(&bound.checkout_path);
+        if let Some(open) = open {
             if focus {
                 self.topology().focus_tab(&open.tab)?;
                 self.changed();

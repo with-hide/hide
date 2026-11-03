@@ -2299,6 +2299,8 @@ mod tests {
         typed: (Mutex<Typed>, Condvar),
         /// The next input announces admission and waits for its outcome.
         input_hold: Mutex<Option<InputHold>>,
+        /// The next holder reports facts before its pane is published.
+        start_facts: Mutex<Option<PaneFacts>>,
         /// What every pane's terminal holds; `None` answers unreachable.
         processes: Mutex<Option<HolderProcesses>>,
     }
@@ -2333,6 +2335,10 @@ mod tests {
                 });
             }
             self.started.lock().unwrap().push(start.clone());
+            let facts = self.start_facts.lock().unwrap().take();
+            if let Some(facts) = facts {
+                self.say(&start.pane, &facts);
+            }
             Ok(())
         }
 
@@ -3613,10 +3619,14 @@ mod tests {
             "opened where it is"
         );
         let again = engine
-            .open_worktree(WAIT, &wire(&herdr_place), &wire(&repo), false)
+            .open_worktree(WAIT, &wire(&herdr_place), &wire(&repo), true)
             .unwrap();
         assert!(again.already_open);
         assert_eq!(again.workspace_id, opened.workspace_id);
+        assert_eq!(
+            engine.focused_workspace(WAIT).unwrap().as_deref(),
+            Some(opened.workspace_id.as_str())
+        );
 
         engine
             .remove_worktree(WAIT, &made.workspace_id)
@@ -3736,6 +3746,27 @@ mod tests {
             code: "pane_input_expired".to_owned(),
             message: "the queued input expired before writing".to_owned(),
         }
+    }
+
+    #[test]
+    fn an_agents_early_facts_and_rules_enter_with_its_pane() {
+        let holders = Arc::new(Holders::default());
+        *holders.start_facts.lock().unwrap() = Some(running(
+            "claude",
+            hide_node_link::holders::ScreenState::Working,
+        ));
+        let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+        let (_, _, pane) = engine
+            .create_workspace(WAIT, "/w", "w", true, Env::new())
+            .unwrap();
+        let agents = engine.agents(WAIT).unwrap();
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].pane_id, pane);
+        assert_eq!(agents[0].agent_status.as_deref(), Some("working"));
+        assert_eq!(
+            holders.rules_given(1),
+            [(pane, Some("claude-code".to_owned()))]
+        );
     }
 
     /// A refused launch leaves neither a listed agent nor a held name,
