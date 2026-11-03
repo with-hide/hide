@@ -55,6 +55,8 @@ const DONE: MissionStage = 9;
 export const BEATS: Partial<Record<MissionStage, number>> = { 1: 3500, 3: 3000, 4: 4000, 6: 3000, 7: 3500, 8: 3000 };
 /** Between two lines the Conductor writes. */
 const LINE_MS = 450;
+/** From the plan standing until its last line, the question, is written (five lines, the first at once), and a moment to read it. */
+export const PLAN_SEEN_MS = 4 * LINE_MS + 1200;
 /** The event a Conductor's turn ending plays: the stage it moves to. */
 const BEAT = "practice_beat";
 
