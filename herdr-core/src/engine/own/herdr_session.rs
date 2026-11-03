@@ -220,8 +220,8 @@ pub(crate) fn read(path: &Path) -> HerdrRead {
 /// the inline one before tabs; a format newer than [`NEWEST_FORMAT`] or text
 /// that is not a session is refused whole.
 pub(crate) fn parse(text: &str) -> Result<HerdrSession, String> {
-    let header: Header =
-        serde_json::from_str(text).map_err(|error| format!("it is not a Herdr session: {error}"))?;
+    let header: Header = serde_json::from_str(text)
+        .map_err(|error| format!("it is not a Herdr session: {error}"))?;
     if header.version > NEWEST_FORMAT {
         return Err(format!(
             "it is format {}, newer than the format {NEWEST_FORMAT} this build reads",
@@ -295,7 +295,9 @@ fn workspace_of(index: usize, raw: Value) -> Result<HerdrWorkspace, Refused> {
 fn first_leaf(layout: &HerdrLayout) -> Option<u32> {
     match layout {
         HerdrLayout::Pane(pane) => Some(*pane),
-        HerdrLayout::Split { first, second, .. } => first_leaf(first).or_else(|| first_leaf(second)),
+        HerdrLayout::Split { first, second, .. } => {
+            first_leaf(first).or_else(|| first_leaf(second))
+        }
     }
 }
 
@@ -383,9 +385,9 @@ pub(crate) fn convert(
             Some(id) if moved_before.contains(id) => continue,
             None => engine_id(),
             Some(id) if counted.get(id).copied().unwrap_or(0) > 1 => {
-                converted
-                    .refused
-                    .push(named(format!("another workspace of the save has its id {id}")));
+                converted.refused.push(named(format!(
+                    "another workspace of the save has its id {id}"
+                )));
                 continue;
             }
             Some(id) if !matches!(ids::workspace_of(id), Some((Numbered::Herdr, _))) => {
@@ -476,10 +478,14 @@ fn moved(workspace: &HerdrWorkspace, id: &str, label: String) -> Result<Moved, S
         if unique.len() != laid.len()
             || unique != tab.panes.keys().copied().collect::<BTreeSet<_>>()
         {
-            return Err(format!("its tab {tab_id} does not lay out exactly the panes it holds"));
+            return Err(format!(
+                "its tab {tab_id} does not lay out exactly the panes it holds"
+            ));
         }
         if laid.len() > MAX_PANES {
-            return Err(format!("its tab {tab_id} holds more than {MAX_PANES} panes"));
+            return Err(format!(
+                "its tab {tab_id} holds more than {MAX_PANES} panes"
+            ));
         }
         let pane_id = |raw: u32| -> Result<String, String> {
             let number = numbers
@@ -489,8 +495,8 @@ fn moved(workspace: &HerdrWorkspace, id: &str, label: String) -> Result<Moved, S
                 .ok_or_else(|| format!("its pane {raw} has no number"))?;
             Ok(ids::pane_id(id, number))
         };
-        let root = node(&tab.layout, &pane_id, 1)
-            .map_err(|why| format!("its tab {tab_id} {why}"))?;
+        let root =
+            node(&tab.layout, &pane_id, 1).map_err(|why| format!("its tab {tab_id} {why}"))?;
         let mut panes = Vec::new();
         for raw in &laid {
             let pane = &tab.panes[raw];
@@ -594,7 +600,11 @@ fn agent_of(pane: &HerdrPane) -> Option<SavedAgent> {
         .agent_session
         .as_ref()
         .map(|session| session.agent.clone())
-        .or_else(|| pane.agent_resume.as_ref().map(|resume| resume.agent.clone()))
+        .or_else(|| {
+            pane.agent_resume
+                .as_ref()
+                .map(|resume| resume.agent.clone())
+        })
         .or_else(|| pane.managed_agent_kind.clone())
         .filter(|kind| !kind.trim().is_empty())?;
     Some(SavedAgent {
@@ -667,11 +677,13 @@ pub(crate) fn import(
         .collect();
     let mut numbers = saved.workspace_numbers;
     let mut given = BTreeSet::new();
-    let converted = convert(session, moved_before, &held, || loop {
-        numbers += 1;
-        let id = ids::workspace_id(numbers);
-        if !held.contains(&id) && given.insert(id.clone()) {
-            break id;
+    let converted = convert(session, moved_before, &held, || {
+        loop {
+            numbers += 1;
+            let id = ids::workspace_id(numbers);
+            if !held.contains(&id) && given.insert(id.clone()) {
+                break id;
+            }
         }
     });
     saved.workspace_numbers = numbers;
@@ -724,7 +736,8 @@ mod tests {
     fn ids_of(workspace: &SavedWorkspace) -> Vec<&str> {
         std::iter::once(workspace.id.as_str())
             .chain(workspace.tabs.iter().flat_map(|tab| {
-                std::iter::once(tab.id.as_str()).chain(tab.panes.iter().map(|pane| pane.id.as_str()))
+                std::iter::once(tab.id.as_str())
+                    .chain(tab.panes.iter().map(|pane| pane.id.as_str()))
             }))
             .collect()
     }
@@ -741,7 +754,11 @@ mod tests {
         for release in ["0.9.5", "0.9.1", "0.8.2"] {
             let session = parse(&fixture(release)).unwrap();
             let converted = convert(&session, &BTreeSet::new(), &BTreeSet::new(), no_engine_id);
-            assert!(converted.refused.is_empty(), "{release}: {:?}", converted.refused);
+            assert!(
+                converted.refused.is_empty(),
+                "{release}: {:?}",
+                converted.refused
+            );
             let ids: Vec<Vec<&str>> = converted
                 .moved
                 .iter()
@@ -834,7 +851,11 @@ mod tests {
             no_engine_id,
         );
         assert_eq!(converted.moved.len(), 1);
-        assert!(converted.refused[0].reason.contains("already has a workspace w2"));
+        assert!(
+            converted.refused[0]
+                .reason
+                .contains("already has a workspace w2")
+        );
     }
 
     // The form before tabs: one tab inline, no id or public numbers, which
@@ -867,10 +888,16 @@ mod tests {
         assert_eq!(moved.tabs[0].focused, "h4:p2");
         assert!(matches!(
             moved.tabs[0].root,
-            SavedNode::Split { direction: SavedDirection::Down, .. }
+            SavedNode::Split {
+                direction: SavedDirection::Down,
+                ..
+            }
         ));
         let agent = moved.tabs[0].panes[1].agent.as_ref().unwrap();
-        assert_eq!((agent.kind.as_str(), agent.session.as_deref()), ("codex", None));
+        assert_eq!(
+            (agent.kind.as_str(), agent.session.as_deref()),
+            ("codex", None)
+        );
     }
 
     // D-3, D-9: an import adds Herdr's workspaces behind the engine's own,
@@ -908,7 +935,10 @@ mod tests {
             .map(|workspace| workspace.id.as_str())
             .collect();
         assert_eq!(ids, ["h1", "w1", "w2"]);
-        let agent = opened.workspaces[1].tabs[0].panes[0].agent.as_ref().unwrap();
+        let agent = opened.workspaces[1].tabs[0].panes[0]
+            .agent
+            .as_ref()
+            .unwrap();
         assert_eq!(agent.session.as_deref(), Some("0b6a3f1e-claude-session"));
 
         let again = import(
@@ -918,7 +948,10 @@ mod tests {
             true,
         )
         .unwrap();
-        assert!(again.workspaces.is_empty() && again.refused.is_empty(), "{again:?}");
+        assert!(
+            again.workspaces.is_empty() && again.refused.is_empty(),
+            "{again:?}"
+        );
     }
 
     // D-8: while the Herdr an import reads still runs, no conversation it has

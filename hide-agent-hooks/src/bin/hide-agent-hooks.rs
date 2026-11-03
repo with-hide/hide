@@ -295,8 +295,8 @@ fn run_basic_hook(agent: GuidanceAgent, arguments: &[String], started: Instant) 
         event,
         HookEvent::Stop | HookEvent::UserPromptSubmit | HookEvent::SessionStart
     )
-        .then(|| read_stdin_before_deadline(started + GUARD_PAYLOAD_BUDGET))
-        .flatten();
+    .then(|| read_stdin_before_deadline(started + GUARD_PAYLOAD_BUDGET))
+    .flatten();
     let (answer, intake) = std::panic::catch_unwind(|| match event {
         HookEvent::PreToolUse => basic_tool_call(dialect, agent.id(), started),
         HookEvent::Stop | HookEvent::UserPromptSubmit => {

@@ -684,14 +684,12 @@ impl EngineHandle {
         // with the engine resumes its agents with them (PRD
         // engine-bundle-4-herdr-removal D-24). This machine's panes are keyed
         // by their own ids there, as the engine's are.
-        let launches = crate::persistence::load(
-            &state_dir.join(crate::node_migration::CORE_STATE),
-        )
-        .0
-        .pane_launches
-        .into_iter()
-        .filter(|(pane, _)| !crate::address::is_device_scoped(pane))
-        .collect();
+        let launches = crate::persistence::load(&state_dir.join(crate::node_migration::CORE_STATE))
+            .0
+            .pane_launches
+            .into_iter()
+            .filter(|(pane, _)| !crate::address::is_device_scoped(pane))
+            .collect();
         let engine = own::OwnEngine::open(
             own::link_panes(Arc::clone(&node)),
             own::Place {

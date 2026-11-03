@@ -3142,12 +3142,7 @@ impl Runtime {
             }
             // Completions are kept first, so the lineage hands up the ones a
             // restored server no longer reports.
-            self.apply_pane_completions(
-                &mut agents,
-                None,
-                local,
-                live_pane_ids.as_ref(),
-            );
+            self.apply_pane_completions(&mut agents, None, local, live_pane_ids.as_ref());
             self.apply_pane_launches(&agents, local, live_pane_ids.as_ref());
             // A plan waiting for review is a question the lineage raises
             // and the read axis compares, so it is laid before both.
@@ -3165,11 +3160,7 @@ impl Runtime {
                 &self.snapshot.navigator.workspaces,
                 &self.snapshot.ui_state.expanded_agent_pane_ids,
             );
-            changed |= self.apply_pane_read_state(
-                &mut agents,
-                local,
-                live_pane_ids.as_ref(),
-            );
+            changed |= self.apply_pane_read_state(&mut agents, local, live_pane_ids.as_ref());
             changed |= self.sync_conversation_modes(&agents);
             self.lay_local_requests(&mut agents, live_pane_ids.as_ref());
             if self.snapshot.navigator.agents != agents {

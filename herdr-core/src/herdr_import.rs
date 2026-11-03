@@ -179,7 +179,10 @@ pub(crate) fn read(engine_dir: &Path) -> Result<Option<Record>, String> {
     std::io::Read::read_to_string(&mut std::io::Read::take(file, READ_CAP + 1), &mut text)
         .map_err(|error| format!("{} could not be read: {error}", path.display()))?;
     if text.len() as u64 > READ_CAP {
-        return Err(format!("{} is larger than {READ_CAP} bytes", path.display()));
+        return Err(format!(
+            "{} is larger than {READ_CAP} bytes",
+            path.display()
+        ));
     }
     let record: Record = serde_json::from_str(&text)
         .map_err(|error| format!("{} is not an import record: {error}", path.display()))?;
@@ -234,9 +237,11 @@ fn open(engine_dir: &Path) -> Result<Record, String> {
     if !record.moving.is_empty() {
         let held = crate::engine::own::saved_workspaces(engine_dir);
         let moving = std::mem::take(&mut record.moving);
-        record
-            .moved
-            .extend(moving.into_iter().filter(|workspace| held.contains(workspace)));
+        record.moved.extend(
+            moving
+                .into_iter()
+                .filter(|workspace| held.contains(workspace)),
+        );
     }
     Ok(record)
 }
@@ -307,8 +312,7 @@ pub fn look(engine_dir: &Path, herdr_session: &Path) -> Result<Look, String> {
                 stamp: stamp(herdr_session),
             };
             let held = crate::engine::own::saved_workspaces(engine_dir);
-            let converted =
-                herdr_session::convert(&session, &record.moved, &held, String::new);
+            let converted = herdr_session::convert(&session, &record.moved, &held, String::new);
             let offer = Offer {
                 workspaces: converted.moved.len(),
                 tabs: converted.tabs(),
@@ -344,7 +348,9 @@ fn stamp(path: &Path) -> Stamp {
             .modified()
             .ok()
             .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-            .map_or(0, |since| u64::try_from(since.as_nanos()).unwrap_or(u64::MAX)),
+            .map_or(0, |since| {
+                u64::try_from(since.as_nanos()).unwrap_or(u64::MAX)
+            }),
     })
 }
 
@@ -565,9 +571,9 @@ fn rename_openers(
             }
             changed
         }
-        Value::Array(items) => items
-            .iter_mut()
-            .fold(false, |changed, item| rename_openers(item, node, terminals) | changed),
+        Value::Array(items) => items.iter_mut().fold(false, |changed, item| {
+            rename_openers(item, node, terminals) | changed
+        }),
         _ => false,
     }
 }
@@ -610,7 +616,13 @@ mod tests {
         let outcome = import(&engine, &save, Asked { resume: true }).unwrap();
         assert!(matches!(
             outcome,
-            Outcome::Moved { workspaces: 2, tabs: 3, agents: 1, waiting: 0, .. }
+            Outcome::Moved {
+                workspaces: 2,
+                tabs: 3,
+                agents: 1,
+                waiting: 0,
+                ..
+            }
         ));
         assert_eq!(held(&engine), Held::Nothing);
         assert_eq!(look(&engine, &save).unwrap(), Look::Nothing);
@@ -633,7 +645,11 @@ mod tests {
             import(&engine, &save, Asked { resume: true }).unwrap(),
             Outcome::Unreadable { .. }
         ));
-        assert_eq!(std::fs::read_to_string(&save).unwrap(), "{", "the save is only read");
+        assert_eq!(
+            std::fs::read_to_string(&save).unwrap(),
+            "{",
+            "the save is only read"
+        );
     }
 
     // Principle #11: an import that ended while it wrote the engine's
@@ -649,7 +665,10 @@ mod tests {
         record.moved.clear();
         write(&engine, &record).unwrap();
         let again = import(&engine, &save, Asked { resume: true }).unwrap();
-        assert!(matches!(again, Outcome::Moved { workspaces: 0, .. }), "{again:?}");
+        assert!(
+            matches!(again, Outcome::Moved { workspaces: 0, .. }),
+            "{again:?}"
+        );
         assert_eq!(
             crate::engine::own::saved_workspaces(&engine),
             BTreeSet::from(["w1".to_owned(), "w2".to_owned()])
@@ -667,5 +686,100 @@ mod tests {
         assert!(committed(&engine));
         std::fs::write(path_in(&engine), "{").unwrap();
         assert!(committed(&engine));
+    }
+
+    // D-4, B7: a moved pane's registration is scoped to the engine with its
+    // pane as its terminal, and so is each View opener that named it; one
+    // in a workspace not moved, or of another machine, stays Herdr's, and a
+    // second pass changes nothing.
+    #[test]
+    fn a_moved_pane_s_registration_and_openers_are_given_to_the_engine_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path();
+        let engine = hide_kit::layout::engine_dir(state);
+        let socket = "/home/me/.config/herdr/herdr.sock";
+        let agent = |id: &str, machine: &str, pane: &str, terminal: &str| {
+            serde_json::json!({
+                "id": id, "name": id, "machine": machine, "host_scope": socket,
+                "native_machine": machine, "session": format!("s-{id}"),
+                "instance": terminal, "terminal_id": terminal, "pane": pane,
+                "parent": null, "project": "/work",
+                "actor": {"pane_id": pane, "name": id, "kind": "claude", "device_id": machine},
+                "ended": false,
+            })
+        };
+        let ledger_path = hide_kit::layout::delivery_ledger(state);
+        std::fs::create_dir_all(ledger_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &ledger_path,
+            serde_json::json!({
+                "version": 1, "next_id": 4, "letters": [], "watches": [],
+                "agents": [
+                    agent("agent-1", "mac", "w1:p1", "term_7"),
+                    agent("agent-2", "mac", "w2:p1", "term_8"),
+                    agent("agent-3", "mini", "w1:p1", "term_7"),
+                ],
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let views_path = state.join(crate::node_migration::WORKSPACE_VIEWS);
+        std::fs::write(
+            &views_path,
+            serde_json::json!({"displays": [
+                {"id": "d1", "opener": {"device_id": "mac", "terminal_id": "term_7"}},
+                {"id": "d2", "openers": [
+                    {"device_id": "mini", "terminal_id": "term_7"},
+                    {"device_id": "mac", "terminal_id": "term_8"},
+                ]},
+            ]})
+            .to_string(),
+        )
+        .unwrap();
+        let moved = BTreeSet::from(["w1".to_owned()]);
+
+        assert_eq!(adopt(state, "mac", socket, &engine, &moved).unwrap(), 1);
+        let ledger = crate::delivery::ledger::load(&ledger_path).unwrap();
+        let given = |id: &str| {
+            let record = ledger.agents.iter().find(|record| record.id == id).unwrap();
+            (
+                record.host_scope.clone(),
+                record.instance.clone(),
+                record.terminal_id.clone(),
+            )
+        };
+        let engine_scope = engine.to_string_lossy().into_owned();
+        assert_eq!(
+            given("agent-1"),
+            (engine_scope, "w1:p1".to_owned(), Some("w1:p1".to_owned()))
+        );
+        for (id, terminal) in [("agent-2", "term_8"), ("agent-3", "term_7")] {
+            assert_eq!(
+                given(id),
+                (
+                    socket.to_owned(),
+                    terminal.to_owned(),
+                    Some(terminal.to_owned())
+                )
+            );
+        }
+        let views: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&views_path).unwrap()).unwrap();
+        assert_eq!(views["displays"][0]["opener"]["terminal_id"], "w1:p1");
+        assert_eq!(views["displays"][1]["openers"][0]["terminal_id"], "term_7");
+        assert_eq!(views["displays"][1]["openers"][1]["terminal_id"], "term_8");
+
+        let before = (
+            std::fs::read(&ledger_path).unwrap(),
+            std::fs::read(&views_path).unwrap(),
+        );
+        assert_eq!(adopt(state, "mac", socket, &engine, &moved).unwrap(), 0);
+        assert_eq!(
+            (
+                std::fs::read(&ledger_path).unwrap(),
+                std::fs::read(&views_path).unwrap()
+            ),
+            before
+        );
     }
 }

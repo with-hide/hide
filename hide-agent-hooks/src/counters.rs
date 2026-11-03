@@ -1501,10 +1501,7 @@ mod tests {
             .map(|(pane, records)| (pane, records[0].counters.working))
             .collect();
         found.sort();
-        assert_eq!(
-            found,
-            [("h1:p2".to_owned(), 2), ("w1:p1".to_owned(), 1)]
-        );
+        assert_eq!(found, [("h1:p2".to_owned(), 2), ("w1:p1".to_owned(), 1)]);
         fs::remove_dir_all(&root).unwrap();
     }
 

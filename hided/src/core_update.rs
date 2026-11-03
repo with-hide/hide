@@ -173,7 +173,11 @@ fn update(args: &Args) -> Result<Outcome, String> {
             // engine-bundle-4-herdr-removal D-13, D-27).
             let engine_dir = hide_kit::layout::engine_dir(&args.state_dir);
             if herdr_core::herdr_import::committed(&engine_dir) {
-                log(&args.intent, "rollback.refused", json!({"reason": "herdr_moved"}));
+                log(
+                    &args.intent,
+                    "rollback.refused",
+                    json!({"reason": "herdr_moved"}),
+                );
                 return Err(format!(
                     "the update failed ({reason}); this machine's Herdr session moved into the new build, so the previous build is not started again"
                 ));

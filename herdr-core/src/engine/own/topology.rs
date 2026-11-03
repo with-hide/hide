@@ -2330,7 +2330,10 @@ mod tests {
         assert_eq!(read.reserve_tab("w5").unwrap().0, "w5:t4");
         assert_eq!(read.reserve_pane(&first.workspace).unwrap(), "h1:p2");
         assert_eq!(read.reserve_workspace().workspace, "h2");
-        read.gather(vec![("w9:p1".to_owned(), Pane::new("/c", None))], "restored");
+        read.gather(
+            vec![("w9:p1".to_owned(), Pane::new("/c", None))],
+            "restored",
+        );
         assert_eq!(read.reserve_workspace().workspace, "h3");
     }
 }

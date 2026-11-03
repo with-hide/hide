@@ -84,7 +84,10 @@ pub(crate) fn before_core(env: &Env, node: &str) -> Look {
             &moved,
         )?;
         if given > 0 {
-            log("herdr_transition.adopted", json!({ "registrations": given }));
+            log(
+                "herdr_transition.adopted",
+                json!({ "registrations": given }),
+            );
         }
         Ok::<_, String>(look)
     })();
@@ -164,4 +167,3 @@ fn move_session(place: &Place) -> Result<(), String> {
     herdr_import::commit(&place.engine_dir)?;
     herdr_import::ask(&place.engine_dir, Asked { resume: true })
 }
-

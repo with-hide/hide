@@ -485,7 +485,12 @@ fn a_grok_session_start_reports_the_session_it_starts() {
     let reports = machine.status_reports();
     let started: Vec<_> = reports
         .iter()
-        .map(|report| (report["session"].as_str(), report["session_start"].as_bool()))
+        .map(|report| {
+            (
+                report["session"].as_str(),
+                report["session_start"].as_bool(),
+            )
+        })
         .collect();
     assert_eq!(started, [(Some("grok-session"), Some(true))]);
 }
