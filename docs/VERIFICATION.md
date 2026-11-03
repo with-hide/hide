@@ -335,6 +335,15 @@ The scene preparation and overlay tests cover supported MCP formats, positive na
 
 ## Agent journey
 
+The journey's controller must outlive the local CLI protocol it measures: its 42-second command budget covers the 10-second bootstrap, 30-second spawn exchange and two-second claim.
+The observer allows the supervisor's separate 20-second cleanup bound and five seconds to publish completion; none of those reserves authorizes another command after an unsettled result.
+The controller requires matching command identities, ordinary child completion and confirmed cleanup before accepting a JSON answer, including one written before a later watchdog timeout.
+It preserves each command's bounded raw stdout and stderr (one MiB each), driver result and supervisor outcome under the ignored run directory, even when a later cell runs.
+At most 512 controller commands run; the report carries byte counts and constant phase identifiers, and the retained raw streams stay out of the uploaded journey report.
+An empty or invalid answer remains a failure; a nonzero child exit carrying the product's structured refusal remains that refusal.
+The controller boundary check distinguishes stderr-only exits, OS launch errors, supervisor deadlines and inner structured timeouts on the actual compiled provider, without a desktop or agent CLI.
+Those controlled cases prove the boundary's behavior, not the historical cause of a Windows failure whose original stderr and supervisor phase were lost.
+
 `python3 scripts/agent-journey-check.py` follows each supported agent through what an operator does with it in Hide, on an isolated candidate, and says per agent and step whether it worked.
 It is the check a release runs on the Mac before its tag ([CONTRIBUTING.md: Releases](../CONTRIBUTING.md#releases)), and the one to run after a change to how Hide starts, wakes or writes to an agent, after moving the pinned Herdr and after a substantial agent CLI update.
 
