@@ -358,7 +358,11 @@ mod tests {
                     "kind": kind, "pid": 42, "retry": false,
                 "password": "q7Z", "accessToken": "opaque-private-value",
                 "headers": {"Authorization": "Basic cXVpZXQ6c2VjcmV0", "Cookie": "session=opaque"},
-                    "nested": {"messages": cases.as_array().unwrap().iter().map(|case| case["input"].as_str().map(str::to_owned).unwrap_or_else(|| case["input"].as_array().unwrap().iter().map(|part| part.as_str().unwrap()).collect::<String>())).collect::<Vec<_>>()},
+                    "nested": {
+                        "messages": cases.as_array().unwrap().iter().map(|case| case["input"].as_str().map(str::to_owned).unwrap_or_else(|| case["input"].as_array().unwrap().iter().map(|part| part.as_str().unwrap()).collect::<String>())).collect::<Vec<_>>(),
+                        "node": ["0123456789abcdef0123456789abcdef"],
+                        "password": {"node": "0123456789abcdef0123456789abcdef"}
+                    },
                     "identity_records": field_cases.as_array().unwrap().iter().map(|case| case["input"].clone()).collect::<Vec<_>>()
                 })
             };
@@ -426,6 +430,10 @@ mod tests {
         );
         for record in &records {
             assert_eq!(record["nested"]["messages"], serde_json::json!(expected));
+            // A field's name does not grant context to array strings, and
+            // credential context removes an entire nested value first.
+            assert_eq!(record["nested"]["node"], serde_json::json!(["[redacted]"]));
+            assert_eq!(record["nested"]["password"], "[redacted]");
             assert_eq!(
                 record["identity_records"],
                 serde_json::json!(expected_fields)
