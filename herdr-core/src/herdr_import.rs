@@ -265,6 +265,81 @@ pub fn hide_used(state_dir: &Path, herdr_socket: &str) -> bool {
     )
 }
 
+/// What moves this machine's Herdr save for the screen (D-6 to D-8, B2 to
+/// B5, B11, B14 to B17): `hided` reads the save and the server on its
+/// socket and makes the move, and the core decides what is shown, asking it
+/// on a worker of its own, never under the runtime lock, as it asks the
+/// takeover (`herdr_takeover.rs`).
+pub trait Machine: Send + Sync {
+    /// What the save offers, whose Herdr runs on its socket, and what the
+    /// last move came to while the operator has not read it.
+    fn look(&self) -> Seen;
+    /// Moves the save the way `take` says. Once it answers
+    /// [`Taken::Restarting`], the core role starts again and moves it
+    /// before the engine opens (D-7).
+    fn take(&self, take: Take) -> Taken;
+    /// The last move's result was read.
+    fn dismiss(&self);
+}
+
+/// One look at this machine's Herdr save.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Seen {
+    pub look: Look,
+    pub server: Server,
+    /// The last move's result, while the operator has not read it.
+    pub outcome: Option<Outcome>,
+}
+
+/// Whose Herdr runs on the socket beside the save (D-5).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Server {
+    /// None does.
+    #[default]
+    Stopped,
+    /// Hide's own: moving the save stops it first (D-6).
+    Hide,
+    /// Someone else's, or one whose program the system will not name: its
+    /// save is only imported, and it runs on untouched (D-8).
+    Other,
+}
+
+/// How the operator asked for the save to move.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Take {
+    /// Hide's Herdr is stopped, then its session moves and its agents
+    /// resume (D-6).
+    Move,
+    /// The save is imported and nothing is stopped; agents whose Herdr runs
+    /// on are left waiting (D-8).
+    Import,
+}
+
+/// What asking for a move came to.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Taken {
+    /// The move is asked for and the core role starts again with it.
+    Restarting,
+    /// Hide's Herdr could not be stopped, so nothing moved (B4).
+    NotStopped,
+    /// Nothing moved: why, for the log.
+    Failed(String),
+}
+
+/// The last move's result, while the operator has not read it.
+pub fn outcome(engine_dir: &Path) -> Result<Option<Outcome>, String> {
+    Ok(read(engine_dir)?.and_then(|record| record.outcome))
+}
+
+/// The operator read the last move's result.
+pub fn dismiss(engine_dir: &Path) -> Result<(), String> {
+    let mut record = open(engine_dir)?;
+    if record.outcome.take().is_none() {
+        return Ok(());
+    }
+    write(engine_dir, &record)
+}
+
 /// What a machine's Herdr save offers to move.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub enum Look {
@@ -709,9 +784,9 @@ mod tests {
             })
         };
         let ledger_path = hide_kit::layout::delivery_ledger(state);
-        std::fs::create_dir_all(ledger_path.parent().unwrap()).unwrap();
-        std::fs::write(
-            &ledger_path,
+        // The core reads only a private ledger, so it is written as the core
+        // writes it.
+        let ledger = crate::delivery::ledger::from_bytes(
             serde_json::json!({
                 "version": 1, "next_id": 4, "letters": [], "watches": [],
                 "agents": [
@@ -720,9 +795,11 @@ mod tests {
                     agent("agent-3", "mini", "w1:p1", "term_7"),
                 ],
             })
-            .to_string(),
+            .to_string()
+            .as_bytes(),
         )
         .unwrap();
+        crate::delivery::ledger::save(&ledger_path, &ledger).unwrap();
         let views_path = state.join(crate::node_migration::WORKSPACE_VIEWS);
         std::fs::write(
             &views_path,

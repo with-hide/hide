@@ -1006,6 +1006,20 @@ impl Core {
         }
     }
 
+    /// What moves this machine's Herdr save into the core's own engine
+    /// (PRD engine-bundle-4-herdr-removal D-6 to D-8); `hided` installs one
+    /// only on a core that runs its own engine. Looks at the save at once.
+    pub fn set_herdr_import(&self, machine: Arc<dyn crate::herdr_import::Machine>) {
+        if check_owner_thread(self, "set_herdr_import") {
+            let mut runtime = lock_recover(&self.runtime);
+            runtime.install_herdr_import(
+                machine,
+                Arc::downgrade(&self.runtime),
+                self.notifier.clone(),
+            );
+        }
+    }
+
     /// What gives the Desk process its identity and places (PRD Desk 1차);
     /// starts Desk's worker, which looks at the agents at once.
     pub fn set_desk(&self, platform: Arc<dyn crate::desk::DeskPlatform>) {

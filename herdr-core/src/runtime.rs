@@ -45,6 +45,7 @@ mod github_poll;
 mod gone_worktrees;
 pub(crate) mod group_starts;
 mod guardrails;
+mod herdr_import;
 mod herdr_profiles;
 mod herdr_takeover;
 mod hide_notes;
@@ -1406,6 +1407,9 @@ pub struct Runtime {
     /// Moving the operator's older Herdr server onto this app's Herdr
     /// (`runtime/herdr_takeover.rs`); session-only.
     herdr_takeover: herdr_takeover::Takeover,
+    /// Moving this machine's Herdr save into the core's own engine
+    /// (`runtime/herdr_import.rs`); session-only.
+    herdr_import: herdr_import::Import,
     /// The Desk room and its one Desk process (`runtime/desk.rs`).
     desk: desk::Desk,
     /// When this Mac's kit is next re-read while Settings is on screen.
@@ -2408,6 +2412,7 @@ impl Runtime {
             local_kit_pending: None,
             first_run_apply: None,
             herdr_takeover: herdr_takeover::Takeover::default(),
+            herdr_import: herdr_import::Import::default(),
             desk: desk::Desk::default(),
             local_kit_next_status: None,
             local_kit_check_requested: false,
