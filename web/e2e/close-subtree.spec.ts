@@ -17,6 +17,7 @@ import { claudeProjects, writeFixtureTranscript, type FixtureLabel } from "./her
 import { startHided, type Daemon } from "./hided-fixture";
 import { countSent, enterWorkspace, screenshot } from "./wire";
 import { chord } from "./chords";
+import { completedCloseOrder, type CloseRecord, type CloseTiming } from "./close-order";
 
 test.describe.configure({ timeout: 180_000 });
 test.use({ actionTimeout: 15_000 });
@@ -31,17 +32,20 @@ async function listed(daemon: Daemon, pane: string): Promise<boolean> {
   return withControl(daemon, async (control) => (await control.until((rest) => ({ live: tabOfPane(rest, pane) !== undefined }), `the layouts naming ${pane}`)).live);
 }
 
-/** The existing close timings, in the daemon's bounded diagnostic files. */
-function closeTimings(daemon: Daemon): { op_id: string; pane_ids: string[]; outcome: string; requested_at_unix_ms: number; applied_ms?: number }[] {
+/** Existing diagnostics in FIFO order, in the daemon's two bounded files. */
+function closeRecords(daemon: Daemon): CloseRecord[] {
   return ["core.previous.jsonl", "core.jsonl"].flatMap((name) => {
     const file = path.join(daemon.stateDir, "Logs", name);
     if (!fs.existsSync(file)) return [];
     // The writer may be appending the last record. Only complete lines count;
     // malformed complete records fail instead of silently losing evidence.
     return fs.readFileSync(file, "utf8").split("\n").slice(0, -1)
-      .map((line) => JSON.parse(line))
-      .filter((record) => record.kind === "pane_op.timing" && record.op === "pane.close");
+      .map((line) => JSON.parse(line));
   });
+}
+
+function closeTimings(records: CloseRecord[]): CloseTiming[] {
+  return records.filter((record) => record.kind === "pane_op.timing" && record.op === "pane.close") as CloseTiming[];
 }
 
 /**
@@ -52,24 +56,18 @@ function closeTimings(daemon: Daemon): { op_id: string; pane_ids: string[]; outc
  * and operation IDs exclude old records; exact pane IDs exclude other closes.
  */
 async function watchCloseOrder(daemon: Daemon, watched: string[]): Promise<{ order: Promise<string[]>; close: () => void }> {
-  const before = new Set(closeTimings(daemon).map((record) => record.op_id));
+  const before = new Set(closeTimings(closeRecords(daemon)).map((record) => record.op_id));
   const started = Date.now();
   const control = await connectControl(daemon);
-  const current = () => closeTimings(daemon).filter((record) => !before.has(record.op_id)
+  const current = (records: CloseRecord[]) => closeTimings(records).filter((record) => !before.has(record.op_id)
     && record.requested_at_unix_ms >= started
     && record.pane_ids.length === 1 && watched.includes(record.pane_ids[0]!));
   const done = (async () => {
     await control.until((rest) => watched.every((pane) => tabOfPane(rest, pane) === undefined) ? true : undefined, "every watched pane closed", 60_000);
     // The diagnostic writer is independent of snapshot publication.
-    await expect.poll(() => current().length, { timeout: 10_000, message: "every watched close has a timing record" }).toBe(watched.length);
-    const timings = current().sort((left, right) => left.requested_at_unix_ms - right.requested_at_unix_ms);
-    for (const [index, timing] of timings.entries()) {
-      expect(timing.outcome).toBe("completed");
-      expect(timing.applied_ms).toBeDefined();
-      const next = timings[index + 1];
-      if (next) expect(timing.requested_at_unix_ms + timing.applied_ms!, `${timing.pane_ids[0]} applied before ${next.pane_ids[0]} requested`).toBeLessThanOrEqual(next.requested_at_unix_ms);
-    }
-    return timings.map((timing) => timing.pane_ids[0]!);
+    await expect.poll(() => current(closeRecords(daemon)).length, { timeout: 10_000, message: "every watched close has a timing record" }).toBe(watched.length);
+    const records = closeRecords(daemon);
+    return completedCloseOrder(records, current(records), watched);
   })();
   // A failure before the caller awaits `done` still reaches it; this only
   // keeps the runner from reporting the same rejection as unhandled.
