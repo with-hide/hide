@@ -77,12 +77,9 @@ const POWERSHELL: &str = "powershell.exe -NoProfile -NonInteractive -Command";
 /// and `$o` the link's unbuffered input and output. It reads a byte at a
 /// time, so it takes nothing past the script.
 ///
-/// Windows OpenSSH hands the session overlapped pipes, which .NET's console
-/// streams read and write as if they were not: a read that has to wait for
-/// the node's next step then never returns. So `$i` and `$o` are overlapped
-/// streams on the same handles, and the console streams themselves where a
-/// handle is an ordinary pipe (a local start, `wsl.exe`, a test), on which
-/// an overlapped stream refuses to open.
+/// They are .NET's console streams; the script reads and writes through
+/// overlapped streams instead where the link's pipes are overlapped, as
+/// Windows OpenSSH's are (`bootstrap.ps1`).
 ///
 /// It travels as plain words inside every shell's quotes at once, so it holds
 /// no character any of them would read there (checked by a test): no quote,
@@ -90,10 +87,7 @@ const POWERSHELL: &str = "powershell.exe -NoProfile -NonInteractive -Command";
 /// escape) and no backtick. It is readable PowerShell rather than an encoded
 /// one, which Windows' malware scan refuses beside the `sh` words.
 const POWERSHELL_WRAPPER: &str = "
-$c=[Console]::OpenStandardInput();$d=[Console]::OpenStandardOutput();
-$h=$c.GetType().GetField((Write-Output _handle),[Reflection.BindingFlags]36);
-try{$i=New-Object IO.FileStream($h.GetValue($c),[IO.FileAccess]::Read,1,$true)}catch{$i=$c};
-try{$o=New-Object IO.FileStream($h.GetValue($d),[IO.FileAccess]::Write,1,$true)}catch{$o=$d};
+$i=[Console]::OpenStandardInput();$o=[Console]::OpenStandardOutput();
 $b=[Text.Encoding]::ASCII.GetBytes(((Write-Output HIDE1 script powershell) -join [char]9)+[char]10);
 $o.Write($b,0,$b.Length);$o.Flush();
 $n=0;

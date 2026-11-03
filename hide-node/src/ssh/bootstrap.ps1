@@ -1,10 +1,10 @@
 # A Windows device's start script (hide-node/src/ssh/bootstrap.rs): the same
 # steps, answers and lock step as the POSIX script there, in the Windows
 # PowerShell 5.1 every Windows 10 and 11 carries. The wrapper the ssh command
-# starts has read this script's own line and nothing past it: $i is its
-# standard input, unbuffered, and $o its standard output, both the link.
+# starts has read this script and nothing past it: $i is its standard input,
+# unbuffered, and $o its standard output, both the link.
 #
-# Every answer is written as bytes to $o, never through PowerShell's own
+# Every answer is written as bytes to the link, never through PowerShell's own
 # output, which would re-encode it and add its own lines; nothing a statement
 # returns may reach the pipeline, so every call that returns a value it does
 # not need is cast to [void].
@@ -12,8 +12,42 @@
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$stdin = $i
-$stdout = $o
+# Windows OpenSSH hands the session overlapped pipes, and .NET's console
+# streams read and write any handle as if it were not: on an overlapped pipe
+# a read that has to wait for the node's next step never returns. So the link
+# is read and written through overlapped streams exactly when its handles are
+# overlapped, which only Windows itself can say (NtQueryInformationFile's
+# FileModeInformation); an ordinary pipe (a local start, a test) keeps the
+# console streams, since an overlapped stream on it waits for completions
+# that never come.
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+public static class HideLinkHandle {
+    [StructLayout(LayoutKind.Sequential)]
+    struct IoStatusBlock { public IntPtr Status; public IntPtr Information; }
+    [DllImport("ntdll.dll")]
+    static extern int NtQueryInformationFile(SafeFileHandle handle, out IoStatusBlock status, out uint mode, int length, int informationClass);
+    // FileModeInformation (16): a handle opened for synchronous I/O carries
+    // FILE_SYNCHRONOUS_IO_ALERT or FILE_SYNCHRONOUS_IO_NONALERT.
+    public static bool Overlapped(SafeFileHandle handle) {
+        IoStatusBlock status;
+        uint mode;
+        int result = NtQueryInformationFile(handle, out status, out mode, 4, 16);
+        if (result != 0) { throw new InvalidOperationException("the link's handle mode could not be read: " + result.ToString("x8")); }
+        return (mode & 0x30) == 0;
+    }
+}
+'@
+
+function Link-Stream($console, [IO.FileAccess]$access) {
+    $handle = $console.GetType().GetField('_handle', [Reflection.BindingFlags]'NonPublic, Instance').GetValue($console)
+    if ([HideLinkHandle]::Overlapped($handle)) { New-Object IO.FileStream($handle, $access, 1, $true) } else { $console }
+}
+
+$stdin = Link-Stream $i Read
+$stdout = Link-Stream $o Write
 $utf8 = New-Object Text.UTF8Encoding $false
 $sha = [Security.Cryptography.SHA256]::Create()
 
