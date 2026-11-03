@@ -411,6 +411,8 @@ test("discovery: a Finder-style PATH still lets a new daemon run installed tools
   fs.writeFileSync(gh, "#!/bin/sh\nprintf 'fixture-gh\\n'\n", { mode: 0o755 });
   // The unpackaged host still looks beside its app folder for a worktree build; there is none.
   const before = [...["debug", "release"].map((profile) => path.join(run.root, "target", profile, "hide")), ...bare.map((dir) => path.join(dir, "hide"))];
+  // The shared linux-home contract masks the fixture's home/.local prefix in logs.
+  const loggedInstalled = `${run.root}~/bin/hide`;
   const resolved = () => hostLog(env).filter((line) => line.event === "cli.resolved");
 
   ({ app } = await launch(env, { appDir }));
@@ -422,13 +424,13 @@ test("discovery: a Finder-style PATH still lets a new daemon run installed tools
   const daemonPath = /(?:^|\s)PATH=(.*?)(?=\s[A-Za-z_][A-Za-z_0-9]*=|$)/s.exec(processInfo.stdout)?.[1];
   expect(daemonPath).toBeTruthy();
   expect(spawnSync("gh", ["--version"], { env: { PATH: daemonPath }, encoding: "utf8" }).stdout).toBe("fixture-gh\n");
-  expect(resolved().at(-1)).toMatchObject({ source: "well-known", path: installed, tried: [...before, installed].join(":") });
+  expect(resolved().at(-1)).toMatchObject({ source: "well-known", path: loggedInstalled, tried: [...before, loggedInstalled].join(":") });
   const remembered = path.join(env.HIDE_DESKTOP_USER_DATA_DIR!, "cli-path.json");
   expect(JSON.parse(fs.readFileSync(remembered, "utf8"))).toEqual({ schema: 1, path: installed });
   await app.close();
 
   app = await relaunch(env, { appDir });
-  expect(resolved().at(-1)).toMatchObject({ source: "remembered", path: installed, tried: [...before, installed].join(":") });
+  expect(resolved().at(-1)).toMatchObject({ source: "remembered", path: loggedInstalled, tried: [...before, loggedInstalled].join(":") });
 });
 
 // @platform: A daemon ending and the next one starting, seen through the system's processes and local stream.
@@ -462,8 +464,8 @@ test("uncaught: an exception and a rejection nothing in the host caught go to it
   const uncaught = () => hostLog(run.env).filter((line) => line.event === "host.uncaught");
   await expect.poll(() => uncaught().map((line) => line.kind).sort()).toEqual(["uncaughtException", "unhandledRejection"]);
   const exception = uncaught().find((line) => line.kind === "uncaughtException")!;
-  expect(exception.message).toBe("planted exception token=[redacted] at https://[address]");
-  expect(String(exception.stack)).toContain("planted exception token=[redacted]");
+  expect(exception.message).toBe("planted exception [redacted] at https://[address]");
+  expect(String(exception.stack)).toContain("planted exception [redacted]");
   expect(uncaught().find((line) => line.kind === "unhandledRejection")?.message).toBe("planted rejection");
   const logged = JSON.stringify(hostLog(run.env));
   expect(logged).not.toContain(secret);
