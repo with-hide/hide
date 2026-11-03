@@ -454,7 +454,10 @@ fn a_directory_answers_its_real_path_and_nothing_else_answers_one() {
         })
         .unwrap()
     };
-    assert_eq!(directory(root), serde_json::json!(real.to_string_lossy()));
+    assert_eq!(
+        directory(root),
+        serde_json::json!(hide_platform::path::to_wire_lossy(&real))
+    );
     assert_eq!(directory(&root.join("file")), serde_json::Value::Null);
     assert_eq!(directory(&root.join("gone")), serde_json::Value::Null);
 }

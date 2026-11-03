@@ -20,17 +20,16 @@ use crate::worktrees::{self, WalkBudget};
 pub fn real_paths(paths: &[String]) -> Vec<PathState> {
     paths
         .iter()
-        .map(Path::new)
-        .map(|path| match path.is_absolute() {
-            false => Err(std::io::Error::new(
+        .map(|path| match crate::root::native_absolute(path) {
+            None => Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "the path is not absolute",
             )),
-            true => hide_platform::fs::identity::canonical(path),
+            Some(path) => hide_platform::fs::identity::canonical(&path),
         })
         .map(|resolved| match resolved {
             Ok(real) => PathState::Real {
-                path: real.to_string_lossy().into_owned(),
+                path: crate::root::wire(&real),
             },
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => PathState::Missing,
             Err(error) => PathState::Unreadable {
@@ -43,9 +42,9 @@ pub fn real_paths(paths: &[String]) -> Vec<PathState> {
 /// The repository that holds `path`, read from its `.git` files.
 pub fn repository(path: &Path) -> Option<RepositoryDirs> {
     hide_project::git::discover(path).map(|repository| RepositoryDirs {
-        root: repository.root.to_string_lossy().into_owned(),
-        git_dir: repository.git_dir.to_string_lossy().into_owned(),
-        common_dir: repository.common_dir.to_string_lossy().into_owned(),
+        root: crate::root::wire(&repository.root),
+        git_dir: crate::root::wire(&repository.git_dir),
+        common_dir: crate::root::wire(&repository.common_dir),
     })
 }
 
@@ -65,7 +64,10 @@ pub fn judge_folders(
     let verdicts = folders
         .iter()
         .map(|folder| {
-            let path = Path::new(&folder.path);
+            // A path that is not absolute is the judge's to refuse.
+            let path = crate::root::native_absolute(&folder.path)
+                .unwrap_or_else(|| PathBuf::from(&folder.path));
+            let path = path.as_path();
             match verify_folder(root, path, folder.layer, exclude_dir.as_deref()) {
                 Err(refusal) => FolderVerdict::Refused { refusal },
                 Ok(()) => match worktrees::contains_repository(path, &mut budget) {
@@ -93,7 +95,7 @@ pub fn clean_removal(root: &Path, checkout: &Path, common: &Path) -> CleanRemova
     let outcome = worktrees::remove_worktree(root, checkout, false).into();
     let trashed = worktrees::trash_entries(common)
         .difference(&before)
-        .map(|entry| entry.to_string_lossy().into_owned())
+        .map(|entry| crate::root::wire(&entry))
         .collect();
     CleanRemoval { outcome, trashed }
 }
@@ -101,7 +103,10 @@ pub fn clean_removal(root: &Path, checkout: &Path, common: &Path) -> CleanRemova
 /// Deletes what waits in the trash under `common` and waits up to `wait` for
 /// `ours`; answers how many of them remain.
 pub fn drain_trash(common: &Path, ours: &[String], wait: Duration) -> usize {
-    let ours: BTreeSet<PathBuf> = ours.iter().map(PathBuf::from).collect();
+    let ours: BTreeSet<PathBuf> = ours
+        .iter()
+        .map(|entry| crate::root::native_absolute(entry).unwrap_or_else(|| PathBuf::from(entry)))
+        .collect();
     worktrees::drain_trash(common, &ours, wait)
 }
 

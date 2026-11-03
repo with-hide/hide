@@ -181,7 +181,9 @@ pub fn clone_reporting(
         &mut |progress| send(CloneReport::Progress { progress }),
     );
     match result {
-        Ok(path) => CloneAnswer::Cloned { path },
+        Ok(path) => CloneAnswer::Cloned {
+            path: PathBuf::from(crate::root::wire(&path)),
+        },
         Err(failure) => CloneAnswer::Failed { failure },
     }
 }

@@ -232,6 +232,58 @@ fn a_devices_workspaces_are_grouped_into_its_repositories_by_its_helper_facts() 
     assert_ne!(studio.workspaces[0].id, main.id);
 }
 
+/// A Windows device's helper answers its folders on the wire (`C:/...`), so
+/// they group into its repositories here as a Unix device's do, named by
+/// their last names, whatever this machine's own system is.
+#[test]
+fn a_windows_devices_folders_group_by_the_wire_spelling_its_helper_answers() {
+    let main = "C:/Users/me/repo";
+    let linked = "D:/work/repo-feature";
+    let facts = |checkout_root: &str, branch: &str, linked_worktree: bool| {
+        Fact::Known(hide_project::ProjectFacts {
+            root: PathBuf::from(main),
+            checkout_root: PathBuf::from(checkout_root),
+            kind: hide_project::ProjectKind::Git,
+            branch: Some(branch.to_owned()),
+            linked_worktree,
+        })
+    };
+    let raw = session(vec![
+        herdr_workspace("pc", "w1", main, &[("t1", main)]),
+        herdr_workspace("pc", "w2", linked, &[("t2", linked)]),
+    ]);
+    let answered = DeviceFacts {
+        facts: [
+            (main.to_owned(), facts(main, "main", false)),
+            (linked.to_owned(), facts(linked, "feature", true)),
+        ]
+        .into_iter()
+        .collect(),
+        ..DeviceFacts::default()
+    };
+    let grouped = device_catalog::group("pc", &raw, &answered, None);
+
+    assert_eq!(
+        layout(&grouped),
+        vec![(
+            main.to_owned(),
+            vec![
+                (main.to_owned(), vec!["t1".to_owned()]),
+                (linked.to_owned(), vec!["t2".to_owned()]),
+            ]
+        )]
+    );
+    let project = &grouped.workspaces[0];
+    assert_eq!(project.label, "repo");
+    assert_eq!(
+        project.id,
+        device_catalog::project_id("pc", Path::new(main))
+    );
+    assert_eq!(project.default_branch.as_deref(), Some("main"));
+    assert!(project.checkouts[1].is_worktree);
+    assert!(!project.checkouts[0].unconfirmed);
+}
+
 /// `answered` with each of `refused` answered as a folder the helper
 /// cannot read.
 fn with_refused(mut facts: DeviceFacts, refused: &[&str]) -> DeviceFacts {

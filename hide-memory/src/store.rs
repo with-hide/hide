@@ -885,6 +885,99 @@ pub struct Folded {
 
 /// Folds the Project `leftover`, stored under the id `into` that `moving`
 /// would take, with `moving`'s rows and choices winning (`convert_device_merging`).
+/// Every table that keys rows by Project, read from the schema so a table
+/// added later cannot keep an old id.
+fn project_tables(transaction: &Transaction<'_>) -> Result<Vec<String>, MemoryError> {
+    let mut statement = transaction.prepare(
+        "SELECT m.name FROM sqlite_master m WHERE m.type='table' AND m.name!='projects'
+         AND EXISTS(SELECT 1 FROM pragma_table_info(m.name) c WHERE c.name='project_id')",
+    )?;
+    Ok(statement
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?)
+}
+
+/// Moves each Project whose id an earlier build derived from its root's own
+/// text (`hide_project::project_id_as_written`) where the root's wire
+/// spelling now derives another (`hide_project::project_id`): a Windows
+/// root such as `\\?\C:\repo`, which is `C:/repo` on the wire. Every row
+/// naming the old id names the new one, and a copy of the Project already
+/// stored under the new id, with a root of the same wire spelling, is
+/// folded in as [`MemoryStore::convert_device_merging`] folds one. A Project
+/// whose id is neither, such as a device's scoped id, is left as it is. On
+/// macOS and Linux a root's text is its wire spelling, so nothing moves.
+/// One transaction, so the file is either converted or untouched; a second
+/// run finds nothing left to move.
+fn rekey_root_spellings(connection: &Connection) -> Result<Vec<Conversion>, MemoryError> {
+    let transaction = connection.unchecked_transaction()?;
+    transaction.execute_batch("PRAGMA defer_foreign_keys=ON;")?;
+    let projects = {
+        let mut statement = transaction.prepare("SELECT id, root, device_id FROM projects")?;
+        statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    let moving = projects
+        .into_iter()
+        .filter_map(|(old, root, device)| {
+            let new = hide_project::project_id(&device, Path::new(&root));
+            (new != old && hide_project::project_id_as_written(&device, &root) == old)
+                .then_some((old, new, root, device))
+        })
+        .collect::<Vec<_>>();
+    if moving.is_empty() {
+        return Ok(Vec::new());
+    }
+    let tables = project_tables(&transaction)?;
+    let mut moved = Vec::with_capacity(moving.len());
+    for (old, new, root, device) in moving {
+        let wire_root = hide_platform::path::to_wire_lossy(Path::new(&root));
+        let held: Option<String> = transaction
+            .query_row("SELECT root FROM projects WHERE id=?1", [&new], |row| {
+                row.get(0)
+            })
+            .optional()?;
+        let merged = match held {
+            None => {
+                for table in &tables {
+                    transaction.execute(
+                        &format!("UPDATE \"{table}\" SET project_id=?1 WHERE project_id=?2"),
+                        params![new, old],
+                    )?;
+                }
+                transaction.execute(
+                    "UPDATE projects SET id=?1, root=?2 WHERE id=?3",
+                    params![new, wire_root, old],
+                )?;
+                None
+            }
+            Some(held_root)
+                if hide_platform::path::to_wire_lossy(Path::new(&held_root)) == wire_root =>
+            {
+                Some(fold_project(&transaction, &tables, &old, &new, &device)?)
+            }
+            Some(_) => {
+                return Err(MemoryError::Integrity(format!(
+                    "root_spelling_conflict:{new}"
+                )));
+            }
+        };
+        moved.push(Conversion {
+            from: old,
+            to: new,
+            merged,
+        });
+    }
+    transaction.commit()?;
+    Ok(moved)
+}
+
 fn fold_project(
     transaction: &Transaction<'_>,
     tables: &[String],
@@ -1164,6 +1257,7 @@ impl MemoryStore {
             "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA synchronous=NORMAL; PRAGMA secure_delete=ON;",
         )?;
         migrate(&connection, path, diagnostic)?;
+        let rekeyed = rekey_root_spellings(&connection)?;
         enforce_database_permissions(path)?;
         let store = Self {
             connection,
@@ -1174,6 +1268,12 @@ impl MemoryStore {
         store.check_integrity()?;
         check_projection_integrity(&store.connection)?;
         certify_projection(&store.connection)?;
+        for moved in rekeyed {
+            diagnostic(serde_json::json!({
+                "component": "memory", "kind": "memory.project_rekeyed",
+                "from": moved.from, "to": moved.to, "merged": moved.merged.is_some(),
+            }));
+        }
         Ok(store)
     }
 
@@ -1367,17 +1467,7 @@ impl MemoryStore {
         if projects.is_empty() {
             return Ok(Vec::new());
         }
-        // Every table that keys rows by Project, read from the schema so a
-        // table added later cannot keep an old id.
-        let tables = {
-            let mut statement = transaction.prepare(
-                "SELECT m.name FROM sqlite_master m WHERE m.type='table' AND m.name!='projects'
-                 AND EXISTS(SELECT 1 FROM pragma_table_info(m.name) c WHERE c.name='project_id')",
-            )?;
-            statement
-                .query_map([], |row| row.get::<_, String>(0))?
-                .collect::<Result<Vec<_>, _>>()?
-        };
+        let tables = project_tables(&transaction)?;
         let mut moved = Vec::with_capacity(projects.len());
         for (old, root) in projects {
             let new = hide_project::project_id(to, Path::new(&root));
@@ -11981,6 +12071,53 @@ PRAGMA user_version=14;"#,
             .unwrap()
             .collect::<Result<_, _>>()
             .unwrap()
+    }
+
+    /// A Windows Project an earlier build keyed by its root's verbatim
+    /// text (`\\?\C:\...`) is found under the id its wire spelling
+    /// derives once the store opens again, cards and receipt key with it; a
+    /// Project under any other id stays. On macOS and Linux both ids are one,
+    /// so the same assertions hold with nothing moved.
+    #[test]
+    fn a_project_keyed_by_its_root_as_written_is_found_under_its_wire_id() {
+        let (temp, mut store, other) = store();
+        let root = r"\\?\C:\Users\me\repo";
+        let written = hide_project::project_id_as_written("pc", root);
+        store
+            .ensure_project(&written, Path::new(root), "pc")
+            .unwrap();
+        store.set_enabled(&written, true, true).unwrap();
+        store
+            .apply_candidates(
+                &batch(&written, "b-written", "h-written"),
+                &[candidate("Build from C:\\hide-dev", CandidateRelation::New)],
+            )
+            .unwrap();
+        let key: Vec<u8> = store.receipt_auth_key(&written).unwrap();
+        let path = store.path().to_path_buf();
+        drop(store);
+
+        let wire = hide_project::project_id("pc", Path::new(root));
+        let store = MemoryStore::open(&path).unwrap();
+        assert_eq!(card_numbers(&store, &wire), vec![1]);
+        assert_eq!(store.receipt_auth_key(&wire).unwrap(), key);
+        assert_eq!(card_numbers(&store, &other).len(), 0);
+        assert!(store.project_state(&other).is_ok());
+        if cfg!(windows) {
+            assert_ne!(wire, written);
+            assert!(card_numbers(&store, &written).is_empty());
+            assert_eq!(
+                store.roots_of_device("pc").unwrap(),
+                vec!["C:/Users/me/repo".to_owned()]
+            );
+        } else {
+            assert_eq!(wire, written);
+        }
+        drop(store);
+        // A second open finds nothing left to move.
+        let store = MemoryStore::open(&path).unwrap();
+        assert_eq!(card_numbers(&store, &wire), vec![1]);
+        drop(temp);
     }
 
     #[test]

@@ -34,7 +34,7 @@ pub fn watch(
     let mut unwatched = Vec::new();
     for dir in common_dirs {
         if let Err(error) = watcher.watch(dir) {
-            unwatched.push((dir.to_string_lossy().into_owned(), error.to_string()));
+            unwatched.push((crate::root::wire(dir), error.to_string()));
         }
     }
     if !report(GitWatchReport::Watching { unwatched }) {
@@ -52,7 +52,7 @@ pub fn watch(
                 Change::Path { path, .. } => {
                     for dir in common_dirs {
                         if path.strip_prefix(dir).is_ok_and(git_fact_path) {
-                            changed.insert(dir.to_string_lossy().into_owned());
+                            changed.insert(crate::root::wire(dir));
                         }
                     }
                 }
@@ -108,7 +108,7 @@ mod tests {
         assert_eq!(
             seen.last(),
             Some(&GitWatchReport::Changed {
-                common_dirs: vec![common.to_string_lossy().into_owned()]
+                common_dirs: vec![crate::root::wire(&common)]
             })
         );
     }

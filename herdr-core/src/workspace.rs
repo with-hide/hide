@@ -1220,9 +1220,12 @@ fn branch_purpose(note: Option<&BranchNote>) -> Option<CheckoutPurposeSnapshot> 
 /// core only compares what a node already spelled.
 pub fn comparison_by_names(path: &Path) -> String {
     let wire = path::to_wire_lossy(path);
-    match wire.trim_end_matches('/') {
-        "" if wire.starts_with('/') => "/".to_owned(),
-        trimmed => trimmed.to_owned(),
+    let trimmed = wire.trim_end_matches('/');
+    // A root keeps its `/`: neither `` nor a drive's `C:` is absolute.
+    if path::is_wire_absolute(&wire) && !path::is_wire_absolute(trimmed) {
+        format!("{trimmed}/")
+    } else {
+        trimmed.to_owned()
     }
 }
 
@@ -1238,6 +1241,23 @@ mod tests {
     use crate::model::{ProjectWorktreesSnapshot, WorktreeSnapshot};
     use std::fs;
     use std::process::Command;
+
+    /// A path compares by its names, a trailing `/` dropped, except where
+    /// it is a root: `/`, and a Windows device's drive `C:/`.
+    #[test]
+    fn a_path_compares_by_its_names_and_a_root_keeps_its_slash() {
+        for (path, expected) in [
+            ("/repo/", "/repo"),
+            ("/", "/"),
+            ("C:/Users/me/repo/", "C:/Users/me/repo"),
+            ("C:/", "C:/"),
+            ("D:", "D:"),
+            ("//server/share/", "//server/share"),
+            ("repo/", "repo"),
+        ] {
+            assert_eq!(comparison_by_names(Path::new(path)), expected, "{path}");
+        }
+    }
 
     #[test]
     fn a_project_its_node_could_not_read_reaches_the_cores_log_once_per_change() {
