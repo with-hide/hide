@@ -207,9 +207,9 @@ fn the_powershell_wrapper_holds_nothing_a_login_shell_reads_inside_quotes() {
     let wrapper = powershell_wrapper();
     let read = ['\'', '"', '&', '|', '<', '>', '^', '%', '!', '\\', '`', '\n'];
     assert!(
-        !wrapper.contains(read),
+        !wrapper.contains(&read[..]),
         "{:?}",
-        wrapper.matches(read).collect::<Vec<_>>()
+        wrapper.matches(&read[..]).collect::<Vec<_>>()
     );
 }
 
