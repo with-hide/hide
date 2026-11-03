@@ -25,9 +25,15 @@ const tabs = Number(process.env.MEASURE_RESTORE_TABS);
 const panes = Number(process.env.MEASURE_RESTORE_PANES);
 const boundMs = Number(process.env.MEASURE_RESTORE_SECONDS ?? 180) * 1000;
 const openFixture = fs.readFileSync(new URL("./open-fixture.js", import.meta.url), "utf8");
-if (!stateDir || !cdpPort || !readyDir || !Number.isFinite(t0) || !(tabs > 0) || !(panes > 0)) {
-  throw new Error("MEASURE_HIDE_STATE, MEASURE_CDP_PORT, MEASURE_READY_DIR, MEASURE_RESTORE_T0, MEASURE_RESTORE_TABS and MEASURE_RESTORE_PANES are required");
+const runDir = process.env.MEASURE_RUN_DIR;
+if (!stateDir || !cdpPort || !readyDir || !runDir || !Number.isFinite(t0) || !(tabs > 0) || !(panes > 0)) {
+  throw new Error("MEASURE_HIDE_STATE, MEASURE_CDP_PORT, MEASURE_READY_DIR, MEASURE_RUN_DIR, MEASURE_RESTORE_T0, MEASURE_RESTORE_TABS and MEASURE_RESTORE_PANES are required");
 }
+const checkout = JSON.parse(fs.readFileSync(path.join(runDir, "fixture.json"), "utf8")).checkout;
+if (typeof checkout !== "string" || !checkout) throw new Error("fixture.json must name its checkout");
+// A navigation replaces window. Set the identity in the same evaluation as
+// selection, on every poll, so a restarted document cannot use the fallback.
+const openRestoredFixture = `window.__measureCheckoutId = ${JSON.stringify(checkout)};\n${openFixture}`;
 const deadline = t0 + boundMs;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const since = () => Date.now() - t0;
@@ -75,7 +81,7 @@ async function frontBack(page, state) {
   await page.send("Page.navigate", { url: `http://127.0.0.1:${state.port}/?probe=1#token=${state.token}` });
   while (Date.now() < deadline) {
     try {
-      if (await page.evaluate(openFixture)) {
+      if (await page.evaluate(openRestoredFixture)) {
         frontLast = await page.evaluate(`(() => {
           const views = [...document.querySelectorAll('[data-canvas] [data-pane-view]')].map((el) => el.dataset.paneView);
           return { url: location.href.split('#')[0], tab: document.querySelector('[data-canvas]')?.dataset.canvas ?? null, panes: views.map((id) => ({ id, chars: (window.__hideProbe?.paneText(id) ?? '').trim().length })) };
