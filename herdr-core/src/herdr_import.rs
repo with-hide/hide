@@ -246,6 +246,13 @@ fn open(engine_dir: &Path) -> Result<Record, String> {
     Ok(record)
 }
 
+/// Whether the pane, tab or workspace `id` of this machine belongs to the
+/// Herdr save and is not moved yet: a `hide` called there is refused, and
+/// what it reports changes nothing on screen (D-7, B10).
+pub fn holds(engine_dir: &Path, id: &str) -> bool {
+    !held(engine_dir).releases(id)
+}
+
 /// The workspaces moved into `engine_dir`'s engine.
 pub fn moved(engine_dir: &Path) -> Result<BTreeSet<String>, String> {
     Ok(open(engine_dir)?.moved)
@@ -748,6 +755,21 @@ mod tests {
             crate::engine::own::saved_workspaces(&engine),
             BTreeSet::from(["w1".to_owned(), "w2".to_owned()])
         );
+    }
+
+    // B10: a pane of the save that is not moved yet is held, one the engine
+    // made is not, and once moved none of the save's is.
+    #[test]
+    fn a_pane_of_the_save_is_held_until_its_workspace_moves() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = dir.path().join("engine");
+        let save = fixture(dir.path());
+        assert!(!holds(&engine, "w1:p1"));
+        look(&engine, &save).unwrap();
+        assert!(holds(&engine, "w1:p1"));
+        assert!(!holds(&engine, "h1:p1"));
+        import(&engine, &save, Asked { resume: true }).unwrap();
+        assert!(!holds(&engine, "w1:p1"));
     }
 
     // D-27: a move is committed once, and a record that cannot be read

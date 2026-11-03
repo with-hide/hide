@@ -798,6 +798,24 @@ fn attest_bootstrap(
             None => Err("pane_unavailable"),
         }
     };
+    // A pane of the Herdr save that is not moved yet is no pane of this
+    // core's, and its caller is not handed to its checkout either: it runs
+    // in Herdr, beside the engine (PRD engine-bundle-4-herdr-removal D-7,
+    // B10).
+    if pane.is_err()
+        && core.pane_holders().is_some()
+        && herdr_core::herdr_import::holds(
+            &hide_kit::layout::engine_dir(core.state_dir()),
+            &request.pane_id,
+        )
+    {
+        herdr_core::diagnostic!(json!({
+            "component": "pane_auth",
+            "kind": "pane_auth.pane_not_moved",
+            "pane_id": request.pane_id,
+        }));
+        return Err("pane_not_moved");
+    }
     match pane {
         Ok(attestation) => Ok((attestation, None)),
         Err(pane_reason) => attest_checkout(peer, &request.nonce, core)

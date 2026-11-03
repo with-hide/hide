@@ -15,10 +15,14 @@ use serde::{Deserialize, Serialize};
 /// Recovery advice shared by local and device pane refusals.
 pub const CHECKOUT_NEXT_ACTION: &str = "Run the command from a shell inside a registered project checkout, or reconnect Hide, and retry";
 pub const PANE_NEXT_ACTION: &str = "Reconnect the pane and retry";
+/// A Herdr pane whose workspace is not moved into Hide's own engine yet
+/// (PRD engine-bundle-4-herdr-removal B10).
+pub const PANE_NOT_MOVED_NEXT_ACTION: &str = "This pane is not moved into Hide's new engine yet: move Herdr from Hide's window, then run the command in the moved pane";
 
 pub fn refusal_next_action(reason: &str) -> &'static str {
     match reason {
         "checkout_not_registered" | "caller_unavailable" => CHECKOUT_NEXT_ACTION,
+        "pane_not_moved" => PANE_NOT_MOVED_NEXT_ACTION,
         _ => PANE_NEXT_ACTION,
     }
 }
