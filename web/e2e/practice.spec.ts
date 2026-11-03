@@ -70,8 +70,13 @@ async function pasteByHand(practice: Page): Promise<void> {
   await expect.poll(() => practiceState(practice), { message: "the pasted request did not reach the signup agent" }).toMatch(/^delegate:end:/);
 }
 
-/** Waits out a step ⏎ performed while its result is shown, so the next Enter is the next step's and not the one that skips the wait. */
+/**
+ * Ends the moment a step ⏎ performed stays while its result is shown, the way the learner's ⏎ there does, so the
+ * journey does not wait out the learner's pace; the press is made in the page only while the moment lasts, so it can
+ * never land on the next step. Where the bubble shows no button (a palette is up), the moment is waited out.
+ */
 async function settled(practice: Page): Promise<void> {
+  await practice.evaluate(() => document.querySelector<HTMLButtonElement>("[data-practice-layer][data-practice-settling] [data-practice-go]")?.click());
   await expect(practice.locator("[data-practice-settling]")).toHaveCount(0);
 }
 
