@@ -436,10 +436,10 @@ fn with_both_folders_the_new_one_is_used_and_the_old_one_logged() {
         "{\"old\":true}"
     );
     let entry = logged(&moved.join("Logs/core.jsonl"), "state.legacy_left");
-    // The log masks a home folder (`/home/<name>/` becomes `~/`, the
-    // diagnostic redaction contract), so the fixture's `home/.local` and
-    // `home/.hide` each read as `~` and only the rest of the path tells the
-    // two folders apart.
+    // The log masks the account's home folder in a path as `~/` (the
+    // diagnostic redaction contract), and the masked part is the home folder
+    // plus the one name under it, so the fixture's `.local` and `.hide` each
+    // read as `~` and only the rest of the path tells the two folders apart.
     let entry: Value = serde_json::from_str(&entry).unwrap();
     let masked = |path: &Path| {
         let rest = path.strip_prefix(&home).unwrap();
