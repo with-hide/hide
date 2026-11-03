@@ -31,7 +31,10 @@ pub enum Server {
     /// (also one renamed aside or in the Trash), a runtime copy's, or the
     /// copy a device's helper pins, as the process `pid` that started at
     /// `started`.
-    Hide { pid: u32, started: u64 },
+    Hide {
+        pid: u32,
+        started: u64,
+    },
     /// Someone else's Herdr, or one whose program the system will not name:
     /// read only, never stopped (D-8).
     Other,

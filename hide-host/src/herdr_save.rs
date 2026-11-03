@@ -60,7 +60,9 @@ pub fn fetch(path: &Path) -> Fetched {
         .ok()
         .and_then(|metadata| metadata.modified().ok())
         .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-        .map_or(0, |since| u64::try_from(since.as_nanos()).unwrap_or(u64::MAX));
+        .map_or(0, |since| {
+            u64::try_from(since.as_nanos()).unwrap_or(u64::MAX)
+        });
     let mut text = String::new();
     if let Err(error) =
         std::io::Read::read_to_string(&mut std::io::Read::take(file, READ_CAP + 1), &mut text)
@@ -124,12 +126,7 @@ pub fn found(home: &Path) -> Result<Found, String> {
 /// socket call needs no program file, so a server whose file an update
 /// deleted stops the same way (B42). The reason a polite ask was refused is
 /// handed to `refused` for the caller's log.
-pub fn stop(
-    socket: &Path,
-    pid: u32,
-    started: u64,
-    refused: &dyn Fn(&str),
-) -> Result<(), String> {
+pub fn stop(socket: &Path, pid: u32, started: u64, refused: &dyn Fn(&str)) -> Result<(), String> {
     let same = || hide_platform::process::start_time(pid).is_ok_and(|now| now == started);
     let asked = hide_herdr_client::request_with_timeout(
         socket,
@@ -177,7 +174,12 @@ mod tests {
         let path = dir.path().join("session.json");
         assert_eq!(fetch(&path), Fetched::Missing);
         std::fs::write(&path, "{\"version\":3}").unwrap();
-        let Fetched::Text { text, len, modified_ns } = fetch(&path) else {
+        let Fetched::Text {
+            text,
+            len,
+            modified_ns,
+        } = fetch(&path)
+        else {
             panic!("the save is read");
         };
         assert_eq!((text.as_str(), len), ("{\"version\":3}", 13));

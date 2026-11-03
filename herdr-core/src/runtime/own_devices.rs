@@ -147,11 +147,8 @@ impl Runtime {
                         if let (Some(mover), Some(seen)) = (mover, seen)
                             && guard.device_link_current(&device, generation)
                         {
-                            changed |= guard.install_device_herdr_import(
-                                &device,
-                                Arc::new(mover),
-                                seen,
-                            );
+                            changed |=
+                                guard.install_device_herdr_import(&device, Arc::new(mover), seen);
                         }
                         (changed, unused, guard.take_retired_remote_syncs())
                     }

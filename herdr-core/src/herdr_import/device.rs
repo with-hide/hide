@@ -314,7 +314,10 @@ mod tests {
                 save: save(1),
             })
         );
-        assert_eq!(asked(&device.engine_dir).unwrap(), Some(Asked { resume: true }));
+        assert_eq!(
+            asked(&device.engine_dir).unwrap(),
+            Some(Asked { resume: true })
+        );
         assert!(committed(&device.engine_dir));
         // Committed, a later look offers it and starts nothing again.
         let (seen, restarting) = device.look_first();
@@ -326,8 +329,12 @@ mod tests {
     #[test]
     fn a_device_save_hide_never_used_is_only_offered() {
         let dir = tempfile::tempdir().unwrap();
-        let (device, _, local) =
-            device(dir.path(), vec![found(NodeServer::Stopped, 1)], false, false);
+        let (device, _, local) = device(
+            dir.path(),
+            vec![found(NodeServer::Stopped, 1)],
+            false,
+            false,
+        );
         let (seen, restarting) = device.look_first();
         assert!(!restarting && matches!(seen.look, Look::Offer(_)));
         assert_eq!(seen.server, Server::Stopped);
@@ -349,8 +356,14 @@ mod tests {
         );
         assert_eq!(device.take(Take::Move), Taken::Restarting);
         assert_eq!(node.stops.load(Ordering::SeqCst), 1);
-        assert_eq!(kept_save(&device.engine_dir).unwrap().unwrap().save, save(2));
-        assert_eq!(asked(&device.engine_dir).unwrap(), Some(Asked { resume: true }));
+        assert_eq!(
+            kept_save(&device.engine_dir).unwrap().unwrap().save,
+            save(2)
+        );
+        assert_eq!(
+            asked(&device.engine_dir).unwrap(),
+            Some(Asked { resume: true })
+        );
         assert_eq!(local.restarts.load(Ordering::SeqCst), 1);
     }
 
@@ -361,7 +374,10 @@ mod tests {
         let running = NodeServer::Hide { pid: 7, started: 9 };
         let (device, _, local) = device(dir.path(), vec![found(running, 1)], true, true);
         assert_eq!(device.take(Take::Move), Taken::NotStopped);
-        assert_eq!(outcome(&device.engine_dir).unwrap(), Some(Outcome::NotStopped));
+        assert_eq!(
+            outcome(&device.engine_dir).unwrap(),
+            Some(Outcome::NotStopped)
+        );
         assert_eq!(kept_save(&device.engine_dir).unwrap(), None);
         assert_eq!(asked(&device.engine_dir).unwrap(), None);
         assert_eq!(local.restarts.load(Ordering::SeqCst), 0);
@@ -373,12 +389,14 @@ mod tests {
     #[test]
     fn a_device_s_own_herdr_is_imported_and_never_stopped() {
         let dir = tempfile::tempdir().unwrap();
-        let (device, node, _) =
-            device(dir.path(), vec![found(NodeServer::Other, 1)], false, false);
+        let (device, node, _) = device(dir.path(), vec![found(NodeServer::Other, 1)], false, false);
         assert!(matches!(device.take(Take::Move), Taken::Failed(_)));
         assert_eq!(kept_save(&device.engine_dir).unwrap(), None);
         assert_eq!(device.take(Take::Import), Taken::Restarting);
         assert_eq!(node.stops.load(Ordering::SeqCst), 0);
-        assert_eq!(asked(&device.engine_dir).unwrap(), Some(Asked { resume: false }));
+        assert_eq!(
+            asked(&device.engine_dir).unwrap(),
+            Some(Asked { resume: false })
+        );
     }
 }

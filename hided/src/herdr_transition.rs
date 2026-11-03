@@ -500,7 +500,10 @@ mod tests {
         devices_before_core(&state);
         assert_eq!(herdr_import::asked(&engine_dir).unwrap(), None);
         // This machine's save is not the device's: it is still offered.
-        assert!(matches!(before_core_at(&place, &state, "mac"), Look::Offer(_)));
+        assert!(matches!(
+            before_core_at(&place, &state, "mac"),
+            Look::Offer(_)
+        ));
     }
 
     fn told(restart: &tokio::sync::Notify) -> bool {

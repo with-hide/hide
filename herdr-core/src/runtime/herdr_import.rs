@@ -147,13 +147,12 @@ impl Runtime {
         let spawned = thread::Builder::new()
             .name("herdr-core-herdr-import-look".into())
             .spawn(move || {
-                let seen = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    machine.look()
-                }))
-                .unwrap_or_else(|_| Seen {
-                    look: Look::Unreadable("the look stopped unexpectedly".into()),
-                    ..Seen::default()
-                });
+                let seen =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| machine.look()))
+                        .unwrap_or_else(|_| Seen {
+                            look: Look::Unreadable("the look stopped unexpectedly".into()),
+                            ..Seen::default()
+                        });
                 answer(&worker, |runtime| {
                     runtime.ingest_herdr_save_of(&key, &machine, seen)
                 });
@@ -277,17 +276,21 @@ impl Runtime {
             .spawn(move || {
                 // A move that panics still answers, so the step is not held
                 // on its spinner.
-                let taken = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    machine.take(take)
-                }))
-                .unwrap_or_else(|_| Taken::Failed("the move stopped unexpectedly".into()));
+                let taken =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| machine.take(take)))
+                        .unwrap_or_else(|_| Taken::Failed("the move stopped unexpectedly".into()));
                 answer(&worker, |runtime| {
                     runtime.ingest_herdr_take_of(&key, &machine, take, taken)
                 });
             });
         if let Err(error) = spawned {
             let machine = Arc::clone(&self.herdr_import.places[place].machine);
-            return self.ingest_herdr_take_of(place, &machine, take, Taken::Failed(error.to_string()));
+            return self.ingest_herdr_take_of(
+                place,
+                &machine,
+                take,
+                Taken::Failed(error.to_string()),
+            );
         }
         self.show_herdr_import()
     }
@@ -379,7 +382,12 @@ impl Runtime {
     }
 
     /// The device's move answered.
-    pub(super) fn ingest_device_herdr_take(&mut self, device: &str, take: Take, taken: Taken) -> bool {
+    pub(super) fn ingest_device_herdr_take(
+        &mut self,
+        device: &str,
+        take: Take,
+        taken: Taken,
+    ) -> bool {
         let place = Some(device.to_owned());
         let machine = Arc::clone(&self.herdr_import.places[&place].machine);
         self.ingest_herdr_take_of(&place, &machine, take, taken)
@@ -429,9 +437,7 @@ fn shown(seen: &Seen, taking: bool) -> Option<HerdrImportSnapshot> {
         }),
         // Waiting conversations resume only once their Herdr no longer runs,
         // so while another Herdr runs on, a save with nothing else is no offer.
-        Look::Offer(offer)
-            if offer.workspaces > 0 || seen.server != Server::Other =>
-        {
+        Look::Offer(offer) if offer.workspaces > 0 || seen.server != Server::Other => {
             let not_stopped =
                 !taking && kind == KIND_MOVE && seen.outcome == Some(Outcome::NotStopped);
             let stage = if not_stopped {

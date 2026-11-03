@@ -725,7 +725,10 @@ pub fn adopt(
             || record.host_scope != handover.from_scope
             || !moved.contains(workspace_of(&record.pane))
             || (record.instance == record.pane
-                && record.terminal_id.as_ref().is_none_or(|id| *id == record.pane)
+                && record
+                    .terminal_id
+                    .as_ref()
+                    .is_none_or(|id| *id == record.pane)
                 && record.host_scope == handover.to_scope)
         {
             continue;
@@ -812,8 +815,8 @@ fn rename_openers(
 
 #[cfg(test)]
 mod tests {
-    use hide_host::herdr_save::fetch;
     use super::*;
+    use hide_host::herdr_save::fetch;
 
     fn fixture(dir: &Path) -> PathBuf {
         let path = dir.join("herdr").join("session.json");
@@ -871,7 +874,10 @@ mod tests {
         let engine = dir.path().join("engine");
         let save = fixture(dir.path());
         std::fs::write(&save, "{").unwrap();
-        assert!(matches!(look(&engine, &fetch(&save)).unwrap(), Look::Unreadable(_)));
+        assert!(matches!(
+            look(&engine, &fetch(&save)).unwrap(),
+            Look::Unreadable(_)
+        ));
         let unknown = held(&engine);
         assert!(!unknown.releases("w1:p1") && !unknown.releases("x"));
         assert!(unknown.releases("h1:p1"));

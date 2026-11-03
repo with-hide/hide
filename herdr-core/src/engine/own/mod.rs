@@ -4564,11 +4564,8 @@ mod tests {
 
         let holders = Arc::new(Holders::default());
         holders.idle_shell(52, "zsh");
-        let next = OwnEngine::open(
-            Arc::clone(&holders) as Arc<dyn PaneHolders>,
-            place.clone(),
-        )
-        .unwrap();
+        let next =
+            OwnEngine::open(Arc::clone(&holders) as Arc<dyn PaneHolders>, place.clone()).unwrap();
         holders.hand(HolderRecovery {
             owner: 1,
             ended: vec![working.clone(), resting.clone()],

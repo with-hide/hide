@@ -249,7 +249,11 @@ fn a_cut_agent_is_told_once_it_shows_and_given_up_on_when_it_never_does() {
 #[test]
 fn a_device_s_save_is_offered_under_its_name_and_goes_with_its_link() {
     let mut runtime = installed();
-    assert!(runtime.install_device_herdr_import("d1", Arc::new(StandIn), offered(Server::Hide, None)));
+    assert!(runtime.install_device_herdr_import(
+        "d1",
+        Arc::new(StandIn),
+        offered(Server::Hide, None)
+    ));
     let status = &serde_json::to_value(runtime.snapshot()).unwrap()["status"];
     assert_eq!(status["herdr_import"], serde_json::Value::Null);
     assert_eq!(
@@ -262,7 +266,10 @@ fn a_device_s_save_is_offered_under_its_name_and_goes_with_its_link() {
     );
     // This machine offers nothing, so its move is not the device's.
     assert!(!act(&mut runtime, "move"));
-    let device_move = event("herdr_import", serde_json::json!({"action": "move", "device": "d1"}));
+    let device_move = event(
+        "herdr_import",
+        serde_json::json!({"action": "move", "device": "d1"}),
+    );
     assert!(runtime.dispatch_json(&device_move));
     let devices = |runtime: &Runtime| {
         serde_json::to_value(runtime.snapshot()).unwrap()["status"]["herdr_import_devices"].clone()

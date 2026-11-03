@@ -711,7 +711,10 @@ pub enum Call {
     /// Stops Hide's Herdr on the node account's default socket, the server
     /// `pid` that started at `started` as `HerdrSave` found it, confirmed
     /// gone by both; answers `null` once it is gone (D-6, D-10).
-    HerdrStop { pid: u32, started: u64 },
+    HerdrStop {
+        pid: u32,
+        started: u64,
+    },
     /// Replaces the project guardrails' policy file under the node's home
     /// with `policy`, the projects of this machine with a protection on
     /// (`hide_agent_hooks::guardrails::write_policy`); answers `null` once
