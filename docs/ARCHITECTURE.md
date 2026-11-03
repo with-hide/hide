@@ -2546,7 +2546,7 @@ An import reads any other Herdr's save and leaves that Herdr running beside Hide
 When Hide's own Herdr has stopped and Hide used it, the move is made without asking once the core is ready; while it runs, the core shows the question (`status.herdr_import`, kind `move`), and a save no Hide Herdr runs is offered to import (kind `import`), from the sidebar's line, Settings, the first run and `hide import herdr [--yes]`.
 The operator's answer is one event (`herdr_import {action}`: `move`, `import`, `look`, `continue`), handled on a worker off the runtime lock through the machine hided installs (`Core::set_herdr_import`, `herdr_import::Machine`).
 
-A move first writes the commit mark into the record (D-27), then stops Hide's Herdr through its socket (`server.stop`, `engine::herdr::transition::stop_server`), ending the process by its pid when the socket does not answer and confirming the end by the pid and its start time, so a reused pid is never taken for it.
+A move first writes the commit mark into the record (D-27), then stops Hide's Herdr through its socket (`server.stop`, `hide_host::herdr_save::stop`), ending the process by its pid when the socket does not answer and confirming the end by the pid and its start time, so a reused pid is never taken for it.
 Hide's Herdr that would not stop moves nothing, and the question says so and offers the move again.
 The move or import is then asked in the record, and hided starts the core role again (`Event::HerdrMove`); before the engine opens, `before_core` imports the asked workspaces and gives their panes' Hide state to the engine the core move's way (D-4), so the engine opens with them and restores them as a reboot does.
 Once committed, a failed update does not start the previous build again (`core_update.rs`, `rollback.refused`): that build's daemon would open a Herdr session that has moved.
@@ -2558,6 +2558,12 @@ Until a workspace has moved, `hide` from one of its Herdr panes is refused `pane
 A move or a reboot can end a turn an agent was in.
 The restore reads each resumed pane's hook file (`hide_agent_hooks::counters::records`, by the same pane id) and marks a resume whose agent's last turn was running or waiting on the operator; when the resumed agent's hook names its session, `Engine::hook_session` answers true once, and the core sends that agent one letter from `hide:transition` saying its work was cut off (`runtime/transition_letters.rs`, D-22), once it is the agent seen in its pane and within 10 minutes; an agent that was resting gets none.
 A device's engine reads no hook files (`Place::hooks_home`), since they are on the device.
+
+A dialed device of that engine moves the same way, by its node (D-10, B18; `herdr_core::herdr_import::device`).
+Before the device's engine opens on a link, the core asks the node for the device's save and the server on its default socket (`Call::HerdrSave`), and a move asks the node to stop Hide's Herdr there (`Call::HerdrStop`, refused unless the server is still the one found); both run `hide-host/src/herdr_save.rs`, the code this machine's daemon reads and stops with, so every system a node runs on takes one path.
+Each device's offer shows under its id while that link lasts (`status.herdr_import_devices`, `herdr_import {action, device}`).
+A move is committed in the device's record, `<state>/engine/devices/<device>/herdr-import.json`, the save the node read is kept beside it with the device's machine id (`herdr-save.json`, `hide_kit::layout::herdr_save_kept_in`), and the core role starts again; `before_core` imports each kept save before any link is up and gives the moved panes' registrations their pane ids, keeping the device id as their scope.
+A device whose machine id the core could not read is not looked at, since its registrations could not be told apart.
 
 ## Desk
 
