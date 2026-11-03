@@ -20,15 +20,12 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{Duration, Instant};
 
 use herdr_core::herdr_import::{self, Asked, Look, Seen, Take, Taken};
+use hide_host::herdr_save;
 use serde_json::json;
 
 use crate::env::Env;
-
-/// How long Hide's Herdr has to end on each way of asking it (D-6).
-const STOP_WITHIN: Duration = Duration::from_secs(10);
 
 static RECORD: Mutex<()> = Mutex::new(());
 
@@ -41,29 +38,26 @@ fn hold_record() -> MutexGuard<'static, ()> {
 /// This machine's default Herdr session and the engine it moves into.
 pub(crate) struct Place {
     engine_dir: PathBuf,
-    session: PathBuf,
-    socket: PathBuf,
+    save: herdr_save::Place,
+    home: PathBuf,
 }
 
 impl Place {
-    /// The place of `env`'s machine, when its core runs its own engine: the
-    /// session Herdr keeps beside its default socket in its config folder
-    /// (Herdr v0.9.5 `persist/io.rs`, `session_path`), which is the session
-    /// Hide's Herdr ran.
+    /// The place of `env`'s machine, when its core runs its own engine
+    /// (`herdr_save::Place`).
     pub(crate) fn of(env: &Env) -> Option<Self> {
         if !env.own_engine {
             return None;
         }
-        let variables = |name: &str| match name {
-            "HOME" => Some(env.home.clone().into_os_string()),
-            _ => std::env::var_os(name),
-        };
-        let config = hide_platform::host::herdr_config_dir_from(&variables).ok()?;
         Some(Self {
             engine_dir: hide_kit::layout::engine_dir(&env.state_dir),
-            session: config.join("session.json"),
-            socket: config.join("herdr.sock"),
+            save: herdr_save::Place::of_account(&env.home).ok()?,
+            home: env.home.clone(),
         })
+    }
+
+    fn fetch(&self) -> herdr_save::Fetched {
+        herdr_save::fetch(&self.save.session)
     }
 }
 
@@ -92,17 +86,17 @@ fn before_core_at(place: &Place, state_dir: &Path, node: &str) -> Look {
     let look = (|| {
         let look = match herdr_import::asked(&place.engine_dir)? {
             Some(asked) => {
-                let outcome = herdr_import::import(&place.engine_dir, &place.session, asked)?;
+                let outcome = herdr_import::import(&place.engine_dir, &place.fetch(), asked)?;
                 log("herdr_transition.moved", json!({ "outcome": outcome }));
-                herdr_import::look(&place.engine_dir, &place.session)?
+                herdr_import::look(&place.engine_dir, &place.fetch())?
             }
-            None => herdr_import::look(&place.engine_dir, &place.session)?,
+            None => herdr_import::look(&place.engine_dir, &place.fetch())?,
         };
         let moved = herdr_import::moved(&place.engine_dir)?;
         let given = herdr_import::adopt(
             state_dir,
             node,
-            &place.socket.to_string_lossy(),
+            &place.save.socket.to_string_lossy(),
             &place.engine_dir,
             &moved,
         )?;
@@ -147,27 +141,12 @@ impl Server {
 
 /// Who runs the Herdr server on `place`'s socket.
 fn server(place: &Place, state_dir: &Path) -> Server {
-    let stream = match hide_platform::ipc::LocalStream::connect(&place.socket) {
-        Ok(stream) => stream,
-        Err(_) => {
-            return Server::Stopped {
-                hide_used: herdr_import::hide_used(state_dir, &place.socket.to_string_lossy()),
-            };
-        }
-    };
-    let Ok(pid) = stream.peer_pid() else {
-        return Server::Other;
-    };
-    drop(stream);
-    let ours = hide_platform::process::image_of(pid).is_ok_and(|image| {
-        image
-            .path
-            .parent()
-            .is_some_and(hide_kit::holds_package_runtime)
-    });
-    match hide_platform::process::start_time(pid) {
-        Ok(started) if ours => Server::Hide { pid, started },
-        _ => Server::Other,
+    match herdr_save::server(&place.save, &place.home) {
+        herdr_save::Server::Stopped => Server::Stopped {
+            hide_used: herdr_import::hide_used(state_dir, &place.save.socket.to_string_lossy()),
+        },
+        herdr_save::Server::Hide { pid, started } => Server::Hide { pid, started },
+        herdr_save::Server::Other => Server::Other,
     }
 }
 
@@ -243,7 +222,13 @@ impl LocalMachine {
             }
             (Take::Move, Server::Hide { pid, started }) => {
                 herdr_import::commit(&place.engine_dir)?;
-                if let Err(reason) = stop(&place.socket, pid, started) {
+                let refused = |reason: &str| {
+                    log(
+                        "herdr_transition.stop_refused",
+                        json!({ "pid": pid, "reason": reason }),
+                    );
+                };
+                if let Err(reason) = herdr_save::stop(&place.save.socket, pid, started, &refused) {
                     log(
                         "herdr_transition.not_stopped",
                         json!({ "pid": pid, "reason": reason }),
@@ -275,7 +260,7 @@ impl herdr_import::Machine for LocalMachine {
         };
         let _held = hold_record();
         let server = server(place, &self.state_dir);
-        let look = herdr_import::look(&place.engine_dir, &place.session).unwrap_or_else(|reason| {
+        let look = herdr_import::look(&place.engine_dir, &place.fetch()).unwrap_or_else(|reason| {
             log("herdr_transition.refused", json!({ "reason": reason }));
             Look::Unreadable(reason)
         });
@@ -356,48 +341,6 @@ pub(crate) fn cli_answer(
     Ok(json!({ "offered": shown, "asked": asked }))
 }
 
-/// Stops the Herdr server `pid`, which started at `started`, on `socket`:
-/// by its own `server.stop`, which saves its session as its quit does, else
-/// by the system's polite end (D-6); either way it is confirmed gone by its
-/// pid and start, so a pid a new process took is never read as it. The
-/// socket call needs no program file, so a server whose file an update
-/// deleted stops the same way (B42).
-fn stop(socket: &Path, pid: u32, started: u64) -> Result<(), String> {
-    let same = || hide_platform::process::start_time(pid).is_ok_and(|now| now == started);
-    let asked = herdr_core::engine::herdr::transition::stop_server(socket, STOP_WITHIN);
-    if wait_gone(&same) {
-        return Ok(());
-    }
-    if let Err(reason) = asked {
-        log(
-            "herdr_transition.stop_refused",
-            json!({ "pid": pid, "reason": reason }),
-        );
-    }
-    if same() {
-        hide_platform::process::terminate(pid)
-            .map_err(|error| format!("Herdr's server {pid} could not be ended: {error}"))?;
-    }
-    if wait_gone(&same) {
-        Ok(())
-    } else {
-        Err(format!("Herdr's server {pid} did not end"))
-    }
-}
-
-#[allow(clippy::disallowed_methods)] // a production wait, not test code
-fn wait_gone(same: &dyn Fn() -> bool) -> bool {
-    // No event tells another process's exit, so its end is polled.
-    let deadline = Instant::now() + STOP_WITHIN;
-    while same() {
-        if Instant::now() >= deadline {
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    true
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -419,8 +362,11 @@ mod tests {
         std::fs::create_dir_all(&state).unwrap();
         let place = Place {
             engine_dir: hide_kit::layout::engine_dir(&state),
-            session: config.join("session.json"),
-            socket: config.join("herdr.sock"),
+            save: herdr_save::Place {
+                session: config.join("session.json"),
+                socket: config.join("herdr.sock"),
+            },
+            home: dir.join("home"),
         };
         (place, state)
     }
@@ -463,7 +409,7 @@ mod tests {
     fn hide_s_own_stopped_session_moves_without_asking_into_the_next_start() {
         let dir = tempfile::tempdir().unwrap();
         let (place, state) = place(dir.path());
-        registered(&state, "mac", &place.socket);
+        registered(&state, "mac", &place.save.socket);
         let look = before_core_at(&place, &state, "mac");
         assert!(matches!(look, Look::Offer(_)), "{look:?}");
         let restart = tokio::sync::Notify::new();
@@ -530,7 +476,7 @@ mod tests {
     fn an_unreadable_save_is_shown_with_why() {
         let dir = tempfile::tempdir().unwrap();
         let (place, state) = place(dir.path());
-        std::fs::write(&place.session, "{").unwrap();
+        std::fs::write(&place.save.session, "{").unwrap();
         let machine = LocalMachine {
             place: Some(place),
             state_dir: state,

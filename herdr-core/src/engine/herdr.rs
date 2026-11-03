@@ -47,27 +47,6 @@ pub(crate) fn local(socket: impl AsRef<std::path::Path>) -> SharedEngine {
     )))
 }
 
-/// Stopping Hide's own Herdr server when its session moves into the core's
-/// own engine (PRD engine-bundle-4-herdr-removal D-6).
-pub mod transition {
-    /// Asks the Herdr server on `socket` to stop (`server.stop`), which ends
-    /// its panes and saves its session as its own quit does, waiting at most
-    /// `within` for its answer.
-    pub fn stop_server(
-        socket: &std::path::Path,
-        within: std::time::Duration,
-    ) -> Result<(), String> {
-        hide_herdr_client::request_with_timeout(
-            socket,
-            "server.stop",
-            serde_json::json!({}),
-            within,
-        )
-        .map(|_| ())
-        .map_err(|error| format!("server.stop: {error}"))
-    }
-}
-
 /// What `hided/src/herdr_handoff.rs` asks a Herdr server it is about to
 /// replace, before any core or engine exists for it: the one reach into
 /// Herdr's wire terms from outside this crate. Bundle 4 (the switch release)

@@ -20,9 +20,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
 
 use serde::{Deserialize, Serialize};
+
+pub use hide_host::herdr_save::Fetched;
 
 use crate::engine::own::herdr_session::{self, HerdrRead, PendingResume};
 
@@ -420,13 +421,13 @@ pub struct Offer {
     pub waiting: usize,
 }
 
-/// Reads the Herdr save at `herdr_session`, only reading it, records what of
+/// Reads the Herdr save its machine read (`save`), records what of
 /// it is not moved in `engine_dir`'s record, and says what moving it would
 /// move. It runs at every start of the core before the engine opens, so the
 /// engine's cleanup never owns a pane of the save before it is moved.
-pub fn look(engine_dir: &Path, herdr_session: &Path) -> Result<Look, String> {
+pub fn look(engine_dir: &Path, save: &Fetched) -> Result<Look, String> {
     let mut record = open(engine_dir)?;
-    let look = match herdr_session::read(herdr_session) {
+    let look = match herdr_session::of(save) {
         HerdrRead::Missing => {
             record.found = Found::Nothing;
             // Conversations waiting from an earlier import go back without
@@ -456,7 +457,7 @@ pub fn look(engine_dir: &Path, herdr_session: &Path) -> Result<Look, String> {
                 .collect();
             record.found = Found::NotMoved {
                 workspaces,
-                stamp: stamp(herdr_session),
+                stamp: stamp(save),
             };
             let held = crate::engine::own::saved_workspaces(engine_dir);
             let converted = herdr_session::convert(&session, &record.moved, &held, String::new);
@@ -479,27 +480,26 @@ pub fn look(engine_dir: &Path, herdr_session: &Path) -> Result<Look, String> {
 
 /// Whether a save Herdr changed since `engine_dir`'s record read it waits to
 /// be read again: an offer the operator put off is made again then (D-9).
-pub fn changed_since_read(engine_dir: &Path, herdr_session: &Path) -> bool {
+pub fn changed_since_read(engine_dir: &Path, save: &Fetched) -> bool {
     match read(engine_dir) {
         Ok(Some(Record {
             found: Found::NotMoved { stamp: read, .. },
             ..
-        })) => read != stamp(herdr_session),
+        })) => read != stamp(save),
         _ => true,
     }
 }
 
-fn stamp(path: &Path) -> Stamp {
-    std::fs::metadata(path).map_or(Stamp::default(), |metadata| Stamp {
-        len: metadata.len(),
-        modified_ns: metadata
-            .modified()
-            .ok()
-            .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-            .map_or(0, |since| {
-                u64::try_from(since.as_nanos()).unwrap_or(u64::MAX)
-            }),
-    })
+fn stamp(save: &Fetched) -> Stamp {
+    match save {
+        Fetched::Text {
+            len, modified_ns, ..
+        } => Stamp {
+            len: *len,
+            modified_ns: *modified_ns,
+        },
+        Fetched::Missing | Fetched::Unreadable { .. } => Stamp::default(),
+    }
 }
 
 /// Records the move the operator asked for, which the core starts with next.
@@ -541,12 +541,12 @@ pub fn not_stopped(engine_dir: &Path) -> Result<(), String> {
     write(engine_dir, &record)
 }
 
-/// Moves the workspaces of the Herdr save at `herdr_session` that no import
+/// Moves the workspaces of the Herdr save its machine read (`save`) that no import
 /// moved into the engine's session in `engine_dir` (D-3), recording which
 /// moved, which were left out and why, and the conversations left waiting
 /// when `asked.resume` is false; the asked move is done after it, whatever
 /// it came to. A save that cannot be read moves nothing and says why.
-pub fn import(engine_dir: &Path, herdr_session: &Path, asked: Asked) -> Result<Outcome, String> {
+pub fn import(engine_dir: &Path, save: &Fetched, asked: Asked) -> Result<Outcome, String> {
     let mut record = open(engine_dir)?;
     record.asked = None;
     // The conversations that waited while their Herdr ran go back to their
@@ -560,7 +560,7 @@ pub fn import(engine_dir: &Path, herdr_session: &Path, asked: Asked) -> Result<O
         .pending
         .retain(|waiting| !given.contains(&waiting.pane));
     record.given_back.extend(given.iter().cloned());
-    let outcome = match herdr_session::read(herdr_session) {
+    let outcome = match herdr_session::of(save) {
         HerdrRead::Missing => {
             record.found = Found::Nothing;
             Outcome::Moved {
@@ -597,7 +597,7 @@ pub fn import(engine_dir: &Path, herdr_session: &Path, asked: Asked) -> Result<O
                 .collect();
             record.found = Found::NotMoved {
                 workspaces,
-                stamp: stamp(herdr_session),
+                stamp: stamp(save),
             };
             Outcome::Moved {
                 workspaces: imported.workspaces.len(),
@@ -739,6 +739,7 @@ fn rename_openers(
 
 #[cfg(test)]
 mod tests {
+    use hide_host::herdr_save::fetch;
     use super::*;
 
     fn fixture(dir: &Path) -> PathBuf {
@@ -761,7 +762,7 @@ mod tests {
         let engine = dir.path().join("engine");
         let save = fixture(dir.path());
         assert_eq!(
-            look(&engine, &save).unwrap(),
+            look(&engine, &fetch(&save)).unwrap(),
             Look::Offer(Offer {
                 workspaces: 2,
                 tabs: 3,
@@ -773,7 +774,7 @@ mod tests {
         assert!(!before.releases("w1:p1") && !before.releases("w2"));
         assert!(before.releases("h1:p1") && before.releases("w9:p1"));
 
-        let outcome = import(&engine, &save, Asked { resume: true }).unwrap();
+        let outcome = import(&engine, &fetch(&save), Asked { resume: true }).unwrap();
         assert!(matches!(
             outcome,
             Outcome::Moved {
@@ -785,8 +786,8 @@ mod tests {
             }
         ));
         assert_eq!(held(&engine), Held::Nothing);
-        assert_eq!(look(&engine, &save).unwrap(), Look::Nothing);
-        assert!(!changed_since_read(&engine, &save));
+        assert_eq!(look(&engine, &fetch(&save)).unwrap(), Look::Nothing);
+        assert!(!changed_since_read(&engine, &fetch(&save)));
     }
 
     // D-25, B43: while the save cannot be read, only what the engine made
@@ -797,12 +798,12 @@ mod tests {
         let engine = dir.path().join("engine");
         let save = fixture(dir.path());
         std::fs::write(&save, "{").unwrap();
-        assert!(matches!(look(&engine, &save).unwrap(), Look::Unreadable(_)));
+        assert!(matches!(look(&engine, &fetch(&save)).unwrap(), Look::Unreadable(_)));
         let unknown = held(&engine);
         assert!(!unknown.releases("w1:p1") && !unknown.releases("x"));
         assert!(unknown.releases("h1:p1"));
         assert!(matches!(
-            import(&engine, &save, Asked { resume: true }).unwrap(),
+            import(&engine, &fetch(&save), Asked { resume: true }).unwrap(),
             Outcome::Unreadable { .. }
         ));
         assert_eq!(
@@ -819,12 +820,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let engine = dir.path().join("engine");
         let save = fixture(dir.path());
-        import(&engine, &save, Asked { resume: true }).unwrap();
+        import(&engine, &fetch(&save), Asked { resume: true }).unwrap();
         let mut record = read(&engine).unwrap().unwrap();
         record.moving = record.moved.clone();
         record.moved.clear();
         write(&engine, &record).unwrap();
-        let again = import(&engine, &save, Asked { resume: true }).unwrap();
+        let again = import(&engine, &fetch(&save), Asked { resume: true }).unwrap();
         assert!(
             matches!(again, Outcome::Moved { workspaces: 0, .. }),
             "{again:?}"
@@ -843,10 +844,10 @@ mod tests {
         let engine = dir.path().join("engine");
         let save = fixture(dir.path());
         assert!(!holds(&engine, "w1:p1"));
-        look(&engine, &save).unwrap();
+        look(&engine, &fetch(&save)).unwrap();
         assert!(holds(&engine, "w1:p1"));
         assert!(!holds(&engine, "h1:p1"));
-        import(&engine, &save, Asked { resume: true }).unwrap();
+        import(&engine, &fetch(&save), Asked { resume: true }).unwrap();
         assert!(!holds(&engine, "w1:p1"));
     }
 
@@ -858,9 +859,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let engine = dir.path().join("engine");
         let save = fixture(dir.path());
-        import(&engine, &save, Asked { resume: false }).unwrap();
+        import(&engine, &fetch(&save), Asked { resume: false }).unwrap();
         assert!(waiting(&engine).contains("w1:p1"));
-        import(&engine, &save, Asked { resume: true }).unwrap();
+        import(&engine, &fetch(&save), Asked { resume: true }).unwrap();
         assert!(waiting(&engine).is_empty());
         assert_eq!(given_back(&engine), BTreeSet::from(["w1:p1".to_owned()]));
         wait_again(

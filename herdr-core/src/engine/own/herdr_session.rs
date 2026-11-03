@@ -5,7 +5,7 @@
 //! Hide's own Herdr, or the read-only import of an operator's Herdr).
 //!
 //! The file is only read, never written or moved. It is read up to
-//! [`READ_CAP`] bytes in every form Herdr v0.9.5 reads (`src/persist/
+//! `hide_host::herdr_save::READ_CAP` bytes in every form Herdr v0.9.5 reads (`src/persist/
 //! snapshot.rs` of the pinned tag: version 3 and the versions before it,
 //! whose workspaces held one tab inline). Herdr's public ids are kept: a
 //! workspace keeps its `w<n>`, and its tabs and panes the ids Herdr's restore
@@ -28,11 +28,6 @@ use super::layout::{MAX_DEPTH, MAX_PANES};
 use super::store::{
     SavedAgent, SavedDirection, SavedNode, SavedPane, SavedTab, SavedWorkspace, SavedWorktree,
 };
-
-/// The largest Herdr session read: an operator's session of 25 workspaces
-/// and 83 panes took 51 KB on 2026-11-04, so this is far past any session
-/// and bounds what an unreadable file can cost.
-pub(crate) const READ_CAP: u64 = 4 * 1024 * 1024;
 
 /// The newest session format Herdr v0.9.5 writes and reads
 /// (`SNAPSHOT_VERSION`); a newer one is a Herdr this build does not know.
@@ -194,25 +189,18 @@ struct Header {
     workspaces: Vec<Value>,
 }
 
-/// Reads the Herdr session at `path`, only reading it.
-pub(crate) fn read(path: &Path) -> HerdrRead {
-    let file = match std::fs::File::open(path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return HerdrRead::Missing,
-        Err(error) => return HerdrRead::Unreadable(format!("it could not be opened: {error}")),
-    };
-    let mut text = String::new();
-    if let Err(error) =
-        std::io::Read::read_to_string(&mut std::io::Read::take(file, READ_CAP + 1), &mut text)
-    {
-        return HerdrRead::Unreadable(format!("it could not be read: {error}"));
-    }
-    if text.len() as u64 > READ_CAP {
-        return HerdrRead::Unreadable(format!("it is larger than {READ_CAP} bytes"));
-    }
-    match parse(&text) {
-        Ok(session) => HerdrRead::Read(session),
-        Err(why) => HerdrRead::Unreadable(why),
+/// The Herdr session a machine read from its save
+/// (`hide_host::herdr_save::fetch`, on that machine), only reading it.
+pub(crate) fn of(fetched: &hide_host::herdr_save::Fetched) -> HerdrRead {
+    match fetched {
+        hide_host::herdr_save::Fetched::Missing => HerdrRead::Missing,
+        hide_host::herdr_save::Fetched::Unreadable { reason } => {
+            HerdrRead::Unreadable(reason.clone())
+        }
+        hide_host::herdr_save::Fetched::Text { text, .. } => match parse(text) {
+            Ok(session) => HerdrRead::Read(session),
+            Err(why) => HerdrRead::Unreadable(why),
+        },
     }
 }
 
@@ -1064,6 +1052,7 @@ mod tests {
     fn a_newer_or_broken_session_is_unreadable_and_a_missing_one_is_none() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("session.json");
+        let read = |path: &Path| of(&hide_host::herdr_save::fetch(path));
         assert!(matches!(read(&path), HerdrRead::Missing));
         std::fs::write(&path, r#"{"version": 4, "workspaces": []}"#).unwrap();
         assert!(matches!(read(&path), HerdrRead::Unreadable(why) if why.contains("format 4")));
