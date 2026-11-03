@@ -239,7 +239,7 @@ impl HelperPackages {
     ) -> Result<Payload, EstablishError> {
         // Asked before anything is read or sent, so the device gets nothing.
         if os == "windows" && engine == DeviceEngine::Herdr {
-            return Err(EstablishError::Unsupported(
+            return Err(EstablishError::NeedsNewEngine(
                 WINDOWS_NEEDS_OWN_ENGINE.to_owned(),
             ));
         }
@@ -3275,7 +3275,7 @@ mod tests {
         }
         let packages = HelperPackages::new(Some(folder.to_path_buf()));
         match packages.payload_for("windows", "x86_64", DeviceEngine::Herdr) {
-            Err(EstablishError::Unsupported(reason)) => {
+            Err(EstablishError::NeedsNewEngine(reason)) => {
                 assert_eq!(reason, WINDOWS_NEEDS_OWN_ENGINE);
             }
             other => panic!(

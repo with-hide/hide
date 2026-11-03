@@ -1413,6 +1413,7 @@ pub enum DeviceProblem {
     SshMissing,
     OpenSshOld,
     Unsupported,
+    NeedsNewEngine,
     HideUpdated,
 }
 
@@ -1427,6 +1428,7 @@ impl DeviceProblem {
             (FailureAction::Retry, SshProblem::SshMissing) => Self::SshMissing,
             (FailureAction::Retry, SshProblem::OpenSshOld) => Self::OpenSshOld,
             (FailureAction::Retry, SshProblem::Unsupported) => Self::Unsupported,
+            (FailureAction::Retry, SshProblem::NeedsNewEngine) => Self::NeedsNewEngine,
             (FailureAction::Retry, _) => Self::CannotConnect,
         }
     }
@@ -1440,6 +1442,7 @@ impl DeviceProblem {
             Self::SshMissing => "ssh_missing",
             Self::OpenSshOld => "openssh_old",
             Self::Unsupported => "unsupported",
+            Self::NeedsNewEngine => "needs_new_engine",
             Self::HideUpdated => "hide_updated",
         }
     }
@@ -10012,6 +10015,7 @@ mod wire_enum_tests {
             DeviceProblem::SshMissing,
             DeviceProblem::OpenSshOld,
             DeviceProblem::Unsupported,
+            DeviceProblem::NeedsNewEngine,
             DeviceProblem::HideUpdated,
         ];
         for variant in problems {
@@ -10023,6 +10027,7 @@ mod wire_enum_tests {
                 | DeviceProblem::SshMissing
                 | DeviceProblem::OpenSshOld
                 | DeviceProblem::Unsupported
+                | DeviceProblem::NeedsNewEngine
                 | DeviceProblem::HideUpdated => {}
             }
         }
@@ -10413,6 +10418,7 @@ mod wire_enum_tests {
         assert_eq!(row(SshProblem::SshMissing), "ssh_missing");
         assert_eq!(row(SshProblem::OpenSshOld), "openssh_old");
         assert_eq!(row(SshProblem::Unsupported), "unsupported");
+        assert_eq!(row(SshProblem::NeedsNewEngine), "needs_new_engine");
         assert_eq!(row(SshProblem::HideUpdated), "hide_updated");
     }
 }
