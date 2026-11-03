@@ -499,6 +499,7 @@ mod tests {
             request: "a".repeat(64),
             cwd: "/project".to_owned(),
             cancelled: true,
+            number: 0,
         });
         let mut uncertain = End::new(EndReason::HolderLost, "lost");
         uncertain.left.push(123);
@@ -508,8 +509,15 @@ mod tests {
         let bytes = serde_json::to_vec(&record).unwrap();
         let mut recovered = parse(&bytes).unwrap();
         recovered.finish(End::new(EndReason::ProgramExited, "exited"));
+        assert_eq!(recovered.phase, Phase::Closing);
+        assert_eq!(
+            recovered.end.as_ref().unwrap().reason,
+            EndReason::Terminated
+        );
+        recovered.holder = None;
+        recovered.program = None;
+        recovered.finish(End::new(EndReason::Terminated, "never started"));
         assert_eq!(recovered.phase, Phase::Ended);
-        assert_eq!(recovered.end.unwrap().reason, EndReason::Terminated);
     }
 
     /// What a node must not take for "no record": each is its own reason.

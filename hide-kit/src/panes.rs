@@ -868,23 +868,8 @@ impl Panes {
             "pane_holder.closing",
             json!({ "pane": pane, "incarnation": current.incarnation, "holder": current.holder.map(|h| h.pid) }),
         );
-        let judgment = match current.holder {
-            Some(holder) if holder.runs() => self.end_closing(pane, holder),
-            // The holder is gone: the record says why, or it is settled as a
-            // reconcile settles a lost holder.
-            _ => match self.record(pane) {
-                Ok(Some(after)) if after.incarnation == current.incarnation => {
-                    self.judge(owner, &after)
-                }
-                Ok(Some(_)) => {
-                    return Err(CloseError::Failed(
-                        "the pane changed during close".to_owned(),
-                    ));
-                }
-                Ok(None) => return Err(CloseError::NoRecord),
-                Err(error) => return Err(CloseError::RecordUnreadable(error)),
-            },
-        };
+        // Use the same boot fence as recovery before any process operation.
+        let judgment = self.judge(owner, &current);
         match judgment {
             Judgment::Ended(record) if record.incarnation == current.incarnation => Ok(record),
             Judgment::LeftoversLeft(record) => Err(CloseError::Failed(format!(
@@ -1198,6 +1183,19 @@ impl Panes {
             Judgment::OtherOwner(current.clone())
         } else if current.protocol < OLDEST_HOLDER_VERSION {
             Judgment::Unsupported(current.clone())
+        } else if current.boot.is_some() && self.boot.is_some() && current.boot != self.boot {
+            // Nothing a record of another boot names runs in this one; its
+            // pids and start times may name processes of this boot.
+            let ended = self.end_record(
+                current,
+                End::new(
+                    EndReason::MachineRestarted,
+                    "the record is from an earlier boot of the machine",
+                ),
+            );
+            // No process of another boot holds a lock in this one.
+            self.remove_stale_socket(&pane, Duration::ZERO);
+            ended
         } else if current.phase == Phase::Ended && current.cancelled() {
             let mut closing = current.clone();
             closing.phase = Phase::Closing;
@@ -1225,19 +1223,6 @@ impl Panes {
             // Accepted existence is not an expired attempt to start a holder.
             // Only explicit cancellation or a fenced recovery consumes it.
             Judgment::Starting(current.clone())
-        } else if current.boot.is_some() && self.boot.is_some() && current.boot != self.boot {
-            // Nothing a record of another boot names runs in this one; its
-            // pids and start times may name processes of this boot.
-            let ended = self.end_record(
-                current,
-                End::new(
-                    EndReason::MachineRestarted,
-                    "the record is from an earlier boot of the machine",
-                ),
-            );
-            // No process of another boot holds a lock in this one.
-            self.remove_stale_socket(&pane, Duration::ZERO);
-            ended
         } else {
             match current.holder {
                 // A close a node asked for and did not see through.
@@ -1820,6 +1805,43 @@ mod tests {
         );
         assert_eq!(panes.record("p1").unwrap(), Some(running));
         assert!(holder.runs());
+    }
+
+    #[test]
+    fn cancellation_from_another_boot_never_ends_a_current_process() {
+        for close_directly in [false, true] {
+            let home = tempfile::tempdir().unwrap();
+            let mut panes = Panes::open(home.path(), &home.path().join("s"), quiet).unwrap();
+            panes.boot = Some("current-boot".to_owned());
+            let owner = panes.acquire(Duration::ZERO).unwrap();
+            let stand_in = StandIn::start();
+            let holder = stand_in.identity();
+            let mut current = reserved(&panes, Some(holder), Phase::Ended);
+            current.boot = Some("previous-boot".to_owned());
+            current.reservation = Some(
+                serde_json::from_value(json!({
+                    "owner": owner.incarnation(), "request": "a".repeat(64),
+                    "cwd": hide_platform::path::to_wire(home.path()).unwrap(), "cancelled": true,
+                }))
+                .unwrap(),
+            );
+            current.end = Some(End::new(
+                EndReason::Terminated,
+                "previous boot cancellation",
+            ));
+            record::write(&layout::pane_record(&panes.state_dir, "p1"), &current).unwrap();
+            let ended = if close_directly {
+                panes.close(&owner, "p1").unwrap()
+            } else {
+                let Judgment::Ended(ended) = panes.judge(&owner, &current) else {
+                    panic!("the previous boot did not settle without cleanup");
+                };
+                ended
+            };
+            assert_eq!(ended.phase, Phase::Ended);
+            assert!(ended.cancelled());
+            assert!(holder.runs(), "a previous boot does not own this process");
+        }
     }
 
     #[test]
