@@ -47,6 +47,7 @@ use crate::sidebar::{SessionLayoutPayload, SessionSnapshotPayload};
 
 mod agents;
 mod creation;
+mod herdr_session;
 mod ids;
 pub(crate) mod layout;
 mod restore;
