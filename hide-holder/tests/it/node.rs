@@ -1561,6 +1561,16 @@ fn a_starting_node_removes_the_old_version_folders_nothing_runs_from() {
     .unwrap();
     assert!(terminals.holders.is_some());
 
+    // Assembly starts no record mutation. The connection acquires ownership
+    // and completes recovery before it prunes, just as the daemon's does.
+    let _owned = Arc::new(LocalPanes::new(
+        Arc::clone(terminals.holders.as_ref().unwrap()),
+        Arc::clone(&terminals.service),
+        PaneShell::Fixed(shell()),
+    ))
+    .own(HANG_LIMIT)
+    .unwrap();
+
     // This test's prune: the one that names its unused folder.
     let pruned = wait_diagnostic("pane_holder.folders_pruned", |record| {
         record["removed"]

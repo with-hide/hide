@@ -167,10 +167,14 @@ fn node(options: &Options) -> Result<(), String> {
         .map(|holders| holders.acquire(Duration::from_secs(5)))
         .transpose()?;
     if let Some(holders) = terminals.holders.as_deref() {
-        holders.recover(
+        let recovered = holders.recover(
             owner.as_ref().expect("holders acquired ownership"),
             &terminals.service,
         );
+        if !recovered.complete {
+            return Err("the node could not complete its pane record scan".to_owned());
+        }
+        holders.prune_folders();
         let told = Arc::clone(&facts);
         holders.watch_facts(Arc::new(move |pane: &str, pane_facts: &_| {
             told.told(pane, pane_facts);

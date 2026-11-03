@@ -313,7 +313,7 @@ impl NodeLink for Local {
             return;
         }
         pending.closed = Some(reason.to_owned());
-        let answers = pending.answers.drain(..).collect::<Vec<_>>();
+        let answers = std::mem::take(&mut pending.answers);
         drop(pending);
         self.env.stop.store(true, Ordering::Release);
         self.env.panes.close();
