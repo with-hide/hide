@@ -1085,10 +1085,9 @@ pub fn handle_with_progress(
             version: env!("CARGO_PKG_VERSION").to_owned(),
             os: std::env::consts::OS.to_owned(),
             arch: std::env::consts::ARCH.to_owned(),
-            home: env
-                .home
-                .as_ref()
-                .map(|home| home.to_string_lossy().into_owned()),
+            // On the wire, so a core on another system joins the engine's
+            // worktree folders under it by names (`hide_kit::layout`).
+            home: env.home.as_deref().map(crate::root::wire),
             machine_identity: match hide_platform::host::machine_id() {
                 Ok(id) => MachineIdentity::Available { id },
                 Err(error) => MachineIdentity::Unavailable {
