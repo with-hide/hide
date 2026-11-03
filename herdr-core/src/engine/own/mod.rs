@@ -276,7 +276,7 @@ impl OwnEngine<'static> {
         let engine = Self {
             shared: Arc::new(Shared {
                 topology: Arc::new(Mutex::new(topology)),
-                rules: rules::RulesWorker::start(Arc::clone(&holders))?,
+                rules: rules::RulesWorker::start(Arc::clone(&holders), restored)?,
                 holders,
                 starts: Arc::default(),
                 pending: Mutex::default(),
@@ -2240,11 +2240,12 @@ mod tests {
         issued: std::sync::atomic::AtomicU64,
         retired: Mutex<Vec<u64>>,
         ended: Mutex<Vec<String>>,
-        found: (Mutex<Option<HolderRecovery>>, Condvar),
+        found: (Mutex<Option<Result<HolderRecovery, HolderError>>>, Condvar),
         ends: Mutex<Option<hide_node_link::holders::PaneEnded>>,
         facts: Mutex<Option<hide_node_link::holders::PaneFactsSink>>,
         /// The rules given to each pane, by agent id, in order.
         rules: (Mutex<Given>, Condvar),
+        rules_hold: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
         typed: (Mutex<Typed>, Condvar),
         /// What every pane's terminal holds; `None` answers unreachable.
         processes: Mutex<Option<HolderProcesses>>,
@@ -2278,7 +2279,7 @@ mod tests {
         }
 
         fn hand(&self, recovery: HolderRecovery) {
-            *self.found.0.lock().unwrap() = Some(recovery);
+            *self.found.0.lock().unwrap() = Some(Ok(recovery));
             self.found.1.notify_all();
         }
 
@@ -2525,6 +2526,10 @@ mod tests {
             pane: &str,
             rules: Option<hide_node_link::holders::ScreenRules>,
         ) -> Result<(), HolderError> {
+            if let Some((began, go)) = self.rules_hold.lock().unwrap().take() {
+                began.send(()).unwrap();
+                go.recv_timeout(Duration::from_secs(5)).unwrap();
+            }
             self.rules
                 .0
                 .lock()
@@ -2540,9 +2545,11 @@ mod tests {
                 .1
                 .wait_timeout_while(found, timeout, |found| found.is_none())
                 .unwrap();
-            found.clone().ok_or(HolderError::Refused {
-                code: "recovery_unfinished".to_owned(),
-                message: "not handed".to_owned(),
+            found.clone().unwrap_or_else(|| {
+                Err(HolderError::Refused {
+                    code: "recovery_unfinished".to_owned(),
+                    message: "not handed".to_owned(),
+                })
             })
         }
     }
@@ -2588,6 +2595,7 @@ mod tests {
     }
 
     mod creation;
+    mod rules_recovery;
 
     /// What a placement saw: each call, in order, with whether the pane's
     /// holder had been asked to start by then and whether the topology could

@@ -202,10 +202,12 @@ impl OwnEngine<'static> {
         let recovery = match self.shared.holders.recovered(RECOVERY_WAIT) {
             Ok(recovery) => recovery,
             Err(error) => {
+                let discarded_rules = self.shared.rules.end();
                 crate::diagnostic!(serde_json::json!({
                     "component": "own_engine",
                     "kind": "engine.restore_unfinished",
                     "message": error.to_string(),
+                    "discarded_rules": discarded_rules,
                 }));
                 self.mark_unrestored(
                     saved,
@@ -214,6 +216,10 @@ impl OwnEngine<'static> {
                 return Err(holder_error(error));
             }
         };
+        // LocalPanes may publish facts while PaneSlot is still acquiring.
+        // Only this successful answer acknowledges its Ready owner; let
+        // queued rules through before adopt can start or inspect panes.
+        self.shared.rules.ready();
         Ok(self.adopt(saved, &recovery))
     }
 
