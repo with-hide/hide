@@ -222,6 +222,22 @@ fn line(pipe: &mut UnaskedStart) -> String {
         .to_owned()
 }
 
+/// Whether the process `pid` is gone within a short bound. A process its job
+/// has ended still counts as alive while Windows closes the handles it held
+/// (`hide_platform::process::is_alive`), a moment after the job counts no
+/// active process; one that left the job runs on past the bound.
+#[allow(clippy::disallowed_methods)] // a polling helper: it sleeps between observations of a state, bounded by a deadline
+fn gone_soon(pid: u32) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while hide_platform::process::is_alive(pid) {
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    true
+}
+
 fn words(words: &[&str]) -> Vec<String> {
     words.iter().map(|word| (*word).to_owned()).collect()
 }
@@ -689,7 +705,7 @@ fn a_command_past_its_cap_is_ended_with_everything_it_started() {
         .parse()
         .unwrap();
     assert!(
-        !hide_platform::process::is_alive(pid),
+        gone_soon(pid),
         "the program the command started outlived the refusal"
     );
     assert_eq!(
@@ -743,7 +759,7 @@ fn a_command_that_ends_leaves_nothing_it_started_running() {
         .parse()
         .unwrap();
     assert!(
-        !hide_platform::process::is_alive(pid),
+        gone_soon(pid),
         "the program the command started outlived it"
     );
     assert_eq!(
