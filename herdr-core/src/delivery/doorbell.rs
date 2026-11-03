@@ -1837,6 +1837,7 @@ mod tests {
                             now: false,
                             force: false,
                         }),
+                        language: crate::model::InterfaceLanguage::English,
                     },
                     Duration::from_secs(5),
                 )
@@ -1879,6 +1880,7 @@ mod tests {
                         actor: recipient,
                         target: None,
                         command: Box::new(Command::Ack { id: id.into() }),
+                        language: crate::model::InterfaceLanguage::English,
                     },
                     Duration::from_secs(5),
                 )
@@ -1933,6 +1935,7 @@ mod tests {
                             now,
                             force,
                         }),
+                        language: crate::model::InterfaceLanguage::English,
                     },
                     Duration::from_secs(5),
                 )
@@ -2139,6 +2142,7 @@ mod tests {
                         session: Some("recipient-native".into()),
                         point: hide_node_link::panes::PullPoint::Prompt,
                     }),
+                    language: crate::model::InterfaceLanguage::English,
                 },
                 Duration::from_secs(5),
             )
@@ -2298,6 +2302,7 @@ mod tests {
                     actor: sender,
                     target: None,
                     command: Box::new(Command::Cancel { id: urgent }),
+                    language: crate::model::InterfaceLanguage::English,
                 },
                 Duration::from_secs(5),
             )

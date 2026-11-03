@@ -11,6 +11,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde_json::{Value, json};
 
 use crate::handle::ChangeNotifier;
+use crate::model::InterfaceLanguage;
 use crate::runtime::Runtime;
 use crate::runtime::delivery::Observation;
 use crate::workspace_control::{Context, Query};
@@ -33,6 +34,9 @@ pub struct Prepared {
     actor: Actor,
     target: Option<Observation>,
     command: Command,
+    /// The operator's interface language, which words a letter bundle's
+    /// fold lines (`mailbox::render`).
+    language: InterfaceLanguage,
     /// The answer the core gave under its lock, with nothing left to run: a
     /// spawn Desk's queue took (PRD Desk 1차 B21).
     answered: Option<Value>,
@@ -188,10 +192,17 @@ impl Prepared {
             actor,
             target,
             command,
+            language: InterfaceLanguage::English,
             answered: None,
             then: None,
             forced: None,
         }
+    }
+
+    /// Words what the command hands over in `language`.
+    pub(crate) fn worded_in(mut self, language: InterfaceLanguage) -> Self {
+        self.language = language;
+        self
     }
 
     /// Runs `after` with the command's answer.
@@ -242,6 +253,7 @@ impl Prepared {
                     actor: self.actor,
                     target: self.target.map(Box::new),
                     command: Box::new(self.command),
+                    language: self.language,
                 },
                 timeout,
             )
@@ -320,6 +332,7 @@ pub(crate) enum Effect {
         actor: Actor,
         target: Option<Box<Observation>>,
         command: Box<Command>,
+        language: InterfaceLanguage,
     },
     Tick(Vec<watch::Reading>),
     /// Spends one bell of the letter on `line` and saves it before the
@@ -730,7 +743,7 @@ pub(crate) fn now() -> u64 {
 }
 
 fn apply(ledger: &mut Ledger, request: &Request, now: u64) -> Result<(Value, bool), String> {
-    let (actor, target, command) = match &request.effect {
+    let (actor, target, command, language) = match &request.effect {
         Effect::SpawnNames { work, names } => {
             crate::coordination::naming::apply(ledger, work, names)?;
             return Ok((json!({"saved":true}), false));
@@ -814,8 +827,9 @@ fn apply(ledger: &mut Ledger, request: &Request, now: u64) -> Result<(Value, boo
             actor,
             target,
             command,
+            language,
             ..
-        } => (actor, target, &**command),
+        } => (actor, target, &**command, *language),
     };
     let value = match command {
         Command::WatchStart { .. } => {
@@ -884,19 +898,20 @@ fn apply(ledger: &mut Ledger, request: &Request, now: u64) -> Result<(Value, boo
                     projected.turn.activity == crate::agent_state::AgentActivity::Working
                 })
                 .map(|projected| projected.working_since(observed));
-            let intake = mailbox::gap_pull(ledger, actor, *point, working_since, now)?;
+            let intake = mailbox::gap_pull(ledger, actor, *point, working_since, now, language)?;
             // The handover is counted before the answer leaves, so a receipt
             // that never comes cannot make the same letter ride every tool;
             // the count moves nothing on screen.
             mailbox::record_tool_handover(ledger, &intake);
             return Ok((json!(intake), false));
         }
-        command => mailbox::apply(
+        command => mailbox::apply_in(
             ledger,
             actor,
             target.as_ref().map(|target| &target.actor),
             command,
             now,
+            language,
         ),
     }?;
     Ok((
@@ -908,6 +923,7 @@ fn apply(ledger: &mut Ledger, request: &Request, now: u64) -> Result<(Value, boo
                 | Command::WatchAssign { .. }
                 | Command::Confirm { .. }
                 | Command::Ack { .. }
+                | Command::AckBundle { .. }
         ),
     ))
 }
@@ -1189,6 +1205,7 @@ fn current(
             actor,
             target,
             command,
+            ..
         } => {
             let command: &Command = command;
             // The intent lookup uses the owned candidate outside Runtime.
@@ -1890,7 +1907,8 @@ mod tests {
                             authority: authority(&target.actor),
                             actor: target.actor.clone(),
                             target: Some(Box::new(target.clone())),
-                            command: Box::new(command)
+                            command: Box::new(command),
+                            language: crate::model::InterfaceLanguage::English,
                         },
                         Duration::from_secs(5)
                     )
@@ -1949,7 +1967,8 @@ mod tests {
                             authority: authority(&actor),
                             actor: actor.clone(),
                             target: Some(Box::new(target.clone())),
-                            command: Box::new(command.clone())
+                            command: Box::new(command.clone()),
+                            language: crate::model::InterfaceLanguage::English,
                         },
                         Duration::from_secs(5)
                     )
@@ -1983,6 +2002,7 @@ mod tests {
                         actor: actor.clone(),
                         target: Some(Box::new(target)),
                         command: Box::new(command.clone()),
+                        language: crate::model::InterfaceLanguage::English,
                     },
                     Duration::from_secs(5),
                 )
@@ -2002,6 +2022,7 @@ mod tests {
                         actor,
                         target: None,
                         command: Box::new(command),
+                        language: crate::model::InterfaceLanguage::English,
                     },
                     Duration::from_secs(5),
                 )
@@ -2043,6 +2064,7 @@ mod tests {
                         now: false,
                         force: false,
                     }),
+                    language: crate::model::InterfaceLanguage::English,
                 },
                 Duration::from_secs(5),
             );
@@ -2346,6 +2368,7 @@ mod tests {
                     now: false,
                     force: false,
                 }),
+                language: crate::model::InterfaceLanguage::English,
             },
             reply: mpsc::sync_channel(1).0,
         }
@@ -2376,6 +2399,7 @@ mod tests {
                     command: Box::new(Command::Ack {
                         id: "letter-999999".into(),
                     }),
+                    language: crate::model::InterfaceLanguage::English,
                 },
                 reply: mpsc::sync_channel(1).0,
             };
@@ -2483,6 +2507,7 @@ mod tests {
                     intent: "answer".into(),
                     body: "answer".into(),
                 }),
+                language: crate::model::InterfaceLanguage::English,
             },
             reply: mpsc::sync_channel(1).0,
         };

@@ -278,10 +278,15 @@ fn intake(answer: serde_json::Value) -> Result<Option<Intake>, Failure> {
     }
 }
 
+/// The most letters one handover bundle carries, the letters it shows in
+/// full and those it folds, all confirmed together; the core's open-letter
+/// limit keeps a bundle under it.
+pub const BUNDLE_LETTERS: usize = 1_024;
+
 /// Whether `ids` may travel to `hide inbox --confirm` as its arguments: at
-/// most one hook's five letters, each a letter id rather than an option.
+/// most one bundle's letters, each a letter id rather than an option.
 pub fn valid_letter_ids(ids: &[String]) -> bool {
-    ids.len() <= 5
+    ids.len() <= BUNDLE_LETTERS
         && ids.iter().all(|id| {
             !id.is_empty()
                 && id.len() <= 256

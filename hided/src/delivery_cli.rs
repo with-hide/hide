@@ -1,10 +1,10 @@
 //! Small typed command surface for the core-owned durable mailbox.
 
-use herdr_core::delivery::{BODY_LIMIT, Command, HOOK_LETTERS};
+use herdr_core::delivery::{BODY_LIMIT, BUNDLE_LETTERS, Command};
 
 use crate::env::Env;
 
-pub const USAGE: &str = "hide request send <target> --intent <key> --body <text> [--kind request|block|report|progress] [--now | --force]\nhide request reply <id> --intent <key> --body <text>\nhide request ack|cancel|show <id>\nhide inbox [--hook [--prompt-digest <sha256>] [--session <id>] [--tool|--turn-end]]\nhide watch start <target> [--observer <id>] [--actor <id>]\nhide watch assign <watch-or-target-id> --observer <id> [--actor <id>] [--expected-generation <n>] [--approval <text>]\nhide watch stop <id>\nhide watch list\nThese commands need a running Hide and a current agent pane; Hide's window does not have to be open.";
+pub const USAGE: &str = "hide request send <target> --intent <key> --body <text> [--kind request|block|report|progress] [--now | --force]\nhide request reply <id> --intent <key> --body <text>\nhide request ack|cancel|show <id>\nhide inbox [--hook [--prompt-digest <sha256>] [--session <id>] [--tool|--turn-end]]\nhide inbox --ack <bundle>\nhide watch start <target> [--observer <id>] [--actor <id>]\nhide watch assign <watch-or-target-id> --observer <id> [--actor <id>] [--expected-generation <n>] [--approval <text>]\nhide watch stop <id>\nhide watch list\nThese commands need a running Hide and a current agent pane; Hide's window does not have to be open.";
 
 pub fn parse<'a>(
     topic: &str,
@@ -59,11 +59,17 @@ pub fn parse<'a>(
             }
             Some("--confirm") => {
                 let ids: Vec<_> = args.cloned().collect();
-                if ids.is_empty() || ids.len() > HOOK_LETTERS || !ids.iter().all(|id| key(id)) {
+                if ids.is_empty() || ids.len() > BUNDLE_LETTERS || !ids.iter().all(|id| key(id)) {
                     return Err(USAGE.into());
                 }
                 Ok(Command::Confirm { ids })
             }
+            Some("--ack") => match (args.next(), args.next()) {
+                (Some(bundle), None) if key(bundle) => Ok(Command::AckBundle {
+                    bundle: bundle.clone(),
+                }),
+                _ => Err(USAGE.into()),
+            },
             _ => Err(USAGE.into()),
         };
     }
@@ -331,7 +337,23 @@ mod tests {
             }
         );
         assert!(parse_line(&["watch", "start", "target", "--force"]).is_err());
-        assert!(parse_line(&["inbox", "--confirm", "a", "b", "c", "d", "e", "f"]).is_err());
+        let bundle: Vec<String> = (0..=BUNDLE_LETTERS)
+            .map(|n| format!("letter-{n}"))
+            .collect();
+        let mut args: Vec<&str> = vec!["inbox", "--confirm"];
+        args.extend(bundle[..BUNDLE_LETTERS].iter().map(String::as_str));
+        assert!(parse_line(&args).is_ok());
+        args.push(&bundle[BUNDLE_LETTERS]);
+        assert!(parse_line(&args).is_err());
+        assert_eq!(
+            parse_line(&["inbox", "--ack", "letter-2~0123456789ab"]).unwrap(),
+            Command::AckBundle {
+                bundle: "letter-2~0123456789ab".into()
+            }
+        );
+        assert!(parse_line(&["inbox", "--ack", "letter-1", "letter-2"]).is_err());
+        assert!(parse_line(&["inbox", "--ack"]).is_err());
+        assert!(parse_line(&["inbox", "--ack", "--hook"]).is_err());
     }
 
     #[test]

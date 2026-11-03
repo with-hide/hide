@@ -1519,6 +1519,7 @@ impl Runtime {
             target,
             command,
         )
+        .worded_in(self.interface_language())
         .then(after);
         let prepared = match forced {
             Some(engine) => prepared.forced_through(engine),
@@ -4774,9 +4775,10 @@ pub(crate) mod tests {
         )
         .unwrap();
         let inbox = run("recipient", Command::Inbox).unwrap();
-        assert_eq!(inbox.as_array().map(Vec::len), Some(1), "{inbox}");
-        assert_eq!(inbox[0]["id"], letter["id"]);
-        assert_eq!(inbox[0]["body"], "read me after a restart");
+        let letters = &inbox["letters"];
+        assert_eq!(letters.as_array().map(Vec::len), Some(1), "{inbox}");
+        assert_eq!(letters[0]["id"], letter["id"]);
+        assert_eq!(letters[0]["body"], "read me after a restart");
         drop(worker);
 
         let saved = crate::delivery::ledger::recover(&path).unwrap();

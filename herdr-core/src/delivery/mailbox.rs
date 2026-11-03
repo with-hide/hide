@@ -2,9 +2,12 @@ pub use hide_node_link::panes::PullPoint;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::answer::{Confirmed, InboxEntry};
+use super::answer::{Acknowledged, Confirmed, Folded, Inbox};
 use super::ledger::{Ledger, Letter, State};
-use super::{Actor, BODY_LIMIT, HOOK_LETTERS, HOOK_LIMIT, LETTER_LIMIT, OPEN_LIMIT};
+use super::{
+    Actor, BODY_LIMIT, BUNDLE_LETTERS, HOOK_LIMIT, LETTER_LIMIT, OPEN_LIMIT, SHOWN_PER_SENDER,
+};
+use crate::model::InterfaceLanguage;
 
 // One per request, made and consumed by its caller and never kept in bulk,
 // so the size of the agent commands is not worth a box.
@@ -39,6 +42,13 @@ pub enum Command {
     },
     Ack {
         id: String,
+    },
+    /// `hide inbox --ack <bundle>`: acknowledges, as one receipt, exactly
+    /// the pending letters `hide inbox` listed, folded ones included, which
+    /// `bundle` names ([`bundle_token`]); a set that changed since is refused
+    /// `bundle_changed`, and a letter that came after it is not taken.
+    AckBundle {
+        bundle: String,
     },
     Cancel {
         id: String,
@@ -244,6 +254,25 @@ pub fn apply(
     command: &Command,
     now: u64,
 ) -> Result<Value, String> {
+    apply_in(
+        ledger,
+        actor,
+        target,
+        command,
+        now,
+        InterfaceLanguage::English,
+    )
+}
+
+/// [`apply`], with what a handover shows worded in `language`.
+pub fn apply_in(
+    ledger: &mut Ledger,
+    actor: &Actor,
+    target: Option<&Actor>,
+    command: &Command,
+    now: u64,
+    language: InterfaceLanguage,
+) -> Result<Value, String> {
     actor.require_native_identity()?;
     if let Command::Send { intent, .. } | Command::Reply { intent, .. } = command
         && let Some(letter) = existing_intent(ledger, actor, intent, now)
@@ -320,49 +349,67 @@ pub fn apply(
                 .iter_mut()
                 .find(|letter| letter.id == *id)
                 .ok_or("letter_unavailable")?;
-            let mut ended = None;
-            if matches!(command, Command::Ack { .. }) {
-                // An older build's acknowledgement may still await intake.
-                if letter.awaiting_intake() || letter.state == State::Delivered {
-                    letter.state = State::Acknowledged;
-                    // Only the recipient's own pane and session may
-                    // acknowledge, so the acknowledgement is its receipt
-                    // whatever its kind; a letter already cancelled or
-                    // expired has none to give.
-                    ended = record_intake(letter, now);
-                }
+            let ended = if matches!(command, Command::Ack { .. }) {
+                acknowledge(letter, now)
             } else {
                 letter.state = State::Cancelled;
                 letter.waiting_answer = false;
-            }
-            if !letter.open() {
-                letter.finished_at_unix_ms.get_or_insert(now);
-            }
+                if !letter.open() {
+                    letter.finished_at_unix_ms.get_or_insert(now);
+                }
+                None
+            };
             let letter = letter.clone();
             end_report_watches(ledger, ended);
             Ok(json!(letter))
         }
-        Command::Show { id } => Ok(json!(authorized(ledger, actor, id)?)),
-        Command::Inbox => {
-            // An agent with no prompt hook acknowledges what it read.
-            let acknowledges = !prompt_hook(&actor.kind);
-            Ok(json!(
-                ledger
-                    .letters
-                    .iter()
-                    .filter(|letter| letter.recipient.same_identity(actor)
-                        && matches!(letter.state, State::Pending | State::Undelivered)
-                        || letter.sender.same_identity(actor) && letter.state == State::Undelivered)
-                    .map(|letter| InboxEntry {
-                        ack_command: (acknowledges
-                            && letter.state == State::Pending
-                            && letter.recipient.same_identity(actor))
-                        .then(|| format!("hide request ack {}", letter.id)),
-                        letter: letter.clone(),
-                    })
-                    .collect::<Vec<_>>()
-            ))
+        Command::AckBundle { bundle } => {
+            let (newest, _) = bundle.rsplit_once(BUNDLE_MARK).ok_or("invalid_request")?;
+            if !authorized(ledger, actor, newest)?
+                .recipient
+                .same_identity(actor)
+            {
+                return Err("recipient_required".into());
+            }
+            // The ledger keeps letters in the order they were sent, so a
+            // letter that came after the bundle stands after its newest, and
+            // the token proves the rest are exactly the letters listed.
+            let end = ledger
+                .letters
+                .iter()
+                .position(|letter| letter.id == newest)
+                .ok_or("letter_unavailable")?;
+            let listed = |letter: &Letter| {
+                letter.recipient.same_identity(actor) && letter.state == State::Pending
+            };
+            let ids: Vec<&str> = ledger.letters[..=end]
+                .iter()
+                .filter(|letter| listed(letter))
+                .map(|letter| letter.id.as_str())
+                .collect();
+            if bundle_token(&ids).as_deref() != Some(bundle.as_str()) {
+                return Err("bundle_changed".into());
+            }
+            let mut reports = Vec::new();
+            let mut acknowledged = 0;
+            for letter in ledger.letters[..=end]
+                .iter_mut()
+                .filter(|letter| listed(letter))
+            {
+                reports.extend(acknowledge(letter, now));
+                acknowledged += 1;
+            }
+            // One receipt for the whole bundle, with the watches it ends.
+            for report in reports {
+                end_report_watches(ledger, Some(report));
+            }
+            Ok(json!(Acknowledged {
+                bundle: bundle.clone(),
+                acknowledged,
+            }))
         }
+        Command::Show { id } => Ok(json!(authorized(ledger, actor, id)?)),
+        Command::Inbox => Ok(json!(inbox(ledger, actor))),
         // A tool event's ask is answered by the worker with the pane's own
         // observation (`tool_pull`); with none, nothing is due.
         Command::Pull {
@@ -419,7 +466,7 @@ pub fn apply(
             prompt_digest: Some(digest),
             ..
         } if rang(ledger, actor, digest) => {
-            let intake = pull(ledger, actor)?;
+            let intake = pull_in(ledger, actor, language)?;
             // Handed over now, whether or not the hook's confirmation, a
             // second process inside its last 400 ms, ever arrives.
             mark_handed(ledger, &intake);
@@ -427,18 +474,12 @@ pub fn apply(
         }
         // An agent no bell rings for takes its letters on its next prompt,
         // whoever typed it: no turn of Hide's own will ever bring them.
-        Command::Pull { .. } if next_prompt_letters(&actor.kind) => Ok(json!(pull(ledger, actor)?)),
+        Command::Pull { .. } if next_prompt_letters(&actor.kind) => {
+            Ok(json!(pull_in(ledger, actor, language)?))
+        }
         Command::Pull { .. } => Ok(json!(operator_prompt_intake(ledger, actor, now)?)),
         Command::Confirm { ids } => {
-            if ids.len() > HOOK_LETTERS {
-                return Err("capacity".into());
-            }
-            for id in ids {
-                let letter = authorized(ledger, actor, id)?;
-                if !letter.recipient.same_identity(actor) {
-                    return Err("recipient_required".into());
-                }
-            }
+            recipient_of_all(ledger, actor, ids)?;
             let mut reports = Vec::new();
             for id in ids {
                 let letter = ledger
@@ -462,6 +503,40 @@ pub fn apply(
         | Command::WatchAssign { .. }
         | Command::WatchList => Err("watch_command_required".into()),
     }
+}
+
+/// Refuses `ids` unless each names a letter to `actor`, and at most one
+/// bundle's worth of them, before any of them changes.
+fn recipient_of_all(ledger: &Ledger, actor: &Actor, ids: &[String]) -> Result<(), String> {
+    if ids.len() > BUNDLE_LETTERS {
+        return Err("capacity".into());
+    }
+    for id in ids {
+        if !authorized(ledger, actor, id)?
+            .recipient
+            .same_identity(actor)
+        {
+            return Err("recipient_required".into());
+        }
+    }
+    Ok(())
+}
+
+/// The recipient's acknowledgement of `letter`: only the recipient's own
+/// pane and session may give one, so it is its receipt whatever its kind; a
+/// letter already cancelled or expired has none to give. Returns the pair
+/// whose report watch it ends.
+fn acknowledge(letter: &mut Letter, now: u64) -> Option<(Actor, Actor)> {
+    let mut ended = None;
+    // An older build's acknowledgement may still await intake.
+    if letter.awaiting_intake() || letter.state == State::Delivered {
+        letter.state = State::Acknowledged;
+        ended = record_intake(letter, now);
+    }
+    if !letter.open() {
+        letter.finished_at_unix_ms.get_or_insert(now);
+    }
+    ended
 }
 
 /// Records that the recipient took the letter in. A report, the letter that
@@ -587,7 +662,14 @@ pub(crate) fn tool_pull(
     working_since: Option<u64>,
     now: u64,
 ) -> Result<Intake, String> {
-    gap_pull(ledger, actor, PullPoint::Tool, working_since, now)
+    gap_pull(
+        ledger,
+        actor,
+        PullPoint::Tool,
+        working_since,
+        now,
+        InterfaceLanguage::English,
+    )
 }
 
 /// At a safe gap, take this session's bell batch immediately, then letters
@@ -598,6 +680,7 @@ pub(crate) fn gap_pull(
     point: PullPoint,
     working_since: Option<u64>,
     now: u64,
+    language: InterfaceLanguage,
 ) -> Result<Intake, String> {
     actor.require_native_identity()?;
     let supported = hide_agent_adapter::adapter(&actor.kind).is_some_and(|row| match point {
@@ -626,7 +709,7 @@ pub(crate) fn gap_pull(
                         })))
         })
         .collect();
-    Ok(render(due))
+    Ok(render(due, language))
 }
 
 /// Counts the handover of the letters `intake` carries, so that a letter
@@ -657,7 +740,14 @@ fn mark_handed(ledger: &mut Ledger, intake: &Intake) {
 }
 
 /// The letter bodies for the turn Hide's bell opened.
-pub fn pull(ledger: &Ledger, actor: &Actor) -> Result<Intake, String> {
+#[cfg(test)]
+pub(crate) fn pull(ledger: &Ledger, actor: &Actor) -> Result<Intake, String> {
+    pull_in(ledger, actor, InterfaceLanguage::English)
+}
+
+/// The bundle of every letter awaiting the caller's intake, its fold lines
+/// worded in `language`.
+fn pull_in(ledger: &Ledger, actor: &Actor, language: InterfaceLanguage) -> Result<Intake, String> {
     actor.require_native_identity()?;
     if !prompt_hook(&actor.kind) {
         return Ok(Intake::default());
@@ -667,12 +757,103 @@ pub fn pull(ledger: &Ledger, actor: &Actor) -> Result<Intake, String> {
         .iter()
         .filter(|letter| letter.recipient.same_identity(actor) && letter.awaiting_intake())
         .collect();
-    Ok(render(pending))
+    Ok(render(pending, language))
 }
 
-/// The hook's context for `pending`, oldest first, at most `HOOK_LETTERS`
-/// letters and `HOOK_LIMIT` bytes, with the ids to confirm.
-fn render(mut pending: Vec<&Letter>) -> Intake {
+/// Whether a bundle may fold `letter` into its sender's line: a question or
+/// a block is always shown, since a folded one would go unanswered until it
+/// expires and its sender would stay stuck.
+fn foldable(letter: &Letter) -> bool {
+    !matches!(letter.kind.as_str(), "request" | "block")
+}
+
+/// One sender's letters in a bundle: those shown in full, pending ones first
+/// and each oldest first, and the older ones folded into one line.
+struct Share<'a> {
+    sender: &'a Actor,
+    shown: Vec<&'a Letter>,
+    folded: Vec<&'a Letter>,
+}
+
+/// `letters` as one bundle: grouped by sender in the order each sender's
+/// first letter comes, every question and block shown, and of the rest the
+/// newest [`SHOWN_PER_SENDER`] shown and the older ones folded.
+fn bundle<'a>(letters: &[&'a Letter]) -> Vec<Share<'a>> {
+    let mut shares: Vec<Share<'a>> = Vec::new();
+    for letter in letters {
+        match shares
+            .iter_mut()
+            .find(|share| share.sender.same_identity(&letter.sender))
+        {
+            Some(share) => share.shown.push(letter),
+            None => shares.push(Share {
+                sender: &letter.sender,
+                shown: vec![letter],
+                folded: Vec::new(),
+            }),
+        }
+    }
+    for share in &mut shares {
+        // Stable, so letters sent in the same millisecond keep the ledger's
+        // order, which is the order they were sent.
+        share.shown.sort_by_key(|letter| letter.created_at_unix_ms);
+        let mut fold = share
+            .shown
+            .iter()
+            .filter(|letter| foldable(letter))
+            .count()
+            .saturating_sub(SHOWN_PER_SENDER);
+        let (folded, shown) = std::mem::take(&mut share.shown)
+            .into_iter()
+            .partition(|letter| {
+                let folds = fold > 0 && foldable(letter);
+                fold -= usize::from(folds);
+                folds
+            });
+        share.folded = folded;
+        share.shown = shown;
+        // The letter a bell rings for comes first, so a backlog acknowledged
+        // without a receipt never displaces it under the size cap.
+        share
+            .shown
+            .sort_by_key(|letter| letter.state != State::Pending);
+    }
+    shares
+}
+
+/// How many folded ids a fold line names, newest first; `hide inbox` lists
+/// every one.
+const FOLD_IDS_NAMED: usize = 8;
+
+/// The line that stands for a sender's folded letters: who sent them, how
+/// many, in the interface language's words for the count, and how to open one.
+fn fold_line(share: &Share<'_>, language: InterfaceLanguage) -> String {
+    let words = super::bell::words(language);
+    let mut named: Vec<&str> = share
+        .folded
+        .iter()
+        .rev()
+        .take(FOLD_IDS_NAMED)
+        .map(|letter| letter.id.as_str())
+        .collect();
+    if share.folded.len() > FOLD_IDS_NAMED {
+        named.push("…");
+    }
+    format!(
+        "\nHide letters from {} ({}) {}: hide request show <id> ({})\n",
+        share.sender.name,
+        share.sender.kind,
+        words.more(share.folded.len()),
+        named.join(", ")
+    )
+}
+
+/// The hook's context for `pending` as one bundle ([`bundle`]): each
+/// sender's fold line, then its letters in full, within `HOOK_LIMIT` bytes,
+/// with the ids to confirm, folded ones included. A sender whose fold line
+/// no longer fits is left whole for the next handover, so a folded letter is
+/// never shown in full later just because its newer ones were taken first.
+fn render(mut pending: Vec<&Letter>, language: InterfaceLanguage) -> Intake {
     // The letters a bell rings for come first, so a backlog acknowledged
     // without a receipt never displaces the one that opened this turn.
     pending.sort_by_key(|letter| (letter.state != State::Pending, letter.created_at_unix_ms));
@@ -681,25 +862,37 @@ fn render(mut pending: Vec<&Letter>) -> Intake {
     // Reserve the tail before rendering bodies, including IDs and sender
     // metadata. Truncation always ends at a UTF-8 boundary.
     const TAIL_BUDGET: usize = 128;
-    for letter in pending.iter().take(HOOK_LETTERS) {
-        let header = format!(
-            "\nHide letter {} from {} ({}) [{}]\n",
-            letter.id, letter.sender.name, letter.sender.kind, letter.kind
-        );
-        let tail = format!("\nFull letter: hide request show {}\n", letter.id);
-        let available =
-            HOOK_LIMIT.saturating_sub(context.len() + header.len() + tail.len() + TAIL_BUDGET);
-        if available == 0 {
-            break;
+    'shares: for share in bundle(&pending) {
+        if !share.folded.is_empty() {
+            let line = fold_line(&share, language);
+            if context.len() + line.len() + TAIL_BUDGET > HOOK_LIMIT
+                || ids.len() + share.folded.len() > BUNDLE_LETTERS
+            {
+                break;
+            }
+            context.push_str(&line);
+            ids.extend(share.folded.iter().map(|letter| letter.id.clone()));
         }
-        let mut end = letter.body.len().min(available);
-        while !letter.body.is_char_boundary(end) {
-            end -= 1;
+        for letter in share.shown {
+            let header = format!(
+                "\nHide letter {} from {} ({}) [{}]\n",
+                letter.id, letter.sender.name, letter.sender.kind, letter.kind
+            );
+            let tail = format!("\nFull letter: hide request show {}\n", letter.id);
+            let available =
+                HOOK_LIMIT.saturating_sub(context.len() + header.len() + tail.len() + TAIL_BUDGET);
+            if available == 0 || ids.len() == BUNDLE_LETTERS {
+                break 'shares;
+            }
+            let mut end = letter.body.len().min(available);
+            while !letter.body.is_char_boundary(end) {
+                end -= 1;
+            }
+            context.push_str(&header);
+            context.push_str(&letter.body[..end]);
+            context.push_str(&tail);
+            ids.push(letter.id.clone());
         }
-        context.push_str(&header);
-        context.push_str(&letter.body[..end]);
-        context.push_str(&tail);
-        ids.push(letter.id.clone());
     }
     let remaining = pending.len().saturating_sub(ids.len());
     if remaining > 0 {
@@ -711,6 +904,85 @@ fn render(mut pending: Vec<&Letter>) -> Intake {
         context,
         ids,
         remaining,
+    }
+}
+
+/// What separates a bundle token's newest letter from its digest.
+const BUNDLE_MARK: char = '~';
+
+/// The token `hide inbox --ack` takes for the pending letters `ids`, in the
+/// ledger's order: the newest's id, then the first 12 hex digits of the
+/// SHA-256 of all of them, one per line, so the acknowledgement takes
+/// exactly the letters the inbox listed and never one it did not.
+fn bundle_token(ids: &[&str]) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let newest = ids.last()?;
+    let digest = Sha256::digest(ids.join("\n").as_bytes());
+    let short: String = digest[..6]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    Some(format!("{newest}{BUNDLE_MARK}{short}"))
+}
+
+/// `hide inbox`: the caller's letters as one bundle, as a handover gives
+/// them, then its own letters that went undelivered; an agent with no prompt
+/// hook acknowledges the whole bundle with the one command it carries.
+fn inbox(ledger: &Ledger, actor: &Actor) -> Inbox {
+    let mut received: Vec<_> = ledger
+        .letters
+        .iter()
+        .filter(|letter| {
+            letter.recipient.same_identity(actor)
+                && matches!(letter.state, State::Pending | State::Undelivered)
+        })
+        .collect();
+    received.sort_by_key(|letter| (letter.state != State::Pending, letter.created_at_unix_ms));
+    let shares = bundle(&received);
+    // The pending letters this answer lists, shown or folded, in the
+    // ledger's order: the one acknowledgement takes exactly these.
+    let listed: std::collections::HashSet<&str> = shares
+        .iter()
+        .flat_map(|share| share.shown.iter().chain(&share.folded))
+        .filter(|letter| letter.state == State::Pending)
+        .map(|letter| letter.id.as_str())
+        .collect();
+    let ids: Vec<&str> = ledger
+        .letters
+        .iter()
+        .map(|letter| letter.id.as_str())
+        .filter(|id| listed.contains(id))
+        .collect();
+    let ack_command = bundle_token(&ids)
+        .filter(|_| !prompt_hook(&actor.kind))
+        .map(|bundle| format!("hide inbox --ack {bundle}"));
+    let folded = shares
+        .iter()
+        .filter(|share| !share.folded.is_empty())
+        .map(|share| Folded {
+            sender: share.sender.name.clone(),
+            sender_kind: share.sender.kind.clone(),
+            ids: share
+                .folded
+                .iter()
+                .map(|letter| letter.id.clone())
+                .collect(),
+        })
+        .collect();
+    let letters = shares
+        .into_iter()
+        .flat_map(|share| share.shown)
+        .chain(ledger.letters.iter().filter(|letter| {
+            letter.sender.same_identity(actor)
+                && !letter.recipient.same_identity(actor)
+                && letter.state == State::Undelivered
+        }))
+        .cloned()
+        .collect();
+    Inbox {
+        letters,
+        folded,
+        ack_command,
     }
 }
 
@@ -927,7 +1199,7 @@ mod tests {
         assert_eq!(restored.letters[0].state, State::Cancelled);
     }
     #[test]
-    fn intake_is_oldest_five_and_bounded_utf8_without_losing_full_body() {
+    fn intake_shows_every_question_and_is_bounded_utf8_without_losing_full_body() {
         let mut ledger = Ledger::default();
         let a = actor("a");
         let b = actor("b");
@@ -945,12 +1217,13 @@ mod tests {
             .unwrap();
         }
         let intake = pull(&ledger, &b).unwrap();
-        assert_eq!(intake.ids.len(), 5);
-        assert_eq!(intake.remaining, 2);
-        assert!(intake.context.contains("대기 2통 더 있음"));
+        assert_eq!(intake.ids.len(), 7, "a question is never folded");
+        assert_eq!(intake.remaining, 0);
         ledger.letters[0].body = "한".repeat(BODY_LIMIT / 3);
         let intake = pull(&ledger, &b).unwrap();
         assert!(intake.context.len() <= HOOK_LIMIT);
+        assert_eq!(intake.ids, vec![ledger.letters[0].id.clone()]);
+        assert!(intake.context.contains("대기 6통 더 있음"));
         assert!(intake.context.contains("hide request show letter-1"));
         assert_eq!(ledger.letters[0].body.len(), (BODY_LIMIT / 3) * 3);
     }
@@ -979,7 +1252,7 @@ mod tests {
         );
         assert_eq!(ledger.letters[0].id, letter.id);
         let inbox = apply(&mut ledger, &a, None, &Command::Inbox, 20).unwrap();
-        assert_eq!(inbox[0]["state"], "undelivered");
+        assert_eq!(inbox["letters"][0]["state"], "undelivered");
     }
 
     #[test]
@@ -1145,7 +1418,15 @@ mod tests {
                 102,
             )
             .unwrap();
-            let intake = gap_pull(&ledger, &recipient, point, Some(100), 102).unwrap();
+            let intake = gap_pull(
+                &ledger,
+                &recipient,
+                point,
+                Some(100),
+                102,
+                InterfaceLanguage::English,
+            )
+            .unwrap();
             assert_eq!(intake.ids, ids);
             assert!(!intake.context.contains("late-body"));
             record_tool_handover(&mut ledger, &intake);
@@ -1158,10 +1439,17 @@ mod tests {
             )
             .unwrap();
             assert!(
-                gap_pull(&ledger, &recipient, point, Some(100), 104)
-                    .unwrap()
-                    .ids
-                    .is_empty()
+                gap_pull(
+                    &ledger,
+                    &recipient,
+                    point,
+                    Some(100),
+                    104,
+                    InterfaceLanguage::English,
+                )
+                .unwrap()
+                .ids
+                .is_empty()
             );
             // A due or explicit immediate letter still travels at either gap.
             ledger
@@ -1171,9 +1459,16 @@ mod tests {
                 .unwrap()
                 .immediate = true;
             assert_eq!(
-                gap_pull(&ledger, &recipient, point, Some(100), 105)
-                    .unwrap()
-                    .ids,
+                gap_pull(
+                    &ledger,
+                    &recipient,
+                    point,
+                    Some(100),
+                    105,
+                    InterfaceLanguage::English
+                )
+                .unwrap()
+                .ids,
                 [later.id]
             );
         }
@@ -1202,19 +1497,33 @@ mod tests {
             .unwrap();
             assert_eq!(answer["context"], "");
             assert_eq!(
-                gap_pull(&ledger, &recipient, PullPoint::TurnEnd, Some(100), 101)
-                    .unwrap()
-                    .ids
-                    .len(),
+                gap_pull(
+                    &ledger,
+                    &recipient,
+                    PullPoint::TurnEnd,
+                    Some(100),
+                    101,
+                    InterfaceLanguage::English
+                )
+                .unwrap()
+                .ids
+                .len(),
                 usize::from(text == LINE)
             );
         }
         for point in [PullPoint::Tool, PullPoint::TurnEnd] {
             assert!(
-                gap_pull(&ledger, &recipient, point, Some(100), 101)
-                    .unwrap()
-                    .ids
-                    .is_empty()
+                gap_pull(
+                    &ledger,
+                    &recipient,
+                    point,
+                    Some(100),
+                    101,
+                    InterfaceLanguage::English
+                )
+                .unwrap()
+                .ids
+                .is_empty()
             );
         }
     }
@@ -1725,19 +2034,22 @@ mod tests {
         let ids = pending_for(&mut ledger, &recipient, 1);
         let inbox = apply(&mut ledger, &recipient, None, &Command::Inbox, 5).unwrap();
         assert_eq!(
-            inbox[0]["ack_command"],
-            format!("hide request ack {}", ids[0])
+            inbox["ack_command"],
+            format!(
+                "hide inbox --ack {}",
+                bundle_token(&[ids[0].as_str()]).unwrap()
+            )
         );
         // An expired letter can no longer be acknowledged, so none is offered.
         assert!(ledger.expire(10 + super::super::DELIVERY_EXPIRY_MS));
         let inbox = apply(&mut ledger, &recipient, None, &Command::Inbox, 5).unwrap();
-        assert_eq!(inbox[0]["state"], "undelivered");
-        assert!(inbox[0].get("ack_command").is_none());
+        assert_eq!(inbox["letters"][0]["state"], "undelivered");
+        assert!(inbox.get("ack_command").is_none());
         // A hooked agent's prompt hook acknowledges for it; the sender sees none.
         let hooked = actor("hooked");
         pending_for(&mut ledger, &hooked, 1);
         let inbox = apply(&mut ledger, &hooked, None, &Command::Inbox, 5).unwrap();
-        assert!(inbox[0].get("ack_command").is_none());
+        assert!(inbox.get("ack_command").is_none());
     }
 
     /// docs/delivery.md, Watch activity and completion: an interim report
@@ -2269,20 +2581,20 @@ mod tests {
     fn a_bell_turn_hands_over_pending_letters_before_an_acknowledged_backlog() {
         let mut ledger = Ledger::default();
         let recipient = actor("recipient");
-        pending_for(&mut ledger, &recipient, HOOK_LETTERS + 2);
-        for index in 0..HOOK_LETTERS + 1 {
+        pending_for(&mut ledger, &recipient, 7);
+        for index in 0..6 {
             acknowledged_without_receipt(&mut ledger, index);
         }
-        let fresh = ledger.letters[HOOK_LETTERS + 1].id.clone();
-        ring(&mut ledger, HOOK_LETTERS + 1, LINE);
+        let fresh = ledger.letters[6].id.clone();
+        ring(&mut ledger, 6, LINE);
         let intake = pull_for(&mut ledger, &recipient, LINE);
-        assert_eq!(intake.ids.len(), HOOK_LETTERS);
+        assert_eq!(intake.ids.len(), 7);
         assert_eq!(intake.ids[0], fresh, "the letter the bell rang for");
         assert_eq!(
             intake.ids[1], ledger.letters[0].id,
             "then the oldest backlog"
         );
-        assert_eq!(intake.remaining, 2);
+        assert_eq!(intake.remaining, 0);
     }
 
     #[test]
@@ -2322,7 +2634,9 @@ mod tests {
             .unwrap_err(),
             "capacity"
         );
-        assert_eq!(pull(&restored, &recipient).unwrap().ids.len(), HOOK_LETTERS);
+        // One sender's whole open backlog is one bundle: its block and its
+        // newest three reports in full, the rest folded, all confirmable.
+        assert_eq!(pull(&restored, &recipient).unwrap().ids.len(), OPEN_LIMIT);
         assert!(restored.expire(deadline));
         assert!(pull(&restored, &recipient).unwrap().ids.is_empty());
         // A block still awaiting its reply stays open; the reports do not.
@@ -2879,5 +3193,343 @@ mod tests {
             .unwrap()
             .answer_wait_ended = Some(AnswerWaitEnd::Deadline);
         assert_eq!(ledger.validate().unwrap_err(), "ledger_unavailable");
+    }
+
+    /// `sender` writes one letter of `kind` to `recipient` for each body,
+    /// a millisecond apart from `from`, and returns their ids.
+    fn letters_from(
+        ledger: &mut Ledger,
+        sender: &Actor,
+        recipient: &Actor,
+        kinds: &[&str],
+        from: u64,
+    ) -> Vec<String> {
+        kinds
+            .iter()
+            .enumerate()
+            .map(|(index, kind)| {
+                let at = from + index as u64;
+                send(
+                    ledger,
+                    sender,
+                    recipient,
+                    &format!("{}-{at}", sender.name),
+                    &format!("body of {} at {at}", sender.name),
+                    kind,
+                    None,
+                    at,
+                )
+                .unwrap()
+                .id
+            })
+            .collect()
+    }
+
+    fn bundle_for(ledger: &Ledger, recipient: &Actor) -> Intake {
+        pull_in(ledger, recipient, InterfaceLanguage::Korean).unwrap()
+    }
+
+    #[test]
+    fn a_sender_with_five_progress_letters_shows_its_newest_three_and_folds_two() {
+        let mut ledger = Ledger::default();
+        let (worker, conductor) = (actor("worker"), actor("conductor"));
+        let ids = letters_from(&mut ledger, &worker, &conductor, &["progress"; 5], 1);
+        let intake = bundle_for(&ledger, &conductor);
+        assert!(intake.context.contains(
+            "Hide letters from worker (codex) 외 2통: hide request show <id> (letter-2, letter-1)"
+        ));
+        for at in 1..=2 {
+            assert!(!intake.context.contains(&format!("body of worker at {at}")));
+        }
+        for at in 3..=5 {
+            assert!(
+                intake
+                    .context
+                    .contains(&format!("body of worker at {at}\n"))
+            );
+        }
+        // The folded letters are confirmed with the shown ones.
+        assert_eq!(intake.ids, ids);
+        assert_eq!(intake.remaining, 0);
+    }
+
+    #[test]
+    fn a_sender_with_two_letters_is_shown_whole_with_no_fold_line() {
+        let mut ledger = Ledger::default();
+        let (worker, conductor) = (actor("worker"), actor("conductor"));
+        let ids = letters_from(&mut ledger, &worker, &conductor, &["progress", "report"], 1);
+        let intake = bundle_for(&ledger, &conductor);
+        assert!(!intake.context.contains("Hide letters from"));
+        assert!(!intake.context.contains("외 "));
+        assert_eq!(intake.context.matches("\nHide letter ").count(), 2);
+        assert_eq!(intake.ids, ids);
+    }
+
+    #[test]
+    fn a_request_among_ten_progress_letters_is_never_folded() {
+        let mut ledger = Ledger::default();
+        let (worker, conductor) = (actor("worker"), actor("conductor"));
+        let mut kinds = vec!["request"];
+        kinds.extend(["progress"; 10]);
+        let ids = letters_from(&mut ledger, &worker, &conductor, &kinds, 1);
+        let intake = bundle_for(&ledger, &conductor);
+        // The oldest letter is the question, shown in full.
+        assert!(intake.context.contains(&format!(
+            "\nHide letter {} from worker (codex) [request]\nbody of worker at 1\n",
+            ids[0]
+        )));
+        assert!(intake.context.contains("외 7통"));
+        assert_eq!(intake.context.matches("\nHide letter ").count(), 4);
+        assert_eq!(intake.ids.len(), 11);
+    }
+
+    #[test]
+    fn one_confirmation_takes_in_folded_letters_and_ends_a_folded_reports_watch() {
+        let mut ledger = Ledger::default();
+        let (child, parent) = (actor("child"), actor("parent"));
+        super::super::watch::start(&mut ledger, &parent, &child, 1).unwrap();
+        let mut kinds = vec!["report"];
+        kinds.extend(["progress"; 4]);
+        let ids = letters_from(&mut ledger, &child, &parent, &kinds, 2);
+        let intake = bundle_for(&ledger, &parent);
+        // The report is the oldest of five, so it is folded.
+        assert!(!intake.context.contains("[report]"));
+        assert!(intake.context.contains("외 2통"));
+        apply(
+            &mut ledger,
+            &parent,
+            None,
+            &Command::Confirm {
+                ids: intake.ids.clone(),
+            },
+            20,
+        )
+        .unwrap();
+        for id in &ids {
+            let letter = ledger
+                .letters
+                .iter()
+                .find(|letter| letter.id == *id)
+                .unwrap();
+            assert_eq!(letter.state, State::Delivered, "{id}");
+            assert_eq!(letter.hook_confirmed, Some(true), "{id}");
+        }
+        assert!(
+            ledger.watches.is_empty(),
+            "the folded report ended the watch"
+        );
+        assert!(bundle_for(&ledger, &parent).ids.is_empty());
+    }
+
+    #[test]
+    fn mixed_senders_each_keep_their_newest_three() {
+        let mut ledger = Ledger::default();
+        let conductor = actor("conductor");
+        let (a, b) = (actor("worker-a"), actor("worker-b"));
+        let a_ids = letters_from(&mut ledger, &a, &conductor, &["progress"; 5], 1);
+        let b_ids = letters_from(&mut ledger, &b, &conductor, &["progress"; 4], 10);
+        let intake = bundle_for(&ledger, &conductor);
+        assert!(intake.context.contains(&format!(
+            "Hide letters from worker-a (codex) 외 2통: hide request show <id> ({}, {})",
+            a_ids[1], a_ids[0]
+        )));
+        assert!(intake.context.contains(&format!(
+            "Hide letters from worker-b (codex) 외 1통: hide request show <id> ({})",
+            b_ids[0]
+        )));
+        assert_eq!(intake.context.matches("\nHide letter ").count(), 6);
+        // Each sender's letters stay together, the earlier sender first.
+        let a_last = intake.context.find("body of worker-a at 5").unwrap();
+        let b_first = intake.context.find("Hide letters from worker-b").unwrap();
+        assert!(a_last < b_first);
+        assert_eq!(intake.ids.len(), 9);
+    }
+
+    #[test]
+    fn letters_past_the_size_cap_are_neither_shown_nor_confirmed() {
+        let mut ledger = Ledger::default();
+        let conductor = actor("conductor");
+        let (asker, worker) = (actor("asker"), actor("worker"));
+        let question = send(
+            &mut ledger,
+            &asker,
+            &conductor,
+            "big-question",
+            &"q".repeat(BODY_LIMIT),
+            "request",
+            None,
+            1,
+        )
+        .unwrap()
+        .id;
+        let progress = letters_from(&mut ledger, &worker, &conductor, &["progress"; 5], 2);
+        let intake = bundle_for(&ledger, &conductor);
+        assert!(intake.context.len() <= HOOK_LIMIT);
+        // The question fills the cap; the worker's letters, shown neither in
+        // full nor on a fold line, wait for the next handover.
+        assert_eq!(intake.ids, vec![question]);
+        assert_eq!(intake.remaining, 5);
+        assert!(!intake.context.contains("Hide letters from worker"));
+        assert!(
+            intake
+                .context
+                .contains("대기 5통 더 있음. hide inbox로 확인하세요.")
+        );
+        apply(
+            &mut ledger,
+            &conductor,
+            None,
+            &Command::Confirm { ids: intake.ids },
+            20,
+        )
+        .unwrap();
+        for id in &progress {
+            let letter = ledger
+                .letters
+                .iter()
+                .find(|letter| letter.id == *id)
+                .unwrap();
+            assert_eq!(letter.state, State::Pending, "{id}");
+        }
+        // The next handover folds them as the first would have.
+        let next = bundle_for(&ledger, &conductor);
+        assert!(next.context.contains("외 2통"));
+        assert_eq!(next.ids, progress);
+    }
+
+    #[test]
+    fn inbox_folds_like_a_handover_and_one_ack_takes_the_bundle_but_not_a_later_letter() {
+        let mut ledger = Ledger::default();
+        let worker = actor("worker");
+        let mut reader = actor("reader");
+        reader.kind = "cursor".into();
+        assert!(!prompt_hook(&reader.kind));
+        super::super::watch::start(&mut ledger, &reader, &worker, 1).unwrap();
+        let mut kinds = vec!["report"];
+        kinds.extend(["progress"; 5]);
+        let ids = letters_from(&mut ledger, &worker, &reader, &kinds, 2);
+        let inbox = apply(&mut ledger, &reader, None, &Command::Inbox, 20).unwrap();
+        assert_eq!(inbox["letters"].as_array().unwrap().len(), 3);
+        assert_eq!(
+            inbox["folded"],
+            json!([{
+                "sender": "worker",
+                "sender_kind": "codex",
+                "ids": ids[..3],
+            }])
+        );
+        let all: Vec<&str> = ids.iter().map(String::as_str).collect();
+        let bundle = bundle_token(&all).unwrap();
+        assert!(bundle.starts_with(&format!("{}~", ids[5])));
+        assert_eq!(inbox["ack_command"], format!("hide inbox --ack {bundle}"));
+        let later = letters_from(&mut ledger, &worker, &reader, &["progress"], 30);
+        let acked = apply(
+            &mut ledger,
+            &reader,
+            None,
+            &Command::AckBundle {
+                bundle: bundle.clone(),
+            },
+            40,
+        )
+        .unwrap();
+        assert_eq!(acked, json!({"bundle": bundle, "acknowledged": 6}));
+        for id in &ids {
+            let letter = ledger
+                .letters
+                .iter()
+                .find(|letter| letter.id == *id)
+                .unwrap();
+            assert_eq!(letter.state, State::Acknowledged, "{id}");
+        }
+        assert!(
+            ledger.watches.is_empty(),
+            "the folded report ended the watch"
+        );
+        let left = apply(&mut ledger, &reader, None, &Command::Inbox, 50).unwrap();
+        assert_eq!(left["letters"][0]["id"], later[0]);
+        let next = bundle_token(&[later[0].as_str()]).unwrap();
+        assert_eq!(left["ack_command"], format!("hide inbox --ack {next}"));
+        // Another agent's letter cannot stand for the caller's bundle.
+        assert_eq!(
+            apply(
+                &mut ledger,
+                &worker,
+                None,
+                &Command::AckBundle { bundle: next },
+                60,
+            )
+            .unwrap_err(),
+            "recipient_required"
+        );
+    }
+
+    #[test]
+    fn a_bundle_ack_takes_only_the_letters_its_inbox_listed() {
+        let mut ledger = Ledger::default();
+        let mut reader = actor("reader");
+        reader.kind = "cursor".into();
+        let (a, b) = (actor("worker-a"), actor("worker-b"));
+        // Interleaved senders: the inbox lists worker-a's letters first,
+        // though worker-b's oldest came before worker-a's newest.
+        let first_b = letters_from(&mut ledger, &b, &reader, &["progress"], 1);
+        let a_ids = letters_from(&mut ledger, &a, &reader, &["progress"; 2], 2);
+        let inbox = apply(&mut ledger, &reader, None, &Command::Inbox, 10).unwrap();
+        let ack: String = serde_json::from_value(inbox["ack_command"].clone()).unwrap();
+        let bundle = ack.strip_prefix("hide inbox --ack ").unwrap().to_owned();
+        // A token naming only some of the letters below its newest, as an
+        // inbox that left one out would print, takes nothing.
+        let partial = bundle_token(&[a_ids[0].as_str(), a_ids[1].as_str()]).unwrap();
+        assert_eq!(
+            apply(
+                &mut ledger,
+                &reader,
+                None,
+                &Command::AckBundle { bundle: partial },
+                11,
+            )
+            .unwrap_err(),
+            "bundle_changed"
+        );
+        // A letter of the bundle taken some other way changes the set too.
+        let mut taken = ledger.clone();
+        apply(
+            &mut taken,
+            &reader,
+            None,
+            &Command::Ack {
+                id: first_b[0].clone(),
+            },
+            11,
+        )
+        .unwrap();
+        assert_eq!(
+            apply(
+                &mut taken,
+                &reader,
+                None,
+                &Command::AckBundle {
+                    bundle: bundle.clone(),
+                },
+                12,
+            )
+            .unwrap_err(),
+            "bundle_changed"
+        );
+        assert!(
+            ledger
+                .letters
+                .iter()
+                .all(|letter| letter.state == State::Pending)
+        );
+        let acked = apply(
+            &mut ledger,
+            &reader,
+            None,
+            &Command::AckBundle { bundle },
+            13,
+        )
+        .unwrap();
+        assert_eq!(acked["acknowledged"], 3);
     }
 }
