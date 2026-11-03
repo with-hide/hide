@@ -49,9 +49,17 @@ test("the packaged app opens its window on the shell its own daemon serves", asy
     expect(fs.realpathSync.native(await app.evaluate(() => process.resourcesPath))).toBe(fs.realpathSync.native(resources));
     expect(run.daemonPid()).not.toBeNull();
     if (process.platform === "win32") {
+      const runtimeRoot = path.join(run.env.USERPROFILE!, ".hide", "runtime");
+      const copies = fs.readdirSync(runtimeRoot, { withFileTypes: true }).filter((entry) => entry.isDirectory());
+      expect(copies).toHaveLength(1);
+      const runtimeDir = path.join(runtimeRoot, copies[0]!.name);
+      expect(fs.statSync(path.join(runtimeDir, "hide.exe")).isFile()).toBe(true);
+      // The Windows-home contract preserves the suffix and uses ~/ before it.
+      const parts = runtimeDir.split(path.sep);
+      const loggedDir = /^[A-Za-z]:$/.test(parts[0]!) && parts[1]?.toLowerCase() === "users" ? `~/${parts.slice(3).join(path.sep)}` : runtimeDir;
       const prepared = hostLog(run.env).find((line) => line.event === "runtime.prepared");
-      expect(path.dirname(String(prepared?.dir))).toBe(path.join(run.env.USERPROFILE!, ".hide", "runtime"));
-      expect(hostLog(run.env).find((line) => line.event === "cli.resolved")?.path).toBe(path.join(String(prepared?.dir), "hide.exe"));
+      expect(prepared?.dir).toBe(loggedDir);
+      expect(hostLog(run.env).find((line) => line.event === "cli.resolved")?.path).toBe(`${loggedDir}${path.sep}hide.exe`);
     }
     // Launch builds Electron's notification presenter on Windows, which makes the Start Menu
     // shortcut a toast is attributed through, named from the executable's product name, before

@@ -42,8 +42,7 @@ static int live_check(int argc, char **argv) {
     return 0;
   }
 #endif
-  const char *composer = run_as_codex(argv[0])
-    ? "\xe2\x80\xba Ask Codex to do anything\r\n" : "\xe2\x9d\xaf \r\n";
+  const char *composer = run_as_codex(argv[0]) ? CODEX_EMPTY_COMPOSER : CLAUDE_EMPTY_COMPOSER;
   live_screen(strcmp(scene, "startup") == 0 ? "Do you trust this folder?\r\n1. Trust\r\n2. Cancel\r\n" : composer);
   char line[8192];
   size_t used = 0;
@@ -376,8 +375,8 @@ static void journey_screen(const char *text) {
    sets it: a braille spinner while a turn runs, Claude's `✳` and Codex's
    plain title at rest. */
 static const char *journey_composer(void) {
-  return journey_codex ? "\033]0;codex\007\xe2\x80\xba Ask Codex to do anything\r\n"
-                       : "\033]0;\xe2\x9c\xb3 Claude Code\007\r\nClaude Code fixture\r\n\xe2\x9d\xaf \r\n";
+  return journey_codex ? "\033]0;codex\007" CODEX_EMPTY_COMPOSER
+                       : "\033]0;\xe2\x9c\xb3 Claude Code\007\r\nClaude Code fixture\r\n" CLAUDE_EMPTY_COMPOSER;
 }
 
 static int journey_turn(const char *prompt) {

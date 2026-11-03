@@ -405,7 +405,6 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         }),
         input: &[
             InputRung::AgentApi(AgentApi::LaunchPrompt),
-            InputRung::AgentApi(AgentApi::CodexQueue),
             InputRung::Typed,
         ],
         start: Some(LaunchDialect::Codex),

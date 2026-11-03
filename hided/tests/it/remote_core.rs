@@ -1078,7 +1078,12 @@ fn a_screen_of_another_build_than_its_core_is_told_so() -> Result<()> {
         );
         // Builds that only their hashes tell apart are not ordered: the
         // node refuses before it says hello and names both builds.
-        let refused = fixture.node_log("node_role", "link.build_refused")?;
+        // The connect answer can arrive before the diagnostic writer has
+        // persisted the refusal, so wait for the record before inspecting it.
+        let refused = wait_for("the node's build refusal diagnostic", || {
+            let rows = fixture.node_log("node_role", "link.build_refused")?;
+            Ok((!rows.is_empty()).then_some(rows))
+        })?;
         ensure!(
             refused.iter().any(|row| {
                 row["reason"] == "other_build" && row["node_build"] != row["core_build"]

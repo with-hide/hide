@@ -452,8 +452,10 @@ int main(int argc, char **argv) {
     "--source", "herdr:claude", "--agent", "claude", "--agent-session-id", session, "--seq", "1", NULL };
   if (claude && run_child(report, 20000) != 0) return 1;
   raw_terminal();
-  static const char ready[] = "\r\nClaude Code fixture\r\nclaude fixture ready\r\n❯ ";
+  static const char ready[] = "\r\nClaude Code fixture\r\nclaude fixture ready\r\n";
   if (terminal_write(ready, sizeof ready - 1) != (fixture_count_t)(sizeof ready - 1)) return 1;
+  static const char prompt[] = "\r\n────────────────\r\n❯ \r\n────────────────\r\n";
+  if (terminal_write(prompt, sizeof prompt - 1) != (fixture_count_t)(sizeof prompt - 1)) return 1;
   char bytes[16384];
   fixture_count_t count;
   while ((count = terminal_read(bytes, sizeof bytes)) > 0) {
@@ -461,7 +463,6 @@ int main(int argc, char **argv) {
       if (bytes[i] != '!') continue;
       int status = run_child(command, command_ms);
       if (complete_command(completion_file, status, command_ms) != 0 || !cleanup_confirmed) return 1;
-      static const char prompt[] = "\r\n❯ ";
       if (terminal_write(prompt, sizeof prompt - 1) != (fixture_count_t)(sizeof prompt - 1)) return 1;
     }
   }

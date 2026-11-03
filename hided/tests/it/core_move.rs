@@ -501,10 +501,26 @@ fn a_window_newer_than_its_core_updates_it_and_links() -> Result<()> {
             "the core runs {health}"
         );
         let program = placed_program(&fixture)?;
+        let version = version_of(&program)?;
+        let expected = fixture
+            .target
+            .home()
+            .join("helper")
+            .join(&version)
+            .join("hided");
         ensure!(
-            done["program"] == program.as_str() && program != previous,
+            std::path::Path::new(&program) == expected && program != previous,
             "the placement names {program} after {done}"
         );
+        let placed_build = hided::build_id::of_file(&expected).map_err(anyhow::Error::msg)?;
+        ensure!(
+            placed_build == newer_build,
+            "the placement runs {placed_build}"
+        );
+        // The log masks the fixture's home/helper prefix too. Placement
+        // above remains the authoritative, unredacted installed path.
+        let logged_program = format!("{}~/{version}/hided", fixture.root.join("c").display());
+        ensure!(done["program"] == logged_program, "{done}");
         let (builds, current) = builds_beside(&program)?;
         let mut expected = vec![version_of(&previous)?, version_of(&program)?];
         expected.sort();
@@ -1036,12 +1052,14 @@ fn a_resumed_move_whose_alias_cannot_be_read_waits_for_its_peer() -> Result<()> 
         std::fs::rename(&config, &away)?;
         fixture.start_source()?;
         let failed = fixture.logged_after_link_wait(&fixture.source, "status.failed")?;
-        // `ssh` names the configuration it could not read.
+        // `ssh` names the configuration it could not read; the diagnostic
+        // masks the fixture's SSH folder as a home-directory prefix.
+        let logged_config = format!("{}~/config", fixture.root.join("m").display());
         ensure!(
             failed["failure"]["kind"] == "unreachable"
                 && failed["failure"]["reason"]
                     .as_str()
-                    .is_some_and(|reason| reason.contains(".ssh/config")),
+                    .is_some_and(|reason| reason.contains(&logged_config)),
             "{failed}"
         );
         ensure!(fixture.role()? == "node");
@@ -1228,8 +1246,12 @@ fn a_move_given_up_while_its_peer_is_cut_off_ends_the_peer_s_core_once_it_is_bac
         })?;
         ensure!(fixture.target_core()?.is_none(), "a core runs on the peer");
         let installed = fixture.logged(&fixture.source, "abandon.installed")?;
+        let logged_older = format!(
+            "{}~/0000000000000000/hided",
+            fixture.root.join("c").display()
+        );
         ensure!(
-            installed["intent"] == intent.as_str() && installed["was"] == json!(older),
+            installed["intent"] == intent.as_str() && installed["was"] == logged_older,
             "{installed}"
         );
         fixture.logged(&fixture.source, "abandon.ended")?;

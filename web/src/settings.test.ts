@@ -245,13 +245,15 @@ describe("settings rules", () => {
       herdr: { state: "connected", received_version: "0.9.1" },
       environment: [],
       diagnostics: [{ kind: "ws.url", message: `opened #token=${token} with key=abc123`, occurred_at: 0 }],
-      lastError: null,
+      lastError: { kind: "provider.failed", message: 'ghp_Q9zR2wK7mN5pT8vS3uX6yL4gH1jV0qB {"password":"q7Z"} someone@example.invalid' },
       userAgent: "test",
     });
     expect(text).toContain("hided 0.1.0 pid 42");
     expect(text).toContain("herdr binary: unavailable");
     expect(text).not.toContain(token);
     expect(text).not.toContain("abc123");
+    for (const privateText of ["ghp_Q9z", "q7Z", "someone@example.invalid", "/Users/example"]) expect(text).not.toContain(privateText);
+    expect(text).toContain("~/.hide/state");
     expect(redact("password=hunter2 ok")).toBe("password=[redacted] ok");
   });
 

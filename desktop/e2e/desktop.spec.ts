@@ -5,6 +5,7 @@
 import { expect, type ElectronApplication, type Page } from "@playwright/test";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
@@ -281,7 +282,11 @@ test("failure: a missing CLI shows its reason and Retry attaches once it exists"
   await expect(page.locator("#reason")).toHaveText("The hide command was not found.", { timeout: 20_000 });
   await expect(page.getByRole("button", { name: "Retry" })).toBeVisible();
   await screenshot(page, "desktop-cli-missing");
-  expect(hostLog(run.env).find((line) => line.event === "cli.missing")?.tried).toBe(cli);
+  // The diagnostic privacy contract keeps the suffix, replacing the home
+  // prefix when the system puts its temporary folder under the user's home.
+  const homePrefix = `${os.homedir()}${path.sep}`;
+  const loggedCli = cli.startsWith(homePrefix) ? `~/${cli.slice(homePrefix.length)}` : cli;
+  expect(hostLog(run.env).find((line) => line.event === "cli.missing")?.tried).toBe(loggedCli);
   // PRD first-run-onboarding B2: Copy diagnostics puts the build, the reason and the log's place on the clipboard and says so,
   // or, when the clipboard refused, shows that text to select by hand.
   // The clipboard is the machine's, so what it held is put back.
@@ -291,7 +296,11 @@ test("failure: a missing CLI shows its reason and Retry attaches once it exists"
     await expect(page.getByRole("button", { name: "Copied" }).or(page.locator("#diagnostics", { hasText: "reason: cli_missing" }))).toBeVisible();
     const copied = hostLog(run.env).find((line) => line.event === "status.diagnostics_copied" || line.event === "status.diagnostics_copy_failed");
     expect(copied?.reason).toBe("cli_missing");
-    if (copied?.event === "status.diagnostics_copied") expect(await app.evaluate(({ clipboard }) => clipboard.readText())).toMatch(/^hide .+\nreason: cli_missing\nlog: .+desktop\.log$/);
+    if (copied?.event === "status.diagnostics_copied") {
+      const diagnostics = await app.evaluate(({ clipboard }) => clipboard.readText());
+      expect(diagnostics).toMatch(/^hide .+\nreason: cli_missing\nlog: .+desktop\.log$/);
+      expect(diagnostics).not.toContain(os.homedir());
+    }
   } finally {
     await app.evaluate(({ clipboard }, text) => clipboard.writeText(text), held);
   }
@@ -402,6 +411,8 @@ test("discovery: a Finder-style PATH still lets a new daemon run installed tools
   fs.writeFileSync(gh, "#!/bin/sh\nprintf 'fixture-gh\\n'\n", { mode: 0o755 });
   // The unpackaged host still looks beside its app folder for a worktree build; there is none.
   const before = [...["debug", "release"].map((profile) => path.join(run.root, "target", profile, "hide")), ...bare.map((dir) => path.join(dir, "hide"))];
+  // The shared linux-home contract masks the fixture's home/.local prefix in logs.
+  const loggedInstalled = `${run.root}~/bin/hide`;
   const resolved = () => hostLog(env).filter((line) => line.event === "cli.resolved");
 
   ({ app } = await launch(env, { appDir }));
@@ -413,13 +424,13 @@ test("discovery: a Finder-style PATH still lets a new daemon run installed tools
   const daemonPath = /(?:^|\s)PATH=(.*?)(?=\s[A-Za-z_][A-Za-z_0-9]*=|$)/s.exec(processInfo.stdout)?.[1];
   expect(daemonPath).toBeTruthy();
   expect(spawnSync("gh", ["--version"], { env: { PATH: daemonPath }, encoding: "utf8" }).stdout).toBe("fixture-gh\n");
-  expect(resolved().at(-1)).toMatchObject({ source: "well-known", path: installed, tried: [...before, installed].join(":") });
+  expect(resolved().at(-1)).toMatchObject({ source: "well-known", path: loggedInstalled, tried: [...before, loggedInstalled].join(":") });
   const remembered = path.join(env.HIDE_DESKTOP_USER_DATA_DIR!, "cli-path.json");
   expect(JSON.parse(fs.readFileSync(remembered, "utf8"))).toEqual({ schema: 1, path: installed });
   await app.close();
 
   app = await relaunch(env, { appDir });
-  expect(resolved().at(-1)).toMatchObject({ source: "remembered", path: installed, tried: [...before, installed].join(":") });
+  expect(resolved().at(-1)).toMatchObject({ source: "remembered", path: loggedInstalled, tried: [...before, loggedInstalled].join(":") });
 });
 
 // @platform: A daemon ending and the next one starting, seen through the system's processes and local stream.
@@ -453,8 +464,8 @@ test("uncaught: an exception and a rejection nothing in the host caught go to it
   const uncaught = () => hostLog(run.env).filter((line) => line.event === "host.uncaught");
   await expect.poll(() => uncaught().map((line) => line.kind).sort()).toEqual(["uncaughtException", "unhandledRejection"]);
   const exception = uncaught().find((line) => line.kind === "uncaughtException")!;
-  expect(exception.message).toBe("planted exception token=[redacted] at https://[address]");
-  expect(String(exception.stack)).toContain("planted exception token=[redacted]");
+  expect(exception.message).toBe("planted exception [redacted] at https://[address]");
+  expect(String(exception.stack)).toContain("planted exception [redacted]");
   expect(uncaught().find((line) => line.kind === "unhandledRejection")?.message).toBe("planted rejection");
   const logged = JSON.stringify(hostLog(run.env));
   expect(logged).not.toContain(secret);
