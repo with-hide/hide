@@ -185,11 +185,13 @@ fn a_closed_connection_keeps_ownership_until_its_cancelled_worker_finishes() {
     assert_eq!(cancelled.phase, Phase::Ended);
     assert!(matches!(
         first.linked.retire(request),
-        Err(HolderError::Unreachable { .. })
+        Err(HolderError::Unreachable { message })
+            if message == "the pane request still has workers draining"
     ));
     assert!(matches!(
         first.linked.retire(request),
-        Err(HolderError::Unreachable { .. })
+        Err(HolderError::Unreachable { message })
+            if message == "the pane request still has workers draining"
     ));
     assert!(matches!(
         first.linked.reserve(&start, None, request),
@@ -209,11 +211,13 @@ fn a_closed_connection_keeps_ownership_until_its_cancelled_worker_finishes() {
     let next = Connection::open(folder.home.path(), &folder.state);
     assert!(matches!(
         next.linked.recovered(Duration::ZERO),
-        Err(HolderError::Unreachable { .. })
+        Err(HolderError::Unreachable { message })
+            if message == "the previous pane owner still has work in flight"
     ));
     assert!(matches!(
         other_process(&folder, "blocked-owner.json"),
-        Err(HolderError::Unreachable { .. })
+        Err(HolderError::Unreachable { message })
+            if message == "the previous pane owner still has work in flight"
     ));
     assert_eq!(record::read(&record_path).unwrap().unwrap(), cancelled);
 
@@ -222,7 +226,15 @@ fn a_closed_connection_keeps_ownership_until_its_cancelled_worker_finishes() {
     assert_ne!(recovered.owner, original.owner);
     assert!(recovered.closed.contains(&pane.to_owned()));
     assert!(!recovered.recoverable.iter().any(|p| p.pane == pane));
-    assert_eq!(record::read(&record_path).unwrap().unwrap(), cancelled);
+    let settled = record::read(&record_path).unwrap().unwrap();
+    // Reconcile rechecks cancellation cleanup and may refresh its diagnostic
+    // text and time. Every identity, intent and terminal outcome stays fixed.
+    let mut expected = cancelled.clone();
+    let end = expected.end.as_mut().unwrap();
+    let settled_end = settled.end.as_ref().unwrap();
+    end.detail.clone_from(&settled_end.detail);
+    end.at_unix_ms = settled_end.at_unix_ms;
+    assert_eq!(settled, expected);
     assert!(matches!(
         next.linked.reserve(&start, None, request),
         Err(HolderError::Refused { .. })
