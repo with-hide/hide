@@ -107,7 +107,7 @@ function Sum([string]$path) {
 }
 
 function Is-Link([string]$path) {
-    try { ([IO.File]::GetAttributes($path) -band [IO.FileAttributes]::ReparsePoint) -ne 0 } catch { $false }
+    try { ([int][IO.File]::GetAttributes($path) -band [int][IO.FileAttributes]::ReparsePoint) -ne 0 } catch { $false }
 }
 
 function Descriptor([string]$path) {
@@ -133,7 +133,7 @@ function Others-Can($descriptor, [int]$watched) {
     $acl = $descriptor.DiscretionaryAcl
     if ($null -eq $acl) { return $true }
     foreach ($ace in $acl) {
-        if (($ace.AceFlags -band [Security.AccessControl.AceFlags]::InheritOnly) -ne 0) { continue }
+        if (([int]$ace.AceFlags -band [int][Security.AccessControl.AceFlags]::InheritOnly) -ne 0) { continue }
         $type = [int]$ace.AceType
         if ($type -ne 0) {
             if (@(1, 6, 10, 12) -contains $type) { continue }
@@ -305,11 +305,20 @@ function Hand-Over([string]$program, $words, [string]$answer) {
     exit $child.ExitCode
 }
 
-function Step-Start([string]$relative, [string]$herdr) {
+function Step-Start([string]$relative, [string]$herdr, [string]$homeWire) {
     if (-not $state.Root) { Say fail 'no install folder was chosen'; exit 65 }
     if ($herdr -ne '-') { Say fail 'a Windows device runs no Herdr, so it takes no Herdr session or socket'; exit 65 }
     $helper = Join-Root $relative
     if (-not [IO.File]::Exists($helper)) { Say fail "the helper $(Wire $helper) is missing"; exit 65 }
+    # A home of the node's own in place of the account's, made private where
+    # it is missing: the account's home is what Windows programs read it from.
+    if ($homeWire -and $homeWire -ne '-') {
+        try {
+            if (-not (Absolute $homeWire)) { throw 'not absolute' }
+            [void][IO.Directory]::CreateDirectory((Native $homeWire), (Private-Folder))
+            $env:USERPROFILE = Native $homeWire
+        } catch { Say fail "the home $homeWire could not be made"; exit 65 }
+    }
     Hand-Over $helper @('node', 'serve', '--own-herdr') 'start'
 }
 
@@ -449,7 +458,7 @@ try {
             'root' { Step-Root $fields[1] }
             'held' { Step-Held $fields[1] }
             'put' { Step-Put $fields[1] $fields[2] $fields[4] }
-            'start' { Step-Start $fields[1] $fields[2] }
+            'start' { Step-Start $fields[1] $fields[2] $fields[3] }
             'run' { Step-Run $fields[1] $fields[2] }
             'fput' { Step-Fput $fields[1] $fields[2] $fields[3] }
             'fget' { Step-Fget $fields[1] }

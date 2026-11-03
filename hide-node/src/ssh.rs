@@ -32,7 +32,7 @@ pub mod session;
 pub mod transfer;
 pub mod upstream;
 
-pub use device::{Connector, SshDevice};
+pub use device::{Connector, DEVICE_HOME_VARIABLE, SshDevice, parse_device_home};
 pub use host::{
     DeviceEngine, LinkStream, LinkWriter, OpenError, PaneEvents, PaneEventsSlot, RemoteHost,
 };

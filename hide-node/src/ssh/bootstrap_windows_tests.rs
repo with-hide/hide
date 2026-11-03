@@ -56,6 +56,15 @@ impl Device {
         self.dir.path().join("home")
     }
 
+    /// A home of the node's own (`HIDE_DEV_DEVICE_HOME`).
+    fn own_home(&self) -> PathBuf {
+        self.home().join(r"candidate\home")
+    }
+
+    fn state(&self) -> PathBuf {
+        self.dir.path().join("state")
+    }
+
     fn wire(path: &Path) -> String {
         hide_platform::path::to_wire(path).unwrap()
     }
@@ -95,6 +104,11 @@ impl Device {
         command
             .current_dir(self.home())
             .env("USERPROFILE", self.home())
+            // What the echoing program compares its folders with, since a
+            // path it printed would be in the console's code page.
+            .env("HIDE_TEST_HOME", self.home())
+            .env("HIDE_TEST_OWN_HOME", self.own_home())
+            .env("HIDE_TEST_STATE", self.state())
             .env_remove(hide_platform::host::MACHINE_ID_VARIABLE)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -123,12 +137,29 @@ impl Device {
     }
 
     /// A batch file the steps can start in place of a program: it says what
-    /// it was started with and where, then repeats one line of its input.
+    /// it was started with and in which of the device's folders (`home`,
+    /// `own` or `other`), then repeats one line of its input.
     fn echoing_program(&self, path: &Path) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(
             path,
-            "@echo off\r\necho args:%*\r\necho cwd:%CD%\r\nset /p line=\r\necho carried:%line%\r\n",
+            [
+                "@echo off",
+                "echo args:%1 %2",
+                "if /i \"%~3\"==\"%HIDE_TEST_STATE%\" (echo third:state) else (echo third:%~3)",
+                "set where=other",
+                "if /i \"%CD%\"==\"%HIDE_TEST_HOME%\" set where=home",
+                "if /i \"%CD%\"==\"%HIDE_TEST_OWN_HOME%\" set where=own",
+                "echo cwd:%where%",
+                "set where=other",
+                "if /i \"%USERPROFILE%\"==\"%HIDE_TEST_HOME%\" set where=home",
+                "if /i \"%USERPROFILE%\"==\"%HIDE_TEST_OWN_HOME%\" set where=own",
+                "echo home:%where%",
+                "set /p line=",
+                "echo carried:%line%",
+                "",
+            ]
+            .join("\r\n"),
         )
         .unwrap();
     }
@@ -353,7 +384,8 @@ fn the_helper_starts_on_the_same_pipes_and_takes_no_herdr() {
         start(
             &mut pipe,
             "v1/helper.cmd",
-            &HerdrChoice::Session("work".to_owned())
+            &HerdrChoice::Session("work".to_owned()),
+            None
         )
         .is_err()
     );
@@ -369,14 +401,37 @@ fn the_helper_starts_on_the_same_pipes_and_takes_no_herdr() {
         ["held", "v1/helper.cmd"]
     );
     assert_eq!(read_step(&mut pipe, soon()).unwrap(), ["end"]);
-    start(&mut pipe, "v1/helper.cmd", &HerdrChoice::Account).unwrap();
-    assert_eq!(line(&mut pipe), "args:node serve --own-herdr");
-    assert_eq!(
-        line(&mut pipe).to_lowercase(),
-        format!("cwd:{}", device.home().display()).to_lowercase()
-    );
+    start(&mut pipe, "v1/helper.cmd", &HerdrChoice::Account, None).unwrap();
+    assert_eq!(line(&mut pipe), "args:node serve");
+    assert_eq!(line(&mut pipe), "third:--own-herdr");
+    assert_eq!(line(&mut pipe), "cwd:home");
+    assert_eq!(line(&mut pipe), "home:home");
     pipe.send(b"through the link\r\n", soon()).unwrap();
     assert_eq!(line(&mut pipe), "carried:through the link");
+
+    // A home of the node's own (`HIDE_DEV_DEVICE_HOME`) takes the account's
+    // place, made private where it was missing.
+    let own = device.own_home();
+    let mut pipe = device.connect();
+    let facts = probe(&mut pipe, soon()).unwrap();
+    let mut asked = format!("root\t{}/.hide/helper\n", facts.home);
+    asked.push_str(&format!("held\t1\nv1/helper.cmd\t{}\n", digest(&bytes)));
+    pipe.send(asked.as_bytes(), soon()).unwrap();
+    for _ in 0..3 {
+        read_step(&mut pipe, soon()).unwrap();
+    }
+    start(
+        &mut pipe,
+        "v1/helper.cmd",
+        &HerdrChoice::Account,
+        Some(&Device::wire(&own)),
+    )
+    .unwrap();
+    line(&mut pipe);
+    line(&mut pipe);
+    assert_eq!(line(&mut pipe), "cwd:own");
+    assert_eq!(line(&mut pipe), "home:own");
+    assert!(hide_platform::fs::private::is_private(&own).unwrap());
 }
 
 /// A command answers its status and both outputs, its words arrive whole,
@@ -406,6 +461,8 @@ fn a_command_answers_its_status_and_output_and_the_next_step_follows() {
             r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
             "-NoProfile",
             "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
             "-File",
             echo.to_str().unwrap(),
             "a b",
@@ -509,7 +566,7 @@ fn attach_hands_the_pipes_to_the_core_program() {
     let device = Device::new();
     let program = device.dir.path().join("hided.cmd");
     device.echoing_program(&program);
-    let state = device.dir.path().join("state");
+    let state = device.state();
 
     let mut pipe = device.connect();
     probe(&mut pipe, soon()).unwrap();
@@ -519,10 +576,8 @@ fn attach_hands_the_pipes_to_the_core_program() {
         Some(&Device::wire(&state)),
     )
     .unwrap();
-    assert_eq!(
-        line(&mut pipe),
-        format!("args:attach --state-dir {}", state.display())
-    );
+    assert_eq!(line(&mut pipe), "args:attach --state-dir");
+    assert_eq!(line(&mut pipe), "third:state");
 
     let mut pipe = device.connect();
     probe(&mut pipe, soon()).unwrap();

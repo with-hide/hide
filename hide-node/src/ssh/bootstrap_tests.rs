@@ -164,10 +164,10 @@ fn an_msys_sh_on_windows_hands_the_link_to_the_powershell_script() {
     program(
         "powershell.exe",
         &format!(
-            "printf '%s\\n' \"$*\" > '{record}.args'\n\
+            "printf '%s\\n' \"$@\" > '{record}.args'\n\
              printf 'HIDE1\\tscript\\tpowershell\\n'\n\
-             IFS= read -r line\n\
-             printf '%s\\n' \"$line\" > '{record}.line'\n\
+             IFS= read -r size\n\
+             head -c \"$size\" > '{record}.script'\n\
              printf 'HIDE1\\tprobe\\t이호연\\tC:/Users/이호연\\tWindows\\tamd64\\t4C4C4544-0042\\tyes\\n'\n",
             record = record.display()
         ),
@@ -185,15 +185,31 @@ fn an_msys_sh_on_windows_hands_the_link_to_the_powershell_script() {
     );
     assert_eq!(facts.machine_id, "4c4c4544-0042");
     let args = std::fs::read_to_string(record.with_extension("args")).unwrap();
+    let wrapper = powershell_wrapper();
     assert_eq!(
-        format!("powershell.exe {}", args.trim_end()),
-        powershell_command()
+        args.lines().collect::<Vec<_>>(),
+        ["-NoProfile", "-NonInteractive", "-Command", wrapper.as_str()]
     );
-    // The line after the request is the PowerShell script, which the sh
+    // What follows the request is the PowerShell script, which the sh
     // script had not taken.
     assert_eq!(
-        std::fs::read_to_string(record.with_extension("line")).unwrap(),
-        powershell_line()
+        std::fs::read_to_string(record.with_extension("script")).unwrap(),
+        POWERSHELL_SCRIPT
+    );
+}
+
+/// The PowerShell wrapper rides inside every login shell's quotes at once,
+/// so it holds no character one of them would read there: a quote of either
+/// kind, `cmd.exe`'s operators, escape and variables, csh's history, fish's
+/// escape, or a command substitution.
+#[test]
+fn the_powershell_wrapper_holds_nothing_a_login_shell_reads_inside_quotes() {
+    let wrapper = powershell_wrapper();
+    let read = ['\'', '"', '&', '|', '<', '>', '^', '%', '!', '\\', '`', '\n'];
+    assert!(
+        !wrapper.contains(read),
+        "{:?}",
+        wrapper.matches(read).collect::<Vec<_>>()
     );
 }
 
@@ -351,7 +367,7 @@ fn an_install_under_a_folder_others_can_change_is_refused() {
 #[test]
 fn the_helper_starts_on_the_same_pipes_with_the_chosen_herdr() {
     let device = Device::new();
-    let helper = "#!/bin/sh\necho \"args:$*\"\necho \"session:${HERDR_SESSION:-} socket:${HERDR_SOCKET_PATH:-}\"\n";
+    let helper = "#!/bin/sh\necho \"args:$*\"\necho \"session:${HERDR_SESSION:-} socket:${HERDR_SOCKET_PATH:-}\"\necho \"home:$HOME pwd:$(pwd -P)\"\n";
     let packages = device.packages(std::env::consts::OS, std::env::consts::ARCH, helper);
     let mut pipe = device.connect("");
     let facts = probe(&mut pipe, soon()).unwrap();
@@ -361,10 +377,55 @@ fn the_helper_starts_on_the_same_pipes_with_the_chosen_herdr() {
         &mut pipe,
         &installed.helper_relative,
         &HerdrChoice::Session("work".to_owned()),
+        None,
     )
     .unwrap();
     assert_eq!(pipe.line(soon()).unwrap(), b"args:node serve --own-herdr");
     assert_eq!(pipe.line(soon()).unwrap(), b"session:work socket:");
+    let home = std::fs::canonicalize(device.home()).unwrap();
+    assert_eq!(
+        String::from_utf8(pipe.line(soon()).unwrap()).unwrap(),
+        format!("home:{} pwd:{}", facts.home, home.display())
+    );
+
+    // A home of the node's own (`HIDE_DEV_DEVICE_HOME`) takes the account's
+    // place, made private where it was missing.
+    let own = format!("{}/candidate/home", facts.home);
+    let mut pipe = device.connect("");
+    let facts = probe(&mut pipe, soon()).unwrap();
+    let installed = install(&mut pipe, "~/.hide/helper", &facts.home, &payload).unwrap();
+    start(&mut pipe, &installed.helper_relative, &HerdrChoice::Account, Some(&own)).unwrap();
+    pipe.line(soon()).unwrap();
+    pipe.line(soon()).unwrap();
+    let made = home.join("candidate/home");
+    assert_eq!(
+        String::from_utf8(pipe.line(soon()).unwrap()).unwrap(),
+        format!("home:{own} pwd:{}", made.display())
+    );
+    assert_eq!(mode(&made), 0o700);
+}
+
+/// `HIDE_DEV_DEVICE_HOME` names a home below the account's or an absolute
+/// one on the device's own system, and nothing else.
+#[test]
+fn a_device_home_is_below_the_account_s_or_absolute_on_the_device() {
+    use super::super::super::device::{parse_device_home, resolve_device_home};
+    for good in ["~/.hide-dev/connect/home", "/srv/candidate", "C:/hide-dev/home"] {
+        assert_eq!(parse_device_home(good).as_deref(), Ok(good));
+    }
+    for bad in ["relative", "~/", "~/a/../b", "/a//b", "~/a\nb", ""] {
+        assert!(parse_device_home(bad).is_err(), "{bad:?}");
+    }
+    assert_eq!(
+        resolve_device_home("~/.hide-dev/home", "C:/Users/이호연", "windows").unwrap(),
+        "C:/Users/이호연/.hide-dev/home"
+    );
+    assert_eq!(
+        resolve_device_home("C:/hide-dev/home", "C:/Users/me", "windows").unwrap(),
+        "C:/hide-dev/home"
+    );
+    assert!(resolve_device_home("/srv/home", "C:/Users/me", "windows").is_err());
+    assert!(resolve_device_home("C:/hide-dev/home", "/home/me", "linux").is_err());
 }
 
 #[test]
@@ -376,7 +437,8 @@ fn a_step_naming_a_line_end_is_never_sent() {
         start(
             &mut pipe,
             "v1/hided",
-            &HerdrChoice::Socket("/tmp/a\nstart\tx".to_owned())
+            &HerdrChoice::Socket("/tmp/a\nstart\tx".to_owned()),
+            None
         )
         .is_err()
     );

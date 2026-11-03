@@ -437,6 +437,7 @@ impl DialedTransport for WslDevice {
                 &mut *pipe,
                 &installed.helper_relative,
                 &bootstrap::HerdrChoice::Account,
+                None,
             )?;
             Ok((installed, identity))
         })(&mut pipe);

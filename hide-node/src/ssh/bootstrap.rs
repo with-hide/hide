@@ -49,69 +49,80 @@ pub(crate) const WRAPPER: [&str; 3] = ["sh", "-c", "IFS= read -r s && eval \"$s\
 /// The remote command an `ssh` runs, in whichever shell the account logs in
 /// with. Every POSIX shell (sh, bash, zsh, fish, csh, tcsh) parses all of it
 /// and runs only its first statement, which replaces the shell with
-/// [`WRAPPER`]; the rest is a plain command and a single-quoted word, which
-/// none of them reads. `cmd.exe`, Windows OpenSSH's default, knows no single
-/// quote: the `&&` inside the first one ends a command, `exec` is no command
-/// there, and the `&` inside the last one starts the PowerShell wrapper, with
-/// `rem` taking what is left. A PowerShell login shell finds no `exec`, goes
-/// on to its next statement, the same wrapper, and casts the last word away.
-/// The wrapper is base64, which no shell reads anything into.
+/// [`WRAPPER`]; the rest is plain words and single-quoted ones, which none of
+/// them reads. `cmd.exe`, Windows OpenSSH's default, knows no single quote:
+/// the `&&` inside the first one ends a command, `exec` is no command there,
+/// and the `&` inside the last one starts the PowerShell wrapper, with `rem`
+/// taking what is left. A PowerShell login shell (5.1 or 7) finds no `exec`,
+/// goes on to its next statement, the same wrapper, and casts the last word
+/// away.
 pub(crate) fn remote_command() -> String {
-    let powershell = powershell_command();
+    let wrapper = powershell_wrapper();
     format!(
-        "exec {} {} '{}' ; {powershell} ; [void]'& {powershell} & rem '",
+        "exec {} {} '{}' ; {POWERSHELL} '{wrapper}' ; [void]'& {POWERSHELL} \"{wrapper}\" & rem '",
         WRAPPER[0], WRAPPER[1], WRAPPER[2]
     )
 }
 
+/// Windows PowerShell 5.1, which every Windows 10 and 11 has, with no
+/// profile of the account's and nothing it could stop to ask. Its .NET is
+/// the one whose access lists the script reads, so a PowerShell 7 login
+/// shell starts it too rather than running the wrapper itself.
+const POWERSHELL: &str = "powershell.exe -NoProfile -NonInteractive -Command";
+
 /// The PowerShell that runs on a Windows device in place of `sh`: it says it
-/// wants its own script (`script powershell`), drops every line before it
-/// (the `sh` script the node sent before it knew), and runs the first line
-/// that is base64, the PowerShell script ([`powershell_line`]), with `$i` and
-/// `$o` the link's unbuffered input and output. It reads a byte at a time, so
-/// it takes nothing past its script's line.
-const POWERSHELL_WRAPPER: &str = r#"$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue'
-$i=[Console]::OpenStandardInput();$o=[Console]::OpenStandardOutput()
-$b=[Text.Encoding]::ASCII.GetBytes("HIDE1`tscript`tpowershell`n");$o.Write($b,0,$b.Length);$o.Flush()
-while(1){$m=New-Object IO.MemoryStream;while(1){$c=$i.ReadByte();if($c -lt 0){exit 0};if($c -eq 10){break};$m.WriteByte($c)};$l=[Text.Encoding]::ASCII.GetString($m.ToArray());if($l -match '^[A-Za-z0-9+/]+=*$'){break}}
-iex ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($l)))"#;
+/// wants its own script (`script powershell`), drops every line before a
+/// byte count (the `sh` script the node sent before it knew), and runs the
+/// script of that many bytes that follows ([`powershell_script`]), with `$i`
+/// and `$o` the link's unbuffered input and output. It reads a byte at a
+/// time, so it takes nothing past the script.
+///
+/// It travels as plain words inside every shell's quotes at once, so it holds
+/// no character any of them would read there (checked by a test): no quote,
+/// none of `cmd.exe`'s `& | < > ^ %`, no `!` (csh's history), no `\` (fish's
+/// escape) and no backtick. It is readable PowerShell rather than an encoded
+/// one, which Windows' malware scan refuses beside the `sh` words.
+const POWERSHELL_WRAPPER: &str = "
+$i=[Console]::OpenStandardInput();$o=[Console]::OpenStandardOutput();
+$b=[Text.Encoding]::ASCII.GetBytes(((Write-Output HIDE1 script powershell) -join [char]9)+[char]10);
+$o.Write($b,0,$b.Length);$o.Flush();
+$n=0;
+while(1){
+$m=New-Object IO.MemoryStream;
+while(1){$c=$i.ReadByte();if($c -lt 0){exit 0};if($c -eq 10){break};$m.WriteByte($c)};
+if([int]::TryParse([Text.Encoding]::ASCII.GetString($m.ToArray()),[ref]$n)){break}
+};
+if($n -le 0 -or $n -gt 4194304){exit 65};
+$s=New-Object byte[] $n;$r=0;
+while($r -lt $n){$k=$i.Read($s,$r,$n-$r);if($k -le 0){exit 0};$r+=$k};
+iex ([Text.Encoding]::UTF8.GetString($s))
+";
+
+/// [`POWERSHELL_WRAPPER`] as the one line every shell is given.
+fn powershell_wrapper() -> String {
+    POWERSHELL_WRAPPER
+        .lines()
+        .map(str::trim)
+        .collect::<String>()
+}
 
 /// The Windows device's script (`bootstrap.ps1`), which the wrapper runs.
 const POWERSHELL_SCRIPT: &str = include_str!("bootstrap.ps1");
 
-/// What the wrapper answers when it runs, asking for [`powershell_line`].
+/// What the wrapper answers when it runs, asking for [`powershell_script`].
 const ASKS_FOR_POWERSHELL: [&str; 2] = ["script", "powershell"];
 
-/// `powershell.exe` and its arguments that run [`POWERSHELL_WRAPPER`]:
-/// Windows PowerShell 5.1, which every Windows 10 and 11 has, with no profile
-/// of the account's and nothing it could stop to ask, given the wrapper as
-/// base64 of its UTF-16 text, the form `-EncodedCommand` reads.
-fn powershell_command() -> String {
-    use base64::Engine as _;
-    let utf16: Vec<u8> = POWERSHELL_WRAPPER
-        .encode_utf16()
-        .flat_map(u16::to_le_bytes)
-        .collect();
-    format!(
-        "powershell.exe -NoProfile -NonInteractive -EncodedCommand {}",
-        base64::engine::general_purpose::STANDARD.encode(utf16)
-    )
-}
-
-/// The PowerShell script as the one line the wrapper reads: base64 of its
-/// UTF-8 text, so its own lines and characters arrive as written.
-fn powershell_line() -> String {
-    use base64::Engine as _;
-    let mut line = base64::engine::general_purpose::STANDARD.encode(POWERSHELL_SCRIPT);
-    line.push('\n');
-    line
+/// The PowerShell script as the wrapper reads it: its size in bytes on a
+/// line, then its UTF-8 text.
+fn powershell_script() -> String {
+    format!("{}\n{POWERSHELL_SCRIPT}", POWERSHELL_SCRIPT.len())
 }
 
 /// The script, one statement per line; [`script_line`] joins it into the
 /// single line [`WRAPPER`] reads. Every line ends where a space may follow.
 const SCRIPT: &str = r#"
 set -fu;
-case $(uname -s) in MINGW*|MSYS*|CYGWIN*) MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' exec @POWERSHELL@;; esac;
+case $(uname -s) in MINGW*|MSYS*|CYGWIN*) MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' exec @POWERSHELL@ '@WRAPPER@';; esac;
 T=$(printf '\t');
 say() { printf 'HIDE1'; for w in "$@"; do printf '\t%s' "$w"; done; printf '\n'; };
 uid=$(id -u) || exit 65;
@@ -151,6 +162,7 @@ if head -c "$d" | store "$t" && [ "$(sum "$t")" = "$b" ] && chmod -- "$c" "$t" &
 start) [ -n "$root" ] || { say fail "no install folder was chosen"; exit 65; }; h=$root/$a;
 case $b in session=*) unset HERDR_SOCKET_PATH; HERDR_SESSION=${b#session=}; export HERDR_SESSION;; socket=*) unset HERDR_SESSION; HERDR_SOCKET_PATH=${b#socket=}; export HERDR_SOCKET_PATH;; esac;
 [ -x "$h" ] || { say fail "the helper $h is missing"; exit 65; };
+case ${c:--} in -) ;; *) { (umask 077; mkdir -p -- "$c") && HOME=$c && export HOME; } || { say fail "the home $c could not be made"; exit 65; };; esac;
 cd -- "$HOME" 2>/dev/null || :;
 say start; exec "$h" node serve --own-herdr;;
 run) set --; i=0; while [ "$i" -lt "$a" ] && IFS= read -r w; do set -- "$@" "$w"; i=$((i+1)); done;
@@ -181,7 +193,8 @@ pub(crate) fn script_line() -> String {
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
         .join(" ")
-        .replace("@POWERSHELL@", &powershell_command());
+        .replace("@POWERSHELL@", POWERSHELL)
+        .replace("@WRAPPER@", &powershell_wrapper());
     line.push('\n');
     line
 }
@@ -253,7 +266,7 @@ pub(crate) fn probe(pipe: &mut dyn Pipe, until: Instant) -> Result<Facts, ProbeE
         };
         if !asked && fields == ASKS_FOR_POWERSHELL {
             asked = true;
-            send(pipe, powershell_line())?;
+            send(pipe, powershell_script())?;
             continue;
         }
         return read_probe(&fields).map_err(ProbeError::Unsupported);
@@ -489,11 +502,15 @@ pub(crate) enum HerdrChoice {
 }
 
 /// Starts the helper in place of the script; from its answer on, the pipes
-/// are the helper's link.
+/// are the helper's link. `home`, an absolute path in the device's own wire
+/// spelling, is the home the helper runs with in place of the account's
+/// (`HIDE_DEV_DEVICE_HOME`, [`super::super::device::resolve_device_home`]),
+/// made private where it is missing.
 pub(crate) fn start(
     pipe: &mut dyn Pipe,
     helper_relative: &str,
     herdr: &HerdrChoice,
+    home: Option<&str>,
 ) -> Result<(), EstablishError> {
     let choice = match herdr {
         HerdrChoice::Account => "-".to_owned(),
@@ -505,10 +522,19 @@ pub(crate) fn start(
             "The device's Herdr session or socket is not a plain name".to_owned(),
         ));
     }
+    let home = match home {
+        None => "-",
+        Some(home) if remote_path(home) => home,
+        Some(_) => {
+            return Err(EstablishError::Helper(
+                "The device's home is not a plain absolute path".to_owned(),
+            ));
+        }
+    };
     let deadline = Instant::now() + STEP_TIMEOUT;
     match step(
         pipe,
-        &format!("start\t{helper_relative}\t{choice}\n"),
+        &format!("start\t{helper_relative}\t{choice}\t{home}\n"),
         deadline,
     )?
     .as_slice()
