@@ -24,8 +24,14 @@ class StopObservation(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             probe = Path(directory)
             home = probe / "home"
+            # The kit can create its hooks directory with ordinary modes;
+            # HOME is the private boundary. Do not chmod existing kit paths.
+            parent = home / ".agent" / "hooks"
+            parent.mkdir(parents=True, mode=0o755)
+            before_mode = parent.stat().st_mode
             observer = stop_observer.Observer(home, probe, [".agent", "hooks", "observer.json"], windows=WINDOWS)
             self.addCleanup(observer.close)
+            self.assertEqual(parent.stat().st_mode, before_mode)
             observer.arm("JOURNEY-1111AAAA", "JOURNEY-2222BBBB", 60)
             config = json.loads(observer.config.read_text())
             handler = config["hooks"]["Stop"][0]["hooks"][0]

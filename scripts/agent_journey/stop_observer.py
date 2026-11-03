@@ -94,7 +94,8 @@ class Observer:
         self.directory = Path(tempfile.mkdtemp(prefix="journey-stop-", dir=self.probe))
         self.config = home.joinpath(*relative)
         contained(self.config, self.probe)
-        private_directory(self.config.parent)
+        if not self.config.parent.exists():
+            private_directory(self.config.parent)
         contained(self.config, self.probe)
         argv = [sys.executable, str(Path(__file__).resolve()), str(self.directory)]
         command = ("& " + " ".join("'" + word.replace("'", "''") + "'" for word in argv)
