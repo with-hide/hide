@@ -4,7 +4,7 @@ import { AgentMark } from "../AgentMark";
 import { agentMarkOf } from "../agentLogos";
 import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
-import { useRunWords } from "../missionParts";
+import { useMissionDeviceName, useRunWords } from "../missionParts";
 import { checkerState } from "../missions";
 import type { Mission, MissionChecker, MissionCriterion } from "../snapshot";
 import { CheckerPopover, useCheckerStatus } from "./mission-checker";
@@ -50,7 +50,8 @@ function Satellite({ mission, line, onSelect, actions }: { mission: Mission; lin
   const state = checkerState(checker);
   const run = useRunWords(mission, checker.pane_id, checker.machine, checker.worker);
   const status = useCheckerStatus(kind, checker);
-  const label = [agentMarkOf(checker.worker.agent)?.label ?? checker.worker.agent, run?.text, status].filter(Boolean).join(" · ");
+  const device = useMissionDeviceName(checker.machine);
+  const label = [agentMarkOf(checker.worker.agent)?.label ?? checker.worker.agent, run?.text, device, status].filter(Boolean).join(" · ");
   return (
     <CheckerPopover mission={mission} kind={kind} checker={checker} actions={actions} hint={label} onNode={onSelect}>
       <Button

@@ -1739,6 +1739,11 @@ A finished or cancelled mission's result tiles count from the record: pull reque
 Under them each node's pull request is its PR mark, title and state word, and pressing one picks its node.
 The report follows as one line headed `보고`, its first words without their Markdown marks (no `#`, `-` or `[ ]`), skipping a first line that only repeats the mission title, and `펼치기` opens all of it drawn as a Markdown document is (B24; PRD mission-tool B21).
 Every state colour is one token of `design/tokens.json` (`--mission-done`, `-working`, `-review`, `-hold`, `-failed`, `-waiting`, `-cancelled`), and a head cell, a card's mark and border, and an edge use the same one.
+When a worker runs on another machine than the window reading the map, its node card and panel show the shared device chip's inline form, the server mark and the device's name as the window names it, in the same caption size without a border or inset padding.
+On the card it follows the model on the second line, then elapsed time and plan progress; the device name truncates within that line and the result keeps its own row below.
+The worker and its device stay together when a large text size or crowded row needs to wrap elapsed time and progress below them.
+The same chip names a review or verification checker's machine in its row and popover, and its satellite's hover and accessible name include the machine.
+The window's own machine and a worker with no recorded machine show no device chip; the display reads the node or checker's recorded machine without guessing from the mission's project, and a clipped name is available in full on hover.
 Before the first plan the page is the head and one `계획 중` line (B19).
 
 `내 차례 n` lists only what the operator can do, each item with its node's chip, which picks that node on the map (B25): the Conductor's decision, a worker the core raised for the operator (`<node> 일꾼 막힘: <its blocked line, or the cause>`, with `터미널로 이동`), a node the core raised to the operator (`! 나`, below), and, while the mission waits on the operator's merge, the merge or join order (`머지 순서 #1 → #2`, `합칠 순서` for direct changes) with `터미널로 이동`.

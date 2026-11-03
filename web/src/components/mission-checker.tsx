@@ -4,7 +4,7 @@ import { AgentMark } from "../AgentMark";
 import { agentMarkOf } from "../agentLogos";
 import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
-import { RunText, useRunWords } from "../missionParts";
+import { MissionDevice, RunText, useMissionDeviceName, useRunWords } from "../missionParts";
 import { checkerState } from "../missions";
 import { allAgents, agentsByPane } from "../paneAgents";
 import { sessionOfAgent } from "../sessionWork";
@@ -73,6 +73,7 @@ export function CheckerPopover({ mission, kind, checker, actions, hint, onNode, 
   const state = checkerState(checker);
   const status = useCheckerStatus(kind, checker);
   const run = useRunWords(mission, checker.pane_id, checker.machine, checker.worker);
+  const device = useMissionDeviceName(checker.machine);
   const { row, session } = useCheckerWays(checker);
   const name = agentMarkOf(checker.worker.agent)?.label ?? checker.worker.agent;
   const go = (action: () => void) => () => {
@@ -90,6 +91,7 @@ export function CheckerPopover({ mission, kind, checker, actions, hint, onNode, 
           <span className="shrink-0 font-semibold">{name}</span>
           {run ? <RunText run={run} className="min-w-0 flex-1 text-caption text-muted-foreground" /> : <span className="flex-1" />}
         </div>
+        <MissionDevice name={device} />
         <span className={cn("w-fit rounded-full px-sm font-semibold", VERDICT_TONE[state])} data-checker-popover-state={state}>
           {state === "fail" ? t(`mission.verdict.rejected`) : status}
         </span>
