@@ -127,24 +127,39 @@ pub fn found(home: &Path) -> Result<Found, String> {
 /// deleted stops the same way (B42). The reason a polite ask was refused is
 /// handed to `refused` for the caller's log.
 pub fn stop(socket: &Path, pid: u32, started: u64, refused: &dyn Fn(&str)) -> Result<(), String> {
+    stop_within(socket, pid, started, refused, STOP_WITHIN)
+}
+
+fn stop_within(
+    socket: &Path,
+    pid: u32,
+    started: u64,
+    refused: &dyn Fn(&str),
+    within: Duration,
+) -> Result<(), String> {
     let same = || hide_platform::process::start_time(pid).is_ok_and(|now| now == started);
     let asked = hide_herdr_client::request_with_timeout(
         socket,
         "server.stop",
         serde_json::json!({}),
-        STOP_WITHIN,
+        within,
     );
-    if wait_gone(&same) {
+    // A server that ends as it answers may close the call first, so its end
+    // is waited for whatever the call came to.
+    if wait_gone(&same, within) {
         return Ok(());
     }
     if let Err(error) = asked {
         refused(&format!("server.stop: {error}"));
     }
-    if same() {
-        hide_platform::process::terminate(pid)
-            .map_err(|error| format!("Herdr's server {pid} could not be ended: {error}"))?;
+    // One that ended between the look and the end is gone, not refused.
+    if same()
+        && let Err(error) = hide_platform::process::terminate(pid)
+        && same()
+    {
+        return Err(format!("Herdr's server {pid} could not be ended: {error}"));
     }
-    if wait_gone(&same) {
+    if wait_gone(&same, within) {
         Ok(())
     } else {
         Err(format!("Herdr's server {pid} did not end"))
@@ -152,9 +167,9 @@ pub fn stop(socket: &Path, pid: u32, started: u64, refused: &dyn Fn(&str)) -> Re
 }
 
 #[allow(clippy::disallowed_methods)] // a production wait, not test code
-fn wait_gone(same: &dyn Fn() -> bool) -> bool {
+fn wait_gone(same: &dyn Fn() -> bool, within: Duration) -> bool {
     // No event tells another process's exit, so its end is polled.
-    let deadline = Instant::now() + STOP_WITHIN;
+    let deadline = Instant::now() + within;
     while same() {
         if Instant::now() >= deadline {
             return false;
@@ -186,6 +201,156 @@ mod tests {
         assert!(modified_ns > 0);
         std::fs::write(&path, vec![b' '; READ_CAP as usize + 1]).unwrap();
         assert!(matches!(fetch(&path), Fetched::Unreadable { .. }));
+    }
+
+    /// Selects [`a_stand_in_herdr_role`] in a child of this test binary.
+    const STAND_IN: &str = "HIDE_TEST_HERDR_STAND_IN";
+
+    /// A stand-in for Herdr's server: a child of this test binary that runs
+    /// until it is ended, reaped as it ends, so a gone one is not read as
+    /// running; it is ended and reaped on drop whatever the test came to.
+    struct StandIn {
+        pid: u32,
+        started: u64,
+        input: Option<std::process::ChildStdin>,
+        reaper: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl StandIn {
+        fn start() -> Self {
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "herdr_save::tests::a_stand_in_herdr_role",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(STAND_IN, "1")
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            // It says it runs once it waits on its input.
+            let mut said = String::new();
+            std::io::BufRead::read_line(
+                &mut std::io::BufReader::new(child.stdout.take().unwrap()),
+                &mut said,
+            )
+            .unwrap();
+            assert_eq!(said.trim(), "waiting");
+            let pid = child.id();
+            Self {
+                pid,
+                started: hide_platform::process::start_time(pid).unwrap(),
+                input: child.stdin.take(),
+                reaper: Some(std::thread::spawn(move || {
+                    let _ = child.wait();
+                })),
+            }
+        }
+
+        fn running(&self) -> bool {
+            hide_platform::process::start_time(self.pid).is_ok_and(|now| now == self.started)
+        }
+    }
+
+    impl Drop for StandIn {
+        fn drop(&mut self) {
+            if self.running() {
+                let _ = hide_platform::process::terminate(self.pid);
+            }
+            drop(self.input.take());
+            if let Some(reaper) = self.reaper.take() {
+                let _ = reaper.join();
+            }
+        }
+    }
+
+    /// The stand-in's own role: it waits on its input until it is ended.
+    #[test]
+    fn a_stand_in_herdr_role() {
+        if std::env::var_os(STAND_IN).is_none() {
+            return;
+        }
+        println!("waiting");
+        let mut line = String::new();
+        let _ = std::io::stdin().read_line(&mut line);
+    }
+
+    // D-6, B3: a server that ends on its socket's `server.stop` is confirmed
+    // gone by its pid and start, and the system is not asked to end it.
+    #[test]
+    fn a_herdr_that_ends_on_server_stop_is_confirmed_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("herdr.sock");
+        let herdr = StandIn::start();
+        let listener = hide_platform::ipc::LocalListener::bind(&socket).unwrap();
+        let closer = listener.closer();
+        let pid = herdr.pid;
+        // The server reads the call and ends, as Herdr's quit does; a call
+        // that never comes ends its wait once the stop returns.
+        let server = std::thread::spawn(move || {
+            let mut stream = listener.accept().ok()?;
+            let mut call = String::new();
+            std::io::BufRead::read_line(&mut std::io::BufReader::new(&mut stream), &mut call)
+                .ok()?;
+            hide_platform::process::terminate(pid).ok()?;
+            Some(call)
+        });
+        let refusals = std::cell::RefCell::new(Vec::new());
+        let refused = |reason: &str| refusals.borrow_mut().push(reason.to_owned());
+        stop_within(
+            &socket,
+            herdr.pid,
+            herdr.started,
+            &refused,
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        closer.close();
+        assert!(server.join().unwrap().unwrap().contains("server.stop"));
+        assert!(!herdr.running());
+        assert!(refusals.borrow().is_empty(), "{:?}", refusals.borrow());
+    }
+
+    // D-6, B42: a server whose socket does not answer (its program file
+    // deleted by an update, or the call refused) is ended by the system, and
+    // why the ask failed goes to the caller's log.
+    #[test]
+    fn a_herdr_whose_socket_does_not_answer_is_ended_by_the_system() {
+        let dir = tempfile::tempdir().unwrap();
+        let herdr = StandIn::start();
+        let refusals = std::cell::RefCell::new(Vec::new());
+        let refused = |reason: &str| refusals.borrow_mut().push(reason.to_owned());
+        stop_within(
+            &dir.path().join("herdr.sock"),
+            herdr.pid,
+            herdr.started,
+            &refused,
+            Duration::from_millis(300),
+        )
+        .unwrap();
+        assert!(!herdr.running());
+        assert_eq!(refusals.borrow().len(), 1);
+        assert!(refusals.borrow()[0].starts_with("server.stop: "));
+    }
+
+    // D-6: a pid a new process took is never ended: it is not the server
+    // that was found, so it reads as gone.
+    #[test]
+    fn a_pid_another_process_took_is_never_ended() {
+        let dir = tempfile::tempdir().unwrap();
+        let other = StandIn::start();
+        stop_within(
+            &dir.path().join("herdr.sock"),
+            other.pid,
+            other.started + 1,
+            &|_| {},
+            Duration::from_millis(300),
+        )
+        .unwrap();
+        assert!(other.running());
     }
 
     #[test]
