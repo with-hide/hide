@@ -252,10 +252,10 @@ const TaskGroups = memo(function TaskGroups({ list, view, showProject, byPane, a
   // The arrow keys move through both parts as one.
   return (
     <div ref={lists} className={cn("flex min-h-0 flex-1 flex-col", disabled && "opacity-(--opacity-disabled)")} data-task-list="true" onKeyDown={moveFocus}>
-      {held ? <div className="max-h-1/2 shrink-0 overflow-y-auto border-b border-border px-sm pb-xs" data-task-scroll="raised">{raised.map(drawSection)}</div> : null}
-      <div className="min-h-0 flex-1 overflow-y-auto px-sm pb-md" data-task-scroll="list">
+      {held ? <div className="max-h-1/2 shrink-0 scroll-pt-(--size-sidebar-section-header) overflow-y-auto border-b border-border px-sm pb-xs" data-task-scroll="raised">{raised.map(drawSection)}</div> : null}
+      <div className={cn("min-h-0 flex-1 overflow-y-auto px-sm pb-md", view === "status" && "scroll-pt-(--size-sidebar-section-header)")} data-task-scroll="list">
         {(held ? below : sections).map(drawSection)}
-        {view === "status" ? <Folds group={{ key: "", resting: list.resting, cleanup: list.cleanup, archived: list.archived }} resting={restingTrees} cleanup={cleanupTrees} archived={shown.archived} open={openFolds} onToggle={toggleFold} rows={rows} archivedRows={archivedList} /> : null}
+        {view === "status" ? <Folds group={{ key: "", resting: list.resting, cleanup: list.cleanup, archived: list.archived }} resting={restingTrees} cleanup={cleanupTrees} archived={shown.archived} open={openFolds} onToggle={toggleFold} rows={rows} archivedRows={archivedList} sticky /> : null}
       </div>
     </div>
   );
@@ -279,12 +279,14 @@ function BandHead({ state }: { state: TaskGroupState }) {
   );
 }
 
-/** A group's head: its state and count, or a project's name with its counts by state (B4, B6). */
+const STICKY_TASK_HEAD = "sticky top-0 z-10 h-(--size-sidebar-section-header) bg-sidebar";
+
+/** A group's state and count stay above its scrolling rows; project heads carry their counts by state (B4, B6). */
 function GroupHead({ group }: { group: TaskGroup }) {
   const { t } = useInterfaceTranslation();
   if (group.state) {
     return (
-      <h3 tabIndex={-1} data-task-focus="group" className={cn("flex items-center gap-xs rounded-xs px-xs pt-sm pb-xs text-micro font-medium text-subtle-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring", group.state === "needs_you" && "text-warning")} data-task-group-head={group.state}>
+      <h3 tabIndex={-1} data-task-focus="group" data-section-sticky="true" className={cn(STICKY_TASK_HEAD, "flex items-center gap-xs rounded-xs px-xs py-xs text-micro font-medium text-subtle-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring", group.state === "needs_you" && "text-warning")} data-task-group-head={group.state}>
         <span>{t(`taskLens.group.${group.state}`)}</span>
         <span className="tabular-nums">{group.entries.length}</span>
       </h3>
@@ -304,7 +306,7 @@ function GroupHead({ group }: { group: TaskGroup }) {
 }
 
 /** `쉬는 중 N ›`, `정리할 것 N ›` and, last, `보관됨 N ›` (B5; PRD session-archive B14, B15): folded, opened in place, closed with `접기`. */
-function Folds({ group, resting, cleanup, archived, open, onToggle, rows, archivedRows: drawArchived }: {
+function Folds({ group, resting, cleanup, archived, open, onToggle, rows, archivedRows: drawArchived, sticky = false }: {
   group: Pick<TaskGroup, "key" | "resting" | "cleanup" | "archived">;
   resting: { entry: TaskEntry; lines: SidebarTreeLine[] }[];
   cleanup: { entry: TaskEntry; lines: SidebarTreeLine[] }[];
@@ -313,6 +315,7 @@ function Folds({ group, resting, cleanup, archived, open, onToggle, rows, archiv
   onToggle: (key: string) => void;
   rows: (trees: { entry: TaskEntry; lines: SidebarTreeLine[] }[]) => ReactNode;
   archivedRows: (entries: ArchivedEntry[]) => ReactNode;
+  sticky?: boolean;
 }) {
   const { t } = useInterfaceTranslation();
   const fold = (kind: "rest" | "cleanup" | "archived", count: number, drawn: ReactNode) => {
@@ -321,7 +324,7 @@ function Folds({ group, resting, cleanup, archived, open, onToggle, rows, archiv
     const expanded = open.has(key);
     return (
       <div data-task-fold={kind}>
-        <Button variant="text" size="inline" data-task-focus="fold" aria-expanded={expanded} onClick={() => onToggle(key)} className="w-full justify-start px-xs py-xs text-micro">
+        <Button variant="text" size="inline" data-task-focus="fold" data-section-sticky={sticky ? "true" : undefined} aria-expanded={expanded} onClick={() => onToggle(key)} className={cn("w-full justify-start px-xs py-xs text-micro", sticky && STICKY_TASK_HEAD)}>
           {expanded ? <ChevronDownIcon aria-hidden="true" className="size-(--size-icon-sm)" /> : <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />}
           <span>{t(kind === "rest" ? "taskLens.fold.resting" : kind === "cleanup" ? "taskLens.fold.cleanup" : "archive.fold", { count })}</span>
         </Button>

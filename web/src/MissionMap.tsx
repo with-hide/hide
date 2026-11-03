@@ -23,7 +23,7 @@ import { markdownPlainText } from "./markdownPlain";
 import { MissionMapCanvas } from "./MissionMapCanvas";
 import { MissionNodePanel } from "./MissionNodePanel";
 import { MissionTurn } from "./MissionTurn";
-import { markWord, RunText, useNodeRun, useNodeTimes } from "./missionParts";
+import { markWord, MissionDevice, RunText, useMissionDeviceName, useNodeRun, useNodeTimes } from "./missionParts";
 import { planCount } from "./plans";
 import {
   attentionWords,
@@ -363,6 +363,7 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
   const satellites = satelliteLines(node.criteria);
   const word = markWord(node, look, t);
   const worker = useNodeRun(node);
+  const device = useMissionDeviceName(node.machine);
   const run = worker?.run ?? null;
   const took = useNodeTimes(mission, node, events, end)?.took ?? null;
   // The worker's plan is one number at the end of that line, never a line of its own.
@@ -381,6 +382,7 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
         word,
         ...(node.kind === "external" && look !== "external" ? [t("mission.look.external")] : []),
         ...(run ? [run.text] : []),
+        ...(device ? [device] : []),
         ...(plan ? [t("plan.chip", { progress: planCount(plan) })] : []),
         ...node.prs.map((pr) => t("mission.attention.pr", { number: String(pr.number) })),
         ...(attention ? [`${t("mission.attention")} · ${attention.who} · ${attention.why}`] : []),
@@ -408,13 +410,22 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
         {node.line ? <Hint label={`${node.title}\n${node.line}`} reveals contentClassName="max-w-(--size-mission-node)">{titleText}</Hint> : titleText}
         {hide ? <HideMark words={hide} /> : null}
       </span>
-      {/* Who works it and how long it has taken have a line of their own, so a long branch or several pull requests never push them out (operator decision 2026-11-02). */}
-      {run || took ? (
-        <span className="flex min-w-0 items-center gap-xxs text-caption text-muted-foreground" data-node-run={run?.from ?? "none"}>
-          {worker?.agent ? <AgentMark kind={worker.agent} /> : null}
-          {run ? <RunText run={run} /> : null}
-          {took ? <span className="shrink-0" data-node-took="true">{run ? "· " : ""}{took}</span> : null}
-          {plan ? <span className="shrink-0 font-mono tabular-nums" data-node-plan-count="true">{run || took ? "· " : ""}{planCount(plan)}</span> : null}
+      {/* The worker and its device stay together; at a large text size a crowded row wraps time and progress below them. Results keep their own row. */}
+      {run || took || device ? (
+        <span className={cn("flex min-w-0 items-center gap-xxs text-caption text-muted-foreground", device && "flex-wrap")} data-node-run={run?.from ?? "none"}>
+          {run || device ? (
+            <span className="flex min-w-0 max-w-full items-center gap-xxs">
+              {worker?.agent ? <AgentMark kind={worker.agent} /> : null}
+              {run ? <RunText run={run} /> : null}
+              {device ? <>{run ? <span aria-hidden="true">·</span> : null}<MissionDevice name={device} className="max-w-[calc(var(--size-mission-node)/3)] shrink-0" /></> : null}
+            </span>
+          ) : null}
+          {took || plan ? (
+            <span className="flex shrink-0 items-center gap-xxs">
+              {took ? <span data-node-took="true">{run || device ? "· " : ""}{took}</span> : null}
+              {plan ? <span className="font-mono tabular-nums" data-node-plan-count="true">{run || took || device ? "· " : ""}{planCount(plan)}</span> : null}
+            </span>
+          ) : null}
         </span>
       ) : null}
       {result || attention ? (

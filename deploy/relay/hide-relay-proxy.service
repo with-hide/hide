@@ -1,0 +1,36 @@
+[Unit]
+Description=Hide relay HTTPS proxy
+After=network-online.target hide-relay.service
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+User=hide-relay-proxy
+Group=hide-relay-proxy
+ExecStart=/usr/bin/caddy run --config /opt/hide-relay/current/Caddyfile --adapter caddyfile
+Environment=XDG_DATA_HOME=/var/lib/hide-relay-proxy
+Environment=XDG_CONFIG_HOME=/var/lib/hide-relay-proxy
+StateDirectory=hide-relay-proxy
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+MemoryMax=256M
+MemorySwapMax=0
+TasksMax=128
+LimitNOFILE=4096
+LimitCORE=0
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+# Runtime proxy errors can include request objects, even without access logs.
+# Health monitoring, not raw request-bearing diagnostics, reports proxy failure.
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=multi-user.target

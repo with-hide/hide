@@ -1,0 +1,10 @@
+[Unit]
+Description=Hide relay journal retention
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1h
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,9 @@
+[Unit]
+Description=Expire only Hide relay journal events
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/journalctl --namespace=hide-relay --rotate --vacuum-time=6d --vacuum-size=64M
+TimeoutStartSec=60
+StandardOutput=null
+StandardError=null

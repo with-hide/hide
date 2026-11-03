@@ -481,6 +481,13 @@ The candidate's `compile (macos)` job runs `desktop package compile` on the sour
 The private publisher downloads that artifact from the candidate run, requires each binary's SHA-256 to equal the receipt's `macos_binaries`, puts them where `assemble` reads them, and assembles, signs and notarizes the app; it compiles nothing.
 Waiting for a hosted macOS runner took 53 minutes at the 90th percentile of 40 pull request verify runs (October 2026), so the job runs on the operator's Mac mini, a self-hosted runner of this public repository labelled `hide-candidate`, which no other workflow names (`scripts/tests/test_release_candidate.py`).
 
+Both the mini and hosted jobs explicitly prepare managed Python 3.12 before dependencies, the Zig inputs and the web build, then require `python3` to import the standard `tomllib` module (Python 3.11 or newer).
+The web typecheck runs `prepare:relay`, whose WASM build reads `Cargo.lock` with `tomllib`; the runner's system Python is not a build prerequisite.
+The pinned `astral-sh/setup-uv` action installs the pinned uv version in `runner.tool_cache` and activates a private environment on PATH, using only managed Python.
+Python, that environment, the download cache and the tool binary directory stay under `runner.temp`, and Actions cache restore/save is disabled.
+The existing work-folder cleanup owns the uv binary, and the runner empties its temporary directory at the start and end of the job.
+Unlike this relocatable distribution, [`actions/setup-python` on self-hosted macOS](https://github.com/actions/setup-python/blob/6d4fd22b20465ccc0f7354476588e8df7c9ca0e0/docs/advanced-usage.md#macos) requires a fixed hosted tool-cache installation outside this cleanup boundary, so the candidate does not use it or change account permissions to accommodate it.
+
 A self-hosted runner of a public repository would run whatever a pull request's workflow asks of it, so the Mac mini takes only this job:
 
 - **Only this workflow, on main.** The Team plan's runner groups can be limited to repositories but not to workflows, so the runner refuses the rest itself: its job-started hook (`scripts/candidate-runner/job-started.sh`) stops every job, before any of its steps runs, unless the job's repository, event, ref and workflow ref are this repository's `release-candidate.yml` dispatched on `refs/heads/main`. Failing the hook would still let the worker run `if: always()` and `if: failure()` steps and actions' `pre` steps, so the hook empties the work folder and kills the job's worker, its parent; the listener completes the job as failed and stays online. The worker dies before it uploads the job's log, so GitHub shows the job failed with no log; the refusal is in the Mac mini's system log, `log show --last 1h --predicate 'process == "logger"'`. Where the hook's parent is not the worker, as an update of the runner could make it, the hook cannot stop that job's steps alone, so it stops the whole runner: it sets the registration aside as `~hiderunner/actions-runner/.runner.stopped` and kills the runner's worker and listener, and the LaunchDaemon, which has no `KeepAlive`, starts nothing more, so the runner stays offline until its administrator restores it. A hook sees the job's own `github` context and never a workflow's `env:`, so no pull request, fork or branch push can name those values. Pull requests from outside contributors also wait for a maintainer's approval before any workflow runs.
@@ -589,7 +596,7 @@ The public repository's `phone-production` GitHub environment supplies exactly t
 
 | Secret | Value supplied by the deployment owner |
 | --- | --- |
-| `PHONE_VERCEL_TOKEN` | Vercel deployment token scoped to the phone project's owner |
+| `PHONE_VERCEL_TOKEN` | Vercel deployment token restricted to the phone project |
 | `PHONE_VERCEL_ORG_ID` | The existing Vercel team or account ID |
 | `PHONE_VERCEL_PROJECT_ID` | The existing phone project ID, separate from the introduction site |
 
@@ -624,13 +631,34 @@ There are no external scripts or analytics in the phone app, and an analytics-en
 After upload, CI reads the inventory, protocol union and every listed file from `app.withhide.dev`, requiring the exact source, bytes and CSP headers before desktop preparation begins.
 A failed confirmation can leave the newly uploaded phone site online, but the desktop release remains stopped; repair the cause and retry from main instead of publishing past it.
 The 30-minute job limit bounds the whole operation, and Vercel upload has its own ten-minute limit.
+The upload pins the npm-published Vercel CLI 65.10.0, whose deploy path accepts a project-scoped token when the project's GET succeeds but the owner team's GET returns `403 team_unauthorized`.
+CLI 50.1.3 rejected that combination before upload with "Could not retrieve Project Settings".
+Preparation still verifies the project's `id` and `accountId` before writing `.vercel/project.json`; no team-wide permission or Git integration is required.
 
 `python3 -m unittest scripts.tests.test_phone_release scripts.tests.test_release_candidate` checks the release dependency graph, secret contract and real filesystem assembly against fixture Vercel HTTP responses.
 It covers retained old files, same-protocol assets, the protocol union, missing secrets, upload prerequisites, refused rollback, corrupt or missing history, unsafe CSP and failed production confirmation, without any live upload.
+The opt-in real-CLI regression installs no dependency itself and needs no credentials.
+Install the two npm releases into ignored run directories with Node 22, then run:
+
+```sh
+npm install --prefix agents/runs/mission-27-phone-deploy/cli-new --ignore-scripts --no-audit --no-fund vercel@65.10.0
+npm install --prefix agents/runs/mission-27-phone-deploy/cli-old --ignore-scripts --no-audit --no-fund vercel@50.1.3
+PHONE_RELEASE_VERCEL_CLI="$PWD/agents/runs/mission-27-phone-deploy/cli-new/node_modules/vercel/dist/index.js" \
+PHONE_RELEASE_OLD_VERCEL_CLI="$PWD/agents/runs/mission-27-phone-deploy/cli-old/node_modules/vercel/dist/index.js" \
+python3 -m unittest scripts.tests.test_phone_release.PhoneReleaseCli
+```
+
+The fixture executes the workflow's deploy arguments against a loopback API using the CLI's `--api` option, with a private home and repository and a synthetic token.
+It runs real preparation, verifies the current CLI matches the workflow pin, reproduces the old CLI's team-403 failure, and checks the new CLI uploads exactly the prepared file bytes and exits successfully.
+A missing project, a different team error, and an upload refusal must still exit unsuccessfully; the ordinary workflow tests keep upload failure and confirmation ahead of packaging.
+Without both installed CLI paths this external-binary case is explicitly skipped, while the ordinary release contract tests still run.
 The existing phone browser journey checks that CSP blocks an external script.
 These checks prove the release contract, not actual credentials, hosting, DNS, a live upload or a physical phone; those remain the deployment node's acceptance checks.
 
 ## Mobile relay server
+
+[RELAY_DEPLOYMENT.md](RELAY_DEPLOYMENT.md) owns the production main-CI artifact, Linux installation and rollback, systemd/proxy/collector configuration and scoped cloud operations.
+The manual `relay-artifact.yml` producer builds only the relay from its exact protected-main dispatch SHA and retains source/run and SHA-256 evidence; it signs nothing and deploys nothing.
 
 `bash scripts/verify-cargo.sh build -p hide-relay --bin hide-relay` builds the standalone memory-only server into `target/debug/hide-relay` (`.exe` on Windows).
 Run `target/debug/hide-relay --listen 127.0.0.1:8787` for local clients; `/ws` accepts WebSockets and `/health` answers the uptime check.

@@ -440,7 +440,7 @@ it("draws each card as its mark, its title, its pull requests, its worker's mode
     expect([card(map, "core").querySelector("[title='제안 core: 기록·공책·점수·반영']"), card(map, "api").querySelector(`[title="${nodes.find((one) => one.key === "api")!.title}"]`)]).toEqual([null, expect.anything()]);
     expect(card(map, "launched").querySelector("[data-run]")?.textContent).toBe("Opus 5.5·high");
     // The agent mark stands before the model: the plan's agent while planned, the launched agent's once kept (codex here, where the plan said claude).
-    expect(["core", "launched"].map((key) => card(map, key).querySelector("[data-node-run] > :first-child")?.getAttribute("data-agent-mark"))).toEqual(["claude", "codex"]);
+    expect(["core", "launched"].map((key) => card(map, key).querySelector("[data-node-run] [data-agent-mark]")?.getAttribute("data-agent-mark"))).toEqual(["claude", "codex"]);
     // A finished node shows what its worker was launched with, its pane gone, never the plan marked planned; with no launch kept it shows nothing.
     expect([card(map, "ran").querySelector("[data-run]")?.textContent, card(map, "ran").querySelector("[data-run-planned]")]).toEqual(["Sonnet 5.5·low", null]);
     expect(card(map, "ran-unknown").querySelector("[data-run], [data-agent-mark]")).toBeNull();

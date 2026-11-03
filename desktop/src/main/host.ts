@@ -47,6 +47,7 @@ import { readJsonFile, writeJsonFile } from "./jsonFile";
 import type { HostLanguage } from "./language";
 import { chooseHerdr, ensureServer, parseServerStatus, restartServer, serverEnvironment, type HerdrChoice } from "./herdr";
 import { loadFailureFields, type HostLog } from "./log";
+import { redact } from "../../../web/src/redact";
 import { ChildRunner, executableFile, startDetached, type ChildResult } from "./spawn";
 import { fallbackScreen, fallbackScript, statusPageFile } from "./statusPage";
 import { MIN_SIZE, readWindowState, restoreBounds, windowStatePath, writeWindowState } from "./windowState";
@@ -1487,7 +1488,7 @@ export class DesktopHost {
    */
   private copyDiagnostics(contents: Electron.WebContents, hash: URLSearchParams): void {
     const reason = this.state.kind === "failed" ? this.state.reason : "none";
-    const text = [`hide ${app.getVersion()} (${process.platform} ${process.arch}, Electron ${process.versions.electron})`, `reason: ${reason}`, `log: ${path.join(app.getPath("logs"), "desktop.log")}`].join("\n");
+    const text = redact([`hide ${app.getVersion()} (${process.platform} ${process.arch}, Electron ${process.versions.electron})`, `reason: ${reason}`, `log: ${path.join(app.getPath("logs"), "desktop.log")}`].join("\n"));
     hash.delete("copy");
     const answer = (key: "copied" | "diagnostics", value: string) => {
       hash.set(key, value);

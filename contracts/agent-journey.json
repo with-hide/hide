@@ -37,6 +37,10 @@
       "usage": true
     },
     "letter": "bell",
+    "busy_letter": [
+      "bell"
+    ],
+    "stop_observer": null,
     "input": [
       "launch_prompt",
       "typed"
@@ -100,6 +104,10 @@
       "usage": true
     },
     "letter": "bell",
+    "busy_letter": [
+      "bell"
+    ],
+    "stop_observer": null,
     "input": [
       "launch_prompt",
       "codex_queue",
@@ -163,6 +171,15 @@
       "usage": true
     },
     "letter": "bell",
+    "busy_letter": [
+      "bell_hook",
+      "turn_end"
+    ],
+    "stop_observer": [
+      ".grok",
+      "hooks",
+      "journey-stop-observer.json"
+    ],
     "input": [
       "launch_prompt",
       "typed"
@@ -220,6 +237,8 @@
       "usage": true
     },
     "letter": "next_prompt",
+    "busy_letter": [],
+    "stop_observer": null,
     "input": [
       "typed"
     ],
@@ -281,6 +300,8 @@
       "usage": true
     },
     "letter": "next_prompt",
+    "busy_letter": [],
+    "stop_observer": null,
     "input": [
       "typed"
     ],
@@ -344,6 +365,8 @@
       "usage": true
     },
     "letter": "next_prompt",
+    "busy_letter": [],
+    "stop_observer": null,
     "input": [
       "launch_prompt",
       "typed"
@@ -407,6 +430,8 @@
       "usage": true
     },
     "letter": "next_prompt",
+    "busy_letter": [],
+    "stop_observer": null,
     "input": [
       "launch_prompt",
       "typed"
