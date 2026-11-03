@@ -2304,6 +2304,8 @@ An ended reservation refuses the original start; a deliberate replacement names 
 Legacy records retain their prior adoption and restart path until replaced by a format 2 reservation.
 Cancellation writes its intent under the same record lock that matches the request, before any process cleanup.
 The holder's final write and the node's lost-holder settlement both preserve that decision; confirmed cleanup ends as terminated, while unconfirmed leftovers remain closing and cancellation reports an unresolved outcome.
+A cancelled holder's final write still leaves its record closing, because it cannot prove its own exit while writing; only the node's cleanup followed by an exact-record compare and replace completes it.
+A holder that already wrote ended but still runs follows this same closing path, including when cleanup refuses or the connection disappears before it runs.
 While something of the earlier start runs on, its holder by pid and start time or on Unix a member of its program's session (elsewhere a pid its end says was left), the start is refused with those pids.
 A record of another state folder or one that cannot be read refuses the start.
 A state folder keeps at most 128 holders: every record not ended counts, and so does one that cannot be read, since it may name a holder; the 129th start is refused `holder_cap` with a `pane_holder.start_refused` line, however many ask at once.

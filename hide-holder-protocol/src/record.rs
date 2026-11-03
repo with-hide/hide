@@ -226,7 +226,10 @@ impl PaneRecord {
         if self.cancelled() {
             if end.left.is_empty() {
                 end.reason = EndReason::Terminated;
-            } else {
+            }
+            if self.holder.is_some() || self.program.is_some() || !end.left.is_empty() {
+                // A holder cannot prove its own exit while writing. The node
+                // completes Closing only after it observes actual cleanup.
                 self.phase = Phase::Closing;
             }
         }

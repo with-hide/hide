@@ -849,17 +849,7 @@ impl Panes {
         if let Some(intent) = &mut current.reservation {
             intent.cancelled = true;
         }
-        if current.phase == Phase::Ended
-            && current
-                .end
-                .as_ref()
-                .is_some_and(|end| end.left.is_empty() && end.reason != EndReason::StartUnconfirmed)
-        {
-            current.finish(current.end.clone().expect("the end was checked"));
-        } else if current.reservation.is_some()
-            && current.holder.is_none()
-            && current.program.is_none()
-        {
+        if current.reservation.is_some() && current.holder.is_none() && current.program.is_none() {
             current.finish(End::new(
                 EndReason::Terminated,
                 "the pane was closed before its holder claimed it",
@@ -871,13 +861,6 @@ impl Panes {
 
     fn finish_close(&self, owner: &Owner, current: PaneRecord) -> Result<PaneRecord, CloseError> {
         if current.phase == Phase::Ended {
-            if let Some(holder) = current.holder.filter(|holder| holder.runs()) {
-                end_holder_tree(holder).map_err(|left| {
-                    CloseError::Failed(format!(
-                        "the ended holder still has processes running: {left:?}"
-                    ))
-                })?;
-            }
             return Ok(current);
         }
         let pane = &current.pane;
@@ -1215,6 +1198,16 @@ impl Panes {
             Judgment::OtherOwner(current.clone())
         } else if current.protocol < OLDEST_HOLDER_VERSION {
             Judgment::Unsupported(current.clone())
+        } else if current.phase == Phase::Ended && current.cancelled() {
+            let mut closing = current.clone();
+            closing.phase = Phase::Closing;
+            match self.write_if_unchanged(current, &closing) {
+                Ok(()) => match closing.holder {
+                    Some(holder) if holder.runs() => self.end_closing(&pane, holder),
+                    _ => self.settle_lost(&closing),
+                },
+                Err(why) => Judgment::Unsettled(why),
+            }
         } else if current.phase == Phase::Ended {
             self.end_unconfirmed_start(current);
             let gone = current.holder.is_none_or(|holder| !holder.runs());
@@ -1288,17 +1281,33 @@ impl Panes {
     /// bound: ended, lost without writing its end, or still closing.
     fn after_close(&self, pane: &str, holder: Identity, refused: Option<String>) -> Judgment {
         match self.record(pane) {
-            Ok(Some(after)) if after.phase == Phase::Ended => Judgment::Ended(after),
+            Ok(Some(after)) if after.phase == Phase::Ended && !after.cancelled() => {
+                Judgment::Ended(after)
+            }
             Ok(Some(after)) if !holder.runs() => self.settle_lost(&after),
-            Ok(Some(after)) => Judgment::Closing(
-                after,
-                refused.unwrap_or_else(|| {
+            Ok(Some(after)) => {
+                let why = refused.unwrap_or_else(|| {
                     format!(
                         "it was asked to end and still runs after {} s",
                         CLOSE_LIMIT.as_secs()
                     )
-                }),
-            ),
+                });
+                let mut closing = after.clone();
+                closing.phase = Phase::Closing;
+                let mut end = closing
+                    .end
+                    .take()
+                    .unwrap_or_else(|| End::new(EndReason::Terminated, &why));
+                end.detail = why.clone();
+                if !end.left.contains(&holder.pid) {
+                    end.left.push(holder.pid);
+                }
+                closing.end = Some(end);
+                match self.write_if_unchanged(&after, &closing) {
+                    Ok(()) => Judgment::Closing(closing, why),
+                    Err(why) => Judgment::Unsettled(why),
+                }
+            }
             Ok(None) => Judgment::Unsettled("the record was removed while it was settled".into()),
             Err(error) => Judgment::Unreadable(error.to_string()),
         }
@@ -1331,7 +1340,9 @@ impl Panes {
     fn settle_lost(&self, current: &PaneRecord) -> Judgment {
         // A holder that ended its pane since the record was read wrote why.
         match self.record(&current.pane) {
-            Ok(Some(now)) if now.phase == Phase::Ended => return Judgment::Ended(now),
+            Ok(Some(now)) if now.phase == Phase::Ended && !now.cancelled() => {
+                return Judgment::Ended(now);
+            }
             Ok(Some(now)) if now == *current => {}
             Ok(_) => return Judgment::Unsettled("the record changed while it was settled".into()),
             Err(error) => return Judgment::Unsettled(error.to_string()),
@@ -1364,6 +1375,9 @@ impl Panes {
     fn end_record(&self, current: &PaneRecord, end: End) -> Judgment {
         let mut ended = current.clone();
         ended.finish(end);
+        // Every caller established that no holder of this boot remains and
+        // completed its leftover cleanup before this exact-record CAS.
+        ended.phase = Phase::Ended;
         match self.write_if_unchanged(current, &ended) {
             Ok(()) => Judgment::Ended(ended),
             Err(why) => Judgment::Unsettled(why),
@@ -1806,6 +1820,62 @@ mod tests {
         );
         assert_eq!(panes.record("p1").unwrap(), Some(running));
         assert!(holder.runs());
+    }
+
+    #[test]
+    fn cancellation_never_records_completion_before_the_live_holder_leaves() {
+        for cleanup_refused in [false, true] {
+            let home = tempfile::tempdir().unwrap();
+            let panes = Panes::open(home.path(), &home.path().join("s"), quiet).unwrap();
+            let owner = panes.acquire(Duration::ZERO).unwrap();
+            let stand_in = StandIn::start();
+            let holder = stand_in.identity();
+            let mut current = reserved(&panes, Some(holder), Phase::Ended);
+            current.reservation = Some(
+                serde_json::from_value(json!({
+                    "owner": owner.incarnation(), "request": "a".repeat(64),
+                    "cwd": hide_platform::path::to_wire(home.path()).unwrap(), "cancelled": false,
+                }))
+                .unwrap(),
+            );
+            current.end = Some(End::new(
+                EndReason::ProgramExited,
+                "the holder has not left yet",
+            ));
+            // Exactly the close decision, committed before cleanup can run.
+            {
+                let _lock = panes.lock().unwrap();
+                panes.prepare_close(&mut current);
+                record::write(&layout::pane_record(&panes.state_dir, "p1"), &current).unwrap();
+            }
+            assert_eq!(current.phase, Phase::Closing);
+            assert!(holder.runs());
+            if cleanup_refused {
+                // Inject a cleanup refusal at its production result boundary;
+                // the actual stand-in stays alive and must never be closed.
+                assert!(matches!(
+                    panes.after_close(
+                        "p1",
+                        holder,
+                        Some("cleanup could not be confirmed".to_owned())
+                    ),
+                    Judgment::Closing(_, _)
+                ));
+                let pending = panes.record("p1").unwrap().unwrap();
+                assert_eq!(pending.phase, Phase::Closing);
+                assert!(pending.end.unwrap().left.contains(&holder.pid));
+            }
+            // The previous connection can disappear at either boundary. Its
+            // successor must finish the actual process before reporting ended.
+            drop(owner);
+            let owner = panes.acquire(Duration::ZERO).unwrap();
+            let current = panes.record("p1").unwrap().unwrap();
+            let Judgment::Ended(ended) = panes.judge(&owner, &current) else {
+                panic!("the successor did not finish the cancelled holder");
+            };
+            assert!(!holder.runs());
+            assert_eq!(ended.end.unwrap().reason, EndReason::Terminated);
+        }
     }
 
     #[test]
