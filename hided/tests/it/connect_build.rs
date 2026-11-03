@@ -415,8 +415,8 @@ fn a_relocated_state_folder_moves_nothing() {
 #[test]
 fn with_both_folders_the_new_one_is_used_and_the_old_one_logged() {
     let dir = tempfile::tempdir().unwrap();
-    // Not `home`: the log writes a `/home/<name>/` segment as `~/`
-    // (contracts/diagnostic-redaction.json), which would hide the paths read here.
+    // Not `home`: the log writes a folder named `home` and the one under it
+    // as `~` (contracts/diagnostic-redaction.json), hiding the paths read here.
     let home = dir.path().join("operator");
     let legacy = home.join(".local/state/hide");
     let moved = home.join(".hide/state");
