@@ -100,7 +100,7 @@ fn a_read_leaves_the_screen_connection_and_its_scroll_position_as_they_were() {
 }
 
 #[test]
-fn processes_name_the_shell_and_the_foreground_or_say_it_is_not_known() {
+fn processes_name_the_shell_and_the_program_that_holds_the_terminal() {
     let home = Home::new();
     let folder = home.prepare(current_version(), &source());
     let holder = start_ready(&folder.program, &home.socket("p"), &shell(), &[]);
@@ -115,47 +115,53 @@ fn processes_name_the_shell_and_the_foreground_or_say_it_is_not_known() {
     };
     let (shell_pid, foreground) = processes();
     assert_eq!(shell_pid, holder.program.pid);
-    #[cfg(windows)]
-    assert_eq!(
-        foreground,
-        Foreground::Unknown(hide_holder_protocol::Unknown::NotOnThisSystem)
+    // The idle shell holds the terminal: on Unix its own group, on Windows
+    // the shell standing in for the console's foreground, which it runs no
+    // program under.
+    let Foreground::Known { group, members } = foreground else {
+        panic!("{foreground:?}");
+    };
+    assert_eq!(group, holder.program.pid);
+    let shell = members
+        .iter()
+        .find(|member| member.pid == holder.program.pid)
+        .unwrap_or_else(|| panic!("{members:?}"));
+    assert!(
+        shell.name.as_deref().is_some_and(|name| !name.is_empty()),
+        "{shell:?}"
     );
-    #[cfg(unix)]
-    {
-        let Foreground::Known { group, members } = foreground else {
-            panic!("{foreground:?}");
-        };
-        assert_eq!(group, holder.program.pid);
-        let shell = members
-            .iter()
-            .find(|member| member.pid == holder.program.pid)
-            .unwrap_or_else(|| panic!("{members:?}"));
-        assert!(
-            shell.name.as_deref().is_some_and(|name| !name.is_empty()),
-            "{shell:?}"
-        );
 
-        let mut connection = holder.open();
-        connection
-            .send(ClientMessage::Input(b"sleep 30\r".to_vec()))
-            .unwrap();
-        wait_until(
-            "the sleep to hold the terminal",
-            || matches!(processes().1, Foreground::Known { group, .. } if group != holder.program.pid),
-        );
-        let Foreground::Known { members, .. } = processes().1 else {
-            unreachable!()
-        };
-        assert!(
-            members
-                .iter()
-                .any(|member| member.name.as_deref() == Some("sleep")),
-            "{members:?}"
-        );
-        connection
-            .send(ClientMessage::Input(b"\x03".to_vec()))
-            .unwrap();
-    }
+    // A program the shell runs holds the terminal, named as the system
+    // names it.
+    let (line, program): (&[u8], &str) = if cfg!(windows) {
+        (b"ping -n 30 127.0.0.1\r", "ping.exe")
+    } else {
+        (b"sleep 30\r", "sleep")
+    };
+    let mut connection = holder.open();
+    connection
+        .send(ClientMessage::Input(line.to_vec()))
+        .unwrap();
+    wait_until(
+        "the program to hold the terminal",
+        || matches!(processes().1, Foreground::Known { group, .. } if group != holder.program.pid),
+    );
+    let Foreground::Known { members, .. } = processes().1 else {
+        unreachable!()
+    };
+    assert!(
+        members
+            .iter()
+            .all(|member| member.pid != holder.program.pid)
+            && members.iter().any(|member| member
+                .name
+                .as_deref()
+                .is_some_and(|name| name.eq_ignore_ascii_case(program))),
+        "{members:?}"
+    );
+    connection
+        .send(ClientMessage::Input(b"\x03".to_vec()))
+        .unwrap();
 }
 
 /// A styled read (Herdr's `ansi` format, of the rows on screen and of the

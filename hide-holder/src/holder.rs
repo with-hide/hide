@@ -948,7 +948,10 @@ impl Holder {
                 pane: self.pane.clone(),
                 rules: self.rules.clone(),
                 shell: self.program,
-                group: Box::new(move || master.group()),
+                group: Box::new({
+                    let shell = self.program;
+                    move || master.group(shell)
+                }),
                 log: self.log.clone(),
             };
             let shutdown = stream.shutdown_handle();
@@ -1440,10 +1443,14 @@ impl PtyMaster {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// The terminal's foreground process group, or why it is not known.
-    fn group(&self) -> Result<u32, Unknown> {
+    /// The terminal's foreground process group, or why it is not known. On
+    /// Windows, which names none for a console, the process that stands in
+    /// for it under `shell`, the pane's program
+    /// (`hide_platform::process::console_foreground`).
+    fn group(&self, shell: u32) -> Result<u32, Unknown> {
         #[cfg(unix)]
         {
+            let _ = shell;
             let group = self
                 .lock()
                 .as_ref()
@@ -1456,7 +1463,13 @@ impl PtyMaster {
         #[cfg(windows)]
         {
             let _ = self;
-            Err(Unknown::NotOnThisSystem)
+            hide_platform::process::console_foreground(shell).map_err(|error| {
+                if error.kind() == std::io::ErrorKind::NotFound {
+                    Unknown::NoGroup
+                } else {
+                    Unknown::Unreadable
+                }
+            })
         }
     }
 }
@@ -2037,7 +2050,7 @@ impl Asked {
                 .map_err(|error| format!("the screen could not be read: {error}")),
             Ask::Processes => Ok(crate::ask::processes(
                 self.shell,
-                self.master.group(),
+                self.master.group(self.shell),
                 &self.log,
             )),
         };
