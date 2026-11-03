@@ -95,6 +95,10 @@ pub(crate) struct Place {
     pub(crate) engine_dir: PathBuf,
     pub(crate) home: String,
     pub(crate) node: Arc<dyn NodeLink>,
+    /// Whether the machine `node` answers for runs Windows: a device's
+    /// system, from its node's hello, never the core's own, since a Mac core
+    /// runs the panes of a Windows device and the reverse.
+    pub(crate) windows: bool,
     /// The agent definitions the operator's folder held when the daemon
     /// started, so a restore resumes their agents before the core's first
     /// read reaches the engine.
@@ -120,6 +124,9 @@ struct Shared {
     definitions: agents::Definitions,
     /// Gives panes' holders their screen rules off every lock.
     rules: rules::RulesWorker,
+    /// Whether the machine whose holders run the panes runs Windows: the
+    /// place's, or this machine's for a test engine with no place.
+    windows: bool,
     /// Facts a holder sent before its pane entered the topology (a pane
     /// reserves its id and starts its holder first), laid on once it has.
     /// The oldest goes first past [`EARLY_FACTS_CAP`].
@@ -197,6 +204,7 @@ pub(crate) fn open_device(
     node: Arc<dyn NodeLink>,
     state_dir: &std::path::Path,
     home: String,
+    windows: bool,
     definitions: Arc<hide_agent_adapter::definition::Catalog>,
 ) -> Result<OwnEngine<'static>, String> {
     let engine_dir = hide_kit::layout::device_engine_dir(state_dir, device)?;
@@ -206,6 +214,7 @@ pub(crate) fn open_device(
             engine_dir,
             home,
             node,
+            windows,
             definitions,
         },
     )
@@ -275,8 +284,10 @@ impl OwnEngine<'static> {
             || Arc::new(hide_agent_adapter::definition::Catalog::read(Vec::new())),
             |place| Arc::clone(&place.definitions),
         );
+        let windows = place.as_ref().map_or(cfg!(windows), |place| place.windows);
         let engine = Self {
             shared: Arc::new(Shared {
+                windows,
                 topology: Arc::new(Mutex::new(topology)),
                 rules: rules::RulesWorker::start(Arc::clone(&holders))?,
                 holders,
@@ -1956,7 +1967,7 @@ impl<'g> Engine for OwnEngine<'g> {
                 format!("pane {pane} runs a program; an agent starts only in an idle shell"),
             ));
         }
-        let shell = shell_line::Shell::of(processes.shell_name()).ok_or_else(|| {
+        let shell = shell_line::Shell::of(processes.shell_name(), self.shared.windows).ok_or_else(|| {
             refused(
                 "agent_start_refused",
                 format!("pane {pane} runs cmd.exe, which takes no start line; start the agent from PowerShell"),
@@ -2869,6 +2880,7 @@ mod tests {
         Place {
             engine_dir: hide_kit::layout::engine_dir(&root.join("state")),
             node: Arc::new(hide_node::Local::new(Some(home.clone()))),
+            windows: cfg!(windows),
             home: wire(&home),
             definitions: Arc::new(hide_agent_adapter::definition::Catalog::read(Vec::new())),
         }
@@ -3283,6 +3295,34 @@ mod tests {
             .filter(|(into, _)| into == pane)
             .map(|(_, bytes)| String::from_utf8_lossy(bytes).into_owned())
             .collect()
+    }
+
+    /// A device's engine types the line its pane's machine reads, never the
+    /// core's: a Mac core starts an agent in a Windows device's pane with
+    /// PowerShell's line when the holder could not name the shell, and a
+    /// Windows core in a Linux device's with a POSIX one.
+    #[test]
+    fn a_start_takes_the_panes_machine_shell_when_its_name_is_unknown() {
+        for (windows, line) in [(true, "& codex\r"), (false, "codex\r")] {
+            let root = tempfile::tempdir().unwrap();
+            let mut place = place(root.path());
+            place.windows = windows;
+            let folder = home(&place);
+            std::fs::create_dir_all(&folder).unwrap();
+            let holders = Holders::found(HolderRecovery::default());
+            let engine =
+                OwnEngine::open(Arc::clone(&holders) as Arc<dyn PaneHolders>, place).unwrap();
+            let (_, _, pane) = engine
+                .create_workspace(WAIT, &wire(&folder), "w", true, Env::new())
+                .unwrap();
+            // The holder could not read the shell's program name.
+            holders.idle_shell(41, "");
+            let start = engine
+                .prepare_start(launch(&pane, "worker", "codex", &[]))
+                .unwrap();
+            engine.start_agent(WAIT, &start).unwrap();
+            assert_eq!(holders.typed(&pane), line, "windows: {windows}");
+        }
     }
 
     /// D-19, B17, B18: a start types its definition's line into the idle

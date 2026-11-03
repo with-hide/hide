@@ -685,6 +685,8 @@ impl EngineHandle {
                 engine_dir: scope.clone(),
                 home,
                 node,
+                // This machine's own node.
+                windows: cfg!(windows),
                 definitions: Arc::new(definitions),
             },
         )?;

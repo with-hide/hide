@@ -530,7 +530,7 @@ impl OwnEngine<'static> {
         let group = self
             .processes(&resume.pane)
             .map_err(|error| error.to_string())?;
-        let shell = Shell::of(group.shell_name())
+        let shell = Shell::of(group.shell_name(), self.shared.windows)
             .ok_or_else(|| "the pane's shell is cmd.exe, which takes no resume line".to_owned())?;
         let line = shell_line::resume_command(&resume.argv, &resume.shown, shell)
             .ok_or_else(|| "the resume names no program".to_owned())?;

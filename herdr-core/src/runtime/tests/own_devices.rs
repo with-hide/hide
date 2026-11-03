@@ -174,6 +174,7 @@ fn an_engine_opened_for_a_replaced_attempt_is_not_installed() {
         Arc::new(HolderNode::default()),
         state.path(),
         "/srv/account".to_owned(),
+        false,
         Arc::new(hide_agent_adapter::definition::Catalog::read(Vec::new())),
     )
     .map(|engine| Arc::new(engine) as crate::engine::SharedEngine);
