@@ -1431,10 +1431,10 @@ fn has_table(store: &LinkStore, name: &str) -> bool {
         .unwrap()
 }
 
-/// Version 15 drops the passive direct-input facts the hooks' direct
-/// observation kept; a store that never had them opens the same way.
+/// Version 15 stops reading the passive direct-input facts the hooks' direct
+/// observation kept, and an upgrade leaves their table and rows as they were.
 #[test]
-fn a_store_drops_the_retired_direct_inputs_once() {
+fn an_upgrade_keeps_the_retired_direct_inputs() {
     let state = tempfile::tempdir().unwrap();
     let path = state.path().join("links.sqlite3");
     let (store, _) = LinkStore::open(&path).unwrap();
@@ -1451,7 +1451,13 @@ fn a_store_drops_the_retired_direct_inputs_once() {
     drop(store);
     let (store, opened) = LinkStore::open(&path).unwrap();
     assert_eq!(opened, Opened::Existing);
-    assert!(!has_table(&store, "direct_observations"));
+    let kept: (String, i64, i64, String) = store
+        .connection
+        .query_row("SELECT id, at, bytes, fact FROM direct_observations", [], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })
+        .unwrap();
+    assert_eq!(kept, ("one".to_owned(), 1, 2, "{}".to_owned()));
 }
 
 #[test]

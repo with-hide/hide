@@ -2393,15 +2393,10 @@ fn migrate(connection: &Connection) -> Result<(), OpenFailure> {
         } else {
             ""
         };
-        // Version 15 drops the passive direct-input facts the hooks' direct
-        // observation kept from version 5 on; nothing records them since.
-        // What the step owes is a store without the table, so one that never
-        // had it (a store a test relabels) is already there.
-        let observations = if (5..15).contains(&version) {
-            "DROP TABLE IF EXISTS direct_observations;"
-        } else {
-            ""
-        };
+        // Version 15 stops reading and writing the passive direct-input facts
+        // the hooks' direct observation kept from version 5 on. Their table
+        // stays as it is, unread: an upgrade deletes nothing the operator
+        // kept, and its retirement is a later release's step.
         let metadata = if version < 6 {
             ledger::METADATA_SCHEMA
         } else {
@@ -2440,7 +2435,7 @@ fn migrate(connection: &Connection) -> Result<(), OpenFailure> {
         };
         connection
             .execute_batch(&format!(
-                "BEGIN IMMEDIATE; {initial} {work_ledger} {origins} {backlog} {aliases} {observations} {metadata} {flows} {closed_flows} {plans} {named} {reviews} {made} {reread} {pane_seen} PRAGMA user_version={SCHEMA_VERSION}; COMMIT;"
+                "BEGIN IMMEDIATE; {initial} {work_ledger} {origins} {backlog} {aliases} {metadata} {flows} {closed_flows} {plans} {named} {reviews} {made} {reread} {pane_seen} PRAGMA user_version={SCHEMA_VERSION}; COMMIT;"
             ))
             .map_err(|error| {
                 let _ = connection.execute_batch("ROLLBACK");
