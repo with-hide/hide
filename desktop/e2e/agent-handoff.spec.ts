@@ -2,7 +2,7 @@
 import { expect, type ElectronApplication } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
-import { agentPane, agentRunner } from "../../web/e2e/agent-pane";
+import { agentPane, installAgentRunner } from "../../web/e2e/agent-pane";
 import { openProject, openWorktree, showTabOf, withControl } from "../../web/e2e/daemon-actions";
 import { enterWorkspace, openTaskFolds, showTasks } from "../../web/e2e/wire";
 import { launchShell, screenshot, startStack, test } from "./fixture";
@@ -31,6 +31,8 @@ test("handoff roots have provenance without delegation or a focus change in eith
     const purpose = await caller(["workspace", "purpose", "Spawn handoff fixture"]);
     expect(purpose.status, purpose.out).toBe(0);
     const command = (args: string[]) => hideAnswer(caller, args);
+    // Bind spawned roots without retiring their running program's input readiness.
+    const runAs = installAgentRunner(fixture, daemon.stateDir);
     await expect(page.locator(`[data-pane-view="${parent}"]`)).toHaveAttribute("data-focused", "true");
     const keyboard = page.locator(`[data-pane-view="${parent}"] .xterm-helper-textarea`);
     await keyboard.focus();
@@ -58,7 +60,7 @@ test("handoff roots have provenance without delegation or a focus change in eith
       if (fixture.engine === "herdr") {
         const child = herdrAgents(fixture).find((agent) => agent.pane_id === root.pane)!;
         for (const check of [[], ["--check"]]) {
-          const reply = await hideAnswer(agentRunner(fixture, daemon.stateDir, root.pane), ["agent", "register", "--host-scope", fixture.socket!, "--session", child.agent_session!.value, "--instance", child.terminal_id, "--name", name!, "--pane", root.pane, ...check]);
+          const reply = await hideAnswer(runAs(root.pane), ["agent", "register", "--host-scope", fixture.socket!, "--session", child.agent_session!.value, "--instance", child.terminal_id, "--name", name!, "--pane", root.pane, ...check]);
           expect(reply).toMatchObject({ id: root.id, parent: null, origin: registered.id });
         }
       }
