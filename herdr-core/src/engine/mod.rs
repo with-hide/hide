@@ -576,9 +576,8 @@ pub(crate) enum Zoom {
 #[derive(Clone)]
 pub struct EngineHandle {
     engine: SharedEngine,
-    /// The folder the core's own engine stands for, when this is that
-    /// engine: what the core keys this machine's session by where it keys a
-    /// Herdr session by its socket.
+    /// The folder the core's own engine stands for, which the core keys this
+    /// machine's session by; `None` for a test's engine.
     own_scope: Option<std::path::PathBuf>,
 }
 
@@ -639,7 +638,7 @@ impl EngineHandle {
         })
     }
 
-    /// The folder the core's own engine stands for; `None` for Herdr.
+    /// The folder the core's own engine stands for; `None` for a test's engine.
     pub fn own_scope(&self) -> Option<&std::path::Path> {
         self.own_scope.as_deref()
     }

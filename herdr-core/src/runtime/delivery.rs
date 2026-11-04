@@ -2245,7 +2245,7 @@ pub(crate) mod tests {
         let state = root.join("state");
         hide_platform::fs::private::create_dir_all(&state).unwrap();
         let options: CoreOptions = serde_json::from_value(json!({
-            "schema_version":SCHEMA_VERSION,"node_id":"test-node","home":root,"herdr_socket_path":null,
+            "schema_version":SCHEMA_VERSION,"node_id":"test-node","home":root,
             "app_state_path":state.join("app.json"),
             "workspace_views_path":root.join("views.json"),
         }))

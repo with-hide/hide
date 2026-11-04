@@ -25,9 +25,6 @@ pub struct CoreOptions {
     /// before the core is placed behind its runtime mutex. Every key naming
     /// this machine, in the snapshot and in stored state, is this id.
     pub node_id: crate::node::NodeId,
-    pub herdr_socket_path: Option<String>,
-    #[serde(default)]
-    pub herdr_bin_path: Option<String>,
     pub app_state_path: String,
     /// Where the helper is installed on devices; `~/` is the device account's
     /// home. Absent means `remote::DEFAULT_HELPER_ROOT`.
@@ -7385,17 +7382,6 @@ pub struct LastErrorSnapshot {
 
 impl Snapshot {
     pub fn initial(options: &CoreOptions) -> Self {
-        let herdr_state = if options.herdr_socket_path.is_some() {
-            "not_connected"
-        } else {
-            "unconfigured"
-        };
-        let herdr_message = if options.herdr_socket_path.is_some() {
-            Some("Waiting for the first herdr connection attempt".to_owned())
-        } else {
-            Some("No herdr socket path was configured".to_owned())
-        };
-
         Self {
             schema_version: SCHEMA_VERSION,
             usage: crate::usage::model::UsageSnapshot::initial(options.node_id.as_str()),
@@ -7493,10 +7479,11 @@ impl Snapshot {
             },
             status: StatusSnapshot {
                 tab_rename: None,
+                // The engine's status until the session sync first answers.
                 herdr: ProviderStatusSnapshot {
-                    state: herdr_state.to_owned(),
-                    socket_path: options.herdr_socket_path.clone(),
-                    message: herdr_message,
+                    state: "unconfigured".to_owned(),
+                    socket_path: None,
+                    message: None,
                 },
                 herdr_import: None,
                 herdr_import_devices: Vec::new(),

@@ -648,8 +648,6 @@ mod tests {
             schema_version: SCHEMA_VERSION,
             home: None,
             node_id: crate::node::test_node(),
-            herdr_socket_path: None,
-            herdr_bin_path: None,
             app_state_path: "/tmp/hide-project-context-test-state.json".to_owned(),
             host_helper_root: None,
             host_cli_dir: None,

@@ -1685,8 +1685,6 @@ impl CoreHandle {
                 schema_version: crate::state_file::SCHEMA_VERSION,
                 home: None,
                 node_id: herdr_core::node::NodeId::parse("test-node").unwrap(),
-                herdr_socket_path: None,
-                herdr_bin_path: None,
                 app_state_path: directory.join("core-state.json").display().to_string(),
                 host_helper_root: None,
                 host_cli_dir: None,

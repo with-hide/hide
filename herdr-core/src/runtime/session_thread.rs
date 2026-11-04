@@ -1239,8 +1239,6 @@ mod tests {
                 schema_version: SCHEMA_VERSION,
                 home: None,
                 node_id: crate::node::test_node(),
-                herdr_socket_path: None,
-                herdr_bin_path: None,
                 app_state_path: folder
                     .path()
                     .join("state.json")

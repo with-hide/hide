@@ -379,8 +379,6 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
             .is_absolute()
             .then(|| env.home.display().to_string()),
         node_id: node.clone(),
-        herdr_socket_path: None,
-        herdr_bin_path: None,
         app_state_path: env.state_dir.join("core-state.json").display().to_string(),
         host_helper_root: env.host_helper_root.clone(),
         host_cli_dir: env.host_cli_dir.clone(),

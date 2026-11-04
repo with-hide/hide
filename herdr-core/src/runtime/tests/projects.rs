@@ -4333,8 +4333,6 @@ fn primary_checkout_switch_survives_restart_and_catalog_refresh() {
                 home: None,
                 app_state_path: state_path.to_string_lossy().into_owned(),
                 node_id: crate::node::test_node(),
-                herdr_socket_path: None,
-                herdr_bin_path: None,
                 host_helper_root: None,
                 host_cli_dir: None,
                 workspace_views_path: None,

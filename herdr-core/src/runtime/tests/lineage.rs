@@ -401,8 +401,6 @@ fn lineage_expansion_persists_without_attention_opening_it_and_prunes_on_disappe
         schema_version: SCHEMA_VERSION,
         home: None,
         node_id: crate::node::test_node(),
-        herdr_socket_path: None,
-        herdr_bin_path: None,
         app_state_path: runtime.state_path.to_string_lossy().into_owned(),
         host_helper_root: None,
         host_cli_dir: None,

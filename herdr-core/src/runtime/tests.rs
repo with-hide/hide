@@ -514,8 +514,6 @@ pub(super) fn runtime() -> Runtime {
         schema_version: SCHEMA_VERSION,
         home: None,
         node_id: crate::node::test_node(),
-        herdr_socket_path: Some("/tmp/herdr-core-pet-runtime.sock".to_owned()),
-        herdr_bin_path: None,
         app_state_path: state
             .path()
             .join("state.json")
