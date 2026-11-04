@@ -1284,20 +1284,35 @@ pub fn name_of(pid: u32) -> io::Result<String> {
     sys::name_of(pid)
 }
 
-/// The installed package whose script Windows runs through an npm launcher.
-/// Windows has no exec transition from a launcher to its script; the package
-/// path distinguishes generic script names such as cli.js. Other systems
-/// keep their existing executable and script-name detection. No file is read.
+/// The installed npm package a runtime's script belongs to: the package
+/// under the nearest `node_modules` in its path, scoped or not, so a
+/// generic script name such as `cli.js` still says which program it is.
+/// Windows runs an npm launcher's script with no exec from the launcher,
+/// and a program started as `node …/node_modules/<package>/dist/cli.js`
+/// names only `cli` anywhere. A path with `.` or `..` in it, or with no
+/// file under its package, names none. No file is read.
 pub fn package_of_script(script: &str) -> Option<String> {
-    #[cfg(windows)]
-    {
-        crate::windows_process::package_name(script)
+    let parts: Vec<_> = script
+        .split(['/', '\\'])
+        .filter(|part| !part.is_empty())
+        .collect();
+    if parts.iter().any(|part| matches!(*part, "." | "..")) {
+        return None;
     }
-    #[cfg(not(windows))]
-    {
-        let _ = script;
-        None
+    let at = parts
+        .iter()
+        .rposition(|part| part.eq_ignore_ascii_case("node_modules"))?;
+    let package = parts.get(at + 1)?;
+    let (package, first_script) = if package.starts_with('@') {
+        (format!("{package}/{}", parts.get(at + 2)?), at + 3)
+    } else {
+        ((*package).to_owned(), at + 2)
+    };
+    // npm's own bound on a package name.
+    if package.len() > 214 || first_script >= parts.len() {
+        return None;
     }
+    Some(package)
 }
 
 /// The arguments `pid` was started with, its program first, as the system

@@ -3311,3 +3311,38 @@ fn windows_sets_no_output_aside() {
     let error = set_output_aside(&log, &log.with_extension("log.1"), OUTPUT_LIMIT).unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Unsupported, "{error}");
 }
+
+/// A runtime's script names the npm package it belongs to on every system,
+/// in either separator, so a generic `cli.js` still says which program runs:
+/// the nearest `node_modules` owns it, a scoped name keeps its scope, and a
+/// path that is ambiguous or has no file under its package names none.
+#[test]
+fn a_script_names_the_npm_package_it_belongs_to_on_every_system() {
+    use hide_platform::process::package_of_script;
+    for (script, package) in [
+        (
+            "/usr/lib/node_modules/@earendil-works/pi-coding-agent/dist/cli.js",
+            Some("@earendil-works/pi-coding-agent"),
+        ),
+        (
+            "/opt/homebrew/lib/node_modules/opencode-ai/bin/opencode",
+            Some("opencode-ai"),
+        ),
+        (
+            r"C:\npm\node_modules\@oh-my-pi\pi-coding-agent\dist\cli.js",
+            Some("@oh-my-pi/pi-coding-agent"),
+        ),
+        (
+            "/n/node_modules/@oh-my-pi/pi-coding-agent/node_modules/helper/cli.js",
+            Some("helper"),
+        ),
+        ("/work/cli.js", None),
+        (
+            "/n/node_modules/@oh-my-pi/pi-coding-agent/../other/cli.js",
+            None,
+        ),
+        ("/n/node_modules/@oh-my-pi/pi-coding-agent", None),
+    ] {
+        assert_eq!(package_of_script(script).as_deref(), package, "{script}");
+    }
+}
