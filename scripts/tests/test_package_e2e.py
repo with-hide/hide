@@ -48,7 +48,7 @@ class PackageEvidence(unittest.TestCase):
             for suite, status in (("window", 23), ("update", 0)):
                 result = subprocess.run(
                     ["bash", "scripts/package-e2e.sh", suite, "packaged-window.spec.ts"],
-                    cwd=root, env={**os.environ, "RUNNER_OS": "Windows", "FIXTURE_EXIT": str(status), "FIXTURE_SUITE": suite},
+                    cwd=root, env={**os.environ, "RUNNER_OS": "macOS", "FIXTURE_EXIT": str(status), "FIXTURE_SUITE": suite},
                     capture_output=True, text=True, timeout=10,
                 )
                 self.assertEqual(result.returncode, status, result.stderr)

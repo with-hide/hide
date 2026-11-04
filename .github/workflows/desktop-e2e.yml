@@ -173,6 +173,12 @@ jobs:
           fi
           if [ "$RUNNER_OS" = Linux ]; then
             xvfb-run -a bash scripts/verify-web.sh desktop e2e "${args[@]}"
+          elif [ "$RUNNER_OS" = Windows ]; then
+            # The runner's job forbids a holder's breakaway; an operator's
+            # desktop session does not (scripts/windows-breakaway-job.py).
+            # Git's bash by its Windows path: CreateProcess looks in System32,
+            # where WSL's bash is, before PATH.
+            python scripts/windows-breakaway-job.py -- "$(cygpath -w "$(command -v bash)")" scripts/verify-web.sh desktop e2e "${args[@]}"
           else
             bash scripts/verify-web.sh desktop e2e "${args[@]}"
           fi
