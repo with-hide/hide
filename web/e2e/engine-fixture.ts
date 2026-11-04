@@ -40,10 +40,9 @@ export type EngineServer = DaemonEngine & {
 export async function startEngine(engine = e2eEngine()): Promise<EngineServer> {
   if (engine === "herdr") {
     const server = await startHerdr({ empty: true });
-    // Hide chooses the integrated shell for panes it starts: PowerShell on
-    // Windows, even though the private server's own default is cmd.exe.
-    // Unix panes use the same shell as the private server.
-    return { engine, ...server, shell: process.platform === "win32" ? "powershell" : server.shell, daemonEnv: { SHELL: server.env.SHELL } };
+    // Hide chooses the integrated shell for panes it starts. Give its node
+    // the same shell as the private server, not the CI runner's login shell.
+    return { engine, ...server, daemonEnv: { SHELL: server.env.SHELL } };
   }
   return startOwnEngine();
 }
