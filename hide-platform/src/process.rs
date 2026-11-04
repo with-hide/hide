@@ -3081,8 +3081,8 @@ mod sys {
                         0,
                     )
                 };
-                let entries = usize::try_from(needed).unwrap_or(0)
-                    / std::mem::size_of::<libc::proc_fdinfo>();
+                let entries =
+                    usize::try_from(needed).unwrap_or(0) / std::mem::size_of::<libc::proc_fdinfo>();
                 vec![
                     libc::proc_fdinfo {
                         proc_fd: 0,
