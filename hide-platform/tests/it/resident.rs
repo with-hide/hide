@@ -391,11 +391,12 @@ mod windows_job {
     };
     use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
-    /// Puts this process in a new kill-on-close job, which lets a process
-    /// leave it when `setup` says `breakaway`, and leaves every child out of
-    /// it unasked when it says `silent` too, as libuv's job for Node and
-    /// Electron does; held until this process exits, which closes the job
-    /// and ends what is in it.
+    /// Puts this process in a new kill-on-close job, or one that ends
+    /// nothing when it closes when `setup` says `nokill`, as a CI runner's
+    /// does; it lets a process leave it when `setup` says `breakaway`, and
+    /// leaves every child out of it unasked when it says `silent` too, as
+    /// libuv's job for Node and Electron does; held until this process
+    /// exits, which closes the job.
     pub(super) fn enter(setup: &str) -> Option<HANDLE> {
         if !setup.contains("job") {
             return None;
@@ -405,8 +406,11 @@ mod windows_job {
             let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
             assert!(!job.is_null());
             let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
-            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-                | if setup.contains("breakaway") {
+            limits.BasicLimitInformation.LimitFlags = if setup.contains("nokill") {
+                0
+            } else {
+                JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            } | if setup.contains("breakaway") {
                     JOB_OBJECT_LIMIT_BREAKAWAY_OK
                 } else {
                     0
@@ -546,6 +550,20 @@ fn a_resident_child_outlives_the_job_electron_starts_its_daemon_in() {
         resident.is_running(),
         "the resident ended with the app's job"
     );
+}
+
+/// The job a CI runner starts a step in lets no process leave and ends
+/// none when it closes: it keeps the resident, which outlives the starter,
+/// and the start says a job holds it.
+#[cfg(windows)]
+#[test]
+fn a_job_that_ends_nothing_on_close_keeps_the_resident() {
+    let (mut starter, line) = run_starter("job nokill exit");
+    assert!(line.starts_with("STARTED "), "{line}");
+    let resident = Started::new(field(&line, "pid").parse().unwrap());
+    starter.0.wait().unwrap();
+    assert_eq!(field(&line, "outer_job"), "true", "{line}");
+    assert!(resident.is_running(), "the resident ended with the job");
 }
 
 #[cfg(windows)]
