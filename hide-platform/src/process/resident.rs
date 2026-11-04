@@ -302,13 +302,13 @@ mod sys {
         // The intermediate process writes the resident's pid here and exits.
         let (mut report_read, report_write) = std::io::pipe()?;
         let report = report_write.as_raw_fd();
-        // `sysconf` is not on POSIX's list of calls safe between fork and
-        // exec, so the bound is read here and the child only uses the number.
-        let limit = super::super::sys::fallback_limit();
+        let mut inherited = super::super::sys::Inherited::prepare();
         // SAFETY: after each fork the closure calls only functions POSIX lists
         // as async-signal-safe (`setsid`, `fork`, `write`, `_exit`,
-        // `sigaction`, `sigprocmask`, `fcntl`, `dup2`, `close`) and the
-        // bare system-call entry; it allocates nothing and takes no lock.
+        // `sigaction`, `sigprocmask`, `fcntl`, `dup2`, `close`, `getpid`) and
+        // bare system-call entries (`syscall`, `proc_pidinfo`); it allocates
+        // nothing, takes no lock, and writes only its own copy of the
+        // listing buffer prepared before the fork.
         unsafe {
             command.pre_exec(move || {
                 if libc::setsid() == -1 {
@@ -340,7 +340,7 @@ mod sys {
                 let mut none: libc::sigset_t = std::mem::zeroed();
                 libc::sigemptyset(&mut none);
                 libc::sigprocmask(libc::SIG_SETMASK, &none, std::ptr::null_mut());
-                super::super::sys::mark_inherited_descriptors(limit)?;
+                inherited.mark()?;
                 // Each lent descriptor is first copied above the names it
                 // will take, so placing one never overwrites another.
                 let mut copies = [-1 as RawFd; MAX_LENT];
