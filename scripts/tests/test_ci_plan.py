@@ -864,9 +864,9 @@ def runner_jobs(block):
         # Windows cannot build the Linux programs the distribution runs.
         return 2
     if "uses: ./.github/workflows/agent-journey.yml" in block:
-        # The stand-ins run on each system but Windows, and Windows has its forms job.
+        # Both engines run stand-ins on each system but Windows; Windows has its forms job.
         systems = json.loads(re.search(r"systems: '(\[[^']*\])'", block).group(1))
-        return len([system for system in systems if system != "windows"]) + ("windows" in systems)
+        return 2 * len([system for system in systems if system != "windows"]) + ("windows" in systems)
     if "uses: ./.github/workflows/package.yml" in block:
         package = (ROOT / ".github/workflows/package.yml").read_text()
         helpers = (ROOT / ".github/workflows/device-helpers.yml").read_text()
@@ -1006,7 +1006,7 @@ class Workflows(unittest.TestCase):
         # three more.
         # The package lane already ran six preparation/compile jobs omitted
         # from the old count; correcting the accounting starts no new job.
-        self.assertLessEqual(most, 60, "a run starts more jobs than the suites and native SDK contracts need")
+        self.assertLessEqual(most, 61, "a run starts more jobs than the suites and native SDK contracts need")
         testing = (ROOT / "docs/TESTING.md").read_text()
         self.assertIn(f"starts at most {most} jobs", testing)
 

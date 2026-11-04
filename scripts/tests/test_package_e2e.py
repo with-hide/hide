@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[2]
 class PackageEvidence(unittest.TestCase):
     def test_each_engine_keeps_its_report_and_propagates_failure(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             (root / "scripts").mkdir()
             (root / "desktop").mkdir()
             shutil.copyfile(ROOT / "scripts/package-e2e.sh", root / "scripts/package-e2e.sh")

@@ -733,10 +733,10 @@ A passing fixture does not prove paid-service authentication or standalone suppo
 
 ### How many jobs a run starts
 
-A run that plans every lane a pull request can plan starts at most 60 jobs.
+A run that plans every lane a pull request can plan starts at most 61 jobs.
 The earlier count of 51 omitted six jobs already running in the package lane: helper identity, two Linux device helpers, device bundles and the separate Windows and macOS compiles.
 Correcting that count adds no runner or workflow.
-The core's own engine adds ten jobs beside Herdr's until the Herdr lanes go with Herdr (PRD engine-bundle-3-core-owns D-24): six Linux web shards, one Windows web job, two macOS desktop shards and one Windows desktop job.
+The core's own engine adds eleven jobs beside Herdr's until the Herdr lanes go with Herdr (PRD engine-bundle-3-core-owns D-24): six Linux web shards, one Windows web job, two macOS desktop shards, one Windows desktop job and one Linux journey job.
 `scripts/tests/test_ci_plan.py` counts them from the workflows:
 
 | Jobs | Count | Why |
@@ -748,7 +748,7 @@ The core's own engine adds ten jobs beside Herdr's until the Herdr lanes go with
 | `os contract` (Linux, Windows), `os contract (macOS)` | 3 | one job per system, the macOS leg planned only for its two crates and a macOS path |
 | `agy contract` (Windows) | 1 | agy's hook block, trust, conversations and Hide AI backend, and the real agy reading Hide's block, where the hook commands and install folder differ; `rust` runs the same tests on Linux and the nightly runs all three systems |
 | `omp SDK contract` (Linux, macOS, Windows) | 3 | both supported exact npm SDK versions on Bun 1.3.14, with synthetic stored login and localhost inference; the native SQLite, Bun runtime and package resolution need each system |
-| `agent journey` (Linux, Windows) | 2 | the journey on the compiled Claude and Codex stand-ins on Linux and its Windows forms (process jobs, private files, pane commands) on Windows, planned for the journey's code, its contract, the stand-ins and a crate's product code (about 4.4 minutes on Linux and half a minute on Windows, the median of 22 pull request runs to 2026-10-30); the nightly and a release run every system with the fake model lane ([VERIFICATION.md](VERIFICATION.md#agent-journey)) |
+| `agent journey` (Linux, Windows) | 3 | the journey on the compiled Claude and Codex stand-ins on both engines on Linux and its Windows forms (process jobs, private files, pane commands) on Windows, planned for the journey's code, its contract, the stand-ins and a crate's product code (about 4.4 minutes on Linux and half a minute on Windows, the median of 22 pull request runs to 2026-10-30); the nightly and a release run every system with the fake model lane ([VERIFICATION.md](VERIFICATION.md#agent-journey)) |
 | `agent CLIs` (Linux, Windows) | 2 | every agent CLI `contracts/agent-clis.json` pins, installed at its pin and failing on another version, planned only for the table, its reader and the installers, so a pin moves in the pull request that installs it; the nightly's journey installs them on macOS too |
 | `windows wsl` (Linux, Windows) | 2 | a real WSL 2 distribution on the Windows runner connected as a device through `wsl.exe`, with this build's Linux programs, which only a Linux job can build, planned only for the crates the WSL link crosses (`hide-platform`, `hide-node`, `hide-node-link`, `hide-host`) and the node command ([WSL device lane](#wsl-device-lane)) |
 | `remote mailbox` | 1 | the lane that was the tail of the macOS `@platform` job, now on Linux and, in the nightly, on macOS |
