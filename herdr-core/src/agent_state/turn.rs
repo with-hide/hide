@@ -428,12 +428,14 @@ pub(crate) fn row_state(agent: &SidebarAgentSnapshot) -> RowState {
                 .is_some_and(|mark| mark.kind == super::escalation::MarkKind::Raised)
         {
             0
-        } else if activity == "working" || waiting {
+        } else if waiting {
             1
-        } else if matches!(RowMark::awake(agent), RowMark::Done | RowMark::Unread) {
+        } else if activity == "working" {
             2
-        } else {
+        } else if matches!(RowMark::awake(agent), RowMark::Done | RowMark::Unread) {
             3
+        } else {
+            4
         },
     }
 }
@@ -1590,6 +1592,22 @@ mod row_tests {
         }
     }
 
+    /// A tree lists a child that waits on a reply or background work before
+    /// one that is working, and both before a finished unread one.
+    #[test]
+    fn a_waiting_child_ranks_before_a_working_one() {
+        let mut waiting = row();
+        waiting.activity = "stopped".into();
+        waiting.completed = true;
+        waiting.wait = Some(crate::model::AgentWait::Background);
+        derive_from_axes(&mut waiting);
+        let mut working = row();
+        working.activity = "working".into();
+        derive_from_axes(&mut working);
+        assert!(waiting.state.tree_rank < working.state.tree_rank);
+        assert_eq!((waiting.state.tree_rank, working.state.tree_rank), (1, 2));
+    }
+
     /// status-marks D-25, B36: a row that waits on proven work draws the
     /// dashed ring and the agent working again draws the solid one; both
     /// count as one in-progress mark.
@@ -1674,7 +1692,7 @@ mod row_tests {
         agent.mark.count_into(&mut counts);
         assert_eq!(counts, crate::model::MarkCountsSnapshot::default());
         // It keeps its place in a tree and its class in a close list.
-        assert_eq!((agent.state.tree_rank, agent.state.subtree), (2, "unread"));
+        assert_eq!((agent.state.tree_rank, agent.state.subtree), (3, "unread"));
         // The phone draws no line under it, as the sidebar does not.
         let rest = json!({"navigator": {"agents": [&agent], "workspaces": []}});
         let phone = super::super::phone::project(&rest, "local");
