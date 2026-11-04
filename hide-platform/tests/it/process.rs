@@ -2578,18 +2578,20 @@ fn a_process_group_lists_its_members_where_the_system_has_them() {
     // and the group is that process and every process under it.
     #[cfg(windows)]
     {
-        let mut child = role_command("tree").spawn().unwrap();
-        let grandchild = ready_number(child.stdout.take().unwrap());
+        let _serial = serial();
+        let (mut child, grandchild) = owned_tree();
         let members = group_members(child.id()).unwrap();
         assert!(
             members.contains(&child.id()) && members.contains(&grandchild),
             "{members:?}"
         );
         assert_eq!(group_members(grandchild).unwrap(), vec![grandchild]);
-        kill_tree(child.id()).unwrap();
-        let _ = child.wait();
+        child.kill_tree().unwrap();
+        child.wait().unwrap();
+        // The held child is known to have ended and keeps its pid. A raw
+        // grandchild pid can still be ending or name another process by now.
         assert_eq!(
-            group_members(grandchild).unwrap_err().kind(),
+            group_members(child.id()).unwrap_err().kind(),
             ErrorKind::NotFound,
             "an ended leader leads nothing"
         );
@@ -2603,18 +2605,19 @@ fn a_process_group_lists_its_members_where_the_system_has_them() {
 #[test]
 fn a_consoles_foreground_is_the_program_its_shell_runs_or_the_shell() {
     use hide_platform::process::console_foreground;
-    let mut shell = role_command("tree").spawn().unwrap();
-    let program = ready_number(shell.stdout.take().unwrap());
+    let _serial = serial();
+    let (mut shell, program) = owned_tree();
     assert_eq!(console_foreground(shell.id()).unwrap(), program);
     assert_eq!(
         console_foreground(program).unwrap(),
         program,
         "a program that runs nothing holds its console itself"
     );
-    kill_tree(shell.id()).unwrap();
-    let _ = shell.wait();
+    shell.kill_tree().unwrap();
+    shell.wait().unwrap();
+    // As above, retain the ended process's handle while asking about it.
     assert_eq!(
-        console_foreground(program).unwrap_err().kind(),
+        console_foreground(shell.id()).unwrap_err().kind(),
         ErrorKind::NotFound
     );
 }
