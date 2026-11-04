@@ -19,7 +19,6 @@ let run: Isolated;
 let app: ElectronApplication | null = null;
 
 test.describe.configure({ timeout: 180_000 });
-test.skip(true, "b4-default 대기(first-run의 Herdr 프로필 읽기 미확정)");
 
 test.beforeEach(async () => {
   engine = await startEngine();
