@@ -16,6 +16,7 @@ const WHY_KEYS = new Map<string, { plain?: MessageKey; at?: MessageKey }>([
   ["no_helper", { at: "kitWhy.no_helperAt" }],
   ["unreadable", { plain: "kitWhy.unreadable", at: "kitWhy.unreadableAt" }],
   ["other_program", { at: "kitWhy.other_programAt" }],
+  ["other_install", { at: "kitWhy.other_installAt" }],
   ["foreign", { at: "kitWhy.foreignAt" }],
   ["agent_absent", { plain: "kitWhy.agent_absent" }],
   ["not_created_yet", { plain: "kitWhy.not_created_yet", at: "kitWhy.not_created_yetAt" }],

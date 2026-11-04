@@ -2582,10 +2582,48 @@ fn a_process_group_lists_its_members_where_the_system_has_them() {
             "no such group"
         );
     }
+    // Windows has no process group: a job's first process stands in for it,
+    // and the group is that process and every process under it.
     #[cfg(windows)]
+    {
+        let mut child = role_command("tree").spawn().unwrap();
+        let grandchild = ready_number(child.stdout.take().unwrap());
+        let members = group_members(child.id()).unwrap();
+        assert!(
+            members.contains(&child.id()) && members.contains(&grandchild),
+            "{members:?}"
+        );
+        assert_eq!(group_members(grandchild).unwrap(), vec![grandchild]);
+        kill_tree(child.id()).unwrap();
+        let _ = child.wait();
+        assert_eq!(
+            group_members(grandchild).unwrap_err().kind(),
+            ErrorKind::NotFound,
+            "an ended leader leads nothing"
+        );
+    }
+}
+
+/// Windows names no foreground for a console: the program a shell runs now,
+/// its oldest child still running, stands in for it, and the shell itself
+/// while it runs none.
+#[cfg(windows)]
+#[test]
+fn a_consoles_foreground_is_the_program_its_shell_runs_or_the_shell() {
+    use hide_platform::process::console_foreground;
+    let mut shell = role_command("tree").spawn().unwrap();
+    let program = ready_number(shell.stdout.take().unwrap());
+    assert_eq!(console_foreground(shell.id()).unwrap(), program);
     assert_eq!(
-        group_members(std::process::id()).unwrap_err().kind(),
-        ErrorKind::Unsupported
+        console_foreground(program).unwrap(),
+        program,
+        "a program that runs nothing holds its console itself"
+    );
+    kill_tree(shell.id()).unwrap();
+    let _ = shell.wait();
+    assert_eq!(
+        console_foreground(program).unwrap_err().kind(),
+        ErrorKind::NotFound
     );
 }
 

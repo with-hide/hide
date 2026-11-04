@@ -888,11 +888,66 @@ mod sys {
         }
     }
 
-    /// The account this thread acts as, and the owner a file it creates gets
-    /// (the Administrators group for an elevated process).
+    /// The account this thread acts as, the owner a file it creates gets
+    /// (the Administrators group for an elevated process), and the groups
+    /// its token may name as an owner instead.
     struct Account {
         user: Sid,
         owner: Sid,
+        /// Groups the token holds with `SE_GROUP_OWNER` that are not only
+        /// for denying: an elevated token's Administrators group. A process
+        /// of the same elevated account whose default owner was set back to
+        /// the user (Git Bash's runtime does that for every program it
+        /// starts) still made, or could have made, what such a group owns.
+        owner_groups: Vec<Sid>,
+    }
+
+    /// The groups `token` may make an object's owner.
+    fn owner_groups(token: HANDLE) -> io::Result<Vec<Sid>> {
+        use windows_sys::Win32::Security::{SID_AND_ATTRIBUTES, TOKEN_GROUPS, TokenGroups};
+        use windows_sys::Win32::System::SystemServices::{
+            SE_GROUP_OWNER, SE_GROUP_USE_FOR_DENY_ONLY,
+        };
+        let mut size = 0u32;
+        // SAFETY: a size query with no buffer; the call fails and sets `size`.
+        unsafe { GetTokenInformation(token, TokenGroups, null_mut(), 0, &mut size) };
+        let mut buffer = vec![0u64; (size as usize).div_ceil(8).max(1)];
+        // SAFETY: `buffer` holds at least `size` writable bytes.
+        if unsafe {
+            GetTokenInformation(
+                token,
+                TokenGroups,
+                buffer.as_mut_ptr().cast(),
+                size,
+                &mut size,
+            )
+        } == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: the call filled a TOKEN_GROUPS whose `GroupCount` entries,
+        // and the SIDs they point at, lie inside `buffer`.
+        let groups = unsafe {
+            let header = buffer.as_ptr().cast::<TOKEN_GROUPS>();
+            std::slice::from_raw_parts(
+                std::ptr::addr_of!((*header).Groups).cast::<SID_AND_ATTRIBUTES>(),
+                (*header).GroupCount as usize,
+            )
+        };
+        Ok(groups
+            .iter()
+            .filter(|group| {
+                group.Attributes & SE_GROUP_OWNER as u32 != 0
+                    && group.Attributes & SE_GROUP_USE_FOR_DENY_ONLY as u32 == 0
+            })
+            .map(|group| {
+                // SAFETY: each SID is valid inside `buffer`; its length is
+                // read from its own header and copied out.
+                let length =
+                    unsafe { windows_sys::Win32::Security::GetLengthSid(group.Sid) } as usize;
+                Sid(unsafe { std::slice::from_raw_parts(group.Sid.cast::<u8>(), length) }.to_vec())
+            })
+            .collect())
     }
 
     fn token_sid(token: HANDLE, class: i32) -> io::Result<Sid> {
@@ -950,6 +1005,7 @@ mod sys {
         Ok(Account {
             user: token_sid(token.0, TokenUser)?,
             owner: token_sid(token.0, TokenOwner)?,
+            owner_groups: owner_groups(token.0)?,
         })
     }
 
@@ -1339,7 +1395,12 @@ mod sys {
 
     fn owned(security: &Security) -> io::Result<bool> {
         let account = account()?;
-        Ok(account.user.same_as(security.owner) || account.owner.same_as(security.owner))
+        Ok(account.user.same_as(security.owner)
+            || account.owner.same_as(security.owner)
+            || account
+                .owner_groups
+                .iter()
+                .any(|group| group.same_as(security.owner)))
     }
 
     pub(super) fn owned_by_current_user(path: &Path) -> io::Result<bool> {

@@ -864,22 +864,48 @@ fn entry_helper(agent: GuidanceAgent, entry: &Value) -> Option<String> {
     })
 }
 
-/// Takes Hide's own hook out of `list` and nothing else. A group another
-/// tool shares with Hide (`{"matcher": "*", "hooks": [hide, theirs]}`) keeps
-/// the other tool's hook and loses only Hide's; a group left with no hook
-/// goes, and so does a flat entry that carries the marker. Returns how many
-/// of Hide's hooks were taken out.
-fn strip_owned(list: &mut Vec<Value>) -> usize {
+/// Whether `entry` is a Hide entry the installation `install` may judge and
+/// replace: one that names that installation, one an earlier build wrote
+/// without naming any, or one whose helper is gone. Another installation's
+/// entry on the same account stays (docs/agent-hooks.md, More than one Hide
+/// on an account). With no `install`, every Hide entry is.
+fn entry_is_mine(agent: GuidanceAgent, entry: &Value, install: Option<&str>) -> bool {
+    if entry_marker_version(entry).is_none() {
+        return false;
+    }
+    let Some(install) = install else {
+        return true;
+    };
+    let mut found = Vec::new();
+    strings(entry, &mut found);
+    let words: Vec<String> = found
+        .into_iter()
+        .map(|text| decoded_windows_command(text).unwrap_or_else(|| text.to_owned()))
+        .collect();
+    match crate::route::install_in_command(&words.join(" ")) {
+        Ok(Some(named)) if named != install => {
+            entry_helper(agent, entry).is_some_and(|helper| !Path::new(&helper).exists())
+        }
+        _ => true,
+    }
+}
+
+/// Takes the installation `install`'s own hooks out of `list`
+/// ([`entry_is_mine`]) and nothing else. A group another tool shares with
+/// Hide (`{"matcher": "*", "hooks": [hide, theirs]}`) keeps the other tool's
+/// hook and loses only Hide's; a group left with no hook goes, and so does a
+/// flat entry of Hide's. Returns how many of Hide's hooks were taken out.
+fn strip_owned(agent: GuidanceAgent, list: &mut Vec<Value>, install: Option<&str>) -> usize {
     let mut removed = 0;
     list.retain_mut(|entry| {
         if let Some(hooks) = entry.get_mut("hooks").and_then(Value::as_array_mut) {
             let before = hooks.len();
-            hooks.retain(|hook| entry_marker_version(hook).is_none());
+            hooks.retain(|hook| !entry_is_mine(agent, hook, install));
             let taken = before - hooks.len();
             removed += taken;
             return taken == 0 || !hooks.is_empty();
         }
-        if entry_marker_version(entry).is_some() {
+        if entry_is_mine(agent, entry, install) {
             removed += 1;
             return false;
         }
@@ -888,17 +914,21 @@ fn strip_owned(list: &mut Vec<Value>) -> usize {
     removed
 }
 
-fn owned(entries: &[Value]) -> impl Iterator<Item = &Value> {
+fn owned<'a>(
+    agent: GuidanceAgent,
+    entries: &'a [Value],
+    install: Option<&'a str>,
+) -> impl Iterator<Item = &'a Value> {
     entries
         .iter()
-        .filter(|entry| entry_marker_version(entry).is_some())
+        .filter(move |entry| entry_is_mine(agent, entry, install))
 }
 
 /// Judges one agent without changing anything. Every event Hide registers
 /// for the agent must carry Hide's entry for the hook to be Installed; one
 /// that lacks it (an earlier version wrote fewer events, or the operator took
 /// one out) reads Outdated, and the next pass writes it back.
-pub fn status(agent: GuidanceAgent, home: &Path) -> HookStatus {
+pub fn status(agent: GuidanceAgent, home: &Path, install: Option<&str>) -> HookStatus {
     if !agent.home_directory(home).is_dir() {
         return HookStatus::RuntimeAbsent;
     }
@@ -920,11 +950,15 @@ pub fn status(agent: GuidanceAgent, home: &Path) -> HookStatus {
             }
             Err(reason) => return HookStatus::Failed { reason },
         };
-        match owned(found).filter_map(entry_marker_version).min() {
+        match owned(agent, found, install)
+            .filter_map(entry_marker_version)
+            .min()
+        {
             Some(version) => lowest = Some(lowest.map_or(version, |best| best.min(version))),
             None => missing_event = true,
         }
-        helper = helper.or_else(|| owned(found).find_map(|entry| entry_helper(agent, entry)));
+        helper = helper
+            .or_else(|| owned(agent, found, install).find_map(|entry| entry_helper(agent, entry)));
     }
     let Some(version) = lowest else {
         return HookStatus::NotInstalled;
@@ -948,12 +982,17 @@ pub fn status(agent: GuidanceAgent, home: &Path) -> HookStatus {
 
 /// The helper Hide's entry in `agent`'s file names, when there is one; the
 /// kit compares it with the helper it would install.
-pub fn installed_helper_path(agent: GuidanceAgent, home: &Path) -> Option<String> {
+pub fn installed_helper_path(
+    agent: GuidanceAgent,
+    home: &Path,
+    install: Option<&str>,
+) -> Option<String> {
     let layout = agent.layout(home);
     let mut document = read_document(&layout.path).ok()??;
     for slot in agent.slots() {
         if let Some(found) = entries(&mut document, &layout, slot.key, false).ok()?
-            && let Some(helper) = owned(found).find_map(|entry| entry_helper(agent, entry))
+            && let Some(helper) =
+                owned(agent, found, install).find_map(|entry| entry_helper(agent, entry))
         {
             return Some(helper);
         }
@@ -983,41 +1022,55 @@ pub fn matches_install<'a>(
         let wanted = entry(agent, helper, slot);
         // A group another tool put a hook into beside Hide's differs too, and
         // the reinstall that follows moves Hide's hook into a group of its own.
-        let mut mine = owned(found);
+        let mut mine = owned(agent, found, helper.install());
         mine.next() == Some(&wanted) && mine.next().is_none()
     })
 }
 
 /// A complete generated command may move to a different state folder;
 /// commands with operator edits still fail the exact comparison.
-pub fn matches_helper(agent: GuidanceAgent, home: &Path, helper: &Path) -> bool {
-    let Ok(Some(document)) = read_document(&agent.layout(home).path) else {
+pub fn matches_helper(
+    agent: GuidanceAgent,
+    home: &Path,
+    helper: &Path,
+    install: Option<&str>,
+) -> bool {
+    let layout = agent.layout(home);
+    let Ok(Some(mut document)) = read_document(&layout.path) else {
         return false;
     };
-    let mut texts = Vec::new();
-    strings(&document, &mut texts);
     let mut state = None;
-    for text in texts {
-        let decoded = decoded_windows_command(text);
-        let command = decoded.as_deref().unwrap_or(text);
-        if entry_marker_version(&Value::String(text.to_owned())).is_none() {
+    for slot in agent.slots() {
+        let Ok(Some(found)) = entries(&mut document, &layout, slot.key, false) else {
             continue;
-        }
-        match crate::route::in_command(command) {
-            Ok(Some(found)) => {
-                if state.as_ref().is_some_and(|state| state != &found) {
-                    return false;
+        };
+        for entry in owned(agent, found, install) {
+            let mut texts = Vec::new();
+            strings(entry, &mut texts);
+            for text in texts {
+                let decoded = decoded_windows_command(text);
+                match crate::route::in_command(decoded.as_deref().unwrap_or(text)) {
+                    Ok(Some(found)) => {
+                        if state.as_ref().is_some_and(|state| state != &found) {
+                            return false;
+                        }
+                        state = Some(found);
+                    }
+                    Ok(None) => {}
+                    Err(()) => return false,
                 }
-                state = Some(found);
             }
-            Ok(None) => {}
-            Err(()) => return false,
         }
     }
     match state {
-        Some(state) => {
-            HookTarget::new(helper, &state).is_ok_and(|target| matches_install(agent, home, target))
-        }
+        // This helper's entries at another route, named for this
+        // installation or written by a build that named none.
+        Some(state) => HookTarget::new(helper, &state).is_ok_and(|target| {
+            matches_install(agent, home, target)
+                || install
+                    .and_then(|install| target.of_install(install).ok())
+                    .is_some_and(|target| matches_install(agent, home, target))
+        }),
         None => false,
     }
 }
@@ -1084,13 +1137,24 @@ fn install_any<'a>(
     for slot in agent.slots() {
         let list = entries(&mut document, &layout, slot.key, true)?
             .ok_or_else(|| failure_shape(&layout.path, "the hook list could not be created"))?;
-        strip_owned(list);
+        let wanted = entry(agent, helper, slot);
+        // This installation's entry already as this build writes it stays
+        // where it is, so a pass beside another installation's moves nothing.
+        let current = {
+            let mut mine = owned(agent, list, helper.install());
+            mine.next() == Some(&wanted) && mine.next().is_none()
+        };
+        if current {
+            preserved += list.len() - 1;
+            continue;
+        }
+        strip_owned(agent, list, helper.install());
         preserved += list.len();
-        list.push(entry(agent, helper, slot));
+        list.push(wanted);
     }
     for key in agent.retired_keys() {
         if let Some(list) = entries(&mut document, &layout, key, false)?
-            && strip_owned(list) != 0
+            && strip_owned(agent, list, helper.install()) != 0
         {
             let left = list.len();
             if left == 0 {
@@ -1126,7 +1190,11 @@ fn install_any<'a>(
 
 /// Takes out only the entries carrying Hide's marker; a file that was Hide's
 /// alone goes with them.
-pub fn remove(agent: GuidanceAgent, home: &Path) -> Result<RemoveOutcome, InstallFailure> {
+pub fn remove(
+    agent: GuidanceAgent,
+    home: &Path,
+    install: Option<&str>,
+) -> Result<RemoveOutcome, InstallFailure> {
     // Every file Hide could have written to, so an entry written beside a
     // settings file is still found after a `hooks.json` appeared (Droid).
     let mut layouts = vec![agent.layout(home)];
@@ -1147,7 +1215,7 @@ pub fn remove(agent: GuidanceAgent, home: &Path) -> Result<RemoveOutcome, Instal
         preserved_entries: 0,
     };
     for layout in &layouts {
-        let outcome = remove_in(agent, layout)?;
+        let outcome = remove_in(agent, layout, install)?;
         total.changed |= outcome.changed;
         total.removed_entries += outcome.removed_entries;
         total.preserved_entries += outcome.preserved_entries;
@@ -1172,7 +1240,11 @@ pub fn remove(agent: GuidanceAgent, home: &Path) -> Result<RemoveOutcome, Instal
     Ok(total)
 }
 
-fn remove_in(agent: GuidanceAgent, layout: &Layout) -> Result<RemoveOutcome, InstallFailure> {
+fn remove_in(
+    agent: GuidanceAgent,
+    layout: &Layout,
+    install: Option<&str>,
+) -> Result<RemoveOutcome, InstallFailure> {
     let Some(mut document) = read_document(&layout.path)? else {
         return Ok(RemoveOutcome {
             changed: false,
@@ -1191,7 +1263,7 @@ fn remove_in(agent: GuidanceAgent, layout: &Layout) -> Result<RemoveOutcome, Ins
         let Some(list) = entries(&mut document, layout, key, false)? else {
             continue;
         };
-        let taken = strip_owned(list);
+        let taken = strip_owned(agent, list, install);
         removed += taken;
         preserved += list.len();
         if taken != 0 && list.is_empty() {

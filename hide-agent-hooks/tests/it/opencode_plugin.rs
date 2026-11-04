@@ -34,7 +34,7 @@ fn the_plugin_keeps_its_pinned_bytes() {
             file.text(crate::hook_target(helper)),
             crate::routed_script(pinned),
             "{} changed: raise its version and regenerate the fixture",
-            file.name()
+            file.name(None)
         );
     }
 }

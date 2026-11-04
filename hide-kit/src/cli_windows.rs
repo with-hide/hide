@@ -6,13 +6,20 @@ use std::path::PathBuf;
 
 use hide_platform::fs::{Access, atomic, link};
 
-use super::{hides_own, link_path, wanted};
+use super::{held_by_another, hides_own, link_path, other_install, wanted};
 use crate::{KitTarget, Observed, RemoveOutcome};
 
 const SHIM: &[u8] = b"@echo off\r\nrem Hide kit command. Managed by Hide.\r\nsetlocal DisableDelayedExpansion\r\n\"%~dp0.hide-kit\\hide.exe\" %*\r\nexit /b %errorlevel%\r\n";
 
 fn junction(target: &KitTarget) -> PathBuf {
     target.cli_dir.join(".hide-kit")
+}
+
+/// The command another live installation on this account reaches through
+/// the junction, which that installation's own pass keeps.
+fn another_installs(target: &KitTarget) -> Option<PathBuf> {
+    let destination = std::fs::read_link(junction(target)).ok()?.join("hide.exe");
+    held_by_another(target, &destination).then_some(destination)
 }
 
 /// Both names are ours or absent. An exact shim alone does not authorize
@@ -104,6 +111,9 @@ pub(crate) fn observe(target: &KitTarget) -> Observed {
             ),
         ));
     }
+    if let Some(destination) = another_installs(target) {
+        return Observed::Absent(other_install(&destination));
+    }
     if let Err(reason) = owned_or_missing(target) {
         return Observed::Blocked(crate::Reason::new(crate::PartCause::OtherProgram, reason));
     }
@@ -121,6 +131,12 @@ pub(crate) fn observe(target: &KitTarget) -> Observed {
 }
 
 pub(crate) fn install(target: &KitTarget) -> Result<(), String> {
+    if let Some(destination) = another_installs(target) {
+        return Err(format!(
+            "another Hide on this account holds the hide command, {}",
+            destination.display()
+        ));
+    }
     owned_or_missing(target)?;
     std::fs::create_dir_all(&target.cli_dir)
         .map_err(|error| format!("{} could not be created: {error}", target.cli_dir.display()))?;
@@ -132,6 +148,14 @@ pub(crate) fn install(target: &KitTarget) -> Result<(), String> {
 }
 
 pub(crate) fn remove(target: &KitTarget) -> RemoveOutcome {
+    if another_installs(target).is_some() {
+        return RemoveOutcome::Kept {
+            reason: format!(
+                "{} is another Hide's on this account",
+                link_path(target).display()
+            ),
+        };
+    }
     if let Err(reason) = owned_or_missing(target) {
         return RemoveOutcome::Kept { reason };
     }

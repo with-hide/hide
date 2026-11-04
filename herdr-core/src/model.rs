@@ -9003,6 +9003,7 @@ mod wire_enum_tests {
             hide_kit::PartCause::HerdrAbsent,
             hide_kit::PartCause::UpdateHerdr,
             hide_kit::PartCause::RetirementPending,
+            hide_kit::PartCause::OtherInstall,
             hide_kit::PartCause::Other,
         ];
         for variant in part_causes {
@@ -9031,6 +9032,7 @@ mod wire_enum_tests {
                 | hide_kit::PartCause::HerdrAbsent
                 | hide_kit::PartCause::UpdateHerdr
                 | hide_kit::PartCause::RetirementPending
+                | hide_kit::PartCause::OtherInstall
                 | hide_kit::PartCause::Other => {}
             }
         }
