@@ -2136,7 +2136,7 @@ impl<'g> Engine for OwnEngine<'g> {
             agents::PaneAgent::started(
                 &definition.id,
                 Some(&launch.name),
-                agents::resumed_in(definition, &argv),
+                agents::started_session(definition, &argv),
             ),
             &line,
         )?;
@@ -4481,6 +4481,46 @@ mod tests {
             "{:?}",
             holders.typed(&pane)
         );
+    }
+
+    /// A fork's held prompt is handed over once its agent takes input
+    /// (`confirm_fork_started`): a Codex fork whose terminal still edits
+    /// lines past the settle is not confirmed, since its Enter would be a
+    /// line break and the fork's first turn, which reports its session and
+    /// lineage, would never come (journey 871294628).
+    #[test]
+    fn a_forks_held_prompt_waits_for_its_agent_to_read_keys() {
+        use hide_node_link::holders::ScreenState;
+        let holders = Arc::new(Holders::default());
+        let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+        let (_, _, pane) = engine
+            .create_workspace(WAIT, "/w", "w", true, Env::new())
+            .unwrap();
+        holders.idle_shell(41, "bash");
+        let start = engine
+            .prepare_start(launch(&pane, "fork-w1-p2", "codex", &[]))
+            .unwrap();
+        engine.start_agent(WAIT, &start).unwrap();
+        let at = |line_editing| PaneFacts {
+            line_editing,
+            ..running("codex", ScreenState::Idle)
+        };
+        let confirm = || {
+            crate::agent_start::confirm_fork_started(
+                &engine,
+                &pane,
+                "fork-w1-p2",
+                "codex",
+                &|| Ok(()),
+                std::time::Instant::now() + std::time::Duration::from_millis(300),
+            )
+        };
+        holders.say(&pane, &at(Some(true)));
+        settle_start(&engine, &pane);
+        assert!(confirm().is_err(), "its terminal still edits lines");
+        holders.say(&pane, &at(Some(false)));
+        settle_start(&engine, &pane);
+        confirm().unwrap();
     }
 
     /// D-7, B13: after a reboot each agent pane resumes its conversation
