@@ -986,8 +986,8 @@ fn a_held_enter_waits_for_the_keys_before_it_to_reach_an_attaching_fork() {
         harness.service.shared.lock().panes["w1:p2"]
             .replay
             .as_ref()
-            .is_some_and(input::Replay::waits_for_terminal),
-        "the Enter waits for the terminal, not for a time"
+            .is_some_and(input::Replay::waits_for_write),
+        "the Enter waits for the keys before it to be written, not for a time"
     );
     let attached = Instant::now();
     harness.attach("w1:p2", Some(SIZE));

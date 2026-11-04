@@ -466,7 +466,7 @@ impl Service {
         impl Drop for Letter<'_> {
             fn drop(&mut self) {
                 let now = Instant::now();
-                self.service.shared.run(|inner, _| {
+                self.service.shared.run(|inner, shared| {
                     let Some(entry) = inner.panes.get_mut(self.pane) else {
                         return;
                     };
@@ -483,7 +483,7 @@ impl Service {
                     for chunk in held.keys.take_in_order(self.pane, now) {
                         inner.route_input(KeyTarget::Pane(self.pane.to_owned()), chunk, now);
                     }
-                    inner.replay_gap(self.pane, now);
+                    inner.await_written(shared, self.pane);
                     inner.finish_input_release(self.pane);
                 });
             }
@@ -1303,7 +1303,7 @@ impl Inner {
                     "bytes": held.iter().map(|chunk| chunk.input.len()).sum::<usize>(),
                 }));
                 if fork {
-                    self.replay(&pane, held, now + input::HELD_INPUT_MAX_AGE, now);
+                    self.replay(shared, &pane, held, now + input::HELD_INPUT_MAX_AGE, now);
                 } else {
                     for chunk in held {
                         self.write_key(&pane, chunk, false, now);
@@ -1469,12 +1469,21 @@ impl Inner {
     }
 
     /// Writes keys a fork request held for `pane` in the order typed, into
-    /// the agent that now runs there. The operator's submit behind other
-    /// replayed keys waits [`input::REPLAYED_SUBMIT_GAP`] after those keys
-    /// reached the pane's terminal, with everything after it, so a program
-    /// that reads keys arriving together as a paste still submits; past the
-    /// replay's end ([`input::Replay::ends`]) the rest is written at once.
-    fn replay(&mut self, pane: &str, chunks: Vec<HeldChunk>, ends: Instant, now: Instant) {
+    /// the agent that now runs there, as Herdr's `agent.prompt` submits:
+    /// the operator's submit behind other replayed keys waits
+    /// [`input::REPLAYED_SUBMIT_GAP`] from when the pane's writer has
+    /// written those keys ([`Self::await_written`]), with everything after
+    /// it, so a program that reads keys arriving together as a paste still
+    /// submits; past the replay's end ([`input::Replay::ends`]) the rest is
+    /// written at once.
+    fn replay(
+        &mut self,
+        shared: &Arc<Shared>,
+        pane: &str,
+        chunks: Vec<HeldChunk>,
+        ends: Instant,
+        now: Instant,
+    ) {
         if let Some(replay) = self
             .panes
             .get_mut(pane)
@@ -1493,17 +1502,12 @@ impl Inner {
                 && input::paces(&chunk)
                 && let Some(entry) = self.panes.get_mut(pane)
             {
-                // Keys before it still held for the terminal or behind a
-                // letter have not reached the program: the gap starts when
-                // they do (`replay_gap`).
-                let waiting = !matches!(entry.hold, PaneHold::Empty) || entry.letter.is_some();
-                let due = (!waiting).then(|| now + input::REPLAYED_SUBMIT_GAP);
                 entry.replay = Some(input::Replay::new(
-                    due,
                     ends,
                     std::iter::once(chunk).chain(chunks),
                 ));
                 self.wake_clock = true;
+                self.await_written(shared, pane);
                 return;
             }
             self.write_key(pane, chunk, false, now);
@@ -1511,8 +1515,50 @@ impl Inner {
         }
     }
 
-    /// The keys before a waiting replay's submit have reached the pane's
-    /// terminal: its gap starts now.
+    /// Asks the pane's writer to say when it has written what it was given
+    /// before a waiting replay's submit, which starts the submit's gap. Keys
+    /// still held for an attaching terminal or behind a letter have not
+    /// reached the writer: the session's open and the letter's end ask
+    /// again once they have. A barrier asked twice starts the gap once.
+    fn await_written(&mut self, shared: &Arc<Shared>, pane: &str) {
+        let Some(entry) = self.panes.get(pane) else {
+            return;
+        };
+        if entry
+            .replay
+            .as_ref()
+            .is_none_or(|replay| !replay.waits_for_write())
+            || !matches!(entry.hold, PaneHold::Empty)
+            || entry.letter.is_some()
+        {
+            return;
+        }
+        if let Some(session) = entry
+            .session
+            .as_ref()
+            .filter(|session| session.mode == Mode::Control)
+        {
+            Self::barrier(shared, session, pane);
+        }
+    }
+
+    /// The writer's barrier behind what `session` was given so far: once it
+    /// has written that, the pane's waiting replay starts its gap. A write
+    /// that failed leaves the replay waiting until its end drops it.
+    fn barrier(shared: &Arc<Shared>, session: &Session, pane: &str) {
+        let shared = Arc::downgrade(shared);
+        let pane = pane.to_owned();
+        // A refused barrier is a writer that is gone, which the same end
+        // covers.
+        let _ = session.after_writes(session::Written::new(move |written| {
+            if written && let Some(shared) = shared.upgrade() {
+                shared.run(|inner, _| inner.replay_gap(&pane, Instant::now()));
+            }
+        }));
+    }
+
+    /// The pane's writer has written the keys before a waiting replay's
+    /// submit: its gap starts now.
     fn replay_gap(&mut self, pane: &str, now: Instant) {
         if let Some(replay) = self
             .panes
@@ -2274,7 +2320,14 @@ impl Inner {
                         self.error(pane, "terminal.write_failed", refused.message(pane));
                     }
                 }
-                self.replay_gap(pane, now);
+                if self
+                    .panes
+                    .get(pane)
+                    .and_then(|entry| entry.replay.as_ref())
+                    .is_some_and(input::Replay::waits_for_write)
+                {
+                    Self::barrier(shared, &session, pane);
+                }
             } else {
                 crate::diagnostic!(json!({
                     "component": "terminal_input",
@@ -2916,12 +2969,12 @@ impl Inner {
                 .get_mut(&pane)
                 .and_then(|entry| entry.replay.take());
             match replay {
-                // Its terminal never took the keys before it in time: an
-                // attaching pane's hold drops keys that old too.
-                Some(replay) if replay.waits_for_terminal() => replay.discard(&pane, "stale"),
+                // The keys before it were not written in time: an attaching
+                // pane's hold drops keys that old too.
+                Some(replay) if replay.waits_for_write() => replay.discard(&pane, "stale"),
                 Some(replay) => {
                     let ends = replay.ends();
-                    self.replay(&pane, replay.take(), ends, now);
+                    self.replay(shared, &pane, replay.take(), ends, now);
                 }
                 None => {}
             }

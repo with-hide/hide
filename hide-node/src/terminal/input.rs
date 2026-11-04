@@ -712,15 +712,15 @@ pub(super) fn paces(chunk: &HeldChunk) -> bool {
 /// [`INPUT_HOLD_LIMIT_BYTES`] like every hold: past the cap the keys typed
 /// until the replay ends are dropped, with one diagnostic.
 pub(super) struct Replay {
-    /// When the rest is written: [`REPLAYED_SUBMIT_GAP`] after the keys
-    /// before it reached the pane's terminal, `None` while they still wait
-    /// for it.
+    /// When the rest is written: [`REPLAYED_SUBMIT_GAP`] after the pane's
+    /// writer has written the keys before it, `None` until it has, as
+    /// Herdr's `agent.prompt` waits from its text's flush.
     due: Option<Instant>,
     /// [`HELD_INPUT_MAX_AGE`] after the fork's keys were released, kept by
     /// every replay that follows: no key waits on pacing past it, so the
     /// rest is written at once then, or dropped when the keys before it
-    /// still wait for the terminal, as an attaching pane's hold drops keys
-    /// that old.
+    /// were not written yet, as an attaching pane's hold drops keys that
+    /// old.
     ends: Instant,
     chunks: Vec<HeldChunk>,
     bytes: usize,
@@ -728,15 +728,11 @@ pub(super) struct Replay {
 }
 
 impl Replay {
-    pub(super) fn new(
-        due: Option<Instant>,
-        ends: Instant,
-        chunks: impl IntoIterator<Item = HeldChunk>,
-    ) -> Self {
+    pub(super) fn new(ends: Instant, chunks: impl IntoIterator<Item = HeldChunk>) -> Self {
         let chunks: Vec<HeldChunk> = chunks.into_iter().collect();
         let bytes = chunks.iter().map(|chunk| chunk.input.len()).sum();
         Self {
-            due,
+            due: None,
             ends,
             chunks,
             bytes,
@@ -753,13 +749,13 @@ impl Replay {
         self.due.map_or(self.ends, |due| due.min(self.ends))
     }
 
-    /// The keys before it still wait for the pane's terminal.
-    pub(super) fn waits_for_terminal(&self) -> bool {
+    /// The pane's writer has not written the keys before it yet.
+    pub(super) fn waits_for_write(&self) -> bool {
         self.due.is_none()
     }
 
-    /// The keys before it reached the pane's terminal at `now`; whether
-    /// that started its gap.
+    /// The pane's writer wrote the keys before it at `now`; whether that
+    /// started its gap.
     pub(super) fn start_gap(&mut self, now: Instant) -> bool {
         if self.due.is_some() {
             return false;
