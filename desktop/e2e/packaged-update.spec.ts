@@ -25,12 +25,15 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { openProject, splitPane, tabPanes } from "../../web/e2e/daemon-actions";
+import { openProject, splitPane, tabPanes, waitForPaneInput } from "../../web/e2e/daemon-actions";
 import { startEngine } from "../../web/e2e/engine-fixture";
 import { connectStateDir } from "../../web/e2e/hided-control.mjs";
 import { ownedHolders } from "../../web/e2e/pane-holders.mjs";
 import { fixtureExecutable } from "../../web/e2e/platform-fixture";
+import { panePrompt } from "../../web/e2e/herdr-fixture";
+import { enterWorkspace } from "../../web/e2e/wire";
 import { hostLog, isolate, launch, screenshot, shellPage, test } from "./fixture";
+import { withProbe, type Probe } from "./terminal-probe";
 
 const executable = process.env.HIDE_E2E_UPDATE_APP;
 const feed = process.env.HIDE_E2E_UPDATE_FEED;
@@ -119,8 +122,23 @@ test("the installed app updates to the next version and the panes and daemon kee
     let tab: string;
     try {
       const made = await openProject(control, path.join(engine.root, "fixture"), "fixture");
-      await splitPane(control, made.tab, made.folder);
+      const panes = [made.pane, await splitPane(control, made.tab, made.folder)];
       tab = made.tab;
+      await withProbe(page);
+      await enterWorkspace(page, "fixture");
+      for (const pane of panes) {
+        await waitForPaneInput(control, pane);
+        await expect.poll(() => page.evaluate(id => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneText(id), pane), {
+          message: `the shell in ${pane} ready before updating`, timeout: 20_000,
+        }).toMatch(panePrompt(engine.shell));
+      }
+      if (engine.engine === "own" && process.platform !== "win32") {
+        await expect.poll(() => ownedHolders(stateDir).filter(holder => {
+          if (!holder.program) return false;
+          try { process.kill(holder.program, 0); return true; }
+          catch (error) { if ((error as NodeJS.ErrnoException).code === "ESRCH") return false; throw error; }
+        }).length, { message: "both holders and their shell processes ready before updating", timeout: 20_000 }).toBe(panes.length);
+      }
     } finally { control.close(); }
     // The panes the daemon lists, and on the own engine, off Windows, the holder processes that run them.
     const panesNow = async () => {
