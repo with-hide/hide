@@ -37,8 +37,7 @@ impl Watch {
 
     fn accepting(socket: &std::path::Path, accepts: Vec<Capability>) -> Self {
         let (stream, watching) =
-            hide_holder_protocol::watch(socket, accepts, Instant::now() + HANG_LIMIT)
-        .unwrap();
+            hide_holder_protocol::watch(socket, accepts, Instant::now() + HANG_LIMIT).unwrap();
         Self {
             stream,
             watching,

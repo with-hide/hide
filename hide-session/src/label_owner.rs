@@ -116,7 +116,8 @@ pub fn confirm_session_file(
     reported_id: Option<&str>,
     cwd: Option<&str>,
 ) -> Result<ConfirmedLabelSession> {
-    crate::inside_session_root(home, &[agent], path).map_err(|refusal| anyhow!(refusal.reason()))?;
+    crate::inside_session_root(home, &[agent], path)
+        .map_err(|refusal| anyhow!(refusal.reason()))?;
     confirm_metadata(agent, path, reported_id, cwd, Some(home))
 }
 
@@ -249,7 +250,8 @@ pub fn read_session_file<T>(
         return read();
     }
     let expected = expected.ok_or_else(|| "label_session_scope_required".to_owned())?;
-    crate::inside_session_root(home, &[agent], path).map_err(|refusal| refusal.reason().to_owned())?;
+    crate::inside_session_root(home, &[agent], path)
+        .map_err(|refusal| refusal.reason().to_owned())?;
     let before = confirm_session_file(home, agent, path, Some(&expected.id), Some(&expected.cwd))
         .map_err(|e| e.to_string())?;
     let stamp = crate::stamp::stamp_at(path);

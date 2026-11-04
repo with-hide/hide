@@ -251,7 +251,9 @@ pub struct FactsWriter {
 
 enum Job {
     Send(HolderMessage),
-    Read { owed: bool },
+    Read {
+        owed: bool,
+    },
     /// Nothing changed by the time the terminal's line editing is asked
     /// again ([`LINE_EDITING_RECHECK`]).
     Recheck,

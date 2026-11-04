@@ -763,7 +763,8 @@ pub(crate) fn is_session_id(value: &str) -> bool {
 /// path, or a link planted inside the folder, never makes the reader open a
 /// file elsewhere.
 fn inside_agent_root(home: &Path, agent: Agent, located: &Path) -> Result<PathBuf, String> {
-    crate::inside_session_root(home, &[agent], located).map_err(|refusal| refusal.reason().to_owned())
+    crate::inside_session_root(home, &[agent], located)
+        .map_err(|refusal| refusal.reason().to_owned())
 }
 
 #[cfg(test)]
