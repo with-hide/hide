@@ -275,7 +275,7 @@ test("hide browser: a selected View of a Workspace behind another answers input 
   fs.mkdirSync(other, { recursive: true });
   // The second project is made without being shown, as the fixture's stays in front.
   await withControl(stack.daemon, async (control) => {
-    await openProject(control, other, "second");
+    await openProject(control, other, "second-checkout");
     await focusTab(control, fixture, fixture.tab);
   });
   await start();

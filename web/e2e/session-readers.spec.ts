@@ -1,6 +1,6 @@
 // Synthetic native-format writers on an isolated engine and hided.
 // Installed CLI measurements remain a separate acceptance boundary.
-import { expect, test, type BrowserContext, type Page } from "@playwright/test";
+import { expect, test, type BrowserContext, type Locator, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -69,6 +69,16 @@ async function paneGone(daemon: Daemon, pane: string): Promise<void> {
   await withControl(daemon, (control) => control.until((rest) => (tabOfPane(rest, pane) === undefined ? true : undefined), `${pane} closed`, 30_000));
 }
 
+/** Quiet fixture agents can fold before the page first reads their session. */
+async function showNativeRow(page: Page, pane: string): Promise<Locator> {
+  const row = page.locator(`nav[data-sidebar] [data-checkout-agents-open] [data-pane="${pane}"]`);
+  const folded = page.locator('nav[data-sidebar] [data-checkout-toggle][aria-expanded="false"]');
+  await expect(row.or(folded)).toBeVisible();
+  if (!(await row.isVisible())) await folded.click();
+  await expect(row).toBeVisible();
+  return row;
+}
+
 async function disableAgentSummaries(page: Page): Promise<void> {
   await page.locator("[data-open-settings]").click();
   await page.locator('[data-settings-tab="hideAi"]').click();
@@ -99,11 +109,7 @@ test(`${kind} native title and durable sleep wake the exact conversation in a fr
     await startNative(fixture, daemon, kind, sourcePane, session);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await page.locator("[data-checkout]").first().click();
-    const row = page.locator(`nav[data-sidebar] [data-checkout-agents-open] [data-pane="${sourcePane}"]`);
-    // A quiet agent's project can already be folded when its session is read.
-    const folded = page.locator('nav[data-sidebar] [data-checkout-toggle][aria-expanded="false"]');
-    await expect(row.or(folded)).toBeVisible();
-    if (!(await row.isVisible())) await folded.click();
+    const row = await showNativeRow(page, sourcePane);
     // status-model.md, Task identity: an automatic/source-less name follows the goal.
     const selected = kind === "pi" ? "Generated Pi goal" : kind === "grok" ? "Generated Grok goal" : initialTitle;
     await expect(row).toContainText(selected, { timeout: 30_000 });
@@ -199,7 +205,7 @@ test(`Cursor ${refusal} root retains its historical goal while retired Sleep ref
     const starts = fs.readFileSync(launches, "utf8");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await page.locator("[data-checkout]").first().click();
-    const row = page.locator(`nav[data-sidebar] [data-checkout-agents-open] [data-pane="${pane}"]`);
+    const row = await showNativeRow(page, pane);
     await expect(row).toContainText(CURSOR_GOAL, { timeout: 30_000 });
     await row.click();
     await page.locator(`[data-pane-menu="${pane}"]`).click();
@@ -293,6 +299,7 @@ test("OpenCode's root session titles its row, waits on its question and wakes by
     await withControl(daemon, (control) => control.until((rest) => (agentIn(rest, sourcePane)?.session_id === OPENCODE_ID ? true : undefined), `${sourcePane} on OpenCode's session`, 30_000));
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await page.locator("[data-checkout]").first().click();
+    await showNativeRow(page, sourcePane);
     const row = page.locator(`nav[data-sidebar] [data-pane="${sourcePane}"]`);
     // OpenCode records no manual source: goal first, native title with summaries off.
     await expect(row).toContainText("Generated OpenCode goal", { timeout: 30_000 });
