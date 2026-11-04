@@ -273,6 +273,10 @@ pub(super) struct Live {
     /// built before it), which leaves a start to the settle alone, as
     /// before; never read as reading keys.
     pub(super) line_editing: Option<bool>,
+    /// The holder could not say what holds the terminal, so who the agent
+    /// is stays as it was and it takes no input until it can: read as the
+    /// shell holding it, it would have ended the agent and its session.
+    pub(super) foreground_unread: bool,
     pub(super) status: Status,
     /// One more each time its status changed, from the engine's own count.
     pub(super) seq: u64,
@@ -336,13 +340,14 @@ impl PaneAgent {
                 || now.duration_since(started) < START_DEADLINE)
     }
 
-    /// Whether the agent's program takes what is typed to it: it shows and
-    /// does not leave the terminal editing lines. This is not whether its
+    /// Whether the agent's program takes what is typed to it: it shows, the
+    /// holder can say what holds the terminal, and the program does not
+    /// leave it editing lines. This is not whether its
     /// start is pending: a start ends at its deadline, while a program that
     /// never turns line editing off takes no input however long ago it
     /// started, and a retried letter must not be typed into its line.
     pub(super) fn interactive(&self) -> bool {
-        self.live.shown && self.live.line_editing != Some(true)
+        self.live.shown && !self.live.foreground_unread && self.live.line_editing != Some(true)
     }
 
     /// Whether a start made at `started` has settled by `now`: its program
@@ -437,6 +442,9 @@ pub(super) fn apply(
     let program = facts.foreground.as_ref();
     let foreground = program.and_then(|program| recognized(catalog, program));
     match (agent.as_mut(), program, foreground) {
+        // The system could not say what holds the terminal: the agent stays
+        // who it is until the holder reads its terminal again.
+        _ if facts.foreground_unread => {}
         // The program of the agent the pane runs is in the foreground, or a
         // program no definition names where that agent was started or ran:
         // the agent itself, run by a wrapper or a runtime under another
@@ -469,6 +477,12 @@ pub(super) fn apply(
             }
         }
         (None, _, None) => {}
+    }
+    if let Some(current) = agent.as_mut()
+        && current.live.foreground_unread != facts.foreground_unread
+    {
+        current.live.foreground_unread = facts.foreground_unread;
+        applied.changed = true;
     }
     applied.rules_for = live.rules_due(agent.as_ref());
     if let Some(current) = agent.as_mut().filter(|current| current.live.shown) {
@@ -830,7 +844,10 @@ mod tests {
         );
         assert!(!agent.interactive());
         let deadline = started + START_DEADLINE;
-        assert!(!agent.launch_pending(deadline), "the start ends at its deadline");
+        assert!(
+            !agent.launch_pending(deadline),
+            "the start ends at its deadline"
+        );
         assert!(
             !agent.interactive(),
             "yet a program that leaves the terminal editing lines takes no input"
@@ -856,6 +873,47 @@ mod tests {
             !pane.agent.as_ref().unwrap().launch_pending(Instant::now()),
             "a holder that cannot say leaves the start to the settle"
         );
+    }
+
+    /// A terminal whose foreground the system could not say keeps the
+    /// agent it runs, its name and session, and takes no input; only a
+    /// terminal read as the shell's again ends it.
+    #[test]
+    fn an_unread_foreground_keeps_the_agent_and_takes_no_input() {
+        let mut pane = Pane::new();
+        pane.agent = Some(PaneAgent::started(
+            "pi",
+            Some("worker"),
+            Some("/s/pi.jsonl".to_owned()),
+        ));
+        pane.facts(PaneFacts {
+            foreground: program("pi"),
+            screen: read(ScreenState::Idle),
+            ..PaneFacts::default()
+        });
+        assert!(pane.agent.as_ref().unwrap().interactive());
+        let applied = pane.facts(PaneFacts {
+            foreground_unread: true,
+            screen: read(ScreenState::Idle),
+            ..PaneFacts::default()
+        });
+        assert!(applied.changed);
+        let agent = pane.agent.as_ref().expect("the agent stays");
+        assert_eq!(agent.name.as_deref(), Some("worker"));
+        assert_eq!(agent.session.as_deref(), Some("/s/pi.jsonl"));
+        assert!(!agent.interactive(), "it takes no input meanwhile");
+
+        pane.facts(PaneFacts {
+            foreground: program("pi"),
+            screen: read(ScreenState::Idle),
+            ..PaneFacts::default()
+        });
+        assert!(pane.agent.as_ref().unwrap().interactive());
+        pane.facts(PaneFacts {
+            screen: read(ScreenState::Idle),
+            ..PaneFacts::default()
+        });
+        assert!(pane.agent.is_none(), "the shell holds the terminal again");
     }
 
     #[test]

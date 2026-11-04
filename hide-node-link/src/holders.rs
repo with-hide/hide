@@ -196,8 +196,14 @@ pub struct PaneFacts {
     pub line_editing: Option<bool>,
     /// The program in the terminal's foreground other than the pane's own
     /// program, `None` while the pane's program holds the terminal or the
-    /// system cannot say.
+    /// system cannot say ([`Self::foreground_unread`]).
     pub foreground: Option<ForegroundProgram>,
+    /// Whether the system could not say what holds the terminal, so a
+    /// `None` foreground is no evidence that the pane's own program holds
+    /// it. False from a holder or node built before it, which read such a
+    /// terminal as the shell's.
+    #[serde(default)]
+    pub foreground_unread: bool,
     /// What the pane's screen rules read on its screen.
     pub screen: ScreenRead,
 }

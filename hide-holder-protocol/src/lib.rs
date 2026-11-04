@@ -201,6 +201,10 @@ pub enum Capability {
     /// ([`Facts::line_editing`]); a node that does not accept it, as one
     /// built before it does not, is sent facts without it.
     LineEditing,
+    /// The holder says on a watch whether the system could not say what
+    /// holds the terminal ([`Facts::foreground_unread`]), which a node built
+    /// before it reads as the pane's own program holding it.
+    ForegroundUnread,
     /// A capability this build does not know, kept by name so a side can
     /// answer with the ones it does.
     Other(String),
@@ -215,6 +219,7 @@ impl Capability {
             Self::ProgramPackage => "program_package",
             Self::Keys => "keys",
             Self::LineEditing => "line_editing",
+            Self::ForegroundUnread => "foreground_unread",
             Self::Other(name) => name,
         }
     }
@@ -227,6 +232,7 @@ impl Capability {
             "program_package" => Self::ProgramPackage,
             "keys" => Self::Keys,
             "line_editing" => Self::LineEditing,
+            "foreground_unread" => Self::ForegroundUnread,
             other => Self::Other(other.to_owned()),
         }
     }
@@ -320,6 +326,29 @@ pub struct Facts {
     /// reads it, in every facts frame of a watch that accepted
     /// [`Capability::LineEditing`] and in no other (`None`).
     pub line_editing: Option<LineEditing>,
+    /// Whether the system could not say what holds the terminal, so
+    /// [`Self::foreground`] is none for want of an answer rather than
+    /// because the pane's own program holds it, in every facts frame of a
+    /// watch that accepted [`Capability::ForegroundUnread`] and in no other
+    /// (`None`).
+    pub foreground_unread: Option<bool>,
+}
+
+/// The facts extensions a watch agreed: each is in every facts frame of that
+/// watch and in no other, in this order after the screen.
+#[derive(Clone, Copy, Debug, Default)]
+struct Extensions {
+    line_editing: bool,
+    foreground_unread: bool,
+}
+
+impl Extensions {
+    fn of(agreed: &[Capability]) -> Self {
+        Self {
+            line_editing: agreed.contains(&Capability::LineEditing),
+            foreground_unread: agreed.contains(&Capability::ForegroundUnread),
+        }
+    }
 }
 
 /// Whether a terminal edits input a line at a time before its program reads
@@ -1608,7 +1637,7 @@ pub fn write_holder(writer: &mut impl Write, message: &HolderMessage) -> io::Res
 /// Reads one message from a holder, on a connection that agreed no facts
 /// extension beyond the package.
 pub fn read_holder(reader: &mut impl Read) -> Result<HolderMessage, FrameError> {
-    read_holder_agreed(reader, false)
+    read_holder_agreed(reader, Extensions::default())
 }
 
 /// Reads one message on a watch whose [`Watching`] named `agreed`: a facts
@@ -1618,12 +1647,12 @@ pub fn read_watch_holder(
     reader: &mut impl Read,
     agreed: &[Capability],
 ) -> Result<HolderMessage, FrameError> {
-    read_holder_agreed(reader, agreed.contains(&Capability::LineEditing))
+    read_holder_agreed(reader, Extensions::of(agreed))
 }
 
 fn read_holder_agreed(
     reader: &mut impl Read,
-    line_editing: bool,
+    agreed: Extensions,
 ) -> Result<HolderMessage, FrameError> {
     let (kind, payload) = read_frame(reader, MAX_FRAME)?;
     let mut payload = Payload(&payload);
@@ -1733,7 +1762,7 @@ fn read_holder_agreed(
                 sends,
             })
         }
-        kind::FACTS => HolderMessage::Facts(Facts::take(&mut payload, line_editing)?),
+        kind::FACTS => HolderMessage::Facts(Facts::take(&mut payload, agreed)?),
         kind::CLOSED => {
             let code = payload.u16()?;
             let reason = CloseReason::from_code(code)
@@ -2093,6 +2122,9 @@ impl Facts {
         if let Some(editing) = self.line_editing {
             payload.push(editing.code());
         }
+        if let Some(unread) = self.foreground_unread {
+            payload.push(u8::from(unread));
+        }
         // No extension is the original facts frame. Older watchers are
         // handed a program with no package by the negotiated writer.
         if let Some(package) = self.foreground.as_ref().and_then(|p| p.package.as_deref()) {
@@ -2100,9 +2132,8 @@ impl Facts {
         }
     }
 
-    /// Reads facts whose frame carries the line editing byte when
-    /// `line_editing` says the watch agreed it.
-    fn take(payload: &mut Payload<'_>, line_editing: bool) -> Result<Self, FrameError> {
+    /// Reads facts whose frame carries the extensions its watch agreed.
+    fn take(payload: &mut Payload<'_>, agreed: Extensions) -> Result<Self, FrameError> {
         let cwd = payload.optional_text(MAX_CWD)?;
         let title = payload.optional_text(MAX_TITLE)?;
         let bells = payload.u64()?;
@@ -2150,8 +2181,19 @@ impl Facts {
                 )));
             }
         };
-        let line_editing = if line_editing {
+        let line_editing = if agreed.line_editing {
             Some(LineEditing::from_code(payload.u8()?)?)
+        } else {
+            None
+        };
+        let foreground_unread = if agreed.foreground_unread {
+            let unread = payload.u8()? != 0;
+            if unread && foreground.is_some() {
+                return Err(FrameError::Malformed(
+                    "a foreground program the system could not say".to_owned(),
+                ));
+            }
+            Some(unread)
         } else {
             None
         };
@@ -2170,6 +2212,7 @@ impl Facts {
             foreground,
             screen,
             line_editing,
+            foreground_unread,
         })
     }
 }
@@ -2196,12 +2239,12 @@ mod tests {
         read_holder(&mut &bytes[..]).unwrap()
     }
 
-    /// The line editing byte sits between the screen and the package, in
-    /// every facts frame of a watch that agreed it and in no other: facts
-    /// without it are the frame an older holder sends, and only a reader
-    /// that agreed it reads it.
+    /// The extensions a watch agreed sit between the screen and the package,
+    /// in every facts frame of that watch and in no other: facts without
+    /// them are the frame an older holder sends, and only a reader that
+    /// agreed them reads them.
     #[test]
-    fn line_editing_rides_only_on_a_watch_that_agreed_it() {
+    fn facts_extensions_ride_only_on_a_watch_that_agreed_them() {
         let facts = Facts {
             foreground: Some(Program {
                 pid: 7,
@@ -2221,6 +2264,7 @@ mod tests {
             Capability::Facts,
             Capability::ProgramPackage,
             Capability::LineEditing,
+            Capability::ForegroundUnread,
         ];
         for editing in [
             LineEditing::ReadsKeys,
@@ -2229,21 +2273,41 @@ mod tests {
         ] {
             let sent = Facts {
                 line_editing: Some(editing),
+                foreground_unread: Some(false),
                 ..facts.clone()
             };
             let mut bytes = Vec::new();
             write_holder(&mut bytes, &HolderMessage::Facts(sent.clone())).unwrap();
-            assert_eq!(bytes.len(), original.len() + 1);
+            assert_eq!(bytes.len(), original.len() + 2);
             assert_eq!(
                 read_watch_holder(&mut &bytes[..], &agreed).unwrap(),
                 HolderMessage::Facts(sent)
             );
         }
-        // A frame that lacks the byte its watch agreed is broken, not facts
-        // that do not know.
+        let unread = Facts {
+            line_editing: Some(LineEditing::Unknown),
+            foreground_unread: Some(true),
+            ..Facts::default()
+        };
+        let mut bytes = Vec::new();
+        write_holder(&mut bytes, &HolderMessage::Facts(unread.clone())).unwrap();
+        assert_eq!(
+            read_watch_holder(&mut &bytes[..], &agreed).unwrap(),
+            HolderMessage::Facts(unread)
+        );
+        // A frame that lacks what its watch agreed is broken, not facts that
+        // do not know; so is a program the system could not say.
         let mut bare = Vec::new();
         write_holder(&mut bare, &HolderMessage::Facts(Facts::default())).unwrap();
         assert!(read_watch_holder(&mut &bare[..], &agreed).is_err());
+        let mut both = Vec::new();
+        let forged = Facts {
+            line_editing: Some(LineEditing::Edits),
+            foreground_unread: Some(true),
+            ..facts
+        };
+        write_holder(&mut both, &HolderMessage::Facts(forged)).unwrap();
+        assert!(read_watch_holder(&mut &both[..], &agreed).is_err());
     }
 
     #[test]
@@ -2398,6 +2462,7 @@ mod tests {
                     rule: Some("osc_title_working".to_owned()),
                 },
                 line_editing: None,
+                foreground_unread: None,
             }),
             HolderMessage::Facts(Facts {
                 screen: ScreenRead::Unknown {
@@ -2615,7 +2680,10 @@ mod tests {
         ]);
         assert_eq!(original, old_wire);
         let mut payload = Payload(&original);
-        assert_eq!(Facts::take(&mut payload, false).unwrap(), facts);
+        assert_eq!(
+            Facts::take(&mut payload, Extensions::default()).unwrap(),
+            facts
+        );
         payload.end().unwrap();
 
         // This is the extension's wire format, appended after the old
@@ -2623,18 +2691,18 @@ mod tests {
         let mut extended = original.clone();
         put_text(&mut extended, "@scope/tool");
         let mut payload = Payload(&extended);
-        let read = Facts::take(&mut payload, false).unwrap();
+        let read = Facts::take(&mut payload, Extensions::default()).unwrap();
         let program = read.foreground.unwrap();
         assert_eq!(program.name, "cli");
         assert_eq!(program.package.as_deref(), Some("@scope/tool"));
         payload.end().unwrap();
 
         put_text(&mut original, &"x".repeat(MAX_PROCESS_NAME + 1));
-        assert!(Facts::take(&mut Payload(&original), false).is_err());
+        assert!(Facts::take(&mut Payload(&original), Extensions::default()).is_err());
         let mut no_program = Vec::new();
         Facts::default().put(&mut no_program);
         put_text(&mut no_program, "@scope/tool");
-        assert!(Facts::take(&mut Payload(&no_program), false).is_err());
+        assert!(Facts::take(&mut Payload(&no_program), Extensions::default()).is_err());
     }
 
     #[test]

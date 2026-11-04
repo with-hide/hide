@@ -126,10 +126,11 @@ const READ_CHUNK: usize = 64 * 1024;
 const SENDS: [Capability; 3] = [Capability::Screen, Capability::Notices, Capability::Keys];
 
 /// What this holder sends on a watch.
-const WATCH_SENDS: [Capability; 3] = [
+const WATCH_SENDS: [Capability; 4] = [
     Capability::Facts,
     Capability::ProgramPackage,
     Capability::LineEditing,
+    Capability::ForegroundUnread,
 ];
 
 enum Event {
@@ -988,6 +989,7 @@ impl Holder {
         let wake = Arc::new(Wake::default());
         let program_package = sends.contains(&Capability::ProgramPackage);
         let line_editing = sends.contains(&Capability::LineEditing);
+        let foreground_unread = sends.contains(&Capability::ForegroundUnread);
         wake.send(HolderMessage::Watching(Watching {
             version,
             rules_engine: hide_screen_rules::ENGINE_VERSION,
@@ -1019,6 +1021,7 @@ impl Holder {
                     let shell = self.program;
                     move || master.group(shell)
                 }),
+                foreground_unread,
                 line_editing: line_editing.then(|| {
                     Box::new(move || master.line_editing()) as Box<dyn Fn() -> LineEditing + Send>
                 }),
@@ -1520,8 +1523,7 @@ impl PtyMaster {
     fn line_editing(&self) -> LineEditing {
         #[cfg(unix)]
         {
-            let Some(termios) = self.lock().as_ref().and_then(|master| master.get_termios())
-            else {
+            let Some(termios) = self.lock().as_ref().and_then(|master| master.get_termios()) else {
                 return LineEditing::Unknown;
             };
             if termios

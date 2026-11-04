@@ -201,14 +201,13 @@ fn state(state: State) -> ScreenState {
     }
 }
 
-/// The pane's facts now: what the pane says of itself, its foreground, its
-/// terminal's line editing, and its screen read by its rules.
+/// The pane's facts now: what the pane says of itself, its foreground, and
+/// its screen read by its rules, with no facts extension.
 pub fn facts(
     pane: &Mutex<Pane>,
     rules: &SharedRules,
     reading: &mut Reading,
     foreground: Option<hide_holder_protocol::Program>,
-    line_editing: Option<LineEditing>,
 ) -> Result<Facts, hide_vt::Error> {
     let (generation, set) = {
         let slot = slot(rules);
@@ -228,7 +227,8 @@ pub fn facts(
         bracketed_paste: observed.bracketed_paste,
         foreground,
         screen,
-        line_editing,
+        line_editing: None,
+        foreground_unread: None,
     })
 }
 
@@ -248,6 +248,9 @@ pub struct FactsWriter {
     /// Whether the terminal edits lines, where the watch's node accepted
     /// [`hide_holder_protocol::Capability::LineEditing`].
     pub line_editing: Option<Box<dyn Fn() -> LineEditing + Send>>,
+    /// Whether the watch's node accepted
+    /// [`hide_holder_protocol::Capability::ForegroundUnread`].
+    pub foreground_unread: bool,
     pub log: Log,
 }
 
@@ -270,6 +273,9 @@ impl FactsWriter {
         // The program that holds the terminal while it edits lines and since
         // when, so its line editing is asked again for a bounded time.
         let mut editing: Option<(u32, Instant)> = None;
+        // Whether the last read could not say what holds the terminal, so
+        // the log has it once per spell.
+        let mut was_unread = false;
         loop {
             let recheck = editing
                 .filter(|(_, since)| since.elapsed() < LINE_EDITING_RECHECK_FOR)
@@ -292,14 +298,34 @@ impl FactsWriter {
                 Job::Read { owed } => owed,
             };
             next = Instant::now() + MIN_FACTS_INTERVAL;
-            let mut program = foreground.program(self.shell, (self.group)(), &self.log);
+            let (mut program, unread) =
+                match foreground.program(self.shell, (self.group)(), &self.log) {
+                    Ok(program) => (program, None),
+                    Err(unread) => (None, Some(unread)),
+                };
+            if let Some(unread) = unread
+                && !was_unread
+            {
+                self.log.event(
+                    "holder.foreground_unread",
+                    &[
+                        ("generation", self.generation.into()),
+                        ("reason", unread.reason().into()),
+                    ],
+                );
+            }
+            was_unread = unread.is_some();
             if !self.program_package
                 && let Some(program) = &mut program
             {
                 program.package = None;
             }
-            let line_editing = self.line_editing.as_ref().map(|read| read());
-            let facts = match facts(&self.pane, &self.rules, &mut reading, program, line_editing) {
+            let facts = match facts(&self.pane, &self.rules, &mut reading, program) {
+                Ok(facts) => Facts {
+                    line_editing: self.line_editing.as_ref().map(|read| read()),
+                    foreground_unread: self.foreground_unread.then_some(unread.is_some()),
+                    ..facts
+                },
                 Ok(facts) => facts,
                 Err(error) => {
                     self.log.event(
@@ -672,7 +698,7 @@ mod tests {
             )
             .as_bytes(),
         );
-        let facts = facts(&pane, &rules, &mut reading, None, None).unwrap();
+        let facts = facts(&pane, &rules, &mut reading, None).unwrap();
         let expected = if cfg!(windows) {
             "C:\\work\\a b"
         } else {
@@ -684,7 +710,7 @@ mod tests {
         assert!(facts.bracketed_paste);
         assert_eq!(facts.screen, ScreenRead::NoRules);
         feed(&pane, b"\x1b]7;relative/folder\x07\x1b[?2004l");
-        let facts = super::facts(&pane, &rules, &mut reading, None, None).unwrap();
+        let facts = super::facts(&pane, &rules, &mut reading, None).unwrap();
         assert_eq!(facts.cwd.as_deref(), Some(expected));
         assert!(!facts.bracketed_paste);
     }
