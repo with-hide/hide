@@ -72,8 +72,8 @@ impl Runtime {
             // its file was written; reported at the session's start, before
             // the file existed, the session stayed unconfirmed, and with it
             // the native id a fork needs (journey 41904789052).
-            if report.turn.is_some() && !self.plans.session_rereads.contains(&pane) {
-                self.plans.session_rereads.push(pane.clone());
+            if report.turn.is_some() {
+                self.queue_session_reread(pane.clone());
             }
             self.request_republish();
         } else if let Some(sync) = self

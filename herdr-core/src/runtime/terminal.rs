@@ -1846,7 +1846,7 @@ impl Runtime {
     /// Whether the core still projects a terminal for `pane`: one of this
     /// machine's panes in a layout or named by a creation, or a connected
     /// device's pane.
-    fn pane_still_terminal(&self, pane: &str) -> bool {
+    pub(super) fn pane_still_terminal(&self, pane: &str) -> bool {
         if crate::address::is_device_scoped(pane) {
             return self
                 .snapshot

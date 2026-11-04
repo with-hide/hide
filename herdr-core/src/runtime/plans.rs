@@ -86,8 +86,14 @@ pub(crate) struct PlanRuntime {
     /// the store confirms it. Bounded by the unconfirmed briefs.
     pub(crate) input_turn_started: BTreeMap<String, u8>,
     /// The panes whose sessions are to be read again, taken by this
-    /// machine's session-sync thread on its next tick.
+    /// machine's session-sync thread on its next tick. Only open panes wait,
+    /// at most `SESSION_REREADS_LIMIT` of them, so a machine whose label
+    /// reader never started keeps no more than that
+    /// (`Runtime::queue_session_reread`).
     pub(crate) session_rereads: Vec<String>,
+    /// Whether a pane was refused a place in `session_rereads` since the
+    /// reader last took it, so a full list is logged once, not per turn.
+    pub(crate) session_rereads_refused: bool,
 }
 
 /// Whom the core asks a question of: a session, or the pane of an agent
