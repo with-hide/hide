@@ -405,6 +405,86 @@ fn a_split_is_drawn_with_the_pane_herdr_named_before_its_layout_arrives() {
     );
 }
 
+/// The tab as an engine lays it out once it holds the split of `LEFT`:
+/// `LEFT | CREATED` at `ratio`, the new pane focused.
+fn split_by_engine(ratio: f32) -> SessionSnapshotPayload {
+    let mut payload = session(Some(ratio), false);
+    let layout = &mut payload.layouts[0];
+    for pane in &mut layout.panes {
+        if pane.pane_id == RIGHT {
+            pane.pane_id = CREATED.to_owned();
+        }
+    }
+    layout.focused_pane_id = CREATED.to_owned();
+    for pane in &mut payload.panes {
+        if pane.pane_id == RIGHT {
+            pane.pane_id = CREATED.to_owned();
+        }
+    }
+    payload
+}
+
+/// The core's own engine answers a split once its layout holds the new pane,
+/// so the publish that confirms the split can be the first one after the
+/// answer: `ratio` is the layout that publish reads, and the answer to the
+/// split is handed over before it, as the engine's worker returns first.
+fn split_confirmed_by_the_first_publish(name: &str, ratio: f32) -> Vec<serde_json::Value> {
+    let herdr = fake_herdr(name);
+    let (mut runtime, _) = runtime_on(&herdr, session(None, false));
+    dispatch(
+        &mut runtime,
+        "create_pane",
+        serde_json::json!({"tab_id": TAB, "cwd": CHECKOUT, "command": null, "direction": "right"}),
+    );
+    let split = PaneControlAction::Split {
+        pane_id: LEFT.to_owned(),
+        direction: PaneSplitDirection::Right,
+        cwd: Some(CHECKOUT.to_owned()),
+    };
+    let ((), records) = crate::diagnostics::capture(|| {
+        answer(
+            &mut runtime,
+            split,
+            Ok(PaneControlOutcome::Acknowledged {
+                created_pane_id: Some(CREATED.to_owned()),
+            }),
+        );
+        runtime.ingest_session(Ok(split_by_engine(ratio)));
+    });
+    assert!(
+        drawn(&runtime).pane_ids().contains(&CREATED),
+        "the split is on screen from the publish that confirmed it"
+    );
+    records
+        .into_iter()
+        .filter(|record| record["kind"] == "pane.prediction_mismatch")
+        .collect()
+}
+
+/// hide-private#484: an engine whose layout already holds the split when the
+/// publish after its answer reads it confirms what the prediction draws, so
+/// nothing is reported, where the comparison with the screen from before the
+/// split reported every split on the core's own engine.
+#[test]
+fn a_split_confirmed_by_the_first_publish_after_its_answer_matches_its_prediction() {
+    let mismatches = split_confirmed_by_the_first_publish("geometry-split-first-publish", 0.5);
+    assert!(mismatches.is_empty(), "{mismatches:?}");
+}
+
+/// The same order still reports an engine whose layout differs from what the
+/// prediction draws, with both shapes.
+#[test]
+fn a_split_the_engine_lays_out_otherwise_than_predicted_is_reported_in_the_same_order() {
+    let mismatches = split_confirmed_by_the_first_publish("geometry-split-other-ratio", 0.25);
+    assert_eq!(mismatches.len(), 1, "{mismatches:?}");
+    assert_eq!(
+        mismatches[0]["drawn_pane_ids"],
+        serde_json::json!([LEFT, CREATED])
+    );
+    assert_eq!(mismatches[0]["drawn_ratios"], serde_json::json!([0.5]));
+    assert_eq!(mismatches[0]["confirmed_ratios"], serde_json::json!([0.25]));
+}
+
 /// B19: operations in one tab leave one at a time, in order, and the ninth
 /// waiting is refused and logged.
 #[test]

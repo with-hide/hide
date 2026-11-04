@@ -2055,18 +2055,28 @@ impl Runtime {
         changed
     }
 
-    /// When Herdr's confirmed layout differs from what was drawn for the
-    /// operation it confirms (a ratio Herdr rounds otherwise, a focus it
-    /// places elsewhere), the confirmed layout is drawn and the difference
-    /// goes to the log only (B18). Read only when nothing else is drawn for
-    /// the tab, so the comparison is of this operation alone.
+    /// When the engine's confirmed layout differs from what the operation's
+    /// prediction draws (a ratio Herdr rounds otherwise, a focus it places
+    /// elsewhere), the confirmed layout is drawn and the difference goes to
+    /// the log only (B18). Read only when nothing else is drawn for the tab,
+    /// so the comparison is of this operation alone.
+    ///
+    /// The prediction is folded over the layout last drawn, which already
+    /// carries it once a publish drew it (a prediction is absolute, so a
+    /// second fold changes nothing). The core's own engine holds a split or a
+    /// new pane in its layout before it answers, so the read that confirms
+    /// the operation can be the first publish after the answer, with nothing
+    /// drawn ahead of it: the comparison is then of what the prediction would
+    /// have drawn, never of the screen from before the operation.
     fn report_prediction_mismatch(
         &self,
         operation: &PendingPaneOperation,
         confirmed: &PaneTopologySignature,
     ) {
-        if operation.prediction.is_none()
-            || self.drawn_closes.contains_key(&operation.scope_id)
+        let Some(prediction) = operation.prediction.as_ref() else {
+            return;
+        };
+        if self.drawn_closes.contains_key(&operation.scope_id)
             || self
                 .pane_operations
                 .values()
@@ -2079,7 +2089,12 @@ impl Runtime {
             .pane_layouts
             .iter()
             .find(|layout| layout.tab_id == operation.scope_id)
-            .map(Self::model_layout_signature)
+            .map(|layout| {
+                Self::model_layout_signature(&super::pane_prediction::predict(
+                    layout,
+                    std::slice::from_ref(prediction),
+                ))
+            })
         else {
             return;
         };
