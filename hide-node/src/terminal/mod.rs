@@ -24,6 +24,7 @@
 
 mod command;
 pub mod device;
+mod echo_timing;
 pub mod engine_panes;
 pub mod holder;
 mod input;
@@ -2205,7 +2206,11 @@ impl Inner {
         }
         let reader_shared = Arc::downgrade(shared);
         let reader_pane = pane.to_owned();
+        let echo = session.echo();
         let reader_started = session::spawn_reader(pane, mode, reader, move |event| {
+            if matches!(event, SessionEvent::Frame { .. }) {
+                echo.frame();
+            }
             let Some(shared) = reader_shared.upgrade() else {
                 return false;
             };
