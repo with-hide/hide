@@ -37,12 +37,12 @@ use hide_node_link::device::{
     HostConsent, HostIdentity, NodeReady, RemoteHostIdentity, RemoteStage, SnapshotCheck, Wake,
     WslDistribution, WslListing,
 };
-use hide_node_link::protocol::{Call, Hello, KitAction};
+use hide_node_link::protocol::{Call, Hello};
 use hide_platform::wsl::Distribution;
 use serde_json::json;
 
 use super::{
-    ChildLink, DEFAULT_CLI_DIR, HelperPackages, PaneHook, RemoteHost, TerminalHook, UnaskedStart,
+    ChildLink, HelperPackages, PaneHook, RemoteHost, TerminalHook, UnaskedStart,
     bootstrap, helper_protocol_refusal, lock_recover,
 };
 
@@ -59,11 +59,6 @@ const RUNNING_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long the account probe may take: it may be what starts the
 /// distribution, and a cold start of WSL's virtual machine takes seconds.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(60);
-/// How long the bridged Herdr has to answer before the kit is asked to
-/// start it.
-const HERDR_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
-/// How long the kit pass a connection runs before its services may take.
-const KIT_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// How this process reaches WSL: the `wsl.exe` it runs and where it reads
 /// the distributions; a test's stand-in for both on a system without WSL.
@@ -135,7 +130,6 @@ pub struct WslDevice {
     distro: String,
     access: WslAccess,
     packages: HelperPackages,
-    engine: super::DeviceEngine,
     panes: Option<PaneHook>,
     terminals: Option<TerminalHook>,
     /// The link the latest attempt started, which carries the device's
@@ -150,7 +144,6 @@ impl WslDevice {
         distro: &str,
         access: WslAccess,
         packages: HelperPackages,
-        engine: super::DeviceEngine,
         panes: Option<PaneHook>,
         terminals: Option<TerminalHook>,
     ) -> Result<Self, String> {
@@ -161,7 +154,6 @@ impl WslDevice {
             distro: distro.to_owned(),
             access,
             packages,
-            engine,
             panes,
             terminals,
             link: Arc::default(),
@@ -428,7 +420,7 @@ impl DialedTransport for WslDevice {
                     observed: Box::new(identity),
                 });
             }
-            let payload = self.packages.payload_for(&facts.os, &facts.arch, self.engine)?;
+            let payload = self.packages.payload_for(&facts.os, &facts.arch)?;
             stage("install");
             let installed =
                 bootstrap::install(&mut *pipe, &consent.helper_root, &facts.home, &payload)?;
@@ -477,62 +469,12 @@ impl DialedTransport for WslDevice {
         }
         host.take_readers(hello.protocol, readers)
             .map_err(EstablishError::Helper)?;
-        let own = self.engine == super::DeviceEngine::Holders;
-        let socket = match own {
-            false => hello
-                .herdr_socket
-                .clone()
-                .ok_or_else(|| "the WSL helper bridges no Herdr socket".to_owned()),
-            true => Err("the distribution's panes run on the core's own engine".to_owned()),
-        };
-        *lock_recover(&self.herdr_socket) = socket.clone().ok();
         *lock_recover(&self.link) = Some(host.clone());
-        // Only a Herdr that does not answer needs the kit before the
-        // services start; otherwise the core runs its pass after ready. A
-        // distribution of the core's own engine has no Herdr to ask.
-        let herdr_answers = own
-            || hide_herdr_client::request_with_connector(
-                &host.herdr_connector(),
-                "session.snapshot",
-                json!({}),
-                HERDR_CHECK_TIMEOUT,
-            )
-            .is_ok();
-        let kit = (!herdr_answers).then(|| {
-            stage("kit");
-            call_as::<hide_kit::KitReport>(
-                &host,
-                Call::Kit {
-                    action: KitAction::Apply,
-                    cli_dir: consent
-                        .cli_dir
-                        .clone()
-                        .unwrap_or_else(|| DEFAULT_CLI_DIR.to_owned()),
-                    herdr_socket: socket.clone().ok(),
-                    preserve_herdr_server: false,
-                    retirement_projects: Vec::new(),
-                },
-                KIT_TIMEOUT,
-            )
-            .map(Box::new)
-            .map_err(|error| error.to_string())
-        });
-        let terminals = if own {
-            stage("holders");
-            super::start_holders_at(&host, self.terminals.clone())
-        } else {
-            if self.panes.is_some() {
-                stage("panes");
-                super::start_panes_at(socket.clone(), &host);
-            }
-            match self.terminals.clone() {
-                None => Err("this process takes no device terminals".to_owned()),
-                Some(hook) => {
-                    stage("terminals");
-                    super::start_terminals_at(socket, &host, hook)
-                }
-            }
-        };
+        // The distribution's panes run on the core's own engine, in pane
+        // holders its node runs; the core runs its kit pass after ready.
+        let kit = None;
+        stage("holders");
+        let terminals = super::start_holders_at(&host, self.terminals.clone());
         // The link is the core's from here (see the SSH device's).
         cancel.disarm();
         if cancel.is_cancelled() {

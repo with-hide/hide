@@ -412,19 +412,17 @@ impl BuiltHolders {
             std::fs::create_dir_all(dir).unwrap();
         }
         let terminals = Holders::start_from(
-            Some((
-                HolderFolders {
-                    home: &home,
-                    state_dir: &state_dir,
-                },
-                hide_kit::holders::Source { program, conpty },
-            )),
+            HolderFolders {
+                home: &home,
+                state_dir: &state_dir,
+            },
+            hide_kit::holders::Source { program, conpty },
             Box::new(NoHerdr),
             Arc::new(Nowhere) as Arc<dyn OutputSink>,
             Arc::new(Nowhere) as Arc<dyn ReportSink>,
         )
         .expect("the node's holders open");
-        let holders = terminals.holders.expect("the holders are on");
+        let holders = terminals.holders;
         // The contract's command lines are a POSIX shell's and Windows
         // PowerShell's, whatever shell this account uses.
         let shell = if cfg!(windows) {

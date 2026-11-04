@@ -863,8 +863,7 @@ fn apply_scope(target: &KitTarget, scope: &Scope) -> KitReport {
             observed
         };
         // The entries are in place for an agent that is on: Codex is asked to
-        // trust them below, once Herdr's integration is in place too (PRD
-        // codex-hook-trust D-05, codex-herdr-hook-trust D-03).
+        // trust them below (PRD codex-hook-trust D-05).
         if id == ComponentId::CodexHook
             && failure.is_none()
             && !turning_off
@@ -890,22 +889,12 @@ fn apply_scope(target: &KitTarget, scope: &Scope) -> KitReport {
     }
     let applied = agent_kit::apply(target, scope, &mut record);
     changed |= applied.changed;
-    // Whether this pass wrote the entries or found them, Codex trusts Hide's
-    // and, when the kit installed it, Herdr's, in one check: Herdr's
-    // integration is only in place now. A failure is the Codex part's, and the
-    // other parts are already installed.
+    // Whether this pass wrote the entries or found them, Codex trusts Hide's,
+    // after the agents' pass took out a Herdr integration the kit installed.
+    // A failure is the Codex part's, and the other parts are already installed.
     if trust_codex
         && !target.stop.load(Ordering::Relaxed)
-        && let Some(codex) = agents::adapter_of_part(ComponentId::CodexHook)
-        && let Some(failure) = codex_trust::ensure(
-            target,
-            // Herdr's entries only while Herdr says its integration is in place.
-            if applied.herdr_current(codex.herdr.target) {
-                record.herdr_hook_entries(codex.id)
-            } else {
-                &[]
-            },
-        )
+        && let Some(failure) = codex_trust::ensure(target, &[])
         && let Some(part) = components
             .iter_mut()
             .find(|part| part.id == ComponentId::CodexHook)
@@ -1104,7 +1093,7 @@ pub fn remove(target: &KitTarget) -> RemoveReport {
     }
     // Before the record goes: it is what says which integrations were Hide's.
     let herdr = match record::load(&target.home) {
-        Ok(record) => agent_kit::remove_herdr(target, &record),
+        Ok(mut record) => agent_kit::remove_herdr(target, &mut record),
         Err(_) => Vec::new(),
     };
     if let Err(reason) = record::forget(&target.home) {

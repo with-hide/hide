@@ -154,18 +154,9 @@ pub(crate) fn retire(target: &KitTarget, record: &mut Record, live_reads_shared:
         if !owned {
             continue;
         }
-        if let Some(integration) = agent.herdr
-            && record.contains_piece(&herdr_code)
-        {
-            match crate::herdr_integration::uninstall(target, integration) {
-                Ok(()) => {
-                    outcome
-                        .report
-                        .removed
-                        .push(format!("{} Herdr integration", agent.label));
-                    outcome.changed |= record.forget_piece(&herdr_code);
-                }
-                Err(reason) => {
+        if agent.herdr.is_some() {
+            match crate::herdr_integration::retire(target, record, agent.id) {
+                Some(RemoveOutcome::Failed { reason }) => {
                     outcome
                         .report
                         .failures
@@ -173,6 +164,15 @@ pub(crate) fn retire(target: &KitTarget, record: &mut Record, live_reads_shared:
                     // Ownership must survive failure even though the active adapter is gone.
                     continue;
                 }
+                Some(RemoveOutcome::Removed) => {
+                    outcome
+                        .report
+                        .removed
+                        .push(format!("{} Herdr integration", agent.label));
+                    outcome.changed = true;
+                }
+                Some(_) => outcome.changed = true,
+                None => {}
             }
         }
         if let Some(hook) = agent.hook
@@ -245,19 +245,16 @@ pub(crate) fn retire(target: &KitTarget, record: &mut Record, live_reads_shared:
 }
 
 /// Full kit removal also reaches integrations no active adapter iterates.
-pub(crate) fn remove_herdr(target: &KitTarget, record: &Record) -> Vec<(String, RemoveOutcome)> {
+pub(crate) fn remove_herdr(
+    target: &KitTarget,
+    record: &mut Record,
+) -> Vec<(String, RemoveOutcome)> {
     RETIRED
         .iter()
+        .filter(|agent| agent.herdr.is_some())
         .filter_map(|agent| {
-            let integration = agent.herdr?;
-            let code = format!("herdr:{}", agent.id);
-            record.contains_piece(&code).then(|| {
-                let outcome = match crate::herdr_integration::uninstall(target, integration) {
-                    Ok(()) => RemoveOutcome::Removed,
-                    Err(reason) => RemoveOutcome::Failed { reason },
-                };
-                (code, outcome)
-            })
+            crate::herdr_integration::retire(target, record, agent.id)
+                .map(|outcome| (crate::herdr_integration::code(agent.id), outcome))
         })
         .collect()
 }

@@ -1792,7 +1792,7 @@ async fn scoped_client_loop(
                             Ok(Err(((*reason).to_owned(), *next_action)))
                         } else {
                             tokio::task::spawn_blocking(move || {
-                            let cap = registry.validate(&query_token, core.engine(), &core, attested.as_deref())
+                            let cap = registry.validate(&query_token, Some(core.engine()), &core, attested.as_deref())
                                 .map_err(|reason| (reason.to_owned(), crate::pane_auth::refusal_next_action(reason)))?;
                             if command.needs_renderer() && renderers.load(Ordering::SeqCst) == 0 {
                                 return Err((
@@ -4723,12 +4723,10 @@ pub fn mount(seat: &crate::seat::SeatParts, state: AppState) -> tokio::task::Joi
             // The core's own engine is this process's, so it answers while
             // the daemon runs and keeps nothing alive; its panes do (PRD
             // engine-bundle-3-core-owns D-10).
-            herdr: state
-                .core
-                .engine()
-                .filter(|engine| engine.own_scope().is_none())
-                .cloned(),
-            panes: state.core.pane_holders().cloned(),
+            live_panes: {
+                let holders = Arc::clone(state.core.pane_holders());
+                Arc::new(move || holders.live_panes())
+            },
         },
         // Mobile on with a phone paired: the phone may come back at any
         // time and push has to keep going (PRD D-10). The idle clock starts
@@ -4746,16 +4744,15 @@ pub(crate) struct Idle {
     pub clients: Arc<AtomicUsize>,
     pub last_client_gone: Arc<Mutex<Instant>>,
     pub shutdown: crate::ending::Ending,
-    /// This machine's engine; `None` when the daemon runs without one.
-    pub herdr: Option<herdr_core::engine::EngineHandle>,
-    /// The pane holders of the core's own engine, whose panes keep the
-    /// daemon alive while one may still run; `None` for Herdr.
-    pub panes: Option<Arc<hide_node::terminal::holder::Holders>>,
+    /// How many of this machine's holder panes may still run
+    /// (`hide_kit::panes::Panes::live`): they keep the daemon alive while
+    /// one may.
+    pub live_panes: Arc<dyn Fn() -> Result<usize, String> + Send + Sync>,
 }
 
 /// Ends the daemon once it had no screen for `idle_secs` while `held` was
-/// false, its Herdr server could not be reached and no pane of the core's
-/// own engine could still run; never with `keep_alive`. Aborted by its
+/// false and no pane of this machine's holders could still run; never with
+/// `keep_alive`. Aborted by its
 /// owner when the daemon stops another way.
 pub(crate) fn watch_idle(
     idle: Idle,
@@ -4765,8 +4762,6 @@ pub(crate) fn watch_idle(
         if idle.keep_alive {
             return;
         }
-        let mut herdr_probed: Option<Instant> = None;
-        let mut herdr_up = false;
         let mut panes_probed: Option<Instant> = None;
         let mut panes_live = false;
         loop {
@@ -4778,36 +4773,20 @@ pub(crate) fn watch_idle(
                 *idle.last_client_gone.lock().expect("client timestamp") = Instant::now();
                 continue;
             }
-            // The daemon lives as long as its Herdr server: labels keep
-            // being made with no window open (PRD labels-in-hided D-18), and
-            // a screen machine's agents keep reaching their core through its
-            // node (PRD core-host-node-remote-core D-08). The idle clock runs
-            // only while the server is unreachable, so a restart or a live
-            // handoff, which brings it back within the idle window, never
-            // ends the daemon.
-            if let Some(engine) = idle.herdr.clone()
-                && herdr_probed.is_none_or(|at| at.elapsed() >= HERDR_PROBE_INTERVAL)
-            {
-                herdr_probed = Some(Instant::now());
-                herdr_up = tokio::task::spawn_blocking(move || herdr_reachable(&engine))
-                    .await
-                    .unwrap_or(false);
-            }
             // The core's own engine's panes run in holders that outlive the
             // daemon, and the daemon is what keeps their letters and states
             // going, so it lives while one may still run. A record that
             // cannot be read is counted as running (`Panes::live`), and a
             // failed count keeps the daemon: ending it would leave panes
             // with no core.
-            if let Some(panes) = idle.panes.clone()
-                && panes_probed.is_none_or(|at| at.elapsed() >= PANES_PROBE_INTERVAL)
-            {
+            if panes_probed.is_none_or(|at| at.elapsed() >= PANES_PROBE_INTERVAL) {
                 panes_probed = Some(Instant::now());
-                panes_live = tokio::task::spawn_blocking(move || panes_running(&panes))
+                let live = Arc::clone(&idle.live_panes);
+                panes_live = tokio::task::spawn_blocking(move || panes_running(&*live))
                     .await
                     .unwrap_or(true);
             }
-            if herdr_up || panes_live {
+            if panes_live {
                 *idle.last_client_gone.lock().expect("client timestamp") = Instant::now();
                 continue;
             }
@@ -4820,16 +4799,12 @@ pub(crate) fn watch_idle(
     })
 }
 
-/// How often an idle daemon asks whether its Herdr server is still there.
-const HERDR_PROBE_INTERVAL: Duration = Duration::from_secs(30);
-const HERDR_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
-
-/// How often an idle daemon of the core's own engine counts its panes.
+/// How often an idle daemon counts its holder panes.
 const PANES_PROBE_INTERVAL: Duration = Duration::from_secs(5);
 
-/// Whether a pane of the core's own engine may still run.
-fn panes_running(panes: &hide_node::terminal::holder::Holders) -> bool {
-    match panes.live_panes() {
+/// Whether a holder pane of this machine may still run.
+fn panes_running(live: &(dyn Fn() -> Result<usize, String> + Send + Sync)) -> bool {
+    match live() {
         Ok(count) => count > 0,
         Err(message) => {
             eprintln!(
@@ -4842,14 +4817,6 @@ fn panes_running(panes: &hide_node::terminal::holder::Holders) -> bool {
             );
             true
         }
-    }
-}
-
-/// Whether the engine answers; a refusal is an answer.
-pub(crate) fn herdr_reachable(engine: &herdr_core::engine::EngineHandle) -> bool {
-    match engine.ping(HERDR_PROBE_TIMEOUT) {
-        Ok(_) => true,
-        Err(error) => error.answered(),
     }
 }
 
@@ -4889,6 +4856,45 @@ pub fn allowed_origins(port: u16, vite: Option<&str>) -> HashSet<String> {
 
 #[cfg(test)]
 mod tests {
+    /// A daemon with no screen and `live` holder panes, ending after one
+    /// idle second.
+    fn idle(live: Result<usize, String>) -> crate::ending::Ending {
+        let shutdown = crate::ending::Ending::new();
+        super::watch_idle(
+            super::Idle {
+                idle_secs: 1,
+                keep_alive: false,
+                clients: Arc::new(AtomicUsize::new(0)),
+                last_client_gone: Arc::new(Mutex::new(Instant::now())),
+                shutdown: shutdown.clone(),
+                live_panes: Arc::new(move || live.clone()),
+            },
+            || false,
+        );
+        shutdown
+    }
+
+    #[tokio::test]
+    async fn a_daemon_outlives_the_idle_window_while_a_holder_pane_may_run() {
+        let running = idle(Ok(1));
+        let uncounted = idle(Err("the engine folder was unreadable".to_owned()));
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        assert!(!running.has_ended());
+        assert!(!uncounted.has_ended(), "a count that failed keeps it alive");
+    }
+
+    #[tokio::test]
+    async fn a_daemon_with_no_screen_and_no_pane_ends_after_the_idle_window() {
+        let ended = idle(Ok(0));
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !ended.has_ended() {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("the daemon ends");
+    }
+
     #[test]
     fn a_screens_feedback_keeps_its_order_and_holds_at_most_four_screenshots() {
         let (queue, mut jobs) = super::FeedbackQueue::new();

@@ -3,12 +3,8 @@
 //! through the terminal service beside the node's Herdr sessions, and, when
 //! the node starts, finding again the holders that ran on while it was gone.
 //!
-//! Nothing here runs unless the development switch [`SWITCH`] is on: with it
-//! off a node opens Herdr sessions only, as it always has, and starts,
-//! adopts and reads no holder (B1). With it on, [`Holders`] owns the state
-//! folder's pane records (`hide_kit::panes`) and [`PaneAttacher`] opens a
-//! pane it knows by them over its holder's socket and every other pane over
-//! Herdr. A holder pane's screen reaches the [`super::OutputSink`] as the
+//! [`Holders`] owns the state folder's pane records (`hide_kit::panes`) and
+//! [`PaneAttacher`] opens a pane it knows by them over its holder's socket. A holder pane's screen reaches the [`super::OutputSink`] as the
 //! fragments the holder draws, each delivered as the frame a Herdr session
 //! delivers, and its input goes out as the bytes, resizes and wheels a Herdr
 //! session takes; a holder encodes those for its program's own settings.
@@ -18,14 +14,11 @@
 //! `taken_over`, which is never tried again on its own (B9). A holder that
 //! speaks a version older than [`OLDEST_HOLDER_VERSION`] is reported
 //! `unsupported_holder_version` and left running (B10). A device's node
-//! runs holders only when the core that dialed it asks
-//! (`Call::HoldersStart`, PRD engine-bundle-3-core-owns D-22), never by its
-//! own environment's switch ([`device_switch`]); a Windows device's node
-//! runs inside the job its SSH session made, which a holder leaves through
-//! `start_resident`.
+//! runs holders when its core asks (`Call::HoldersStart`, PRD
+//! engine-bundle-3-core-owns D-22); a Windows device's node runs inside the
+//! job its SSH session made, which a holder leaves through `start_resident`.
 
 use std::collections::BTreeMap;
-use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
@@ -62,64 +55,6 @@ mod watch;
 
 use watch::Watches;
 pub(super) use watch::too_old;
-
-/// The development switch that lets a node run pane holders.
-///
-/// - Requirement: optional; it is read once, when a node's terminal service
-///   starts.
-/// - Shape: unset, `0` (off) or `1` (on). Any other value fails the node's
-///   start with the values it takes, rather than being read as off.
-/// - Fallback: off.
-/// - When it is missing: the node opens every pane through its Herdr's
-///   terminal sessions and starts, adopts and reads no pane holder; the app
-///   and the daemon behave as they always have. Nobody but a developer of
-///   the next engine sets it: the app shows no holder pane in this bundle.
-/// - Removal: deleted in bundle 4, the switch release, once the new engine
-///   is the default (docs/ARCHITECTURE.md, The pane holder).
-pub const SWITCH: &str = "HIDE_DEV_PANE_HOLDER";
-
-/// Whether [`SWITCH`] is on.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Switch {
-    Off,
-    On,
-}
-
-impl Switch {
-    /// The switch as this process's environment sets it.
-    pub fn from_env() -> Result<Self, String> {
-        Self::parse(std::env::var_os(SWITCH).as_deref())
-    }
-
-    /// The switch a value of [`SWITCH`] sets.
-    pub fn parse(value: Option<&OsStr>) -> Result<Self, String> {
-        match value.map(|value| value.to_str()) {
-            None => Ok(Self::Off),
-            Some(Some("0")) => Ok(Self::Off),
-            Some(Some("1")) => Ok(Self::On),
-            Some(value) => Err(format!(
-                "{SWITCH} is {}; it takes 1 (run pane holders) or 0 (do not), or is left unset",
-                value.map_or_else(|| "not text".to_owned(), |value| format!("{value:?}"))
-            )),
-        }
-    }
-}
-
-/// A device's node whose core runs its panes on Herdr opens them through
-/// Herdr whatever its own environment's switch says: the core that dialed
-/// it chooses its engine (`Call::HoldersStart`), so with the switch on here
-/// it says so in the diagnostic log. A value the switch does not take fails
-/// the device's terminal start, as it fails the local daemon's.
-pub fn device_switch() -> Result<(), String> {
-    if Switch::from_env()? == Switch::On {
-        crate::diagnostic!(json!({
-            "component": "pane_holder",
-            "kind": "pane_holder.device_node_unsupported",
-            "message": "a device's node runs pane holders only when its core asks; its panes open through Herdr",
-        }));
-    }
-    Ok(())
-}
 
 /// How long opening a holder's connection may take: its connect and its
 /// hello's answer, a screen's or a watch's (`watch.rs`).
@@ -593,7 +528,7 @@ pub struct Recovered {
     pub complete: bool,
 }
 
-/// A state folder's holder panes, as a node with [`SWITCH`] on runs them.
+/// A state folder's holder panes, as a node runs them.
 pub struct Holders {
     panes: Panes,
     source: Source,
@@ -609,16 +544,15 @@ pub struct Holders {
     recovery: (Mutex<Option<HolderRecovery>>, Condvar),
 }
 
-/// What [`Holders::start_local`] starts: the node's terminal service, and its
-/// holder panes when the switch is on.
+/// What [`Holders::start_local`] starts: the node's terminal service and its
+/// holder panes.
 pub struct LocalTerminals {
     pub service: Arc<Service>,
-    pub holders: Option<Arc<Holders>>,
+    pub holders: Arc<Holders>,
 }
 
 /// Where a node's holder panes live: the home whose version folders the
 /// holders are copied into, and the state folder that keeps their records.
-/// Only a node with the switch on has them.
 #[derive(Clone, Copy, Debug)]
 pub struct HolderFolders<'a> {
     pub home: &'a Path,
@@ -676,50 +610,40 @@ impl Holders {
         })
     }
 
-    /// The local node's terminal service as a daemon starts it: given
-    /// `holders` (the switch on), their state folder's holder panes beside
-    /// `herdr`'s sessions, the holder from [`Holders::local_source`], and
-    /// the holders that ran on while no node was there found again, and the
-    /// version folders nothing runs from removed when its connection has
-    /// acquired pane ownership; given none (the switch off),
-    /// `herdr`'s sessions alone and nothing of holders opened, read or
-    /// removed. hided and the tools that measure a node
-    /// (`hide-node/examples/holder_node.rs`) start it here, so what they
-    /// measure is how the daemon is built.
+    /// The local node's terminal service as a daemon starts it: the state
+    /// folder's holder panes beside `herdr`'s sessions, the holder from
+    /// [`Holders::local_source`], and the holders that ran on while no node
+    /// was there found again, and the version folders nothing runs from
+    /// removed when its connection has acquired pane ownership. hided and
+    /// the tools that measure a node (`hide-node/examples/holder_node.rs`)
+    /// start it here, so what they measure is how the daemon is built.
     pub fn start_local(
-        holders: Option<HolderFolders<'_>>,
+        folders: HolderFolders<'_>,
         herdr: Box<dyn Attacher>,
         outputs: Arc<dyn super::OutputSink>,
         reports: Arc<dyn ReportSink>,
     ) -> Result<LocalTerminals, String> {
-        let holders = match holders {
-            None => None,
-            Some(folders) => Some((folders, Self::local_source()?)),
-        };
-        Self::start_from(holders, herdr, outputs, reports)
+        Self::start_from(folders, Self::local_source()?, herdr, outputs, reports)
     }
 
     /// [`Holders::start_local`] with the holder program `source` names, for
     /// a test that starts a node as the daemon does with the holder it built.
     pub fn start_from(
-        holders: Option<(HolderFolders<'_>, Source)>,
+        folders: HolderFolders<'_>,
+        source: Source,
         herdr: Box<dyn Attacher>,
         outputs: Arc<dyn super::OutputSink>,
         reports: Arc<dyn ReportSink>,
     ) -> Result<LocalTerminals, String> {
-        let holders = match holders {
-            None => None,
-            Some((folders, source)) => {
-                Some(Arc::new(Self::open(folders, source, Arc::clone(&reports))?))
-            }
-        };
-        let attacher = match &holders {
-            Some(holders) => holders.attacher(herdr),
-            None => herdr,
-        };
+        let holders = Arc::new(Self::open(folders, source, Arc::clone(&reports))?);
         let service = Arc::new(
-            Service::start(attacher, outputs, reports, super::RetryPolicy::Automatic)
-                .map_err(|error| format!("terminal service failed to start: {error}"))?,
+            Service::start(
+                holders.attacher(herdr),
+                outputs,
+                reports,
+                super::RetryPolicy::Automatic,
+            )
+            .map_err(|error| format!("terminal service failed to start: {error}"))?,
         );
         Ok(LocalTerminals { service, holders })
     }
@@ -1420,20 +1344,6 @@ mod tests {
             (None, false),
         ] {
             assert_eq!(finished(reason), closes, "{reason:?}");
-        }
-    }
-
-    #[test]
-    fn the_switch_is_off_unless_set_to_one_and_refuses_other_values_naming_what_it_takes() {
-        assert_eq!(Switch::parse(None), Ok(Switch::Off));
-        assert_eq!(Switch::parse(Some(OsStr::new("0"))), Ok(Switch::Off));
-        assert_eq!(Switch::parse(Some(OsStr::new("1"))), Ok(Switch::On));
-        for value in ["", "true", "yes", " 1", "2"] {
-            let refused = Switch::parse(Some(OsStr::new(value))).unwrap_err();
-            assert!(
-                refused.contains(SWITCH) && refused.contains("1 (run pane holders) or 0"),
-                "{refused}"
-            );
         }
     }
 

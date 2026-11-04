@@ -799,7 +799,7 @@ fn hooks_object<'a>(
     }
 }
 
-fn hooks_object_mut<'a>(
+pub(crate) fn hooks_object_mut<'a>(
     document: &'a mut Value,
     path: &Path,
 ) -> Result<&'a mut Map<String, Value>, InstallFailure> {

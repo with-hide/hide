@@ -45,10 +45,9 @@ import {
 import type { DesktopEnv } from "./env";
 import { readJsonFile, writeJsonFile } from "./jsonFile";
 import type { HostLanguage } from "./language";
-import { chooseHerdr, ensureServer, parseServerStatus, restartServer, serverEnvironment, type HerdrChoice } from "./herdr";
 import { loadFailureFields, type HostLog } from "./log";
 import { redact } from "../../../web/src/redact";
-import { ChildRunner, executableFile, startDetached, type ChildResult } from "./spawn";
+import { ChildRunner, executableFile, type ChildResult } from "./spawn";
 import { fallbackScreen, fallbackScript, statusPageFile } from "./statusPage";
 import { MIN_SIZE, readWindowState, restoreBounds, windowStatePath, writeWindowState } from "./windowState";
 import { openRoute, probe, probeRequest } from "./localPath";
@@ -80,9 +79,6 @@ const HEALTH_INTERVAL_MS = 2_000;
 const HEALTH_TIMEOUT_MS = 1_500;
 const LOST_AFTER_MISSES = 2;
 const LOST_POLL_MS = 3_000;
-/** A started Herdr answered within 0.1 s in a 2026-09-29 run; restoring many panes can take longer. */
-const HERDR_START_WAIT_MS = 5_000;
-const HERDR_START_POLL_MS = 200;
 const STATUS_PAGE = statusPageFile(__dirname);
 const CLIPBOARD_PERMISSIONS = new Set(["clipboard-read", "clipboard-sanitized-write"]);
 const EXTERNAL_PROTOCOLS = new Set(["http:", "https:", "mailto:"]);
@@ -691,42 +687,10 @@ export class DesktopHost {
     });
   }
 
+  /** This app bundles no Herdr to restart onto (PRD engine-bundle-4-herdr-removal D-2), so every ask answers unavailable. */
   private async restartHerdr(): Promise<HerdrRestart> {
-    const herdr = this.herdr();
-    if (herdr.source !== "bundled" || herdr.path === null) {
-      this.log.event("herdr.restart_unavailable", { source: herdr.source });
-      return "unavailable";
-    }
-    const bin = herdr.path;
-    const env = serverEnvironment(this.childEnvironment());
-    const attempt = this.attempts;
-    const result = await restartServer({
-      stop: async () => {
-        const stopped = await this.runChild(bin, ["server", "stop"], STATUS_TIMEOUT_MS, env);
-        if (stopped.spawnError) return { failed: `herdr could not start: ${stopped.spawnError}` };
-        if (stopped.timedOut) return { failed: "herdr server stop timed out" };
-        return stopped.code === 0 ? { ok: true } : { failed: `herdr server stop exited ${stopped.code ?? stopped.signal ?? "without a code"}` };
-      },
-      status: (timeoutMs) => this.runChild(bin, ["status", "server", "--json"], timeoutMs, env).then(parseServerStatus),
-      start: () => startDetached(bin, ["server"], env),
-      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-      now: Date.now,
-      stopped: () => this.quitting,
-      statusTimeoutMs: STATUS_TIMEOUT_MS,
-      waitMs: HERDR_START_WAIT_MS,
-      pollMs: HERDR_START_POLL_MS,
-    });
-    if (result.outcome === "restarted") {
-      this.log.event("herdr.server_restarted", { attempt, pid: result.pid, elapsed_ms: result.elapsedMs });
-      return "restarted";
-    }
-    if (result.outcome === "stop_failed") {
-      this.log.event("herdr.server_stop_failed", { attempt, detail: result.detail });
-      return "stop_failed";
-    }
-    this.log.event("herdr.server_restart_failed", { attempt, outcome: result.outcome, detail: result.detail });
-    this.fail(attempt, "start_failed", `herdr restart: ${result.detail}`);
-    return "failed";
+    this.log.event("herdr.restart_unavailable", { source: "none" });
+    return "unavailable";
   }
 
   /**
@@ -932,12 +896,9 @@ export class DesktopHost {
     const runtime = await this.prepareRuntime(attempt);
     if (runtime !== null) return this.fail(attempt, "start_failed", `runtime: ${runtime}`);
     if (this.quitting) return;
-    const herdr = this.herdr();
-    this.log.event("discovery.start", { attempt, trigger, herdr: herdr.source, replaced_pane_herdr: herdr.replacedPaneValue ?? undefined });
+    this.log.event("discovery.start", { attempt, trigger });
     const cli = await this.findCli(attempt);
     if (!cli) return this.fail(attempt, "cli_missing", "no executable hide CLI");
-    await this.ensureHerdrServer(attempt);
-    if (this.quitting) return;
     const connected = await this.runCli(cli.path, ["connect"], CONNECT_TIMEOUT_MS);
     for (const record of cliRecords(connected.stderr)) this.log.event(record.event, { attempt, ...record.fields });
     const answer = parseConnect(connected);
@@ -1037,13 +998,7 @@ export class DesktopHost {
     return null;
   }
 
-  /** The Herdr a daemon started from here attaches pane terminals with; `herdr.ts` owns the rule. */
-  private herdr(): HerdrChoice {
-    return chooseHerdr({ bundledDir: this.bundledDir(), herdrBinPath: this.env.herdrBinPath, herdrPaneId: this.env.herdrPaneId });
-  }
-
   private childEnvironment(): Record<string, string | undefined> {
-    const herdr = this.herdr().path;
     // Finder supplies only launchd's system PATH. The CLI and any daemon it
     // starts need the same install folders we search for `hide`.
     const inherited = this.env.path ? this.env.path.split(path.delimiter) : systemDirs(this.env).dirs;
@@ -1051,39 +1006,7 @@ export class DesktopHost {
     // Windows names variables without regard to case, so the inherited `Path`
     // goes and this PATH is the child's only one.
     const passed = Object.entries(this.env.inherited).filter(([key]) => process.platform !== "win32" || key.toUpperCase() !== "PATH");
-    return { ...Object.fromEntries(passed), PATH: searchPath, ...(herdr ? { HERDR_BIN_PATH: herdr } : {}) };
-  }
-
-  /**
-   * Starts the Herdr this app bundles when no server answers on the socket
-   * its children would use, as `herdr` does when a terminal runs it: after a
-   * reboot nothing else starts one, and hided only reads a missing server as
-   * absent. A server that answers is never touched, and neither an unpackaged
-   * host nor an explicit HERDR_BIN_PATH override starts anything, so a
-   * development or e2e run keeps the server it made. A daemon on the core's
-   * own engine (HIDE_DEV_PANE_HOLDER=1) runs no Herdr, so none is started for
-   * it. Every failure goes to the log and the connect goes ahead, where the
-   * shell shows Herdr unreachable.
-   */
-  private async ensureHerdrServer(attempt: number): Promise<void> {
-    if (this.env.ownEngine) return;
-    const herdr = this.herdr();
-    if (herdr.source !== "bundled" || herdr.path === null) return;
-    const bin = herdr.path;
-    const env = serverEnvironment(this.childEnvironment());
-    const result = await ensureServer({
-      status: (timeoutMs) => this.runChild(bin, ["status", "server", "--json"], timeoutMs, env).then(parseServerStatus),
-      start: () => startDetached(bin, ["server"], env),
-      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-      now: Date.now,
-      stopped: () => this.quitting,
-      statusTimeoutMs: STATUS_TIMEOUT_MS,
-      waitMs: HERDR_START_WAIT_MS,
-      pollMs: HERDR_START_POLL_MS,
-    });
-    if (result.outcome === "status_failed") this.log.event("herdr.status_failed", { attempt, detail: result.detail });
-    else if (result.outcome === "started") this.log.event("herdr.server_started", { attempt, pid: result.pid, elapsed_ms: result.elapsedMs });
-    else if (result.outcome === "start_failed") this.log.event("herdr.server_start_failed", { attempt, pid: result.pid, detail: result.detail, elapsed_ms: result.elapsedMs });
+    return { ...Object.fromEntries(passed), PATH: searchPath };
   }
 
   private runChild(file: string, args: readonly string[], timeoutMs: number, env: Record<string, string | undefined>): Promise<ChildResult> {

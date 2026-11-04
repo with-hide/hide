@@ -1995,14 +1995,6 @@ fn find_or_start(env: &Env) -> Result<Healthy, ConnectError> {
         .ok()
         .as_deref()
         .and_then(hide_kit::bundled_kit_dir);
-    // Before the daemon, so a daemon this connect starts or keeps finds the
-    // server it will follow already running this app's Herdr.
-    if let Some(herdr) = package.as_deref().and_then(|kit| given_herdr(env, kit))
-        && let Some(socket) = &env.herdr_socket_path
-        && let Some(record) = crate::herdr_handoff::hand_off(&herdr, Path::new(socket)).record()
-    {
-        eprintln!("{record}");
-    }
     if let Some((state, health)) = healthy_daemon(env) {
         let running = health.get("build").and_then(serde_json::Value::as_str);
         if running == Some(build.as_str()) {
@@ -2047,12 +2039,6 @@ fn find_or_start(env: &Env) -> Result<Healthy, ConnectError> {
     // The daemon outlives this command; nothing waits for it.
     std::mem::forget(daemon);
     started
-}
-
-/// The Herdr the app in `kit` ships, when it is the one this connect was
-/// given (`HERDR_BIN_PATH`).
-fn given_herdr(env: &Env, kit: &Path) -> Option<std::path::PathBuf> {
-    crate::herdr_handoff::shipped_herdr(kit, env.herdr_bin_path.as_deref())
 }
 
 /// How long an updated core has to answer `/health` once its update said
@@ -2545,9 +2531,6 @@ fn import_herdr(env: &Env, yes: bool) -> Result<(), String> {
 
 /// The lines `hide import herdr` prints for the daemon's `result`.
 fn import_herdr_lines(result: &serde_json::Value, yes: bool) -> Vec<String> {
-    if result["own_engine"] == false {
-        return vec!["Hide runs on Herdr here, so there is no Herdr session to move: this command moves one into Hide's own engine (HIDE_DEV_PANE_HOLDER=1).".to_owned()];
-    }
     let offered = &result["offered"];
     let count = |field: &str| offered[field].as_u64().unwrap_or(0);
     let mut lines = Vec::new();
@@ -2817,22 +2800,10 @@ fn daemon_binary() -> Result<std::path::PathBuf, String> {
 }
 
 fn spawn_daemon(env: &Env, keep_alive: bool) -> Result<std::process::Child, String> {
-    // The daemon would refuse the same value after it is spawned; checking
-    // here answers `start_failed` with the path instead of a ten-second
-    // `no_response` that names nothing.
-    if let Some(error) = env::herdr_bin_error(env) {
-        return Err(error);
-    }
     let mut command = Command::new(daemon_binary()?);
     command.env("HIDE_STATE_DIR", &env.state_dir);
     if keep_alive {
         command.env("HIDE_KEEP_ALIVE", "1");
-    }
-    if let Some(socket) = &env.herdr_socket_path {
-        command.env("HERDR_SOCKET_PATH", socket);
-    }
-    if let Some(bin) = &env.herdr_bin_path {
-        command.env("HERDR_BIN_PATH", bin);
     }
     if let Some(origin) = &env.vite_origin {
         command.env("HIDE_VITE_ORIGIN", origin);
@@ -3127,7 +3098,6 @@ mod tests {
             pid: 1,
             port,
             token: "t".to_owned(),
-            socket: None,
             started_at: String::new(),
             pid_started: None,
         };
@@ -3169,7 +3139,6 @@ mod tests {
             pid,
             port: 7001,
             token: "abc".into(),
-            socket: None,
             started_at: "now".into(),
             pid_started,
         }
@@ -3467,12 +3436,6 @@ mod tests {
             import_herdr_lines(&serde_json::json!({"offered": null, "asked": false}), false),
             ["This machine has no Herdr session left to move into Hide."]
         );
-        assert_eq!(
-            import_herdr_lines(&serde_json::json!({"own_engine": false}), false),
-            [
-                "Hide runs on Herdr here, so there is no Herdr session to move: this command moves one into Hide's own engine (HIDE_DEV_PANE_HOLDER=1)."
-            ]
-        );
     }
 
     #[test]
@@ -3743,7 +3706,6 @@ mod tests {
             pid: 42,
             port: 7001,
             token: "abc".into(),
-            socket: None,
             started_at: "now".into(),
             pid_started: None,
         };

@@ -57,7 +57,6 @@ fn record(fixture: &Fixture) -> String {
 }
 
 fn cursor_as_an_earlier_build_left_it(fixture: &Fixture) {
-    fixture.operator_installed("cursor", "current");
     write(
         &fixture.home().join(".cursor/hooks.json"),
         r#"{"version":1,"hooks":{"sessionStart":[{"command":"/opt/other/start.sh"},{"command":"/kit/hide-agent-hooks hook --runtime cursor --event SessionStart --source hide-guidance@7"}],"preToolUse":[{"command":"/kit/hide-agent-hooks hook --runtime cursor --event PreToolUse --source hide-guidance@7"}]}}"#,
@@ -80,38 +79,12 @@ fn cursor_retirement_removes_owned_integrations_and_preserves_operator_hooks() {
     let report = apply(&fixture.target, &Scope::automatic());
     assert!(report.agents.iter().all(|agent| agent.id != "cursor"));
     assert!(report.legacy_retirement.failures.is_empty(), "{report:?}");
-    assert_eq!(fixture.integration("cursor"), "none");
     let hooks = std::fs::read_to_string(fixture.home().join(".cursor/hooks.json")).unwrap();
     assert!(hooks.contains("/opt/other/start.sh"));
     assert!(!hooks.contains("hide-guidance"));
     assert!(!record(&fixture).contains("cursor"));
-    let before = fixture.integration_changes();
     let next = apply(&fixture.target, &Scope::automatic());
     assert!(next.legacy_retirement.is_empty(), "{next:?}");
-    assert_eq!(fixture.integration_changes(), before);
-}
-
-#[test]
-fn failed_cursor_uninstall_keeps_ownership_until_a_later_pass_succeeds() {
-    let fixture = Fixture::new();
-    cursor_as_an_earlier_build_left_it(&fixture);
-    write(&fixture.home().join("herdr-uninstall-fails"), "fail");
-    let report = apply(&fixture.target, &Scope::automatic());
-    assert!(
-        report
-            .legacy_retirement
-            .failures
-            .iter()
-            .any(|reason| reason.starts_with("Cursor Herdr integration:")),
-        "{report:?}"
-    );
-    assert!(record(&fixture).contains("herdr:cursor"));
-    assert_eq!(fixture.integration("cursor"), "current");
-    std::fs::remove_file(fixture.home().join("herdr-uninstall-fails")).unwrap();
-    let retry = apply(&fixture.target, &Scope::automatic());
-    assert!(retry.legacy_retirement.failures.is_empty(), "{retry:?}");
-    assert_eq!(fixture.integration("cursor"), "none");
-    assert!(!record(&fixture).contains("cursor"));
 }
 
 #[test]
@@ -129,21 +102,6 @@ fn cursor_retirement_keeps_the_shared_skill_for_a_live_reader() {
             .is_file()
     );
     assert!(record(&fixture).contains("skill:agents"));
-}
-
-#[test]
-fn unrecorded_cursor_integration_is_the_operators_and_stays() {
-    let fixture = Fixture::new();
-    fixture.operator_installed("cursor", "current");
-    let report = apply(&fixture.target, &Scope::agents(["cursor"], []));
-    assert!(report.agents.iter().all(|agent| agent.id != "cursor"));
-    assert_eq!(fixture.integration("cursor"), "current");
-    assert!(
-        fixture
-            .integration_changes()
-            .iter()
-            .all(|call| !call.ends_with(" cursor"))
-    );
 }
 
 #[test]

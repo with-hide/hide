@@ -1762,9 +1762,7 @@ impl Mobile {
     /// The engine that runs a pane on this Mac or a connected device.
     pub fn engine(&self, device_id: &str) -> Result<EngineHandle, pane::PaneError> {
         if self.node() == device_id {
-            return self.config.core.engine().cloned().ok_or_else(|| {
-                pane::PaneError::Unavailable("this Mac has no Herdr socket".to_owned())
-            });
+            return Ok(self.config.core.engine().clone());
         }
         match self.config.core.device_engine(device_id) {
             Ok(Some(engine)) => Ok(engine),

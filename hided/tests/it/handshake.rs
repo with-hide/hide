@@ -15,11 +15,6 @@ fn test_env(keep_alive: bool) -> (tempfile::TempDir, Env) {
     let dir = tempfile::tempdir().unwrap();
     let env = Env {
         home: dir.path().to_path_buf(),
-        herdr_socket_path: None,
-        herdr_move_socket: None,
-        herdr_bin_path: None,
-        own_engine: false,
-        login_shell: None,
         state_dir: dir.path().to_path_buf(),
         legacy_state_dir: None,
         account_state_folder: false,
@@ -137,10 +132,8 @@ fn a_hook_status_report_with_no_daemon_answers_unavailable_as_json() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_hide"))
         .args(["workspace", "status", "--hook"])
         .env_remove(hided::env::HIDE_CAP_REF)
-        .env_remove(hided::env::HERDR_SOCKET_PATH)
-        .env_remove(hided::env::HERDR_BIN_PATH)
         .env(hided::env::HIDE_STATE_DIR, state.path())
-        .env(hided::env::HERDR_PANE_ID, "w1:p1")
+        .env(hided::env::HIDE_PANE_ID, "w1:p1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -1829,94 +1822,6 @@ async fn a_drop_names_only_uploads_hided_staged_and_shapes_it_can_forward() {
         );
     }
     running.stop();
-}
-
-/// A Herdr server that answers every request on `socket`, refusing all but
-/// `ping`; the daemon's session sync gets nothing it can use and keeps
-/// retrying, which is all this needs. It answers until dropped.
-struct AnsweringHerdr {
-    closer: hide_platform::ipc::ListenerCloser,
-}
-
-impl Drop for AnsweringHerdr {
-    fn drop(&mut self) {
-        self.closer.close();
-    }
-}
-
-fn answering_herdr(socket: &std::path::Path) -> AnsweringHerdr {
-    use std::io::{BufRead, Write};
-    let listener = hide_platform::ipc::LocalListener::bind(socket).unwrap();
-    let closer = listener.closer();
-    std::thread::spawn(move || {
-        while let Ok(mut stream) = listener.accept() {
-            std::thread::spawn(move || {
-                let mut line = String::new();
-                if std::io::BufReader::new(&mut stream)
-                    .read_line(&mut line)
-                    .is_err()
-                {
-                    return;
-                }
-                let Ok(request) = serde_json::from_str::<Value>(&line) else {
-                    return;
-                };
-                let response = if request["method"] == "ping" {
-                    json!({"id": request["id"], "result": {"type": "pong"}})
-                } else {
-                    json!({"id": request["id"], "error": {"code": "unavailable", "message": "fake"}})
-                };
-                let _ = writeln!(stream, "{response}");
-            });
-        }
-    });
-    AnsweringHerdr { closer }
-}
-
-#[tokio::test]
-async fn the_daemon_outlives_the_idle_window_while_its_herdr_answers() {
-    let (dir, mut env) = test_env(false);
-    env.idle_secs = 1;
-    // A Unix socket path has a hard length limit; a tempdir may be too deep.
-    let base = if cfg!(unix) {
-        std::path::PathBuf::from("/tmp")
-    } else {
-        std::env::temp_dir()
-    };
-    let herdr_dir = base.join(format!("hided-idle-{}", std::process::id()));
-    std::fs::create_dir_all(&herdr_dir).unwrap();
-    let socket = herdr_dir.join("herdr.sock");
-    let herdr = answering_herdr(&socket);
-    env.herdr_socket_path = Some(socket.display().to_string());
-    let running = std::sync::Arc::new(hided::start_daemon(env).await.expect("start daemon"));
-    let announced = tokio::spawn({
-        let running = std::sync::Arc::clone(&running);
-        async move { hided::wait_shutdown(&running).await }
-    });
-    // No client ever connects; three idle windows pass.
-    tokio::time::sleep(Duration::from_secs(3)).await;
-    assert!(
-        !announced.is_finished(),
-        "a daemon whose Herdr answers keeps making labels with no window open"
-    );
-    assert!(state_file::state_path(dir.path()).exists());
-    drop(herdr);
-    let _ = std::fs::remove_dir_all(&herdr_dir);
-    announced.abort();
-}
-
-#[tokio::test]
-async fn the_daemon_exits_after_the_idle_window_when_its_herdr_is_gone() {
-    let (dir, mut env) = test_env(false);
-    env.idle_secs = 1;
-    env.herdr_socket_path = Some(dir.path().join("gone.sock").display().to_string());
-    let running = std::sync::Arc::new(hided::start_daemon(env).await.expect("start daemon"));
-    let stopped =
-        tokio::time::timeout(Duration::from_secs(5), hided::wait_shutdown(&running)).await;
-    assert!(
-        stopped.is_ok(),
-        "with no client and no Herdr the daemon ends after the idle window"
-    );
 }
 
 #[tokio::test]

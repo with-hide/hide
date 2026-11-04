@@ -249,11 +249,6 @@ pub async fn run_daemon(env: Env) -> Result<(), String> {
 /// A core daemon on a seat of its own, for a caller that is not a process's
 /// supervisor (the integration tests); the seat and lock end with it.
 pub async fn start_daemon(env: Env) -> Result<RunningDaemon, String> {
-    // Refused before anything is written: a daemon that came up on this
-    // path would answer healthy and then fail every pane attach in turn.
-    if let Some(error) = env::herdr_bin_error(&env) {
-        return Err(error);
-    }
     let lock = acquire_lock(&env.state_dir).map_err(|error| error.to_string())?;
     let seat = seat::Seat::serve(
         server::bind(env.bind).await?,
@@ -261,11 +256,10 @@ pub async fn start_daemon(env: Env) -> Result<RunningDaemon, String> {
         ending::Ending::new(),
     )?;
     let state_dir = env.state_dir.clone();
-    let herdr_socket = env.herdr_socket_path.clone();
     let mut running = start_core_role(env, seat.parts()).await?;
     // Recorded once the daemon runs, so a start that failed leaves no record
     // naming a process that is gone.
-    record_daemon(&state_dir, &seat.parts(), herdr_socket)?;
+    record_daemon(&state_dir, &seat.parts())?;
     seat.end_with(running.shutdown.clone(), state_dir.clone());
     running.own = Some(OwnSeat {
         _seat: seat,
@@ -280,7 +274,6 @@ pub async fn start_daemon(env: Env) -> Result<RunningDaemon, String> {
 pub(crate) fn record_daemon(
     state_dir: &std::path::Path,
     seat: &seat::SeatParts,
-    herdr_socket: Option<String>,
 ) -> Result<(), String> {
     let started_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -291,22 +284,12 @@ pub(crate) fn record_daemon(
         pid,
         port: seat.port,
         token: seat.token.clone(),
-        socket: herdr_socket,
         started_at,
         pid_started: hide_platform::process::start_time(pid).ok(),
     };
     write_state(state_dir, &state)
         .map(|_| ())
         .map_err(|error| error.to_string())
-}
-
-/// [`Env::herdr_program`] off the async runtime: the account's search can
-/// wait on its login shell.
-async fn herdr_program(env: &Env) -> Result<Option<std::path::PathBuf>, String> {
-    let env = env.clone();
-    tokio::task::spawn_blocking(move || env.herdr_program())
-        .await
-        .map_err(|error| format!("the herdr search did not finish: {error}"))
 }
 
 /// The core role on `seat`, which already holds the instance lock.
@@ -378,35 +361,15 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         .map_err(|error| format!("the daemon host id could not be read or written: {error}"))?;
     let token = seat.token.clone();
     let port = seat.port;
-    seat.starting("core.herdr_program");
-    let herdr_bin = herdr_program(&env).await?;
-    match herdr_bin.as_ref() {
-        // The core's own engine runs no Herdr (PRD engine-bundle-3-core-owns D-5).
-        None if env.own_engine => eprintln!(
-            "{}",
-            serde_json::json!({
-                "component": "hided",
-                "kind": "engine.own",
-                "message": "the core runs its own engine over this node's pane holders; no Herdr is used",
-            })
-        ),
-        Some(path) => eprintln!(
-            "{}",
-            serde_json::json!({
-                "component": "hided",
-                "kind": "herdr_bin.resolved",
-                "path": path.display().to_string(),
-            })
-        ),
-        None => eprintln!(
-            "{}",
-            serde_json::json!({
-                "component": "hided",
-                "kind": "herdr_bin.missing",
-                "message": "no herdr binary: HERDR_BIN_PATH is unset and neither this build's pinned copy nor the account's search has one; pane terminals cannot attach",
-            })
-        ),
-    }
+    seat.starting("core.engine");
+    eprintln!(
+        "{}",
+        serde_json::json!({
+            "component": "hided",
+            "kind": "engine.own",
+            "message": "the core runs its own engine over this node's pane holders",
+        })
+    );
     let options = CoreOptions {
         schema_version: SCHEMA_VERSION,
         // A relative HOME names no account folder; the core then reports
@@ -416,8 +379,8 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
             .is_absolute()
             .then(|| env.home.display().to_string()),
         node_id: node.clone(),
-        herdr_socket_path: env.herdr_socket_path.clone(),
-        herdr_bin_path: herdr_bin.as_ref().map(|path| path.display().to_string()),
+        herdr_socket_path: None,
+        herdr_bin_path: None,
         app_state_path: env.state_dir.join("core-state.json").display().to_string(),
         host_helper_root: env.host_helper_root.clone(),
         host_cli_dir: env.host_cli_dir.clone(),
@@ -460,11 +423,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
     let pane_events: hide_node::ssh::PaneEventsSlot = Default::default();
     let _ = pane_events.set(Arc::new(node_panes::Events(Arc::clone(&node_panes))));
     seat.starting("core.owner");
-    let core = Arc::new(CoreHandle::spawn(
-        options,
-        env.own_engine,
-        Arc::clone(&pane_events),
-    )?);
+    let core = Arc::new(CoreHandle::spawn(options, Arc::clone(&pane_events))?);
     seat.starting("core.services");
     if effects_held {
         let mut open = move_gate.subscribe();
@@ -601,8 +560,6 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
                 .unwrap_or_else(|_| "0".into()),
             "state_dir": env.state_dir.display().to_string(),
             "core_state_path": env.state_dir.join("core-state.json").display().to_string(),
-            "herdr_bin_path": herdr_bin.as_ref().map(|path| path.display().to_string()),
-            "herdr_socket_path": env.herdr_socket_path.clone(),
             "keep_alive": env.keep_alive,
             "idle_secs": env.idle_secs,
             "core_instance": core_instance(),
@@ -631,7 +588,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         pane_listener,
         Arc::clone(&pane_capabilities),
         Arc::clone(&core),
-        core.engine().cloned(),
+        Some(core.engine().clone()),
         port,
         shutdown.clone(),
         Arc::clone(&app.desktop_renderers),
@@ -658,7 +615,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
     // other save the core offers on the screen (PRD
     // engine-bundle-4-herdr-removal D-6 to D-8, D-27).
     let herdr_move = Arc::new(tokio::sync::Notify::new());
-    if env.own_engine {
+    {
         let env = env.clone();
         let herdr_move = Arc::clone(&herdr_move);
         let core = Arc::clone(&core);
@@ -699,9 +656,6 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
 /// placement record names, and this machine's screens, with no core here.
 /// A node daemon on a seat of its own; see `start_daemon`.
 pub async fn start_node_daemon(env: Env) -> Result<RunningNode, String> {
-    if let Some(error) = env::herdr_bin_error(&env) {
-        return Err(error);
-    }
     let lock = acquire_lock(&env.state_dir).map_err(|error| error.to_string())?;
     let seat = seat::Seat::serve(
         server::bind(env.bind).await?,
@@ -709,9 +663,8 @@ pub async fn start_node_daemon(env: Env) -> Result<RunningNode, String> {
         ending::Ending::new(),
     )?;
     let state_dir = env.state_dir.clone();
-    let herdr_socket = env.herdr_socket_path.clone();
     let mut running = start_node_role(env, seat.parts()).await?;
-    record_daemon(&state_dir, &seat.parts(), herdr_socket)?;
+    record_daemon(&state_dir, &seat.parts())?;
     seat.end_with(running.shutdown.clone(), state_dir.clone());
     running.own = Some(OwnSeat {
         _seat: seat,
@@ -727,10 +680,6 @@ pub async fn start_node_role(env: Env, seat: seat::SeatParts) -> Result<RunningN
     let node = herdr_core::node::NodeId::of_this_machine()?;
     let placement = placement::read(&env.state_dir, node.as_str())?
         .ok_or("no core placement record: this state folder starts a core")?;
-    let herdr_socket = env
-        .herdr_socket_path
-        .clone()
-        .ok_or("the node role needs this machine's Herdr socket (HERDR_SOCKET_PATH)")?;
     // Its records go where the core's would: Logs beside the state folder.
     if let Err(error) = herdr_core::diagnostics::install(&env.state_dir.join("core-state.json")) {
         eprintln!(
@@ -763,10 +712,6 @@ pub async fn start_node_role(env: Env, seat: seat::SeatParts) -> Result<RunningN
             label: host_name().unwrap_or_else(|| node.as_str().to_owned()),
             build: build.clone(),
             release: crate::build_order::Release::of_this_build(),
-            herdr_socket: std::path::PathBuf::from(&herdr_socket),
-            herdr_bin: herdr_program(&env)
-                .await?
-                .ok_or("the node role needs this machine's Herdr binary")?,
             worktree_facts: Some(hide_kit::layout::worktree_facts(&env.state_dir)),
         },
         node_daemon::ServerParts {
@@ -804,7 +749,10 @@ pub async fn start_node_role(env: Env, seat: seat::SeatParts) -> Result<RunningN
         "port": port,
     }));
     // The node lives as the core's daemon does: while a screen is open or
-    // its Herdr server answers, so its agents keep reaching their core.
+    // a pane of its holders may still run, so its agents keep reaching
+    // their core. Its holders keep their records in the device node's
+    // folder (`NodeTerminals::start_holders`).
+    let node_home = env.home.clone();
     let idle = server::watch_idle(
         server::Idle {
             idle_secs: env.idle_secs,
@@ -812,12 +760,14 @@ pub async fn start_node_role(env: Env, seat: seat::SeatParts) -> Result<RunningN
             clients: Arc::clone(&daemon.state.clients),
             last_client_gone: Arc::clone(&daemon.state.last_client_gone),
             shutdown: shutdown.clone(),
-            herdr: Some(herdr_core::engine::EngineHandle::herdr(hide_node::herdr(
-                std::path::Path::new(&herdr_socket),
-            ))),
-            // A node daemon runs its panes in Herdr; holder panes belong to
-            // the machine whose core runs the core's own engine.
-            panes: None,
+            live_panes: Arc::new(move || {
+                hide_kit::panes::Panes::open(
+                    &node_home,
+                    &hide_kit::layout::device_node_state(&node_home),
+                    |record| herdr_core::diagnostic!(record),
+                )?
+                .live()
+            }),
         },
         || false,
     );

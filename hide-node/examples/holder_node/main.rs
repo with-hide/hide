@@ -17,10 +17,9 @@
 //! ```
 //!
 //! `node` reads one JSON request a line and writes one JSON answer a line,
-//! `{"ok": true, ...}` or `{"ok": false, "error": "..."}`, in order. The
-//! development switch is read from `HIDE_DEV_PANE_HOLDER`, as hided reads it;
-//! with `--herdr-socket` the node's Herdr sessions go to that server through
-//! the pinned client, as hided's do. `echo` is a pane program for the
+//! `{"ok": true, ...}` or `{"ok": false, "error": "..."}`, in order. With
+//! `--herdr-socket` the node's Herdr sessions go to that server through the
+//! pinned client. `echo` is a pane program for the
 //! measurements: on a raw terminal it writes each byte it reads to `<log>`
 //! and draws it on the first row (`echo.rs`). `rules` gives a pane an agent
 //! definition's built-in screen rules and `facts` and `wait_screen` read
@@ -41,7 +40,7 @@ use hide_holder_protocol::record;
 use hide_holder_protocol::{Answer, Appearance, Rgb, Size, Theme};
 use hide_kit::layout;
 use hide_kit::panes::{StartRequest, Started};
-use hide_node::terminal::holder::{HolderFolders, Holders, LocalTerminals, Switch};
+use hide_node::terminal::holder::{HolderFolders, Holders, LocalTerminals};
 use hide_node::terminal::{Attacher, LocalAttacher, Mode, OutputSink, ReportSink, SessionParts};
 use hide_node_link::terminal::{GridSize, KeyTarget, TerminalControl, TerminalNode};
 use serde_json::{Value, json};
@@ -123,25 +122,19 @@ pub struct Node {
     pub reports: Arc<Reports>,
     pub facts: Arc<facts::Facts>,
     pub state: PathBuf,
-    owner: Option<hide_kit::panes::Owner>,
+    owner: hide_kit::panes::Owner,
 }
 
 impl Node {
     fn owner(&self) -> Result<&hide_kit::panes::Owner, String> {
-        self.owner
-            .as_ref()
-            .ok_or_else(|| "the node owns no pane records".to_owned())
+        Ok(&self.owner)
     }
     fn holders(&self) -> Result<&Holders, String> {
-        self.terminals
-            .holders
-            .as_deref()
-            .ok_or_else(|| "the development switch is off: this node runs no holder".to_owned())
+        Ok(&self.terminals.holders)
     }
 }
 
 fn node(options: &Options) -> Result<(), String> {
-    let switch = Switch::from_env()?;
     let screens = Arc::new(Screens::default());
     let reports = Arc::new(Reports::default());
     let herdr: Box<dyn Attacher> = match &options.herdr_socket {
@@ -152,34 +145,26 @@ fn node(options: &Options) -> Result<(), String> {
         None => Box::new(NoHerdr),
     };
     let terminals = Holders::start_local(
-        (switch == Switch::On).then_some(HolderFolders {
+        HolderFolders {
             home: &options.home,
             state_dir: &options.state,
-        }),
+        },
         herdr,
         Arc::clone(&screens) as Arc<dyn OutputSink>,
         Arc::clone(&reports) as Arc<dyn ReportSink>,
     )?;
     let facts = facts::Facts::new();
-    let owner = terminals
-        .holders
-        .as_deref()
-        .map(|holders| holders.acquire(Duration::from_secs(5)))
-        .transpose()?;
-    if let Some(holders) = terminals.holders.as_deref() {
-        let recovered = holders.recover(
-            owner.as_ref().expect("holders acquired ownership"),
-            &terminals.service,
-        );
-        if !recovered.complete {
-            return Err("the node could not complete its pane record scan".to_owned());
-        }
-        holders.prune_folders();
-        let told = Arc::clone(&facts);
-        holders.watch_facts(Arc::new(move |pane: &str, pane_facts: &_| {
-            told.told(pane, pane_facts);
-        }));
+    let holders = &terminals.holders;
+    let owner = holders.acquire(Duration::from_secs(5))?;
+    let recovered = holders.recover(&owner, &terminals.service);
+    if !recovered.complete {
+        return Err("the node could not complete its pane record scan".to_owned());
     }
+    holders.prune_folders();
+    let told = Arc::clone(&facts);
+    holders.watch_facts(Arc::new(move |pane: &str, pane_facts: &_| {
+        told.told(pane, pane_facts);
+    }));
     let node = Node {
         terminals,
         screens,

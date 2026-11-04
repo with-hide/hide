@@ -105,8 +105,9 @@ impl Record {
         self.herdr_hooks.get(agent).map_or(&[], Vec::as_slice)
     }
 
-    /// Keeps what Herdr's integration for `agent` wrote; true when that
-    /// changed the record.
+    /// Keeps what Herdr's integration for `agent` wrote, as earlier builds
+    /// did; true when that changed the record. Only a fixture writes it now.
+    #[cfg(test)]
     pub(crate) fn set_herdr_hook_entries(&mut self, agent: &str, entries: Vec<HookEntry>) -> bool {
         if entries.is_empty() {
             return self.herdr_hooks.remove(agent).is_some();

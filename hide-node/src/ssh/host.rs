@@ -133,12 +133,6 @@ const HERDR_NAME: &str = "herdr";
 /// app carries it beside `hided` (PRD engine-bundle-3-core-owns D-22).
 const HOLDER_NAME: &str = "hide-holder";
 
-/// Why a Windows device is refused before anything is installed when the
-/// device's panes would run on its Herdr: a Windows device runs its panes in
-/// pane holders only, on the core's own engine (`HIDE_DEV_PANE_HOLDER=1`).
-pub const WINDOWS_NEEDS_OWN_ENGINE: &str =
-    "Windows devices connect only on the new engine; nothing was installed on this one";
-
 /// A program's file name on a device of `os`: Windows finds a program by its
 /// `.exe` suffix.
 fn device_program(name: &str, os: &str) -> String {
@@ -149,18 +143,6 @@ fn device_program(name: &str, os: &str) -> String {
     }
 }
 
-/// Which engine runs a device's panes: the device's Herdr, as every shipped
-/// Hide does, or the core's own engine over pane holders the device's node
-/// runs, with the development switch `HIDE_DEV_PANE_HOLDER` on (PRD
-/// engine-bundle-3-core-owns D-22). Only the second carries the holder to
-/// the device, and only the first carries Herdr, so a connection with the
-/// switch off uploads exactly what it always has.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum DeviceEngine {
-    #[default]
-    Herdr,
-    Holders,
-}
 /// How long a draining connection waits for its admitted requests before it
 /// closes anyway. An admitted request is written and answered by its one
 /// deadline, and the longest call timeout is 120 s (an index walk, a
@@ -246,29 +228,17 @@ impl HelperPackages {
         })
     }
 
-    /// What a device of `os`/`arch` gets for the engine that runs its panes:
-    /// [`HelperPackages::payload`] for its Herdr, unchanged, or that with no
-    /// Herdr and the pane holder beside the helper.
-    pub(super) fn payload_for(
-        &self,
-        os: &str,
-        arch: &str,
-        engine: DeviceEngine,
-    ) -> Result<Payload, EstablishError> {
-        // Asked before anything is read or sent, so the device gets nothing.
-        if os == "windows" && engine == DeviceEngine::Herdr {
-            return Err(EstablishError::NeedsNewEngine(
-                WINDOWS_NEEDS_OWN_ENGINE.to_owned(),
-            ));
-        }
+    /// What a device of `os`/`arch` gets: [`HelperPackages::payload`] with
+    /// the pane holder beside the helper, which runs the device's panes for
+    /// the core's own engine.
+    pub(super) fn payload_for(&self, os: &str, arch: &str) -> Result<Payload, EstablishError> {
         let (payload, bundled) = self.kit(os, arch)?;
-        match engine {
-            DeviceEngine::Herdr => Ok(payload),
+        {
             // No Herdr goes to the device, and the holder goes beside the
             // helper; a build that does not carry the holder for the
             // device's system connects nothing rather than a node that
             // could run no pane.
-            DeviceEngine::Holders => {
+            {
                 let mut payload = payload.without_herdr();
                 // A release's device kit carries the holder for a device of
                 // another system; a build's own system, or a developer's
@@ -1275,52 +1245,6 @@ fn mark_closed(inner: &Inner, reason: String) {
     inner.stop_gates(&reason);
 }
 
-/// Starts the node's terminal service for the device's Herdr at
-/// `herdr_socket`, as the node names it, and the writer that carries the
-/// core's side of it, so the device's panes' terminals flow inside this link
-/// (PRD core-host-node-terminal D-10). A device whose Herdr cannot be found
-/// has none; its panes read unavailable and the reason goes to the log.
-pub(super) fn start_terminals_at(
-    herdr_socket: Result<String, String>,
-    host: &RemoteHost,
-    hook: TerminalHook,
-) -> Result<Arc<dyn hide_node_link::terminal::TerminalNode>, String> {
-    let started = herdr_socket
-        .and_then(|herdr_socket| {
-            host.call(Call::TerminalsStart { herdr_socket }, HELLO_TIMEOUT)
-                .map_err(|error| error.to_string())
-        })
-        .and_then(|_| {
-            crate::terminal::device::DeviceTerminals::start(
-                &hook.node,
-                Arc::new(host.clone()),
-                hook.sink,
-            )
-            .map_err(|error| format!("the terminal writer could not start: {error}"))
-        });
-    match started {
-        Ok(terminals) => {
-            host.take_terminal_lines(terminals.inbound());
-            crate::diagnostic!(json!({
-                "component": "remote_host",
-                "kind": "host.terminals_started",
-                "target": host.inner.target,
-                "link": terminals.link(),
-            }));
-            Ok(Arc::new(terminals))
-        }
-        Err(reason) => {
-            crate::diagnostic!(json!({
-                "component": "remote_host",
-                "kind": "host.terminals_unstarted",
-                "target": host.inner.target,
-                "reason": reason,
-            }));
-            Err(reason)
-        }
-    }
-}
-
 /// Why a line the device helper sent, whole or still arriving, is longer
 /// than any the protocol allows: a terminal line past
 /// [`hide_node_link::terminal::MAX_TERMINAL_LINE_BYTES`], an answer past
@@ -1397,31 +1321,6 @@ pub(super) fn start_holders_at(
             }));
             Err(reason)
         }
-    }
-}
-
-/// Starts the node's pane service for the device's Herdr at `herdr_socket`,
-/// as the node names it, so its panes' `hide` reaches the core over this
-/// link. A device whose Herdr cannot be found keeps its files and Git; its
-/// panes' `hide` answers that the node is unavailable, and the reason goes
-/// to the log.
-pub(super) fn start_panes_at(herdr_socket: Result<String, String>, host: &RemoteHost) {
-    let started = herdr_socket.and_then(|herdr_socket| {
-        call_as::<PanesStarted>(host, Call::PanesStart { herdr_socket }, HELLO_TIMEOUT)
-            .map_err(|error| error.to_string())
-    });
-    match started {
-        Ok(_) => crate::diagnostic!(json!({
-            "component": "remote_host",
-            "kind": "host.panes_started",
-            "target": host.inner.target,
-        })),
-        Err(reason) => crate::diagnostic!(json!({
-            "component": "remote_host",
-            "kind": "host.panes_unstarted",
-            "target": host.inner.target,
-            "reason": reason,
-        })),
     }
 }
 
@@ -3238,43 +3137,24 @@ mod tests {
         assert!(!other.files.iter().any(|file| file.relative == "herdr.pin"));
     }
 
-    /// A device whose panes run on its Herdr gets exactly what it got before
-    /// the core had its own engine, even from a build that carries the
-    /// holder; a device of the core's own engine gets the holder and no
-    /// Herdr, and a build without the holder connects nothing.
+    /// A device gets the holder beside its helper and no Herdr, even from a
+    /// build that carries Herdr; a build without the holder connects
+    /// nothing.
     #[cfg(unix)]
     #[test]
-    fn only_a_device_of_the_own_engine_gets_the_holder_in_place_of_herdr() {
+    fn a_device_gets_the_holder_and_never_herdr() {
         let directory = tempfile::tempdir().unwrap();
         let (os, arch) = (std::env::consts::OS, std::env::consts::ARCH);
         write(&directory.path().join(HELPER_NAME), b"helper", 0o755);
         write(&directory.path().join(HERDR_NAME), b"pinned herdr", 0o755);
         let packages = HelperPackages::new(Some(directory.path().to_path_buf()));
-        let before = packages.payload(os, arch).unwrap();
         assert!(matches!(
-            packages.payload_for(os, arch, DeviceEngine::Holders),
+            packages.payload_for(os, arch),
             Err(EstablishError::Unsupported(_))
         ));
 
         write(&directory.path().join(HOLDER_NAME), b"holder", 0o755);
-        let herdr = packages.payload_for(os, arch, DeviceEngine::Herdr).unwrap();
-        let names = |payload: &Payload| {
-            payload
-                .files
-                .iter()
-                .map(|file| (file.relative.clone(), file.bytes.len()))
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(names(&herdr), names(&before));
-        assert_eq!(herdr.version(), before.version());
-        assert_eq!(
-            herdr.herdr.as_ref().map(|file| &file.digest),
-            before.herdr.as_ref().map(|file| &file.digest)
-        );
-
-        let own = packages
-            .payload_for(os, arch, DeviceEngine::Holders)
-            .unwrap();
+        let own = packages.payload_for(os, arch).unwrap();
         assert!(own.herdr.is_none());
         assert!(own.files.iter().any(|file| file.relative == HOLDER_NAME));
         assert!(
@@ -3282,13 +3162,10 @@ mod tests {
                 .iter()
                 .any(|file| file.relative == hide_kit::device_herdr::HERDR_PIN)
         );
-        assert_ne!(own.version(), before.version());
     }
 
-    /// A Windows device runs its panes in holders only: on the device's
-    /// Herdr it is refused before anything is read or sent, and on the core's
-    /// own engine it gets its programs under their `.exe` names, the holder
-    /// and the ConPTY runtime the holder loads, and no Herdr.
+    /// A Windows device gets its programs under their `.exe` names, the
+    /// holder and the ConPTY runtime the holder loads, and no Herdr.
     #[cfg(unix)]
     #[test]
     fn a_windows_device_gets_its_programs_and_the_conpty_runtime_and_never_herdr() {
@@ -3302,18 +3179,9 @@ mod tests {
             );
         }
         let packages = HelperPackages::new(Some(folder.to_path_buf()));
-        match packages.payload_for("windows", "x86_64", DeviceEngine::Herdr) {
-            Err(EstablishError::NeedsNewEngine(reason)) => {
-                assert_eq!(reason, WINDOWS_NEEDS_OWN_ENGINE);
-            }
-            other => panic!(
-                "a Windows device on Herdr was not refused: {:?}",
-                other.err()
-            ),
-        }
         assert!(
             matches!(
-                packages.payload_for("windows", "x86_64", DeviceEngine::Holders),
+                packages.payload_for("windows", "x86_64"),
                 Err(EstablishError::Unsupported(reason)) if reason.contains("ConPTY")
             ),
             "a holder without its ConPTY runtime runs no pane"
@@ -3327,7 +3195,7 @@ mod tests {
         write(&conpty.join("conpty.dll"), b"dll", 0o644);
         write(&conpty.join("x64/OpenConsole.exe"), b"console", 0o755);
         let own = packages
-            .payload_for("windows", "x86_64", DeviceEngine::Holders)
+            .payload_for("windows", "x86_64")
             .unwrap();
         assert!(own.herdr.is_none());
         assert_eq!(

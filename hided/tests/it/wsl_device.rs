@@ -1003,7 +1003,7 @@ fn a_wsl_own_engine_device_runs_its_panes_in_holders_with_no_herdr() {
     set_registry(&distribution_id(&distro), "RunOOBE", 0);
     set_default_user(&distro, USER);
     let sink = Arc::new(Sink::default());
-    let connector = connector(sink.clone()).with_engine(hide_node::ssh::DeviceEngine::Holders);
+    let connector = connector(sink.clone());
     let transport = connector.wsl_transport("wsl-own", &distro).unwrap();
     let (connected, _closed) = establish(&*transport, &consent(None), Wake::Allowed);
     let connected = connected.unwrap_or_else(|error| panic!("connection: {error}"));

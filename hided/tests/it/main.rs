@@ -7,7 +7,6 @@ mod browser_control;
 mod closed_stdout;
 mod connect_build;
 mod connect_stop;
-mod core_move;
 mod core_move_checks;
 mod device_bootstrap;
 mod device_own_engine;
@@ -24,8 +23,6 @@ mod node_session_activity;
 mod opener_lifecycle;
 #[path = "support/private_herdr.rs"]
 mod private_herdr;
-mod real_herdr;
-mod remote_core;
 mod remote_delivery;
 mod responsive_state;
 mod seat;

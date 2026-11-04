@@ -348,14 +348,6 @@ pub(crate) fn adapter_of_part(part: ComponentId) -> Option<&'static AgentAdapter
 }
 
 impl AgentAdapter {
-    /// Whether the hook entries Herdr's integration writes for this agent are
-    /// covered by Hide's trust for it: only Codex asks the operator to review
-    /// a hook before it runs, and Hide records that trust for it
-    /// (`hide_agent_hooks::codex_trust`, PRD codex-herdr-hook-trust).
-    pub(crate) fn trusts_herdr_hook(&self) -> bool {
-        self.hook == HookSupport::Part(ComponentId::CodexHook)
-    }
-
     /// Capabilities come from the shared declaration, independently.
     pub fn supports(&self, feature: Feature) -> bool {
         self.declaration.supports(feature)
@@ -370,13 +362,6 @@ impl AgentAdapter {
     /// with its update command.
     pub(crate) fn updates(&self) -> &'static [hide_agent_adapter::UpdateRoute] {
         self.declaration.updates
-    }
-
-    /// The agent's own folder under `home` where Hide and Herdr install,
-    /// from the one resolver of agent folders
-    /// (`hide_agent_adapter::HomeScope::Install`).
-    pub(crate) fn install_home(&self, home: &std::path::Path) -> std::path::PathBuf {
-        self.declaration.install_home(home)
     }
 }
 

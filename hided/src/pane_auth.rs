@@ -803,7 +803,6 @@ fn attest_bootstrap(
     // in Herdr, beside the engine (PRD engine-bundle-4-herdr-removal D-7,
     // B10).
     if pane.is_err()
-        && core.pane_holders().is_some()
         && herdr_core::herdr_import::holds(
             &hide_kit::layout::engine_dir(core.state_dir()),
             &request.pane_id,

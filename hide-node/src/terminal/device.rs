@@ -455,15 +455,12 @@ impl NodeTerminals {
     }
 
     /// The service of a node whose core runs on another machine (PRD
-    /// core-host-node-remote-core D-06): its panes' output reaches its own
-    /// `screen` always, and its link only while the core says a screen of
-    /// the core's own draws them.
-    /// `herdr` is the binary this machine's daemon runs its Herdr with.
-    pub fn for_screen(screen: Arc<dyn OutputSink>, herdr: std::path::PathBuf) -> Self {
-        let mut terminals = Self::with_attacher(Box::new(move |socket: &str| {
-            Box::new(LocalAttacher::new(Some(herdr.clone()), socket.into()))
-                as Box<dyn super::Attacher>
-        }));
+    /// core-host-node-remote-core D-06): its panes run in its pane holders,
+    /// and their output reaches its own `screen` always, and its link only
+    /// while the core says a screen of the core's own draws them.
+    pub fn for_screen(screen: Arc<dyn OutputSink>) -> Self {
+        let mut terminals =
+            Self::with_attacher(Box::new(|_: &str| Box::new(NoHerdr) as Box<dyn super::Attacher>));
         terminals.uplink.withhold(true);
         terminals.screen = Some(screen);
         terminals
@@ -525,9 +522,6 @@ impl hide_host::serve::Terminals for NodeTerminals {
             return Ok(());
         }
         let outputs = self.outputs();
-        // A Herdr node's terminals: holders run when its core asks for them
-        // (`start_holders`), never because of this process's environment.
-        super::holder::device_switch()?;
         let started = Service::start(
             (self.attacher)(herdr_socket),
             outputs,
@@ -568,15 +562,14 @@ impl hide_host::serve::Terminals for NodeTerminals {
             service: started,
             holders: opened,
         } = super::holder::Holders::start_local(
-            Some(super::holder::HolderFolders {
+            super::holder::HolderFolders {
                 home: &home,
                 state_dir: &state_dir,
-            }),
+            },
             Box::new(NoHerdr),
             self.outputs(),
             Arc::new(UplinkReports(Arc::clone(&self.uplink))),
         )?;
-        let opened = opened.ok_or("the node's pane holders did not open")?;
         let panes: Arc<dyn hide_node_link::holders::PaneHolders> = Arc::new(
             super::engine_panes::LocalPanes::for_account(opened, Arc::clone(&started), home),
         );

@@ -23,18 +23,13 @@ use hide_node_link::device::{
     Attempt, DeviceConnector, DeviceTransport, DialedTransport, EstablishError, Established,
     HostConsent, HostIdentity, NodeReady, SshFailure, SshHostListing, SshProblem,
 };
-use hide_node_link::protocol::{Call, Hello, KitAction};
+use hide_node_link::protocol::{Call, Hello};
 
 /// Connection attempts that dial at once across every device (B27); the
 /// rest wait their turn, shown as queued on their rows.
 pub const MAX_DIALING: usize = 4;
 /// How long a device waits for its turn before its attempt fails.
 const TURN_WITHIN: Duration = Duration::from_secs(10 * 60);
-/// How long the helper's Herdr has to answer before the kit is asked to
-/// start it.
-const HERDR_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
-/// How long the kit pass a connection runs before its services may take.
-const KIT_TIMEOUT: Duration = Duration::from_secs(180);
 
 fn ended() -> EstablishError {
     EstablishError::Helper(ENDED.to_owned())
@@ -61,8 +56,6 @@ pub struct Connector {
     /// This PC's WSL, whose distributions are devices too (PRD wsl-device
     /// D-01); none where there is none.
     wsl: Option<host::wsl::WslAccess>,
-    /// The engine every device's panes run on.
-    engine: host::DeviceEngine,
     /// The home every SSH device's node runs with in place of its account's
     /// (`HIDE_DEV_DEVICE_HOME`), as [`parse_device_home`] read it.
     device_home: Option<String>,
@@ -145,7 +138,6 @@ impl Connector {
             terminals: None,
             herdr_program: PathBuf::from("herdr"),
             wsl: None,
-            engine: host::DeviceEngine::Herdr,
             device_home: None,
         }
     }
@@ -154,14 +146,6 @@ impl Connector {
     /// home ([`DEVICE_HOME_VARIABLE`]); `None` leaves the account's.
     pub fn with_device_home(mut self, home: Option<String>) -> Self {
         self.device_home = home;
-        self
-    }
-
-    /// Runs every device's panes on `engine`: the core's own engine over the
-    /// device node's pane holders, for a core with the development switch
-    /// on, and the device's Herdr otherwise.
-    pub fn with_engine(mut self, engine: host::DeviceEngine) -> Self {
-        self.engine = engine;
         self
     }
 
@@ -274,7 +258,6 @@ impl DeviceConnector for Connector {
             herdr,
             askpass: self.askpass.clone(),
             packages: self.packages.clone(),
-            engine: self.engine,
             device_home: self.device_home.clone(),
             panes,
             terminals,
@@ -291,7 +274,6 @@ impl DeviceConnector for Connector {
             distro,
             access,
             self.packages.clone(),
-            self.engine,
             panes,
             terminals,
         )?))
@@ -324,7 +306,6 @@ pub struct SshDevice {
     herdr: HerdrChoice,
     askpass: Option<PathBuf>,
     packages: HelperPackages,
-    engine: host::DeviceEngine,
     device_home: Option<String>,
     panes: Option<PaneHook>,
     terminals: Option<TerminalHook>,
@@ -459,7 +440,7 @@ impl DialedTransport for SshDevice {
     fn establish(
         &self,
         consent: &HostConsent,
-        retirement_projects: &[String],
+        _retirement_projects: &[String],
         attempt: Attempt,
     ) -> Result<Established, EstablishError> {
         let since = Instant::now();
@@ -524,7 +505,7 @@ impl DialedTransport for SshDevice {
                     observed: Box::new(identity),
                 });
             }
-            let payload = self.packages.payload_for(&facts.os, &facts.arch, self.engine)?;
+            let payload = self.packages.payload_for(&facts.os, &facts.arch)?;
             let home = match &self.device_home {
                 Some(configured) => Some(
                     resolve_device_home(configured, &facts.home, &facts.os)
@@ -582,66 +563,11 @@ impl DialedTransport for SshDevice {
         }
         host.take_readers(hello.protocol, readers)
             .map_err(EstablishError::Helper)?;
-        let socket = match self.engine {
-            host::DeviceEngine::Herdr => hello
-                .herdr_socket
-                .clone()
-                .ok_or_else(|| "the device's helper bridges no Herdr socket".to_owned()),
-            host::DeviceEngine::Holders => {
-                Err("the device's panes run on the core's own engine".to_owned())
-            }
-        };
-        // Only a Herdr that does not answer needs the kit before the services
-        // start; otherwise the core runs its pass after ready. A named
-        // session is attached only, never started by a connection's kit. A
-        // device of the core's own engine has no Herdr to ask.
-        let unanswered = self.engine == host::DeviceEngine::Herdr
-            && self.herdr == HerdrChoice::Account
-            && hide_herdr_client::request_with_connector(
-                &host.herdr_connector(),
-                "session.snapshot",
-                json!({}),
-                HERDR_CHECK_TIMEOUT,
-            )
-            .is_err();
-        let kit = unanswered.then(|| {
-            stage("kit");
-            call_as::<hide_kit::KitReport>(
-                &host,
-                Call::Kit {
-                    action: KitAction::Apply,
-                    cli_dir: consent
-                        .cli_dir
-                        .clone()
-                        .unwrap_or_else(|| host::DEFAULT_CLI_DIR.to_owned()),
-                    herdr_socket: socket.clone().ok(),
-                    preserve_herdr_server: false,
-                    retirement_projects: retirement_projects.to_vec(),
-                },
-                KIT_TIMEOUT,
-            )
-            .map(Box::new)
-            .map_err(|error| error.to_string())
-        });
-        let terminals = match self.engine {
-            host::DeviceEngine::Herdr => {
-                if self.panes.is_some() {
-                    stage("panes");
-                    host::start_panes_at(socket.clone(), &host);
-                }
-                match self.terminals.clone() {
-                    None => Err("this process takes no device terminals".to_owned()),
-                    Some(hook) => {
-                        stage("terminals");
-                        host::start_terminals_at(socket.clone(), &host, hook)
-                    }
-                }
-            }
-            host::DeviceEngine::Holders => {
-                stage("holders");
-                host::start_holders_at(&host, self.terminals.clone())
-            }
-        };
+        // The device's panes run on the core's own engine, in pane holders
+        // its node runs; the core runs its kit pass after ready.
+        let kit = None;
+        stage("holders");
+        let terminals = host::start_holders_at(&host, self.terminals.clone());
         // The link is the core's from here, which closes it its own way: a
         // cancel no longer kills ssh. One that came before ends the link
         // here; one after it reaches the core, which drops this attempt's
@@ -656,7 +582,7 @@ impl DialedTransport for SshDevice {
             version,
             signed_in: format!("{}@{}:{}", resolved.user, resolved.hostname, resolved.port),
             protocol: hello.protocol,
-            herdr_socket: socket.ok(),
+            herdr_socket: None,
             terminals: terminals.as_ref().map(|_| ()).map_err(Clone::clone),
         });
         stage("ready");

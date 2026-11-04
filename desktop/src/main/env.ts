@@ -2,12 +2,9 @@
 // (engineering practice env.md). Nothing else under src/ reads
 // the process environment; `env.test.ts` scans for it.
 //
-// The daemon's own keys (HIDE_STATE_DIR, HERDR_SOCKET_PATH, ...) are not
-// read here: the `hide` CLI inherits this process's environment and
-// `hided/src/env.rs` owns them. HOME (USERPROFILE on Windows), HERDR_BIN_PATH,
-// HERDR_PANE_ID and HIDE_DEV_PANE_HOLDER are read by both: the host reads the
-// Herdr keys only to know whether it may name the Herdr it bundles
-// (`herdr.ts`), and the switch only to know whether to start a Herdr server.
+// The daemon's own keys (HIDE_STATE_DIR, ...) are not read here: the `hide`
+// CLI inherits this process's environment and `hided/src/env.rs` owns them.
+// HOME (USERPROFILE on Windows) is read by both.
 
 import os from "node:os";
 import { HAS_LOGIN_SHELL } from "./cli";
@@ -35,27 +32,6 @@ export const ENV_REGISTRY: readonly EnvKey[] = [
     shape: "absolute directory path",
     fallback: "hide-desktop in Electron's appData folder: ~/Library/Application Support on macOS, %APPDATA% on Windows, ~/.config on Linux",
     note: "Isolates window state, the single-instance lock, web storage and the host log for a QA or e2e instance; without it the operator's desktop profile is used",
-  },
-  {
-    key: "HERDR_BIN_PATH",
-    requirement: "optional",
-    shape: "absolute path of the herdr binary",
-    fallback: "a packaged app passes its own Contents/Resources/herdr to every `hide` child; unpackaged, nothing is added and hided resolves herdr from PATH",
-    note: "Names the Herdr a daemon this host starts attaches pane terminals with; set without HERDR_PANE_ID it is an override passed through unchanged, so an isolated e2e or a development server keeps its own binary",
-  },
-  {
-    key: "HERDR_PANE_ID",
-    requirement: "optional",
-    shape: "any non-empty value; only its presence is read",
-    fallback: "absent: an inherited HERDR_BIN_PATH is an explicit override",
-    note: "Herdr sets it in every pane beside its own HERDR_BIN_PATH, so a packaged app opened from a pane replaces that HERDR_BIN_PATH with its bundled herdr instead of inheriting a path that dies with the bundle that started the server",
-  },
-  {
-    key: "HIDE_DEV_PANE_HOLDER",
-    requirement: "optional",
-    shape: "`1` turns it on; hided owns the key and refuses any value other than `0` or `1`",
-    fallback: "off: the host starts the bundled Herdr server when none answers",
-    note: "The development switch that makes the daemon run the core's own engine over pane holders, with no Herdr (PRD engine-bundle-3-core-owns D-5); while it is `1` the host starts no Herdr server",
   },
   {
     key: "SHELL",
@@ -132,10 +108,6 @@ export const ENV_REGISTRY: readonly EnvKey[] = [
 export type DesktopEnv = {
   cliPath: string | null;
   userDataDir: string | null;
-  herdrBinPath: string | null;
-  herdrPaneId: string | null;
-  /** The daemon runs the core's own engine (HIDE_DEV_PANE_HOLDER=1), so no Herdr server is started. */
-  ownEngine: boolean;
   /** A language tag standing in for the system's; null on a normal launch. */
   systemLanguage: string | null;
   /** Another update feed than with-hide/hide's releases; null on a normal launch. */
@@ -200,9 +172,6 @@ export function loadEnv(source: Record<string, string | undefined>): DesktopEnv 
   const env: DesktopEnv = {
     cliPath: absolute("HIDE_CLI_PATH"),
     userDataDir: absolute("HIDE_DESKTOP_USER_DATA_DIR"),
-    herdrBinPath: absolute("HERDR_BIN_PATH"),
-    herdrPaneId: source.HERDR_PANE_ID || null,
-    ownEngine: source.HIDE_DEV_PANE_HOLDER === "1",
     systemLanguage: source.HIDE_DESKTOP_SYSTEM_LANGUAGE || null,
     updateFeedUrl: feed("HIDE_UPDATE_FEED_URL"),
     shell: HAS_LOGIN_SHELL ? (absolute("SHELL") ?? accountShell()) : null,

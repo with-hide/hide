@@ -1,6 +1,6 @@
 //! What the machine taking the core says about itself before a move (PRD
 //! core-host-node-move B3, D-04, D-25, D-26), answered by `hided core-move
-//! inspect` there: its Herdr server runs, the account's GUI session runs
+//! inspect` there: its engine can take the core, the account's GUI session runs
 //! (the only one its login item runs in), the machine does not sleep by
 //! itself on power, `gh` is signed in and every agent Hide AI asks answers.
 //! A failing check says what it found; hide changes none of it.
@@ -92,11 +92,20 @@ impl Programs {
     }
 }
 
-/// Where this machine's Herdr is, as its daemon resolves it
-/// (`Env::herdr_program`).
-pub struct Herdr<'a> {
-    pub bin: Option<&'a Path>,
-    pub socket: Option<&'a str>,
+/// Whether the core's engine can move between machines. A move hands each
+/// machine's panes over and renames the scope that names it in the
+/// delivery ledger; it did both through Herdr, and the core's own engine
+/// does neither yet, so every move is refused here with this reason until
+/// it does (with-hide/hide-private#491).
+pub fn engine_moves() -> Result<(), String> {
+    Err("this version of Hide cannot move its core between machines yet".to_owned())
+}
+
+/// The scope that names this machine in the delivery ledger's host scopes,
+/// which a move rewrites: a Herdr socket before. The core's own engine names
+/// none a move can rewrite yet (`engine_moves`).
+pub fn movable_scope() -> Option<String> {
+    None
 }
 
 /// Every check that fails on this machine, in the dialog's order; `ai` is
@@ -104,13 +113,12 @@ pub struct Herdr<'a> {
 pub fn failing(
     home: &Path,
     state_dir: &Path,
-    herdr: &Herdr<'_>,
     ai: Option<&str>,
     programs: &Programs,
 ) -> Vec<FailedCheck> {
     let stop = AtomicBool::new(false);
     let mut failed: Vec<FailedCheck> = [
-        (CheckId::Herdr, herdr_running(home, herdr, &stop)),
+        (CheckId::Engine, engine_moves()),
         (CheckId::GuiSession, gui_session(home, programs, &stop)),
         (CheckId::Sleep, sleep_off(home, programs, &stop)),
     ]
@@ -299,53 +307,6 @@ fn wait_for_answer(answer: &Path, exited: &dyn Fn() -> Option<String>) -> Result
     Ok(())
 }
 
-fn run(
-    mut command: Command,
-    stop: &AtomicBool,
-) -> Result<hide_platform::process::Finished, String> {
-    let program = command.get_program().to_string_lossy().into_owned();
-    hide_platform::process::run_to_end(&mut command, PROGRAM_WITHIN, stop)
-        .map_err(|failure| format!("{program} did not answer: {failure:?}"))
-}
-
-/// `herdr status server --json` for the server this machine's core would
-/// own says it runs.
-fn herdr_running(home: &Path, herdr: &Herdr<'_>, stop: &AtomicBool) -> Result<(), String> {
-    let bin = herdr
-        .bin
-        .ok_or("no herdr on this machine: HERDR_BIN_PATH names none, this account's helper holds no pinned copy, and the account's search finds none")?;
-    let mut command = Command::new(bin);
-    command
-        .args(["status", "server", "--json"])
-        .env(hide_platform::host::HOME_VARIABLE, home);
-    if let Some(socket) = herdr.socket {
-        command.env(crate::env::HERDR_SOCKET_PATH, socket);
-    }
-    let finished = run(command, stop)?;
-    if finished.code != Some(0) {
-        return Err(format!(
-            "herdr status server exited {:?}: {}",
-            finished.code,
-            finished.last_error_line()
-        ));
-    }
-    let status: ServerStatus = serde_json::from_str(finished.stdout.trim())
-        .map_err(|error| format!("herdr status server was not readable: {error}"))?;
-    if !status.running {
-        return Err(format!("no Herdr server answers at {}", status.socket));
-    }
-    Ok(())
-}
-
-/// The fields of `herdr status server --json` the preflight reads. The CLI
-/// is the boundary here, not the socket schema: the socket cannot be reached
-/// before this answer says where it is.
-#[derive(serde::Deserialize)]
-struct ServerStatus {
-    running: bool,
-    socket: String,
-}
-
 /// `gh auth status` exits 0: the core reads GitHub with this machine's
 /// login once it runs here (PRD core-host-node-remote-core D-16).
 fn gh_signed_in(home: &Path, programs: &Programs, stop: &AtomicBool) -> Result<(), String> {
@@ -437,46 +398,9 @@ mod tests {
     /// not answer is a failing check rather than a pass.
     #[cfg(unix)]
     #[test]
-    fn herdr_and_power_checks_fail_on_what_their_programs_answer() {
+    fn power_and_session_checks_fail_on_what_their_programs_answer() {
         let dir = tempfile::tempdir().unwrap();
         let stop = AtomicBool::new(false);
-        let running = stand_in(
-            dir.path(),
-            "herdr-running",
-            r#"echo '{"running":true,"socket":"/tmp/h.sock"}'"#,
-        );
-        let stopped = stand_in(
-            dir.path(),
-            "herdr-stopped",
-            r#"echo '{"running":false,"socket":"/tmp/h.sock"}'"#,
-        );
-        let herdr = |bin: &Path| {
-            herdr_running(
-                dir.path(),
-                &Herdr {
-                    bin: Some(bin),
-                    socket: None,
-                },
-                &stop,
-            )
-        };
-        assert_eq!(herdr(&running), Ok(()));
-        assert_eq!(
-            herdr(&stopped),
-            Err("no Herdr server answers at /tmp/h.sock".to_owned())
-        );
-        assert!(
-            herdr_running(
-                dir.path(),
-                &Herdr {
-                    bin: None,
-                    socket: None
-                },
-                &stop
-            )
-            .is_err()
-        );
-
         let programs = |pmset: &str| {
             stand_in(dir.path(), "pmset", &format!("printf '{pmset}'"));
             Programs {

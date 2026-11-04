@@ -5,8 +5,7 @@
 //! with Hide's shell integration ([`PaneShell::Account`]), as a tab Hide
 //! opens does, so it says its folder and marks its prompt on its screen.
 //!
-//! Only a daemon with the development switch on builds one, beside the
-//! holders [`Holders::start_local`] opened; with it off nothing here runs.
+//! A daemon builds one beside the holders [`Holders::start_local`] opened.
 
 use std::ffi::OsString;
 use std::path::PathBuf;

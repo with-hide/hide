@@ -1878,11 +1878,6 @@ mod tests {
     fn env_at(directory: &Path) -> Env {
         Env {
             home: directory.to_path_buf(),
-            herdr_socket_path: None,
-            herdr_move_socket: None,
-            herdr_bin_path: None,
-            own_engine: false,
-            login_shell: None,
             state_dir: directory.to_path_buf(),
             legacy_state_dir: None,
             account_state_folder: false,

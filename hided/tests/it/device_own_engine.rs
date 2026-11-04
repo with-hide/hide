@@ -145,7 +145,6 @@ impl Device {
         let slot: hide_node::ssh::PaneEventsSlot = Arc::default();
         let _ = slot.set(Arc::clone(&events) as Arc<dyn hide_node::ssh::PaneEvents>);
         let transport = hide_node::ssh::Connector::new(Some(packages))
-            .with_engine(hide_node::ssh::DeviceEngine::Holders)
             .with_askpass_program(PathBuf::from(env!("CARGO_BIN_EXE_hide")))
             .with_terminals(Arc::new(Unseen))
             .with_pane_events(slot)

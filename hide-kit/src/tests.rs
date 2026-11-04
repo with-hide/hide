@@ -146,82 +146,9 @@ fn executable(path: &Path, body: &str) {
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
 
-/// The `herdr` CLI: plugin calls go to `$HOME/herdr.log`, integration calls
-/// to `herdr-integration.log`, and each integration's state lives in
-/// `herdr-fake/<target>` (`current` or `outdated`; no file is not installed)
-/// the way `herdr integration status` lists it, both beside the fixture's
-/// HOME so a pass that changes nothing in HOME is still seen to. A file
-/// `herdr-fails` in HOME makes an install fail.
+/// The `herdr` CLI, needed only to take out a GitHub install of the retired
+/// labels plugin: its calls go to `$HOME/herdr.log`.
 const FAKE_HERDR: &str = r#"#!/bin/sh
-if [ "$1" = integration ]; then
-  fixture="$(dirname "$HOME")"
-  echo "$@" >> "$fixture/herdr-integration.log"
-  dir="$fixture/herdr-fake"
-  mkdir -p "$dir"
-  case "$2" in
-    status)
-      # `herdr-late-writer` in HOME: another tool adds an entry to Codex's
-      # hook file after Herdr's install, by the time the kit asks for status.
-      if [ -e "$HOME/herdr-late-writer" ] && [ -e "$dir/codex" ] && [ -f "$HOME/.codex/hooks.json" ]; then
-        python3 - "$HOME/.codex/hooks.json" <<'PY'
-import json, sys
-path = sys.argv[1]
-document = json.load(open(path))
-groups = document["hooks"]["SessionStart"]
-c = "bash /foreign/late.sh"
-if not any(h.get("command") == c for g in groups for h in g.get("hooks", [])):
-    groups.append({"hooks": [{"command": c, "timeout": 10, "type": "command"}]})
-json.dump(document, open(path, "w"), indent=2)
-PY
-      fi
-      for t in pi omp claude codex copilot devin droid kimi opencode kilo hermes qodercli qwen cursor mastracode antigravity-cli grok letta; do
-        case "$(cat "$dir/$t" 2>/dev/null)" in
-          current) echo "$t: current (v1) (/x/$t)" ;;
-          outdated) echo "$t: outdated (v0 < v1) (/x/$t)" ;;
-          *) echo "$t: not installed (/x/$t)" ;;
-        esac
-      done ;;
-    install)
-      if [ -e "$HOME/herdr-fails" ]; then echo "disk full" >&2; exit 1; fi
-      echo current > "$dir/$3"
-      # Herdr's Codex integration also adds its entry to `hooks.json`, as
-      # Herdr 0.9.1 does: one group of its own on `SessionStart`, left alone
-      # when it is already there. A file `herdr-many` in HOME makes it add
-      # nine, and `herdr-edits` makes it also drop the first group that is not
-      # its own, the way another writer's change would look.
-      if [ "$3" = codex ] && [ -d "$HOME/.codex" ]; then
-        python3 - "$HOME" <<'PY'
-import json, os, sys
-home = sys.argv[1]
-codex = os.path.join(home, ".codex")
-path = os.path.join(codex, "hooks.json")
-command = "bash '%s' session" % os.path.join(codex, "herdr-agent-state.sh")
-try:
-    document = json.load(open(path))
-except (OSError, ValueError):
-    document = {}
-groups = document.setdefault("hooks", {}).setdefault("SessionStart", [])
-def has(c):
-    return any(h.get("command") == c for g in groups for h in g.get("hooks", []))
-if os.path.exists(os.path.join(home, "herdr-edits")):
-    for g in list(groups):
-        if not any(h.get("command") == command for h in g.get("hooks", [])):
-            groups.remove(g)
-            break
-extra = [command] + (["bash /extra/%d.sh" % n for n in range(8)] if os.path.exists(os.path.join(home, "herdr-many")) else [])
-for c in extra:
-    if not has(c):
-        groups.append({"hooks": [{"command": c, "timeout": 10, "type": "command"}]})
-with open(path, "w") as f:
-    json.dump(document, f, indent=2)
-PY
-      fi ;;
-    uninstall)
-      if [ -e "$HOME/herdr-uninstall-fails" ]; then echo "disk full" >&2; exit 1; fi
-      rm -f "$dir/$3" ;;
-  esac
-  exit 0
-fi
 echo "$@" >> "$HOME/herdr.log"
 "#;
 
@@ -297,31 +224,6 @@ impl Fixture {
 
     fn home(&self) -> &Path {
         &self.target.home
-    }
-
-    /// What the fake Herdr holds of one integration: `current`, `outdated`
-    /// or `none`.
-    fn integration(&self, target: &str) -> String {
-        std::fs::read_to_string(self.root.join("herdr-fake").join(target))
-            .map(|state| state.trim().to_owned())
-            .unwrap_or_else(|_| "none".to_owned())
-    }
-
-    /// An integration the operator put there before Hide looked.
-    fn operator_installed(&self, target: &str, state: &str) {
-        let dir = self.root.join("herdr-fake");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join(target), format!("{state}\n")).unwrap();
-    }
-
-    /// The `herdr integration install|uninstall` calls the kit made, in order.
-    fn integration_changes(&self) -> Vec<String> {
-        std::fs::read_to_string(self.root.join("herdr-integration.log"))
-            .unwrap_or_default()
-            .lines()
-            .filter(|line| !line.starts_with("integration status"))
-            .map(str::to_owned)
-            .collect()
     }
 
     fn settings(&self) -> String {
@@ -437,7 +339,6 @@ fn a_first_apply_installs_every_part_and_keeps_other_tools_entries() {
             "claude_code_hook",
             "cli",
             "coordination_retirement",
-            "herdr:claude-code",
             "skill:claude"
         ],
         "{record}"
