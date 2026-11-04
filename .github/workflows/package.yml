@@ -519,6 +519,7 @@ jobs:
           # these are the package's binaries, so no workspace is built twice.
           mkdir -p target/debug
           cp "${{ steps.installed.outputs.app }}/resources/"{hide,hided,hide-agent-hooks,hide-holder}.exe target/debug/
+          cp -R "${{ steps.installed.outputs.app }}/resources/holder-conpty" target/debug/
       - name: The packaged app's window
         # The installed hide.exe with its window, against a private HOME, state
         # and each engine (desktop/e2e/packaged-window.spec.ts); the shell it draws

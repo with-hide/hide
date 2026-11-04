@@ -55,6 +55,11 @@ export function linkBundle(bundle: Bundle = "plain", herdrBin?: string): void {
     if (!fs.existsSync(built)) throw new Error(`${built} is missing; the lane must build it (scripts/verify-cargo.sh cli, and -p hide-holder on the own engine)`);
     fs.linkSync(built, bundledExecutable(name, bundle));
   }
+  if (e2eEngine() === "own" && process.platform === "win32") {
+    // The node stages ConPTY from beside its executable, not beside the
+    // source binary a fixture hard-linked. Match the shipped package layout.
+    fs.cpSync(path.join(DEBUG, "holder-conpty"), path.join(resources(bundle), "holder-conpty"), { recursive: true });
+  }
   if (herdrBin) {
     const target = bundledExecutable("herdr", bundle);
     try {
