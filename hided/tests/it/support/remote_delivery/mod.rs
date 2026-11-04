@@ -486,8 +486,12 @@ impl Agent {
                 quote(&status)
             ),
         )?;
+        // The line, then its Enter on its own, as a person types it: a
+        // chunk longer than a typed burst reads as a paste, which submits
+        // nothing and would leave the pane holding a draft.
         self.daemon
-            .type_into(pane, &format!("RUN {}\r", script.display()))?;
+            .type_into(pane, &format!("RUN {}", script.display()))?;
+        self.daemon.type_into(pane, "\r")?;
         wait_for("attested pane command status", || {
             if status.exists() && timing.exists() {
                 Ok(Some(()))

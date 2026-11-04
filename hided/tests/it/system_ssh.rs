@@ -541,6 +541,8 @@ mod unix {
         let packages = base.join("p");
         std::fs::create_dir(&packages).unwrap();
         std::fs::write(packages.join("hided"), vec![7u8; 8 * 1024 * 1024]).unwrap();
+        // Every device gets the pane holder beside the helper.
+        std::fs::write(packages.join("hide-holder"), b"holder").unwrap();
         let ssh = base.join("ssh");
         std::fs::write(
             &ssh,

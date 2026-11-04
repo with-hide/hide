@@ -2018,10 +2018,11 @@ async fn hide_path_opens_a_registered_folder_and_answers_why_another_was_not_add
         (wire(&home.join("projects").join("gone")), "not_found"),
         (wire(outside.path()), "needs_confirmation"),
         (wire(&home), "home_root"),
-        // The dialog's own registration, refused by the core: no Herdr runs.
+        // The dialog's own registration, refused by the core: no pane
+        // holder can start for its first pane here.
         (
             wire(&home.join("projects").join("beta")),
-            "workspace_control_unavailable",
+            "workspace_create_failed",
         ),
     ] {
         let answer = open(path.clone()).await.unwrap().unwrap();
