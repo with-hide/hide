@@ -82,10 +82,10 @@ fn claude_in(
     tab.pane_id
 }
 
-/// What `pane` shows now.
+/// What `pane` shows now, without the styling between banner words.
 fn screen(engine: &dyn Engine, pane: &str) -> String {
     engine
-        .read_screen(WAIT, pane)
+        .read_pane(WAIT, pane, "visible", 120)
         .map(|read| read.text)
         .unwrap_or_else(|error| format!("<unread: {error:?}>"))
 }

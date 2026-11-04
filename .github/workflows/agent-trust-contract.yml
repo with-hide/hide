@@ -98,22 +98,16 @@ jobs:
             *) bin=$(zsh scripts/fetch-herdr-runtime.sh --platform macos-aarch64) ;;
           esac
           echo "bin=$bin" >> "$GITHUB_OUTPUT"
-      - name: The real Codex and Claude Code read the trust Hide records
+      - name: The real Codex and Claude Code read the trust Hide records on both engines
+        # One result file retains each engine's verdict even when another fails.
         timeout-minutes: 10
         env:
           HIDE_CODEX_BINARY: ${{ steps.agents.outputs.codex }}
           HIDE_TEST_CLAUDE_BIN: ${{ steps.agents.outputs.claude }}
           HIDE_E2E_HERDR_BIN: ${{ steps.herdr.outputs.bin }}
-        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'test(/^codex_binary::/) | test(=agent_start::real_agent_trust_tests::the_real_claude_starts_at_its_prompt_in_a_worktree_hide_trusted_and_asks_in_another)' --run-ignored only --no-capture
-      - name: The real Claude Code reads the trust Hide records on the own engine
-        # PRD engine-bundle-4-herdr-removal: the same check in a pane holder,
-        # with no Herdr, so the lane holds once Herdr is gone.
-        timeout-minutes: 10
-        env:
-          HIDE_TEST_CLAUDE_BIN: ${{ steps.agents.outputs.claude }}
           HIDE_TEST_HOLDER_BIN: ${{ github.workspace }}/target/debug/hide-holder${{ matrix.system == 'windows' && '.exe' || '' }}
           HIDE_HOLDER_CONPTY: ${{ matrix.system == 'windows' && format('{0}/holder-conpty', runner.temp) || '' }}
-        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'test(=agent_start::real_agent_trust_tests::on_the_own_engine_the_real_claude_starts_at_its_prompt_in_a_worktree_hide_trusted_and_asks_in_another)' --run-ignored only --no-capture
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'test(/^codex_binary::/) | test(/^agent_start::real_agent_trust_tests::/)' --run-ignored only --no-capture --no-fail-fast
       - name: Mint the development issues token
         # Development issues live in with-hide/hide-private (docs/TESTING.md,
         # Flaky tests); one App token reads this run here and files there. A run
