@@ -1155,35 +1155,89 @@ fn a_letter_typed_into_the_fork_keeps_the_released_keys_behind_it_in_order() {
     assert!(written_at(&writes, 5) >= written_at(&writes, 4) + input::REPLAYED_SUBMIT_GAP);
 }
 
+/// Holds `pane`'s keys for one letter, as `type_letter` begins one, so a
+/// test ends it with `Inner::end_letter` when it chooses.
+fn begin_letter(harness: &Harness, pane: &str) {
+    harness.service.shared.run(|inner, _| {
+        inner
+            .panes
+            .get_mut(pane)
+            .unwrap()
+            .letter
+            .get_or_insert_with(LetterHold::default)
+            .letters += 1;
+    });
+}
+
 #[test]
 fn keys_a_letter_held_go_ahead_of_a_forks_keys_released_during_it() {
     // "x" was typed during the letter, before the fork held the pane, so
     // it is written before the fork's keys when the letter ends.
     let harness = submitting_harness();
     let fork = harness.controlling("w1:p2");
-    thread::scope(|scope| {
-        let letter = scope.spawn(|| {
-            harness
-                .service
-                .type_letter(
-                    "w1:p2",
-                    vec![Typed::Bytes(b"letter".to_vec())],
-                    Typed::Bytes(b"\r".to_vec()),
-                    Duration::from_millis(300),
-                )
-                .unwrap();
-        });
-        written(&fork, b"letter");
-        harness.key("w1:p2", b"x");
-        fork_holding(&harness, "w1:p2", &[b"hello", b"\r"]);
-        harness.service.control(TerminalControl::RequestResolve {
-            request: "fork-1".into(),
-            pane: "w1:p2".into(),
-        });
-        letter.join().unwrap();
+    begin_letter(&harness, "w1:p2");
+    harness.key("w1:p2", b"x");
+    fork_holding(&harness, "w1:p2", &[b"hello", b"\r"]);
+    harness.service.control(TerminalControl::RequestResolve {
+        request: "fork-1".into(),
+        pane: "w1:p2".into(),
     });
-    let writes = written(&fork, b"letter\rxhello\r");
-    assert!(written_at(&writes, 13) >= written_at(&writes, 12) + input::REPLAYED_SUBMIT_GAP);
+    fork.assert_no_input();
+    harness
+        .service
+        .shared
+        .run(|inner, _| inner.end_letter("w1:p2", Instant::now()));
+    let writes = written(&fork, b"xhello\r");
+    assert!(written_at(&writes, 6) >= written_at(&writes, 5) + input::REPLAYED_SUBMIT_GAP);
+}
+
+#[test]
+fn a_letter_ending_without_held_keys_keeps_a_fork_queue_that_dropped_keys_past_its_cap() {
+    // "z" crossed the queue's cap and was reported; the keys queued before
+    // it are still written once the letter ends.
+    let harness = submitting_harness();
+    let fork = harness.controlling("w1:p2");
+    begin_letter(&harness, "w1:p2");
+    let full = vec![b'y'; hide_node_link::terminal::INPUT_HOLD_LIMIT_BYTES];
+    fork_holding(&harness, "w1:p2", &[&full]);
+    harness.service.control(TerminalControl::RequestResolve {
+        request: "fork-1".into(),
+        pane: "w1:p2".into(),
+    });
+    harness.key("w1:p2", b"z");
+    harness.report_where(|report| {
+        matches!(report, TerminalReport::RequestDiscarded { request, reason }
+            if request == "fork-1" && reason == "limit")
+    });
+    harness
+        .service
+        .shared
+        .run(|inner, _| inner.end_letter("w1:p2", Instant::now()));
+    assert_eq!(input_bytes(&fork, full.len()), full);
+}
+
+#[test]
+fn keys_a_letter_held_ahead_of_a_full_fork_queue_drop_the_latest_typed_and_report_it() {
+    let harness = submitting_harness();
+    let fork = harness.controlling("w1:p2");
+    begin_letter(&harness, "w1:p2");
+    harness.key("w1:p2", b"x");
+    let full = vec![b'y'; hide_node_link::terminal::INPUT_HOLD_LIMIT_BYTES];
+    fork_holding(&harness, "w1:p2", &[&full]);
+    harness.service.control(TerminalControl::RequestResolve {
+        request: "fork-1".into(),
+        pane: "w1:p2".into(),
+    });
+    harness
+        .service
+        .shared
+        .run(|inner, _| inner.end_letter("w1:p2", Instant::now()));
+    harness.report_where(|report| {
+        matches!(report, TerminalReport::RequestDiscarded { request, reason }
+            if request == "fork-1" && reason == "limit")
+    });
+    assert_eq!(input_bytes(&fork, 1), b"x");
+    fork.assert_no_input();
 }
 
 #[test]

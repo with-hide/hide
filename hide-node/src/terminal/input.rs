@@ -115,15 +115,18 @@ pub(super) enum Typed {
     Submit(Box<hide_holder_protocol::Submit>),
 }
 
+/// What a submission counts against a cap: its parts' bytes or keys.
+pub(super) fn submit_len(submit: &Submit) -> usize {
+    submit.text.iter().map(SubmitPart::len).sum::<usize>() + submit.enter.len()
+}
+
 impl Typed {
     /// What it counts against a cap: its bytes, or one per key.
     pub(super) fn len(&self) -> usize {
         match self {
             Self::Bytes(bytes) | Self::Paste(bytes) => bytes.len(),
             Self::Keys(keys) => keys.len(),
-            Self::Submit(submit) => {
-                submit.text.iter().map(SubmitPart::len).sum::<usize>() + submit.enter.len()
-            }
+            Self::Submit(submit) => submit_len(submit),
         }
     }
 
@@ -807,9 +810,13 @@ impl Replay {
         }
     }
 
-    pub(super) fn push(&mut self, pane_id: &str, chunk: HeldChunk) {
+    /// Queues `chunk` behind the rest; answers whether it is the key that
+    /// crossed the cap, dropped with every key after it, which the caller
+    /// reports once ([`TerminalReport::RequestDiscarded`] `limit`).
+    #[must_use]
+    pub(super) fn push(&mut self, pane_id: &str, chunk: HeldChunk) -> bool {
         if self.overflowed {
-            return;
+            return false;
         }
         if self.bytes + chunk.input.len() > INPUT_HOLD_LIMIT_BYTES {
             self.overflowed = true;
@@ -820,22 +827,33 @@ impl Replay {
                 "reason": "limit",
                 "bytes": chunk.input.len(),
             }));
-            return;
+            return true;
         }
         self.bytes += chunk.input.len();
         self.chunks.push(chunk);
+        false
     }
 
     /// Keys a letter held for the pane, which go ahead of every key queued
     /// here: a key typed while a fork holds the pane is the fork's, so the
     /// fork's hold, and every key it queued, began after them. The cap
-    /// counts them like any other.
-    pub(super) fn put_first(&mut self, pane_id: &str, chunks: Vec<HeldChunk>) {
-        let queued = std::mem::take(&mut self.chunks);
-        self.bytes = 0;
-        for chunk in chunks.into_iter().chain(queued) {
-            self.push(pane_id, chunk);
+    /// counts them like any other, so past it the latest typed are dropped,
+    /// as [`Self::push`] drops them, and a queue that already dropped keys
+    /// goes on dropping. Answers whether this crossed the cap.
+    #[must_use]
+    pub(super) fn put_first(&mut self, pane_id: &str, chunks: Vec<HeldChunk>) -> bool {
+        if chunks.is_empty() {
+            return false;
         }
+        let queued = std::mem::take(&mut self.chunks);
+        let overflowed = std::mem::replace(&mut self.overflowed, false);
+        self.bytes = 0;
+        let mut crossed = false;
+        for chunk in chunks.into_iter().chain(queued) {
+            crossed |= self.push(pane_id, chunk);
+        }
+        self.overflowed |= overflowed;
+        crossed && !overflowed
     }
 
     /// A side channel's permit at its head, which no earlier key waits in

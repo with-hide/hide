@@ -469,31 +469,9 @@ impl Service {
         impl Drop for Letter<'_> {
             fn drop(&mut self) {
                 let now = Instant::now();
-                self.service.shared.run(|inner, _| {
-                    let Some(entry) = inner.panes.get_mut(self.pane) else {
-                        return;
-                    };
-                    let Some(letter) = entry.letter.as_mut() else {
-                        return;
-                    };
-                    letter.letters -= 1;
-                    if letter.letters > 0 {
-                        return;
-                    }
-                    let Some(held) = entry.letter.take() else {
-                        return;
-                    };
-                    let keys = held.keys.take_in_order(self.pane, now);
-                    if let Some(replay) = entry.replay.as_mut() {
-                        replay.put_first(self.pane, keys);
-                    } else {
-                        for chunk in keys {
-                            inner.route_input(KeyTarget::Pane(self.pane.to_owned()), chunk, now);
-                        }
-                    }
-                    inner.pump_replay(self.pane, now);
-                    inner.finish_input_release(self.pane);
-                });
+                self.service
+                    .shared
+                    .run(|inner, _| inner.end_letter(self.pane, now));
             }
         }
         let _work = self.shared.run(|inner, _| {
@@ -548,6 +526,48 @@ impl Service {
 }
 
 impl Inner {
+    /// One letter typed into `pane` ended. Once the last has, the keys the
+    /// letters held go ahead of the pane's replay queue when it has one,
+    /// since they were typed before the fork held the pane, or are written
+    /// in the order typed.
+    fn end_letter(&mut self, pane: &str, now: Instant) {
+        let Some(entry) = self.panes.get_mut(pane) else {
+            return;
+        };
+        let Some(letter) = entry.letter.as_mut() else {
+            return;
+        };
+        letter.letters -= 1;
+        if letter.letters > 0 {
+            return;
+        }
+        let Some(held) = entry.letter.take() else {
+            return;
+        };
+        let keys = held.keys.take_in_order(pane, now);
+        if let Some(replay) = entry.replay.as_mut() {
+            if replay.put_first(pane, keys) {
+                let request = replay.request.clone();
+                self.replay_overflowed(request);
+            }
+        } else {
+            for chunk in keys {
+                self.route_input(KeyTarget::Pane(pane.to_owned()), chunk, now);
+            }
+        }
+        self.pump_replay(pane, now);
+        self.finish_input_release(pane);
+    }
+
+    /// The replay queue for `request` dropped keys past its cap: the core
+    /// asks the operator to type them again (the fork's input-loss notice).
+    fn replay_overflowed(&mut self, request: String) {
+        self.reports.push(TerminalReport::RequestDiscarded {
+            request,
+            reason: "limit".to_owned(),
+        });
+    }
+
     fn route_input(&mut self, target: KeyTarget, chunk: HeldChunk, now: Instant) {
         let target = match target {
             // A request holds the operator's keys typed into a new pane until
@@ -1478,8 +1498,13 @@ impl Inner {
         };
         match entry.replay.as_mut() {
             Some(replay) => {
+                let mut crossed = false;
                 for chunk in held {
-                    replay.push(pane, chunk);
+                    crossed |= replay.push(pane, chunk);
+                }
+                if crossed {
+                    let request = replay.request.clone();
+                    self.replay_overflowed(request);
                 }
             }
             None => {
@@ -1579,7 +1604,10 @@ impl Inner {
                 .get_mut(pane)
                 .and_then(|entry| entry.replay.as_mut())
         {
-            replay.push(pane, chunk);
+            if replay.push(pane, chunk) {
+                let request = replay.request.clone();
+                self.replay_overflowed(request);
+            }
             return;
         }
         if chunk.by == Typist::Operator

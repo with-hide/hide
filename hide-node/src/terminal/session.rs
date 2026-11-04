@@ -531,7 +531,7 @@ impl WriterCommand {
             Self::Scroll { .. } | Self::Resize(_) | Self::Redraw(_) => CONTROL_LINE_COST,
             Self::Input { bytes, .. } | Self::Paste(bytes) => bytes.len(),
             Self::Keys(keys) => keys.len(),
-            Self::Submit(submit) => super::input::Typed::Submit(submit.clone()).len(),
+            Self::Submit(submit) => super::input::submit_len(submit),
             Self::Engine { input, .. } => input.len(),
             Self::Barrier(_) | Self::Release { .. } => 0,
         }
