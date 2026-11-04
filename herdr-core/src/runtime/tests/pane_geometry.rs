@@ -477,9 +477,17 @@ fn a_split_confirmed_by_the_first_publish_after_its_answer_matches_its_predictio
 fn a_split_the_engine_lays_out_otherwise_than_predicted_is_reported_in_the_same_order() {
     let mismatches = split_confirmed_by_the_first_publish("geometry-split-other-ratio", 0.25);
     assert_eq!(mismatches.len(), 1, "{mismatches:?}");
+    // The drawn shape is the prediction's, with the new pane in it, and only
+    // the ratio differs from the engine's.
     assert_eq!(
         mismatches[0]["drawn_pane_ids"],
-        serde_json::json!([LEFT, CREATED])
+        mismatches[0]["confirmed_pane_ids"]
+    );
+    assert!(
+        mismatches[0]["drawn_pane_ids"]
+            .as_array()
+            .is_some_and(|ids| ids.contains(&serde_json::json!(CREATED))),
+        "{mismatches:?}"
     );
     assert_eq!(mismatches[0]["drawn_ratios"], serde_json::json!([0.5]));
     assert_eq!(mismatches[0]["confirmed_ratios"], serde_json::json!([0.25]));

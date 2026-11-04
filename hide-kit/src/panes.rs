@@ -348,9 +348,9 @@ impl Panes {
 
     /// Mends what a machine that stopped mid-write leaves, before anything
     /// reads the records. A record and the incarnation counter are replaced
-    /// whole (`hide_platform::fs::atomic::write_file`) and flushed to the
-    /// device but not past its cache, since a pane record need not outlive
-    /// the machine: after a power loss every holder it names is gone too.
+    /// whole (`hide_platform::fs::atomic::write_file`) and not synced, since
+    /// a pane record need not outlive the machine: after a power loss every
+    /// holder it names is gone too.
     /// What the device then kept may be an empty or cut-off file, or an
     /// older one, and none of it may stop the panes starting again:
     ///
@@ -1120,8 +1120,8 @@ impl Panes {
     /// and started again never has an earlier start's number. The caller
     /// holds the lock. The file is moved on by [`INCARNATIONS_TAKEN`] at a
     /// time and this process gives those out itself, so one start in that
-    /// many writes it rather than every start: each write is flushed, and
-    /// it stood in front of every new pane. A number is never given twice,
+    /// many writes it rather than every start: each write was flushed then,
+    /// and it stood in front of every new pane. A number is never given twice,
     /// whichever process takes the next ones, and one taken but not given
     /// (the process ended) is simply never used.
     fn next_incarnation(&self) -> Result<u64, String> {
