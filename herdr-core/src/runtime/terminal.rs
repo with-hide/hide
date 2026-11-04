@@ -1793,8 +1793,11 @@ impl Runtime {
                         // pending; set here alone, the engine's next layout,
                         // still on the old pane, read as the engine's own
                         // move and took the keyboard back. Only on a move
-                        // within the tab shown, never per key.
-                        self.focus_pane(pane, super::events::PaneFocusOrigin::Operator, None);
+                        // within the tab shown, never per key. A key is not
+                        // a look: the read record stays where the operator
+                        // last looked (a phone's keys reach this machine's
+                        // panes too), so the focus is not the operator's.
+                        self.focus_pane(pane, super::events::PaneFocusOrigin::Restore, None);
                     }
                     return true;
                 }
