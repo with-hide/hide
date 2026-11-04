@@ -1,27 +1,31 @@
-//! The real Claude Code in a pane of the pinned Herdr, in a worktree of a
+//! The real Claude Code in a pane of an engine, in a worktree of a
 //! repository it was never told to trust: it starts at its prompt in the
 //! worktree whose trust Hide recorded through the node (`trust_worktree`),
 //! and asks its folder trust question in the repository's other worktree,
 //! which shows the check reads the question where Claude asks it. Claude Code
 //! shows the question before it needs a sign-in, so no account is needed.
 //!
-//! It needs the pinned Herdr in `HIDE_E2E_HERDR_BIN` and Claude Code in
-//! `HIDE_TEST_CLAUDE_BIN`, so it is ignored by default; the nightly agent
-//! trust contract installs the pinned Claude Code and runs it on every
-//! system.
+//! It runs once on each engine: the pinned Herdr in a private server
+//! (`HIDE_E2E_HERDR_BIN`), and the core's own engine over holders started
+//! from the built holder (`HIDE_TEST_HOLDER_BIN`, and `HIDE_HOLDER_CONPTY` on
+//! Windows). Both need Claude Code in `HIDE_TEST_CLAUDE_BIN`, so they are
+//! ignored by default; the nightly agent trust contract installs the pinned
+//! Claude Code and runs both on every system.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-
-use serde_json::json;
+use std::time::Instant;
 
 use super::real_herdr_tests::PrivateHerdr;
 use super::*;
+use crate::engine::{Engine, Wait};
 
 /// Claude Code 2.1.302's folder trust question.
 const TRUST_QUESTION: &str = "Quick safety check";
 /// The banner over Claude Code's prompt, which its trust question replaces.
 const PROMPT_BANNER: &str = "Claude Code v";
+const WAIT: Wait = Wait::Each(Duration::from_secs(10));
 
 fn git(cwd: &Path, args: &[&str]) {
     // The account's git settings, such as commit signing, are not the
@@ -46,25 +50,34 @@ fn git(cwd: &Path, args: &[&str]) {
     );
 }
 
-/// A tab running `claude` in `folder`, in a workspace of its own.
-fn claude_in(herdr: &PrivateHerdr, claude: &Path, folder: &Path, label: &str) -> String {
-    let (workspace, _, _) = crate::engine::herdr::wire::created_workspace(herdr.request(
-        "workspace.create",
-        json!({"cwd": folder, "label": label, "focus": false}),
-    ))
-    .unwrap();
-    let env = [
-        ("DISABLE_AUTOUPDATER", "1"),
-        ("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1"),
-    ]
-    .into_iter()
-    .map(|(key, value)| (key.to_owned(), value.to_owned()))
-    .collect();
+/// A tab running `claude` in `folder`, in a workspace of its own; `env`
+/// reaches the pane's program beside what the engine gives it.
+fn claude_in(
+    engine: &dyn Engine,
+    env: &BTreeMap<String, String>,
+    claude: &Path,
+    folder: &Path,
+    label: &str,
+) -> String {
+    // Project registration hands the engine the node's canonical wire path
+    // (hide_host::project::create). A Windows temp path can instead name an
+    // 8.3 alias; Claude compares that cwd literally with its trust key.
+    let folder = hide_platform::fs::identity::canonical(folder).unwrap();
+    let folder = hide_platform::path::to_wire(&folder).unwrap();
+    let (workspace, _, _) = engine
+        .create_workspace(WAIT, &folder, label, false, env.clone())
+        .unwrap_or_else(|error| panic!("{label}: the workspace is made: {error:?}"));
+    let mut env = env.clone();
+    env.insert("DISABLE_AUTOUPDATER".into(), "1".into());
+    env.insert(
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC".into(),
+        "1".into(),
+    );
     let command = [claude.to_str().unwrap().to_owned()];
     let tab = crate::checkout_owner::open::create_tab_in(
-        herdr.engine().as_ref(),
+        engine,
         &workspace,
-        folder.to_str().unwrap(),
+        &folder,
         label,
         false,
         env,
@@ -74,17 +87,59 @@ fn claude_in(herdr: &PrivateHerdr, claude: &Path, folder: &Path, label: &str) ->
     tab.pane_id
 }
 
-#[test]
-#[ignore = "needs the pinned Herdr (HIDE_E2E_HERDR_BIN) and Claude Code (HIDE_TEST_CLAUDE_BIN)"]
-fn the_real_claude_starts_at_its_prompt_in_a_worktree_hide_trusted_and_asks_in_another() {
+/// What `pane` shows now, without the styling between banner words.
+fn screen(engine: &dyn Engine, pane: &str) -> String {
+    engine
+        .read_pane(WAIT, pane, "visible", 120)
+        .map(|read| read.text)
+        .unwrap_or_else(|error| format!("<unread: {error:?}>"))
+}
+
+/// Waits until `pane` shows `text`, failing with what it shows.
+#[allow(clippy::disallowed_methods)] // a polling helper: it sleeps between observations of a state, bounded by a deadline
+fn wait_for(engine: &dyn Engine, pane: &str, text: &str, what: &str) {
+    let deadline = Instant::now() + Duration::from_secs(90);
+    while !screen(engine, pane).contains(text) {
+        assert!(
+            Instant::now() < deadline,
+            "{what}; pane {pane} shows:\n{}",
+            screen(engine, pane)
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+/// The check on `engine`, whose panes receive only private config roots:
+/// Claude Code asks in the worktree nobody trusted and starts
+/// at its prompt in the one Hide trusted.
+fn claude_reads_the_trust_hide_recorded(engine: &dyn Engine, home: &Path) {
     let claude = PathBuf::from(
         std::env::var_os("HIDE_TEST_CLAUDE_BIN").expect("HIDE_TEST_CLAUDE_BIN names Claude Code"),
     );
-    let herdr = PrivateHerdr::new(None);
-    let home = herdr.home.clone();
+    // Move every native config lookup with HOME, including an inherited
+    // Claude override and its keychain namespace. The same private .claude
+    // folder holds the legacy global config both Claude and trust_worktree
+    // read (hide-agent-hooks Runtime::trust_path).
+    let config = home.join(".claude");
+    std::fs::create_dir_all(&config).unwrap();
+    let env = [
+        ("HOME", home.to_owned()),
+        ("USERPROFILE", home.to_owned()),
+        ("CLAUDE_CONFIG_DIR", config.clone()),
+        ("CLAUDE_SECURESTORAGE_CONFIG_DIR", config.clone()),
+        ("APPDATA", home.join("AppData/Roaming")),
+        ("LOCALAPPDATA", home.join("AppData/Local")),
+        ("XDG_CONFIG_HOME", home.join(".config")),
+        ("XDG_STATE_HOME", home.join(".local/state")),
+        ("XDG_DATA_HOME", home.join(".local/share")),
+        ("XDG_CACHE_HOME", home.join(".cache")),
+    ]
+    .into_iter()
+    .map(|(key, folder)| (key.to_owned(), folder.to_string_lossy().into_owned()))
+    .collect();
     // An account where Claude Code has run before and trusts no folder.
     std::fs::write(
-        home.join(".claude.json"),
+        config.join(".config.json"),
         r#"{"hasCompletedOnboarding": true, "hasSeenAutoDefaultNotice": true, "theme": "dark", "numStartups": 3}"#,
     )
     .unwrap();
@@ -117,7 +172,7 @@ fn the_real_claude_starts_at_its_prompt_in_a_worktree_hide_trusted_and_asks_in_a
         );
     }
 
-    let node = hide_node::Local::new(Some(home.clone()));
+    let node = hide_node::Local::new(Some(home.to_owned()));
     trust_worktree(
         Some(&node),
         "claude",
@@ -125,23 +180,64 @@ fn the_real_claude_starts_at_its_prompt_in_a_worktree_hide_trusted_and_asks_in_a
     )
     .unwrap();
 
-    let asked = claude_in(&herdr, &claude, &other, "other");
-    herdr.wait_on(
+    // The node must have written the file the real CLI will read, not the
+    // default global file outside CLAUDE_CONFIG_DIR.
+    let trusted_config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(config.join(".config.json")).unwrap()).unwrap();
+    let projects = trusted_config["projects"].as_object().unwrap();
+    assert_eq!(projects.len(), 1);
+    let (folder, trust) = projects.iter().next().unwrap();
+    assert_eq!(
+        std::fs::canonicalize(folder).unwrap(),
+        std::fs::canonicalize(&task).unwrap()
+    );
+    assert_eq!(trust["hasTrustDialogAccepted"], true);
+    assert!(!home.join(".claude.json").exists());
+
+    let asked = claude_in(engine, &env, &claude, &other, "other");
+    wait_for(
+        engine,
         &asked,
-        Duration::from_secs(90),
+        TRUST_QUESTION,
         "Claude Code asks its folder trust question in a worktree no one trusted",
-        || herdr.screen(&asked).contains(TRUST_QUESTION),
     );
-    let trusted = claude_in(&herdr, &claude, &task, "task");
-    herdr.wait_on(
+    let trusted = claude_in(engine, &env, &claude, &task, "task");
+    wait_for(
+        engine,
         &trusted,
-        Duration::from_secs(90),
+        PROMPT_BANNER,
         "Claude Code starts at its prompt in the worktree Hide trusted",
-        || herdr.screen(&trusted).contains(PROMPT_BANNER),
     );
-    let screen = herdr.screen(&trusted);
+    let screen = screen(engine, &trusted);
     assert!(
         !screen.contains(TRUST_QUESTION),
         "Claude Code asked in the worktree Hide trusted:\n{screen}"
     );
+}
+
+#[test]
+#[ignore = "needs the pinned Herdr (HIDE_E2E_HERDR_BIN) and Claude Code (HIDE_TEST_CLAUDE_BIN)"]
+fn the_real_claude_starts_at_its_prompt_in_a_worktree_hide_trusted_and_asks_in_another() {
+    // The server runs in its private home, which its panes inherit.
+    let herdr = PrivateHerdr::new(None);
+    let engine = herdr.engine();
+    claude_reads_the_trust_hide_recorded(engine.as_ref(), &herdr.home);
+}
+
+#[test]
+#[ignore = "needs the built pane holder (HIDE_TEST_HOLDER_BIN) and Claude Code (HIDE_TEST_CLAUDE_BIN)"]
+fn on_the_own_engine_the_real_claude_starts_at_its_prompt_in_a_worktree_hide_trusted_and_asks_in_another()
+ {
+    struct Running(crate::engine::contract::BuiltHolders);
+    impl Drop for Running {
+        fn drop(&mut self) {
+            self.0.stop();
+        }
+    }
+    let running = Running(crate::engine::contract::BuiltHolders::start());
+    // A holder's pane runs with the test's environment, so the private home
+    // is named to the pane's program as Herdr's server names its own.
+    let home = Path::new(&running.0.folder).join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    claude_reads_the_trust_hide_recorded(&running.0.engine, &home);
 }

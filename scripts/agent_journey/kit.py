@@ -1,4 +1,4 @@
-"""The integration cell: the Herdr integration that reported the agent's
+"""The integration cell: the engine integration that reported the agent's
 session is the one the candidate's kit installed where the agent reads it.
 
 Hide's own record of what its kit put on this Mac is the machine's kit row in
@@ -10,6 +10,8 @@ in the session's source, the contract's `herdr_source`
 (`herdr:<integration target>`). Both together, with both pieces in
 the HOME the agent reads its configuration from, say the agent loaded the
 candidate's integration and not one of the operator's.
+On the own engine, the private hook and Hide's registered session identity
+provide the corresponding observations; no Herdr integration is required.
 """
 
 from pathlib import Path
@@ -40,7 +42,7 @@ def verdict(row, session, source, home):
     reports it, `home` where the agent reads its configuration."""
     if not row:
         return cells.FAIL, "the kit has no row for the agent on this Mac"
-    for name in ("hook", "herdr"):
+    for name in (("hook", "herdr") if source is not None else ("hook",)):
         piece = row.get(name) or {}
         if piece.get("state") != "installed":
             return cells.FAIL, f"the kit's {name} piece is {piece.get('state')}" + (
@@ -51,8 +53,8 @@ def verdict(row, session, source, home):
     status, reason = cells.emitter_verdict(session, source)
     if status != cells.PASS:
         return status, reason
-    return cells.PASS, ("the kit installed Hide's hook and Herdr's current integration in the agent's HOME, "
-                        "and " + reason)
+    pieces = "Hide's hook and Herdr's current integration" if source is not None else "Hide's hook"
+    return cells.PASS, f"the kit installed {pieces} in the agent's HOME, and {reason}"
 
 
 def measure(journey):
@@ -61,7 +63,7 @@ def measure(journey):
 
     def installed(rest):
         row = kit_agent(rest, journey.id) or {}
-        return all((row.get(name) or {}).get("state") == "installed" for name in ("hook", "herdr")) and row
+        return all((row.get(name) or {}).get("state") == "installed" for name in (("hook", "herdr") if journey.runtime.engine == "herdr" else ("hook",))) and row
     try:
         journey.daemon.wait(installed, KIT_SECONDS, "the kit row to read the agent's pieces installed")
     except ProcessError as error:
@@ -76,4 +78,4 @@ def measure(journey):
         record["devices"] = [{"id": device.get("id"), "kind": device.get("kind"), "state": device.get("state"),
                               "agents": [agent.get("id") for agent in (device.get("kit") or {}).get("agents") or []]}
                              for device in ((journey.daemon.snapshot() or {}).get("navigator") or {}).get("devices") or []]
-    journey.settle(CELL, verdict(row, session, journey.row["herdr_source"], journey.runtime.home), journey.evidence(CELL, record))
+    journey.settle(CELL, verdict(row, session, (journey.row["herdr_source"] if journey.runtime.engine == "herdr" else None), journey.runtime.home), journey.evidence(CELL, record))

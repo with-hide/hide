@@ -1,7 +1,9 @@
-// The desktop app against a private Herdr server and a private hided state
-// directory. Nothing here can reach the operator's daemon: the app is
-// refused a launch unless HIDE_STATE_DIR, HOME, HERDR_SOCKET_PATH and its
-// own userData all sit under this run's temporary directory.
+// The desktop app against the engine HIDE_E2E_ENGINE names and a private
+// hided state directory: a private Herdr server, or the core's own engine (a
+// daemon with HIDE_DEV_PANE_HOLDER=1 over the bundle's `hide-holder`, and no
+// Herdr). Nothing here can reach the operator's daemon: the app is refused a
+// launch unless HIDE_STATE_DIR, HOME, its own userData and, on Herdr,
+// HERDR_SOCKET_PATH all sit under this run's temporary directory.
 
 import { _electron as electron, test as base, expect, type ElectronApplication, type Page } from "@playwright/test";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
@@ -11,9 +13,11 @@ import path from "node:path";
 import { linkFixtureTranscripts, type HerdrFixture } from "../../web/e2e/herdr-fixture";
 import { bundledExecutable, linkBundle } from "../../web/e2e/bundled-app";
 import { dumpOnFailure, pageSide } from "../../web/e2e/failure-dump";
-import { aiSettingsFile } from "../../web/e2e/hided-fixture";
-import { ownUntilWorkerExit } from "../../web/e2e/worker-owned";
-import { endWindowsProcesses, fixtureExecutable, fixtureHomeEnv, fixtureLoginShellPath, fixtureOpenCommand, fixtureToolPath, inheritedFixtureEnv } from "../../web/e2e/platform-fixture";
+import { startFixture, type AgentFixture } from "../../web/e2e/engine-fixture";
+import { aiSettingsFile, type Daemon } from "../../web/e2e/hided-fixture";
+import { endPaneHolders } from "../../web/e2e/pane-holders.mjs";
+import { afterCleanup, ownUntilWorkerExit } from "../../web/e2e/worker-owned";
+import { endWindowsProcesses, fixtureExecutable, fixtureHomeEnv, fixtureLoginShellPath, fixtureOpenCommand, fixtureToolPath, inheritedFixtureEnv, windowsProcessTree } from "../../web/e2e/platform-fixture";
 import { SHOW_INACTIVE_SWITCH } from "../src/main/launchSwitches";
 import { FUSED_ELECTRON_ENV } from "./fused-env";
 
@@ -36,24 +40,41 @@ export type Isolated = {
 };
 
 /**
+ * What an isolated home runs its panes on: a Herdr server (`socket` and
+ * `bin`), or, with neither, the core's own engine, whose daemon gets the
+ * development switch and `daemonEnv` (the pane shell and its prompt,
+ * `web/e2e/engine-fixture.ts`).
+ */
+export type IsolatedEngine = Partial<Pick<HerdrFixture, "socket" | "bin" | "root" | "afterStop">> & { daemonEnv?: NodeJS.ProcessEnv };
+
+/**
  * The app's `hide` is the worker's app bundle of the debug build
  * (`web/e2e/bundled-app.ts`), so the daemon it starts runs the install kit
  * into the private HOME as a packaged one does. The HOME carries an empty kit
  * record (`seedKitRecord`), as a Mac the kit has run on.
  *
- * A Herdr fixture with its `root` also lends the daemon its `claude`, which
+ * A fixture with its `root` also lends the daemon its `claude`, which
  * is the label provider the fixture's transcripts are answered by, and those
  * transcripts; without one the daemon finds whatever `claude` PATH has, on a
  * HOME where it is not logged in. It also saves `claude` as the agent Hide AI runs on.
+ *
+ * With no Herdr `socket` the daemon runs the core's own engine: its panes are
+ * its node's children, so they start in this HOME, whose `.zshrc` gives them
+ * the fixture's prompt, and the holders they run in are ended with the home.
  */
-export function isolate(herdr: Pick<HerdrFixture, "socket" | "bin"> & Partial<Pick<HerdrFixture, "root" | "afterStop">>, label: string): Isolated {
+export function isolate(herdr: IsolatedEngine, label: string): Isolated {
+  const own = !herdr.socket;
   if (isolations.size >= MAX_ISOLATIONS) throw new Error(`desktop fixture has ${MAX_ISOLATIONS} unclosed homes; clean an owned fixture before creating another`);
-  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), `hide-desktop-${label}-`)));
+  // macOS's temporary base already uses most of a Unix socket's path bound.
+  // Keep the state's holder socket short regardless of the test's label.
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(process.platform === "win32" ? os.tmpdir() : "/tmp", "hdd-")));
   const home = path.join(root, "home");
   let env: Record<string, string>;
   try {
     fs.mkdirSync(path.join(home, "projects"), { recursive: true });
     seedKitRecord(home);
+    // The prompt the fixture's waits read, as the Herdr fixture's server gives its panes.
+    if (own) fs.writeFileSync(path.join(home, ".zshrc"), "PS1='fixture %# '\n");
     if (herdr.root) {
       linkFixtureTranscripts({ root: herdr.root }, home);
       // Hide AI asks no model until an agent is chosen (PRD settings-cleanup B47), and this app has
@@ -72,11 +93,12 @@ export function isolate(herdr: Pick<HerdrFixture, "socket" | "bin"> & Partial<Pi
       HIDE_DESKTOP_SYSTEM_LANGUAGE: "en-US",
       HIDE_CLI_PATH: bundledExecutable("hide"),
       HIDED_UI_DIR: path.join(REPO, "web", "dist"),
-      HERDR_SOCKET_PATH: herdr.socket,
-      HERDR_BIN_PATH: herdr.bin,
+      // The core's own engine takes no Herdr: a socket beside its switch fails the daemon's start.
+      ...(own ? { HIDE_DEV_PANE_HOLDER: "1" } : { HERDR_SOCKET_PATH: herdr.socket!, HERDR_BIN_PATH: herdr.bin! }),
       PATH: fixtureToolPath(path.join(herdr.root ?? root, "bin")),
       // `open_external` must not launch a GUI application during a test.
       HIDE_OPEN_COMMAND: fixtureOpenCommand(undefined, root),
+      ...definedEnv(herdr.daemonEnv),
     };
   } catch (error) {
     fs.rmSync(root, { recursive: true, force: true });
@@ -101,22 +123,37 @@ export function isolate(herdr: Pick<HerdrFixture, "socket" | "bin"> & Partial<Pi
     const live = [...owner.candidates].filter((child) => child.exitCode === null && child.signalCode === null);
     if (live.length || owner.launching) {
       const pids = live.map((child) => child.pid ?? "unavailable").join(", ");
-      throw new Error(`fixture cleanup incomplete; preserve ${root}: candidate exit unconfirmed (PIDs: ${pids || "none"}, pending launches: ${owner.launching}); close only the recorded owned candidates, confirm their exit, then call cleanup() again`);
+      throw new Error(`fixture cleanup incomplete (${label}); preserve ${root}: candidate exit unconfirmed (PIDs: ${pids || "none"}, pending launches: ${owner.launching}); close only the recorded owned candidates, confirm their exit, then call cleanup() again`);
     }
     // Read before the root goes: an exception nothing in the host caught fails
     // the test with its stack, instead of passing unseen (issue 675).
-    const uncaught = hostLog(cleanupEnv).filter((line) => line.event === "host.uncaught"
-      && !allowed.some((part) => String(line.message).includes(part)));
     const errors: unknown[] = [];
+    let uncaught: ReturnType<typeof hostLog> = [];
+    try {
+      uncaught = hostLog(cleanupEnv).filter((line) => line.event === "host.uncaught"
+        && !allowed.some((part) => String(line.message).includes(part)));
+    } catch (error) { errors.push(error); }
+    const stoppedStates: string[] = [];
     for (const state of states()) {
       if (!fs.existsSync(state)) continue;
       const stopped = spawnSync(HIDE_CLI, ["stop"], { env: { ...cleanupEnv, HIDE_STATE_DIR: state }, encoding: "utf8", timeout: 20_000 });
       if (stopped.error || stopped.status !== 0) errors.push(new Error(`private hided stop failed for ${state}: ${stopped.error?.message ?? (stopped.stderr || stopped.stdout || stopped.status)}`));
+      else stoppedStates.push(state);
     }
     // A spec cleans up in its own hooks, before the test's outcome is final,
     // so the logs are read here and the test fixture decides whether to keep them.
     if (daemonLogs) {
       try { daemonLogs.push(...daemonLogTails(states(), root, home)); } catch (error) { errors.push(error); }
+    }
+    // The own engine's holders outlive their daemon by design; the home that started them ends them.
+    // A log read failure must not strand holders after their daemon stopped.
+    if (own) {
+      for (const state of stoppedStates) {
+        if (!fs.existsSync(path.join(state, "holders"))) continue;
+        try {
+          endPaneHolders(state, process.platform === "win32" ? { endTree: (pid: number) => endWindowsProcesses(windowsProcessTree(pid)) } : {});
+        } catch (error) { errors.push(error); }
+      }
     }
     if (errors.length) throw new AggregateError(errors, `fixture cleanup incomplete; preserve ${root} and resolve the reported stop/unload failure`);
     // Windows keeps a running executable and a process's folder locked: end what still runs from the root first.
@@ -140,6 +177,70 @@ export function isolate(herdr: Pick<HerdrFixture, "socket" | "bin"> & Partial<Pi
   owner.cleanup = cleanup;
   isolations.set(home, owner);
   return { root, env, hide, daemonPid, allowHostUncaught: (part) => { allowed.push(part); }, cleanup };
+}
+
+/** `env` without its unset values, as a child's environment takes it. */
+function definedEnv(env: NodeJS.ProcessEnv | undefined): Record<string, string> {
+  return Object.fromEntries(Object.entries(env ?? {}).filter((entry): entry is [string, string] => entry[1] !== undefined));
+}
+
+/** A test's engine, its isolated home, and the daemon that holds the fixture's checkout and panes. */
+export type Stack = {
+  fixture: AgentFixture;
+  run: Isolated;
+  /** The home's daemon, which the app attaches to; it is stopped with the home. */
+  daemon: Pick<Daemon, "origin" | "token" | "stateDir" | "home">;
+  /** Ends the home (its app, daemon and holders) and then the engine. */
+  stop: () => void;
+};
+
+/**
+ * The default stack of a desktop spec, on the engine HIDE_E2E_ENGINE names
+ * (`web/e2e/engine-fixture.ts`, `startFixture`): one checkout, the folder
+ * `fixture` under the engine's root, whose one tab holds two panes, each the
+ * `claude` stand-in (`agents: false` leaves two shells; `family` makes the
+ * second the first one's delegated child). Its home's daemon is started as
+ * the app's own `hide connect` starts it, and the fixture is made through
+ * that daemon with the web shell's events before the app opens, as Herdr's
+ * panes existed before it; the app then attaches to that daemon
+ * (`launch`). `prepare` runs between the isolated home and its daemon, for
+ * what must exist before the daemon registers the checkout or reads its
+ * environment (a repository, a program on PATH, a variable): the home's
+ * daemon starts only once.
+ */
+export async function startStack(
+  label: string,
+  options: { agents?: boolean; family?: boolean; prepare?: (fixture: AgentFixture, run: Isolated) => void } = {},
+): Promise<Stack> {
+  const { prepare, ...kind } = options;
+  const fixture = await startFixture(kind);
+  let run: Isolated | null = null;
+  const stop = () => {
+    try { run?.cleanup(); } finally { fixture.stop(); }
+  };
+  try {
+    run = isolate(fixture, label);
+    prepare?.(fixture, run);
+    const daemon = await connectHome(run);
+    await fixture.opened!(daemon);
+    return { fixture, run, daemon, stop };
+  } catch (error) {
+    throw afterCleanup(error, stop);
+  }
+}
+
+/**
+ * Starts the home's daemon with the bundle's `hide connect`, as the app
+ * does, and returns once it answers; a launch then attaches to it.
+ */
+export async function connectHome(run: Isolated): Promise<Pick<Daemon, "origin" | "token" | "stateDir" | "home">> {
+  linkBundle();
+  fixtureLoginShellPath(run.env.HOME!, run.env.PATH!);
+  const connected = spawnSync(bundledExecutable("hide"), ["connect"], { env: run.env, encoding: "utf8", timeout: 30_000 });
+  if (connected.error || connected.status !== 0) throw new Error(`hide connect failed for ${run.root}: ${connected.error?.message ?? (connected.stdout || connected.stderr || `exit ${connected.status}`)}`);
+  const stateDir = run.env.HIDE_STATE_DIR!;
+  const { port, token } = JSON.parse(fs.readFileSync(path.join(stateDir, "hided.json"), "utf8")) as { port: number; token: string };
+  return { origin: `http://127.0.0.1:${port}`, token, stateDir, home: run.env.HOME! };
 }
 
 /**
@@ -190,7 +291,10 @@ export function assertIsolated(env: Record<string, string>): void {
   // The Herdr fixture keeps its socket directly under /tmp for the path length limit.
   const roots = [fs.realpathSync.native(os.tmpdir()), ...(process.platform === "win32" ? [] : [fs.realpathSync.native("/tmp")])];
   const nativeHomeKeys = process.platform === "win32" ? ["USERPROFILE", "APPDATA", "LOCALAPPDATA"] : [];
-  for (const key of ["HOME", "HIDE_STATE_DIR", "HIDE_DESKTOP_USER_DATA_DIR", "HERDR_SOCKET_PATH", ...nativeHomeKeys]) {
+  // The own engine runs no Herdr, and a socket beside its switch would fail its daemon.
+  const own = env.HIDE_DEV_PANE_HOLDER === "1";
+  if (own && env.HERDR_SOCKET_PATH) throw new Error("HERDR_SOCKET_PATH is set beside HIDE_DEV_PANE_HOLDER=1");
+  for (const key of ["HOME", "HIDE_STATE_DIR", "HIDE_DESKTOP_USER_DATA_DIR", ...(own ? [] : ["HERDR_SOCKET_PATH"]), ...nativeHomeKeys]) {
     const value = env[key];
     const parent = value ? fs.realpathSync.native(path.dirname(value)) : null;
     if (!parent || !roots.some((root) => {

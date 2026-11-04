@@ -43,6 +43,10 @@ impl Runtime {
         // the agent's screen (`delivery::typed`).
         let mut sent = None;
         let (machine, step) = match command {
+            PaneCommand::ReadScreen { pane } => {
+                let (machine, raw) = target(&pane);
+                (machine, Step::ReadScreen { pane, raw })
+            }
             PaneCommand::Read { pane, lines } => {
                 let (machine, raw) = target(&pane);
                 (machine, Step::Read { pane, raw, lines })
@@ -287,7 +291,7 @@ mod tests {
             .prepare_pane_command(NODE, "sender", context, command)?
             .step
         {
-            Step::Read { pane, raw, .. } => Ok((pane, raw)),
+            Step::Read { pane, raw, .. } | Step::ReadScreen { pane, raw } => Ok((pane, raw)),
             _ => panic!("a read"),
         }
     }
@@ -297,6 +301,62 @@ mod tests {
             agent: key.into(),
             lines: 10,
         }
+    }
+
+    #[test]
+    fn a_screen_read_preserves_styles_rows_and_truncation_without_sending_input() {
+        let screen = "\u{1b}[31mred\u{1b}[0m\r\n  next row";
+        let (runtime, context, _root, _herdr) = fixture_answering(false, move |method, params| {
+            assert_eq!(method, "pane.read");
+            assert_eq!(params["pane_id"], "recipient");
+            assert_eq!(params["source"], "visible");
+            assert_eq!(params["format"], "ansi");
+            assert_eq!(params["strip_ansi"], false);
+            assert!(params.get("lines").is_none_or(serde_json::Value::is_null));
+            Ok(json!({"type": "pane_read", "read": {
+                "pane_id": "recipient", "workspace_id": "w1", "tab_id": "w1:t1",
+                "source": "visible", "format": "ansi", "revision": 1,
+                "truncated": true, "text": screen
+            }}))
+        });
+        let result = runtime
+            .prepare_pane_command(
+                NODE,
+                "sender",
+                &context,
+                PaneCommand::ReadScreen {
+                    pane: "recipient".into(),
+                },
+            )
+            .unwrap()
+            .run()
+            .unwrap();
+        assert_eq!(
+            result,
+            json!({"pane": "recipient", "text": screen, "truncated": true})
+        );
+    }
+
+    #[test]
+    fn a_refused_screen_read_is_an_error_not_an_empty_screen() {
+        let (runtime, context, _root, _herdr) = fixture_answering(false, |method, _| {
+            assert_eq!(method, "pane.read");
+            Err(("pane_not_found".into(), "gone".into()))
+        });
+        assert_eq!(
+            runtime
+                .prepare_pane_command(
+                    NODE,
+                    "sender",
+                    &context,
+                    PaneCommand::ReadScreen {
+                        pane: "recipient".into()
+                    },
+                )
+                .unwrap()
+                .run(),
+            Err("pane_unavailable".into())
+        );
     }
 
     /// A send counts as input routed to the agent's pane, the answer that
@@ -1025,6 +1085,27 @@ mod tests {
             read(&runtime, &context, pane("remote:studio:pane:w7:p3")).err(),
             Some("engine_unavailable".into()),
             "the device's engine, not this machine's"
+        );
+        assert_eq!(
+            read(
+                &runtime,
+                &context,
+                PaneCommand::ReadScreen {
+                    pane: "w7:p3".into()
+                }
+            ),
+            Ok(("w7:p3".into(), "w7:p3".into()))
+        );
+        assert_eq!(
+            read(
+                &runtime,
+                &context,
+                PaneCommand::ReadScreen {
+                    pane: "remote:studio:pane:w7:p3".into()
+                }
+            )
+            .err(),
+            Some("engine_unavailable".into())
         );
         let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
             {"id":"far","pane_id":"w2:p1","agent":"codex","agent_status":"idle","state_change_seq":1,"lineage_session":"far-session"},

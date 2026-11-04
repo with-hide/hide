@@ -1,6 +1,7 @@
-// The desktop app end to end: a private Herdr server with two fake agent
-// panes, a private hided the app starts through `hide connect`, and the
-// real Electron build. Each test owns its state directory and so its daemon.
+// The desktop app end to end: a private engine, a private hided the app starts
+// through `hide connect` (or finds already running over the panes a test
+// made), and the real Electron build. Each test owns its engine, its state
+// directory and so its daemon.
 
 import { expect, type ElectronApplication, type Page } from "@playwright/test";
 import { spawn, spawnSync } from "node:child_process";
@@ -9,38 +10,44 @@ import os from "node:os";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
-import { startHerdr, type HerdrFixture } from "../../web/e2e/herdr-fixture";
+import { tabsOf, withControl } from "../../web/e2e/daemon-actions";
+import { startEngine } from "../../web/e2e/engine-fixture";
 import "../../web/src/host";
 import { chord, commandLabel } from "../../web/e2e/chords";
 import { fixtureExecutable } from "../../web/e2e/platform-fixture";
-import { herdrTabs } from "../../web/e2e/failure-dump";
 import { countSent, enterWorkspace } from "../../web/e2e/wire";
 import { toPage } from "../src/main/wirePath";
-import { detachedApp, DESKTOP_DIR, HIDE_CLI, hostLog, isolate, launch, relaunch, screenshot, test, type Isolated } from "./fixture";
+import { detachedApp, DESKTOP_DIR, HIDE_CLI, hostLog, isolate, launch, launchShell, relaunch, screenshot, startStack, test, type Isolated, type Stack } from "./fixture";
 
-let herdr: HerdrFixture;
 let run: Isolated;
+let stack: Stack;
+let stopHome: (() => void) | null = null;
 let app: ElectronApplication | null = null;
 
-test.beforeAll(async () => {
-  herdr = await startHerdr();
-});
+const homeLabel = () => test.info().title.split(":")[0]!;
 
-test.afterAll(() => {
-  herdr?.stop();
-});
+/** A home whose daemon the app starts itself, over an engine with no panes in it. */
+async function bareHome(): Promise<void> {
+  const engine = await startEngine();
+  run = isolate(engine, homeLabel());
+  stopHome = () => { try { run.cleanup(); } finally { engine.stop(); } };
+}
 
-test.beforeEach(() => {
-  run = isolate(herdr, test.info().title.split(":")[0]!);
-});
+/** A home whose daemon is already running over the fixture's checkout, whose one tab holds two shells. */
+async function paneHome(): Promise<void> {
+  stack = await startStack(homeLabel(), { agents: false });
+  run = stack.run;
+  stopHome = stack.stop;
+}
 
 test.afterEach(async () => {
   const info = test.info();
   // The host's log says which discovery step failed; it goes with the failure.
-  if (info.status !== info.expectedStatus) console.log(hostLog(run.env).map((line) => JSON.stringify(line)).join("\n"));
+  if (info.status !== info.expectedStatus && stopHome) console.log(hostLog(run.env).map((line) => JSON.stringify(line)).join("\n"));
   await app?.close().catch(() => undefined);
   app = null;
-  run.cleanup();
+  stopHome?.();
+  stopHome = null;
 });
 
 async function shellShown(page: Page): Promise<void> {
@@ -49,8 +56,10 @@ async function shellShown(page: Page): Promise<void> {
 
 // @platform: `hide connect` starts hided through the system's processes and local stream, and the window, menu and chords are the system's own set.
 test("attach: the app starts hided, shows the shell, and runs the native chords and the menu", { tag: "@platform" }, async () => {
-  ({ app } = await launch(run.env));
-  const page = await app.firstWindow();
+  await paneHome();
+  const launched = await launchShell(run.env);
+  app = launched.app;
+  const page = launched.page;
   // B1: the host's own screen while it looks, then the shell hided serves.
   await shellShown(page);
   expect(new URL(page.url()).hostname).toBe("127.0.0.1");
@@ -124,22 +133,26 @@ test("attach: the app starts hided, shows the shell, and runs the native chords 
 
 // @platform: the native accelerator and menu bridge each open a terminal on every system.
 test("New tab: the native chord and menu each open one terminal directly", { tag: "@platform" }, async () => {
-  ({ app } = await launch(run.env));
-  const page = await app.firstWindow();
+  await paneHome();
+  const launched = await launchShell(run.env);
+  app = launched.app;
+  const page = launched.page;
   const last = new Map<string, Record<string, unknown>>();
   const sent = countSent(page, last);
+  // launchShell already connected; observe the next socket before the action.
+  await page.reload();
   await shellShown(page);
   await enterWorkspace(page);
   const tabs = page.locator("[data-agent-tab-bar] [role=tab][data-tab]");
   const start = page.locator("[data-agent-tab-start]");
   await expect(page.locator("[data-pane-view]").first()).toBeVisible();
   const before = await tabs.count();
-  const nativeTabCount = () => (herdrTabs(herdr) as { tabs: string[] }[]).reduce((sum, workspace) => sum + workspace.tabs.length, 0);
-  const beforeNative = nativeTabCount();
+  const nativeTabCount = () => withControl(stack.daemon, async (control) => (await control.until((rest) => ({ tabs: tabsOf(rest, stack.fixture.workspace) ?? [] }), "the project's tabs")).tabs.length);
+  const beforeNative = await nativeTabCount();
   const area = page.locator("[data-agent-area-id]");
   const areaId = await area.getAttribute("data-agent-area-id");
   const request = {
-    workspace: { device_id: expect.any(String), path: toPage(path.join(herdr.root, "fixture")) },
+    workspace: { device_id: expect.any(String), path: toPage(path.join(stack.fixture.root, "fixture")) },
     group_id: null, action: "new_tab", terminal: true, request_id: expect.any(String),
   };
 
@@ -180,6 +193,7 @@ test("New tab: the native chord and menu each open one terminal directly", { tag
 });
 
 test("links: external links open in the default browser and the window stays on the daemon", async () => {
+  await bareHome();
   ({ app } = await launch(run.env));
   const page = await app.firstWindow();
   await shellShown(page);
@@ -207,6 +221,7 @@ test("links: external links open in the default browser and the window stays on 
 
 // @platform: Closing the last window keeps the app on macOS and ends it elsewhere (`window-all-closed` in `index.ts`); hided outlives the app on every system.
 test("lifetime: a second launch brings the first back, closing the last window keeps the app on macOS and ends it elsewhere, and hided stays for the next launch", { tag: "@platform" }, async () => {
+  await bareHome();
   ({ app } = await launch(run.env));
   let page = await app.firstWindow();
   await shellShown(page);
@@ -275,6 +290,7 @@ test("lifetime: a second launch brings the first back, closing the last window k
 
 // @platform: The CLI is `hide.exe` on Windows and `hide` elsewhere, and the host looks for it in the system's own places (`cli.ts`).
 test("failure: a missing CLI shows its reason and Retry attaches once it exists", { tag: "@platform" }, async () => {
+  await bareHome();
   const cli = path.join(run.root, "bin", fixtureExecutable("hide"));
   ({ app } = await launch({ ...run.env, HIDE_CLI_PATH: cli }));
   const page = await app.firstWindow();
@@ -324,6 +340,7 @@ test("failure: a missing CLI shows its reason and Retry attaches once it exists"
 });
 
 test("failure: a state folder another node owns names the file and starts nothing", async () => {
+  await bareHome();
   // PRD core-host-node B2: the daemon refuses the folder and the screen says which file.
   const marker = path.join(run.env.HIDE_STATE_DIR!, "node.json");
   fs.mkdirSync(path.dirname(marker), { recursive: true });
@@ -340,6 +357,7 @@ test("failure: a state folder another node owns names the file and starts nothin
 });
 
 test("failure: a core newer than this app names its machine and both builds and asks for the app to be updated", async () => {
+  await bareHome();
   // PRD core-host-node-move B11: a stand-in hide answers as a node whose core runs a newer build; the core is left as it is.
   const cli = path.join(run.root, "bin", "hide");
   fs.mkdirSync(path.dirname(cli), { recursive: true });
@@ -359,6 +377,7 @@ test("failure: a core newer than this app names its machine and both builds and 
 });
 
 test("failure: an attached node whose core update failed shows both builds, and Retry is one more connection", async () => {
+  await bareHome();
   // PRD core-host-node-move B10, B20: the node's health names the failed update and the host leaves the shell for its page.
   const builds = { machine: "Mac mini", core: "0.4.1 (b520d6e)", app: "0.4.2 (3f1c2a9)" };
   const node = http.createServer((request, response) => {
@@ -398,6 +417,7 @@ test("failure: an attached node whose core update failed shows both builds, and 
 });
 
 test("discovery: a Finder-style PATH still lets a new daemon run installed tools", async () => {
+  await bareHome();
   // launchd's bare PATH, no override, no worktree build beside it. Playwright runs the app
   // unpackaged, so the login-shell step is skipped here; cli.test.ts covers its place in the order.
   const bare = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"];
@@ -435,6 +455,7 @@ test("discovery: a Finder-style PATH still lets a new daemon run installed tools
 
 // @platform: A daemon ending and the next one starting, seen through the system's processes and local stream.
 test("reattach: a daemon that dies shows the shell's disconnected state, and the app follows the next one", { tag: "@platform" }, async () => {
+  await bareHome();
   ({ app } = await launch(run.env));
   const page = await app.firstWindow();
   await shellShown(page);
@@ -452,6 +473,7 @@ test("reattach: a daemon that dies shows the shell's disconnected state, and the
 });
 
 test("uncaught: an exception and a rejection nothing in the host caught go to its log without a dialog, the app keeps running, and quit finishes", async () => {
+  await bareHome();
   ({ app } = await launch(run.env));
   await shellShown(await app.firstWindow());
   run.allowHostUncaught("planted");

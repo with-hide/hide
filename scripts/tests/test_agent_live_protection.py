@@ -453,6 +453,23 @@ raise SystemExit('FIFO was accepted as configuration')
                 with self.assertRaises(ProtectionError):
                     validate_isolation(self.run, home, sock, private_state, self.home, None)
 
+    @unittest.skipIf(os.name == "nt", "native journey waits for win-agent-start")
+    def test_native_state_accepts_only_the_owned_private_short_root(self):
+        short = self.root / "short"
+        short.mkdir(mode=0o700)
+        args = (self.run, self.run / "home", short / "herdr.sock", short / "state", self.home, None, short)
+        validate_isolation(*args, short_state=True)
+        with self.assertRaises(ProtectionError):
+            validate_isolation(*args)
+        (short / "state").symlink_to(self.home, target_is_directory=True)
+        with self.assertRaises(ProtectionError):
+            validate_isolation(*args, short_state=True)
+        (short / "state").unlink()
+        if os.name != "nt":
+            short.chmod(0o755)
+            with self.assertRaises(ProtectionError):
+                validate_isolation(*args, short_state=True)
+
 
 @unittest.skipUnless(sys.platform == "darwin" or sys.platform.startswith("linux"),
                      "process guardian supports macOS and Linux")
@@ -1243,12 +1260,17 @@ class NativeWriteProtection(unittest.TestCase):
                 listener.close()
 
     def test_other_process_control_arguments_and_mailbox_storage_are_denied(self):
+        for short_state in (False, True):
+            with self.subTest(short_state=short_state):
+                self.check_private_state(short_state)
+
+    def check_private_state(self, short_state):
         with tempfile.TemporaryDirectory(prefix="acl-", dir="/tmp") as name:
             root = Path(name).resolve()
             run, sockets, home = [root / key for key in ("run", "sockets", "operator")]
             for path in (run, sockets, home):
                 path.mkdir(mode=0o700)
-            state = run / "state"
+            state = (sockets if short_state else run) / "state"
             caps = state / "pane-capabilities"
             caps.mkdir(parents=True, mode=0o700)
             reference = caps / "own.json"
@@ -1256,7 +1278,7 @@ class NativeWriteProtection(unittest.TestCase):
             reference.chmod(0o600)
             mailbox = state / "mailbox.json"
             mailbox.write_text("fresh-test-marker")
-            guard = WriteSandbox(run, sockets, home, checkout=root / "candidate")
+            guard = WriteSandbox(run, sockets, home, state, checkout=root / "candidate")
             settings = guard.probe / "integration/.claude/settings.json"
             settings.parent.mkdir(parents=True, mode=0o700)
             settings.write_text("fixture-settings")
@@ -1279,6 +1301,9 @@ class NativeWriteProtection(unittest.TestCase):
                            f"\ntry: Path({str(mailbox)!r}).read_text()"
                            "\nexcept PermissionError: pass"
                            "\nelse: raise SystemExit(31)"
+                           f"\ntry: Path({str(mailbox)!r}).write_text('forbidden')"
+                           "\nexcept PermissionError: pass"
+                           "\nelse: raise SystemExit(34)"
                            f"\ntry: os.kill({standin.pid}, 0)"
                            "\nexcept PermissionError: pass"
                            "\nelse: raise SystemExit(32)"

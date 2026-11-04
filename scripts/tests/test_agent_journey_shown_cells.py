@@ -30,6 +30,15 @@ def rest(*agents, devices=()):
 class Integration(unittest.TestCase):
     session = {"source": "herdr:codex", "agent": "codex", "kind": "id", "value": "s1"}
 
+    def test_native_kit_needs_its_private_hook_and_registered_session_without_herdr(self):
+        row = kit_row()
+        row.pop("herdr")
+        session = {"kind": "id", "value": "s1", "observation": "hide.agent.list"}
+        self.assertEqual(kit.verdict(row, session, None, HOME)[0], cells.PASS)
+        for changed in ({**row, "hook": None}, kit_row(hook_at="/elsewhere/operator/.codex")):
+            self.assertEqual(kit.verdict(changed, session, None, HOME)[0], cells.FAIL)
+        self.assertEqual(kit.verdict(row, {**session, "observation": "snapshot"}, None, HOME)[0], cells.FAIL)
+
     def test_the_kit_installed_both_pieces_in_the_agents_home_and_herdr_reported_the_session(self):
         status, reason = kit.verdict(kit_row(), self.session, "herdr:codex", HOME)
         self.assertEqual(status, cells.PASS)
@@ -109,7 +118,7 @@ class Fork(unittest.TestCase):
                                       "agent-2")[0], cells.FAIL)
         status, reason = fork.verdict(self.row(), "source-1", {**self.herdr, "value": "fork-2"}, "herdr:claude",
                                       self.listed, "agent-2")
-        self.assertEqual((status, reason), (cells.FAIL, "Herdr reports session fork-2 in the fork, Hide registered fork-1"))
+        self.assertEqual((status, reason), (cells.FAIL, "The engine reports session fork-2 in the fork, Hide registered fork-1"))
         self.assertEqual(fork.verdict(self.row(), "source-1", None, "herdr:claude", self.listed, "agent-2")[0], cells.FAIL)
 
     def test_a_fork_registered_as_a_child_or_from_another_source_fails(self):

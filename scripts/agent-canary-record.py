@@ -15,9 +15,9 @@ day on which no vendor released starts no journey. `reruns` prints the
 agents whose latest release failed a cell while their pin is another version
 (`agents=<id,...>`) and the systems it failed on (`systems=<JSON>`): the
 workflow measures those again at their pins, on the same commit. `record`
-judges each agent from the fake model lane's reports, one per system under
-`<dir>` (the latest releases' `agent-journey-fake-<system>` and the pinned
-rerun's `agent-journey-pinned-<system>`), and rewrites the record issue's
+judges each agent from the fake model lane's reports, one per engine and system under
+`<dir>` (the latest releases' `agent-journey-fake-<system>-<engine>` and the pinned
+rerun's `agent-journey-pinned-<system>-<engine>`), and rewrites the record issue's
 table. A miss the pinned version does not repeat is the release's: the agent
 gets its own issue, or a comment on the open one, and an agent that passes
 again closes it. A miss the pinned version repeats on the same commit is
@@ -85,6 +85,10 @@ def misses(row, report, system):
     a CLI that is missing or answered another version than the table, or
     `row` for a report with no row for the agent; `head` says which and how,
     and `reason`, which can name a run's own token, why."""
+    if "engine_reports" in report:
+        return [(f"{engine}/{what}", head, reason)
+                for engine, measured in report["engine_reports"].items()
+                for what, head, reason in misses(row, measured, f"{system} {engine}")]
     agent = row["id"]
     found = []
     entry = next((item for item in report.get("agents", []) if item.get("id") == agent), {})
@@ -156,7 +160,7 @@ def verdicts(contract, versions, pins, reports, pinned):
         label = f"{agent} {pin} (pinned)" if same else f"{agent} {pin} (pinned; latest {versions.get(kind)})"
         release, hide, keys, unjudged = [], [], [], []
         for system, what, head, reason in found[agent]:
-            if not same and what == "install":
+            if not same and what.rsplit("/", 1)[-1] == "install":
                 # The latest release's own install or version answer.
                 release.append(line(head, reason))
                 continue
@@ -164,7 +168,7 @@ def verdicts(contract, versions, pins, reports, pinned):
                 again = pinned.get(system)
                 measured = again is not None and agent in again.get("selected", [])
                 repeated = {miss[0] for miss in misses(row, again, system)} if measured else set()
-                if not measured or "install" in repeated:
+                if not measured or any(item.rsplit("/", 1)[-1] == "install" for item in repeated):
                     unjudged.append(f"{line(head, reason)}; the pinned {pin} was not measured on {system}")
                     continue
                 if what not in repeated:
@@ -306,12 +310,21 @@ def apply(state, before, run_url, commit, pins, run=subprocess.run):
 
 
 def load_reports(folder, name=LATEST):
-    """Each system's report, from the artifacts `<name>-<system>/report.json`."""
+    """Both engines on each system; a missing leg is no complete measurement.
+
+    Windows own waits for win-agent-start and bounded holder job ownership,
+    as agent-journey.yml declares. Keep engine in a failure's identity so a
+    pinned Herdr success cannot clear a native-engine failure.
+    """
     reports = {}
     for system in SYSTEMS:
-        path = folder / f"{name}-{system}" / "report.json"
-        if path.is_file():
-            reports[system] = json.loads(path.read_text())
+        engines = ("herdr",) if system == "windows" else ("herdr", "own")
+        paths = {engine: folder / f"{name}-{system}-{engine}" / "report.json" for engine in engines}
+        if all(path.is_file() for path in paths.values()):
+            measured = {engine: json.loads(path.read_text()) for engine, path in paths.items()}
+            reports[system] = {"engine_reports": measured,
+                               "selected": sorted(set.intersection(*(set(row.get("selected", []))
+                                                                      for row in measured.values())))}
     return reports
 
 

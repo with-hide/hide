@@ -1,5 +1,5 @@
 // Runs the production host and its scoped endpoint against a private daemon
-// and Herdr server. The operator's app, browser and profile are never used.
+// and engine. The operator's app, browser and profile are never used.
 import { chromium, expect, type Browser, type ElectronApplication, type Page } from "@playwright/test";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -9,13 +9,15 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { WebSocket } from "ws";
 import type { BrowserSync } from "../../web/src/host";
-import { startHerdr, type HerdrFixture } from "../../web/e2e/herdr-fixture";
+import { sendKeys, withControl } from "../../web/e2e/daemon-actions";
+import type { AgentFixture } from "../../web/e2e/engine-fixture";
 import { chooseExpand, enterWorkspace, showDocuments } from "../../web/e2e/wire";
 import { BROWSER_SYNC_CHANNEL } from "../src/channel";
-import { fitWindow, HIDE_CLI, hostLog, isolate, launch, REPO, test, type Isolated } from "./fixture";
+import { fitWindow, HIDE_CLI, hostLog, launchShell, REPO, startStack, test, type Isolated, type Stack } from "./fixture";
 
 test.describe.configure({ timeout: 180_000 });
-let herdr: HerdrFixture;
+let stack: Stack;
+let fixture: AgentFixture;
 let run: Isolated;
 let app: ElectronApplication | null = null;
 let browser: Browser | null = null;
@@ -112,11 +114,10 @@ function coreLog(env: Record<string, string>): { kind?: unknown; scheme?: unknow
   return fs.readFileSync(file, "utf8").split("\n").filter(Boolean).flatMap((line) => { try { return [JSON.parse(line) as { kind?: unknown }]; } catch { return []; } });
 }
 async function fromPane(args: string[], succeeds = true): Promise<Record<string, unknown>> {
-  const stem = path.join(herdr.root, `cdp-command-${++sequence}`);
+  const stem = path.join(fixture.root, `cdp-command-${++sequence}`);
   const output = `${stem}.json`, status = `${stem}.status`;
-  const command = `HIDE_STATE_DIR=${quote(run.env.HIDE_STATE_DIR!)} ${[HIDE_CLI, ...args].map(quote).join(" ")} > ${quote(output)}; printf '%s' "$?" > ${quote(status)}\n`;
-  const sent = spawnSync(herdr.bin, ["pane", "send-text", herdr.panes[0]!, command], { env: herdr.env, encoding: "utf8", timeout: 10_000 });
-  expect(sent.status).toBe(0);
+  const command = `HIDE_STATE_DIR=${quote(run.env.HIDE_STATE_DIR!)} ${[HIDE_CLI, ...args].map(quote).join(" ")} > ${quote(output)}; printf '%s' "$?" > ${quote(status)}\r`;
+  await withControl(stack.daemon, async (control) => sendKeys(control, fixture.panes[0], command));
   await expect.poll(() => fs.existsSync(status), { timeout: 30_000 }).toBe(true);
   expect(fs.statSync(output).size, "bounded isolated Workspace reply").toBeLessThanOrEqual(64 * 1024);
   let parsed: unknown;
@@ -212,10 +213,6 @@ async function ownedFrameProvenance(parentUrl: string, childUrl: string) {
 }
 
 test.beforeAll(async () => {
-  herdr = await startHerdr({ agents: false });
-  fileCanary = path.join(herdr.root, "outside-cdp-canary.html");
-  fs.writeFileSync(fileCanary, '<title>Forbidden file canary</title><h1>FORBIDDEN_CDP_FILE_CONTENT</h1>');
-  fileUrl = pathToFileURL(fileCanary).href;
   server = createServer((request, response) => {
     if (request.url === "/owned-download") {
       if (downloadRequests === MAX_DOWNLOAD_REQUESTS) { response.writeHead(429); response.end("Fixture download request limit exceeded"); return; }
@@ -248,11 +245,16 @@ test.beforeAll(async () => {
   origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
 test.afterAll(async () => {
-  herdr?.stop();
   await new Promise<void>((resolve) => server?.close(() => resolve()));
 });
-test.beforeEach(() => {
-  run = isolate(herdr, "browser-cdp"); downloadRequests = 0;
+test.beforeEach(async () => {
+  stack = await startStack("browser-cdp", { agents: false });
+  fixture = stack.fixture;
+  run = stack.run;
+  downloadRequests = 0;
+  fileCanary = path.join(fixture.root, "outside-cdp-canary.html");
+  fs.writeFileSync(fileCanary, '<title>Forbidden file canary</title><h1>FORBIDDEN_CDP_FILE_CONTENT</h1>');
+  fileUrl = pathToFileURL(fileCanary).href;
   fileRedirectRequested = false; fileRedirect = null;
 });
 test.afterEach(async () => {
@@ -262,11 +264,11 @@ test.afterEach(async () => {
   browser = null;
   await app?.close().catch(() => undefined);
   app = null;
-  run.cleanup();
+  stack.stop();
 });
 
 test("browser CDP: standard Playwright controls the scoped native page and disconnect preserves it", async () => {
-  const launched = await launch(run.env);
+  const launched = await launchShell(run.env);
   app = launched.app;
   await fitWindow(app, { width: 1024, height: 640 });
   await enterWorkspace(launched.page, "fixture");
@@ -439,7 +441,7 @@ test("browser CDP: standard Playwright controls the scoped native page and disco
 });
 
 test("browser CDP: creation stays in its originating area while another area is active and foreign renderer IDs are refused", async () => {
-  const launched = await launch(run.env);
+  const launched = await launchShell(run.env);
   app = launched.app;
   await enterWorkspace(launched.page, "fixture");
   const first = await fromPane(["browser", "open", `${origin}/first`, "--wait"]);
@@ -485,7 +487,7 @@ test("browser CDP: creation stays in its originating area while another area is 
 });
 
 test("browser CDP: selected-display and direct-page close replies arrive before capability shutdown", async () => {
-  const launched = await launch(run.env);
+  const launched = await launchShell(run.env);
   app = launched.app;
   await enterWorkspace(launched.page, "fixture");
   for (const mode of ["browser", "page"] as const) {
@@ -511,7 +513,7 @@ test("browser CDP: selected-display and direct-page close replies arrive before 
 });
 
 test("browser CDP: injected incarnation-only sync revokes old URLs without replacing the native page", async () => {
-  const launched = await launch(run.env);
+  const launched = await launchShell(run.env);
   app = launched.app;
   await enterWorkspace(launched.page, "fixture");
   const url = `${origin}/incarnation`;
@@ -583,7 +585,7 @@ test("browser CDP: injected incarnation-only sync revokes old URLs without repla
 });
 
 test("browser CDP: the native guard cancels a pending preattach file load and remains restricted after disconnect", async () => {
-  const launched = await launch(run.env);
+  const launched = await launchShell(run.env);
   app = launched.app;
   await enterWorkspace(launched.page, "fixture");
   const opened = await fromPane(["browser", "open", `${origin}/pending-preload`]);
@@ -644,7 +646,7 @@ test("browser CDP: the native guard cancels a pending preattach file load and re
 });
 
 test("browser CDP: native files cannot be read through runtime, frames, redirects or creation", async () => {
-  const launched = await launch(run.env);
+  const launched = await launchShell(run.env);
   app = launched.app;
   await enterWorkspace(launched.page, "fixture");
   const opened = await fromPane(["browser", "open", `${origin}/protected`, "--wait"]);
@@ -698,7 +700,7 @@ test("browser CDP: native files cannot be read through runtime, frames, redirect
   expect(await page.locator("body").innerText()).not.toContain("FORBIDDEN_CDP_FILE_CONTENT");
   // A manual file display retains ordinary native behavior but is excluded
   // even when its source is within this checkout and its renderer is live.
-  const manual = path.join(herdr.root, "fixture", "manual-cdp-file.html");
+  const manual = path.join(fixture.root, "fixture", "manual-cdp-file.html");
   fs.writeFileSync(manual, "<title>Manual local file</title><h1>Manual local file</h1>");
   const manualOpened = await fromPane(["browser", "open", pathToFileURL(manual).href, "--wait"]);
   const manualId = (manualOpened.result as { view_id: string }).view_id;
@@ -766,7 +768,7 @@ test("browser CDP: native files cannot be read through runtime, frames, redirect
 });
 
 test("browser CDP: the owned native iframe request is causally canceled before file content", async () => {
-  const launched = await launch(run.env);
+  const launched = await launchShell(run.env);
   app = launched.app;
   await enterWorkspace(launched.page, "fixture");
   const url = `${origin}/frame-guard`;
@@ -824,7 +826,7 @@ test("browser CDP: the owned native iframe request is causally canceled before f
 });
 
 test("browser CDP: controlled downloads are always canceled and log once after disconnect", async () => {
-  const launched = await launch(run.env);
+  const launched = await launchShell(run.env);
   app = launched.app;
   await enterWorkspace(launched.page, "fixture");
   const opened = await fromPane(["browser", "open", `${origin}/download-guard`, "--wait"]);

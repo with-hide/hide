@@ -8,7 +8,7 @@ import { expect, type ElectronApplication, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { startHerdr } from "../../web/e2e/herdr-fixture";
+import { startEngine } from "../../web/e2e/engine-fixture";
 import { chord } from "../../web/e2e/chords";
 import { toPage } from "../src/main/wirePath";
 import { sendEvent, THIS_MACHINE } from "../../web/e2e/wire";
@@ -16,6 +16,9 @@ import { isolate, launch, nodeOf, test } from "./fixture";
 import { compositorPresents } from "../../web/e2e/wait";
 
 type Pick = { canceled: boolean; filePaths: string[] };
+
+// These tests start from a home with no project registered (the dialog's first-run wording and its
+// default parent folder depend on it), so each runs on an empty engine and the app starts its own daemon.
 
 /** Replaces the picker with `answers`, one per call; returns how many calls it has had. */
 async function stubPicker(app: ElectronApplication, answers: Pick[]): Promise<void> {
@@ -36,8 +39,8 @@ const pickCalls = (app: ElectronApplication) => app.evaluate(() => (globalThis a
 
 // @platform: The picker answers a native path, which the host spells for the wire (`wirePath.ts`: `/` on every system, a drive path on Windows).
 test("Add a project picks a folder with the native picker, and a cancel or a refusal keeps the dialog", { tag: "@platform" }, async () => {
-  const herdr = await startHerdr();
-  const run = isolate(herdr, "add-project");
+  const engine = await startEngine();
+  const run = isolate(engine, "add-project");
   let app: ElectronApplication | undefined;
   try {
     const home = run.env.HOME!;
@@ -142,13 +145,13 @@ test("Add a project picks a folder with the native picker, and a cancel or a ref
   } finally {
     await app?.close();
     run.cleanup();
-    herdr.stop();
+    engine.stop();
   }
 });
 
 test("Create new project makes a Git repository and adds it; a name already taken is refused before anything is sent", async () => {
-  const herdr = await startHerdr();
-  const run = isolate(herdr, "create-project");
+  const engine = await startEngine();
+  const run = isolate(engine, "create-project");
   let app: ElectronApplication | undefined;
   try {
     const home = run.env.HOME!;
@@ -219,13 +222,13 @@ test("Create new project makes a Git repository and adds it; a name already take
   } finally {
     await app?.close();
     run.cleanup();
-    herdr.stop();
+    engine.stop();
   }
 });
 
 test("Clone from URL clones a repository into a folder under home and adds it as a project", async () => {
-  const herdr = await startHerdr();
-  const run = isolate(herdr, "clone-project");
+  const engine = await startEngine();
+  const run = isolate(engine, "clone-project");
   let app: ElectronApplication | undefined;
   try {
     const home = run.env.HOME!;
@@ -304,7 +307,7 @@ test("Clone from URL clones a repository into a folder under home and adds it as
   } finally {
     await app?.close();
     run.cleanup();
-    herdr.stop();
+    engine.stop();
   }
 });
 

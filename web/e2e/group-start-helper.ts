@@ -1,26 +1,29 @@
 import { expect, type Locator, type Page } from "@playwright/test";
-import { execFileSync } from "node:child_process";
 import path from "node:path";
+import type { EngineServer } from "./engine-fixture";
 import type { Daemon } from "./hided-fixture";
 import { sendEvent } from "./wire";
 import { paneCommandLine, type HerdrFixture } from "./herdr-fixture";
 import { fixtureProgram } from "./platform-fixture";
 import { herdrTabs } from "./failure-dump";
 
-/** Proves typed input executes in the node's normal shell, independently of its prompt. */
-export async function executeTerminalCheck(page: Page, herdr: HerdrFixture, pane: string, timeout = 5_000): Promise<void> {
+/**
+ * Proves typed input executes in the pane's shell, independently of its
+ * prompt: the fixture program the shell is told to run prints a marker,
+ * which the page's probe reads back. It reads no engine's own CLI, so it
+ * holds on either engine. The node's normal shell need not inherit the
+ * server's PATH, so the command names the fixture program by path, in the
+ * fixture shell's syntax.
+ */
+export async function executeTerminalCheck(page: Page, fixture: Pick<EngineServer, "root" | "shell">, pane: string, timeout = 5_000): Promise<void> {
   const marker = "HIDE_TERMINAL_EXECUTED";
-  const executable = fixtureProgram(path.join(herdr.root, "bin"), "hide-terminal-check", `console.log(${JSON.stringify(marker)});`);
+  const executable = fixtureProgram(path.join(fixture.root, "bin"), "hide-terminal-check", `console.log(${JSON.stringify(marker)});`);
   const view = page.locator(`[data-pane-view="${pane}"]`);
   await expect(view).toHaveAttribute("data-transport", "controlling");
   await view.locator("textarea").focus();
-  // The node's normal shell need not inherit the server's injected PATH.
-  // Run the exact fixture executable using the fixture's selected shell.
-  const command = paneCommandLine(herdr.shell, [executable]);
-  await page.keyboard.type(command);
+  await page.keyboard.type(paneCommandLine(fixture.shell, [executable]));
   await page.keyboard.press("Enter");
   await expect.poll(() => page.evaluate((id) => (window as unknown as { __hideProbe?: { paneText: (id: string) => string } }).__hideProbe?.paneText(id), pane), { timeout }).toContain(marker);
-  await expect.poll(() => execFileSync(herdr.bin, ["pane", "read", pane, "--source", "visible", "--format", "text"], { env: herdr.env, encoding: "utf8", timeout: 10_000 }), { timeout }).toContain(marker);
 }
 
 /** Every tab id the fixture's Herdr holds now, across its workspaces. */

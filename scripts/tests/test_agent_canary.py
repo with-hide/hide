@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -92,6 +93,30 @@ class Record(unittest.TestCase):
     # Every latest release moved off its pin: `1.0.0` is pinned, `2.0.0` the latest.
     versions = {**{kind: "2.0.0" for kind in KINDS.values()}, "herdr": "0.9.5"}
     pins = {kind: "1.0.0" for kind in KINDS.values()}
+
+    def test_engine_reports_stay_apart_and_a_missing_native_leg_is_not_a_pass(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            for system in record.SYSTEMS:
+                for engine in (("herdr",) if system == "windows" else ("herdr", "own")):
+                    path = root / f"{record.LATEST}-{system}-{engine}" / "report.json"
+                    path.parent.mkdir()
+                    value = report(failing="codex") if (system, engine) == ("linux", "own") else report()
+                    path.write_text(json.dumps(value))
+            reports = record.load_reports(root)
+            self.assertEqual(record.reruns(CONTRACT, self.versions, self.pins, reports), (["codex"], ["linux"]))
+            # The same cell failing only on Herdr at the pin cannot be used
+            # as evidence that the native failure was already in Hide.
+            pinned = {"linux": {"selected": AGENTS, "engine_reports": {
+                "herdr": report(failing="codex"), "own": report()}}}
+            result = record.verdicts(CONTRACT, self.versions, self.pins, reports, pinned)
+            self.assertEqual(result["codex"][0], "fail")
+            pinned["linux"]["engine_reports"]["own"] = report(failing="codex")
+            self.assertEqual(record.verdicts(CONTRACT, self.versions, self.pins, reports, pinned)["codex"][0], "hide")
+            (root / f"{record.LATEST}-linux-own/report.json").unlink()
+            incomplete = record.load_reports(root)
+            self.assertNotIn("linux", incomplete)
+            self.assertEqual(record.verdicts(CONTRACT, self.versions, self.pins, incomplete, pinned)["codex"][0], "unknown")
 
     def run_once(self, state, reports, pinned=None, versions=None):
         versions = versions or self.versions

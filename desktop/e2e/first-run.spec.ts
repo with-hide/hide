@@ -10,25 +10,21 @@ import { expect, type ElectronApplication } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 import { clickClosingItsPage } from "../../web/e2e/closing-click";
-import { startHerdr, type HerdrFixture } from "../../web/e2e/herdr-fixture";
+import { startEngine, type EngineServer } from "../../web/e2e/engine-fixture";
+import { e2eEngine } from "../../web/e2e/e2e-engine";
 import { hostLog, isolate, launch, nodeOf, screenshot, test, type Isolated } from "./fixture";
 
-let herdr: HerdrFixture;
+// Every test starts from a home with no project registered, as the first run does, so the engine is empty and the app starts its own daemon.
+let engine: EngineServer;
 let run: Isolated;
 let app: ElectronApplication | null = null;
 
 test.describe.configure({ timeout: 180_000 });
+test.skip(e2eEngine() === "own", "b4-default 대기(first-run의 Herdr 프로필 읽기 미확정)");
 
-test.beforeAll(async () => {
-  herdr = await startHerdr();
-});
-
-test.afterAll(() => {
-  herdr?.stop();
-});
-
-test.beforeEach(() => {
-  run = isolate(herdr, "first-run");
+test.beforeEach(async () => {
+  engine = await startEngine();
+  run = isolate(engine, "first-run");
   // A machine the kit has never run on (`seedKitRecord`): the first run's question waits for the wizard.
   fs.rmSync(path.join(run.env.HOME!, ".hide", "kit", "installed.json"));
 });
@@ -39,6 +35,7 @@ test.afterEach(async () => {
   await app?.close().catch(() => undefined);
   app = null;
   run.cleanup();
+  engine.stop();
 });
 
 test("the wizard walks agents, notifications and the first project, never returns, and Help reopens it as a closable walk", async () => {
@@ -203,8 +200,7 @@ test("with every agent off, the first project closes the wizard and opens no sta
   await expect(wizard).toHaveAttribute("data-first-run", "project");
   await page.locator('[data-first-run-way="project"]').click();
 
-  // B50: no agent on, so no panel opens on the project. (The fixture's shared Herdr runs agents, so the
-  // Home here lists its tasks; the empty Home with no agent is B28's own check.)
+  // B50: no agent on, so no panel opens on the project.
   await stubPicker(app, [alpha]);
   await page.locator("[data-add-project-browse]").click();
   await expect(wizard).toHaveCount(0, { timeout: 20_000 });

@@ -2,7 +2,7 @@
 // page: it loads its own folder's files, cannot read another file, and reaches no address of this
 // machine or its network (docs/BROWSER_DISPLAYS.md, The file boundary). The app runs on the
 // fused Electron the release is built with (`fused-electron.ts`), against a private hided and
-// Herdr, never the operator's.
+// engine, never the operator's.
 import { expect, type ElectronApplication } from "@playwright/test";
 import fs from "node:fs";
 import { createServer, type Server } from "node:http";
@@ -11,28 +11,24 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { agentPane } from "../../web/e2e/agent-pane";
-import { startHerdr, type HerdrFixture } from "../../web/e2e/herdr-fixture";
 import { enterWorkspace } from "../../web/e2e/wire";
-import { fitWindow, hostLog, isolate, launch, test, type Isolated } from "./fixture";
+import { fitWindow, hostLog, launchShell, startStack, test, type Stack } from "./fixture";
 
 test.describe.configure({ timeout: 180_000 });
 
 // A 1x1 red PNG.
 const PIXEL = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==", "base64");
 
-let herdr: HerdrFixture;
-let run: Isolated;
+let stack: Stack;
 let app: ElectronApplication | null = null;
-// One Herdr per test: an agent pane is made once for a Herdr.
+// One stack per test: an agent pane is made once for an engine.
 test.beforeEach(async () => {
-  herdr = await startHerdr({ agents: false });
-  run = isolate(herdr, "local-page-rules");
+  stack = await startStack("local-page-rules", { agents: false });
 });
 test.afterEach(async () => {
   await app?.close().catch(() => undefined);
   app = null;
-  run.cleanup();
-  herdr.stop();
+  stack.stop();
 });
 
 /** The first non-loopback IPv4 address of this machine, where a runner has one. */
@@ -53,14 +49,15 @@ async function listen(host: string): Promise<{ server: Server; origin: string; h
 }
 
 test("A local HTML page loads its own folder's files and nothing else", async () => {
-  const launched = await launch(run.env);
+  const { fixture, run } = stack;
+  const launched = await launchShell(run.env);
   app = launched.app;
   await fitWindow(app, { width: 1400, height: 900 });
   await enterWorkspace(launched.page, "fixture");
-  const agent = await agentPane(herdr, run.env.HIDE_STATE_DIR!, herdr.panes[0]!);
+  const agent = await agentPane(fixture, run.env.HIDE_STATE_DIR!, fixture.panes[0]);
 
-  const checkout = path.join(herdr.root, "fixture");
-  const outside = path.join(herdr.root, "outside");
+  const checkout = path.join(fixture.root, "fixture");
+  const outside = path.join(fixture.root, "outside");
   fs.mkdirSync(path.join(checkout, "assets"), { recursive: true });
   fs.mkdirSync(outside, { recursive: true });
   fs.writeFileSync(path.join(checkout, "assets", "pixel.png"), PIXEL);
