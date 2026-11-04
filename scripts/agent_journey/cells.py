@@ -52,10 +52,11 @@ INTERRUPTED = "interrupted"
 def excluded_agents(engine="herdr", fake_model=False):
     """Explicit transition gaps, shared by the run plan and CI verdict.
 
-    The own-start-fixes work removes Pi's whole row exclusion once the
-    product confirms its first brief; later cells cannot run without it.
+    The own-start-fixes work removes these row exclusions once the product
+    confirms the first brief; later cells cannot run without it.
     """
-    return {**EXCLUDED_AGENTS, **({"pi": "own-start-fixes 노드 대기(Pi 첫 지시문 input_unconfirmed, 제품 결함)"}
+    return {**EXCLUDED_AGENTS, **({"pi": "own-start-fixes 노드 대기(Pi 첫 지시문 input_unconfirmed, 제품 결함)",
+                                 "opencode": "own-start-fixes 노드 대기(OpenCode 첫 지시문 미전달, 제품 결함)"}
                                 if engine == "own" and fake_model else {})}
 
 

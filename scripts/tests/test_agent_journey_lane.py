@@ -74,20 +74,25 @@ class FakeModel(unittest.TestCase):
     def test_every_declared_cell_passing_passes(self):
         self.assertEqual(lane.judge(report(self.table(), [], fake_model=True), "fake"), (True, []))
 
-    def test_only_the_own_fake_pi_row_may_record_the_approved_exclusion(self):
-        reason = "own-start-fixes 노드 대기(Pi 첫 지시문 input_unconfirmed, 제품 결함)"
-        pi = {name: {"status": "excluded", "reason": reason} for name in lane.CELLS}
-        value = report({"pi": pi}, [], fake_model=True, engine="own")
-        self.assertEqual(lane.judge(value, "fake"), (True, []))
-        self.assertFalse(lane.judge({**value, "engine": "herdr"}, "fake")[0])
-        self.assertFalse(lane.judge({**value, "cleanup": {"confirmed": False}}, "fake")[0])
-        for name in lane.CELLS:
-            with self.subTest(cell=name):
-                changed = report({"pi": {**pi, name: {"status": "excluded", "reason": "unapproved"}}},
-                                 [], fake_model=True, engine="own")
-                self.assertFalse(lane.judge(changed, "fake")[0])
-        value["table"]["codex"]["start"] = {"status": "excluded", "reason": reason}
-        self.assertFalse(lane.judge(value, "fake")[0])
+    def test_only_the_approved_own_fake_rows_may_record_the_exclusion(self):
+        reasons = {"pi": "own-start-fixes 노드 대기(Pi 첫 지시문 input_unconfirmed, 제품 결함)",
+                   "opencode": "own-start-fixes 노드 대기(OpenCode 첫 지시문 미전달, 제품 결함)"}
+        excluded = {agent: {name: {"status": "excluded", "reason": reason} for name in lane.CELLS}
+                    for agent, reason in reasons.items()}
+        for agent, reason in reasons.items():
+            with self.subTest(agent=agent):
+                row = excluded[agent]
+                value = report(excluded, [], fake_model=True, engine="own")
+                self.assertEqual(lane.judge(value, "fake"), (True, []))
+                self.assertFalse(lane.judge({**value, "engine": "herdr"}, "fake")[0])
+                self.assertFalse(lane.judge({**value, "cleanup": {"confirmed": False}}, "fake")[0])
+                for name in lane.CELLS:
+                    with self.subTest(cell=name):
+                        changed = report({**excluded, agent: {**row, name: {"status": "excluded", "reason": "unapproved"}}},
+                                         [], fake_model=True, engine="own")
+                        self.assertFalse(lane.judge(changed, "fake")[0])
+                value["table"]["codex"]["start"] = {"status": "excluded", "reason": reason}
+                self.assertFalse(lane.judge(value, "fake")[0])
 
     def test_the_folder_question_a_stand_in_cannot_ask_must_pass(self):
         # The lane takes the stand-ins' place only when it measures what they cannot.

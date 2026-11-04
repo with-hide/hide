@@ -52,19 +52,21 @@ class Plan(unittest.TestCase):
     def test_retired_cursor_is_absent_from_the_active_journey(self):
         self.assertNotIn("cursor", cells.plan(contract(), ["codex"]))
 
-    def test_only_the_own_fake_pi_row_waits_for_the_first_brief_fix(self):
+    def test_only_the_approved_own_fake_rows_wait_for_the_first_brief_fix(self):
+        reasons = {"pi": "own-start-fixes 노드 대기(Pi 첫 지시문 input_unconfirmed, 제품 결함)",
+                   "opencode": "own-start-fixes 노드 대기(OpenCode 첫 지시문 미전달, 제품 결함)"}
         for engine, fake in (("herdr", True), ("own", False), ("own", True)):
-            with self.subTest(engine=engine, fake=fake):
-                table = cells.plan(contract(), ["pi", "codex"], engine=engine, fake_model=fake)
-                if engine == "own" and fake:
-                    self.assertTrue(all(row["status"] == cells.EXCLUDED and
-                                        row["reason"] == "own-start-fixes 노드 대기(Pi 첫 지시문 input_unconfirmed, 제품 결함)"
-                                        for row in table["pi"].values()))
-                    self.assertEqual(cells.exit_code(table, ["pi"], setup_failed=False), 0)
-                    self.assertEqual(cells.exit_code(table, ["pi"], setup_failed=True), 2)
-                else:
-                    self.assertEqual(table["pi"]["start"]["status"], cells.PENDING)
-                self.assertEqual(table["codex"]["start"]["status"], cells.PENDING)
+            for agent, reason in reasons.items():
+                with self.subTest(engine=engine, fake=fake, agent=agent):
+                    table = cells.plan(contract(), [agent, "codex"], engine=engine, fake_model=fake)
+                    if engine == "own" and fake:
+                        self.assertTrue(all(row["status"] == cells.EXCLUDED and row["reason"] == reason
+                                            for row in table[agent].values()))
+                        self.assertEqual(cells.exit_code(table, [agent], setup_failed=False), 0)
+                        self.assertEqual(cells.exit_code(table, [agent], setup_failed=True), 2)
+                    else:
+                        self.assertEqual(table[agent]["start"]["status"], cells.PENDING)
+                    self.assertEqual(table["codex"]["start"]["status"], cells.PENDING)
 
     def test_a_legacy_cursor_row_is_excluded_in_every_cell_and_counts_nowhere(self):
         rows = contract()

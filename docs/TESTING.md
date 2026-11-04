@@ -743,7 +743,8 @@ The transition retains these explicit exceptions:
 | Cursor legacy native readers, 3 tests | Herdr only: the retired integration supplies their session identity | Removed with Herdr by `b4-default` |
 | `agent-live-check`, 5 specs | Herdr integration checks, outside the dual-engine migration | CLI retirement by `b4-default` |
 | Windows own-engine journey | Excluded, `win-agent-start 대기` | Windows start proof, then holder lifetime integration |
-| Pi own-engine fake journey, entire row | Excluded: `own-start-fixes 노드 대기(Pi 첫 지시문 input_unconfirmed, 제품 결함)`; the other six rows and Herdr's Pi row remain required | `own-start-fixes` fixes the first brief and removes this exclusion |
+| Pi own-engine fake journey, entire row | Excluded: `own-start-fixes 노드 대기(Pi 첫 지시문 input_unconfirmed, 제품 결함)`; the other five own-engine rows and all Herdr rows remain required | `own-start-fixes` fixes the first brief and removes this exclusion |
+| OpenCode own-engine fake journey, entire row | Excluded: `own-start-fixes 노드 대기(OpenCode 첫 지시문 미전달, 제품 결함)` | `own-start-fixes` delivers the first brief and removes this exclusion |
 | Windows own-engine desktop and package | Excluded: CI Job forbids holder breakaway | Holder lifetime fix and enabled cells by `b4-default` |
 | Own-engine desktop failed-restoration spec | Excluded: `own-restore-checkout 노드 대기`; cold restore moves a pane in a nested folder out of its original checkout | `own-restore-checkout` preserves the original checkout and removes this exclusion |
 | Windows Herdr desktop failed-restoration spec | Excluded: `geometry close 대기열 제품 결함 판정 대기`; close stays unfinished after the preceding split completes | Diagnose and fix the close queue, then remove this exclusion |
