@@ -79,7 +79,7 @@ pub trait Sink: Send + 'static {
     /// How a delete of named sessions' lines went (B29, B30).
     fn deleted(&self, _request: String, _answer: Result<(), String>) {}
     /// A session a Hide pane carried for the first time (`pane_first_at`).
-    fn agent_started(&self, _agent: hide_session::Agent) {}
+    fn agent_started(&self, _agent: hide_session::Agent, _session: &SessionIdentity) {}
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1002,7 +1002,7 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
                         // the statistic's vocabulary is closed.
                         for session in first {
                             if let Some(agent) = hide_session::Agent::from_kind(&session.agent) {
-                                sink.agent_started(agent);
+                                sink.agent_started(agent, &session);
                             }
                         }
                     }

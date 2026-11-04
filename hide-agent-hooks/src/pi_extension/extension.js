@@ -591,6 +591,8 @@ function onSessionStart(state, ctx) {
   state.root = true;
   shared.rootSession = sessionFile(ctx);
   state.guidance ??= startGuidance(state, ctx);
+  // The pane's session from its start, so letters and the inbox reach it before its first turn.
+  if (shared.rootSession) void helper(state, "session", { session_id: shared.rootSession }, COUNT_BUDGET_MS);
   if (AGENT === "omp") {
     // A new session in the pane starts its counts at zero, as Claude Code's SessionStart does.
     shared.children.clear();

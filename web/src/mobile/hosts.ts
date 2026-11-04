@@ -3,7 +3,8 @@ export interface PairedHost {
   room: string;
   name: string;
   noiseKey: string;
-  credential: string;
+  /** Null once the device refused it: a revoked credential never connects again, and the row stays until removed or paired anew. */
+  credential: string | null;
   protocol: number;
   lastSeen: number | null;
 }
@@ -22,7 +23,7 @@ export function readHosts(storage: Pick<Storage, "getItem">): PairedHost[] {
   for (const h of hosts) {
     if (!h || typeof h !== "object" || typeof h.room !== "string" || typeof h.noiseKey !== "string" || !KEY.test(h.room) || !KEY.test(h.noiseKey) ||
         typeof h.name !== "string" || !h.name.trim() || new TextEncoder().encode(h.name).length > 128 ||
-        typeof h.credential !== "string" || !h.credential || h.credential.length > 512 ||
+        (h.credential !== null && (typeof h.credential !== "string" || !h.credential || h.credential.length > 512)) ||
         !Number.isSafeInteger(h.protocol) || h.protocol < 1 ||
         (h.lastSeen !== null && (!Number.isSafeInteger(h.lastSeen) || h.lastSeen < 0)) || rooms.has(h.room)) {
       throw new Error("host_storage_invalid");
@@ -50,9 +51,15 @@ export function forgetHost(storage: Storage, room: string): void {
   storage.setItem(HOSTS_KEY, JSON.stringify(readHosts(storage).filter((h) => h.room !== room)));
 }
 
+/** The device refused this phone's credential: keep its name and room, drop the credential. */
+export function revokeHost(storage: Pick<Storage, "getItem" | "setItem">, room: string): void {
+  const host = readHosts(storage).find((h) => h.room === room);
+  if (host?.credential) saveHost(storage, { ...host, credential: null });
+}
+
 /** One registration request per saved device, shared by words, notices and subscription. */
 export function registerHostPush(room: string): Promise<ServiceWorkerRegistration> {
-  if (!readHosts(localStorage).some((host) => host.room === room)) return Promise.reject(new Error("host_not_saved"));
+  if (!readHosts(localStorage).some((host) => host.room === room && host.credential)) return Promise.reject(new Error("host_not_saved"));
   const existing = pushWorkers.get(room);
   if (existing) return existing;
   if (pushWorkers.size >= MAX_HOSTS) return Promise.reject(new Error("host_limit"));
@@ -62,24 +69,31 @@ export function registerHostPush(room: string): Promise<ServiceWorkerRegistratio
   return pending;
 }
 
-export async function removeHostPush(room: string): Promise<void> {
+async function removeHostPush(room: string): Promise<void> {
   if ("serviceWorker" in navigator) {
     // A removal waits for its admitted registration; it cannot leave a late worker behind.
     const pending = pushWorkers.get(room);
     if (pending) await pending.catch(() => undefined);
     const worker = await navigator.serviceWorker.getRegistration(`/push/${room}/`);
     if (worker && new URL(worker.scope).pathname === `/push/${room}/`) {
-      await (await worker.pushManager.getSubscription())?.unsubscribe();
+      // A Safari tab has workers without push; such a worker holds no subscription.
+      const push = worker.pushManager as PushManager | undefined;
+      if (push) await (await push.getSubscription())?.unsubscribe();
       if (!(await worker.unregister())) throw new Error("worker_remove_failed");
     }
     if ("caches" in window) await (await caches.open("hide-phone-words")).delete(`/push/${room}/words.json`);
   }
+  pushWorkers.delete(room);
+}
+
+/** A revoked device keeps no notification worker; a failed removal is not the operator's to act on, so it goes to the log. */
+export function dropHostPush(room: string): Promise<void> {
+  return removeHostPush(room).catch((error: unknown) => { console.warn("phone.push_remove_failed", { room, error: String(error) }); });
 }
 
 export async function removeHost(room: string): Promise<void> {
   await removeHostPush(room);
   forgetHost(localStorage, room);
-  pushWorkers.delete(room);
 }
 
 export function bundlePath(protocol: number, supported: readonly number[]): string | null {

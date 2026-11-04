@@ -16,6 +16,7 @@ fn test_env(keep_alive: bool) -> (tempfile::TempDir, Env) {
     let env = Env {
         home: dir.path().to_path_buf(),
         herdr_socket_path: None,
+        herdr_move_socket: None,
         herdr_bin_path: None,
         own_engine: false,
         login_shell: None,
@@ -32,6 +33,7 @@ fn test_env(keep_alive: bool) -> (tempfile::TempDir, Env) {
         host_helper_root: None,
         host_cli_dir: None,
         pane_id: None,
+        install: None,
         // A missing path: no test here reaches a real Tailscale.
         tailscale_bin: Some(dir.path().join("no-tailscale")),
         relay_url: "ws://127.0.0.1:9/ws".to_owned(),
@@ -120,6 +122,100 @@ async fn the_pane_bootstrap_answers_a_caller_on_the_local_stream() {
         "caller_unavailable"
     };
     assert_eq!(answer.unwrap_err(), expected);
+    running.stop();
+    drop(dir);
+}
+
+/// A pane another Hide installation on this account started, such as a
+/// device helper's, belongs to that installation: when its own bridge does
+/// not answer, this account's daemon refuses it before it would bind the
+/// caller by its folder, so the call never runs against the other Hide.
+#[tokio::test]
+async fn a_pane_of_another_installation_is_refused_by_this_accounts_daemon() {
+    let (dir, mut env) = test_env(true);
+    let running = hided::start_daemon(env.clone())
+        .await
+        .expect("start daemon");
+    env.pane_id = None;
+    env.install = Some(hide_agent_hooks::route::install_of_root(
+        &dir.path().join("elsewhere"),
+    ));
+    let answer = tokio::task::spawn_blocking(move || hided::workspace_cli::bootstrap(&env, true))
+        .await
+        .unwrap();
+    assert_eq!(answer.unwrap_err(), "other_install");
+    running.stop();
+    drop(dir);
+}
+
+/// The `hide` CLI an agent runs reaches the daemon's pane bootstrap from
+/// every shell an agent runs it in on Windows: Claude Code runs commands in
+/// Git Bash and Codex in PowerShell. Git Bash starts a program with the
+/// same elevated token as PowerShell but its default owner set to the user,
+/// while the daemon's listener is owned by the Administrators group; the
+/// answer has to be the daemon's own refusal, never `hide_unavailable`.
+#[cfg(windows)]
+#[tokio::test]
+async fn the_cli_reaches_the_pane_bootstrap_from_powershell_and_git_bash() {
+    use std::process::{Command, Stdio};
+    let (dir, env) = test_env(true);
+    let running = hided::start_daemon(env.clone())
+        .await
+        .expect("start daemon");
+    let git_bash = std::path::PathBuf::from(std::env::var_os("ProgramFiles").unwrap())
+        .join(r"Git\bin\bash.exe");
+    assert!(
+        git_bash.is_file(),
+        "Git for Windows is not at {}",
+        git_bash.display()
+    );
+    let shells: [(&str, std::path::PathBuf, &[&str]); 2] = [
+        (
+            "PowerShell",
+            "powershell.exe".into(),
+            &[
+                "-NoProfile",
+                "-Command",
+                "& $env:HIDE_TEST_CLI workspace info --hook",
+            ],
+        ),
+        (
+            "Git Bash",
+            git_bash,
+            &["-c", "\"$HIDE_TEST_CLI\" workspace info --hook"],
+        ),
+    ];
+    let state = dir.path().to_path_buf();
+    let answers = tokio::task::spawn_blocking(move || {
+        shells.map(|(name, shell, args)| {
+            let output = Command::new(shell)
+                .args(args)
+                .env("HIDE_TEST_CLI", env!("CARGO_BIN_EXE_hide"))
+                .env_remove(hided::env::HIDE_CAP_REF)
+                .env_remove(hided::env::HERDR_SOCKET_PATH)
+                .env_remove(hided::env::HERDR_BIN_PATH)
+                .env_remove(hided::env::HERDR_PANE_ID)
+                .env(hided::env::HIDE_STATE_DIR, &state)
+                .stdin(Stdio::null())
+                .output()
+                .expect("the shell starts");
+            let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+            let answer: Value = serde_json::from_str(stdout.lines().next().unwrap_or_default())
+                .unwrap_or_else(|_| {
+                    panic!(
+                        "{name} printed {stdout:?} and {:?}, {}",
+                        String::from_utf8_lossy(&output.stderr),
+                        output.status
+                    )
+                });
+            (name, answer)
+        })
+    })
+    .await
+    .unwrap();
+    for (name, answer) in answers {
+        assert_eq!(answer["reason"], "caller_unavailable", "{name}: {answer}");
+    }
     running.stop();
     drop(dir);
 }

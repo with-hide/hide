@@ -60,22 +60,15 @@ fn main() -> ExitCode {
         // reads any exit as no answer, and an agent's call is never failed by
         // Hide's helper. Cursor's permission hooks get their allow, since
         // Cursor reads output that is not a valid answer as a refusal.
-        Err(_)
-            if matches!(
-                arguments.first().map(String::as_str),
-                Some("hook" | "opencode" | "pi" | "omp")
-            ) =>
-        {
-            if cursor_permission_hook(&arguments) {
-                let _ = print_line(basic::CURSOR_ALLOW);
-            }
-            if antigravity_tool_hook(&arguments) {
-                print_line(antigravity::ASK);
-            }
-            return ExitCode::SUCCESS;
-        }
+        Err(_) if agent_call(&arguments) => return nothing_to_say(&arguments),
         Err(_) => return ExitCode::from(2),
     };
+    // A pane another Hide installation on this account started is that
+    // installation's entry's to answer (docs/agent-hooks.md, More than one
+    // Hide on an account): this one says nothing and reports nothing.
+    if agent_call(&arguments) && hide_agent_hooks::route::foreign_pane() {
+        return nothing_to_say(&arguments);
+    }
     match arguments.first().map(String::as_str) {
         Some("hook") => {
             if argument_value("--event", &arguments)
@@ -184,6 +177,29 @@ fn main() -> ExitCode {
     }
 }
 
+/// Whether `arguments` are an agent's call: a hook entry's, or a script of
+/// Hide's in an agent's own folder.
+fn agent_call(arguments: &[String]) -> bool {
+    matches!(
+        arguments.first().map(String::as_str),
+        Some("hook" | "opencode" | "pi" | "omp")
+    )
+}
+
+/// The answer of an agent's call that has nothing to say: none, which every
+/// agent reads as no decision, but Cursor's permission hooks get their
+/// allow, since Cursor reads output that is not a valid answer as a
+/// refusal, and agy's tool hook its ask, which agy needs on every path.
+fn nothing_to_say(arguments: &[String]) -> ExitCode {
+    if cursor_permission_hook(arguments) {
+        let _ = print_line(basic::CURSOR_ALLOW);
+    }
+    if antigravity_tool_hook(arguments) {
+        print_line(antigravity::ASK);
+    }
+    ExitCode::SUCCESS
+}
+
 /// Post observation never prints a permission/context decision or alters the
 /// original tool's result. Ordinary calls do no new daemon/Herdr lookup.
 /// Observes a shell call's result, and hands back the input it read for the
@@ -289,10 +305,14 @@ fn run_basic_hook(agent: GuidanceAgent, arguments: &[String], started: Instant) 
     if dialect == HookDialect::Cursor && inside_grok() {
         return;
     }
-    // Stop has one payload shared by its intake and subagent count.
-    let payload = matches!(event, HookEvent::Stop | HookEvent::UserPromptSubmit)
-        .then(|| read_stdin_before_deadline(started + GUARD_PAYLOAD_BUDGET))
-        .flatten();
+    // Stop has one payload shared by its intake and subagent count; a
+    // session start's names the session it starts.
+    let payload = matches!(
+        event,
+        HookEvent::Stop | HookEvent::UserPromptSubmit | HookEvent::SessionStart
+    )
+    .then(|| read_stdin_before_deadline(started + GUARD_PAYLOAD_BUDGET))
+    .flatten();
     let (answer, intake) = std::panic::catch_unwind(|| match event {
         HookEvent::PreToolUse => basic_tool_call(dialect, agent.id(), started),
         HookEvent::Stop | HookEvent::UserPromptSubmit => {
@@ -777,11 +797,19 @@ fn report_basic(
     let counted = dialect.adapter().subagent_counts.is_some();
     let change = if counted { change } else { Change::None };
     let Some(home) = home_directory() else { return };
-    // Neither agent's hook input is read for its session here, so the record
-    // names the agent and no session.
+    // A session start names the session it starts, so the core knows the
+    // pane's session before its first turn and letters and the inbox reach
+    // it from the start (PRD engine-bundle-4-herdr-removal, mission c3). No
+    // other event's input is read for its session here: a subagent's events
+    // name the subagent's own, so the record names the agent's last session.
+    let session = (event == HookEvent::SessionStart)
+        .then_some(payload)
+        .flatten()
+        .and_then(|(payload, truncated)| basic::session(payload, *truncated, dialect).ok())
+        .flatten();
     let who = Reporter {
         agent: Some(dialect.adapter().id),
-        session: None,
+        session: session.as_deref(),
     };
     report_pane(
         &home,

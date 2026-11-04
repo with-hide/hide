@@ -46,6 +46,7 @@ mod github_poll;
 mod github_store;
 pub mod global_instruction;
 mod handle;
+pub mod herdr_import;
 pub mod herdr_takeover;
 pub mod input_gate;
 pub mod issues;
@@ -112,8 +113,8 @@ pub use ai::{
 };
 pub use handle::Core;
 pub use model::{
-    CoreOptions, DeviceProblem, DeviceRegistration, LinkOrigin, SCHEMA_VERSION, Snapshot,
-    SnapshotDeltaPayload,
+    CoreOptions, DeviceProblem, DeviceRegistration, HerdrImportSnapshot, LinkOrigin,
+    SCHEMA_VERSION, Snapshot, SnapshotDeltaPayload,
 };
 pub use model::{
     RemoteFileListSnapshot, RemoteSessionSnapshot, RemoteStatusSnapshot, RestSections,

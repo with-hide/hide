@@ -55,7 +55,7 @@ fn both_shells_capture_the_state_route_and_route_changes_are_distinct_from_edits
             home.path(),
             HookTarget::new(&helper, &home.path().join("other-state")).unwrap()
         ));
-        assert!(matches_helper(runtime, home.path(), &helper));
+        assert!(matches_helper(runtime, home.path(), &helper, None));
         let path = runtime.config_path(home.path());
         let original = fs::read_to_string(&path).unwrap();
         let other_state = home.path().join("other-state");
@@ -63,7 +63,7 @@ fn both_shells_capture_the_state_route_and_route_changes_are_distinct_from_edits
         let mixed = original.replacen(target.arguments().trim(), other.arguments().trim(), 1);
         fs::write(&path, mixed).unwrap();
         assert!(
-            !matches_helper(runtime, home.path(), &helper),
+            !matches_helper(runtime, home.path(), &helper, None),
             "conflicting routes are an edit"
         );
         fs::write(&path, original).unwrap();
@@ -71,10 +71,10 @@ fn both_shells_capture_the_state_route_and_route_changes_are_distinct_from_edits
             .unwrap()
             .replace("--event Stop", "--event Stop --verbose");
         fs::write(&path, edited).unwrap();
-        assert!(!matches_helper(runtime, home.path(), &helper));
+        assert!(!matches_helper(runtime, home.path(), &helper, None));
         install(runtime, home.path(), &helper).unwrap();
         assert!(
-            !matches_helper(runtime, home.path(), &helper),
+            !matches_helper(runtime, home.path(), &helper, None),
             "removing the captured route is an edit"
         );
     }

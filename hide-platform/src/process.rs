@@ -1298,19 +1298,76 @@ pub fn argv_of(pid: u32) -> io::Result<Vec<String>> {
 
 /// The processes in process group `group`, zombies included, as one look at
 /// the system's process table finds them: a terminal's foreground is a
-/// group (`tcgetpgrp`). `Unsupported` on Windows, which has no process
-/// groups a terminal names.
+/// group (`tcgetpgrp`). Windows keeps no process group, so there the group
+/// is the job its first process leads ([`console_foreground`]): that
+/// process and every process under it, as [`terminate_group`] ends it.
+/// `NotFound` on Windows when the leader has ended.
 pub fn group_members(group: u32) -> io::Result<Vec<u32>> {
     #[cfg(unix)]
     return sys::group_members(group);
     #[cfg(windows)]
     {
-        let _ = group;
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "Windows has no process group a terminal names",
-        ))
+        if !sys::is_alive(group) {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("process {group} has ended"),
+            ));
+        }
+        let mut members = vec![group];
+        members.extend(
+            descendants(group)?
+                .into_iter()
+                .filter(|pid| !is_console_host(*pid)),
+        );
+        Ok(members)
     }
+}
+
+/// The console host programs Windows starts for a console, which run no
+/// program of the console's own: a console process that made a new console
+/// gets one as its child.
+#[cfg(windows)]
+const CONSOLE_HOSTS: [&str; 2] = ["conhost.exe", "OpenConsole.exe"];
+
+/// Whether `pid` runs a console host ([`CONSOLE_HOSTS`]), named as Windows
+/// names programs, without case. A process gone since is none.
+#[cfg(windows)]
+fn is_console_host(pid: u32) -> bool {
+    name_of(pid).is_ok_and(|name| {
+        CONSOLE_HOSTS
+            .iter()
+            .any(|host| host.eq_ignore_ascii_case(&name))
+    })
+}
+
+/// The process that stands in for the foreground group of the console whose
+/// program is `shell`, on Windows, which names no foreground for a console:
+/// the oldest process `shell` started that still runs, the program the
+/// shell runs now (a line typed into it starts one, and the shell waits on
+/// it), or `shell` itself while it runs none; a console host is never it.
+/// A process the shell started and that started others leads them all
+/// ([`group_members`]). Herdr reads a
+/// Windows pane's foreground the same way, from the shell down. `NotFound`
+/// when `shell` has ended.
+#[cfg(windows)]
+pub fn console_foreground(shell: u32) -> io::Result<u32> {
+    let shell_started = start_time(shell)?;
+    let mut walk = sys::Walk::new()?;
+    let oldest = walk
+        .children_of(shell)
+        .into_iter()
+        .filter(|child| !is_console_host(*child))
+        .filter_map(|child| start_time(child).ok().map(|started| (started, child)))
+        .min();
+    // The shell's start is read again, so a shell that ended during the
+    // look, and whose pid another process took, is not answered for.
+    if start_time(shell)? != shell_started {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("process {shell} has ended"),
+        ));
+    }
+    Ok(oldest.map_or(shell, |(_, child)| child))
 }
 
 /// The program file a process runs, as the kernel keeps it.

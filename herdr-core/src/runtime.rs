@@ -45,6 +45,7 @@ mod github_poll;
 mod gone_worktrees;
 pub(crate) mod group_starts;
 mod guardrails;
+mod herdr_import;
 mod herdr_profiles;
 mod herdr_takeover;
 mod hide_notes;
@@ -85,6 +86,7 @@ mod project_tasks;
 mod projects;
 mod ps;
 mod pull_requests;
+mod read_ahead;
 mod recent_checkouts;
 mod recent_panes;
 mod rename;
@@ -104,6 +106,7 @@ pub(crate) mod suggestions;
 mod tab_focus;
 mod terminal;
 mod terminal_input;
+mod transition_letters;
 mod tree_close;
 mod tree_reopen;
 pub(crate) mod typed_input;
@@ -1338,6 +1341,10 @@ pub struct Runtime {
     /// them which panes attach and hears their state back; keys and output
     /// never pass here.
     terminals: Arc<dyn hide_node_link::terminal::TerminalRoutes>,
+    /// What this machine's import record keeps of the Herdr panes not moved
+    /// into the core's own engine yet, which the local cleanup leaves alone
+    /// (PRD engine-bundle-4-herdr-removal D-25); nothing on Herdr.
+    herdr_held: Arc<crate::herdr_import::Held>,
     /// Each pane's attach state as its node last reported it, which the
     /// terminal projection shows.
     terminal_states: HashMap<String, hide_node_link::terminal::PaneTerminalState>,
@@ -1402,6 +1409,9 @@ pub struct Runtime {
     /// Moving the operator's older Herdr server onto this app's Herdr
     /// (`runtime/herdr_takeover.rs`); session-only.
     herdr_takeover: herdr_takeover::Takeover,
+    /// Moving this machine's Herdr save into the core's own engine
+    /// (`runtime/herdr_import.rs`); session-only.
+    herdr_import: herdr_import::Import,
     /// The Desk room and its one Desk process (`runtime/desk.rs`).
     desk: desk::Desk,
     /// When this Mac's kit is next re-read while Settings is on screen.
@@ -1536,6 +1546,9 @@ pub struct Runtime {
     drawn_closes: HashMap<String, Vec<pane_prediction::Prediction>>,
     /// Created tabs drawn until Herdr's layout for them arrives (D-05).
     provisional_tabs: Vec<drawn_ahead::ProvisionalTab>,
+    /// Panes a read of Herdr's own showed before its event stream did; their
+    /// absence from the stream retires nothing until it lays them out.
+    read_ahead: read_ahead::ReadAhead,
     recent_closed_sequence: u64,
     reopen_in_flight: Option<String>,
     /// A reopen asked for while this machine's newest close was still
@@ -1845,6 +1858,9 @@ pub struct Runtime {
     letter_wakes: agent_sleep::letters::LetterWakes,
     /// The letters held on a session Hide cannot read whose senders were told.
     unreadable_letters: unreadable_letters::UnreadableLetters,
+    /// The letters owed to agents whose turn a move or a machine restart cut
+    /// off (`transition_letters.rs`); session-only.
+    transition_letters: transition_letters::TransitionLetters,
     /// Panes with a Reopen running or just refused, until the pane connects,
     /// leaves, or stops showing a connection chip (B29). One entry per pane,
     /// so a second press while one runs starts nothing.
@@ -2382,6 +2398,7 @@ impl Runtime {
             remote_tab_creations_in_flight: HashSet::new(),
             registration_terminals: VecDeque::new(),
             terminals: Arc::new(terminal::NoTerminals),
+            herdr_held: Arc::default(),
             terminal_states: HashMap::new(),
             terminal_attach_requested: HashSet::new(),
             terminal_intents: terminal::TerminalIntents::default(),
@@ -2403,6 +2420,7 @@ impl Runtime {
             local_kit_pending: None,
             first_run_apply: None,
             herdr_takeover: herdr_takeover::Takeover::default(),
+            herdr_import: herdr_import::Import::default(),
             desk: desk::Desk::default(),
             local_kit_next_status: None,
             local_kit_check_requested: false,
@@ -2453,6 +2471,7 @@ impl Runtime {
             ingesting_session: false,
             pumping_geometry: false,
             provisional_tabs: Vec::new(),
+            read_ahead: read_ahead::ReadAhead::default(),
             recent_closed_sequence: 0,
             reopen_in_flight: None,
             reopen_after_close: None,
@@ -2581,6 +2600,7 @@ impl Runtime {
             agent_wake_started: HashMap::new(),
             letter_wakes: Default::default(),
             unreadable_letters: Default::default(),
+            transition_letters: Default::default(),
             pane_reopens: HashMap::new(),
             update_badges: HashMap::new(),
             fork_sequence: 0,
@@ -2669,6 +2689,12 @@ impl Runtime {
         terminals: Arc<dyn hide_node_link::terminal::TerminalRoutes>,
     ) {
         self.terminals = terminals;
+    }
+
+    /// What the local cleanup leaves alone of the Herdr panes this machine's
+    /// import record keeps, set once before the engine's first publish.
+    pub(crate) fn hold_herdr_state(&mut self, held: crate::herdr_import::Held) {
+        self.herdr_held = Arc::new(held);
     }
 
     /// Whether this core still waits for its move's link before it acts

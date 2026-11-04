@@ -190,9 +190,11 @@ pub(crate) trait Engine: Send + Sync {
     /// engine that starts and resumes agents itself keeps it as the pane's
     /// agent's session, saved with the pane, so a reboot resumes that
     /// conversation. Herdr learns a pane's session from its own integration
-    /// and ignores it.
-    fn hook_session(&self, _pane: &str, _kind: &str, _session: &str) -> Answer<()> {
-        Ok(())
+    /// and ignores it. Answers true once for the first session of an agent
+    /// the engine resumed after its turn was cut off under it (PRD
+    /// engine-bundle-4-herdr-removal D-22), which the core then tells.
+    fn hook_session(&self, _pane: &str, _kind: &str, _session: &str) -> Answer<bool> {
+        Ok(false)
     }
 
     // The session as a whole.
@@ -677,15 +679,31 @@ impl EngineHandle {
         definitions: hide_agent_adapter::definition::Catalog,
     ) -> Result<Self, String> {
         let scope = hide_kit::layout::engine_dir(&state_dir);
+        let hooks_home = home.clone();
         let home = hide_platform::path::to_wire(&home)
             .map_err(|error| format!("{} has no wire spelling: {error}", home.display()))?;
+        // The choices this machine's agents were started with, which the
+        // core keeps and reads again when it starts; the restore that starts
+        // with the engine resumes its agents with them (PRD
+        // engine-bundle-4-herdr-removal D-24). This machine's panes are keyed
+        // by their own ids there, as the engine's are.
+        let launches = crate::persistence::load(&state_dir.join(crate::node_migration::CORE_STATE))
+            .0
+            .pane_launches
+            .into_iter()
+            .filter(|(pane, _)| !crate::address::is_device_scoped(pane))
+            .collect();
         let engine = own::OwnEngine::open(
             own::link_panes(Arc::clone(&node)),
             own::Place {
                 engine_dir: scope.clone(),
                 home,
+                hooks_home: Some(hooks_home),
                 node,
+                // This machine's own node.
+                windows: cfg!(windows),
                 definitions: Arc::new(definitions),
+                launches: Arc::new(launches),
             },
         )?;
         Ok(Self {

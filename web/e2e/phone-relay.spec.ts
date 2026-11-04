@@ -147,6 +147,58 @@ for (const [reason, copy] of [["code_expired", "expired"], ["phone_limit", "4"]]
   });
 }
 
+// A Safari tab's workers have no push; the revoked device's cleanup must not read as a storage failure.
+test("a revoked device stays listed as disconnected, never dials again and pairs anew", async ({ page, relay }) => {
+  await page.addInitScript(() => { Object.defineProperty(ServiceWorkerRegistration.prototype, "pushManager", { configurable: true, get: () => undefined }); });
+  await pair(page, relay);
+  relay.state.refusal = "revoked";
+  await page.reload();
+  await expect(page.locator('[data-phone-guidance="revoked"]')).toContainText("revoked");
+  await expect(page.getByText("Device storage is unavailable", { exact: false })).toHaveCount(0);
+  const hosts = () => page.evaluate(() => JSON.parse(localStorage.getItem("hide.phone.hosts.v1") ?? "[]") as { room: string; name: string; credential: string | null }[]);
+  await expect.poll(hosts).toEqual([expect.objectContaining({ room: relay.pairing.room, name: relay.pairing.name, credential: null })]);
+  await page.getByRole("button", { name: "Choose another device" }).click();
+  const row = page.locator(`[data-phone-host-revoked="${relay.pairing.room}"]`);
+  await expect(row).toContainText(relay.pairing.name);
+  await expect(row).toContainText("Disconnected");
+  await expect(row).toContainText("Unused for 7 days, or disconnected on this device");
+  await expect(row.getByRole("button", { name: "Remove device" })).toBeVisible();
+  // A link to the device shows the refusal without dialing it.
+  relay.plaintext.length = 0;
+  await page.goto(`${relay.origin}/p/1/?host=${relay.pairing.room}`);
+  await expect(page.locator('[data-phone-guidance="revoked"]')).toBeVisible();
+  expect(relay.plaintext).toEqual([]);
+  await page.goto(relay.origin + "/");
+  await row.getByRole("button", { name: "Reconnect" }).click();
+  await expect(page).toHaveURL(relay.origin + "/?add=1");
+  relay.state.refusal = "";
+  await pair(page, relay);
+  await expect.poll(hosts).toEqual([expect.objectContaining({ room: relay.pairing.room, credential: relay.credential })]);
+  await page.goto(relay.origin + "/");
+  await expect(page.locator("[data-phone-host-revoked]")).toHaveCount(0);
+});
+
+test("the device list marks a device that refuses its status check as disconnected", async ({ page, relay }) => {
+  const second = await startPhoneRelay();
+  relay.relayEndpoints.set(second.pairing.room, second.wsUrl);
+  try {
+    await pair(page, relay);
+    await page.goto("about:blank");
+    await page.goto(relay.origin + "/" + new URL(second.qr).hash);
+    await page.getByRole("button", { name: "Connect", exact: true }).click();
+    await expect(page.locator('[data-phone-connected="true"]')).toBeVisible();
+    relay.state.refusal = "revoked";
+    await page.getByRole("button", { name: second.pairing.name, exact: true }).click();
+    await expect(page.locator(`[data-phone-host-revoked="${relay.pairing.room}"]`)).toContainText("Disconnected");
+    // The root list watches the live device to its counts and never dials the revoked one.
+    relay.plaintext.length = 0;
+    await page.goto(relay.origin + "/");
+    await expect(page.getByText("Needs you 1 · Working 2", { exact: true })).toBeVisible();
+    await expect(page.locator(`[data-phone-host-revoked="${relay.pairing.room}"]`)).toBeVisible();
+    expect(relay.plaintext).toEqual([]);
+  } finally { await page.goto("about:blank"); await second.stop(); }
+});
+
 test("the in-app link scanner adds a device and CSP refuses external scripts", async ({ page, relay }) => {
   await page.goto(relay.origin);
   await page.getByRole("button", { name: "Connect another device" }).click();

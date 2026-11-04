@@ -23,7 +23,8 @@ const { pathToFileURL } = require("node:url");
 
 const agent = path.basename(process.argv[1]);
 const config = JSON.parse(fs.readFileSync(path.join(path.dirname(process.argv[1]), "pi-omp-host.json"), "utf8"));
-const pane = process.env.HERDR_PANE_ID;
+// A pane on the core's own engine names itself HIDE_PANE_ID and carries no HERDR_* variable.
+const pane = process.env.HIDE_PANE_ID || process.env.HERDR_PANE_ID;
 const folder = path.join(config.dir, pane.replace(/[^A-Za-z0-9]/g, "-"));
 fs.mkdirSync(folder, { recursive: true });
 // The pane's hide reaches the fixture daemon, as the operator's reaches theirs.
@@ -116,7 +117,9 @@ const subs = new Map();
 let extension;
 
 (async () => {
-  announce();
+  // Only a Herdr pane is told what runs in it; on the core's own engine the extension's own session report is how
+  // Hide learns the session.
+  if (config.herdr) announce();
   // The kit writes a .ts file that is plain JavaScript; Node reads it as the ES module both hosts load.
   const copy = path.join(folder, "hide.mjs");
   fs.copyFileSync(config.extension[agent], copy);
@@ -141,7 +144,7 @@ let extension;
 });
 `;
 
-export type HostConfig = { herdr: string; stateDir: string; extension: { pi: string; omp: string }; dir: string };
+export type HostConfig = { herdr?: string; stateDir: string; extension: { pi: string; omp: string }; dir: string };
 
 /** Writes the stand-in as `pi` and `omp` in `bin`, configured by `config`. */
 export function installPiOmpHosts(bin: string, config: HostConfig): void {

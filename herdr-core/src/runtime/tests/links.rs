@@ -1792,22 +1792,6 @@ fn a_parents_request_stays_the_childs_work_when_the_parents_screen_title_changes
     );
 }
 
-#[derive(Debug, Default)]
-struct RecordedStatistics(Mutex<Vec<crate::product_analytics::Event>>);
-
-impl crate::product_analytics::Sink for RecordedStatistics {
-    fn set_enabled(&self, _enabled: bool) {}
-    fn capture(&self, event: crate::product_analytics::Event) {
-        self.0.lock().unwrap().push(event);
-    }
-}
-
-impl RecordedStatistics {
-    fn take(&self) -> Vec<crate::product_analytics::Event> {
-        std::mem::take(&mut self.0.lock().unwrap())
-    }
-}
-
 /// A core on `state`, whose own node's agent files live in an empty `home`,
 /// with panes `p-a`, `p-b` and `p-c` carrying the given sessions.
 fn statistics_runtime(
@@ -1854,6 +1838,7 @@ fn statistics_runtime(
             agent
         })
         .collect();
+    runtime.delivery_ledger = Ok(Arc::default());
     runtime.install_product_analytics(statistics.clone());
     runtime
 }
@@ -1861,11 +1846,25 @@ fn statistics_runtime(
 /// `hide_agent_started` is sent from the link record's `pane_first_at`: a
 /// session a pane carries again, in another place or after the core
 /// restarts on the same state, is not counted again; a new one is, and a
-/// shell pane sends nothing.
+/// shell pane sends nothing. Each names who started it: the operator, a
+/// spawn, or a mission.
 #[test]
 fn a_session_a_pane_carries_is_counted_once_across_a_restart() {
-    use crate::product_analytics::Event::AgentStarted;
+    use crate::product_analytics::{AgentSource, Event};
     use hide_session::Agent;
+    #[allow(non_snake_case)]
+    fn AgentStarted(agent: Agent, source: AgentSource) -> Event {
+        Event::AgentStarted {
+            agent,
+            source: Some(source),
+        }
+    }
+    let on_pane = |id: &str, pane: &str, parent: Option<&str>| {
+        let mut record = spawned_record(id, "claude", id, parent);
+        record.pane = pane.into();
+        record.actor.pane_id = pane.into();
+        record
+    };
     let state = scratch_dir("herdr-core-statistics-state-");
     let home = scratch_dir("herdr-core-statistics-home-");
     let path = state.path().join("state.json");
@@ -1882,12 +1881,23 @@ fn a_session_a_pane_carries_is_counted_once_across_a_restart() {
     wait(&shared, "the first session's start", |_| {
         !statistics.0.lock().unwrap().is_empty()
     });
-    assert_eq!(statistics.take(), [AgentStarted(Agent::Claude)]);
+    assert_eq!(
+        statistics.take(),
+        [AgentStarted(Agent::Claude, AgentSource::Operator)]
+    );
 
     // The same session seen again from another folder, beside a new session
-    // in another pane: one pass applies both, and only the new one counts.
+    // in another pane that `hide agent spawn` started: one pass applies
+    // both, and only the new one counts.
     {
         let mut runtime = shared.lock().unwrap();
+        runtime.delivery_ledger = Ok(Arc::new(crate::delivery::ledger::Ledger {
+            agents: vec![
+                on_pane("agent-1", "p-a", None),
+                on_pane("agent-2", "p-b", Some("agent-1")),
+            ],
+            ..Default::default()
+        }));
         runtime.snapshot.navigator.workspaces[0].checkouts[0].tabs[0].panes[0].cwd =
             "/repo/sub".into();
         let mut codex = record_agent("p-b", "session-b", None);
@@ -1898,7 +1908,10 @@ fn a_session_a_pane_carries_is_counted_once_across_a_restart() {
     wait(&shared, "the second session's start", |_| {
         !statistics.0.lock().unwrap().is_empty()
     });
-    assert_eq!(statistics.take(), [AgentStarted(Agent::Codex)]);
+    assert_eq!(
+        statistics.take(),
+        [AgentStarted(Agent::Codex, AgentSource::Spawn)]
+    );
     drop(worker);
     drop(shared);
 
@@ -1913,6 +1926,32 @@ fn a_session_a_pane_carries_is_counted_once_across_a_restart() {
         ],
         &statistics,
     )));
+    // The third pane is a mission's checker.
+    {
+        let mut runtime = shared.lock().unwrap();
+        runtime.delivery_ledger = Ok(Arc::new(crate::delivery::ledger::Ledger {
+            agents: vec![on_pane("agent-3", "p-c", Some("agent-1"))],
+            ..Default::default()
+        }));
+        runtime.missions.book.missions.push(
+            serde_json::from_value(serde_json::json!({
+                "id": "mission-1", "title": "Fix the bug", "project": "/repo",
+                "device_id": crate::node::TEST_NODE,
+                "conductor": {"actor": {"pane_id": "p-a", "name": "lead", "kind": "claude",
+                    "device_id": crate::node::TEST_NODE, "session": null}, "agent_id": "agent-1"},
+                "status": "running", "scope": "pr", "cap": 4,
+                "created_at_unix_ms": 1, "updated_at_unix_ms": 1,
+                "nodes": [{
+                    "key": "fix", "title": "Fix it", "kind": "change", "status": "working",
+                    "agent_id": "agent-9",
+                    "criteria": [{"key": "review", "kind": "review", "checkers": [
+                        {"worker": {"agent": "claude"}, "agent_id": "agent-3"}
+                    ]}]
+                }]
+            }))
+            .unwrap(),
+        );
+    }
     let worker = super::super::links::spawn_worker(&shared, ChangeNotifier::noop())
         .expect("the link worker starts again");
     wait(&shared, "the third session's start", |_| {
@@ -1920,7 +1959,10 @@ fn a_session_a_pane_carries_is_counted_once_across_a_restart() {
     });
     // The worker is joined first, so a recount in the same pass is seen.
     drop(worker);
-    assert_eq!(statistics.take(), [AgentStarted(Agent::Claude)]);
+    assert_eq!(
+        statistics.take(),
+        [AgentStarted(Agent::Claude, AgentSource::Mission)]
+    );
 }
 
 fn pre_check_operation(

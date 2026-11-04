@@ -6814,6 +6814,13 @@ pub struct StatusSnapshot {
     pub tab_rename: Option<TabRenameSnapshot>,
     pub herdr: ProviderStatusSnapshot,
     pub herdr_takeover: Option<HerdrTakeoverSnapshot>,
+    /// What this machine's Herdr save offers to move into the core's own
+    /// engine (PRD engine-bundle-4-herdr-removal); absent while there is
+    /// nothing to show.
+    pub herdr_import: Option<HerdrImportSnapshot>,
+    /// What each device of that engine offers, on the link its engine
+    /// opened on (B18), each naming its `device`.
+    pub herdr_import_devices: Vec<HerdrImportSnapshot>,
     pub herdr_versions: Option<HerdrVersionsSnapshot>,
     pub remote: Vec<RemoteStatusSnapshot>,
     pub environment: Vec<EnvironmentStatusSnapshot>,
@@ -7312,6 +7319,47 @@ pub struct HerdrTakeoverSnapshot {
     pub path_herdr: Option<MovedPathHerdrSnapshot>,
 }
 
+/// What this machine's Herdr save offers to move into the core's own engine,
+/// and what the last move came to (PRD engine-bundle-4-herdr-removal D-6 to
+/// D-8, B2 to B5, B11, B14 to B17).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct HerdrImportSnapshot {
+    /// `move` while Hide's own Herdr runs, which moving stops (the question,
+    /// D-6); `import` for any other save, read only (D-8); `result` when
+    /// nothing is left to offer and the last move's result waits to be read.
+    pub kind: String,
+    /// `offered`, `moving` while the move is asked for and the core starts
+    /// again with it, `failed`, or `moved` for a `result`.
+    pub stage: String,
+    /// What moving offers: workspaces, tabs and agents not moved yet.
+    pub workspaces: usize,
+    pub tabs: usize,
+    pub agents: usize,
+    /// Conversations an earlier import left waiting in the Herdr they came
+    /// from, which an import resumes once that Herdr no longer runs (B15).
+    pub waiting: usize,
+    /// A Herdr runs on with the save's conversations open, so an import
+    /// opens their panes as shells (B15).
+    pub herdr_running: bool,
+    /// `not_stopped` (Hide's Herdr could not be stopped, B4) or `unreadable`
+    /// (the save could not be read, B11) while `stage` is `failed`.
+    pub failure: Option<String>,
+    /// Why the save could not be read, in one line.
+    pub reason: Option<String>,
+    /// The workspaces the last move left out, with why (B11).
+    pub refused: Vec<HerdrImportRefusedSnapshot>,
+    /// The device whose save this is; absent for this machine's (B18).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+}
+
+/// A workspace a move left out.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct HerdrImportRefusedSnapshot {
+    pub label: String,
+    pub reason: String,
+}
+
 /// The operator's own `herdr` after a move left it behind.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct MovedPathHerdrSnapshot {
@@ -7594,6 +7642,8 @@ impl Snapshot {
                     received_version: None,
                 },
                 herdr_takeover: None,
+                herdr_import: None,
+                herdr_import_devices: Vec::new(),
                 herdr_versions: None,
                 remote: Vec::new(),
                 environment: Vec::new(),
@@ -8953,6 +9003,7 @@ mod wire_enum_tests {
             hide_kit::PartCause::HerdrAbsent,
             hide_kit::PartCause::UpdateHerdr,
             hide_kit::PartCause::RetirementPending,
+            hide_kit::PartCause::OtherInstall,
             hide_kit::PartCause::Other,
         ];
         for variant in part_causes {
@@ -8981,6 +9032,7 @@ mod wire_enum_tests {
                 | hide_kit::PartCause::HerdrAbsent
                 | hide_kit::PartCause::UpdateHerdr
                 | hide_kit::PartCause::RetirementPending
+                | hide_kit::PartCause::OtherInstall
                 | hide_kit::PartCause::Other => {}
             }
         }

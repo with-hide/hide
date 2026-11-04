@@ -190,6 +190,19 @@ test("outside a Herdr pane the plugin only guards a protected project's tools", 
   }
 });
 
+// Mission c3: on the core's own engine nothing but the plugin names the pane's session, so a new root session
+// reports itself when it is created, before its first prompt; a subagent's session does not.
+test("a new root session reports itself before its first prompt, and a subagent's does not", async () => {
+  answer({ session: { reported: true } });
+  const hooks = await plugin();
+  await hooks.event({ event: sample("session.created") });
+  await hooks.event({ event: sample("session.created.child") });
+  const [call] = await until("session");
+  assert.equal(call.input.session_id, "ses_root");
+  assert.equal(calls().filter((c) => c.operation === "session").length, 1);
+  assert.equal(calls().filter((c) => c.operation === "prompt").length, 0);
+});
+
 test("a new root session's first prompt carries the guidance and the letters, which are confirmed once OpenCode stored it", async () => {
   answer({
     start: { context: "HIDE-GUIDANCE" },

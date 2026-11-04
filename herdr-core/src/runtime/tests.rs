@@ -62,6 +62,8 @@ mod group_start_admission;
 mod group_tabs;
 mod group_tabs_remote;
 mod guardrails;
+#[path = "tests/herdr_import.rs"]
+mod herdr_import;
 #[path = "tests/herdr_takeover.rs"]
 mod herdr_takeover;
 mod hide_ai_devices;
@@ -496,6 +498,23 @@ impl Drop for SharedRuntime {
                 ),
             }
         }
+    }
+}
+
+/// The usage statistics a test's runtime captured, in order.
+#[derive(Debug, Default)]
+pub(super) struct RecordedStatistics(Mutex<Vec<crate::product_analytics::Event>>);
+
+impl crate::product_analytics::Sink for RecordedStatistics {
+    fn set_enabled(&self, _enabled: bool) {}
+    fn capture(&self, event: crate::product_analytics::Event) {
+        self.0.lock().unwrap().push(event);
+    }
+}
+
+impl RecordedStatistics {
+    pub(super) fn take(&self) -> Vec<crate::product_analytics::Event> {
+        std::mem::take(&mut self.0.lock().unwrap())
     }
 }
 

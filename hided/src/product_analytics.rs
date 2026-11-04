@@ -199,18 +199,8 @@ fn properties(id: &str, event: Event) -> serde_json::Value {
         "app_version": crate::VERSION,
         "os": OS
     });
-    if let Some(agent) = event.agent() {
-        properties["agent"] = agent.into();
-    }
-    for (key, value) in [
-        ("outcome", event.outcome()),
-        ("failed_step", event.failed_step()),
-        ("herdr", event.herdr()),
-        ("platform", event.platform()),
-    ] {
-        if let Some(value) = value {
-            properties[key] = value.into();
-        }
+    for (key, value) in event.properties() {
+        properties[key] = value.into();
     }
     properties
 }
@@ -298,7 +288,7 @@ mod tests {
         let (received, bodies) = mpsc::channel();
         let (release, gate) = mpsc::channel();
         let peer = std::thread::spawn(move || {
-            for _ in 0..6 {
+            for _ in 0..9 {
                 let (mut stream, _) = server.accept().unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(10)))
@@ -335,7 +325,9 @@ mod tests {
         let worker =
             Worker::spawn(id.clone(), "phc_fixture_public_token".into(), endpoint).unwrap();
         worker.client.set_enabled(true);
-        worker.client.capture(Event::AiCalled);
+        worker.client.capture(Event::MissionStarted {
+            nodes: herdr_core::product_analytics::MissionSize::TwoToThree,
+        });
         let first = bodies.recv_timeout(Duration::from_secs(10)).unwrap();
         use herdr_core::product_analytics::{
             DeviceFailedStep, DeviceHerdr, DeviceOutcome, DevicePlatform,
@@ -355,9 +347,10 @@ mod tests {
         worker.client.capture(Event::Connected);
         release.send(()).unwrap();
         let second = bodies.recv_timeout(Duration::from_secs(10)).unwrap();
-        worker
-            .client
-            .capture(Event::AgentStarted(hide_session::Agent::OpenCode));
+        worker.client.capture(Event::AgentStarted {
+            agent: hide_session::Agent::OpenCode,
+            source: Some(herdr_core::product_analytics::AgentSource::Mission),
+        });
         release.send(()).unwrap();
         let third = bodies.recv_timeout(Duration::from_secs(10)).unwrap();
         worker.client.capture(ready);
@@ -372,10 +365,32 @@ mod tests {
         });
         release.send(()).unwrap();
         let sixth = bodies.recv_timeout(Duration::from_secs(10)).unwrap();
+        use herdr_core::product_analytics::{
+            MissionOutcome, PhoneRoute, PracticeChapter, PracticeStage,
+        };
+        worker.client.capture(Event::MissionEnded {
+            outcome: MissionOutcome::MergeWait,
+        });
+        release.send(()).unwrap();
+        let ended = bodies.recv_timeout(Duration::from_secs(10)).unwrap();
+        worker.client.capture(Event::Practice {
+            chapter: PracticeChapter::Mission,
+            stage: PracticeStage::Finished,
+        });
+        release.send(()).unwrap();
+        let practice = bodies.recv_timeout(Duration::from_secs(10)).unwrap();
+        worker.client.capture(Event::PhonePaired {
+            route: PhoneRoute::Relay,
+        });
+        release.send(()).unwrap();
+        let phone = bodies.recv_timeout(Duration::from_secs(10)).unwrap();
         assert_eq!(sixth["event"], "hide_device_connected");
         assert_eq!(fourth["event"], "hide_device_connected");
         assert_eq!(fifth["event"], "hide_device_connected");
-        assert_eq!(first["event"], "hide_ai_called");
+        assert_eq!(first["event"], "hide_mission_started");
+        assert_eq!(ended["event"], "hide_mission_ended");
+        assert_eq!(practice["event"], "hide_practice");
+        assert_eq!(phone["event"], "hide_phone_paired");
         assert_eq!(second["event"], "hide_connected");
         assert_eq!(third["event"], "hide_agent_started");
         assert_ne!(first["uuid"], second["uuid"]);
@@ -385,11 +400,24 @@ mod tests {
             "$geoip_disable": true, "$ip": null,
             "app_version": env!("HIDE_BUILD_VERSION"), "os": std::env::consts::OS
         });
-        assert_eq!(first["properties"], common);
+        let mut mission = common.clone();
+        mission["nodes"] = "2-3".into();
+        assert_eq!(first["properties"], mission);
         assert_eq!(second["properties"], common);
         let mut started = common.clone();
         started["agent"] = "opencode".into();
+        started["source"] = "mission".into();
         assert_eq!(third["properties"], started);
+        let mut waiting = common.clone();
+        waiting["outcome"] = "merge_wait".into();
+        assert_eq!(ended["properties"], waiting);
+        let mut chapter = common.clone();
+        chapter["chapter"] = "mission".into();
+        chapter["stage"] = "finished".into();
+        assert_eq!(practice["properties"], chapter);
+        let mut paired = common.clone();
+        paired["route"] = "relay".into();
+        assert_eq!(phone["properties"], paired);
         let mut device_ready = common.clone();
         device_ready["outcome"] = "ready".into();
         device_ready["herdr"] = "started".into();
@@ -405,7 +433,9 @@ mod tests {
         device_failed["failed_step"] = "herdr_start".into();
         device_failed["platform"] = "macos-aarch64".into();
         assert_eq!(fifth["properties"], device_failed);
-        for body in [first, second, third, fourth, fifth, sixth] {
+        for body in [
+            first, second, third, fourth, fifth, sixth, ended, practice, phone,
+        ] {
             assert_eq!(body["api_key"], "phc_fixture_public_token");
             let mut keys: Vec<_> = body
                 .as_object()

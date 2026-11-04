@@ -305,7 +305,10 @@ use crate::error::HostError;
 /// existence record. An older node cannot fence late requests on reconnect.
 /// 73: removes the running-agent queue call. Running input is typed through
 /// the engine so a letter reaches an ongoing turn; older helpers upgrade.
-pub const PROTOCOL_VERSION: u32 = 73;
+/// 74: adds `HerdrSave` and `HerdrStop`, so the core moves a device's Herdr
+/// session into its own engine (PRD engine-bundle-4-herdr-removal D-10); an
+/// older helper would refuse both, so it upgrades.
+pub const PROTOCOL_VERSION: u32 = 74;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
 /// runs it ([`Call::AgentInstalled`]).
@@ -701,6 +704,17 @@ pub enum Call {
     /// Whether the node's account has Hide's agent hooks in place, read from
     /// that account's own configuration (`hide_agent_hooks::Diagnosis`).
     HookDiagnosis,
+    /// The node account's Herdr save and who runs the server on its default
+    /// socket (`crate::herdr_save::Found`), only read (PRD
+    /// engine-bundle-4-herdr-removal D-10).
+    HerdrSave,
+    /// Stops Hide's Herdr on the node account's default socket, the server
+    /// `pid` that started at `started` as `HerdrSave` found it, confirmed
+    /// gone by both; answers `null` once it is gone (D-6, D-10).
+    HerdrStop {
+        pid: u32,
+        started: u64,
+    },
     /// Replaces the project guardrails' policy file under the node's home
     /// with `policy`, the projects of this machine with a protection on
     /// (`hide_agent_hooks::guardrails::write_policy`); answers `null` once
@@ -1264,6 +1278,8 @@ impl Call {
             | Self::WorktreeRemovalCheck { .. }
             | Self::Kit { .. }
             | Self::HookDiagnosis
+            | Self::HerdrSave
+            | Self::HerdrStop { .. }
             | Self::GuardrailPolicy { .. }
             | Self::WorktreesRegistered { .. }
             | Self::IgnoredRepository { .. }

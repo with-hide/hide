@@ -493,6 +493,21 @@ pub fn engine_backups_in(engine_dir: &Path) -> PathBuf {
     engine_dir.join("backups")
 }
 
+/// The import record of the engine whose folder is `engine_dir`, this
+/// machine's or a device's (PRD engine-bundle-4-herdr-removal D-25): what of
+/// that machine's Herdr session is not moved into the engine yet, what was,
+/// the conversations waiting to resume and whether the move was committed.
+pub fn herdr_import_in(engine_dir: &Path) -> PathBuf {
+    engine_dir.join("herdr-import.json")
+}
+
+/// A device's Herdr save as its node read it when a move of it was asked,
+/// kept in the device's engine folder `engine_dir` until the core's next
+/// start moves it (PRD engine-bundle-4-herdr-removal D-10).
+pub fn herdr_save_kept_in(engine_dir: &Path) -> PathBuf {
+    engine_dir.join("herdr-save.json")
+}
+
 /// The folder of the core's own engine for the device `device`, in the
 /// core's state folder (PRD engine-bundle-3-core-owns D-22): the core keeps
 /// each machine's session, a device's as its own, and the device keeps only

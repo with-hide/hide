@@ -17,6 +17,7 @@ fn env(dir: &std::path::Path) -> Env {
     Env {
         home: dir.to_path_buf(),
         herdr_socket_path: None,
+        herdr_move_socket: None,
         herdr_bin_path: None,
         own_engine: false,
         login_shell: None,
@@ -33,6 +34,7 @@ fn env(dir: &std::path::Path) -> Env {
         host_helper_root: None,
         host_cli_dir: None,
         pane_id: None,
+        install: None,
         tailscale_bin: Some(dir.join("no-tailscale")),
         relay_url: "ws://127.0.0.1:9/ws".to_owned(),
         search_path: None,

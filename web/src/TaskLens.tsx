@@ -1,6 +1,6 @@
 import { AgentRecordTitle } from "./components/agent-record-title";
 import { ChevronDownIcon, ChevronRightIcon, EllipsisIcon, FileTextIcon, GitBranchIcon, PlusIcon, ServerIcon, StarIcon } from "lucide-react";
-import { Fragment, memo, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { Fragment, memo, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import type { Actions } from "./actions";
 import { deviceScope } from "./agentScope";
@@ -18,6 +18,7 @@ import { MissionChip } from "./components/mission-chip";
 import { RowLineText } from "./components/row-line-text";
 import { StatusMark } from "./components/status-mark";
 import { Button } from "./components/ui/button";
+import { RowButton } from "./components/ui/row-button";
 import { Keycap } from "./components/ui/keycap";
 import { ToggleGroup, ToggleGroupItem } from "./components/ui/toggle-group";
 import { EntryContextMenu, EntryDropdown, type MenuEntry } from "./components/entry-menu";
@@ -230,9 +231,12 @@ const TaskGroups = memo(function TaskGroups({ list, view, showProject, byPane, a
     <TaskTree key={entry.card.root} entry={entry} lines={lines} byPane={byPane} opened={opened} selected={selected} number={numbers ? numberOf(numbers, entry.agent.pane_id) : null} showProject={showProject} disabled={disabled} actions={actions} onShowAll={showAll} />
   ));
   const archivedList = (entries: ArchivedEntry[]) => entries.map((entry) => <ArchivedRow key={entry.row.id} entry={entry} showProject={showProject} disabled={disabled} actions={actions} />);
-  const drawSection = ({ group, bands, resting, cleanup, archived }: (typeof sections)[number]) => (
-    <section key={group.key} data-task-group={group.state ?? group.project?.id ?? ""} aria-label={groupName(group, t)}>
-      <GroupHead group={group} />
+  // In 상태별 a section draws no box of its own, so its head sticks beside the
+  // heads of the groups above it rather than leaving with its rows: each head
+  // stacks under the ones already passed, and pressing one goes back to its rows.
+  const drawSection = ({ group, bands, resting, cleanup, archived }: (typeof sections)[number], stack: number) => (
+    <section key={group.key} className={view === "status" ? "contents" : undefined} data-task-group={group.state ?? group.project?.id ?? ""} aria-label={groupName(group, t)}>
+      <GroupHead group={group} stack={stack} />
       {bands.map((band) => (
         <Fragment key={band.state}>
           {view === "project" ? <BandHead state={band.state} /> : null}
@@ -249,13 +253,15 @@ const TaskGroups = memo(function TaskGroups({ list, view, showProject, byPane, a
   const raised = view === "status" ? sections.filter(({ group }) => group.state !== null && RAISED_TASK_GROUPS.has(group.state)) : [];
   const below = sections.filter((section) => !raised.includes(section));
   const held = raised.length > 0 && (below.length > 0 || list.resting.length + list.cleanup.length + list.archived.length > 0);
+  const listed = held ? below : sections;
+  const statusFolds = view === "status" ? [list.resting, list.cleanup, list.archived].filter((entries) => entries.length > 0).length : 0;
   // The arrow keys move through both parts as one.
   return (
     <div ref={lists} className={cn("flex min-h-0 flex-1 flex-col", disabled && "opacity-(--opacity-disabled)")} data-task-list="true" onKeyDown={moveFocus}>
-      {held ? <div className="max-h-1/2 shrink-0 scroll-pt-(--size-sidebar-section-header) overflow-y-auto border-b border-border px-sm pb-xs" data-task-scroll="raised">{raised.map(drawSection)}</div> : null}
-      <div className={cn("min-h-0 flex-1 overflow-y-auto px-sm pb-md", view === "status" && "scroll-pt-(--size-sidebar-section-header)")} data-task-scroll="list">
-        {(held ? below : sections).map(drawSection)}
-        {view === "status" ? <Folds group={{ key: "", resting: list.resting, cleanup: list.cleanup, archived: list.archived }} resting={restingTrees} cleanup={cleanupTrees} archived={shown.archived} open={openFolds} onToggle={toggleFold} rows={rows} archivedRows={archivedList} sticky /> : null}
+      {held ? <div className="max-h-1/2 shrink-0 overflow-y-auto border-b border-border px-sm pb-xs" style={stackPadding(raised.length)} data-task-scroll="raised">{raised.map(drawSection)}</div> : null}
+      <div className="min-h-0 flex-1 overflow-y-auto px-sm pb-md" style={view === "status" ? stackPadding(listed.length + statusFolds) : undefined} data-task-scroll="list">
+        {listed.map(drawSection)}
+        {view === "status" ? <Folds group={{ key: "", resting: list.resting, cleanup: list.cleanup, archived: list.archived }} resting={restingTrees} cleanup={cleanupTrees} archived={shown.archived} open={openFolds} onToggle={toggleFold} rows={rows} archivedRows={archivedList} stackFrom={listed.length} /> : null}
       </div>
     </div>
   );
@@ -279,16 +285,46 @@ function BandHead({ state }: { state: TaskGroupState }) {
   );
 }
 
-const STICKY_TASK_HEAD = "sticky top-0 z-10 h-(--size-sidebar-section-header) bg-sidebar";
+const STICKY_TASK_HEAD = "sticky z-20 h-(--size-sidebar-section-header) bg-sidebar";
 
-/** A group's state and count stay above its scrolling rows; project heads carry their counts by state (B4, B6). */
-function GroupHead({ group }: { group: TaskGroup }) {
+/** Where the `stack`th sticky head of a scrolling part stands: under the heads above it. */
+function stackTop(stack: number): CSSProperties {
+  return { top: `calc(var(--size-sidebar-section-header) * ${stack})` };
+}
+
+/** A part's scroll padding under its `count` stacked heads, so a row brought into view is never under them. */
+function stackPadding(count: number): CSSProperties {
+  return { scrollPaddingTop: `calc(var(--size-sidebar-section-header) * ${count})` };
+}
+
+/**
+ * Brings a stacked head's rows back: the part scrolls until the first row
+ * under the head stands right below the head's own place in the stack.
+ */
+function goToHead(head: HTMLElement, stack: number) {
+  const scroller = head.closest<HTMLElement>("[data-task-scroll]");
+  const first = head.nextElementSibling;
+  if (!scroller || !(first instanceof HTMLElement)) return;
+  const top = scroller.scrollTop + first.getBoundingClientRect().top - scroller.getBoundingClientRect().top - (stack + 1) * head.offsetHeight;
+  scroller.scrollTo({ top: Math.max(0, top) });
+}
+
+/**
+ * A group's state and count stay above its scrolling rows, stacked under the
+ * heads of the groups already passed, and pressing one goes back to its rows;
+ * project heads carry their counts by state (B4, B6).
+ */
+function GroupHead({ group, stack }: { group: TaskGroup; stack: number }) {
   const { t } = useInterfaceTranslation();
   if (group.state) {
+    const name = t(`taskLens.group.${group.state}`);
     return (
-      <h3 tabIndex={-1} data-task-focus="group" data-section-sticky="true" className={cn(STICKY_TASK_HEAD, "flex items-center gap-xs rounded-xs px-xs py-xs text-micro font-medium text-subtle-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring", group.state === "needs_you" && "text-warning")} data-task-group-head={group.state}>
-        <span>{t(`taskLens.group.${group.state}`)}</span>
-        <span className="tabular-nums">{group.entries.length}</span>
+      <h3 data-section-sticky="true" className={STICKY_TASK_HEAD} style={stackTop(stack)} data-task-group-head={group.state}>
+        <RowButton data-task-focus="group" aria-label={`${name} ${group.entries.length}`} onClick={(event) => goToHead(event.currentTarget.parentElement!, stack)}
+          className={cn("h-full rounded-xs text-micro font-medium text-subtle-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring", group.state === "needs_you" && "text-warning")}>
+          <span>{name}</span>
+          <span className="tabular-nums">{group.entries.length}</span>
+        </RowButton>
       </h3>
     );
   }
@@ -306,7 +342,7 @@ function GroupHead({ group }: { group: TaskGroup }) {
 }
 
 /** `쉬는 중 N ›`, `정리할 것 N ›` and, last, `보관됨 N ›` (B5; PRD session-archive B14, B15): folded, opened in place, closed with `접기`. */
-function Folds({ group, resting, cleanup, archived, open, onToggle, rows, archivedRows: drawArchived, sticky = false }: {
+function Folds({ group, resting, cleanup, archived, open, onToggle, rows, archivedRows: drawArchived, stackFrom = null }: {
   group: Pick<TaskGroup, "key" | "resting" | "cleanup" | "archived">;
   resting: { entry: TaskEntry; lines: SidebarTreeLine[] }[];
   cleanup: { entry: TaskEntry; lines: SidebarTreeLine[] }[];
@@ -315,16 +351,20 @@ function Folds({ group, resting, cleanup, archived, open, onToggle, rows, archiv
   onToggle: (key: string) => void;
   rows: (trees: { entry: TaskEntry; lines: SidebarTreeLine[] }[]) => ReactNode;
   archivedRows: (entries: ArchivedEntry[]) => ReactNode;
-  sticky?: boolean;
+  /** In 상태별, the place in the stack of sticky heads the first fold button takes; null where the folds do not stick. */
+  stackFrom?: number | null;
 }) {
   const { t } = useInterfaceTranslation();
+  const counts = [group.resting.length, group.cleanup.length, group.archived.length];
   const fold = (kind: "rest" | "cleanup" | "archived", count: number, drawn: ReactNode) => {
     if (count === 0) return null;
     const key = taskFoldKey(kind, group.key);
     const expanded = open.has(key);
+    const index = ["rest", "cleanup", "archived"].indexOf(kind);
+    const stack = stackFrom === null ? null : stackFrom + counts.slice(0, index).filter((n) => n > 0).length;
     return (
-      <div data-task-fold={kind}>
-        <Button variant="text" size="inline" data-task-focus="fold" data-section-sticky={sticky ? "true" : undefined} aria-expanded={expanded} onClick={() => onToggle(key)} className={cn("w-full justify-start px-xs py-xs text-micro", sticky && STICKY_TASK_HEAD)}>
+      <div data-task-fold={kind} className={stack === null ? undefined : "contents"}>
+        <Button variant="text" size="inline" data-task-focus="fold" data-section-sticky={stack === null ? undefined : "true"} aria-expanded={expanded} onClick={() => onToggle(key)} style={stack === null ? undefined : stackTop(stack)} className={cn("w-full justify-start px-xs py-xs text-micro", stack !== null && STICKY_TASK_HEAD)}>
           {expanded ? <ChevronDownIcon aria-hidden="true" className="size-(--size-icon-sm)" /> : <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />}
           <span>{t(kind === "rest" ? "taskLens.fold.resting" : kind === "cleanup" ? "taskLens.fold.cleanup" : "archive.fold", { count })}</span>
         </Button>
@@ -367,7 +407,7 @@ function TaskRow({ entry, open, selected, number, showProject, disabled, actions
   const menu = useTaskMenu(agent, record, go, resolvable, disabled, actions, true);
   // The row's own mark words, as the sidebar row says them (status-marks B3, B33); a fold's rows say the fold.
   // A task waiting in 다시 볼 것 wears the ★ in its mark's slot (PRD revisit-group B6). A read ask in 내 차례
-  // wears a hollow `!`, is dimmed and says 읽음 (needs-you-cleanup B10).
+  // wears a hollow `!` and is dimmed; the mark says it was read, so no word repeats it (needs-you-cleanup B10).
   // The small ★ after the title steps aside where the time's slot shows the ☆/★ button, so the row never draws two.
   const starMark = card.state === "revisit";
   const read = card.state === "needs_you" && card.read === true;
@@ -381,7 +421,7 @@ function TaskRow({ entry, open, selected, number, showProject, disabled, actions
     <li className={cn("group/task relative flex min-w-0 items-stretch rounded-xs pr-xs", selected ? "bg-selected" : "hover:bg-accent focus-within:bg-accent", rowDimmed(agent) && "opacity-(--opacity-dimmed)")}
       data-task-row={agent.pane_id} data-task-state={card.state} data-task-read={read ? "true" : undefined} data-selected={selected ? "true" : undefined} onClick={go}>
       <TreeChevron name={agent.identity_label} open={open} onToggle={toggle} hangs={false} disabled={disabled} data-task-chevron={agent.pane_id} />
-      <div className="flex min-w-0 flex-1 flex-col gap-xxs py-xs pl-xs">
+      <div className="flex min-w-0 flex-1 flex-col gap-xs py-xs pl-xs">
         <div className="flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs">
           <button type="button" data-task-focus="row" disabled={disabled} aria-current={selected ? "true" : undefined} aria-expanded={open ?? undefined} aria-label={name}
             title={[agent.identity_label, agentProductName(agent.agent_kind), recordWords(t, agent), agent.record_summary, words, sentence].filter(Boolean).join("\n")}
@@ -396,7 +436,6 @@ function TaskRow({ entry, open, selected, number, showProject, disabled, actions
           </button>
           <AgentPrMark agent={agent} pulls={rowPulls(agent)} disabled={disabled} onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: project?.id ?? null, url: pull.url, number: pull.number })} onExternal={(pull) => actions.openLink(pull.url, true)} />
           <MissionChip agent={agent} onOpen={(id) => actions.openMission(id)} />
-          {read ? <span aria-hidden="true" className="shrink-0 rounded-xs border border-border px-xxs text-micro text-subtle-foreground group-hover/task:hidden group-focus-within/task:hidden hoverless:hidden" data-task-read-tag="">{t("taskLens.readTag")}</span> : null}
           <TimeSlot agent={agent} record={record} menu={menu} revisit={{ on: starred(agent), disabled, actions }} />
         </div>
         <SecondLine entry={entry} showProject={showProject} read={read} />
@@ -449,7 +488,7 @@ function ArchivedRow({ entry, showProject, disabled, actions }: { entry: Archive
       <li className={cn("group/task relative flex min-w-0 items-stretch rounded-xs pr-xs hover:bg-accent focus-within:bg-accent", (pending || away) && "opacity-(--opacity-dimmed)")}
         data-archived-row={row.id} data-archived-phase={row.phase} data-archived-resume={failed ? "failed" : pending ? "pending" : undefined} onClick={record}>
         <TreeChevron name={root.title} open={null} onToggle={() => {}} hangs={false} />
-        <div className="flex min-w-0 flex-1 flex-col gap-xxs py-xs pl-xs">
+        <div className="flex min-w-0 flex-1 flex-col gap-xs py-xs pl-xs">
           <div className="flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs">
             <button type="button" data-task-focus="row" aria-label={[root.title, agentProductName(root.agent_kind), t("archive.state"), row.starred ? t("taskLens.revisit.starred") : null, state].filter(Boolean).join(", ")}
               title={[root.title, agentProductName(root.agent_kind), root.last_line].filter(Boolean).join("\n")}
@@ -659,7 +698,7 @@ function ChildRow({ parent, child, depth, place, open, selected, disabled, actio
       data-task-child={child.pane_id} data-depth={depth} data-selected={selected ? "true" : undefined} onClick={go}>
       <TreeRails place={place} />
       <TreeChevron name={child.identity_label} open={open} onToggle={toggle} hangs chain={place.chain} disabled={disabled} data-task-chevron={child.pane_id} />
-      <div className="flex min-w-0 flex-1 flex-col gap-xxs py-xs pl-xs">
+      <div className="flex min-w-0 flex-1 flex-col gap-xs py-xs pl-xs">
         <div className="flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs">
           <button type="button" data-task-focus="row" disabled={disabled} aria-current={selected ? "true" : undefined} aria-expanded={open ?? undefined}
             aria-label={[child.identity_label, forkLabel(t, child), agentProductName(child.agent_kind), recordWords(t, child), child.record_summary, markWords(t, child), child.state.branch_badge, device].filter(Boolean).join(", ")}

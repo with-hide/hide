@@ -39,6 +39,10 @@ pub const HIDE_HOST_CLI_DIR: &str = "HIDE_HOST_CLI_DIR";
 /// (`hide_agent_hooks::pane`).
 pub const HIDE_PANE_ID: &str = hide_agent_hooks::pane::HIDE_PANE_ID;
 pub const HERDR_PANE_ID: &str = hide_agent_hooks::pane::HERDR_PANE_ID;
+/// The Hide installation that started the pane, and that installation's own
+/// `hide` command (`hide_agent_hooks::route`).
+pub const HIDE_INSTALL: &str = hide_agent_hooks::route::INSTALL_VARIABLE;
+pub const HIDE_INSTALL_CLI: &str = hide_agent_hooks::route::CLI_VARIABLE;
 pub const HIDE_CAP_REF: &str = "HIDE_CAP_REF";
 pub const HIDE_TAILSCALE_BIN: &str = "HIDE_TAILSCALE_BIN";
 pub const HIDE_RELAY_URL: &str = "HIDE_RELAY_URL";
@@ -86,7 +90,7 @@ pub const REGISTRY: &[EnvKey] = &[
         key: HERDR_SOCKET_PATH,
         required: false,
         format: "absolute local socket path (a named pipe's name on Windows)",
-        absent_behavior: "The socket Herdr's default session uses (see XDG_CONFIG_HOME) when it exists; otherwise core starts without a Herdr socket and the sidebar shows that state. Ignored, with the default, while HIDE_DEV_PANE_HOLDER is `1`",
+        absent_behavior: "The socket Herdr's default session uses (see XDG_CONFIG_HOME) when it exists; otherwise core starts without a Herdr socket and the sidebar shows that state. While HIDE_DEV_PANE_HOLDER is `1` no Herdr is attached on it; a named socket is only where the move into the core's own engine reads Hide's Herdr, and with none it reads the default",
     },
     EnvKey {
         key: HERDR_BIN_PATH,
@@ -191,6 +195,18 @@ pub const REGISTRY: &[EnvKey] = &[
         absent_behavior: "Pane-scoped Workspace commands refuse because the caller cannot identify a connected Herdr pane",
     },
     EnvKey {
+        key: HIDE_INSTALL,
+        required: false,
+        format: "`app` or `root:<helper root>`; a pane holder's pane names the Hide installation that started it",
+        absent_behavior: "The pane is any installation's: a `hide` command asks this account's daemon first and its device bridges after",
+    },
+    EnvKey {
+        key: HIDE_INSTALL_CLI,
+        required: false,
+        format: "absolute path of the `hide` command of the installation that started the pane",
+        absent_behavior: "The `hide` command found first on PATH answers the call itself",
+    },
+    EnvKey {
         key: HIDE_CAP_REF,
         required: false,
         format: "absolute path to a regular, owner-only pane credential reference",
@@ -270,6 +286,11 @@ pub struct Env {
     /// registration events (`boundary.rs`); read once, never configured.
     pub home: PathBuf,
     pub herdr_socket_path: Option<String>,
+    /// While the core runs its own engine, the socket `HERDR_SOCKET_PATH`
+    /// names: the one Hide's Herdr ran on, whose session moves into the
+    /// engine (PRD engine-bundle-4-herdr-removal D-5); `None` reads the
+    /// account's default socket. Read by the move only.
+    pub herdr_move_socket: Option<PathBuf>,
     /// `HERDR_BIN_PATH` as given; [`Env::herdr_program`] is the herdr a
     /// daemon runs.
     pub herdr_bin_path: Option<PathBuf>,
@@ -313,6 +334,8 @@ pub struct Env {
     /// The pane a Workspace CLI command runs in; the daemon verifies its
     /// live membership and never trusts a caller-supplied Workspace.
     pub pane_id: Option<String>,
+    /// The Hide installation that started that pane (`HIDE_INSTALL`).
+    pub install: Option<String>,
     /// The only tailscale CLI Mobile runs, when set (`HIDE_TAILSCALE_BIN`).
     pub tailscale_bin: Option<PathBuf>,
     pub relay_url: String,
@@ -452,8 +475,14 @@ fn resolve(mut read: impl FnMut(&str) -> Option<String>) -> (Env, Vec<EnvError>)
         },
     };
     // The core's own engine runs no Herdr: neither the socket a caller
-    // names nor the default one is read.
-    let herdr_socket_path = match read(HERDR_SOCKET_PATH) {
+    // names nor the default one is read, except by the move of the session
+    // Hide's Herdr ran there, which reads the named one as it is.
+    let named_socket = read(HERDR_SOCKET_PATH);
+    let herdr_move_socket = named_socket
+        .as_deref()
+        .filter(|value| own_engine && Path::new(value).is_absolute())
+        .map(PathBuf::from);
+    let herdr_socket_path = match named_socket {
         _ if own_engine => None,
         Some(value) if value.is_empty() => {
             errors.push(EnvError {
@@ -620,6 +649,7 @@ fn resolve(mut read: impl FnMut(&str) -> Option<String>) -> (Env, Vec<EnvError>)
             None => {}
         }
     }
+    let install = read(HIDE_INSTALL).filter(|value| !value.is_empty());
     let tailscale_bin = match read(HIDE_TAILSCALE_BIN) {
         Some(value)
             if !Path::new(&value).is_absolute() || value.bytes().any(|b| b.is_ascii_control()) =>
@@ -648,6 +678,7 @@ fn resolve(mut read: impl FnMut(&str) -> Option<String>) -> (Env, Vec<EnvError>)
     let env = Env {
         home,
         herdr_socket_path,
+        herdr_move_socket,
         herdr_bin_path,
         own_engine,
         login_shell,
@@ -664,6 +695,7 @@ fn resolve(mut read: impl FnMut(&str) -> Option<String>) -> (Env, Vec<EnvError>)
         host_helper_root,
         host_cli_dir,
         pane_id,
+        install,
         tailscale_bin,
         relay_url,
         search_path,
@@ -895,6 +927,11 @@ mod tests {
         assert_eq!(env.herdr_socket_path, None);
         assert_eq!(env.herdr_bin_path, None);
         assert_eq!(env.herdr_program(), None);
+        // Only the move reads the named socket, where Hide's Herdr ran.
+        assert_eq!(
+            env.herdr_move_socket,
+            Some(PathBuf::from("/tmp/herdr.sock"))
+        );
     }
 
     #[test]

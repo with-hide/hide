@@ -659,8 +659,9 @@ pub enum ReadRecordScope<'a> {
     /// Prune nothing. The caller has no authoritative pane topology.
     Retain,
     /// The caller holds the local server's full pane topology. Remote records
-    /// are left alone.
-    Local,
+    /// are left alone, and so is what this machine's import record keeps of
+    /// the Herdr panes not moved yet (PRD engine-bundle-4-herdr-removal D-25).
+    Local(&'a crate::herdr_import::Held),
     /// The caller holds one remote target's full pane topology. The argument
     /// is that target's device id, and only records of its panes are dropped.
     Remote(&'a str),
@@ -671,7 +672,9 @@ impl ReadRecordScope<'_> {
     pub(crate) fn owns(self, pane_id: &str) -> bool {
         match self {
             Self::Retain => false,
-            Self::Local => !crate::address::is_device_scoped(pane_id),
+            Self::Local(held) => {
+                !crate::address::is_device_scoped(pane_id) && held.releases(pane_id)
+            }
             Self::Remote(device) => crate::address::is_pane_of(pane_id, device),
         }
     }

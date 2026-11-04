@@ -271,7 +271,7 @@ test("a new session's first prompt carries the guidance and the letters in one h
   // `lost` counts calls an earlier budget gave up on; a loaded machine may add it. Letters know the session by its
   // file, as Herdr does; Memory by the host's own id, which its session reader keys a receipt by.
   const { lost: _lost, ...input } = call.input;
-  assert.deepEqual(input, { session_id: file, native_session: id, prompt: "Fix the failing parser test", cwd: "/checkouts/fixture", first: true, memory_first: true, version: 13 });
+  assert.deepEqual(input, { session_id: file, native_session: id, prompt: "Fix the failing parser test", cwd: "/checkouts/fixture", first: true, memory_first: true, version: 14 });
   assert.equal(call.env.HERDR_PANE_ID, "w1:p1");
 
   // Once the host wrote it, the session's guidance is given.
@@ -437,6 +437,20 @@ test("a confirmation Hide did not take is made again when the letter rides the n
   assert.deepEqual(second.input.letters, ["letter-1"]);
 });
 
+// Mission c3: on the core's own engine nothing but the extension names the pane's session, so it reports it when
+// the session starts and when the operator switches to another, before the first prompt.
+test("a session start and a switch report the pane's session before its first prompt", async () => {
+  const host = await extension();
+  answer({ session: { reported: true } });
+  await host.emit("session_start", sample("session_start").event, context("session_start"));
+  const file = context("session_start").sessionManager.getSessionFile();
+  await until("session", 1, (input) => input.session_id === file);
+  const other = "/fixture-home/.pi/agent/sessions/-fixture-home-work-/switched.jsonl";
+  await host.emit("session_switch", sample("session_start").event, context("session_start", { sessionFile: other }));
+  await until("session", 1, (input) => input.session_id === other);
+  assert.equal(made("prompt").length, 0);
+});
+
 test("the pane's session reports its turn: working from a run's start, done once it settles, idle after an abort", async () => {
   const host = await extension();
   await started(host, "");
@@ -599,7 +613,7 @@ test("a shell call that starts an agent through Herdr is refused with the helper
   assert.deepEqual(await host.emit("tool_call", launch, context("tool_call.bash")), { block: true, reason: "Use hide agent spawn --parent here" });
   const [call] = await until("tool");
   const { lost: _lost, ...input } = call.input;
-  assert.deepEqual(input, { tool: "bash", command: "herdr agent start helper --kind claude", cwd: "/checkouts/fixture", version: 13 });
+  assert.deepEqual(input, { tool: "bash", command: "herdr agent start helper --kind claude", cwd: "/checkouts/fixture", version: 14 });
 
   // A call that can hand a result to the system opener asks the helper too.
   const opener = { ...sample("tool_call.bash").event, input: { command: "Start-Process report.pdf" } };
@@ -624,7 +638,7 @@ test("while a project has a protection on, file and shell calls ask the helper w
     const shell = { ...sample("tool_call.bash").event, input: { command: "cat .env" } };
     assert.deepEqual(await host.emit("tool_call", shell, context("tool_call.bash")), { block: true, reason: "Not run: Guard files is on" });
     const sent = (await until("tool", 2)).map(({ input: { lost: _lost, ...input } }) => input);
-    assert.deepEqual(sent[0], { tool: "write", args: { path: "/checkouts/fixture/.env" }, cwd: "/checkouts/fixture", version: 13 });
+    assert.deepEqual(sent[0], { tool: "write", args: { path: "/checkouts/fixture/.env" }, cwd: "/checkouts/fixture", version: 14 });
     assert.equal(sent[1].command, "cat .env");
 
     // Every protection off again: no file or shell call starts the helper (B27).
@@ -699,6 +713,7 @@ if (AGENT === "omp") {
     assert.equal(await host.emit("tool_call", { type: "tool_call", toolName: "ask", toolCallId: "a", input: {} }, context("tool_call.bash")), undefined);
     await host.emit("agent_end", sample("agent_end").event, context("agent_end"));
     await settled(host);
-    assert.deepEqual(calls().map((call) => call.operation), ["start", "tool"]);
+    // The session report and the guidance read start together, in either order.
+    assert.deepEqual(calls().map((call) => call.operation).sort(), ["session", "start", "tool"]);
   });
 }

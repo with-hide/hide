@@ -25,6 +25,7 @@ fn env(dir: &Path, tailscale: &Path) -> Env {
     Env {
         home: dir.to_path_buf(),
         herdr_socket_path: None,
+        herdr_move_socket: None,
         herdr_bin_path: None,
         own_engine: false,
         login_shell: None,
@@ -44,6 +45,7 @@ fn env(dir: &Path, tailscale: &Path) -> Env {
         tailscale_bin: Some(tailscale.to_path_buf()),
         relay_url: "ws://127.0.0.1:9/ws".to_owned(),
         search_path: None,
+        install: None,
     }
 }
 

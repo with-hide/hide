@@ -85,7 +85,6 @@ struct Attempt {
 
 #[derive(Default)]
 struct State {
-    analytics: Option<Arc<dyn crate::product_analytics::Sink>>,
     attempts: VecDeque<Attempt>,
     /// Calls dropped from a full queue, by the quarter hour they were made in
     /// (every civil offset is a multiple of one), so they still count as
@@ -135,27 +134,13 @@ impl AiUsageQueue {
         Arc::new(Self::default())
     }
 
-    pub(crate) fn set_product_analytics(&self, sink: Arc<dyn crate::product_analytics::Sink>) {
-        self.state().analytics = Some(sink);
-    }
-
     fn state(&self) -> MutexGuard<'_, State> {
         self.0.lock().unwrap_or_else(|error| error.into_inner())
     }
 
     /// Takes everything queued and dates it in `zone`.
     pub fn take(&self, zone: &jiff::tz::TimeZone) -> Batch {
-        let state = {
-            let mut guard = self.state();
-            let analytics = guard.analytics.clone();
-            std::mem::replace(
-                &mut *guard,
-                State {
-                    analytics,
-                    ..State::default()
-                },
-            )
-        };
+        let state = std::mem::take(&mut *self.state());
         let mut batch = Batch {
             lost: state.lost,
             unmapped: state.unmapped.into_iter().collect(),
@@ -233,13 +218,6 @@ fn part(day: &str, provider: &str, feature: Feature, tokens: &ModelTokens) -> Op
 }
 
 impl AiUsageSink for AiUsageQueue {
-    fn started(&self) {
-        let sink = self.state().analytics.clone();
-        if let Some(sink) = sink {
-            sink.capture(crate::product_analytics::Event::AiCalled);
-        }
-    }
-
     fn attempt(&self, feature_id: &str, provider: ProviderId, models: &[ModelTokens]) {
         let (feature, known) = Feature::of(feature_id);
         let at_ms = crate::links::now_ms();

@@ -112,8 +112,9 @@
     const caption = document.querySelector(".mesh-caption");
     const route = caption.querySelector(".mesh-route");
     const text = caption.querySelector(".mesh-text");
-    const AT = { laptop: [24, 17], server: [76, 17], core: [50, 52], phone: [50, 87] };
-    // `data-step` is the index plus one; the stylesheet closes the laptop on 3 and 4 and colors the phone's ask on 4 and 5.
+    // The stylesheet places each machine (one layout wide, another on a phone), so the letter reads a node's place from it.
+    const at = (name) => { const style = getComputedStyle(mesh.querySelector(`.node.${name}`)); return [style.left, style.top]; };
+    // `data-step` is the index plus one; the stylesheet closes the laptop on 3 and 4, shows the phone's ask on 4 and its reply on 5.
     const STEPS = [
       { route: "Claude Code on MacBook → Codex on Linux server", say: "Run the export tests on the Linux box.", path: ["laptop", "core", "server"] },
       { route: "Codex on Linux server → Claude Code on MacBook", say: "All 128 tests pass. #431 is ready.", path: ["server", "core", "laptop"] },
@@ -127,7 +128,7 @@
       let index = 0;
       const later = (ms, next) => { timer = setTimeout(next, ms); };
       const light = (name) => mesh.querySelectorAll(".node").forEach((node) => node.classList.toggle("lit", node.classList.contains(name)));
-      const place = ([x, y]) => { letter.style.left = `${x}%`; letter.style.top = `${y}%`; };
+      const place = ([x, y]) => { letter.style.left = x; letter.style.top = y; };
       const step = () => {
         const now = STEPS[index];
         mesh.dataset.step = String(index + 1);
@@ -140,14 +141,14 @@
           const finish = () => { light(now.lit ?? now.path.at(-1) ?? ""); letter.classList.remove("moving"); index = (index + 1) % STEPS.length; later(2200, step); };
           if (!legs.length) { finish(); return; }
           letter.style.transition = "none";
-          place(AT[now.path[0]]);
+          place(at(now.path[0]));
           letter.getBoundingClientRect();
           letter.style.transition = "";
           letter.classList.add("moving");
           let leg = 0;
           const next = () => {
             if (leg === legs.length) { finish(); return; }
-            place(AT[legs[leg++]]);
+            place(at(legs[leg++]));
             later(LEG, next);
           };
           later(120, next);

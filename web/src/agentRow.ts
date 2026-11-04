@@ -9,7 +9,7 @@ import { hideAiWords } from "./hideAiOrigin";
 import type { TFunction } from "i18next";
 import { statusText } from "./agentStatus";
 import { toneClass } from "./lineage";
-import { askSubjectLead, askSubjectText } from "./askSubject";
+import { askSubjectText } from "./askSubject";
 import type { AgentRow, AgentStatusCode, AskSubject, AgentWait, LineMode, MarkCounts, RowMark, TabAgent } from "./snapshot";
 
 /**
@@ -94,6 +94,9 @@ export function backgroundTail(t: TFunction<"translation">, agent: { background_
 /** Status codes that lead a line as its word: what was asked, how a turn ended (D-04). */
 const LEAD_WORDS = new Set<AgentStatusCode>(["error", "question", "approval", "done", "unfinished"]);
 
+/** The status codes of an ask, whose request line names no verb. */
+const ASK_CODES = new Set<AgentStatusCode>(["question", "approval"]);
+
 /** The word that leads a row's line, or null when its status code is not one. */
 export function leadWord(t: TFunction<"translation">, agent: Pick<AgentRow, "status_code">): string | null {
   return LEAD_WORDS.has(agent.status_code) ? statusText(t, agent.status_code) : null;
@@ -110,8 +113,10 @@ export type LineAgent = { wait?: AgentWait | null; status_code: AgentStatusCode;
 export type LineParts = { lead: string | null; text: string | null; tail: string | null };
 
 /**
- * The sentence as a row draws it. A request, a read row's news and a kept line
- * lead with their word (`질문 · …`, `일 남음 · …`, D-04); a waiting in-progress
+ * The sentence as a row draws it. A read row's news and a kept line lead with
+ * their word (`일 남음 · …`, D-04), and so does a block (`막힘 · …`); a question,
+ * an approval or a decision says only what is asked, since the row's `!` and
+ * the warning colour already say it is the operator's turn; a waiting in-progress
  * row leads with 대기 and says its sentence or, with none, the cause Hide
  * proved (B10, B29); the end of the checks a row waited on names the pull
  * request (B13). A View to look at leads with 볼 것 and names the newest, the
@@ -137,7 +142,8 @@ export function lineParts(t: TFunction<"translation">, agent: LineAgent, line: R
       return parts(word ?? statusText(t, agent.status_code), line.text);
     case "request":
       if (line.look !== undefined) return parts(t("agents.mark.look"), line.text);
-      return parts(askSubjectLead(t, line.subject) ?? word, line.subject ? askSubjectText(t, line.subject) : line.text);
+      if (line.subject) return parts(null, askSubjectText(t, line.subject));
+      return parts(ASK_CODES.has(agent.status_code) ? null : word, line.text);
     case "news":
       return parts(word, line.text);
     case "quiet":

@@ -8,8 +8,12 @@
 //!
 //! The core is replaced by this build's through its starter (the account's
 //! login item, whose replacement ends the old job), and has 30 s to take
-//! links; one that does not is replaced by the previous build's again. Both
-//! ends leave `current` at the build that runs and keep the other build of
+//! links; one that does not is replaced by the previous build's again,
+//! unless this machine's Herdr session already moved into the new build's
+//! engine (PRD engine-bundle-4-herdr-removal D-27), which only goes forward:
+//! the update answers why, and the new build stays the one the account
+//! starts, so a retry starts it again (B40). All three ends leave `current`
+//! at the build that runs or is to run and keep the other build of
 //! the update, so a later connection reuses its files and no more than two
 //! builds are kept. A move holds this machine's handover record while it
 //! runs, and the update holds that record's lock for its whole length, so
@@ -129,10 +133,34 @@ fn build_of(program: &Path) -> Result<Build, String> {
     })
 }
 
+/// What starts a build's core and answers its pid once it takes links.
+trait Starter {
+    fn replace(&self, state_dir: &Path, program: &Path) -> Result<u32, String>;
+}
+
+impl Starter for CoreStarter {
+    fn replace(&self, state_dir: &Path, program: &Path) -> Result<u32, String> {
+        CoreStarter::replace(self, state_dir, program)
+    }
+}
+
 fn update(args: &Args) -> Result<Outcome, String> {
     let program =
         std::env::current_exe().map_err(|error| format!("this hided has no path: {error}"))?;
-    let new = build_of(&program)?;
+    update_with(args, &program, || {
+        let home = hide_platform::host::home_dir().map_err(|error| error.to_string())?;
+        CoreStarter::for_account(&home)
+    })
+}
+
+/// The update of the core to `program`'s build, started by the starter
+/// `starter` makes once nothing else holds the state folder.
+fn update_with<S: Starter>(
+    args: &Args,
+    program: &Path,
+    starter: impl FnOnce() -> Result<S, String>,
+) -> Result<Outcome, String> {
+    let new = build_of(program)?;
     let previous = build_of(&args.previous)?;
     if new.root != previous.root {
         return Err(format!(
@@ -150,21 +178,41 @@ fn update(args: &Args) -> Result<Outcome, String> {
         );
         return Err("move_running".to_owned());
     }
-    let home = hide_platform::host::home_dir().map_err(|error| error.to_string())?;
-    let starter = CoreStarter::for_account(&home)?;
+    let starter = starter()?;
     log(
         &args.intent,
         "update.started",
         json!({"previous": previous.version, "build": new.version}),
     );
-    match starter.replace(&args.state_dir, &program) {
+    match starter.replace(&args.state_dir, program) {
         Ok(pid) => {
             adopt(&new, &previous.version);
             log(&args.intent, "update.done", json!({"pid": pid}));
-            Ok(Outcome::Updated { pid, program })
+            Ok(Outcome::Updated {
+                pid,
+                program: program.to_path_buf(),
+            })
         }
         Err(reason) => {
             log(&args.intent, "update.failed", json!({"reason": reason}));
+            // Once this machine's Herdr session moved into the new build's
+            // engine, no path starts the previous build on this state folder
+            // again: its Herdr would restore what moved (PRD
+            // engine-bundle-4-herdr-removal D-13, D-27).
+            let engine_dir = hide_kit::layout::engine_dir(&args.state_dir);
+            if herdr_core::herdr_import::committed(&engine_dir) {
+                log(
+                    &args.intent,
+                    "rollback.refused",
+                    json!({"reason": "herdr_moved"}),
+                );
+                // The new build is the one the account starts, so the
+                // retry starts it again (B40).
+                adopt(&new, &previous.version);
+                return Err(format!(
+                    "the update failed ({reason}); this machine's Herdr session moved into the new build, so the previous build is not started again"
+                ));
+            }
             let pid = starter
                 .replace(&args.state_dir, &args.previous)
                 .map_err(|again| {
@@ -217,6 +265,103 @@ mod tests {
             hide_kit::layout::state_dir_from_process(&home)
         );
         assert_eq!(args.previous, PathBuf::from("/x/hided"));
+    }
+
+    /// Starts the builds a test names as failing with why, and records each.
+    #[derive(Default)]
+    struct Starts {
+        failing: std::cell::RefCell<Vec<PathBuf>>,
+        started: std::cell::RefCell<Vec<PathBuf>>,
+    }
+
+    impl Starter for &Starts {
+        fn replace(&self, _: &Path, program: &Path) -> Result<u32, String> {
+            self.started.borrow_mut().push(program.to_path_buf());
+            if self
+                .failing
+                .borrow()
+                .iter()
+                .any(|failing| failing == program)
+            {
+                Err("the core took no links within 30 s".to_owned())
+            } else {
+                Ok(7)
+            }
+        }
+    }
+
+    /// Two builds of one install, the previous and the new, and the state
+    /// folder they run on.
+    fn install(root: &Path) -> (Args, PathBuf) {
+        let build = |version: &str| {
+            let program = root.join("builds").join(version).join("hided");
+            std::fs::create_dir_all(program.parent().unwrap()).unwrap();
+            std::fs::write(&program, "").unwrap();
+            program
+        };
+        let previous = build("aaaaaaaaaaaaaaaa");
+        let new = build("bbbbbbbbbbbbbbbb");
+        let state_dir = root.join("state");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        (
+            Args {
+                state_dir,
+                previous,
+                intent: "update-1".to_owned(),
+            },
+            new,
+        )
+    }
+
+    // D-27, B41: before this machine's Herdr session moved, a new build that
+    // takes no links gives way to the previous build again.
+    #[test]
+    fn an_update_that_fails_before_the_move_starts_the_previous_build_again() {
+        let root = tempfile::tempdir().unwrap();
+        let (args, new) = install(root.path());
+        let starts = Starts::default();
+        starts.failing.borrow_mut().push(new.clone());
+        let outcome = update_with(&args, &new, || Ok(&starts)).unwrap();
+        assert!(
+            matches!(outcome, Outcome::RolledBack { pid: 7, .. }),
+            "{outcome:?}"
+        );
+        assert_eq!(*starts.started.borrow(), [new, args.previous.clone()]);
+    }
+
+    // D-13, D-27, B40: once the move is committed, a new build that takes
+    // no links never gives way to the previous build: the update answers
+    // why, the account's build is the new one, and a retry starts it again.
+    #[test]
+    fn an_update_that_fails_after_the_move_never_starts_the_previous_build_and_a_retry_starts_the_new_one()
+     {
+        let root = tempfile::tempdir().unwrap();
+        let (args, new) = install(root.path());
+        herdr_core::herdr_import::commit(&hide_kit::layout::engine_dir(&args.state_dir)).unwrap();
+        let starts = Starts::default();
+        starts.failing.borrow_mut().push(new.clone());
+        let refused = update_with(&args, &new, || Ok(&starts)).unwrap_err();
+        assert!(
+            refused.contains("the core took no links within 30 s"),
+            "{refused}"
+        );
+        assert!(refused.contains("not started again"), "{refused}");
+        assert_eq!(*starts.started.borrow(), std::slice::from_ref(&new));
+        assert!(hide_platform::fs::link::is_link_to(
+            &root.path().join("builds").join(hide_kit::CURRENT),
+            Path::new("bbbbbbbbbbbbbbbb"),
+        ));
+
+        starts.failing.borrow_mut().clear();
+        let retried = update_with(&args, &new, || Ok(&starts)).unwrap();
+        assert_eq!(
+            retried,
+            Outcome::Updated {
+                pid: 7,
+                program: new.clone(),
+            }
+        );
+        assert_eq!(*starts.started.borrow(), [new.clone(), new]);
     }
 
     /// The node reads only an outcome: a line of any other shape is named

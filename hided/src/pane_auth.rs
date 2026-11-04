@@ -747,6 +747,24 @@ pub struct BootstrapRequest {
     pub nonce: String,
     #[serde(default)]
     pub one_shot: bool,
+    /// The Hide installation the caller's pane names (`HIDE_INSTALL`), when
+    /// it names one: only that installation's daemon may answer for it.
+    #[serde(default)]
+    pub install: Option<String>,
+}
+
+/// The installation this daemon is (`hide_host::kit::pane_install`), the
+/// one its own panes name; `None` for a build run from anywhere else, whose
+/// panes name none.
+fn own_install() -> Option<&'static str> {
+    static OWN: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    OWN.get_or_init(|| {
+        std::env::current_exe()
+            .ok()
+            .and_then(|exe| hide_host::kit::pane_install(&exe))
+            .map(|install| install.id)
+    })
+    .as_deref()
 }
 
 #[derive(Clone, Debug)]
@@ -784,11 +802,20 @@ fn attest_bootstrap(
     request: &BootstrapRequest,
     herdr: Option<&EngineHandle>,
     core: &CoreHandle,
+    own: Option<&str>,
 ) -> Result<(Attestation, Option<&'static str>), &'static str> {
     // The encoded checkout caller is hided's own key for the core; a request
     // never names one, whatever Herdr's pane namespace holds in the future.
     if matches!(Caller::parse(&request.pane_id), Caller::Checkout { .. }) {
         return Err("invalid_request");
+    }
+    // A pane another installation started is that installation's, even when
+    // its folder is a checkout this daemon also registered: binding it here
+    // by its folder would run its calls against another Hide.
+    if let Some(install) = request.install.as_deref()
+        && own != Some(install)
+    {
+        return Err("other_install");
     }
     let pane = if request.pane_id.is_empty() {
         Err("pane_not_connected")
@@ -798,6 +825,24 @@ fn attest_bootstrap(
             None => Err("pane_unavailable"),
         }
     };
+    // A pane of the Herdr save that is not moved yet is no pane of this
+    // core's, and its caller is not handed to its checkout either: it runs
+    // in Herdr, beside the engine (PRD engine-bundle-4-herdr-removal D-7,
+    // B10).
+    if pane.is_err()
+        && core.pane_holders().is_some()
+        && herdr_core::herdr_import::holds(
+            &hide_kit::layout::engine_dir(core.state_dir()),
+            &request.pane_id,
+        )
+    {
+        herdr_core::diagnostic!(json!({
+            "component": "pane_auth",
+            "kind": "pane_auth.pane_not_moved",
+            "pane_id": request.pane_id,
+        }));
+        return Err("pane_not_moved");
+    }
     match pane {
         Ok(attestation) => Ok((attestation, None)),
         Err(pane_reason) => attest_checkout(peer, &request.nonce, core)
@@ -1167,7 +1212,7 @@ fn answer_bootstrap(
             if request.one_shot != hook.command.one_shot() || !crate::hook_request::valid(&hook) {
                 return Err("invalid_request");
             }
-            let (attestation, _) = attest_bootstrap(peer, &request, herdr, core)?;
+            let (attestation, _) = attest_bootstrap(peer, &request, herdr, core, own_install())?;
             let holder = if request.one_shot {
                 Some((peer, process_start(peer).ok_or("caller_unavailable")?))
             } else {
@@ -1225,7 +1270,8 @@ fn answer_bootstrap(
             serde_json::from_str::<BootstrapRequest>(&line).map_err(|_| "invalid_request")
         })
         .and_then(|request| {
-            let (attestation, pane_reason) = attest_bootstrap(peer, &request, herdr, core)?;
+            let (attestation, pane_reason) =
+                attest_bootstrap(peer, &request, herdr, core, own_install())?;
             let holder = if request.one_shot {
                 Some((peer, process_start(peer).ok_or("caller_unavailable")?))
             } else {
@@ -1971,21 +2017,22 @@ mod tests {
             pane_id: pane_id.to_owned(),
             nonce: format!("{:032x}", 7),
             one_shot: true,
+            install: None,
         };
         // A stale pane id with no Herdr socket used to answer pane_unavailable
         // before the fallback ran; the fallback's own answer is the proof it ran
         // (this test's cwd is inside no registered checkout).
         assert_eq!(
-            attest_bootstrap(peer, &request("w9J:p17"), None, &core).unwrap_err(),
+            attest_bootstrap(peer, &request("w9J:p17"), None, &core, None).unwrap_err(),
             "checkout_not_registered"
         );
         assert_eq!(
-            attest_bootstrap(peer, &request(""), None, &core).unwrap_err(),
+            attest_bootstrap(peer, &request(""), None, &core, None).unwrap_err(),
             "checkout_not_registered"
         );
         // A request cannot name the core's encoded checkout caller itself.
         assert_eq!(
-            attest_bootstrap(peer, &request("checkout:abcd:/tmp"), None, &core).unwrap_err(),
+            attest_bootstrap(peer, &request("checkout:abcd:/tmp"), None, &core, None).unwrap_err(),
             "invalid_request"
         );
         // An unreadable caller fails closed before any lookup.

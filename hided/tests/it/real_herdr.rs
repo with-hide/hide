@@ -68,6 +68,7 @@ fn daemon_env(root: &Path, herdr: &PrivateHerdr) -> Env {
     Env {
         home: herdr.home.clone(),
         herdr_socket_path: Some(herdr.socket.display().to_string()),
+        herdr_move_socket: None,
         herdr_bin_path: Some(herdr.bin.clone()),
         own_engine: false,
         login_shell: None,
@@ -84,6 +85,7 @@ fn daemon_env(root: &Path, herdr: &PrivateHerdr) -> Env {
         host_helper_root: None,
         host_cli_dir: None,
         pane_id: None,
+        install: None,
         // A missing path: this test reaches no Tailscale.
         tailscale_bin: Some(root.join("no-tailscale")),
         relay_url: "ws://127.0.0.1:9/ws".to_owned(),

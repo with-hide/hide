@@ -42,6 +42,9 @@ type ReleaseSourceAnswer =
     Result<(herdr_core::ReleaseSource, serde_json::Value), herdr_core::MoveSourceRefusal>;
 
 enum Command {
+    /// A usage event the daemon observed outside the core (a phone's
+    /// pairing); the owner thread hands it to the statistics worker it owns.
+    ProductEvent(herdr_core::product_analytics::Event),
     ObservationPrepare {
         device_id: String,
         pane_id: String,
@@ -174,6 +177,12 @@ enum Command {
     },
     SetDesk {
         platform: Arc<dyn herdr_core::desk::DeskPlatform>,
+    },
+    SetHerdrImport {
+        machine: Arc<dyn herdr_core::herdr_import::Machine>,
+    },
+    HerdrImportShown {
+        reply: Sender<Option<herdr_core::HerdrImportSnapshot>>,
     },
     Dispatch {
         event: Vec<u8>,
@@ -338,6 +347,12 @@ impl CoreHandle {
     /// The machine the core runs on.
     pub fn node(&self) -> &herdr_core::node::NodeId {
         &self.node
+    }
+
+    /// Counts a usage event the daemon observed outside the core; the
+    /// statistics worker drops it while usage statistics are off.
+    pub fn capture_product_event(&self, event: herdr_core::product_analytics::Event) {
+        let _ = self.commands.send(Command::ProductEvent(event));
     }
 
     /// The core's state folder.
@@ -796,6 +811,27 @@ impl CoreHandle {
         self.commands
             .send(Command::SetDesk { platform })
             .map_err(|_| "core owner thread is gone".to_owned())
+    }
+
+    /// Has the core offer this machine's Herdr save to move into its own
+    /// engine (PRD engine-bundle-4-herdr-removal D-6 to D-8).
+    pub fn set_herdr_import(
+        &self,
+        machine: Arc<dyn herdr_core::herdr_import::Machine>,
+    ) -> Result<(), String> {
+        self.commands
+            .send(Command::SetHerdrImport { machine })
+            .map_err(|_| "core owner thread is gone".to_owned())
+    }
+
+    /// What the core offers for this machine's Herdr save now (B17).
+    pub fn herdr_import_shown(&self) -> Result<Option<herdr_core::HerdrImportSnapshot>, String> {
+        let (reply, rx) = mpsc::channel();
+        self.commands
+            .send(Command::HerdrImportShown { reply })
+            .map_err(|_| "core owner thread is gone".to_owned())?;
+        rx.recv()
+            .map_err(|_| "core owner thread dropped the Herdr import reply".to_owned())
     }
 
     /// `own_engine` is the development switch (`crate::env::Env::own_engine`):
@@ -1426,15 +1462,20 @@ fn owner_loop(
     // Only a daemon running from a desktop package with that package's own
     // Herdr offers to move the operator's older server onto it (PRD
     // herdr-takeover); any other installs one that finds nothing, so a
-    // Herdr step a packaged daemon saved still goes on.
-    let takeover = crate::herdr_handoff::LocalTakeover::for_daemon(
-        options.herdr_bin_path.as_deref().map(std::path::Path::new),
-        options
-            .herdr_socket_path
-            .as_deref()
-            .map(std::path::Path::new),
-        &state_dir,
-    );
+    // Herdr step a packaged daemon saved still goes on. A core on its own
+    // engine runs no Herdr: its Herdr session moves into the engine instead
+    // (`herdr_transition`).
+    let takeover = match own_engine.as_ref().and_then(EngineHandle::own_scope) {
+        Some(_) => None,
+        None => crate::herdr_handoff::LocalTakeover::for_daemon(
+            options.herdr_bin_path.as_deref().map(std::path::Path::new),
+            options
+                .herdr_socket_path
+                .as_deref()
+                .map(std::path::Path::new),
+            &state_dir,
+        ),
+    };
     let Some(core) = Core::create_with_product_analytics(
         options,
         std::sync::Arc::new(own_node),
@@ -1490,6 +1531,11 @@ fn owner_loop(
             }
             Command::ReleaseEffects { reply } => {
                 let _ = reply.send(core.release_effects());
+            }
+            Command::ProductEvent(event) => {
+                if let Some(worker) = &analytics {
+                    herdr_core::product_analytics::Sink::capture(&*worker.client, event);
+                }
             }
             Command::MemoryPrepare {
                 device_id,
@@ -1647,6 +1693,10 @@ fn owner_loop(
                 ));
             }
             Command::SetDesk { platform } => core.set_desk(platform),
+            Command::SetHerdrImport { machine } => core.set_herdr_import(machine),
+            Command::HerdrImportShown { reply } => {
+                let _ = reply.send(core.herdr_import_shown());
+            }
             Command::SetFileRoots { roots, reply } => {
                 // This node holds the opened roots while the core pins their
                 // identities; the previous set closes once it is replaced.

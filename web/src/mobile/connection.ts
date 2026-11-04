@@ -28,7 +28,7 @@ import { CLOSED_SHEET, applyFrame, patch, usePhone, type StartSheet } from "./st
 import { forgetPush, syncPush } from "./push";
 import { RelaySocket, type PhoneSocket } from "./relaySocket";
 import { hostedPhone, PHONE_PROTOCOL, takePairing } from "./relayRuntime";
-import { readHosts, saveHost, forgetHost, type PairedHost } from "./hosts";
+import { readHosts, saveHost, revokeHost, type PairedHost } from "./hosts";
 import type { PairingQr } from "../../../hide-relay-protocol/web";
 
 let relayHost: PairedHost | null = null;
@@ -58,7 +58,8 @@ function storeCredential(credential: string | null): void {
   if (hostedPhone()) {
     try {
       if (relayHost && credential) { relayHost = { ...relayHost, credential }; saveHost(localStorage, relayHost); }
-      else if (relayHost) forgetHost(localStorage, relayHost.room);
+      // A revoked device stays listed as disconnected, without the credential it refused.
+      else if (relayHost) { relayHost = { ...relayHost, credential: null }; revokeHost(localStorage, relayHost.room); }
     } catch { storageFailed(); }
     return;
   }
@@ -597,13 +598,15 @@ async function startRelay(): Promise<void> {
     }
     if (relayPair) {
       relayHost = { room: relayPair.room, noiseKey: relayPair.noise_key, name: relayPair.name,
-        credential: "", protocol: PHONE_PROTOCOL, lastSeen: null };
+        credential: null, protocol: PHONE_PROTOCOL, lastSeen: null };
       patch({ screen: "pair", macName: relayPair.name });
       if (query.get("connect") === "1") pairNow();
     } else {
       relayHost = readHosts(localStorage).find((host) => host.room === query.get("host")) ?? null;
       if (!relayHost) { window.location.replace("/"); return; }
       credential = relayHost.credential;
+      // A revoked device opened from a link or a notification says so without dialing it.
+      if (!credential) { stopped = true; patch({ screen: "refused", refusal: "revoked" }); return; }
       patch({ screen: "app", macName: relayHost.name, unreachable: !navigator.onLine });
       connect();
     }

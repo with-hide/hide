@@ -2568,6 +2568,7 @@ impl Runtime {
             // hand one to a tab Hide never created.
             self.created_tab_checkouts.clear();
             self.provisional_tabs.clear();
+            self.read_ahead.clear();
         }
         // The session update is this runtime's only regular tick, so it is
         // also where a notification Herdr never answered stops being pending.
@@ -2634,6 +2635,16 @@ impl Runtime {
                     .iter()
                     .any(|layout| layout.panes.iter().any(|pane| pane.pane_id == pane_id))
             });
+            let laid_out = &self.snapshot.pane_layouts;
+            self.read_ahead.observe(
+                payload,
+                |pane_id| {
+                    laid_out
+                        .iter()
+                        .any(|layout| layout.pane_ids().contains(&pane_id))
+                },
+                now_unix_ms,
+            );
             self.overlay_drawn_ahead(payload);
         }
         let previously_projected_pane = self
@@ -2679,8 +2690,18 @@ impl Runtime {
                 .collect::<HashSet<_>>()
         });
         if let Some(live_pane_ids) = live_pane_ids.as_ref() {
+            // A pane a read of Herdr's own showed is not gone before the
+            // stream first lays it out (`read_ahead.rs`).
+            let read_ahead = self
+                .read_ahead
+                .panes
+                .iter()
+                .map(|(pane_id, _)| pane_id.clone())
+                .collect::<HashSet<_>>();
             let keep = |pane_id: &str| {
-                crate::address::is_device_scoped(pane_id) || live_pane_ids.contains(pane_id)
+                crate::address::is_device_scoped(pane_id)
+                    || live_pane_ids.contains(pane_id)
+                    || read_ahead.contains(pane_id)
             };
             self.retain_terminal_pane_state(keep);
             // Metadata belongs to the session's panes, not its selection.
@@ -3121,6 +3142,8 @@ impl Runtime {
             changed = true;
         }
         if let Some(mut agents) = agents {
+            let held = Arc::clone(&self.herdr_held);
+            let local = ReadRecordScope::Local(&held);
             self.stamp_agent_sleep(&mut agents);
             self.place_agents_in_navigator(&mut agents);
             // The lineage is built before the read axis is applied, because
@@ -3129,24 +3152,19 @@ impl Runtime {
             if crate::agent_state::prune_lineage_expansion(
                 &mut self.snapshot.ui_state.expanded_agent_pane_ids,
                 &agents,
-                ReadRecordScope::Local,
+                local,
             ) | crate::agent_state::prune_lineage_expansion(
                 &mut self.snapshot.ui_state.sessions_expanded_agent_pane_ids,
                 &agents,
-                ReadRecordScope::Local,
+                local,
             ) {
                 self.persist_ui_state();
                 changed = true;
             }
             // Completions are kept first, so the lineage hands up the ones a
             // restored server no longer reports.
-            self.apply_pane_completions(
-                &mut agents,
-                None,
-                ReadRecordScope::Local,
-                live_pane_ids.as_ref(),
-            );
-            self.apply_pane_launches(&agents, ReadRecordScope::Local, live_pane_ids.as_ref());
+            self.apply_pane_completions(&mut agents, None, local, live_pane_ids.as_ref());
+            self.apply_pane_launches(&agents, local, live_pane_ids.as_ref());
             // A plan waiting for review is a question the lineage raises
             // and the read axis compares, so it is laid before both.
             let node = self.node.as_str().to_owned();
@@ -3157,17 +3175,13 @@ impl Runtime {
             // Views to look at go to Needs You or up to the ancestors, which
             // the lineage and the read axis decide.
             self.lay_unseen_views(&mut agents);
-            self.lay_start_prompts(&mut agents, ReadRecordScope::Local, live_pane_ids.as_ref());
+            self.lay_start_prompts(&mut agents, local, live_pane_ids.as_ref());
             crate::agent_state::apply_lineage(
                 &mut agents,
                 &self.snapshot.navigator.workspaces,
                 &self.snapshot.ui_state.expanded_agent_pane_ids,
             );
-            changed |= self.apply_pane_read_state(
-                &mut agents,
-                ReadRecordScope::Local,
-                live_pane_ids.as_ref(),
-            );
+            changed |= self.apply_pane_read_state(&mut agents, local, live_pane_ids.as_ref());
             changed |= self.sync_conversation_modes(&agents);
             self.lay_local_requests(&mut agents, live_pane_ids.as_ref());
             if self.snapshot.navigator.agents != agents {

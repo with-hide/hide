@@ -277,6 +277,52 @@ pub(crate) fn placed_build(executable: &Path, home: &Path) -> Option<(PathBuf, S
 
 /// The root and build of a program at `<root>/<16 hex>/<program>`, the
 /// folder every install of a build into a helper root makes.
+/// The Hide installation a pane holder's pane belongs to, as the pane names
+/// it ([`hide_agent_hooks::route::INSTALL_VARIABLE`] and
+/// [`hide_agent_hooks::route::CLI_VARIABLE`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PaneInstall {
+    /// The installation's name, the one its hook entries carry.
+    pub id: String,
+    /// Its own `hide` command, at a path that outlives one build.
+    pub cli: PathBuf,
+}
+
+impl PaneInstall {
+    /// The variables that name this installation in a pane.
+    pub fn variables(&self) -> [(std::ffi::OsString, std::ffi::OsString); 2] {
+        [
+            (
+                hide_agent_hooks::route::INSTALL_VARIABLE.into(),
+                self.id.clone().into(),
+            ),
+            (
+                hide_agent_hooks::route::CLI_VARIABLE.into(),
+                self.cli.clone().into_os_string(),
+            ),
+        ]
+    }
+}
+
+/// The installation the program at `executable` belongs to: the desktop
+/// package it runs from, or the helper root its build sits in (a device
+/// helper's, or a build Hide placed there), whose `current` link leads to the
+/// build that runs now. A Cargo build or any other copy belongs to none.
+pub fn pane_install(executable: &Path) -> Option<PaneInstall> {
+    let cli = if cfg!(windows) { "hide.exe" } else { "hide" };
+    if let Some(kit_dir) = hide_kit::bundled_kit_dir(executable) {
+        return Some(PaneInstall {
+            id: hide_agent_hooks::route::APP_INSTALL.to_owned(),
+            cli: kit_dir.join(cli),
+        });
+    }
+    let (root, _) = build_layout(executable)?;
+    Some(PaneInstall {
+        id: hide_agent_hooks::route::install_of_root(&root),
+        cli: root.join(hide_kit::CURRENT).join(cli),
+    })
+}
+
 pub(crate) fn build_layout(executable: &Path) -> Option<(PathBuf, String)> {
     let version_dir = executable.parent()?;
     let version = version_dir

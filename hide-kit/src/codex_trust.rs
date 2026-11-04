@@ -42,7 +42,9 @@ fn memory() -> std::sync::MutexGuard<'static, BTreeMap<PathBuf, String>> {
 pub(crate) fn ensure(target: &KitTarget, herdr: &[HookEntry]) -> Option<String> {
     let helper = target.kit_dir.join(hide_agent_hooks::HELPER_BINARY_NAME);
     let state = crate::layout::state_dir_from_process(&target.home);
-    let hook_target = match hide_agent_hooks::route::HookTarget::new(&helper, &state) {
+    let hook_target = match hide_agent_hooks::route::HookTarget::new(&helper, &state)
+        .and_then(|hook| hook.of_install(&target.install))
+    {
         Ok(target) => target,
         Err(reason) => {
             memory().insert(target.home.clone(), reason.to_owned());

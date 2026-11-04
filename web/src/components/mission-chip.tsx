@@ -1,3 +1,4 @@
+import { CheckIcon, WaypointsIcon } from "lucide-react";
 import { useInterfaceTranslation } from "../i18n/client";
 import { chipWords, conductedBy, missionDeciding, missionTone, type CellTone, type ConductorOwner } from "../missions";
 import { cn } from "../lib/utils";
@@ -8,9 +9,10 @@ import { Hint } from "./ui/tooltip";
 /**
  * The Conductor row's mission mark (PRD software-factory-conductor B14): the
  * mission it conducts as `미션 n/m`, its plan or its merge wait; pressing it
- * opens the map in the lane's 보기 slot. Its words stay; its colour is the
+ * opens the map in the lane's 보기 slot. Its face is the mission icon and,
+ * while it runs, `n/m`; its words move to its hint and name. Its colour is the
  * map's state colour (PRD mission-plan-visibility B35, D-23), and a decision
- * waiting adds `!` before them (needs-you-cleanup B5). A row that
+ * waiting adds `!` before it (needs-you-cleanup B5). A row that
  * conducts nothing draws nothing, so no other row moves.
  */
 export function MissionChip({ agent, onOpen }: { agent: ConductorOwner; onOpen: (missionId: string) => void }) {
@@ -29,7 +31,7 @@ export function MissionChip({ agent, onOpen }: { agent: ConductorOwner; onOpen: 
 export function MissionChipView({ id, title, words, counts, tone, deciding, status, onOpen }: {
   id: string;
   title: string;
-  /** The chip's words, such as `미션`. */
+  /** The chip's words, such as `미션`, said by its hint and name. */
   words: string;
   /** `k/n`, or nothing while the mission plans or waits. */
   counts: string | null;
@@ -39,7 +41,8 @@ export function MissionChipView({ id, title, words, counts, tone, deciding, stat
   onOpen: (missionId: string) => void;
 }) {
   const { t } = useInterfaceTranslation();
-  const label = [t("mission.chip.open"), title, deciding ? t("mission.askDecision") : null].filter(Boolean).join(" · ");
+  const label = [t("mission.chip.open"), title, words, counts, deciding ? t("mission.askDecision") : null].filter(Boolean).join(" · ");
+  const Mark = status === "done" ? CheckIcon : WaypointsIcon;
   return (
     <Hint label={label}>
       <button
@@ -56,7 +59,7 @@ export function MissionChipView({ id, title, words, counts, tone, deciding, stat
         }}
       >
         {deciding ? <span aria-hidden="true" className="font-semibold">!</span> : null}
-        <span>{words}</span>
+        <Mark aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />
         {counts ? <span className="font-mono tabular-nums">{counts}</span> : null}
       </button>
     </Hint>
