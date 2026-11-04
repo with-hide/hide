@@ -11,13 +11,12 @@ case "$engine" in herdr|own) ;; *) exit 2 ;; esac
 output="$PWD/agents/runs/package-e2e/$suite/$engine"
 mkdir -p "$output/screenshots"
 export HIDE_E2E_ENGINE="$engine" HIDE_E2E_SCREENSHOT_DIR="$output/screenshots"
-options=()
-if [[ "$engine" == own ]]; then options=(--grep-invert @herdr); fi
-prefix=()
-if [[ "${RUNNER_OS:-}" == Linux ]]; then prefix=(xvfb-run -a); fi
+package_test=(bash scripts/verify-web.sh desktop e2e "$@")
+if [[ "$engine" == own ]]; then package_test+=(--grep-invert @herdr); fi
+if [[ "${RUNNER_OS:-}" == Linux ]]; then package_test=(xvfb-run -a "${package_test[@]}"); fi
 # Never attribute a preceding run's report to a build that failed before Playwright.
 rm -f desktop/e2e-report.json
 status=0
-"${prefix[@]}" bash scripts/verify-web.sh desktop e2e "$@" "${options[@]}" --output "$output/test-results" || status=$?
+"${package_test[@]}" --output "$output/test-results" || status=$?
 if [[ -f desktop/e2e-report.json ]]; then mv desktop/e2e-report.json "$output/report.json"; fi
 exit "$status"
