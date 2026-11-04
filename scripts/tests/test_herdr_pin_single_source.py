@@ -9,9 +9,7 @@ import unittest
 ROOT = Path(__file__).resolve().parent.parent.parent
 SCRIPT = ROOT / "scripts" / "check-herdr-pin-single-source.sh"
 DERIVED = (
-    ".github/workflows/pr.yml", ".github/workflows/web-e2e.yml", ".github/workflows/os-contract.yml",
-    "scripts/fetch-herdr-runtime.sh", "scripts/fetch-herdr-runtime.ps1", "desktop/scripts/package.mjs",
-    "desktop/scripts/smoke-package.mjs", "desktop/src/main/cli.ts", "web/e2e/herdr-fixture.ts",
+    "scripts/fetch-herdr-runtime.sh", "scripts/fetch-herdr-runtime.ps1", "web/e2e/herdr-fixture.ts",
     "desktop/e2e/fixture.ts", "scripts/web-shell-measure/isolated-env.sh",
 )
 

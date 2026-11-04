@@ -22,15 +22,12 @@ sha256=$(jq -er '.sha256' "$manifest")
 linux_sha256=$(jq -er '.linux_x86_64.sha256' "$manifest")
 windows_sha256=$(jq -er '.windows_x86_64.sha256' "$manifest")
 
+# What still fetches or starts the pinned Herdr: the fetch scripts and the
+# test fixtures that look at Herdr itself; the app, its packages and the CI
+# lanes carry none (PRD engine-bundle-4-herdr-removal D-2).
 derived_sources=(
-  .github/workflows/pr.yml
-  .github/workflows/web-e2e.yml
-  .github/workflows/os-contract.yml
   scripts/fetch-herdr-runtime.sh
   scripts/fetch-herdr-runtime.ps1
-  desktop/scripts/package.mjs
-  desktop/scripts/smoke-package.mjs
-  desktop/src/main/cli.ts
   web/e2e/herdr-fixture.ts
   desktop/e2e/fixture.ts
   scripts/web-shell-measure/isolated-env.sh
