@@ -400,6 +400,11 @@ def with_turn(verdict, turn):
 def emitter_verdict(session, expected):
     """Herdr's own integration reported the pane's session under `expected`,
     the contract's `herdr_source`."""
+    if expected is None:
+        if ((session or {}).get("observation") == "hide.agent.list" and session.get("kind") in ("id", "path")
+                and isinstance(session.get("value"), str) and session["value"]):
+            return PASS, "Hide's registration ledger names the native session checked by the conversation reader"
+        return FAIL, "Hide's registration ledger did not name a native session"
     source = (session or {}).get("source")
     if source == expected:
         return PASS, "Herdr integration reported the session as " + source

@@ -425,7 +425,7 @@ class Journey:
         self.reference = native.get("agent_session") or self.reference
         self.record["start"] = {"activities": observed, "turn": turn, "herdr_agent": native,
                                 "row": self.daemon.row(self.pane)}
-        checks = [spawned, turn, cells.emitter_verdict(self.reference, self.row["herdr_source"])]
+        checks = [spawned, turn, cells.emitter_verdict(self.reference, (self.row["herdr_source"] if self.runtime.engine == "herdr" else None))]
         if self.brief_start:
             spawn_record = self.spawn_record("journey-" + self.id)
             self.record["start"]["brief_input"] = (spawn_record or {}).get("brief_input")
@@ -997,7 +997,7 @@ class Journey:
             self.pane, self.session, self.reference = saved
 
     def wait_ready(self):
-        """Herdr reads the woken agent ready for input."""
+        """The engine reads the woken agent ready for input."""
         try:
             self.runtime.wait(lambda: (agent := self.herdr_agent()) and agent.get("interactive_ready", True)
                               and agent.get("agent_status") in ("idle", "done") and not agent.get("launch_pending"), 60)
@@ -1005,7 +1005,7 @@ class Journey:
             if self.runtime.owner.cancelled.is_set():
                 raise
             agent = self.herdr_agent() or {}
-            raise ProcessError(f"agent_not_ready_for_input: Herdr reads {agent.get('agent_status')}, "
+            raise ProcessError(f"agent_not_ready_for_input: engine reads {agent.get('agent_status')}, "
                                f"interactive_ready {agent.get('interactive_ready')}, "
                                f"launch_pending {agent.get('launch_pending')}") from error
 
@@ -1033,7 +1033,7 @@ class Journey:
             native = self.herdr_agent() or {}
             record["herdr_agent"], record["turn"], record["read"] = native, turn, read
             self.settle("start_untrusted", cells.start_verdict(spawned, turn,
-                                                               cells.emitter_verdict(native.get("agent_session"), self.row["herdr_source"]),
+                                                               cells.emitter_verdict(native.get("agent_session"), (self.row["herdr_source"] if self.runtime.engine == "herdr" else None)),
                                                                cells.reply_verdict(read, self.session, value)),
                         self.evidence("start-untrusted", record))
         finally:
@@ -1053,7 +1053,7 @@ class Journey:
         closed = self.record.setdefault("closed", {})
         for pane in dict.fromkeys(pane for pane in self.opened if pane and pane != keep and pane not in closed):
             try:
-                code, _, err = self.runtime.command(["pane", "close", pane], check=False)
+                code, err = self.runtime.close_pane(pane)
             except ProcessError as error:
                 if self.runtime.owner.cancelled.is_set():
                     raise
@@ -1067,6 +1067,10 @@ class Journey:
     def herdr_view(self, worktree):
         """What Herdr holds for a refused spawn: its workspaces and the
         repository's worktrees, as diagnostic evidence."""
+        if self.runtime.engine == "own":
+            rest = self.daemon.snapshot() or {}
+            return {"workspaces": (rest.get("navigator") or {}).get("workspaces", []),
+                    "worktree_exists": worktree.exists()}
         view = {}
         for name, args in (("workspaces", ["workspace", "list"]),
                            ("worktrees", ["worktree", "list", "--cwd", str(self.repository)])):
@@ -1081,8 +1085,7 @@ class Journey:
         has any child, and its `pane.process_info` names none that is not an
         agent, so this is the one record of what held the pane."""
         try:
-            info = self.runtime.json(["pane", "process-info", pane])["process_info"]
-            shell = int(info["shell_pid"])
+            shell = self.runtime.shell_pid(pane)
         except (ProcessError, KeyError, TypeError, ValueError) as error:
             return {"error": str(error)[:200]}
         if os.name == "nt":
@@ -1113,9 +1116,9 @@ class Journey:
         is neither the controller's nor one this journey already knows, for the
         failure capture only."""
         try:
-            snapshot = self.runtime.json(["api", "snapshot"])["snapshot"]
+            present = self.runtime.pane_ids()
         except (ProcessError, KeyError, ValueError):
             return None
         known = {self.pane, self.controller.pane, *self.record.get("panes", [])}
-        panes = [pane["pane_id"] for pane in snapshot.get("panes", []) if pane["pane_id"] not in known]
+        panes = sorted(pane for pane in present if pane not in known)
         return panes[-1] if panes else None

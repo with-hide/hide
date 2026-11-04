@@ -159,6 +159,14 @@ class Verdicts(unittest.TestCase):
                          cells.PASS)
         self.assertEqual(cells.emitter_verdict({"source": "herdr:agy"}, "herdr:antigravity_cli")[0], cells.FAIL)
 
+    def test_native_identity_needs_the_registration_ledger_not_just_a_projected_row(self):
+        session = {"observation": "hide.agent.list", "kind": "id", "value": "native-session"}
+        self.assertEqual(cells.emitter_verdict(session, None)[0], cells.PASS)
+        for invalid in (None, {**session, "observation": "snapshot"}, {**session, "value": ""},
+                        {**session, "kind": "unknown"}, {"source": "herdr:claude"}):
+            with self.subTest(session=invalid):
+                self.assertEqual(cells.emitter_verdict(invalid, None)[0], cells.FAIL)
+
     def test_a_reply_passes_only_with_the_token_from_the_assistant_in_that_session(self):
         events = [{"role": "user", "text": "Reply with exactly JOURNEY-1"}, {"role": "assistant", "text": "JOURNEY-1"}]
         self.assertEqual(cells.reply_verdict({"session": "s", "events": events}, "s", "JOURNEY-1")[0], cells.PASS)

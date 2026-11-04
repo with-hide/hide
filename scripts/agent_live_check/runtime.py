@@ -154,8 +154,11 @@ class ResidentOutput:
 
 class Runtime:
     def __init__(self, checkout: Path, run: Path, operator: Path, owner: OwnedProcesses,
-                 *, herdr_bin: Path, fixture_bin: Path | None = None,
+                 *, herdr_bin: Path | None = None, fixture_bin: Path | None = None, engine="herdr",
                  socket: Path | None = None, state: Path | None = None, home: Path | None = None, private_env=False):
+        if engine not in ("herdr", "own"):
+            raise ProtectionError("unknown_pane_engine")
+        self.engine = engine
         self.checkout, self.run, self.operator, self.owner = checkout, run, operator, owner
         # The journey keeps the daemon home under the probe, where a sandboxed
         # agent may read the candidate's hooks; the bell check keeps it apart.
@@ -163,11 +166,15 @@ class Runtime:
         self.state = state or run / "state"
         self.probe = run / "probe"
         self.bin = run / "bin"
-        self.short = Path(tempfile.mkdtemp(prefix="acl-"))
+        self.short = Path(tempfile.mkdtemp(prefix="acl-", **({"dir": "/tmp"} if engine == "own" else {}))).resolve()
+        # Holder socket names live below state. The checkout's evidence path
+        # can exceed a Unix socket address before the pane name is appended.
+        if engine == "own":
+            self.state = self.short / "state"
         self.shell = PaneShell()
         self.socket = socket or self.short / "herdr.sock"
         self.fixture_bin = fixture_bin
-        self.herdr_bin = herdr_bin.resolve()
+        self.herdr_bin = herdr_bin.resolve() if herdr_bin else None
         self.hided = checkout / "target/debug" / exe("hided")
         self.hide = checkout / "target/debug" / exe("hide")
         self.servers = []
@@ -181,7 +188,7 @@ class Runtime:
         try:
             validate_isolation(run, self.home, self.socket, self.state, operator,
                                Path(os.environ["HERDR_SOCKET_PATH"]) if os.environ.get("HERDR_SOCKET_PATH") else None,
-                               self.short)
+                               self.short, short_state=engine == "own")
             for path in (self.home, self.state, self.probe, self.bin, run / "agent-tmp",
                          *(Path(value) for value in home_env(self.home).values())):
                 private_directory(path)
@@ -189,10 +196,11 @@ class Runtime:
             for file in (self.hided, self.hide):
                 if file.is_symlink() or not file.is_file() or not os.access(file, os.X_OK):
                     raise ProtectionError("build_this_worktrees_hided_and_hide_first")
-            manifest = json.loads((checkout / "contracts/herdr-bundle.json").read_text())
-            if not herdr_matches_pin(self.herdr_bin, manifest):
-                raise ProtectionError("herdr_binary_does_not_match_pin")
-            self.expected_version = manifest["version"]
+            if engine == "herdr":
+                manifest = json.loads((checkout / "contracts/herdr-bundle.json").read_text())
+                if not self.herdr_bin or not herdr_matches_pin(self.herdr_bin, manifest):
+                    raise ProtectionError("herdr_binary_does_not_match_pin")
+                self.expected_version = manifest["version"]
             base = clean_env(private=private_env)
             base.update(**home_env(self.home), **self.shell.environment(self.home),
                         **{name: str(self.home / folder) for name, folder in XDG_FOLDERS.items()},
@@ -201,10 +209,14 @@ class Runtime:
                         HERDR_SESSION_PATH=str(run / "herdr-session.json"),
                         **temp_env(run / "agent-tmp"),
                         PATH=tool_path(self.bin))
+            if engine == "own":
+                base = {key: value for key, value in base.items() if not key.startswith("HERDR_")}
+                base["HIDE_DEV_PANE_HOLDER"] = "1"
             self.env = base
             for name, data in self.shell.files():
                 write_private(self.home / name, data)
-            write_private(run / "herdr.toml", ("[update]\nversion_check = false\n[sound]\nenabled = false\n"
+            if engine == "herdr":
+                write_private(run / "herdr.toml", ("[update]\nversion_check = false\n[sound]\nenabled = false\n"
                                                + self.shell.herdr_config()).encode())
             self.daemon_env = {**base, "HIDE_PORT": "0",
                                "HIDE_KEEP_ALIVE": "1", "HIDED_UI_DIR": str(checkout / "web/dist")}
@@ -258,17 +270,18 @@ class Runtime:
         return child
 
     def start(self) -> dict:
-        _, version, _ = self.command(["--version"])
-        if version.strip().split()[-1] != self.expected_version:
-            raise ProtectionError("herdr_version_mismatch")
-        self.owner.run([sys.executable, str(self.checkout / "scripts/check-herdr-schema.py"),
-                        "--herdr-bin", str(self.herdr_bin)],
-                       env=self.env, cwd=self.checkout)
-        self.resident(self.herdr_bin, ["server"], self.env, "herdr")
-        self.started = True
-        self.wait(lambda: self.socket.exists(), 15)
-        if self.json(["api", "snapshot"])["snapshot"]["workspaces"]:
-            raise ProtectionError("private_server_not_empty")
+        if self.engine == "herdr":
+            _, version, _ = self.command(["--version"])
+            if version.strip().split()[-1] != self.expected_version:
+                raise ProtectionError("herdr_version_mismatch")
+            self.owner.run([sys.executable, str(self.checkout / "scripts/check-herdr-schema.py"),
+                            "--herdr-bin", str(self.herdr_bin)],
+                           env=self.env, cwd=self.checkout)
+            self.resident(self.herdr_bin, ["server"], self.env, "herdr")
+            self.started = True
+            self.wait(lambda: self.socket.exists(), 15)
+            if self.json(["api", "snapshot"])["snapshot"]["workspaces"]:
+                raise ProtectionError("private_server_not_empty")
         self.resident(self.hided, [], self.daemon_env, "hided")
 
         def health():
@@ -282,6 +295,12 @@ class Runtime:
             except OSError:
                 return False
         self.wait(health, 20)
+        if self.engine == "own":
+            holder = self.hided.with_name(exe("hide-holder"))
+            if not holder.is_file():
+                raise ProtectionError("build_this_worktrees_hide_holder_first")
+            return {"engine": "own", "holder_sha256": hashlib.sha256(holder.read_bytes()).hexdigest(),
+                    "hided_sha256": hashlib.sha256(self.hided.read_bytes()).hexdigest()}
         manifests = self.json(["server", "agent-manifests", "--json"])
         return {"version": version.strip(), "sha256": hashlib.sha256(self.herdr_bin.read_bytes()).hexdigest(),
                 "manifests": manifests["manifests"], "last_result": manifests.get("last_result"),
@@ -313,14 +332,9 @@ class Runtime:
                        "HIDE_LIVE_CHECK_SCENE": scene}
         environment.update(overlay["env"])
         self.native_env = {**clean_env(), **environment}
-        args = ["workspace", "create", "--cwd", str(cwd), "--label", "Local bell check", "--no-focus"]
-        for key, value in environment.items():
-            args.extend(["--env", f"{key}={value}"])
-        created = self.json(args)
-        workspace = created["workspace"]["workspace_id"]
-        pane = created["root_pane"]["pane_id"]
+        workspace, pane = self.open_workspace(cwd, environment)
         self.workspaces.add(workspace)
-        self.wait(lambda: READY in self.screen(pane), 10)
+        self.wait_shell(pane)
         # Exercise the real checkout/capability boundary in its actual shell;
         # no synthetic native-session declaration or copied operator capability.
         name = recipe["id"] + "-" + scene + "-bootstrap"
@@ -354,6 +368,22 @@ class Runtime:
         if not reference.with_suffix(".claimed").is_file():
             raise ProtectionError("private_pane_reference_not_claimed: claim_file_missing")
         return workspace, pane, cwd
+
+    def open_workspace(self, cwd, environment):
+        args = ["workspace", "create", "--cwd", str(cwd), "--label", "Local bell check", "--no-focus"]
+        for key, value in environment.items():
+            args.extend(["--env", f"{key}={value}"])
+        created = self.json(args)
+        return created["workspace"]["workspace_id"], created["root_pane"]["pane_id"]
+
+    def wait_shell(self, pane):
+        self.wait(lambda: READY in self.screen(pane), 10)
+
+    def pane_at_shell(self, pane, deadline):
+        return READY in self.screen(pane, seconds=deadline.command_seconds(), deadline=deadline.end)
+
+    def stop_panes(self):
+        """Herdr owns its panes until its server ends; native holders override this."""
 
     def bootstrap(self, pane, name):
         started = time.monotonic()
@@ -406,6 +436,19 @@ class Runtime:
         agents = self.json(["agent", "list"], seconds=seconds, deadline=deadline)["agents"]
         return next((agent for agent in agents if agent["pane_id"] == pane), None)
 
+    def send_text(self, pane, text):
+        self.command(["pane", "send-text", pane, text])
+
+    def pane_ids(self):
+        return {pane["pane_id"] for pane in self.json(["api", "snapshot"])["snapshot"].get("panes", [])}
+
+    def close_pane(self, pane):
+        code, _, error = self.command(["pane", "close", pane], check=False)
+        return code, error
+
+    def shell_pid(self, pane):
+        return int(self.json(["pane", "process-info", pane])["process_info"]["shell_pid"])
+
     def send(self, pane, text, *, deadline: Deadline | None = None):
         if deadline is None:
             require_no_login(self.screen(pane))
@@ -455,6 +498,7 @@ class Runtime:
     def close(self) -> dict:
         failures = []
         processes_confirmed = False
+        panes_confirmed = False
         # A cancellation stops work, but must not disable protocol teardown.
         with self.owner.teardown():
             for workspace in list(self.workspaces):
@@ -475,12 +519,17 @@ class Runtime:
                 except Exception as error:
                     failures.append(f"herdr server stop: {error}")
             try:
+                self.stop_panes()
+                panes_confirmed = True
+            except Exception as error:
+                failures.append(f"pane cleanup: {error}")
+            try:
                 self.owner.close()
                 # A later empty close cannot erase a prior missing or failed
                 # receipt. Check every launched guardian before deleting its
                 # private runtime directories, including already-ended ones.
                 self.owner.attribution_report()
-                processes_confirmed = True
+                processes_confirmed = panes_confirmed
             except Exception as error:
                 failures.append(str(error))
             for child, output, label in self.servers:
@@ -518,7 +567,7 @@ class Runtime:
     def pane_command(self, pane, argv, name, *, deadline=None):
         """Only called while this owned pane is positively at its shell prompt."""
         deadline = deadline or Deadline(self.owner, COMMAND_SECONDS)
-        if READY not in self.screen(pane, seconds=deadline.command_seconds(), deadline=deadline.end):
+        if not self.pane_at_shell(pane, deadline):
             raise ProcessError("pane_not_at_owned_shell")
         output, error, status = (self.run / (name + suffix) for suffix in (".out", ".err", ".status"))
         # Neither stream is evidence: a success can hold a private reference,
