@@ -1448,7 +1448,7 @@ fn owner_loop(
     // Herdr step a packaged daemon saved still goes on. A core on its own
     // engine runs no Herdr: its Herdr session moves into the engine instead
     // (`herdr_transition`).
-    let takeover = match own_engine {
+    let takeover = match own_engine.as_ref().and_then(EngineHandle::own_scope) {
         Some(_) => None,
         None => crate::herdr_handoff::LocalTakeover::for_daemon(
             options.herdr_bin_path.as_deref().map(std::path::Path::new),

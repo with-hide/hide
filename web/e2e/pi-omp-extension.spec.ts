@@ -51,7 +51,7 @@ async function start(label: string): Promise<Stack> {
       expect(fs.readFileSync(file, "utf8")).toContain(JSON.stringify(bundledExecutable("hide-agent-hooks")));
     }
     const dir = path.join(fixture.root, "pi-omp");
-    installPiOmpHosts(path.join(fixture.root, "bin"), { herdr: (fixture as AgentFixture & { bin: string }).bin, stateDir: daemon.stateDir, extension, dir });
+    installPiOmpHosts(path.join(fixture.root, "bin"), { herdr: fixture.engine === "herdr" ? fixture.bin : undefined, stateDir: daemon.stateDir, extension, dir });
     await withControl(daemon, async (control) => {
       sendKeys(control, fixture.panes[0], "pi\r");
       sendKeys(control, fixture.panes[1], "omp\r");
