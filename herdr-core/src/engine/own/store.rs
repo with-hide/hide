@@ -319,10 +319,22 @@ impl Saver {
         })
     }
 
+    /// What marks the session changed, for every view of the engine; only
+    /// the saver's owner ends the thread.
+    pub(super) fn signal(&self) -> SaveSignal {
+        SaveSignal(Arc::clone(&self.pending))
+    }
+}
+
+/// Wakes the saving thread for a change; a change marked after the saver
+/// ended is not written.
+pub(super) struct SaveSignal(Arc<(Mutex<Pending>, Condvar)>);
+
+impl SaveSignal {
     /// Marks the session changed; the thread writes it once the operation's
     /// changes have landed.
     pub(super) fn changed(&self) {
-        let (pending, wake) = &*self.pending;
+        let (pending, wake) = &*self.0;
         pending
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -496,8 +508,9 @@ mod tests {
             Some(session())
         })
         .unwrap();
+        let signal = saver.signal();
         for _ in 0..20 {
-            saver.changed();
+            signal.changed();
         }
         // Ending does not wait out the settle: the burst is written once,
         // now.

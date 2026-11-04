@@ -123,9 +123,9 @@ struct Shared {
     wake: Mutex<Option<Wake>>,
     stopped: AtomicBool,
     place: Option<Place>,
-    /// The thread that saves the session, for a daemon's engine; dropped
-    /// with the engine, which writes the last change.
-    saver: OnceLock<store::Saver>,
+    /// Wakes the thread that saves the session, for a daemon's engine,
+    /// whose thread the engine [`OwnEngine::open`] returned owns.
+    saving: OnceLock<store::SaveSignal>,
     /// Whether the restore has finished: until it has, no pane is made, so
     /// a new pane never takes an id a holder still running was recorded
     /// under before the restore counted past it.
@@ -178,7 +178,7 @@ impl Drop for Held<'_> {
 
 /// Whether a restore has finished, which the restore marks once it has let
 /// go of the engine, so an engine dropped after a pane was made is dropped
-/// whole, its last change written.
+/// whole.
 #[derive(Default)]
 pub(super) struct Restored {
     done: Mutex<Option<Result<(), EngineError>>>,
@@ -196,6 +196,11 @@ impl Restored {
 pub(crate) struct OwnEngine<'g> {
     shared: Arc<Shared>,
     gates: Vec<Gate<'g>>,
+    /// The thread that saves the session, held only by the engine
+    /// [`OwnEngine::open`] returned: dropping that engine writes the last
+    /// change before the drop returns, while a holder start finishing or a
+    /// fact arriving may hold the shared state a moment longer elsewhere.
+    saver: Option<store::Saver>,
 }
 
 /// The pane holders of the machine `node` reaches, as every engine of this
@@ -276,7 +281,7 @@ impl OwnEngine<'static> {
         let backups = hide_kit::layout::engine_backups_in(&place.engine_dir);
         let topology = restore::read(&path, &backups);
         let saved = topology.panes().map(|(id, _)| id.to_owned()).collect();
-        let engine = Self::with(topology, holders, Some(place), false)?;
+        let mut engine = Self::with(topology, holders, Some(place), false)?;
         let session = Arc::clone(&engine.shared.topology);
         let saver = store::Saver::start(path, move || {
             Some(
@@ -286,7 +291,8 @@ impl OwnEngine<'static> {
                     .to_saved(),
             )
         })?;
-        let _ = engine.shared.saver.set(saver);
+        let _ = engine.shared.saving.set(saver.signal());
+        engine.saver = Some(saver);
         // A pane whose program exits on its own closes, as Herdr closes it.
         // The node holds no engine: it is told the engine's shared state
         // weakly, so an engine dropped is not kept by its holders.
@@ -299,6 +305,7 @@ impl OwnEngine<'static> {
                     OwnEngine {
                         shared,
                         gates: Vec::new(),
+                        saver: None,
                     }
                     .program_exited(pane);
                 }
@@ -307,6 +314,7 @@ impl OwnEngine<'static> {
             OwnEngine {
                 shared: Arc::clone(&engine.shared),
                 gates: Vec::new(),
+                saver: None,
             },
             saved,
         )?;
@@ -335,7 +343,7 @@ impl OwnEngine<'static> {
                 wake: Mutex::default(),
                 stopped: AtomicBool::new(false),
                 place,
-                saver: OnceLock::new(),
+                saving: OnceLock::new(),
                 restored: Arc::new(Restored {
                     done: Mutex::new(restored.then_some(Ok(()))),
                     finished: Condvar::new(),
@@ -345,6 +353,7 @@ impl OwnEngine<'static> {
                 cut: Mutex::default(),
             }),
             gates: Vec::new(),
+            saver: None,
         };
         // What runs in each pane and what its screen shows, whether or not a
         // screen shows it (D-18). The node holds no engine, as for the ends
@@ -358,6 +367,7 @@ impl OwnEngine<'static> {
                     OwnEngine {
                         shared,
                         gates: Vec::new(),
+                        saver: None,
                     }
                     .pane_facts(pane, facts);
                 }
@@ -451,8 +461,8 @@ impl OwnEngine<'_> {
     /// saved.
     fn changed(&self) {
         self.settle_early();
-        if let Some(saver) = self.shared.saver.get() {
-            saver.changed();
+        if let Some(saving) = self.shared.saving.get() {
+            saving.changed();
         }
         let wake = self
             .shared
@@ -750,6 +760,7 @@ impl OwnEngine<'_> {
                 OwnEngine {
                     shared,
                     gates: Vec::new(),
+                    saver: None,
                 }
                 .changed();
             }
@@ -1340,6 +1351,7 @@ impl<'g> Engine for OwnEngine<'g> {
         Box::new(OwnEngine {
             shared: Arc::clone(&self.shared),
             gates,
+            saver: None,
         })
     }
 
@@ -2881,6 +2893,7 @@ mod tests {
         let handle = Arc::new(OwnEngine {
             shared: Arc::clone(&engine.shared),
             gates: Vec::new(),
+            saver: None,
         });
         let seen = Arc::new(Mutex::new(Vec::new()));
         let placing = |refuse| {
@@ -3441,6 +3454,35 @@ mod tests {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// The engine `open` returned writes its last change as it is dropped,
+    /// even while another thread still holds its shared state for a moment
+    /// (a holder start finishing, a fact arriving): the next engine opened
+    /// on its place reads the change at once.
+    #[test]
+    fn an_engine_dropped_while_a_worker_holds_it_has_written_its_last_change() {
+        let root = tempfile::tempdir().unwrap();
+        let place = place(root.path());
+        let folder = root.path().join("w");
+        for dir in [&home(&place), &folder] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let first =
+            OwnEngine::open(Holders::found(HolderRecovery::default()), place.clone()).unwrap();
+        let (_, tab, pane) = first
+            .create_workspace(WAIT, &wire(&folder), "w", true, Env::new())
+            .unwrap();
+        let worker = Arc::clone(&first.shared);
+        drop(first);
+
+        let next = OwnEngine::open(Holders::found(HolderRecovery::default()), place).unwrap();
+        assert_eq!(
+            layout_of(&next.session_payload(WAIT).unwrap(), &tab),
+            [pane],
+            "the change is saved before the drop returns"
+        );
+        drop(worker);
     }
 
     /// D-7 and letter-19977: a daemon opened again lays its saved session
@@ -4887,6 +4929,8 @@ mod tests {
         let (_, pane) = engine
             .create_tab(WAIT, &workspace, "/w", "t", true, Env::new())
             .unwrap();
+        engine.read_pane(WAIT, &pane, "recent", 1).unwrap();
+        engine.close_pane(WAIT, &first).unwrap();
         let program = |folders: Option<Vec<String>>| HolderProcesses {
             shell: 41,
             foreground: Some(hide_node_link::holders::HolderForeground {
@@ -4929,8 +4973,6 @@ mod tests {
             vec![(pane.clone(), Some("/w".to_owned()))]
         );
         assert_eq!(
-        engine.read_pane(WAIT, &pane, "recent", 1).unwrap();
-        engine.close_pane(WAIT, &first).unwrap();
             engine.pane_places(WAIT).unwrap(),
             vec![PanePlace {
                 pane_id: pane,
