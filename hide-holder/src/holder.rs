@@ -592,8 +592,8 @@ impl Holder {
         // The program and `running` in one write of the record: the window
         // in which the program runs and the record does not name it is that
         // write, as it was when the program had a write of its own, and a
-        // start writes its record once less (each write was flushed then,
-        // and the start of every new pane waited for them).
+        // start writes its record once less (each write is flushed, and the
+        // start of every new pane waited for them).
         if let Some(record) = &record {
             record
                 .running(program)
