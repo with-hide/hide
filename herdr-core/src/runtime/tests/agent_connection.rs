@@ -1345,3 +1345,40 @@ fn a_session_hide_cannot_read_marks_its_pane_until_a_read_lands() {
     );
     assert_eq!(connection_of(&runtime, "w1:p2"), None);
 }
+
+/// A turn an agent's hook reports asks the label reader to read the pane's
+/// session again, since the engine may not have moved: omp, which has no
+/// screen rules, reads at rest on the core's own engine through its turns,
+/// and the session it reported before writing its file is confirmed only by
+/// such a read. A report that moves nothing asks for nothing, and counts
+/// alone are no turn.
+#[test]
+fn a_turn_a_hook_reports_asks_the_label_reader_to_read_the_session_again() {
+    let mut runtime = runtime();
+    let report = |turn| hide_node_link::panes::HookStatusReport {
+        runtime: "omp".to_owned(),
+        version: hide_agent_hooks::HOOK_VERSION,
+        session: Some("/home/me/.omp/agent/sessions/--w--/s.jsonl".to_owned()),
+        turn,
+        counts: None,
+        session_start: false,
+        waiting: None,
+    };
+    let ingest = |runtime: &mut Runtime, turn| {
+        runtime
+            .ingest_hook_status(crate::node::TEST_NODE, "w1:p1", &report(turn))
+            .expect("the report is recorded");
+        runtime.take_session_rereads()
+    };
+    assert!(
+        ingest(&mut runtime, None).is_empty(),
+        "a session alone is no turn"
+    );
+    let working = Some(hide_node_link::panes::HookTurn::Working);
+    assert_eq!(ingest(&mut runtime, working), vec!["w1:p1".to_owned()]);
+    assert!(ingest(&mut runtime, working).is_empty(), "nothing moved");
+    assert_eq!(
+        ingest(&mut runtime, Some(hide_node_link::panes::HookTurn::Idle)),
+        vec!["w1:p1".to_owned()]
+    );
+}

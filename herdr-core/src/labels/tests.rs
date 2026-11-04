@@ -4152,6 +4152,55 @@ fn waits(worker: &LabelWorker, agent: &ObservedAgent) -> (Option<Waiting>, Optio
     (waiting, row)
 }
 
+/// omp reports its session file's path at its session's start, before it
+/// writes the file; once a turn has written it, the agent's next state
+/// change confirms the session, and the row has the native id a fork needs.
+#[test]
+fn an_omp_session_reported_before_its_file_is_written_is_confirmed_by_its_next_turn() {
+    let harness = Harness::new();
+    let (mut worker, woken, _source) = harness.worker(harness.store());
+    worker.set_summaries(false, Instant::now());
+    let cwd = hide_platform::fs::identity::canonical(harness.home.path()).unwrap();
+    let folder = crate::fixture::native_session_folder(harness.home.path(), "omp", &cwd);
+    std::fs::create_dir_all(&folder).unwrap();
+    let path = folder.join("native.jsonl");
+    let at = |status: &str, seq: u64| ObservedAgent {
+        agent: Some("omp".into()),
+        cwd: Some(cwd.display().to_string()),
+        ..agent(&path, status, seq)
+    };
+    let idle = at("idle", 1);
+    observe(&mut worker, &idle);
+    settle(&mut worker, &woken);
+    assert!(
+        shown_facts(&worker, &idle)
+            .and_then(|f| f.native_session_id)
+            .is_none()
+    );
+    std::fs::write(
+        &path,
+        format!(
+            "{}\n{}\n{}\n",
+            json!({"type":"session", "version":3, "id":"native-omp", "cwd":cwd}),
+            json!({"type":"message", "timestamp":"2026-10-03T01:00:00Z",
+                "message":{"role":"user", "content":"Reply"}}),
+            json!({"type":"message", "timestamp":"2026-10-03T01:00:00.100Z",
+                "message":{"role":"assistant", "content":[{"type":"text","text":"Done"}], "stopReason":"stop"}})
+        ),
+    )
+    .unwrap();
+    for (status, seq) in [("working", 2), ("idle", 3)] {
+        observe(&mut worker, &at(status, seq));
+        settle(&mut worker, &woken);
+    }
+    assert_eq!(
+        shown_facts(&worker, &at("idle", 3))
+            .and_then(|f| f.native_session_id)
+            .as_deref(),
+        Some("native-omp")
+    );
+}
+
 #[test]
 fn an_omp_title_and_question_refresh_without_state_changes_or_repeated_analysis() {
     let harness = Harness::new();
