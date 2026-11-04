@@ -600,6 +600,7 @@ fn start(
             kind: "claude".into(),
             args: vec!["--".into(), format!("promote {name}")],
             codex_daemon: crate::codex_launch::CodexDaemon::Unknown,
+            wakes: false,
         })
         .unwrap();
     start_within(
@@ -1096,6 +1097,7 @@ fn sleep_and_wake(shell: &str, variable: &str) {
             kind: "codex".into(),
             args: Vec::new(),
             codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
+            wakes: false,
         })
         .unwrap();
     start_within(

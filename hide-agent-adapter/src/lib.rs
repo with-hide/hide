@@ -286,6 +286,15 @@ impl SessionFormat {
     pub const fn reports_session_path(self) -> bool {
         matches!(self, Self::Pi | Self::Omp)
     }
+    /// Whether the integration reports the session only once the agent has
+    /// loaded it, and keys typed before then are lost: OpenCode 2.0.29's
+    /// plugin reports from its session event, and a prompt typed into a
+    /// woken OpenCode taken at once for the id it resumed never reached it,
+    /// while one typed after its report did (journeys 41879399661 and
+    /// 41850644522). A wake of such an agent is known by that report.
+    pub const fn reports_session_once_loaded(self) -> bool {
+        matches!(self, Self::OpenCode)
+    }
 
     pub const fn has_session_file(self) -> bool {
         matches!(

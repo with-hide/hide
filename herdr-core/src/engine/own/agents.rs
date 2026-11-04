@@ -203,11 +203,20 @@ pub(super) fn resume_argv(definition: &Definition, session: Option<&str>) -> Opt
 /// registration was refused (`identity_changed`, journey 871294628), and
 /// such a session waits for the agent's own report. Resumed by that file's
 /// path (Pi's `--session <path>`), the path is the session it reports.
-pub(super) fn started_session(definition: &Definition, argv: &[String]) -> Option<String> {
+/// Nor for a wake of OpenCode, which takes keys only once it has loaded the
+/// session its plugin then reports (`AgentLaunch::wakes`); a spawn that
+/// resumes OpenCode is known by its resume at once.
+pub(super) fn started_session(
+    definition: &Definition,
+    argv: &[String],
+    wakes: bool,
+) -> Option<String> {
     let session = resumed_in(definition, argv)?;
-    let reports_path = hide_agent_adapter::adapter(&definition.id)
-        .and_then(|adapter| adapter.session)
-        .is_some_and(hide_agent_adapter::SessionFormat::reports_session_path);
+    let format = hide_agent_adapter::adapter(&definition.id).and_then(|adapter| adapter.session);
+    if wakes && format.is_some_and(hide_agent_adapter::SessionFormat::reports_session_once_loaded) {
+        return None;
+    }
+    let reports_path = format.is_some_and(hide_agent_adapter::SessionFormat::reports_session_path);
     // A Windows device's path comes in its own spelling.
     let names_path = hide_platform::path::is_wire_absolute(&session.replace('\\', "/"));
     (!reports_path || names_path).then_some(session)
@@ -1073,20 +1082,29 @@ mod tests {
         let omp = definition(&catalog, "omp").unwrap();
         let argv = words(&["omp", "--resume", "01a1a635-dc01-749e-b762-b4aa840d457c"]);
         assert!(resumed_in(omp, &argv).is_some());
-        assert_eq!(started_session(omp, &argv), None);
+        assert_eq!(started_session(omp, &argv, false), None);
         let pi = definition(&catalog, "pi").unwrap();
         for path in ["/home/me/.pi/s.jsonl", "C:\\Users\\me\\.pi\\s.jsonl"] {
             let argv = words(&["pi", "--session", path]);
-            assert_eq!(started_session(pi, &argv).as_deref(), Some(path));
+            assert_eq!(started_session(pi, &argv, false).as_deref(), Some(path));
         }
         let agy = definition(&catalog, "agy").unwrap();
         let argv = words(&["agy", "--conversation", "c-1"]);
         assert_eq!(resumed_in(agy, &argv).as_deref(), Some("c-1"));
-        assert_eq!(started_session(agy, &argv).as_deref(), Some("c-1"));
+        assert_eq!(started_session(agy, &argv, false).as_deref(), Some("c-1"));
+        // A woken OpenCode takes keys only once it has loaded the session
+        // its plugin then reports; a spawn that resumes it is known at once.
+        let opencode = definition(&catalog, "opencode").unwrap();
+        let argv = words(&["opencode", "-s", "ses_e584ebfb9ffeITTA6qYHnKhdkZ"]);
+        assert_eq!(started_session(opencode, &argv, true), None);
+        assert_eq!(
+            started_session(opencode, &argv, false).as_deref(),
+            Some("ses_e584ebfb9ffeITTA6qYHnKhdkZ")
+        );
         let claude = definition(&catalog, "claude").unwrap();
         let argv = words(&["claude", "--resume", "0b8f1f3e-5c2a-4a8e-9a54-2d4c1f6b7e90"]);
         assert_eq!(
-            started_session(claude, &argv).as_deref(),
+            started_session(claude, &argv, false).as_deref(),
             Some("0b8f1f3e-5c2a-4a8e-9a54-2d4c1f6b7e90")
         );
     }

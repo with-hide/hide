@@ -2260,7 +2260,7 @@ impl<'g> Engine for OwnEngine<'g> {
             agents::PaneAgent::started(
                 &definition.id,
                 Some(&launch.name),
-                agents::started_session(definition, &argv),
+                agents::started_session(definition, &argv, launch.wakes),
             ),
             &line,
         )?;
@@ -3904,6 +3904,7 @@ mod tests {
             kind: kind.to_owned(),
             args: args.iter().map(|arg| (*arg).to_owned()).collect(),
             codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
+            wakes: false,
         }
     }
 
