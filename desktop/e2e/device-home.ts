@@ -6,6 +6,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { e2eEngine } from "../../web/e2e/e2e-engine";
 import { herdrBinary } from "../../web/e2e/herdr-fixture";
 import { HIDE_CLI, seedKitRecord } from "./fixture";
 const MARKER = ".hide-e2e-device-home";
@@ -68,15 +69,15 @@ export const codexHooks = (home: string) => path.join(home, ".codex", "hooks.jso
 export const readSettings = (file: string) => JSON.parse(fs.readFileSync(file, "utf8")) as AgentSettings;
 
 /**
- * Puts the private HOME back to a device that has never met Hide: Herdr
- * installed in ~/.local/bin, the kit's
- * folders gone, and the agent files seeded by `seedAgentFiles`.
+ * Puts the private HOME back to a device that has never met Hide: the kit's
+ * folders gone, the agent files seeded by `seedAgentFiles`, and, on Herdr,
+ * Herdr installed in ~/.local/bin; the core's own engine needs no Herdr there.
  */
 export function resetDeviceHome(home: string): { claude: AgentSettings; codex: AgentSettings } {
   assertTestHome(home);
   for (const name of [".claude", ".codex", ".hide", ".local"]) fs.rmSync(path.join(home, name), { recursive: true, force: true });
   fs.mkdirSync(path.join(home, ".local", "bin"), { recursive: true });
-  fs.symlinkSync(herdrBinary(), path.join(home, ".local", "bin", "herdr"));
+  if (e2eEngine() === "herdr") fs.symlinkSync(herdrBinary(), path.join(home, ".local", "bin", "herdr"));
   return seedAgentFiles(home);
 }
 
@@ -149,9 +150,10 @@ export const codexAutostart = (home: string) => (fs.existsSync(path.join(home, "
 
 /**
  * A daemon folder laid out as the app's Contents/Resources: this build's
- * binaries, every kit part a device gets and the pinned Herdr the package
- * carries. The daemon reads the device payload from beside its own
- * executable.
+ * binaries, every kit part a device gets, and what the package carries for
+ * the engine the run uses: the pinned Herdr, or, on the core's own engine,
+ * the pane holder (`web/e2e/bundled-app.ts`, `binaries`). The daemon reads
+ * the device payload from beside its own executable.
  */
 export function stageBuild(root: string): string {
   const debug = path.dirname(HIDE_CLI);
@@ -160,11 +162,13 @@ export function stageBuild(root: string): string {
   const place = (source: string, target: string) => {
     try { fs.linkSync(source, target); } catch { fs.copyFileSync(source, target); fs.chmodSync(target, 0o755); }
   };
-  for (const name of ["hided", "hide", "hide-agent-hooks"]) {
+  const own = e2eEngine() === "own";
+  for (const name of ["hided", "hide", "hide-agent-hooks", ...(own ? ["hide-holder"] : [])]) {
     const binary = path.join(debug, name);
-    if (!fs.existsSync(binary)) throw new Error(`${binary} is missing: run \`cargo build -p hided -p hide-agent-hooks\``);
+    if (!fs.existsSync(binary)) throw new Error(`${binary} is missing: run \`cargo build -p hided -p hide-agent-hooks${own ? " -p hide-holder" : ""}\``);
     place(binary, path.join(build, name));
   }
+  if (own) return build;
   // A copy, so the device's Herdr server, which runs the linked pinned
   // binary, never runs the file the upload reads.
   fs.copyFileSync(herdrBinary(), path.join(build, "herdr"));

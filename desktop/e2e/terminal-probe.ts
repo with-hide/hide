@@ -3,10 +3,12 @@
 // click terminal links (`terminal-links.spec.ts`, `outside-files.spec.ts`).
 
 import { expect, type Page } from "@playwright/test";
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { printFileCommand, type HerdrFixture } from "../../web/e2e/herdr-fixture";
+import { sendKeys, withControl } from "../../web/e2e/daemon-actions";
+import type { AgentFixture } from "../../web/e2e/engine-fixture";
+import type { Daemon } from "../../web/e2e/hided-fixture";
+import { printFileCommand } from "../../web/e2e/herdr-fixture";
 
 export type Probe = { paneId: () => string | null; paneText: (id: string) => string; paneGrid: (id: string) => { cols: number; rows: number } | null; diagnostics?: () => string[] };
 
@@ -22,8 +24,8 @@ export async function withProbe(page: Page): Promise<void> {
     .toBe("object");
 }
 
-/** Prints `lines` in the fixture pane through a program, using the pane's shell. */
-export async function printInPane(herdr: HerdrFixture, page: Page, paneId: string, lines: string[], last: string): Promise<void> {
+/** Prints `lines` in the fixture's first pane through a program, typed as the operator types, using the pane's shell. */
+export async function printInPane(fixture: Pick<AgentFixture, "root" | "shell" | "panes">, daemon: Pick<Daemon, "origin" | "token">, page: Page, paneId: string, lines: string[], last: string): Promise<void> {
   // Leave the old row before replacing its text so xterm requests fresh links
   // when the next real hover enters it, including after an empty/error answer.
   const grid = await page.evaluate((id) => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneGrid(id)!, paneId);
@@ -31,11 +33,10 @@ export async function printInPane(herdr: HerdrFixture, page: Page, paneId: strin
   const away = await cellPoint(page, paneId, { row: grid.rows - 1, column: Math.floor(grid.cols / 2) });
   expect(await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest(".xterm") != null, away)).toBe(true);
   await page.mouse.move(away.x, away.y);
-  const file = path.join(herdr.root, `print-${Date.now()}.txt`);
+  const file = path.join(fixture.root, `print-${Date.now()}.txt`);
   fs.writeFileSync(file, `${lines.join("\n")}\n`);
-  const command = printFileCommand(herdr.shell, file);
-  const sent = spawnSync(herdr.bin, ["pane", "run", herdr.panes[0], command], { env: herdr.env, encoding: "utf8", timeout: 10_000 });
-  expect(sent.status, sent.stderr).toBe(0);
+  const command = printFileCommand(fixture.shell, file);
+  await withControl(daemon, async (control) => sendKeys(control, fixture.panes[0], `${command}\r`));
   await expect.poll(() => page.evaluate((id) => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneText(id), paneId), { timeout: 20_000 }).toContain(last);
 }
 

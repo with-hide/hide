@@ -1,23 +1,47 @@
 import { expect, type ElectronApplication } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
-import { startHerdr } from "../../web/e2e/herdr-fixture";
+import { closePane, newTab, preparePaneInput, splitPane, withControl } from "../../web/e2e/daemon-actions";
+import { e2eEngine } from "../../web/e2e/e2e-engine";
+import type { EngineServer } from "../../web/e2e/engine-fixture";
+import { endPaneHolders } from "../../web/e2e/pane-holders.mjs";
+import { endWindowsProcesses, windowsProcessTree } from "../../web/e2e/platform-fixture";
 import { enterWorkspace } from "../../web/e2e/wire";
 import { toPage } from "../src/main/wirePath";
-import { fitWindow, isolate, launchShell, test } from "./fixture";
+import { fitWindow, launchShell, startStack, test } from "./fixture";
 
 // B16: native presentation of a real failed cold restore in both themes,
 // with a long Korean cwd and a narrow window. OS keyboard input is not claimed.
-// @platform: Herdr's native folder becomes a wire path before the page renders it.
+// @platform: the engine's native folder becomes a wire path before the page renders it.
+// How the restore fails differs by engine. Herdr cannot start a pane whose folder moved away
+// while its server was down. The own engine opens such a pane in the home folder with a
+// notice, and marks a pane failed only when its shell cannot start, so there the shell is
+// the one thing that is missing when the engine's panes are made again.
 test("failed terminals remain legible and keyboard reachable in a narrow native window", { tag: "@platform" }, async () => {
-  const herdr = await startHerdr({ agents: false });
-  const run = isolate(herdr, "restoration");
+  // Windows starts the integrated PowerShell, which no SHELL setting makes unstartable.
+  test.skip(process.platform === "win32" && e2eEngine() === "own", "the own engine's restore fails only for a shell that cannot start, which no setting does for Windows' integrated PowerShell");
+  const stack = await startStack("restoration", { agents: false });
+  const { fixture, run, daemon } = stack;
   let app: ElectronApplication | null = null;
   try {
-    const folder = path.join(herdr.root, "fixture", "복구할-작업-폴더-이름이-긴-경우에도-경로를-확인합니다");
+    const folder = path.join(fixture.root, "fixture", "복구할-작업-폴더-이름이-긴-경우에도-경로를-확인합니다");
     fs.mkdirSync(folder);
-    const made = herdr.run(["tab", "create", "--workspace", herdr.workspace, "--cwd", folder, "--label", "복구 작업", "--no-focus"]) as { result: { tab: { tab_id: string }; root_pane: { pane_id: string } } };
-    await herdr.restart(() => fs.renameSync(folder, `${folder}-moved`));
+    // A tab whose only pane runs in that folder.
+    const tab = await withControl(daemon, async (control) => {
+      const made = await newTab(control, fixture, "복구 작업");
+      const pane = await splitPane(control, made.tab, toPage(folder));
+      await closePane(control, made.pane);
+      await preparePaneInput(control, pane);
+      return made.tab;
+    });
+    // The engine's panes end and are made again from what was saved, as a reboot does.
+    expect(run.hide(["stop"]).status).toBe(0);
+    if (fixture.engine === "herdr") {
+      await (fixture as unknown as EngineServer & { restart: (beforeStart?: () => void) => Promise<void> }).restart(() => fs.renameSync(folder, `${folder}-moved`));
+    } else {
+      endPaneHolders(daemon.stateDir, process.platform === "win32" ? { endTree: (pid: number) => endWindowsProcesses(windowsProcessTree(pid)) } : {});
+      run.env.SHELL = path.join(run.root, "no-such-shell");
+    }
     const launched = await launchShell(run.env);
     app = launched.app;
     const page = launched.page;
@@ -28,12 +52,12 @@ test("failed terminals remain legible and keyboard reachable in a narrow native 
       return { pid: process.pid, executable: process.execPath, window: windows[0]!.getMediaSourceId() };
     });
     await enterWorkspace(page);
-    await page.locator(`[data-tab="${made.result.tab.tab_id}"]`).click();
+    await page.locator(`[data-tab="${tab}"]`).click();
     const failed = page.locator("[data-pane-restore-failed]");
     await expect(failed).toHaveCount(1);
     await expect(failed).toContainText(toPage(folder));
     const evidence = process.env.HIDE_E2E_SCREENSHOT_DIR;
-    if (evidence) fs.writeFileSync(path.join(evidence, "native-restoration-identity.json"), JSON.stringify({ ...identity, daemonPid: run.daemonPid(), state: run.env.HIDE_STATE_DIR, socket: herdr.socket }));
+    if (evidence) fs.writeFileSync(path.join(evidence, "native-restoration-identity.json"), JSON.stringify({ ...identity, daemonPid: run.daemonPid(), state: run.env.HIDE_STATE_DIR, socket: fixture.socket }));
     for (const theme of ["dark", "light"]) {
       await page.locator("[data-open-settings]").click();
       await page.locator('[data-settings-tab="general"]').click();
@@ -60,5 +84,5 @@ test("failed terminals remain legible and keyboard reachable in a narrow native 
     }
     await page.keyboard.press("Enter");
     await expect(failed).toHaveCount(0);
-  } finally { await app?.close(); run.cleanup(); herdr.stop(); }
+  } finally { await app?.close(); stack.stop(); }
 });

@@ -726,17 +726,17 @@ A passing fixture does not prove paid-service authentication or standalone suppo
 
 ### How many jobs a run starts
 
-A run that plans every lane a pull request can plan starts at most 57 jobs.
+A run that plans every lane a pull request can plan starts at most 60 jobs.
 The earlier count of 51 omitted six jobs already running in the package lane: helper identity, two Linux device helpers, device bundles and the separate Windows and macOS compiles.
 Correcting that count adds no runner or workflow.
-The core's own engine adds seven web jobs beside Herdr's: six Linux shards and one Windows job, until the Herdr lane goes with Herdr (PRD engine-bundle-3-core-owns D-24).
+The core's own engine adds ten jobs beside Herdr's until the Herdr lanes go with Herdr (PRD engine-bundle-3-core-owns D-24): six Linux web shards, one Windows web job, two macOS desktop shards and one Windows desktop job.
 `scripts/tests/test_ci_plan.py` counts them from the workflows:
 
 | Jobs | Count | Why |
 | --- | --- | --- |
 | `plan`, `policy`, `rust`, `checks`, `windows check`, `verify` | 6 | `checks` merges `web checks` and `desktop checks`: both install the same dependencies, run for a minute or two and start a runner each |
 | `windows e2e` | 2 | the reusable workflow no longer starts a `plan` job that only fanned the shard numbers out; a matrix picks its list by index; the second job runs the same tests on the core's own engine |
-| `windows desktop` | 1 | the desktop `@platform` tests on Windows, the one job that starts the Electron app there in a pull request; it keeps the window it drew as the run's artifact |
+| `windows desktop` | 2 | the desktop `@platform` tests on Windows, the one lane that starts the Electron app there in a pull request; it keeps the window it drew as the run's artifact; the second job runs the same tests on the core's own engine |
 | `web e2e` (Linux) | 14 | six more shards run every test not tagged `@herdr` on the core's own engine beside the Herdr shards, so the lane's wall-clock time stays the Herdr shards'; parallel daemon and web shell builds, with the daemon job also downloading the zsh packages, and six shards dealt by recorded durations: six were cut to four in 2026-10-05 after queues at the 20-job limit, returned to six as the suite grew, and six now meet the 720-second budget using the refreshed twenty-run median ([Balancing the e2e shards](#balancing-the-e2e-shards)) |
 | `os contract` (Linux, Windows), `os contract (macOS)` | 3 | one job per system, the macOS leg planned only for its two crates and a macOS path |
 | `agy contract` (Windows) | 1 | agy's hook block, trust, conversations and Hide AI backend, and the real agy reading Hide's block, where the hook commands and install folder differ; `rust` runs the same tests on Linux and the nightly runs all three systems |
@@ -745,12 +745,12 @@ The core's own engine adds seven web jobs beside Herdr's: six Linux shards and o
 | `agent CLIs` (Linux, Windows) | 2 | every agent CLI `contracts/agent-clis.json` pins, installed at its pin and failing on another version, planned only for the table, its reader and the installers, so a pin moves in the pull request that installs it; the nightly's journey installs them on macOS too |
 | `windows wsl` (Linux, Windows) | 2 | a real WSL 2 distribution on the Windows runner connected as a device through `wsl.exe`, with this build's Linux programs, which only a Linux job can build, planned only for the crates the WSL link crosses (`hide-platform`, `hide-node`, `hide-node-link`, `hide-host`) and the node command ([WSL device lane](#wsl-device-lane)) |
 | `remote mailbox` | 1 | the lane that was the tail of the macOS `@platform` job, now on Linux and, in the nightly, on macOS |
-| `desktop e2e` | 2 | the only macOS lane of the desktop app's own changes, in two shards that build in place, because the whole suite outgrew one job's step cap ([Balancing the e2e shards](#balancing-the-e2e-shards)) |
+| `desktop e2e` | 4 | the only macOS lane of the desktop app's own changes, in two shards that build in place, because the whole suite outgrew one job's step cap ([Balancing the e2e shards](#balancing-the-e2e-shards)); two more shards run every test not tagged `@herdr` on the core's own engine, four of the organization's five macOS runners |
 | `vt`, holder restart, relay interoperability | 9 | each lane runs once on Linux, macOS and Windows |
 | `package` (Windows, Linux, macOS) | 9 | helper identity, two Linux device helpers, device bundles, Windows and macOS compiles, and three packages; without macOS, its compile and package are omitted, leaving seven jobs |
 
-The common runs are smaller: a `herdr-core` or `hided` change starts 27 jobs, a web shell change 19, a desktop-only change 5 (6 for `desktop/src/main`, which adds `windows check`), a `hide-platform` change 31, a `hide-kit` or `hide-agent-hooks` change 35, all with none on macOS, and a documentation change 3, as does a push that reuses the pull request's last green run.
-A macOS path adds its macOS jobs: a change to a macOS file of `desktop/src/main` starts 8 jobs with two on macOS, and one to `hide-platform`'s macOS code 33 with two.
+The common runs are smaller: a `herdr-core` or `hided` change starts 28 jobs, a web shell change 23, a desktop-only change 6 (7 for `desktop/src/main`, which adds `windows check`), a `hide-platform` change 32, a `hide-kit` or `hide-agent-hooks` change 36, all with none on macOS, and a documentation change 3, as does a push that reuses the pull request's last green run.
+A macOS path adds its macOS jobs: a change to a macOS file of `desktop/src/main` starts 11 jobs with four on macOS, and one to `hide-platform`'s macOS code 34 with two.
 The median wall time and the share of runs whose Linux shards waited more than 10 minutes come from a measurement of the pull request runs after a change merges, taken the way issue #561 took its baseline; they are not in this guide because a pull request cannot prove them.
 The `plan` job's summary lists each lane with the paths that chose it.
 

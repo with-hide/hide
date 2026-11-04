@@ -1,65 +1,66 @@
-// A native caller hands off roots through the real pinned Herdr and hided.
+// A native caller hands off roots through the real hided on either engine.
 import { expect, type ElectronApplication } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
-import { herdrHasFocus, startHerdr } from "../../web/e2e/herdr-fixture";
+import { agentPane, agentRunner } from "../../web/e2e/agent-pane";
+import { openProject, openWorktree, showTabOf, withControl } from "../../web/e2e/daemon-actions";
 import { enterWorkspace, openTaskFolds, showTasks } from "../../web/e2e/wire";
-import { HIDE_CLI, isolate, launchShell, screenshot, test } from "./fixture";
+import { launchShell, screenshot, startStack, test } from "./fixture";
 import { captureNativeWindow } from "./native-window";
-import { installSpawnProvider, nativeSpawnCommand, waitForSpawnShell, type SpawnedAgent } from "./agent-spawn-fixture";
-
-type NativeAgent = { pane_id: string; terminal_id: string; agent_session?: { value: string }; tokens?: Record<string, unknown> };
+import { coreFocus, expectCoreFocus, herdrAgents, hideAnswer, makeSpawnRepository, type SpawnedAgent } from "./agent-spawn-fixture";
 
 test("handoff roots have provenance without delegation or a focus change in either checkout path", async () => {
-  const herdr = await startHerdr({ agents: false });
-  const run = isolate(herdr, "agent-handoff");
-  const response = path.join(run.root, "response.json");
-  const repo = path.join(herdr.root, "fixture");
-  const parent = herdr.panes[0];
+  const stack = await startStack("agent-handoff", { agents: false });
+  const { fixture, run, daemon } = stack;
   let app: ElectronApplication | undefined;
   const failures: unknown[] = [];
   try {
-    execFileSync("git", ["init", "-b", "main", repo], { env: run.env, timeout: 20_000 });
-    execFileSync("git", ["-C", repo, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-m", "Fixture"], { env: run.env, timeout: 20_000 });
-    const existingCheckout = path.join(herdr.root, "existing-checkout");
-    execFileSync("git", ["-C", repo, "worktree", "add", "-b", "existing-task", existingCheckout], { env: run.env, timeout: 20_000 });
-    execFileSync(herdr.bin, ["worktree", "open", "--cwd", repo, "--path", existingCheckout, "--no-focus"], { env: herdr.env, timeout: 20_000 });
-    const provider = installSpawnProvider(herdr, run.root);
-    execFileSync(herdr.bin, ["workspace", "report-metadata", herdr.workspace, "--source", "hide", "--token", "purpose=Spawn handoff fixture"], { env: herdr.env, timeout: 20_000 });
-    await waitForSpawnShell(herdr, parent);
-    execFileSync(herdr.bin, ["agent", "start", "handoff-caller", "--kind", "claude", "--pane", parent, "--timeout", "5000"], { env: herdr.env, timeout: 20_000 });
-    const agents = () => (herdr.run(["api", "snapshot"]) as { result: { snapshot: { agents: NativeAgent[] } } }).result.snapshot.agents;
-    await expect.poll(() => agents().find((agent) => agent.pane_id === parent)?.agent_session?.value).toMatch(/^fixture-\d+$/);
-    const native = agents().find((agent) => agent.pane_id === parent)!;
+    const { repo, existingCheckout } = makeSpawnRepository(fixture.root, run.env);
+    const project = await withControl(daemon, (control) => openProject(control, repo, "repo"));
+    const parent = project.pane;
     const opened = await launchShell(run.env);
     app = opened.app;
     const page = opened.page;
-    const command = (args: string[]) => nativeSpawnCommand(herdr, provider, parent, HIDE_CLI, args, run.env, response);
-    const registered = await command(["agent", "register", "--host-scope", herdr.socket, "--session", native.agent_session!.value, "--instance", native.terminal_id, "--name", "handoff-caller", "--pane", parent]);
-    expect(registered.origin).toBeNull();
-    await enterWorkspace(page, "fixture");
+    await enterWorkspace(page, "repo");
+    // The core lists a linked worktree once a page shows its repository.
+    await withControl(daemon, async (control) => {
+      await openWorktree(control, existingCheckout);
+      await showTabOf(control, parent);
+    });
+    const caller = await agentPane(fixture, daemon.stateDir, parent);
+    const purpose = await caller(["workspace", "purpose", "Spawn handoff fixture"]);
+    expect(purpose.status, purpose.out).toBe(0);
+    const command = (args: string[]) => hideAnswer(caller, args);
     await expect(page.locator(`[data-pane-view="${parent}"]`)).toHaveAttribute("data-focused", "true");
     const keyboard = page.locator(`[data-pane-view="${parent}"] .xterm-helper-textarea`);
     await keyboard.focus();
-    await expect.poll(() => herdrHasFocus(herdr, parent)).toBe(true);
+    await expectCoreFocus(daemon, parent);
     const roots: SpawnedAgent[] = [];
+    let registered: SpawnedAgent | undefined;
     for (const [name, branch] of [["handoff-existing", "existing-task"], ["handoff-new", "handoff-task"]]) {
       const root = await command(["agent", "spawn", "--name", name!, "--intent", name!, "--kind", "claude", "--repo", repo, "--branch", branch!]);
+      // The first spawn registers its caller as the origin, and the caller's own record is read back by `show here`.
+      registered ??= await command(["agent", "show", "here"]);
+      if (roots.length === 0) expect(registered.origin).toBeNull();
       expect(root.parent).toBeNull();
       expect(root.origin).toBe(registered.id);
       expect(root.watch).toBeNull();
       expect(root.pane).not.toBe(parent);
       expect(root.pane.split(":")[0]).not.toBe(parent.split(":")[0]);
-      expect(agents().find((agent) => agent.pane_id === root.pane)?.tokens?.parent_pane).toBeUndefined();
+      // Herdr alone keeps agent tokens, which a handoff never gives the root a parent_pane.
+      if (fixture.engine === "herdr") expect(herdrAgents(fixture).find((agent) => agent.pane_id === root.pane)?.tokens?.parent_pane).toBeUndefined();
       await expect(page.locator(`[data-pane-view="${parent}"]`)).toHaveAttribute("data-focused", "true");
       await expect(keyboard).toBeFocused();
-      expect(herdrHasFocus(herdr, parent)).toBe(true);
+      expect(await coreFocus(daemon)).toBe(parent);
       const shown = await command(["agent", "show", root.id]);
       expect(shown).toMatchObject({ parent: null, origin: registered.id, watch: null });
-      const child = agents().find((agent) => agent.pane_id === root.pane)!;
-      for (const check of [[], ["--check"]]) {
-        const reply = await nativeSpawnCommand(herdr, provider, root.pane, HIDE_CLI, ["agent", "register", "--host-scope", herdr.socket, "--session", child.agent_session!.value, "--instance", child.terminal_id, "--name", name!, "--pane", root.pane, ...check], run.env, response);
-        expect(reply).toMatchObject({ id: root.id, parent: null, origin: registered.id });
+      // Registering a root again by Herdr's own host scope is a Herdr integration contract, which the own engine has no counterpart for.
+      if (fixture.engine === "herdr") {
+        const child = herdrAgents(fixture).find((agent) => agent.pane_id === root.pane)!;
+        for (const check of [[], ["--check"]]) {
+          const reply = await hideAnswer(agentRunner(fixture, daemon.stateDir, root.pane), ["agent", "register", "--host-scope", fixture.socket!, "--session", child.agent_session!.value, "--instance", child.terminal_id, "--name", name!, "--pane", root.pane, ...check]);
+          expect(reply).toMatchObject({ id: root.id, parent: null, origin: registered.id });
+        }
       }
       roots.push(root);
     }
@@ -72,7 +73,7 @@ test("handoff roots have provenance without delegation or a focus change in eith
       await expect(row).toHaveAttribute("data-depth", "0");
     }
     await expect(page.locator(`[data-pane-children="${parent}"]`)).toHaveCount(0);
-    const facts = { parent, roots, state: run.env.HIDE_STATE_DIR, home: run.env.HOME, socket: herdr.socket, head: execFileSync("git", ["rev-parse", "HEAD"], { cwd: path.resolve(__dirname, "../.."), encoding: "utf8" }).trim(), provider: "synthetic native CLI" };
+    const facts = { parent, roots, state: run.env.HIDE_STATE_DIR, home: run.env.HOME, socket: fixture.socket, head: execFileSync("git", ["rev-parse", "HEAD"], { cwd: path.resolve(__dirname, "../.."), encoding: "utf8" }).trim(), provider: "synthetic native CLI" };
     await screenshot(page, "agent-handoff-roots");
     await captureNativeWindow(app, "agent-handoff-roots-native", facts).catch((error) => failures.push(error));
     // Each handed-off root is its own task in the sidebar's 태스크 list, not a child of the spawner's (PRD sidebar-task-lens B4, B7).
@@ -87,8 +88,7 @@ test("handoff roots have provenance without delegation or a focus change in eith
     failures.push(error);
   } finally {
     try { await app?.close(); } catch (error) { failures.push(error); }
-    try { run.cleanup(); } catch (error) { failures.push(error); }
-    try { herdr.stop(); } catch (error) { failures.push(error); }
+    try { stack.stop(); } catch (error) { failures.push(error); }
   }
   if (failures.length) throw new AggregateError(failures, "native handoff fixture or teardown failed");
 });

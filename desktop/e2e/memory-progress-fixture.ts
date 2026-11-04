@@ -1,17 +1,17 @@
 // Synthetic GitHub answers and card receipts in the fixture's private home.
 import fs from "node:fs";
 import path from "node:path";
-import type { HerdrFixture } from "../../web/e2e/herdr-fixture";
+import type { EngineServer } from "../../web/e2e/engine-fixture";
 import { fixtureProgram } from "../../web/e2e/platform-fixture";
 
 type FixturePull = { number: number; title: string; headRefName: string; baseRefName: string; state: string; reviewDecision: string; isDraft: boolean; statusCheckRollup: Record<string, string>[]; url: string; mergedAt: string | null; createdAt: string; updatedAt: string; closingIssuesReferences: never[] };
 
-export function progressGithub(herdr: HerdrFixture) {
-  const file = path.join(herdr.root, "memory-pulls.json");
+export function progressGithub(engine: Pick<EngineServer, "root">) {
+  const file = path.join(engine.root, "memory-pulls.json");
   const pulls: FixturePull[] = [{ number: 72, title: "Existing document PR", headRefName: "fixture-shared-pr", baseRefName: "main", state: "OPEN", reviewDecision: "REVIEW_REQUIRED", isDraft: false, statusCheckRollup: [], url: "https://github.com/acme/memory-fixture/pull/72", mergedAt: null, createdAt: "2026-10-13T00:00:00Z", updatedAt: "2026-10-13T00:00:00Z", closingIssuesReferences: [] }];
   const write = () => fs.writeFileSync(file, JSON.stringify(pulls));
   write();
-  fixtureProgram(path.join(herdr.root, "bin"), "gh", `
+  fixtureProgram(path.join(engine.root, "bin"), "gh", `
 const fs = require("node:fs");
 const args = process.argv.slice(2), key = args.slice(0, 2).join(" ");
 const pulls = JSON.parse(fs.readFileSync(${JSON.stringify(file)}, "utf8"));

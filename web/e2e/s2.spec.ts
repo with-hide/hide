@@ -12,11 +12,10 @@ import os from "node:os";
 import path from "node:path";
 import { altScreenProgram, bytesReceived } from "./alt-screen-program";
 import { corePaneFocus, focusTab, newTab, openProject, tabsOf, withControl } from "./daemon-actions";
-import { startFixture, type AgentFixture, type EngineServer } from "./engine-fixture";
-import { waitForTerminal } from "./group-start-helper";
-import { paneCommandLine, panePrompt, printFileCommand, printLinesCommand } from "./herdr-fixture";
+import { startFixture, type AgentFixture } from "./engine-fixture";
+import { executeTerminalCheck, waitForTerminal } from "./group-start-helper";
+import { panePrompt, printFileCommand, printLinesCommand } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
-import { fixtureProgram } from "./platform-fixture";
 import { projectRow } from "./overview-entry";
 import { countSent, screenshot, showProjectRow } from "./wire";
 import { chord, mod, SYSTEM } from "./chords";
@@ -76,21 +75,6 @@ async function listedTabs(flow: Flow): Promise<string[]> {
 /** The one tab the project holds now that `before` did not, once the daemon lists it. */
 async function createdTab(flow: Flow, before: readonly string[]): Promise<string> {
   return withControl(flow.daemon, (control) => control.until((rest) => tabsOf(rest, flow.herdr.workspace)?.find((id) => !before.includes(id)), "the tab just created", 20_000));
-}
-
-/**
- * Proves typed input executes in the pane's shell: the fixture program the
- * shell is told to run prints a marker, which the page draws.
- */
-async function executeTerminalCheck(page: Page, herdr: EngineServer, pane: string, timeout = 5_000): Promise<void> {
-  const marker = "HIDE_TERMINAL_EXECUTED";
-  const executable = fixtureProgram(path.join(herdr.root, "bin"), "hide-terminal-check", `console.log(${JSON.stringify(marker)});`);
-  const view = page.locator(`[data-pane-view="${pane}"]`);
-  await expect(view).toHaveAttribute("data-transport", "controlling");
-  await view.locator("textarea").focus();
-  await page.keyboard.type(paneCommandLine(herdr.shell, [executable]));
-  await page.keyboard.press("Enter");
-  await expect.poll(() => paneText(page, pane), { timeout }).toContain(marker);
 }
 
 test.describe.configure({ timeout: 90_000 });

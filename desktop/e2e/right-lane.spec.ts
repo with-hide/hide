@@ -8,11 +8,13 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { openProject, sendKeys, withControl } from "../../web/e2e/daemon-actions";
 import { startHerdr, type HerdrFixture } from "../../web/e2e/herdr-fixture";
+import { connectControl, type HidedControl } from "../../web/e2e/hided-control.mjs";
 import { chord } from "../../web/e2e/chords";
 import { chooseExpand, countSent, enterWorkspace, keyboardFocus, pinState, rest, sendEvent, setLanePinned, showExplorer, showProjectRow } from "../../web/e2e/wire";
 import { deviceHome, proveDeviceHome, resetDeviceHome, stageBuild, writeSshConfig } from "./device-home";
-import { isolate, launchShell, nodeOf, test } from "./fixture";
+import { isolate, launchShell, nodeOf, startStack, test } from "./fixture";
 
 type Probe = {
   arm: (marker: string) => void;
@@ -84,29 +86,27 @@ async function stableCount(count: () => number): Promise<number> {
   return previous;
 }
 
-function sendText(herdr: HerdrFixture, pane: string, text: string): void {
-  const sent = spawnSync(herdr.bin, ["pane", "send-text", pane, text], { env: herdr.env, encoding: "utf8", timeout: 3000 });
-  expect(sent.status, sent.stderr).toBe(0);
-}
+/** Types `text` into `pane` as the operator's keys, over the test's own connection to the daemon. */
+const sendText = (control: HidedControl, pane: string, text: string): void => sendKeys(control, pane, text);
 
-async function echo(page: Page, herdr: HerdrFixture, pane: string, phase: string, afterSend?: (index: number) => Promise<void>) {
-  const samples: { marker: string; cli_return_ms: number; arrival_ms: number; write_ms: number; latency_ms: number }[] = [];
+async function echo(page: Page, control: HidedControl, pane: string, phase: string, afterSend?: (index: number) => Promise<void>) {
+  const samples: { marker: string; sent_ms: number; arrival_ms: number; write_ms: number; latency_ms: number }[] = [];
   for (let index = 0; index < 20; index += 1) {
     const marker = `lane_${phase}_${String(index).padStart(3, "0")}`;
     await page.evaluate((marker) => (window as unknown as { __hideProbe: Probe }).__hideProbe.arm(marker), marker);
-    sendText(herdr, pane, `${marker}\n`);
-    const cli_return_ms = performance.timeOrigin + performance.now();
+    sendText(control, pane, `${marker}\n`);
+    const sent_ms = performance.timeOrigin + performance.now();
     // Keep marker observation running while the real lane action lands.
     // Both promises are owned here, including an action or echo failure.
     const [sample] = await Promise.all([
       page.evaluate(() => (window as unknown as { __hideProbe: Probe }).__hideProbe.waitArmed()),
       afterSend?.(index),
     ]);
-    samples.push({ marker, cli_return_ms, ...sample, latency_ms: sample.write_ms - cli_return_ms });
+    samples.push({ marker, sent_ms, ...sample, latency_ms: sample.write_ms - sent_ms });
     await new Promise((done) => setTimeout(done, 80));
   }
   const values = samples.map((sample) => sample.latency_ms).sort((a, b) => a - b);
-  return { method: "send-text CLI return to xterm write callback, 20 native-window samples, nearest-rank p95; candidate observation, no baseline comparison", samples, p95_ms: values[Math.ceil(values.length * 0.95) - 1] };
+  return { method: "key event sent to xterm write callback, 20 native-window samples, nearest-rank p95; candidate observation, no baseline comparison", samples, p95_ms: values[Math.ceil(values.length * 0.95) - 1] };
 }
 
 type Saved = { workspaces: { device_id: string; path: string; open: boolean; documents: boolean; tool: string | null; pinned: boolean; document_width?: number; explorer_width?: number }[] };
@@ -116,13 +116,16 @@ function saved(stateDir: string): Saved {
 }
 
 test("the lane comes and goes over the terminals without a resize, the pin and a docked divider resize once, and input continues through all of it", async () => {
-  const herdr = await startHerdr({ agents: false });
-  const run = isolate(herdr, "right-lane");
+  // The checkout is a repository before the daemon registers it.
+  const stack = await startStack("right-lane", { agents: false, prepare: (fixture) => {
+    const init = spawnSync("git", ["-C", path.join(fixture.root, "fixture"), "init", "-q", "--initial-branch=main"], { encoding: "utf8" });
+    expect(init.status, init.stderr).toBe(0);
+  } });
+  const { fixture, run, daemon } = stack;
+  const keys = await connectControl(daemon);
   let app: ElectronApplication | null = null;
   try {
-    const checkout = path.join(fs.realpathSync(herdr.root), "fixture");
-    const init = spawnSync("git", ["-C", checkout, "init", "-q", "--initial-branch=main"], { env: herdr.env, encoding: "utf8" });
-    expect(init.status, init.stderr).toBe(0);
+    const checkout = path.join(fs.realpathSync(fixture.root), "fixture");
     fs.writeFileSync(path.join(checkout, "notes.md"), "# 작업 기록\n\n한글과 English를 나란히 읽습니다.\n");
     const longName = "한글과 English 작업 기록 - 긴 파일 제목과 경로 확인.md";
     fs.writeFileSync(path.join(checkout, longName), "# 긴 제목의 작업 기록\n\n한글과 English가 함께 있는 파일을 읽습니다.\n");
@@ -143,7 +146,7 @@ test("the lane comes and goes over the terminals without a resize, the pin and a
     await expect(workspace).toHaveAttribute("data-lane-mode", "closed");
     const identity = await app.evaluate(({ BrowserWindow }) => ({ pid: process.pid, executable: process.execPath, window: BrowserWindow.getAllWindows()[0]!.getMediaSourceId(), screen: BrowserWindow.getAllWindows()[0]!.getBounds() }));
     const dir = process.env.HIDE_E2E_SCREENSHOT_DIR;
-    if (dir) fs.writeFileSync(path.join(dir, "lane-identity.json"), JSON.stringify({ ...identity, daemonPid: run.daemonPid(), socket: herdr.socket, state: run.env.HIDE_STATE_DIR, profile: run.env.HIDE_DESKTOP_USER_DATA_DIR, home: run.env.HOME }, null, 2));
+    if (dir) fs.writeFileSync(path.join(dir, "lane-identity.json"), JSON.stringify({ ...identity, daemonPid: run.daemonPid(), socket: fixture.socket, state: run.env.HIDE_STATE_DIR, profile: run.env.HIDE_DESKTOP_USER_DATA_DIR, home: run.env.HOME }, null, 2));
     await bodyWidth(app, page, 1600);
     await nativeCapture(app, page, "lane-closed");
     const resizeCount = () => sent.get("terminal_resize") ?? 0;
@@ -162,7 +165,7 @@ test("the lane comes and goes over the terminals without a resize, the pin and a
     await expect(workspace).toHaveAttribute("data-lane-view", "documents");
     await expect(workspace).toHaveAttribute("data-lane-shows", "explorer");
     await nativeCapture(app, page, "lane-overlay");
-    await page.locator(`[data-terminal-host="${herdr.panes[0]}"]`).click({ position: { x: 20, y: 20 } });
+    await page.locator(`[data-terminal-host="${fixture.panes[0]}"]`).click({ position: { x: 20, y: 20 } });
     await expect(workspace).toHaveAttribute("data-lane-mode", "overlay");
     for (const mode of ["closed", "overlay"]) {
       await toggleLane();
@@ -209,16 +212,16 @@ test("the lane comes and goes over the terminals without a resize, the pin and a
 
     // Idle and driven echo, then input that continues through every lane
     // change and a held drag, with the same terminals attached (B24).
-    const pane = herdr.panes[0];
-    sendText(herdr, pane, "stty -echo -icanon; echo LANE_IDLE_READY; cat\n");
+    const pane = fixture.panes[0];
+    sendText(keys, pane, "stty -echo -icanon; echo LANE_IDLE_READY; cat\n");
     await expect.poll(() => page.evaluate((id) => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneText(id), pane)).toContain("LANE_IDLE_READY");
-    const idle = await echo(page, herdr, pane, "idle");
-    sendText(herdr, pane, "\u0003");
-    const driver = path.join(herdr.root, "lane-driven.sh");
+    const idle = await echo(page, keys, pane, "idle");
+    sendText(keys, pane, "\u0003");
+    const driver = path.join(fixture.root, "lane-driven.sh");
     fs.writeFileSync(driver, '#!/bin/bash\nstty -echo -icanon\n(while true; do printf "lane driven output\\n"; sleep 0.008; done) &\ndriver=$!\ntrap \'kill "$driver" 2>/dev/null; wait "$driver" 2>/dev/null\' EXIT HUP TERM\necho LANE_DRIVEN_READY\ncat\n');
-    sendText(herdr, pane, `bash '${driver}'\n`);
+    sendText(keys, pane, `bash '${driver}'\n`);
     await expect.poll(() => page.evaluate((id) => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneText(id), pane)).toContain("LANE_DRIVEN_READY");
-    const driven = await echo(page, herdr, pane, "driven");
+    const driven = await echo(page, keys, pane, "driven");
     await nativeCapture(app, page, "lane-driven-terminal");
     await stableCount(resizeCount);
     const session = () => page.evaluate(() => {
@@ -242,7 +245,7 @@ test("the lane comes and goes over the terminals without a resize, the pin and a
     };
     try {
       const changes = [[() => setLanePinned(page, false), "overlay", panesShown], [toggleLane, "closed", 0], [toggleLane, "overlay", 0], [() => setLanePinned(page, true), "docked", panesShown]] as const;
-      drivenChanges = await echo(page, herdr, pane, "change", async (index) => {
+      drivenChanges = await echo(page, keys, pane, "change", async (index) => {
         if (index % 5 !== 0) return;
         const [control, mode, expected] = changes[index / 5]!;
         const before = await stableCount(resizeCount);
@@ -259,7 +262,7 @@ test("the lane comes and goes over the terminals without a resize, the pin and a
       const dragBox = (await divider.boundingBox())!;
       const beforeDrag = await stableCount(resizeCount);
       const start_ms = Date.now();
-      drivenDrag = await echo(page, herdr, pane, "drag", async (index) => {
+      drivenDrag = await echo(page, keys, pane, "drag", async (index) => {
         if (index === 0) {
           await page.mouse.move(dragBox.x + dragBox.width / 2, dragBox.y + 100);
           await page.mouse.down();
@@ -323,9 +326,9 @@ test("the lane comes and goes over the terminals without a resize, the pin and a
       }
     }
   } finally {
+    keys.close();
     await app?.close().catch(() => undefined);
-    run.cleanup();
-    herdr.stop();
+    stack.stop();
   }
 });
 
@@ -334,11 +337,11 @@ test("the lane comes and goes over the terminals without a resize, the pin and a
 // forward drawn; too narrow for the one in front, it opens over the agents; the
 // width coming back restores both, and Expand gives the viewing column the rest.
 test("a pinned lane stacks its columns in a narrow body, opens over the agents in a narrower one, and expands as one", async () => {
-  const herdr = await startHerdr({ agents: false });
-  const run = isolate(herdr, "right-lane-narrow");
+  const stack = await startStack("right-lane-narrow", { agents: false });
+  const { fixture, run } = stack;
   let app: ElectronApplication | null = null;
   try {
-    const checkout = path.join(fs.realpathSync(herdr.root), "fixture");
+    const checkout = path.join(fs.realpathSync(fixture.root), "fixture");
     fs.writeFileSync(path.join(checkout, "notes.md"), "# notes\n");
     ({ app } = await launchShell(run.env));
     const page = await app.firstWindow();
@@ -380,19 +383,18 @@ test("a pinned lane stacks its columns in a narrow body, opens over the agents i
     await expect(workspace).toHaveAttribute("data-lane-mode", "docked");
   } finally {
     await app?.close().catch(() => undefined);
-    run.cleanup();
-    herdr.stop();
+    stack.stop();
   }
 });
 
 // B6 and UI_BEHAVIOR: every arrow key moves one 32px step, even when more
 // keys arrive before the daemon publishes the previous width.
 test("lane dividers retain every rapid arrow step before a snapshot arrives", async () => {
-  const herdr = await startHerdr({ agents: false });
-  const run = isolate(herdr, "lane-key-burst");
+  const stack = await startStack("lane-key-burst", { agents: false });
+  const { fixture, run } = stack;
   let app: ElectronApplication | null = null;
   try {
-    fs.writeFileSync(path.join(herdr.root, "fixture", "notes.md"), "# notes\n");
+    fs.writeFileSync(path.join(fixture.root, "fixture", "notes.md"), "# notes\n");
     ({ app } = await launchShell(run.env));
     const page = await app.firstWindow();
     await enterWorkspace(page, "fixture");
@@ -441,8 +443,7 @@ test("lane dividers retain every rapid arrow step before a snapshot arrives", as
     await nativeCapture(app, page, "lane-rapid-keys-restored");
   } finally {
     await app?.close().catch(() => undefined);
-    run.cleanup();
-    herdr.stop();
+    stack.stop();
   }
 });
 
@@ -572,19 +573,19 @@ test("an SSH Workspace's lane keeps its chords, narrow fallback and saved widths
 // Changing Workspaces while the pointer is captured cancels the old guide;
 // releasing it must not land a width in the newly front Workspace.
 test("a Workspace switch cancels its lane drag without changing another Workspace", async () => {
-  const herdr = await startHerdr({ agents: false });
-  const run = isolate(herdr, "lane-drag-switch");
-  let app: ElectronApplication | null = null;
-  try {
-    const first = path.join(herdr.root, "fixture");
-    const beta = path.join(herdr.root, "beta");
-    fs.mkdirSync(beta);
-    for (const folder of [first, beta]) {
+  // Both folders are repositories with a document before the daemon registers them.
+  const stack = await startStack("lane-drag-switch", { agents: false, prepare: (fixture) => {
+    fs.mkdirSync(path.join(fixture.root, "beta"));
+    for (const folder of [path.join(fixture.root, "fixture"), path.join(fixture.root, "beta")]) {
       fs.writeFileSync(path.join(folder, "notes.md"), "# Workspace notes\n");
       const init = spawnSync("git", ["-C", folder, "init", "-q"], { encoding: "utf8" });
       expect(init.status, init.stderr).toBe(0);
     }
-    herdr.run(["workspace", "create", "--cwd", beta, "--label", "beta", "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]);
+  } });
+  const { fixture, run, daemon } = stack;
+  let app: ElectronApplication | null = null;
+  try {
+    await withControl(daemon, (control) => openProject(control, path.join(fixture.root, "beta"), "beta"));
     ({ app } = await launchShell(run.env));
     const page = await app.firstWindow();
     const sent = countSent(page);
@@ -635,7 +636,6 @@ test("a Workspace switch cancels its lane drag without changing another Workspac
     }
   } finally {
     await app?.close().catch(() => undefined);
-    run.cleanup();
-    herdr.stop();
+    stack.stop();
   }
 });

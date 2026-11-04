@@ -3,66 +3,66 @@
 import { expect, type ElectronApplication } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
-import { herdrHasFocus, startHerdr } from "../../web/e2e/herdr-fixture";
+import { agentPane } from "../../web/e2e/agent-pane";
+import { openProject, openWorktree, showTabOf, withControl } from "../../web/e2e/daemon-actions";
 import { enterWorkspace } from "../../web/e2e/wire";
-import { HIDE_CLI, isolate, launchShell, nodeOf, screenshot, test } from "./fixture";
+import { launchShell, nodeOf, screenshot, startStack, test } from "./fixture";
 import { captureNativeWindow } from "./native-window";
-import { installSpawnProvider, nativeSpawnCommand, waitForSpawnShell, type SpawnedAgent } from "./agent-spawn-fixture";
-
-type NativeAgent = { pane_id: string; terminal_id: string; agent_session?: { value: string }; tokens?: Record<string, unknown> };
+import { expectCoreFocus, herdrAgents, hideAnswer, makeSpawnRepository, type SpawnedAgent } from "./agent-spawn-fixture";
 
 test("a spawned child appears in the native delegation tree", async () => {
-  const herdr = await startHerdr({ agents: false });
-  const run = isolate(herdr, "agent-spawn");
-  const response = path.join(run.root, "response.json");
-  const repo = path.join(herdr.root, "fixture");
-  const parent = herdr.panes[0];
+  const stack = await startStack("agent-spawn", { agents: false });
+  const { fixture, run, daemon } = stack;
   let app: ElectronApplication | undefined;
   const failures: unknown[] = [];
   try {
-    execFileSync("git", ["init", "-b", "main", repo], { env: run.env, timeout: 20_000 });
-    execFileSync("git", ["-C", repo, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-m", "Fixture"], { env: run.env, timeout: 20_000 });
-    const existingCheckout = path.join(herdr.root, "existing-checkout");
-    execFileSync("git", ["-C", repo, "worktree", "add", "-b", "existing-task", existingCheckout], { env: run.env, timeout: 20_000 });
-    execFileSync(herdr.bin, ["worktree", "open", "--cwd", repo, "--path", existingCheckout, "--no-focus"], { env: herdr.env, timeout: 20_000 });
-    const provider = installSpawnProvider(herdr, run.root);
-    execFileSync(herdr.bin, ["workspace", "report-metadata", herdr.workspace, "--source", "hide", "--token", "purpose=Spawn delegation fixture"], { env: herdr.env, timeout: 20_000 });
-    // The fixture wrapper declares a controlled session after agent.start;
-    // this case observes the synthetic executable's own native report instead.
-    await waitForSpawnShell(herdr, parent);
-    execFileSync(herdr.bin, ["agent", "start", "parent", "--kind", "claude", "--pane", parent, "--timeout", "5000"], { env: herdr.env, timeout: 20_000 });
-    const agents = () => (herdr.run(["api", "snapshot"]) as { result: { snapshot: { agents: NativeAgent[] } } }).result.snapshot.agents;
-    await expect.poll(() => agents().find((agent) => agent.pane_id === parent)?.agent_session?.value).toMatch(/^fixture-\d+$/);
-    const native = agents().find((agent) => agent.pane_id === parent)!;
+    const { repo, existingCheckout } = makeSpawnRepository(fixture.root, run.env);
+    const project = await withControl(daemon, (control) => openProject(control, repo, "repo"));
+    const parent = project.pane;
     const opened = await launchShell(run.env);
     app = opened.app;
     const page = opened.page;
-    const command = (args: string[]) => nativeSpawnCommand(herdr, provider, parent, HIDE_CLI, args, run.env, response);
-    const registered = await command(["agent", "register", "--host-scope", herdr.socket, "--session", native.agent_session!.value, "--instance", native.terminal_id, "--name", "parent", "--pane", parent]);
-    expect(registered.machine).toBe(nodeOf(run.env));
-    await enterWorkspace(page, "fixture");
+    await enterWorkspace(page, "repo");
+    // The core lists a linked worktree once a page shows its repository.
+    await withControl(daemon, async (control) => {
+      await openWorktree(control, existingCheckout);
+      await showTabOf(control, parent);
+    });
+    // The agent in the pane is the synthetic provider; this case observes its own native session report.
+    const caller = await agentPane(fixture, daemon.stateDir, parent);
+    const purpose = await caller(["workspace", "purpose", "Spawn delegation fixture"]);
+    expect(purpose.status, purpose.out).toBe(0);
+    const command = (args: string[]) => hideAnswer(caller, args);
     await expect(page.locator(`[data-pane-view="${parent}"]`)).toHaveAttribute("data-focused", "true");
-    await expect.poll(() => herdrHasFocus(herdr, parent)).toBe(true);
+    await expectCoreFocus(daemon, parent);
     const keyboard = page.locator(`[data-pane-view="${parent}"] .xterm-helper-textarea`);
     await keyboard.focus();
     const children: SpawnedAgent[] = [];
+    let registered: SpawnedAgent | undefined;
     for (const [name, branch] of [["child-existing", "existing-task"], ["child", "child-task"]]) {
       const spawned = await command(["agent", "spawn", "--parent", "here", "--name", name!, "--intent", name!, "--kind", "claude", "--repo", repo, "--branch", branch!]);
+      // The spawn registers its caller as the child's parent; its own record is read back by `show here`.
+      registered ??= await command(["agent", "show", "here"]);
+      if (children.length === 0) expect(registered.machine).toBe(nodeOf(run.env));
       expect(spawned.parent).toBe(registered.id);
       expect(spawned.origin).toBe(registered.id);
       expect(spawned.pane.split(":")[0]).not.toBe(parent.split(":")[0]);
       await expect(page.locator(`[data-pane-view="${parent}"]`)).toHaveAttribute("data-focused", "true");
       await expect(keyboard).toBeFocused();
-      expect(herdrHasFocus(herdr, parent)).toBe(true);
+      await expectCoreFocus(daemon, parent);
       expect(spawned.watch).toBeTruthy();
-      expect(agents().find((agent) => agent.pane_id === spawned.pane)?.tokens?.parent_pane).toBe(parent);
+      // Herdr alone keeps agent tokens, where the lineage is written as the child's parent_pane.
+      if (fixture.engine === "herdr") expect(herdrAgents(fixture).find((agent) => agent.pane_id === spawned.pane)?.tokens?.parent_pane).toBe(parent);
       children.push(spawned);
     }
     const child = children[1]!;
-    // Tokens Herdr drops (a live handoff drops them all) are written again from
+    // Herdr's tokens are Herdr's: a live handoff drops them all, and they are written again from
     // the ledger on this machine too, whose records carry its node id (issue 772).
-    execFileSync(herdr.bin, ["pane", "report-metadata", child.pane, "--source", "hide", ...["parent_pane", "parent_session", "child_session"].flatMap((key) => ["--clear-token", key])], { env: herdr.env, timeout: 20_000 });
-    await expect.poll(() => agents().find((agent) => agent.pane_id === child.pane)?.tokens?.parent_pane).toBe(parent);
+    if (fixture.engine === "herdr") {
+      const herdr = fixture as typeof fixture & { env: NodeJS.ProcessEnv; bin: string };
+      execFileSync(herdr.bin, ["pane", "report-metadata", child.pane, "--source", "hide", ...["parent_pane", "parent_session", "child_session"].flatMap((key) => ["--clear-token", key])], { env: herdr.env, timeout: 20_000 });
+      await expect.poll(() => herdrAgents(fixture).find((agent) => agent.pane_id === child.pane)?.tokens?.parent_pane).toBe(parent);
+    }
     const parentRow = page.locator(`nav[data-sidebar] [data-pane="${parent}"]`);
     await expect(parentRow).toHaveAttribute("data-delegated", "false");
     // The root folds its children behind its chevron; the pane header's tree
@@ -77,13 +77,12 @@ test("a spawned child appears in the native delegation tree", async () => {
     await page.keyboard.press("Escape");
     await expect(treeButton).toBeFocused();
     await screenshot(page, "agent-spawn-delegation");
-    await captureNativeWindow(app, "agent-spawn-delegation-native", { parent, children, state: run.env.HIDE_STATE_DIR, home: run.env.HOME, socket: herdr.socket, head: execFileSync("git", ["rev-parse", "HEAD"], { cwd: path.resolve(__dirname, "../.."), encoding: "utf8" }).trim(), provider: "synthetic native CLI" });
+    await captureNativeWindow(app, "agent-spawn-delegation-native", { parent, children, state: run.env.HIDE_STATE_DIR, home: run.env.HOME, socket: fixture.socket, head: execFileSync("git", ["rev-parse", "HEAD"], { cwd: path.resolve(__dirname, "../.."), encoding: "utf8" }).trim(), provider: "synthetic native CLI" });
   } catch (error) {
     failures.push(error);
   } finally {
     try { await app?.close(); } catch (error) { failures.push(error); }
-    try { run.cleanup(); } catch (error) { failures.push(error); }
-    try { herdr.stop(); } catch (error) { failures.push(error); }
+    try { stack.stop(); } catch (error) { failures.push(error); }
   }
   if (failures.length) throw new AggregateError(failures, "native spawn fixture or teardown failed");
 });

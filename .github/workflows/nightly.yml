@@ -199,6 +199,8 @@ jobs:
       shards: ${{ matrix.system == 'macos' && 2 || 1 }}
       grep: ${{ matrix.system != 'macos' && '@platform' || '' }}
       keep-screenshots: ${{ matrix.system != 'macos' }}
+      # Every system runs its tests again on the core's own engine.
+      own-engine: true
 
   # One fixed fixture measured against the release hided on macOS
   # (docs/PERFORMANCE_TESTING.md, "The nightly performance lane"). A failed

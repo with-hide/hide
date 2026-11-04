@@ -195,16 +195,24 @@ export type Stack = {
  * the app's own `hide connect` starts it, and the fixture is made through
  * that daemon with the web shell's events before the app opens, as Herdr's
  * panes existed before it; the app then attaches to that daemon
- * (`launch`).
+ * (`launch`). `prepare` runs between the isolated home and its daemon, for
+ * what must exist before the daemon registers the checkout or reads its
+ * environment (a repository, a program on PATH, a variable): the home's
+ * daemon starts only once.
  */
-export async function startStack(label: string, options: { agents?: boolean; family?: boolean } = {}): Promise<Stack> {
-  const fixture = await startFixture(options);
+export async function startStack(
+  label: string,
+  options: { agents?: boolean; family?: boolean; prepare?: (fixture: AgentFixture, run: Isolated) => void } = {},
+): Promise<Stack> {
+  const { prepare, ...kind } = options;
+  const fixture = await startFixture(kind);
   let run: Isolated | null = null;
   const stop = () => {
     try { run?.cleanup(); } finally { fixture.stop(); }
   };
   try {
     run = isolate(fixture, label);
+    prepare?.(fixture, run);
     const daemon = await connectHome(run);
     await fixture.opened!(daemon);
     return { fixture, run, daemon, stop };

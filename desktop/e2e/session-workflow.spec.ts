@@ -1,24 +1,28 @@
-// The 태스크 list and the quiet header on one exact native candidate. Herdr, HOME,
+// The 태스크 list and the quiet header on one exact native candidate. The engine, HOME,
 // daemon and profile belong to this fixture; input never reaches the operator.
 import { expect, type ElectronApplication } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
-import { continueFixtureTranscript, declareParent, labelAgent, setFixtureLifecycle, startHerdr } from "../../web/e2e/herdr-fixture";
+import { setAgentState } from "../../web/e2e/fixture-agents";
+import { continueFixtureTranscript } from "../../web/e2e/herdr-fixture";
+import { startWork } from "../../web/e2e/session-work-fixture";
 import { enterWorkspace, showTasks } from "../../web/e2e/wire";
-import { fitWindow, isolate, launchShell, test } from "./fixture";
+import { fitWindow, launchShell, startStack, test } from "./fixture";
 import { captureNativeWindow } from "./native-window";
 
 test("the 태스크 list and raised-child pane bands preserve native terminal geometry in both themes", async () => {
-  const herdr = await startHerdr();
-  const run = isolate(herdr, "session-workflow");
+  // The child is the parent's delegated child, spawned by the parent agent itself (family).
+  const stack = await startStack("session-workflow", { family: true });
+  const { fixture, run, daemon } = stack;
   let app: ElectronApplication | undefined;
   const failures: unknown[] = [];
   try {
-    const [parent, child] = herdr.panes;
-    const parentSession = labelAgent(herdr, parent, { task: "한국어 입력과 세션 복귀 경계를 검토하는 긴 작업 제목", progress: "자식 검토 결과를 기다리는 중" });
-    labelAgent(herdr, child, { task: "자식의 긴 한국어 검증 요청과 회귀 결과 확인", progress: "검증 명령 실행 권한이 필요합니다" });
-    declareParent(herdr, child, parent);
-    await setFixtureLifecycle(herdr, child, "blocked");
+    // The parent runs a session labelled from its start, and delegates a child running a labelled session of its own.
+    const started = await startWork(fixture, daemon,
+      { task: "한국어 입력과 세션 복귀 경계를 검토하는 긴 작업 제목", progress: "자식 검토 결과를 기다리는 중" },
+      { task: "자식의 긴 한국어 검증 요청과 회귀 결과 확인", progress: "검증 명령 실행 권한이 필요합니다" });
+    const parent = started.pane, child = started.child!.pane, parentSession = started.session;
+    await setAgentState(daemon, child, "blocked");
     const opened = await launchShell(run.env);
     app = opened.app;
     const page = opened.page;
@@ -47,7 +51,7 @@ test("the 태스크 list and raised-child pane bands preserve native terminal ge
     // The raised ask leads with the parent's request, its own first line while the label gave no summary (PRD pane-last-request B1, B3).
     await expect(raisedRow.locator(`[data-pane-turn-request="${parent}"]`)).toContainText("한국어 입력과 세션 복귀 경계를 검토하는 긴 작업 제목 진행해줘");
     const terminal = await host.boundingBox();
-    const facts = { head: execFileSync("git", ["rev-parse", "HEAD"], { cwd: path.resolve(__dirname, "../.."), encoding: "utf8" }).trim(), parent, child, home: run.env.HOME, socket: herdr.socket, state: run.env.HIDE_STATE_DIR, provider: "synthetic agent transcript and lifecycle" };
+    const facts = { head: execFileSync("git", ["rev-parse", "HEAD"], { cwd: path.resolve(__dirname, "../.."), encoding: "utf8" }).trim(), parent, child, home: run.env.HOME, socket: fixture.socket, state: run.env.HIDE_STATE_DIR, provider: "synthetic agent transcript and lifecycle" };
     for (const theme of ["light", "dark"] as const) {
       await page.getByRole("button", { name: /^Settings \(/ }).click();
       await page.locator('[data-settings-tab="general"]').click();
@@ -70,10 +74,10 @@ test("the 태스크 list and raised-child pane bands preserve native terminal ge
       await page.locator('[data-sidebar-lens-option="projects"]').click();
       await expect(page.locator('[data-sidebar-lens="projects"]')).toBeVisible();
     }
-    await setFixtureLifecycle(herdr, child, "working");
+    await setAgentState(daemon, child, "working");
     await expect(pane.locator('[data-pane-header-band="raised"]')).toHaveCount(0);
-    continueFixtureTranscript(herdr, parentSession, { task: "한국어 입력과 세션 복귀 경계를 검토하는 긴 작업 제목", progress: "자식 검토 결과를 기다리는 중", request: "자식 검토 결과 정리와 세션 복귀 확인" });
-    await setFixtureLifecycle(herdr, parent, "working");
+    continueFixtureTranscript(fixture, parentSession, { task: "한국어 입력과 세션 복귀 경계를 검토하는 긴 작업 제목", progress: "자식 검토 결과를 기다리는 중", request: "자식 검토 결과 정리와 세션 복귀 확인" });
+    await setAgentState(daemon, parent, "working");
     await expect(pane.locator(`[data-pane-own-progress="${parent}"]`)).toHaveText("자식 검토 결과를 기다리는 중", { timeout: 25_000 });
     // The working turn leads with the label's summary of the new request, and a press opens its card under it (B1, B2, B6).
     const request = pane.locator(`[data-pane-turn-request="${parent}"]`);
@@ -90,8 +94,7 @@ test("the 태스크 list and raised-child pane bands preserve native terminal ge
   } catch (error) { failures.push(error); }
   finally {
     try { await app?.close(); } catch (error) { failures.push(error); }
-    try { run.cleanup(); } catch (error) { failures.push(error); }
-    try { herdr.stop(); } catch (error) { failures.push(error); }
+    try { stack.stop(); } catch (error) { failures.push(error); }
   }
   if (failures.length) throw new AggregateError(failures, "native task list fixture or teardown failed");
 });

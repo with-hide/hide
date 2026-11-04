@@ -1,7 +1,7 @@
 // The operator's Comment mode on a local HTML page (a `file:` page inside a checkout). It draws the
 // same overlay as on an http page, through a comment-only lease only hided holds, while an agent
 // still cannot drive the page, and the comment world reads no more than the page itself could
-// (docs/BROWSER_DISPLAYS.md, Comment mode and The file boundary). The operator's app, Herdr server
+// (docs/BROWSER_DISPLAYS.md, Comment mode and The file boundary). The operator's app, engine
 // and browser are never used.
 import { expect, type ElectronApplication, type Page } from "@playwright/test";
 import fs from "node:fs";
@@ -10,9 +10,8 @@ import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { agentPane, type HideAnswer } from "../../web/e2e/agent-pane";
-import { startHerdr, type HerdrFixture } from "../../web/e2e/herdr-fixture";
 import { enterWorkspace } from "../../web/e2e/wire";
-import { fitWindow, isolate, launch, test, type Isolated } from "./fixture";
+import { fitWindow, launchShell, startStack, test, type Stack } from "./fixture";
 import { captureNativeWindow } from "./native-window";
 import { evaluateIn, pageUrls, sendInput } from "./page-input";
 
@@ -27,20 +26,17 @@ const PAGE = `<!doctype html><meta charset="utf-8"><title>Local fixture</title>
 <div id="room"></div>
 <script>window.keys = 0; addEventListener("keydown", () => { window.keys += 1; }, true);</script>`;
 
-let herdr: HerdrFixture;
-let run: Isolated;
+let stack: Stack;
 let app: ElectronApplication | null = null;
 
-// One Herdr per test: an agent pane is made once for a Herdr.
+// One stack per test: an agent pane is made once for an engine.
 test.beforeEach(async () => {
-  herdr = await startHerdr({ agents: false });
-  run = isolate(herdr, "view-comment-file");
+  stack = await startStack("view-comment-file", { agents: false });
 });
 test.afterEach(async () => {
   await app?.close().catch(() => undefined);
   app = null;
-  run.cleanup();
-  herdr.stop();
+  stack.stop();
 });
 
 /** The address the window's native page shows for the file named `name` in the checkout. */
@@ -56,17 +52,18 @@ async function centreOf(url: string, selector: string): Promise<{ x: number; y: 
 }
 
 test("Comment on a local HTML page: point at an element and drag an area, and the agent gets both while it still cannot drive the page", async () => {
-  const launched = await launch(run.env);
+  const { fixture, run } = stack;
+  const launched = await launchShell(run.env);
   app = launched.app;
   const shell: Page = launched.page;
   await fitWindow(app, { width: 1400, height: 900 });
   await enterWorkspace(shell, "fixture");
-  const agent = await agentPane(herdr, run.env.HIDE_STATE_DIR!, herdr.panes[0]!);
+  const agent = await agentPane(fixture, run.env.HIDE_STATE_DIR!, fixture.panes[0]);
   const ok = (answer: HideAnswer) => {
     expect(answer.status, answer.out).toBe(0);
     return answer.out;
   };
-  const file = path.join(herdr.root, "fixture", "index.html");
+  const file = path.join(fixture.root, "fixture", "index.html");
   fs.writeFileSync(file, PAGE);
   const opened = JSON.parse(ok(await agent(["browser", "open", pathToFileURL(file).href, "--wait"])).trim().split("\n").at(-1)!) as { result: { view_id: string } };
   const display = opened.result.view_id;
@@ -137,14 +134,15 @@ test("Comment on a local HTML page: point at an element and drag an area, and th
 });
 
 test("The comment world of a local HTML page reads exactly what the page itself reads", async () => {
-  const launched = await launch(run.env);
+  const { fixture, run } = stack;
+  const launched = await launchShell(run.env);
   app = launched.app;
   await fitWindow(app, { width: 1400, height: 900 });
   await enterWorkspace(launched.page, "fixture");
-  const agent = await agentPane(herdr, run.env.HIDE_STATE_DIR!, herdr.panes[0]!);
+  const agent = await agentPane(fixture, run.env.HIDE_STATE_DIR!, fixture.panes[0]);
   // Secrets in the checkout beside the page and outside every checkout, and a server that must hear nothing.
-  const checkout = path.join(herdr.root, "fixture");
-  const outside = path.join(herdr.root, "outside");
+  const checkout = path.join(fixture.root, "fixture");
+  const outside = path.join(fixture.root, "outside");
   fs.mkdirSync(outside, { recursive: true });
   const secret = "TOPSECRET-" + path.basename(run.root);
   const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==", "base64");

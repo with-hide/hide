@@ -3,13 +3,16 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expect, type ElectronApplication } from "@playwright/test";
-import { startHerdr } from "../../web/e2e/herdr-fixture";
+import { startFixture } from "../../web/e2e/engine-fixture";
 import { usageShim } from "../../web/e2e/usage-fixture";
-import { fitWindow, isolate, launchShell, screenshot, test } from "./fixture";
+import { connectHome, fitWindow, isolate, launchShell, screenshot, test } from "./fixture";
 
 test("native usage history preserves totals, hover geometry and the Overview filter", async () => {
-  const herdr = await startHerdr();
-  const run = isolate(herdr, "usage-history");
+  // Two shells, not agents: the usage shim stands in for `claude` on the daemon's PATH, where an agent
+  // start would find it too. The daemon starts after that PATH and the ledger's files are set, so this
+  // composes `startStack`'s steps.
+  const fixture = await startFixture({ agents: false });
+  const run = isolate(fixture, "usage-history");
   const usage = usageShim();
   run.env.PATH = usage.path;
   usage.release();
@@ -28,6 +31,7 @@ test("native usage history preserves totals, hover geometry and the Overview fil
   let app: ElectronApplication | undefined;
   const failures: unknown[] = [];
   try {
+    await fixture.opened!(await connectHome(run));
     const opened = await launchShell(run.env);
     app = opened.app;
     const page = opened.page;
@@ -40,7 +44,7 @@ test("native usage history preserves totals, hover geometry and the Overview fil
       const candidate = await app!.evaluate(({ BrowserWindow }) => ({ pid: process.pid, executable: process.execPath, windows: BrowserWindow.getAllWindows().length, switches: process.argv, bounds: BrowserWindow.getAllWindows()[0]!.getBounds() }));
       expect(candidate.windows).toBe(1);
       const directory = process.env.HIDE_E2E_SCREENSHOT_DIR;
-      if (directory) fs.writeFileSync(path.join(directory, `${name}.json`), JSON.stringify({ candidate, home: run.env.HOME, socket: herdr.socket, fixture: "six native calls; new tokens 360, cache read 5400; unknown model", collector: "isolated Electron renderer screenshot" }, null, 2));
+      if (directory) fs.writeFileSync(path.join(directory, `${name}.json`), JSON.stringify({ candidate, home: run.env.HOME, socket: fixture.socket, fixture: "six native calls; new tokens 360, cache read 5400; unknown model", collector: "isolated Electron renderer screenshot" }, null, 2));
       await screenshot(page, name);
     };
     for (const language of ["en", "ko"] as const) {
@@ -98,7 +102,7 @@ test("native usage history preserves totals, hover geometry and the Overview fil
   finally {
     try { await app?.close(); } catch (error) { failures.push(error); }
     try { run.cleanup(); } catch (error) { failures.push(error); }
-    try { herdr.stop(); } catch (error) { failures.push(error); }
+    try { fixture.stop(); } catch (error) { failures.push(error); }
     try { usage.cleanup(); } catch (error) { failures.push(error); }
   }
   if (failures.length) throw new AggregateError(failures, "native history or teardown failed");

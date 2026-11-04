@@ -1,131 +1,69 @@
-// A real pane process reports its own native session and starts each Hide CLI
-// as a descendant. No session, lineage or capability is injected by the test.
+// What the native spawn specs (`agent-spawn.spec.ts`, `agent-handoff.spec.ts`)
+// share on either engine: a Git repository with one linked worktree, the
+// answer of a `hide agent` command run by a real agent process in its pane
+// (`agentPane` in `web/e2e/agent-pane.ts`, whose stand-in reports its native
+// session the way the pane's engine learns one), and, on Herdr only, the
+// native agent rows Herdr keeps beside the daemon's.
+
 import { expect } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import type { HerdrFixture } from "../../web/e2e/herdr-fixture";
-import { fixtureExecutable, fixtureToolPath, inheritedFixtureEnv } from "../../web/e2e/platform-fixture";
-import { copyFixtureShim } from "../../web/e2e/shims/build";
-import { configureSpawnProvider, writeSessionReporter } from "../../web/e2e/spawn-provider";
-import { powershellQuote, windowsArgument } from "../../web/e2e/windows-command";
+import type { AgentFixture, HideRunner } from "../../web/e2e/engine-fixture";
+import { corePaneFocus, withControl } from "../../web/e2e/daemon-actions";
+import type { Daemon } from "../../web/e2e/hided-fixture";
 
-type SpawnProvider = { script: string; completed: string };
 export type SpawnedAgent = { id: string; pane: string; machine: string; parent: string | null; origin: string | null; watch: string | null; session: string };
-const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+type NativeAgent = { pane_id: string; terminal_id: string; agent_session?: { value: string }; tokens?: Record<string, unknown> };
 
-function powershellBinary(bin: string): string {
-  // Reuse the controlled system-tool boundary, never the account's PATH.
-  const tool = fixtureToolPath(bin).split(path.delimiter)
-    .map((directory) => path.join(directory, "powershell.exe"))
-    .find((candidate) => fs.existsSync(candidate));
-  if (!tool) throw new Error("Windows spawn fixture needs the native Windows PowerShell executable");
-  return tool;
+/**
+ * A repository `<root>/repo` on `main` with one commit and a linked
+ * worktree `<root>/existing-checkout` on the branch `existing-task`, the
+ * checkout a spawn onto that branch reuses.
+ */
+export function makeSpawnRepository(root: string, env: NodeJS.ProcessEnv): { repo: string; existingCheckout: string } {
+  const repo = path.join(root, "repo");
+  const existingCheckout = path.join(root, "existing-checkout");
+  fs.mkdirSync(repo, { recursive: true });
+  execFileSync("git", ["init", "-b", "main", repo], { env, timeout: 20_000 });
+  execFileSync("git", ["-C", repo, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-m", "Fixture"], { env, timeout: 20_000 });
+  execFileSync("git", ["-C", repo, "worktree", "add", "-b", "existing-task", existingCheckout], { env, timeout: 20_000 });
+  return { repo, existingCheckout };
 }
 
-export function installSpawnProvider(herdr: HerdrFixture, root: string): SpawnProvider {
-  const provider = {
-    script: path.join(root, process.platform === "win32" ? "command.ps1" : "command.sh"),
-    completed: path.join(root, "command-completed"),
-  };
-  const runner = process.platform === "win32"
-    ? [powershellBinary(path.join(herdr.root, "bin")), "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", provider.script]
-    : ["/bin/sh", provider.script];
-  configureSpawnProvider(herdr.root, { reporter: writeSessionReporter(herdr), completed: provider.completed, command: runner });
-  copyFixtureShim("spawn-provider", path.join(herdr.root, "bin", fixtureExecutable("claude")));
-  return provider;
-}
+type Answer = { ok?: boolean; value?: SpawnedAgent; error?: { code?: string } } | null;
 
-/** The caller sends one trigger only after this script is ready. */
-export function prepareSpawnCommand(provider: SpawnProvider, binary: string, args: string[], env: NodeJS.ProcessEnv, response: string): void {
-  fs.rmSync(response, { force: true });
-  fs.rmSync(provider.completed, { force: true });
-  // Preserve Herdr's actual pane/session identity inherited by the provider.
-  // Move every native home lookup, provider home and daemon setting together.
-  const privateEnv = Object.entries(env).flatMap(([key, value]) => {
-    const canonical = process.platform === "win32" ? key.toUpperCase() : key;
-    const home = ["HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "PATH"];
-    return value !== undefined && (home.includes(canonical) || canonical.startsWith("XDG_") || canonical.startsWith("HIDE_") || canonical === "HERDR_BIN_PATH")
-      ? [[canonical, value] as const] : [];
-  });
-  if (process.platform !== "win32") {
-    const argv = ["env", ...privateEnv.map(([key, value]) => `${key}=${value}`), binary, ...args];
-    fs.writeFileSync(provider.script, `#!/bin/sh\nexec ${argv.map(shellQuote).join(" ")} > ${shellQuote(response)}\n`, { mode: 0o700 });
-    return;
+/**
+ * Runs `args` as the agent `caller` runs them and returns the answer's value.
+ * A child started fresh reports its session after the spawn answers, and the
+ * same intent then answers it (docs/delivery.md), so that one refusal is asked
+ * again.
+ */
+export async function hideAnswer(caller: HideRunner, args: string[]): Promise<SpawnedAgent> {
+  const deadline = Date.now() + 30_000;
+  for (;;) {
+    const ran = await caller(args);
+    const answer = JSON.parse(ran.out.trim().split("\n").at(-1) ?? "null") as Answer;
+    if (ran.status === 0 && answer?.ok && answer.value) return answer.value;
+    if (answer?.error?.code !== "native_identity_unavailable" || Date.now() > deadline) throw new Error(`hide ${args.join(" ")} failed: ${ran.out}`);
+    await new Promise((resolve) => setTimeout(resolve, 500));
   }
-  // ProcessStartInfo bypasses PowerShell 5's native argument rewriting. The
-  // entire command is an argv string encoded once for the Windows process API.
-  const script = `$ErrorActionPreference = 'Stop'
-$fixtureStart = New-Object System.Diagnostics.ProcessStartInfo
-$fixtureStart.FileName = ${powershellQuote(binary)}
-$fixtureStart.Arguments = ${powershellQuote(args.map(windowsArgument).join(" "))}
-$fixtureStart.UseShellExecute = $false
-$fixtureStart.RedirectStandardOutput = $true
-$fixtureStart.StandardOutputEncoding = New-Object System.Text.UTF8Encoding($false)
-${privateEnv.map(([key, value]) => `$fixtureStart.EnvironmentVariables[${powershellQuote(key)}] = ${powershellQuote(value)}`).join("\n")}
-$fixtureChild = New-Object System.Diagnostics.Process
-$fixtureChild.StartInfo = $fixtureStart
-try {
-  if (-not $fixtureChild.Start()) { throw 'fixture CLI did not start' }
-  $fixtureOutput = $fixtureChild.StandardOutput.ReadToEndAsync()
-  if (-not $fixtureChild.WaitForExit(20000)) { throw 'fixture CLI exceeded its process bound' }
-  [System.IO.File]::WriteAllText(${powershellQuote(response)}, $fixtureOutput.GetAwaiter().GetResult(), (New-Object System.Text.UTF8Encoding($false)))
-  exit $fixtureChild.ExitCode
-} finally {
-  $fixtureChild.Dispose()
-}
-`;
-  // Windows PowerShell 5 needs a BOM to read non-ASCII paths and arguments.
-  fs.writeFileSync(provider.script, `\uFEFF${script}`);
 }
 
-/** Run one delivery command as the real native caller, observing its reply. */
-export async function nativeSpawnCommand(herdr: HerdrFixture, provider: SpawnProvider, pane: string, binary: string, args: string[], env: NodeJS.ProcessEnv, response: string): Promise<SpawnedAgent> {
-  prepareSpawnCommand(provider, binary, args, env, response);
-  execFileSync(herdr.bin, ["pane", "send-text", pane, "!"], { env: herdr.env, timeout: 20_000 });
-  await expect.poll(() => {
-    if (!fs.existsSync(provider.completed)) return null;
-    const completed = fs.readFileSync(provider.completed, "utf8").trim();
-    if (!completed) return null;
-    if (Number(completed) !== 0) throw new Error(`native spawn fixture command exited ${completed}`);
-    try { return JSON.parse(fs.readFileSync(response, "utf8")) as unknown; } catch { return null; }
-  }).not.toBeNull();
-  const answer = JSON.parse(fs.readFileSync(response, "utf8")) as { ok: boolean; value: SpawnedAgent };
-  expect(answer.ok, JSON.stringify(answer)).toBe(true);
-  return answer.value;
+/** The pane the core holds focused, as the daemon publishes it. */
+export async function coreFocus(daemon: Pick<Daemon, "origin" | "token">): Promise<string | null> {
+  return withControl(daemon, (control) => control.until((rest) => ({ pane: corePaneFocus(rest) }), "the focused pane")).then((focus) => focus.pane);
 }
 
-/** A prompt can precede the shell becoming available to agent.start. */
-export async function waitForSpawnShell(herdr: HerdrFixture, pane: string): Promise<void> {
-  const deadline = Date.now() + 10_000;
-  let shell: number | null = null;
-  await expect.poll(() => {
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) throw new Error("fixture shell was unavailable before the single agent start");
-    const answer = JSON.parse(execFileSync(herdr.bin, ["pane", "process-info", "--pane", pane], {
-      env: herdr.env, encoding: "utf8", timeout: remaining,
-    })) as {
-      result: { process_info: { shell_pid: number | null; foreground_process_group_id: number | null; foreground_processes: { pid: number }[] } };
-    };
-    const info = answer.result.process_info;
-    shell = info.shell_pid;
-    return shell !== null && shell > 1 && info.foreground_process_group_id === shell
-      && info.foreground_processes.every((process) => process.pid === shell);
-  }).toBe(true);
-  if (process.platform !== "win32") return;
-  const remaining = deadline - Date.now();
-  if (remaining <= 0 || !shell) throw new Error("fixture shell was unavailable before the single agent start");
-  // The pinned Herdr reports cmd as foreground while a non-agent child is
-  // running. Observe its actual children, as the shared Herdr fixture does.
-  execFileSync(powershellBinary(path.join(herdr.root, "bin")), ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", `
-    $ErrorActionPreference = 'Stop'
-    $fixtureUntil = [DateTime]::UtcNow.AddMilliseconds(${remaining})
-    do {
-      $fixtureProcesses = @(Get-CimInstance -ClassName Win32_Process -Filter 'ProcessId = ${shell} OR ParentProcessId = ${shell}' -Property ProcessId, ParentProcessId)
-      if (@($fixtureProcesses | Where-Object { $_.ProcessId -eq ${shell} }).Count -ne 1) { throw 'fixture shell exited before agent start' }
-      if (@($fixtureProcesses | Where-Object { $_.ParentProcessId -eq ${shell} }).Count -eq 0) { exit 0 }
-      Start-Sleep -Milliseconds 100
-    } while ([DateTime]::UtcNow -lt $fixtureUntil)
-    throw 'fixture shell still has child processes before agent start'
-  `], { env: { ...inheritedFixtureEnv(), ...herdr.env }, timeout: remaining });
+/** Waits until the core holds `pane` focused. */
+export async function expectCoreFocus(daemon: Pick<Daemon, "origin" | "token">, pane: string): Promise<void> {
+  await expect.poll(() => coreFocus(daemon), { message: `the core's keyboard focus on ${pane}` }).toBe(pane);
+}
+
+/** Herdr's own agent rows: what its integration reports for each pane, which only Herdr keeps. */
+export function herdrAgents(fixture: AgentFixture): NativeAgent[] {
+  if (fixture.engine !== "herdr") throw new Error("only Herdr keeps native agent rows");
+  const herdr = fixture as AgentFixture & { env: NodeJS.ProcessEnv; bin: string };
+  const answer = JSON.parse(execFileSync(herdr.bin, ["api", "snapshot"], { env: herdr.env, encoding: "utf8", timeout: 20_000 })) as { result: { snapshot: { agents: NativeAgent[] } } };
+  return answer.result.snapshot.agents;
 }
