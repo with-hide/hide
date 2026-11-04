@@ -103,13 +103,14 @@ class RefusedCell(unittest.TestCase):
 
     def settled(self, verdict):
         with tempfile.TemporaryDirectory() as folder:
-            def command(argv, check=True):
-                return 0, "screen\n", ""
-            runtime = SimpleNamespace(run=Path(folder), command=command,
+            def read_pane(pane, *, lines):
+                return "screen\n"
+            controller = SimpleNamespace(read_pane=read_pane)
+            runtime = SimpleNamespace(run=Path(folder),
                                       owner=SimpleNamespace(cancelled=threading.Event()))
             table = {"codex": {name: {"status": cells.PENDING} for name in ("resume", "title")}}
             record = {}
-            journey = Journey(runtime, None, None, table, {"id": "codex", "herdr_kind": "codex", "model_flag": []},
+            journey = Journey(runtime, None, controller, table, {"id": "codex", "herdr_kind": "codex", "model_flag": []},
                               Path("/repo"), record, None, branch="b", created=[], sessions=Path(folder),
                               route={}, composer_judge=None)
             journey.pane, journey.session = "w1:p1", THREAD

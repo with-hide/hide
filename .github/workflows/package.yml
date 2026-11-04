@@ -413,12 +413,8 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.issues-token.outputs.token }}
         run: |
-          status=0
-          for report in agents/runs/package-e2e/*/*/report.json; do
-            [[ -f "$report" ]] || continue
-            python3 scripts/ci-flaky-report.py --suite desktop --playwright "$report" || status=1
-          done
-          exit "$status"
+          python3 scripts/package-e2e-report.py agents/runs/package-e2e
+          python3 scripts/ci-flaky-report.py --suite desktop --playwright agents/runs/package-e2e/report.json
       - name: Keep the failed window run
         if: ${{ failure() || steps.flaky.outputs.flaky == 'true' }}
         uses: actions/upload-artifact@v7
@@ -595,12 +591,8 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.issues-token.outputs.token }}
         run: |
-          status=0
-          for report in agents/runs/package-e2e/*/*/report.json; do
-            [[ -f "$report" ]] || continue
-            python3 scripts/ci-flaky-report.py --suite desktop --playwright "$report" || status=1
-          done
-          exit "$status"
+          python3 scripts/package-e2e-report.py agents/runs/package-e2e
+          python3 scripts/ci-flaky-report.py --suite desktop --playwright agents/runs/package-e2e/report.json
       - name: Keep the packaged window
         if: steps.window.outcome == 'success'
         uses: actions/upload-artifact@v7
@@ -863,12 +855,8 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.issues-token.outputs.token }}
         run: |
-          status=0
-          for report in agents/runs/package-e2e/*/*/report.json; do
-            [[ -f "$report" ]] || continue
-            python3 scripts/ci-flaky-report.py --suite desktop --playwright "$report" || status=1
-          done
-          exit "$status"
+          python3 scripts/package-e2e-report.py agents/runs/package-e2e
+          python3 scripts/ci-flaky-report.py --suite desktop --playwright agents/runs/package-e2e/report.json
       - name: Keep the failed package run
         # A flaky run keeps it as a failed one does; see web-e2e.yml.
         if: ${{ failure() || steps.flaky.outputs.flaky == 'true' }}
