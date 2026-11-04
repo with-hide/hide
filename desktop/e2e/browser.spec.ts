@@ -648,7 +648,7 @@ test("browser: a login in one Workspace is available in another", async () => {
   fs.mkdirSync(other, { recursive: true });
   // The second project is made without being shown, so the fixture's stays in front; no page shows its shell yet.
   const otherPane = await withControl(stack.daemon, async (control) => {
-    const made = await openProject(control, other, "second");
+    const made = await openProject(control, other, "second-checkout");
     await focusTab(control, fixture, fixture.tab);
     viewPane(control, made.pane);
     await waitForPaneInput(control, made.pane);

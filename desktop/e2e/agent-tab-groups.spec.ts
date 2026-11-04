@@ -42,14 +42,15 @@ test("Agent edge drag splits the desktop column into two live tab groups", async
       const terminal = page.locator(`[data-terminal-host="${pane}"]`);
       await expect(terminal).toBeVisible();
       await terminal.click();
-      await page.keyboard.type("printf 'desktop-group-live\\n'");
+      // The first group's split pane is narrow; keep the output on one row.
+      await page.keyboard.type("printf 'group-live\\n'");
       await page.keyboard.press("Enter");
-      await expect.poll(() => screen(pane)).toMatch(/(?:^|\n)desktop-group-live\r?(?:\n|$)/);
+      await expect.poll(() => screen(pane)).toMatch(/(?:^|\n)group-live\r?(?:\n|$)/);
     }
     // Each group ran the line exactly once: Herdr's late answer to the drop's
     // focus once moved the keyboard to the other group mid-line (#413).
     for (const pane of groups) {
-      expect((await screen(pane)).match(/(?:^|\n)desktop-group-live\r?(?=\n|$)/g) ?? [], `${pane} output`).toHaveLength(1);
+      expect((await screen(pane)).match(/(?:^|\n)group-live\r?(?=\n|$)/g) ?? [], `${pane} output`).toHaveLength(1);
     }
     await expect(page.locator('[data-transport="released"]')).toHaveCount(0);
     await screenshot(page, "desktop-agent-groups-split");

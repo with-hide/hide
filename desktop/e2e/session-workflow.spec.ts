@@ -4,6 +4,7 @@ import { expect, type ElectronApplication } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { setAgentState } from "../../web/e2e/fixture-agents";
+import { showTabOf, withControl } from "../../web/e2e/daemon-actions";
 import { continueFixtureTranscript } from "../../web/e2e/herdr-fixture";
 import { startWork } from "../../web/e2e/session-work-fixture";
 import { enterWorkspace, showTasks } from "../../web/e2e/wire";
@@ -23,6 +24,9 @@ test("the 태스크 list and raised-child pane bands preserve native terminal ge
       { task: "자식의 긴 한국어 검증 요청과 회귀 결과 확인", progress: "검증 명령 실행 권한이 필요합니다" });
     const parent = started.pane, child = started.child!.pane, parentSession = started.session;
     await setAgentState(daemon, child, "blocked");
+    // Drawing the child's prompt types into its pane. Inspect the parent's
+    // header with the parent's tab selected, as the scenario requires.
+    await withControl(daemon, (control) => showTabOf(control, parent));
     const opened = await launchShell(run.env);
     app = opened.app;
     const page = opened.page;
