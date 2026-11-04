@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expect, test, type Page } from "@playwright/test";
+import type { SnapshotRest } from "../src/snapshot";
 import { agentIn, newTab, preparePaneInput, sendKeys, withControl, type AgentRow } from "./daemon-actions";
 import { waitForAgentInput } from "./agent-pane";
 import { resumeFlags, startProgram } from "./agent-start-fixture";
@@ -38,7 +39,7 @@ async function bothStarts(page: Page, fixture: AgentFixture, daemon: Daemon, kin
     // A real start requires the kit to have read this binary's daemon
     // capability. The stand-in answers features list as an older CLI.
     await withControl(daemon, (control) => control.until((rest) => {
-      const devices = rest.devices as { id: string; kit?: { codex_daemon?: boolean } }[] | undefined;
+      const devices = (rest as SnapshotRest).navigator?.devices;
       return devices?.find((device) => device.id === daemon.node)?.kit?.codex_daemon === false || undefined;
     }, "the installed start program's daemon capability", 30_000));
   }
@@ -50,7 +51,8 @@ async function bothStarts(page: Page, fixture: AgentFixture, daemon: Daemon, kin
     name: `start-${kind}`, kind, repo: path.join(fixture.root, "fixture"),
     // A resume gives spawn its required identity. The typed start below
     // exercises a fresh process without a session declared by the caller.
-    nativeArgs: [resumeFlags[kind] ?? "--resume", `platform-${kind}`],
+    nativeArgs: [resumeFlags[kind] ?? "--resume", ["pi", "omp"].includes(kind)
+      ? path.join(fixture.root, `platform-${kind}.jsonl`) : `platform-${kind}`],
   }), (async () => {
     const pane = await withControl(daemon, (control) => control.until((rest) => agents(rest).find((agent) =>
       agent.agent_kind === kind && !previous.has(agent.pane_id))?.pane_id, `the new ${kind} process`, 30_000));
@@ -76,7 +78,15 @@ for (const [kind, executable] of [
     let daemon: Daemon | undefined;
     try {
       if (executable !== "claude") fixtureProgram(path.join(fixture.root, "bin"), executable, startProgram(fixture, kind));
-      daemon = await startHided(fixture, `start-${kind}`, undefined, {}, kind === "codex");
+      const home = kind === "codex" ? fixture.home ?? path.join(fixture.root, "home") : undefined;
+      if (home) {
+        // This is an existing installation, as in the desktop fixture's
+        // seedKitRecord. The first-run dialog has its own flow tests.
+        const kit = path.join(home, ".hide", "kit");
+        fs.mkdirSync(kit, { recursive: true });
+        fs.writeFileSync(path.join(kit, "installed.json"), JSON.stringify({ format: 1, installed: [] }));
+      }
+      daemon = await startHided(fixture, `start-${kind}`, home, {}, kind === "codex");
       // Claude uses the family's native session reporter. Other kinds
       // run their own stand-in, including its native integration reports.
       await bothStarts(page, fixture, daemon, kind, executable);

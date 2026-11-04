@@ -8,7 +8,6 @@
 // the core's own engine. Both engines read the stand-in's screen with
 // Herdr's rules for Claude Code (`hide-agent-adapter/agents/claude-code.toml`).
 
-import fs from "node:fs";
 import path from "node:path";
 import { waitForAgentInput } from "./agent-pane";
 import { claudeProjects, declareAgentSession, writeFixtureTranscript, type FixtureLabel } from "./herdr-fixture";
