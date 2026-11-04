@@ -188,15 +188,14 @@ fn a_verified_download_is_reused_offline_and_corruption_is_repaired_before_uploa
     manifest.validate().unwrap();
     let server = Release::serve(200, archive);
     let (first, holder) = load(&manifest, "linux-aarch64", home.path(), &server.base()).unwrap();
-    // A device on its Herdr is sent what it was before the kit carried the
-    // holder: three programs and the Herdr pin; the holder is apart.
-    assert_eq!(first.files.len(), 4);
-    assert_eq!(first.files.iter().filter(|file| file.executable).count(), 3);
+    // The helper and the kit's two programs, and the holder apart.
+    assert_eq!(first.files.len(), 3);
+    assert!(first.files.iter().all(|file| file.executable));
     assert!(!first.files.iter().any(|file| file.relative == HOLDER));
     assert_eq!(holder.relative, HOLDER);
     assert!(holder.executable);
     assert!(first.missing.is_empty());
-    assert!(first.herdr.as_ref().unwrap().executable);
+    assert!(first.herdr.is_none());
     assert_eq!(server.hits(), 1);
     let (second, _) = load(
         &manifest,
@@ -285,7 +284,7 @@ fn manifest_rejects_wrong_release_names_missing_parts_and_resource_overruns() {
         .get_mut("linux-aarch64")
         .unwrap()
         .files
-        .remove("herdr");
+        .remove(HOLDER);
     assert!(manifest.validate().is_err());
     let (mut manifest, _) = kit();
     manifest
@@ -293,7 +292,7 @@ fn manifest_rejects_wrong_release_names_missing_parts_and_resource_overruns() {
         .get_mut("linux-aarch64")
         .unwrap()
         .files
-        .get_mut("herdr")
+        .get_mut(HOLDER)
         .unwrap()
         .size = MAX_BUNDLE;
     assert!(manifest.validate().is_err());

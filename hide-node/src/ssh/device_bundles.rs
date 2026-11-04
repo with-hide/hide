@@ -14,12 +14,13 @@ use std::time::Duration;
 
 const MANIFEST: &str = "device-bundles.json";
 const PLATFORMS: [&str; 2] = ["linux-x86_64", "linux-aarch64"];
-/// The pane holder, which only a device of the core's own engine is sent
-/// (PRD engine-bundle-3-core-owns D-22).
+/// The pane holder, which runs a device's panes (PRD
+/// engine-bundle-3-core-owns D-22).
 pub(super) const HOLDER: &str = "hide-holder";
-const PROGRAMS: [&str; 5] = ["hided", "hide", "hide-agent-hooks", HOLDER, "herdr"];
-/// 2: each bundle carries the pane holder too.
-const FORMAT: u32 = 2;
+const PROGRAMS: [&str; 4] = ["hided", "hide", "hide-agent-hooks", HOLDER];
+/// 3: no bundle carries Herdr (PRD engine-bundle-4-herdr-removal D-2); 2
+/// carried it beside the pane holder.
+const FORMAT: u32 = 3;
 const MAX_MANIFEST: u64 = 16 * 1024;
 const MAX_BUNDLE: u64 = 256 * 1024 * 1024;
 // Two <=256 MiB slots, a <=256 MiB staging kit and <=256 MiB archive:
@@ -60,7 +61,7 @@ pub(super) fn supported(os: &str, arch: &str) -> bool {
 }
 
 /// The device kit for `os`/`arch` from the verified release download: the
-/// payload a device on its Herdr gets, and the pane holder apart from it.
+/// helper and the kit's parts, and the pane holder apart from them.
 pub(super) fn payload(
     directory: Option<&Path>,
     os: &str,
@@ -269,7 +270,6 @@ fn load(
                 executable: true,
             };
             match name {
-                "herdr" => payload.add_herdr(file),
                 HOLDER => holder = Some(file),
                 _ => payload.files.push(file),
             }

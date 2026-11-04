@@ -153,8 +153,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Install zsh for the Herdr fetch
-        run: sudo apt-get install -y --no-install-recommends zsh
       - uses: actions/download-artifact@v8
         with:
           name: hide-device-helper-linux-x86_64
@@ -308,8 +306,8 @@ jobs:
           fi
       - run: bash scripts/verify-web.sh install
       - name: Package the unsigned app, its installers and update files
-        # The packager builds the web shell and the release binaries,
-        # fetches the pinned Herdr and refuses when any of them cannot run;
+        # The packager builds the web shell and the release binaries and
+        # refuses when any of them cannot run;
         # electron-builder then wraps the app in desktop/out/release.
         timeout-minutes: 50
         env:
@@ -481,8 +479,8 @@ jobs:
       - run: bash scripts/verify-web.sh install
       - name: Package the unsigned app, its installers and update files
         # The packager assembles `compile (windows)`'s checked binaries with
-        # the run's device bundles, fetches the pinned Herdr and refuses when
-        # any of them cannot run; electron-builder then wraps the app in
+        # the run's device bundles and the holder's pinned ConPTY runtime and
+        # refuses when any of them cannot run; electron-builder then wraps the app in
         # desktop/out/release.
         timeout-minutes: 50
         env:
@@ -491,7 +489,7 @@ jobs:
       - name: Check each installer against its checksum
         working-directory: desktop/out/release
         run: for checksum in *.sha256; do sha256sum -c "$checksum"; done
-      - name: Install, install again while Herdr runs, and uninstall
+      - name: Install, install again while the daemon runs, and uninstall
         timeout-minutes: 15
         run: node desktop/scripts/smoke-windows-installer.mjs "desktop/out/release/hide-v${HIDE_VERSION}-windows-x64-setup.exe"
       - name: Install the package

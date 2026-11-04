@@ -4,21 +4,21 @@
 //   1. `setup.exe /S` installs for this user, without elevation, into
 //      %LOCALAPPDATA%\Programs\hide, with a Start menu entry and an entry in
 //      Settings > Apps that names the version;
-//   2. with a Herdr server and a daemon running from the build's runtime copy
-//      (as the desktop host starts them), installing again leaves both running:
-//      the installer stops every program under the install folder, and the copy
-//      lives under the private home instead;
+//   2. with a daemon running from the build's runtime copy (as the desktop
+//      host starts it), installing again leaves it running: the installer
+//      stops every program under the install folder, and the copy lives under
+//      the private home instead;
 //   3. the uninstaller removes the app, its Start menu entry and its Apps
-//      entry, stops the daemon and leaves the Herdr server running.
+//      entry, and stops the daemon.
 //
 // Usage: node desktop/scripts/smoke-windows-installer.mjs <setup.exe>
 //
 // The installer itself writes to this account's real install folder, Start
 // menu and registry, which is what is being tested; a CI runner's account is
-// discarded with it. Every hide and Herdr process runs with a private home,
-// state folder and Herdr socket.
+// discarded with it. Every hide process runs with a private home and state
+// folder.
 
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -92,17 +92,15 @@ Object.assign(isolated, {
   HOME: home,
   USERPROFILE: home,
   XDG_CONFIG_HOME: path.join(home, ".config"),
-  HERDR_SOCKET_PATH: path.join(scratch, "herdr.sock"),
   HIDE_STATE_DIR: path.join(home, ".hide", "state"),
   HIDE_TAILSCALE_BIN: path.join(home, "no-tailscale"),
 });
 
 let runtime = null;
-let herdrPid = null;
 try {
   check("silent per-user install", () => {
     execFileSync(setup, ["/S"], { stdio: "inherit", timeout: 300_000 });
-    for (const file of [path.join(installDir, "hide.exe"), path.join(installDir, "resources", "hide.exe"), path.join(installDir, "resources", "herdr.exe")]) {
+    for (const file of [path.join(installDir, "hide.exe"), path.join(installDir, "resources", "hide.exe"), path.join(installDir, "resources", "hide-holder.exe")]) {
       if (!fs.statSync(file, { throwIfNoEntry: false })?.isFile()) throw new Error(`${file} is missing`);
     }
     if (!fs.existsSync(startMenuEntry)) throw new Error(`no Start menu entry at ${startMenuEntry}`);
@@ -118,25 +116,17 @@ try {
     return runtime;
   });
 
-  // As the desktop host starts them: Herdr's server from the copy, then the copy's `hide connect`.
-  const herdr = path.join(runtime, "herdr.exe");
-  const server = spawn(herdr, ["server"], { env: isolated, detached: true, stdio: "ignore", windowsHide: true });
-  herdrPid = server.pid;
-  server.unref();
-  await until("the Herdr server answering", () => {
-    try { return JSON.parse(output(herdr, ["status", "server", "--json"], isolated)).running === true; } catch { return false; }
-  });
+  // As the desktop host starts it: the copy's `hide connect`.
   const connectBegan = Date.now();
-  const connected = JSON.parse(output(path.join(runtime, "hide.exe"), ["connect"], { ...isolated, HERDR_BIN_PATH: herdr }));
+  const connected = JSON.parse(output(path.join(runtime, "hide.exe"), ["connect"], isolated));
   const connectMs = Date.now() - connectBegan;
   check("the daemon starts from the copy", () => {
     if (connected.ok !== true) throw new Error(JSON.stringify(connected));
-    return `daemon ${connected.pid}, Herdr server ${herdrPid}; connect ${connectMs} ms; start steps: ${startSteps(isolated.HIDE_STATE_DIR)}`;
+    return `daemon ${connected.pid}; connect ${connectMs} ms; start steps: ${startSteps(isolated.HIDE_STATE_DIR)}`;
   });
 
-  check("installing again keeps the Herdr server and the daemon running", () => {
+  check("installing again keeps the daemon running", () => {
     execFileSync(setup, ["/S"], { stdio: "inherit", timeout: 300_000 });
-    if (!isAlive(herdrPid)) throw new Error(`the Herdr server ${herdrPid} ended`);
     const status = JSON.parse(output(path.join(runtime, "hide.exe"), ["status", "--json"], isolated));
     if (status.running !== true || status.pid !== connected.pid) throw new Error(`the daemon answered ${JSON.stringify(status)}`);
     if (appsEntries().length !== 1) throw new Error("a second Apps entry appeared");
@@ -151,9 +141,8 @@ try {
   execFileSync(path.join(installDir, "Uninstall hide.exe"), ["/S"], { env: uninstalling, stdio: "inherit", timeout: 300_000 });
   await until("the uninstaller removing the app", () => !fs.existsSync(path.join(installDir, "hide.exe")) && appsEntries().length === 0);
   await until("the daemon stopping", () => !isAlive(connected.pid), 30_000);
-  check("uninstalling removes the app and stops the daemon, and leaves the Herdr server", () => {
+  check("uninstalling removes the app and stops the daemon", () => {
     if (fs.existsSync(startMenuEntry)) throw new Error("the Start menu entry is still there");
-    if (!isAlive(herdrPid)) throw new Error(`the Herdr server ${herdrPid} ended`);
     if (!fs.existsSync(path.join(home, ".hide"))) throw new Error("~\\.hide was removed");
   });
 } catch (error) {
@@ -162,16 +151,6 @@ try {
   for (const record of daemonRecords(isolated.HIDE_STATE_DIR).slice(-60)) console.error(JSON.stringify(record));
   process.exitCode = 1;
 } finally {
-  // The private Herdr server, then the folder it ran from.
-  if (runtime && herdrPid && isAlive(herdrPid)) {
-    try {
-      execFileSync(path.join(runtime, "herdr.exe"), ["server", "stop"], { env: isolated, stdio: "inherit", timeout: 30_000 });
-      await until("the Herdr server ending", () => !isAlive(herdrPid), 15_000);
-    } catch (error) {
-      console.error(`herdr server stop failed: ${error instanceof Error ? error.message : String(error)}`);
-      process.exitCode = 1;
-    }
-  }
   try {
     if (runtime) execFileSync(path.join(runtime, "hide.exe"), ["stop"], { env: isolated, stdio: "inherit", timeout: 30_000 });
     fs.rmSync(scratch, { recursive: true, force: true });
