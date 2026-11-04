@@ -78,6 +78,22 @@ class Plan(unittest.TestCase):
         self.assertEqual(cells.exit_code({"codex": passed, "cursor": table["cursor"]}, ["codex", "cursor"],
                                          setup_failed=False), 0)
 
+    def test_product_gaps_exclude_only_the_approved_cells_of_other_rows(self):
+        expected = {("codex", "fork"), ("antigravity", "fork"),
+                    ("omp", "sleep_wake"), ("omp", "fork"), ("omp", "title")}
+        selected = ["codex", "antigravity", "omp", "claude-code", "grok"]
+        for engine, fake in (("own", True), ("herdr", True), ("own", False)):
+            with self.subTest(engine=engine, fake=fake):
+                table = cells.plan(contract(), selected, engine=engine, fake_model=fake)
+                actual = {(agent, name) for agent in selected for name, value in table[agent].items()
+                          if value["status"] == cells.EXCLUDED}
+                self.assertEqual(actual, expected if engine == "own" and fake else set())
+                for agent, name in actual:
+                    self.assertIn("own-start-fixes 노드 대기", table[agent][name]["reason"])
+                    self.assertFalse(cells.measurable(table, agent, name))
+                    self.assertFalse(cells.settle(table, agent, name, cells.PASS, "not run"))
+                self.assertEqual(table["omp"]["usage"]["status"], cells.PENDING)
+
     def test_a_new_adapter_participates_without_a_second_agent_list(self):
         codex = next(row for row in contract() if row["id"] == "codex")
         added = {**codex, "id": "newly-registered-agent"}

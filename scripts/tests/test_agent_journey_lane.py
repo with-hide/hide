@@ -23,6 +23,18 @@ def report(table, agents, **extra):
     return {"fixture": False, "cleanup": {"confirmed": True}, "failures": [], "table": complete, "agents": agents, **extra}
 
 
+def own_cell_gaps():
+    return {
+        "codex": {"fork": {"status": "excluded", "reason": "own-start-fixes 노드 대기(Codex fork 세션과 계보 미등록, 제품 결함)"}},
+        "antigravity": {"fork": {"status": "excluded", "reason": "own-start-fixes 노드 대기(Antigravity fork 입력 준비 미확정, 제품 결함)"}},
+        "omp": {
+            "sleep_wake": {"status": "excluded", "reason": "own-start-fixes 노드 대기(OMP 깨우기 확인 지연, 제품 결함)"},
+            "fork": {"status": "excluded", "reason": "own-start-fixes 노드 대기(OMP 깨우기 뒤 fork 입력 준비 미확정, 제품 결함)"},
+            "title": {"status": "excluded", "reason": "own-start-fixes 노드 대기(OMP 깨우기 뒤 제목 대상 행 소실, 제품 결함)"},
+        },
+    }
+
+
 class EitherLane(unittest.TestCase):
     def test_a_failed_cell_fails(self):
         passed, notes = lane.judge(report({"claude-code": {"reply": {"status": "fail", "reason": "rate_limit"}}},
@@ -77,8 +89,8 @@ class FakeModel(unittest.TestCase):
     def test_only_the_approved_own_fake_rows_may_record_the_exclusion(self):
         reasons = {"pi": "own-start-fixes 노드 대기(Pi 첫 지시문 input_unconfirmed, 제품 결함)",
                    "opencode": "own-start-fixes 노드 대기(OpenCode 첫 지시문 미전달, 제품 결함)"}
-        excluded = {agent: {name: {"status": "excluded", "reason": reason} for name in lane.CELLS}
-                    for agent, reason in reasons.items()}
+        excluded = {**own_cell_gaps(), **{agent: {name: {"status": "excluded", "reason": reason} for name in lane.CELLS}
+                                        for agent, reason in reasons.items()}}
         for agent, reason in reasons.items():
             with self.subTest(agent=agent):
                 row = excluded[agent]
@@ -93,6 +105,21 @@ class FakeModel(unittest.TestCase):
                         self.assertFalse(lane.judge(changed, "fake")[0])
                 value["table"]["codex"]["start"] = {"status": "excluded", "reason": reason}
                 self.assertFalse(lane.judge(value, "fake")[0])
+
+    def test_a_cell_exclusion_cannot_hide_other_behavior_or_apply_to_the_other_engine(self):
+        selected = ["codex", "antigravity", "omp"]
+        value = report(own_cell_gaps(), [], fake_model=True, engine="own")
+        self.assertEqual(lane.judge(value, "fake", agents=selected), (True, []))
+        self.assertFalse(lane.judge({**value, "engine": "herdr"}, "fake", agents=selected)[0])
+        self.assertFalse(lane.judge({**value, "cleanup": {"confirmed": False}}, "fake", agents=selected)[0])
+        for agent, names in own_cell_gaps().items():
+            for name in names:
+                with self.subTest(agent=agent, cell=name):
+                    changed = report(own_cell_gaps(), [], fake_model=True, engine="own")
+                    changed["table"][agent][name] = {"status": "excluded", "reason": "unapproved"}
+                    self.assertFalse(lane.judge(changed, "fake", agents=selected)[0])
+        value["table"]["omp"]["usage"] = {"status": "fail", "reason": "no usage"}
+        self.assertFalse(lane.judge(value, "fake", agents=selected)[0])
 
     def test_the_folder_question_a_stand_in_cannot_ask_must_pass(self):
         # The lane takes the stand-ins' place only when it measures what they cannot.

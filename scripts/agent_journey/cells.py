@@ -60,6 +60,25 @@ def excluded_agents(engine="herdr", fake_model=False):
                                 if engine == "own" and fake_model else {})}
 
 
+def excluded_cells(engine="herdr", fake_model=False):
+    """The approved transition gaps, by cell, for both planning and CI.
+
+    A row exclusion still prevents its CLI from starting. A cell exclusion
+    leaves the rest of that agent's declared behavior required.
+    """
+    excluded = {(agent, name): reason for agent, reason in excluded_agents(engine, fake_model).items()
+                for name in CELLS}
+    if engine == "own" and fake_model:
+        excluded.update({
+            ("codex", "fork"): "own-start-fixes 노드 대기(Codex fork 세션과 계보 미등록, 제품 결함)",
+            ("antigravity", "fork"): "own-start-fixes 노드 대기(Antigravity fork 입력 준비 미확정, 제품 결함)",
+            ("omp", "sleep_wake"): "own-start-fixes 노드 대기(OMP 깨우기 확인 지연, 제품 결함)",
+            ("omp", "fork"): "own-start-fixes 노드 대기(OMP 깨우기 뒤 fork 입력 준비 미확정, 제품 결함)",
+            ("omp", "title"): "own-start-fixes 노드 대기(OMP 깨우기 뒤 제목 대상 행 소실, 제품 결함)",
+        })
+    return excluded
+
+
 def cell(status, reason, evidence=None):
     return {"status": status, "reason": reason, "evidence": evidence}
 
@@ -67,12 +86,12 @@ def cell(status, reason, evidence=None):
 def plan(contract, selected, *, engine="herdr", fake_model=False):
     """Every registered adapter participates; undeclared and unselected cells are final."""
     table = {}
-    excluded = excluded_agents(engine, fake_model)
+    excluded = excluded_cells(engine, fake_model)
     for row in contract:
         cells = {}
         for name in CELLS:
-            if row["id"] in excluded:
-                cells[name] = cell(EXCLUDED, excluded[row["id"]])
+            if (row["id"], name) in excluded:
+                cells[name] = cell(EXCLUDED, excluded[row["id"], name])
             elif not row["cells"][name]:
                 cells[name] = cell(NA, "not declared by the adapter")
             elif row["id"] not in selected:
