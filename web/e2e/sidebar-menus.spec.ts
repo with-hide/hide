@@ -48,7 +48,7 @@ async function startAgentAt(server: EngineServer, daemon: Daemon, control: Hided
     const pane = tab ? tabPanes(rest, tab)[0] : undefined;
     return tab && pane && agentIn(rest, pane) ? { tab, pane } : undefined;
   }, `an agent in a new tab of ${folder}`, 30_000);
-  await setAgentSession(daemon, started.pane, session);
+  await setAgentSession(server, daemon, started.pane, session);
   return started;
 }
 

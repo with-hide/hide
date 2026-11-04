@@ -1,4 +1,3 @@
-import { skipOwnWindowsAgentStart } from "./own-windows-agent-start";
 import { expect, test, type Page } from "@playwright/test";
 import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
@@ -175,7 +174,6 @@ async function typedTextEchoes(page: Page, marker: string): Promise<void> {
 
 // @platform: Real PTY input and echo through the platform's Herdr and its shell.
 test("a sidebar row click switches the pane and typed text echoes there", { tag: "@platform" }, async ({ page }) => {
-  skipOwnWindowsAgentStart();
   const herdr = await startFixture();
   let daemon: Awaited<ReturnType<typeof startHided>> | null = null;
   try {

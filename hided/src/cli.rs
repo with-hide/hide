@@ -180,7 +180,7 @@ fn topic_usage(topic: &str) -> Option<String> {
         "ps" => usage(crate::ps_cli::USAGE),
         "device" => usage(crate::device_cli::USAGE),
         "mission" => usage(crate::mission_cli::USAGE),
-        "plan" => usage(crate::plan_cli::USAGE),
+        "task" => usage(crate::plan_cli::USAGE),
         "links" => LINKS_USAGE.to_owned(),
         "session" => usage(crate::session_cli::USAGE),
         "memory" => MEMORY_USAGE.to_owned(),
@@ -265,13 +265,26 @@ pub const COMMIT: Option<&str> = match env!("HIDE_BUILD_COMMIT").as_bytes() {
 };
 
 pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
+    // `hide plan` is what `hide task` was called: a session started under
+    // the old `hide-plan` skill still types it, so it is read as `hide task`
+    // and no table lists it. Drop this once the oldest build that updates in
+    // place writes the `hide-task` skill (`hide_kit::agents::RETIRED_SKILLS`).
+    let renamed: Vec<String>;
+    let args = if args.get(1).map(String::as_str) == Some("plan") {
+        let mut words = args.to_vec();
+        words[1] = "task".to_owned();
+        renamed = words;
+        renamed.as_slice()
+    } else {
+        args
+    };
     // `--help` or `-h` ending any command asks for that command's usage; the
-    // guides of `agent spawn`, `mission` and `plan` answer it themselves.
+    // guides of `agent spawn`, `mission` and `task` answer it themselves.
     if let (Some(topic), Some("--help" | "-h")) = (
         args.get(1).map(String::as_str),
         args.last().filter(|_| args.len() > 2).map(String::as_str),
     ) && !(args[2..] == ["spawn", "--help"]
-        || (matches!(topic, "mission" | "plan") && args.len() == 3))
+        || (matches!(topic, "mission" | "task") && args.len() == 3))
         && let Some(text) = topic_usage(topic)
     {
         return Ok(CommandKind::Usage(text));
@@ -375,10 +388,10 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
                 .map(CommandKind::Mission)
                 .map_err(|reason| wrong(reason, crate::mission_cli::USAGE))
         }
-        Some("plan") if matches!(args.get(2).map(String::as_str), Some("help" | "--help")) => {
+        Some("task") if matches!(args.get(2).map(String::as_str), Some("help" | "--help")) => {
             crate::plan_cli::parse(args[2..].iter()).map(CommandKind::Plan)
         }
-        Some("plan") => {
+        Some("task") => {
             crate::cli_contract::admit(&args[1..])
                 .map_err(|refusal| format!("{refusal}\n{}", usage(crate::plan_cli::USAGE)))?;
             crate::plan_cli::parse(iter)

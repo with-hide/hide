@@ -728,7 +728,7 @@ impl Core {
         }
     }
 
-    /// Runs a `hide plan` command (PRD hide-plan D-27): one change under the
+    /// Runs a `hide task` command (PRD hide-plan D-27): one change under the
     /// lock, saved by the link worker, judged with the evidence `proofs`
     /// already read. A change whose evidence still needs reading answers
     /// the reads, which the caller makes off the owner thread before asking

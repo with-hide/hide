@@ -3,9 +3,9 @@
 // checkout of two shell panes made through the daemon (`engine-fixture.ts`).
 
 import { expect, test, type Page } from "@playwright/test";
-import { chord } from "./chords";
+import { chord, SYSTEM } from "./chords";
 import { openLayout, startLayoutStack, type LayoutStack } from "./engine-fixture";
-import { corePaneFocus } from "./daemon-actions";
+import { shownTab, corePaneFocus } from "./daemon-actions";
 import { panePrompt, paneSizeCommand, type PaneShell } from "./herdr-fixture";
 import { countSent, screenshot } from "./wire";
 
@@ -276,5 +276,54 @@ test("a narrower window reaches each pane's program as a narrower terminal", { t
     expect(await programSize(page, right, stack.server.shell, "narrow")).toEqual(await grid(right));
   } finally {
     open.stack.stop();
+  }
+});
+
+test("directional chords keep terminal input inside the drawn tab and preserve zoom and sheets", { tag: "@platform" }, async ({ page }) => {
+  const { stack, sent } = await startOpen(page);
+  try {
+    // Browser zoom produces independently rounded shared edges.
+    await page.evaluate(() => { document.documentElement.style.zoom = "1.25"; });
+    const [left, right] = stack.panes as [string, string];
+    await focusPane(page, stack, right);
+    await page.keyboard.press(chord("split_down"));
+    await expect(page.locator("[data-pane-view]")).toHaveCount(3);
+    const bottom = (await paneIds(page)).find((id) => id !== left && id !== right)!;
+    await expect.poll(() => probePane(page)).toBe(bottom);
+    for (const [command, destination] of [
+      ["focus_pane_up", right], ["focus_pane_left", left],
+      ["focus_pane_right", right], ["focus_pane_down", bottom],
+    ] as const) {
+      await page.keyboard.press(chord(command));
+      await expect.poll(() => probePane(page)).toBe(destination);
+      await stack.control.until((rest) => corePaneFocus(rest) === destination && shownTab(rest) === stack.tab || undefined, "focus in the original tab");
+    }
+    await page.keyboard.type("echo NAVIGATION_INPUT");
+    await page.keyboard.press("Enter");
+    await expect.poll(() => paneText(page, bottom)).toContain("NAVIGATION_INPUT");
+    const focusEvents = sent.get("focus_pane") ?? 0;
+    await page.keyboard.press(chord("focus_pane_down"));
+    await page.keyboard.press(chord("focus_pane_right"));
+    await page.keyboard.press(chord("toggle_zoom"));
+    await expect(page.locator("[data-canvas][data-zoomed=true]")).toBeVisible();
+    await page.keyboard.press(chord("focus_pane_left"));
+    await page.keyboard.press(chord("toggle_zoom"));
+    await expect(page.locator("[data-canvas][data-zoomed=false]")).toBeVisible();
+    await page.keyboard.press(chord("shortcuts"));
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await page.keyboard.press(chord("focus_pane_up"));
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    expect(sent.get("focus_pane") ?? 0).toBe(focusEvents);
+    await expect.poll(() => probePane(page)).toBe(bottom);
+    await page.locator("[data-open-settings]").click();
+    const field = page.getByRole("textbox", { name: "Terminal font", exact: true });
+    await field.fill("alpha beta");
+    await field.press("End");
+    await field.press(SYSTEM === "mac" ? "Alt+Shift+ArrowLeft" : "Control+Shift+ArrowLeft");
+    expect(await field.evaluate((element: HTMLInputElement) => element.value.slice(element.selectionStart!, element.selectionEnd!))).toBe("beta");
+  } finally {
+    stack.stop();
   }
 });

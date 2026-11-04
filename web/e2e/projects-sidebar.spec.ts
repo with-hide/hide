@@ -744,7 +744,7 @@ test("projects without agents fold under No agents, and only a working agent bri
       }, "the background shell outside the attach window");
     });
     // B2: an agent started in the folded project takes it out of the fold, which goes with its last project.
-    await startAgentIn(live, quietPane);
+    await startAgentIn(fixture, live, quietPane);
     await expect(fold).toHaveCount(0, { timeout: 20_000 });
     await expect(quiet).toBeVisible();
   } finally {

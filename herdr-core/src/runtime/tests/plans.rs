@@ -1,4 +1,4 @@
-//! A session's own plan (PRD hide-plan): the `hide plan` commands from the
+//! A session's own plan (PRD hide-plan): the `hide task` commands from the
 //! agent's pane, the review a proposed plan waits on, the save through the
 //! link worker and the read back after a restart, the cap, and the plan
 //! going with its session.
@@ -52,7 +52,7 @@ fn command(runtime: &mut Runtime, actor: &Actor, command: Value) -> Result<(Valu
     }
 }
 
-/// One turn of a `hide plan` command, judged with `proofs`.
+/// One turn of a `hide task` command, judged with `proofs`.
 fn turn(
     runtime: &mut Runtime,
     actor: &Actor,
@@ -425,7 +425,7 @@ fn another_agents_plan_is_read_but_never_changed_and_an_unknown_agent_is_named()
         session: Some("recipient-session".into()),
     };
     command(&mut runtime, &recipient, plan(true)).unwrap();
-    // The recipient is a registered agent, named as `hide plan` names one.
+    // The recipient is a registered agent, named as `hide task` names one.
     let mut ledger = (*runtime.delivery_state().unwrap()).clone();
     ledger.agents.push(crate::coordination::AgentRecord {
         id: "agent-1".into(),

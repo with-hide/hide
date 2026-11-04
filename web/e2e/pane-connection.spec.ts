@@ -12,7 +12,7 @@ import { expect, test, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 import { agentRunner, reportedMarker, type AgentRun, type HideAnswer } from "./agent-pane";
-import { agentIn, withControl } from "./daemon-actions";
+import { agentIn, waitForInputGate, withControl } from "./daemon-actions";
 import { startFixture, type AgentFixture } from "./engine-fixture";
 import { setAgentState } from "./fixture-agents";
 import { CLAUDE_FULL_ACCESS_LINE, claudeProjects, liveHandoff, setFixtureSession, startHerdr, writeFixtureTranscript, type HerdrFixture } from "./herdr-fixture";
@@ -93,6 +93,8 @@ async function start(page: Page, label: string): Promise<{ fixture: AgentFixture
 
 test("a session started before the hook wears the chip, Not now keeps it, and Reopen continues the conversation and connects it", async ({ page }) => {
   const { fixture, daemon, pane, sent } = await start(page, "pane-connection");
+  const readyGate = path.join(fixture.root, "resumed-terminal.gate");
+  const held = `${readyGate}.arrived`;
   try {
     const view = page.locator(`[data-pane-view="${pane}"]`);
     const chip = view.locator("[data-pane-connection]");
@@ -120,22 +122,42 @@ test("a session started before the hook wears the chip, Not now keeps it, and Re
 
     // B29: Reopen sends one event and the same conversation starts again in the same pane, as an agent whose hooks
     // run from inside its own process.
+    const ready = path.join(fixture.root, `terminal-ready-${pane.replaceAll(":", "-")}`);
+    await expect.poll(() => fs.existsSync(ready), { message: "the old program left its input-ready mark" }).toBe(true);
     const asAgent = agentRunner(fixture, daemon.stateDir, pane);
+    // Hold the real reporter after its session report, before the native program
+    // configures its terminal. An echoed resume line must not admit a hook key.
+    fs.appendFileSync(path.join(fixture.root, "agent-pane-session.cjs"), `
+fs.writeFileSync(${JSON.stringify(held)}, "");
+${waitForInputGate(readyGate, 15_000)}
+`);
     const startLines = await resumeLines(page, pane, FIXTURE_SESSION);
     await chip.click();
     await popover.locator(`[data-pane-reopen="${pane}"]`).dblclick();
     await expect.poll(() => sent.get("pane_reopen")).toBe(1);
     // The line that started the agent is on the screen already: the reopen types a second one, which the resumed agent answers.
     await expect.poll(() => resumeLines(page, pane, FIXTURE_SESSION), { timeout: 40_000 }).toBe(startLines + 1);
+    await expect.poll(() => fs.existsSync(held), { message: "the resumed program held before terminal setup", timeout: 20_000 }).toBe(true);
+    expect(fs.existsSync(ready), "the old program cannot make the resumed one input-ready").toBe(false);
 
     // The resumed agent runs its own SessionStart hook, which is what tells Hide it is listening.
-    await runHook(asAgent, "SessionStart", FIXTURE_SESSION);
+    const hook = runHook(asAgent, "SessionStart", FIXTURE_SESSION);
+    try {
+      // Let the command attempt enter its readiness wait while the program is held.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(fs.existsSync(path.join(fixture.root, "agent-pane-command.json")), "no command is submitted before fresh readiness").toBe(false);
+    } finally {
+      fs.writeFileSync(readyGate, "");
+      await hook;
+    }
+    expect(fs.existsSync(ready), "the resumed program wrote its own input-ready mark").toBe(true);
     await expect(chip).toHaveCount(0, { timeout: 30_000 });
     await expect(page.locator("[data-pane-connection-popover]")).toHaveCount(0);
     // Only the pane that connected lost its chip.
     await expect(other).toBeVisible();
     expect(sent.get("pane_reopen")).toBe(1);
   } finally {
+    fs.writeFileSync(readyGate, "");
     daemon.stop();
     fixture.stop();
   }

@@ -232,7 +232,7 @@ function StepCard({ plan, step, open, onOpen, openPane }: { plan: PlanView; step
 }
 
 /**
- * The child's own plan under a handed step's detail (B27): `<이름>의 계획 n/m`
+ * The child's own plan under a handed step's detail (B27): `<이름>의 작업 단계 n/m`
  * over the same checklist the pane chip opens, or one line when the child
  * works without one, and the way to its pane while it has one. Nothing is
  * said of a plan while the child is still being started (B32).

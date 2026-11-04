@@ -475,7 +475,7 @@ impl CoreHandle {
             .map_err(|_| "mission_unavailable".to_owned())?
     }
 
-    /// Runs a `hide plan` command on the owner thread. A change whose
+    /// Runs a `hide task` command on the owner thread. A change whose
     /// evidence needs reading (a step's pull request or file, PRD
     /// hide-plan-delegate D-19) has it read here, on the caller's request
     /// thread, and is asked again with what was read; a plan that moved in

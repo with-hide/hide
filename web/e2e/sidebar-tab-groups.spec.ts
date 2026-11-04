@@ -1,4 +1,3 @@
-import { skipOwnWindowsAgentStart } from "./own-windows-agent-start";
 import { test, expect, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
@@ -48,14 +47,13 @@ async function startAgent(herdr: AgentFixture, daemon: Awaited<ReturnType<typeof
     }, beside ? `a new agent beside ${beside}` : "a new agent in a tab of its own", 30_000);
   });
   // The stand-in reports its session, as Claude Code does, so its row leaves Starting.
-  await setAgentSession(daemon, started.pane, `sidebar-${started.pane.replaceAll(":", "-")}`);
+  await setAgentSession(herdr, daemon, started.pane, `sidebar-${started.pane.replaceAll(":", "-")}`);
   return started;
 }
 
 const position = async (row: ReturnType<Page["locator"]>) => (await row.boundingBox())!;
 
 test("a tab with two agents opens with a line that opens it, takes its name once renamed, and keeps it at one agent while named", { tag: "@platform" }, async ({ page }) => {
-  skipOwnWindowsAgentStart();
   // The platform's engine owns pane/process existence.
   const herdr = await startFixture();
   const daemon = await startHided(herdr, "sidebar-tab-segments");

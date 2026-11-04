@@ -1,4 +1,3 @@
-import { skipOwnWindowsAgentStart } from "./own-windows-agent-start";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { herdrHasFocus, startHerdr } from "./herdr-fixture";
 import { startFixture } from "./engine-fixture";
@@ -77,7 +76,6 @@ async function holdSnapshots(page: Page) {
 }
 
 test("a snapshot older than the last click does not take the keys back, and the one that includes it keeps them", { tag: "@platform" }, async ({ page }) => {
-  skipOwnWindowsAgentStart();
   const fixture = await startFixture();
   let daemon: Daemon | undefined;
   try {
@@ -123,7 +121,6 @@ test("a snapshot older than the last click does not take the keys back, and the 
 });
 
 test("the answer to a click on the focused pane leaves the keys where the operator took them since", { tag: "@platform" }, async ({ page }) => {
-  skipOwnWindowsAgentStart();
   const fixture = await startFixture();
   let daemon: Daemon | undefined;
   try {
@@ -165,7 +162,6 @@ test("the answer to a click on the focused pane leaves the keys where the operat
 });
 
 test("a focus move that waited for the last click is dropped once the operator takes the keys elsewhere", { tag: "@platform" }, async ({ page }) => {
-  skipOwnWindowsAgentStart();
   const fixture = await startFixture();
   let daemon: Daemon | undefined;
   try {
@@ -241,7 +237,6 @@ test("a focus move the core followed from Herdr still takes the keys once the cl
 });
 
 test("opening the pane that is already focused from the sidebar takes the keyboard", { tag: "@platform" }, async ({ page }) => {
-  skipOwnWindowsAgentStart();
   const fixture = await startFixture();
   let daemon: Daemon | undefined;
   try {

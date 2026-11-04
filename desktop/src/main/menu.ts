@@ -86,7 +86,7 @@ export const MENU_LAYOUT: Readonly<Record<"app" | "File" | "Edit" | "View" | "Pa
     "text_smaller",
     "text_reset",
   ],
-  Pane: ["split_right", "split_down", "toggle_zoom", "toggle_plan", null, "keep_open", null, ...AREA_COMMANDS],
+  Pane: ["split_right", "split_down", null, "focus_pane_left", "focus_pane_right", "focus_pane_up", "focus_pane_down", null, "toggle_zoom", "toggle_plan", null, "keep_open", null, ...AREA_COMMANDS],
   Help: ["shortcuts"],
 };
 

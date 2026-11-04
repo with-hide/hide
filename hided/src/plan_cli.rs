@@ -1,4 +1,4 @@
-//! `hide plan …` (PRD hide-plan D-27): an agent's commands over its own
+//! `hide task …` (PRD hide-plan D-27): an agent's commands over its own
 //! session's plan, answered by the core without a shell through the pane
 //! capability a delivery command uses, on this machine or a connected
 //! device's (D-21).
@@ -13,10 +13,10 @@ use herdr_core::plans::{PlanCommand, PlanInput, StepStatus, next_action};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
-/// The guide `hide plan help` prints, which the `hide-plan` skill points at.
-pub const HELP: &str = include_str!("../assets/plan/help.md");
+/// The guide `hide task help` prints, which the `hide-task` skill points at.
+pub const HELP: &str = include_str!("../assets/task/help.md");
 
-pub const USAGE: &str = "hide plan help\nhide plan set (--file <plan.json> | --json <plan>) [--ask [why]] [--reason <text>]\nhide plan node <key> [--status planned|working|done|dropped] [--line <text>] [--pr <number> | --file <path>]\nhide plan approve [<agent>]\nhide plan drop [<agent>]\nhide plan show [<agent>]";
+pub const USAGE: &str = "hide task help\nhide task set (--file <plan.json> | --json <plan>) [--ask [why]] [--reason <text>]\nhide task node <key> [--status planned|working|done|dropped] [--line <text>] [--pr <number> | --file <path>]\nhide task approve [<agent>]\nhide task drop [<agent>]\nhide task show [<agent>]";
 
 /// The largest plan file read from disk.
 const FILE_LIMIT: u64 = 96 * 1024;
@@ -85,7 +85,7 @@ fn flags(args: &[String], valued: &[&str]) -> Result<Flags, String> {
             }
             at += 2;
         } else if arg.starts_with('-') {
-            return Err(format!("unknown flag for hide plan: {arg}"));
+            return Err(format!("unknown flag for hide task: {arg}"));
         } else {
             positional.push(arg.to_owned());
             at += 1;
@@ -117,7 +117,7 @@ pub enum PlanSource {
     Json(String),
 }
 
-/// Parses the words after `hide plan`.
+/// Parses the words after `hide task`.
 pub fn parse<'a>(args: impl Iterator<Item = &'a String>) -> Result<PlanCli, String> {
     let args: Vec<String> = args.cloned().collect();
     let (verb, rest) = args.split_first().ok_or(USAGE)?;
@@ -263,11 +263,11 @@ fn keep_context(result: &Value) {
     let written = hide_platform::host::home_dir()
         .and_then(|home| hide_agent_hooks::plan_record::write(&home, &pane, session, &context));
     if let Err(error) = written {
-        eprintln!("hide plan: the pane's plan record was not written: {error}");
+        eprintln!("hide task: the pane's plan record was not written: {error}");
     }
 }
 
-/// Runs a parsed `hide plan` command and prints its answer as one JSON
+/// Runs a parsed `hide task` command and prints its answer as one JSON
 /// line: `{"ok":true,"result":…}`, or the refusal's reason and next action.
 pub fn run(env: &Env, command: PlanCli) -> Result<(), String> {
     let command = match command {
@@ -321,7 +321,7 @@ pub fn run(env: &Env, command: PlanCli) -> Result<(), String> {
         }
         Err(reason) => {
             let next = if reason == "request_timeout" {
-                "The command may have been applied; run hide plan show before running it again"
+                "The command may have been applied; run hide task show before running it again"
             } else if crate::cli::bootstrap_refused(&reason) {
                 crate::cli::request_next_action(&reason)
             } else {

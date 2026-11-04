@@ -504,7 +504,7 @@ pub fn request_mission(
     })
 }
 
-/// `hide plan`: a command over the caller's session's own plan, answered by
+/// `hide task`: a command over the caller's session's own plan, answered by
 /// the core without a shell. Running it again converges: a repeated change
 /// changes nothing more.
 pub fn request_plan(

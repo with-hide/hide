@@ -33,6 +33,8 @@ struct File {
     #[serde(default)]
     pub executables: Option<Vec<String>>,
     #[serde(default)]
+    pub packages: Option<Vec<String>>,
+    #[serde(default)]
     pub aliases: Option<Vec<String>>,
     /// The agent's own folder for hooks and sessions, under the account's
     /// home: `~/` and the folders below it.
@@ -104,6 +106,7 @@ pub struct Fields {
     pub name: Option<String>,
     pub based_on: Option<String>,
     pub executables: Option<Vec<String>>,
+    pub packages: Option<Vec<String>>,
     pub aliases: Option<Vec<String>>,
     /// The agent's own folder under the account's home, as its parts.
     pub home: Option<Vec<String>>,
@@ -148,6 +151,16 @@ pub fn read(name: &str, text: &str, origin: Origin) -> Result<Fields, String> {
     if let Some(executables) = &file.executables {
         check_executables(name, executables)?;
     }
+    if let Some(packages) = &file.packages {
+        if packages.len() > 16 {
+            return Err(format!("{name}: packages holds more than 16 names"));
+        }
+        if let Some(package) = packages.iter().find(|package| !valid_package(package)) {
+            return Err(format!(
+                "{name}: package {package:?} is not a full npm package name"
+            ));
+        }
+    }
     if let Some(aliases) = &file.aliases
         && let Some(alias) = aliases.iter().find(|alias| !valid_alias(alias))
     {
@@ -176,6 +189,7 @@ pub fn read(name: &str, text: &str, origin: Origin) -> Result<Fields, String> {
         name: file.name,
         based_on: file.based_on,
         executables: file.executables,
+        packages: file.packages,
         aliases: file.aliases,
         home,
         hooks: file.hooks,
@@ -205,6 +219,26 @@ fn valid_alias(alias: &str) -> bool {
         && alias.bytes().all(|byte| {
             byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-' || byte == b'_'
         })
+}
+
+/// Full registry names, optionally scoped, never paths or version ranges.
+fn valid_package(package: &str) -> bool {
+    fn part(value: &str) -> bool {
+        !value.is_empty()
+            && !value.starts_with(['.', '_'])
+            && value.bytes().all(|byte| {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"-._~".contains(&byte)
+            })
+    }
+    if package.len() > 214 {
+        return false;
+    }
+    match package.strip_prefix('@') {
+        Some(scoped) => scoped
+            .split_once('/')
+            .is_some_and(|(scope, name)| part(scope) && part(name)),
+        None => part(package),
+    }
 }
 
 /// Programs are compared by their file's name, so none is a path or holds a

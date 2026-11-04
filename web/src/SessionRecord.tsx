@@ -264,7 +264,7 @@ function liveTurn(agent: AgentRow): "working" | "question" | null {
   return agent.status_code === "working" ? "working" : agent.status_code === "question" || agent.status_code === "approval" ? "question" : null;
 }
 
-/** A running plan, which the 지금 block draws in place of the 계획 section. */
+/** A running plan, which the 지금 block draws in place of the 작업 단계 section. */
 function runningPlan(plan: PlanView | null): PlanView | null {
   return plan && !plan.progress.finished ? plan : null;
 }

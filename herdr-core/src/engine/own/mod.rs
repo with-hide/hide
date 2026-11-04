@@ -3712,6 +3712,7 @@ mod tests {
             foreground: Some(hide_node_link::holders::ForegroundProgram {
                 pid: 77,
                 name: program.to_owned(),
+                package: None,
                 argv: vec![program.to_owned()],
             }),
             screen: hide_node_link::holders::ScreenRead::Read {

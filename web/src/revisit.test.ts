@@ -18,13 +18,14 @@ describe("다시 볼 것", () => {
 
   it("stands between 읽을 것 and 작업 중 in 상태별 (B1)", () => {
     const list = taskList({ cards } as never, rows, [project], "status");
-    expect(list.groups.map((group) => group.state)).toEqual(["needs_you", "done", "revisit", "working", "waiting"]);
+    expect(list.groups.map((group) => group.state)).toEqual(["needs_you", "done", "revisit", "working"]);
+    expect(list.groups.at(-1)?.entries.map((entry) => entry.card.root)).toEqual(["work", "wait"]);
     expect(list.total).toBe(5);
   });
 
   it("is a band in the same order inside a project in 프로젝트별 (B14)", () => {
     const list = taskList({ cards } as never, rows, [project], "project");
-    expect(list.groups[0]?.bands.map((band) => band.state)).toEqual(["needs_you", "done", "revisit", "working", "waiting"]);
+    expect(list.groups[0]?.bands.map((band) => band.state)).toEqual(["needs_you", "done", "revisit", "working"]);
     expect(list.groups[0]?.counts.revisit).toBe(1);
   });
 

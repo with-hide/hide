@@ -14,10 +14,12 @@ import type { AgentRow, ArchivedSession, TaskView, Workspace } from "./snapshot"
  * approval or a block), 읽을 것, whose tasks want the operator's look, 다시 볼 것
  * (PRD revisit-group D-01), a task the operator starred (a read ask stays in
  * 내 차례, needs-you-cleanup D-04),
- * above 작업 중, whose agents work, and 대기 last, whose tasks wait on proven work.
+ * above 작업 중, whose tasks are in progress: the ones whose agent works first,
+ * then the ones that wait on proven work (CI, children, a reply), since
+ * neither asks anything of the operator.
  */
-export type TaskGroupState = "needs_you" | "done" | "revisit" | "working" | "waiting";
-export const TASK_GROUPS: readonly TaskGroupState[] = ["needs_you", "done", "revisit", "working", "waiting"];
+export type TaskGroupState = "needs_you" | "done" | "revisit" | "working";
+export const TASK_GROUPS: readonly TaskGroupState[] = ["needs_you", "done", "revisit", "working"];
 /** The 상태별 groups held still above the rest of the list, the projects tree's raised Needs You and Done. */
 export const RAISED_TASK_GROUPS: ReadonlySet<TaskGroupState> = new Set(["needs_you", "done"]);
 
@@ -53,9 +55,15 @@ export type TaskList = {
   archived: ArchivedEntry[];
 };
 
-/** Which open group a state stands in: a block is the operator's turn (B32). */
+/** Which open group a state stands in: a block is the operator's turn (B32), and a wait is work in progress. */
 export function groupOf(state: TaskState): TaskGroupState | "resting" | "cleanup" {
-  return state === "blocked" ? "needs_you" : state;
+  return state === "blocked" ? "needs_you" : state === "waiting" ? "working" : state;
+}
+
+/** A group's open rows in the core's order, a working agent's above a waiting one's. */
+function inGroup(open: readonly TaskEntry[], state: TaskGroupState): TaskEntry[] {
+  const entries = open.filter(({ card }) => groupOf(card.state) === state);
+  return state === "working" ? [...entries.filter(({ card }) => card.state !== "waiting"), ...entries.filter(({ card }) => card.state === "waiting")] : entries;
 }
 
 /**
@@ -83,7 +91,7 @@ export function taskList(tasks: ProjectTasksScope | null | undefined, rows: Read
   const archived = archivedRows.map((row) => ({ row, project: archivedProject(row, projects) }));
   if (view === "status") {
     const groups = TASK_GROUPS.map((state) => {
-      const entries = open.filter(({ card }) => groupOf(card.state) === state);
+      const entries = inGroup(open, state);
       return { key: `state:${state}`, state, project: null, entries, bands: [{ state, entries }], counts: {}, resting: [], cleanup: [], archived: [] };
     }).filter((group) => group.entries.length > 0);
     return { total: open.length, groups, resting, cleanup, archived };
@@ -98,7 +106,7 @@ export function taskList(tasks: ProjectTasksScope | null | undefined, rows: Read
   const groups = sorted.map((project) => {
     const mine = (list: TaskEntry[]) => list.filter((entry) => entry.project === project);
     const shown = mine(open);
-    const bands = TASK_GROUPS.map((state) => ({ state, entries: shown.filter(({ card }) => groupOf(card.state) === state) })).filter((band) => band.entries.length > 0);
+    const bands = TASK_GROUPS.map((state) => ({ state, entries: inGroup(shown, state) })).filter((band) => band.entries.length > 0);
     const counts: Partial<Record<TaskGroupState, number>> = Object.fromEntries(bands.map((band) => [band.state, band.entries.length]));
     return { key: `project:${project?.id ?? ""}`, state: null, project, entries: bands.flatMap((band) => band.entries), bands, counts, resting: mine(resting), cleanup: mine(cleanup), archived: archived.filter((entry) => entry.project === project) };
   });

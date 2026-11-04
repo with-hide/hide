@@ -1,4 +1,3 @@
-import { skipOwnWindowsAgentStart } from "./own-windows-agent-start";
 // Korean typed through the browser's input-method path, on an isolated pinned
 // Herdr and hided: a pane's program reads the syllables before a ⇧↩ pressed
 // right after them, and an Escape the input method answers while a dialog's
@@ -22,7 +21,6 @@ function heard(log: string, from: number): string {
 
 // @platform: Hangul bytes reach the agent's PTY through the platform's Herdr.
 test("⇧↩ right after a Hangul syllable reaches the program after that syllable", { tag: "@platform" }, async ({ page }) => {
-  skipOwnWindowsAgentStart();
   await page.setViewportSize({ width: 1440, height: 900 });
   const herdr = await startFixture();
   let daemon: Daemon | null = null;

@@ -365,7 +365,7 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     turns[69] = turn("assistant", "turn 69 **굵게**\n\n- 항목 하나\n- 항목 둘\n\n```\ncode line\n```", 69);
     turns.splice(66, 0, toolOutput("SECRET-TOOL-OUTPUT"), turn("user", "<system-reminder>INJECTED-CONTEXT</system-reminder>", 66));
     fs.writeFileSync(transcript, `${turns.join("\n")}\n`);
-    await setAgentSession(daemon, one, SESSION);
+    await setAgentSession(fixture, daemon, one, SESSION);
 
     // B24: the detail shows the head and the agent's newest 30 messages, newest at the bottom.
     const history = [...Array.from({ length: 260 }, (_, index) => `line ${String(index + 1).padStart(3, "0")}`), `wide ${"w".repeat(300)}`].join("\n");
@@ -627,7 +627,7 @@ test("the phone caches group and row status words in the desktop language", asyn
         subject_mission_attention_wake_refused: "PR 일로 일꾼을 깨우지 못함",
         subject_mission_attention_worker_ended: "일꾼 끝남, 일 남음",
         subject_mission_decision: "판단",
-        subject_plan_review: "계획 검토 · {{count}}단계",
+        subject_plan_review: "작업 단계 검토 · {{count}}단계",
       });
     await page.locator("[data-interface-language]").click();
     await page.locator('[data-language-option="system"]').click();

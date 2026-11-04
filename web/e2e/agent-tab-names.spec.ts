@@ -19,7 +19,7 @@ test("focused agent titles, inline rename, clear and reconnect", async ({ page }
     await expect(tab).toContainText(paneShellTabName(fixture.shell));
     const [first, second] = fixture.panes;
     for (const [pane, title] of [[first, "첫 번째 작업 진행"], [second, "두 번째 작업 진행"]]) {
-      await startAgentIn(daemon, pane!);
+      await startAgentIn(fixture, daemon, pane!);
       await labelAgentPane(fixture, daemon, pane!, { task: title! });
     }
     await page.locator(`[data-pane-view="${first}"]`).click({ position: { x: 30, y: 60 } });

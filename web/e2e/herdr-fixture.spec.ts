@@ -1,4 +1,3 @@
-import { skipOwnWindowsAgentStart } from "./own-windows-agent-start";
 // The fixture's own contract. The first test is the engine-neutral fixture's, on either engine; every
 // other one is about the pinned Herdr's fixture (its CLI start order, its server, its readiness reads).
 // @platform: The real pinned CLI starts two native pane processes together;
@@ -103,7 +102,6 @@ catch (error) { if (error.stderr) process.stderr.write(error.stderr); process.ex
 }
 
 test("the fixture's two agents accept their first input, and stopping it removes its root", { tag: "@platform" }, async () => {
-  skipOwnWindowsAgentStart();
   const fixture = await startFixture();
   const daemon = await startHided(fixture, "fixture-first-input");
   try {

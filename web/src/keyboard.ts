@@ -26,9 +26,10 @@ import { useSetupWalk } from "./FirstRunWizard";
 import { numberedDevices, numberedTabs, sidebarNumbers } from "./numbering";
 import { areaFrame } from "./areaFrames";
 import { adjacentDisplay } from "./areaLayout";
+import { adjacentPane } from "./paneNavigation";
 import { availableEntries, currentEntry, expectPane, expectSurface, observeEntries, observePane, observeProject, paneItem, panelItem, projectItem, reconcileCycle, recentEntries, recentProjectOrder, type CycleItem } from "./recent";
 import { projectsOf, remoteContext } from "./remote";
-import { hostChord, hostRegistry, isNumberedCommand, pageKeepsKeyboard, releaseModifier, matchHost, numberedCommand, REGISTRY, storedBindings, type CommandId, type Digit, type NumberedFamily } from "./shortcuts";
+import { hostChord, hostRegistry, isNumberedCommand, isPaneFocusCommand, pageKeepsKeyboard, releaseModifier, matchHost, numberedCommand, REGISTRY, storedBindings, type CommandId, type Digit, type NumberedFamily } from "./shortcuts";
 import { editorFor, type AgentRow, type SnapshotRest, type Workspace } from "./snapshot";
 import { useShellStore } from "./store";
 import { coveringLayer, useUiStore, type Cycle } from "./ui";
@@ -230,6 +231,12 @@ export function installKeyboard(actions: Actions): () => void {
     nativeCycle = null;
   };
 
+  const paneFocusOwner = () => {
+    const owner = keyboardCommandOwner();
+    const state = ui();
+    return owner.kind === "pane" && state.screen?.kind === "workspace" && !state.overviewOpen && !layerOpen(state) ? owner : null;
+  };
+
   const run = (id: CommandId, event: KeyboardEvent | null) => {
     if (isNumberedCommand(id)) {
       // An empty number is nothing, not a diagnostic: the hold hint shows
@@ -355,6 +362,16 @@ export function installKeyboard(actions: Actions): () => void {
         return actions.split("right");
       case "split_down":
         return actions.split("down");
+      case "focus_pane_left":
+      case "focus_pane_right":
+      case "focus_pane_up":
+      case "focus_pane_down": {
+        const owner = paneFocusOwner();
+        if (!owner) return;
+        const target = adjacentPane(owner.paneId, id.slice("focus_pane_".length) as "left" | "right" | "up" | "down");
+        if (target) actions.focusPane(target);
+        return;
+      }
       case "toggle_zoom": {
         // One chord for "this, full size", chosen by where the operator
         // works: in the right lane it expands the lane and back, anywhere
@@ -537,6 +554,8 @@ export function installKeyboard(actions: Actions): () => void {
     const { registry } = hostRegistry(useShellStore.getState().rest?.ui_state, host, system);
     const command = matchHost(event, registry, host);
     if (!command) return;
+    // Text fields keep their own selection keys, including Ctrl+Shift+arrows.
+    if (isPaneFocusCommand(command.id) && !paneFocusOwner()) return;
     // Desk switched off has no chord (D-76): the key goes on to the page or the terminal.
     if (command.id === "desk_terminal" && !deskOn(useShellStore.getState().desk)) return;
     event.preventDefault();

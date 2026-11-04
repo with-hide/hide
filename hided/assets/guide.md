@@ -11,7 +11,7 @@ Every pane, agent and letter command here is a `hide` command; there is no other
 
 - Your session's start note from Hide, when there is one, names your checkout, the commands this pane may run and the exact prefix to run them with; use that prefix, and when the note and this guide differ, the note is right for this pane.
 - `hide workspace info` answers the same for this checkout now: the Workspace, the checkout, the device id and the commands available.
-- `hide --help` lists every command's syntax, `hide agent spawn --help` explains spawning, `hide browser help`, `hide mission help` and `hide plan help` are the guides to their topics.
+- `hide --help` lists every command's syntax, `hide agent spawn --help` explains spawning, `hide browser help`, `hide mission help` and `hide task help` are the guides to their topics.
 - The agent, letter and Workspace commands print one JSON line, `{"ok":true,...}` or `{"ok":false,"reason":...,"next_action":...}`; follow `next_action`, and after a timeout read the state before you run the command again.
 
 ## Letters
@@ -157,7 +157,7 @@ hide session read <id> --request <n> | --from <n> [--events <n>] [--json]
 ## Where to go next
 
 - A web page, a local app in a browser, or what a page shows: run `hide browser help` and follow it.
-- Work the operator wants split across several agents: plan it and hand only the steps that deliver something to other agents, as `hide plan help` says; research stays with your own subagents.
+- Work the operator wants split across several agents: plan it and hand only the steps that deliver something to other agents, as `hide task help` says; research stays with your own subagents.
 - A mission the operator asks for or agrees to, or one to take over as its Conductor: run `hide mission help` and follow it. This guide is the way in for a mission; there is no separate Conductor skill.
 - A worker or reviewer of a mission node: record your lines with `hide mission record`, as `hide mission help` says under For workers and checkers.
-- A task of more than a few steps, or an operator who asks you to plan first or have the plan reviewed: run `hide plan help` and follow it.
+- A task of more than a few steps, or an operator who asks you to plan first or have the plan reviewed: run `hide task help` and follow it.

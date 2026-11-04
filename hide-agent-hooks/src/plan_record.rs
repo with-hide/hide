@@ -2,7 +2,7 @@
 //! hide-plan D-14, D-15, D-30).
 //!
 //! The core hands a small summary ([`PlanContext`]) with the answer to the
-//! prompt hook's letter pull and with every `hide plan` command's answer;
+//! prompt hook's letter pull and with every `hide task` command's answer;
 //! the hook or the CLI writes it to the pane's record here. The prompt hook
 //! turns it into one line of session context ([`hint`]), and the pre-tool
 //! hook reads only this record to refuse the three things a plan or a
@@ -196,7 +196,7 @@ pub fn hint(context: &PlanContext, now: u64) -> Option<String> {
     let mut lines = Vec::new();
     if let Some(plan) = context.plan.as_ref().filter(|plan| !plan.finished) {
         let mut line = format!(
-            "Plan: now {}",
+            "Task: now {}",
             plan.current
                 .as_ref()
                 .map_or("-", |step| step.title.as_str())
@@ -209,7 +209,7 @@ pub fn hint(context: &PlanContext, now: u64) -> Option<String> {
         lines.push(line);
         if context.proposed() {
             lines.push(
-                "The plan waits for the operator's review: writing files, git commit and git push are blocked until the operator answers in the conversation. If they approve, run hide plan approve; if they ask for changes, send the revised plan with hide plan set --json '<plan>' --ask rather than a file; if they say not to, run hide plan drop.".to_owned(),
+                "The task's steps wait for the operator's review: writing files, git commit and git push are blocked until the operator answers in the conversation. If they approve, run hide task approve; if they ask for changes, send the revised steps with hide task set --json '<plan>' --ask rather than a file; if they say not to, run hide task drop.".to_owned(),
             );
         } else if now.saturating_sub(plan.updated_at_unix_ms) > STALE_AFTER_MS {
             let key = plan
@@ -217,7 +217,7 @@ pub fn hint(context: &PlanContext, now: u64) -> Option<String> {
                 .as_ref()
                 .map_or("<key>", |step| step.key.as_str());
             lines.push(format!(
-                "Mark a finished step with `hide plan node {key} --status done` and the step you are on with `--status working`."
+                "Mark a finished step with `hide task node {key} --status done` and the step you are on with `--status working`."
             ));
         }
     }
@@ -310,7 +310,7 @@ impl Refused {
     pub fn reason(self) -> &'static str {
         match self {
             Self::ProposedPlan => {
-                "Not run: the plan is waiting for the operator's review (run hide plan approve once they answer). Reading and looking around still run; write, commit and push wait for the operator's answer. A revised plan goes up with hide plan set --json '<plan>' --ask."
+                "Not run: the task's steps are waiting for the operator's review (run hide task approve once they answer). Reading and looking around still run; write, commit and push wait for the operator's answer. Revised steps go up with hide task set --json '<plan>' --ask."
             }
             Self::MissionMerge => {
                 "Not run: this mission goes up to pull requests, so its workers do not merge. Report the pull request to the Conductor; the operator merges."
@@ -535,12 +535,12 @@ mod tests {
         };
         assert_eq!(
             hint(&fresh, 5 * 60_000).unwrap(),
-            "Plan: now Core events (1/4) · next Web map · updated 5 min ago"
+            "Task: now Core events (1/4) · next Web map · updated 5 min ago"
         );
         let stale = hint(&fresh, 31 * 60_000).unwrap();
         assert!(
             stale.ends_with(
-                "`hide plan node core --status done` and the step you are on with `--status working`."
+                "`hide task node core --status done` and the step you are on with `--status working`."
             ),
             "{stale}"
         );
