@@ -14,7 +14,7 @@ from agent_live_check.authentication import require_no_login
 from agent_live_check.processes import ProcessError
 from agent_live_check.protection import ProtectionError, write_private
 from agent_live_check.runtime import Runtime
-from agent_live_check.system import remove_pane_files
+from agent_live_check.system import READY, remove_pane_files
 from holder_owned import Owned
 
 from .daemon import Daemon
@@ -101,7 +101,7 @@ class OwnRuntime(Runtime):
         if pane in self.initial_shells and pane not in self.pane_credentials:
             deadline.remaining()
             return True  # open_workspace proved this exact newly created shell.
-        return super().pane_at_shell(pane, deadline)
+        return READY in self.screen(pane, seconds=deadline.command_seconds(), deadline=deadline.end)
 
     def cli(self, args, *, seconds=15, deadline=None):
         reference = self.pane_credentials.get(self.controller_pane)
