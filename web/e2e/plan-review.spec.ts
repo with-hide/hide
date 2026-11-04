@@ -81,7 +81,7 @@ test("a plan put up for review asks on the pane, the agent's approval clears it,
 
     await plan(agent, ["approve"]);
     await expect(chip).toHaveAttribute("data-plan-chip-state", "running");
-    await expect(chip).toHaveText("Plan1/4");
+    await expect(chip).toHaveText("Task steps1/4");
     await expect(page.locator('[data-pane-header-band="answer"]')).toHaveCount(0);
     await expect(sidebar).not.toContainText("Task steps review");
 
@@ -92,7 +92,7 @@ test("a plan put up for review asks on the pane, the agent's approval clears it,
     const refused = JSON.parse((await agent(["plan", "node", "web", "--status", "done"])).out.trim().split("\n").at(-1)!) as Answer;
     expect([refused.ok, refused.reason]).toEqual([false, "plan_order_refused"]);
     await plan(agent, ["node", "core", "--status", "done"]);
-    await expect(chip).toHaveText("Plan2/4");
+    await expect(chip).toHaveText("Task steps2/4");
 
     // The chip's popover is the checklist; Larger draws the map in the 보기 slot (PRD mission-plan-visibility B3, D-07).
     await chip.hover();
