@@ -685,7 +685,7 @@ A new agent follows [Adding an agent](#adding-an-agent), which starts from these
 ### ACP servers
 
 The [Agent Client Protocol](https://agentclientprotocol.com) is how an editor drives a coding agent over stdio and receives its conversation as typed updates (messages, tool calls with their kind, diffs and output, plans).
-Hide runs each agent in a Herdr pane and reads the agent's own session files (`hide-session/`); the one agent it drives over ACP is Desk's, through the pinned adapters in `contracts/desk-adapters/` ([ARCHITECTURE.md: Desk](ARCHITECTURE.md#desk)), with no pane and no hook.
+Hide runs each agent in a pane and reads the agent's own session files (`hide-session/`); the one agent it drives over ACP is Desk's, through the pinned adapters in `contracts/desk-adapters/` ([ARCHITECTURE.md: Desk](ARCHITECTURE.md#desk)), with no pane and no hook.
 An agent's ACP server is still the vendor's own answer to how its conversation is shaped, so it is the reference to read before mapping that agent's session records onto a conversation view.
 
 Find an agent's server in the ACP registry: [zed.dev/acp](https://zed.dev/acp) lists every registered agent with its page, and the machine-readable list is `https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json`, which names each server's version, launch command and per-system download with its sha256.
@@ -766,7 +766,7 @@ What some lines take on:
 
 ### What the kit puts down
 
-Two pieces are written per agent into the agent's own files, and nothing else; a third, Herdr's integration, is put in through Herdr's own CLI (below):
+Two pieces are written per agent into the agent's own files, and nothing else:
 
 - The skill stubs Hide puts down (`hide_kit::agents::SKILLS`), each as `<name>/SKILL.md` in the folder the agent reads, plain copies written by every pass into every folder: `hide`, the guide to Hide, `hide-mission`, for a mission of agents, and `hide-plan`, for the session's own plan; a further stub is one more entry of that array, and the observe, write and remove passes read the array.
   Each is a few lines that point at the CLI's own guide, `hide guide`, `hide mission help` or `hide plan help`, so it stays right as that guide changes; the `hide` guide sends browser work to `hide browser help`, so there is no separate browser skill, and it names `hide mission help` too, so an agent that did not pick the Conductor's skill still finds it.
@@ -862,7 +862,7 @@ The core judges a Grok pane instrumented by that agent's hook piece in the kit (
 `web/e2e/grok-cursor-hooks.spec.ts` runs Grok's hooks from inside a Grok stand-in's own process in its pane (`agentRunner` in `web/e2e/agent-pane.ts`), because hided takes a status report only from a process it proves runs in the pane.
 It asserts Grok's answers and counts, retired Cursor's silence and lack of daemon calls or counts, and a single count when Grok runs all three of Hide's hooks for one subagent.
 
-The record `~/.hide/kit/installed.json` keeps the operator's choice per agent (`agents`) and the pieces Hide installed (`hook:<agent>`, `skill:<folder>`, `herdr:<agent>`), and an older build ignores them.
+The record `~/.hide/kit/installed.json` keeps the operator's choice per agent (`agents`) and the pieces Hide installed (`hook:<agent>`, `skill:<folder>`, and `herdr:<agent>` from a build that put in Herdr's integration, until [its retirement](#herdrs-integration-an-earlier-hide-installed) takes it out), and an older build ignores them.
 With no choice on record Claude Code and Codex are on, as they have been since their hooks became part of the kit, and every other agent is off.
 A piece that was installed and is gone stays gone until Reinstall, and an agent switched off keeps nothing of Hide's and gets nothing back from a later pass.
 Whether the agent is installed only decides whether a switch can work: an agent that is not installed on a machine has no switch there, and switching it on is not recorded.
@@ -1040,18 +1040,15 @@ The version is asked once per version of the program's file ([The oldest version
 A read happens at launch and on each device connection, every 5 seconds while a Settings tab showing the kit is open, and once when a pane newly wears the update badge: an agent started in a pane, perhaps after its update, has the kit of its machine read (`Runtime::request_machine_kit_read`).
 A session that was already running keeps the old process, which Hide's piece never reached, so it reads `started_before_hide` once instead of the badge ([status-model.md](status-model.md#not-connected-and-what-fixes-it)); Hide judges the copy the operator's shell runs, and a pane that runs another copy by its full path is judged by that one only once the shell finds it.
 
-### Herdr's integration for an agent
+### Herdr's integration an earlier Hide installed
 
-Herdr learns an agent's session id, and for some agents its lifecycle, from a hook script or plugin that `herdr integration install <target>` puts into the agent's own configuration.
-Lineage, the mailbox identity, labels and sleep all read that session id, so the kit installs the integration with the agent's other pieces, as a third piece of the agent's row, `herdr:<agent>` in the record.
-It runs through the machine's own Herdr CLI (`KitTarget::herdr_bin`): the Herdr bundled in the app on this Mac, and the device's own Herdr on a device.
-Every call is one owned child with a deadline and only the account's login variables and `HOME` (`hide_platform::process::restrict_to_login_environment`), on the kit worker and never under the runtime lock.
-The integration is put in only when the agent is on, installed and has made its own folder, since Herdr refuses an agent whose configuration folder is missing.
-For Codex the kit also keeps what Herdr's install wrote into `~/.codex/hooks.json`, because Codex asks the operator to review a hook before it runs and Hide records that trust for the entries it installed ([Codex trusts Hide's own hooks](#codex-trusts-hides-own-hooks)); it goes from the record with the `herdr:codex` piece.
-Hide takes out only what it put in: an integration that was already in place when Hide first looked is the operator's and stays, whether the agent is switched on or off or the machine leaves Hide, and an older one of the operator's is not replaced.
-One of Hide's own that is older is replaced, and one the operator removed by hand stays removed until Reinstall, as for every other piece.
-A failed install shows on that agent's row alone and the other agents are untouched; an agent that has not made its folder yet (omp's `~/.omp/agent`, Pi's `~/.pi/agent`, agy's `~/.gemini/config`) reads that on its row, and neither Hide nor Herdr makes the folder.
-The integration goes in on the first pass after the folder exists that switches the agent on, the launch pass included.
+Earlier builds put Herdr's own integration into each agent's configuration with the bundled Herdr (`herdr integration install <target>`), as a third piece of the agent's row, `herdr:<agent>` in the record, because Herdr learned an agent's session from it.
+Hide runs no Herdr now, and each agent's own Hide piece reports its session ([Which session is the pane's](#which-session-is-the-panes)), so the kit installs nothing of Herdr's and takes out only what the record says it put there, without a Herdr binary (`hide_kit::herdr_integration`, PRD engine-bundle-4-herdr-removal D-12).
+It runs where the retired agents' pieces come out, once per machine: a `herdr:<agent>` piece in the record has the hook entries the kit recorded Herdr writing (`herdr_hooks`, Codex's in `~/.codex/hooks.json`) taken out, each only while it is still byte for byte what was recorded, through `hide-agent-hooks`, the one writer of an agent's configuration.
+An entry the operator edited stays and is logged (`herdr_integration.entries_kept`), a piece recorded with no entries (every agent's but Codex's) leaves the agent's files as they are (`herdr_integration.unrecorded_left`), and an integration the operator installed before Hide has no piece and stays.
+Codex's record that it trusted a removed entry stays in `~/.codex/config.toml`, where it trusts nothing that is not there.
+A write that fails keeps the piece, so the next pass tries again; the piece leaves the record once it is out.
+This retirement stays for operators who skip the releases that ran Herdr.
 
 ### Which agents ask for a review
 
@@ -1085,33 +1082,19 @@ A listing that shows Codex could not use the file Hide wrote is a failure too, n
 Hide computes no hash and writes no `config.toml`, so a change in how Codex hashes is followed, and every other setting in that file stays as Codex wrote it; the folder trust for Hide's worktrees goes through the same interface ([Folder trust for the worktrees Hide makes](#folder-trust-for-the-worktrees-hide-makes)).
 
 The kit runs the check in every pass that finds the Codex hook part in place, whether the pass wrote it or found it current: at launch, when a device connects, and on Reinstall.
-It runs once, after the pass has put in every agent's pieces, because Herdr's integration is only in place then, so one `codex app-server` session trusts Hide's entries and Herdr's together and a first install is trusted before the operator's first Codex start.
+It runs once, after the pass has put in every agent's pieces, so one `codex app-server` session trusts every entry Hide wrote and a first install is trusted before the operator's first Codex start.
 A pass that finds every entry trusted writes nothing, so a repeat leaves `config.toml` as it was.
 An entry another tool's hook displaced is trusted at its new position by the next pass; a Codex started before that pass can still show the screen for Hide's entry.
 A Codex without hook trust (its app-server does not know `hooks/list`, which codex-cli 0.160.0 shows as a `-32600` "unknown variant" error rather than JSON-RPC's `-32601`; both are read as unknown), a Codex that ends before it answers the handshake (no `app-server` command, or a program that is not a Codex) and a machine with no Codex are left alone and show nothing new; a Codex that answers the handshake and then ends, hangs or refuses is a failure.
 Starting the app-server also makes Codex do its own bookkeeping in `~/.codex` (its databases, `installation_id`, `skills/`), which is Codex's and not Hide's.
 
-What is trusted is exactly the entry Hide wrote, or the entry the kit recorded Herdr writing, and nothing else (`select_targets`, one function for both):
+What is trusted is exactly the entry Hide wrote, and nothing else (`select_targets`):
 
 - Codex lists it from this account's `~/.codex/hooks.json` as a user hook that is not managed, so a project's hook, a plugin's and a managed one with the same command are not it;
-- its event, handler type, `command` and matcher are, byte for byte, those of one of Hide's runtime-specific entries (the command Hide writes for that event with this kit's helper, a command hook, and `install::hook_matcher` for that runtime/event; the writer and this check read it from one function, so a matcher that changed is a `modified` entry trusted again, never one trusted blind), or of one entry in the kit record's Herdr entries for Codex (below);
+- its event, handler type, `command` and matcher are, byte for byte, those of one of Hide's runtime-specific entries (the command Hide writes for that event with this kit's helper, a command hook, and `install::hook_matcher` for that runtime/event; the writer and this check read it from one function, so a matcher that changed is a `modified` entry trusted again, never one trusted blind);
 - Codex does not trust it yet (`untrusted`, or `modified` after a change).
 
-The Herdr entries are learned, never written down in Hide: the kit reads the command entries of `~/.codex/hooks.json` before its own `herdr integration install codex` call and again as soon as the call returns, under the account lock, and records the entries that call added (event, matcher, handler type, command) as `herdr_hooks.codex` in `~/.hide/kit/installed.json`, once Herdr reports the integration `current`.
-The window another writer could land an entry in is that one call.
-The file may only have gained entries, or lost entries the kit already recorded as Herdr's (Herdr replacing its own older command); the removal or edit of any other entry, or an install that adds more than four, records nothing and leaves the record as it was (`herdr_hook_not_learned` on the kit's standard error), and Codex shows its screen for what that install wrote.
-A `hooks.json` the kit cannot read around the call leaves the record as it was (`herdr_hook_unread`).
-A call that added nothing keeps the recorded entries that are still in the file: Herdr leaves an entry it already wrote alone when it reinstalls (observed on Herdr 0.9.1: an outdated script is replaced and the entry is not duplicated).
-A Herdr that changes its command is followed because the kit reads what Herdr wrote at its next install of the integration, and the same pass trusts the new command; the trust recorded for the old command is not removed, as for Hide's own.
-The recorded entries count only while the record also holds `herdr:codex` and Herdr reports the integration `current` in that pass, so an integration the operator installed first (the kit never installed it, and the record has neither) and a command that is merely like Herdr's, in another folder or with another argument, are not byte-equal to anything recorded and stay for the review screen.
-What stays judgment rather than a rule: an entry another tool wrote in that one call, as a pure addition, would be taken for Herdr's, and a `herdr` that a device finds on its `PATH` is trusted for what it writes as it is already run.
-A machine whose record holds `herdr:codex` from a build that did not keep the entries learns none, and does not heal unless Herdr adds a new entry without removing the old one: Herdr's reinstall of an entry it already wrote adds nothing for the kit to see, and an in-place replacement of its command removes an entry the kit never recorded, which an install may not do.
-Such a machine shows the review screen once for Herdr's hook and, in those two cases, again for each later change of Herdr's command; approving it trusts exactly that hash.
-
-One other tool's entries join that list, and only through the kit's record: the entries Herdr's own integration (`herdr integration install codex`) added to `hooks.json` when the kit ran it (PRD codex-herdr-hook-trust).
-The kit installs that integration with Hide's hooks (see [Herdr's integration for an agent](#herdrs-integration-for-an-agent)), so the operator's agreement to Hide's install covers it: a Mac or device the kit set up opens Codex with no "Hooks need review" screen for Herdr's hook either, and Herdr knows the Codex session from its first turn.
-Another tool's hook, an entry that carries Hide's marker over a different command, and any entry that is not like this are neither read nor changed: Codex still shows the review screen for them, and lists only them.
-That includes an integration the operator installed before Hide did, which the kit never installed and never recorded, so on a machine where it is the only hook Codex shows "Hooks need review" with that one hook while Hide's are already trusted and run; approving that screen once covers it only, and the review screen lists no entry for Hide's spawn guard.
+Another tool's hook, an entry that carries Hide's marker over a different command, and any entry that is not like this are neither read nor changed: Codex still shows the review screen for them, and lists only them; approving that screen once covers them only, and the review screen lists no entry for Hide's spawn guard.
 Hide writes `trusted_hash` and never `enabled`, so a hook the operator switched off in Codex's hook list stays off, and switching Hide's hook off there is how the operator opts out of one; switching Codex off in Settings, Agents takes Hide's entries out and Hide asks Codex for nothing.
 Removing Hide's hooks leaves its trust records in `config.toml`; each one matches only the same command and starts nothing by itself.
 Codex's `--dangerously-bypass-hook-trust` and `bypass_hook_trust` skip the review for every hook and are not used.
