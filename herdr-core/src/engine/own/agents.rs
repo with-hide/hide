@@ -535,7 +535,16 @@ pub(super) fn apply(
             current.live.line_editing = facts.line_editing;
             applied.changed |= current.live.started.is_some();
         }
-        let status = status_of(&facts.screen, current.live.status);
+        let mut status = status_of(&facts.screen, current.live.status);
+        // A screen no rules read never says the agent rests, so once its
+        // program takes input it reads idle, as Herdr reads an agent it
+        // started, and its integration's turns say when it works (they
+        // outrank this, `agent_state::axes`). Read unknown, a woken or
+        // forked omp stayed a starting row with no state change to publish
+        // its settle (journey 41850644522).
+        if current.live.rest_unread && status == Status::Unknown && current.interactive() {
+            status = Status::Idle;
+        }
         // An answered question restarts a pending start's settle: the agent
         // draws its next screen after it, and input typed while it does is
         // lost (Claude Code 2.1.318 on Windows after its folder trust).
@@ -777,7 +786,7 @@ mod tests {
     }
 
     #[test]
-    fn a_start_waits_for_its_program_and_a_screen_without_rules_is_unknown() {
+    fn a_start_waits_for_its_program_and_a_screen_without_rules_reads_idle_once_shown() {
         let mut pane = Pane::new();
         pane.agent = Some(PaneAgent::started("omp", Some("worker"), None));
         // The shell holds the terminal while the start is typed.
@@ -790,7 +799,9 @@ mod tests {
         let agent = pane.agent.as_ref().unwrap();
         assert!(agent.live.shown);
         assert_eq!(agent.name.as_deref(), Some("worker"));
-        assert_eq!(agent.live.status, Status::Unknown);
+        // Where the holder cannot say whether it reads keys, the settle
+        // alone decides its input; its turns come from its integration.
+        assert_eq!(agent.live.status, Status::Idle);
     }
 
     /// An agent whose definition has no screen rules (omp) never reads at
@@ -813,9 +824,12 @@ mod tests {
             pane.agent.as_ref().unwrap().launch_pending(Instant::now()),
             "its terminal still edits lines"
         );
+        assert_eq!(pane.status(), Some("unknown"), "it takes no input yet");
         pane.facts(at("omp", Some(false)));
         let agent = pane.agent.as_mut().unwrap();
-        assert_eq!(agent.live.status, Status::Unknown);
+        // Read at rest once it takes input, a state change the core hears.
+        assert_eq!(agent.live.status, Status::Idle);
+        assert_eq!(agent.live.seq, 1);
         assert!(agent.launch_pending(Instant::now()), "a settle of its own");
         agent.live.started = Some(Instant::now() - START_SETTLE);
         assert!(!agent.launch_pending(Instant::now()));
