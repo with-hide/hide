@@ -49,18 +49,29 @@ EXCLUDED_AGENTS = {"cursor": "operator decision 2026-10-17"}
 INTERRUPTED = "interrupted"
 
 
+def excluded_agents(engine="herdr", fake_model=False):
+    """Explicit transition gaps, shared by the run plan and CI verdict.
+
+    The own-start-fixes work removes Pi's whole row exclusion once the
+    product confirms its first brief; later cells cannot run without it.
+    """
+    return {**EXCLUDED_AGENTS, **({"pi": "own-start-fixes 노드 대기(Pi 첫 지시문 input_unconfirmed, 제품 결함)"}
+                                if engine == "own" and fake_model else {})}
+
+
 def cell(status, reason, evidence=None):
     return {"status": status, "reason": reason, "evidence": evidence}
 
 
-def plan(contract, selected):
+def plan(contract, selected, *, engine="herdr", fake_model=False):
     """Every registered adapter participates; undeclared and unselected cells are final."""
     table = {}
+    excluded = excluded_agents(engine, fake_model)
     for row in contract:
         cells = {}
         for name in CELLS:
-            if row["id"] in EXCLUDED_AGENTS:
-                cells[name] = cell(EXCLUDED, EXCLUDED_AGENTS[row["id"]])
+            if row["id"] in excluded:
+                cells[name] = cell(EXCLUDED, excluded[row["id"]])
             elif not row["cells"][name]:
                 cells[name] = cell(NA, "not declared by the adapter")
             elif row["id"] not in selected:

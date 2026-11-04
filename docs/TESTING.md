@@ -743,6 +743,7 @@ The transition retains these explicit exceptions:
 | Cursor legacy native readers, 3 tests | Herdr only: the retired integration supplies their session identity | Removed with Herdr by `b4-default` |
 | `agent-live-check`, 5 specs | Herdr integration checks, outside the dual-engine migration | CLI retirement by `b4-default` |
 | Windows own-engine journey | Excluded, `win-agent-start 대기` | Windows start proof, then holder lifetime integration |
+| Pi own-engine fake journey, entire row | Excluded: `own-start-fixes 노드 대기(Pi 첫 지시문 input_unconfirmed, 제품 결함)`; the other six rows and Herdr's Pi row remain required | `own-start-fixes` fixes the first brief and removes this exclusion |
 | Windows own-engine desktop and package | Excluded: CI Job forbids holder breakaway | Holder lifetime fix and enabled cells by `b4-default` |
 | Desktop SSH specs on the own engine | Fixture prepared; existing private-SSH prerequisites still skip without that environment | Connect an isolated SSH CI lane |
 

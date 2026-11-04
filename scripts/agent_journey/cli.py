@@ -581,16 +581,18 @@ def main(argv=None):
         refuse("report_directory_must_be_new_and_local_only")
     commit = measured_source(checkout)
     run_id = slug.removeprefix("agent-journey-") if not args.run_dir else run.name
-    measured = [key for key in selected if key not in unmeasured]
+    excluded = cells.excluded_agents(args.engine, fake)
+    measured = [key for key in selected if key not in unmeasured and key not in excluded]
     private_directory(run)
     rows = {row["id"]: row for row in contract}
-    table = cells.plan(contract, selected)
+    table = cells.plan(contract, selected, engine=args.engine, fake_model=fake)
     report = {"format": 1, "mode": args.mode, "engine": args.engine, "fixture": bool(fixture_bin), "selected": selected, "models": models,
               "herdr": {}, "agents": [], "table": table, "systems": systems(args.mode), "configuration": {},
               **({"fixture_limits": ci.FIXTURE_LIMITS} if fixture_bin else {}),
               **({"fake_model": True, "fake_model_limits": fake_lane.LIMITS} if fake else {}),
               "leftover_copies": leftover_copies(checkout, run), "measured_commit": commit, "created": [],
               "cleanup": {"confirmed": False}, "failures": []}
+    report["agents"].extend({"id": key, "excluded": excluded[key]} for key in selected if key in excluded)
     for key, reason in unmeasured.items():
         report["agents"].append({"id": key, "unmeasured": reason})
         cells.settle_agent(table, key, reason)
