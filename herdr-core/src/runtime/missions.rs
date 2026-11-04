@@ -972,12 +972,10 @@ impl Runtime {
         if let Some(id) = taken {
             // A take whose workers cannot be handed over is not made, so
             // asking it again tries again.
-            let conductor = self
-                .missions
-                .book
+            let former = before
                 .get(&id)
-                .and_then(|mission| mission.conductor.agent_id.clone());
-            if let Err(code) = self.adopt_mission_workers(&id, conductor.as_deref()) {
+                .and_then(|mission| mission.conductor.hands_down());
+            if let Err(code) = self.hand_over_children(&id, former) {
                 self.missions.book = before;
                 self.save_missions();
                 return Err(code);
@@ -1536,13 +1534,80 @@ impl Runtime {
         Ok(true)
     }
 
+    /// Hands the children of the registration `former`, which conducted
+    /// `mission` before, and the mission's workers to its Conductor now. A
+    /// Conductor with no registration yet keeps `former` until it registers
+    /// (`bind_registered_conductors`).
+    fn hand_over_children(&mut self, mission: &str, former: Option<String>) -> Result<(), String> {
+        let Some(target) = self.missions.book.get_mut(mission) else {
+            return Ok(());
+        };
+        let Some(conductor) = target.conductor.agent_id.clone() else {
+            target.conductor.takes_from = former;
+            return Ok(());
+        };
+        target.conductor.takes_from = None;
+        self.adopt_mission_workers(mission, Some(&conductor), former.as_deref())
+    }
+
+    /// A Conductor that had no registration when it took or made its mission
+    /// is bound to the one it has now, and handed the children it was owed
+    /// (B43). True when a mission changed.
+    pub(super) fn bind_registered_conductors(&mut self) -> bool {
+        let Ok(ledger) = self.delivery_state() else {
+            return false;
+        };
+        let binds: Vec<(String, String)> = self
+            .missions
+            .book
+            .missions
+            .iter()
+            .filter(|mission| mission.status.open() && mission.conductor.agent_id.is_none())
+            .filter_map(|mission| {
+                let record = ledger.agents.iter().rev().find(|record| {
+                    !record.ended && record.actor.same_identity(&mission.conductor.actor)
+                })?;
+                Some((mission.id.clone(), record.id.clone()))
+            })
+            .collect();
+        let mut changed = false;
+        for (id, agent) in binds {
+            let Some(mission) = self.missions.book.get_mut(&id) else {
+                continue;
+            };
+            mission.conductor.agent_id = Some(agent);
+            let former = mission.conductor.takes_from.clone();
+            if let Err(code) = self.hand_over_children(&id, former) {
+                // Not bound, so the next ledger tries again.
+                if let Some(mission) = self.missions.book.get_mut(&id) {
+                    mission.conductor.agent_id = None;
+                }
+                crate::diagnostic!(json!({
+                    "component": "missions", "kind": "mission.conductor_bind_failed",
+                    "mission": id, "code": code,
+                }));
+                continue;
+            }
+            changed = true;
+        }
+        if changed {
+            self.save_missions();
+        }
+        changed
+    }
+
     /// Hands the workers of `mission` to the registration that took it over,
     /// so the heir's retry of a start finds the worker it made, and the
     /// workers' reports and watches reach the Conductor there now. It is
     /// queued before the takeover answers, so it lands before any command
     /// the heir sends next. A heir with no registration yet is handed them
     /// when it registers to start a worker (`coordination`, the reserve).
-    fn adopt_mission_workers(&self, mission: &str, conductor: Option<&str>) -> Result<(), String> {
+    fn adopt_mission_workers(
+        &self,
+        mission: &str,
+        conductor: Option<&str>,
+        former: Option<&str>,
+    ) -> Result<(), String> {
         let Some(conductor) = conductor else {
             return Ok(());
         };
@@ -1558,6 +1623,7 @@ impl Runtime {
                 mutation: Box::new(crate::coordination::Mutation::AdoptMissionWorkers {
                     mission: mission.to_owned(),
                     conductor: conductor.to_owned(),
+                    former: former.map(str::to_owned),
                 }),
             })
             .inspect_err(|code| {
@@ -1608,6 +1674,7 @@ impl Runtime {
             actor,
             session,
             agent_id,
+            takes_from: None,
         }
     }
 
@@ -1682,13 +1749,12 @@ impl Runtime {
         let mut moved = false;
         for (id, pane, actor) in moves {
             let conductor = self.conductor_of(device, &pane, actor);
-            let agent_id = conductor.agent_id.clone();
             let Some(mission) = self.missions.book.get_mut(&id) else {
                 continue;
             };
             let former = std::mem::replace(&mut mission.conductor, conductor);
             mission.updated_at_unix_ms = now;
-            if let Err(code) = self.adopt_mission_workers(&id, agent_id.as_deref()) {
+            if let Err(code) = self.hand_over_children(&id, former.hands_down()) {
                 // Not moved, so the next sight of the pane tries again.
                 if let Some(mission) = self.missions.book.get_mut(&id) {
                     mission.conductor = former;

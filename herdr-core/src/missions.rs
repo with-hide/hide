@@ -805,6 +805,19 @@ pub struct Conductor {
     pub session: Option<crate::links::ledger::SessionIdentity>,
     #[serde(default)]
     pub agent_id: Option<String>,
+    /// The registration of the Conductor this one took the mission from,
+    /// while this one has no registration yet: its children become this
+    /// one's once it registers (B43).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub takes_from: Option<String>,
+}
+
+impl Conductor {
+    /// The registration whose children the next Conductor takes: this one's,
+    /// or, while it has none, the one it was still owed children by.
+    pub(crate) fn hands_down(&self) -> Option<String> {
+        self.agent_id.clone().or_else(|| self.takes_from.clone())
+    }
 }
 
 fn is_zero(value: &u8) -> bool {
@@ -2655,6 +2668,7 @@ pub(crate) mod tests {
                 actor: actor("w1:p1"),
                 session: None,
                 agent_id: None,
+                takes_from: None,
             },
             status: MissionStatus::Planning,
             scope: MissionScope::Pr,

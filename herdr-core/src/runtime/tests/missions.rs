@@ -400,6 +400,60 @@ fn a_mission_is_taken_over_only_once_its_conductor_is_gone() {
     );
 }
 
+/// A session that takes a mission over before it has a registration keeps
+/// the former Conductor's registration owed to it, and is handed its
+/// children once it registers (B43).
+#[test]
+fn an_unregistered_heir_is_handed_the_former_conductors_children_once_it_registers() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    runtime.missions.book.missions[0].conductor.agent_id = Some("agent-1".into());
+    runtime.delivery_observations.remove("sender");
+    runtime.refresh_missions();
+    command(
+        &mut runtime,
+        "recipient",
+        json!({"op": "take", "mission": "mission-1"}),
+    )
+    .unwrap();
+    let conductor = runtime.missions.book.missions[0].conductor.clone();
+    assert_eq!(conductor.agent_id, None);
+    assert_eq!(conductor.takes_from.as_deref(), Some("agent-1"));
+    // Nothing registered yet: nothing binds.
+    assert!(!runtime.bind_registered_conductors());
+
+    let mut ledger = crate::delivery::ledger::Ledger::default();
+    ledger.agents.push(crate::coordination::AgentRecord {
+        id: "agent-2".into(),
+        name: Some("recipient".into()),
+        machine: crate::node::TEST_NODE.into(),
+        host_scope: "scope".into(),
+        native_machine: "fixture-machine".into(),
+        session: "recipient-native".into(),
+        instance: "recipient".into(),
+        pane: "recipient".into(),
+        parent: None,
+        origin: None,
+        project: None,
+        actor: conductor.actor.clone(),
+        ended: false,
+        terminal_id: None,
+        forked: false,
+    });
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    assert!(runtime.bind_registered_conductors());
+    let conductor = &runtime.missions.book.missions[0].conductor;
+    assert_eq!(conductor.agent_id.as_deref(), Some("agent-2"));
+    assert_eq!(conductor.takes_from, None);
+    assert!(!runtime.bind_registered_conductors(), "bound once");
+}
+
 /// 이어받기 resumes the gone Conductor's conversation in a new pane (PRD
 /// mission-tool D-11, B14): once that pane is seen running the same
 /// session, it conducts the mission without a `take`, and a pane running

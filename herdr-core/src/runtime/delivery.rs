@@ -1753,6 +1753,8 @@ impl Runtime {
         let feedback = self.observe_feedback_letters(&ledger);
         self.delivery_ledger = Ok(ledger);
         let continued = self.settle_dormant_registrations();
+        // A Conductor that registered since it took its mission (B43).
+        let conductors = self.bind_registered_conductors();
         self.feed_link_parents();
         let lineage = (waiters_moved || started_moved) && self.refresh_agent_lineage();
         // A plan step's child moved by its letters or its end (PRD
@@ -1763,6 +1765,7 @@ impl Runtime {
             | reopened
             | feedback
             | continued
+            | conductors
             | lineage
             | plans
             | self.sync_session_state()
