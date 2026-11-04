@@ -9,6 +9,7 @@
 import { connectPage } from "./cdp.mjs";
 
 import { pathToFileURL } from "node:url";
+import fs from "node:fs";
 
 export function observeFrames(page) {
   const received = {};
@@ -79,13 +80,25 @@ export function observeFrames(page) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const args = process.argv.slice(2);
+  if (args.length && (args.length !== 2 || args[0] !== "--ready-file")) throw new Error("usage: ws-count.mjs [--ready-file <new-path>]");
+  const readyFile = args[1];
+  if (readyFile && fs.existsSync(readyFile)) throw new Error("observer readiness file already exists");
   const cdpPort = process.env.MEASURE_CDP_PORT;
   const seconds = Number(process.env.MEASURE_WS_COUNT_SECONDS ?? 0);
   if (!cdpPort || !(seconds > 0)) throw new Error("MEASURE_CDP_PORT and MEASURE_WS_COUNT_SECONDS are required");
   const page = await connectPage(cdpPort, process.env.MEASURE_WS_REQUIRE_PROBE !== "0");
-  const counter = observeFrames(page);
-  await page.send("Network.enable");
-  await new Promise((resolve) => setTimeout(resolve, seconds * 1000));
-  page.close();
-  console.log(JSON.stringify({ method: "Existing page socket via CDP; UTF-8 text/application binary payload bytes, excludes framing/compression; sections count JSON value bytes", seconds, ...counter.report() }));
+  try {
+    const counter = observeFrames(page);
+    await page.send("Network.enable");
+    if (readyFile) {
+      const temporary = `${readyFile}.${process.pid}.tmp`;
+      fs.writeFileSync(temporary, JSON.stringify({ pid: process.pid, boundary: "Network.enable completed" }), { flag: "wx" });
+      try { fs.linkSync(temporary, readyFile); } finally { fs.unlinkSync(temporary); }
+    }
+    await new Promise((resolve) => setTimeout(resolve, seconds * 1000));
+    console.log(JSON.stringify({ method: "Existing page socket via CDP; UTF-8 text/application binary payload bytes, excludes framing/compression; sections count JSON value bytes", seconds, ...counter.report() }));
+  } finally {
+    page.close();
+  }
 }

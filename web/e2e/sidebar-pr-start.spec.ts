@@ -1,5 +1,5 @@
 // A sidebar row's pull request with no screen asking (issue #391): on an
-// isolated pinned Herdr and hided with a fake `gh` that knows one pull request
+// isolated engine and hided with a fake `gh` that knows one pull request
 // in each of three repositories. The first daemon only chooses a Workspace, so
 // the next start opens on it with the right panel on Explorer and the merged
 // pull request's Inactive fold already open: no Overview, no
@@ -19,7 +19,8 @@ import { expect, test } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { withControl, openProject } from "./daemon-actions";
+import { startEngine, type EngineServer } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { fixtureProgram } from "./platform-fixture";
 import { toPage } from "../../desktop/src/main/wirePath";
@@ -98,32 +99,33 @@ process.exit(1);
   return { bin, down };
 }
 
-/** A repository with its `branch` checked out as a linked worktree, and a Herdr workspace on each. */
-function repositoryWithWorktree(herdr: HerdrFixture, name: string, branch: string): string {
-  const repo = path.join(herdr.root, name);
+/** A repository with its `branch` checked out as a linked worktree; returns the worktree's head commit. */
+function repositoryWithWorktree(server: EngineServer, name: string, branch: string): string {
+  const repo = path.join(server.root, name);
   fs.mkdirSync(repo);
   initGithubRepository(repo);
   fs.writeFileSync(path.join(repo, "README.md"), `# ${name}\n`);
   git(repo, ["add", "README.md"]);
   git(repo, ["commit", "-m", "initial"]);
-  const worktree = path.join(herdr.root, `${name}-wt`);
+  const worktree = path.join(server.root, `${name}-wt`);
   git(repo, ["worktree", "add", "-b", branch, worktree]);
   git(worktree, ["commit", "--allow-empty", "-m", "work"]);
-  for (const cwd of [repo, worktree]) {
-    herdr.run(["workspace", "create", "--cwd", cwd, "--label", path.basename(cwd), "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]);
-  }
   return execFileSync("git", ["rev-parse", "HEAD"], { cwd: worktree, encoding: "utf8" }).trim();
 }
 
 test("the sidebar draws every project's pull request with no screen asking, and a restart keeps them as stale", async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 });
-  const herdr = await startHerdr();
+  const herdr = await startEngine();
   let daemon = null as Daemon | null;
   try {
     const heads = new Map<string, string>();
     for (const { name, branch } of REPOSITORIES) heads.set(name, repositoryWithWorktree(herdr, name, branch));
     const gh = fakeGh(herdr.root, heads);
     daemon = await startHided(herdr, "sidebar-pr-start", undefined, { PATH: `${gh.bin}${path.delimiter}${herdr.fixturePath}` });
+    // Each repository is a project, as Add project makes it; its linked worktree is listed under it.
+    await withControl(daemon, async (control) => {
+      for (const { name } of REPOSITORIES) await openProject(control, path.join(herdr.root, name), name);
+    });
 
     // The first run opens on All projects and chooses a Workspace, so the next start resumes on it.
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);

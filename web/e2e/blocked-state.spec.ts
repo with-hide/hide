@@ -4,26 +4,63 @@
 // word leading the sentence.
 import { expect, test, type Page } from "@playwright/test";
 import { herdrGate } from "./herdr-gate";
-import { elsewhereTab, finishFixtureTurn, herdrHasFocus, labelAgent, setFixtureLifecycle, startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { elsewhereTab as nativeElsewhereTab, finishFixtureTurn, herdrHasFocus, labelAgent, setFixtureLifecycle, startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { startFixture, type AgentFixture } from "./engine-fixture";
+import { continueFixtureTranscript, type FixtureLabel } from "./herdr-fixture";
+import { agentIn, focusTab, sendKeys, withControl } from "./daemon-actions";
+import { elsewhereTab, labelAgentPane, setAgentState } from "./fixture-agents";
 import { startHided, type Daemon } from "./hided-fixture";
 
 test.describe.configure({ timeout: 150_000 });
 
 const sidebarRow = (page: Page, pane: string) => page.locator(`nav[data-sidebar] [data-pane="${pane}"]`).first();
 
-/** A block and an unfinished turn, each finished unseen in one tab, as `startHerdr`'s two panes. */
-async function finishTwoTurns(herdr: HerdrFixture, [blocked, unfinished]: [string, string]) {
+/**
+ * A finished turn the operator has not seen, labelled `label`: the agent in
+ * `pane` takes the label's session, works while the turn's request is
+ * appended to its transcript, then rests while `elsewhere` is the tab
+ * shown, and its row reads unread. The core reads a transcript's new turn on
+ * the agent's next state change, so the label's end lands on this turn; a
+ * session taken during the turn would instead rest the agent as seen. A turn
+ * finished unseen is published as stopped, which `setAgentState`'s idle does
+ * not read, so the rest is typed here and waited for on the unread row.
+ */
+async function finishTurnUnseen(fixture: AgentFixture, daemon: Daemon, pane: string, elsewhere: string, label: FixtureLabel) {
+  await withControl(daemon, (control) => focusTab(control, fixture, elsewhere));
+  const session = await labelAgentPane(fixture, daemon, pane, label);
+  await setAgentState(daemon, pane, "working");
+  continueFixtureTranscript(fixture, session, label);
+  await withControl(daemon, async (control) => {
+    sendKeys(control, pane, "\x1b]0;✳ Claude Code\x07");
+    await control.until((rest) => (agentIn(rest, pane)?.unread === true && agentIn(rest, pane)?.activity !== "working") || undefined, `${pane}'s finished turn unread`, 20_000);
+  });
+}
+
+/** A block and an unfinished turn, each finished unseen in one tab, as the fixture's two agents. */
+async function finishTwoTurns(fixture: AgentFixture, daemon: Daemon, [blocked, unfinished]: [string, string]) {
+  await finishTurnUnseen(fixture, daemon, blocked, await elsewhereTab(fixture, daemon), { task: "디스크 정리 작업", progress: "디스크가 가득 차 멈췄어요", end: "blocked" });
+  await finishTurnUnseen(fixture, daemon, unfinished, await elsewhereTab(fixture, daemon), { task: "설정 화면 스위치 추가", progress: "테스트 3개 남음", end: "unfinished" });
+}
+
+/** The same two turns before the daemon starts, for the test that holds Herdr's own changes at its socket. */
+async function finishTurnsBeforeDaemon(herdr: HerdrFixture, [blocked, unfinished]: [string, string]) {
   labelAgent(herdr, blocked, { task: "디스크 정리 작업", progress: "디스크가 가득 차 멈췄어요", end: "blocked" });
-  await finishFixtureTurn(herdr, blocked, elsewhereTab(herdr));
+  await finishFixtureTurn(herdr, blocked, nativeElsewhereTab(herdr));
   labelAgent(herdr, unfinished, { task: "설정 화면 스위치 추가", progress: "테스트 3개 남음", end: "unfinished" });
-  await finishFixtureTurn(herdr, unfinished, elsewhereTab(herdr));
+  await finishFixtureTurn(herdr, unfinished, nativeElsewhereTab(herdr));
 }
 
 /**
- * Herdr reports its changes to the core in the order it made them, so once
- * `pane` shows working here, every state Herdr held before that change (the
- * seen it gave a tab) has reached the core and been projected.
+ * The engine reports its changes to the core in the order it made them, so
+ * once `pane` shows working here, every state the engine held before that
+ * change (the seen it gave a tab) has reached the core and been projected.
  */
+async function afterNextChange(daemon: Daemon, page: Page, pane: string) {
+  await setAgentState(daemon, pane, "working");
+  await expect(sidebarRow(page, pane).locator('[data-agent-status="working"]')).toBeVisible({ timeout: 30_000 });
+}
+
+/** The same fence on Herdr, which the held-focus test reads through its own socket. */
 async function afterNextHerdrChange(herdr: HerdrFixture, page: Page, pane: string) {
   await setFixtureLifecycle(herdr, pane, "working");
   await expect(sidebarRow(page, pane).locator('[data-agent-status="working"]')).toBeVisible({ timeout: 30_000 });
@@ -37,12 +74,12 @@ async function expectRead(page: Page, pane: string, mark: string) {
 
 test("a blocked turn draws the turn mark in Needs You that dims once read, and an unfinished turn a plain dot to read outside it", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  const herdr = await startHerdr({ readiness: "registered" });
+  const fixture = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    const [blocked, unfinished] = herdr.panes;
-    await finishTwoTurns(herdr, herdr.panes);
-    daemon = await startHided(herdr, "blocked-state");
+    daemon = await startHided(fixture, "blocked-state");
+    const [blocked, unfinished] = fixture.panes;
+    await finishTwoTurns(fixture, daemon, fixture.panes);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     const row = (pane: string) => sidebarRow(page, pane);
     await expect(row(blocked).locator('[data-agent-status="error"]')).toBeVisible({ timeout: 30_000 });
@@ -58,19 +95,20 @@ test("a blocked turn draws the turn mark in Needs You that dims once read, and a
     await expect(mark).toHaveClass(/opacity-\(--opacity-read-status\)/);
     await expect(page.locator(`[data-raised-group="needs_you"] [data-pane="${blocked}"]`)).toHaveCount(0);
     await expect(row(blocked)).toContainText("디스크가 가득 차 멈췄어요");
-    // Still read after Herdr's next change reaches the core (#901): the click's
+    // Still read after the engine's next change reaches the core (#901): the click's
     // assertions above hold on the frame the click drew, and a revert would
     // show on the projection that change brings.
-    await afterNextHerdrChange(herdr, page, unfinished);
+    await afterNextChange(daemon, page, unfinished);
     await expectRead(page, blocked, "error");
     await expect(row(blocked)).toContainText("디스크가 가득 차 멈췄어요");
   } finally {
     daemon?.stop();
-    herdr.stop();
+    fixture.stop();
   }
 });
 
-test("a read block stays read when Herdr marks its tab seen after the operator moved on", async ({ page }) => {
+// Herdr only: it holds Herdr's own pane.focus at the socket, so Herdr's seen bookkeeping lands after the operator moved on.
+test("a read block stays read when Herdr marks its tab seen after the operator moved on @herdr", async ({ page }) => {
   // Herdr gives a tab's panes the seen mark when it applies a focus, which
   // takes a finished pane from done to idle at the same sequence (#901). Held
   // at the socket, that focus lands after the operator has gone on to the
@@ -82,7 +120,7 @@ test("a read block stays read when Herdr marks its tab seen after the operator m
   let daemon: Daemon | null = null;
   try {
     const [blocked, unfinished] = herdr.panes;
-    await finishTwoTurns(herdr, herdr.panes);
+    await finishTurnsBeforeDaemon(herdr, herdr.panes);
     gate = await herdrGate(herdr);
     daemon = await startHided({ ...herdr, socket: gate.socket }, "blocked-state-seen-late");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);

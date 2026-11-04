@@ -24,7 +24,7 @@ use herdr_core::workspace_control::{
 };
 use herdr_core::{Core, CoreOptions};
 use hide_node::terminal::device::DeviceSink;
-use hide_node::terminal::engine_panes::{LocalPanes, PaneShell};
+use hide_node::terminal::engine_panes::LocalPanes;
 use hide_node::terminal::holder::{Holders, LocalTerminals};
 use hide_node::terminal::router::Router;
 use hide_node::terminal::{
@@ -1244,21 +1244,9 @@ fn local_engine(
             // asked of a node answering for the core's home as the core's own
             // node does, by the same requests a device's node answers.
             let node = Arc::new(
-                hide_node::Local::new(Some(home.clone())).with_panes(
-                    // A pane with no program of its own runs the account's shell
-                    // with Hide's integration, as the node prepares it for a tab.
-                    Arc::new(LocalPanes::new(
-                        holders,
-                        Arc::clone(service),
-                        PaneShell::Account {
-                            home: home.clone(),
-                            user: hide_host::shell_integration::UserShell::of_process(),
-                        },
-                        std::env::current_exe()
-                            .ok()
-                            .and_then(|program| hide_host::kit::pane_install(&program)),
-                    )),
-                ),
+                hide_node::Local::new(Some(home.clone())).with_panes(Arc::new(
+                    LocalPanes::for_account(holders, Arc::clone(service), home.clone()),
+                )),
             );
             // The engine opens knowing the operator's agents, so the restore
             // that starts with it resumes theirs too; a folder that cannot be

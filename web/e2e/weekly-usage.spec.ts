@@ -6,7 +6,7 @@
 // opens and closes and when the page is hidden.
 
 import { expect, test, type Page } from "@playwright/test";
-import { startHerdr } from "./herdr-fixture";
+import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { usageShim } from "./usage-fixture";
 import { screenshot } from "./wire";
@@ -36,7 +36,8 @@ function sentHints(page: Page): Hints[] {
 // @platform: The usage child gets a restricted environment that differs per OS (USERPROFILE and SystemRoot on Windows), and a Node-based `claude` only starts with it.
 test("weekly usage: a loading, an available and an unavailable row, and the hints the page sends", { tag: "@platform" }, async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  const herdr = await startHerdr({ readiness: "registered" });
+  // This fixture's claude answers /usage only; no terminal agent is needed.
+  const herdr = await startFixture({ agents: false });
   const usage = usageShim();
   let daemon: Daemon | null = null;
   try {

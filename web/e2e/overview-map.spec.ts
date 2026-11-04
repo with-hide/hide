@@ -1,8 +1,9 @@
+import { skipOwnWindowsAgentStart } from "./own-windows-agent-start";
 // PRD overview-main-map B1, B13, B14, B17, B21, B22, B23, B25, B26: the private
 // runtime supplies identity and topology; the camera stays local to the mounted
 // force map, while hiding, folding and dropped places are the core's.
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { startHerdr } from "./herdr-fixture";
+import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { openOverview } from "./overview-entry";
 import { enterWorkspace } from "./wire";
@@ -19,7 +20,8 @@ async function drag(page: Page, handle: Locator, dx: number, dy: number) {
 }
 
 test("@platform Overview restores its exact current session and keeps map movement local", async ({ page }) => {
-  const herdr = await startHerdr({ readiness: "registered" });
+  skipOwnWindowsAgentStart();
+  const herdr = await startFixture();
   let daemon: Daemon | undefined;
   try {
     daemon = await startHided(herdr, "overview-map");
@@ -118,7 +120,7 @@ test("@platform Overview restores its exact current session and keeps map moveme
 // PRD overview-graph-remembered B1, B3, B5, B9: the core keeps the map's arrangement, so a
 // reloaded shell opens it as it was left, and Reset layout's fresh map is what reopens.
 test("Overview's work map keeps a hidden project and a dropped session across a reload until Reset layout", async ({ page }) => {
-  const herdr = await startHerdr({ readiness: "registered" });
+  const herdr = await startFixture();
   let daemon: Daemon | undefined;
   try {
     daemon = await startHided(herdr, "overview-map-remembered");
@@ -156,7 +158,7 @@ test("Overview's work map keeps a hidden project and a dropped session across a 
 // PRD pane-open-in-overview B4-B7, B12: an agent pane's menu opens the Overview's Work map with
 // that pane's session chosen, its hidden project shown again, framed, and Escape steps back to the pane.
 test("a pane's Show in Overview opens Work with its session chosen and gives the keyboard back", async ({ page }) => {
-  const herdr = await startHerdr({ readiness: "registered" });
+  const herdr = await startFixture();
   let daemon: Daemon | undefined;
   try {
     daemon = await startHided(herdr, "overview-map-pane");
@@ -207,7 +209,7 @@ test("a pane's Show in Overview opens Work with its session chosen and gives the
 // The side column's search finds a session on the map: what it does not find dims in place,
 // and Enter shows the first found session with its details, as choosing it on the map does.
 test("Overview's work map search dims what it does not find and Enter shows the found session", async ({ page }) => {
-  const herdr = await startHerdr({ readiness: "registered" });
+  const herdr = await startFixture();
   let daemon: Daemon | undefined;
   try {
     daemon = await startHided(herdr, "overview-map-search");

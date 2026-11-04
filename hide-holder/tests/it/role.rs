@@ -32,6 +32,7 @@ fn play() {
         "print_when_told" => print_when_told(),
         "flood_when_told" => flood_when_told(),
         "node" => crate::node::node_role(),
+        "node_owner" => crate::node::ownership::owner_role(),
         "holder_v1" => crate::fixture_v1::holder_v1(),
         other => panic!("unknown role {other}"),
     }

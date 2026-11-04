@@ -14,7 +14,7 @@ import { clearTimeout, setTimeout } from "node:timers";
  * once the daemon sent its first snapshot. `until` waits `ms` unless it names
  * its own bound.
  */
-export async function connectControl({ origin, token }, ms = 15_000) {
+export async function connectControl({ origin, token }, ms = 15_000, terminalEvidence) {
   // The daemon accepts its own origin only; Node's WebSocket takes undici's headers.
   const ws = new globalThis.WebSocket(`${origin.replace(/^http/, "ws")}/ws`, { headers: { origin } });
   let rest = null;
@@ -41,6 +41,7 @@ export async function connectControl({ origin, token }, ms = 15_000) {
     ws.onmessage = (event) => {
       if (typeof event.data !== "string") return;
       const frame = JSON.parse(event.data);
+      if (terminalEvidence && frame.payload?.chunks) terminalEvidence(frame.payload.chunks);
       if (frame.type === "path_refused") {
         refusals.push(frame.payload);
         settle();

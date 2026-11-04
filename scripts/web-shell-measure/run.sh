@@ -58,7 +58,7 @@
 # pane's shell), confirms none runs, starts them again and times the tabs, the
 # front tab's panes and every shell coming back (restore.mjs).
 # MEASURE_ENGINE (PRD engine-bundle-3-core-owns D-15) picks what runs the
-# panes of `topology` and `restore`: `herdr` (the default), the private pinned
+# panes of `keys`, `topology` and `restore`: `herdr` (the default), the private pinned
 # Herdr server, or `own`, the core's own engine, the same hided started with
 # HIDE_DEV_PANE_HOLDER=1 and no Herdr, over the `hide-holder` beside it. Both
 # make their fixture the same way, with the web shell's events on the
@@ -74,6 +74,7 @@ set -euo pipefail
 # Optional unattended mode: no native window and no operator socket read.
 isolated_headless=false
 memory_series=false
+fixture_only=false
 case "${1:-}" in
   '') ;;
   --isolated-headless) isolated_headless=true ;;
@@ -82,7 +83,8 @@ esac
 case "${2:-}" in
   '') ;;
   --memory-series) memory_series=true; export MEASURE_FRAME_WINDOW_MS=600000 ;;
-  *) echo 'second argument must be --memory-series' >&2; exit 2 ;;
+  --fixture-only) fixture_only=true ;;
+  *) echo 'second argument must be --memory-series or --fixture-only' >&2; exit 2 ;;
 esac
 measure_dir="$(cd "$(dirname "$0")" && pwd)"
 source "$measure_dir/isolated-env.sh"
@@ -91,13 +93,14 @@ scenario="${MEASURE_SCENARIO:-single}"
 case "$scenario" in single|multi|keys|device|remote-core|areas2|areas3|topology|restore) ;; *) echo "MEASURE_SCENARIO must be single, multi, keys, device, remote-core, areas2, areas3, topology or restore" >&2; exit 2;; esac
 engine="${MEASURE_ENGINE:-herdr}"
 case "$engine" in herdr|own) ;; *) echo "MEASURE_ENGINE must be herdr or own" >&2; exit 2;; esac
-# The topology and the restore are made through the daemon on either engine.
+# The local fixtures are made through the daemon on either engine.
 neutral=false
-[[ "$scenario" != topology && "$scenario" != restore ]] || neutral=true
-[[ "$engine" == herdr ]] || $neutral || { echo "MEASURE_ENGINE=own measures only MEASURE_SCENARIO=topology or restore" >&2; exit 2; }
+[[ "$scenario" != topology && "$scenario" != restore && "$scenario" != keys ]] || neutral=true
+! $fixture_only || $neutral || { echo '--fixture-only needs MEASURE_SCENARIO=keys, topology or restore' >&2; exit 2; }
+[[ "$engine" == herdr ]] || $neutral || { echo "MEASURE_ENGINE=own measures only MEASURE_SCENARIO=keys, topology or restore" >&2; exit 2; }
 scale="${MEASURE_SCALE:-none}"
 case "$scale" in none|operator|double) ;; *) echo "MEASURE_SCALE must be none, operator or double" >&2; exit 2;; esac
-[[ "$scale" == none ]] || $neutral || { echo "MEASURE_SCALE needs MEASURE_SCENARIO=topology or restore" >&2; exit 2; }
+[[ "$scale" == none ]] || { $neutral && [[ "$scenario" != keys ]]; } || { echo "MEASURE_SCALE needs MEASURE_SCENARIO=topology or restore" >&2; exit 2; }
 [[ "$scenario" != device && "$scenario" != remote-core ]] || source "$measure_dir/device-guard.sh"
 screen_node="${MEASURE_SCREEN_NODE:-measure-screen}"
 core_started=false
@@ -109,6 +112,7 @@ hided_bin="${MEASURE_HIDED_BIN:-$MEASURE_WORKTREE/target/release/hided}"
 [[ -x "$chrome_bin" ]] || { echo "Chrome not found at $chrome_bin" >&2; exit 1; }
 pids=()
 server_started=false
+server_pid=0
 # The daemon's state folder sits in the run's short socket folder while the
 # run lasts, since the own engine's holder sockets live under it and the run
 # folder's path is longer than a Unix socket address takes (a link is refused
@@ -247,6 +251,7 @@ reset_fixture() {
   echo "scale=$scale"
   echo "isolated_headless=$isolated_headless"
   echo "memory_series=$memory_series"
+  echo "fixture_only=$fixture_only"
   echo "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   uptime
 } > "$MEASURE_RUN_DIR/identity.txt"
@@ -260,11 +265,17 @@ if [[ ! -d "$MEASURE_FIXTURE/.git" ]]; then
   git -C "$MEASURE_FIXTURE" add README
   git -C "$MEASURE_FIXTURE" -c commit.gpgsign=false -c user.email="measure@example.invalid" -c user.name="measure" commit --quiet -m "measure fixture"
 fi
-measure_checkout="$(cd "$MEASURE_RUN_DIR" && pwd)/checkout"
-if [[ ! -f "$measure_checkout/.git" ]]; then
-  git -C "$MEASURE_FIXTURE" worktree add --quiet -b measure-worktree "$measure_checkout"
+# A linked checkout makes Herdr open its primary workspace as well, while
+# the own engine opens only the requested checkout. Neutral comparisons use
+# the primary Git checkout on both engines, keeping their total shape equal.
+# The legacy Herdr-only scenarios retain their linked-checkout fixture.
+if ! $neutral; then
+  measure_checkout="$(cd "$MEASURE_RUN_DIR" && pwd)/checkout"
+  if [[ ! -f "$measure_checkout/.git" ]]; then
+    git -C "$MEASURE_FIXTURE" worktree add --quiet -b measure-worktree "$measure_checkout"
+  fi
+  export MEASURE_FIXTURE="$measure_checkout"
 fi
-export MEASURE_FIXTURE="$measure_checkout"
 start_server() {
   env HOME="$MEASURE_PRIVATE/home" "$HERDR_BIN_PATH" server >>"$MEASURE_RUN_DIR/logs/herdr-server.log" 2>&1 &
   server_pid=$!
@@ -384,7 +395,14 @@ if $neutral; then
   mkdir -p "$MEASURE_READY_DIR"
   cat >> "$MEASURE_PRIVATE/home/.zshrc" <<ZSHRC
 : >| "$MEASURE_READY_DIR/\$\$"
-[[ -p .measure-go ]] && { read -r _ < .measure-go; /usr/bin/python3 -u -c 'import time,collections; collections.deque(((print("fixture output %08d" % i, flush=True),time.sleep(0.05)) for i in range(20000)),maxlen=0)'; }
+[[ -p .measure-go ]] && { read -r _ < .measure-go; /usr/bin/python3 -u -c '
+import os, pathlib, time
+for i in range(20000):
+    print("fixture output %08d" % i, flush=True)
+    if i == 0:
+        pathlib.Path(".measure-printing").write_text(str(os.getpid()) + "\\n")
+    time.sleep(0.05)
+'; }
 ZSHRC
 fi
 # The own engine takes no Herdr: a socket beside its switch fails the daemon.
@@ -406,10 +424,17 @@ page_url="http://127.0.0.1:$hided_port/?probe=1#token=$hided_token"
 [[ "$scenario" != remote-core ]] || page_url+="&node=$screen_node"
 if $neutral; then
   note "$engine: making the $scale fixture with the web shell's events"
-  node "$measure_dir/fixture.mjs" build "$scale" > "$MEASURE_RUN_DIR/fixture-build.json"
+  fixture_scale="$scale"
+  [[ "$scenario" != keys ]] || fixture_scale=keys
+  node "$measure_dir/fixture.mjs" build "$fixture_scale" > "$MEASURE_RUN_DIR/fixture-build.json"
+  extra_panes=()
+  if [[ "$scenario" == keys ]]; then
+    while IFS= read -r pane; do extra_panes+=("$pane"); done < <(python3 -c 'import json,sys; print("\n".join(json.load(open(sys.argv[1]))["key_panes"]))' "$MEASURE_RUN_DIR/fixture.json")
+  fi
   export MEASURE_PANE_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pane"])' "$MEASURE_RUN_DIR/fixture.json")"
   export MEASURE_SWITCH_TAB="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["switch_tab"])' "$MEASURE_RUN_DIR/fixture.json")"
   measure_tab="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["tab"])' "$MEASURE_RUN_DIR/fixture.json")"
+  measure_checkout_json="$(python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))["checkout"]))' "$MEASURE_RUN_DIR/fixture.json")"
   echo "engine=$engine" >> "$MEASURE_RUN_DIR/identity.txt"
 fi
 
@@ -443,6 +468,9 @@ if [[ "$scenario" == remote-core ]]; then
   screen_pane="remote:$screen_node:pane:$MEASURE_PANE_ID"
   echo "screen_pane=$screen_pane" >> "$MEASURE_RUN_DIR/identity.txt"
 fi
+if $neutral; then
+  wait_js "(() => { window.__measureCheckoutId = $measure_checkout_json; return true; })()"
+fi
 wait_js "$(cat "$measure_dir/open-fixture.js")"
 # The fixture made the switch target last, which a new tab brings to the
 # front; the measured tab is shown again by its click, as the operator would.
@@ -469,7 +497,11 @@ if [[ "$scenario" == multi ]]; then
   sleep 2
 fi
 if [[ "$scenario" == keys || "$scenario" == remote-core ]]; then
-  for pane in "${extra_panes[@]}"; do wait_prompt "$pane"; done
+  if $neutral; then
+    for pane in "${extra_panes[@]}"; do wait_js "(window.__hideProbe?.paneText('$pane') ?? '').includes('fixture %')"; done
+  else
+    for pane in "${extra_panes[@]}"; do wait_prompt "$pane"; done
+  fi
   wait_js "document.querySelectorAll('[data-pane-view]').length === 5 && window.__hideProbe.paneId() === '$echo_pane'"
   wait_js "window.__hideProbe.attachedPanes().length >= 5"
   sleep 2
@@ -477,11 +509,21 @@ fi
 node -e "
 import('$measure_dir/cdp.mjs').then(async ({connectPage}) => { const p = await connectPage('$MEASURE_CDP_PORT'); console.log(JSON.stringify(await p.evaluate('({scenario: \"$scenario\", pane: window.__hideProbe.paneId(), pane_views: document.querySelectorAll(\"[data-pane-view]\").length, splits: document.querySelectorAll(\"[data-split]\").length, tabs: document.querySelectorAll(\"[role=tab]\").length, attached_panes: window.__hideProbe.attachedPanes(), live_terminals: window.__hideProbe.liveTerminals(), ua: navigator.userAgent, dpr: devicePixelRatio, inner: [innerWidth, innerHeight]})'))); p.close(); })" > "$MEASURE_RUN_DIR/page.json"
 cat "$MEASURE_RUN_DIR/page.json"
+if $fixture_only; then
+  if [[ "$scenario" != keys && "$scale" != none ]]; then node "$measure_dir/fixture.mjs" drive; fi
+  note 'fixture-only: exact topology and browser pane readiness confirmed; no performance samples collected'
+  exit 0
+fi
 # Resident memory with every attached pane's terminal alive (D-05): sampled
 # before the echo trials and again after the driven window.
 python3 "$measure_dir/memory.py" settled "$chrome_pid" "$hided_pid" "$MEASURE_CDP_PORT" > "$MEASURE_RUN_DIR/memory-settled.json"
 cat "$MEASURE_RUN_DIR/memory-settled.json"
-python3 "$measure_dir/resources.py" "$hided_pid" "${server_pid:-0}" "$chrome_pid" > "$MEASURE_RUN_DIR/resources-idle.json"
+resource_engine="$server_pid"
+if [[ "$scenario" == keys ]]; then
+  if [[ "$engine" == own ]]; then resource_engine="engine:$(node "$pane_holders" roots "$hide_state")";
+  else resource_engine="engine:$server_pid"; fi
+fi
+python3 "$measure_dir/resources.py" "$hided_pid" "$resource_engine" "$chrome_pid" > "$MEASURE_RUN_DIR/resources-idle.json"
 
 # What each engine saves its layout in, for the save watch (save-watch.py):
 # the daemon's screen saves on both, and the Herdr server's session or the
@@ -507,6 +549,11 @@ if [[ "$scenario" == topology ]]; then
   # Only a build that records stage times writes these lines.
   python3 "$measure_dir/summarize.py" timing "$hide_state/Logs/core.jsonl" > "$MEASURE_RUN_DIR/timing-summary.json"
   python3 "$measure_dir/memory.py" after-topology "$chrome_pid" "$hided_pid" "$MEASURE_CDP_PORT" > "$MEASURE_RUN_DIR/memory-after-topology.json"
+  # Topology created and closed panes: read the surviving engine roots now,
+  # then record their tree RSS beside the hided/Chrome comparison (row 31).
+  if [[ "$engine" == own ]]; then resource_engine="engine:$(node "$pane_holders" roots "$hide_state")";
+  else resource_engine="engine:$server_pid"; fi
+  MEASURE_RESOURCE_SECONDS=1 python3 "$measure_dir/resources.py" "$hided_pid" "$resource_engine" "$chrome_pid" > "$MEASURE_RUN_DIR/resources-after-topology.json"
   cat "$MEASURE_RUN_DIR/echo-summary.json" "$MEASURE_RUN_DIR/topology-summary.json" "$MEASURE_RUN_DIR/save-summary.json"
   note 'measurement complete; cleaning up owned processes'
   exit 0
@@ -609,37 +656,59 @@ fi
 
 if [[ "$scenario" == keys || "$scenario" == remote-core ]]; then
   all_panes=("$MEASURE_PANE_ID" "${extra_panes[@]}")
-  # One line per 8 ms for the given seconds, beside the cat that echoes keys.
-  printf '%s\n' 'import sys, time' 'end = time.monotonic() + float(sys.argv[1]); i = 0' \
-    'while time.monotonic() < end:' "    print(f'drive {i:05d}', flush=True); i += 1; time.sleep(0.008)" > "$MEASURE_RUN_DIR/drive.py"
-  # A pane's printer runs in the background of its shell, where Ctrl+C does
-  # not reach it; it carries its pane id so only that one is ended.
+  keys_printers="$measure_dir/keys_printers.py"
+  # Remote-core retains its pane-tagged driver; local keys uses first-flush receipts.
+  if ! $neutral; then
+    printf '%s\n' 'import sys, time' 'end = time.monotonic() + float(sys.argv[1]); i = 0' \
+      'while time.monotonic() < end:' "    print(f'drive {i:05d}', flush=True); i += 1; time.sleep(0.008)" > "$MEASURE_RUN_DIR/drive.py"
+  fi
+  # Local printers run in the foreground, so Ctrl+C ends them on either
+  # engine. The remote-core fixture retains its pane-tagged background job.
   reset_pane() {
-    pkill -f "$MEASURE_RUN_DIR/drive\.py [0-9]+ $1\$" || true
-    "$HERDR_BIN_PATH" pane send-keys "$1" ctrl+c >/dev/null
-    sleep 0.3
-    "$HERDR_BIN_PATH" pane run "$1" "printf '\033c'; stty -echo -icanon; ${2:+/usr/bin/python3 $MEASURE_RUN_DIR/drive.py $2 $1 & }cat" >/dev/null
+    if $neutral; then
+      node "$measure_dir/type.mjs" "$MEASURE_CDP_PORT" "$1" --focus --interrupt "printf '\033c'; stty -echo -icanon; cat"
+    else
+      pkill -f "$MEASURE_RUN_DIR/drive\.py [0-9]+ $1\$" || true
+      "$HERDR_BIN_PATH" pane send-keys "$1" ctrl+c >/dev/null
+      sleep 0.3
+      "$HERDR_BIN_PATH" pane run "$1" "printf '\033c'; stty -echo -icanon; ${2:+/usr/bin/python3 $MEASURE_RUN_DIR/drive.py $2 $1 & }cat" >/dev/null
+    fi
   }
-  drive_all() { for pane in "${all_panes[@]}"; do reset_pane "$pane" "$1"; done; sleep 1; }
-  quiet_all() { for pane in "${all_panes[@]}"; do reset_pane "$pane"; done; sleep 0.5; }
+  drive_all() {
+    if $neutral; then
+      printer_phase="$MEASURE_RUN_DIR/keys-printers-$2"
+      python3 "$keys_printers" start "$printer_phase" "$1" "${extra_panes[@]}" "$MEASURE_PANE_ID" \
+        node "$measure_dir/type.mjs" "$MEASURE_CDP_PORT"
+    else
+      # Keep remote-core's drive.py duration/pane argv and tagged pkill contract.
+      for pane in "${extra_panes[@]}" "$MEASURE_PANE_ID"; do reset_pane "$pane" "$1"; done
+      sleep 1
+    fi
+  }
+  check_printers() {
+    if $neutral; then python3 "$keys_printers" check "$printer_phase" "$@"; fi
+  }
+  quiet_all() { for pane in "${extra_panes[@]}" "$MEASURE_PANE_ID"; do reset_pane "$pane"; done; sleep 0.5; }
   idle_seconds="${MEASURE_IDLE_SECONDS:-60}"
   driven_seconds="${MEASURE_DRIVEN_SECONDS:-120}"
   windowless_seconds="${MEASURE_WINDOWLESS_SECONDS:-60}"
   quiet_all
   note "keys: idle resources, $idle_seconds s, five attached panes"
-  MEASURE_RESOURCE_SECONDS="$idle_seconds" python3 "$measure_dir/resources.py" "$hided_pid" "$server_pid" "$chrome_pid" > "$MEASURE_RUN_DIR/resources-idle.json"
+  MEASURE_RESOURCE_SECONDS="$idle_seconds" python3 "$measure_dir/resources.py" "$hided_pid" "$resource_engine" "$chrome_pid" > "$MEASURE_RUN_DIR/resources-idle.json"
   note "keys: screen key echo, idle (50 samples)"
   MEASURE_PANE_ID="$echo_pane" MEASURE_ECHO_REPEATS=50 node "$measure_dir/key-echo.mjs" > "$MEASURE_RUN_DIR/key-echo-idle.json"
   note "keys: driven, $driven_seconds s at one line per 8 ms per pane"
-  drive_all $((driven_seconds + 120))
+  drive_all $((driven_seconds + 120)) driven
+  check_printers resources-before
   export MEASURE_RESOURCE_SECONDS="$driven_seconds"
-  spawn_owned resources-driven python3 "$measure_dir/resources.py" "$hided_pid" "$server_pid" "$chrome_pid"
+  spawn_owned resources-driven python3 "$measure_dir/resources.py" "$hided_pid" "$resource_engine" "$chrome_pid"
   resource_pid=$owned_pid
   unset MEASURE_RESOURCE_SECONDS
   python3 "$measure_dir/diag-counts.py" "$hide_state/Logs/core.jsonl" > "$MEASURE_RUN_DIR/driven-diagnostics-before.json"
   MEASURE_WS_COUNT_SECONDS="$driven_seconds" spawn_owned ws-driven node "$measure_dir/ws-count.mjs"
   ws_pid=$owned_pid
   wait "$resource_pid" "$ws_pid"
+  check_printers resources-after
   cp "$MEASURE_RUN_DIR/logs/resources-driven.log" "$MEASURE_RUN_DIR/resources-driven.json"
   cp "$MEASURE_RUN_DIR/logs/ws-driven.log" "$MEASURE_RUN_DIR/ws-driven.json"
   python3 "$measure_dir/diag-counts.py" "$hide_state/Logs/core.jsonl" > "$MEASURE_RUN_DIR/driven-diagnostics-after.json"
@@ -647,23 +716,45 @@ if [[ "$scenario" == keys || "$scenario" == remote-core ]]; then
   # to a plain cat while the other four keep printing.
   reset_pane "$MEASURE_PANE_ID"
   sleep 0.5
+  check_printers echo-before --exclude "$MEASURE_PANE_ID"
   note "keys: screen key echo, driven (50 samples, the other four panes printing)"
   MEASURE_PANE_ID="$echo_pane" MEASURE_ECHO_REPEATS=50 node "$measure_dir/key-echo.mjs" > "$MEASURE_RUN_DIR/key-echo-driven.json"
+  check_printers echo-after --exclude "$MEASURE_PANE_ID"
   quiet_all
   if (( ${MEASURE_KEY_COUNT:-0} > 0 )); then
     note "keys: $MEASURE_KEY_COUNT distinct keys counted back from the pane"
-    MEASURE_SCREEN_PANE_ID="$echo_pane" node "$measure_dir/key-count.mjs" > "$MEASURE_RUN_DIR/key-count.json"
+    if $neutral; then
+      # Count bytes the terminal program actually received, without an
+      # engine-specific scrollback reader or display line wrapping.
+      receipt="$MEASURE_RUN_DIR/key-input.txt"
+      : > "$receipt"
+      node "$measure_dir/type.mjs" "$MEASURE_CDP_PORT" "$MEASURE_PANE_ID" --focus --interrupt "printf '\033c'; stty -echo -icanon; tee $(printf '%q' "$receipt")"
+      MEASURE_PANE_READ="cat $(printf '%q' "$receipt")" MEASURE_SCREEN_PANE_ID="$echo_pane" node "$measure_dir/key-count.mjs" > "$MEASURE_RUN_DIR/key-count.json"
+    else
+      MEASURE_SCREEN_PANE_ID="$echo_pane" node "$measure_dir/key-count.mjs" > "$MEASURE_RUN_DIR/key-count.json"
+    fi
     cat "$MEASURE_RUN_DIR/key-count.json"
     quiet_all
   fi
   note "keys: windowless, $windowless_seconds s with every pane printing"
-  MEASURE_WS_COUNT_SECONDS=$((windowless_seconds + 30)) spawn_owned ws-reopen node "$measure_dir/ws-count.mjs"
-  ws_pid=$owned_pid
-  sleep 1
+  if $neutral; then
+    drive_all $((windowless_seconds + 10)) windowless
+    ws_ready="$MEASURE_RUN_DIR/ws-reopen-ready.json"
+    [[ ! -e "$ws_ready" ]] || { echo 'observer readiness file already exists' >&2; exit 1; }
+    MEASURE_WS_COUNT_SECONDS=$((windowless_seconds + 30)) spawn_owned ws-reopen node "$measure_dir/ws-count.mjs" --ready-file "$ws_ready"
+    ws_pid=$owned_pid
+    python3 "$keys_printers" observer "$ws_ready" "$ws_pid"
+    check_printers resources-before
+  else
+    MEASURE_WS_COUNT_SECONDS=$((windowless_seconds + 30)) spawn_owned ws-reopen node "$measure_dir/ws-count.mjs"
+    ws_pid=$owned_pid
+    sleep 1
+    drive_all $((windowless_seconds + 10)) windowless
+  fi
   printf 'about:blank' | node "$measure_dir/navigate.mjs" "$MEASURE_CDP_PORT"
   sleep 2
-  drive_all $((windowless_seconds + 10))
-  MEASURE_RESOURCE_SECONDS="$windowless_seconds" python3 "$measure_dir/resources.py" "$hided_pid" "$server_pid" 0 > "$MEASURE_RUN_DIR/resources-windowless.json"
+  MEASURE_RESOURCE_SECONDS="$windowless_seconds" python3 "$measure_dir/resources.py" "$hided_pid" "$resource_engine" 0 > "$MEASURE_RUN_DIR/resources-windowless.json"
+  check_printers resources-after
   printf '%s' "$page_url" | node "$measure_dir/navigate.mjs" "$MEASURE_CDP_PORT"
   wait_js "window.__hideProbe?.paneId() === '$echo_pane' && document.querySelectorAll('[data-pane-view]').length === 5"
   sleep 5
@@ -729,10 +820,10 @@ reset_fixture
 "$HERDR_BIN_PATH" pane send-keys "$MEASURE_PANE_ID" ctrl+c >/dev/null
 sleep 0.5
 uptime > "$MEASURE_RUN_DIR/frames-uptime-before.txt"
-spawn_owned resources-driven python3 "$measure_dir/resources.py" "$hided_pid" "$server_pid" "$chrome_pid"
+spawn_owned resources-driven python3 "$measure_dir/resources.py" "$hided_pid" "$resource_engine" "$chrome_pid"
 resource_pid=$owned_pid
 if $memory_series; then
-  spawn_owned memory-series python3 "$measure_dir/resources.py" "$hided_pid" "$server_pid" "$chrome_pid" --memory-series
+  spawn_owned memory-series python3 "$measure_dir/resources.py" "$hided_pid" "$resource_engine" "$chrome_pid" --memory-series
   memory_pid=$owned_pid
 fi
 node "$measure_dir/frames.mjs" > "$MEASURE_RUN_DIR/frames.json"

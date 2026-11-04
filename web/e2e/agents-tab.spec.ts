@@ -7,9 +7,10 @@
 import { expect, test, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
-import { startHerdr } from "./herdr-fixture";
+import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { countSent, enterWorkspace, screenshot } from "./wire";
+import { copyFixtureShim } from "./shims/build";
 
 // The kit writes POSIX hook files; the guidance hooks are not written on Windows.
 test.skip(process.platform === "win32", "the kit installs POSIX hooks");
@@ -25,11 +26,14 @@ const read = (file: string) => (fs.existsSync(file) ? fs.readFileSync(file, "utf
  * likely to have there.
  */
 async function start(label: string) {
-  const herdr = await startHerdr({ readiness: "registered" });
+  const herdr = await startFixture();
   const home = path.join(fs.mkdtempSync(path.join(herdr.root, "ag-")), "home");
   for (const folder of [".claude", ".codex", ".grok/hooks", ".cursor"]) fs.mkdirSync(path.join(home, folder), { recursive: true });
   fs.mkdirSync(path.join(home, ".local", "bin"), { recursive: true });
   for (const program of ["claude", "codex", "grok", "opencode", "omp", "cursor-agent"]) fs.writeFileSync(path.join(home, ".local", "bin", program), "#!/bin/sh\n", { mode: 0o755 });
+  // The start panel resolves the installed program in this HOME. Its two
+  // Claude sessions need the interactive shim, not the discovery-only stub.
+  copyFixtureShim("claude-shim", path.join(home, ".local", "bin", "claude"));
   fs.mkdirSync(path.join(home, ".hide", "kit"), { recursive: true });
   fs.writeFileSync(path.join(home, ".hide", "kit", "installed.json"), JSON.stringify({ format: 1, installed: [] }));
   const daemon = await startHided(herdr, label, home, {}, true);

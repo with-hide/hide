@@ -1,5 +1,5 @@
 // The sidebar's PR list and the pull request decision card on an isolated
-// pinned Herdr and hided (PRD work-tab-pr-lens; PRD sidebar-task-lens
+// engine and hided (PRD work-tab-pr-lens; PRD sidebar-task-lens
 // B26-B37; PRD lane-two-columns B35, B38, B41): a
 // Git project whose pull requests a fake `gh` answers and records every write
 // of, so nothing reaches GitHub. The list groups by whose move it is with a
@@ -11,11 +11,12 @@
 // HIDE_E2E_SCREENSHOT_DIR.
 
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { initGithubRepository } from "./github-remote";
-import { setFixtureLifecycle, startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { openProject, openWorktree, withControl } from "./daemon-actions";
+import { startEngine } from "./engine-fixture";
+import { setAgentState, startAgentInProject } from "./fixture-agents";
 import { startHided } from "./hided-fixture";
 import { fakeGh, git, head, moveHead, skewCardHead, writes, type ExtraQuery } from "./work-prs-fixture";
 import { chord } from "./chords";
@@ -23,30 +24,19 @@ import { chooseTheme, countSent, registerFolder, screenshot, showProjectRow, sho
 
 test.describe.configure({ timeout: 180_000 });
 
-/** Waits for the fixture shell's prompt in `pane`. */
-async function prompt(herdr: HerdrFixture, pane: string): Promise<void> {
-  const deadline = Date.now() + 15_000;
-  while (Date.now() < deadline) {
-    const read = spawnSync(herdr.bin, ["pane", "read", pane, "--source", "visible", "--format", "text"], { env: herdr.env, encoding: "utf8", timeout: 10_000 });
-    if (read.status === 0 && read.stdout.includes("fixture %")) return;
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error(`no prompt in pane ${pane}`);
-}
-
 /**
- * A project on a private Herdr and hided with the fake `gh`, the sidebar on
+ * A project on a private engine and hided with the fake `gh`, the sidebar on
  * its PR list; `agentOn` starts a working agent in a worktree of that branch.
  */
 async function openWork(page: Page, fn: (stack: { gh: { bin: string; state: string }; work: Locator; sent: Map<string, number>; last: Map<string, Record<string, unknown>>; daemon: { origin: string; token: string; home: string } }) => Promise<void>, options: { failing?: ExtraQuery[]; teamAsk?: boolean; agentOn?: string } = {}): Promise<void> {
   await page.setViewportSize({ width: 1600, height: 1000 });
-  const herdr = await startHerdr();
+  const engine = await startEngine();
   let daemon: Awaited<ReturnType<typeof startHided>> | null = null;
   try {
-    const repo = path.join(herdr.root, "repo");
-    const origin = path.join(herdr.root, "origin.git");
+    const repo = path.join(engine.root, "repo");
+    const origin = path.join(engine.root, "origin.git");
     fs.mkdirSync(repo);
-    git(herdr.root, ["init", "--bare", origin]);
+    git(engine.root, ["init", "--bare", origin]);
     initGithubRepository(repo);
     fs.writeFileSync(path.join(repo, "README.md"), "# repo\n");
     git(repo, ["add", "README.md"]);
@@ -54,31 +44,36 @@ async function openWork(page: Page, fn: (stack: { gh: { bin: string; state: stri
     git(repo, ["remote", "add", "origin", origin]);
     git(repo, ["push", "-q", "origin", "main"]);
     git(repo, ["remote", "set-head", "origin", "main"]);
-    herdr.run(["workspace", "create", "--cwd", repo, "--label", "repo", "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]);
-    if (options.agentOn) {
-      const worktree = path.join(herdr.root, "repo-agent");
-      git(repo, ["worktree", "add", "-q", "-b", options.agentOn, worktree]);
-      const created = herdr.run(["workspace", "create", "--cwd", worktree, "--label", "repo-agent", "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]) as { result: { root_pane: { pane_id: string } } };
-      const pane = created.result.root_pane.pane_id;
-      await prompt(herdr, pane);
-      herdr.run(["agent", "start", "agent-on-branch", "--kind", "claude", "--pane", pane]);
-      await setFixtureLifecycle(herdr, pane, "working");
-    }
+    const worktree = path.join(engine.root, "repo-agent");
+    if (options.agentOn) git(repo, ["worktree", "add", "-q", "-b", options.agentOn, worktree]);
 
-    const gh = fakeGh(herdr.root, options);
-    daemon = await startHided(herdr, "work-prs", undefined, { PATH: `${gh.bin}${path.delimiter}${herdr.fixturePath}` });
+    const gh = fakeGh(engine.root, options);
+    daemon = await startHided(engine, "work-prs", undefined, { PATH: `${gh.bin}${path.delimiter}${engine.fixturePath}` });
+    const project = await withControl(daemon, (control) => openProject(control, repo, "repo"));
     const last = new Map<string, Record<string, unknown>>();
     const sent = countSent(page, last);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await (await showProjectRow(page, page.locator("[data-project]", { hasText: "repo" }).locator("[data-checkout]").first())).click();
     await chooseTheme(page, "light");
+    if (options.agentOn) {
+      // A working agent in the worktree of that branch. The core lists a repository's worktrees once the
+      // project is in front, so this waits for the page to open it.
+      const live = daemon;
+      await withControl(live, async (control) => {
+        // The session's transcript names the worktree, which is how the core ties the agent to that branch's pull request.
+        const agent = await startAgentInProject(engine, live, await openWorktree(control, worktree), { task: "Clean branch work", cwd: worktree });
+        await setAgentState(live, agent.pane, "working");
+        // The PR list names the agents the last GitHub read found, so the operator's Check again reads it anew with the agent there.
+        control.send("github_request", { workspace_id: project.workspace, refresh: true });
+      });
+    }
     await showSidebarPrs(page);
     const work = page.locator("[data-sidebar-prs]");
     await expect(work.locator("[data-pr-group]").first()).toBeVisible({ timeout: 30_000 });
     await fn({ gh, work, sent, last, daemon });
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 }
 

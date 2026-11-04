@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
-import { startHerdr } from "./herdr-fixture";
+import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace, screenshot, showExplorer } from "./wire";
 import { chord } from "./chords";
@@ -9,7 +9,7 @@ import { chord } from "./chords";
 test("close follows the keyboard and the lane never renders an empty surface", async ({ page }) => {
   test.setTimeout(90_000);
   await page.setViewportSize({ width: 1920, height: 1000 });
-  const herdr = await startHerdr();
+  const herdr = await startFixture();
   let daemon: Daemon | null = null;
   try {
     fs.writeFileSync(path.join(herdr.root, "fixture", "notes.md"), "# Notes\n\n한글과 English\n");

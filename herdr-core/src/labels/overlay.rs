@@ -34,6 +34,8 @@ pub(crate) struct LabelOverlay {
 #[derive(Clone, Debug, PartialEq)]
 struct OverlayPane {
     changed_unix_ms: u64,
+    notice_owed: Option<u64>,
+    notice_finalized: Option<u64>,
     /// `None` while this daemon does not generate labels (another daemon on
     /// the same Herdr holds the generator role, D-10): only elapsed time is
     /// laid.
@@ -105,6 +107,8 @@ impl LabelOverlay {
                     pane_id.clone(),
                     OverlayPane {
                         changed_unix_ms: record.changed_unix_ms,
+                        notice_owed: record.notice_owed.filter(|_| labels_shown && summaries),
+                        notice_finalized: record.notice_finalized,
                         label,
                     },
                 )
@@ -237,6 +241,10 @@ impl LabelOverlay {
                 continue;
             };
             agent.changed_at_unix_ms = Some(pane.changed_unix_ms);
+            agent.notification_pending =
+                agent.state_change_seq.is_some() && pane.notice_owed == agent.state_change_seq;
+            agent.notification_finalized =
+                agent.state_change_seq.is_some() && pane.notice_finalized == agent.state_change_seq;
             let Some(label) = pane.label.as_ref() else {
                 continue;
             };

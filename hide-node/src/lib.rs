@@ -313,13 +313,12 @@ impl NodeLink for Local {
             return;
         }
         pending.closed = Some(reason.to_owned());
+        let answers = std::mem::take(&mut pending.answers);
+        drop(pending);
         self.env.stop.store(true, Ordering::Release);
+        self.env.panes.close();
         self.env.label_locks.close();
-        for answered in pending
-            .answers
-            .drain(..)
-            .filter_map(|sender| sender.upgrade())
-        {
+        for answered in answers.into_iter().filter_map(|sender| sender.upgrade()) {
             let _ = answered.try_send(Err(LinkError::Unknown(reason.to_owned())));
         }
     }

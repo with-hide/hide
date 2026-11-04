@@ -36,6 +36,12 @@ impl Runtime {
         self.own_devices = Some(OwnDevices { state_dir });
     }
 
+    /// Whether this core runs on its own engine: the switch is on, so the
+    /// devices it dials run on it too (`run_devices_on_own_engine`).
+    pub(super) fn runs_own_engine(&self) -> bool {
+        self.own_devices.is_some()
+    }
+
     /// Whether `registration`'s panes run on the core's own engine: the
     /// switch is on and the core dials the device.
     pub(super) fn device_on_own_engine(&self, registration: &DeviceRegistration) -> bool {

@@ -1,4 +1,4 @@
-// The web design system reset on an isolated pinned Herdr and hided: Settings
+// The web design system reset on an isolated engine and hided: Settings
 // chooses System, Light or Dark and an accent, the page switches its tokens at
 // once, an open terminal is re-colored without being recreated (B13), the
 // choice survives a daemon restart (B6, B7), and the production build hided
@@ -9,7 +9,8 @@
 import { expect, test, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
-import { startHerdr } from "./herdr-fixture";
+import { startEngine, startFixture } from "./engine-fixture";
+import { openProject, withControl } from "./daemon-actions";
 import { startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace, screenshot, showExplorer } from "./wire";
 import { chord } from "./chords";
@@ -73,10 +74,10 @@ async function openAppearance(page: Page): Promise<void> {
 test("the theme and accent switch at once, keep the terminal, and survive a restart", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   const tokens = tokenFile();
-  const herdr = await startHerdr();
+  const fixture = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "theme");
+    daemon = await startHided(fixture, "theme");
     await open(page, daemon);
     await enterWorkspace(page);
 
@@ -131,20 +132,21 @@ test("the theme and accent switch at once, keep the terminal, and survive a rest
     // The choice is the core's, so a restarted daemon and a reloaded page
     // bring it back.
     daemon = await daemon.restart();
+    await page.goto("about:blank");
     await open(page, daemon);
     await expect(page.locator("[data-main-screen]").or(page.locator("[data-workspace-screen]"))).toBeVisible({ timeout: 20_000 });
     await expect(root).toHaveClass(/(^|\s)light(\s|$)/);
     await expect.poll(() => token(page, "--primary")).toBe(rgb(tokens["--accent-choice-sky"]!.light!));
   } finally {
     daemon?.stop();
-    herdr.stop();
+    fixture.stop();
   }
 });
 
 test("the color theme switches the whole page at once from the keyboard, keeps the terminal, the mode and the accent, and survives a restart", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   const tokens = tokenFile();
-  const herdr = await startHerdr();
+  const fixture = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   // What the page and its focused terminal draw now, against tokens.json.
   // The built CSS may shorten a hex (#ffffff to #fff), so the terminal's colors are compared in six digits.
@@ -174,7 +176,7 @@ test("the color theme switches the whole page at once from the keyboard, keeps t
     }),
   });
   try {
-    daemon = await startHided(herdr, "color-theme");
+    daemon = await startHided(fixture, "color-theme");
     await open(page, daemon);
     await enterWorkspace(page);
     const root = page.locator("html");
@@ -224,6 +226,7 @@ test("the color theme switches the whole page at once from the keyboard, keeps t
 
     // B7: the choice is the core's, so a restarted daemon and a reloaded page bring it back.
     daemon = await daemon.restart();
+    await page.goto("about:blank");
     await open(page, daemon);
     await expect(page.locator("[data-main-screen]").or(page.locator("[data-workspace-screen]"))).toBeVisible({ timeout: 20_000 });
     await expect(root).toHaveClass(/(^|\s)light(\s|$)/);
@@ -235,7 +238,7 @@ test("the color theme switches the whole page at once from the keyboard, keeps t
     expect(await token(page, "--background")).toBe(rgb(hexOf(tokens["--background"]!, "hide", "light")));
   } finally {
     daemon?.stop();
-    herdr.stop();
+    fixture.stop();
   }
 });
 
@@ -243,16 +246,16 @@ test("an editor open during a theme switch is drawn like one opened after it", a
   // A wide window, as the other theme tests use; the second file opens from
   // the tree beside the first (PRD right-lane B10).
   await page.setViewportSize({ width: 1920, height: 1080 });
-  const herdr = await startHerdr();
+  const engine = await startEngine();
   let daemon: Daemon | null = null;
   try {
-    const repoDir = path.join(herdr.root, "demo");
+    const repoDir = path.join(engine.root, "demo");
     fs.mkdirSync(repoDir, { recursive: true });
     fs.writeFileSync(path.join(repoDir, "open.ts"), "export const open = 1;\n");
     fs.writeFileSync(path.join(repoDir, "later.ts"), "export const later = 2;\n");
     const repo = fs.realpathSync(repoDir);
-    herdr.run(["workspace", "create", "--cwd", repoDir, "--label", "demo", "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]);
-    daemon = await startHided(herdr, "editor-theme");
+    daemon = await startHided(engine, "editor-theme");
+    await withControl(daemon, (control) => openProject(control, repoDir, "demo"));
     await open(page, daemon);
     await enterWorkspace(page, "demo");
     await showExplorer(page);
@@ -287,7 +290,7 @@ test("an editor open during a theme switch is drawn like one opened after it", a
     expect(removed.filter((name) => fresh.has(name))).toEqual([]);
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });
 
@@ -298,16 +301,16 @@ test("the production build hided serves has no gallery", async ({ page }) => {
     expect(fs.readFileSync(path.join(assets, file), "utf8"), file).not.toContain("data-gallery-section");
   }
   // ...and /gallery on the served page opens nothing of it.
-  const herdr = await startHerdr();
+  const engine = await startEngine();
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "gallery");
+    daemon = await startHided(engine, "gallery");
     // hided answers an empty 404 for /gallery: the 404 is the claim, and no page loads to wait for.
     const response = await page.goto(`${daemon.origin}/gallery#token=${daemon.token}`);
     expect(response?.status()).toBe(404);
     await expect(page.locator("[data-gallery-section]")).toHaveCount(0);
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

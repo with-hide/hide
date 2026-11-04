@@ -27,6 +27,9 @@ use crate::sidebar::{AgentLabel, SessionSnapshotPayload};
 #[path = "record_tests.rs"]
 mod record_tests;
 
+#[path = "notification_tests.rs"]
+mod notification_tests;
+
 /// A provider that answers from a queue and can hold an answer back.
 struct Scripted {
     answers: Mutex<VecDeque<Value>>,

@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
-import { startHerdr } from "./herdr-fixture";
+import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace, screenshot } from "./wire";
 import { chord } from "./chords";
@@ -31,7 +31,7 @@ async function choose(page: Page, language: string) {
 }
 
 test("one confirmed choice follows every window, persists, and resets to each system language", async ({ browser }) => {
-  const herdr = await startHerdr({ readiness: "registered" });
+  const herdr = await startFixture();
   let daemon: Daemon | null = null;
   const korean = await browser.newContext({ locale: "ko-KR" });
   const japanese = await browser.newContext({ locale: "ja-JP" });
@@ -117,7 +117,7 @@ test("one confirmed choice follows every window, persists, and resets to each sy
 });
 
 test("unsupported systems use English, and an invalid stored preference is diagnosed and retained", async ({ browser }) => {
-  const herdr = await startHerdr({ readiness: "registered" });
+  const herdr = await startFixture();
   let daemon: Daemon | null = null;
   const context = await browser.newContext({ locale: "fr-FR" });
   try {

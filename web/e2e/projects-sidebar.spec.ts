@@ -1,12 +1,15 @@
-// One sidebar on an isolated Herdr and daemon: new checkouts open by default,
-// roots own direct-child badges, and project/checkout folds persist.
-// Existing row geometry, context menus and type scaling remain stable.
+// One sidebar on an isolated engine and daemon, on either engine: new checkouts
+// open by default, roots own direct-child badges, and project/checkout folds
+// persist. Existing row geometry, context menus and type scaling remain stable.
 
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { declareParent, elsewhereTab, finishFixtureTurn, labelAgent, setFixtureLifecycle, startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { startFixture, type AgentFixture } from "./engine-fixture";
+import { closePane, focusTab, newTab, openProject, openWorktree, viewPane, withControl, type OpenedProject } from "./daemon-actions";
+import { agentReading, elsewhereTab, finishUnseenTurn, labelAgentPane, setAgentAsking, setAgentState, spawnChild, startAgentIn, startAgentInProject } from "./fixture-agents";
+import { continueFixtureTranscript } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { countSent, keyboardFocus, rest, rowGeometry, screenshot, sendEvent, sidebarColumns, sidebarOverflow, sidebarRowsFit } from "./wire";
 import { chord } from "./chords";
@@ -21,28 +24,20 @@ function git(cwd: string, args: string[]): void {
   execFileSync("git", ["-c", "user.name=e2e", "-c", "user.email=e2e@example.invalid", "-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false", ...args], { cwd, stdio: "ignore" });
 }
 
-async function prompt(herdr: HerdrFixture, pane: string): Promise<void> {
-  const deadline = Date.now() + 15_000;
-  while (Date.now() < deadline) {
-    const read = spawnSync(herdr.bin, ["pane", "read", pane, "--source", "visible", "--format", "text"], { env: herdr.env, encoding: "utf8", timeout: 10_000 });
-    if (read.status === 0 && read.stdout.includes("fixture %")) return;
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error(`no prompt in pane ${pane}`);
-}
-
-/** A Herdr workspace at `cwd`, with a fake `claude` agent titled `task` unless it is null. */
-async function workspaceAt(herdr: HerdrFixture, cwd: string, task: string | null, at?: number): Promise<string> {
-  const created = herdr.run(["workspace", "create", "--cwd", cwd, "--label", path.basename(cwd), "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]) as {
-    result: { root_pane: { pane_id: string } };
-  };
-  const pane = created.result.root_pane.pane_id;
-  await prompt(herdr, pane);
-  if (task) {
-    herdr.run(["agent", "start", `agent-${path.basename(cwd)}`, "--kind", "claude", "--pane", pane]);
-    labelAgent(herdr, pane, { task, at });
-  }
-  return pane;
+/**
+ * The project at `cwd` (or, with `worktree`, the linked worktree `cwd` of a
+ * project already open) with the `claude` stand-in titled `task` in it, as the
+ * start panel starts one, or with its first shell alone when `task` is null.
+ * `at` is when the agent's request was made. Returns the pane a spec types
+ * into and, with an agent, its session.
+ */
+async function projectAt(fixture: AgentFixture, daemon: Daemon, cwd: string, task: string | null, at?: number, worktree = false): Promise<{ pane: string; session: string | null; project: OpenedProject }> {
+  const project = await withControl(daemon, (control) => (worktree ? openWorktree(control, cwd) : openProject(control, cwd, path.basename(cwd))));
+  const agent = task ? await startAgentInProject(fixture, daemon, project, { task, at }) : null;
+  const pane = agent?.pane ?? project.pane;
+  // No page shows the pane yet, and an engine delivers keys only to a pane something has sized.
+  await withControl(daemon, async (control) => viewPane(control, pane));
+  return { pane, session: agent?.session ?? null, project };
 }
 
 async function open(page: Page, daemon: Daemon): Promise<void> {
@@ -83,34 +78,42 @@ async function chooseTheme(page: Page, theme: "light" | "dark"): Promise<void> {
 }
 
 test("a delegated-child-only checkout follows the front checkout across project reopening", async ({ page }) => {
-  const herdr = await startHerdr();
+  // The family fixture's agents run `hide`, so the root in the main checkout delegates the worktree's work as a real agent does.
+  const fixture = await startFixture({ family: true });
   let daemon: Daemon | null = null;
   try {
-    const repo = path.join(herdr.root, "repo");
+    const repo = path.join(fixture.root, "repo");
     fs.mkdirSync(repo);
     git(repo, ["init"]);
     git(repo, ["commit", "--allow-empty", "-m", "initial"]);
-    const worktree = path.join(herdr.root, "repo-rows");
+    const worktree = path.join(fixture.root, "repo-rows");
     git(repo, ["worktree", "add", "-b", "feature/sidebar-rows", worktree]);
-    const notes = path.join(herdr.root, "notes");
+    const notes = path.join(fixture.root, "notes");
     fs.mkdirSync(notes);
-    const mainPane = await workspaceAt(herdr, repo, "메인 체크아웃 정리");
-    const rowsPane = await workspaceAt(herdr, worktree, "사이드바 행 구현");
-    await workspaceAt(herdr, notes, "회의록 요약 정리");
-    daemon = await startHided(herdr, "sidebar-child-only");
+    daemon = await startHided(fixture, "sidebar-child-only");
+    const live = daemon;
+    const mainPane = (await projectAt(fixture, live, repo, "메인 체크아웃 정리")).pane;
+    await projectAt(fixture, live, notes, "회의록 요약 정리");
     const last = new Map<string, Record<string, unknown>>();
     countSent(page, last);
     await open(page, daemon);
+    // The core lists a linked worktree once a page shows its repository.
+    const rowsAgent = (await projectAt(fixture, live, worktree, "사이드바 행 구현", undefined, true)).pane;
     const project = page.locator("[data-project]").filter({ has: page.locator("[data-project-row]", { hasText: /^repo/ }) });
     const primary = project.locator('[data-checkout][aria-label^="main"]');
     const feature = project.locator("[data-checkout-row]").filter({ has: page.locator('[data-checkout][aria-label^="feature/sidebar-rows"]') });
     const toggle = project.locator("[data-project-toggle]");
     const projectRow = project.locator("[data-project-row]");
+    await expect(feature.locator("[data-checkout]")).toBeVisible({ timeout: 30_000 });
     await feature.locator("[data-checkout]").click();
     await expect(feature.locator("[data-checkout]")).toHaveAttribute("aria-current", "true");
     const featureId = await feature.locator("[data-checkout]").getAttribute("data-checkout");
     await page.locator('[data-project] [data-checkout][aria-label^="notes"]').click();
-    declareParent(herdr, rowsPane, mainPane);
+    // The root delegates the worktree's work, then the worktree's own agent
+    // closes, so the delegated child is all that checkout holds.
+    await agentReading(fixture, mainPane);
+    const rowsPane = await spawnChild(fixture, live, mainPane, { name: "sidebar-rows", repo: fs.realpathSync.native(repo), branch: "feature/sidebar-rows" });
+    await withControl(live, (control) => closePane(control, rowsAgent));
     const parentRow = project.locator(`[data-pane="${mainPane}"]`);
     const chevron = parentRow.locator(`[data-tree-chevron="${mainPane}"]`);
     await expect(chevron).toBeVisible();
@@ -138,41 +141,43 @@ test("a delegated-child-only checkout follows the front checkout across project 
     await expect(feature.locator("[data-checkout]")).toHaveAttribute("aria-current", "true");
     await screenshot(page, "sidebar-child-only-front");
   } catch (error) {
-    throw afterCleanup(afterCleanup(error, () => daemon?.stop()), () => herdr.stop());
+    throw afterCleanup(afterCleanup(error, () => daemon?.stop()), () => fixture.stop());
   }
-  try { daemon?.stop(); } catch (error) { throw afterCleanup(error, () => herdr.stop()); }
-  herdr.stop();
+  try { daemon?.stop(); } catch (error) { throw afterCleanup(error, () => fixture.stop()); }
+  fixture.stop();
 });
 
 test("the sidebar: kind, age, status badges, opened checkouts and folded projects", async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 });
-  const herdr = await startHerdr();
+  // The family fixture's agents run `hide`, so the root in the main checkout can delegate the worktree's work later.
+  const fixture = await startFixture({ family: true });
   let daemon: Daemon | null = null;
   try {
-    const repo = path.join(herdr.root, "repo");
+    const repo = path.join(fixture.root, "repo");
     fs.mkdirSync(repo);
     git(repo, ["init"]);
     fs.writeFileSync(path.join(repo, "README.md"), "# repo\n");
     git(repo, ["add", "README.md"]);
     git(repo, ["commit", "-m", "initial"]);
-    const worktree = path.join(herdr.root, "repo-rows");
+    const worktree = path.join(fixture.root, "repo-rows");
     git(repo, ["worktree", "add", "-b", "feature/sidebar-rows", worktree]);
     git(worktree, ["commit", "--allow-empty", "-m", "rows"]);
     // The branch description is a purpose the core reads from Git itself.
     git(repo, ["config", "branch.feature/sidebar-rows.description", "Projects 탭 행 다시 그리기"]);
-    const emptyTree = path.join(herdr.root, "repo-empty");
+    const emptyTree = path.join(fixture.root, "repo-empty");
     git(repo, ["worktree", "add", "-b", "empty", emptyTree]);
-    const notes = path.join(herdr.root, "notes");
+    const notes = path.join(fixture.root, "notes");
     fs.mkdirSync(notes);
 
-    const mainPane = await workspaceAt(herdr, repo, "메인 체크아웃 정리");
-    const rowsPane = await workspaceAt(herdr, worktree, "사이드바 행 구현", promptNow - 3 * 3_600_000);
-    const notesPane = await workspaceAt(herdr, notes, "회의록 요약 정리", promptNow - 2 * 86_400_000);
-
-    daemon = await startHided(herdr, "projects-sidebar");
+    daemon = await startHided(fixture, "projects-sidebar");
+    const live = daemon;
+    const mainPane = (await projectAt(fixture, live, repo, "메인 체크아웃 정리")).pane;
+    const notesPane = (await projectAt(fixture, live, notes, "회의록 요약 정리", promptNow - 2 * 86_400_000)).pane;
     const last = new Map<string, Record<string, unknown>>();
     const sent = countSent(page, last);
     await open(page, daemon);
+    // The core lists a linked worktree once a page shows its repository.
+    const rowsPane = (await projectAt(fixture, live, worktree, "사이드바 행 구현", promptNow - 3 * 3_600_000, true)).pane;
 
     const project = page.locator("[data-project]").filter({ has: page.locator("[data-project-row]", { hasText: /^repo/ }) });
     const projectToggle = project.locator("[data-project-toggle]");
@@ -180,7 +185,7 @@ test("the sidebar: kind, age, status badges, opened checkouts and folded project
     const primary = project.locator("[data-checkout-row]", { hasText: /^main/ });
     const feature = project.locator("[data-checkout-row]").filter({ has: page.locator(`[data-checkout][aria-label^="feature/sidebar-rows"]`) });
     await expect(primary.locator("[data-checkout]")).toHaveAttribute("data-checkout-kind", "primary");
-    await expect(feature.locator("[data-checkout]")).toHaveAttribute("data-checkout-kind", "branch");
+    await expect(feature.locator("[data-checkout]")).toHaveAttribute("data-checkout-kind", "branch", { timeout: 30_000 });
     // The primary checkout leads its project although the worktree moved later.
     await expect(project.locator("[data-checkout]").first()).toHaveAttribute("data-checkout-kind", "primary");
     // The worktree's commit was just made: its age is the first minute.
@@ -378,16 +383,20 @@ test("the sidebar: kind, age, status badges, opened checkouts and folded project
 
     // Delegated children leave the checkout tree they work in and open under
     // their root, one line with no branch (agent-hierarchy-screens B10, B14).
-    declareParent(herdr, rowsPane, mainPane);
+    // The root delegates the worktree's work as a real agent does, then the
+    // worktree's own agent closes, so the delegated child is all it holds.
+    await agentReading(fixture, mainPane);
+    const childPane = await spawnChild(fixture, live, mainPane, { name: "sidebar-rows", repo: fs.realpathSync.native(repo), branch: "feature/sidebar-rows" });
+    await withControl(live, (control) => closePane(control, rowsPane));
     await primaryToggle.click();
     const parentRow = primary.locator(`[data-checkout-agents-open] [data-pane="${mainPane}"]`);
     const chevron = parentRow.locator(`[data-tree-chevron="${mainPane}"]`);
     await expect(chevron).toBeVisible({ timeout: 20_000 });
     await expect(chevron).toHaveAttribute("aria-expanded", "false");
-    await expect(page.locator(`nav[data-sidebar] [data-pane="${rowsPane}"]`)).toHaveCount(0);
+    await expect(page.locator(`nav[data-sidebar] [data-pane="${childPane}"]`)).toHaveCount(0);
     const beforeTree = new Map(sent);
     await chevron.click();
-    const childRow = primary.locator(`[data-checkout-agents-open] [data-pane="${rowsPane}"]`);
+    const childRow = primary.locator(`[data-checkout-agents-open] [data-pane="${childPane}"]`);
     await expect(childRow).toHaveAttribute("data-depth", "1");
     await expect(childRow.locator("[data-branch-chip]")).toHaveCount(0);
     await screenshot(page, "projects-sidebar-child-tree");
@@ -436,7 +445,7 @@ test("the sidebar: kind, age, status badges, opened checkouts and folded project
     await expect(feature).toHaveCount(0);
     await expect(primaryToggle).toHaveAttribute("aria-expanded", "true");
     await expect(parentRow.locator(`[data-tree-chevron="${mainPane}"]`)).toBeVisible();
-    await expect(page.locator(`nav[data-sidebar] [data-pane="${rowsPane}"]`)).toHaveCount(0);
+    await expect(page.locator(`nav[data-sidebar] [data-pane="${childPane}"]`)).toHaveCount(0);
     // B25: every level open, at the design width and the app's minimum, nothing runs sideways.
     for (const width of ["calc(240px + var(--size-rail))", "calc(var(--size-sidebar-min) + var(--size-rail))"]) expect(await sidebarOverflow(page, width)).toEqual([]);
     await sidebarOverflow(page, "");
@@ -523,25 +532,27 @@ test("the sidebar: kind, age, status badges, opened checkouts and folded project
     await expect(page.locator("[data-projects-empty]")).toHaveCount(0);
   } finally {
     await daemon?.stop();
-    await herdr.stop();
+    await fixture.stop();
   }
 });
 
 test("Needs You and Unread are raised above Pinned and stay in their tree, whatever is folded", async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 });
-  const herdr = await startHerdr();
+  const fixture = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    const repo = path.join(herdr.root, "raised");
+    const repo = path.join(fixture.root, "raised");
     fs.mkdirSync(repo);
     git(repo, ["init"]);
     git(repo, ["commit", "--allow-empty", "-m", "initial"]);
-    const asking = await workspaceAt(herdr, repo, "배포 전 확인 요청");
-    const [finished] = herdr.panes;
     // The fixture's folders are in the daemon's home, as an operator's projects
     // are, so a pin registers them and a project outliving its last pane stays
     // listed without asking about a folder outside home (PRD wsl-device B15).
-    daemon = await startHided(herdr, "projects-raised", herdr.root);
+    daemon = await startHided(fixture, "projects-raised", fixture.root);
+    const live = daemon;
+    const agent = await projectAt(fixture, live, repo, "배포 전 확인 요청");
+    const asking = agent.pane;
+    const [finished] = fixture.panes;
     const sent = countSent(page);
     await open(page, daemon);
 
@@ -553,9 +564,12 @@ test("Needs You and Unread are raised above Pinned and stay in their tree, whate
     // Nothing needs the operator yet: no raised section is drawn.
     await expect(page.locator("[data-raised-group]")).toHaveCount(0);
 
-    labelAgent(herdr, asking, { task: "배포 전 확인 요청", reply: "배포해도 될까요?", question: true });
-    labelAgent(herdr, finished, { task: "Agent one", progress: "정리 끝" });
-    await finishFixtureTurn(herdr, finished, elsewhereTab(herdr));
+    // The agent's next turn ends in a question, which the core reads when its state changes.
+    continueFixtureTranscript(fixture, agent.session!, { task: "배포 전 확인 요청", reply: "배포해도 될까요?", question: true });
+    await setAgentState(live, asking, "working");
+    await setAgentAsking(live, asking);
+    await labelAgentPane(fixture, live, finished, { task: "Agent one", progress: "정리 끝" });
+    await finishUnseenTurn(fixture, live, finished, await elsewhereTab(fixture, live));
     const needsYou = page.locator('[data-raised-group="needs_you"]');
     const done = page.locator('[data-raised-group="done"]');
     await expect(needsYou.locator(`[data-pane="${asking}"]`)).toBeVisible({ timeout: 20_000 });
@@ -592,28 +606,29 @@ test("Needs You and Unread are raised above Pinned and stay in their tree, whate
     await expect(page.locator("[data-workspace-screen]")).toBeVisible();
 
     // Answered, the agent leaves Needs You and its empty section goes.
-    await setFixtureLifecycle(herdr, asking, "working");
-    await setFixtureLifecycle(herdr, asking, "idle");
+    await setAgentState(live, asking, "working");
+    await setAgentState(live, asking, "idle");
     await expect(needsYou).toHaveCount(0, { timeout: 20_000 });
   } finally {
     await daemon?.stop();
-    await herdr.stop();
+    await fixture.stop();
   }
 });
 
 // docs/UI_BEHAVIOR.md, The sidebar list: Needs You and Done stand still above the projects.
 test("Done stands still above the scrolled projects, and opening its first row moves the next one up into its place", async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 560 });
-  const herdr = await startHerdr();
+  const fixture = await startFixture();
   let daemon: Daemon | null = null;
   try {
+    daemon = await startHided(fixture, "projects-raised-held");
+    const live = daemon;
     const panes: string[] = [];
-    for (const name of ["alpha-repo", "bravo-repo", "charlie-repo", "delta-repo", "echo-repo"]) panes.push(await workspaceAt(herdr, repoAt(herdr, name), `${name} 작업`));
-    daemon = await startHided(herdr, "projects-raised-held");
+    for (const name of ["alpha-repo", "bravo-repo", "charlie-repo", "delta-repo", "echo-repo"]) panes.push((await projectAt(fixture, live, repoAt(fixture, name), `${name} 작업`)).pane);
     await open(page, daemon);
-    const elsewhere = elsewhereTab(herdr);
-    await finishFixtureTurn(herdr, panes[3]!, elsewhere);
-    await finishFixtureTurn(herdr, panes[4]!, elsewhere);
+    const elsewhere = await elsewhereTab(fixture, live);
+    await finishUnseenTurn(fixture, live, panes[3]!, elsewhere);
+    await finishUnseenTurn(fixture, live, panes[4]!, elsewhere);
     const done = page.locator('[data-raised-group="done"]');
     await expect(done.locator('[data-section="done"]')).toHaveText("Unread · 2", { timeout: 20_000 });
     const list = page.locator("[data-project-list]");
@@ -640,13 +655,13 @@ test("Done stands still above the scrolled projects, and opening its first row m
     await screenshot(page, "projects-raised-held");
   } finally {
     await daemon?.stop();
-    await herdr.stop();
+    await fixture.stop();
   }
 });
 
-/** A git repository at `herdr.root/<name>` with one commit, so the sidebar draws it as a project with its main checkout. */
-function repoAt(herdr: HerdrFixture, name: string): string {
-  const repo = path.join(herdr.root, name);
+/** A git repository at `<root>/<name>` with one commit, so the sidebar draws it as a project with its main checkout. */
+function repoAt(fixture: Pick<AgentFixture, "root">, name: string): string {
+  const repo = path.join(fixture.root, name);
   fs.mkdirSync(repo);
   git(repo, ["init"]);
   git(repo, ["commit", "--allow-empty", "-m", "initial"]);
@@ -662,14 +677,15 @@ function projectItem(page: Page, name: string): Locator {
 // decisions, which the list draws and a reload keeps.
 test("projects without agents fold under No agents, and only a working agent brightens a project's name", async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 });
-  const herdr = await startHerdr();
+  const fixture = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    const quietDir = path.join(herdr.root, "quiet-notes");
+    const quietDir = path.join(fixture.root, "quiet-notes");
     fs.mkdirSync(quietDir);
-    const quietPane = await workspaceAt(herdr, quietDir, null);
-    const busyPane = await workspaceAt(herdr, repoAt(herdr, "busy-repo"), "빌드 고치기");
-    daemon = await startHided(herdr, "projects-no-agents");
+    daemon = await startHided(fixture, "projects-no-agents");
+    const live = daemon;
+    const quietPane = (await projectAt(fixture, live, quietDir, null)).pane;
+    const { pane: busyPane, project: busyProject } = await projectAt(fixture, live, repoAt(fixture, "busy-repo"), "빌드 고치기");
     await open(page, daemon);
 
     // B1: the agentless project is counted in the fold after the projects with agents, and not drawn.
@@ -710,29 +726,41 @@ test("projects without agents fold under No agents, and only a working agent bri
     await expect(weight).toHaveAttribute("data-project-weight", "quiet");
     await expect(weight).toHaveCSS("font-weight", "600");
     await expect(weight).toHaveCSS("color", await toneOf("--muted-foreground"));
-    await setFixtureLifecycle(herdr, busyPane, "working");
+    await setAgentState(live, busyPane, "working");
     await expect(weight).toHaveAttribute("data-project-weight", "working", { timeout: 20_000 });
     await expect(weight).toHaveCSS("color", await toneOf("--foreground"));
     await expect(quiet.locator("[data-project-weight]")).toHaveAttribute("data-project-weight", "quiet");
 
+    // Exercise an agentless pane outside the five-tab attach window, as a
+    // project left in the background can be when the operator starts an agent.
+    await withControl(live, async (control) => {
+      for (let index = 0; index < 6; index += 1) {
+        const tab = await newTab(control, busyProject, `background-${index}`);
+        await focusTab(control, busyProject, tab.tab);
+      }
+      await control.until((snapshot) => {
+        const pane = (snapshot.terminal as { panes: { pane_id: string; transport_state: string }[] }).panes.find((pane) => pane.pane_id === quietPane);
+        return !pane || pane.transport_state === "released";
+      }, "the background shell outside the attach window");
+    });
     // B2: an agent started in the folded project takes it out of the fold, which goes with its last project.
-    herdr.run(["agent", "start", "agent-quiet", "--kind", "claude", "--pane", quietPane]);
+    await startAgentIn(fixture, live, quietPane);
     await expect(fold).toHaveCount(0, { timeout: 20_000 });
     await expect(quiet).toBeVisible();
   } finally {
     await daemon?.stop();
-    await herdr.stop();
+    await fixture.stop();
   }
 });
 
 // PRD sidebar-titlebar-refresh B4, B5: the fold of a sleeping project is the core's, kept across a reload.
 test("a project whose agents all sleep folds, and stays open once opened", async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 });
-  const herdr = await startHerdr();
+  const fixture = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    const napPane = await workspaceAt(herdr, repoAt(herdr, "napping-repo"), "잠들 작업");
-    daemon = await startHided(herdr, "projects-asleep");
+    daemon = await startHided(fixture, "projects-asleep");
+    const napPane = (await projectAt(fixture, daemon, repoAt(fixture, "napping-repo"), "잠들 작업")).pane;
     await open(page, daemon);
     const project = projectItem(page, "napping-repo");
     const toggle = project.locator("[data-project-toggle]");
@@ -754,18 +782,18 @@ test("a project whose agents all sleep folds, and stays open once opened", async
     await expect(project.locator("[data-project-toggle]")).toHaveAttribute("aria-expanded", "true", { timeout: 20_000 });
   } finally {
     await daemon?.stop();
-    await herdr.stop();
+    await fixture.stop();
   }
 });
 
 // PRD sidebar-titlebar-refresh B6-B8.
 test("a project row's + and ⋯ appear on hover and focus, start in its main checkout and open its menu", async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 });
-  const herdr = await startHerdr();
+  const fixture = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    await workspaceAt(herdr, repoAt(herdr, "tools-repo"), "도구 정리");
-    daemon = await startHided(herdr, "projects-row-actions");
+    daemon = await startHided(fixture, "projects-row-actions");
+    await projectAt(fixture, daemon, repoAt(fixture, "tools-repo"), "도구 정리");
     await open(page, daemon);
     const project = projectItem(page, "tools-repo");
     const row = project.locator("[data-project-row]");
@@ -815,22 +843,22 @@ test("a project row's + and ⋯ appear on hover and focus, start in its main che
     await expect(menu).toHaveCount(0);
   } finally {
     await daemon?.stop();
-    await herdr.stop();
+    await fixture.stop();
   }
 });
 
 // PRD sidebar-titlebar-refresh B9, B10.
 test("section headers stay at the top of the scrolled list, and a row the keyboard reaches is not under one", async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 560 });
-  const herdr = await startHerdr();
+  const fixture = await startFixture();
   let daemon: Daemon | null = null;
   try {
     const names = ["alpha-repo", "bravo-repo", "charlie-repo", "delta-repo", "echo-repo"];
-    for (const name of names) await workspaceAt(herdr, repoAt(herdr, name), `${name} 작업`);
     // The fixture's folders are in the daemon's home, as an operator's projects
     // are, so a pin registers them and a project outliving its last pane stays
     // listed without asking about a folder outside home (PRD wsl-device B15).
-    daemon = await startHided(herdr, "projects-sticky", herdr.root);
+    daemon = await startHided(fixture, "projects-sticky", fixture.root);
+    for (const name of names) await projectAt(fixture, daemon, repoAt(fixture, name), `${name} 작업`);
     await open(page, daemon);
     await expect(projectItem(page, "echo-repo")).toBeVisible({ timeout: 20_000 });
     await projectItem(page, "alpha-repo").locator("[data-project-row]").click({ button: "right" });
@@ -887,6 +915,6 @@ test("section headers stay at the top of the scrolled list, and a row the keyboa
     await expect(recent).toHaveAttribute("data-stuck", "false");
   } finally {
     await daemon?.stop();
-    await herdr.stop();
+    await fixture.stop();
   }
 });

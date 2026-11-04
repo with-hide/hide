@@ -226,6 +226,16 @@ fn run_coordinator(
                     ) {
                         return;
                     }
+                    if let Some(writer) = lineage_writer.as_mut() {
+                        writer.reconnected();
+                        observe_pulled(
+                            writer,
+                            &context,
+                            session.published_state(),
+                            true,
+                            snapshot_started_at,
+                        );
+                    }
                     pulled = Some(session);
                 }
                 Err(error) => {
@@ -631,10 +641,12 @@ fn run_coordinator(
         }
 
         let timeout = coordinator_wait(
-            subscription.is_some() || pulled.is_some(),
+            subscription.is_some(),
+            pulled.is_some(),
             reconnect_at,
             next_agent_refresh,
             next_operation_tick,
+            Instant::now(),
         );
         match receiver.recv_timeout(timeout) {
             Ok(CoordinatorMessage::RefreshTopology) => {
@@ -1060,8 +1072,13 @@ fn run_coordinator(
                         // Not connected yet; the connect reads it.
                         continue;
                     }
+                    let started_at = Instant::now();
                     match super::pulled::PulledSession::read(&context) {
                         Ok(session) => {
+                            let moved = pulled.as_ref().is_none_or(|previous| {
+                                previous.published_state().agents
+                                    != session.published_state().agents
+                            });
                             let current = pulled.insert(session);
                             if !publish_session(
                                 &context,
@@ -1072,6 +1089,15 @@ fn run_coordinator(
                                 &mut arrivals,
                             ) {
                                 return;
+                            }
+                            if let Some(writer) = lineage_writer.as_mut() {
+                                observe_pulled(
+                                    writer,
+                                    &context,
+                                    current.published_state(),
+                                    moved,
+                                    started_at,
+                                );
                             }
                         }
                         Err(error) => {
@@ -2087,6 +2113,32 @@ fn begin_read_connection(context: &SessionSyncContext, snapshot_started_at: Inst
 
 /// What the lineage writer reads from the runtime in one lock: the delivery
 /// ledger and the panes that should carry this connection's mark.
+/// Hands a pulled engine's agents to the lineage writer, as the event path
+/// hands it each agent list Herdr answers: the writer settles the
+/// registrations Hide owes an agent once its session shows (a fork, a spawn
+/// given no prompt) and writes each registration's lineage tokens on its
+/// pane. Without it no fork on the core's own engine is ever registered.
+/// `moved` says the agents differ from the last session read.
+fn observe_pulled(
+    writer: &mut crate::coordination::lineage::Writer,
+    context: &SessionSyncContext,
+    state: &ProjectionState,
+    moved: bool,
+    started_at: Instant,
+) {
+    let Some((ledger, marks)) = lineage_inputs(context) else {
+        return;
+    };
+    writer.observe(
+        &ledger,
+        &state.agents,
+        &|pane| state.panes.iter().any(|known| known.pane_id == pane),
+        &marks,
+        moved,
+        started_at,
+    );
+}
+
 fn lineage_inputs(
     context: &SessionSyncContext,
 ) -> Option<(
@@ -2560,13 +2612,19 @@ fn publish_ports(
 
 fn coordinator_wait(
     subscribed: bool,
+    pulled: bool,
     reconnect_at: Instant,
     next_agent_refresh: Instant,
     next_operation_tick: Instant,
+    now: Instant,
 ) -> Duration {
-    let now = Instant::now();
     let deadline = if subscribed {
         next_agent_refresh.min(next_operation_tick)
+    } else if pulled {
+        // Pulled engines wake this mailbox on changes. They neither refresh
+        // Herdr agents nor reconnect while connected, so those clocks can
+        // stay in the past without making the coordinator spin.
+        next_operation_tick
     } else {
         reconnect_at.min(next_operation_tick)
     };
@@ -2585,6 +2643,70 @@ fn stale_if_projected(
         return error;
     }
     SessionFetchError::Stale(error.message().to_owned())
+}
+
+#[cfg(test)]
+mod coordinator_wait_tests {
+    use super::*;
+
+    #[test]
+    fn a_pulled_connection_waits_for_its_tick_after_other_deadlines_expire() {
+        let now = Instant::now();
+        let expired = now - Duration::from_secs(1);
+        assert_eq!(
+            coordinator_wait(
+                false,
+                true,
+                expired,
+                expired,
+                now + Duration::from_millis(250),
+                now,
+            ),
+            Duration::from_millis(250),
+        );
+        assert_eq!(
+            coordinator_wait(false, true, expired, expired, now, now),
+            Duration::ZERO,
+        );
+    }
+
+    #[test]
+    fn a_subscription_waits_for_agent_refresh_or_the_operation_tick() {
+        let now = Instant::now();
+        let expired = now - Duration::from_secs(1);
+        for (refresh_ms, expected_ms) in [(100, 100), (1000, 250)] {
+            assert_eq!(
+                coordinator_wait(
+                    true,
+                    false,
+                    expired,
+                    now + Duration::from_millis(refresh_ms),
+                    now + Duration::from_millis(250),
+                    now,
+                ),
+                Duration::from_millis(expected_ms),
+            );
+        }
+    }
+
+    #[test]
+    fn a_disconnected_coordinator_waits_for_reconnect_or_the_operation_tick() {
+        let now = Instant::now();
+        let expired = now - Duration::from_secs(1);
+        for (reconnect_ms, expected_ms) in [(0, 0), (100, 100), (5000, 250)] {
+            assert_eq!(
+                coordinator_wait(
+                    false,
+                    false,
+                    now + Duration::from_millis(reconnect_ms),
+                    expired,
+                    now + Duration::from_millis(250),
+                    now,
+                ),
+                Duration::from_millis(expected_ms),
+            );
+        }
+    }
 }
 
 #[cfg(test)]

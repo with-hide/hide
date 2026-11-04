@@ -6,6 +6,7 @@
 //! is writable; observe is concurrent and read-only. Dropping a session
 //! releases it and ends only what its transport started (D-20).
 
+use std::collections::HashSet;
 use std::io::{self, BufRead, BufReader, Lines, Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -130,6 +131,19 @@ pub struct Transport {
 }
 
 impl Transport {
+    /// Ends an open that lost its generation, before another open may begin.
+    pub(super) fn close(self, pane: &str) {
+        let Self {
+            events,
+            writer,
+            kept,
+            cleanup,
+            ..
+        } = self;
+        run_cleanup(cleanup, pane);
+        drop((events, writer, kept));
+    }
+
     /// A Herdr session's NDJSON lines: its reader's lines are its events,
     /// and in control mode its writer takes the input, resize, scroll and
     /// release lines; an observer's writer is kept, never written.
@@ -236,14 +250,35 @@ impl SessionWriter for LineWriter {
 /// close can wait for the last one.
 #[derive(Default)]
 pub(super) struct Children {
-    live: Mutex<usize>,
+    live: Mutex<HashSet<String>>,
     gone: Condvar,
 }
 
 impl Children {
-    pub(super) fn hold(self: &Arc<Self>) -> ChildHold {
-        *self.lock() += 1;
-        ChildHold(Arc::clone(self))
+    pub(super) fn hold(
+        self: &Arc<Self>,
+        pane: &str,
+        ended: Box<dyn FnOnce() + Send>,
+    ) -> Option<ChildHold> {
+        let mut live = self.lock();
+        if live.contains(pane) || live.len() >= hide_node_link::terminal::MAX_ATTACHED_PANES {
+            return None;
+        }
+        live.insert(pane.to_owned());
+        Some(ChildHold {
+            owner: Arc::clone(self),
+            pane: pane.to_owned(),
+            ended: Some(ended),
+        })
+    }
+
+    pub(super) fn contains(&self, pane: &str) -> bool {
+        self.lock().contains(pane)
+    }
+
+    pub(super) fn occupied_with<'a>(&self, pending: impl Iterator<Item = &'a str>) -> usize {
+        let live = self.lock();
+        live.len() + pending.filter(|pane| !live.contains(*pane)).count()
     }
 
     /// Waits until every child counted has been reaped or `within` passes,
@@ -251,7 +286,7 @@ impl Children {
     pub(super) fn wait_gone(&self, within: Duration) -> usize {
         let deadline = Instant::now() + within;
         let mut live = self.lock();
-        while *live > 0 {
+        while !live.is_empty() {
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
                 break;
@@ -262,10 +297,10 @@ impl Children {
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .0;
         }
-        *live
+        live.len()
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, usize> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashSet<String>> {
         self.live
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -273,14 +308,18 @@ impl Children {
 }
 
 /// One attach child counted live; dropped once it has been reaped.
-pub(super) struct ChildHold(Arc<Children>);
+pub(super) struct ChildHold {
+    owner: Arc<Children>,
+    pane: String,
+    ended: Option<Box<dyn FnOnce() + Send>>,
+}
 
 impl Drop for ChildHold {
     fn drop(&mut self) {
-        let mut live = self.0.lock();
-        *live = live.saturating_sub(1);
-        if *live == 0 {
-            self.0.gone.notify_all();
+        self.owner.lock().remove(&self.pane);
+        self.owner.gone.notify_all();
+        if let Some(ended) = self.ended.take() {
+            ended();
         }
     }
 }
@@ -433,6 +472,10 @@ pub(super) enum WriterCommand {
     Paste(Vec<u8>),
     /// Named keys, each counted as one byte.
     Keys(Vec<Key>),
+    Engine {
+        input: super::input::Typed,
+        command: super::command::Command,
+    },
     Resize(GridSize),
     Redraw(GridSize),
     /// Writes nothing; tells `written` once what was sent before it was
@@ -456,6 +499,7 @@ impl WriterCommand {
             Self::Scroll { .. } | Self::Resize(_) | Self::Redraw(_) => CONTROL_LINE_COST,
             Self::Input { bytes, .. } | Self::Paste(bytes) => bytes.len(),
             Self::Keys(keys) => keys.len(),
+            Self::Engine { input, .. } => input.len(),
             Self::Barrier(_) | Self::Release { .. } => 0,
         }
     }
@@ -470,6 +514,10 @@ impl WriterCommand {
                 ..
             }
             | Self::Barrier(written) => written.disarm(),
+            Self::Engine { command, .. } => command.refused(match &refusal {
+                WriteRefused::Full => "Pane input exceeded the writer backlog limit",
+                WriteRefused::Failed(message) | WriteRefused::Unsupported(message) => message,
+            }),
             _ => {}
         }
         Err(refusal)
@@ -548,12 +596,18 @@ impl Session {
         } = transport;
         let unwritten = Arc::new(Unwritten::default());
         let writer = match (mode, writer) {
-            (Mode::Control, Some(writer)) => Some(spawn_session_writer(
+            (Mode::Control, Some(writer)) => match spawn_session_writer(
                 pane_id,
                 writer,
                 Arc::clone(&unwritten),
                 on_write_failure,
-            )?),
+            ) {
+                Ok(writer) => Some(writer),
+                Err(error) => {
+                    run_cleanup(cleanup, pane_id);
+                    return Err(error);
+                }
+            },
             (Mode::Control, None) => {
                 run_cleanup(cleanup, pane_id);
                 return Err("terminal control stream has no writer".to_owned());
@@ -609,6 +663,22 @@ impl Session {
                 "terminal control input channel is closed".to_owned(),
             ))
         })
+    }
+
+    pub(super) fn command(
+        &self,
+        input: super::input::Typed,
+        command: super::command::Command,
+    ) -> Result<(), WriteRefused> {
+        if matches!(&input, super::input::Typed::Keys(_)) && !self.reads_keys {
+            let message = format!(
+                "Pane {}'s holder does not support named keys; input was not sent",
+                self.pane_id
+            );
+            command.refused(&message);
+            return Err(WriteRefused::Unsupported(message));
+        }
+        self.send(WriterCommand::Engine { input, command })
     }
 
     pub(super) fn write(&self, bytes: &[u8]) -> Result<(), WriteRefused> {
@@ -767,6 +837,24 @@ fn spawn_session_writer(
                     WriterCommand::Input { bytes, written } => {
                         (writer.input(&bytes), None, written)
                     }
+                    WriterCommand::Engine { input, command } => {
+                        if !command.begin() {
+                            unwritten.bytes.fetch_sub(cost, Ordering::AcqRel);
+                            continue;
+                        }
+                        let result = match input {
+                            super::input::Typed::Bytes(bytes) => writer.input(&bytes),
+                            super::input::Typed::Paste(text) => writer.paste(&text),
+                            super::input::Typed::Keys(keys) => writer.keys(&keys),
+                        };
+                        let failed = result.as_ref().err().map(|error| error.to_string());
+                        command.finish(result);
+                        (
+                            failed.map_or(Ok(()), |message| Err(io::Error::other(message))),
+                            None,
+                            None,
+                        )
+                    }
                     WriterCommand::Paste(text) => (writer.paste(&text), None, None),
                     WriterCommand::Keys(keys) => (writer.keys(&keys), None, None),
                     WriterCommand::Resize(size) => (writer.resize(size), None, None),
@@ -837,13 +925,11 @@ impl Drop for Session {
         // Dropped here, or after the reaper's cleanup: a child is counted
         // gone only once it has exited.
         let child = self.child.take();
-        if matches!(cleanup, Cleanup::None) {
-            return;
-        }
         let pane_id = self.pane_id.clone();
         // Fields drop in order, so a reaper that cannot start still ends the
         // child before it is counted gone.
-        let reaping = Reaping { cleanup, child };
+        let reaping = Arc::new(Mutex::new(Some(Reaping { cleanup, child })));
+        let owned = Arc::clone(&reaping);
         if let Err(error) = thread::Builder::new()
             .name(format!("hide-node-terminal-reaper-{pane_id}"))
             .spawn(move || {
@@ -858,11 +944,23 @@ impl Drop for Session {
                         "pane_id": pane_id,
                     }));
                 }
-                let Reaping { cleanup, child } = reaping;
+                let Reaping { cleanup, child } = owned
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .take()
+                    .expect("one reaper");
                 run_cleanup(cleanup, &pane_id);
                 drop(child);
             })
         {
+            // Every Session is retired outside the service lock. If no
+            // reaper can start, this caller still owns and completes cleanup.
+            if let Some(Reaping { cleanup, child }) =
+                reaping.lock().unwrap_or_else(|e| e.into_inner()).take()
+            {
+                run_cleanup(cleanup, &self.pane_id);
+                drop(child);
+            }
             crate::diagnostic!(json!({
                 "component": "terminal_session",
                 "kind": "terminal.session_reaper_spawn_failed",

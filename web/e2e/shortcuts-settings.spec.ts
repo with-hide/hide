@@ -5,7 +5,7 @@
 // macOS-app-only row or its explanations.
 
 import { expect, test } from "@playwright/test";
-import { startHerdr } from "./herdr-fixture";
+import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { countSent, enterWorkspace, screenshot } from "./wire";
 import { label } from "./chords";
@@ -14,7 +14,7 @@ test.describe.configure({ timeout: 120_000 });
 
 test("a chord chip rebinds as the chord is pressed, and the area commands fold into one line", async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 900 });
-  const herdr = await startHerdr();
+  const herdr = await startFixture();
   let daemon: Daemon | null = null;
   try {
     daemon = await startHided(herdr, "shortcuts-settings");

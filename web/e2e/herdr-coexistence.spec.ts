@@ -1,10 +1,13 @@
 // B1-B7/B14: real cold restoration and one Hide-triggered terminal split.
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 import { toPage } from "../../desktop/src/main/wirePath";
-import { startHerdr, type HerdrFixture } from "./herdr-fixture";
-import { createdTabs, executeTerminalCheck, herdrTabIds, waitForTerminal } from "./group-start-helper";
+import { paneCommandLine, startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { waitForTerminal } from "./group-start-helper";
+import { tabLayout, tabPanes, tabsOf, withControl } from "./daemon-actions";
+import { startFixture } from "./engine-fixture";
+import { fixtureProgram } from "./platform-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { chord } from "./chords";
 import { countSent, enterWorkspace, screenshot } from "./wire";
@@ -18,39 +21,55 @@ const listsAgent = (herdr: HerdrFixture, pane: string) =>
   (herdr.run(["agent", "list"]) as { result: { agents: { pane_id: string }[] } }).result.agents.some((agent) => agent.pane_id === pane);
 test.describe.configure({ timeout: 120_000 });
 
-test("Opening a new terminal and splitting it keeps one real Herdr tab and both terminal identities", async ({ page }) => {
-  const herdr = await startHerdr({ agents: false });
+/** Proves typed input executes in the pane's normal shell: the page types a fixture program's line and the pane shows what it printed. */
+async function terminalRuns(page: Page, fixture: { root: string; shell: Parameters<typeof paneCommandLine>[0] }, pane: string): Promise<void> {
+  const marker = "HIDE_TERMINAL_EXECUTED";
+  const executable = fixtureProgram(path.join(fixture.root, "bin"), "hide-terminal-check", `console.log(${JSON.stringify(marker)});`);
+  const view = page.locator(`[data-pane-view="${pane}"]`);
+  await expect(view).toHaveAttribute("data-transport", "controlling");
+  await view.locator("textarea").focus();
+  await page.keyboard.type(paneCommandLine(fixture.shell, [executable]));
+  await page.keyboard.press("Enter");
+  await expect.poll(() => page.evaluate((id) => window.__hideProbe?.paneText(id), pane), { timeout: 5_000 }).toContain(marker);
+}
+
+test("Opening a new terminal and splitting it keeps one tab and both terminal identities", async ({ page }) => {
+  const fixture = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "coexistence-split");
+    daemon = await startHided(fixture, "coexistence-split");
+    const live = daemon;
+    const read = <T,>(pick: (rest: Parameters<typeof tabsOf>[0]) => T | undefined, what: string) => withControl(live, (control) => control.until(pick, what, 20_000));
     const sent = countSent(page);
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page);
-    const before = snapshot(herdr).panes.map((pane) => pane.pane_id).sort();
-    const tabsBefore = herdrTabIds(herdr);
+    const tabsBefore = await read((rest) => tabsOf(rest, fixture.workspace), "the tabs of the checkout");
     await page.locator("[data-new-agent-tab]").first().click();
-    await expect.poll(() => snapshot(herdr).panes.length).toBe(before.length + 1);
-    const [tab] = await createdTabs(herdr, tabsBefore);
-    await waitForTerminal(page, tab!);
+    const tab = await read((rest) => tabsOf(rest, fixture.workspace)?.find((id) => !tabsBefore.includes(id)), "a new tab in the checkout");
+    await waitForTerminal(page, tab);
     await expect(page.locator("[data-pane-view]")).toHaveCount(1);
     const first = await page.locator("[data-pane-view]").getAttribute("data-pane-view");
-    await executeTerminalCheck(page, herdr, first!);
+    await terminalRuns(page, fixture, first!);
     await page.keyboard.press(chord("split_right"));
     await expect(page.locator("[data-pane-view]")).toHaveCount(2);
     await expect.poll(() => sent.get("create_pane")).toBe(1);
-    await expect(page.locator("[data-canvas]")).toHaveAttribute("data-canvas", tab!);
+    await expect(page.locator("[data-canvas]")).toHaveAttribute("data-canvas", tab);
     const ids = await page.locator("[data-pane-view]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-pane-view")!).sort());
     expect(ids).toContain(first);
-    await expect.poll(() => snapshot(herdr).panes.filter((pane) => pane.tab_id === tab).map((pane) => pane.pane_id).sort()).toEqual(ids);
-    await expect.poll(() => snapshot(herdr).layouts.find((layout) => layout.tab_id === tab)?.splits).toEqual([expect.objectContaining({ direction: "right", ratio: 0.5 })]);
+    // The core lists the same two panes in the tab, split to the right at half.
+    const listed = await read((rest) => { const panes = tabPanes(rest, tab); return panes.length === 2 ? [...panes].sort() : undefined; }, "two panes in the new tab");
+    expect(listed).toEqual(ids);
+    const split = await read((rest) => { const root = tabLayout(rest, tab)?.root as { type: string; direction?: string; ratio?: number } | undefined; return root?.type === "split" ? root : undefined; }, "the tab's split");
+    expect(split).toEqual(expect.objectContaining({ direction: "right", ratio: 0.5 }));
     const pane = ids.find((id) => id !== first)!;
     await expect(page.locator(`[data-pane-view="${pane}"]`)).toHaveAttribute("data-focused", "true");
-    await executeTerminalCheck(page, herdr, pane);
+    await terminalRuns(page, fixture, pane);
     await screenshot(page, "coexistence-new-tab-two-panes");
-  } finally { daemon?.stop(); herdr.stop(); }
+  } finally { daemon?.stop(); fixture.stop(); }
 });
 
-test("a missing-folder cold restore shows failure without an agent and closes only after Herdr", async ({ page }) => {
+// Herdr only: it restarts Herdr's server with the folder gone and reads Herdr's cold restore, its `restore_error` and the panes it keeps.
+test("a missing-folder cold restore shows failure without an agent and closes only after Herdr @herdr", async ({ page }) => {
   const herdr = await startHerdr({ agents: false });
   let daemon: Daemon | null = null;
   try {
@@ -74,7 +93,8 @@ test("a missing-folder cold restore shows failure without an agent and closes on
   } finally { daemon?.stop(); herdr.stop(); }
 });
 
-test("cold restoration failure retains a sleeping row and visiting it does not wake the agent", async ({ page }) => {
+// Herdr only: it restarts Herdr's server over a moved folder and reads Herdr's own agent list around the restore.
+test("cold restoration failure retains a sleeping row and visiting it does not wake the agent @herdr", async ({ page }) => {
   const herdr = await startHerdr();
   let daemon: Daemon | null = null;
   try {

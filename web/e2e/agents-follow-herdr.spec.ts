@@ -6,6 +6,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
+import { startEngine } from "./engine-fixture";
 import { startHerdr } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { screenshot } from "./wire";
@@ -17,8 +18,8 @@ test.describe.configure({ timeout: 120_000 });
 const read = (file: string) => (fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "");
 
 /** A private HOME with `programs` in `~/.local/bin` (which the kit searches), `folders` made, and `files` written. */
-async function start(label: string, programs: string[], folders: string[], files: Record<string, string>) {
-  const herdr = await startHerdr({ readiness: "registered" });
+async function start(label: string, programs: string[], folders: string[], files: Record<string, string>, { integrations = false } = {}) {
+  const herdr = integrations ? await startHerdr({ readiness: "registered" }) : await startEngine();
   const home = path.join(fs.mkdtempSync(path.join(herdr.root, "fh-")), "home");
   for (const folder of [".local/bin", ...folders]) fs.mkdirSync(path.join(home, folder), { recursive: true });
   for (const program of programs) fs.writeFileSync(path.join(home, ".local", "bin", program), "#!/bin/sh\n", { mode: 0o755 });
@@ -26,8 +27,8 @@ async function start(label: string, programs: string[], folders: string[], files
     fs.mkdirSync(path.dirname(path.join(home, file)), { recursive: true });
     fs.writeFileSync(path.join(home, file), text);
   }
-  // The bundle carries the pinned Herdr, so the kit installs agents' Herdr integrations with it.
-  const daemon = await startHided(herdr, label, home, {}, true, { bundledHerdr: true });
+  // With the pinned Herdr the bundle carries it, so the kit installs agents' Herdr integrations with it.
+  const daemon = await startHided(herdr, label, home, {}, true, { bundledHerdr: integrations });
   return { herdr, daemon, home };
 }
 
@@ -47,9 +48,10 @@ const OLD_SHARED_SKILL = ".agents/skills/hide-browser/SKILL.md";
 /** Every active program plus retired Cursor: only seven rows may appear, even when Cursor is installed. */
 const PROGRAMS = ["claude", "codex", "grok", "opencode", "pi", "omp", "cursor-agent", "agy"];
 
-test("omp is a row after Pi, and its switch installs Herdr's omp integration in ~/.omp/agent once omp has made it", async ({ page }) => {
+// Herdr only: the switch installs Herdr's own omp integration, which the pinned Herdr's bundle carries.
+test("omp is a row after Pi, and its switch installs Herdr's omp integration in ~/.omp/agent once omp has made it @herdr", async ({ page }) => {
   // No `~/.omp/agent` yet: omp is installed but has not run.
-  const { herdr, daemon, home } = await start("follow-omp", PROGRAMS, [".claude"], { [RECORD]: JSON.stringify({ format: 1, installed: [] }) });
+  const { herdr, daemon, home } = await start("follow-omp", PROGRAMS, [".claude"], { [RECORD]: JSON.stringify({ format: 1, installed: [] }) }, { integrations: true });
   const integration = path.join(home, ".omp", "agent", "extensions", "herdr-omp-agent-state.ts");
   try {
     const list = await openAgents(page, daemon);

@@ -14,8 +14,20 @@ use hide_node_link::holders::{HolderError, PaneHolders, ScreenRules};
 #[derive(Default)]
 struct Pending {
     panes: BTreeMap<String, Option<ScreenRules>>,
-    ending: bool,
+    phase: Phase,
+    #[cfg(test)]
+    waiting: Option<std::sync::mpsc::Sender<()>>,
 }
+
+#[derive(Default, PartialEq, Eq)]
+enum Phase {
+    #[default]
+    Waiting,
+    Ready,
+    Ended,
+}
+
+const PENDING_CAP: usize = hide_kit::panes::HOLDER_CAP;
 
 type Shared = Arc<(Mutex<Pending>, Condvar)>;
 
@@ -25,8 +37,15 @@ pub(super) struct RulesWorker {
 }
 
 impl RulesWorker {
-    pub(super) fn start(holders: Arc<dyn PaneHolders>) -> Result<Self, String> {
+    pub(super) fn start(holders: Arc<dyn PaneHolders>, ready: bool) -> Result<Self, String> {
         let pending: Shared = Arc::default();
+        if ready {
+            pending
+                .0
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .phase = Phase::Ready;
+        }
         let waiting = Arc::clone(&pending);
         let thread = std::thread::Builder::new()
             .name("hide-own-engine-rules".into())
@@ -41,23 +60,62 @@ impl RulesWorker {
     /// Gives `pane`'s holder `rules`, in place of any it was given.
     pub(super) fn give(&self, pane: &str, rules: Option<ScreenRules>) {
         let (pending, wake) = &*self.pending;
-        pending
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .panes
-            .insert(pane.to_owned(), rules);
+        let mut pending = pending.lock().unwrap_or_else(PoisonError::into_inner);
+        if pending.phase == Phase::Ended {
+            return;
+        }
+        if pending.panes.len() >= PENDING_CAP && !pending.panes.contains_key(pane) {
+            drop(pending);
+            crate::diagnostic!(serde_json::json!({
+                "component": "own_engine",
+                "kind": "pane.rules_not_given",
+                "pane_id": pane,
+                "message": "the pending screen rules limit was reached",
+                "limit": PENDING_CAP,
+            }));
+            return;
+        }
+        pending.panes.insert(pane.to_owned(), rules);
+        drop(pending);
         wake.notify_one();
+    }
+
+    /// The node acknowledged this connection's owner after recovery.
+    pub(super) fn ready(&self) {
+        let (pending, wake) = &*self.pending;
+        let mut pending = pending.lock().unwrap_or_else(PoisonError::into_inner);
+        if pending.phase == Phase::Waiting {
+            pending.phase = Phase::Ready;
+        }
+        drop(pending);
+        wake.notify_one();
+    }
+
+    /// Ends admission and discards queued intentions; never reopens them.
+    pub(super) fn end(&self) -> usize {
+        let (pending, wake) = &*self.pending;
+        let mut pending = pending.lock().unwrap_or_else(PoisonError::into_inner);
+        pending.phase = Phase::Ended;
+        let discarded = pending.panes.len();
+        pending.panes.clear();
+        drop(pending);
+        wake.notify_one();
+        discarded
+    }
+
+    /// Observes the actual wait with pending work, without holding it up.
+    #[cfg(test)]
+    pub(super) fn waiting(&self) -> std::sync::mpsc::Receiver<()> {
+        let (send, receive) = std::sync::mpsc::channel();
+        self.pending.0.lock().unwrap().waiting = Some(send);
+        self.pending.1.notify_one();
+        receive
     }
 }
 
 impl Drop for RulesWorker {
     fn drop(&mut self) {
-        let (pending, wake) = &*self.pending;
-        pending
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .ending = true;
-        wake.notify_one();
+        self.end();
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
@@ -69,15 +127,29 @@ fn give_loop(pending: &Shared, holders: &dyn PaneHolders) {
     loop {
         let panes = {
             let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
-            while state.panes.is_empty() && !state.ending {
+            while state.phase != Phase::Ended
+                && (state.phase == Phase::Waiting || state.panes.is_empty())
+            {
+                #[cfg(test)]
+                if state.phase == Phase::Waiting
+                    && !state.panes.is_empty()
+                    && let Some(waiting) = state.waiting.take()
+                {
+                    let _ = waiting.send(());
+                }
                 state = wake.wait(state).unwrap_or_else(PoisonError::into_inner);
             }
-            if state.ending {
+            if state.phase == Phase::Ended {
                 return;
             }
             std::mem::take(&mut state.panes)
         };
         for (pane, rules) in panes {
+            // Only a call admitted before end may finish after it. Do not
+            // start the rest of a drained batch while Drop joins us.
+            if state.lock().unwrap_or_else(PoisonError::into_inner).phase == Phase::Ended {
+                return;
+            }
             let agent = rules.as_ref().map(|rules| rules.agent.clone());
             match holders.set_rules(&pane, rules) {
                 // A pane that closed meanwhile has no holder to give them to.

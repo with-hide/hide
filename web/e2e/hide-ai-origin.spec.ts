@@ -1,5 +1,5 @@
 // What Hide AI started, told from what the operator started, on a real core
-// through an isolated pinned Herdr, hided and browser (PRD hide-ai-origin-mark
+// through an isolated engine, hided and browser (PRD hide-ai-origin-mark
 // B5, B12, B13; PRD hide-ai-work-home B1, B3, B20). The fixture is a scratch repository with no remote;
 // the ledger is seeded in the daemon's own state folder while it is down, the
 // way a Memory promotion's spawn leaves it, and never an operator's.
@@ -7,30 +7,45 @@
 import { expect, test, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
-import { sessionOf, spawnAgent, startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { openProject, openWorktree, withControl } from "./daemon-actions";
+import { startEngine, type EngineServer } from "./engine-fixture";
+import { sessionIn, startAgentInProject } from "./fixture-agents";
 import { git, ledgerOf } from "./hide-ai-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 
 test.describe.configure({ timeout: 150_000 });
 
-type Stack = { herdr: HerdrFixture; daemon: Daemon; repo: string; operatorPane: string; hideAiPane: string; hideAiPath: string };
+type Stack = { server: EngineServer; daemon: Daemon; repo: string; operatorPane: string; hideAiPane: string; hideAiPath: string };
 
 /** A project whose main checkout has the operator's agent, a worktree with an agent Hide started, and a worktree the operator made whose branch is named like Hide AI's. */
-async function start(): Promise<Stack> {
-  const herdr = await startHerdr({ agents: false });
-  fs.mkdirSync(path.join(herdr.root, "scratch"));
-  const repo = fs.realpathSync(path.join(herdr.root, "scratch"));
-  git(repo, "init", "-q", "-b", "main");
-  git(repo, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-q", "--allow-empty", "-m", "first");
-  const hideAiPath = `${repo}.worktrees/hide-memory-m43-fixture`;
-  const lookalikePath = `${repo}.worktrees/hide-memory-m9-by-hand`;
-  git(repo, "worktree", "add", "-q", "-b", "hide-memory-m43-fixture", hideAiPath);
-  git(repo, "worktree", "add", "-q", "-b", "hide-memory-m9-by-hand", lookalikePath);
-  const operatorPane = await spawnAgent(herdr, "scratch", null, repo, { task: "사이드바 가독성 개선" });
-  const hideAiPane = await spawnAgent(herdr, "m43", null, hideAiPath, { task: "m43 규칙을 문서로 옮기는 중" });
-  await spawnAgent(herdr, "m9", null, lookalikePath, { task: "m9 손으로 만든 작업" });
-  const daemon = await startHided(herdr, "hide-ai-origin");
-  return { herdr, daemon, repo, operatorPane, hideAiPane, hideAiPath };
+async function start(page: Page): Promise<Stack> {
+  const server = await startEngine();
+  try {
+    fs.mkdirSync(path.join(server.root, "scratch"));
+    const repo = fs.realpathSync(path.join(server.root, "scratch"));
+    git(repo, "init", "-q", "-b", "main");
+    git(repo, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-q", "--allow-empty", "-m", "first");
+    const hideAiPath = `${repo}.worktrees/hide-memory-m43-fixture`;
+    const lookalikePath = `${repo}.worktrees/hide-memory-m9-by-hand`;
+    git(repo, "worktree", "add", "-q", "-b", "hide-memory-m43-fixture", hideAiPath);
+    git(repo, "worktree", "add", "-q", "-b", "hide-memory-m9-by-hand", lookalikePath);
+    const daemon = await startHided(server, "hide-ai-origin");
+    try {
+      // The core lists a linked worktree once a client shows its repository.
+      await open(page, daemon);
+      const project = await withControl(daemon, (control) => openProject(control, repo, "scratch"));
+      const operator = await startAgentInProject(server, daemon, project, { task: "사이드바 가독성 개선" });
+      const hideAi = await startAgentInProject(server, daemon, await withControl(daemon, (control) => openWorktree(control, hideAiPath)), { task: "m43 규칙을 문서로 옮기는 중" });
+      await startAgentInProject(server, daemon, await withControl(daemon, (control) => openWorktree(control, lookalikePath)), { task: "m9 손으로 만든 작업" });
+      return { server, daemon, repo, operatorPane: operator.pane, hideAiPane: hideAi.pane, hideAiPath };
+    } catch (error) {
+      daemon.stop();
+      throw error;
+    }
+  } catch (error) {
+    server.stop();
+    throw error;
+  }
 }
 
 async function open(page: Page, daemon: Daemon): Promise<void> {
@@ -40,7 +55,7 @@ async function open(page: Page, daemon: Daemon): Promise<void> {
 
 /** Restarts the daemon with Hide's record of its start in the ledger, as a promotion leaves it. */
 async function seed(stack: Stack, task: { kind: string; target: string } | null): Promise<void> {
-  const session = sessionOf(stack.herdr, stack.hideAiPane);
+  const session = await sessionIn(stack.daemon, stack.hideAiPane);
   stack.daemon = await stack.daemon.restart((dir) => {
     const file = path.join(dir, "delivery-ledger.json");
     fs.writeFileSync(file, ledgerOf(stack.daemon.node, [{ pane: stack.hideAiPane, session, path: stack.hideAiPath, branch: "hide-memory-m43-fixture", task }]), { mode: 0o600 });
@@ -49,7 +64,7 @@ async function seed(stack: Stack, task: { kind: string; target: string } | null)
 
 test("an agent Hide AI started for a home leaves the project tree with no head, and a branch named like Hide AI's stays the operator's", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  const stack = await start();
+  const stack = await start(page);
   try {
     await open(page, stack.daemon);
     const project = page.locator("[data-project]", { hasText: "scratch" });
@@ -71,13 +86,13 @@ test("an agent Hide AI started for a home leaves the project tree with no head, 
     await expect(page.locator(`[data-pane="${stack.operatorPane}"] [data-agent-task]`)).toHaveCount(0);
   } finally {
     stack.daemon.stop();
-    stack.herdr.stop();
+    stack.server.stop();
   }
 });
 
 test("a start whose kind this build has no home for stays an operator's row naming its task, and it all holds across a restart of hided", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  const stack = await start();
+  const stack = await start(page);
   try {
     // A record with no task, or one a newer build wrote, loads with the rest of the ledger (B20).
     await seed(stack, null);
@@ -85,9 +100,9 @@ test("a start whose kind this build has no home for stays an operator's row nami
     const row = page.locator(`[data-pane="${stack.hideAiPane}"]`);
     await expect(row.locator("[data-agent-task]")).toHaveText("Hide AI", { timeout: 30_000 });
 
+    const session = await sessionIn(stack.daemon, stack.hideAiPane);
     stack.daemon = await stack.daemon.restart((dir) => {
       const file = path.join(dir, "delivery-ledger.json");
-      const session = sessionOf(stack.herdr, stack.hideAiPane);
       fs.writeFileSync(file, ledgerOf(stack.daemon.node, [{ pane: stack.hideAiPane, session, path: stack.hideAiPath, branch: "hide-memory-m43-fixture", task: { kind: "future_kind", target: "m43" } }]), { mode: 0o600 });
     });
     await open(page, stack.daemon);
@@ -95,6 +110,6 @@ test("a start whose kind this build has no home for stays an operator's row nami
     await expect(page.locator("[data-hide-ai-group]")).toHaveCount(0);
   } finally {
     stack.daemon.stop();
-    stack.herdr.stop();
+    stack.server.stop();
   }
 });

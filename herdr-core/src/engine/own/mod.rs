@@ -17,10 +17,8 @@
 //! ([`rules`]). A daemon's engine saves its session after every change
 //! ([`store`]) and, as it opens, lays the saved session out again around the
 //! holders that ran on, starts the rest again and resumes their agents
-//! ([`restore`]), so a pane keeps its id across a restart and a reboot. What
-//! a later bundle 3 pull request brings (pane identity, scrolling, paste)
-//! answers a refusal under [`UNSUPPORTED`] that names it, never a silent
-//! default. Only a daemon with the development
+//! ([`restore`]), so a pane keeps its id across a restart and a reboot.
+//! Only a daemon with the development
 //! switch `HIDE_DEV_PANE_HOLDER` on builds this engine (D-5).
 
 use std::collections::BTreeMap;
@@ -31,7 +29,8 @@ use std::time::Duration;
 
 use hide_node_link::NodeLink;
 use hide_node_link::holders::{
-    HolderError, HolderKey, HolderStart, PaneFacts, PaneHolders, PaneInput, StyledRead,
+    HolderError, HolderKey, HolderScroll, HolderStart, PaneFacts, PaneHolders, PaneInput,
+    StyledRead, UNSUPPORTED_HOLDER,
 };
 
 use super::keys::PaneKey;
@@ -47,6 +46,7 @@ use crate::session_sync::{ProjectedAgent, ProjectionState};
 use crate::sidebar::{SessionLayoutPayload, SessionSnapshotPayload};
 
 mod agents;
+mod creation;
 mod ids;
 pub(crate) mod layout;
 mod restore;
@@ -59,24 +59,21 @@ mod worktrees;
 
 use topology::{Closed, Pane, Topology, refused};
 
-/// The refusal code of a call this engine does not answer yet.
-pub(crate) const UNSUPPORTED: &str = "own_engine_unsupported";
-
 /// The size a pane starts at before a screen draws it; the first screen
 /// that attaches it resizes it to the rectangle drawn for it.
 const START_ROWS: u16 = 24;
 const START_COLS: u16 = 80;
 
-/// The most of a pane's history a read asks its holder for.
+/// The most rows a read hands the node, which bounds it again to what a
+/// holder answers (`Holders::read`, truncated past it).
 const READ_LINES_CAP: u32 = u16::MAX as u32;
 
-/// The read sources this engine answers, each with the one read a holder
-/// gives: the last rows of its screen and scrollback, soft wraps joined
-/// (`hide_holder_protocol::Ask::Read`). `recent` is therefore unwrapped as
-/// `recent_unwrapped` is, and `visible` reads those same last rows, the
-/// screen's bottom rows among them; a read of exactly the drawn screen is
-/// not answered yet: the screen's size is the attached client's, which the
-/// engine does not hold.
+/// The read sources this engine answers, soft wraps joined: `recent` and
+/// `recent_unwrapped` the last rows of the screen and its scrollback
+/// (`hide_holder_protocol::Ask::Read`), so `recent` is unwrapped as
+/// `recent_unwrapped` is, and `visible` the rows the screen shows now,
+/// wherever it is scrolled to (`Ask::Visible`), which a find measures its
+/// scroll against.
 const READ_SOURCES: [&str; 3] = ["recent", "recent_unwrapped", "visible"];
 
 /// The refusal code of a read from a source this engine does not hold.
@@ -110,6 +107,7 @@ struct Shared {
     topology: Arc<Mutex<Topology>>,
     holders: Arc<dyn PaneHolders>,
     starts: Arc<starts::Starts>,
+    pending: Mutex<BTreeMap<String, creation::Ticket>>,
     wake: Mutex<Option<Wake>>,
     stopped: AtomicBool,
     place: Option<Place>,
@@ -135,7 +133,7 @@ struct Shared {
 
 /// The most panes whose facts wait to enter the topology: a node's cap of
 /// holders.
-const EARLY_FACTS_CAP: usize = 128;
+const EARLY_FACTS_CAP: usize = hide_kit::panes::HOLDER_CAP;
 
 /// One hold of the topology's lock. As it ends, a change of the tab the
 /// keyboard's workspace shows is recorded as a move, so the session reports
@@ -166,13 +164,13 @@ impl Drop for Held<'_> {
 /// whole, its last change written.
 #[derive(Default)]
 pub(super) struct Restored {
-    done: Mutex<bool>,
+    done: Mutex<Option<Result<(), EngineError>>>,
     finished: Condvar,
 }
 
 impl Restored {
-    pub(super) fn finish(&self) {
-        *self.done.lock().unwrap_or_else(PoisonError::into_inner) = true;
+    pub(super) fn finish(&self, result: Result<(), EngineError>) {
+        *self.done.lock().unwrap_or_else(PoisonError::into_inner) = Some(result);
         self.finished.notify_all();
     }
 }
@@ -289,15 +287,16 @@ impl OwnEngine<'static> {
             shared: Arc::new(Shared {
                 windows,
                 topology: Arc::new(Mutex::new(topology)),
-                rules: rules::RulesWorker::start(Arc::clone(&holders))?,
+                rules: rules::RulesWorker::start(Arc::clone(&holders), restored)?,
                 holders,
                 starts: Arc::default(),
+                pending: Mutex::default(),
                 wake: Mutex::default(),
                 stopped: AtomicBool::new(false),
                 place,
                 saver: OnceLock::new(),
                 restored: Arc::new(Restored {
-                    done: Mutex::new(restored),
+                    done: Mutex::new(restored.then_some(Ok(()))),
                     finished: Condvar::new(),
                 }),
                 definitions: agents::Definitions::new(definitions),
@@ -364,10 +363,10 @@ impl OwnEngine<'_> {
         let done = restored.done.lock().unwrap_or_else(PoisonError::into_inner);
         let (done, _) = restored
             .finished
-            .wait_timeout_while(done, restore::BOUND, |done| !*done)
+            .wait_timeout_while(done, restore::BOUND, |done| done.is_none())
             .unwrap_or_else(PoisonError::into_inner);
-        if *done {
-            Ok(())
+        if let Some(result) = &*done {
+            result.clone()
         } else {
             Err(EngineError::Refused {
                 code: "restore_unfinished".to_owned(),
@@ -432,8 +431,8 @@ impl OwnEngine<'_> {
         let applied = self.topology().apply_facts(pane, facts, &catalog);
         match applied {
             Ok(applied) => {
-                if let Some(kind) = applied.rules_for {
-                    self.give_rules(pane, kind.as_deref(), &catalog);
+                if applied.rules_for.is_some() {
+                    self.give_rules(pane);
                 }
                 if applied.changed {
                     self.changed();
@@ -481,25 +480,84 @@ impl OwnEngine<'_> {
         };
         let catalog = self.shared.definitions.get();
         for (pane, facts) in entered {
-            if let Ok(applied) = self.topology().apply_facts(&pane, &facts, &catalog)
-                && let Some(kind) = applied.rules_for
+            let applied = self.topology().apply_facts(&pane, &facts, &catalog);
+            if let Ok(applied) = applied
+                && applied.rules_for.is_some()
             {
-                self.give_rules(&pane, kind.as_deref(), &catalog);
+                self.give_rules(&pane);
             }
         }
     }
 
-    /// Gives `pane`'s holder the screen rules of the agent `kind`, or none.
-    fn give_rules(
-        &self,
-        pane: &str,
-        kind: Option<&str>,
-        catalog: &hide_agent_adapter::definition::Catalog,
-    ) {
-        let rules = kind
-            .and_then(|kind| agents::definition(catalog, kind))
-            .and_then(agents::screen_rules);
-        self.shared.rules.give(pane, rules);
+    /// Queues the pane's current decision in topology order. A caller that
+    /// lost a race with a new agent must not enqueue the previous agent's
+    /// rules afterwards. Only the queue insertion is under this lock; the
+    /// rules worker owns the actual holder call.
+    fn give_rules(&self, pane: &str) {
+        loop {
+            let kind = {
+                let topology = self.topology();
+                let Ok(held) = topology.pane(pane) else {
+                    return;
+                };
+                held.agent.as_ref().map(|agent| agent.kind.clone())
+            };
+            let catalog = self.shared.definitions.get();
+            let rules = kind
+                .as_deref()
+                .and_then(|kind| agents::definition(&catalog, kind))
+                .and_then(agents::screen_rules);
+            let mut topology = self.topology();
+            let Ok(held) = topology.pane_mut(pane) else {
+                return;
+            };
+            if held.agent.as_ref().map(|agent| &agent.kind) != kind.as_ref() {
+                // The newer topology transition owns its publication.
+                return;
+            }
+            if !Arc::ptr_eq(&catalog, &self.shared.definitions.get()) {
+                // A catalog update queues only changed rules. It may have
+                // nothing to publish for this kind, so recompute outside the
+                // lock instead of dropping the pane's first decision.
+                drop(topology);
+                continue;
+            }
+            held.live.rules_sent = Some(kind.clone());
+            self.shared.rules.give(pane, rules);
+            return;
+        }
+    }
+
+    /// Publishes a start provisionally so early hooks have their identity,
+    /// then withdraws only proven non-delivery of that same attempt.
+    /// An unanswered write may already have reached the program.
+    fn type_agent_start(&self, pane: &str, agent: agents::PaneAgent, line: &str) -> Answer<()> {
+        let start = {
+            let mut topology = self.topology();
+            if agent
+                .name
+                .as_deref()
+                .is_some_and(|name| topology.name_taken(name, pane))
+            {
+                return Err(refused(
+                    "agent_name_taken",
+                    "another pane runs an agent under its name".to_owned(),
+                ));
+            }
+            topology.start_agent(pane, agent)?
+        };
+        self.give_rules(pane);
+        self.changed();
+        let result = self.type_bytes(pane, format!("{line}\r").into_bytes());
+        let not_delivered = matches!(&result, Err(EngineError::Refused { .. }));
+        let withdrawn = self
+            .topology()
+            .finish_agent_start(pane, start, not_delivered);
+        if withdrawn {
+            self.give_rules(pane);
+            self.changed();
+        }
+        result
     }
 
     /// Starts `pane`'s holder running `program`, or the machine's shell
@@ -512,9 +570,28 @@ impl OwnEngine<'_> {
         env: Env,
         notice: Option<&str>,
     ) -> Result<(), EngineError> {
-        let mut turn = self.shared.starts.reserve()?;
-        turn.enter()?;
-        start_holder(&*self.shared.holders, pane, program, cwd, env, notice)
+        self.start_pane_replacing(pane, program, cwd, env, notice, None)
+    }
+
+    fn start_pane_replacing(
+        &self,
+        pane: &str,
+        program: Option<&[String]>,
+        cwd: &str,
+        env: Env,
+        notice: Option<&str>,
+        previous: Option<u64>,
+    ) -> Result<(), EngineError> {
+        let ticket = self.reserve_start(
+            start_request(pane, program, cwd, env, notice),
+            previous,
+            false,
+            None,
+        )?;
+        if self.topology().pane(pane).is_ok() {
+            ticket.publish(true, || Ok(()))?;
+        }
+        creation::run(ticket, &*self.shared.holders, &Arc::downgrade(&self.shared))
     }
 
     /// Starts the holder of `pane`, whose id this call just reserved, once
@@ -530,37 +607,17 @@ impl OwnEngine<'_> {
         cwd: &str,
         env: Env,
     ) -> Result<(), EngineError> {
-        self.place(pane)?;
-        if let Err(error) = self.start_pane(pane, program, cwd, env, None) {
-            self.withdraw(pane);
+        let ticket = self.reserve_start(
+            start_request(pane, program, cwd, env, None),
+            None,
+            true,
+            None,
+        )?;
+        if let Err(error) = ticket.check_open().and_then(|()| self.check()) {
+            self.cancel_start(ticket)?;
             return Err(error);
         }
-        Ok(())
-    }
-
-    /// Records `pane`, whose id this call just reserved, on every gate's
-    /// [`super::Placement`] before anything shows it or starts its holder
-    /// (D-11). The order is the locks' order and never overlaps: the
-    /// topology lock was let go once the id was reserved (the caller's block
-    /// ended), a placement takes the lock its record needs (the runtime's,
-    /// for a spawn) and lets it go, and the holder starts outside every
-    /// lock. A placement that refuses takes back the ones before it and
-    /// leaves the pane unmade.
-    fn place(&self, pane: &str) -> Result<(), EngineError> {
-        let placements: Vec<_> = self
-            .gates
-            .iter()
-            .filter_map(|gate| gate.placement.as_ref())
-            .collect();
-        for (at, placement) in placements.iter().enumerate() {
-            if let Err(error) = placement.place(pane) {
-                for placed in &placements[..at] {
-                    placed.withdraw(pane);
-                }
-                return Err(error);
-            }
-        }
-        Ok(())
+        creation::run(ticket, &*self.shared.holders, &Arc::downgrade(&self.shared))
     }
 
     /// Starts the holder of `pane`, which this call has placed and drawn
@@ -575,26 +632,26 @@ impl OwnEngine<'_> {
     /// that holder ended here, since its closer left it to this call.
     fn start_drawn(
         &self,
-        pane: &str,
-        program: Option<&[String]>,
-        cwd: &str,
-        env: Env,
+        ticket: creation::Ticket,
         starting: Arc<starts::Starting>,
     ) -> Result<(), EngineError> {
-        let started = self.start_pane(pane, program, cwd, env, None);
+        let pane = ticket.start.pane.clone();
+        let started = creation::run(ticket, &*self.shared.holders, &Arc::downgrade(&self.shared));
+        let failure = if started.as_ref().is_err_and(|error| error.reply_unknown()) {
+            OnFailure::Mark
+        } else {
+            OnFailure::TakeOut
+        };
         let settled = settle_start(
             &self.shared.topology,
             &*self.shared.holders,
-            pane,
+            &pane,
             &starting,
             &started,
-            OnFailure::TakeOut,
+            failure,
         );
         if settled == Settled::Failed {
             self.changed();
-        }
-        if started.is_err() {
-            self.withdraw(pane);
         }
         started
     }
@@ -618,31 +675,19 @@ impl OwnEngine<'_> {
     /// Starts share the restore's admission gate: eight run and eight
     /// wait at most, admitted before a thread is made. An admission or
     /// thread failure marks the pane just like a holder start failure.
-    fn start_after_answer(
-        &self,
-        pane: &str,
-        program: Option<&[String]>,
-        cwd: &str,
-        env: Env,
-        starting: Arc<starts::Starting>,
-    ) {
+    fn start_after_answer(&self, ticket: creation::Ticket, starting: Arc<starts::Starting>) {
         let topology = Arc::clone(&self.shared.topology);
         let holders = Arc::clone(&self.shared.holders);
         let shared = Arc::downgrade(&self.shared);
-        let turn = self.shared.starts.reserve();
-        let (pane, program, cwd) = (
-            pane.to_owned(),
-            program.map(<[String]>::to_vec),
-            cwd.to_owned(),
-        );
-        let start = move |admission: Result<starts::Turn, EngineError>| {
-            // Keep admission until this thread finishes publishing too.
-            let mut admission = admission;
-            let started = match &mut admission {
-                Ok(turn) => turn.enter().and_then(|()| {
-                    start_holder(&*holders, &pane, program.as_deref(), &cwd, env, None)
-                }),
-                Err(error) => Err(error.clone()),
+        let start = move |ticket: creation::Ticket, failure: Option<EngineError>| {
+            let pane = ticket.start.pane.clone();
+            let started = match failure {
+                None => creation::run(ticket, &*holders, &shared),
+                Some(error) => {
+                    // No worker can start this accepted reservation now. It
+                    // remains recoverable, with its visible failure, on disk.
+                    creation::retire(&*holders, &ticket, &shared).and(Err(error))
+                }
             };
             let settled = settle_start(
                 &topology,
@@ -653,12 +698,9 @@ impl OwnEngine<'_> {
                 OnFailure::Mark,
             );
             if let Err(error) = started {
-                crate::diagnostic!(serde_json::json!({
-                    "component": "own_engine",
-                    "kind": "pane.start_failed",
-                    "pane_id": pane,
-                    "message": error.to_string(),
-                }));
+                crate::diagnostic!(
+                    serde_json::json!({ "component": "own_engine", "kind": "pane.start_failed", "pane_id": pane, "message": error.to_string() })
+                );
             }
             if settled == Settled::Failed
                 && let Some(shared) = shared.upgrade()
@@ -670,39 +712,35 @@ impl OwnEngine<'_> {
                 .changed();
             }
         };
-        let turn = match turn {
-            Ok(turn) => turn,
-            Err(error) => {
-                start(Err(error));
-                return;
-            }
-        };
-        // Admission bounds both active and waiting threads. They hold no
-        // engine, so daemon shutdown still saves without waiting on a node.
-        let pending = Arc::new(Mutex::new(Some((start, turn))));
+        // The slot was acquired before reserve and publication, never twice.
+        let pending = Arc::new(Mutex::new(Some((start, ticket))));
         let spawned = std::thread::Builder::new()
             .name("hide-own-engine-pane-start".into())
             .spawn({
                 let pending = Arc::clone(&pending);
                 move || {
-                    if let Some((start, turn)) = pending
+                    let work = pending
                         .lock()
                         .unwrap_or_else(PoisonError::into_inner)
-                        .take()
-                    {
-                        start(Ok(turn));
+                        .take();
+                    if let Some((start, ticket)) = work {
+                        start(ticket, None);
                     }
                 }
             });
-        if let Err(error) = spawned
-            && let Some((start, _turn)) = pending
+        if let Err(error) = spawned {
+            let work = pending
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
-                .take()
-        {
-            start(Err(EngineError::Transport(format!(
-                "the holder start thread could not start: {error}"
-            ))));
+                .take();
+            if let Some((start, ticket)) = work {
+                start(
+                    ticket,
+                    Some(EngineError::Transport(format!(
+                        "the holder start thread could not start: {error}"
+                    ))),
+                );
+            }
         }
     }
 
@@ -714,37 +752,28 @@ impl OwnEngine<'_> {
     /// end leaves every pane in place, as before.
     fn end_and_remove<R>(
         &self,
-        panes: &[String],
+        select: impl FnOnce(&Topology) -> Result<Vec<String>, EngineError>,
         remove: impl FnOnce(&mut Topology) -> R,
     ) -> Result<R, EngineError> {
-        let starting = |topology: &Topology, pane: &String| {
-            topology.pane(pane).is_ok_and(|pane| pane.is_starting())
-        };
-        let (left, now): (Vec<String>, Vec<String>) = {
-            let topology = self.topology();
-            panes
-                .iter()
-                .cloned()
-                .partition(|pane| starting(&topology, pane))
-        };
-        self.end_panes(&now)?;
-        let (finished, removed) = {
+        self.resolve_unpublished()?;
+        let panes = {
             let mut topology = self.topology();
-            let finished: Vec<String> = left
-                .into_iter()
-                .filter(|pane| !starting(&topology, pane))
-                .collect();
-            (finished, remove(&mut topology))
+            let panes = select(&topology)?;
+            // Selection and the fence share publication's topology lock.
+            // Keep the fence on an unresolved close; a later close retries
+            // the same panes rather than admitting new children behind it.
+            for pane in &panes {
+                if let Ok(pane) = topology.pane_mut(pane) {
+                    pane.closing = true;
+                }
+            }
+            panes
         };
-        let _ = self.end_panes(&finished);
+        self.cancel_unpublished_for(&panes)?;
+        self.end_panes(&panes)?;
+        let removed = remove(&mut self.topology());
+        self.release_closed(&panes)?;
         Ok(removed)
-    }
-
-    /// Takes back every gate's placement of `pane`, which will not run.
-    fn withdraw(&self, pane: &str) {
-        for placement in self.gates.iter().filter_map(|gate| gate.placement.as_ref()) {
-            placement.withdraw(pane);
-        }
     }
 
     /// Ends the holders of `panes`, every one asked even when one fails:
@@ -768,6 +797,7 @@ impl OwnEngine<'_> {
         program: Option<&[String]>,
     ) -> Answer<(String, String)> {
         self.restored()?;
+        self.resolve_unpublished()?;
         let reserved = {
             let mut topology = self.topology();
             if let Some(replace) = replace
@@ -781,21 +811,31 @@ impl OwnEngine<'_> {
             topology.reserve_tab(workspace)?
         };
         let (tab, pane) = &reserved;
-        self.place(pane)?;
+        let ticket = self.reserve_start(
+            start_request(pane, program, cwd, env.clone(), None),
+            None,
+            true,
+            None,
+        )?;
+        if let Err(error) = ticket.check_open().and_then(|()| self.check()) {
+            self.cancel_start(ticket)?;
+            return Err(error);
+        }
         let (drawn, starting) = Pane::starting(cwd, pane_label, program, &env);
-        let added = self
-            .topology()
-            .add_tab(workspace, (tab, pane), label, drawn, focus);
+        let added = ticket.publish(replace.is_none() && !self.places(), || {
+            self.topology()
+                .add_tab(workspace, (tab, pane), label, drawn, focus)
+        });
         if let Err(error) = added {
             // The workspace closed since the id was reserved.
-            self.withdraw(pane);
+            self.cancel_start(ticket)?;
             return Err(error);
         }
         self.changed();
         if replace.is_some() || self.places() {
-            self.start_drawn(pane, program, cwd, env, starting)?;
+            self.start_drawn(ticket, starting)?;
         } else {
-            self.start_after_answer(pane, program, cwd, env, starting);
+            self.start_after_answer(ticket, starting);
         }
         if let Some(replace) = replace {
             self.close_tab_now(replace)?;
@@ -815,6 +855,7 @@ impl OwnEngine<'_> {
         focus: bool,
     ) -> Answer<String> {
         self.restored()?;
+        self.resolve_unpublished()?;
         let (pane, cwd) = {
             let mut topology = self.topology();
             let cwd = match cwd.filter(|cwd| !cwd.trim().is_empty()) {
@@ -824,21 +865,31 @@ impl OwnEngine<'_> {
             let (workspace, _) = topology.pane_place(target)?;
             (topology.reserve_pane(&workspace)?, cwd)
         };
-        self.place(&pane)?;
+        let ticket = self.reserve_start(
+            start_request(&pane, None, &cwd, env.clone(), None),
+            None,
+            true,
+            Some(target),
+        )?;
+        if let Err(error) = ticket.check_open().and_then(|()| self.check()) {
+            self.cancel_start(ticket)?;
+            return Err(error);
+        }
         let (drawn, starting) = Pane::starting(&cwd, None, None, &env);
-        let added = self
-            .topology()
-            .add_split(target, direction, ratio, &pane, drawn, focus);
+        let added = ticket.publish(!self.places(), || {
+            self.topology()
+                .add_split(target, direction, ratio, &pane, drawn, focus)
+        });
         if let Err(error) = added {
             // The pane beside it closed since the id was reserved.
-            self.withdraw(&pane);
+            self.cancel_start(ticket)?;
             return Err(error);
         }
         self.changed();
         if self.places() {
-            self.start_drawn(&pane, None, &cwd, env, starting)?;
+            self.start_drawn(ticket, starting)?;
         } else {
-            self.start_after_answer(&pane, None, &cwd, env, starting);
+            self.start_after_answer(ticket, starting);
         }
         Ok(pane)
     }
@@ -857,6 +908,7 @@ impl OwnEngine<'_> {
         root: &ClosedLayoutNode,
     ) -> Answer<ClosedLayout> {
         self.restored()?;
+        self.resolve_unpublished()?;
         let planned = self
             .topology()
             .plan_layout(workspace, replace, label, root)?;
@@ -886,8 +938,10 @@ impl OwnEngine<'_> {
     }
 
     fn close_tab_now(&self, tab: &str) -> Answer<()> {
-        let panes = self.topology().tab_panes(tab)?;
-        match self.end_and_remove(&panes, |topology| topology.remove_tab(tab))? {
+        match self.end_and_remove(
+            |topology| topology.tab_panes(tab),
+            |topology| topology.remove_tab(tab),
+        )? {
             // A pane of it closed the tab while its holders ended.
             Ok(_) | Err(EngineError::Refused { .. }) => {}
             Err(error) => return Err(error),
@@ -1049,25 +1103,22 @@ fn settle_start(
 
 /// Starts `pane`'s holder running `program`, or the machine's shell after
 /// `notice` when one is given.
-fn start_holder(
-    holders: &dyn PaneHolders,
+fn start_request(
     pane: &str,
     program: Option<&[String]>,
     cwd: &str,
     env: Env,
     notice: Option<&str>,
-) -> Result<(), EngineError> {
-    holders
-        .start(&HolderStart {
-            pane: pane.to_owned(),
-            program: program.map(<[String]>::to_vec),
-            cwd: cwd.to_owned(),
-            env: env.into_iter().collect(),
-            rows: START_ROWS,
-            cols: START_COLS,
-            notice: notice.map(str::to_owned),
-        })
-        .map_err(holder_error)
+) -> HolderStart {
+    HolderStart {
+        pane: pane.to_owned(),
+        program: program.map(<[String]>::to_vec),
+        cwd: cwd.to_owned(),
+        env: env.into_iter().collect(),
+        rows: START_ROWS,
+        cols: START_COLS,
+        notice: notice.map(str::to_owned),
+    }
 }
 
 /// A holder's failure in the engine boundary's words: a pane the node does
@@ -1082,18 +1133,15 @@ fn holder_error(error: HolderError) -> EngineError {
             code: code.to_owned(),
             message,
         },
-        HolderError::Unreachable { message } => EngineError::Transport(message),
+        HolderError::Unreachable { message } => EngineError::Unanswered(message),
     }
 }
 
-/// The refusal of a call a later bundle 3 pull request answers.
-fn unsupported<T>(call: &str, brought_by: &str) -> Answer<T> {
-    Err(EngineError::Refused {
-        code: UNSUPPORTED.to_owned(),
-        message: format!(
-            "the core's own engine does not answer {call} yet; the {brought_by} brings it"
-        ),
-    })
+fn pane_scroll(scroll: HolderScroll) -> crate::find::pane::PaneScroll {
+    crate::find::pane::PaneScroll {
+        offset_from_bottom: scroll.offset_from_bottom,
+        max_offset_from_bottom: scroll.max_offset_from_bottom,
+    }
 }
 
 /// How long a prompt waits before its Enter, as Herdr's `agent.prompt`
@@ -1133,10 +1181,6 @@ fn delivery_of(
     }
 }
 
-/// What brings a find's scroll of the screen: the holder saying and moving
-/// its screen's scroll position (PRD engine-bundle-3-core-owns D-21).
-const SCROLL_POSITION: &str = "holder's scroll position capability";
-
 /// Hide's key as the holder names it; the holder encodes it for the
 /// program's keyboard modes, as Herdr encodes a named key for its pane.
 fn holder_key(key: PaneKey) -> HolderKey {
@@ -1151,6 +1195,50 @@ fn holder_key(key: PaneKey) -> HolderKey {
         PaneKey::Right => HolderKey::Right,
         PaneKey::Backspace => HolderKey::Backspace,
         PaneKey::CtrlC => HolderKey::CtrlC,
+    }
+}
+
+/// What `send_keys` types for `keys`, in their order: a named key for the
+/// holder to encode, and as bytes a single character (`/`) or a Ctrl chord
+/// of a letter (`ctrl+o`, its control byte), which Herdr's `send_keys` takes
+/// too and an agent's own search is opened with (`crate::agent_find`).
+/// Adjacent bytes go as one input; the holder writes its inputs in order.
+fn typed_keys(keys: &[&str]) -> Answer<Vec<PaneInput>> {
+    let mut typed: Vec<PaneInput> = Vec::new();
+    for key in keys {
+        if let Ok(named) = named_key(key) {
+            match typed.last_mut() {
+                Some(PaneInput::Keys(run)) => run.push(holder_key(named)),
+                _ => typed.push(PaneInput::Keys(vec![holder_key(named)])),
+            }
+            continue;
+        }
+        let bytes = typed_bytes(key).ok_or_else(|| EngineError::Refused {
+            code: "unknown_key".to_owned(),
+            message: format!("the core's own engine presses no key named {key:?}"),
+        })?;
+        match typed.last_mut() {
+            Some(PaneInput::Bytes(run)) => run.extend(bytes),
+            _ => typed.push(PaneInput::Bytes(bytes)),
+        }
+    }
+    Ok(typed)
+}
+
+/// The bytes of a single character, or the control byte of a Ctrl chord of
+/// a letter (`ctrl+o` or `ctrl-o`).
+fn typed_bytes(key: &str) -> Option<Vec<u8>> {
+    let mut chars = key.chars();
+    if let (Some(single), None) = (chars.next(), chars.next()) {
+        return Some(single.to_string().into_bytes());
+    }
+    let lower = key.trim().to_ascii_lowercase();
+    let letter = lower
+        .strip_prefix("ctrl+")
+        .or_else(|| lower.strip_prefix("ctrl-"))?;
+    match letter.as_bytes() {
+        [letter @ b'a'..=b'z'] => Some(vec![letter & 0x1f]),
+        _ => None,
     }
 }
 
@@ -1201,7 +1289,7 @@ impl<'g> Engine for OwnEngine<'g> {
             let rules = |catalog| agents::definition(catalog, &kind).and_then(agents::screen_rules);
             let now = rules(&catalog);
             if rules(&before) != now {
-                self.shared.rules.give(&pane, now);
+                self.give_rules(&pane);
             }
         }
         self.changed();
@@ -1215,20 +1303,9 @@ impl<'g> Engine for OwnEngine<'g> {
                 code: "unknown_agent".to_owned(),
                 message: format!("no agent definition names {kind}"),
             })?;
-        // Only the agent the pane runs takes it: a session the operator's
-        // own hook started in the pane's environment (`claude -p` from a
-        // Stop hook) is another agent's, and the engine already knows the
-        // pane runs no agent of that kind.
-        let runs = self
+        if self
             .topology()
-            .pane(pane)?
-            .agent
-            .as_ref()
-            .is_some_and(|agent| agent.kind == definition.id);
-        if runs
-            && self
-                .topology()
-                .set_agent_session(pane, &definition.id, session)?
+            .hook_session(pane, &definition.id, session)?
         {
             self.changed();
         }
@@ -1299,6 +1376,7 @@ impl<'g> Engine for OwnEngine<'g> {
     ) -> Answer<(String, String, String)> {
         self.check()?;
         self.restored()?;
+        self.resolve_unpublished()?;
         let reserved = self.topology().reserve_workspace();
         self.start_placed(&reserved.pane, None, cwd, env.clone())?;
         self.topology().add_workspace(
@@ -1536,7 +1614,10 @@ impl<'g> Engine for OwnEngine<'g> {
     fn close_pane(&self, _wait: Wait, pane: &str) -> Answer<()> {
         self.check()?;
         self.known(pane)?;
-        match self.end_and_remove(&[pane.to_owned()], |topology| topology.remove_pane(pane))? {
+        match self.end_and_remove(
+            |_| Ok(vec![pane.to_owned()]),
+            |topology| topology.remove_pane(pane),
+        )? {
             Ok(Closed { .. }) => {}
             // Its tab closed while its holder ended.
             Err(EngineError::Refused { .. }) => {}
@@ -1688,26 +1769,37 @@ impl<'g> Engine for OwnEngine<'g> {
             .to_owned())
     }
 
+    /// Where the holder's screen is in its scrollback. A holder built
+    /// before scroll asks reports none, as a Herdr pane with no scroll
+    /// metrics does, so a find on it opens the agent's own search.
     fn pane_scroll(
         &self,
         _wait: Wait,
         pane: &str,
     ) -> Answer<Option<crate::find::pane::PaneScroll>> {
         self.check()?;
-        // The holder keeps the scroll of its screen connection and reports
-        // none here.
         self.known(pane)?;
-        Ok(None)
+        match self.shared.holders.scroll(pane, None) {
+            Ok(scroll) => Ok(Some(pane_scroll(scroll))),
+            Err(HolderError::Refused { code, .. }) if code == UNSUPPORTED_HOLDER => Ok(None),
+            Err(error) => Err(holder_error(error)),
+        }
     }
 
     fn scroll_pane(
         &self,
         _wait: Wait,
-        _pane: &str,
-        _offset_from_bottom: u64,
+        pane: &str,
+        offset_from_bottom: u64,
     ) -> Answer<Option<crate::find::pane::PaneScroll>> {
         self.check()?;
-        unsupported("a scroll", SCROLL_POSITION)
+        self.known(pane)?;
+        let scroll = self
+            .shared
+            .holders
+            .scroll(pane, Some(offset_from_bottom))
+            .map_err(holder_error)?;
+        Ok(Some(pane_scroll(scroll)))
     }
 
     fn report_pane_tokens(
@@ -1758,6 +1850,17 @@ impl<'g> Engine for OwnEngine<'g> {
             });
         }
         self.ready(pane)?;
+        if source == "visible" {
+            let text = self
+                .shared
+                .holders
+                .read_visible(pane)
+                .map_err(holder_error)?;
+            return Ok(PaneText {
+                text,
+                truncated: false,
+            });
+        }
         let lines = u16::try_from(lines.min(READ_LINES_CAP)).unwrap_or(u16::MAX);
         let (text, truncated) = self
             .shared
@@ -1785,11 +1888,10 @@ impl<'g> Engine for OwnEngine<'g> {
 
     fn send_keys(&self, _wait: Wait, pane: &str, keys: &[&str]) -> Answer<()> {
         self.check()?;
-        let keys = keys
-            .iter()
-            .map(|key| named_key(key).map(holder_key))
-            .collect::<Answer<_>>()?;
-        self.type_input(pane, PaneInput::Keys(keys))
+        for input in typed_keys(keys)? {
+            self.type_input(pane, input)?;
+        }
+        Ok(())
     }
 
     /// The text as it is, then Enter encoded for the program's keyboard
@@ -1931,11 +2033,7 @@ impl<'g> Engine for OwnEngine<'g> {
         )?;
         // The longest of the shells' lines, so the start is bounded as the
         // shell it meets will type it.
-        let line = [shell_line::Shell::Posix, shell_line::Shell::PowerShell]
-            .into_iter()
-            .filter_map(|shell| shell_line::command(&argv, shell))
-            .map(|line| line.len() + 1)
-            .max()
+        let line = shell_line::longest(|shell| shell_line::command(&argv, shell))
             .ok_or_else(|| format!("the {} start cannot be typed into a shell", definition.id))?;
         Ok(PreparedStart::new(launch, line))
     }
@@ -1979,26 +2077,15 @@ impl<'g> Engine for OwnEngine<'g> {
                 format!("the {} start cannot be typed into a shell", definition.id),
             )
         })?;
-        {
-            let mut topology = self.topology();
-            if topology.name_taken(&launch.name, pane) {
-                return Err(refused(
-                    "agent_name_taken",
-                    format!("another pane runs an agent named {}", launch.name),
-                ));
-            }
-            topology.start_agent(
-                pane,
-                agents::PaneAgent::started(
-                    &definition.id,
-                    Some(&launch.name),
-                    agents::resumed_in(definition, &argv),
-                ),
-            )?;
-        }
-        self.give_rules(pane, Some(&definition.id), &catalog);
-        self.changed();
-        self.type_bytes(pane, format!("{line}\r").into_bytes())?;
+        self.type_agent_start(
+            pane,
+            agents::PaneAgent::started(
+                &definition.id,
+                Some(&launch.name),
+                agents::resumed_in(definition, &argv),
+            ),
+            &line,
+        )?;
         Ok(StartedAgent {
             pane_id: pane.to_owned(),
             terminal_id: Some(pane.to_owned()),
@@ -2138,6 +2225,28 @@ impl<'g> Engine for OwnEngine<'g> {
 
 #[cfg(test)]
 mod tests {
+    // An agent's own search opens with `ctrl+o` and `/` (`crate::agent_find`):
+    // the own engine types them as the bytes Herdr would, in order with the
+    // named keys around them.
+    #[test]
+    fn send_keys_types_a_character_and_a_ctrl_letter_in_order_with_named_keys() {
+        use super::{HolderKey, PaneInput, typed_keys};
+        assert_eq!(
+            typed_keys(&["ctrl+o", "/"]).unwrap(),
+            vec![PaneInput::Bytes(vec![0x0f, b'/'])]
+        );
+        assert_eq!(
+            typed_keys(&["escape", "x", "ctrl-c", "enter"]).unwrap(),
+            vec![
+                PaneInput::Keys(vec![HolderKey::Escape]),
+                PaneInput::Bytes(b"x".to_vec()),
+                PaneInput::Keys(vec![HolderKey::CtrlC, HolderKey::Enter]),
+            ]
+        );
+        assert!(typed_keys(&["f13"]).is_err());
+        assert!(typed_keys(&["ctrl+1"]).is_err());
+    }
+
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Condvar, Mutex};
 
@@ -2146,6 +2255,16 @@ mod tests {
     use crate::sidebar::SessionSnapshotPayload;
 
     use super::*;
+
+    type TerminateHold = (
+        String,
+        std::sync::mpsc::Sender<()>,
+        std::sync::mpsc::Receiver<()>,
+    );
+    type InputHold = (
+        std::sync::mpsc::Sender<()>,
+        std::sync::mpsc::Receiver<Result<(), HolderError>>,
+    );
 
     /// Holders that start every pane until told to refuse, as a node whose
     /// holder program cannot start refuses, and say what they found of the
@@ -2169,26 +2288,67 @@ mod tests {
             )>,
         >,
         started: Mutex<Vec<HolderStart>>,
+        reserved: Mutex<Vec<HolderStart>>,
+        lose_reserve: AtomicBool,
+        reserve_hold: Mutex<
+            Option<(
+                std::sync::mpsc::Sender<String>,
+                std::sync::mpsc::Receiver<()>,
+            )>,
+        >,
+        lose_cancel: AtomicBool,
+        cancel_notice: Mutex<Option<std::sync::mpsc::Sender<String>>>,
+        terminate_hold: Mutex<Option<TerminateHold>>,
+        lose_retire: AtomicBool,
+        issued: std::sync::atomic::AtomicU64,
+        retired: Mutex<Vec<u64>>,
         ended: Mutex<Vec<String>>,
-        found: (Mutex<Option<HolderRecovery>>, Condvar),
+        found: (Mutex<Option<Result<HolderRecovery, HolderError>>>, Condvar),
         ends: Mutex<Option<hide_node_link::holders::PaneEnded>>,
         facts: Mutex<Option<hide_node_link::holders::PaneFactsSink>>,
         /// The rules given to each pane, by agent id, in order.
         rules: (Mutex<Given>, Condvar),
+        rules_hold: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
         typed: (Mutex<Typed>, Condvar),
+        /// The next input announces admission and waits for its outcome.
+        input_hold: Mutex<Option<InputHold>>,
+        /// The next holder reports facts before its pane is published.
+        start_facts: Mutex<Option<PaneFacts>>,
         /// What every pane's terminal holds; `None` answers unreachable.
         processes: Mutex<Option<HolderProcesses>>,
     }
 
     impl Holders {
+        fn hold_input(
+            &self,
+        ) -> (
+            std::sync::mpsc::Receiver<()>,
+            std::sync::mpsc::Sender<Result<(), HolderError>>,
+        ) {
+            let (began, admitted) = std::sync::mpsc::channel();
+            let (outcome, finish) = std::sync::mpsc::channel();
+            *self.input_hold.lock().unwrap() = Some((began, finish));
+            (admitted, outcome)
+        }
+
         /// A start as the node answers it, once counted.
+        /// A start, counted while it runs, so a test sees how many ran at once.
+        fn counted_start(&self, start: &HolderStart) -> Result<(), HolderError> {
+            let now = self.starting.0.fetch_add(1, Ordering::AcqRel) + 1;
+            self.starting.1.fetch_max(now, Ordering::AcqRel);
+            let answer = self.start_now(start);
+            self.starting.0.fetch_sub(1, Ordering::AcqRel);
+            answer
+        }
+
         fn start_now(&self, start: &HolderStart) -> Result<(), HolderError> {
             let hold = self.hold.lock().unwrap().take();
             if let Some((began, go)) = hold {
                 began.send(start.pane.clone()).unwrap();
                 go.recv().unwrap();
             }
-            let refused = self.refuse.load(Ordering::Acquire)
+            let refused = self.ended.lock().unwrap().contains(&start.pane)
+                || self.refuse.load(Ordering::Acquire)
                 || self.refuse_pane.lock().unwrap().as_deref() == Some(start.pane.as_str());
             if refused {
                 return Err(HolderError::Refused {
@@ -2197,6 +2357,10 @@ mod tests {
                 });
             }
             self.started.lock().unwrap().push(start.clone());
+            let facts = self.start_facts.lock().unwrap().take();
+            if let Some(facts) = facts {
+                self.say(&start.pane, &facts);
+            }
             Ok(())
         }
 
@@ -2207,7 +2371,7 @@ mod tests {
         }
 
         fn hand(&self, recovery: HolderRecovery) {
-            *self.found.0.lock().unwrap() = Some(recovery);
+            *self.found.0.lock().unwrap() = Some(Ok(recovery));
             self.found.1.notify_all();
         }
 
@@ -2267,16 +2431,112 @@ mod tests {
     }
 
     impl PaneHolders for Holders {
-        fn start(&self, start: &HolderStart) -> Result<(), HolderError> {
-            let now = self.starting.0.fetch_add(1, Ordering::AcqRel) + 1;
-            self.starting.1.fetch_max(now, Ordering::AcqRel);
-            let answer = self.start_now(start);
-            self.starting.0.fetch_sub(1, Ordering::AcqRel);
-            answer
+        fn request(&self) -> Result<hide_node_link::holders::HolderRequest, HolderError> {
+            Ok(hide_node_link::holders::HolderRequest {
+                owner: 1,
+                number: self.issued.fetch_add(1, Ordering::AcqRel) + 1,
+            })
+        }
+        fn retire(
+            &self,
+            request: hide_node_link::holders::HolderRequest,
+        ) -> Result<(), HolderError> {
+            self.retired.lock().unwrap().push(request.number);
+            if self.lose_retire.swap(false, Ordering::AcqRel) {
+                Err(HolderError::Unreachable {
+                    message: "retire answer lost".to_owned(),
+                })
+            } else {
+                Ok(())
+            }
+        }
+        fn reserve(
+            &self,
+            start: &HolderStart,
+            previous: Option<u64>,
+            _: hide_node_link::holders::HolderRequest,
+        ) -> Result<hide_node_link::holders::HolderReservation, HolderError> {
+            if previous.is_some() {
+                self.ended
+                    .lock()
+                    .unwrap()
+                    .retain(|pane| pane != &start.pane);
+            }
+            let mut reserved = self.reserved.lock().unwrap();
+            let incarnation =
+                if let Some(at) = reserved.iter().position(|held| held.pane == start.pane) {
+                    at + 1
+                } else {
+                    reserved.push(start.clone());
+                    reserved.len()
+                } as u64;
+            drop(reserved);
+            let hold = self.reserve_hold.lock().unwrap().take();
+            if let Some((began, go)) = hold {
+                began.send(start.pane.clone()).unwrap();
+                go.recv().unwrap();
+            }
+            if self.lose_reserve.swap(false, Ordering::AcqRel) {
+                Err(HolderError::Unreachable {
+                    message: "reserve response lost".to_owned(),
+                })
+            } else {
+                Ok(hide_node_link::holders::HolderReservation { incarnation })
+            }
+        }
+
+        fn start_reserved(
+            &self,
+            start: &HolderStart,
+            _: hide_node_link::holders::HolderReservation,
+            _: hide_node_link::holders::HolderRequest,
+        ) -> Result<(), HolderError> {
+            assert!(
+                self.reserved
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|reserved| reserved == start),
+                "a start must have its original reservation"
+            );
+            self.counted_start(start)
+        }
+
+        fn cancel(
+            &self,
+            intent: &hide_node_link::holders::HolderIntent,
+            _: hide_node_link::holders::HolderRequest,
+        ) -> Result<(), HolderError> {
+            self.terminate(&intent.pane)?;
+            if let Some(notice) = self.cancel_notice.lock().unwrap().take() {
+                notice.send(intent.pane.clone()).unwrap();
+            }
+            if self.lose_cancel.swap(false, Ordering::AcqRel) {
+                Err(HolderError::Unreachable {
+                    message: "cancel response lost".to_owned(),
+                })
+            } else {
+                Ok(())
+            }
         }
 
         fn terminate(&self, pane: &str) -> Result<(), HolderError> {
-            self.ended.lock().unwrap().push(pane.to_owned());
+            let hold = {
+                let mut hold = self.terminate_hold.lock().unwrap();
+                if hold.as_ref().is_some_and(|(target, _, _)| target == pane) {
+                    hold.take()
+                } else {
+                    None
+                }
+            };
+            if let Some((_, began, go)) = hold {
+                began.send(()).unwrap();
+                go.recv_timeout(Duration::from_secs(5)).unwrap();
+            }
+            let mut ended = self.ended.lock().unwrap();
+            if !ended.iter().any(|held| held == pane) {
+                ended.push(pane.to_owned());
+            }
             Ok(())
         }
         fn read(&self, _: &str, _: u16) -> Result<(String, bool), HolderError> {
@@ -2284,6 +2544,14 @@ mod tests {
         }
         fn read_styled(&self, _: &str, read: StyledRead) -> Result<(String, bool), HolderError> {
             Ok((format!("\u{1b}[1m{read:?}\u{1b}[0m"), false))
+        }
+        fn read_visible(&self, _: &str) -> Result<String, HolderError> {
+            Ok("screen".to_owned())
+        }
+        fn scroll(&self, _: &str, _: Option<u64>) -> Result<HolderScroll, HolderError> {
+            Err(HolderError::Unreachable {
+                message: "not asked".to_owned(),
+            })
         }
         fn processes(&self, _: &str) -> Result<HolderProcesses, HolderError> {
             self.processes
@@ -2308,6 +2576,11 @@ mod tests {
             })
         }
         fn input(&self, pane: &str, input: PaneInput) -> Result<(), HolderError> {
+            let hold = self.input_hold.lock().unwrap().take();
+            if let Some((began, finish)) = hold {
+                began.send(()).unwrap();
+                finish.recv_timeout(Duration::from_secs(10)).unwrap()?;
+            }
             self.typed
                 .0
                 .lock()
@@ -2342,6 +2615,10 @@ mod tests {
             pane: &str,
             rules: Option<hide_node_link::holders::ScreenRules>,
         ) -> Result<(), HolderError> {
+            if let Some((began, go)) = self.rules_hold.lock().unwrap().take() {
+                began.send(()).unwrap();
+                go.recv_timeout(Duration::from_secs(5)).unwrap();
+            }
             self.rules
                 .0
                 .lock()
@@ -2357,9 +2634,11 @@ mod tests {
                 .1
                 .wait_timeout_while(found, timeout, |found| found.is_none())
                 .unwrap();
-            found.clone().ok_or(HolderError::Refused {
-                code: "recovery_unfinished".to_owned(),
-                message: "not handed".to_owned(),
+            found.clone().unwrap_or_else(|| {
+                Err(HolderError::Refused {
+                    code: "recovery_unfinished".to_owned(),
+                    message: "not handed".to_owned(),
+                })
             })
         }
     }
@@ -2385,12 +2664,16 @@ mod tests {
         let (_, _, pane) = engine
             .create_workspace(WAIT, "/w", "w", true, Env::new())
             .unwrap();
-        for source in ["recent", "recent_unwrapped", "visible"] {
+        for source in ["recent", "recent_unwrapped"] {
             assert_eq!(
                 engine.read_pane(WAIT, &pane, source, 20).unwrap().text,
                 "rows"
             );
         }
+        assert_eq!(
+            engine.read_pane(WAIT, &pane, "visible", 20).unwrap().text,
+            "screen"
+        );
         match engine.read_pane(WAIT, &pane, "scrollback", 20) {
             Err(EngineError::Refused { code, message }) => {
                 assert_eq!(code, "unknown_read_source");
@@ -2399,6 +2682,9 @@ mod tests {
             other => panic!("expected a refusal naming the source, got {other:?}"),
         }
     }
+
+    mod creation;
+    mod rules_recovery;
 
     /// What a placement saw: each call, in order, with whether the pane's
     /// holder had been asked to start by then and whether the topology could
@@ -2516,6 +2802,119 @@ mod tests {
         assert_eq!(engine.pane_folders(WAIT).unwrap().len(), 2);
     }
 
+    #[test]
+    fn an_unanswered_reservation_keeps_placement_until_cancellation_and_retirement_confirm() {
+        let holders = Arc::new(Holders::default());
+        let engine = Arc::new(OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>));
+        let (_, _, first) = engine
+            .create_workspace(WAIT, "/w", "w", true, Env::new())
+            .unwrap();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let placed = engine.gated(Gate::placing(Placed {
+            engine: Arc::clone(&engine),
+            holders: Arc::clone(&holders),
+            refuse: false,
+            seen: Arc::clone(&seen),
+        }));
+        let before = holders.started().len();
+        holders.lose_reserve.store(true, Ordering::Release);
+        assert!(
+            placed
+                .split_beside(WAIT, &first, None, Env::new())
+                .unwrap_err()
+                .reply_unknown()
+        );
+        let pane = engine
+            .shared
+            .pending
+            .lock()
+            .unwrap()
+            .keys()
+            .next()
+            .unwrap()
+            .clone();
+        assert_eq!(engine.pane_folders(WAIT).unwrap().len(), 1);
+        assert_eq!(
+            seen.lock().unwrap().len(),
+            1,
+            "unknown does not withdraw a placement"
+        );
+        holders.lose_cancel.store(true, Ordering::Release);
+        assert!(engine.resolve_unpublished().unwrap_err().reply_unknown());
+        assert_eq!(seen.lock().unwrap().len(), 1);
+        assert!(engine.shared.pending.lock().unwrap().contains_key(&pane));
+        holders.lose_retire.store(true, Ordering::Release);
+        assert!(engine.resolve_unpublished().unwrap_err().reply_unknown());
+        assert_eq!(
+            seen.lock().unwrap().len(),
+            2,
+            "confirmed cancellation withdraws once"
+        );
+        assert!(engine.shared.pending.lock().unwrap().contains_key(&pane));
+        let retired = *holders.retired.lock().unwrap().last().unwrap();
+        engine.resolve_unpublished().unwrap();
+        assert!(engine.shared.pending.lock().unwrap().is_empty());
+        assert_eq!(*holders.retired.lock().unwrap().last().unwrap(), retired);
+        assert_eq!(seen.lock().unwrap().len(), 2);
+        assert_eq!(
+            holders.started().len(),
+            before,
+            "an unknown reservation never starts a replacement"
+        );
+    }
+
+    #[test]
+    fn authority_lost_during_reservation_cancels_before_publication() {
+        let holders = Arc::new(Holders::default());
+        let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+        let (_, _, first) = engine
+            .create_workspace(WAIT, "/w", "w", true, Env::new())
+            .unwrap();
+        let allowed = AtomicBool::new(true);
+        let gated = engine.gated(Gate::both(|| {
+            if allowed.load(Ordering::Acquire) {
+                Ok(())
+            } else {
+                Err(refused(
+                    "authority_lost",
+                    "the caller was removed".to_owned(),
+                ))
+            }
+        }));
+        let (began, entered) = std::sync::mpsc::channel();
+        let (go, released) = std::sync::mpsc::channel();
+        *holders.reserve_hold.lock().unwrap() = Some((began, released));
+        std::thread::scope(|scope| {
+            let work = scope.spawn(|| gated.split_beside(WAIT, &first, None, Env::new()));
+            let pane = entered.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert_eq!(engine.pane_folders(WAIT).unwrap().len(), 1);
+            allowed.store(false, Ordering::Release);
+            go.send(()).unwrap();
+            assert_eq!(
+                work.join().unwrap().unwrap_err().code(),
+                Some("authority_lost")
+            );
+            assert!(holders.ended.lock().unwrap().contains(&pane));
+            assert!(!holders.started().iter().any(|start| start.pane == pane));
+        });
+        assert_eq!(engine.pane_folders(WAIT).unwrap().len(), 1);
+        assert!(engine.shared.pending.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn completed_creations_return_capacity_on_the_same_connection() {
+        let holders = Arc::new(Holders::default());
+        let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+        for n in 1..=384 {
+            engine
+                .start_placed(&format!("w1:p{n}"), None, "/w", Env::new())
+                .unwrap();
+        }
+        assert_eq!(holders.started().len(), 384);
+        assert_eq!(holders.retired.lock().unwrap().len(), 384);
+        assert!(engine.shared.pending.lock().unwrap().is_empty());
+    }
+
     /// Waits for `done`, which a holder start on its own thread settles.
     #[allow(clippy::disallowed_methods)] // a polling helper: it sleeps between observations of a state, bounded by a deadline
     fn settles(what: &str, done: impl Fn() -> bool) {
@@ -2566,24 +2965,30 @@ mod tests {
                 .any(|start| start.pane == split)
         });
 
-        // A tab closed while its pane's holder starts is gone at once; the
-        // holder, which may not run yet, is ended by the start once it runs,
-        // never by the close under the start.
+        // Close fences the already published reservation before removing
+        // the tab. The delayed start must observe that terminal decision.
         let (starting, go) = held();
         let (tab, pane) = engine
             .create_tab(WAIT, &workspace, "/w", "t", false, Env::new())
             .unwrap();
         assert_eq!(starting.recv().unwrap(), pane);
+        let outcome = engine
+            .topology()
+            .pane(&pane)
+            .unwrap()
+            .starting
+            .clone()
+            .unwrap();
         engine.close_tab(WAIT, &tab).unwrap();
         assert!(!shown(&pane), "the closed tab's pane is gone at once");
         assert!(
-            !ended(&pane),
-            "the close leaves the starting holder to its start"
+            ended(&pane),
+            "close confirms termination before removing the published pane"
         );
         go.send(()).unwrap();
-        settles(
-            "the start ends the holder of a pane closed while it started",
-            || ended(&pane),
+        assert!(
+            outcome.wait().is_err(),
+            "the delayed start cannot reopen it"
         );
 
         // A holder that does not start leaves its pane where it was drawn,
@@ -2671,27 +3076,37 @@ mod tests {
             );
             panes.push(pane);
         }
-        for _ in 0..8 {
-            panes.push(
-                engine
-                    .create_tab(WAIT, &workspace, "/w", "queued", false, Env::new())
-                    .unwrap()
-                    .1,
+        std::thread::scope(|scope| {
+            let queued: Vec<_> = (0..8)
+                .map(|_| {
+                    scope.spawn(|| {
+                        engine.create_tab(WAIT, &workspace, "/w", "queued", false, Env::new())
+                    })
+                })
+                .collect();
+            settles(
+                "eight creation callers admitted to the waiting bound",
+                || engine.shared.starts.waiting() == 8,
             );
-        }
-        let overflow = engine.split_beside(WAIT, &first, None, Env::new()).unwrap();
-        let error = engine.pane_processes(WAIT, &overflow).unwrap_err();
-        assert_eq!(error.code(), Some("holder_start_queue_full"));
-        assert!(engine.session(WAIT).unwrap().panes.iter().any(|pane| {
-            pane.pane_id == overflow
-                && pane.restore_error.as_deref() == Some(error.to_string().as_str())
-        }));
-        // A synchronous creation uses this same gate, including restores.
-        let error = engine
-            .create_workspace(WAIT, "/other", "other", false, Env::new())
-            .unwrap_err();
-        assert_eq!(error.code(), Some("holder_start_queue_full"));
-        drop(held);
+            let before = engine.pane_folders(WAIT).unwrap().len();
+            let error = engine
+                .split_beside(WAIT, &first, None, Env::new())
+                .unwrap_err();
+            assert_eq!(error.code(), Some("holder_start_queue_full"));
+            assert_eq!(
+                engine.pane_folders(WAIT).unwrap().len(),
+                before,
+                "refused admission publishes no pane"
+            );
+            let error = engine
+                .create_workspace(WAIT, "/other", "other", false, Env::new())
+                .unwrap_err();
+            assert_eq!(error.code(), Some("holder_start_queue_full"));
+            drop(held);
+            for call in queued {
+                panes.push(call.join().unwrap().unwrap().1);
+            }
+        });
         for pane in panes {
             assert_eq!(
                 engine.pane_processes(WAIT, &pane).unwrap().shell_pid,
@@ -2781,12 +3196,6 @@ mod tests {
             first.read_pane(WAIT, &tab, "recent", 1).unwrap();
             panes.push(tab);
         }
-        settles("the first daemon's panes started", || {
-            first
-                .topology()
-                .panes()
-                .all(|(_, pane)| !pane.is_starting())
-        });
         drop(first);
 
         // After the reboot nothing of them runs; one pane's holder refuses.
@@ -2966,9 +3375,11 @@ mod tests {
             "the saved layout is there before the node answers"
         );
         holders.hand(HolderRecovery {
+            owner: 1,
             closed: vec![exited.clone()],
             ended: vec![ended.clone()],
             present: vec![running.clone(), shown, unplaced.clone()],
+            recoverable: Vec::new(),
         });
         next.restored().unwrap();
         let active = |engine: &OwnEngine<'_>| {
@@ -3048,9 +3459,11 @@ mod tests {
         std::fs::write(&path, "{ not a session").unwrap();
 
         let holders = Holders::found(HolderRecovery {
+            owner: 1,
             closed: Vec::new(),
             ended: Vec::new(),
             present: vec!["w2:p1".to_owned(), "w2:p3".to_owned()],
+            recoverable: Vec::new(),
         });
         let engine =
             OwnEngine::open(Arc::clone(&holders) as Arc<dyn PaneHolders>, place.clone()).unwrap();
@@ -3101,12 +3514,9 @@ mod tests {
             .unwrap();
         // A program exits only once its holder runs, and these start after
         // their answers.
-        settles("the new panes' holders started", || {
-            engine
-                .topology()
-                .panes()
-                .all(|(_, pane)| !pane.is_starting())
-        });
+        for pane in [&first, &second, &lone] {
+            engine.read_pane(WAIT, pane, "recent", 1).unwrap();
+        }
         let exited = holders
             .ends
             .lock()
@@ -3224,10 +3634,14 @@ mod tests {
             "opened where it is"
         );
         let again = engine
-            .open_worktree(WAIT, &wire(&herdr_place), &wire(&repo), false)
+            .open_worktree(WAIT, &wire(&herdr_place), &wire(&repo), true)
             .unwrap();
         assert!(again.already_open);
         assert_eq!(again.workspace_id, opened.workspace_id);
+        assert_eq!(
+            engine.focused_workspace(WAIT).unwrap().as_deref(),
+            Some(opened.workspace_id.as_str())
+        );
 
         engine
             .remove_worktree(WAIT, &made.workspace_id)
@@ -3382,6 +3796,437 @@ mod tests {
         assert_eq!(listed[0].name.as_deref(), Some("worker"));
         assert_eq!(listed[0].agent_status.as_deref(), Some("done"));
         assert_eq!(engine.pane_agent_status(WAIT, &pane).unwrap(), "done");
+    }
+
+    fn undelivered_input() -> HolderError {
+        HolderError::Refused {
+            code: "pane_input_expired".to_owned(),
+            message: "the queued input expired before writing".to_owned(),
+        }
+    }
+
+    #[test]
+    fn an_agents_early_facts_and_rules_enter_with_its_pane() {
+        let holders = Arc::new(Holders::default());
+        *holders.start_facts.lock().unwrap() = Some(running(
+            "claude",
+            hide_node_link::holders::ScreenState::Working,
+        ));
+        let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+        let (_, _, pane) = engine
+            .create_workspace(WAIT, "/w", "w", true, Env::new())
+            .unwrap();
+        let agents = engine.agents(WAIT).unwrap();
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].pane_id, pane);
+        assert_eq!(agents[0].agent_status.as_deref(), Some("working"));
+        assert_eq!(
+            holders.rules_given(1),
+            [(pane, Some("claude-code".to_owned()))]
+        );
+    }
+
+    /// A refused launch leaves neither a listed agent nor a held name,
+    /// and does not erase a hook that preceded the provisional launch.
+    #[test]
+    fn an_undelivered_agent_start_releases_its_name_and_restores_the_pending_session() {
+        let holders = Arc::new(Holders::default());
+        holders.idle_shell(41, "zsh");
+        let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+        let (_, _, pane) = engine
+            .create_workspace(WAIT, "/w", "w", true, Env::new())
+            .unwrap();
+        let (_, _, other) = engine
+            .create_workspace(WAIT, "/other", "other", false, Env::new())
+            .unwrap();
+        engine
+            .hook_session(&pane, "claude", "before-start")
+            .unwrap();
+        let start = engine
+            .prepare_start(launch(&pane, "worker", "claude", &[]))
+            .unwrap();
+        let (admitted, finish) = holders.hold_input();
+        std::thread::scope(|scope| {
+            let starting = scope.spawn(|| engine.start_agent(WAIT, &start));
+            admitted.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert_eq!(holders.rules_given(1)[0].1.as_deref(), Some("claude-code"));
+            finish.send(Err(undelivered_input())).unwrap();
+            assert!(
+                matches!(starting.join().unwrap(), Err(EngineError::Refused { code, .. }) if code == "pane_input_expired")
+            );
+        });
+        assert!(engine.agents(WAIT).unwrap().is_empty());
+        assert!(holders.typed(&pane).is_empty());
+        assert_eq!(holders.rules_given(2)[1], (pane.clone(), None));
+        let reused = engine
+            .prepare_start(launch(&other, "worker", "claude", &[]))
+            .unwrap();
+        engine.start_agent(WAIT, &reused).unwrap();
+        holders.say(
+            &pane,
+            &running("claude", hide_node_link::holders::ScreenState::Working),
+        );
+        let agents = engine.agents(WAIT).unwrap();
+        let restored = agents.iter().find(|agent| agent.pane_id == pane).unwrap();
+        assert_eq!(
+            restored.agent_session.as_ref().unwrap().value,
+            "before-start"
+        );
+    }
+
+    #[test]
+    fn an_undelivered_agent_start_restores_the_preceding_agent() {
+        let holders = Arc::new(Holders::default());
+        holders.idle_shell(41, "zsh");
+        let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+        let (_, _, pane) = engine
+            .create_workspace(WAIT, "/w", "w", true, Env::new())
+            .unwrap();
+        let old = engine
+            .prepare_start(launch(&pane, "old", "claude", &[]))
+            .unwrap();
+        engine.start_agent(WAIT, &old).unwrap();
+        engine.hook_session(&pane, "claude", "old-session").unwrap();
+        holders.say(
+            &pane,
+            &running("claude", hide_node_link::holders::ScreenState::Working),
+        );
+        // The processes read says the shell is idle before the next facts
+        // arrive. A refused start must preserve the last observed identity.
+        let new = engine
+            .prepare_start(launch(&pane, "new", "codex", &[]))
+            .unwrap();
+        let (_admitted, finish) = holders.hold_input();
+        finish.send(Err(undelivered_input())).unwrap();
+        assert!(engine.start_agent(WAIT, &new).is_err());
+        let agents = engine.agents(WAIT).unwrap();
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].name.as_deref(), Some("old"));
+        assert_eq!(
+            agents[0].agent_session.as_ref().unwrap().value,
+            "old-session"
+        );
+        assert_eq!(agents[0].agent_status.as_deref(), Some("working"));
+        assert!(!holders.typed(&pane).contains("codex"));
+    }
+
+    /// A rollback cannot restore a name another pane was allowed to take.
+    /// The backup reserves it only while restoration is still possible.
+    #[test]
+    fn a_start_reserves_its_previous_name_until_rollback_is_no_longer_possible() {
+        for outcome in ["refused", "written", "unanswered", "hook"] {
+            let holders = Arc::new(Holders::default());
+            holders.idle_shell(41, "zsh");
+            let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+            let (_, _, pane) = engine
+                .create_workspace(WAIT, "/w", "w", true, Env::new())
+                .unwrap();
+            let (_, _, other) = engine
+                .create_workspace(WAIT, "/other", "other", false, Env::new())
+                .unwrap();
+            let old = engine
+                .prepare_start(launch(&pane, "old", "claude", &[]))
+                .unwrap();
+            engine.start_agent(WAIT, &old).unwrap();
+            holders.say(
+                &pane,
+                &running("claude", hide_node_link::holders::ScreenState::Working),
+            );
+            let new = engine
+                .prepare_start(launch(&pane, "new", "codex", &[]))
+                .unwrap();
+            let reuse = engine
+                .prepare_start(launch(&other, "old", "claude", &[]))
+                .unwrap();
+            let (admitted, finish) = holders.hold_input();
+            std::thread::scope(|scope| {
+                let starting = scope.spawn(|| engine.start_agent(WAIT, &new));
+                admitted.recv_timeout(Duration::from_secs(5)).unwrap();
+                assert!(
+                    matches!(engine.start_agent(WAIT, &reuse), Err(EngineError::Refused { code, .. }) if code == "agent_name_taken")
+                );
+                if outcome == "hook" {
+                    engine.hook_session(&pane, "codex", "confirmed").unwrap();
+                    engine.start_agent(WAIT, &reuse).unwrap();
+                }
+                finish
+                    .send(match outcome {
+                        "written" => Ok(()),
+                        "unanswered" => Err(HolderError::Unreachable {
+                            message: "write outcome unknown".to_owned(),
+                        }),
+                        _ => Err(undelivered_input()),
+                    })
+                    .unwrap();
+                let result = starting.join().unwrap();
+                assert_eq!(result.is_ok(), outcome == "written");
+            });
+            if outcome == "refused" {
+                assert!(
+                    matches!(engine.start_agent(WAIT, &reuse), Err(EngineError::Refused { code, .. }) if code == "agent_name_taken")
+                );
+            } else if outcome != "hook" {
+                engine.start_agent(WAIT, &reuse).unwrap();
+            }
+            let agents = engine.agents(WAIT).unwrap();
+            let old = agents
+                .iter()
+                .filter(|agent| agent.name.as_deref() == Some("old"))
+                .collect::<Vec<_>>();
+            assert_eq!(old.len(), 1, "{outcome}");
+            assert_eq!(
+                old[0].pane_id,
+                if outcome == "refused" { &pane } else { &other }.as_str()
+            );
+        }
+    }
+
+    /// A write without an answer may already have reached the shell. It is
+    /// not undone or resent, and another pane cannot claim its name.
+    #[test]
+    fn an_unanswered_agent_start_keeps_its_identity() {
+        let holders = Arc::new(Holders::default());
+        holders.idle_shell(41, "zsh");
+        let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+        let (_, _, pane) = engine
+            .create_workspace(WAIT, "/w", "w", true, Env::new())
+            .unwrap();
+        let (_, _, other) = engine
+            .create_workspace(WAIT, "/other", "other", false, Env::new())
+            .unwrap();
+        let start = engine
+            .prepare_start(launch(&pane, "worker", "claude", &[]))
+            .unwrap();
+        let (_admitted, finish) = holders.hold_input();
+        finish
+            .send(Err(HolderError::Unreachable {
+                message: "the writer stopped answering".to_owned(),
+            }))
+            .unwrap();
+        assert!(matches!(
+            engine.start_agent(WAIT, &start),
+            Err(EngineError::Unanswered(_))
+        ));
+        assert_eq!(
+            engine.delivery_agent(WAIT, "worker").unwrap().readiness,
+            Readiness::Launching
+        );
+        let duplicate = engine
+            .prepare_start(launch(&other, "worker", "claude", &[]))
+            .unwrap();
+        assert!(
+            matches!(engine.start_agent(WAIT, &duplicate), Err(EngineError::Refused { code, .. }) if code == "agent_name_taken")
+        );
+    }
+
+    /// A session report, even at the value the launch already carried, or
+    /// a real foreground observation is newer authority than input refusal.
+    #[test]
+    fn an_undelivered_start_cannot_erase_a_hook_or_foreground_observation() {
+        for observation in ["hook", "claude", "wrapper", "gemini"] {
+            let holders = Arc::new(Holders::default());
+            holders.idle_shell(41, "zsh");
+            let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+            let (_, _, pane) = engine
+                .create_workspace(WAIT, "/w", "w", true, Env::new())
+                .unwrap();
+            let start = engine
+                .prepare_start(launch(
+                    &pane,
+                    "worker",
+                    "claude",
+                    &["--resume", "same-session"],
+                ))
+                .unwrap();
+            let (admitted, finish) = holders.hold_input();
+            std::thread::scope(|scope| {
+                let starting = scope.spawn(|| engine.start_agent(WAIT, &start));
+                admitted.recv_timeout(Duration::from_secs(5)).unwrap();
+                if observation == "hook" {
+                    engine
+                        .hook_session(&pane, "claude", "same-session")
+                        .unwrap();
+                    let duplicate = engine
+                        .prepare_start(launch(&pane, "second", "codex", &[]))
+                        .unwrap();
+                    assert!(
+                        matches!(engine.start_agent(WAIT, &duplicate), Err(EngineError::Refused { code, .. }) if code == "agent_pane_busy")
+                    );
+                } else {
+                    holders.say(
+                        &pane,
+                        &running(observation, hide_node_link::holders::ScreenState::Working),
+                    );
+                }
+                finish.send(Err(undelivered_input())).unwrap();
+                assert!(matches!(
+                    starting.join().unwrap(),
+                    Err(EngineError::Refused { .. })
+                ));
+            });
+            let agents = engine.agents(WAIT).unwrap();
+            assert_eq!(agents.len(), 1, "{observation}");
+            assert_eq!(
+                agents[0].agent.as_deref(),
+                Some(if observation == "gemini" {
+                    "gemini"
+                } else {
+                    "claude"
+                })
+            );
+            if observation == "hook" {
+                assert_eq!(
+                    agents[0].agent_session.as_ref().unwrap().value,
+                    "same-session"
+                );
+            }
+        }
+    }
+
+    /// The old response can arrive after the original start deadline and
+    /// a new start. Neither it nor the new refusal revives the expired one.
+    #[test]
+    fn an_expired_agent_start_cannot_withdraw_or_return_after_a_new_attempt() {
+        for new_refused in [false, true] {
+            let holders = Arc::new(Holders::default());
+            holders.idle_shell(41, "zsh");
+            let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+            let (_, _, pane) = engine
+                .create_workspace(WAIT, "/w", "w", true, Env::new())
+                .unwrap();
+            let old = engine
+                .prepare_start(launch(&pane, "old", "claude", &[]))
+                .unwrap();
+            let (admitted, finish) = holders.hold_input();
+            std::thread::scope(|scope| {
+                let starting = scope.spawn(|| engine.start_agent(WAIT, &old));
+                admitted.recv_timeout(Duration::from_secs(5)).unwrap();
+                engine
+                    .topology()
+                    .pane_mut(&pane)
+                    .unwrap()
+                    .agent
+                    .as_mut()
+                    .unwrap()
+                    .live
+                    .started = Some(
+                    std::time::Instant::now() - agents::START_DEADLINE - Duration::from_secs(1),
+                );
+                let new = engine
+                    .prepare_start(launch(&pane, "new", "codex", &[]))
+                    .unwrap();
+                if new_refused {
+                    let (_admitted, reject) = holders.hold_input();
+                    reject.send(Err(undelivered_input())).unwrap();
+                    assert!(engine.start_agent(WAIT, &new).is_err());
+                } else {
+                    engine.start_agent(WAIT, &new).unwrap();
+                }
+                finish.send(Err(undelivered_input())).unwrap();
+                assert!(starting.join().unwrap().is_err());
+            });
+            let agents = engine.agents(WAIT).unwrap();
+            if new_refused {
+                assert!(
+                    agents.is_empty(),
+                    "neither expired nor refused starts survive"
+                );
+            } else {
+                assert_eq!(agents.len(), 1);
+                assert_eq!(agents[0].name.as_deref(), Some("new"));
+                assert_eq!(agents[0].agent.as_deref(), Some("codex"));
+                assert!(!holders.typed(&pane).contains("claude"));
+            }
+        }
+    }
+
+    /// Rules in flight for an old start may finish, but the queued decision
+    /// after refusal and a new launch belongs to the new agent.
+    #[test]
+    fn a_refused_start_and_its_successor_leave_the_new_agents_rules() {
+        let holders = Arc::new(Holders::default());
+        holders.idle_shell(41, "zsh");
+        let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+        let (_, _, pane) = engine
+            .create_workspace(WAIT, "/w", "w", true, Env::new())
+            .unwrap();
+        let (began, waiting) = std::sync::mpsc::channel();
+        let (finish, go) = std::sync::mpsc::channel();
+        *holders.rules_hold.lock().unwrap() = Some((began, go));
+        let start = engine
+            .prepare_start(launch(&pane, "old", "claude", &[]))
+            .unwrap();
+        let (admitted, reject) = holders.hold_input();
+        std::thread::scope(|scope| {
+            let starting = scope.spawn(|| engine.start_agent(WAIT, &start));
+            admitted.recv_timeout(Duration::from_secs(5)).unwrap();
+            waiting.recv_timeout(Duration::from_secs(5)).unwrap();
+            reject.send(Err(undelivered_input())).unwrap();
+            assert!(starting.join().unwrap().is_err());
+            let new = engine
+                .prepare_start(launch(&pane, "new", "codex", &[]))
+                .unwrap();
+            engine.start_agent(WAIT, &new).unwrap();
+            finish.send(()).unwrap();
+        });
+        assert_eq!(
+            holders.rules_given(2).last().unwrap().1.as_deref(),
+            Some("codex")
+        );
+        let agents = engine.agents(WAIT).unwrap();
+        assert_eq!(agents[0].name.as_deref(), Some("new"));
+    }
+
+    /// A typed agent can report its first session before the holder has
+    /// recognized its program. Neither ordering loses the native identity.
+    #[test]
+    fn a_hook_session_waits_for_its_agent_without_claiming_another_agent() {
+        use hide_node_link::holders::ScreenState;
+        for report_first in [true, false] {
+            let holders = Arc::new(Holders::default());
+            let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+            let (_, _, pane) = engine
+                .create_workspace(WAIT, "/w", "w", true, Env::new())
+                .unwrap();
+            if report_first {
+                engine.hook_session(&pane, "claude-code", "first").unwrap();
+                engine.hook_session(&pane, "claude-code", "latest").unwrap();
+                assert!(engine.agents(WAIT).unwrap().is_empty());
+            }
+            holders.say(&pane, &running("claude", ScreenState::Working));
+            if !report_first {
+                engine.hook_session(&pane, "claude-code", "latest").unwrap();
+            }
+            let session = || engine.agents(WAIT).unwrap()[0].agent_session.clone();
+            assert_eq!(session().unwrap().value, "latest");
+            engine.hook_session(&pane, "gemini", "nested").unwrap();
+            assert_eq!(session().unwrap().value, "latest");
+            holders.say(&pane, &PaneFacts::default());
+            holders.say(&pane, &running("claude", ScreenState::Working));
+            assert!(
+                session().is_none(),
+                "an ended agent's report is not replayed"
+            );
+            holders.say(&pane, &PaneFacts::default());
+            engine
+                .hook_session(&pane, "gemini", "early-other-kind")
+                .unwrap();
+            holders.say(&pane, &running("claude", ScreenState::Working));
+            assert!(
+                session().is_none(),
+                "detection discards a different kind's report"
+            );
+            holders.say(&pane, &PaneFacts::default());
+            holders.say(&pane, &running("gemini", ScreenState::Working));
+            assert!(
+                session().is_none(),
+                "a discarded report cannot reach a later agent"
+            );
+            holders.say(&pane, &PaneFacts::default());
+            engine.hook_session(&pane, "claude", "closing").unwrap();
+            engine.close_pane(WAIT, &pane).unwrap();
+            assert!(engine.hook_session(&pane, "claude", "too-late").is_err());
+        }
     }
 
     /// B19: the folder, title and first prompt the holder reads follow the
@@ -3548,6 +4393,7 @@ mod tests {
         let next =
             OwnEngine::open(Arc::clone(&holders) as Arc<dyn PaneHolders>, place.clone()).unwrap();
         holders.hand(HolderRecovery {
+            owner: 1,
             ended: vec![claude.clone(), twin.clone(), gemini.clone()],
             ..HolderRecovery::default()
         });
@@ -3611,6 +4457,7 @@ mod tests {
                 OwnEngine::open(Arc::clone(&holders) as Arc<dyn PaneHolders>, place.clone())
                     .unwrap();
             holders.hand(HolderRecovery {
+                owner: 1,
                 present: vec![claude.clone()],
                 ..HolderRecovery::default()
             });

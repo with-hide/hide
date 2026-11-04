@@ -1,17 +1,17 @@
-// agy's own hook block on an isolated pinned Herdr and a hided that runs the install kit, with a stand-in `agy`
+// agy's own hook block on an isolated engine and a hided that runs the install kit, with a stand-in `agy`
 // (PRD antigravity-first-class B1, B2, B3, B9, D-09, D-12, D-18): the Agents switch writes Hide's `hide` block in
 // `~/.gemini/config/hooks.json` beside the operator's block, the skill stub in `~/.gemini/config/skills`, and Hide
 // AI's read-only folder with its trust, and takes out only Hide's; the operator's own skills under
 // `~/.gemini/antigravity-cli/skills` are never touched. The INSTALLED tool command, read from the file the kit wrote
-// and run the way agy runs it (agy's payload on stdin), refuses a direct `herdr agent start` in agy's shape and
+// and run the way agy runs it (agy's payload on stdin, from inside a pane's agent), refuses a direct `herdr agent start` in agy's shape and
 // leaves every other call to agy's own question.
 // The real agy is never run here: it signs in through the operator's browser whenever its home changes (D-18).
 
 import { expect, test, type Page } from "@playwright/test";
-import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { startFixture, type AgentFixture } from "./engine-fixture";
+import { agentPane } from "./agent-pane";
 import { startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace, screenshot } from "./wire";
 
@@ -27,7 +27,7 @@ const OPERATOR_HOOKS = { mine: { Stop: [{ type: "command", command: "/opt/mine.s
 const OPERATOR_SETTINGS = { theme: "dark", trustedWorkspaces: ["/opt/mine"] };
 const OPERATOR_SKILL = "---\nname: mine\ndescription: the operator's own skill\n---\n";
 
-type Stack = { herdr: HerdrFixture; daemon: Daemon; home: string };
+type Stack = { herdr: AgentFixture; daemon: Daemon; home: string };
 
 const hooksFile = (home: string) => path.join(home, ".gemini", "config", "hooks.json");
 const settingsFile = (home: string) => path.join(home, ".gemini", "antigravity-cli", "settings.json");
@@ -41,11 +41,13 @@ const aiFolder = (home: string) => path.join(home, ".hide", "ai", "antigravity-r
  * copy of the fixture's agent shim on the fixture PATH, which is the PATH the kit searches.
  */
 async function start(label: string, options: { chosen?: boolean } = {}): Promise<Stack> {
-  const herdr = await startHerdr();
+  const herdr = await startFixture({ agents: false });
   fs.copyFileSync(path.join(herdr.root, "bin", "claude"), path.join(herdr.root, "bin", "agy"));
   fs.chmodSync(path.join(herdr.root, "bin", "agy"), 0o755);
   const home = path.join(fs.mkdtempSync(path.join(herdr.root, "agy-")), "home");
   fs.mkdirSync(path.join(operatorSkills(home), "mine"), { recursive: true });
+  // The panes' shells start in the daemon's HOME on the own engine; without a startup file zsh asks its new-user questions first.
+  fs.writeFileSync(path.join(home, ".zshrc"), "PS1='fixture %# '\n");
   fs.mkdirSync(path.dirname(hooksFile(home)), { recursive: true });
   fs.writeFileSync(hooksFile(home), JSON.stringify(OPERATOR_HOOKS));
   fs.writeFileSync(settingsFile(home), JSON.stringify(OPERATOR_SETTINGS));
@@ -161,22 +163,24 @@ test("the installed agy tool command refuses a direct agent start in agy's shape
     await page.goto(`${stack.daemon.origin}/#token=${stack.daemon.token}`);
     await enterWorkspace(page, "fixture");
     await expect.poll(() => read(hooksFile(home)), { timeout: 60_000 }).toContain("--runtime antigravity");
-    const pane = await shellPane(herdr);
+    // agy's tool command runs from inside an agent in the fixture's first pane, as agy runs it.
+    const [pane] = herdr.panes;
+    const asAgent = await agentPane(herdr, stack.daemon.stateDir, pane);
     const checkout = path.join(herdr.root, "fixture");
     const call = (name: string, args: Record<string, unknown>) => ({ conversationId: "ade08778-fcdd-4e96-88ba-fd1c4e594fa2", toolCall: { name, args } });
 
-    const refused = runHook(stack, pane, toolCommand(home), call("run_command", { CommandLine: `herdr agent start worker --kind claude --pane ${pane}`, Cwd: checkout }));
-    expect(refused.status, refused.stderr).toBe(0);
-    const answer = JSON.parse(refused.stdout) as { decision: string; reason: string };
+    const refused = await runHook(asAgent, home, toolCommand(home), call("run_command", { CommandLine: `herdr agent start worker --kind claude --pane ${pane}`, Cwd: checkout }));
+    expect(refused.status).toBe(0);
+    const answer = JSON.parse(refused.out) as { decision: string; reason: string };
     expect(answer.decision).toBe("deny");
     expect(answer.reason).toContain("hide agent spawn");
     expect(refusals(home)).toEqual(["antigravity"]);
 
     // Every other path leaves the call to agy's own permission question: ask, never allow.
     for (const payload of [call("run_command", { CommandLine: "cargo test", Cwd: checkout }), call("view_file", { AbsolutePath: path.join(checkout, "README.md") })]) {
-      const run = runHook(stack, pane, toolCommand(home), payload);
-      expect(run.status, run.stderr).toBe(0);
-      expect(JSON.parse(run.stdout)).toEqual({ decision: "ask" });
+      const run = await runHook(asAgent, home, toolCommand(home), payload);
+      expect(run.status).toBe(0);
+      expect(JSON.parse(run.out)).toEqual({ decision: "ask" });
     }
     expect(refusals(home)).toEqual(["antigravity"]);
   } finally {
@@ -184,28 +188,9 @@ test("the installed agy tool command refuses a direct agent start in agy's shape
   }
 });
 
-/** A shell pane of its own in the fixture's checkout, once its prompt is drawn. */
-async function shellPane(herdr: HerdrFixture): Promise<string> {
-  const created = herdr.run(["workspace", "create", "--cwd", path.join(herdr.root, "fixture"), "--label", "agy", "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]) as {
-    result: { root_pane: { pane_id: string } };
-  };
-  const pane = created.result.root_pane.pane_id;
-  const screen = () => execFileSync(herdr.bin, ["pane", "read", pane, "--source", "recent", "--lines", "10"], { env: herdr.env, encoding: "utf8", timeout: 10_000 });
-  await expect.poll(screen, { message: `a prompt in pane ${pane}`, timeout: 20_000 }).toContain("fixture %");
-  return pane;
-}
-
-/** Runs `command` as agy does (a shell, the payload on stdin) from the fixture's checkout, in the pane's environment. */
-function runHook(stack: Stack, pane: string, command: string, payload: unknown): { stdout: string; stderr: string; status: number | null } {
-  const { herdr, daemon } = stack;
-  const run = spawnSync("/bin/sh", ["-c", command], {
-    cwd: path.join(herdr.root, "fixture"),
-    input: JSON.stringify(payload),
-    env: { PATH: herdr.fixturePath, HOME: daemon.home, HIDE_STATE_DIR: daemon.stateDir, HERDR_SOCKET_PATH: herdr.socket, HERDR_PANE_ID: pane },
-    encoding: "utf8",
-    timeout: 20_000,
-  });
-  return { stdout: run.stdout, stderr: run.stderr, status: run.status };
+/** Runs `command` as agy does (a shell, the payload on stdin) from inside the pane's agent, with the kit's HOME. */
+function runHook(asAgent: Awaited<ReturnType<typeof agentPane>>, home: string, command: string, payload: unknown) {
+  return asAgent(["-c", command], { program: "/bin/sh", input: JSON.stringify(payload), env: { HOME: home } });
 }
 
 /** The runtimes of the guard's refusals so far, in order: its own log, one `launch.refused` line each. */

@@ -22,8 +22,9 @@ use hide_holder_protocol::record::Phase;
 use hide_holder_protocol::{Answer, Appearance, Foreground, OpenError, Size, Theme};
 use hide_kit::panes::{CloseError, StartRefusal, StartRequest, Started};
 use hide_node_link::holders::{
-    HolderError, HolderForeground, HolderProcesses, HolderProof, HolderRecovery, HolderStart,
-    PaneEnded, PaneFactsSink, PaneHolders, PaneInput, ScreenRules, StyledRead, UNSUPPORTED_HOLDER,
+    HolderError, HolderForeground, HolderIntent, HolderProcesses, HolderProof, HolderRecovery,
+    HolderRequest, HolderReservation, HolderScroll, HolderStart, PaneEnded, PaneFactsSink,
+    PaneHolders, PaneInput, ScreenRules, StyledRead, UNSUPPORTED_HOLDER,
 };
 
 /// This machine's holders and the service that shows their screens.
@@ -32,9 +33,11 @@ pub struct LocalPanes {
     service: Arc<Service>,
     shell: PaneShell,
     install: Option<PaneInstall>,
+    owner: Option<Arc<hide_kit::panes::Owner>>,
 }
 
 /// How a pane started with no program runs this machine's shell.
+#[derive(Clone)]
 pub enum PaneShell {
     /// The account's shell with Hide's shell integration, prepared for each
     /// pane as the node prepares it for a tab Hide opens
@@ -71,28 +74,42 @@ impl PaneShell {
 
 impl LocalPanes {
     /// The panes of `holders`, attached to `service`; a pane started with no
-    /// program runs `shell`, and every pane names `install`, the Hide
-    /// installation this node belongs to, so a hook entry or a `hide` command
-    /// another installation wrote leaves the pane to this one's
-    /// (docs/agent-hooks.md, More than one Hide on an account).
-    pub fn new(
-        holders: Arc<Holders>,
-        service: Arc<Service>,
-        shell: PaneShell,
-        install: Option<PaneInstall>,
-    ) -> Self {
+    /// program runs `shell`. Its panes name no installation.
+    pub fn new(holders: Arc<Holders>, service: Arc<Service>, shell: PaneShell) -> Self {
         holders.own_every_pane();
         Self {
             holders,
             service,
             shell,
-            install,
+            install: None,
+            owner: None,
         }
     }
-}
 
-impl PaneHolders for LocalPanes {
-    fn start(&self, start: &HolderStart) -> Result<(), HolderError> {
+    /// The panes of `holders` on the account `home` belongs to: a pane with
+    /// no program of its own runs the account's shell with Hide's
+    /// integration, as the node prepares it for a tab. What this machine's
+    /// engine and a device's node both run.
+    /// Every such pane names the Hide installation this program belongs to,
+    /// so a hook entry or a `hide` command another installation wrote leaves
+    /// the pane to this one's (docs/agent-hooks.md, More than one Hide on an
+    /// account).
+    pub fn for_account(holders: Arc<Holders>, service: Arc<Service>, home: PathBuf) -> Self {
+        let mut panes = Self::new(
+            holders,
+            service,
+            PaneShell::Account {
+                home,
+                user: hide_host::shell_integration::UserShell::of_process(),
+            },
+        );
+        panes.install = std::env::current_exe()
+            .ok()
+            .and_then(|program| hide_host::kit::pane_install(&program));
+        panes
+    }
+
+    fn expand(&self, start: &HolderStart) -> Result<StartRequest, HolderError> {
         let size = Size::checked(start.rows, start.cols).map_err(|why| HolderError::Refused {
             code: "invalid_size".to_owned(),
             message: why,
@@ -134,7 +151,7 @@ impl PaneHolders for LocalPanes {
                 code: "invalid_cwd".to_owned(),
                 message: format!("{} is not a folder path: {error}", start.cwd),
             })?;
-        let request = StartRequest {
+        Ok(StartRequest {
             pane: start.pane.clone(),
             program,
             cwd,
@@ -168,8 +185,128 @@ impl PaneHolders for LocalPanes {
                 palette: Vec::new(),
                 appearance: Appearance::Unknown,
             },
-        };
-        match self.holders.start(&self.service, &request) {
+        })
+    }
+
+    fn admit(
+        &self,
+        request: HolderRequest,
+        intent: &HolderIntent,
+    ) -> Result<hide_kit::panes::Request<'_>, HolderError> {
+        self.owner()?
+            .admit(request.owner, request.number, &intent.pane, &intent.digest)
+            .map_err(|message| HolderError::Refused {
+                code: "pane_request_refused".to_owned(),
+                message,
+            })
+    }
+
+    fn owner(&self) -> Result<&hide_kit::panes::Owner, HolderError> {
+        self.owner.as_deref().ok_or_else(|| HolderError::Refused {
+            code: "pane_owner_unavailable".to_owned(),
+            message: "this connection has not acquired its pane records".to_owned(),
+        })
+    }
+}
+
+impl PaneHolders for LocalPanes {
+    fn own(
+        self: Arc<Self>,
+        within: std::time::Duration,
+    ) -> Result<Arc<dyn PaneHolders>, HolderError> {
+        let owner = Arc::new(
+            self.holders
+                .acquire(within)
+                .map_err(|message| HolderError::Unreachable { message })?,
+        );
+        let found = self.holders.recover(&owner, &self.service);
+        if !found.complete {
+            return Err(HolderError::Unreachable {
+                message: "the node could not complete its pane record scan".to_owned(),
+            });
+        }
+        // A complete scan retains unreadable IDs in `present` and in the
+        // record cap. Quarantine those records, not this connection's
+        // healthy panes; starting an unreadable ID still refuses in Panes.
+        self.holders.prune_folders();
+        Ok(Arc::new(Self {
+            holders: Arc::clone(&self.holders),
+            service: Arc::clone(&self.service),
+            shell: self.shell.clone(),
+            install: self.install.clone(),
+            owner: Some(owner),
+        }))
+    }
+
+    fn request(&self) -> Result<HolderRequest, HolderError> {
+        // The connection's owner numbers every request of its incarnation,
+        // the ones a library caller issues included, so none is issued twice.
+        let owner = self.owner()?;
+        let number = owner.number().map_err(|message| HolderError::Refused {
+            code: "pane_request_refused".to_owned(),
+            message,
+        })?;
+        Ok(HolderRequest {
+            owner: owner.incarnation(),
+            number,
+        })
+    }
+
+    fn retire(&self, request: HolderRequest) -> Result<(), HolderError> {
+        match self.owner()?.retire(request.owner, request.number) {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(HolderError::Unreachable {
+                message: "the pane request still has workers draining".to_owned(),
+            }),
+            Err(message) => Err(HolderError::Refused {
+                code: "pane_request_refused".to_owned(),
+                message,
+            }),
+        }
+    }
+
+    fn reserve(
+        &self,
+        start: &HolderStart,
+        previous: Option<u64>,
+        request: HolderRequest,
+    ) -> Result<HolderReservation, HolderError> {
+        let intent = start.intent()?;
+        let guard = self.admit(request, &intent)?;
+        // Validate without expanding the shell or modifying configuration.
+        Size::checked(start.rows, start.cols).map_err(|message| HolderError::Refused {
+            code: "invalid_size".to_owned(),
+            message,
+        })?;
+        if start
+            .program
+            .as_ref()
+            .is_some_and(|program| program.is_empty() || start.notice.is_some())
+        {
+            return Err(HolderError::Refused {
+                code: "invalid_program".to_owned(),
+                message: "the pane's program or notice is invalid".to_owned(),
+            });
+        }
+        self.holders
+            .reserve(&guard, &intent, previous)
+            .map_err(start_refusal)
+    }
+
+    fn start_reserved(
+        &self,
+        start: &HolderStart,
+        reserved: HolderReservation,
+        request: HolderRequest,
+    ) -> Result<(), HolderError> {
+        let intent = start.intent()?;
+        let guard = self.admit(request, &intent)?;
+        match self
+            .holders
+            .start_reserved(&guard, &self.service, &intent, reserved, || {
+                self.expand(start)
+                    .map_err(|error| StartRefusal::Failed(format!("{error:?}")))
+            }) {
             Ok(Started::Started(record) | Started::Existing(record)) => match record.end {
                 None => Ok(()),
                 Some(end) => Err(HolderError::Refused {
@@ -181,6 +318,13 @@ impl PaneHolders for LocalPanes {
         }
     }
 
+    fn cancel(&self, intent: &HolderIntent, request: HolderRequest) -> Result<(), HolderError> {
+        let guard = self.admit(request, intent)?;
+        self.holders
+            .cancel(&guard, &self.service, intent)
+            .map_err(start_refusal)
+    }
+
     fn shell_launch(&self) -> Option<ShellLaunch> {
         self.shell
             .launch()
@@ -189,7 +333,7 @@ impl PaneHolders for LocalPanes {
     }
 
     fn terminate(&self, pane: &str) -> Result<(), HolderError> {
-        match self.holders.terminate(&self.service, pane) {
+        match self.holders.terminate(self.owner()?, &self.service, pane) {
             Ok(_) => Ok(()),
             Err(CloseError::NoRecord) => Err(HolderError::NoPane {
                 message: format!("pane {pane} has no holder on this machine"),
@@ -204,9 +348,7 @@ impl PaneHolders for LocalPanes {
     fn read(&self, pane: &str, lines: u16) -> Result<(String, bool), HolderError> {
         match self.holders.read(pane, lines).map_err(ask_error)? {
             Answer::Text { text, truncated } => Ok((text, truncated)),
-            Answer::Processes { .. } => Err(HolderError::Unreachable {
-                message: format!("pane {pane}'s holder answered a read with its processes"),
-            }),
+            other => Err(misanswered(pane, "a read", &other)),
         }
     }
 
@@ -217,18 +359,30 @@ impl PaneHolders for LocalPanes {
         };
         match self.holders.read_styled(pane, rows) {
             Ok(Answer::Text { text, truncated }) => Ok((text, truncated)),
-            Ok(Answer::Processes { .. }) => Err(HolderError::Unreachable {
-                message: format!("pane {pane}'s holder answered a styled read with its processes"),
+            Ok(other) => Err(misanswered(pane, "a styled read", &other)),
+            Err(error) => Err(newer_ask_error(pane, "styled reads", error)),
+        }
+    }
+
+    fn read_visible(&self, pane: &str) -> Result<String, HolderError> {
+        match self.holders.read_visible(pane) {
+            Ok(Answer::Text { text, .. }) => Ok(text),
+            Ok(other) => Err(misanswered(pane, "a visible read", &other)),
+            Err(error) => Err(newer_ask_error(pane, "visible reads", error)),
+        }
+    }
+
+    fn scroll(&self, pane: &str, to: Option<u64>) -> Result<HolderScroll, HolderError> {
+        match self.holders.scroll(pane, to) {
+            Ok(Answer::Scroll {
+                offset_from_bottom,
+                max_offset_from_bottom,
+            }) => Ok(HolderScroll {
+                offset_from_bottom,
+                max_offset_from_bottom,
             }),
-            Err(error) => Err(match super::holder::too_old(&error) {
-                Some(version) => HolderError::Refused {
-                    code: UNSUPPORTED_HOLDER.to_owned(),
-                    message: format!(
-                        "pane {pane}'s holder (protocol {version}) was built before styled reads"
-                    ),
-                },
-                None => ask_error(error),
-            }),
+            Ok(other) => Err(misanswered(pane, "a scroll", &other)),
+            Err(error) => Err(newer_ask_error(pane, "scroll asks", error)),
         }
     }
 
@@ -247,9 +401,7 @@ impl PaneHolders for LocalPanes {
                     Foreground::Unknown(_) => None,
                 },
             }),
-            Answer::Text { .. } => Err(HolderError::Unreachable {
-                message: format!("pane {pane}'s holder answered a process ask with text"),
-            }),
+            other => Err(misanswered(pane, "a process ask", &other)),
         }
     }
 
@@ -277,8 +429,7 @@ impl PaneHolders for LocalPanes {
     }
 
     fn input(&self, pane: &str, input: PaneInput) -> Result<(), HolderError> {
-        self.service.type_input(pane, typed(input));
-        Ok(())
+        self.service.type_input(pane, typed(input))
     }
 
     fn letter(
@@ -289,8 +440,7 @@ impl PaneHolders for LocalPanes {
         gap: std::time::Duration,
     ) -> Result<(), HolderError> {
         self.service
-            .type_letter(pane, typed(body), typed(submit), gap);
-        Ok(())
+            .type_letter(pane, typed(body), typed(submit), gap)
     }
 
     fn watch_ends(&self, ended: PaneEnded) {
@@ -325,7 +475,10 @@ impl PaneHolders for LocalPanes {
 fn shell_after_notice(shell: &[OsString], notice: &str) -> Vec<OsString> {
     let line: String = notice.chars().filter(|c| !c.is_control()).collect();
     if cfg!(windows) {
-        let write = format!("Write-Host '{}'", line.replace('\'', "''"));
+        let write = format!(
+            "Write-Host {}",
+            hide_shell::quote::powershell_single_quoted(&line)
+        );
         let mut program = shell.to_vec();
         // A shell started with a command of its own (the integration's)
         // writes the line first, in that same command.
@@ -375,11 +528,40 @@ fn start_refusal(refusal: StartRefusal) -> HolderError {
         StartRefusal::RecordUnreadable(_) => "record_unreadable",
         StartRefusal::OtherOwner(_) => "other_owner",
         StartRefusal::Failed(_) => "holder_start_failed",
+        StartRefusal::Uncertain(message) => {
+            return HolderError::Unreachable {
+                message: message.clone(),
+            };
+        }
         StartRefusal::EarlierRuns(_) => "earlier_start_runs",
     };
     HolderError::Refused {
         code: code.to_owned(),
         message: refusal.to_string(),
+    }
+}
+
+/// A holder that answered an ask with another ask's answer.
+fn misanswered(pane: &str, ask: &str, answer: &Answer) -> HolderError {
+    let what = match answer {
+        Answer::Text { .. } => "text",
+        Answer::Processes { .. } => "its processes",
+        Answer::Scroll { .. } => "its scroll position",
+    };
+    HolderError::Unreachable {
+        message: format!("pane {pane}'s holder answered {ask} with {what}"),
+    }
+}
+
+/// An ask's failure, refused [`UNSUPPORTED_HOLDER`] when the holder was
+/// built before `asks` were added.
+fn newer_ask_error(pane: &str, asks: &str, error: OpenError) -> HolderError {
+    match super::holder::too_old(&error) {
+        Some(version) => HolderError::Refused {
+            code: UNSUPPORTED_HOLDER.to_owned(),
+            message: format!("pane {pane}'s holder (protocol {version}) was built before {asks}"),
+        },
+        None => ask_error(error),
     }
 }
 

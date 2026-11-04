@@ -8,7 +8,7 @@
 
 import { expect, test, type Page } from "@playwright/test";
 import fs from "node:fs";
-import { startHerdr } from "./herdr-fixture";
+import { startFixture } from "./engine-fixture";
 import { startHided } from "./hided-fixture";
 import { quietFor } from "./wait";
 import { enterWorkspace, screenshot } from "./wire";
@@ -33,7 +33,7 @@ function dragRowOnto(page: Page, row: string, pane: string): Promise<void> {
 test("an agent row dropped on another terminal types its reference there and nothing on its own pane", async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 });
   // Both fixture panes run the fake agent, whose input log is what its PTY received.
-  const herdr = await startHerdr();
+  const herdr = await startFixture();
   const daemon = await startHided(herdr, "agent-reference-drop").catch((error) => { herdr.stop(); throw error; });
   try {
     const [target, agent] = herdr.panes;
@@ -75,7 +75,7 @@ test("an agent row dropped on another terminal types its reference there and not
 
 test("a pane's @ lists the other agents and types the chosen one's reference into that pane", async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 });
-  const herdr = await startHerdr();
+  const herdr = await startFixture();
   const daemon = await startHided(herdr, "agent-reference-mention").catch((error) => { herdr.stop(); throw error; });
   try {
     const [target, agent] = herdr.panes;

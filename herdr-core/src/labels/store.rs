@@ -122,6 +122,15 @@ pub(crate) struct PaneRecord {
     /// session again and shows its rows as Herdr reports them meanwhile.
     #[serde(skip)]
     pub(crate) turn_end_owed: Option<u64>,
+    /// The stopped lifecycle state whose final analysis must land before
+    /// announcing Done. Ephemeral: restarting never replays old notices.
+    #[serde(skip)]
+    pub(crate) notice_owed: Option<u64>,
+    /// A fallback already settled this state as Done for notices.
+    #[serde(skip)]
+    pub(crate) notice_finalized: Option<u64>,
+    #[serde(skip)]
+    pub(crate) provider_waiting: bool,
     /// Herdr's per-pane state counter and when the core saw it move, which
     /// is the pane's elapsed time and recency whichever session it runs.
     #[serde(default)]
@@ -187,6 +196,12 @@ pub(crate) struct WakeRead {
 }
 
 impl PaneRecord {
+    /// Finalize a pending turn once; later analysis still updates its row.
+    pub(crate) fn finalize_notice(&mut self) -> Option<u64> {
+        let seq = self.notice_owed.take()?;
+        self.notice_finalized = Some(seq);
+        Some(seq)
+    }
     pub(crate) fn first_seen(state_change_seq: u64, now_unix_ms: u64) -> Self {
         Self {
             state_change_seq,
@@ -228,6 +243,7 @@ impl PaneRecord {
     /// A new session in the pane: nothing the old one said or decided stays.
     pub(crate) fn reset_session(&mut self, owner: Option<String>) {
         self.owner = owner;
+        self.provider_waiting = false;
         self.native_session_id = None;
         self.native_source_path = None;
         self.proven_reference = None;

@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { startFixture, type AgentFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { chord } from "./chords";
 import { enterWorkspace } from "./wire";
@@ -18,7 +18,7 @@ import { enterWorkspace } from "./wire";
 // `register` and `spawn`) for a real pane of the fixture's Herdr, while the
 // daemon is down.
 
-type Desk = { page: Page; herdr: HerdrFixture; daemon: Daemon; pane: string };
+type Desk = { page: Page; herdr: AgentFixture; daemon: Daemon; pane: string };
 
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 
@@ -55,10 +55,10 @@ async function switchDesk(page: Page, on: boolean) {
 
 /** A Workspace whose second pane is a thread Desk started, Desk switched on, and the page on Desk's room unless `open` is false. */
 async function startDesk(page: Page, name: string, open = true): Promise<Desk> {
-  const herdr = await startHerdr({ agents: false });
+  const herdr = await startFixture({ agents: false });
   const repo = path.join(herdr.root, "fixture");
-  const pane = herdr.panes[1];
   let daemon = await startHided(herdr, name);
+  const pane = herdr.panes[1];
   daemon = await daemon.restart((stateDir) => {
     fs.writeFileSync(path.join(stateDir, "delivery-ledger.json"), JSON.stringify(deskLedger(daemon.node, pane, repo)));
   });

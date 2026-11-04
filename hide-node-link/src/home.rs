@@ -8,7 +8,7 @@ pub const MAX_LINKS: usize = 256;
 /// The Home folder after a sync.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct HomeSynced {
-    /// Absolute, canonical path of `<user home>/hide`.
+    /// Absolute, canonical path of `<user home>/hide`, in wire spelling (`/`).
     pub home: String,
     /// This call made the Home folder.
     pub created: bool,

@@ -81,8 +81,7 @@ impl Claim {
             if record.phase == Phase::Ended {
                 return Ok(false);
             }
-            record.phase = Phase::Ended;
-            record.end = Some(end);
+            record.finish(end);
             Ok(true)
         })
         .or_else(|error| {

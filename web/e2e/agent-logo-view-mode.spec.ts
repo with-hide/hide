@@ -4,7 +4,8 @@
 // daemon restart, and a browser has no ⌥ hold, so no peek and no key line.
 
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { startHerdr } from "./herdr-fixture";
+import { startFixture } from "./engine-fixture";
+import { setAgentState } from "./fixture-agents";
 import { startHided, type Daemon } from "./hided-fixture";
 import { countSent, enterWorkspace, openTaskFolds, screenshot, showTasks } from "./wire";
 
@@ -29,15 +30,18 @@ async function choose(page: Page, mode: "shown" | "hidden") {
 }
 
 test("hidden by default, a menu that checks the core's value, and logos that return in the sidebar, the tab and the 태스크 list", async ({ page }) => {
-  const herdr = await startHerdr({ readiness: "registered" });
+  const herdr = await startFixture();
   const daemon = await startHided(herdr, "agent-logo-menu");
   const sent = countSent(page);
+  const row = page.locator(`[data-sidebar] li[data-pane="${herdr.panes[0]}"]`);
   try {
+    // B17 compares logo modes on the same resting agent, not Starting vs Quiet.
+    for (const pane of herdr.panes) await setAgentState(daemon, pane, "idle");
     await open(page, daemon);
-    await expect(sidebarRow(page)).toBeVisible();
+    await expect(row).toBeVisible();
     // B4: nothing draws a logo until it is chosen.
     await expect(marks(page)).toHaveCount(0);
-    const hiddenRow = await box(sidebarRow(page));
+    const hiddenRow = await box(row);
 
     // B1-B3: the eye button names itself, the menu checks Hide, and the key line is absent in a browser.
     await expect(trigger(page)).toHaveAccessibleName("View");
@@ -58,16 +62,16 @@ test("hidden by default, a menu that checks the core's value, and logos that ret
     // B5-B7: shown draws the logo after the status mark and before the title, in all three places.
     await choose(page, "shown");
     expect(sent.get("agent_logo_mode_set")).toBe(1);
-    await expect(sidebarRow(page).locator("[data-agent-mark]")).toHaveCount(1);
+    await expect(row.locator("[data-agent-mark]")).toHaveCount(1);
     await expect(page.locator("[data-tab] [data-agent-mark]").first()).toBeVisible();
-    const status = await box(sidebarRow(page).locator("[data-agent-status-mark]"));
-    const logo = await box(sidebarRow(page).locator("[data-agent-mark]"));
-    const title = await box(sidebarRow(page).locator("[data-agent-title]"));
+    const status = await box(row.locator("[data-agent-status-mark]"));
+    const logo = await box(row.locator("[data-agent-mark]"));
+    const title = await box(row.locator("[data-agent-title]"));
     expect(logo.x).toBeGreaterThanOrEqual(status.x + status.width);
     expect(title.x).toBeGreaterThanOrEqual(logo.x + logo.width);
     expect(logo.width).toBe(16);
     // B17: the row keeps its height and the logo adds no wrap.
-    expect((await box(sidebarRow(page))).height).toBe(hiddenRow.height);
+    expect((await box(row)).height).toBe(hiddenRow.height);
     await trigger(page).click();
     await expect(item(page, "shown")).toHaveAttribute("aria-checked", "true");
     await screenshot(page, "view-menu-shown");
@@ -81,12 +85,12 @@ test("hidden by default, a menu that checks the core's value, and logos that ret
     await choose(page, "hidden");
     await expect(marks(page)).toHaveCount(0);
     await page.locator('[data-sidebar-lens-option="projects"]').click();
-    expect((await box(sidebarRow(page))).height).toBe(hiddenRow.height);
+    expect((await box(row)).height).toBe(hiddenRow.height);
   } finally { daemon.stop(); herdr.stop(); }
 });
 
 test("the choice follows a second window at once and survives a daemon restart", async ({ page, browser }) => {
-  const herdr = await startHerdr({ readiness: "registered" });
+  const herdr = await startFixture();
   let daemon = await startHided(herdr, "agent-logo-persist");
   const other = await (await browser.newContext()).newPage();
   try {

@@ -1,5 +1,5 @@
-// The work Hide AI does for a home, on a real core through an isolated pinned
-// Herdr, hided and browser (PRD hide-ai-work-home B8-B11, B15-B17): a Memory
+// The work Hide AI does for a home, on a real core through an isolated
+// engine, hided and browser (PRD hide-ai-work-home B8-B11, B15-B17): a Memory
 // card's promotion whose pull request a fake `gh` answers from a state file
 // the spec moves. The Memory store and the coordination record are seeded in
 // the daemon's own state folder while it is down, the way a promotion's start
@@ -11,7 +11,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { initGithubRepository } from "./github-remote";
 import { git, ledgerOf } from "./hide-ai-fixture";
-import { sessionOf, spawnAgent, startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { openProject, openWorktree, tabOfPane, withControl } from "./daemon-actions";
+import { startEngine, type EngineServer } from "./engine-fixture";
+import { sessionIn, startAgentInProject } from "./fixture-agents";
 import { startHided, type Daemon } from "./hided-fixture";
 import { fixtureProgram } from "./platform-fixture";
 import { countSent, sendEvent, showProjectMemory, showProjectRow } from "./wire";
@@ -84,22 +86,35 @@ connection.close()
   if (run.status !== 0) throw new Error(`seeding the Memory store failed: ${run.stderr}`);
 }
 
-type Stack = { herdr: HerdrFixture; daemon: Daemon; repo: string; worktree: string; operatorPane: string; hideAiPane: string; gh: { bin: string; state: string } };
+type Stack = { server: EngineServer; daemon: Daemon; repo: string; worktree: string; operatorPane: string; hideAiPane: string; gh: { bin: string; state: string } };
 
 /** A GitHub-backed project: the operator's agent in the main checkout, and the promotion's agent in its own worktree on the attempt's branch. */
-async function start(): Promise<Stack> {
-  const herdr = await startHerdr({ agents: false });
-  const repo = path.join(herdr.root, "scratch");
-  fs.mkdirSync(repo);
-  initGithubRepository(repo);
-  git(repo, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-q", "--allow-empty", "-m", "first");
-  const worktree = `${fs.realpathSync(repo)}.worktrees/${BRANCH}`;
-  git(repo, "worktree", "add", "-q", "-b", BRANCH, worktree);
-  const operatorPane = await spawnAgent(herdr, "scratch", null, fs.realpathSync(repo), { task: "사이드바 가독성 개선" });
-  const hideAiPane = await spawnAgent(herdr, "memory-promote-m43-1", null, worktree, { task: "m43 규칙을 문서로 옮기는 중" });
-  const gh = fakeGh(herdr.root, fs.realpathSync(repo));
-  const daemon = await startHided(herdr, "hide-ai-home", undefined, { PATH: `${gh.bin}${path.delimiter}${herdr.fixturePath}` });
-  return { herdr, daemon, repo: fs.realpathSync(repo), worktree, operatorPane, hideAiPane, gh };
+async function start(page: Page): Promise<Stack> {
+  const server = await startEngine();
+  try {
+    const repo = path.join(server.root, "scratch");
+    fs.mkdirSync(repo);
+    initGithubRepository(repo);
+    git(repo, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-q", "--allow-empty", "-m", "first");
+    const worktree = `${fs.realpathSync(repo)}.worktrees/${BRANCH}`;
+    git(repo, "worktree", "add", "-q", "-b", BRANCH, worktree);
+    const gh = fakeGh(server.root, fs.realpathSync(repo));
+    const daemon = await startHided(server, "hide-ai-home", undefined, { PATH: `${gh.bin}${path.delimiter}${server.fixturePath}` });
+    try {
+      // The core lists a linked worktree once a client shows its repository.
+      await open(page, daemon);
+      const project = await withControl(daemon, (control) => openProject(control, repo, "scratch"));
+      const operator = await startAgentInProject(server, daemon, project, { task: "사이드바 가독성 개선" });
+      const hideAi = await startAgentInProject(server, daemon, await withControl(daemon, (control) => openWorktree(control, worktree)), { task: "m43 규칙을 문서로 옮기는 중" });
+      return { server, daemon, repo: fs.realpathSync(repo), worktree, operatorPane: operator.pane, hideAiPane: hideAi.pane, gh };
+    } catch (error) {
+      daemon.stop();
+      throw error;
+    }
+  } catch (error) {
+    server.stop();
+    throw error;
+  }
 }
 
 async function open(page: Page, daemon: Daemon): Promise<void> {
@@ -135,11 +150,11 @@ function dump(stack: Stack): void {
   }
 }
 
-const evidence = (stack: Stack) => process.env.HIDE_E2E_SCREENSHOT_DIR ?? stack.herdr.root;
+const evidence = (stack: Stack) => process.env.HIDE_E2E_SCREENSHOT_DIR ?? stack.server.root;
 
 test("a promotion's agent is in Needs You only while its pull request waits for the operator, opens its row in 제안, and leaves with its cleanup on merge", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  const stack = await start();
+  const stack = await start(page);
   try {
     const sent = new Map<string, Record<string, unknown>>();
     countSent(page, sent);
@@ -154,7 +169,7 @@ test("a promotion's agent is in Needs You only while its pull request waits for 
     await page.locator('[data-lane="memory"] [data-memory-switch="off"]').click();
     await expect(page.locator('[data-lane="memory"] [data-memory="on"]')).toBeVisible({ timeout: 20_000 });
     const workspace = String(sent.get("memory_open")?.workspace_id);
-    const session = sessionOf(stack.herdr, stack.hideAiPane);
+    const session = await sessionIn(stack.daemon, stack.hideAiPane);
     stack.daemon = await stack.daemon.restart((dir) => {
       seedPromotion(path.join(dir, "project-memory.sqlite3"), "agent-2");
       fs.writeFileSync(path.join(dir, "delivery-ledger.json"), ledgerOf(stack.daemon.node, [{ pane: stack.hideAiPane, session, path: stack.worktree, branch: BRANCH, task: { kind: "memory_promote", target: "m43" } }]), { mode: 0o600 });
@@ -198,11 +213,11 @@ test("a promotion's agent is in Needs You only while its pull request waits for 
       throw error;
     });
     expect(execFileSync("git", ["rev-parse", "--verify", BRANCH], { cwd: stack.repo, encoding: "utf8" }).trim()).toMatch(/^[0-9a-f]{40}$/);
-    const panes = execFileSync(stack.herdr.bin, ["pane", "list"], { env: stack.herdr.env, encoding: "utf8" });
-    expect(panes).not.toContain(stack.hideAiPane);
-    expect(panes).toContain(stack.operatorPane);
+    const tabs = await withControl(stack.daemon, (control) => control.until((rest) => ({ hideAi: tabOfPane(rest, stack.hideAiPane), operator: tabOfPane(rest, stack.operatorPane) }), "the panes the core lists", 20_000));
+    expect(tabs.hideAi).toBeUndefined();
+    expect(tabs.operator).toBeDefined();
   } finally {
     stack.daemon.stop();
-    stack.herdr.stop();
+    stack.server.stop();
   }
 });

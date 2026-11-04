@@ -6,6 +6,7 @@ use crate::worktree_control::{CheckoutStart, CheckoutTabRequest, WorktreeTaskOut
 use hide_herdr_client::{
     ApiConnector, ApiError, ApiStream, ConnectionShutdown, LocalSocketConnector,
 };
+use hide_node_link::protocol::Call;
 use hide_node_link::{LinkAnswer, LinkError, NodeLink};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;

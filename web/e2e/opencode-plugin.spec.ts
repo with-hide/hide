@@ -1,4 +1,4 @@
-// Hide's OpenCode plugin on the pinned Herdr and a hided that runs the install kit (PRD opencode-plugin
+// Hide's OpenCode plugin on the engine and a hided that runs the install kit (PRD opencode-plugin
 // B1, B3, B4, B7, B9, D-13): the kit writes the plugin into the fixture HOME's OpenCode folder, and two
 // OpenCode stand-ins (`opencode-host.ts`) load it from there in two panes. A letter from one reaches the
 // other's next prompt and is confirmed only once that prompt is stored, a shell call that starts an agent
@@ -9,7 +9,8 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { bundledExecutable } from "./bundled-app";
-import { startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { sendKeys, withControl } from "./daemon-actions";
+import { startFixture, type AgentFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { installOpenCodeHost, openCodeHost, type Host } from "./opencode-host";
 import { snapshotCounts } from "./subagent-counts";
@@ -19,7 +20,7 @@ import { enterWorkspace } from "./wire";
 test.skip(process.platform === "win32", "the OpenCode plugin is not written on Windows");
 test.describe.configure({ timeout: 120_000 });
 
-type Stack = { herdr: HerdrFixture; daemon: Daemon; home: string; sender: Host; recipient: Host };
+type Stack = { herdr: AgentFixture; daemon: Daemon; home: string; sender: Host; recipient: Host };
 
 /**
  * A private HOME that has OpenCode (its program and its configuration folder) and a kit record with OpenCode
@@ -27,7 +28,7 @@ type Stack = { herdr: HerdrFixture; daemon: Daemon; home: string; sender: Host; 
  * the kit has written the plugin.
  */
 async function start(label: string): Promise<Stack> {
-  const herdr = await startHerdr({ agents: false });
+  const herdr = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
     const home = path.join(herdr.root, "home");
@@ -45,8 +46,8 @@ async function start(label: string): Promise<Stack> {
     // B1: the plugin names this build's helper, the bundle's.
     expect(fs.readFileSync(plugin, "utf8")).toContain(JSON.stringify(bundledExecutable("hide-agent-hooks")));
     const dir = path.join(herdr.root, "opencode");
-    installOpenCodeHost(path.join(herdr.root, "bin"), { herdr: herdr.bin, stateDir: daemon.stateDir, plugin, dir });
-    for (const pane of herdr.panes) execFileSync(herdr.bin, ["pane", "run", pane, "opencode"], { env: herdr.env, timeout: 10_000 });
+    installOpenCodeHost(path.join(herdr.root, "bin"), { herdr: herdr.engine === "herdr" ? herdr.bin : undefined, stateDir: daemon.stateDir, plugin, dir });
+    await withControl(daemon, async (control) => { for (const pane of herdr.panes) sendKeys(control, pane, "opencode\r"); });
     const [sender, recipient] = await Promise.all(herdr.panes.map((pane) => openCodeHost(dir, pane)));
     return { herdr, daemon, home, sender: sender!, recipient: recipient! };
   } catch (error) {
@@ -68,7 +69,11 @@ async function hide(host: Host, ...args: string[]): Promise<{ ok?: boolean; resu
   return JSON.parse(String(ran.stdout)) as { ok?: boolean; result?: Record<string, unknown> };
 }
 
-test("a letter rides the recipient's next prompt and is confirmed only once OpenCode stored it", async ({ page }) => {
+// Herdr only: bundle 4 PR A (b4-transition) owns the first-session report from the OpenCode plugin. Herdr takes the stand-in's
+// session from its integration report, but on the own engine hook-facts hold `session: null` for the pane and a
+// start resuming that session is refused `session_route_unconfirmed` without an OpenCode session file, so a
+// letter sent from the pane fails `native_identity_required`.
+test("a letter rides the recipient's next prompt and is confirmed only once OpenCode stored it @herdr", async ({ page }) => {
   const stack = await start("opencode-letter");
   try {
     // The plugin registered the hooks it works through in a managed pane.

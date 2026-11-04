@@ -589,19 +589,22 @@ function contents(model: MissionModel, relative: string): string {
 
 const DAY_MS = 24 * 60 * MINUTE;
 
+/** The card the learner's answer becomes once the work is done, the newest in the Project's Memory. */
+export const DECISION_CARD = 3;
+
 /**
  * What the Project's Memory keeps: two older memories, and once the mission is
  * done the one Hide AI made of the decision, newest first, from the learner's own words.
  */
 function memory(model: MissionModel, nowMs: number): MemorySection {
-  type Card = [kind: "decision" | "rule" | "lesson", key: string, ageMs: number, mine: number];
-  const decided: Card[] = model.stage === DONE ? [["decision", model.drop ? "memoryDrop" : "memoryKeep", MINUTE, 1]] : [];
-  const cards: Card[] = [...decided, ["lesson", "memoryLesson", 3 * DAY_MS, 0], ["rule", "memoryRule", 6 * DAY_MS, 1]];
+  type Card = [number: number, kind: "decision" | "rule" | "lesson", key: string, ageMs: number, mine: number];
+  const decided: Card[] = model.stage === DONE ? [[DECISION_CARD, "decision", model.drop ? "memoryDrop" : "memoryKeep", MINUTE, 1]] : [];
+  const cards: Card[] = [...decided, [2, "lesson", "memoryLesson", 3 * DAY_MS, 0], [1, "rule", "memoryRule", 6 * DAY_MS, 1]];
   return {
     project: {
       workspace_id: PLACE.project, unavailable: null, loading: false, enabled: true, capacity_reached: false, evicted_cards: 0, evicted_through_unix_ms: null,
-      rows: cards.map(([kind, key, ageMs, mine], index) => ({
-        number: cards.length - index, title: say(key), kind, human_source_count: mine, provided_session_count: index, pull_count: index, updated_at_unix_ms: nowMs - ageMs, verifying: false, promotion: null,
+      rows: cards.map(([number, kind, key, ageMs, mine], index) => ({
+        number, title: say(key), kind, human_source_count: mine, provided_session_count: index, pull_count: index, updated_at_unix_ms: nowMs - ageMs, verifying: false, promotion: null,
       })),
       questions: [], analysis: "idle", consent_required: false, usable_cards: cards.length, checking_card: null, check_resume_at_unix_ms: null,
       forgotten: null, pending_action: null, expanded: null, search: null,

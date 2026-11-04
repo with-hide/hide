@@ -236,6 +236,8 @@ mod tests {
             lineage_collapsed: false,
             sleep: None,
             row_facts: None,
+            notification_pending: false,
+            notification_finalized: false,
             awaited_replies: Vec::new(),
             hide_ai: None,
             request: None,

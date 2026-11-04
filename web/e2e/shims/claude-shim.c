@@ -8,6 +8,7 @@
 #include <io.h>
 #include <sys/stat.h>
 #include <process.h>
+#include <direct.h>
 #define read _read
 #define write _write
 #define open _open
@@ -291,7 +292,12 @@ static int agent_pane_runner(int argc, char **argv) {
     arguments[i] = passed[i - 1];
   }
   arguments[argc] = NULL;
-  _wexecv(executable, arguments);
+  /* Windows exec starts another process and ends this one. Keep this
+     ancestor alive while the runner calls Hide: the kernel can prove its
+     path back to the pane's shell only through live parents. The fixture's
+     process-tree owner ends both on teardown. */
+  intptr_t status = _wspawnv(_P_WAIT, executable, arguments);
+  if (status >= 0) exit((int)status);
 #else
   /* The runner gets the launch's arguments, so a resume keeps its conversation. */
   char *arguments[18] = { runner };
@@ -391,6 +397,42 @@ static int native_session(int argc, char **argv) {
   return 0;
 }
 
+/* A new session, as Claude Code reports one after /clear: the fixture types
+   `ESC ] 7770 ; session=<id> BEL` into the pane, and the stand-in runs Hide's
+   SessionStart hook (`HIDE_E2E_HOOKS`, the built `hide-agent-hooks`) with
+   that session, from inside the pane, so the daemon proves it as the pane's
+   own report (`engine-fixture.ts`, `setAgentSession`). Returns 1 when `bytes`
+   was such a request, which is then not echoed. */
+static int session_request(const char *bytes, size_t size) {
+  static const char prefix[] = "\x1b]7770;session=";
+  const size_t length = sizeof prefix - 1;
+  if (size <= length + 1 || memcmp(bytes, prefix, length) != 0 || bytes[size - 1] != '\a') return 0;
+  const char *hooks = getenv("HIDE_E2E_HOOKS");
+  char session[256], command[4200], cwd[2048];
+  size_t id = size - length - 1;
+  if (!hooks || id >= sizeof session) return 1;
+  memcpy(session, bytes + length, id);
+  session[id] = 0;
+  for (size_t i = 0; i < id; i++) if (!(session[i] == '-' || session[i] == '_' || session[i] == '.' || (session[i] >= '0' && session[i] <= '9') || (session[i] >= 'a' && session[i] <= 'z') || (session[i] >= 'A' && session[i] <= 'Z'))) return 1;
+#ifdef _WIN32
+  if (!_getcwd(cwd, sizeof cwd)) return 1;
+  for (char *at = cwd; *at; at++) if (*at == '\\') *at = '/';
+  if (snprintf(command, sizeof command, "\"\"%s\" hook --runtime claude-code --event SessionStart >NUL 2>&1\"", hooks) >= (int)sizeof command) return 1;
+  FILE *hook = _popen(command, "w");
+#else
+  if (!getcwd(cwd, sizeof cwd)) return 1;
+  if (snprintf(command, sizeof command, "'%s' hook --runtime claude-code --event SessionStart >/dev/null 2>&1", hooks) >= (int)sizeof command) return 1;
+  FILE *hook = popen(command, "w");
+#endif
+  if (!hook) return 1;
+  fprintf(hook, "{\"session_id\":\"%s\",\"hook_event_name\":\"SessionStart\",\"source\":\"clear\",\"cwd\":\"%s\"}", session, cwd);
+#ifdef _WIN32
+  _pclose(hook);
+#else
+  pclose(hook);
+#endif
+  return 1;
+}
 static int has_option(int argc, char **argv, const char *name) {
   for (int i = 1; i < argc; i++) if (strcmp(argv[i], name) == 0) return 1;
   return 0;
@@ -411,6 +453,17 @@ int main(int argc, char **argv) {
   if (native_session(argc, argv) != 0) return 1;
   if (agent_pane_runner(argc, argv) != 0) return 1;
   const char *log_path = getenv("HIDE_E2E_INPUT_LOG");
+  /* A pane the fixture made through the daemon logs under its own id in the
+     run's root (`engine-fixture.ts`, `paneInputLog`), `:` written as `-`;
+     the pane names itself as `hide_agent_hooks::pane` reads it. */
+  char pane_log[4096];
+  const char *pane_root = getenv("HIDE_E2E_ROOT"), *pane = getenv("HIDE_PANE_ID");
+  if (!pane || !*pane) pane = getenv("HERDR_PANE_ID");
+  if (!log_path && pane_root && pane && *pane) {
+    if (snprintf(pane_log, sizeof pane_log, "%s/input-%s.log", pane_root, pane) >= (int)sizeof pane_log) return 1;
+    for (char *at = pane_log + strlen(pane_root); *at; at++) if (*at == ':') *at = '-';
+    log_path = pane_log;
+  }
   int flags = O_WRONLY | O_CREAT | O_APPEND;
 #ifdef _WIN32
   flags |= _O_BINARY;
@@ -434,17 +487,28 @@ int main(int argc, char **argv) {
   const char *composer = run_as_codex(argv[0]) ? CODEX_EMPTY_COMPOSER : CLAUDE_EMPTY_COMPOSER;
   size_t composer_length = strlen(composer);
   if (terminal_write(composer, composer_length) != (fixture_count_t)composer_length) return 1;
-#ifdef _WIN32
-  // Herdr's encoded PowerShell launch has no visible agent name.
-  // Announce from the initialized interactive process before reading input.
+  // A real interactive agent draws its first screen after it starts.
+  // Announce after initialization on every system: shell echo can precede
+  // exec, so a silent stand-in leaves output-driven detection seeing the shell.
   static const char ready[] = "claude fixture ready\r\n";
   if (terminal_write(ready, sizeof ready - 1) != (fixture_count_t)(sizeof ready - 1)) return 1;
+#ifdef _WIN32
   char b[16384];
 #else
   char b[4096];
 #endif
   fixture_count_t n;
   while ((n = terminal_read(b, sizeof b)) > 0) {
+    /* Keys held for the pane until the agent ran can arrive in the same read
+       as a session request typed after them: the request is the read's tail,
+       and what comes before it is input like any other. */
+    static const char request[] = "\x1b]7770;session=";
+    for (fixture_count_t at = 1; at + (fixture_count_t)(sizeof request - 1) < n; at++) {
+      if (memcmp(b + at, request, sizeof request - 1) != 0 || !session_request(b + at, (size_t)(n - at))) continue;
+      n = at;
+      break;
+    }
+    if (session_request(b, (size_t)n)) continue;
     if (log >= 0 && write(log, b, (size_t)n) < 0) return 1;
 #ifdef _WIN32
     // A Unix tty turns Enter's CR into LF on input and LF into CRLF on

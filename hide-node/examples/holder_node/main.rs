@@ -123,9 +123,15 @@ pub struct Node {
     pub reports: Arc<Reports>,
     pub facts: Arc<facts::Facts>,
     pub state: PathBuf,
+    owner: Option<hide_kit::panes::Owner>,
 }
 
 impl Node {
+    fn owner(&self) -> Result<&hide_kit::panes::Owner, String> {
+        self.owner
+            .as_ref()
+            .ok_or_else(|| "the node owns no pane records".to_owned())
+    }
     fn holders(&self) -> Result<&Holders, String> {
         self.terminals
             .holders
@@ -155,7 +161,20 @@ fn node(options: &Options) -> Result<(), String> {
         Arc::clone(&reports) as Arc<dyn ReportSink>,
     )?;
     let facts = facts::Facts::new();
+    let owner = terminals
+        .holders
+        .as_deref()
+        .map(|holders| holders.acquire(Duration::from_secs(5)))
+        .transpose()?;
     if let Some(holders) = terminals.holders.as_deref() {
+        let recovered = holders.recover(
+            owner.as_ref().expect("holders acquired ownership"),
+            &terminals.service,
+        );
+        if !recovered.complete {
+            return Err("the node could not complete its pane record scan".to_owned());
+        }
+        holders.prune_folders();
         let told = Arc::clone(&facts);
         holders.watch_facts(Arc::new(move |pane: &str, pane_facts: &_| {
             told.told(pane, pane_facts);
@@ -167,6 +186,7 @@ fn node(options: &Options) -> Result<(), String> {
         reports,
         facts,
         state: options.state.clone(),
+        owner,
     };
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
@@ -334,7 +354,7 @@ fn answer(node: &Node, request: &Value) -> Result<Option<Value>, String> {
             let pane = text(request, "pane")?;
             let ended = node
                 .holders()?
-                .terminate(&node.terminals.service, &pane)
+                .terminate(node.owner()?, &node.terminals.service, &pane)
                 .map_err(|why| format!("{why:?}"))?;
             json!({"record": ended})
         }
@@ -381,7 +401,7 @@ fn start(node: &Node, request: &Value) -> Result<Value, String> {
     };
     let started = node
         .holders()?
-        .start(&node.terminals.service, &start)
+        .start(node.owner()?, &node.terminals.service, &start)
         .map_err(|refused| format!("{pane} did not start: {refused}"))?;
     let (kind, found) = match started {
         Started::Started(found) => ("started", found),

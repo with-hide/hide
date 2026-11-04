@@ -2,14 +2,15 @@
 // repository's own README opens as the page GitHub shows, a caret inside a
 // block shows its source, and what a document names but may not load (a
 // script, a path outside the checkout, an http address) never reaches the
-// page. Runs on an isolated pinned Herdr and hided; the operator's is never
-// touched.
+// page. Runs on an isolated engine and hided, either engine; the operator's is
+// never touched.
 
 import { expect, test, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 import { toPage } from "../../desktop/src/main/wirePath";
-import { startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { startEngine, type EngineServer } from "./engine-fixture";
+import { openProject, withControl } from "./daemon-actions";
 import { startHided, type Daemon } from "./hided-fixture";
 import { chord } from "./chords";
 import { countSent, screenshot, showExplorer, showProjectRow } from "./wire";
@@ -36,38 +37,38 @@ const UNSAFE = [
   "",
 ].join("\n");
 
-type Stack = { herdr: HerdrFixture; daemon: Daemon; repo: string; sent: Map<string, number> };
+type Stack = { engine: EngineServer; daemon: Daemon; repo: string; sent: Map<string, number> };
 
 /** Starts the isolated stack with `files` written into the checkout, and leaves the Explorer showing it. */
 async function openStack(page: Page, files: Record<string, Buffer | string>): Promise<Stack> {
-  const herdr = await startHerdr();
+  const engine = await startEngine();
   let daemon: Daemon | null = null;
   try {
-    const repoDir = path.join(herdr.root, "repo");
+    const repoDir = path.join(engine.root, "repo");
     fs.mkdirSync(repoDir, { recursive: true });
     for (const [name, contents] of Object.entries(files)) {
       fs.mkdirSync(path.dirname(path.join(repoDir, name)), { recursive: true });
       fs.writeFileSync(path.join(repoDir, name), contents);
     }
-    fs.writeFileSync(path.join(herdr.root, "outside.png"), PNG);
-    herdr.run(["workspace", "create", "--cwd", repoDir, "--label", "repo", "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]);
-    daemon = await startHided(herdr, "markdown-html");
+    fs.writeFileSync(path.join(engine.root, "outside.png"), PNG);
+    daemon = await startHided(engine, "markdown-html");
+    await withControl(daemon, (control) => openProject(control, repoDir, "repo"));
     const sent = countSent(page, new Map());
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     const row = await showProjectRow(page, page.locator("[data-project]", { hasText: "repo" }).locator("[data-checkout]").first());
     await row.click();
     await showExplorer(page);
-    return { herdr, daemon, repo: toPage(fs.realpathSync(repoDir)), sent };
+    return { engine, daemon, repo: toPage(fs.realpathSync(repoDir)), sent };
   } catch (error) {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
     throw error;
   }
 }
 
-function close({ daemon, herdr }: Stack): void {
+function close({ daemon, engine }: Stack): void {
   daemon.stop();
-  herdr.stop();
+  engine.stop();
 }
 
 test.describe.configure({ timeout: 90_000 });

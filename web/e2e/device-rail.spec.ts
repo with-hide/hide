@@ -13,7 +13,7 @@
 // in a browser tab.
 
 import { expect, test, type Page } from "@playwright/test";
-import { startHerdr } from "./herdr-fixture";
+import { startFixture } from "./engine-fixture";
 import { startHided, writeSshHost, type Daemon } from "./hided-fixture";
 import { countSent, screenshot, THIS_MACHINE } from "./wire";
 import { SYSTEM } from "./chords";
@@ -48,7 +48,7 @@ async function closeAddDeviceDialog(page: Page): Promise<void> {
 
 test("the rail follows the registered devices; a device that cannot be reached is dimmed and offers Reconnect", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
-  const herdr = await startHerdr();
+  const herdr = await startFixture();
   let daemon: Daemon | null = null;
   try {
     daemon = await startHided(herdr, "device-rail");

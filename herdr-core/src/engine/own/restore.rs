@@ -43,7 +43,7 @@ use super::shell_line::{self, Shell};
 use super::starts::STARTS_AT_ONCE;
 use super::store::{self, Read};
 use super::topology::{Pane, Topology};
-use super::{Env, OwnEngine};
+use super::{EngineError, Env, OwnEngine, holder_error};
 use crate::agent_start::{ShellStart, StartError};
 use crate::node_access::{NodeLink, call_as};
 
@@ -88,16 +88,18 @@ pub(super) fn start(engine: OwnEngine<'static>, saved: BTreeSet<String>) -> Resu
         .spawn(move || {
             let gate = engine.restore_gate();
             let resumes = engine.restore(&saved);
-            if resumes.is_empty() {
-                // No worker retains the engine past this gate. A caller
-                // may immediately drop it and reopen its completed save.
-                drop(engine);
-                gate.finish();
-            } else {
-                gate.finish();
-                // Calls that make panes no longer wait for these: each
-                // agent waits for its own shell, one pane after another.
-                engine.resume_agents(&resumes);
+            // Release the restore's ownership before opening the gate, so
+            // a caller can drop the engine and reopen its completed save.
+            // Resumes hold it only while each one runs; the next stops when
+            // its owner has let the engine go (a device's, with its link).
+            let shared = std::sync::Arc::downgrade(&engine.shared);
+            drop(engine);
+            match resumes {
+                Ok(resumes) => {
+                    gate.finish(Ok(()));
+                    OwnEngine::resume_agents(&shared, &resumes);
+                }
+                Err(error) => gate.finish(Err(error)),
             }
         })
         .map(|_| ())
@@ -111,6 +113,7 @@ struct Restart {
     pane: String,
     cwd: String,
     agent: Option<PaneAgent>,
+    previous: Option<u64>,
 }
 
 /// What a restarted pane's agent gets: its resume, typed once its shell is
@@ -195,23 +198,29 @@ fn conversation(agent: &PaneAgent, cwd: &str) -> (String, String) {
 }
 
 impl OwnEngine<'static> {
-    fn restore(&self, saved: &BTreeSet<String>) -> Vec<Resume> {
+    fn restore(&self, saved: &BTreeSet<String>) -> Result<Vec<Resume>, EngineError> {
         let recovery = match self.shared.holders.recovered(RECOVERY_WAIT) {
             Ok(recovery) => recovery,
             Err(error) => {
+                let discarded_rules = self.shared.rules.end();
                 crate::diagnostic!(serde_json::json!({
                     "component": "own_engine",
                     "kind": "engine.restore_unfinished",
                     "message": error.to_string(),
+                    "discarded_rules": discarded_rules,
                 }));
                 self.mark_unrestored(
                     saved,
                     &format!("the node did not say which panes still run: {error}"),
                 );
-                return Vec::new();
+                return Err(holder_error(error));
             }
         };
-        self.adopt(saved, &recovery)
+        // LocalPanes may publish facts while PaneSlot is still acquiring.
+        // Only this successful answer acknowledges its Ready owner; let
+        // queued rules through before adopt can start or inspect panes.
+        self.shared.rules.ready();
+        Ok(self.adopt(saved, &recovery))
     }
 
     /// Lays the panes `saved` names out around what `recovery` found: the
@@ -238,10 +247,30 @@ impl OwnEngine<'static> {
                 .filter(|id| saved.contains(*id) && topology.remove_pane(id).is_ok())
                 .cloned()
                 .collect();
+            // Existence is durable before the coalesced layout save. Gather
+            // those recorded IDs before selecting the one bounded restart set.
+            let missing = recovery
+                .recoverable
+                .iter()
+                .filter_map(|record| {
+                    if topology.pane(&record.pane).is_ok() {
+                        return None;
+                    }
+                    record
+                        .cwd
+                        .as_ref()
+                        .map(|cwd| (record.pane.clone(), Pane::new(cwd, None)))
+                })
+                .collect();
+            topology.gather(missing, GATHERED_LABEL);
             let placed: BTreeSet<String> = topology.panes().map(|(id, _)| id.to_owned()).collect();
             let restarted: Vec<String> = topology
                 .panes()
-                .filter(|(id, _)| saved.contains(*id) && !present.contains(id))
+                .filter(|(id, _)| {
+                    (saved.contains(*id)
+                        || recovery.recoverable.iter().any(|record| record.pane == *id))
+                        && !present.contains(id)
+                })
                 .map(|(id, _)| id.to_owned())
                 .collect();
             // A restarted pane's agent ended with its holder: the pane is a
@@ -253,6 +282,11 @@ impl OwnEngine<'static> {
                     Some(Restart {
                         cwd: pane.cwd.clone(),
                         agent: pane.agent.take(),
+                        previous: recovery
+                            .recoverable
+                            .iter()
+                            .find(|record| record.pane == id)
+                            .map(|record| record.incarnation),
                         pane: id,
                     })
                 })
@@ -284,6 +318,11 @@ impl OwnEngine<'static> {
                     Some(Restart {
                         cwd: pane.cwd.clone(),
                         agent: pane.agent.take(),
+                        previous: recovery
+                            .recoverable
+                            .iter()
+                            .find(|record| record.pane == id)
+                            .map(|record| record.incarnation),
                         pane: id,
                     })
                 })
@@ -418,12 +457,13 @@ impl OwnEngine<'static> {
                             (None, _) => None,
                         };
                         let resumable = notice.is_none() && matches!(plan, Some(Plan::Resume(_)));
-                        match self.start_pane(
+                        match self.start_pane_replacing(
                             &restart.pane,
                             None,
                             &cwd,
                             Env::new(),
                             notice.as_deref(),
+                            restart.previous,
                         ) {
                             Ok(()) if resumable => {
                                 started
@@ -471,17 +511,29 @@ impl OwnEngine<'static> {
     /// Types each of `resumes` into its pane, one pane after another, each
     /// once its shell is ready; one that cannot be typed leaves its pane a
     /// shell and logs why.
-    pub(super) fn resume_agents(&self, resumes: &[Resume]) {
-        // A restarted pane runs the shell a pane with no program runs: it
-        // marks its first prompt when that is the integration's, and the
-        // resume waits for the mark as a start into a tab the core just
-        // opened with it does.
-        let shell = ShellStart::of_tab(true, self.shared.holders.shell_launch().as_ref());
+    pub(super) fn resume_agents(engine: &std::sync::Weak<super::Shared>, resumes: &[Resume]) {
+        let mut shell = None;
         for resume in resumes {
-            if self.check().is_err() {
+            let Some(shared) = engine.upgrade() else {
+                return;
+            };
+            let engine = OwnEngine {
+                shared,
+                gates: Vec::new(),
+            };
+            if engine.check().is_err() {
                 return;
             }
-            match self.resume_agent(resume, shell.clone()) {
+            // A restarted pane runs the shell a pane with no program runs: it
+            // marks its first prompt when that is the integration's, and the
+            // resume waits for the mark as a start into a tab the core just
+            // opened with it does.
+            let shell = shell
+                .get_or_insert_with(|| {
+                    ShellStart::of_tab(true, engine.shared.holders.shell_launch().as_ref())
+                })
+                .clone();
+            match engine.resume_agent(resume, shell) {
                 Ok(()) => crate::diagnostic!(serde_json::json!({
                     "component": "own_engine",
                     "kind": "agent.resumed",
@@ -505,12 +557,10 @@ impl OwnEngine<'static> {
     /// agent as started and types its resume.
     fn resume_agent(&self, resume: &Resume, shell: ShellStart) -> Result<(), String> {
         // The longest of the shells' lines, as a start is bounded.
-        let longest = [Shell::Posix, Shell::PowerShell]
-            .into_iter()
-            .filter_map(|shell| shell_line::resume_command(&resume.argv, &resume.shown, shell))
-            .map(|line| line.len() + 1)
-            .max()
-            .ok_or_else(|| "the resume names no program".to_owned())?;
+        let longest = shell_line::longest(|shell| {
+            shell_line::resume_command(&resume.argv, &resume.shown, shell)
+        })
+        .ok_or_else(|| "the resume names no program".to_owned())?;
         let node = self.node().ok().map(|node| &**node as &dyn NodeLink);
         crate::agent_start::wait_for_shell(
             self,
@@ -534,32 +584,12 @@ impl OwnEngine<'static> {
             .ok_or_else(|| "the pane's shell is cmd.exe, which takes no resume line".to_owned())?;
         let line = shell_line::resume_command(&resume.argv, &resume.shown, shell)
             .ok_or_else(|| "the resume names no program".to_owned())?;
-        {
-            let catalog = self.shared.definitions.get();
-            let mut topology = self.topology();
-            if resume
-                .name
-                .as_deref()
-                .is_some_and(|name| topology.name_taken(name, &resume.pane))
-            {
-                return Err("another pane runs an agent under its name".to_owned());
-            }
-            topology
-                .start_agent(
-                    &resume.pane,
-                    PaneAgent::started(
-                        &resume.kind,
-                        resume.name.as_deref(),
-                        resume.session.clone(),
-                    ),
-                )
-                .map_err(|error| error.to_string())?;
-            drop(topology);
-            self.give_rules(&resume.pane, Some(&resume.kind), &catalog);
-        }
-        self.changed();
-        self.type_bytes(&resume.pane, format!("{line}\r").into_bytes())
-            .map_err(|error| error.to_string())
+        self.type_agent_start(
+            &resume.pane,
+            PaneAgent::started(&resume.kind, resume.name.as_deref(), resume.session.clone()),
+            &line,
+        )
+        .map_err(|error| error.to_string())
     }
 
     /// Where a saved pane whose folder was `cwd` starts again: there, or in

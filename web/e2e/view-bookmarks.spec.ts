@@ -2,7 +2,8 @@ import { expect, test, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 import { fixtureExecutable } from "./platform-fixture";
-import { runInPane, startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { focusPane, focusTab, newTab, runInPaneKeepingFocus, splitPane, withControl } from "./daemon-actions";
+import { startFixture, type AgentFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { countSent, enterWorkspace, screenshot, setLanePinned, showExplorer } from "./wire";
 
@@ -15,9 +16,9 @@ test.describe.configure({ timeout: 180_000 });
 test.use({ actionTimeout: 15_000 });
 
 /** Runs `hide <args>` in the shell of `pane`, as an agent in that tab would. */
-async function hideFrom(herdr: HerdrFixture, daemon: Daemon, pane: string, args: string[], sequence: number): Promise<void> {
+async function hideFrom(herdr: AgentFixture, daemon: Daemon, pane: string, args: string[], sequence: number): Promise<void> {
   const hide = path.resolve("..", "target", "debug", fixtureExecutable("hide"));
-  const ran = await runInPane(herdr, pane, `cli-${sequence}`, { env: { HIDE_STATE_DIR: daemon.stateDir }, argv: [hide, ...args] });
+  const ran = await runInPaneKeepingFocus(herdr, daemon, pane, `cli-${sequence}`, { env: { HIDE_STATE_DIR: daemon.stateDir }, argv: [hide, ...args] });
   expect(ran.status, ran.stderr).toBe(0);
 }
 
@@ -49,17 +50,20 @@ function savedAgentTabs(daemon: Daemon): string[] {
 
 test("Agent switching preserves the selected View and background opens stay behind it", async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
-  const herdr = await startHerdr({ agents: false });
+  const herdr = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
     const fixture = path.join(herdr.root, "fixture");
     for (const name of ["a.md", "b.md", "c.md", "d.md"]) fs.writeFileSync(path.join(fixture, name), `${name}\n`);
-    const created = herdr.run(["tab", "create", "--workspace", herdr.workspace, "--cwd", fixture, "--label", "second", "--no-focus"]) as {
-      result: { tab: { tab_id: string }; root_pane: { pane_id: string } };
-    };
-    const [first, second] = [herdr.tab, created.result.tab.tab_id];
-    const [firstPane, secondPane] = [herdr.panes[0], created.result.root_pane.pane_id];
     daemon = await startHided(herdr, "view-bookmarks");
+    // A second tab, with the first still the one shown.
+    const created = await withControl(daemon, async (control) => {
+      const made = await newTab(control, herdr, "second");
+      await focusTab(control, herdr, herdr.tab);
+      return made;
+    });
+    const [first, second] = [herdr.tab, created.tab];
+    const [firstPane, secondPane] = [herdr.panes[0], created.pane];
     const sent = countSent(page);
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
@@ -102,8 +106,14 @@ test("Agent switching preserves the selected View and background opens stay behi
     // B8: the operator's own tab split in two. The agent in the pane beside
     // the operator's opens c.md: it joins the strip behind a.md and moves
     // nothing, though both panes are on screen in the tab in front.
-    const split = herdr.run(["pane", "split", firstPane, "--direction", "right", "--cwd", fixture, "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]) as { result: { pane: { pane_id: string } } };
-    await hideFrom(herdr, daemon, split.result.pane.pane_id, ["file", "open", "c.md"], 3);
+    const sibling = await withControl(daemon, async (control) => {
+      const made = await splitPane(control, first, fixture);
+      await focusPane(control, firstPane);
+      return made;
+    });
+    // The new shell takes typed keys once the page has drawn it at its prompt.
+    await expect.poll(() => page.evaluate((id) => window.__hideProbe?.paneText(id) ?? "", sibling), { timeout: 30_000, message: `the prompt in ${sibling}` }).toContain("fixture %");
+    await hideFrom(herdr, daemon, sibling, ["file", "open", "c.md"], 3);
     await expect(viewTabs(page)).toHaveCount(3);
     await expect(viewTabs(page).filter({ hasText: "c.md" })).toHaveCount(1);
     await expect(front(page)).toHaveAttribute("aria-label", /\/b\.md/);

@@ -98,6 +98,17 @@ pub(super) fn resume_command(argv: &[String], agent: &str, shell: Shell) -> Opti
     })
 }
 
+/// The longest of the lines `line` writes for each shell a pane may run,
+/// Enter included: a start or a resume is bounded as the shell it meets will
+/// type it. `None` when no shell takes it.
+pub(super) fn longest(line: impl Fn(Shell) -> Option<String>) -> Option<usize> {
+    [Shell::Posix, Shell::PowerShell]
+        .into_iter()
+        .filter_map(line)
+        .map(|line| line.len() + 1)
+        .max()
+}
+
 fn posix_quote(value: &str) -> String {
     if !value.is_empty()
         && value.chars().all(|ch| {
@@ -110,7 +121,7 @@ fn posix_quote(value: &str) -> String {
     {
         return value.to_owned();
     }
-    format!("'{}'", value.replace('\'', "'\\''"))
+    hide_shell::quote::posix_single_quoted(value)
 }
 
 fn powershell_quote(value: &str) -> String {
@@ -123,7 +134,7 @@ fn powershell_quote(value: &str) -> String {
     {
         return value.to_owned();
     }
-    format!("'{}'", value.replace('\'', "''"))
+    hide_shell::quote::powershell_single_quoted(value)
 }
 
 /// A Windows command line argument, for `Start-Process -ArgumentList`.
@@ -203,38 +214,30 @@ fn powershell_args(args: &[String]) -> String {
         .join(" ")
 }
 
-/// The most words a resume types.
-const MAX_RESUME_ARGS: usize = 64;
-/// The most bytes a resume's words hold in all.
-const MAX_RESUME_ARGV_BYTES: usize = 8 * 1024;
-
-/// Whether `argv` may be typed as a resume: a plain command name first
-/// (shells disagree on how to run a quoted path), no control character and
-/// no apostrophe, within Herdr's bounds.
+/// Whether `argv` may be typed as a resume: a plain command name first, no
+/// control character and no apostrophe, within Herdr's bounds; the rules a
+/// definition's words are read with (`hide_agent_adapter::definition`).
 pub(super) fn check_resume(argv: &[String]) -> Result<(), String> {
+    use hide_agent_adapter::definition::{
+        LINE_BYTES, LINE_WORDS, is_plain_command, is_typable_word,
+    };
     let Some(command) = argv.first() else {
         return Err("the resume names no program".to_owned());
     };
-    if argv.len() > MAX_RESUME_ARGS {
-        return Err(format!("the resume has more than {MAX_RESUME_ARGS} words"));
+    if argv.len() > LINE_WORDS {
+        return Err(format!("the resume has more than {LINE_WORDS} words"));
     }
-    if argv.iter().map(String::len).sum::<usize>() > MAX_RESUME_ARGV_BYTES {
-        return Err(format!(
-            "the resume is longer than {MAX_RESUME_ARGV_BYTES} bytes"
-        ));
+    if argv.iter().map(String::len).sum::<usize>() > LINE_BYTES {
+        return Err(format!("the resume is longer than {LINE_BYTES} bytes"));
     }
-    if argv.iter().any(|arg| arg.chars().any(char::is_control)) {
-        return Err("the resume holds a control character".to_owned());
+    if let Some(word) = argv.iter().find(|arg| !is_typable_word(arg)) {
+        return Err(if word.contains('\'') {
+            "the resume holds an apostrophe".to_owned()
+        } else {
+            "the resume holds a control character".to_owned()
+        });
     }
-    if argv.iter().any(|arg| arg.contains('\'')) {
-        return Err("the resume holds an apostrophe".to_owned());
-    }
-    let plain = !command.is_empty()
-        && !command.starts_with('-')
-        && command
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'));
-    if !plain {
+    if !is_plain_command(command) {
         return Err("the resume starts with a path, not a program's name".to_owned());
     }
     Ok(())
@@ -360,7 +363,7 @@ mod tests {
         ] {
             assert!(check_resume(&refused).is_err(), "{refused:?}");
         }
-        let many = vec!["x".to_owned(); MAX_RESUME_ARGS + 1];
+        let many = vec!["x".to_owned(); hide_agent_adapter::definition::LINE_WORDS + 1];
         assert!(check_resume(&many).is_err());
     }
 

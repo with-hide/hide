@@ -8,15 +8,21 @@
 // from any step plays to its end the same way: nothing the shell's screen held
 // from the run before carries into the next.
 
+import fs from "node:fs";
+import path from "node:path";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { clickClosingItsPage } from "./closing-click";
-import { startHerdr } from "./herdr-fixture";
+import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 
 test.describe.configure({ timeout: 180_000 });
 
-/** More presses than any chapter's steps and the press that starts it; a practice that needs more has stopped moving. */
-const PRESSES_PER_CHAPTER = 25;
+/**
+ * More presses than any chapter needs: its steps, the press that starts it, one that brings in a step's scene, one
+ * past each waiting step once its beat came, and, where the clock is run ahead, one per beat; a practice that needs
+ * more has stopped moving.
+ */
+const PRESSES_PER_CHAPTER = 40;
 
 /**
  * Records each call a page makes to the system clipboard in `window.clipboardCalls`; the practice window makes none.
@@ -39,7 +45,8 @@ function practiceState(page: Page): Promise<string> {
     const root = document.querySelector("[data-practice-chapter]");
     if (!root) return document.querySelector("[data-practice-hub]") ? "hub" : "none";
     const layer = document.querySelector("[data-practice-layer]");
-    const step = layer?.hasAttribute("data-practice-ended") ? "ended" : layer?.getAttribute("data-practice-step");
+    // A step that opens on its scene reads as its own state until the guide comes in, which a press does.
+    const step = layer?.hasAttribute("data-practice-ended") ? "ended" : `${layer?.getAttribute("data-practice-step")}${layer?.hasAttribute("data-practice-scene") ? "~scene" : ""}`;
     return `${root.getAttribute("data-practice-chapter")}:${step}:${root.getAttribute("data-practice-moves")}`;
   });
 }
@@ -69,9 +76,22 @@ async function pasteByHand(practice: Page): Promise<void> {
   await expect.poll(() => practiceState(practice), { message: "the pasted request did not reach the signup agent" }).toMatch(/^delegate:end:/);
 }
 
-/** Waits out a step ⏎ performed while its result is shown, so the next Enter is the next step's and not the one that skips the wait. */
+/**
+ * Ends the moment a step ⏎ performed stays while its result is shown, the way the learner's ⏎ there does, so the
+ * journey does not wait out the learner's pace; the press is made in the page only while the moment lasts, so it can
+ * never land on the next step. Where the bubble shows no button (a palette is up), the moment is waited out.
+ */
 async function settled(practice: Page): Promise<void> {
+  await practice.evaluate(() => document.querySelector<HTMLButtonElement>("[data-practice-layer][data-practice-settling] [data-practice-go]")?.click());
   await expect(practice.locator("[data-practice-settling]")).toHaveCount(0);
+}
+
+/**
+ * Waits for the page to draw what the last change opened, two frames, before the next press: a person's next key
+ * never lands in the frame a palette opened in, and a press there finds the palette's field not yet drawn.
+ */
+async function drawn(practice: Page): Promise<void> {
+  await practice.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
 }
 
 /** One press of the guide: ⏎, or its bubble's button where the bubble shows one. */
@@ -83,7 +103,8 @@ const pressEnter: GuidePress = (practice) => practice.keyboard.press("Enter");
  */
 const pressButton: GuidePress = async (practice) => {
   const guiding = await practice.locator("[data-practice-layer]").count();
-  if (!guiding || (await practice.locator("[data-palette]").count())) return practice.keyboard.press("Enter");
+  // Before a step's scene is over there is no bubble yet, and ⏎ brings it in.
+  if (!guiding || (await practice.locator("[data-palette], [data-practice-scene]").count())) return practice.keyboard.press("Enter");
   await practice.locator("[data-practice-layer] [data-practice-go]").click();
 };
 
@@ -94,6 +115,7 @@ async function playEveryChapter(practice: Page, chapters: number, press: GuidePr
   do {
     expect(presses, `the practice stopped moving at ${now}`).toBeLessThan(chapters * PRESSES_PER_CHAPTER);
     const before = now;
+    await drawn(practice);
     if (now.startsWith("delegate:mention:")) await pasteByHand(practice);
     else await press(practice);
     presses += 1;
@@ -106,7 +128,7 @@ async function playEveryChapter(practice: Page, chapters: number, press: GuidePr
 /** Opens the practice window from the shell's Help menu of an isolated stack, runs `journey` on it, and stops the stack. */
 async function withPractice(page: Page, journey: (practice: Page, chapters: Locator) => Promise<void>): Promise<void> {
   await page.setViewportSize({ width: 1280, height: 800 });
-  const herdr = await startHerdr();
+  const herdr = await startFixture();
   let daemon: Daemon | null = null;
   try {
     daemon = await startHided(herdr, "practice");
@@ -170,21 +192,49 @@ async function pressTo(practice: Page, id: string, at: number | null, hurry: (()
     if (at !== null && Number(await layer.getAttribute("data-practice-index")) >= at) return;
     expect(presses, `the practice stopped moving at ${now}`).toBeLessThan(PRESSES_PER_CHAPTER);
     const waiting = (await layer.getAttribute("data-practice-waiting")) !== null;
+    await drawn(practice);
     if (waiting && hurry) await hurry();
     else if (!waiting) await practice.keyboard.press("Enter");
-    await expect.poll(() => practiceState(practice), { message: `Enter at ${now} moved nothing`, timeout: 10_000 }).not.toBe(now);
+    try {
+      await expect.poll(() => practiceState(practice), { message: `Enter at ${now} moved nothing`, timeout: 10_000 }).not.toBe(now);
+    } catch (error) {
+      await keepStall(practice);
+      throw error;
+    }
     await settled(practice);
   }
 }
 
-test("every chapter started over from each of its steps plays to its end with Enter alone", async ({ page }) => {
-  test.setTimeout(600_000);
-  await withPractice(page, async (practice, chapters) => {
-    // Chapter 0 waits seconds at a time for its Conductor; replayed from each of its steps that would be minutes, so its clock runs ahead on those steps.
-    await practice.clock.install();
-    const hurry = () => practice.clock.fastForward(5_000);
-    const ids = await chapters.evaluateAll((rows) => rows.map((row) => row.getAttribute("data-practice-hub-chapter")!));
-    for (const id of ids) {
+/** Keeps what the practice window showed where it stopped moving: its screen, and whether the step's target was there to press. */
+async function keepStall(practice: Page): Promise<void> {
+  const info = test.info();
+  // Written under the test's own output folder, which CI keeps with the run's logs.
+  await practice.screenshot({ path: info.outputPath("practice-stall.png") });
+  const facts = await practice.evaluate(() => {
+    const layer = document.querySelector("[data-practice-layer]");
+    return {
+      step: layer?.getAttribute("data-practice-step"),
+      settling: layer?.hasAttribute("data-practice-settling"),
+      waiting: layer?.hasAttribute("data-practice-waiting"),
+      children: [...document.querySelectorAll("[data-agent-child]")].map((row) => row.getAttribute("data-agent-child")),
+      trees: [...document.querySelectorAll("[data-pane-tree]")].map((tree) => `${tree.getAttribute("data-pane-tree")}:${tree.getAttribute("aria-expanded")}`),
+      focused: document.querySelector("[data-pane-view][data-focused='true']")?.getAttribute("data-pane-view") ?? null,
+    };
+  });
+  fs.writeFileSync(info.outputPath("practice-stall.json"), JSON.stringify(facts, null, 2));
+}
+
+/** Every chapter's id, one per file in `src/practice/chapters/`, as the practice lists them; each gets a journey of its own below. */
+const CHAPTER_IDS = fs.readdirSync(path.resolve("src/practice/chapters")).filter((file) => file.endsWith(".ts")).map((file) => file.slice(0, -".ts".length));
+
+// One test per chapter, so a chapter whose steps grow takes its own time budget and shard rather than every chapter's.
+for (const id of CHAPTER_IDS) {
+  test(`chapter ${id} started over from each of its steps plays to its end with Enter alone`, async ({ page }) => {
+    test.setTimeout(600_000);
+    await withPractice(page, async (practice) => {
+      // Chapter 0 waits seconds at a time for its Conductor; replayed from each of its steps that would be minutes, so its clock runs ahead on those steps.
+      await practice.clock.install();
+      const hurry = () => practice.clock.fastForward(5_000);
       const row = practice.locator(`[data-practice-hub-chapter="${id}"]`);
       const layer = practice.locator(`[data-practice-chapter="${id}"] [data-practice-layer]`);
       await row.locator("[data-practice-play]").click();
@@ -202,9 +252,9 @@ test("every chapter started over from each of its steps plays to its end with En
       await pressTo(practice, id, null, hurry);
       if ((await practiceState(practice)) !== "hub") await practice.locator("[data-practice-hub-open]").click();
       await expect(row).toHaveAttribute("data-status", "done");
-    }
+    });
   });
-});
+}
 
 test("Back over a step that changed the screen plays the chapter again up to that step as it began", async ({ page }) => {
   await withPractice(page, async (practice) => {
@@ -275,7 +325,7 @@ test("the chapter list leads back to Hide, and a finished chapter stops on its e
 /** An isolated stack's shell, signed in, for `journey`; the stack stops after it. */
 async function withShell(page: Page, journey: (origin: string) => Promise<void>): Promise<void> {
   await page.setViewportSize({ width: 1280, height: 800 });
-  const herdr = await startHerdr();
+  const herdr = await startFixture();
   let daemon: Daemon | null = null;
   try {
     daemon = await startHided(herdr, "practice-invite");

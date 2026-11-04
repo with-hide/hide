@@ -1097,6 +1097,13 @@ pub mod push {
                 // A read ask listed in Needs You is read: it clears a notice
                 // and never announces again (needs-you-cleanup D-10, B12).
                 Effective::Seen
+            } else if agent.notification_finalized && agent.group == "needs_you" {
+                // A later judgment updates the row, not a finalized notice.
+                Effective::Done
+            } else if agent.notification_pending && agent.group == "done" {
+                // The lifecycle stopped before its asynchronous judgment.
+                // Explicit asks still announce immediately.
+                Effective::Working
             } else {
                 Effective::from_group(&agent.group)
             };

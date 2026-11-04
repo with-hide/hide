@@ -1,11 +1,15 @@
-// A pane's session read as a thread on actual pinned Herdr and hided (PRD
+// A pane's session read as a thread on either engine and hided (PRD
 // session-docs-and-assistant B25, B29): the node reads the record, reads on
 // as the session writes, and the input box's words reach that pane's program.
+// The Claude pane runs on both engines; the Pi pane learns its session file from
+// Herdr's pi integration, so its test is Herdr only.
 import { expect, test, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
-import { startHerdr } from "./herdr-fixture";
+import { startFixture } from "./engine-fixture";
+import { setAgentState } from "./fixture-agents";
+import { continueFixtureTranscript, startHerdr } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { prepareNativeWriter, reportNativeWriter } from "./session-reader-fixture";
 import { sendEvent } from "./wire";
@@ -31,7 +35,40 @@ function watchThread(page: Page): { thread: () => SessionThreadSection | null; w
   return { thread: () => thread, words };
 }
 
-test("a Pi pane's record reads as a thread, follows what the session writes, and takes the input box's words", async ({ page }) => {
+test("a Claude pane's record reads as a thread, follows what the session writes, and takes the input box's words", async ({ page }) => {
+  const { thread, words } = watchThread(page);
+  const herdr = await startFixture();
+  let daemon: Daemon | null = null;
+  try {
+    daemon = await startHided(herdr, "claude-thread");
+    const pane = herdr.panes[0];
+    await page.goto(`${daemon.origin}/#token=${daemon.token}`);
+    await expect(page.locator(`nav[data-sidebar] [data-pane="${pane}"]`)).toBeVisible({ timeout: 30_000 });
+
+    await sendEvent(page, daemon, "session_thread_open", { pane_id: pane });
+    await expect.poll(() => thread()?.state, { timeout: 30_000 }).toBe("ready");
+    expect(thread()).toMatchObject({ pane_id: pane, pane: "same", connected: true });
+    expect(words()).toContain("Agent one 진행해줘");
+
+    // The session writes on while it works: the thread reads what it wrote.
+    continueFixtureTranscript(herdr, "fixture-one", { task: "스레드가 따라 읽는 새 말" });
+    await setAgentState(daemon, pane, "working");
+    await expect.poll(() => words(), { timeout: 30_000 }).toContain("스레드가 따라 읽는 새 말");
+
+    // The input box's words reach the pane's program, with Enter, and nowhere else.
+    const request = crypto.randomUUID();
+    await sendEvent(page, daemon, "thread_input", { generation: thread()!.generation, pane_id: pane, request_id: request, text: "계속해 주세요", stages: [] });
+    await expect.poll(() => thread()?.input, { timeout: 30_000 }).toEqual({ request_id: request, state: "sent" });
+    await expect.poll(() => fs.readFileSync(herdr.inputLogs[0], "utf8"), { timeout: 10_000 }).toContain("계속해 주세요");
+    expect(fs.existsSync(herdr.inputLogs[1]) ? fs.readFileSync(herdr.inputLogs[1], "utf8") : "").not.toContain("계속해 주세요");
+  } finally {
+    daemon?.stop();
+    herdr.stop();
+  }
+});
+
+// Herdr only: bundle 4 PR A (b4-transition) owns Pi's first-session report. The fixture binds it through Herdr's `report-agent-session`, with no Hide extension.
+test("a Pi pane's record reads as a thread, follows what the session writes, and takes the input box's words @herdr", async ({ page }) => {
   const { thread, words } = watchThread(page);
   const herdr = await startHerdr({ agents: false });
   let daemon: Daemon | null = null;

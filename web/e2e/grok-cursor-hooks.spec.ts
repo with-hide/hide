@@ -1,4 +1,4 @@
-// Active Grok hooks and retired Cursor compatibility on an isolated pinned Herdr and private install kit.
+// Active Grok hooks and retired Cursor compatibility on an isolated engine and private install kit.
 // Grok's switch writes and removes only Hide's file, and its installed commands refuse a direct agent start
 // and report subagents. Cursor's installed program produces no switch, user settings stay byte-for-byte,
 // and synthetic stale Cursor callbacks are silent (onboarding B31/D-09). Under Grok, only its own hook counts
@@ -9,11 +9,12 @@
 // folder (`hided/src/pane_auth.rs`, `attest_checkout`), which is the fixture's own checkout.
 
 import { expect, test, type Page } from "@playwright/test";
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { agentRunner, type AgentRun, type HideAnswer } from "./agent-pane";
-import { startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { agentIn, newTab, sendKeys, viewPane, withControl } from "./daemon-actions";
+import { startFixture, type AgentFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace, screenshot } from "./wire";
 
@@ -31,21 +32,24 @@ const ORCA_FILE = '{\n\t"hooks": {\n\t\t"SessionStart": [ {"hooks": [{"type": "c
 const CURSOR_FILE = { version: 1, hooks: { stop: [{ command: "/opt/mine.sh", timeout: 5 }], sessionStart: [{ command: "/opt/orca/cursor-hook", timeout: 3 }] } };
 const CURSOR_BYTES = `${JSON.stringify(CURSOR_FILE, null, "\t")}\n`;
 
-type Stack = { herdr: HerdrFixture; daemon: Daemon; home: string };
+type Stack = { herdr: AgentFixture; daemon: Daemon; home: string };
 
 /**
  * A private HOME with the agents' folders (`.claude` only for `claude`), the third-party files above and a kit
  * record; `on` seeds Grok on and a retired Cursor preference that must be removed. The programs `grok` and
  * `cursor-agent` are copies of the fixture's agent shim on the fixture PATH, which is the PATH the kit searches
- * and the PATH of every pane, so Herdr classifies a pane that runs one as that agent.
+ * and the PATH of every pane, so the engine classifies a pane that runs one as that agent.
  */
 async function start(label: string, options: { on?: boolean; claude?: boolean } = {}): Promise<Stack> {
-  const herdr = await startHerdr();
+  const herdr = await startFixture({ agents: false });
   for (const program of ["grok", "cursor-agent"]) {
     fs.copyFileSync(path.join(herdr.root, "bin", "claude"), path.join(herdr.root, "bin", program));
     fs.chmodSync(path.join(herdr.root, "bin", program), 0o755);
   }
   const home = path.join(fs.mkdtempSync(path.join(herdr.root, "gc-")), "home");
+  // The daemon's panes run in this HOME on the own engine, and a zsh with no startup file asks its new-user questions.
+  fs.mkdirSync(home, { recursive: true });
+  fs.writeFileSync(path.join(home, ".zshrc"), "PS1='fixture %# '\n");
   for (const folder of [".grok/hooks", ".cursor", ...(options.claude ? [".claude"] : [])]) fs.mkdirSync(path.join(home, folder), { recursive: true });
   fs.writeFileSync(path.join(home, ".grok", "hooks", "herdr.json"), HERDR_FILE);
   fs.writeFileSync(path.join(home, ".grok", "hooks", "orca.json"), ORCA_FILE);
@@ -240,19 +244,26 @@ test("a Grok file the operator removed or edited shows on its row until Reinstal
   }
 });
 
+/** Whether the sidebar lists a `kind` agent in `pane`. */
+async function listedAs(daemon: Daemon, pane: string): Promise<string | null | undefined> {
+  return withControl(daemon, (control) => control.until((rest) => agentIn(rest, pane)?.agent_kind ?? undefined, `an agent in ${pane}`, 30_000));
+}
+
 /**
- * A pane of its own in the fixture's checkout that runs the stand-in `kind`, which Herdr classifies by the
+ * A tab of its own in the fixture's checkout whose pane runs the stand-in `kind`, which the engine classifies by the
  * program in the pane's foreground. Returns the pane once the sidebar lists its row.
  */
-async function agentPane(page: Page, herdr: HerdrFixture, kind: "grok" | "cursor", beforeStart?: (pane: string) => void): Promise<string> {
-  const created = herdr.run(["workspace", "create", "--cwd", path.join(herdr.root, "fixture"), "--label", kind, "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]) as {
-    result: { root_pane: { pane_id: string } };
-  };
-  const pane = created.result.root_pane.pane_id;
-  const screen = () => execFileSync(herdr.bin, ["pane", "read", pane, "--source", "recent", "--lines", "10"], { env: herdr.env, encoding: "utf8", timeout: 10_000 });
-  await expect.poll(screen, { message: `a prompt in pane ${pane}`, timeout: 20_000 }).toContain("fixture %");
-  beforeStart?.(pane);
-  herdr.run(["agent", "start", kind, "--kind", kind, "--pane", pane]);
+async function agentPane(page: Page, stack: Stack, kind: "grok" | "cursor", beforeStart?: (pane: string) => void): Promise<string> {
+  const { herdr, daemon } = stack;
+  const pane = await withControl(daemon, async (control) => {
+    const made = await newTab(control, herdr, kind);
+    // No page shows the new tab, and keys typed into a pane no view has sized can be dropped.
+    viewPane(control, made.pane);
+    beforeStart?.(made.pane);
+    sendKeys(control, made.pane, `${kind === "cursor" ? "cursor-agent" : "grok"}\r`);
+    return made.pane;
+  });
+  expect(await listedAs(daemon, pane)).toBe(kind);
   await expect(page.locator(`nav[data-sidebar] [data-pane="${pane}"]`)).toBeVisible({ timeout: 30_000 });
   return pane;
 }
@@ -263,7 +274,7 @@ function runHook(stack: Stack, pane: string, command: string, payload: unknown, 
   const run = spawnSync("/bin/sh", ["-c", command], {
     cwd: path.join(herdr.root, "fixture"),
     input: typeof payload === "string" ? payload : JSON.stringify(payload),
-    env: { PATH: herdr.fixturePath, HOME: daemon.home, HIDE_STATE_DIR: daemon.stateDir, HERDR_SOCKET_PATH: herdr.socket, HERDR_PANE_ID: pane, ...env },
+    env: { PATH: herdr.fixturePath, HOME: daemon.home, HIDE_STATE_DIR: daemon.stateDir, HIDE_PANE_ID: pane, ...env },
     encoding: "utf8",
     timeout: 20_000,
   });
@@ -277,7 +288,7 @@ function runHook(stack: Stack, pane: string, command: string, payload: unknown, 
  */
 async function grokAgentPane(page: Page, stack: Stack): Promise<{ pane: string; run: (command: string, payload: unknown, env: Record<string, string>) => Promise<{ stdout: string; status: number }> }> {
   let asAgent: ((args: string[], run?: AgentRun) => Promise<HideAnswer>) | undefined;
-  const pane = await agentPane(page, stack.herdr, "grok", (pane) => {
+  const pane = await agentPane(page, stack, "grok", (pane) => {
     asAgent = agentRunner(stack.herdr, stack.daemon.stateDir, pane, "grok");
   });
   return {
@@ -310,8 +321,8 @@ test("the installed Grok guard refuses direct starts while retired Cursor callba
     await page.goto(`${stack.daemon.origin}/#token=${stack.daemon.token}`);
     await enterWorkspace(page, "fixture");
     await installedEverywhere(home, false);
-    const grok = await agentPane(page, herdr, "grok");
-    const cursor = await agentPane(page, herdr, "cursor");
+    const grok = await agentPane(page, stack, "grok");
+    const cursor = await agentPane(page, stack, "cursor");
 
     // B2, Grok: Claude Code's envelope with the same reason; the guard's log holds the one refusal.
     const grokCall = (command: string) => ({ ...sample("grok-pre-tool-use.json"), cwd: path.join(herdr.root, "fixture"), toolInput: { command } });
@@ -338,7 +349,7 @@ test("the installed Grok guard refuses direct starts while retired Cursor callba
 
 test("installed Grok events update counts while a historical Cursor pane stays uninstrumented", async ({ page }) => {
   const stack = await start("grok-cursor-counts", { on: true });
-  const { herdr, home } = stack;
+  const { home } = stack;
   const wire = watchWire(page);
   try {
     await page.goto(`${stack.daemon.origin}/#token=${stack.daemon.token}`);
@@ -346,10 +357,9 @@ test("installed Grok events update counts while a historical Cursor pane stays u
     await installedEverywhere(home, false);
     await expect.poll(() => wire.hook("grok")?.state, { timeout: 60_000 }).toBe("installed");
     expect(wire.hook("cursor")).toBeUndefined();
-    const cursor = await agentPane(page, herdr, "cursor");
+    const cursor = await agentPane(page, stack, "cursor");
     const { pane: grok, run: asGrok } = await grokAgentPane(page, stack);
-    const kinds = (herdr.run(["agent", "list"]) as { result: { agents: { pane_id: string; agent: string }[] } }).result.agents;
-    expect([grok, cursor].map((pane) => kinds.find((agent) => agent.pane_id === pane)?.agent)).toEqual(["grok", "cursor"]);
+    expect(await Promise.all([grok, cursor].map((pane) => listedAs(stack.daemon, pane)))).toEqual(["grok", "cursor"]);
     const send = async (event: string, nativeEvent: string, payload: unknown) => {
       const run = await asGrok(installed.grok(home, event), payload, GROK_ENV(nativeEvent));
       expect(run.status, event).toBe(0);

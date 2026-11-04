@@ -1,5 +1,5 @@
 // A Hide AI fix waiting on its branch, on a real core through an isolated
-// pinned Herdr, hided and browser (PRD hide-ai-branch-first-apply B3, B4, B6,
+// engine, hided and browser (PRD hide-ai-branch-first-apply B3, B4, B6,
 // B7, B13): two 제안 lines whose agents left a commit on a local branch of a
 // scratch repository with no remote, seeded into the daemon's own suggestion
 // store while it is down, the way a stopped agent leaves them. The core reads
@@ -12,7 +12,8 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { digest, git } from "./hide-ai-fixture";
-import { startHerdr } from "./herdr-fixture";
+import { openProject, withControl } from "./daemon-actions";
+import { startEngine } from "./engine-fixture";
 import { startHided } from "./hided-fixture";
 import { countSent, showProjectMemory, showProjectRow } from "./wire";
 
@@ -89,12 +90,12 @@ async function open(page: Page, origin: string, token: string): Promise<void> {
 
 test("a fix waits on its local branch, shows its files and diff in the 보기 slot, and merges into main on the press without a remote", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  const herdr = await startHerdr({ readiness: "registered" });
+  const herdr = await startEngine();
   let daemon: Awaited<ReturnType<typeof startHided>> | null = null;
   try {
     const repo = repository(herdr.root);
-    herdr.run(["workspace", "create", "--cwd", repo, "--label", "branchy", "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]);
     daemon = await startHided(herdr, "hide-ai-branch");
+    await withControl(daemon, (control) => openProject(control, repo, "branchy"));
     const sent = new Map<string, Record<string, unknown>>();
     countSent(page, sent);
     await open(page, daemon.origin, daemon.token);

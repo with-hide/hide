@@ -49,6 +49,10 @@ use crate::support::{
     shell, source, wait_until,
 };
 
+pub(crate) mod ownership;
+mod rules_recovery;
+mod transport_ownership;
+
 /// The variables the `node` role reads.
 const NODE_HOME: &str = "HIDE_HOLDER_TEST_NODE_HOME";
 const NODE_STATE: &str = "HIDE_HOLDER_TEST_NODE_STATE";
@@ -341,6 +345,7 @@ impl Attacher for Herdr {
 struct Node {
     service: Service,
     holders: Option<Holders>,
+    owner: Option<hide_kit::panes::Owner>,
     screens: Arc<Screens>,
     reports: Arc<Reports>,
     herdr_opened: Mutex<Receiver<String>>,
@@ -374,9 +379,13 @@ impl Node {
             RetryPolicy::Automatic,
         )
         .unwrap();
+        let owner = holders
+            .as_ref()
+            .map(|holders| holders.acquire(Duration::from_secs(5)).unwrap());
         Self {
             service,
             holders,
+            owner,
             screens,
             reports,
             herdr_opened: Mutex::new(herdr_opened),
@@ -387,9 +396,13 @@ impl Node {
         self.holders.as_ref().expect("the switch is on")
     }
 
+    fn owner(&self) -> &hide_kit::panes::Owner {
+        self.owner.as_ref().expect("the fixture owns its records")
+    }
+
     fn start_pane(&self, request: &StartRequest) -> Started {
         self.holders()
-            .start(&self.service, request)
+            .start(self.owner(), &self.service, request)
             .unwrap_or_else(|refused| panic!("{} did not start: {refused}", request.pane))
     }
 
@@ -485,6 +498,20 @@ fn request(
 /// On Windows the caret keeps the typed line from holding it; a variable
 /// would not do twice in one shell, since cmd expands `%B%` when it reads
 /// the line, before its `set` runs, and prints the word set before.
+/// Starts `start`'s pane as the core's own engine does: a request number,
+/// the pane's reservation, its start, and the number retired unless the
+/// answer was lost.
+fn start_pane(holders: &dyn PaneHolders, start: &HolderStart) -> Result<(), HolderError> {
+    let request = holders.request()?;
+    let result = holders
+        .reserve(start, None, request)
+        .and_then(|reserved| holders.start_reserved(start, reserved, request));
+    if !matches!(result, Err(HolderError::Unreachable { .. })) {
+        holders.retire(request)?;
+    }
+    result
+}
+
 fn print_node(word: &str) -> Vec<u8> {
     if cfg!(windows) {
         format!("echo {word}^-node\r").into_bytes()
@@ -567,7 +594,10 @@ fn a_started_pane_shows_its_first_full_screen_takes_input_and_converges() {
     );
 
     let holder = first.holder.unwrap();
-    let ended = node.holders().terminate(&node.service, "s1").unwrap();
+    let ended = node
+        .holders()
+        .terminate(node.owner(), &node.service, "s1")
+        .unwrap();
     assert_eq!(ended.phase, Phase::Ended);
     assert_eq!(ended.end.map(|end| end.reason), Some(EndReason::Terminated));
     assert!(!holder.runs());
@@ -585,15 +615,18 @@ fn an_engine_pane_attaches_before_its_holder_start_is_registered() {
         screens,
         reports,
         herdr_opened,
+        owner,
     } = Node::start(Switch::On, folder.home.path(), &folder.state);
+    drop(owner);
     let service = Arc::new(service);
     let holders = Arc::new(holders.unwrap());
-    let engine = LocalPanes::new(
+    let engine = Arc::new(LocalPanes::new(
         Arc::clone(&holders),
         Arc::clone(&service),
         PaneShell::Fixed(shell()),
-        None,
-    );
+    ))
+    .own(Duration::from_secs(5))
+    .unwrap();
     let pane = "w1:p1";
     assert!(holders.record(pane).unwrap().is_none());
     let (opened, _) = channel();
@@ -609,8 +642,9 @@ fn an_engine_pane_attaches_before_its_holder_start_is_registered() {
         manual: false,
     });
     reports.wait_state(pane, "starting");
-    engine
-        .start(&HolderStart {
+    start_pane(
+        &*engine,
+        &HolderStart {
             pane: pane.to_owned(),
             program: None,
             cwd: hide_platform::path::to_wire(folder.home.path()).unwrap(),
@@ -618,8 +652,9 @@ fn an_engine_pane_attaches_before_its_holder_start_is_registered() {
             rows: SIZE.rows,
             cols: SIZE.cols,
             notice: None,
-        })
-        .unwrap();
+        },
+    )
+    .unwrap();
     screens.first_full(pane);
     service.key(KeyTarget::Pane(pane.to_owned()), print_ok().to_vec(), 0);
     screens.wait_drawn_after(pane, 0, "hide-ok");
@@ -632,6 +667,217 @@ fn an_engine_pane_attaches_before_its_holder_start_is_registered() {
     );
     engine.terminate(pane).unwrap();
     service.close();
+}
+
+/// An unreadable neighbour stays quarantined while the node connection
+/// recovers a live pane and admits a new, distinct pane.
+#[test]
+fn unreadable_records_do_not_reject_the_nodes_healthy_panes() {
+    use hide_node_link::holders::PaneInput;
+    use hide_node_link::link::NodeLink;
+    use hide_node_link::link_panes::LinkPanes;
+
+    let folder = Folder::new();
+    let node = Node::start(Switch::On, folder.home.path(), &folder.state);
+    node.start_pane(&folder.shell("w1:p1"));
+    node.screens.first_full("w1:p1");
+    let invalid = [
+        ("w1:p2", b"{cut off".as_slice()),
+        ("w1:p3", b"{\"format\":999}".as_slice()),
+    ];
+    for (pane, bytes) in invalid {
+        std::fs::write(
+            layout::pane_record(&folder.state, &hide_kit::panes::holder_pane(pane)),
+            bytes,
+        )
+        .unwrap();
+    }
+    let Node {
+        service,
+        holders,
+        owner,
+        screens,
+        ..
+    } = node;
+    drop(owner);
+    let service = Arc::new(service);
+    let local = Arc::new(
+        hide_node::Local::new(Some(folder.home.path().to_owned())).with_panes(Arc::new(
+            LocalPanes::new(
+                Arc::new(holders.unwrap()),
+                Arc::clone(&service),
+                PaneShell::Fixed(shell()),
+            ),
+        )),
+    );
+    let linked = LinkPanes::new(Arc::clone(&local) as Arc<dyn NodeLink>, Arc::new(|_| {}));
+    let found = linked.recovered(Duration::from_secs(5)).unwrap();
+    for pane in ["w1:p1", "w1:p2", "w1:p3"] {
+        assert!(
+            found.present.contains(&pane.to_owned()),
+            "{pane} was lost: {found:?}"
+        );
+    }
+    linked
+        .input("w1:p1", PaneInput::Bytes(print_ok().to_vec()))
+        .unwrap();
+    screens.wait_drawn_after("w1:p1", 0, "hide-ok");
+    assert!(linked.read("w1:p1", 200).unwrap().0.contains("hide-ok"));
+    let start = |pane: &str| HolderStart {
+        pane: pane.to_owned(),
+        program: None,
+        cwd: hide_platform::path::to_wire(folder.home.path()).unwrap(),
+        env: Vec::new(),
+        rows: SIZE.rows,
+        cols: SIZE.cols,
+        notice: None,
+    };
+    start_pane(&linked, &start("w1:p4")).unwrap();
+    screens.first_full("w1:p4");
+    for (pane, bytes) in invalid {
+        assert!(matches!(
+            start_pane(&linked, &start(pane)),
+            Err(HolderError::Refused { .. })
+        ));
+        assert_eq!(
+            std::fs::read(layout::pane_record(
+                &folder.state,
+                &hide_kit::panes::holder_pane(pane)
+            ))
+            .unwrap(),
+            bytes
+        );
+    }
+    linked.terminate("w1:p4").unwrap();
+    linked.terminate("w1:p1").unwrap();
+    local.close("test finished");
+    service.close();
+}
+
+/// A cancellation that finds an unreported holder death is still a close,
+/// including a start whose cleanup was previously uncertain. Recovery must
+/// not convert the cancelled intent into a replacement shell.
+#[test]
+fn cancelled_dead_holders_stay_closed_on_the_next_owner() {
+    use hide_node_link::holders::HolderIntent;
+
+    let folder = Folder::new();
+    let mut node = Node::start(Switch::On, folder.home.path(), &folder.state);
+    for (pane, phase) in [("p1", Phase::Running), ("p2", Phase::Ended)] {
+        let intent = HolderIntent {
+            pane: pane.to_owned(),
+            digest: "a".repeat(64),
+            cwd: hide_platform::path::to_wire(folder.home.path()).unwrap(),
+        };
+        let guard = node.owner().issue(pane, &intent.digest).unwrap();
+        let reserved = node.holders().reserve(&guard, &intent, None).unwrap();
+        node.holders()
+            .start_reserved(&guard, &node.service, &intent, reserved, || {
+                Ok(folder.shell(pane))
+            })
+            .unwrap();
+        let mut abandoned = folder.record(pane);
+        let holder = abandoned.holder.unwrap();
+        hide_platform::process::kill_tree(holder.pid).unwrap();
+        wait_until("the test holder to exit", || !holder.runs());
+        // Model the durable record left when its final write never arrives.
+        abandoned.phase = phase;
+        abandoned.end = (phase == Phase::Ended).then(|| {
+            record::End::new(
+                EndReason::StartUnconfirmed,
+                "the original start did not answer",
+            )
+        });
+        {
+            let _lock = record::lock(&layout::pane_records_lock(&folder.state), record::LOCK_WAIT)
+                .unwrap()
+                .unwrap();
+            record::write(&layout::pane_record(&folder.state, pane), &abandoned).unwrap();
+        }
+        let original = abandoned.reservation.as_ref().unwrap();
+        node.holders()
+            .cancel(
+                &guard,
+                &node.service,
+                &HolderIntent {
+                    pane: pane.to_owned(),
+                    digest: original.request.clone(),
+                    cwd: original.cwd.clone(),
+                },
+            )
+            .unwrap();
+        let ended = folder.record(pane);
+        assert_eq!(ended.phase, Phase::Ended);
+        assert!(ended.cancelled());
+        assert_eq!(ended.end.unwrap().reason, EndReason::Terminated);
+        let panes =
+            hide_kit::panes::Panes::open(folder.home.path(), &folder.state, |_| {}).unwrap();
+        assert!(
+            panes
+                .start_reserved(
+                    &guard,
+                    pane,
+                    abandoned.incarnation,
+                    &original.request,
+                    &source(),
+                    || panic!("a cancelled start expanded its shell")
+                )
+                .is_err()
+        );
+    }
+    drop(node.owner.take());
+    node.owner = Some(node.holders().acquire(Duration::from_secs(5)).unwrap());
+    node.holders().recover(node.owner(), &node.service);
+    let recovered = node.holders().recovered(Duration::from_secs(5)).unwrap();
+    assert_eq!(recovered.closed, vec!["p1", "p2"]);
+    assert!(recovered.ended.is_empty(), "{recovered:?}");
+    assert!(recovered.recoverable.is_empty(), "{recovered:?}");
+    assert!(recovered.present.is_empty(), "{recovered:?}");
+    node.service.close();
+}
+
+/// Reboot fences old process identities but cannot turn a completed pane
+/// into a recoverable shell. Exercise the node's actual closed partition.
+#[test]
+fn completed_panes_from_another_boot_stay_closed() {
+    let folder = Folder::new();
+    let panes = hide_kit::panes::Panes::open(folder.home.path(), &folder.state, |_| {}).unwrap();
+    let reasons = [
+        EndReason::ProgramExited,
+        EndReason::Terminated,
+        EndReason::TreeEndUnconfirmed,
+    ];
+    for (i, reason) in reasons.into_iter().enumerate() {
+        let pane = format!("p{i}");
+        let record = PaneRecord {
+            format: record::LEGACY_RECORD_FORMAT,
+            pane: pane.clone(),
+            owner: panes.owner().to_owned(),
+            incarnation: i as u64 + 1,
+            phase: Phase::Ended,
+            protocol: hide_holder_protocol::PROTOCOL_VERSION,
+            version_folder: String::new(),
+            spec: String::new(),
+            reservation: None,
+            reserved_at_unix_ms: record::now_unix_ms(),
+            boot: Some("test-earlier-boot".to_owned()),
+            holder: None,
+            program: None,
+            end: Some(record::End::new(reason, "already completed")),
+        };
+        record::write(&layout::pane_record(&folder.state, &pane), &record).unwrap();
+    }
+    let node = Node::start(Switch::On, folder.home.path(), &folder.state);
+    node.holders().recover(node.owner(), &node.service);
+    let recovered = node.holders().recovered(Duration::from_secs(5)).unwrap();
+    assert_eq!(recovered.closed, vec!["p0", "p1", "p2"]);
+    assert!(recovered.ended.is_empty(), "{recovered:?}");
+    assert!(recovered.recoverable.is_empty(), "{recovered:?}");
+    assert!(recovered.present.is_empty(), "{recovered:?}");
+    for (i, reason) in reasons.into_iter().enumerate() {
+        assert_eq!(folder.record(&format!("p{i}")).end.unwrap().reason, reason);
+    }
+    node.service.close();
 }
 
 /// A redraw, and a view at the grid the pane already runs at, each bring a
@@ -676,7 +922,9 @@ fn a_redraw_on_a_holder_pane_draws_its_screen_again_and_what_follows() {
         }
         node.screens.wait_drawn_after("r1", drawn, &printed);
     }
-    node.holders().terminate(&node.service, "r1").unwrap();
+    node.holders()
+        .terminate(node.owner(), &node.service, "r1")
+        .unwrap();
 }
 
 /// The `node` role: starts every pane of the kill test, eight at once as a
@@ -785,7 +1033,7 @@ fn a_node_killed_outright_finds_its_holders_again_and_attaches_sixty_four() {
     let next = Node::start(Switch::On, folder.home.path(), &folder.state);
     let told = Arc::new(Told::default());
     next.holders().watch_facts(told.sink());
-    let recovered = next.holders().recover(&next.service);
+    let recovered = next.holders().recover(next.owner(), &next.service);
     assert!(recovered.complete, "{recovered:?}");
     let mut expected: Vec<String> = panes.iter().filter(|pane| *pane != ENDS).cloned().collect();
     expected.sort();
@@ -862,7 +1110,7 @@ fn a_holder_whose_record_was_deleted_runs_on_until_its_shell_ends() {
     std::fs::remove_dir_all(&folder.state).unwrap();
 
     let next = Node::start(Switch::On, folder.home.path(), &folder.state);
-    let recovered = next.holders().recover(&next.service);
+    let recovered = next.holders().recover(next.owner(), &next.service);
     assert!(recovered.complete, "{recovered:?}");
     assert!(
         recovered.attached.is_empty() && recovered.ended.is_empty(),
@@ -949,6 +1197,7 @@ fn fixture_record(folder: &Folder, pane: &str, protocol: u16, holder: u32, versi
         protocol,
         version_folder: version_folder.to_owned(),
         spec: String::new(),
+        reservation: None,
         reserved_at_unix_ms: record::now_unix_ms(),
         boot: hide_platform::process::boot_id().ok(),
         holder: Some(holder),
@@ -997,7 +1246,7 @@ fn a_node_works_a_holder_of_the_oldest_version_it_supports() {
     let node = Node::start(Switch::On, folder.home.path(), &folder.state);
     let told = Arc::new(Told::default());
     node.holders().watch_facts(told.sink());
-    let recovered = node.holders().recover(&node.service);
+    let recovered = node.holders().recover(node.owner(), &node.service);
     assert_eq!(recovered.attached, vec!["f1".to_owned()], "{recovered:?}");
     node.screens.wait_full("f1", fixture_v1::SCREEN_TEXT);
     // A version 1 holder built before watches refuses the watch opening,
@@ -1028,7 +1277,10 @@ fn a_node_works_a_holder_of_the_oldest_version_it_supports() {
         Answer::Text { text, .. } => assert_eq!(text, fixture_v1::READ_TEXT),
         other => panic!("a read answered {other:?}"),
     }
-    let ended = node.holders().terminate(&node.service, "f1").unwrap();
+    let ended = node
+        .holders()
+        .terminate(node.owner(), &node.service, "f1")
+        .unwrap();
     assert_eq!(ended.phase, Phase::Ended);
     let logged = logged();
     assert!(logged.contains("terminate"), "{logged}");
@@ -1123,7 +1375,9 @@ fn a_node_tells_its_panes_facts_read_by_the_rules_its_holder_reads() {
     let later = Arc::new(Told::default());
     node.holders().watch_facts(later.sink());
     assert_eq!(later.wait("w1", "the last facts", |_| true), last);
-    node.holders().terminate(&node.service, "w1").unwrap();
+    node.holders()
+        .terminate(node.owner(), &node.service, "w1")
+        .unwrap();
 }
 
 /// B19: a pane whose watch ends some other way than with the pane (here
@@ -1162,7 +1416,9 @@ fn a_pane_whose_watch_another_took_reads_unknown_with_why() {
             }
     });
     assert_eq!(lost.title.as_deref(), Some("job"));
-    node.holders().terminate(&node.service, "l1").unwrap();
+    node.holders()
+        .terminate(node.owner(), &node.service, "l1")
+        .unwrap();
 }
 
 /// B10: a holder older than the oldest version a node speaks to is reported
@@ -1183,7 +1439,7 @@ fn a_holder_older_than_the_oldest_supported_is_reported_and_left_running() {
     fixture_record(&folder, "o1", 0, old.0.id(), "v0-old");
 
     let node = Node::start(Switch::On, folder.home.path(), &folder.state);
-    let recovered = node.holders().recover(&node.service);
+    let recovered = node.holders().recover(node.owner(), &node.service);
     assert_eq!(
         recovered.unsupported,
         vec!["o1".to_owned()],
@@ -1322,6 +1578,16 @@ fn a_starting_node_removes_the_old_version_folders_nothing_runs_from() {
     )
     .unwrap();
     assert!(terminals.holders.is_some());
+
+    // Assembly starts no record mutation. The connection acquires ownership
+    // and completes recovery before it prunes, just as the daemon's does.
+    let _owned = Arc::new(LocalPanes::new(
+        Arc::clone(terminals.holders.as_ref().unwrap()),
+        Arc::clone(&terminals.service),
+        PaneShell::Fixed(shell()),
+    ))
+    .own(HANG_LIMIT)
+    .unwrap();
 
     // This test's prune: the one that names its unused folder.
     let pruned = wait_diagnostic("pane_holder.folders_pruned", |record| {

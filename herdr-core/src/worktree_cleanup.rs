@@ -593,8 +593,11 @@ fn verified_pane_paths(
         .into_iter()
         .map(|(pane, cwd)| {
             let cwd = cwd.ok_or("A live pane's folder is unknown. Resolve it before cleanup.")?;
+            // The node spells its panes' folders on the wire, so a Windows
+            // device's `C:/...` is absolute here whatever this system is.
+            let absolute = hide_platform::path::is_wire_absolute(&cwd);
             let path = PathBuf::from(cwd);
-            if !path.is_absolute()
+            if !absolute
                 || path.components().any(|component| {
                     matches!(
                         component,

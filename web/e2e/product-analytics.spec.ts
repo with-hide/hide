@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
-import { startHerdr } from "./herdr-fixture";
+import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace, screenshot } from "./wire";
 
@@ -24,7 +24,7 @@ function savedChoice(file: string): unknown {
 
 test("product usage defaults on and an opt-out stays off after a daemon restart @platform", async ({ page }) => {
   test.setTimeout(120_000);
-  const herdr = await startHerdr({ agents: false });
+  const herdr = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
     daemon = await startHided(herdr, "product-analytics");

@@ -181,7 +181,8 @@ test("live check guards preserve bytes, refuse aliases, and end detached childre
 // Each provider keeps all ten scenes and its own bounded native lifecycle.
 // Mixed-provider report/exit aggregation is covered at the report boundary;
 // authenticated acceptance still requires one invocation with all adapters.
-for (const provider of ["claude-code", "codex"]) test(`live check retains every ${provider} scene and rejects unsafe picker or plan input`, async () => {
+// Herdr only: the live check measures the agents on the pinned Herdr it is handed (`--herdr-bin`).
+for (const provider of ["claude-code", "codex"]) test(`live check retains every ${provider} scene and rejects unsafe picker or plan input @herdr`, async () => {
   test.skip(process.platform === "win32", "Native measurement's process guardian supports Unix hosts");
   test.setTimeout(240_000);
   const { root, run, args } = fixtureRoot(provider);
@@ -240,7 +241,8 @@ for (const provider of ["claude-code", "codex"]) test(`live check retains every 
   }
 });
 
-test("live check refuses operator socket and state before a server starts", async () => {
+// Herdr only: the live check measures the agents on the pinned Herdr it is handed (`--herdr-bin`).
+test("live check refuses operator socket and state before a server starts @herdr", async () => {
   test.skip(process.platform === "win32", "Unix local tool");
   const { root, run, args } = fixtureRoot();
   let clean = false;
@@ -264,7 +266,8 @@ test("live check refuses operator socket and state before a server starts", asyn
   } finally { if (clean) fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test("live check retains integrity loss before a later fatal artifact refusal", async () => {
+// Herdr only: the live check measures the agents on the pinned Herdr it is handed (`--herdr-bin`).
+test("live check retains integrity loss before a later fatal artifact refusal @herdr", async () => {
   test.skip(process.platform === "win32", "Unix private integration and aliases");
   test.setTimeout(120_000);
   for (const scenario of ["integrity-fatal", "integrity-native-error"]) {
@@ -299,7 +302,8 @@ test("live check retains integrity loss before a later fatal artifact refusal", 
   }
 });
 
-test("live check tears down a started runtime on failure and Ctrl-C", async () => {
+// Herdr only: the live check measures the agents on the pinned Herdr it is handed (`--herdr-bin`).
+test("live check tears down a started runtime on failure and Ctrl-C @herdr", async () => {
   test.skip(process.platform === "win32", "Unix signal and private socket contract");
   test.setTimeout(120_000);
   for (const scenario of ["failure", "configuration", "server-loss", "guardian", "hold"]) {

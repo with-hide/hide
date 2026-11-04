@@ -8,6 +8,11 @@ use std::process::Command;
 use hide_host::ErrorCode;
 use hide_host::register::check;
 
+/// A path as an answer spells it (`hide_host::root::wire`).
+fn wire(path: &Path) -> String {
+    hide_platform::path::to_wire_lossy(path)
+}
+
 #[test]
 fn a_folder_inside_home_is_registered_as_its_project() {
     let home = tempfile::tempdir().unwrap();
@@ -26,10 +31,10 @@ fn a_folder_inside_home_is_registered_as_its_project() {
     );
 
     let plain = check(&folder, None, &home).unwrap();
-    assert_eq!(plain.root, folder.to_string_lossy());
+    assert_eq!(plain.root, wire(&folder));
     assert!(!plain.is_git);
     let inside = check(&repository.join("src"), None, &home).unwrap();
-    assert_eq!(inside.root, repository.to_string_lossy());
+    assert_eq!(inside.root, wire(&repository));
     assert!(inside.is_git);
 }
 
@@ -89,10 +94,7 @@ fn a_folder_in_a_repository_holding_home_is_refused_as_that_repository() {
         check(&home, None, &home).unwrap_err().code,
         ErrorCode::OutsideRoot
     );
-    assert_eq!(
-        check(&own, None, &home).unwrap().root,
-        own.to_string_lossy()
-    );
+    assert_eq!(check(&own, None, &home).unwrap().root, wire(&own));
 }
 
 /// PRD wsl-device B15, B18, B20: a folder outside the host's home is
@@ -113,9 +115,7 @@ fn a_folder_outside_home_needs_its_own_confirmation() {
     let added = check(&app, Some(&app), home.path()).unwrap();
     assert_eq!(
         added.root,
-        hide_platform::fs::identity::canonical(&app)
-            .unwrap()
-            .to_string_lossy()
+        wire(&hide_platform::fs::identity::canonical(&app).unwrap())
     );
     assert!(!added.is_git);
     for (path, confirmed) in [
@@ -194,10 +194,7 @@ fn a_folder_in_a_project_outside_home_asks_about_the_project_it_adds() {
     repository_with_worktree(&repo, &linked);
     let public = repo.join("public");
     std::fs::create_dir(&public).unwrap();
-    let root = hide_platform::fs::identity::canonical(&repo)
-        .unwrap()
-        .to_string_lossy()
-        .into_owned();
+    let root = wire(&hide_platform::fs::identity::canonical(&repo).unwrap());
     let asked = |path: &Path, confirmed: Option<&Path>| {
         let error = check(path, confirmed, home.path()).unwrap_err();
         (error.code, error.confirm)
@@ -225,12 +222,9 @@ fn a_folder_in_a_project_outside_home_asks_about_the_project_it_adds() {
         asked(&inward, None),
         (
             ErrorCode::NeedsConfirmation,
-            Some(
-                hide_platform::fs::identity::canonical(&other)
-                    .unwrap()
-                    .to_string_lossy()
-                    .into_owned()
-            )
+            Some(wire(
+                &hide_platform::fs::identity::canonical(&other).unwrap()
+            ))
         )
     );
 }
@@ -285,7 +279,7 @@ fn another_spelling_of_home_is_home() {
     }
     // Registered by the spelling the system gives the folder.
     let added = check(&spelled.join("app"), None, &home).unwrap();
-    assert_eq!(added.root, home.join("app").to_string_lossy());
+    assert_eq!(added.root, wire(&home.join("app")));
 }
 
 /// On a volume that ignores letter case, home written in another case is
@@ -316,12 +310,7 @@ fn home_in_another_letter_case_is_home_where_case_is_ignored() {
 fn a_folder_whose_git_directory_lives_elsewhere_is_its_own_project() {
     let home = tempfile::tempdir().unwrap();
     let elsewhere = tempfile::tempdir().unwrap();
-    let canonical = |path: &Path| {
-        hide_platform::fs::identity::canonical(path)
-            .unwrap()
-            .to_string_lossy()
-            .into_owned()
-    };
+    let canonical = |path: &Path| wire(&hide_platform::fs::identity::canonical(path).unwrap());
     let submodule = |folder: &Path, git_dir: &Path| {
         std::fs::create_dir_all(git_dir).unwrap();
         std::fs::write(git_dir.join("HEAD"), "ref: refs/heads/main\n").unwrap();

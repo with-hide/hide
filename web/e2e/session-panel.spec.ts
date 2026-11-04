@@ -1,9 +1,12 @@
-// The sidebar's 태스크 list on a real isolated Herdr and daemon (PRD sidebar-task-lens).
+// The sidebar's 태스크 list on a real isolated engine and daemon (PRD sidebar-task-lens).
 import { expect, test, type Page } from "@playwright/test";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { declareParent, labelAgent, setFixtureLifecycle, startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { agentIn, openWorktree, viewPane, withControl } from "./daemon-actions";
+import { startFixture, type AgentFixture } from "./engine-fixture";
+import { agentReading, sessionIn, setAgentState, startAgentInProject, takeOverSession, type AgentState } from "./fixture-agents";
+import { claudeProjects, continueFixtureTranscript, writeFixtureTranscript, type FixtureLabel } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { chord } from "./chords";
 import { chooseTheme, countSent, openTaskFolds, screenshot, showTasks } from "./wire";
@@ -16,25 +19,49 @@ function git(cwd: string, args: string[]): void {
   execFileSync("git", ["-c", "user.name=e2e", "-c", "user.email=e2e@example.invalid", "-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false", ...args], { cwd, stdio: "ignore" });
 }
 
-async function prompt(herdr: HerdrFixture, pane: string): Promise<void> {
-  const deadline = Date.now() + 15_000;
-  while (Date.now() < deadline) {
-    const read = spawnSync(herdr.bin, ["pane", "read", pane, "--source", "visible", "--format", "text"], { env: herdr.env, encoding: "utf8", timeout: 10_000 });
-    if (read.status === 0 && read.stdout.includes("fixture %")) return;
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error(`no prompt in pane ${pane}`);
+/**
+ * The agent of a linked worktree `name` of the fixture's repository, running
+ * the `claude` stand-in on a session whose transcript names it `label`. The
+ * core lists a linked worktree once a page is connected, so the page opens
+ * first. Returns its pane.
+ */
+async function agentInWorktree(fixture: AgentFixture, daemon: Daemon, name: string, label: FixtureLabel, state?: AgentState): Promise<string> {
+  const dir = path.join(fixture.root, `fixture-${name}`);
+  git(path.join(fixture.root, "fixture"), ["worktree", "add", "-b", `prd/${name}`, dir]);
+  return withControl(daemon, async (control) => {
+    const agent = await startAgentInProject(fixture, daemon, await openWorktree(control, dir), label);
+    // The stand-in reads only once it runs, and on Herdr a pane no view has sized takes no keys. Showing its tab would
+    // mark what it says as seen, which is not the point of the tasks that wait for the operator.
+    viewPane(control, agent.pane);
+    await agentReading(fixture, agent.pane);
+    // Put the agent on its current screen before binding the turn we label.
+    // A later idle-to-approval transition means another turn ran and clears the old turn's line.
+    if (state) await setAgentState(daemon, agent.pane, state);
+    // A new session is read as soon as it starts, which is how the core takes the label of a turn that already ended.
+    const session = `label-${process.pid}-${name}`;
+    writeFixtureTranscript(claudeProjects(fixture), session, label);
+    await takeOverSession(fixture, daemon, agent.pane, session, dir);
+    return agent.pane;
+  });
 }
 
-/** A Herdr workspace at `cwd` running the fake `claude`. */
-async function agentAt(herdr: HerdrFixture, cwd: string): Promise<string> {
-  const created = herdr.run(["workspace", "create", "--cwd", cwd, "--label", path.basename(cwd), "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]) as {
-    result: { root_pane: { pane_id: string } };
-  };
-  const pane = created.result.root_pane.pane_id;
-  await prompt(herdr, pane);
-  herdr.run(["agent", "start", `agent-${path.basename(cwd)}`, "--kind", "claude", "--pane", pane]);
-  return pane;
+/** One turn of the stand-in in `pane`, which the core reads the session's transcript at the end of. */
+async function finishTurn(daemon: Daemon, pane: string): Promise<void> {
+  await setAgentState(daemon, pane, "working");
+  await setAgentState(daemon, pane, "idle");
+}
+
+/** Names the fixture's parent and its delegated child: a turn appended to the session each runs now, which the core reads as the agent's state changes. */
+async function labelFamily(fixture: AgentFixture, daemon: Daemon, parent: FixtureLabel, child: FixtureLabel): Promise<void> {
+  const [parentPane, childPane] = fixture.panes;
+  continueFixtureTranscript(fixture, await sessionIn(daemon, parentPane), parent);
+  await finishTurn(daemon, parentPane);
+  continueFixtureTranscript(fixture, await sessionIn(daemon, childPane), child);
+  await finishTurn(daemon, childPane);
+  // A turn-end label that lands after the next turn starts is stale. The
+  // fixture needs the completed turn's title before making its child work again.
+  await withControl(daemon, (control) => control.until((rest) => agentIn(rest, childPane)?.identity_label === child.task, "the child's completed turn label", 30_000));
+  await setAgentState(daemon, childPane, "working");
 }
 
 const LONG_TITLE = "세션 패널에서 긴 한국어 제목과 브랜치를 한 줄로 안전하게 표시하는 작업";
@@ -51,32 +78,18 @@ async function showProjects(page: Page) {
 
 test("the 태스크 list groups the device's tasks, folds children and resting ones, reads questions, and resolves durably", async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 1000 });
-  const herdr = await startHerdr();
+  const fixture = await startFixture({ family: true });
   let daemon: Daemon | null = null;
   try {
-    const repo = path.join(herdr.root, "repo");
-    fs.mkdirSync(repo);
-    git(repo, ["init"]);
-    git(repo, ["commit", "--allow-empty", "-m", "initial"]);
-    const tree = (name: string) => path.join(herdr.root, `repo-${name}`);
-    for (const name of ["child", "asking", "question", "stopped"]) {
-      git(repo, ["worktree", "add", "-b", `prd/${name}`, tree(name)]);
-    }
-    const parent = await agentAt(herdr, repo);
-    labelAgent(herdr, parent, { task: LONG_TITLE, progress: "자식의 결과를 기다리는 중" });
-    const child = await agentAt(herdr, tree("child"));
-    labelAgent(herdr, child, { task: "하위 작업 검증" });
-    declareParent(herdr, child, parent);
-    await setFixtureLifecycle(herdr, child, "working");
-    const asking = await agentAt(herdr, tree("asking"));
-    labelAgent(herdr, asking, { task: "권한 승인 요청", progress: "검증 명령을 승인해 주세요" });
-    await setFixtureLifecycle(herdr, asking, "blocked");
-    const question = await agentAt(herdr, tree("question"));
-    labelAgent(herdr, question, { task: "AI 질문 읽음 확인", reply: QUESTION, question: true });
-    const stopped = await agentAt(herdr, tree("stopped"));
-    labelAgent(herdr, stopped, { task: "설정 화면 스위치 추가", progress: "테스트 환경이 없어 멈췄어요", end: "unfinished" });
-    daemon = await startHided(herdr, "session-panel");
+    daemon = await startHided(fixture, "session-panel");
     const sent = countSent(page);
+    await page.goto(`${daemon.origin}/#token=${daemon.token}`);
+    const [parent, child] = fixture.panes;
+    await labelFamily(fixture, daemon, { task: LONG_TITLE, progress: "자식의 결과를 기다리는 중" }, { task: "하위 작업 검증" });
+    const asking = await agentInWorktree(fixture, daemon, "asking", { task: "권한 승인 요청", progress: "검증 명령을 승인해 주세요" }, "blocked");
+    const question = await agentInWorktree(fixture, daemon, "question", { task: "AI 질문 읽음 확인", reply: QUESTION, question: true });
+    const stopped = await agentInWorktree(fixture, daemon, "stopped", { task: "설정 화면 스위치 추가", progress: "테스트 환경이 없어 멈췄어요", end: "unfinished" });
+    await page.goto("about:blank");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await page.locator(`nav[data-sidebar] [data-agent-open="${parent}"]`).first().click();
     // The rail has no Work tool; after the viewing column's documents button, the Project tool comes first, then Memory (B23; lane-two-columns B2, B25).
@@ -107,6 +120,7 @@ test("the 태스크 list groups the device's tasks, folds children and resting o
     await page.keyboard.press("Enter");
     await expect(page.locator(`[data-pane-view="${question}"]`)).toHaveAttribute("data-focused", "true");
     await expect(group("needs_you").locator(`[data-task-row="${question}"]`)).toHaveAttribute("data-task-read", "true");
+    await expect(ask(question)).toContainText(QUESTION);
     await row(asking).locator('[data-task-focus="row"]').click();
     await expect(page.locator(`[data-pane-view="${asking}"]`)).toHaveAttribute("data-focused", "true");
     await expect(row(asking)).toHaveAttribute("data-selected", "true");
@@ -161,26 +175,20 @@ test("the 태스크 list groups the device's tasks, folds children and resting o
     expect(sentTotal(sent)).toBe(quiet);
   } finally {
     daemon?.stop();
-    herdr.stop();
+    fixture.stop();
   }
 });
 
 test("세션 닫기 in a task's ⋯ menu closes its pane, though its checkout is not the one in front", async ({ page }) => {
-  const herdr = await startHerdr();
+  const fixture = await startFixture({ family: true });
   let daemon: Daemon | null = null;
   try {
-    const repo = path.join(herdr.root, "repo");
-    const other = path.join(herdr.root, "repo-other");
-    fs.mkdirSync(repo);
-    git(repo, ["init"]);
-    git(repo, ["commit", "--allow-empty", "-m", "initial"]);
-    git(repo, ["worktree", "add", "-b", "prd/other", other]);
-    const front = await agentAt(herdr, repo);
-    labelAgent(herdr, front, { task: "앞에 있는 작업" });
-    const behind = await agentAt(herdr, other);
-    labelAgent(herdr, behind, { task: "닫을 작업", reply: "끝났어요" });
-    daemon = await startHided(herdr, "session-close");
+    daemon = await startHided(fixture, "session-close");
     const sent = countSent(page);
+    await page.goto(`${daemon.origin}/#token=${daemon.token}`);
+    const [front] = fixture.panes;
+    const behind = await agentInWorktree(fixture, daemon, "other", { task: "닫을 작업", reply: "끝났어요" });
+    await page.goto("about:blank");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await page.locator(`nav[data-sidebar] [data-agent-open="${front}"]`).first().click();
     const tasks = await showTasks(page);
@@ -194,6 +202,6 @@ test("세션 닫기 in a task's ⋯ menu closes its pane, though its checkout is
     await expect(tasks.locator(`[data-task-row="${front}"]`)).toBeVisible();
   } finally {
     daemon?.stop();
-    herdr.stop();
+    fixture.stop();
   }
 });
