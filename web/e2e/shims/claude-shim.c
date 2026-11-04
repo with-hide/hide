@@ -441,7 +441,7 @@ static int native_session(int argc, char **argv) {
    that session, from inside the pane, so the daemon proves it as the pane's
    own report (`engine-fixture.ts`, `setAgentSession`). Returns 1 when `bytes`
    was such a request, which is then not echoed. */
-static int session_request(const char *bytes, size_t size) {
+static int session_request(const char *bytes, size_t size, int codex) {
   static const char prefix[] = "\x1b]7770;session=";
   const size_t length = sizeof prefix - 1;
   if (size <= length + 1 || memcmp(bytes, prefix, length) != 0 || bytes[size - 1] != '\a') return 0;
@@ -455,15 +455,15 @@ static int session_request(const char *bytes, size_t size) {
 #ifdef _WIN32
   if (!_getcwd(cwd, sizeof cwd)) return 1;
   for (char *at = cwd; *at; at++) if (*at == '\\') *at = '/';
-  if (snprintf(command, sizeof command, "\"\"%s\" hook --runtime claude-code --event SessionStart >NUL 2>&1\"", hooks) >= (int)sizeof command) return 1;
+  if (snprintf(command, sizeof command, "\"\"%s\" hook --runtime %s --event SessionStart >NUL 2>&1\"", hooks, codex ? "codex" : "claude-code") >= (int)sizeof command) return 1;
   FILE *hook = _popen(command, "w");
 #else
   if (!getcwd(cwd, sizeof cwd)) return 1;
-  if (snprintf(command, sizeof command, "'%s' hook --runtime claude-code --event SessionStart >/dev/null 2>&1", hooks) >= (int)sizeof command) return 1;
+  if (snprintf(command, sizeof command, "'%s' hook --runtime %s --event SessionStart >/dev/null 2>&1", hooks, codex ? "codex" : "claude-code") >= (int)sizeof command) return 1;
   FILE *hook = popen(command, "w");
 #endif
   if (!hook) return 1;
-  fprintf(hook, "{\"session_id\":\"%s\",\"hook_event_name\":\"SessionStart\",\"source\":\"clear\",\"cwd\":\"%s\"}", session, cwd);
+  fprintf(hook, "{\"session_id\":\"%s\",\"hook_event_name\":\"SessionStart\",\"source\":\"%s\",\"cwd\":\"%s\"}", session, codex ? "startup" : "clear", cwd);
 #ifdef _WIN32
   _pclose(hook);
 #else
@@ -542,11 +542,11 @@ int main(int argc, char **argv) {
        and what comes before it is input like any other. */
     static const char request[] = "\x1b]7770;session=";
     for (fixture_count_t at = 1; at + (fixture_count_t)(sizeof request - 1) < n; at++) {
-      if (memcmp(b + at, request, sizeof request - 1) != 0 || !session_request(b + at, (size_t)(n - at))) continue;
+      if (memcmp(b + at, request, sizeof request - 1) != 0 || !session_request(b + at, (size_t)(n - at), run_as_codex(argv[0]))) continue;
       n = at;
       break;
     }
-    if (session_request(b, (size_t)n)) continue;
+    if (session_request(b, (size_t)n, run_as_codex(argv[0]))) continue;
     if (log >= 0 && write(log, b, (size_t)n) < 0) return 1;
 #ifdef _WIN32
     // A Unix tty turns Enter's CR into LF on input and LF into CRLF on
