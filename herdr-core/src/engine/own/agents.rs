@@ -197,19 +197,20 @@ pub(super) fn resume_argv(definition: &Definition, session: Option<&str>) -> Opt
 /// session` selector, before any `--`.
 /// The session a start the engine types runs, before its agent says: the
 /// one its resume names, so a woken agent names the conversation it resumed
-/// at once. Not for an agent whose integration reports its session as a
-/// file's path (Pi, omp): they resume by id, and an id recorded for a woken
-/// omp read as another conversation than the path its registration held, so
-/// the registration was refused (`identity_changed`, journey 871294628);
-/// such an agent's session waits for its own report.
+/// at once. Not when an agent whose integration reports its session as a
+/// file's path (Pi, omp) resumes by id: an id recorded for a woken omp read
+/// as another conversation than the path its registration held, so the
+/// registration was refused (`identity_changed`, journey 871294628), and
+/// such a session waits for the agent's own report. Resumed by that file's
+/// path (Pi's `--session <path>`), the path is the session it reports.
 pub(super) fn started_session(definition: &Definition, argv: &[String]) -> Option<String> {
+    let session = resumed_in(definition, argv)?;
     let reports_path = hide_agent_adapter::adapter(&definition.id)
         .and_then(|adapter| adapter.session)
         .is_some_and(hide_agent_adapter::SessionFormat::reports_session_path);
-    if reports_path {
-        return None;
-    }
-    resumed_in(definition, argv)
+    // A Windows device's path comes in its own spelling.
+    let names_path = hide_platform::path::is_wire_absolute(&session.replace('\\', "/"));
+    (!reports_path || names_path).then_some(session)
 }
 
 pub(super) fn resumed_in(definition: &Definition, argv: &[String]) -> Option<String> {
@@ -1059,9 +1060,10 @@ mod tests {
     }
 
     /// A start records the session its resume names, except for an agent
-    /// that reports its session as a file's path: omp resumes by id, so the
-    /// id would read as another conversation and a woken omp's registration
-    /// would be refused. Claude reports the id it resumes.
+    /// that reports its session as a file's path and resumes by id: omp's id
+    /// would read as another conversation and a woken omp's registration
+    /// would be refused. Pi resumed by its file's path records the path;
+    /// Claude reports the id it resumes.
     #[test]
     fn a_start_records_its_resumed_session_unless_its_agent_reports_a_path() {
         let catalog = catalog();
@@ -1072,6 +1074,11 @@ mod tests {
         let argv = words(&["omp", "--resume", "01a1a635-dc01-749e-b762-b4aa840d457c"]);
         assert!(resumed_in(omp, &argv).is_some());
         assert_eq!(started_session(omp, &argv), None);
+        let pi = definition(&catalog, "pi").unwrap();
+        for path in ["/home/me/.pi/s.jsonl", "C:\\Users\\me\\.pi\\s.jsonl"] {
+            let argv = words(&["pi", "--session", path]);
+            assert_eq!(started_session(pi, &argv).as_deref(), Some(path));
+        }
         let agy = definition(&catalog, "agy").unwrap();
         let argv = words(&["agy", "--conversation", "c-1"]);
         assert_eq!(resumed_in(agy, &argv).as_deref(), Some("c-1"));
