@@ -203,15 +203,11 @@ pub(super) fn resume_argv(definition: &Definition, session: Option<&str>) -> Opt
 /// registration was refused (`identity_changed`, journey 871294628), and
 /// such a session waits for the agent's own report. Resumed by that file's
 /// path (Pi's `--session <path>`), the path is the session it reports.
-/// Nor for OpenCode, which takes keys only once it has loaded the session
-/// its plugin then reports (`SessionFormat::reports_session_once_loaded`).
 pub(super) fn started_session(definition: &Definition, argv: &[String]) -> Option<String> {
     let session = resumed_in(definition, argv)?;
-    let format = hide_agent_adapter::adapter(&definition.id).and_then(|adapter| adapter.session);
-    if format.is_some_and(hide_agent_adapter::SessionFormat::reports_session_once_loaded) {
-        return None;
-    }
-    let reports_path = format.is_some_and(hide_agent_adapter::SessionFormat::reports_session_path);
+    let reports_path = hide_agent_adapter::adapter(&definition.id)
+        .and_then(|adapter| adapter.session)
+        .is_some_and(hide_agent_adapter::SessionFormat::reports_session_path);
     // A Windows device's path comes in its own spelling.
     let names_path = hide_platform::path::is_wire_absolute(&session.replace('\\', "/"));
     (!reports_path || names_path).then_some(session)
@@ -1067,7 +1063,7 @@ mod tests {
     /// that reports its session as a file's path and resumes by id: omp's id
     /// would read as another conversation and a woken omp's registration
     /// would be refused. Pi resumed by its file's path records the path;
-    /// Claude reports the id it resumes; OpenCode waits for its own report.
+    /// Claude reports the id it resumes.
     #[test]
     fn a_start_records_its_resumed_session_unless_its_agent_reports_a_path() {
         let catalog = catalog();
@@ -1087,12 +1083,6 @@ mod tests {
         let argv = words(&["agy", "--conversation", "c-1"]);
         assert_eq!(resumed_in(agy, &argv).as_deref(), Some("c-1"));
         assert_eq!(started_session(agy, &argv).as_deref(), Some("c-1"));
-        // OpenCode takes keys only once it has loaded the session its
-        // plugin then reports.
-        let opencode = definition(&catalog, "opencode").unwrap();
-        let argv = words(&["opencode", "-s", "ses_e584ebfb9ffeITTA6qYHnKhdkZ"]);
-        assert!(resumed_in(opencode, &argv).is_some());
-        assert_eq!(started_session(opencode, &argv), None);
         let claude = definition(&catalog, "claude").unwrap();
         let argv = words(&["claude", "--resume", "0b8f1f3e-5c2a-4a8e-9a54-2d4c1f6b7e90"]);
         assert_eq!(
