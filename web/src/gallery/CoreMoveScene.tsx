@@ -42,14 +42,13 @@ export function CoreMoveScene({ scene, theme, state, content, language }: CoreMo
       const device = next.rest.navigator!.devices!.find((device) => device.id === NODE_DEVICE)!;
       device.state = "unavailable";
       device.problem = state === "device-unsupported" ? "unsupported" : null;
-      device.message = "Herdr was not found";
+      device.message = "The device kit is not installed";
       device.host = {
         ...device.host!, platform: state === "device-unsupported" ? "macos-x86_64" : "linux-aarch64", state: state === "device-unsupported" ? "unsupported" : "unavailable",
         message: state === "device-unsupported" ? "Intel Mac devices are not supported; Hide ships for Apple Silicon Macs only" : "Device kit download failed: This local/main Hide build has no matching device release; install a released app or provide local device artifacts. Retry the device connection",
       };
       const status = next.rest.status!.remote!.find((row) => row.target_id === NODE_DEVICE)!;
       status.state = "unavailable";
-      status.herdr_version = null;
     }
     return next;
   }, [side, content, state]);

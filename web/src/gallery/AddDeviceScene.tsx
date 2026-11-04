@@ -87,8 +87,8 @@ export function AddDeviceScene({ params }: { params: URLSearchParams }) {
     const ssh = view === "sign-in" ? SIGN_IN : view === "failures" ? FAILURES : null;
     const local = windows ? DEVICES[0]! : MAC;
     const status = ssh
-      ? { remote: ssh.map((row) => ({ target_id: row.id, state: row.sign_in ? "connecting" : "unavailable", message: null, herdr_version: null })) }
-      : view === "devices" ? { remote: [WSL_ID, "studio"].map((id) => ({ target_id: id, state: "connected", message: null, herdr_version: "0.9.5" })) } : { ssh_hosts: HOSTS };
+      ? { remote: ssh.map((row) => ({ target_id: row.id, state: row.sign_in ? "connecting" : "unavailable", message: null })) }
+      : view === "devices" ? { remote: [WSL_ID, "studio"].map((id) => ({ target_id: id, state: "connected", message: null })) } : { ssh_hosts: HOSTS };
     const navigator = ssh ? { devices: [local, ...ssh], focused_device_id: local.id, workspaces: [] } : view === "devices" ? { devices: DEVICES, focused_device_id: WSL_ID, workspaces: [] } : undefined;
     useShellStore.setState({ connection: "live", rest: { navigator, status, ui_state: { interface_language: lang as "en" | "ko" | "ja" | "zh-CN" } } } as never);
     document.documentElement.classList.toggle("dark", theme === "dark");

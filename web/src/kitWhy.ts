@@ -28,8 +28,6 @@ const WHY_KEYS = new Map<string, { plain?: MessageKey; at?: MessageKey }>([
   ["not_changed", { plain: "kitWhy.not_changed" }],
   ["codex_untrusted", { plain: "kitWhy.codex_untrusted" }],
   ["record_unsaved", { plain: "kitWhy.record_unsaved" }],
-  ["herdr_absent", { plain: "kitWhy.herdr_absent" }],
-  ["update_herdr", { plain: "kitWhy.update_herdr" }],
   ["retirement_pending", { plain: "kitWhy.retirement_pending" }],
 ]);
 

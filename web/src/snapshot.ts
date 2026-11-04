@@ -2107,7 +2107,6 @@ export type RemoteStatus = {
   /** `connected`, `not_connected`, `stale`, `disabled`, `socket_missing`, or a failure word. */
   state: string;
   message: string | null;
-  herdr_version: string | null;
   /** The last session read from that host; kept while `stale`. */
   session?: RemoteSession | null;
   /** How far the device's helper has confirmed its projects (`device_catalog`). */

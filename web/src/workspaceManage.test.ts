@@ -9,15 +9,14 @@ import { initializeInterfaceI18n } from "./i18n/instance";
 const { t } = initializeInterfaceI18n("en");
 const ko = initializeInterfaceI18n("ko").t;
 const agentMenu = (agent: Parameters<typeof manage.agentMenu>[0], chord: string) => manage.agentMenu(agent, chord, t);
-const checkoutMenu = (workspace: Workspace, checkout: Checkout, host: Parameters<typeof manage.checkoutMenu>[2], purposeProblem: string | null = null) => manage.checkoutMenu(workspace, checkout, host, t, purposeProblem);
-const folderMenu = (workspace: Workspace, checkout: Checkout, host: Parameters<typeof manage.folderMenu>[2], purposeProblem: string | null = null, issueSource?: string) =>
-  manage.folderMenu(workspace, checkout, host, t, purposeProblem, issueSource);
+const checkoutMenu = (workspace: Workspace, checkout: Checkout, host: Parameters<typeof manage.checkoutMenu>[2]) => manage.checkoutMenu(workspace, checkout, host, t);
+const folderMenu = (workspace: Workspace, checkout: Checkout, host: Parameters<typeof manage.folderMenu>[2], issueSource?: string) =>
+  manage.folderMenu(workspace, checkout, host, t, issueSource);
 const projectMenu = (workspace: Workspace, host: Parameters<typeof manage.projectMenu>[1], issueSource?: string) => manage.projectMenu(workspace, host, t, issueSource);
 const deletionFacts = (checkout: Checkout, panes: number) => manage.deletionFacts(checkout, panes, t);
 const projectRemovalFacts = (workspace: Workspace) => manage.projectRemovalFacts(workspace, t);
 const purposeCountLabel = (text: string) => manage.purposeCountLabel(text, t);
 const purposeScope = (device: string | null, branch: string | null) => manage.purposeScope(device, branch, t);
-const remotePurposeProblem = (workspace: Workspace, remote: Parameters<typeof manage.remotePurposeProblem>[1]) => manage.remotePurposeProblem(workspace, remote, t);
 
 const workspace = (patch: Partial<Workspace> = {}): Workspace => ({ agent_scope: emptyScope(),
   id: "w1",
@@ -148,7 +147,7 @@ describe("row menus", () => {
     const folderCheckout = primary();
     const source = { kind: "local", label: "Local", name: null, reading: false, failure: null, last_read_at_unix_ms: null };
     const folder = workspace({ is_git: false, checkouts: [folderCheckout], tasks: { source, tasks: [] } as unknown as Workspace["tasks"] });
-    const checked = (stored?: string) => folderMenu(folder, folderCheckout, desktop, null, stored).find((item) => item.id === "issue_source")?.choices?.filter((choice) => choice.checked).map((choice) => choice.id);
+    const checked = (stored?: string) => folderMenu(folder, folderCheckout, desktop, stored).find((item) => item.id === "issue_source")?.choices?.filter((choice) => choice.checked).map((choice) => choice.id);
     expect(checked()).toEqual(["issue_source_auto"]);
     expect(checked("local")).toEqual(["issue_source_local"]);
   });
@@ -355,19 +354,17 @@ describe("language-dependent sentences", () => {
     expect(factsLine(manage.projectRemovalFacts(workspace(counted), ko))).toBe("터미널 2개 닫힘 · 에이전트 1개 종료 · 등록만 제거 · 디스크의 파일은 유지");
   });
 
-  it("names the version a remote device lacks, or says it is unknown", () => {
+  it("offers Set purpose on a device's checkout", () => {
     const remote = workspace({ remote_target_id: "mini" });
-    expect(remotePurposeProblem(remote, [{ target_id: "mini", herdr_version: "0.9.0" }] as never)).toBe("Set purpose requires Herdr 0.9.1 or newer on that device; 0.9.0 is installed.");
-    expect(remotePurposeProblem(remote, [{ target_id: "mini", herdr_version: null }] as never)).toBe("Set purpose requires Herdr 0.9.1 or newer on that device; its version is unavailable.");
-    expect(remotePurposeProblem(remote, [{ target_id: "mini", herdr_version: "0.9.1" }] as never)).toBeNull();
-    expect(manage.remotePurposeProblem(remote, [{ target_id: "mini", herdr_version: "0.9.0" }] as never, ko)).toBe("용도를 설정하려면 그 기기에 Herdr 0.9.1 이상이 필요해요. 설치된 버전: 0.9.0");
+    const desktop = { reveal: { label: "explorer.revealFinder" as const }, newTabChord: "⌘T", node: "local", screen: "local", editor: false };
+    expect(checkoutMenu(remote, checkout(), desktop).find((item) => item.id === "set_purpose")?.unavailable).toBeNull();
   });
 });
 
 describe("purposeScope", () => {
-  it("names the device's Herdr as the only store for a device purpose and adds the branch description here", () => {
-    expect(purposeScope("MacBook", "feature")).toBe("Kept in Herdr's workspace metadata on MacBook; its Git config is not changed.");
-    expect(purposeScope(null, "feature")).toBe("Kept in Herdr's workspace metadata and as the Git description of feature on this machine.");
-    expect(purposeScope(null, null)).toBe("Kept in Herdr's workspace metadata on this machine.");
+  it("names the device's workspace record as the only store for a device purpose and adds the branch description here", () => {
+    expect(purposeScope("MacBook", "feature")).toBe("Kept in the workspace's record on MacBook; its Git config is not changed.");
+    expect(purposeScope(null, "feature")).toBe("Kept in the workspace's record and as the Git description of feature on this machine.");
+    expect(purposeScope(null, null)).toBe("Kept in the workspace's record on this machine.");
   });
 });

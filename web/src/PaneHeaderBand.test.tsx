@@ -526,7 +526,7 @@ it.each([["hq3mini", "a dialed device"], ["b06a260a-6c14-5287-9caf-672044350d94"
   const agent = legacyAgentRow({ id: "a", pane_id: pane, device_id: target, device_pane_id: "w1:p4", identity_label: "Fix the login", agent_kind: "claude", session_id: "s-1" });
   useShellStore.getState().applyFrame({ type: "snapshot", payload: { revision: 1, rest: {
     navigator: { devices: [{ id: core, kind: "local" }, { id: target, kind: "remote" }] },
-    status: { pane_focus_request: null, remote: [{ target_id: target, state: "connected", message: null, herdr_version: null, session: { agents: [agent] } }] },
+    status: { pane_focus_request: null, remote: [{ target_id: target, state: "connected", message: null, session: { agents: [agent] } }] },
   } as unknown as SnapshotRest } });
   const container = document.createElement("div");
   document.body.append(container);

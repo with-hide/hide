@@ -28,7 +28,7 @@ const state = (devices: Device[]) => ({
   connection: "live" as const,
   rest: {
     navigator: { focused_device_id: "local", devices: [{ agent_scope: emptyScope(), id: "local", label: null, kind: "local", state: "local", message: null, ssh_alias: null, agent_count: 0, test: null, kit: kit([part("cli", "installed")]) }, ...devices] },
-    status: { remote: devices.map((device) => ({ target_id: device.id, state: "connected", message: null, herdr_version: "0.9.1" })) },
+    status: { remote: devices.map((device) => ({ target_id: device.id, state: "connected", message: null })) },
     ui_state: {},
   },
 });
@@ -56,10 +56,10 @@ async function mount(next: ReturnType<typeof state>) {
 
 const sent = (events: Parameters<DispatchFn>[0][], kind: string) => events.filter((event) => event.kind === kind);
 
-it("says nothing about a healthy kit on a device row, and names the device by alias, platform and Herdr version (B54)", async () => {
+it("says nothing about a healthy kit on a device row, and names the device by alias and platform (B54)", async () => {
   const { row, q, unmount } = await mount(state([remote("mini")]));
   const mini = row("mini")!;
-  expect(q('[data-device-subtitle="mini"]')?.textContent).toBe("mini · macos aarch64 · Herdr 0.9.1");
+  expect(q('[data-device-subtitle="mini"]')?.textContent).toBe("mini · macos aarch64");
   expect(mini.querySelector("[data-machine-kit], [data-kit-part], [data-kit-problem], [data-kit-reinstall], [data-device-host]")).toBeNull();
   // The old rows named the hide command, the hook files and the helper: none of it is on the row.
   expect(mini.textContent).not.toMatch(/hide command|Claude Code hook|Codex hook|installs to|bound to/);
@@ -346,7 +346,7 @@ it("puts a node's own machine first as This Mac, with the core back and the end 
 // PRD system-ssh-device-link: what ssh asks and how it failed, on the device's row.
 const waiting = (id: string, sign_in: Device["sign_in"]) => {
   const next = state([remote(id, { state: "unavailable", sign_in, host: { ...host, state: "connecting" } })]);
-  next.rest.status.remote = [{ target_id: id, state: "connecting", message: null, herdr_version: "0.9.1" }];
+  next.rest.status.remote = [{ target_id: id, state: "connecting", message: null }];
   return next;
 };
 
@@ -462,7 +462,7 @@ it("reads a refused sign-in with the same Sign in as a needed one", async () => 
 
 it("stops a reconnect nobody could be asked for at Sign in, which starts an attempt that may ask (B8, B14)", async () => {
   const next = state([remote("mini", { state: "unavailable", problem: "sign_in_needed", host: { ...host, state: "unavailable", message: "ssh needs an answer" } })]);
-  next.rest.status.remote = [{ target_id: "mini", state: "unavailable", message: null, herdr_version: null as never }];
+  next.rest.status.remote = [{ target_id: "mini", state: "unavailable", message: null }];
   const view = await mount(next);
   try {
     expect(view.q('[data-device-problem="mini:sign_in_needed"]')?.textContent).toContain("Sign-in needed");

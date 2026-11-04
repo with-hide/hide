@@ -9,10 +9,9 @@ import type { TFunction } from "i18next";
 import { statusText } from "./agentStatus";
 import type { MessageKey } from "./i18n/catalogs";
 import { shownPullRequest } from "./projects";
-import { supportsRemotePurpose } from "./remote";
 import { revealExternalEntry, type RevealHost } from "./revealExternal";
 import { issueSourceChoices } from "./settings";
-import type { AgentRow, Checkout, RemoteStatus, TaskOperation, Workspace, WorktreeRemoval } from "./snapshot";
+import type { AgentRow, Checkout, TaskOperation, Workspace, WorktreeRemoval } from "./snapshot";
 
 /** The native purpose field's limits (`PurposeInputPresentation`). */
 export const PURPOSE_RECOMMENDED = 40;
@@ -223,24 +222,11 @@ export function folderMenu(
   checkout: Checkout,
   host: MenuHost,
   t: TFunction<"translation">,
-  purposeProblem: string | null = null,
   storedIssueSource?: string,
 ): MenuItem[] {
   const project = projectMenu(workspace, host, t, storedIssueSource, true);
-  const [first, ...rest] = checkoutMenu(workspace, checkout, host, t, purposeProblem).filter((item) => FOLDER_CHECKOUT_ITEMS.has(item.id));
+  const [first, ...rest] = checkoutMenu(workspace, checkout, host, t).filter((item) => FOLDER_CHECKOUT_ITEMS.has(item.id));
   return first ? [...project, { ...first, separated: true }, ...rest.map((item) => ({ ...item, separated: false }))] : project;
-}
-
-/**
- * Why a remote checkout's purpose cannot be written: the core stores it in
- * that host's Herdr, which takes it from 0.9.1 (the native `purposeUnavailableReason`).
- */
-export function remotePurposeProblem(workspace: Workspace, remote: RemoteStatus[] | undefined, t: TFunction<"translation">): string | null {
-  const targetId = workspace.remote_target_id;
-  if (!targetId) return null;
-  const version = remote?.find((row) => row.target_id === targetId)?.herdr_version ?? null;
-  if (supportsRemotePurpose(version)) return null;
-  return version ? t("workspace.remotePurposeVersion", { minimum: "0.9.1", version }) : t("workspace.remotePurposeUnknownVersion", { minimum: "0.9.1" });
 }
 
 /**
@@ -267,7 +253,7 @@ function primaryProblem(workspace: Workspace, checkout: Checkout, node: string, 
  * Choices stored on this machine and the OS file manager are this computer's
  * only, so a device's checkout lists them disabled.
  */
-export function checkoutMenu(workspace: Workspace, checkout: Checkout, host: MenuHost, t: TFunction<"translation">, purposeProblem: string | null = null): MenuItem[] {
+export function checkoutMenu(workspace: Workspace, checkout: Checkout, host: MenuHost, t: TFunction<"translation">): MenuItem[] {
   const pr = shownPullRequest(checkout);
   const items: MenuItem[] = [
     { id: "open_checkout", label: t("common.open"), unavailable: null },
@@ -276,7 +262,7 @@ export function checkoutMenu(workspace: Workspace, checkout: Checkout, host: Men
   ];
   if (pr) items.push({ id: "open_pull_request", label: t("workspace.menu.openPr", { number: pr.number }), unavailable: null });
   items.push(
-    { id: "set_purpose", label: t("workspace.menu.setPurpose"), unavailable: purposeProblem, separated: true },
+    { id: "set_purpose", label: t("workspace.menu.setPurpose"), unavailable: null, separated: true },
     { id: "set_primary", label: t("workspace.menu.setPrimary"), unavailable: primaryProblem(workspace, checkout, host.node, t) },
     { id: "copy_branch", label: t("workspace.menu.copyBranch"), unavailable: checkout.branch ? null : t("workspace.unavailable.detached") },
     { id: "copy_path", label: t("workspace.menu.copyPath"), unavailable: null },

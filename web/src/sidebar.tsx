@@ -56,7 +56,7 @@ import { commandLabel } from "./shortcutLabels";
 import type { Digit } from "./shortcuts";
 import { contextAgents, contextAllWorkspaces, contextWorkspaces, deviceCatalogLine, remoteContext, remoteView } from "./remote";
 import { agentReference } from "./agentReference";
-import { agentMenu, checkoutMenu, checkoutRemoving, FOLDER_CHECKOUT_ITEMS, folderMenu, primaryCheckout, projectMenu, remotePurposeProblem, type MenuHost, type MenuItem } from "./workspaceManage";
+import { agentMenu, checkoutMenu, checkoutRemoving, FOLDER_CHECKOUT_ITEMS, folderMenu, primaryCheckout, projectMenu, type MenuHost, type MenuItem } from "./workspaceManage";
 import { projectIssueSource, projectRepository, settingsTarget } from "./projectSettings";
 import { machineName, windowDeviceId, windowFirst } from "./screenMachine";
 import { focusedRemoteDevice, localDeviceId, type AgentRow, type Checkout, type HideAiCheckout, type SessionPull, type SleepingSession, type SnapshotRest, type Workspace } from "./snapshot";
@@ -1118,7 +1118,6 @@ const CheckoutRowView = memo(function CheckoutRowView({
 }) {
   const { t } = useInterfaceTranslation();
   const { actions } = context;
-  const purposeProblem = useShellStore((s) => remotePurposeProblem(workspace, s.rest?.status?.remote, t));
   const removing = useShellStore((s) => checkoutRemoving(s.rest?.worktree_removal, workspace.device_id, checkout.path, localDeviceId(s.rest)));
   const view = checkoutPresentation(workspace, checkout, Date.now(), t);
   const name = checkout.branch ?? checkout.label;
@@ -1136,7 +1135,7 @@ const CheckoutRowView = memo(function CheckoutRowView({
     >
       <EntryContextMenu
         label={t("common.entryActions", { name })}
-        items={() => checkoutMenu(workspace, checkout, menuHost(), t, purposeProblem)}
+        items={() => checkoutMenu(workspace, checkout, menuHost(), t)}
         onSelect={(item) => runCheckoutItem(actions, workspace, checkout, item)}
         disabled={removing}
         className="group flex items-stretch"
@@ -1223,7 +1222,6 @@ const FolderRowView = memo(function FolderRowView({
 }) {
   const { t } = useInterfaceTranslation();
   const { actions } = context;
-  const purposeProblem = useShellStore((s) => remotePurposeProblem(workspace, s.rest?.status?.remote, t));
   const issueSource = useShellStore((s) => projectIssueSource(s.rest, workspace));
   const view = checkoutPresentation(workspace, checkout, Date.now(), t);
   const sleeping = useSleepingCheckout(checkout.path, workspace.device_id);
@@ -1239,7 +1237,7 @@ const FolderRowView = memo(function FolderRowView({
     <li data-project={workspace.id} data-checkout-open={open ? "true" : undefined} className={cn(inset, !first && (open ? BLOCK_GAP : "mt-xs"))}>
       <EntryContextMenu
         label={t("common.entryActions", { name: workspace.label })}
-        items={() => folderMenu(workspace, checkout, menuHost(), t, purposeProblem, issueSource)}
+        items={() => folderMenu(workspace, checkout, menuHost(), t, issueSource)}
         onSelect={(item) => (FOLDER_CHECKOUT_ITEMS.has(item) ? runCheckoutItem(actions, workspace, checkout, item) : runProjectItem(actions, workspace, item))}
         className="group flex items-stretch"
         data-project-menu={workspace.id}
@@ -1270,7 +1268,7 @@ const FolderRowView = memo(function FolderRowView({
             <RowEnd>
               <RowActions
                 workspace={workspace}
-                items={() => folderMenu(workspace, checkout, menuHost(), t, purposeProblem, issueSource)}
+                items={() => folderMenu(workspace, checkout, menuHost(), t, issueSource)}
                 onSelect={(item) => (FOLDER_CHECKOUT_ITEMS.has(item) ? runCheckoutItem(actions, workspace, checkout, item) : runProjectItem(actions, workspace, item))}
               />
               {foldable ? (

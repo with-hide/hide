@@ -1486,11 +1486,11 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "agent_definitions_read", payload: {} });
     },
 
-    registerDevice(id: string, label: string, alias: string, options: { hostConsent: boolean; herdrSocketPath: string | null }) {
+    registerDevice(id: string, label: string, alias: string, options: { hostConsent: boolean }) {
       dispatch({
         schema_version: 2,
         kind: "register_device",
-        payload: { id, label, ssh_alias: alias, host_consent: options.hostConsent, herdr_socket_path: options.herdrSocketPath },
+        payload: { id, label, ssh_alias: alias, host_consent: options.hostConsent },
       });
     },
 

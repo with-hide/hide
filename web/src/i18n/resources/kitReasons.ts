@@ -32,8 +32,6 @@ export const kitReasonsEnglish = {
   "kitWhy.not_changed": "Hide could not install or change it.",
   "kitWhy.codex_untrusted": "Codex has not trusted Hide's agent setup yet. Review it in Codex.",
   "kitWhy.record_unsaved": "Installed, but Hide could not save that it did, so it installs it again next time.",
-  "kitWhy.herdr_absent": "Herdr is not found on this device.",
-  "kitWhy.update_herdr": "This Herdr has no integration for the agent. Update Herdr.",
   "kitWhy.retirement_pending": "Hide has not finished removing an earlier Hide's coordination. It carries on next time.",
 
   "kitUnavailable.standalone": "This Hide is not running from the installed app, so it installs nothing on this device. Open the Hide app to install.",
@@ -76,8 +74,6 @@ const ko = {
   "kitWhy.not_changed": "Hide가 설치하거나 바꾸지 못했어요.",
   "kitWhy.codex_untrusted": "Codex가 아직 Hide의 설정을 신뢰하지 않았어요. Codex에서 확인하세요.",
   "kitWhy.record_unsaved": "설치했지만 설치 기록을 저장하지 못해서 다음에 다시 설치해요.",
-  "kitWhy.herdr_absent": "이 기기에서 Herdr를 찾지 못했어요.",
-  "kitWhy.update_herdr": "이 Herdr에는 이 에이전트용 연동이 없어요. Herdr를 업데이트하세요.",
   "kitWhy.retirement_pending": "이전 Hide의 조정 기능을 아직 다 지우지 못했어요. 다음에 이어서 지워요.",
 
   "kitUnavailable.standalone": "이 Hide는 설치된 앱에서 실행되지 않아서 이 기기에 아무것도 설치하지 않아요. Hide 앱을 열어 설치하세요.",
@@ -120,8 +116,6 @@ const ja = {
   "kitWhy.not_changed": "Hide はインストールまたは変更できませんでした。",
   "kitWhy.codex_untrusted": "Codex はまだ Hide の設定を信頼していません。Codex で確認してください。",
   "kitWhy.record_unsaved": "インストールしましたが記録を保存できなかったため、次回もう一度インストールします。",
-  "kitWhy.herdr_absent": "このデバイスに Herdr が見つかりません。",
-  "kitWhy.update_herdr": "この Herdr にはこのエージェント用の連携がありません。Herdr を更新してください。",
   "kitWhy.retirement_pending": "以前の Hide の連携機能の削除がまだ終わっていません。次回続けます。",
 
   "kitUnavailable.standalone": "この Hide はインストール済みのアプリから実行されていないため、このデバイスには何もインストールしません。Hide アプリを開いてインストールしてください。",
@@ -164,8 +158,6 @@ const zhCN = {
   "kitWhy.not_changed": "Hide 无法安装或更改它。",
   "kitWhy.codex_untrusted": "Codex 尚未信任 Hide 的设置。请在 Codex 中查看。",
   "kitWhy.record_unsaved": "已安装，但 Hide 无法保存安装记录，下次会再次安装。",
-  "kitWhy.herdr_absent": "在此设备上找不到 Herdr。",
-  "kitWhy.update_herdr": "此 Herdr 没有该智能体的集成。请更新 Herdr。",
   "kitWhy.retirement_pending": "Hide 尚未移除完早先 Hide 的协调功能。下次会继续。",
 
   "kitUnavailable.standalone": "此 Hide 不是从已安装的应用运行的，因此不会在此设备上安装任何内容。请打开 Hide 应用进行安装。",

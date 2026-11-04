@@ -6,7 +6,7 @@ import { Disclosure, Group, Note, Row, Status, Value, type Tone } from "../compo
 import { useInterfaceTranslation } from "../i18n/client";
 import { formatDateTime, formatPercent } from "../i18n/format";
 import { requireInterfaceLanguage } from "../i18n/locale";
-import { diagnosticsInputOf, diagnosticsText, environmentTone, herdrLine, herdrProtocolText, shownIn } from "../settings";
+import { diagnosticsInputOf, diagnosticsText, environmentTone, herdrLine, shownIn } from "../settings";
 import { useShellStore } from "../store";
 import type { UpdateStatus } from "../host";
 import { checkedAgo, checkForUpdates, restartIntoUpdate, setPreviewUpdates, useUpdateStatus } from "../updates";
@@ -20,7 +20,6 @@ export function AboutTab({ actions }: { actions: Actions }) {
   const environment = useShellStore((s) => s.rest?.status?.environment);
   const [copy, setCopy] = useState<"idle" | "copied" | "failed">("idle");
   const line = herdrLine(herdr, t);
-  const protocol = herdrProtocolText(herdr, t);
   const copyDiagnostics = () => {
     const text = diagnosticsText(diagnosticsInputOf(useShellStore.getState(), navigator.userAgent));
     void actions.copyText(text, "diagnostics").then((copied) => setCopy(copied ? "copied" : "failed"));
@@ -55,18 +54,10 @@ export function AboutTab({ actions }: { actions: Actions }) {
               </Note>
             ) : null
           }
-        />
-        <Row label={t("settings.version")}>
-          <Value data-herdr-version="true">{shownIn(herdr?.received_version, t)}</Value>
-        </Row>
-        <Row label={t("settings.protocol")}>
-          <Value data-herdr-protocol={protocol.matches ? "matches" : "mismatch"}>{protocol.text}</Value>
-        </Row>
-        <Row label={t("settings.socket")}>
-          <Value>{shownIn(herdr?.socket_path ?? daemon?.herdr_socket_path, t)}</Value>
-        </Row>
-        <Row label={t("settings.binary")}>
-          <Value>{shownIn(daemon?.herdr_bin_path, t)}</Value>
+        >
+          <Status tone={line.tone === "ok" ? "ok" : "warn"} data-engine-state={herdr?.state ?? "unavailable"}>
+            {line.text}
+          </Status>
         </Row>
         {(environment ?? []).map((row) => (
           <Row key={row.key} label={<span className="font-mono">{row.key}</span>} detail={row.message ? <Note>{row.message}</Note> : null}>

@@ -57,7 +57,8 @@ it("lists each Host with its address, and fills the name and adds only the alias
   await act(async () => { q('[data-add-device="true"]')?.click(); });
   const register = sent(events, "register_device");
   expect(register).toHaveLength(1);
-  expect(register[0]?.payload).toMatchObject({ id: "lab", label: "lab", ssh_alias: "lab", host_consent: true, herdr_socket_path: null });
+  expect(register[0]?.payload).toMatchObject({ id: "lab", label: "lab", ssh_alias: "lab", host_consent: true });
+  expect(register[0]?.payload).not.toHaveProperty("herdr_socket_path");
   await unmount();
 });
 
@@ -104,12 +105,12 @@ it("says it is reading until hided has answered, and keeps the earlier Hosts whi
   await again.unmount();
 });
 
-it("keeps what Hide installs and the Herdr socket under Advanced, three lines long (B53)", async () => {
+it("keeps what Hide installs under Advanced, three lines long, and asks for no socket (B53)", async () => {
   const { q, unmount } = await mount(hosts([host("lab")]));
   const advanced = q('[data-add-device-advanced="true"]') as HTMLDetailsElement;
   expect(advanced.open).toBe(false);
   expect(q('[data-add-device-installs="true"]')?.querySelectorAll("li")).toHaveLength(3);
-  expect(advanced.querySelector("[data-device-socket]")).not.toBeNull();
+  expect(advanced.querySelector("[data-device-socket]")).toBeNull();
   await unmount();
 });
 

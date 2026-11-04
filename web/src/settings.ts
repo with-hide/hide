@@ -2,6 +2,7 @@
 // the core or the daemon reported, and what the copied diagnostics carry.
 // Nothing here reads the store, so every rule is tested without a browser.
 
+import { herdrStateText } from "./coreError";
 import type { TFunction } from "i18next";
 import type { DaemonInfo } from "./store";
 import type { MessageKey } from "./i18n/catalogs";
@@ -193,28 +194,12 @@ export function environmentTone(state: string, required: boolean): "ok" | "warn"
   return "ok";
 }
 
-/** One line for the Herdr connection, from the core's own state words. */
+/** One line for the terminal engine's connection, from the core's own state words. */
 export function herdrLine(herdr: HerdrStatus | undefined, t: Translate): { text: string; tone: "ok" | "warn" | "error" } {
   const state = herdr?.state;
   if (!state) return { text: t("settings.unavailable"), tone: "warn" };
   if (state === "connected") return { text: t("common.connected"), tone: "ok" };
-  if (herdr?.expected_protocol != null && herdr.received_protocol != null && herdr.expected_protocol !== herdr.received_protocol) {
-    return { text: t("settings.protocolMismatch", { received: String(herdr.received_protocol), expected: String(herdr.expected_protocol) }), tone: "error" };
-  }
-  return { text: state.replace(/_/g, " "), tone: "warn" };
-}
-
-/**
- * The Herdr protocol row of the details: the number the running Herdr speaks
- * while it matches what this build requires, and both numbers only when they
- * differ, so a healthy connection shows one real value (B5).
- */
-export function herdrProtocolText(herdr: HerdrStatus | undefined, t: Translate): { text: string; matches: boolean } {
-  const received = herdr?.received_protocol;
-  if (received == null) return { text: t("settings.unavailable"), matches: true };
-  const expected = herdr?.expected_protocol;
-  if (expected == null || expected === received) return { text: String(received), matches: true };
-  return { text: t("settings.protocolValue", { received: String(received), expected: String(expected) }), matches: false };
+  return { text: herdrStateText(state, t), tone: "warn" };
 }
 
 /**
@@ -237,17 +222,16 @@ export function deviceLine(device: Device, remote: RemoteStatus | undefined, t: 
 
 /**
  * The line under a device's name (B54): its SSH alias, the platform its helper
- * runs on and the Herdr version it reported, in that order. Nothing here is
+ * runs on, in that order. Nothing here is
  * read on this machine, so a fact the device has not reported is left out
  * rather than filled in; this machine has no alias to show.
  */
-export function deviceSubtitle(device: Device, remote: RemoteStatus | undefined, t: Translate, coreName?: string): string {
+export function deviceSubtitle(device: Device, t: Translate, coreName?: string): string {
   if (device.kind !== "remote") return t("devices.localAlias");
   const parts: string[] = [device.ssh_alias ?? registeredName(device)];
   // A WSL distribution is named where it is, the core's PC, in place of its Linux platform (PRD wsl-device B5).
   if (device.wsl_distro && coreName) parts.push(coreName);
   else if (device.host?.state === "ready" && device.host.platform) parts.push(device.host.platform);
-  if (remote?.herdr_version) parts.push(`Herdr ${remote.herdr_version}`);
   return parts.join(" · ");
 }
 
@@ -357,7 +341,6 @@ export function hostLine(host: DeviceHost | undefined, t: Translate): { text: st
 export function kitConsentTerms(helperRoot: string | null, cliDir: string | null, t: Translate): string[] {
   return [
     t("devices.terms.copy", { root: helperRoot ?? t("devices.helperFolder") }),
-    t("devices.terms.herdr"),
     t("devices.terms.configure", { cliDir: cliDir ?? t("devices.commandFolder") }),
     t("devices.terms.runtime"),
     t("devices.terms.confirm"),
@@ -461,15 +444,6 @@ export function kitRefusalLine(refusal: KitRefusal, t: Translate): string {
       // A cause a newer machine named that this build does not know.
       return t("devices.kitRefused.other");
   }
-}
-
-/** A device Herdr socket must be an absolute single-line path on that device, or left empty. */
-export function socketProblem(path: string, t: Translate): string | null {
-  const trimmed = path.trim();
-  if (!trimmed) return null;
-  // eslint-disable-next-line no-control-regex
-  if (!trimmed.startsWith("/") || trimmed === "/" || /[\u0000-\u001f]/.test(trimmed)) return t("devices.socketInvalid");
-  return null;
 }
 
 /**
@@ -588,7 +562,7 @@ export function diagnosticsInputOf(state: { daemon: DaemonInfo | null; connectio
 export const COPIED_DIAGNOSTICS = 40;
 
 /**
- * The text Copy diagnostics puts on the clipboard: daemon identity, Herdr
+ * The text Copy diagnostics puts on the clipboard: daemon identity, engine
  * state, environment checks and the core's own recent diagnostics. It never
  * carries the page token, terminal output or anything the operator typed into
  * a pane: none of those are inputs here, and every line is redacted anyway.
@@ -598,9 +572,7 @@ export function diagnosticsText(input: DiagnosticsInput): string {
   const daemon = input.daemon;
   lines.push(`daemon: ${daemon ? `hided ${daemon.version} pid ${daemon.pid} schema ${daemon.schema_version}` : "unavailable"}`);
   lines.push(`state: ${shown(daemon?.core_state_path)}`);
-  lines.push(`herdr binary: ${shown(daemon?.herdr_bin_path)}`);
-  lines.push(`herdr socket: ${shown(input.herdr?.socket_path ?? daemon?.herdr_socket_path)}`);
-  lines.push(`herdr: ${shown(input.herdr?.state)} version ${shown(input.herdr?.received_version)} protocol ${shown(input.herdr?.received_protocol)}/${shown(input.herdr?.expected_protocol)}`);
+  lines.push(`engine: ${shown(input.herdr?.state)}`);
   lines.push(`connection: ${input.connection}`);
   lines.push(`browser: ${input.userAgent}`);
   for (const row of input.environment) lines.push(`env ${row.key}: ${row.state}${row.message ? ` - ${row.message}` : ""}`);
