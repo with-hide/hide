@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { labelMarker, type HerdrFixture } from "./herdr-fixture";
 import { copyFixtureShim } from "./shims/build";
@@ -299,8 +299,12 @@ if (config.herdr) {
 } else {
   helper("session", { session_id: config.id });
   require("node:readline").createInterface({ input: process.stdin }).on("line", (line) => {
-    const turn = { working: "working", idle: "done" }[line.trim()];
-    if (turn) helper("turn", { session_id: config.id, turn });
+    const [request, state] = line.trim().split(" ");
+    const turn = { working: "working", idle: "done" }[state];
+    if (turn) {
+      helper("turn", { session_id: config.id, turn });
+      fs.writeFileSync(config.turnReceipt, request);
+    }
   });
 }
 process.stdout.write("opencode fixture ready\n");
@@ -317,6 +321,7 @@ export function prepareOpenCodeWriter(fixture: OpenCodeHost): string {
   fs.writeFileSync(path.join(bin, "opencode-double.json"), JSON.stringify({
     herdr: fixture.engine === "herdr" ? fixture.bin : undefined, hooks: builtHooks(), database, schema: OPENCODE_SCHEMA, id: OPENCODE_ID, title: OPENCODE_TITLE,
     child: `${OPENCODE_ID}child`, childTitle: OPENCODE_CHILD_TITLE, launches: path.join(fixture.root, "opencode-launches.jsonl"),
+    turnReceipt: path.join(fixture.root, "opencode-turn-receipt"),
     answer: labelMarker({task:"Generated OpenCode goal",progress:"완료"}),
   }));
   fixtureProgram(bin, "opencode", OPENCODE_DOUBLE);
@@ -351,9 +356,15 @@ let reported = 0;
  */
 export async function reportOpenCodeState(fixture: OpenCodeHost, daemon: Pick<Daemon, "origin" | "token">, pane: string, state: "working" | "idle"): Promise<void> {
   if (fixture.engine === "own") {
+    const request = randomUUID();
+    const receipt = path.join(fixture.root, "opencode-turn-receipt");
     await withControl(daemon, async (control) => {
       await preparePaneInput(control, pane);
-      sendKeys(control, pane, `${state}\r`);
+      sendKeys(control, pane, `${request} ${state}\r`);
+      // A row already at rest cannot acknowledge a new idle report. Keep
+      // the input connection until the double has reported this command.
+      await expect.poll(() => fs.existsSync(receipt) ? fs.readFileSync(receipt, "utf8") : "",
+        { message: `OpenCode reported ${state}`, timeout: 10_000 }).toBe(request);
       await control.until((rest) => {
         const row = agentIn(rest, pane);
         return row && (state === "working" ? row.activity === "working" : row.activity !== "working") ? true : undefined;
