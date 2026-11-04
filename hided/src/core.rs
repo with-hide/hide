@@ -42,6 +42,9 @@ type ReleaseSourceAnswer =
     Result<(herdr_core::ReleaseSource, serde_json::Value), herdr_core::MoveSourceRefusal>;
 
 enum Command {
+    /// A usage event the daemon observed outside the core (a phone's
+    /// pairing); the owner thread hands it to the statistics worker it owns.
+    ProductEvent(herdr_core::product_analytics::Event),
     ObservationPrepare {
         device_id: String,
         pane_id: String,
@@ -344,6 +347,12 @@ impl CoreHandle {
     /// The machine the core runs on.
     pub fn node(&self) -> &herdr_core::node::NodeId {
         &self.node
+    }
+
+    /// Counts a usage event the daemon observed outside the core; the
+    /// statistics worker drops it while usage statistics are off.
+    pub fn capture_product_event(&self, event: herdr_core::product_analytics::Event) {
+        let _ = self.commands.send(Command::ProductEvent(event));
     }
 
     /// The core's state folder.
@@ -1522,6 +1531,11 @@ fn owner_loop(
             }
             Command::ReleaseEffects { reply } => {
                 let _ = reply.send(core.release_effects());
+            }
+            Command::ProductEvent(event) => {
+                if let Some(worker) = &analytics {
+                    herdr_core::product_analytics::Sink::capture(&*worker.client, event);
+                }
             }
             Command::MemoryPrepare {
                 device_id,
