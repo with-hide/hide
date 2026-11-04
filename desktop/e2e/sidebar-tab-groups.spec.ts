@@ -19,7 +19,8 @@ test("sidebar tab segments use the candidate window's real tab", { tag: "@platfo
     await enterWorkspace(page, "fixture");
     const glyph = page.locator(`[data-sidebar-tab="${fixture.tab}"]`);
     const rows = page.locator(`[data-sidebar-tab-group="${fixture.tab}"] [data-agent-open]`);
-    await expect(glyph).toHaveAccessibleName("Tab 1, 2 agents");
+    // Add project made the first shell tab; starting the agents made Tab 2.
+    await expect(glyph).toHaveAccessibleName("Tab 2, 2 agents");
     await expect(rows).toHaveCount(2);
     await expect(page.locator(`[data-sidebar-tab-guide="${fixture.tab}"]`)).toHaveCount(1);
     await captureElectronWindow(app, "sidebar-native-segments", { build: "worktree debug candidate", daemonPid: run.daemonPid(), privateSocket: fixture.socket });

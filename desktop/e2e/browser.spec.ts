@@ -886,6 +886,7 @@ test("area cycle native: page input previews one exact area, releases once and c
   ({ app } = await launchShell(run.env));
   const page = await shellPage(app);
   const sent = countSent(page);
+  await page.reload();
   // Within the work area: the blur and focus below order the window out and
   // in, and macOS would clamp a larger one then, dropping both View areas.
   await fitWindow(app, WINDOW);
@@ -1046,6 +1047,7 @@ test("zoom: the text-size commands zoom a focused page in Chrome's steps and a p
   await fitWindow(app, WINDOW);
   const page = await shellPage(app);
   const sent = countSent(page);
+  await page.reload();
   await enterWorkspace(page, "fixture");
   const pageA = `${origin}/a.html`;
   expect(await openFromCli(pageA, ["--wait"])).toMatchObject({ ok: true });
@@ -1295,6 +1297,7 @@ test("page zoom: a zoomed page shows its zoom in the address field, steps in the
   await fitWindow(app, WINDOW);
   const page = await shellPage(app);
   const sent = countSent(page);
+  await page.reload();
   await enterWorkspace(page, "fixture");
   const first = `${origin}/site.html`;
   const second = `${origin}/site-2.html`;

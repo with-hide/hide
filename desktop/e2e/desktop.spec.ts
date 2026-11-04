@@ -139,6 +139,8 @@ test("New tab: the native chord and menu each open one terminal directly", { tag
   const page = launched.page;
   const last = new Map<string, Record<string, unknown>>();
   const sent = countSent(page, last);
+  // launchShell already connected; observe the next socket before the action.
+  await page.reload();
   await shellShown(page);
   await enterWorkspace(page);
   const tabs = page.locator("[data-agent-tab-bar] [role=tab][data-tab]");

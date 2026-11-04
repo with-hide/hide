@@ -32,6 +32,9 @@ test("failed terminals remain legible and keyboard reachable in a narrow native 
       const pane = await splitPane(control, made.tab, toPage(folder));
       await closePane(control, made.pane);
       await preparePaneInput(control, pane);
+      // Only this pane belongs to the cold-restore scenario. In the own
+      // engine the missing shell would fail every other saved pane too.
+      for (const initial of fixture.panes) await closePane(control, initial);
       return made.tab;
     });
     // The engine's panes end and are made again from what was saved, as a reboot does.

@@ -24,7 +24,7 @@ export async function withProbe(page: Page): Promise<void> {
     .toBe("object");
 }
 
-/** Prints `lines` in the fixture's first pane through a program, typed as the operator types, using the pane's shell. */
+/** Prints `lines` in the pane the probe reads, typed as the operator types, using the pane's shell. */
 export async function printInPane(fixture: Pick<AgentFixture, "root" | "shell" | "panes">, daemon: Pick<Daemon, "origin" | "token">, page: Page, paneId: string, lines: string[], last: string): Promise<void> {
   // Leave the old row before replacing its text so xterm requests fresh links
   // when the next real hover enters it, including after an empty/error answer.
@@ -36,7 +36,7 @@ export async function printInPane(fixture: Pick<AgentFixture, "root" | "shell" |
   const file = path.join(fixture.root, `print-${Date.now()}.txt`);
   fs.writeFileSync(file, `${lines.join("\n")}\n`);
   const command = printFileCommand(fixture.shell, file);
-  await withControl(daemon, async (control) => sendKeys(control, fixture.panes[0], `${command}\r`));
+  await withControl(daemon, async (control) => sendKeys(control, paneId, `${command}\r`));
   await expect.poll(() => page.evaluate((id) => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneText(id), paneId), { timeout: 20_000 }).toContain(last);
 }
 

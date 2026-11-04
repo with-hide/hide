@@ -273,6 +273,9 @@ async function openFixture(control: HidedControl, server: EngineServer, daemon: 
     // running shells, including to a spec that restarts the daemon at once.
     // Waiting must not select a checkout before the spec opens its page.
     for (const pane of [first.pane, second]) await waitForPaneInput(control, pane);
+    // Match the agent fixture and the original Herdr fixture: a command
+    // from the first pane is a command from the operator's current pane.
+    await focusPane(control, first.pane);
     return { workspace: first.workspace, checkout: first.checkout, tab: first.tab, panes: [first.pane, second] };
   }
   // A family's agents run `hide` as a real agent does, from inside their panes.

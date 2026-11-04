@@ -80,6 +80,7 @@ test("pane chords: the macOS app's set comes across, runs once, and Settings edi
   const page = launched.page;
   const lastSent = new Map<string, Record<string, unknown>>();
   const sent = countSent(page, lastSent);
+  await page.reload();
   await enterWorkspace(page);
   await expect(page.locator("[data-pane-view]")).toHaveCount(2);
 
@@ -146,6 +147,7 @@ test("cycles: ⌃Tab and ⌥Tab commit once, on releasing the held modifier", as
   app = launched.app;
   const page = launched.page;
   const sent = countSent(page);
+  await page.reload();
   await enterWorkspace(page, "fixture");
   const canvas = page.locator("[data-canvas]").first();
   const cycleRow = (kind: string) => page.locator(`[data-cycle=${kind}] [aria-selected=true]`);
