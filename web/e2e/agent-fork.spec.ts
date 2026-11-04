@@ -1,4 +1,3 @@
-import { skipOwnWindowsAgentStart } from "./own-windows-agent-start";
 // Fork agent and Fork agent to the side from the pane menu, on an isolated
 // engine and hided (PRD fork-operator-root): each starts the pane's
 // conversation again as a new session, the operator's own root, which takes
@@ -114,7 +113,6 @@ async function fork(page: Page, herdr: AgentFixture, daemon: Daemon, forker: str
 }
 
 test("Fork agent accepts bare pane keys from another client and opens right of the source", { tag: "@platform" }, async ({ page }) => {
-  skipOwnWindowsAgentStart();
   const herdr = await startFixture();
   let daemon: Daemon | null = null;
   try {

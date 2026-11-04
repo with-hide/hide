@@ -7,7 +7,7 @@ use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{
-    ERROR_INSUFFICIENT_BUFFER, FILETIME, HANDLE, NO_ERROR, RtlNtStatusToDosError, WAIT_OBJECT_0,
+    ERROR_INSUFFICIENT_BUFFER, FILETIME, NO_ERROR, RtlNtStatusToDosError, WAIT_OBJECT_0,
     WAIT_TIMEOUT,
 };
 use windows_sys::Win32::NetworkManagement::IpHelper::{
@@ -16,7 +16,6 @@ use windows_sys::Win32::NetworkManagement::IpHelper::{
 };
 use windows_sys::Win32::Networking::WinSock::{AF_INET, AF_INET6};
 use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
-use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows_sys::Win32::System::SystemInformation::{
     IMAGE_FILE_MACHINE_AMD64, IMAGE_FILE_MACHINE_ARM64, IMAGE_FILE_MACHINE_I386,
 };
@@ -36,7 +35,7 @@ const MAX_OWNERS: usize = 512;
 const TABLE_ATTEMPTS: usize = 3;
 const READ_BUDGET: Duration = Duration::from_secs(10);
 
-type NtQuery = unsafe extern "system" fn(HANDLE, u32, *mut c_void, u32, *mut u32) -> i32;
+use crate::windows_process::{NtQuery, nt_query};
 
 fn check_budget(start: Instant) -> io::Result<()> {
     if start.elapsed() >= READ_BUDGET {
@@ -255,25 +254,6 @@ fn identity(owner: &OwnedHandle) -> io::Result<u64> {
         return Err(io::Error::last_os_error());
     }
     Ok((created.dwHighDateTime as u64) << 32 | created.dwLowDateTime as u64)
-}
-
-fn nt_query() -> io::Result<NtQuery> {
-    let name: Vec<u16> = "ntdll.dll\0".encode_utf16().collect();
-    let module = unsafe { GetModuleHandleW(name.as_ptr()) };
-    let function = if module.is_null() {
-        None
-    } else {
-        unsafe { GetProcAddress(module, c"NtQueryInformationProcess".as_ptr().cast()) }
-    };
-    let Some(function) = function else {
-        return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "NtQueryInformationProcess is unavailable",
-        ));
-    };
-    // The documented system ABI, dynamically resolved as Microsoft requires
-    // for this changeable native query. Return lengths are checked below.
-    Ok(unsafe { std::mem::transmute::<unsafe extern "system" fn() -> isize, NtQuery>(function) })
 }
 
 #[repr(C)]

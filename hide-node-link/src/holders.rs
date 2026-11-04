@@ -204,8 +204,11 @@ pub struct ForegroundProgram {
     /// runs a script (node, bun, deno, python), the script's name without
     /// its folder or extension, as Herdr recognizes a wrapped agent.
     pub name: String,
-    /// Its arguments, the program first, where the system says them
-    /// (macOS and Linux); empty where it does not. At most
+    /// The installed package, when the holder can identify it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
+    /// Its arguments, the program first; empty when the system cannot
+    /// read them. At most
     /// [`MAX_FOREGROUND_ARGS`] of at most [`MAX_FOREGROUND_ARGV_BYTES`] in
     /// all, as Herdr bounds a resume's arguments.
     pub argv: Vec<String>,

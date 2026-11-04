@@ -1,4 +1,3 @@
-import { skipOwnWindowsAgentStart } from "./own-windows-agent-start";
 // Pane-header move B1-B10/B18/B21: production UI and real isolated PTYs.
 import { expect, test } from "@playwright/test";
 import fs from "node:fs";
@@ -21,7 +20,6 @@ function processBefore(flow: Awaited<ReturnType<typeof startMove>>, pane: string
 
 // Process ownership and PTY identity must hold through each system's engine.
 test("header edges insert in all four directions while retaining terminal, process, session and xterm", { tag: "@platform" }, async ({ page }) => {
-  skipOwnWindowsAgentStart();
   const flow = await startMove(page);
   try {
     const [source, target] = flow.panes;

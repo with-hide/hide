@@ -3,8 +3,8 @@
 // name on every system), so a fixture daemon meets what a packaged one does,
 // the first-run choice included. The binaries are hard links: `hide connect`
 // compares builds by content, so the bundle is the build it was linked from,
-// and nothing is copied. A link cannot cross volumes, and a Windows runner's
-// temporary folder is on another drive, so the bundle sits beside the build
+// with the holder's runtime copied beside them on Windows. A link cannot cross
+// volumes, and a Windows runner's temporary folder is on another drive, so the bundle sits beside the build
 // in `target/debug`, one per worker, and is removed when the worker exits.
 //
 // A packaged app also carries the pinned Herdr in its resources, which the kit
@@ -54,6 +54,11 @@ export function linkBundle(bundle: Bundle = "plain", herdrBin?: string): void {
     const built = path.join(DEBUG, fixtureExecutable(name));
     if (!fs.existsSync(built)) throw new Error(`${built} is missing; the lane must build it (scripts/verify-cargo.sh cli, and -p hide-holder on the own engine)`);
     fs.linkSync(built, bundledExecutable(name, bundle));
+  }
+  if (process.platform === "win32" && e2eEngine() === "own") {
+    // The node resolves the pinned runtime beside hided, as in the packaged app.
+    // A missing lane input fails here, before any pane starts from this bundle.
+    fs.cpSync(path.join(DEBUG, "holder-conpty"), path.join(resources(bundle), "holder-conpty"), { recursive: true });
   }
   if (herdrBin) {
     const target = bundledExecutable("herdr", bundle);
