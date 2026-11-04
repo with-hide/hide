@@ -4404,6 +4404,55 @@ mod tests {
         );
     }
 
+    /// A brief typed while the agent's program still leaves the terminal
+    /// editing lines sits in its line with its Enter read as a line break:
+    /// Pi 1.0.4 on a CI runner had not turned it off when its start's
+    /// settle passed (nightly 41789009557). The engine types nothing then,
+    /// whatever the time, and types the brief once the program reads keys.
+    #[test]
+    fn a_prompt_waits_for_the_agents_program_to_read_keys_past_the_settle() {
+        use hide_node_link::holders::ScreenState;
+        let holders = Arc::new(Holders::default());
+        let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+        let (_, _, pane) = engine
+            .create_workspace(WAIT, "/w", "w", true, Env::new())
+            .unwrap();
+        holders.idle_shell(41, "bash");
+        let start = engine
+            .prepare_start(launch(&pane, "worker", "pi", &[]))
+            .unwrap();
+        engine.start_agent(WAIT, &start).unwrap();
+        let before = holders.typed(&pane);
+        let at = |line_editing| PaneFacts {
+            line_editing,
+            ..running("pi", ScreenState::Idle)
+        };
+        holders.say(&pane, &at(Some(true)));
+        settle_start(&engine, &pane);
+        match engine.prompt_agent(WAIT, "worker", "brief") {
+            Err(EngineError::Refused { code, .. }) => assert_eq!(code, "agent_not_ready"),
+            other => panic!("expected the agent not ready, got {other:?}"),
+        }
+        assert_eq!(holders.typed(&pane), before, "nothing typed");
+        let readiness = engine.delivery_agent(WAIT, "worker").unwrap().readiness;
+        assert!(!readiness.accepts_input(), "{readiness:?}");
+
+        holders.say(&pane, &at(Some(false)));
+        assert!(
+            engine
+                .delivery_agent(WAIT, "worker")
+                .unwrap()
+                .readiness
+                .accepts_input()
+        );
+        engine.prompt_agent(WAIT, "worker", "brief").unwrap();
+        assert!(
+            holders.typed(&pane).ends_with("brief<Enter></letter>"),
+            "{:?}",
+            holders.typed(&pane)
+        );
+    }
+
     /// D-7, B13: after a reboot each agent pane resumes its conversation
     /// once, by its session or by its last one, in its new shell; a second
     /// pane holding the same conversation opens a shell that says why.
