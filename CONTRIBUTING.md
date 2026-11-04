@@ -102,7 +102,7 @@ bash scripts/verify-web.sh web build
 bash scripts/verify-web.sh web e2e --grep-invert @herdr       # Playwright against a local hided on the core's own engine, its panes in the `hide-holder` beside it, for the S2 flows and the S3 Explorer, editor, viewers, attach, watch and reconnect flows (one worker, because each spec starts its own hided, pane holders and browser; CI deals the same tests out to six Linux shards by their recorded durations, `scripts/e2e-shard.py`, docs/TESTING.md "Balancing the e2e shards")
 bash scripts/verify-cargo.sh cli
 bash scripts/verify-web.sh desktop e2e            # Playwright `_electron` against a private hided and the pinned Herdr; windows never activate the app except in `@needs-focus` specs, which `--grep-invert @needs-focus` skips; CI deals the macOS suite out to two shards by `desktop/e2e/shard-durations.json`
-MEASURE_SCENARIO=multi HIDE_MEASURE_RUN_DIR=agents/runs/<slug>/measure/<attempt> bash scripts/web-shell-measure/run.sh   # echo and frame gates with four splits and five attached tabs; review-required evidence, not a CI check
+MEASURE_SCENARIO=keys HIDE_MEASURE_RUN_DIR=agents/runs/<slug>/measure/<attempt> bash scripts/web-shell-measure/run.sh   # key echo, key count and resources with five attached panes on the core's own engine; review-required evidence, not a CI check
 bash scripts/check-harness-ignore-anchor.sh
 bash scripts/check-capability-readers-off-lock.sh
 python3 -m unittest discover -s scripts/tests -p 'test_*.py'

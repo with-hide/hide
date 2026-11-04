@@ -6,8 +6,7 @@
 #
 # `scripts/web-shell-measure/run.sh --isolated-headless` with
 # `MEASURE_SCENARIO=topology MEASURE_SCALE=operator` fills the core's own
-# engine (`MEASURE_ENGINE=own`) to the operator's scale
-# through the daemon (fixture.mjs: 43 workspaces, 62 tabs, 66 panes,
+# engine to the operator's scale through the daemon (fixture.mjs: 43 workspaces, 62 tabs, 66 panes,
 # 5 printing), opens the release `hided` built here in the hosted
 # image's Google Chrome, headless, and records idle resources, one key echo
 # distribution while an agent changes state every two seconds, and 20 rounds
@@ -90,7 +89,6 @@ jobs:
       - name: Measure the topology at operator scale
         timeout-minutes: 15
         env:
-          MEASURE_ENGINE: own
           HIDE_MEASURE_RUN_DIR: ${{ steps.run.outputs.dir }}
           MEASURE_SCENARIO: topology
           MEASURE_SCALE: operator

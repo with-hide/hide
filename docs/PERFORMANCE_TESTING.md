@@ -82,7 +82,6 @@ On revisit, check restored text and new ordered input separately from retained m
 | Owned terminal children end with daemon/link owners | `hided/tests/it/terminal_children.rs` and remote/core-move journeys | A functional teardown assertion does not establish zero survivors for every OS or owner-death mode. |
 | A Claude or Codex transcript keeps its header directory and listed facts only while its stamp (device, inode, length, modification time) holds; when the stamp moves the file is read on from where its last read stopped through the label and Memory readers' `ConversationCursor`, from its start when it got shorter or was replaced, and lists what a cold read lists; a read that failed is read again from the start on the next listing; a file that leaves its home's listing is forgotten | `hide-session/src/catalog.rs` tests `a_claude_transcript_keeps_its_facts_until_its_stamp_moves`, `an_appended_transcript_lists_what_a_cold_read_lists`, `a_shorter_or_replaced_transcript_is_listed_from_its_start`, `a_record_appended_in_two_writes_is_counted_once_it_is_whole`, `a_transcript_longer_than_one_read_window_is_listed_whole`, `an_appended_transcript_is_read_on_from_where_its_last_read_stopped`, `a_transcript_that_could_not_be_read_is_listed_once_it_can_be`, `a_listing_forgets_the_facts_of_a_file_it_no_longer_finds`; cache in `hide-session/src/file_cache.rs` | A same-length rewrite with its modification time restored keeps the old facts, and bytes rewritten in place before where the last read stopped are not read again, as the label and cursor readers already accept; the cost of a listing is measured only in the Project Memory cost contract below. |
 | A Memory pass skips the session walk of a Project whose listed sessions (each with its file's stamp), their live, closed and delegated sets, Hide AI's route and the Project's retry hold are what they were when a walk left nothing to read, record or queue, until the first pending session would turn quiet; Retry, a Hide AI settings change and Memory turned off forget the memo | `runtime::memory_analysis::tests` `a_walk_whose_sessions_did_not_move_is_skipped_until_one_moves_or_comes_due`, `a_skipped_walk_comes_due_when_its_first_pending_session_turns_quiet` | A session with no stamp (OpenCode's, an older node's row) walks its Project on every pass; a store change made outside the pass (a cursor or queue row written by hand) is not seen by a skipped walk; the card and evidence checks keep their own schedules and are not skipped. |
-| Measurements refuse production device routes before dialing | `scripts/tests/test_measure_device_guard.py`, `device-guard.sh` | Guard fixtures do not establish a real device's speed, login or cleanup. |
 | Echo and frame summaries refuse invalid or incomplete data; echo acceptance requires an explicit threshold | `scripts/tests/test_measure_echo_summary.py` | Synthetic records prove the verdict rules, not a measured latency, physical input or native presentation. |
 | The nightly lane fails only on a fixture other than its own, an invalid or a missing measurement, and files each failed check by name | `scripts/tests/test_measure_nightly.py`, `scripts/tests/test_ci_flaky_report.py` | Synthetic run files and GitHub answers prove the verdict and filing rules, not a hosted runner's timing or a measured figure. |
 
@@ -333,7 +332,6 @@ Building, testing, installing, launching, committing, and merging are separate s
 
 ## 3. Isolate runtime state before making fixtures
 
-Read the current official CLI and socket references required by [AGENTS.md](../AGENTS.md#herdr-api-contract), and check the bundled binary's contract before using integration commands.
 Use that exact binary for the private server, fixture CLI, and reference TUI, not whichever executable happens to be on PATH.
 Every invocation, including cleanup, must use the same explicit routing environment:
 
@@ -435,7 +433,7 @@ A change to the coordinator's readers or to the root follower has to keep this: 
 
 For an RSS claim, take eleven one-minute samples across ten minutes per build and retain process lists, endpoints, range, and median.
 `scripts/web-shell-measure/memory.py` records one instant: browser-tree RSS, hided RSS and page JS heap.
-`resources.py --memory-series` records the eleven one-minute process-tree RSS observations; it does not record a JS-heap series.
+No script takes that series: run `memory.py` once a minute for ten minutes beside the workload.
 Keep pane count, occlusion, warm-up, and workload comparable; memory pressure can lower RSS without an allocation improvement.
 
 A build that is fast at launch can still become slow after hours, because cost that grows with process age is invisible in any short window taken on a fresh process.
@@ -526,111 +524,81 @@ The run verdict must include:
 
 Use a qualified verdict when coverage is bounded: "no whole-body blanking observed in these recordings" is supportable; "all performance issues resolved" is not.
 
-## Web shell echo and frame measurement
+## Web shell measurement
 
 Published figures and their measurement boundaries live in the dated [performance observations](PERFORMANCE_RESULTS.md).
 That report is an observed candidate result, not a new threshold or a replacement for the measurement contract here.
 
 `scripts/web-shell-measure/run.sh` exercises the product `hided` with separate screen-key and driven-output workloads.
 Baseline and candidate must use the same driver revision, fixture, browser mode and measurement boundary.
-It owns every process it starts: an isolated pinned Herdr server on a socket inside a run-specific mode-0700 directory under `/tmp` (`isolated-env.sh`, the same routing table as section 3), one measured Git checkout and workspace with a `stty -echo -icanon; cat` pane, the release `hided` with its embedded `web/dist`, and one Google Chrome with an automatically assigned CDP port on the page opened with `?probe=1`.
+It owns every process it starts: the release `hided` with its embedded `web/dist` on a private HOME and XDG folders (`isolated-env.sh`, the same isolation as section 3), its state folder in a run-specific mode-0700 folder under `/tmp`, every pane holder that `hided` starts from the `hide-holder` beside it, one measured Git checkout, and one Google Chrome with an automatically assigned CDP port on the page opened with `?probe=1`.
 The runner reads Chrome's CDP port from its own profile and sends the page URL over standard input so the token is absent from the Chrome command line.
-The operator's socket is only read, before and after, for the topology counts written beside the results.
+Nothing of the operator's is read or touched.
 
-Echo is three trials of fifty screen-key samples from `key-echo.mjs`, each timed from renderer keydown to xterm write completion on the page's clock.
+Echo is fifty screen-key samples per trial from `key-echo.mjs`, each timed from renderer keydown to xterm write completion on the page's clock.
 The collector records the boundary, expected sample count and successful completion explicitly.
 `summarize.py echo` rejects missing, incomplete, negative, nonfinite or nonnumeric samples and an unproven clock boundary; one invalid trial prevents an aggregate verdict, and invalid input exits nonzero.
 A valid run reports distributions with `pass: null` until the caller supplies `--max-p95-ms N`, the acceptance limit agreed before the run; a failed explicit limit also exits nonzero.
-No historical S0 value is a default threshold.
-The removed CLI-return collector mixed clocks and could start after output was already parsed, so its historical files cannot pass the current summary contract.
+No historical value is a default threshold.
 Neither the screen-key samples nor xterm write completion prove physical-key-to-screen latency or compositor presentation.
 
-Frames (PRD B12) is one 120 s window with each driven pane printing a sequence-numbered line every 8 ms while a `requestAnimationFrame` loop injected through CDP records every frame's `dt`.
-The collector reads each pane's parsed buffer at most twice a second, retaining the first and last advancing sequence in each third of the window; at most six panes retain 36 progress records.
-Sequence and retirement records accept trailing terminal-cell spaces, while prefixes, embedded command text and records from another run are not evidence.
-This observer cost is part of the measured workload and must be identical in a baseline and candidate comparison.
-The frame summary requires advancing output from the same run in every pane and every third, a matching completed window of at least 120 s, valid durations, and confirmed writer launch and retirement before evaluating the existing 16.7 ms budget and one-percent fraction.
-CLI success, WebSocket traffic and a final pane tail are diagnostics, not proof that a driven workload persisted.
-The progress observations establish sampled workload coverage, not an output-rate or input-latency guarantee.
-Writers run in the foreground and finish with a run-specific marker; cleanup interrupts every attempted writer, checks its final marker, cancels the owned frame callback and closes the CDP connection.
-Each writer has a deadline beyond the measurement window, and unconfirmed retirement fails the run so the enclosing private-server owner can finish cleanup.
-Failure still emits the collected frames, workload observations and bounded pane diagnostics as an invalid measurement document, with a nonzero exit status.
-Diagnostics retain at most 4,096 UTF-16 code units per pane tail before and after stopping, plus one native tail on failure, for at most six panes; these reads are outside the measured window.
-An output-only frame window contains no injected echo markers; use the separate `keys` scenario for input timing while other panes print.
-A callback interval remains distinct from native presentation.
-
-Run it as `HIDE_MEASURE_RUN_DIR=agents/runs/<slug>/measure/<attempt> bash scripts/web-shell-measure/run.sh` after `bash scripts/verify-web.sh web build` and `bash scripts/verify-cargo.sh release`.
-For an unattended comparison, append `--isolated-headless`: Chrome has no native window and the runner records that operator topology observation was skipped, without contacting the operator socket.
+Run it as `MEASURE_SCENARIO=<keys|topology|restore> HIDE_MEASURE_RUN_DIR=agents/runs/<slug>/measure/<attempt> bash scripts/web-shell-measure/run.sh` after `bash scripts/verify-web.sh web build` and `bash scripts/verify-cargo.sh release`; `topology` is the default.
+For an unattended comparison, append `--isolated-headless`: Chrome has no native window.
 Use that same browser mode for baseline and candidate, and report it with the results; a headless measurement does not prove native presentation.
-`MEASURE_SCENARIO=areas2` or `areas3` shows two or three Agent tabs through the real area menu, each with one pane.
-All shown panes receive the same line-every-8-ms driver during the frame window; idle key echo is measured separately before it.
-`resources-idle.json` and `resources-driven.json` record twenty one-second CPU-time deltas and RSS sums for the owned hided, Herdr and Chrome process trees, independently of the echo and frame samples.
+`resources-*.json` record one-second CPU-time deltas and RSS sums for the owned `hided`, pane holder (`engine`) and Chrome process trees, independently of the echo samples.
 Each sample also keeps the root's own RSS and each child's RSS by its accounting name, because a child caught between fork and exec reads as a second copy of its parent's pages: a bound on hided's memory reads `hided_self_rss_max_kb` (hided alone), and the tree sum says what its children add.
-For `single`, `multi`, `areas2` or `areas3`, append `--memory-series` after `--isolated-headless` to extend the driven frame window to ten minutes and collect eleven one-minute process-tree RSS samples in `memory-series.json`.
-The `keys`, `device`, `remote-core` and `topology` branches exit before that sampler; the flag does not add a series to them.
-A first run opens on Main (PRD S6), so the harness uses the Projects sidebar to open its fixture checkout before measuring.
-The engine-neutral `keys`, `topology` and `restore` scenarios use the private primary Git checkout on both engines and select its exact checkout id in the sidebar.
-A linked checkout makes Herdr also open its primary workspace, so measuring that child alone would leave an extra workspace, tab and pane on only one side.
-This primary-checkout fixture measures equal total topology; it is not performance evidence for opening linked worktrees.
+A first run opens on Main (PRD S6), so the harness uses the Projects sidebar to open its fixture checkout before measuring, selecting its exact checkout id.
+The fixture is a private primary Git checkout; it is not performance evidence for opening linked worktrees.
 Before starting Chrome or collecting any performance sample, `fixture.mjs` writes the actual and target workspace, tab, pane and configured printer counts to `scale.json` and refuses any mismatch.
 The operator shape has four split printers and one existing project pane printer, for five printers inside the same 43-workspace, 62-tab, 66-pane total; the double shape similarly uses eight splits and two existing panes.
 Root printers belong to projects without extra tabs, so their startup FIFO cannot capture another tab's shell.
 Starting the output waits at most 30 seconds for the FIFOs and one marker per printer, written after its first flushed line; `printing-start.json` records that startup observation outside the measured window, not continuous output coverage.
-The marker adds one file write per printer before measurement and none inside the printing loop after its first line, identically on both engines.
-Append `--fixture-only` after `--isolated-headless` to exercise an engine-neutral scenario through exact topology and browser pane readiness, then clean up without collecting echo, frame or resource samples.
-The older Herdr-only scenarios keep a linked checkout whose prepared workspace reports its `hide_owner` token before startup so the core reuses its pane.
+The marker adds one file write per printer before measurement and none inside the printing loop after its first line.
+Append `--fixture-only` after `--isolated-headless` to exercise a scenario through exact topology and browser pane readiness, then clean up without collecting echo or resource samples.
 The Projects control is a tab, so readiness reads `aria-selected`; opening the fixture is one click after its checkout row appears.
 At a scale the fixture's project is the one without agents, so its row waits behind the No agents fold, its project's own fold and its empty or inactive worktrees; the harness opens those folds on the fixture's project alone, each once, because a fold is the core's state and a second click closes it.
-Cleanup removes the private socket's label-generator lock as well as its socket before removing the owned socket directory.
-The run directory keeps `identity.txt` (head, dirty count, binary hash, Herdr and Chrome versions, load), `echo-*.json`, `frames.json`, both summaries and the owned PID status at cleanup.
+The daemon's state folder lives in the run's short folder while the run lasts, because the holder sockets are under it and a run folder's path is longer than a Unix socket address takes, and the run's end moves it to `isolated/hide-state`; the holders outlive the daemon by design, so the run ends each by the pid its record names and fails when one still runs, writing how many did to `cleanup-processes.txt`.
+The run directory keeps `identity.txt` (head, dirty count, binary hash, Chrome version, scenario, engine, load), the scenario's measurements and summaries, and the owned PID status at cleanup.
 The harness resolves that directory to an absolute path before starting child panes, so their private HOME, state, and checkout paths remain valid after the pane changes directory.
-`MEASURE_SCENARIO=multi` is the S2 shape (PRD web-shell-pivot-s2 D-08): the measured pane shares its tab with four splits and four more tabs are shown once each so the core holds five attached tabs before the shell returns to the measured tab; `page.json` records the pane, split and tab counts, the attached pane ids and the live xterm instances the run started from (every attached pane keeps its instance parked while its tab is hidden, D-05).
-`memory.py` samples resident memory twice, after the shape settled and after the driven window (`memory-settled.json`, `memory-after-frames.json`): the Chrome process tree's RSS sum, hided's RSS, the page's JS heap and its live instance count; the two samples say whether the parked instances grow the tab under load, which is the D-05 revisit trigger.
-The driver and the marker still go to the one measured pane, so the other panes are idle shells with mounted xterm instances.
-This five-tab fixture does not cross attach eviction.
-`runtime::tests::terminal::only_the_last_five_shown_tabs_keep_their_panes_attached` proves the core policy; separately visit a sixth tab, require the oldest attachment and renderer instance to retire, revisit for restored content and new ordered input, then repeat the cycle.
-Core metadata assertions alone do not prove renderer disposal or long-lived heap stability.
+`page.json` records the pane, split and tab counts, the attached pane ids and the live xterm instances the run started from.
+`memory.py` samples resident memory after the shape settled and after the scenario's driven phase (`memory-settled.json`, `memory-after-topology.json`): the Chrome process tree's RSS sum, hided's RSS, the page's JS heap and its live instance count.
 The same validity checks and explicit echo-threshold contract apply to every fixture shape.
 A headed run opens Chrome with backgrounding/occlusion switches disabled; a headless run has no native window.
-Record that mode and actual callback cadence with the load, and do not focus or move the operator's windows to improve a measurement.
-Neither the switches nor a callback count prove physical compositor presentation.
+Record that mode with the load, and do not focus or move the operator's windows to improve a measurement.
 
 ### Pane topology latency
 
 `MEASURE_SCENARIO=topology` measures how long a split, a zoom and unzoom, a pane close, a new tab, a tab switch and a window resize take to reach the screen (PRD instant-pane-topology D-15, B23; PRD engine-bundle-3-core-owns B43).
-It runs on either engine, picked by `MEASURE_ENGINE` (PRD engine-bundle-3-core-owns D-15): `herdr`, the default, starts the private pinned Herdr server; `own` starts no server and gives the same `hided` `HIDE_DEV_PANE_HOLDER=1`, its panes in the `hide-holder` beside it.
-On both, `fixture.mjs` makes the whole topology with the web shell's own events on the daemon's WebSocket (`create_workspace` with the confirmation Add project sends, `create_tab`, and `focus_pane` then `create_pane` for a split, which acts on the current pane), never with an engine's CLI, and every key the run types goes through the page (`type.mjs`, `key-echo.mjs`, CDP), so a pair of runs differs in the switch alone.
+`fixture.mjs` makes the whole topology with the web shell's own events on the daemon's WebSocket (`create_workspace` with the confirmation Add project sends, `create_tab`, and `focus_pane` then `create_pane` for a split, which acts on the current pane), and every key the run types goes through the page (`type.mjs`, `key-echo.mjs`, CDP), so a pair of runs differs in the build alone.
 It adds a second tab to the measured workspace, and with `MEASURE_SCALE=operator` or `double` first fills the session to that scale (D-18): 43 workspaces, 62 tabs and 66 panes, 5 of which print a line every 50 ms once the idle sample is taken, or twice each (86, 124, 132, 10); every other workspace is its own Git checkout.
-No pane reports an agent and no agent state changes: the report was Herdr's own call (`herdr pane report-agent`), which has no daemon event, so the echo and the rounds no longer carry the agent-status churn the series before 2026-11-02 did, and a figure from that series is not compared with one from this.
+No pane reports an agent and no agent state changes, because a report has no daemon event, so the echo and the rounds carry no agent-status churn, and a figure from the series before 2026-11-02, which did, is not compared with one from this.
 A printing pane is a split whose folder holds a FIFO; the run's private `.zshrc` waits on it in the foreground and `fixture.mjs drive` releases it, so the printer is the pane's own shell and ends with it.
-The run records `resources-idle.json` before anything moves, one echo trial (`echo-summary.json`, the typing half of B24), and `topology.mjs`'s rounds (`MEASURE_TOPOLOGY_ROUNDS`, 20 by default), then skips the frame window.
+The run records `resources-idle.json` before anything moves, one echo trial (`echo-summary.json`, the typing half of B24), and `topology.mjs`'s rounds (`MEASURE_TOPOLOGY_ROUNDS`, 20 by default).
 Each round ends with two resizes: the page's width set to 1100 and back to 1280 with CDP `Emulation.setDeviceMetricsOverride`, `screen_ms` the canvas's new width and `frame_ms` every shown pane's new grid.
-While the rounds run, `save-watch.py` reads every 10 ms the files each engine saves its layout in (the daemon's `core-state.json` and `workspace-views.json` on both, and Herdr's session folder or the own engine's `engine` folder), and `save-summary.json` gives the writes and bytes per group and per operation the rounds made (`topology.json`'s `operations`, which counts the new tab's untimed close).
-The daemon's state folder lives in the run's short socket folder while the run lasts, because the own engine's holder sockets are under it and a run folder's path is longer than a Unix socket address takes, and the run's end moves it to `isolated/hide-state`; the own engine's holders outlive the daemon by design, so the run ends each by the pid its record names and writes how many still run to `cleanup-processes.txt`.
-The initial resource sample precedes topology/status churn, while `memory-after-topology.json` follows the driven phase.
-This scenario currently collects no continuously sampled driven CPU interval; its initial resource result is not driven CPU evidence.
+While the rounds run, `save-watch.py` reads every 10 ms the files the layout is saved in (the daemon's `core-state.json` and `workspace-views.json`, and the own engine's `engine` folder), and `save-summary.json` gives the writes and bytes per group and per operation the rounds made (`topology.json`'s `operations`, which counts the new tab's untimed close).
+The initial resource sample precedes topology churn, while `memory-after-topology.json` and `resources-after-topology.json` follow the driven phase.
+This scenario collects no continuously sampled driven CPU interval; its initial resource result is not driven CPU evidence.
 Keys are CDP `Input.dispatchKeyEvent` events, which Chrome delivers to the focused terminal as an ordinary renderer keydown, so each chord takes the web shell's own keydown path and its browser chord; a tab switch is a click on the tab.
 Every time is on the page's clock from the chord's first keydown (or the click): `screen_ms` is the first animation frame whose DOM shows the change (the canvas's pane count, its zoom flag or the shown tab), and `frame_ms` the first frame after it in which the terminal the change is about shows it (text in a new pane, a new grid in a resized one).
 `topology-summary.json` gives each operation's p50, p95 and max to screen and to frame.
-`MEASURE_HIDED_BIN` points the run at another hided, such as a baseline built from the merge base, so baseline and candidate share the fixture; run both headless (`--isolated-headless`) under the same scale and report the load beside each.
-Herdr's share and Hide's are read from the candidate's `pane_op.timing` lines in the run's `hide-state` diagnostic log (Drawn ahead of Herdr in [ARCHITECTURE.md](ARCHITECTURE.md#drawn-ahead-of-herdr)), which the baseline does not write.
+`MEASURE_HIDED_BIN` points the run at another hided, such as a baseline built from the merge base with its `hide-holder` beside it, so baseline and candidate share the fixture; run both headless (`--isolated-headless`) under the same scale and report the load beside each.
+The stage times are read from the candidate's `pane_op.timing` lines in the run's `hide-state` diagnostic log (`summarize.py timing`, Drawn ahead of Herdr in [ARCHITECTURE.md](ARCHITECTURE.md#drawn-ahead-of-herdr)).
 
 ### Restore after a reboot
 
-`MEASURE_SCENARIO=restore` (PRD engine-bundle-3-core-owns B44) builds the topology fixture at `MEASURE_SCALE` on either engine, opens the page on it, and then kills every process the run started for the panes with SIGKILL: the daemon, then the Herdr server and everything under it, or every pane holder its records name and everything under each.
-It writes the list to `restore-victims.txt` and fails unless none of them runs within ten seconds, then notes t0 and starts them again, the Herdr server first on Herdr.
+`MEASURE_SCENARIO=restore` (PRD engine-bundle-3-core-owns B44) builds the topology fixture at `MEASURE_SCALE`, opens the page on it, and then kills every process the run started for the panes with SIGKILL: the daemon, then every pane holder its records name and everything under each.
+It writes the list to `restore-victims.txt` and fails unless none of them runs within ten seconds, then notes t0 and starts the daemon again.
 `restore.mjs` times from t0 on the machine's wall clock: `tabs_ms` until the snapshot lays out every tab of the fixture again, `front_ms` until the page, opened as the daemon answers `/health`, shows the measured checkout's tab with every pane of it drawn, and `shells_ms` until every pane's shell has read its rc file again (the private `.zshrc` touches one file per shell in `shell-ready/`).
 A time that did not come within `MEASURE_RESTORE_SECONDS` (180) is `null`, and a missing front names what the page last showed (`front_last`).
 An agent's resume is not timed here; the engine's functional tests own it.
 
-### The two-engine gate
+### Judging a change
 
-The core's own engine replaces Herdr only when it is no worse than Herdr on every row of a 31-row table (PRD engine-bundle-3-core-owns D-14, D-15, B39 to B44).
-Each row is measured as pairs on one build: the Herdr path (H) and the own engine's path (P), the development switch `HIDE_DEV_PANE_HOLDER` the only difference, five pairs, the order flipped every pair.
+A change is judged against the build before it with the same pair method.
+The 31-row table below was the bundle 3 gate that let the core's own engine replace Herdr (PRD engine-bundle-3-core-owns D-14, D-15, B39 to B44); with Herdr gone, the same rows and the same method judge any change to the terminal path against the build before it (PRD engine-bundle-4-herdr-removal D-16).
+Each row is measured as pairs: the build before the change (H) and the candidate (P), five pairs, the order flipped every pair; for the engine switch itself H is the bundle 3 gate commit's own-engine path.
 No pair is dropped; each run records its load and the build processes running beside it, and a run is started only on a quiet machine (load under 6, no cargo or rustc running).
 A latency passes within 1.1 x H + 0.5 ms and any other value within 1.1 x H, judged on the median over the pairs of P minus that tolerance, so at least three of five pairs are inside it.
-The bundle 3 gate has one accepted transition exception: row 30's shell-response time after restoring 66 panes may exceed that latency tolerance by a median of at most 87.7 ms; the original slack and the raw P minus H are both reported, and bundle 4 owns closing this gap.
-The exception is `median(P - (1.1 x H + 0.5 ms)) <= 87.7 ms`, not a larger allowance for the tab list or first screen in the same row, or for any other row.
 Loss, duplication and order of keys, a holder's wakeups while idle, and one holder's memory (4 MiB idle, 6 MiB after a flood) hold in every run, not on a median.
 The memory of panes no screen shows and the sum of holders' memory are recorded and not judged: a process per pane is the accepted cost (D-33).
 
@@ -639,23 +607,22 @@ The memory of panes no screen shows and the sum of holders' memory are recorded 
 | 1 to 5 (B39) | Idle: CPU over 60 s, holder wakeups, the memory of 64 attached panes, one holder's memory idle and after a flood | `scripts/holder-perf.py` at the node ([The pane holder's path](#the-pane-holders-path)) |
 | 6 to 9 (B40) | Key to frame latency alone, beside one and eight flooding panes, and beside a slow consumer, with a slow consumer's holder at most 6 MiB | `scripts/holder-perf.py` |
 | 10 to 15 (B41) | A flood: bytes per frame, time to drain, the path's CPU, reattach time, frames per pane at most 62.5 a second | `scripts/holder-perf.py` |
-| 16 to 21, 31 (B40, B41, B42) | The app end to end: echo idle and with five panes printing, CPU while printing, idle CPU, CPU with no window, hided's and Chrome's largest RSS, and their RSS after the scale | `scripts/web-shell-measure/run.sh` with `MEASURE_ENGINE` |
+| 16 to 21, 31 (B40, B41, B42) | The app end to end: echo idle and with five panes printing, CPU while printing, idle CPU, CPU with no window, hided's and Chrome's largest RSS, and their RSS after the scale | `scripts/web-shell-measure/run.sh` with `MEASURE_SCENARIO=keys` |
 | 22 to 27 (B43) | A new tab, a split, zoom and unzoom, a pane close, a tab switch and a resize, to screen and to frame, p50 and p95 | `MEASURE_SCENARIO=topology` ([Pane topology latency](#pane-topology-latency)) |
 | 28 (B40) | Echo at the operator's scale | the same topology run's `echo-summary.json` |
 | 29 (B44) | Layout save writes, at most one per operation | the same run's `save-summary.json` |
 | 30 (B44) | After every process was killed: the tab list, the front tab drawn, every shell answering | `MEASURE_SCENARIO=restore` ([Restore after a reboot](#restore-after-a-reboot)) |
 
-Rows are measured under the load as it is (R), and key latency alone (rows 6 to 9 at one pane and at 128 panes) also under a standing load L of 28 busy processes, which `holder-perf.py --load 28` starts beside the path and ends with the round, so both paths meet the same load whatever else the machine runs.
-The app's engine RSS is judged by the per-holder bound above, never against the Herdr server's.
-Row 31 also records the engine's total RSS in `resources-after-topology.json`, one sample from the existing resource collector after it reads the surviving holder roots or the private Herdr server tree.
+Rows are measured under the load as it is (R), and key latency alone (rows 6 to 9 at one pane and at 128 panes) also under a standing load L of 28 busy processes, which `holder-perf.py --load 28` starts beside the path and ends with the round, so both builds meet the same load whatever else the machine runs.
+The app's engine RSS is judged by the per-holder bound above.
+Row 31 also records the holders' total RSS in `resources-after-topology.json`, one sample from the existing resource collector after it reads the surviving holder roots.
 That sum is recorded only; `memory-after-topology.json` still supplies the hided and Chrome RSS comparison.
 The numbers belong to the run record; this document keeps the method, not a verdict.
 
 ### The nightly performance lane
 
-`nightly.yml` calls `perf.yml`, whose two jobs (`performance (macOS) / topology operator` on Herdr and `topology operator own engine` on the core's own engine, each on `macos-15`) measure the same fixture every night against the product `hided` built from that night's `main`.
-Each builds the web shell and the release `hided` at the fixed `target/release/hided` and runs `run.sh --isolated-headless` with `MEASURE_SCENARIO=topology`, `MEASURE_SCALE=operator` and `MEASURE_TOPOLOGY_ROUNDS=20`, the run directory under the job's workspace.
-The Herdr job fetches the pinned Herdr; the own engine's job builds the release `hide-holder` beside `hided` instead, runs with `MEASURE_ENGINE=own` and fetches no Herdr, so its run needs none.
+`nightly.yml` calls `perf.yml`, whose job (`topology operator own engine`, on `macos-15`) measures the same fixture every night against the product `hided` built from that night's `main`.
+It builds the web shell, the release `hided` at the fixed `target/release/hided` and the release `hide-holder` beside it, and runs `run.sh --isolated-headless` with `MEASURE_SCENARIO=topology`, `MEASURE_SCALE=operator` and `MEASURE_TOPOLOGY_ROUNDS=20`, the run directory under the job's workspace.
 The browser is the hosted image's Google Chrome, headless; `run.sh` starts it with `--remote-debugging-port=0` and reads the port Chrome chose from `DevToolsActivePort` in the run's own profile.
 `perf.yml` also has a `workflow_dispatch`, so a branch can be measured alone without starting every nightly lane.
 Nothing a pull request runs depends on it, and no pull request runs it.
@@ -664,19 +631,19 @@ The fixture is the measurement's identity, so it is fixed:
 
 | Part | Contract |
 | --- | --- |
-| Topology | `fixture.mjs` at `operator`, on each job's engine: 43 workspaces and 43 projects (the measured checkout, a linked worktree of the fixture repository, and 42 others that are each their own Git checkout), 62 tabs (the measured tab and the switch target, one root tab in each other workspace, 18 more), 66 panes (one per tab and four splits) |
+| Topology | `fixture.mjs` at `operator`: 43 workspaces and 43 projects (the measured checkout, a linked worktree of the fixture repository, and 42 others that are each their own Git checkout), 62 tabs (the measured tab and the switch target, one root tab in each other workspace, 18 more), 66 panes (one per tab and four splits) |
 | Printing | No agent is reported; 5 panes print a line every 50 ms after the idle sample |
-| Idle resources | `resources-idle.json`: 20 one-second samples of the owned `hided`, Herdr and Chrome trees before anything moves |
+| Idle resources | `resources-idle.json`: 20 one-second samples of the owned `hided` and Chrome trees before anything moves |
 | Echo | One trial of 50 screen keys on the measured pane, renderer keydown to xterm write on the page's clock |
-| Topology | 20 rounds of split, zoom, unzoom, close and new tab by chord, two tab switches by click and two resizes, each to screen and to terminal, with Herdr's share and Hide's from `pane_op.timing`, and the layout saves the rounds made |
+| Topology | 20 rounds of split, zoom, unzoom, close and new tab by chord, two tab switches by click and two resizes, each to screen and to terminal, with the stage times from `pane_op.timing`, and the layout saves the rounds made |
 | Memory | `memory-settled.json` and `memory-after-topology.json` |
 | Browser and runner | Headless Google Chrome at 1280 × 900 on the `macos-15` hosted image |
 | Driver | `scripts/web-shell-measure/` at the run's commit |
 
 `fixture.mjs` writes the counts the daemon's snapshot answers beside the ones the scale asks for (`scale.json`), and a run whose counts differ is not this fixture.
-The series changed on 2026-11-02 (PRD engine-bundle-3-core-owns D-24): the fixture is made through the daemon on either engine, without the agent reports and their churn, and each round adds two resizes; a record before it is not compared with one after.
+The series changed on 2026-11-02 (PRD engine-bundle-3-core-owns D-24): the fixture is made through the daemon, without the agent reports and their churn, and each round adds two resizes; a record before it is not compared with one after.
 Changing any row of this table, `fixture.mjs`'s operator numbers or the driver's measurement boundaries starts a new series: do it in its own pull request that says so.
-Each record carries its engine, the driver's hash, the runner image, the Chrome, Herdr (none on the own engine) and `hided` identities and the load, so a reader compares only records of one series; each engine's records are a series of their own.
+Each record carries its engine, the driver's hash, the runner image, the Chrome and `hided` identities and the load, so a reader compares only records of one series; the series of the Herdr job, which ran beside this one until Herdr's removal, ended there.
 
 `scripts/web-shell-measure/nightly.py` judges the run and writes its record, `nightly-summary.json`.
 It derives every figure again from the raw files through `summarize.py`, writes the same table to the job's summary page with the record beneath it, and fails the job in three cases only:
@@ -688,27 +655,23 @@ It derives every figure again from the raw files through `summarize.py`, writes 
 No figure is a limit.
 The guide's echo comparisons are relative to a matched baseline, never absolute, so the echo is reported with `pass: null` and no `--max-p95-ms`.
 `summarize.py topology` has no validity contract, so a topology timeout is counted in the table and the record and is not judged.
-The frame window, whose 16.7 ms budget and one-percent fraction are the one limit this guide states, does not run on the hosted runner: headless Chrome calls animation frames at a nominal 60 Hz whatever the load, so every interval sits on the budget and the strict `dt > 16.7` check counts the browser's scheduler.
-The dated headless runs in [PERFORMANCE_RESULTS.md](PERFORMANCE_RESULTS.md#headless-sustained-output-observation) failed it with 38.8% and 24.9% of intervals over while their p50 and p95 were both about 16.7 ms.
-The frame window therefore stays a local check on a native display, and the lane covers it as follows:
 
 | Measurement | Nightly lane |
 | --- | --- |
-| Idle resources, echo under churn, topology latencies, memory | Covered, recorded without a limit; invalid or missing fails the job |
-| Frame window (16.7 ms budget) | Not covered: headless 60 Hz frame scheduling on the hosted runner |
-| Driven CPU, key count, windowless, device and remote core | Not covered: not part of the `topology` scenario |
+| Idle resources, echo, topology latencies, memory | Covered, recorded without a limit; invalid or missing fails the job |
+| Driven CPU, key count, windowless and restore | Not covered: not part of the `topology` scenario |
 
 A failed check is annotated as `Failed measurement` (`ci-flaky-report.py --measurement`), and the nightly report opens one `nightly-failure` issue per check, comments on it each night it fails again and closes it when a scheduled run passes the lane ([TESTING.md](TESTING.md#nightly-failures)).
 Its candidates are every pull request merged since the lane's last green nightly, because a measurement can move with any change; a run that stopped is filed by its failed step instead, with the lane's workflows and scripts as candidates.
 The authors of the candidates look first.
-A fixture failure means the driver, the pin or the runner no longer builds the fixture; an invalid echo means keys stopped reaching the terminal the way the probe measures, a product defect candidate.
+A fixture failure means the driver or the runner no longer builds the fixture; an invalid echo means keys stopped reaching the terminal the way the probe measures, a product defect candidate.
 When no candidate explains it, for instance a new runner image or Chrome that the record's identity shows, the issue goes to the operator, who decides whether the series has to start again.
 A green run proves the measurement was valid, not that performance held; read the trend.
 
-Each run keeps its run directory, without the throwaway Chrome profile, as the artifact `perf-run-<date>-<run id>-<attempt>` for 30 days, and its record alone as `perf-record-<date>` for 90; the own engine's are `perf-run-own-…` and `perf-record-own-<date>`.
-Read a series with `gh run download <run id> -n perf-record-<date>`; nothing about a run is committed.
+Each run keeps its run directory, without the throwaway Chrome profile, as the artifact `perf-run-own-<date>-<run id>-<attempt>` for 30 days, and its record alone as `perf-record-own-<date>` for 90, the `-own` names its series began with.
+Read a series with `gh run download <run id> -n perf-record-own-<date>`; nothing about a run is committed.
 
-Each job costs about 17 runner minutes a night on `macos-15`, most of it the release build.
+The job costs about 17 runner minutes a night on `macos-15`, most of it the release build.
 Its first run on a branch, with no Rust cache, took 21.8 minutes when the release profile had one codegen unit: about a minute of setup, a minute for the web shell, 16.4 minutes for the release `hided` (14.4 in another run) and 3.6 for the measurement.
 Sixteen units cut a clean macOS release build by 29% (`docs/BUILD.md`, The release profile), so the release `hided` should now take about 12 minutes.
 The same change raised `hided`'s resident memory by about 5 MiB once, so the series steps up by that much at the merge that moved to sixteen units, not through a leak.
@@ -724,23 +687,21 @@ The harness refuses a sample that is nonfinite or negative on that one clock, or
 Beside each sample it keeps the same completion minus the driver's own clock before the key was sent (`node_t0_samples`) and the driver's offset from the page's clock, read by a round trip bracketed on the driver's clock (`clock_offset_ms` per hop), and `summarize.py echo` reports both per trial; they are a cross-check, not the measurement.
 Until 2026-10-10 the sample was that two-clock value: the driver and the page each fix their time origin when they start, and the constant between them changed per run (+75, -21 and -22 ms in three runs of PR #898's comparison), so key echo numbers measured before then carry an unknown per-run offset; only a large one showed, as impossible samples.
 The key collector also records every `/ws` frame the page received while it typed, by type (`ws_frames_by_type`), so a key that made the core publish shows as a `delta` frame (B5).
-The node writes the server's share of the same path to the daemon's diagnostic log on either engine: `terminal.echo_timing`, once a second while input comes into a pane and once when its session ends, times from the node writing the first input since the pane's last frame to the next frame it reads (`count`, `p50_ms` and `p95_ms` as upper edges of half-millisecond buckets up to 50 ms, `mean_ms`, `max_ms`), so a pair of keys runs compares the engines without the hub and the page (`hide-node/src/terminal/echo_timing.rs`).
+The node writes the server's share of the same path to the daemon's diagnostic log: `terminal.echo_timing`, once a second while input comes into a pane and once when its session ends, times from the node writing the first input since the pane's last frame to the next frame it reads (`count`, `p50_ms` and `p95_ms` as upper edges of half-millisecond buckets up to 50 ms, `mean_ms`, `max_ms`), so a pair of keys runs compares two builds without the hub and the page (`hide-node/src/terminal/echo_timing.rs`).
 It costs one clock read and one atomic exchange per input and per frame, and one record a second per pane being typed into.
-Its samples are the inputs that open a wait, so the two engines time different populations: Herdr, which gathers the keys of each 16 ms into one frame, times only the first of them, and the holder, which answers each input with a frame, times nearly every key; compare its counts and means as that, not key for key.
+Its samples are the inputs that open a wait; the holder answers each input with a frame, so it times nearly every key.
 
-`key-count.mjs` types `MEASURE_KEY_COUNT` keys (10,000 for the claim) one CDP `Input.dispatchKeyEvent` each, the same key path as `key-echo.mjs`, spelling distinct markers (`mNNNNN` and a space, Enter after every 100th, `#` last), then reads the terminal program's received bytes through `MEASURE_PANE_READ` (or logical lines from the private Herdr by default) and compares them with what was typed: `exact` when they match key for key, otherwise how many keys never arrived (`keys_lost`), arrived outside the longest in-order common run (`keys_reordered`) or arrived without being typed (`keys_unexpected`), with the markers that are missing for a reader (D-08).
+`key-count.mjs` types `MEASURE_KEY_COUNT` keys (10,000 for the claim) one CDP `Input.dispatchKeyEvent` each, the same key path as `key-echo.mjs`, spelling distinct markers (`mNNNNN` and a space, Enter after every 100th, `#` last), then reads the terminal program's received bytes through `MEASURE_PANE_READ` and compares them with what was typed: `exact` when they match key for key, otherwise how many keys never arrived (`keys_lost`), arrived outside the longest in-order common run (`keys_reordered`) or arrived without being typed (`keys_unexpected`), with the markers that are missing for a reader (D-08).
 CDP `Input.insertText` does not reach the shell's key path, so it cannot stand in for typing.
 It never stops at the first loss.
-`MEASURE_PANE_READ` replaces the read command, which is how a device pane is read from the device's isolated Herdr over SSH; `MEASURE_KEY_INTERVAL_MS` spaces the keys (0 by default: as fast as CDP takes them, in order).
+`MEASURE_KEY_INTERVAL_MS` spaces the keys (0 by default: as fast as CDP takes them, in order).
 
-`MEASURE_SCENARIO=keys` runs both checks on the shape the terminal claims are made on: the measured pane and four splits in one tab, five attached panes.
-`MEASURE_ENGINE=herdr|own` selects the engine; both create the panes through `fixture.mjs` and send fixture commands through `type.mjs`, using the same build.
-For the key count only, the foreground program is `tee <private receipt>` and the reader is `cat <private receipt>` on both engines, so wrapping in a narrow split cannot change the received bytes.
-The resource files name the engine group `engine`: the private Herdr server and its descendants, or all five owned pane holders and their descendants, counted once.
+`MEASURE_SCENARIO=keys` runs both checks on the shape the terminal claims are made on: the measured pane and four splits in one tab, five attached panes, created through `fixture.mjs`, with fixture commands sent through `type.mjs`.
+For the key count, the foreground program is `tee <private receipt>` and the reader is `cat <private receipt>`, so wrapping in a narrow split cannot change the received bytes.
+The resource files name the pane holders' group `engine`: all five owned pane holders and their descendants, counted once.
 Each group also records `root_pids`, `self_cpu_percent` and `self_rss_kb`; use hided's own fields separately from the engine group, since its descendant tree can overlap the holders.
-Engine RSS remains recorded rather than compared against Herdr, and hided's own cost remains visible when work moves into the core.
 It records, in order: idle resources over `MEASURE_IDLE_SECONDS` (60) in `resources-idle.json`; the idle key echo (`key-echo-idle.json`); every pane printing a line per 8 ms (foreground `keys_printers.py print`, stopped with Ctrl+C) while resources are sampled over `MEASURE_DRIVEN_SECONDS` (120, `resources-driven.json`), with the page's `/ws` frames by type, the full redraws it asked for (`ws-driven.json`) and the core log's terminal and redraw records before and after (`driven-diagnostics-*.json`); the key echo again on the measured pane, back to a plain `cat` so its marker arrives whole, while the other four keep printing (`key-echo-driven.json`); the key count when `MEASURE_KEY_COUNT` is set (`key-count.json`); and the page navigated to `about:blank` while the panes print for `MEASURE_WINDOWLESS_SECONDS` (60, `resources-windowless.json`, browser omitted from that sampler), then navigated back, with each pane's drawn text length (`reopen-panes.json`), the page's frames and full-redraw requests around that navigation away and back (`ws-reopen.json`, `ws-count.mjs`) and the core log's terminal, redraw and resume records (`reopen-diagnostics.json`, `diag-counts.py`).
-Before either local keys printing phase, `keys_printers.py start` delivers all five commands and verifies their first flushed output under one monotonic 30-second deadline, including command delivery, receipt waiting and the final process identity checks.
+Before either printing phase, `keys_printers.py start` delivers all five commands and verifies their first flushed output under one monotonic 30-second deadline, including command delivery, receipt waiting and the final process identity checks.
 Each phase has a new private folder and nonce; each printer atomically publishes one receipt naming that phase, pane, PID and OS birth after its first flushed line.
 Missing, stale, duplicate or invalid identities fail the run, preserving partial receipts and taking the existing fixture cleanup path; delivery children are ended and waited for through `holder_owned.Owned`, with cleanup duration and errors recorded separately from startup.
 The same five PID/birth identities must still run before and after the driven and windowless resource windows; after the echo pane switches to `cat`, the other four must run before and after the driven echo.
@@ -749,50 +710,39 @@ These receipts prove first flush and identity survival at the boundaries, not un
 The reopen observer starts after printer readiness, registers its listeners and completes `Network.enable` before atomically publishing a fresh `ws-reopen-ready.json`; only a live matching observer's ready receipt permits navigation to `about:blank`.
 Its existing windowless seconds plus 30 observation duration is unchanged.
 `scripts/tests/test_keys_printers.py` checks the process/file contract without a browser; actual keys and reopen measurements remain separate evidence.
-The legacy `remote-core` fixture retains its private `drive.py` duration/pane arguments and pane-tagged cleanup.
 `summarize.py resources` reads hided's median one-second CPU and its largest RSS from a resources file; `summarize.py echo` reads a key echo file like an echo file.
 Chrome remains alive during this detach/reconnect phase; verify private `/health` client retirement and reacquisition independently, and use the isolated desktop lifetime journey for native last-window or browser-process exit.
 Use valid trial distributions with the current matched comparison; supply an explicit echo threshold only when that absolute limit belongs to the agreed claim.
 
-A comparison runs the baseline and the candidate `hided` (release builds, each from its own worktree, `MEASURE_HIDED_BIN`) in alternating trials on the same machine, idle and driven reported separately, with nearest-rank p50 and p95 per condition and the load recorded beside each trial; the claim's thresholds are the PRD's (B2: p50 and p95 no more than 5 ms above the baseline; B21: median CPU no more than 10% above and largest RSS no more than 32 MiB above; B19: windowless median CPU no more than 10% above), never a past run's figure.
+A comparison runs the baseline and the candidate `hided` (release builds, each from its own worktree with its `hide-holder` beside it, `MEASURE_HIDED_BIN`) in alternating trials on the same machine, idle and driven reported separately, with nearest-rank p50 and p95 per condition and the load recorded beside each trial; the claim's thresholds are the PRD's (B2: p50 and p95 no more than 5 ms above the baseline; B21: median CPU no more than 10% above and largest RSS no more than 32 MiB above; B19: windowless median CPU no more than 10% above), never a past run's figure.
 Keep `--isolated-headless` the same for both builds.
-A device pane is measured the same way from a screen whose isolated hided has the device registered with consent, reaching a private sshd, an isolated Herdr and a separate HOME and state folder on the device; the operator's own device account, daemons and Herdr are never the target.
-`MEASURE_SCENARIO=device` does this: it writes the private sshd's alias `MEASURE_DEVICE_ALIAS` (for `MEASURE_DEVICE_USER` at `MEASURE_DEVICE_HOST` on `MEASURE_DEVICE_PORT` with the key file `MEASURE_DEVICE_IDENTITY`) into the private HOME's `~/.ssh/config` and copies `MEASURE_DEVICE_KNOWN_HOSTS` (its host key; Hide checks `~/.ssh/known_hosts` only) beside it, starts hided with the consent folders `MEASURE_DEVICE_HELPER_ROOT` and `MEASURE_DEVICE_CLI_DIR` inside the device account, registers and fronts the device as the shell does (`device-front.mjs`, which also waits for the device's helper to be ready, since its terminals ride that link; `MEASURE_DEVICE_WAIT_HOST=0` skips that wait for a build from before the node link, whose device terminals run on their own SSH sessions), and runs the key echo (`key-echo-device.json`) and, with `MEASURE_KEY_COUNT`, the key count (`key-count-device.json`) on the device's one fixture pane; with `MEASURE_DEVICE_DRIVEN_SECONDS` it then splits four more panes on the device, each printing a line per 8 ms, and runs the key echo again on the measured pane (`key-echo-device-driven.json`), closing the splits afterwards; `device-herdr.sh` runs the device's isolated Herdr (the pinned binary in the private HOME's `~/.local/bin`) on `MEASURE_DEVICE_SOCKET` over the same alias.
-Before anything dials the device, `device-guard.sh` refuses any target but the isolated account: the private sshd's port `MEASURE_DEVICE_PORT` is never 22, the recorded host keys name that host and port only, the private HOME `MEASURE_DEVICE_HOME` and the socket must be under `/tmp`, and the consent folders absolute inside that HOME, so none depends on which HOME a session reports: the private sshd still signs in as the account itself, and a `~/` spelled from its own home once installed a node there (`docs/VERIFICATION.md`, A device check).
-The guard never reads a caller's SSH configuration: hided's parser and OpenSSH read some spellings apart (`Port=22841`, a tab, `Include`, `Match`), so a file OpenSSH resolves to the private port can send hided to port 22; the guard writes the alias in one plain form instead, and `device-herdr.sh` passes the same parts to `ssh` with no configuration file.
-`MEASURE_SCENARIO=remote-core` measures a screen whose core runs on another machine (PRD core-host-node-remote-core B5-B7, B21): it is the `keys` shape with this machine's hided in the node role, its core on the measured device.
-`core-host.sh` uploads `MEASURE_CORE_BIN` (the measured hided unless set) to `MEASURE_CORE_PROGRAM` and starts it there with the state folder `MEASURE_CORE_STATE`, the node id `MEASURE_CORE_NODE`, no Tailscale, and the device's isolated Herdr, then stops only that process when the run ends; the run writes the placement record naming it, starts this machine's node with the node id `MEASURE_SCREEN_NODE` (`measure-screen`), and fronts its checkout on the core through the node's `/ws` (`core-front.mjs`).
-The keys run's resources are the node-role hided's, its key echo and key count are on this machine's pane as the core names it, and a key echo (`key-echo-core.json`) and key count (`key-count-core.json`) follow on the core machine's own pane in `MEASURE_CORE_FIXTURE`.
-For it the guard takes no consent folders and requires instead that the core's program and state folder are absolute paths inside `MEASURE_DEVICE_HOME` and that its node id is a plain name.
-Fingerprint the device's real `~/.hide`, `~/.local/bin`, `~/Library/LaunchAgents` and Herdr configuration (hash, modification time and the processes that hold them) before and after, and record both.
+A device's pane has no harness here: the device scenarios drove a device's Herdr and were removed with it, so a device claim is checked by hand against an isolated device account (`docs/VERIFICATION.md`, A device check).
 
 ### The pane holder's path
 
-`scripts/holder-perf.py` compares a node's pane holders with the Herdr session path it replaces, both measured at the node (PRD engine-bundle-2-pane-holder D-17, B15, B21); it runs on macOS by hand, since its process figures are macOS's (`proc_pid_rusage`).
-One round measures one path at one pane count, with release builds of `hide-holder` and hide-node's `holder_node` example copied to a folder of their own (a build in the checkout during a run relinks them): `herdr` is a private Herdr server of the pinned build, its HOME, XDG folders, `HERDR_SESSION`, `HERDR_CONFIG_PATH` and `HERDR_SOCKET_PATH` all its own, with N panes attached through the node's Herdr sessions as hided runs today; `holder` is the same node with `HIDE_DEV_PANE_HOLDER=1` and N holders.
-The node is the one the daemon builds (`Holders::start_local`); every pane runs `/bin/sh` at 120x40, and the keys go through the node's own `key`.
-The path's processes are the Herdr server and the node's session clients, or the holders; the shells are the same on both and left out.
+`scripts/holder-perf.py` measures a node's pane holders at the node (PRD engine-bundle-2-pane-holder D-17, B15, B21); it runs on macOS by hand, since its process figures are macOS's (`proc_pid_rusage`).
+It measured the holder path against the Herdr session path it replaced until Herdr's removal; it now compares two builds of the holder path, the build before a change and the candidate, by the same pair method ([Judging a change](#judging-a-change)).
+One round measures one build at one pane count, with release builds of `hide-holder` and hide-node's `holder_node` example copied to a folder of their own (`--bin`; a build in the checkout during a run relinks them), N holders started the way the daemon starts them (`Holders::start_local`); every pane runs `/bin/sh` at 120x40, and the keys go through the node's own `key`.
+The path's processes are the holders; the shells are left out.
 
 A round records, each in its own phase:
 
 - idle for 60 s with no screen attached, then with min(N, 64) attached: CPU (user and system), memory (`phys_footprint`, all processes and the largest one) and wakeups (idle-exit and interrupt wakeups), the kernel's counts for each process over the window;
-- key-to-frame latency on one extra pane running `holder_node echo`, which draws each token typed alone on its first row and logs every byte it receives: a 12-letter token, every letter changed from the one before so a frame carries all of it, is typed through the node's `key` and timed until a frame showing it reaches the node's screen sink, 200 tokens 40 ms apart (Herdr draws at most once per 16 ms after its last frame, and the holder so for output alone, so keys back to back would measure that pacing), alone, beside one pane flooding 300 MB, beside eight panes flooding a quarter of that each, and beside one pane flooding a quarter of that whose connection alone is read slowly (the slow consumer): on the holder path the holder's socket is moved aside behind a proxy that passes the node's messages at once and reads the holder's for 10 ms of every 40, so the holder's own backpressure and fragment cap run, and on Herdr's that pane's session client is stopped (SIGSTOP) for 30 ms of every 40; the node's sink is never slowed, and the node's own memory is read before, right after and once still;
+- key-to-frame latency on one extra pane running `holder_node echo`, which draws each token typed alone on its first row and logs every byte it receives: a 12-letter token, every letter changed from the one before so a frame carries all of it, is typed through the node's `key` and timed until a frame showing it reaches the node's screen sink, 200 tokens 40 ms apart (the holder draws at most once per 16 ms after its last frame for output alone, so keys back to back would measure that pacing), alone, beside one pane flooding 300 MB, beside eight panes flooding a quarter of that each, and beside one pane flooding a quarter of that whose connection alone is read slowly (the slow consumer): the holder's socket is moved aside behind a proxy that passes the node's messages at once and reads the holder's for 10 ms of every 40, so the holder's own backpressure and fragment cap run; the node's sink is never slowed, and the node's own memory is read before, right after and once still;
 - each flood's frames and bytes reaching the node and the path's CPU, and the memory again once the screen has been still for 2.5 s, past the second after which a holder gives freed pages back;
 - the node killed outright and a new one started: the time until every attached pane drew again, and 50 more tokens;
 - with `--phases flood_unattached`, one holder flooded with no screen attached, its memory right after and once still;
 - the echo's log against every token typed: loss, duplication and order on the input side; a token never drawn within 10 s is a loss on the screen side.
 
 Each round also records, in every phase, the load average and the build processes running, and a pair either of whose rounds saw a build process in any phase is dropped from the comparison and listed.
-A claim compares the two paths in alternating rounds on the same machine: five pairs, the order flipped each pair, at 1, 64, 100 and 128 panes, judged by the median of the kept pairs' holder-to-Herdr figures, each pair's own figure and load shown beside it; absolute figures from such a run are figures under load, and loss, memory and wakeups are judged in every kept round.
-The run folder's analysis prints a pass or a fail for every bound below.
-Everything a round starts (the node, the holders, the Herdr server and its panes) is ended by pid and start time on every path, a stop signal included (`scripts/holder_owned.py`), and a round that leaves any of it running fails.
+A claim compares the two builds in alternating rounds on the same machine: five pairs, the order flipped each pair, at 1, 64, 100 and 128 panes, judged by the median of the kept pairs' candidate-to-baseline figures, each pair's own figure and load shown beside it; absolute figures from such a run are figures under load, and loss, memory and wakeups are judged in every kept round.
+Everything a round starts (the node, the holders and the busy processes) is ended by pid and start time on every path, a stop signal included (`scripts/holder_owned.py`), and a round that leaves any of it running fails.
 `agents/runs/<slug>/` keeps the rounds; nothing of them is committed.
-The latency, CPU, loss and wakeup bounds are the PRD's (B15, B21): latency p50 and p95 no more than 1.1 times Herdr's plus 0.5 ms, flood CPU no more than 1.1 times Herdr's, no loss, duplication or reordering, and no wakeup of an idle holder over the window.
+The latency, CPU, loss and wakeup bounds are the PRD's (B15, B21), now against the build before: latency p50 and p95 no more than 1.1 times the baseline's plus 0.5 ms, flood CPU no more than 1.1 times the baseline's, no loss, duplication or reordering, and no wakeup of an idle holder over the window.
 The memory bounds are not the PRD's 3 MB per holder: they were decided for the bundle on 2026-11-01, because a holder is a process of its own, about 2.8 MB before it draws anything (code, the system libraries' data, five threads' stacks), so one with a screen attached measured 3.47 MB idle, its connection's buffers included, past 3 MB; and because a flood fills the 2 MiB scrollback the parser is given (D-17), which 3 MB had not counted.
-They are every holder at most 4 MiB idle, attached or not; 6 MiB, that and the 2 MiB scrollback, once a flood has settled; and the holders of 64 attached panes at most 1.5 times the Herdr path's.
-The holders of panes with no screen attached hold several times what one Herdr server does for them; that comparison is recorded, not bounded.
-On this Mac (Apple M-series, 14 cores, 2026-11-01) five pairs ran at each pane count; six pairs that saw a build process were dropped, leaving 3 or 4 at each count at load 1.5 to 15.1, and every bound passed: the holder path's key-to-frame p50 was 0.15 to 0.39 ms against Herdr's 1.0 to 20 ms (medians per phase and pane count), with no token lost, repeated or out of order; flood CPU was 0.19 times Herdr's for one pane flooding and 0.92 to 1.03 times for eight; an idle holder woke 0 times in 60 s, attached or not, past the one wake a second after its last frame; one holder held at most 3.3 MiB idle and 5.9 MiB once a 300 MB flood had settled (8.5 MB before freed pages were given back), and one flooded with no screen attached 5.2 MiB; and 64 attached panes' holders held 0.73 times the Herdr path's server and session clients, while 128 unattached holders held about ten times one Herdr server.
-With one pane's connection read slowly (three more pairs at 64 panes), the slow pane drew 44 to 48 frames of a 75 MB flood against about 460 unslowed, the other panes' p50 stayed 0.19 to 0.24 ms against Herdr's 0.7 to 2.1, the path's CPU was 0.07 times Herdr's, and the node's own memory grew by 0.04 to 0.11 MiB on either path; a 120x40 frame is about 6 KB, so the 4 MiB fragment cap is the unit tests' to reach, not this run's.
+They are every holder at most 4 MiB idle, attached or not, and 6 MiB, that and the 2 MiB scrollback, once a flood has settled.
+On this Mac (Apple M-series, 14 cores, 2026-11-01), against the Herdr path it replaced, every bound passed: the holder path's key-to-frame p50 was 0.15 to 0.39 ms against Herdr's 1.0 to 20 ms (medians per phase and pane count), with no token lost, repeated or out of order; flood CPU was 0.19 times Herdr's for one pane flooding and 0.92 to 1.03 times for eight; an idle holder woke 0 times in 60 s, attached or not, past the one wake a second after its last frame; one holder held at most 3.3 MiB idle and 5.9 MiB once a 300 MB flood had settled (8.5 MB before freed pages were given back), and one flooded with no screen attached 5.2 MiB; and 64 attached panes' holders held 0.73 times the Herdr path's server and session clients.
+With one pane's connection read slowly, the slow pane drew 44 to 48 frames of a 75 MB flood against about 460 unslowed, the other panes' p50 stayed 0.19 to 0.24 ms, and the node's own memory grew by 0.04 to 0.11 MiB; a 120x40 frame is about 6 KB, so the 4 MiB fragment cap is the unit tests' to reach, not this run's.
 On Linux and Windows CI holds the boundaries a short run can (`hide-holder/tests/it/idle.rs` for wakeups, the lifecycle and record tests for input and the caps); the comparison is macOS's.
 
 ## Scoped browser gateway discovery
