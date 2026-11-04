@@ -59,8 +59,13 @@ fn claude_in(
     folder: &Path,
     label: &str,
 ) -> String {
+    // Project registration hands the engine the node's canonical wire path
+    // (hide_host::project::create). A Windows temp path can instead name an
+    // 8.3 alias; Claude compares that cwd literally with its trust key.
+    let folder = hide_platform::fs::identity::canonical(folder).unwrap();
+    let folder = hide_platform::path::to_wire(&folder).unwrap();
     let (workspace, _, _) = engine
-        .create_workspace(WAIT, folder.to_str().unwrap(), label, false, env.clone())
+        .create_workspace(WAIT, &folder, label, false, env.clone())
         .unwrap_or_else(|error| panic!("{label}: the workspace is made: {error:?}"));
     let mut env = env.clone();
     env.insert("DISABLE_AUTOUPDATER".into(), "1".into());
@@ -72,7 +77,7 @@ fn claude_in(
     let tab = crate::checkout_owner::open::create_tab_in(
         engine,
         &workspace,
-        folder.to_str().unwrap(),
+        &folder,
         label,
         false,
         env,
