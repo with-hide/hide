@@ -89,8 +89,7 @@ def verdict_of(journey, screen):
 
 def read(journey):
     """The verdict of the pane's visible screen now."""
-    _, screen, _ = journey.runtime.command(["pane", "read", journey.pane, "--source", "visible",
-                                            "--format", "ansi"])
+    screen = journey.controller.read_pane(journey.pane, visible=True)
     return verdict_of(journey, screen)
 
 

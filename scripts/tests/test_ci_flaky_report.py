@@ -236,7 +236,7 @@ class Workflows(unittest.TestCase):
                     continue
                 reports = [step for step in steps if "ci-flaky-report.py" in step and "\n        id: flaky\n" in step]
                 for step in steps:
-                    if "upload-artifact" not in step or "hide-e2e" not in step:
+                    if "upload-artifact" not in step or not any(root in step for root in ("hide-e2e", "path: agents/runs/package-e2e\n")):
                         continue
                     # The window a passing run drew is kept on success, not as a failure's logs.
                     if re.search(r"path: \$\{\{ runner\.temp \}\}/hide-e2e/\*\.png\n", step):

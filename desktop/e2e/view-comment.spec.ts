@@ -4,16 +4,15 @@
 // with trusted input the main process sends, writes the note in the window
 // over the page's still, where the page's scripts never see it (D-17), and
 // Send gives that agent one letter with the page, the element and a
-// screenshot it can read. The operator's app, Herdr server and browser are
+// screenshot it can read. The operator's app, engine and browser are
 // never used.
 import { expect, type ElectronApplication, type Page } from "@playwright/test";
 import fs from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { agentPane, type HideAnswer } from "../../web/e2e/agent-pane";
-import { startHerdr, type HerdrFixture } from "../../web/e2e/herdr-fixture";
 import { enterWorkspace } from "../../web/e2e/wire";
-import { fitWindow, focusPage, isolate, launch, NEEDS_FOCUS, screenshot, test, type Isolated } from "./fixture";
+import { fitWindow, focusPage, launchShell, NEEDS_FOCUS, screenshot, startStack, test, type Stack } from "./fixture";
 import { evaluateIn, sendInput } from "./page-input";
 
 test.describe.configure({ timeout: 180_000 });
@@ -23,8 +22,7 @@ const PAGE = `<!doctype html><meta charset="utf-8"><title>Sign in</title>
 <button id="go" style="margin:40px;width:200px;height:48px" onclick="document.title='pressed'">Continue</button>
 <script>window.keys = 0; addEventListener("keydown", () => { window.keys += 1; }, true);</script>`;
 
-let herdr: HerdrFixture;
-let run: Isolated;
+let stack: Stack;
 let app: ElectronApplication | null = null;
 let server: Server;
 let origin: string;
@@ -79,7 +77,6 @@ async function pinAt(url: string, x: number, y: number): Promise<boolean> {
 const inPage = <T>(url: string, expression: string) => evaluateIn<T>(app!, url, expression);
 
 test.beforeAll(async () => {
-  herdr = await startHerdr({ agents: false });
   server = createServer((_request, response) => {
     response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     response.end(PAGE);
@@ -88,25 +85,26 @@ test.beforeAll(async () => {
   origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
 test.afterAll(async () => {
-  herdr?.stop();
   await new Promise<void>((resolve) => server?.close(() => resolve()));
 });
-test.beforeEach(() => { run = isolate(herdr, "view-comment"); });
+// One stack per test: an agent pane is made once for an engine.
+test.beforeEach(async () => { stack = await startStack("view-comment", { agents: false }); });
 test.afterEach(async () => {
   await app?.close().catch(() => undefined);
   app = null;
-  run.cleanup();
+  stack.stop();
 });
 
 test("Comment on a page: the operator picks an element in the page and its agent gets the page, the element and a screenshot", async () => {
-  const launched = await launch(run.env);
+  const { fixture, run } = stack;
+  const launched = await launchShell(run.env);
   app = launched.app;
   const shell: Page = launched.page;
   await fitWindow(app, { width: 1400, height: 900 });
   await enterWorkspace(shell, "fixture");
 
-  const pane = herdr.panes[0]!;
-  const agent = await agentPane(herdr, run.env.HIDE_STATE_DIR!, pane);
+  const pane = fixture.panes[0];
+  const agent = await agentPane(fixture, run.env.HIDE_STATE_DIR!, pane);
   const ok = (answer: HideAnswer) => {
     expect(answer.status, answer.out).toBe(0);
     return answer.out;
@@ -211,12 +209,13 @@ test("Comment on a page: the operator picks an element in the page and its agent
 });
 
 test(`A note written over a page takes the keyboard from the page and gives it back ${NEEDS_FOCUS}`, async () => {
-  const launched = await launch(run.env);
+  const { fixture, run } = stack;
+  const launched = await launchShell(run.env);
   app = launched.app;
   const shell: Page = launched.page;
   await fitWindow(app, { width: 1400, height: 900 });
   await enterWorkspace(shell, "fixture");
-  const agent = await agentPane(herdr, run.env.HIDE_STATE_DIR!, herdr.panes[0]!);
+  const agent = await agentPane(fixture, run.env.HIDE_STATE_DIR!, fixture.panes[0]);
   const url = `${origin}/focus`;
   const opened = await agent(["browser", "open", url, "--wait"]);
   expect(opened.status, opened.out).toBe(0);

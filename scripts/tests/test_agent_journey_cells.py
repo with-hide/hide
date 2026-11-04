@@ -52,6 +52,22 @@ class Plan(unittest.TestCase):
     def test_retired_cursor_is_absent_from_the_active_journey(self):
         self.assertNotIn("cursor", cells.plan(contract(), ["codex"]))
 
+    def test_only_the_approved_own_fake_rows_wait_for_the_first_brief_fix(self):
+        reasons = {"pi": "own-start-fixes 노드 대기(Pi 첫 지시문 input_unconfirmed, 제품 결함)",
+                   "opencode": "own-start-fixes 노드 대기(OpenCode 첫 지시문 미전달, 제품 결함)"}
+        for engine, fake in (("herdr", True), ("own", False), ("own", True)):
+            for agent, reason in reasons.items():
+                with self.subTest(engine=engine, fake=fake, agent=agent):
+                    table = cells.plan(contract(), [agent, "codex"], engine=engine, fake_model=fake)
+                    if engine == "own" and fake:
+                        self.assertTrue(all(row["status"] == cells.EXCLUDED and row["reason"] == reason
+                                            for row in table[agent].values()))
+                        self.assertEqual(cells.exit_code(table, [agent], setup_failed=False), 0)
+                        self.assertEqual(cells.exit_code(table, [agent], setup_failed=True), 2)
+                    else:
+                        self.assertEqual(table[agent]["start"]["status"], cells.PENDING)
+                    self.assertEqual(table["codex"]["start"]["status"], cells.PENDING)
+
     def test_a_legacy_cursor_row_is_excluded_in_every_cell_and_counts_nowhere(self):
         rows = contract()
         legacy = {**next(row for row in rows if row["id"] == "codex"), "id": "cursor"}
@@ -61,6 +77,22 @@ class Plan(unittest.TestCase):
         passed = {name: cells.cell(cells.PASS, "fixture") for name in cells.CELLS}
         self.assertEqual(cells.exit_code({"codex": passed, "cursor": table["cursor"]}, ["codex", "cursor"],
                                          setup_failed=False), 0)
+
+    def test_product_gaps_exclude_only_the_approved_cells_of_other_rows(self):
+        expected = {("codex", "fork"), ("antigravity", "fork"),
+                    ("omp", "sleep_wake"), ("omp", "resume"), ("omp", "fork"), ("omp", "title")}
+        selected = ["codex", "antigravity", "omp", "claude-code", "grok"]
+        for engine, fake in (("own", True), ("herdr", True), ("own", False)):
+            with self.subTest(engine=engine, fake=fake):
+                table = cells.plan(contract(), selected, engine=engine, fake_model=fake)
+                actual = {(agent, name) for agent in selected for name, value in table[agent].items()
+                          if value["status"] == cells.EXCLUDED}
+                self.assertEqual(actual, expected if engine == "own" and fake else set())
+                for agent, name in actual:
+                    self.assertIn("own-start-fixes", table[agent][name]["reason"])
+                    self.assertFalse(cells.measurable(table, agent, name))
+                    self.assertFalse(cells.settle(table, agent, name, cells.PASS, "not run"))
+                self.assertEqual(table["omp"]["usage"]["status"], cells.PENDING)
 
     def test_a_new_adapter_participates_without_a_second_agent_list(self):
         codex = next(row for row in contract() if row["id"] == "codex")
@@ -158,6 +190,14 @@ class Verdicts(unittest.TestCase):
         self.assertEqual(cells.emitter_verdict({"source": "herdr:antigravity_cli"}, "herdr:antigravity_cli")[0],
                          cells.PASS)
         self.assertEqual(cells.emitter_verdict({"source": "herdr:agy"}, "herdr:antigravity_cli")[0], cells.FAIL)
+
+    def test_native_identity_needs_the_registration_ledger_not_just_a_projected_row(self):
+        session = {"observation": "hide.agent.list", "kind": "id", "value": "native-session"}
+        self.assertEqual(cells.emitter_verdict(session, None)[0], cells.PASS)
+        for invalid in (None, {**session, "observation": "snapshot"}, {**session, "value": ""},
+                        {**session, "kind": "unknown"}, {"source": "herdr:claude"}):
+            with self.subTest(session=invalid):
+                self.assertEqual(cells.emitter_verdict(invalid, None)[0], cells.FAIL)
 
     def test_a_reply_passes_only_with_the_token_from_the_assistant_in_that_session(self):
         events = [{"role": "user", "text": "Reply with exactly JOURNEY-1"}, {"role": "assistant", "text": "JOURNEY-1"}]

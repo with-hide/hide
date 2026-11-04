@@ -215,9 +215,14 @@ When the behavior depends on the order of two events, the test fixes that order;
   Every completion retains the integer status and publishes a correlated `.json` sidecar first, with the supervisor's phase, OS error, elapsed time and cleanup result.
   `python3 scripts/check-agent-journey-controller.py --provider <compiled-provider> --run-dir agents/runs/<run>/controller` exercises that same supervisor with real Python children, without a Herdr server or a model.
   Its opt-in `--deadline-comparison` compares a controlled 21-second child under the old 20-second watchdog and the journey's protocol budget; it cannot establish why an earlier Windows command failed.
+  The own-engine controller sources its initial environment from a private file and confirms a ready file before bootstrap; sending a long PATH before the shell leaves canonical mode can truncate both the setup and its Enter.
+  Both setup files are removed on success or failure.
+  Journey observations (`pane read` and registration `agent list`) use the controller's claimed capability from the host, bounded by the same process owner, without typing an input turn into its pane.
+  Repeated reads therefore consume none of the controller's 512 command-file budget; mutations still use that bounded command path, and a read failure retains its cause instead of becoming a registration timeout.
+  Desktop fixture homes use a short `/tmp` root on Unix, so the default state folder below HOME, as well as an explicit state folder, leaves room for the holder socket within the OS path limit.
   The private Herdr server, panes and `hided` use `fixturePath`: the shim directory followed by system-tool directories, including `/usr/sbin` for `lsof` on Unix and native Windows and Git directories on Windows.
   `fixtureExecutable` supplies native `.exe` names and `fixtureToolPath` uses the native path delimiter while refusing missing or non-absolute Windows system-root or program-files values.
-  On disposable Windows CI runners, the web e2e job also prepends `%HIDE_E2E_ROOT%\bin` to the user's registry `Path` as `REG_EXPAND_SZ`, preserving its other entries.
+  On disposable Windows CI runners, the web and desktop e2e jobs share `.github/actions/windows-fixture-path`, which prepends `%HIDE_E2E_ROOT%\bin` to the user's registry `Path` as `REG_EXPAND_SZ`, preserving its other entries.
   The PTY builds the pane's PATH from the registry and expands that entry in each daemon's private environment, so a start from the product's agent panel finds that test's compiled stand-ins.
   This setup is CI-only: it never edits a developer's registry, types a PATH command into a pane, or overrides the product's environment contract.
   Catalog discovery probes every provider, so appending the host's `PATH` also reaches its installed CLIs even when the test selects Claude.
@@ -290,7 +295,10 @@ Nothing here is new policy.
 A piece that another open change is still building is marked as pending with the change that owns it, and the guide is aligned when that change merges.
 
 1. **Start from the fixture, one stack per test.**
-   `web/e2e/engine-fixture.ts` starts the engine a spec's panes run on and `web/e2e/hided-fixture.ts` a private `hided` over it; `desktop/e2e/fixture.ts` takes a started Herdr fixture and gives the packaged window its own `HOME` and `hided` state.
+   `web/e2e/engine-fixture.ts` starts the engine a spec's panes run on and `web/e2e/hided-fixture.ts` a private `hided` over it; `desktop/e2e/fixture.ts` gives the window its own `HOME` and `hided` state on either engine.
+   The desktop fixture's `startStack` starts that home's daemon through its bundled `hide connect`, then creates its panes over the daemon's connection; `prepare` makes any files or environment the daemon must read before it starts.
+   The packaged-window, install-kit and update checks in `package.yml` reuse one package for both engines, setting `HIDE_E2E_ENGINE` through `scripts/package-e2e.sh`.
+   Each pass retains its report, screenshots and traces separately under `agents/runs/package-e2e/<suite>/<engine>`, and each update pass reinstalls the previous version before starting.
    Why: a test that shares a server with another inherits its panes, focus and timers, and its failure cannot be read alone.
    Every web spec runs on both engines while bundle 3 brings the core's own engine and bundle 4 removes Herdr (PRD engine-bundle-3-core-owns D-14, D-24).
    The fixture reads `HIDE_E2E_ENGINE`: `herdr`, the default, is an empty private Herdr server (`startHerdr({ empty: true })` in `web/e2e/herdr-fixture.ts`); `own` is a daemon with `HIDE_DEV_PANE_HOLDER=1` over the `hide-holder` built beside `hided` and no Herdr at all; any other value fails the run.
@@ -303,8 +311,11 @@ A piece that another open change is still building is marked as pending with the
    `hide pane read` and `hide pane send` answer only inside a pane, so a spec reads a pane through the page's probe.
    The own engine's pane holders outlive their daemon by design, so a daemon restart leaves them for the next daemon to adopt, and the fixture's end ends each one by the pid its record in that daemon's state folder names (`endPaneHolders` in `web/e2e/pane-holders.mjs`, the rule the web shell measurement runs too) and fails while any process of that folder still runs: leaked holders once used up every PTY of a machine.
    Only a test that looks at Herdr itself (its protocol, its server's lifecycle, Hide following a change made in Herdr outside Hide, coexistence with an operator's Herdr) is tagged `@herdr`, with a `// Herdr only:` line above it saying why; it starts from `startHerdr` and drives Herdr's CLI.
-   Bundle 3 has one explicit transition exception: the native writers in `session-readers.spec.ts` (Pi, omp, OpenCode, Grok and Cursor) and the Pi flow in `session-thread.spec.ts` bind their first session through a Herdr fixture's `report-agent-session` rather than an agent's integration, so they stay tagged until bundle 4 PR B moves those fixtures to the engine fixture; `pi-omp-extension.spec.ts` and `opencode-plugin.spec.ts` run the integrations themselves and run on both engines.
-   Their reason lines name that owner; a green own-engine lane does not prove these excluded native session reads.
+   The native writers in `session-readers.spec.ts` (Pi, omp, OpenCode and Grok) and the Pi flow in `session-thread.spec.ts` run on both engines.
+   Cursor's three legacy native-reader tests retain `@herdr`: their session identity comes from its retired Herdr integration, which the own engine does not support.
+   `agent-live-check`'s five specs remain Herdr integration checks, outside this migration; their CLI retirement belongs to the default-engine transition.
+   On the own engine the stand-in reports its session from inside its pane through the agent's Hide integration; on Herdr the fixture retains Herdr's integration report.
+   These synthetic native-format records prove session reading and continuation, while `pi-omp-extension.spec.ts` and `opencode-plugin.spec.ts` exercise the integrations themselves.
    The web and desktop native-caller fixtures share `web/e2e/spawn-provider.ts`; the compiled stand-in writes its own bounded config through `--write-config`, also used by the Python journey, so none of those callers repeats its line format.
    A synthetic trigger sent as a `key` event is operator input and moves keyboard focus: `agent-pane.ts` and `runInPaneKeepingFocus` hold the command behind a file gate until `restoreFocusAfterInput` observes that input and restores the prior focus, before the command runs as the agent.
   The native stand-ins write `terminal-ready-<pane>` only after configuring their terminal and drawing their first screen; `waitForAgentInput` waits for that mark before a command trigger or a session-report key.
@@ -318,6 +329,10 @@ A piece that another open change is still building is marked as pending with the
    Ordinary Windows shell panes use the private Herdr server's configured cmd.exe on Herdr, and the product's integrated PowerShell on the own engine; an agent-start tab uses the integrated launch recipe.
    The engine fixture names its ordinary shell, and shared command and prompt helpers use that syntax without changing the account's PowerShell profile.
    The disposable runner's registry PATH preparation above belongs to the CI job, not to a fixture running on a developer's account.
+   Windows desktop and package own-engine cells are excluded: CI Job forbids holder breakaway; `b4-default` owns holder lifetime, and no test-only start helper bypasses it.
+   The desktop SSH specs use `ssh-pane-fixture.ts` on either engine: a native pane is made through the connected device's node, and cleanup ends its private HOME's holder records.
+   They retain their isolated-SSH environment skips; the native fixture is prepared, while connecting an SSH CI lane remains follow-up work.
+   Only the pinned-Herdr repair case and the pre-connection Herdr pane premise stay Herdr-specific.
    `agent-start-platform.spec.ts` runs all seven native stand-ins through `hide agent spawn` and a typed shell command and checks their visible state; its Windows npm cases run real `.ps1` and `.cmd` launchers over Node, distinguishing Pi and omp despite their shared `cli.js` filename.
    Each package and launcher has its own start journey with both packages installed, keeping the shared-filename check within the ordinary per-test time budget.
    The real-holder engine contract refuses `agent_pane_busy` while an ordinary program runs above the shell.
@@ -735,31 +750,49 @@ A passing fixture does not prove paid-service authentication or standalone suppo
 
 ### How many jobs a run starts
 
-A run that plans every lane a pull request can plan starts at most 57 jobs.
+The transition retains these explicit exceptions:
+
+| Cell | Current coverage | What closes it |
+| --- | --- | --- |
+| Cursor legacy native readers, 3 tests | Herdr only: the retired integration supplies their session identity | Removed with Herdr by `b4-default` |
+| `agent-live-check`, 5 specs | Herdr integration checks, outside the dual-engine migration | CLI retirement by `b4-default` |
+| Windows own-engine journey | Excluded: CI Job forbids holder breakaway; Windows agent start proof is available | Holder lifetime integration and enabled cell by `b4-default` |
+| Pi own-engine fake journey, entire row | Excluded: `own-start-fixes 노드 대기(Pi 첫 지시문 input_unconfirmed, 제품 결함)`; cells outside the named exclusions and all Herdr rows remain required | `own-start-fixes` fixes the first brief and removes this exclusion |
+| OpenCode own-engine fake journey, entire row | Excluded: `own-start-fixes 노드 대기(OpenCode 첫 지시문 미전달, 제품 결함)` | `own-start-fixes` delivers the first brief and removes this exclusion |
+| Codex and Antigravity own-engine fake journey, `fork` only | Excluded: `own-start-fixes 노드 대기`; Codex's new pane has no session or fork lineage, and Antigravity's fork input is discarded before readiness is confirmed | `own-start-fixes` confirms the fork's readiness and registration and removes these exclusions |
+| OMP own-engine fake journey, `sleep_wake`, `fork`, `title` | Excluded: `own-start-fixes 노드 대기`; wake confirmation arrives after the cell ends, the following fork is not ready for input, and the title's row is gone | `own-start-fixes` fixes wake and its following operations and removes these exclusions |
+| OMP own-engine fake journey, `resume` | Excluded: `own-start-fixes(#2075) 대기(깨우기 제외에 따른 선행 조건 미충족)`; it compares the sessions before and after the excluded wake | Remove this exclusion when #2075 merges |
+| Windows own-engine desktop and package | Excluded: CI Job forbids holder breakaway | Holder lifetime fix and enabled cells by `b4-default` |
+| Own-engine desktop failed-restoration spec | Excluded: `own-restore-checkout 노드 대기`; cold restore moves a pane in a nested folder out of its original checkout | `own-restore-checkout` preserves the original checkout and removes this exclusion |
+| Windows and Linux Herdr desktop failed-restoration spec | Excluded: close stays unfinished after the preceding split completes | `b4-default` removes the Herdr lane |
+| Own-engine desktop first-run wizard, 4 tests | Excluded: `b4-default 대기(first-run의 Herdr 프로필 읽기 미확정)` | `b4-default` retires the Herdr profile read and enables these cells |
+| Desktop SSH specs on the own engine | Fixture prepared; existing private-SSH prerequisites still skip without that environment | Connect an isolated SSH CI lane |
+
+A run that plans every lane a pull request can plan starts at most 60 jobs.
 The earlier count of 51 omitted six jobs already running in the package lane: helper identity, two Linux device helpers, device bundles and the separate Windows and macOS compiles.
 Correcting that count adds no runner or workflow.
-The core's own engine adds seven web jobs beside Herdr's: six Linux shards and one Windows job, until the Herdr lane goes with Herdr (PRD engine-bundle-3-core-owns D-24).
+The core's own engine adds ten jobs beside Herdr's until the Herdr lanes go with Herdr (PRD engine-bundle-3-core-owns D-24): six Linux web shards, one Windows web job, two macOS desktop shards and one Linux journey job.
 `scripts/tests/test_ci_plan.py` counts them from the workflows:
 
 | Jobs | Count | Why |
 | --- | --- | --- |
 | `plan`, `policy`, `rust`, `checks`, `windows check`, `verify` | 6 | `checks` merges `web checks` and `desktop checks`: both install the same dependencies, run for a minute or two and start a runner each |
 | `windows e2e` | 2 | the reusable workflow no longer starts a `plan` job that only fanned the shard numbers out; a matrix picks its list by index; the second job runs the same tests on the core's own engine |
-| `windows desktop` | 1 | the desktop `@platform` tests on Windows, the one job that starts the Electron app there in a pull request; it keeps the window it drew as the run's artifact |
+| `windows desktop` | 1 | the desktop `@platform` tests on Herdr, with the window kept as an artifact; own engine excluded because CI Job forbids holder breakaway, with holder lifetime owned by `b4-default` |
 | `web e2e` (Linux) | 14 | six more shards run every test not tagged `@herdr` on the core's own engine beside the Herdr shards, so the lane's wall-clock time stays the Herdr shards'; parallel daemon and web shell builds, with the daemon job also downloading the zsh packages, and six shards dealt by recorded durations: six were cut to four in 2026-10-05 after queues at the 20-job limit, returned to six as the suite grew, and six now meet the 720-second budget using the refreshed twenty-run median ([Balancing the e2e shards](#balancing-the-e2e-shards)) |
 | `os contract` (Linux, Windows), `os contract (macOS)` | 3 | one job per system, the macOS leg planned only for its two crates and a macOS path |
 | `agy contract` (Windows) | 1 | agy's hook block, trust, conversations and Hide AI backend, and the real agy reading Hide's block, where the hook commands and install folder differ; `rust` runs the same tests on Linux and the nightly runs all three systems |
 | `omp SDK contract` (Linux, macOS, Windows) | 3 | both supported exact npm SDK versions on Bun 1.3.14, with synthetic stored login and localhost inference; the native SQLite, Bun runtime and package resolution need each system |
-| `agent journey` (Linux, Windows) | 2 | the journey on the compiled Claude and Codex stand-ins on Linux and its Windows forms (process jobs, private files, pane commands) on Windows, planned for the journey's code, its contract, the stand-ins and a crate's product code (about 4.4 minutes on Linux and half a minute on Windows, the median of 22 pull request runs to 2026-10-30); the nightly and a release run every system with the fake model lane ([VERIFICATION.md](VERIFICATION.md#agent-journey)) |
+| `agent journey` (Linux, Windows) | 3 | the journey on the compiled Claude and Codex stand-ins on both engines on Linux and its Windows forms (process jobs, private files, pane commands) on Windows, planned for the journey's code, its contract, the stand-ins and a crate's product code (about 4.4 minutes on Linux and half a minute on Windows, the median of 22 pull request runs to 2026-10-30); the nightly and a release run every system with the fake model lane ([VERIFICATION.md](VERIFICATION.md#agent-journey)) |
 | `agent CLIs` (Linux, Windows) | 2 | every agent CLI `contracts/agent-clis.json` pins, installed at its pin and failing on another version, planned only for the table, its reader and the installers, so a pin moves in the pull request that installs it; the nightly's journey installs them on macOS too |
 | `windows wsl` (Linux, Windows) | 2 | a real WSL 2 distribution on the Windows runner connected as a device through `wsl.exe`, with this build's Linux programs, which only a Linux job can build, planned only for the crates the WSL link crosses (`hide-platform`, `hide-node`, `hide-node-link`, `hide-host`) and the node command ([WSL device lane](#wsl-device-lane)) |
 | `remote mailbox` | 1 | the lane that was the tail of the macOS `@platform` job, now on Linux and, in the nightly, on macOS |
-| `desktop e2e` | 2 | the only macOS lane of the desktop app's own changes, in two shards that build in place, because the whole suite outgrew one job's step cap ([Balancing the e2e shards](#balancing-the-e2e-shards)) |
+| `desktop e2e` | 4 | the only macOS lane of the desktop app's own changes, in two shards that build in place, because the whole suite outgrew one job's step cap ([Balancing the e2e shards](#balancing-the-e2e-shards)); two more shards run every test not tagged `@herdr` on the core's own engine, four of the organization's five macOS runners |
 | `vt`, holder restart, relay interoperability | 9 | each lane runs once on Linux, macOS and Windows |
 | `package` (Windows, Linux, macOS) | 9 | helper identity, two Linux device helpers, device bundles, Windows and macOS compiles, and three packages; without macOS, its compile and package are omitted, leaving seven jobs |
 
-The common runs are smaller: a `herdr-core` or `hided` change starts 27 jobs, a web shell change 19, a desktop-only change 5 (6 for `desktop/src/main`, which adds `windows check`), a `hide-platform` change 31, a `hide-kit` or `hide-agent-hooks` change 35, all with none on macOS, and a documentation change 3, as does a push that reuses the pull request's last green run.
-A macOS path adds its macOS jobs: a change to a macOS file of `desktop/src/main` starts 8 jobs with two on macOS, and one to `hide-platform`'s macOS code 33 with two.
+The common runs are smaller: a `herdr-core` or `hided` change starts 27 jobs, a web shell change 22, a desktop-only change 5 (6 for `desktop/src/main`, which adds `windows check`), a `hide-platform` change 31, a `hide-kit` or `hide-agent-hooks` change 35, all with none on macOS, and a documentation change 3, as does a push that reuses the pull request's last green run.
+A macOS path adds its macOS jobs: a change to a macOS file of `desktop/src/main` starts 10 jobs with four on macOS, and one to `hide-platform`'s macOS code 33 with two.
 The median wall time and the share of runs whose Linux shards waited more than 10 minutes come from a measurement of the pull request runs after a change merges, taken the way issue #561 took its baseline; they are not in this guide because a pull request cannot prove them.
 The `plan` job's summary lists each lane with the paths that chose it.
 

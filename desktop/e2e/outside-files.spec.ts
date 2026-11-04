@@ -5,7 +5,7 @@
 // desktop host holds for this window alone. An HTML
 // page loads its own folder and nothing beside it, a reload of the window
 // keeps every tab, and closing a tab ends its grant. Everything runs on a
-// private Herdr server, hided and Electron profile (see `fixture.ts`); the
+// private engine, hided and Electron profile (see `fixture.ts`); the
 // operating system's handlers are replaced with recorders, so nothing opens
 // outside the test.
 
@@ -14,17 +14,19 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { agentPane } from "../../web/e2e/agent-pane";
-import { runInPane, startHerdr, type HerdrFixture } from "../../web/e2e/herdr-fixture";
+import { runInPane } from "../../web/e2e/daemon-actions";
+import type { AgentFixture } from "../../web/e2e/engine-fixture";
 import { fixtureExecutable } from "../../web/e2e/platform-fixture";
 import { enterWorkspace } from "../../web/e2e/wire";
 import { toPage } from "../src/main/wirePath";
-import { fitWindow, hostLog, isolate, launch, screenshot, shellPage, test, type Isolated } from "./fixture";
+import { fitWindow, hostLog, launchShell, screenshot, startStack, test, type Isolated, type Stack } from "./fixture";
 import { hoverLink, pointOf, printInPane, withProbe, type Probe } from "./terminal-probe";
 
 test.describe.configure({ timeout: 240_000 });
 test.use({ actionTimeout: 15_000 });
 
-let herdr: HerdrFixture;
+let stack: Stack;
+let fixture: AgentFixture;
 let run: Isolated;
 let app: ElectronApplication | null = null;
 /** The folder outside every checkout the files live in, removed however the test ends. */
@@ -33,14 +35,10 @@ let scratch: string | null = null;
 // A one-pixel PNG.
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
 
-test.beforeAll(async () => {
-  herdr = await startHerdr({ agents: false });
-});
-
-test.afterAll(() => herdr?.stop());
-
-test.beforeEach(() => {
-  run = isolate(herdr, "outside-files");
+test.beforeEach(async () => {
+  stack = await startStack("outside-files", { agents: false });
+  fixture = stack.fixture;
+  run = stack.run;
   scratch = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "hide-outside-")));
   test.info().attach("scratch", { body: scratch });
 });
@@ -50,16 +48,17 @@ test.afterEach(async () => {
   if (info.status !== info.expectedStatus) console.log(hostLog(run.env).map((line) => JSON.stringify(line)).join("\n"));
   await app?.close().catch(() => undefined);
   app = null;
-  run.cleanup();
+  stack.stop();
   if (scratch) fs.rmSync(scratch, { recursive: true, force: true });
   scratch = null;
 });
 
 /** Launches the window on the fixture checkout with the probe, and returns its page, its pane and every frame it sent from the reload on. */
 async function start(): Promise<{ page: Page; paneId: string; sent: string[] }> {
-  ({ app } = await launch(run.env));
+  const launched = await launchShell(run.env);
+  app = launched.app;
   await fitWindow(app, { width: 1024, height: 681 });
-  const page = await shellPage(app);
+  const page = launched.page;
   const sent: string[] = [];
   page.on("websocket", (socket) => socket.on("framesent", (frame) => sent.push(String(frame.payload))));
   await withProbe(page);
@@ -115,7 +114,7 @@ test("an outside image, text file and HTML page open read-only in the View with 
   fs.writeFileSync(path.join(scratch!, "secret.css"), "body { color: rgb(9, 9, 9); }");
   fs.writeFileSync(path.join(site, "index.html"), '<!doctype html><title>Outside page</title><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="../secret.css"><h1>outside</h1>');
   const { page, paneId, sent } = await start();
-  await printInPane(herdr, page, paneId, [`img ${shot}`, `txt ${notes}:3`, `html ${path.join(site, "index.html")}`, "END-OUTSIDE"], "END-OUTSIDE");
+  await printInPane(fixture, stack.daemon, page, paneId, [`img ${shot}`, `txt ${notes}:3`, `html ${path.join(site, "index.html")}`, "END-OUTSIDE"], "END-OUTSIDE");
 
   // An image opens in the image viewer, its tab marked External, and the badge's hint is the file's path (B1, B11).
   await click(page, paneId, shot);
@@ -159,7 +158,7 @@ test("a reload keeps outside tabs readable, and closing one ends its grant", asy
   const gone = path.join(scratch!, "gone.txt");
   fs.writeFileSync(gone, "closed and let go");
   const { page, paneId } = await start();
-  await printInPane(herdr, page, paneId, [`keep ${notes}`, `close ${gone}`, "END-RELOAD"], "END-RELOAD");
+  await printInPane(fixture, stack.daemon, page, paneId, [`keep ${notes}`, `close ${gone}`, "END-RELOAD"], "END-RELOAD");
   await click(page, paneId, notes);
   await expect(outsideTab(page, "kept.txt")).toHaveAttribute("data-external", "held", { timeout: 20_000 });
   await click(page, paneId, gone);
@@ -205,7 +204,7 @@ test("an outside PDF and video open in their viewers, a file deleted before the 
   const notes = path.join(scratch!, "lines.txt");
   fs.writeFileSync(notes, ["one", "two", "three", "four"].join("\n"));
   const { page, paneId } = await start();
-  await printInPane(herdr, page, paneId, [`pdf ${pdf}`, `video ${video}`, `gone ${deleted}`, `at ${notes}:1`, `again ${notes}:4`, "END-KINDS"], "END-KINDS");
+  await printInPane(fixture, stack.daemon, page, paneId, [`pdf ${pdf}`, `video ${video}`, `gone ${deleted}`, `at ${notes}:1`, `again ${notes}:4`, "END-KINDS"], "END-KINDS");
 
   // A PDF and a video open in the viewers a checkout file uses (B23).
   await click(page, paneId, pdf);
@@ -240,8 +239,8 @@ function answer(out: string): Record<string, unknown> {
 
 let cliSequence = 0;
 /** `hide ...` run by the plain shell of `pane`, which no agent holds. */
-async function shellHide(args: string[], pane = herdr.panes[0]): Promise<Record<string, unknown>> {
-  const result = await runInPane(herdr, pane, `outside-cli-${++cliSequence}`, {
+async function shellHide(args: string[], pane = fixture.panes[0]): Promise<Record<string, unknown>> {
+  const result = await runInPane(fixture, stack.daemon, pane, `outside-cli-${++cliSequence}`, {
     env: { HIDE_STATE_DIR: run.env.HIDE_STATE_DIR! },
     argv: [path.resolve("..", "target", "debug", fixtureExecutable("hide")), ...args],
     stdout: true,
@@ -289,8 +288,8 @@ test("an agent's outside file is its open: it waits in Needs You, view list name
   const report = path.join(scratch!, "report.html");
   fs.writeFileSync(report, "<!doctype html><title>Agent report</title><h1>Report</h1>");
   const { page } = await start();
-  const [pane, other] = herdr.panes;
-  const agent = await agentPane(herdr, run.env.HIDE_STATE_DIR!, pane);
+  const [pane, other] = fixture.panes;
+  const agent = await agentPane(fixture, run.env.HIDE_STATE_DIR!, pane);
   const hide = async (args: string[]) => answer((await agent(args)).out);
   const row = page.locator(`nav[data-sidebar] [data-pane="${pane}"]`).first();
   // The operator's keyboard is in the other pane, so the agent's open waits for them.

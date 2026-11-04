@@ -8,7 +8,8 @@ import { expect, type ElectronApplication, type Page } from "@playwright/test";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { herdrBinary, startHerdr, type HerdrFixture } from "../../web/e2e/herdr-fixture";
+import { herdrBinary, type HerdrFixture } from "../../web/e2e/herdr-fixture";
+import { startSshPaneFixture, type SshPaneFixture } from "./ssh-pane-fixture";
 import { enterWorkspace } from "../../web/e2e/wire";
 import {
   claudeSettings, codexHooks, deviceBridges, deviceHome,
@@ -62,8 +63,8 @@ type DeviceRun = Awaited<ReturnType<typeof startDeviceRun>>;
  */
 async function startDeviceRun(name: string, aliases: string[]) {
   const home = deviceHome();
-  const local = await startHerdr({ agents: false });
-  const device = await startHerdr({ agents: false });
+  const local = await startSshPaneFixture();
+  const device = await startSshPaneFixture();
   const run = isolate(local, name);
   const bridge = deviceBridges(home);
   const helper = path.join(run.root, "device-helper");
@@ -79,6 +80,7 @@ async function startDeviceRun(name: string, aliases: string[]) {
   const daemon = spawn(path.join(build, "hided"), [], { env: run.env, stdio: ["ignore", daemonOutput, daemonOutput] });
   fs.closeSync(daemonOutput);
   await expect.poll(() => run.hide(["status", "--json"]).stdout.includes('"running":true'), { timeout: 30_000 }).toBe(true);
+  await local.attach(run);
   return { home, local, device, run, bridge, helper, cliDir, original, daemonLog, daemon };
 }
 
@@ -135,13 +137,8 @@ function withoutHerdr(settings: AgentSettings): AgentSettings {
 }
 
 /** Runs a shell line in the device's first pane and returns its exit status and output. */
-async function inDevicePane(herdr: HerdrFixture, line: string, label: string): Promise<{ status: number; stdout: string }> {
-  const result = path.join(herdr.root, `${label}.out`);
-  const exit = path.join(herdr.root, `${label}.exit`);
-  const sent = spawnSync(herdr.bin, ["pane", "send-text", herdr.panes[0], `${line} > ${quote(result)}; printf '%s' "$?" > ${quote(exit)}\n`], { env: herdr.env, encoding: "utf8", timeout: 10_000 });
-  expect(sent.status, sent.stderr).toBe(0);
-  await expect.poll(() => fs.existsSync(exit), { timeout: 30_000 }).toBe(true);
-  return { status: Number(fs.readFileSync(exit, "utf8")), stdout: fs.readFileSync(result, "utf8") };
+async function inDevicePane(device: SshPaneFixture, line: string, label: string): Promise<{ status: number; stdout: string }> {
+  return device.command(line, label);
 }
 
 test("a device gets this Mac's kit, keeps a part the operator removed out until Reinstall, and gives the kit back on removal", async () => {
@@ -160,6 +157,7 @@ test("a device gets this Mac's kit, keeps a part the operator removed out until 
     } });
     const applied = () => daemonEvents(daemonLog).filter((line) => line.kind === "apply.completed" && line.device_id === DEVICE);
     await expect.poll(() => applied().length, { timeout: 120_000 }).toBeGreaterThan(0);
+    await device.attach(run, DEVICE);
     expect(applied()[0]!.components).toEqual(PARTS.map((id) => expect.objectContaining({ id, state: "installed" })));
 
     // B16: every part names the helper root's `current`, which outlives a build.
@@ -174,11 +172,11 @@ test("a device gets this Mac's kit, keeps a part the operator removed out until 
       expect({ ...now, hooks: undefined }).toEqual({ ...before, hooks: undefined });
     }
     // PRD settings-cleanup D-13: Herdr's own integration for each agent that is on, put in with the device's own Herdr.
-    for (const file of herdrIntegrations(home)) expect(fs.existsSync(file), file).toBe(true);
+    for (const file of herdrIntegrations(home)) expect(fs.existsSync(file), file).toBe(device.engine === "herdr");
     // D-14: the kit reads Codex's daemon setting and never turns it off on its own.
     expect(codexDaemonWritten(home)).toBe(false);
     // Labels for device panes are made on this Mac; the kit links no plugin there (PRD labels-in-hided B2).
-    expect(devicePlugins(device)).not.toContain(LABELS_ID);
+    if (device.herdr) expect(devicePlugins(device.herdr)).not.toContain(LABELS_ID);
 
     await page.locator("[data-open-settings]").click();
     await expect(page.locator('[data-settings="true"]')).toBeVisible();
@@ -246,7 +244,7 @@ test("a device gets this Mac's kit, keeps a part the operator removed out until 
     for (const file of herdrIntegrations(home)) expect(fs.existsSync(file), file).toBe(false);
     expect(fs.lstatSync(path.join(cliDir, "hide"), { throwIfNoEntry: false })).toBeUndefined();
     expect(fs.existsSync(helper)).toBe(false);
-    expect(devicePlugins(device)).not.toContain(LABELS_ID);
+    if (device.herdr) expect(devicePlugins(device.herdr)).not.toContain(LABELS_ID);
   } catch (error) {
     console.log(hostLog(run.env).map((line) => JSON.stringify(line)).join("\n"));
     console.log(fs.readFileSync(daemonLog, "utf8"));
@@ -262,7 +260,7 @@ test("a device gets this Mac's kit, keeps a part the operator removed out until 
 // use it; the device's server already runs that release from the operator's
 // own `herdr`, so it is left as it is and its row shows no line. Removing the
 // device takes the copy no server runs.
-test("a device gets the pinned Herdr beside its build and leaves a server on that release alone", async () => {
+test("a device gets the pinned Herdr beside its build and leaves a server on that release alone", { tag: "@herdr" }, async () => {
   const setup = await startDeviceRun("herdr", [ALIAS]);
   const { home, device, run, helper, daemonLog } = setup;
   let app: ElectronApplication | undefined;

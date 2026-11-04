@@ -4,7 +4,7 @@
 // choosing it hands that file or folder to `shell.showItemInFolder`. A deleted
 // file's History row lists it disabled with the reason. The main process
 // refuses a path that is not absolute or no longer exists and logs the
-// outcome without the path. Everything runs on a private Herdr server, hided
+// outcome without the path. Everything runs on a private engine, hided
 // and Electron profile (see `fixture.ts`); macOS's handler is replaced with a
 // recorder, so Finder never comes forward.
 
@@ -12,28 +12,50 @@ import { expect, type ElectronApplication, type Locator, type Page } from "@play
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { startHerdr, type HerdrFixture } from "../../web/e2e/herdr-fixture";
+import { startFixture, type AgentFixture } from "../../web/e2e/engine-fixture";
 import { enterWorkspace, showExplorer, showTool } from "../../web/e2e/wire";
 import { toPage } from "../src/main/wirePath";
-import { fitWindow, hostLog, isolate, launch, screenshot, shellPage, test, type Isolated } from "./fixture";
+import { afterCleanup } from "../../web/e2e/worker-owned";
+import { connectHome, fitWindow, hostLog, isolate, launchShell, screenshot, test, type Isolated } from "./fixture";
 
 test.describe.configure({ timeout: 240_000 });
 test.use({ actionTimeout: 15_000 });
 
-let herdr: HerdrFixture;
+let fixture: AgentFixture;
 let run: Isolated;
+let checkout: string;
 let app: ElectronApplication | null = null;
 
-test.beforeAll(async () => {
-  herdr = await startHerdr({ agents: false });
-});
+/** The checkout's files and its Git history, with a changed and a deleted file, as the History list shows them. */
+function seedCheckout(folder: string): void {
+  fs.mkdirSync(path.join(folder, "src"), { recursive: true });
+  fs.writeFileSync(path.join(folder, "src", "a.txt"), "a\n");
+  fs.writeFileSync(path.join(folder, "notes.md"), "# notes\n");
+  fs.writeFileSync(path.join(folder, "gone.txt"), "gone\n");
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: folder });
+  git("init", "-q", "-b", "main");
+  git("add", "-A");
+  git("-c", "user.email=e2e@example.com", "-c", "user.name=e2e", "-c", "commit.gpgsign=false", "commit", "-qm", "base");
+  fs.appendFileSync(path.join(folder, "src", "a.txt"), "changed\n");
+  fs.rmSync(path.join(folder, "gone.txt"));
+}
 
-test.afterAll(() => {
-  herdr?.stop();
-});
-
-test.beforeEach(() => {
-  run = isolate(herdr, "reveal-external");
+// The checkout is a repository before the home's daemon registers it, so this composes `startStack`'s
+// steps: the fixture, the checkout's files, the home, its daemon, then the fixture's panes.
+test.beforeEach(async () => {
+  fixture = await startFixture({ agents: false });
+  let made: Isolated | undefined;
+  try {
+    checkout = path.join(fs.realpathSync(fixture.root), "fixture");
+    seedCheckout(checkout);
+    made = isolate(fixture, "reveal-external");
+    await fixture.opened!(await connectHome(made));
+    run = made;
+  } catch (error) {
+    throw afterCleanup(error, () => {
+      try { made?.cleanup(); } finally { fixture.stop(); }
+    });
+  }
 });
 
 test.afterEach(async () => {
@@ -41,7 +63,7 @@ test.afterEach(async () => {
   if (info.status !== info.expectedStatus) console.log(hostLog(run.env).map((line) => JSON.stringify(line)).join("\n"));
   await app?.close().catch(() => undefined);
   app = null;
-  run.cleanup();
+  try { run.cleanup(); } finally { fixture.stop(); }
 });
 
 /** Replaces the OS file manager's handler in the main process with a recorder. */
@@ -80,22 +102,12 @@ async function openMenu(page: Page, target: Locator, name: string): Promise<Loca
 
 // @platform: The reveal is labelled and handed over by the system's file manager: Finder, File Explorer or the Linux file manager.
 test("reveal: Explorer, History, a View tab and a sidebar row hand the item to the OS file manager under the OS's label", { tag: "@platform" }, async () => {
-  const checkout = path.join(fs.realpathSync(herdr.root), "fixture");
-  fs.mkdirSync(path.join(checkout, "src"), { recursive: true });
-  fs.writeFileSync(path.join(checkout, "src", "a.txt"), "a\n");
-  fs.writeFileSync(path.join(checkout, "notes.md"), "# notes\n");
-  fs.writeFileSync(path.join(checkout, "gone.txt"), "gone\n");
-  const git = (...args: string[]) => execFileSync("git", args, { cwd: checkout });
-  git("init", "-q", "-b", "main");
-  git("add", "-A");
-  git("-c", "user.email=e2e@example.com", "-c", "user.name=e2e", "-c", "commit.gpgsign=false", "commit", "-qm", "base");
-  fs.appendFileSync(path.join(checkout, "src", "a.txt"), "changed\n");
-  fs.rmSync(path.join(checkout, "gone.txt"));
   const label = ({ darwin: "Reveal in Finder", win32: "Reveal in File Explorer", linux: "Open Containing Folder" } as Record<string, string>)[process.platform] ?? "Show in File Manager";
 
-  ({ app } = await launch(run.env));
+  const launched = await launchShell(run.env);
+  app = launched.app;
   await fitWindow(app, { width: 1024, height: 681 });
-  const page = await shellPage(app);
+  const page = launched.page;
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents.setZoomFactor(0.7));
   await enterWorkspace(page, "fixture");
   await recordReveals();

@@ -5,26 +5,27 @@
 import { expect, type ElectronApplication } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
-import { startHerdr, type HerdrFixture } from "../../web/e2e/herdr-fixture";
+import { startEngine, type EngineServer } from "../../web/e2e/engine-fixture";
 import { detachedApp, hostLog, isolate, launch, screenshot, test, type Isolated } from "./fixture";
 
 // Test-only candidate selection: a packaged executable carries its own status page inside its archive.
 const packaged = process.env.HIDE_E2E_PACKAGED_APP;
 
-let herdr: HerdrFixture;
+// No daemon ever starts here (no hide CLI is found), so the engine is empty and one serves every test.
+let engine: EngineServer;
 let run: Isolated;
 let app: ElectronApplication | null = null;
 
 test.beforeAll(async () => {
-  herdr = await startHerdr({ agents: false });
+  engine = await startEngine();
 });
 
 test.afterAll(() => {
-  herdr?.stop();
+  engine?.stop();
 });
 
 test.beforeEach(() => {
-  run = isolate(herdr, "status-page");
+  run = isolate(engine, "status-page");
   // No hide CLI is found, so discovery fails with cli_missing at once.
   run.env.HIDE_CLI_PATH = path.join(run.root, "bin", "hide-not-installed");
 });

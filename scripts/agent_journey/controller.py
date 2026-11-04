@@ -13,6 +13,7 @@ measurement boundary, checked independently of Herdr and the agent CLIs.
 import json
 from pathlib import Path
 import shutil
+import shlex
 import sys
 import time
 
@@ -90,11 +91,19 @@ class Controller:
         # The provider reports its session as `<python> <reporter> <pane> <session>`
         # (spawn-provider.c): to the pinned Herdr, as Herdr's integration does.
         reporter = self.root / "session_report.py"
-        write_private(reporter, (
-            "import subprocess, sys\n"
-            "pane, session = sys.argv[1:3]\n"
-            f"sys.exit(subprocess.run([{str(runtime.herdr_bin)!r}, 'pane', 'report-agent-session', pane, '--source', 'herdr:claude',"
-            " '--agent', 'claude', '--agent-session-id', session, '--seq', '1'], timeout=20).returncode)\n").encode())
+        if runtime.engine == "own":
+            hooks = runtime.hided.with_name(exe("hide-agent-hooks"))
+            write_private(reporter, (
+                "import json, os, subprocess, sys\n"
+                "pane, session = sys.argv[1:3]\n"
+                "payload = json.dumps(dict(session_id=session, hook_event_name='SessionStart', source='startup', cwd=os.getcwd()))\n"
+                f"sys.exit(subprocess.run([{str(hooks)!r}, 'hook', '--runtime', 'claude-code', '--event', 'SessionStart'], input=payload, text=True, timeout=20).returncode)\n").encode())
+        else:
+            write_private(reporter, (
+                "import subprocess, sys\n"
+                "pane, session = sys.argv[1:3]\n"
+                f"sys.exit(subprocess.run([{str(runtime.herdr_bin)!r}, 'pane', 'report-agent-session', pane, '--source', 'herdr:claude',"
+                " '--agent', 'claude', '--agent-session-id', session, '--seq', '1'], timeout=20).returncode)\n").encode())
         write_private(self.root / "provider.config", b"")
         runtime.owner.run([str(shim), "--write-config", str(self.root / "provider.config"),
                            sys.executable, str(reporter), str(self.completed),
@@ -104,40 +113,89 @@ class Controller:
         workspace, pane, _ = runtime.new_workspace(recipe, "journey", runtime.home, shim,
                                                    {"env": {"HIDE_E2E_ROOT": str(self.root)}})
         self.workspace, self.pane = workspace, pane
-        # Herdr starts an agent only in a shell with nothing of its own in the
-        # foreground; the bootstrap's last command may still be finishing.
-        def shell_alone():
-            _, out, _ = runtime.command(["pane", "process-info", "--pane", pane], check=False)
-            try:
-                info = json.loads(out)["result"]["process_info"]
-            except (ValueError, KeyError, TypeError):
-                return False
-            shell = info.get("shell_pid")
-            return bool(shell) and info.get("foreground_process_group_id") == shell and all(
-                process.get("pid") == shell for process in info.get("foreground_processes", []))
-        # Herdr can still read the pane busy just after the shell looks alone
-        # (its own process read lags); each refusal waits for the shell again,
-        # within one bound.
-        end = time.monotonic() + START_SECONDS
-        while True:
-            runtime.wait(shell_alone, 20)
-            code, out, err = runtime.command(["agent", "start", "controller", "--kind", "claude", "--pane", pane,
-                                              "--timeout", "5000"], seconds=15, check=False)
-            # Herdr's own wait for the start can run out on a loaded machine
-            # while the provider still starts; its session report below decides.
-            if not code or '"timeout"' in out + err:
-                break
-            if "agent_pane_busy" not in out + err or time.monotonic() > end or runtime.owner.cancelled.wait(2):
-                raise ProcessError("controller_start_refused:" + (out + err).strip()[:300])
+        if runtime.engine == "own":
+            runtime.send(pane, shlex.quote(str(shim)))
+            runtime.initial_shells.discard(pane)
+        else:
+            # Herdr starts an agent only in a shell with nothing of its own in the
+            # foreground; the bootstrap's last command may still be finishing.
+            def shell_alone():
+                _, out, _ = runtime.command(["pane", "process-info", "--pane", pane], check=False)
+                try:
+                    info = json.loads(out)["result"]["process_info"]
+                except (ValueError, KeyError, TypeError):
+                    return False
+                shell = info.get("shell_pid")
+                return bool(shell) and info.get("foreground_process_group_id") == shell and all(
+                    process.get("pid") == shell for process in info.get("foreground_processes", []))
+            # Herdr can still read the pane busy just after the shell looks alone
+            # (its own process read lags); each refusal waits for the shell again,
+            # within one bound.
+            end = time.monotonic() + START_SECONDS
+            while True:
+                runtime.wait(shell_alone, 20)
+                code, out, err = runtime.command(["agent", "start", "controller", "--kind", "claude", "--pane", pane,
+                                                  "--timeout", "5000"], seconds=15, check=False)
+                # Herdr's own wait for the start can run out on a loaded machine
+                # while the provider still starts; its session report below decides.
+                if not code or '"timeout"' in out + err:
+                    break
+                if "agent_pane_busy" not in out + err or time.monotonic() > end or runtime.owner.cancelled.wait(2):
+                    raise ProcessError("controller_start_refused:" + (out + err).strip()[:300])
         native = runtime.wait(lambda: (agent := runtime.agent(pane)) and (agent.get("agent_session") or {}).get("value")
                               and agent, 20)
-        answer = self.hide(["agent", "register", "--host-scope", str(runtime.socket),
+        answer = self.hide(["agent", "register", "--host-scope", str(runtime.state / "engine" if runtime.engine == "own" else runtime.socket),
                             "--session", native["agent_session"]["value"], "--instance", native["terminal_id"],
                             "--name", "journey-controller", "--pane", pane])
         if answer.get("ok") is not True:
             raise ProcessError("controller_register_refused:" + json.dumps(answer)[:300])
         self.agent_id = answer["value"]["id"]
+        if runtime.engine == "own":
+            runtime.controller_registered = True
         return self.agent_id
+
+    def _read(self, args):
+        """Observe through the controller's capability without waking its pane.
+
+        Polling owns no command file and consumes none of the controller's
+        bounded mutation budget. The process owner still bounds each read.
+        """
+        runtime = self.runtime
+        reference = runtime.pane_credentials[self.pane]
+        code, output, error = runtime.owner.run(
+            [str(runtime.hide), *args, "--json"],
+            env={**runtime.daemon_env, "HIDE_CAP_REF": str(reference)}, check=False,
+        )
+        if code:
+            raise ProcessError(f"journey_read_exit_{code}: {error.strip()[:200]}")
+        try:
+            answer = json.loads(output)
+            value = answer["value"]
+            if answer.get("ok") is not True or not isinstance(value, dict):
+                raise ValueError("missing read result")
+            return value
+        except (ValueError, KeyError, TypeError) as error:
+            raise ProcessError("journey_read_unreadable") from error
+
+    def list_agents(self):
+        """The same public registration list, read without an input turn."""
+        value = self._read(["agent", "list"])
+        if not isinstance(value.get("items"), list):
+            raise ProcessError("journey_agent_list_unreadable")
+        return value["items"]
+
+    def read_pane(self, pane, *, visible=False, lines=120):
+        """A styled screen must be whole before the composer can judge it."""
+        flags = ["--source", "visible", "--format", "ansi"] if visible else ["--lines", str(lines)]
+        value = self._read(["pane", "read", pane, *flags])
+        try:
+            if not isinstance(value.get("text"), str):
+                raise ValueError("missing pane text")
+            if visible and value.get("truncated") is not False:
+                raise ProcessError("journey_visible_screen_truncated")
+            return value["text"]
+        except (ValueError, KeyError, TypeError) as error:
+            raise ProcessError("journey_pane_read_unreadable") from error
 
     def hide(self, args, seconds=COMPLETION_SECONDS):
         """One `hide` command run by the controller agent; its JSON answer."""
@@ -154,7 +212,7 @@ class Controller:
         write_private(self.command, json.dumps({"id": self.sequence, "argv": [str(runtime.hide), *args],
                                                 "env": environment, "response": str(self.response),
                                                 "stderr": str(self.stderr), "result": str(self.result)}).encode())
-        runtime.command(["pane", "send-text", self.pane, "!"])
+        runtime.send_text(self.pane, "!")
         wait_error, status = None, None
         try:
             status = runtime.wait(lambda: self.completed.is_file() and self.completed.read_text().strip(), seconds)

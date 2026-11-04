@@ -20,7 +20,8 @@ def table_lines(report):
 
 def markdown(report):
     lines = ["# Agent journey", "",
-             f"Mode: {report['mode']}. Herdr: {text(report['herdr'].get('version', 'not started'))}. "
+             f"Mode: {report['mode']}. Engine: {text(report.get('engine', 'herdr'))}. "
+             f"Runtime: {text(report['herdr'].get('version', report['herdr'].get('engine', 'not started')))}. "
              f"Candidate hided sha256: {text(report['herdr'].get('hided_sha256', 'not started'))}.", "",
              *(["**Fixture run**: the compiled stand-ins of web/e2e/shims answered in place of the CLIs and no model "
                 "read a prompt; this report is never a release's agent evidence.", ""] if report.get("fixture") else []),
@@ -28,7 +29,7 @@ def markdown(report):
                 "of a provider; its rows are apart from a signed-in run's and never prove a provider or a login.", ""]
                if report.get("fake_model") else []),
              "Each cell is judged from what Hide reported (spawn answer, snapshot rows, Hide's conversation reader, "
-             "the letter record, Herdr's session report), never from screen text; the composer cell is judged by the "
+             "the letter record, the engine's session report or Hide's registration ledger), never from screen text; the composer cell is judged by the "
              "product's composer parser on the screen's styling, and keeps no screen text.", "",
              *table_lines(report), "",
              "## Every cell", "", "| Agent | Cell | Result | Reason | Evidence |", "| --- | --- | --- | --- | --- |"]

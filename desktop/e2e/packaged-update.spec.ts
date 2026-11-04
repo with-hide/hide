@@ -1,7 +1,7 @@
 // A real update of the installed app (PRD auto-update D-28, D-29, B16, B17):
 // version N, installed from its own installer, finds version N+1 on a local
 // feed, downloads it, and the operator presses Restart in the Help menu; the
-// installer of N+1 then replaces N while the Herdr server and the daemon keep
+// installer of N+1 then replaces N while the engine's panes and the daemon keep
 // running. The package lane runs it on Windows and Linux (deb), where both
 // builds are made from one package with `desktop/scripts/installers.mjs`; a
 // macOS update needs two Developer ID builds and is not run here. It is also
@@ -25,9 +25,15 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { startHerdr } from "../../web/e2e/herdr-fixture";
+import { openProject, splitPane, tabPanes, waitForPaneInput } from "../../web/e2e/daemon-actions";
+import { startEngine } from "../../web/e2e/engine-fixture";
+import { connectStateDir } from "../../web/e2e/hided-control.mjs";
+import { ownedHolders } from "../../web/e2e/pane-holders.mjs";
 import { fixtureExecutable } from "../../web/e2e/platform-fixture";
+import { panePrompt } from "../../web/e2e/herdr-fixture";
+import { enterWorkspace } from "../../web/e2e/wire";
 import { hostLog, isolate, launch, screenshot, shellPage, test } from "./fixture";
+import { withProbe, type Probe } from "./terminal-probe";
 
 const executable = process.env.HIDE_E2E_UPDATE_APP;
 const feed = process.env.HIDE_E2E_UPDATE_FEED;
@@ -89,14 +95,14 @@ function endReopenedApp(app: string): void {
   }
 }
 
-test("the installed app updates to the next version and the Herdr server and daemon keep running", async () => {
+test("the installed app updates to the next version and the panes and daemon keep running", async () => {
   const file = fs.realpathSync.native(executable!);
   if (file.startsWith("/Applications/")) throw new Error("HIDE_E2E_UPDATE_APP must name a CI install, never the operator's installed app");
   const before = installedVersion();
   expect(before).not.toBe(next);
   const served = await serveFeed(path.resolve(feed!));
-  const herdr = await startHerdr({ agents: false });
-  const run = isolate(herdr, "update");
+  const engine = await startEngine();
+  const run = isolate(engine, "update");
   const shim = process.platform === "linux" ? sudoShim() : null;
   let app: ElectronApplication | null = null;
   try {
@@ -110,7 +116,41 @@ test("the installed app updates to the next version and the Herdr server and dae
     const page = await shellPage(app);
     const daemon = run.daemonPid();
     expect(daemon).not.toBeNull();
-    const panes = JSON.stringify(herdr.run(["pane", "list"]));
+    // Two shells in one tab of the fixture's folder, made through the app's daemon as the web shell makes them.
+    const stateDir = run.env.HIDE_STATE_DIR!;
+    const control = await connectStateDir(stateDir);
+    let tab: string;
+    try {
+      const made = await openProject(control, path.join(engine.root, "fixture"), "fixture");
+      const panes = [made.pane, await splitPane(control, made.tab, made.folder)];
+      tab = made.tab;
+      await withProbe(page);
+      await enterWorkspace(page, "fixture");
+      for (const pane of panes) {
+        await waitForPaneInput(control, pane);
+        await expect.poll(() => page.evaluate(id => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneText(id), pane), {
+          message: `the shell in ${pane} ready before updating`, timeout: 20_000,
+        }).toMatch(panePrompt(engine.shell));
+      }
+      if (engine.engine === "own" && process.platform !== "win32") {
+        await expect.poll(() => ownedHolders(stateDir).filter(holder => {
+          if (!holder.program) return false;
+          try { process.kill(holder.program, 0); return true; }
+          catch (error) { if ((error as NodeJS.ErrnoException).code === "ESRCH") return false; throw error; }
+        }).length, { message: "both holders and their shell processes ready before updating", timeout: 20_000 }).toBe(panes.length);
+      }
+    } finally { control.close(); }
+    // The panes the daemon lists, and on the own engine, off Windows, the holder processes that run them.
+    const panesNow = async () => {
+      const reading = await connectStateDir(stateDir);
+      try {
+        // The first snapshot holds every layout, so an empty answer is a pane that is gone, not one not yet drawn.
+        const listed = await reading.until((rest) => tabPanes(rest, tab).join(",") || "none", `the panes of ${tab}`);
+        const holders = engine.engine === "own" && process.platform !== "win32" ? JSON.stringify(ownedHolders(stateDir)) : "";
+        return `${listed};${holders}`;
+      } finally { reading.close(); }
+    };
+    const panes = await panesNow();
 
     // The first look comes 15 s after launch; then the download (B15).
     const trigger = page.locator("[data-help-menu-trigger]");
@@ -130,7 +170,7 @@ test("the installed app updates to the next version and the Herdr server and dae
     // The installer of N+1 replaced N (B16) and nothing the core runs ended (D-19).
     await expect.poll(installedVersion, { timeout: 180_000, intervals: [1_000] }).toBe(next);
     expect(run.daemonPid()).toBe(daemon);
-    expect(JSON.stringify(herdr.run(["pane", "list"]))).toBe(panes);
+    expect(await panesNow()).toBe(panes);
     expect(hostLog(run.env).map((line) => line.event)).toContain("update.install");
   } catch (error) {
     console.log(hostLog(run.env).map((line) => JSON.stringify(line)).join("\n"));
@@ -141,6 +181,6 @@ test("the installed app updates to the next version and the Herdr server and dae
     if (shim) fs.rmSync(shim, { recursive: true, force: true });
     await served.close();
     run.cleanup();
-    herdr.stop();
+    engine.stop();
   }
 });

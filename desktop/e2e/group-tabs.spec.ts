@@ -1,15 +1,14 @@
 // Candidate-window evidence for group-tabs. Renderer input is addressed
 // through Playwright; captures identify this app's sole exact native window.
 import { expect, type ElectronApplication } from "@playwright/test";
-import { startHerdr } from "../../web/e2e/herdr-fixture";
 import { enterWorkspace } from "../../web/e2e/wire";
 import { compositorPresents } from "../../web/e2e/wait";
-import { fitWindow, isolate, launchShell, test } from "./fixture";
+import { fitWindow, launchShell, startStack, test } from "./fixture";
 import { captureNativeWindow } from "./native-window";
 
 test("named groups and new terminals render in the candidate window", async () => {
-  const herdr = await startHerdr();
-  const run = isolate(herdr, "group-tabs");
+  const stack = await startStack("group-tabs");
+  const { fixture, run } = stack;
   let app: ElectronApplication | undefined;
   try {
     const opened = await launchShell(run.env);
@@ -20,7 +19,7 @@ test("named groups and new terminals render in the candidate window", async () =
     const selector = page.locator("[data-agent-group-selector]");
     const tabs = page.locator('[data-agent-tab-bar] [role=tab]');
     await expect(selector).toBeVisible();
-    const facts = { build: "worktree debug", daemonPid: run.daemonPid(), home: run.env.HOME, state: run.env.HIDE_STATE_DIR, socket: herdr.socket, input: "Playwright renderer", externalProvider: "controlled fixture CLI" };
+    const facts = { build: "worktree debug", daemonPid: run.daemonPid(), home: run.env.HOME, state: run.env.HIDE_STATE_DIR, socket: fixture.socket, input: "Playwright renderer", externalProvider: "controlled fixture CLI" };
     await compositorPresents(page);
     await captureNativeWindow(app, "group-tabs-work-native", facts);
     await selector.click();
@@ -40,14 +39,14 @@ test("named groups and new terminals render in the candidate window", async () =
     await expect(tabs).toHaveAttribute("aria-selected", "true");
     await expect(tabs).not.toHaveAttribute("data-tab", /^draft:/);
     const tab = (await tabs.getAttribute("data-tab"))!;
-    expect(tab).not.toBe(herdr.tab);
+    expect(tab).not.toBe(fixture.tab);
     await expect(page.locator("[data-agent-tab-start]")).toHaveCount(0);
     const canvas = page.locator(`[data-canvas="${tab}"]`);
     await expect(canvas).toBeVisible();
     const panes = canvas.locator("[data-pane-view]");
     await expect(panes).toHaveCount(1);
     const paneId = (await panes.getAttribute("data-pane-view"))!;
-    expect(herdr.panes).not.toContain(paneId);
+    expect(fixture.panes).not.toContain(paneId);
     const pane = canvas.locator(`[data-pane-view="${paneId}"]`);
     await expect(pane).toBeVisible();
     await expect(row).toHaveAttribute("aria-current", "true");
@@ -70,6 +69,6 @@ test("named groups and new terminals render in the candidate window", async () =
     await captureNativeWindow(app, "group-tabs-narrow-light-native", { ...facts, requestedWidth: 920 });
   } finally {
     try { await app?.close(); }
-    finally { try { run.cleanup(); } finally { herdr.stop(); } }
+    finally { stack.stop(); }
   }
 });

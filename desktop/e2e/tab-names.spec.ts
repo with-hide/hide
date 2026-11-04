@@ -2,27 +2,27 @@ import { expect, type ElectronApplication } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { labelAgent, startHerdr } from "../../web/e2e/herdr-fixture";
+import { labelAgentPane } from "../../web/e2e/fixture-agents";
 import { enterWorkspace } from "../../web/e2e/wire";
-import { isolate, launch, test } from "./fixture";
+import { launchShell, startStack, test } from "./fixture";
 import { animationsFinished, compositorPresents } from "../../web/e2e/wait";
 
 test("native tab composition and Korean inline naming", async () => {
-  const herdr = await startHerdr();
-  const run = isolate(herdr, "tab-names");
+  const stack = await startStack("tab-names");
+  const { fixture, run, daemon } = stack;
   let app: ElectronApplication | undefined;
   try {
     const title = "한글 작업 이름 · focused session";
-    labelAgent(herdr, herdr.panes[0], { task: title });
-    const launched = await launch(run.env);
+    await labelAgentPane(fixture, daemon, fixture.panes[0], { task: title });
+    const launched = await launchShell(run.env);
     app = launched.app;
     const page = launched.page;
     const cdp = await page.context().newCDPSession(page);
     await cdp.send("Emulation.setFocusEmulationEnabled", { enabled: true });
     await expect(page.locator("[data-main-screen], [data-workspace-screen]")).toBeVisible({ timeout: 30_000 });
     await enterWorkspace(page, "fixture");
-    await page.locator(`[data-pane-view="${herdr.panes[0]}"]`).click({ position: { x: 30, y: 60 } });
-    const tab = page.locator(`[data-tab="${herdr.tab}"]`);
+    await page.locator(`[data-pane-view="${fixture.panes[0]}"]`).click({ position: { x: 30, y: 60 } });
+    const tab = page.locator(`[data-tab="${fixture.tab}"]`);
     await expect(tab).toContainText(title);
     await tab.click({ button: "right" });
     await page.getByRole("menuitem", { name: "Copy name", exact: true }).click();
@@ -64,7 +64,6 @@ test("native tab composition and Korean inline naming", async () => {
     }
   } finally {
     await app?.close();
-    run.cleanup();
-    herdr.stop();
+    stack.stop();
   }
 });

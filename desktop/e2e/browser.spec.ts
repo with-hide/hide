@@ -4,7 +4,7 @@
 // slot, survives a move between areas without loading again, freezes under
 // a shell overlay, ends its renderer when closed, comes back after a
 // relaunch, and is a quiet notice in a plain browser tab. Everything runs on
-// a private Herdr server, hided and Electron profile (see `fixture.ts`).
+// a private engine, hided and Electron profile (see `fixture.ts`).
 
 import { chromium, expect, type ElectronApplication, type Page } from "@playwright/test";
 import { spawnSync } from "node:child_process";
@@ -12,23 +12,25 @@ import fs from "node:fs";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
-import { runInPane, startHerdr, type HerdrFixture } from "../../web/e2e/herdr-fixture";
+import { corePaneFocus, focusPane, focusTab, newTab, openProject, runInPaneKeepingFocus, viewPane, waitForPaneInput, withControl } from "../../web/e2e/daemon-actions";
+import type { AgentFixture } from "../../web/e2e/engine-fixture";
 import { fixtureExecutable } from "../../web/e2e/platform-fixture";
 import { chooseExpand, countSent, enterWorkspace, setLanePinned, showDocuments, showExplorer, showProjectRow } from "../../web/e2e/wire";
-import { fitWindow, focusPage, hostLog, isolate, launch, NEEDS_FOCUS, nodeOf, relaunch, screenshot, shellPage, test, type Isolated } from "./fixture";
+import { fitWindow, focusPage, hostLog, launchShell, NEEDS_FOCUS, nodeOf, relaunch, screenshot, shellPage, startStack, test, type Isolated, type Stack } from "./fixture";
 import { dumpOnFailure } from "../../web/e2e/failure-dump";
 import { compositorPresents, quietFor } from "../../web/e2e/wait";
+import { withProbe, type Probe } from "./terminal-probe";
 
 test.describe.configure({ timeout: 240_000 });
 test.use({ actionTimeout: 15_000 });
 
-let herdr: HerdrFixture;
+let stack: Stack;
+let fixture: AgentFixture;
 let run: Isolated;
 let app: ElectronApplication | null = null;
 let server: http.Server;
 let origin: string;
 let cliSequence = 0;
-let extraWorkspace: string | null = null;
 let nativeModifiers = new Set<string>();
 
 const PAGES: Record<string, string> = {
@@ -52,7 +54,6 @@ const PAGES: Record<string, string> = {
 const APP_REDIRECT = "/to-app";
 
 test.beforeAll(async () => {
-  herdr = await startHerdr({ agents: false });
   server = http.createServer((request, response) => {
     if (request.url === APP_REDIRECT) {
       response.writeHead(302, { location: "hide-e2e-app://redirected" });
@@ -68,12 +69,13 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-  herdr?.stop();
   await new Promise((resolve) => server?.close(resolve));
 });
 
-test.beforeEach(() => {
-  run = isolate(herdr, test.info().title.split(":")[0]!);
+test.beforeEach(async () => {
+  stack = await startStack(test.info().title.split(":")[0]!, { agents: false });
+  fixture = stack.fixture;
+  run = stack.run;
 });
 
 test.afterEach(async () => {
@@ -86,9 +88,7 @@ test.afterEach(async () => {
   if (info.status !== info.expectedStatus) console.log(hostLog(run.env).map((line) => JSON.stringify(line)).join("\n"));
   await app?.close().catch(() => undefined);
   app = null;
-  if (extraWorkspace) herdr.run(["workspace", "close", extraWorkspace]);
-  extraWorkspace = null;
-  run.cleanup();
+  stack.stop();
   expect(releaseFailure).toBeNull();
 });
 
@@ -182,12 +182,37 @@ async function nativePageShot(url: string, name: string): Promise<void> {
   fs.writeFileSync(path.join(dir, `${name}.png`), Buffer.from(png, "base64"));
 }
 
-async function cliFromPane(args: string[], pane = herdr.panes[0]): Promise<Record<string, unknown>> {
-  const result = await runInPane(herdr, pane, `desktop-cli-${++cliSequence}`, {
+/** A tab in the fixture's checkout that is made without being shown, so the operator's tab stays in front. */
+async function backgroundTab(label: string): Promise<{ tab: string; pane: string }> {
+  return withControl(stack.daemon, async (control) => {
+    const focused = await control.until((rest) => corePaneFocus(rest) ?? undefined, "the operator's pane");
+    const made = await newTab(control, fixture, label);
+    await focusTab(control, fixture, fixture.tab);
+    // A tab selection can choose its other split. Preserve the actual pane:
+    // only that pane's browser open brings a page forward on this checkout.
+    await focusPane(control, focused);
+    return made;
+  });
+}
+
+async function cliFromPane(args: string[], pane = fixture.panes[0]): Promise<Record<string, unknown>> {
+  // The pane is the one an agent runs in, whichever the operator is in: the command must not take the keyboard from it.
+  const name = `desktop-cli-${++cliSequence}`;
+  const result = await dumpOnFailure("pane command", async () => {
+    const page = await shellPage(app!);
+    return {
+      pane, name,
+      terminal: await page.evaluate((id) => (window as unknown as { __hideProbe?: Probe }).__hideProbe?.paneText(id), pane),
+      files: Object.fromEntries(["out", "err", "status"].map(extension => {
+        const file = path.join(fixture.root, `${name}.${extension}`);
+        return [extension, fs.existsSync(file) ? fs.readFileSync(file, "utf8").slice(-8192) : null];
+      })),
+    };
+  }, () => runInPaneKeepingFocus(fixture, stack.daemon, pane, name, {
     env: { HIDE_STATE_DIR: run.env.HIDE_STATE_DIR! },
     argv: [path.resolve("..", "target", "debug", fixtureExecutable("hide")), ...args],
     stdout: true,
-  });
+  }));
   return { status: result.status, ...(JSON.parse(result.stdout.trim().split("\n").at(-1) || "{}") as Record<string, unknown>) };
 }
 
@@ -247,15 +272,11 @@ async function displayIdOf(page: Page, text: string): Promise<string> {
 // and a POSIX shell elsewhere, through the same portable fixture boundary.
 for (const width of [1500, 720]) {
 test(`browser: Agent tabs share one page per address through a background open and never move the operator (${width}px)`, { tag: "@platform" }, async () => {
-  ({ app } = await launch(run.env));
+  ({ app } = await launchShell(run.env));
   await fitWindow(app, { width, height: 900 });
   const page = await shellPage(app);
   await enterWorkspace(page, "fixture");
-  const created = herdr.run(["tab", "create", "--workspace", herdr.workspace, "--cwd", path.join(herdr.root, "fixture"), "--label", "Other tab", "--no-focus"]) as {
-    result: { tab: { tab_id: string }; root_pane: { pane_id: string } };
-  };
-  const other = created.result.tab.tab_id;
-  const otherPane = created.result.root_pane.pane_id;
+  const { tab: other, pane: otherPane } = await backgroundTab("Other tab");
   const url = `${origin}/a.html`;
   const chooseTab = async (id: string, callFiles = true) => {
     // The lane over the agents can cover their tab strip: ⌘E closes it for
@@ -270,62 +291,59 @@ test(`browser: Agent tabs share one page per address through a background open a
     await expect(page.locator(`[data-agent-tab-bar] [data-tab="${id}"]`)).toHaveAttribute("aria-selected", "true");
     if (callFiles) await showDocuments(page);
   };
-  try {
-    const opened = await openLoaded(url, { status: 0, ok: true, page: { state: "loaded" } });
-    const a = (opened.result as { view_id: string }).view_id;
-    await shownAndSelected(page, url, a);
-    const mark = async (id: number, script: string) => app!.evaluate(({ webContents }, { id, script }) => webContents.fromId(id)!.executeJavaScript(script), { id, script });
-    const original = await viewOf(url);
-    // The other tab is shown for the first time and has no bookmark: the
-    // checkout's one list stays as it is, and the same address opened from
-    // its pane is the page already there, not a second one (PRD
-    // lane-files-checkout-views B1, B3, B12).
-    await chooseTab(other);
-    await expect(tab(page, "Page A")).toHaveCount(1);
-    const again = await cliFromPane(["browser", "open", url, "--wait"], otherPane);
-    expect(again).toMatchObject({ status: 0, ok: true, result: { view_id: a } });
-    await expect.poll(async () => (await views()).filter((view) => view.url === url).length).toBe(1);
-    await expect.poll(async () => (await views()).filter((view) => view.url === url && view.visible).map((view) => view.id)).toEqual([original.id]);
-    // The reopen loaded the one page again; what the page holds from here must survive the background open.
-    await mark(original.id, "window.marker='A'; document.getElementById('q').value='A 한글 입력'");
-    // Back on the first tab, the other tab's pane opens a page behind it: the
-    // page joins the strip, waits unloaded behind the one in front and moves
-    // nothing (B7).
-    await chooseTab(herdr.tab);
-    const waiting = await cliFromPane(["browser", "open", `${origin}/c.html`, "--wait"], otherPane);
-    expect(waiting).toMatchObject({ status: 2, ok: false, applied: "applied", reason: "page_wait_timeout", page: { state: "pending" } });
-    await expect(page.locator(`[data-view-tab-bar] [aria-selected=true][data-display="${a}"]`)).toBeVisible();
-    // Still unloaded, the page has no title yet, so its tab names its address.
-    await expect(tab(page, "/c.html")).toBeVisible();
-    await expect.poll(async () => (await views()).filter((view) => view.url === url && view.visible).map((view) => view.id)).toEqual([original.id]);
-    expect(await mark(original.id, "[window.marker, document.getElementById('q').value]")).toEqual(["A", "A 한글 입력"]);
-    await tab(page, "/c.html").click();
-    await expect.poll(async () => (await viewOf(`${origin}/c.html`)).visible).toBe(true);
-    await windowShot(`background-tab-C-behind-${width}`, process.platform === "darwin");
-    // The other tab's pane asks for the page again: it stays behind the
-    // operator's c.html and the first tab stays on screen, since only the
-    // pane the operator is in moves the screen (B8).
-    expect(await cliFromPane(["browser", "open", url], otherPane)).toMatchObject({ status: 0, ok: true, result: { view_id: a } });
-    await expect(page.locator(`[data-agent-tab-bar] [data-tab="${herdr.tab}"]`)).toHaveAttribute("aria-selected", "true");
-    await expect(page.locator(`[data-view-tab-bar] [aria-selected=true][data-display="${a}"]`)).toHaveCount(0);
-    await expect.poll(async () => (await viewOf(`${origin}/c.html`)).visible).toBe(true);
-    await windowShot(`background-tab-A-stays-behind-${width}`, process.platform === "darwin");
-  } finally {
-    herdr.run(["tab", "close", other]);
-  }
+  const opened = await openLoaded(url, { status: 0, ok: true, page: { state: "loaded" } });
+  const a = (opened.result as { view_id: string }).view_id;
+  await shownAndSelected(page, url, a);
+  const mark = async (id: number, script: string) => app!.evaluate(({ webContents }, { id, script }) => webContents.fromId(id)!.executeJavaScript(script), { id, script });
+  const original = await viewOf(url);
+  // The other tab is shown for the first time and has no bookmark: the
+  // checkout's one list stays as it is, and the same address opened from
+  // its pane is the page already there, not a second one (PRD
+  // lane-files-checkout-views B1, B3, B12).
+  await chooseTab(other);
+  await expect(tab(page, "Page A")).toHaveCount(1);
+  const again = await cliFromPane(["browser", "open", url, "--wait"], otherPane);
+  expect(again).toMatchObject({ status: 0, ok: true, result: { view_id: a } });
+  await expect.poll(async () => (await views()).filter((view) => view.url === url).length).toBe(1);
+  await expect.poll(async () => (await views()).filter((view) => view.url === url && view.visible).map((view) => view.id)).toEqual([original.id]);
+  // The reopen loaded the one page again; what the page holds from here must survive the background open.
+  await mark(original.id, "window.marker='A'; document.getElementById('q').value='A 한글 입력'");
+  // Back on the first tab, the other tab's pane opens a page behind it: the
+  // page joins the strip, waits unloaded behind the one in front and moves
+  // nothing (B7).
+  await chooseTab(fixture.tab);
+  const waiting = await cliFromPane(["browser", "open", `${origin}/c.html`, "--wait"], otherPane);
+  expect(waiting).toMatchObject({ status: 2, ok: false, applied: "applied", reason: "page_wait_timeout", page: { state: "pending" } });
+  await expect(page.locator(`[data-view-tab-bar] [aria-selected=true][data-display="${a}"]`)).toBeVisible();
+  // Still unloaded, the page has no title yet, so its tab names its address.
+  await expect(tab(page, "/c.html")).toBeVisible();
+  await expect.poll(async () => (await views()).filter((view) => view.url === url && view.visible).map((view) => view.id)).toEqual([original.id]);
+  expect(await mark(original.id, "[window.marker, document.getElementById('q').value]")).toEqual(["A", "A 한글 입력"]);
+  await tab(page, "/c.html").click();
+  await expect.poll(async () => (await viewOf(`${origin}/c.html`)).visible).toBe(true);
+  await windowShot(`background-tab-C-behind-${width}`, process.platform === "darwin");
+  // The other tab's pane asks for the page again: it stays behind the
+  // operator's c.html and the first tab stays on screen, since only the
+  // pane the operator is in moves the screen (B8).
+  expect(await cliFromPane(["browser", "open", url], otherPane)).toMatchObject({ status: 0, ok: true, result: { view_id: a } });
+  await expect(page.locator(`[data-agent-tab-bar] [data-tab="${fixture.tab}"]`)).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator(`[data-view-tab-bar] [aria-selected=true][data-display="${a}"]`)).toHaveCount(0);
+  await expect.poll(async () => (await viewOf(`${origin}/c.html`)).visible).toBe(true);
+  await windowShot(`background-tab-A-stays-behind-${width}`, process.platform === "darwin");
 });
 }
 
 test("browser: a page opens from an agent's pane, follows its area, moves without loading again, freezes under the palette and ends with its display", async () => {
-  const report = path.join(herdr.root, "fixture", "리포트 1.html");
+  const report = path.join(fixture.root, "fixture", "리포트 1.html");
   fs.writeFileSync(report, '<!doctype html><meta charset="utf-8"><title>Local report</title><h1>리포트</h1>');
-  ({ app } = await launch(run.env));
+  ({ app } = await launchShell(run.env));
   // The window is the size this run needs, whatever the machine's screen:
   // a CI runner's screen is 1024 points wide.
   await fitWindow(app, WINDOW);
-  const page = await app.firstWindow();
+  const page = await shellPage(app);
+  await withProbe(page);
   await enterWorkspace(page, "fixture");
-  const checkout = path.join(fs.realpathSync(herdr.root), "fixture");
+  const checkout = path.join(fs.realpathSync(fixture.root), "fixture");
 
   // `hide browser open` from an agent's pane opens the page in that pane's
   // Workspace and answers with the core's receipt.
@@ -528,9 +546,9 @@ test("browser: a page opens from an agent's pane, follows its area, moves withou
 });
 
 test("browser: a shell layer never has a page drawn over it, and a page tab's hint opens clear of the page", async () => {
-  ({ app } = await launch(run.env));
+  ({ app } = await launchShell(run.env));
   await fitWindow(app, WINDOW);
-  const page = await app.firstWindow();
+  const page = await shellPage(app);
   await enterWorkspace(page, "fixture");
   const url = `${origin}/long.html`;
   const title = "Quarterly report draft";
@@ -621,8 +639,8 @@ test("browser: a shell layer never has a page drawn over it, and a page tab's hi
 });
 
 test("browser: waiting for a hidden page does not take the operator's keyboard target", async () => {
-  ({ app } = await launch(run.env));
-  const page = await app.firstWindow();
+  ({ app } = await launchShell(run.env));
+  const page = await shellPage(app);
   await enterWorkspace(page, "fixture");
   const focusedLocator = page.locator('[data-pane-view][data-focused="true"]');
   await expect(focusedLocator).toHaveAttribute("data-pane-view", /./);
@@ -630,37 +648,32 @@ test("browser: waiting for a hidden page does not take the operator's keyboard t
   // An agent in a tab the operator is not looking at opens the page, so it
   // stays hidden; from the operator's own pane the open would call the lane
   // (PRD right-lane B17).
-  const created = herdr.run(["tab", "create", "--workspace", herdr.workspace, "--cwd", path.join(herdr.root, "fixture"), "--label", "Background", "--no-focus"]) as {
-    result: { tab: { tab_id: string }; root_pane: { pane_id: string } };
-  };
-  const agent = created.result.root_pane.pane_id;
-  try {
-    // Until the core has projected the new tab, its pane is not a caller Hide
-    // knows: the command would run with its checkout's authority, not as the
-    // agent in that tab, and its page would not be that tab's (issue 1125).
-    await expect(page.locator(`[data-agent-tab-bar] [data-tab="${created.result.tab.tab_id}"]`)).toHaveCount(1);
-    const hidden = await cliFromPane(["browser", "open", `${origin}/b.html`, "--wait"], agent);
-    expect(hidden).toMatchObject({ status: 2, ok: false, applied: "applied", reason: "page_wait_timeout", page: { state: "pending" } });
-    expect(await cliFromPane(["view", "status", hidden.view_id as string], agent)).toMatchObject({ status: 0, ok: true, view: { page: { state: "pending" } } });
-    await expect(page.locator('[data-pane-view][data-focused="true"]')).toHaveAttribute("data-pane-view", focused!);
-  } finally {
-    herdr.run(["tab", "close", created.result.tab.tab_id]);
-  }
+  const created = await backgroundTab("Background");
+  const agent = created.pane;
+  // Until the core has projected the new tab, its pane is not a caller Hide
+  // knows: the command would run with its checkout's authority, not as the
+  // agent in that tab, and its page would not be that tab's (issue 1125).
+  await expect(page.locator(`[data-agent-tab-bar] [data-tab="${created.tab}"]`)).toHaveCount(1);
+  const hidden = await cliFromPane(["browser", "open", `${origin}/b.html`, "--wait"], agent);
+  expect(hidden).toMatchObject({ status: 2, ok: false, applied: "applied", reason: "page_wait_timeout", page: { state: "pending" } });
+  expect(await cliFromPane(["view", "status", hidden.view_id as string], agent)).toMatchObject({ status: 0, ok: true, view: { page: { state: "pending" } } });
+  await expect(page.locator('[data-pane-view][data-focused="true"]')).toHaveAttribute("data-pane-view", focused!);
 });
 
 test("browser: a login in one Workspace is available in another", async () => {
-  const other = path.join(herdr.root, "second-checkout");
+  const other = path.join(fixture.root, "second-checkout");
   fs.mkdirSync(other, { recursive: true });
-  const created = herdr.run(["workspace", "create", "--cwd", other, "--label", "second", "--no-focus"]) as { result: { workspace: { workspace_id: string }; root_pane: { pane_id: string } } };
-  extraWorkspace = created.result.workspace.workspace_id;
-  const otherPane = created.result.root_pane.pane_id;
-  await expect.poll(() => {
-    const read = spawnSync(herdr.bin, ["pane", "read", otherPane, "--source", "visible", "--format", "text"], { env: herdr.env, encoding: "utf8", timeout: 10_000 });
-    return read.stdout.includes("fixture %");
-  }).toBe(true);
+  // The second project is made without being shown, so the fixture's stays in front; no page shows its shell yet.
+  const otherPane = await withControl(stack.daemon, async (control) => {
+    const made = await openProject(control, other, "second-checkout");
+    await focusTab(control, fixture, fixture.tab);
+    viewPane(control, made.pane);
+    await waitForPaneInput(control, made.pane);
+    return made.pane;
+  });
 
-  ({ app } = await launch(run.env));
-  const page = await app.firstWindow();
+  ({ app } = await launchShell(run.env));
+  const page = await shellPage(app);
   await enterWorkspace(page, "fixture");
   expect(await openFromCli(`${origin}/a.html`, ["--wait"])).toMatchObject({ status: 0, ok: true });
   await viewOf(`${origin}/a.html`);
@@ -677,8 +690,8 @@ test("browser: a login in one Workspace is available in another", async () => {
 });
 
 test("browser: a sign-in popup keeps its opener, belongs to its page, and a link to another app asks first", async () => {
-  ({ app } = await launch(run.env));
-  const page = await app.firstWindow();
+  ({ app } = await launchShell(run.env));
+  const page = await shellPage(app);
   await fitWindow(app, WINDOW);
   await enterWorkspace(page, "fixture");
   const signin = `${origin}/signin.html`;
@@ -786,10 +799,10 @@ test("browser: a sign-in popup keeps its opener, belongs to its page, and a link
 });
 
 test("new-tab: empty page creates no native renderer and address loads in the same display", async () => {
-  ({ app } = await launch(run.env));
+  ({ app } = await launchShell(run.env));
   expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1);
   await fitWindow(app, WINDOW);
-  const page = await app.firstWindow();
+  const page = await shellPage(app);
   await enterWorkspace(page, "fixture");
   expect(await openFromCli(`${origin}/a.html`, ["--wait"])).toMatchObject({ ok: true });
   await viewOf(`${origin}/a.html`);
@@ -887,9 +900,10 @@ function releaseNativeModifiers(): ReturnType<typeof spawnSync> {
 }
 
 test("area cycle native: page input previews one exact area, releases once and cancels", { tag: NEEDS_FOCUS }, async () => {
-  ({ app } = await launch(run.env));
-  const page = await app.firstWindow();
+  ({ app } = await launchShell(run.env));
+  const page = await shellPage(app);
   const sent = countSent(page);
+  await page.reload();
   // Within the work area: the blur and focus below order the window out and
   // in, and macOS would clamp a larger one then, dropping both View areas.
   await fitWindow(app, WINDOW);
@@ -934,7 +948,7 @@ test("area cycle native: page input previews one exact area, releases once and c
     const source = await app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.getMediaSourceId());
     const result = spawnSync("/usr/sbin/screencapture", ["-x", "-o", "-l", source.split(":")[1]!, path.join(dir, `${name}.png`)], { encoding: "utf8" });
     expect(result.status, "exact native window capture failed: " + result.stderr).toBe(0);
-    fs.writeFileSync(path.join(dir, "area-native-identity.json"), JSON.stringify({ pid, window: source, daemonPid: run.daemonPid(), socket: herdr.socket, state: run.env.HIDE_STATE_DIR, userData: run.env.HIDE_DESKTOP_USER_DATA_DIR, pages: await views() }, null, 2));
+    fs.writeFileSync(path.join(dir, "area-native-identity.json"), JSON.stringify({ pid, window: source, daemonPid: run.daemonPid(), socket: fixture.socket, state: run.env.HIDE_STATE_DIR, userData: run.env.HIDE_DESKTOP_USER_DATA_DIR, pages: await views() }, null, 2));
   };
   await focus(current, originalId);
   await expect(page.locator('[data-keyboard-area=true]')).toHaveCount(1);
@@ -1046,10 +1060,11 @@ function pinch(url: string): Promise<number> {
 }
 
 test("zoom: the text-size commands zoom a focused page in Chrome's steps and a pinch zooms it", { tag: NEEDS_FOCUS }, async () => {
-  ({ app } = await launch(run.env));
+  ({ app } = await launchShell(run.env));
   await fitWindow(app, WINDOW);
-  const page = await app.firstWindow();
+  const page = await shellPage(app);
   const sent = countSent(page);
+  await page.reload();
   await enterWorkspace(page, "fixture");
   const pageA = `${origin}/a.html`;
   expect(await openFromCli(pageA, ["--wait"])).toMatchObject({ ok: true });
@@ -1101,9 +1116,9 @@ test("zoom: the text-size commands zoom a focused page in Chrome's steps and a p
 // Chromium focuses a page's view as each new document commits; a page that
 // reloads itself took the keyboard from the terminal the operator typed in.
 test("refresh focus: a page that loads itself again never takes the keyboard from the terminal", { tag: NEEDS_FOCUS }, async () => {
-  ({ app } = await launch(run.env));
+  ({ app } = await launchShell(run.env));
   await fitWindow(app, WINDOW);
-  const page = await app.firstWindow();
+  const page = await shellPage(app);
   await enterWorkspace(page, "fixture");
   const refresh = `${origin}/refresh.html`;
   expect(await openFromCli(refresh, ["--wait"])).toMatchObject({ ok: true });
@@ -1134,9 +1149,9 @@ test("refresh focus: a page that loads itself again never takes the keyboard fro
 });
 
 test("expand: Zoom pane in a focused page expands the lane and back while the page keeps the keyboard", { tag: NEEDS_FOCUS }, async () => {
-  ({ app } = await launch(run.env));
+  ({ app } = await launchShell(run.env));
   await fitWindow(app, WINDOW);
-  const page = await app.firstWindow();
+  const page = await shellPage(app);
   await enterWorkspace(page, "fixture");
   const pageA = `${origin}/a.html`;
   expect(await openFromCli(pageA, ["--wait"])).toMatchObject({ ok: true });
@@ -1158,9 +1173,9 @@ test("expand: Zoom pane in a focused page expands the lane and back while the pa
 });
 
 test("directional terminal menu commands leave a native page holding its next input", { tag: NEEDS_FOCUS }, async () => {
-  ({ app } = await launch(run.env));
+  ({ app } = await launchShell(run.env));
   await fitWindow(app, WINDOW);
-  const page = await app.firstWindow();
+  const page = await shellPage(app);
   await enterWorkspace(page, "fixture");
   const address = `${origin}/a.html`;
   expect(await openFromCli(address, ["--wait"])).toMatchObject({ ok: true });
@@ -1219,11 +1234,11 @@ function storedLaneWidth(field: "document_width" | "panel_width" = "document_wid
 // @platform: the page view is placed in native window coordinates, which a
 // Windows or Linux display scale and the shell's fitted zoom change.
 test("page width: a page opened into the lane widens it to 900 beside Agent Views' 480, and a width the operator narrows it to stays", { tag: "@platform" }, async () => {
-  ({ app } = await launch(run.env));
+  ({ app } = await launchShell(run.env));
   const page = await shellPage(app);
   await enterWorkspace(page, "fixture");
   const zoom = await bodyWidth(page, 1800);
-  const notes = path.join(fs.realpathSync(herdr.root), "fixture", "page-width-notes.md");
+  const notes = path.join(fs.realpathSync(fixture.root), "fixture", "page-width-notes.md");
   fs.writeFileSync(notes, "# Notes\n");
   const site = `${origin}/site.html`;
   const divider = page.locator('[data-lane-divider="lane"]');
@@ -1277,7 +1292,7 @@ test("page width: a page opened into the lane widens it to 900 beside Agent View
 // @platform: the room left beside Agent Views comes from the body the host
 // measures, which each system's window frame and display scale change.
 test("page width: widening leaves Agent Views 480 pinned or not, never narrows, and leaves an expanded lane alone", { tag: "@platform" }, async () => {
-  ({ app } = await launch(run.env));
+  ({ app } = await launchShell(run.env));
   const page = await shellPage(app);
   await enterWorkspace(page, "fixture");
   const body = 1200;
@@ -1318,10 +1333,11 @@ test("page width: widening leaves Agent Views 480 pinned or not, never narrows, 
 // and a `@needs-focus` test under `--grep @platform` would run every
 // background test it depends on (playwright.config.ts).
 test("page zoom: a zoomed page shows its zoom in the address field, steps in the popover and loses the badge at 100%", { tag: NEEDS_FOCUS }, async () => {
-  ({ app } = await launch(run.env));
+  ({ app } = await launchShell(run.env));
   await fitWindow(app, WINDOW);
   const page = await shellPage(app);
   const sent = countSent(page);
+  await page.reload();
   await enterWorkspace(page, "fixture");
   const first = `${origin}/site.html`;
   const second = `${origin}/site-2.html`;
@@ -1381,7 +1397,7 @@ test("page zoom: a zoomed page shows its zoom in the address field, steps in the
 // @platform: the host emulates the device viewport in each system's
 // renderer, and the scale it fits a wide size by depends on the display.
 test("device size: a page lays out at 390, 768 and 1280 CSS pixels at any zoom, keeps it across a navigation and fits again", { tag: "@platform" }, async () => {
-  ({ app } = await launch(run.env));
+  ({ app } = await launchShell(run.env));
   await fitWindow(app, WINDOW);
   const page = await shellPage(app);
   await enterWorkspace(page, "fixture");

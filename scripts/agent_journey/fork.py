@@ -29,8 +29,8 @@ def forked_row(rest, source):
 
 
 def panes(runtime):
-    """The pane ids the run's Herdr holds now."""
-    return {pane["pane_id"] for pane in runtime.json(["api", "snapshot"])["snapshot"].get("panes", [])}
+    """The pane ids the run's engine holds now."""
+    return runtime.pane_ids()
 
 
 def verdict(row, source_session, herdr_session, source, listed, source_agent):
@@ -50,7 +50,7 @@ def verdict(row, source_session, herdr_session, source, listed, source_agent):
     # Hide registers a session as Herdr names it, a path for Pi and omp,
     # while the row shows its native id, so Herdr's is matched to the registration.
     if (herdr_session or {}).get("value") != listed.get("session"):
-        return cells.FAIL, (f"Herdr reports session {(herdr_session or {}).get('value')} in the fork, Hide "
+        return cells.FAIL, (f"The engine reports session {(herdr_session or {}).get('value')} in the fork, Hide "
                             f"registered {listed.get('session')}")
     if listed.get("parent") is not None or listed.get("origin") != source_agent:
         return cells.FAIL, (f"the fork is registered with parent {listed.get('parent')} and origin "
@@ -104,12 +104,11 @@ def measure(journey):
         record["unmarked"] = {"herdr_session": (journey.runtime.agent(opened[0]) or {}).get("agent_session"),
                               "hide_row": {key: (journey.daemon.row(opened[0]) or {}).get(key)
                                            for key in ("session_id", "forked_from", "identity_label")}}
-    listing = journey.controller.hide(["agent", "list"])
-    listed = next((item for item in (listing.get("value") or {}).get("items") or []
+    listed = next((item for item in journey.controller.list_agents()
                    if pane and item.get("pane") == pane), None)
     record["prompt"].update(turn=turn, read=read)
     record.update(herdr_session=herdr_session, listed=listed, errors=list(journey.daemon.errors))
-    status, reason = verdict(row, source_session, herdr_session, journey.row["herdr_source"], listed, journey.agent)
+    status, reason = verdict(row, source_session, herdr_session, (journey.row["herdr_source"] if journey.runtime.engine == "herdr" else None), listed, journey.agent)
     if status == cells.PASS:
         answer = cells.with_turn(cells.reply_verdict(read, listed["session"], value), turn)
         status, reason = (status, reason + "; " + answer[1]) if answer[0] == cells.PASS else \

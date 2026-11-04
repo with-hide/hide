@@ -49,18 +49,50 @@ EXCLUDED_AGENTS = {"cursor": "operator decision 2026-10-17"}
 INTERRUPTED = "interrupted"
 
 
+def excluded_agents(engine="herdr", fake_model=False):
+    """Explicit transition gaps, shared by the run plan and CI verdict.
+
+    The own-start-fixes work removes these row exclusions once the product
+    confirms the first brief; later cells cannot run without it.
+    """
+    return {**EXCLUDED_AGENTS, **({"pi": "own-start-fixes 노드 대기(Pi 첫 지시문 input_unconfirmed, 제품 결함)",
+                                 "opencode": "own-start-fixes 노드 대기(OpenCode 첫 지시문 미전달, 제품 결함)"}
+                                if engine == "own" and fake_model else {})}
+
+
+def excluded_cells(engine="herdr", fake_model=False):
+    """The approved transition gaps, by cell, for both planning and CI.
+
+    A row exclusion still prevents its CLI from starting. A cell exclusion
+    leaves the rest of that agent's declared behavior required.
+    """
+    excluded = {(agent, name): reason for agent, reason in excluded_agents(engine, fake_model).items()
+                for name in CELLS}
+    if engine == "own" and fake_model:
+        excluded.update({
+            ("codex", "fork"): "own-start-fixes 노드 대기(Codex fork 세션과 계보 미등록, 제품 결함)",
+            ("antigravity", "fork"): "own-start-fixes 노드 대기(Antigravity fork 입력 준비 미확정, 제품 결함)",
+            ("omp", "sleep_wake"): "own-start-fixes 노드 대기(OMP 깨우기 확인 지연, 제품 결함)",
+            ("omp", "resume"): "own-start-fixes(#2075) 대기(깨우기 제외에 따른 선행 조건 미충족)",
+            ("omp", "fork"): "own-start-fixes 노드 대기(OMP 깨우기 뒤 fork 입력 준비 미확정, 제품 결함)",
+            ("omp", "title"): "own-start-fixes 노드 대기(OMP 깨우기 뒤 제목 대상 행 소실, 제품 결함)",
+        })
+    return excluded
+
+
 def cell(status, reason, evidence=None):
     return {"status": status, "reason": reason, "evidence": evidence}
 
 
-def plan(contract, selected):
+def plan(contract, selected, *, engine="herdr", fake_model=False):
     """Every registered adapter participates; undeclared and unselected cells are final."""
     table = {}
+    excluded = excluded_cells(engine, fake_model)
     for row in contract:
         cells = {}
         for name in CELLS:
-            if row["id"] in EXCLUDED_AGENTS:
-                cells[name] = cell(EXCLUDED, EXCLUDED_AGENTS[row["id"]])
+            if (row["id"], name) in excluded:
+                cells[name] = cell(EXCLUDED, excluded[row["id"], name])
             elif not row["cells"][name]:
                 cells[name] = cell(NA, "not declared by the adapter")
             elif row["id"] not in selected:
@@ -400,6 +432,11 @@ def with_turn(verdict, turn):
 def emitter_verdict(session, expected):
     """Herdr's own integration reported the pane's session under `expected`,
     the contract's `herdr_source`."""
+    if expected is None:
+        if ((session or {}).get("observation") == "hide.agent.list" and session.get("kind") in ("id", "path")
+                and isinstance(session.get("value"), str) and session["value"]):
+            return PASS, "Hide's registration ledger names the native session checked by the conversation reader"
+        return FAIL, "Hide's registration ledger did not name a native session"
     source = (session or {}).get("source")
     if source == expected:
         return PASS, "Herdr integration reported the session as " + source

@@ -5,17 +5,19 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, type ElectronApplication } from "@playwright/test";
 import { initGithubRepository } from "../../web/e2e/github-remote";
-import { startHerdr } from "../../web/e2e/herdr-fixture";
+import { openProject, withControl } from "../../web/e2e/daemon-actions";
+import { startEngine } from "../../web/e2e/engine-fixture";
 import { fixtureProgram } from "../../web/e2e/platform-fixture";
 import { showProjectRow } from "../../web/e2e/wire";
 import { projectRow } from "../../web/e2e/overview-entry";
 import { animationsFinished, compositorPresents } from "../../web/e2e/wait";
 import { captureNativeWindow } from "./native-window";
-import { fitWindow, isolate, launch, screenshot, test } from "./fixture";
+import { connectHome, fitWindow, isolate, launchShell, screenshot, startStack, test } from "./fixture";
 
+// No panes of its own: the project is the one this test makes, in a home whose daemon runs in the account's own state folder.
 test("Project settings keep confirmed values through a failed save and restart", async () => {
-  const herdr = await startHerdr({ agents: false });
-  const run = isolate(herdr, "project-settings");
+  const engine = await startEngine();
+  const run = isolate(engine, "project-settings");
   fs.mkdirSync(run.env.XDG_STATE_HOME!, { recursive: true }); run.env.HIDE_STATE_DIR = path.join(run.env.XDG_STATE_HOME!, "hide"); // The account's own folder: only a core there writes the guardrails policy.
   let app: ElectronApplication | null = null;
   try {
@@ -23,12 +25,12 @@ test("Project settings keep confirmed values through a failed save and restart",
     fs.mkdirSync(repo);
     initGithubRepository(repo);
     // gh as a logged-out account answers it: exit 4 and its sign-in hint.
-    fixtureProgram(path.join(herdr.root, "bin"), "gh", `console.error("To get started with GitHub CLI, please run:  gh auth login"); process.exit(4);`);
+    fixtureProgram(path.join(engine.root, "bin"), "gh", `console.error("To get started with GitHub CLI, please run:  gh auth login"); process.exit(4);`);
     fs.writeFileSync(path.join(repo, "README.md"), "Fixture\n");
     execFileSync("git", ["add", "README.md"], { cwd: repo });
     execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "Initial"], { cwd: repo });
-    herdr.run(["workspace", "create", "--cwd", repo, "--label", "sample", "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]);
-    let launched = await launch(run.env);
+    await withControl(await connectHome(run), (control) => openProject(control, repo, "sample"));
+    let launched = await launchShell(run.env);
     app = launched.app;
     let page = launched.page;
     const gear = () => page.locator('[data-project]', { hasText: "sample" }).locator('[data-row-settings]');
@@ -40,7 +42,7 @@ test("Project settings keep confirmed values through a failed save and restart",
     // so, rather than moving its issues to Local.
     await expect(sheet).toContainText("Automatic (GitHub)");
     await expect(sheet).toContainText("GitHub read failed");
-    await captureNativeWindow(app, "project-settings-connections-native", { state: run.env.HIDE_STATE_DIR, home: run.env.HOME, socket: herdr.socket, daemonPid: run.daemonPid(), build: "worktree debug", provider: "fixture gh logged out, GitHub remote" });
+    await captureNativeWindow(app, "project-settings-connections-native", { state: run.env.HIDE_STATE_DIR, home: run.env.HOME, socket: engine.socket, daemonPid: run.daemonPid(), build: "worktree debug", provider: "fixture gh logged out, GitHub remote" });
     await sheet.getByRole("combobox", { name: "Issue source", exact: true }).click();
     await page.getByRole("option", { name: "Local", exact: true }).click();
     await expect(sheet).toContainText("Saved");
@@ -97,7 +99,7 @@ test("Project settings keep confirmed values through a failed save and restart",
     await expect(location).toContainText("New worktree");
     await expect(sheet).toContainText("Saved");
     await expect.poll(() => Object.values(stored().project_settings).find((record) => record.root === repo)?.new_work).toBe("worktree");
-    await captureNativeWindow(app, "project-settings-work-native", { state: run.env.HIDE_STATE_DIR, home: run.env.HOME, socket: herdr.socket, daemonPid: run.daemonPid(), build: "worktree debug", provider: "fixture discovery, no external GitHub" });
+    await captureNativeWindow(app, "project-settings-work-native", { state: run.env.HIDE_STATE_DIR, home: run.env.HOME, socket: engine.socket, daemonPid: run.daemonPid(), build: "worktree debug", provider: "fixture discovery, no external GitHub" });
     await page.keyboard.press("Escape");
     await expect(sheet).toHaveCount(0);
     await expect(gear()).toBeFocused();
@@ -113,7 +115,7 @@ test("Project settings keep confirmed values through a failed save and restart",
     await app.close();
     app = null;
     expect(run.hide(["stop"]).status).toBe(0);
-    launched = await launch(run.env);
+    launched = await launchShell(run.env);
     app = launched.app;
     page = launched.page;
     await (await showProjectRow(page, gear())).click();
@@ -130,13 +132,13 @@ test("Project settings keep confirmed values through a failed save and restart",
   } finally {
     if (app) await app.close();
     run.cleanup();
-    herdr.stop();
+    engine.stop();
   }
 });
 
 test("Project settings fit a narrow native window in every language and theme", async () => {
-  const herdr = await startHerdr({ agents: false });
-  const run = isolate(herdr, "project-settings-narrow");
+  const stack = await startStack("project-settings-narrow", { agents: false });
+  const { run, daemon } = stack;
   let app: ElectronApplication | null = null;
   try {
     const repo = path.join(run.env.HOME!, "projects", "sample");
@@ -145,8 +147,8 @@ test("Project settings fit a narrow native window in every language and theme", 
     fs.writeFileSync(path.join(repo, "README.md"), "Fixture\n");
     execFileSync("git", ["add", "README.md"], { cwd: repo });
     execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "Initial"], { cwd: repo });
-    herdr.run(["workspace", "create", "--cwd", repo, "--label", "sample 프로젝트 이름이 아주 길어지는 경우에도 설정 열기", "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]);
-    const launched = await launch(run.env);
+    await withControl(daemon, (control) => openProject(control, repo, "sample 프로젝트 이름이 아주 길어지는 경우에도 설정 열기"));
+    const launched = await launchShell(run.env);
     app = launched.app;
     const page = launched.page;
     const gear = () => page.locator('[data-project]', { hasText: "sample" }).locator('[data-row-settings]');
@@ -201,14 +203,13 @@ test("Project settings fit a narrow native window in every language and theme", 
     await captureNativeWindow(app, "project-settings-narrow-native", { build: "worktree debug", daemonPid: run.daemonPid(), width: 720, height: 480, scale: 17 / 13 });
   } finally {
     if (app) await app.close();
-    run.cleanup();
-    herdr.stop();
+    stack.stop();
   }
 });
 
 test("Project and Overview menus return Settings focus to their own trigger", async () => {
-  const herdr = await startHerdr({ agents: false });
-  const run = isolate(herdr, "project-settings-menus");
+  const stack = await startStack("project-settings-menus", { agents: false });
+  const { run, daemon } = stack;
   let app: ElectronApplication | null = null;
   try {
     const repo = path.join(run.env.HOME!, "projects", "sample");
@@ -217,8 +218,8 @@ test("Project and Overview menus return Settings focus to their own trigger", as
     fs.writeFileSync(path.join(repo, "README.md"), "Fixture\n");
     execFileSync("git", ["add", "README.md"], { cwd: repo });
     execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "Initial"], { cwd: repo });
-    herdr.run(["workspace", "create", "--cwd", repo, "--label", "sample", "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]);
-    const launched = await launch(run.env);
+    await withControl(daemon, (control) => openProject(control, repo, "sample"));
+    const launched = await launchShell(run.env);
     app = launched.app;
     const page = launched.page;
     const more = page.locator('[data-project]', { hasText: "sample" }).locator('[data-row-more]');
@@ -243,7 +244,6 @@ test("Project and Overview menus return Settings focus to their own trigger", as
     await captureNativeWindow(app, "project-settings-overview-focus-native", { build: "worktree debug", daemonPid: run.daemonPid(), menuFocusReturned: true });
   } finally {
     if (app) await app.close();
-    run.cleanup();
-    herdr.stop();
+    stack.stop();
   }
 });

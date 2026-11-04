@@ -63,7 +63,7 @@ FIXTURE_CELLS = tuple(name for name in cells.CELLS
 FIXTURE_LIMITS = [
     "A stand-in answers with the token its prompt or its hook context carries, or else the one in the Memory "
     "index its start hook printed, as the fake model does; no model reads the prompt.",
-    "Herdr's integration runs from the hook commands the kit installed, fed the payload the stand-in writes, "
+    "The engine's integration runs from the hook commands the kit installed, fed the payload the stand-in writes, "
     "so a change in the real CLI's hook payload is not seen.",
     "The working and idle screens and titles and the session file format are the stand-in's copies of the CLI's.",
     "Codex's app-server, through which Hide records folder and hook trust, is the trust tests' stand-in "

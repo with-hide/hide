@@ -3,11 +3,15 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { labelMarker, type HerdrFixture } from "./herdr-fixture";
 import { copyFixtureShim } from "./shims/build";
 import { fixtureExecutable, fixtureProgram } from "./platform-fixture";
+import { agentIn, preparePaneInput, sendKeys, withControl } from "./daemon-actions";
+import { builtHooks } from "./engine-fixture";
+import type { E2eEngine } from "./e2e-engine";
+import type { Daemon } from "./hided-fixture";
 
 export const PI_ID = "fixture-pi-native";
 export const PI_TITLE = "요청 보기 - Pi native title";
@@ -78,12 +82,15 @@ export function appendOmpQuestion(session: string, answered = false): void {
   fs.appendFileSync(session, `${JSON.stringify({ type: "message", id: answered ? "answer" : "question", parentId: null, timestamp, message })}\n`);
 }
 
-/** A seed consumed and written by the fake CLI. No session file exists yet. */
-export function preparePiWriter(herdr: HerdrFixture, checkout = path.join(herdr.root, "fixture")): string {
-  return prepareNativeWriter(herdr, "pi", checkout);
-}
+/** What a native writer's seeds need of a run: its root and its HOME, which every engine's fixture has. */
+type NativeWriterHost = { root: string; env: { HOME?: string } };
 
-export function prepareNativeWriter(herdr: HerdrFixture, kind: NativeFileReader, checkout = path.join(herdr.root, "fixture")): string {
+/**
+ * A seed consumed and written by the fake CLI. No session file exists yet.
+ * On the core's own engine the stand-in also reports the session it writes
+ * as the agent's own integration does (`prepareEngineWriter`).
+ */
+export function prepareNativeWriter(herdr: NativeWriterHost, kind: NativeFileReader, checkout = path.join(herdr.root, "fixture")): string {
   copyFixtureShim("claude-shim", path.join(herdr.root, "bin", fixtureExecutable(kind === "cursor" ? "cursor-agent" : kind)));
   const cwd = fs.realpathSync(checkout);
   if (kind === "cursor") {
@@ -137,15 +144,88 @@ export function prepareNativeWriter(herdr: HerdrFixture, kind: NativeFileReader,
   return session;
 }
 
-/** Explicit synthetic integration provenance, never a native discovery claim. */
-export function reportPiWriter(herdr: HerdrFixture, pane: string, session: string): void {
-  reportNativeWriter(herdr, "pi", pane, session);
+/** The session a native writer's integration names: Grok's and Cursor's own id, Pi's and omp's session file. */
+export function nativeSessionRef(kind: NativeFileReader, session: string): string {
+  return kind === "grok" ? GROK_ID : kind === "cursor" ? CURSOR_ID : session;
 }
 
+/** The ID inside the native record, also shown in the sidebar, not its file reference. */
+export function nativeSessionId(kind: NativeFileReader): string {
+  return { pi: PI_ID, omp: OMP_ID, grok: GROK_ID, cursor: CURSOR_ID }[kind];
+}
+
+/**
+ * Herdr's integration report of a native writer's session, which the stand-in
+ * has no Hide integration to replace on Herdr's engine. On the core's own
+ * engine the stand-in reports it itself (`prepareEngineWriter`).
+ */
 export function reportNativeWriter(herdr: HerdrFixture, kind: NativeFileReader, pane: string, session: string): void {
-  // Herdr's Grok integration reports the native id; Pi's and omp's report the file.
-  const reference = kind === "grok" ? ["--agent-session-id", GROK_ID] : kind === "cursor" ? ["--agent-session-id", CURSOR_ID] : ["--agent-session-path", session];
+  const reference = kind === "pi" || kind === "omp" ? ["--agent-session-path", session] : ["--agent-session-id", nativeSessionRef(kind, session)];
   execFileSync(herdr.bin, ["pane", "report-agent-session", pane, "--source", `herdr:${kind}`, "--agent", kind, ...reference, "--seq", "2", "--session-start-source", "clear"], { env: herdr.env, timeout: 30_000 });
+}
+
+/** Pi's and omp's extension sends the version of the script it is; the helper answers no other. */
+function piExtensionVersion(): number {
+  const source = fs.readFileSync(path.resolve("..", "hide-agent-hooks", "src", "pi_extension.rs"), "utf8");
+  const version = /pub const VERSION: u32 = (\d+);/.exec(source)?.[1];
+  if (version === undefined) throw new Error("hide-agent-hooks/src/pi_extension.rs no longer declares `pub const VERSION: u32 = N;`");
+  return Number(version);
+}
+
+const shellQuoted = (word: string): string => `'${word.replaceAll("'", `'\\''`)}'`;
+
+/**
+ * The report each agent's own Hide integration makes when its session starts
+ * or switches, as that integration makes it: Grok's and Cursor's SessionStart
+ * command hook reads the session its input names, and Pi's and omp's script
+ * asks the helper's `session` operation with its own version. `reference` is
+ * the id the integration names: Pi's and omp's is the session file.
+ */
+function sessionReport(kind: NativeFileReader, reference: string): { env: Record<string, string>; args: string[]; input: unknown } {
+  switch (kind) {
+    case "pi":
+    case "omp":
+      return { env: {}, args: [kind, "session"], input: { session_id: reference, version: piExtensionVersion() } };
+    case "grok":
+      return { env: { GROK_HOOK_EVENT: "session_start", GROK_SESSION_ID: reference }, args: ["hook", "--runtime", "grok", "--event", "SessionStart"], input: { sessionId: reference, hook_event_name: "SessionStart" } };
+    case "cursor":
+      return { env: { CURSOR_VERSION: "2026.10.01" }, args: ["hook", "--runtime", "cursor", "--event", "SessionStart"], input: { conversation_id: reference, hook_event_name: "sessionStart" } };
+  }
+}
+
+/**
+ * On the core's own engine nothing but the agent's Hide integration names a
+ * pane's session, so the stand-in `kind` runs that integration's report from
+ * inside its pane each time it writes or resumes its session
+ * (`shims/claude-shim.c`, `report_session`): this file is the command line,
+ * then its input. The commands are written for the shell the shim's `popen`
+ * runs; no Windows lane runs a spec that uses them.
+ */
+function writeSessionReport(root: string, kind: NativeFileReader, session: string): void {
+  if (process.platform === "win32") throw new Error("a native writer's session report is written for a Unix shell; no Windows lane runs it");
+  const { env, args, input } = sessionReport(kind, nativeSessionRef(kind, session));
+  const words = [...Object.entries(env).map(([name, value]) => `${name}=${shellQuoted(value)}`), shellQuoted(builtHooks()), ...args.map(shellQuoted)];
+  let command = `${words.join(" ")} >/dev/null 2>&1`;
+  if (kind === "omp") {
+    // The seed ends with a completed assistant reply. Session identity alone
+    // reports no activity, and omp has no screen rules. Its real extension
+    // also reports that completed turn at agent_end, from inside its pane.
+    const turn = JSON.stringify({ session_id: session, version: piExtensionVersion(), turn: "done" });
+    command += ` && printf %s ${shellQuoted(turn)} | ${shellQuoted(builtHooks())} ${kind} turn >/dev/null 2>&1`;
+  }
+  fs.writeFileSync(path.join(root, `${kind}-session-report.config`), `${command}\n${JSON.stringify(input)}`);
+}
+
+/**
+ * A native writer for the engine `fixture` runs on: the seeds and the session
+ * path (`prepareNativeWriter`), and on the core's own engine the stand-in's
+ * own session report. On Herdr the spec reports the session through Herdr's
+ * integration (`reportNativeWriter`).
+ */
+export function prepareEngineWriter(fixture: { root: string; engine: E2eEngine }, kind: NativeFileReader, checkout?: string): string {
+  const session = prepareNativeWriter({ root: fixture.root, env: { HOME: path.join(fixture.root, "home") } }, kind, checkout);
+  if (fixture.engine === "own") writeSessionReport(fixture.root, kind, session);
+  return session;
 }
 
 export const OPENCODE_ID = "ses_fixtureopencoderoot";
@@ -166,11 +246,16 @@ CREATE TABLE IF NOT EXISTS message (id text PRIMARY KEY, session_id text NOT NUL
 CREATE TABLE IF NOT EXISTS part (id text PRIMARY KEY, message_id text NOT NULL REFERENCES message(id) ON DELETE CASCADE,
   session_id text NOT NULL, time_created integer NOT NULL, time_updated integer NOT NULL, data text NOT NULL);`;
 
-// Run as `opencode` in a pane of the private Herdr: a first launch writes its
-// session into OpenCode's database the way OpenCode does (a root session in
-// the pane's checkout and a subagent's child session under it), a `-s <id>`
-// launch continues it without writing, and each tells Herdr its session id
-// the way Herdr's OpenCode integration does. Every argument list is logged.
+// Run as `opencode` in a pane: a first launch writes its session into
+// OpenCode's database the way OpenCode does (a root session in the pane's
+// checkout and a subagent's child session under it), a `-s <id>` launch
+// continues it without writing, and each reports its session id the way
+// OpenCode's integration does, from this process, the pane's foreground
+// program. On Herdr that is Herdr's OpenCode integration (`pane report-agent`
+// and `report-agent-session`); on the core's own engine it is Hide's plugin
+// asking the helper's `session` operation, and a line typed into the pane
+// (`working`, `idle`) is the turn the plugin reports (`turn`). Every argument
+// list is logged.
 const OPENCODE_DOUBLE = String.raw`
 const fs = require("node:fs");
 const path = require("node:path");
@@ -201,29 +286,53 @@ if (!(argv[0] === "-s" && argv[1] === config.id)) {
   part.run("prt_c1", "msg_c1", config.child, at + 1, at + 1, JSON.stringify({ type: "text", text: "subagent task" }));
   db.close();
 }
-const pane = process.env.HERDR_PANE_ID;
-const listed = () => JSON.parse(execFileSync(config.herdr, ["agent", "list"], { encoding: "utf8", timeout: 10000 }))
-  .result.agents.find((agent) => agent.pane_id === pane)?.agent_session?.value;
-for (let attempt = 1; listed() !== config.id; attempt += 1) {
-  if (attempt > 50) throw new Error("Herdr never took the double's session");
-  const seq = Date.now() * 1000 + attempt * 2;
-  execFileSync(config.herdr, ["pane", "report-agent", pane, "--source", "herdr:opencode", "--agent", "opencode",
-    "--state", "idle", "--agent-session-id", config.id, "--seq", String(seq)], { timeout: 10000 });
-  execFileSync(config.herdr, ["pane", "report-agent-session", pane, "--source", "herdr:opencode", "--agent", "opencode",
-    "--agent-session-id", config.id, "--session-start-source", "select", "--seq", String(seq + 1)], { timeout: 10000 });
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+// The helper answers on its standard output; the pane shows OpenCode, not that.
+const helper = (operation, input) => {
+  const answer = JSON.parse(execFileSync(config.hooks, ["opencode", operation], { input: JSON.stringify(input), encoding: "utf8", timeout: 10000 }));
+  if (answer.reported !== true) throw new Error("OpenCode fixture's " + operation + " report was refused");
+};
+if (config.herdr) {
+  const pane = process.env.HERDR_PANE_ID;
+  const listed = () => JSON.parse(execFileSync(config.herdr, ["agent", "list"], { encoding: "utf8", timeout: 10000 }))
+    .result.agents.find((agent) => agent.pane_id === pane)?.agent_session?.value;
+  for (let attempt = 1; listed() !== config.id; attempt += 1) {
+    if (attempt > 50) throw new Error("Herdr never took the double's session");
+    const seq = Date.now() * 1000 + attempt * 2;
+    execFileSync(config.herdr, ["pane", "report-agent", pane, "--source", "herdr:opencode", "--agent", "opencode",
+      "--state", "idle", "--agent-session-id", config.id, "--seq", String(seq)], { timeout: 10000 });
+    execFileSync(config.herdr, ["pane", "report-agent-session", pane, "--source", "herdr:opencode", "--agent", "opencode",
+      "--agent-session-id", config.id, "--session-start-source", "select", "--seq", String(seq + 1)], { timeout: 10000 });
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+  }
+} else {
+  helper("session", { session_id: config.id });
+  require("node:readline").createInterface({ input: process.stdin }).on("line", (line) => {
+    const [request, state] = line.trim().split(" ");
+    const turn = { working: "working", idle: "done" }[state];
+    if (turn) {
+      // The real TUI redraws the interrupt hint as a turn starts and ends.
+      // Its screen transition also gives the native reader a new engine state.
+      process.stdout.write("\x1b[2J\x1b[H" + (state === "working" ? "opencode esc to interrupt\n" : "opencode fixture ready\n"));
+      helper("turn", { session_id: config.id, turn });
+      fs.writeFileSync(config.turnReceipt, request);
+    }
+  });
 }
 process.stdout.write("opencode fixture ready\n");
 setInterval(() => {}, 1 << 30);
 `;
 
+/** What the OpenCode double needs of a run: the engine, its root (and HOME under it) and, on Herdr, the binary its integration reports through. */
+type OpenCodeHost = { engine: E2eEngine; root: string; bin?: string };
+
 /** Installs the OpenCode double as `opencode`; answers its database's path. */
-export function prepareOpenCodeWriter(herdr: HerdrFixture): string {
-  const database = path.join(herdr.env.HOME!, ".local", "share", "opencode", "opencode.db");
-  const bin = path.join(herdr.root, "bin");
+export function prepareOpenCodeWriter(fixture: OpenCodeHost): string {
+  const database = path.join(fixture.root, "home", ".local", "share", "opencode", "opencode.db");
+  const bin = path.join(fixture.root, "bin");
   fs.writeFileSync(path.join(bin, "opencode-double.json"), JSON.stringify({
-    herdr: herdr.bin, database, schema: OPENCODE_SCHEMA, id: OPENCODE_ID, title: OPENCODE_TITLE,
-    child: `${OPENCODE_ID}child`, childTitle: OPENCODE_CHILD_TITLE, launches: path.join(herdr.root, "opencode-launches.jsonl"),
+    herdr: fixture.engine === "herdr" ? fixture.bin : undefined, hooks: builtHooks(), database, schema: OPENCODE_SCHEMA, id: OPENCODE_ID, title: OPENCODE_TITLE,
+    child: `${OPENCODE_ID}child`, childTitle: OPENCODE_CHILD_TITLE, launches: path.join(fixture.root, "opencode-launches.jsonl"),
+    turnReceipt: path.join(fixture.root, "opencode-turn-receipt"),
     answer: labelMarker({task:"Generated OpenCode goal",progress:"완료"}),
   }));
   fixtureProgram(bin, "opencode", OPENCODE_DOUBLE);
@@ -248,11 +357,42 @@ export function writeOpenCodeQuestion(database: string, state: "running" | "comp
 let reported = 0;
 
 /**
- * Herdr's OpenCode integration telling Herdr the pane's state, as OpenCode moves, once Herdr lists it. Its
- * sequence is time-based like the integration's, and rises within one millisecond, since Herdr keeps only a
- * newer report.
+ * OpenCode's integration telling the engine the pane's state as OpenCode
+ * moves, and waiting until the engine lists the pane so.
+ * On Herdr that is its integration's `pane report-agent`, whose sequence is
+ * time-based like the integration's and rises within one millisecond, since
+ * Herdr keeps only a newer report. On the core's own engine it is the plugin's
+ * `turn` report: the line typed into the pane is read by the double
+ * (`OPENCODE_DOUBLE`), which asks the helper from inside the pane.
  */
-export async function reportOpenCodeState(herdr: HerdrFixture, pane: string, state: "working" | "idle"): Promise<void> {
+export async function reportOpenCodeState(fixture: OpenCodeHost, daemon: Pick<Daemon, "origin" | "token" | "stateDir">, pane: string, state: "working" | "idle"): Promise<void> {
+  if (fixture.engine === "own") {
+    const request = randomUUID();
+    const receipt = path.join(fixture.root, "opencode-turn-receipt");
+    const engineRead = () => fs.readFileSync(path.join(daemon.stateDir, "Logs", "core.jsonl"), "utf8").trim().split("\n")
+      .map(line => JSON.parse(line) as { kind?: string; pane_id?: string; state_change_seq?: number; activity?: string })
+      .findLast(record => record.kind === "pane.read_record" && record.pane_id === pane);
+    const before = engineRead()?.state_change_seq;
+    expect(before, "the engine has read the initial OpenCode screen").toBeDefined();
+    await withControl(daemon, async (control) => {
+      await preparePaneInput(control, pane);
+      sendKeys(control, pane, `${request} ${state}\r`);
+      // A row already at rest cannot acknowledge a new idle report. Keep
+      // the input connection until the double has reported this command.
+      await expect.poll(() => fs.existsSync(receipt) ? fs.readFileSync(receipt, "utf8") : "",
+        { message: `OpenCode reported ${state}`, timeout: 10_000 }).toBe(request);
+      // A plugin report can change activity before the holder reads its new
+      // screen. Do not draw the next state until that engine transition lands.
+      await expect.poll(() => engineRead()?.state_change_seq,
+        { message: `the engine read OpenCode's ${state} screen`, timeout: 10_000 }).toBeGreaterThan(before!);
+      await control.until((rest) => {
+        const row = agentIn(rest, pane);
+        return row && (state === "working" ? row.activity === "working" : row.activity !== "working") ? true : undefined;
+      }, `${pane} listed ${state}`, 10_000);
+    });
+    return;
+  }
+  const herdr = fixture as unknown as HerdrFixture;
   reported = Math.max(reported + 1, Date.now() * 1000);
   execFileSync(herdr.bin, ["pane", "report-agent", pane, "--source", "herdr:opencode", "--agent", "opencode", "--state", state,
     "--agent-session-id", OPENCODE_ID, "--seq", String(reported)], { env: herdr.env, timeout: 30_000 });

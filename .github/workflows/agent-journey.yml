@@ -97,18 +97,19 @@ env:
 
 jobs:
   fixture:
-    name: agent journey stand-ins (${{ matrix.system }})
+    name: agent journey stand-ins (${{ matrix.system }}, ${{ matrix.engine }})
     # A Windows-only run leaves no system for the stand-ins.
     if: ${{ inputs.stand-ins != false && inputs.systems != '["windows"]' }}
     runs-on: ${{ fromJSON('{"linux":"ubuntu-latest","macos":"macos-15"}')[matrix.system] }}
     # Every job's cap is at least the sum of its steps' caps, so a step that
     # times out still leaves the report's upload its time
     # (scripts/tests/test_agent_journey_workflow.py).
-    timeout-minutes: 95
+    timeout-minutes: 105
     strategy:
       fail-fast: false
       matrix:
         system: ${{ fromJSON(inputs.systems) }}
+        engine: [herdr, own]
         exclude:
           - system: windows
     defaults:
@@ -116,7 +117,7 @@ jobs:
         shell: bash
     env:
       HERDR_PLATFORM: ${{ fromJSON('{"linux":"linux-x86_64","macos":"macos-aarch64"}')[matrix.system] }}
-      RUN_DIR: agents/runs/agent-journey-fixture-${{ matrix.system }}
+      RUN_DIR: agents/runs/agent-journey-fixture-${{ matrix.system }}-${{ matrix.engine }}
     steps:
       - uses: actions/checkout@v7
         timeout-minutes: 5
@@ -141,8 +142,13 @@ jobs:
           bash scripts/verify-cargo.sh build -p hide-session --example journey_conversation
           bash scripts/verify-cargo.sh build -p hide-memory --example journey_memory
           bash scripts/verify-cargo.sh build -p hide-agent-adapter --example journey_composer
+      - name: Build the native pane holder
+        if: matrix.engine == 'own'
+        timeout-minutes: 10
+        run: bash scripts/verify-cargo.sh build -p hide-holder --bin hide-holder
       - name: Fetch the pinned Herdr runtime
         id: herdr
+        if: matrix.engine == 'herdr'
         timeout-minutes: 5
         run: echo "bin=$(zsh scripts/fetch-herdr-runtime.sh --platform "$HERDR_PLATFORM")" >> "$GITHUB_OUTPUT"
       - name: Build the Claude and Codex stand-ins and the controller's spawn provider
@@ -161,7 +167,7 @@ jobs:
         timeout-minutes: 30
         run: |
           set +e
-          python3 scripts/agent-journey-check.py --mode ci \
+          python3 scripts/agent-journey-check.py --mode ci --engine "${{ matrix.engine }}" \
             --fixture-bin "$RUNNER_TEMP/journey-shims" --controller-provider "$RUNNER_TEMP/journey-controller/claude" \
             --herdr-bin "${{ steps.herdr.outputs.bin }}" --run-dir "$RUN_DIR"
           echo "exit=$?" >> "$GITHUB_OUTPUT"
@@ -173,7 +179,7 @@ jobs:
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
-          name: agent-journey-fixture-${{ matrix.system }}
+          name: agent-journey-fixture-${{ matrix.system }}-${{ matrix.engine }}
           # The report and each cell's evidence; the probe, which held the
           # private daemon, is gone by now.
           path: |
@@ -229,23 +235,29 @@ jobs:
           if-no-files-found: warn
 
   fake:
-    name: agent journey fake model (${{ matrix.system }})
+    name: agent journey fake model (${{ matrix.system }}, ${{ matrix.engine }})
     if: ${{ inputs.fake }}
     runs-on: ${{ fromJSON('{"linux":"ubuntu-latest","macos":"macos-15","windows":"windows-latest"}')[matrix.system] }}
     # Seven agents of eleven cells each, about 4 to 7 minutes an agent on
     # macOS and up to 9 on Windows (2026-10-18), inside the journey step's 85;
     # the job's cap is its steps' caps summed.
-    timeout-minutes: 171
+    timeout-minutes: 181
     strategy:
       fail-fast: false
       matrix:
         system: ${{ fromJSON(inputs.systems) }}
+        engine: [herdr, own]
+        # CI Job forbids holder breakaway. b4-default owns holder lifetime
+        # and must enable this Windows cell after that integration.
+        exclude:
+          - system: windows
+            engine: own
     defaults:
       run:
         shell: bash
     env:
       HERDR_PLATFORM: ${{ fromJSON('{"linux":"linux-x86_64","macos":"macos-aarch64","windows":"windows-x86_64"}')[matrix.system] }}
-      RUN_DIR: agents/runs/agent-journey-fake-${{ matrix.system }}
+      RUN_DIR: agents/runs/agent-journey-fake-${{ matrix.system }}-${{ matrix.engine }}
       # Every active adapter unless the caller named some (agent-canary.yml's pinned rerun).
       AGENTS: ${{ inputs.agents }}
       # The journey needs Python 3.12; Windows names it python.
@@ -298,8 +310,13 @@ jobs:
           bash scripts/verify-cargo.sh build -p hide-session --example journey_conversation
           bash scripts/verify-cargo.sh build -p hide-memory --example journey_memory
           bash scripts/verify-cargo.sh build -p hide-agent-adapter --example journey_composer
+      - name: Build the native pane holder
+        if: matrix.engine == 'own'
+        timeout-minutes: 10
+        run: bash scripts/verify-cargo.sh build -p hide-holder --bin hide-holder
       - name: Fetch the pinned Herdr runtime
         id: herdr
+        if: matrix.engine == 'herdr'
         timeout-minutes: 5
         run: |
           if [[ "$RUNNER_OS" == Windows ]]; then
@@ -332,7 +349,7 @@ jobs:
           set +e
           selection=()
           if [[ -n "$AGENTS" ]]; then selection=(--agents "$AGENTS"); fi
-          "$PYTHON" scripts/agent-journey-check.py --mode ci --fake-model "${selection[@]}" \
+          "$PYTHON" scripts/agent-journey-check.py --mode ci --engine "${{ matrix.engine }}" --fake-model "${selection[@]}" \
             --controller-provider "${{ steps.controller.outputs.provider }}" \
             --herdr-bin "${{ steps.herdr.outputs.bin }}" --run-dir "$RUN_DIR"
           echo "journey exit $?"
@@ -348,7 +365,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           # A hand run has no `report-name` input.
-          name: ${{ inputs.report-name || 'agent-journey-fake' }}-${{ matrix.system }}
+          name: ${{ inputs.report-name || 'agent-journey-fake' }}-${{ matrix.system }}-${{ matrix.engine }}
           path: |
             ${{ env.RUN_DIR }}/report.*
             ${{ env.RUN_DIR }}/*.json
