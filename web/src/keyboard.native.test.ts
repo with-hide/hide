@@ -111,6 +111,28 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("split pane shortcuts", () => {
+  it.each(["ArrowRight", "ArrowLeft"])("moves between two split panes with Command+Option+%s", code => {
+    const rest = useShellStore.getState().rest;
+    const checkout = rest?.navigator?.workspaces?.[0]?.checkouts[0];
+    if (!rest || !checkout) throw new Error("fixture checkout missing");
+    checkout.tabs = [{ id: "t", workspace_id: "w", checkout_id: "c", label: "terminal", empty: false, delegated: false, panes: ["left", "right"].map(id => ({ id, device_id: "local", device_pane_id: id, cwd: "/fixture", herdr_label: null, terminal_title: null, identity_label: null, status_code: "idle", requires_close_confirmation: false, requires_close_status_check: false })) }];
+    checkout.active_tab_id = "t";
+    const sizes = { areaMinWidth: 100, areaMinHeight: 100, divider: 4, tabStrip: 30 };
+    const layout = { root: { area: { id: "a1", active: "t", displays: [{ id: "t" }] } }, active_area: "a1", canvases: {}, display_count: 1, limits: { areas: 6, depth: 5, displays: 64 } };
+    noteAreaFrame("agent", { workspace: { device_id: "local", path: "/fixture" }, remote: false, layout, geometry: areaGeometry(layout.root, { x: 0, y: 0, width: 1000, height: 800 }, sizes), sizes });
+    useShellStore.setState({ rest });
+    noteKeyboardOwner({ kind: "pane", workspace: "c", paneId: "left" });
+    events.length = 0;
+
+    const press = new KeyboardEvent("keydown", { key: code, code, metaKey: true, altKey: true });
+    window.dispatchEvent(press);
+
+    expect(press.defaultPrevented).toBe(true);
+    expect(events).toEqual([{ schema_version: 2, kind: "focus_pane", payload: { pane_id: "right", origin: "operator" } }]);
+  });
+});
+
 describe("native cycle responder return", () => {
   it.each(["one item", "no owner", "shortcut recording"])("returns the visible origin after a rejected first start: %s", (reason) => {
     if (reason === "one item") { unregister?.(); draw(1); }

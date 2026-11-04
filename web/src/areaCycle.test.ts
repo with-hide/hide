@@ -9,7 +9,7 @@ import { configurePaneVisits, expectPane, observeEntries, observePane, resetRece
 import type { SnapshotRest } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
-import type { KeyboardOwner } from "./viewFocus";
+import { noteKeyboardOwner, type KeyboardOwner } from "./viewFocus";
 
 // a1 exists independently in Agent and View; another Agent area and
 // checkout both contain tabs that must never leak into the cycle.
@@ -33,6 +33,43 @@ function draw(rest: SnapshotRest) {
 }
 const ids = (cycle: ReturnType<typeof areaCycle>) => cycle?.items.map((row) => row.target.kind === "surface" ? row.target.surface.id : "wrong-kind");
 const owner = { kind: "pane", workspace: "c", paneId: "t1-pane" } as const;
+
+describe("split pane navigation", () => {
+  beforeEach(() => { resetRecent(); useUiStore.setState({ screen: { kind: "workspace" }, overviewOpen: false }); });
+
+  it.each([
+    { from: "left", step: 1, to: "middle" },
+    { from: "right", step: 1, to: "left" },
+    { from: "left", step: -1, to: "right" },
+    { from: "right", step: -1, to: "middle" },
+  ] as const)("moves from $from to $to with step $step without leaving the tab", ({ from, step, to }) => {
+    const rest = world();
+    const tab = rest.navigator?.workspaces?.[0]?.checkouts[0]?.tabs[0];
+    const pane = tab?.panes[0];
+    if (!tab || !pane) throw new Error("fixture tab missing");
+    tab.panes = ["left", "middle", "right"].map(id => ({ ...pane, id }));
+    draw(rest);
+    noteKeyboardOwner({ kind: "pane", workspace: "c", paneId: from });
+    const sent: unknown[] = [];
+    createActions(event => { sent.push(event); }).focusAdjacentPane(step);
+    expect(sent).toEqual([{ schema_version: 2, kind: "focus_pane", payload: { pane_id: to, origin: "operator" } }]);
+  });
+
+  it.each(["single pane", "view owns keyboard", "hidden tab"])("does nothing with %s", reason => {
+    const rest = world();
+    if (reason !== "single pane") {
+      const tab = rest.navigator?.workspaces?.[0]?.checkouts[0]?.tabs[reason === "hidden tab" ? 1 : 0];
+      const pane = tab?.panes[0];
+      if (!tab || !pane) throw new Error("fixture tab missing");
+      tab.panes = [pane, { ...pane, id: `${pane.id}-side` }];
+    }
+    draw(rest);
+    noteKeyboardOwner(reason === "view owns keyboard" ? { kind: "view", workspace: "c", areaId: "a1" } : { ...owner, paneId: reason === "hidden tab" ? "t2-pane" : owner.paneId });
+    const sent: unknown[] = [];
+    createActions(event => { sent.push(event); }).focusAdjacentPane(1);
+    expect(sent).toEqual([]);
+  });
+});
 
 describe("focused-area recent tabs", () => {
   beforeEach(() => { resetRecent(); useUiStore.setState({ screen: { kind: "workspace" }, cycle: null }); noteAreaFrame("agent", null); noteAreaFrame("view", null); });

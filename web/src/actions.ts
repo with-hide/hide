@@ -3,6 +3,7 @@ import { deviceConnected, readsHere } from "./devices";
 import { sameGithubPullRequest } from "./pullRequestIdentity";
 import { useGroupFeedback } from "./groupTabs";
 import { areaFrame } from "./areaFrames";
+import { agentOrigin } from "./areaCycle";
 import { AGENT_WORDS, agentAreaStepUnavailable, agentMenu, type AgentAreaStep, type AgentCommand } from "./agentLayout";
 import { findArea as findAgentArea, activeDisplay as activeAgentDisplay, adjacentInOrder as adjacentAgentArea, locateDisplay as locateAgentTab, neighbourArea as neighbourAgentArea, resizeTarget as resizeAgentTarget, type Edge as AgentEdge } from "./areaLayout";
 // Every shell command in one place, so a shortcut, a button and a menu run
@@ -2658,6 +2659,16 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     focusPane,
+
+    focusAdjacentPane(step: 1 | -1) {
+      const origin = agentOrigin(rest(), keyboardCommandOwner());
+      if (!origin?.paneId) return;
+      const tab = frontCheckout(rest())?.tabs.find(tab => tab.panes.some(pane => pane.id === origin.paneId));
+      if (!tab || tab.panes.length < 2) return;
+      const index = tab.panes.findIndex(pane => pane.id === origin.paneId);
+      const next = tab.panes[(index + step + tab.panes.length) % tab.panes.length];
+      if (next) focusPane(next.id);
+    },
 
     createTab,
     agentGroup,

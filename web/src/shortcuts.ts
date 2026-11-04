@@ -142,6 +142,8 @@ export type CommandId =
   | "explorer_paste"
   | "split_right"
   | "split_down"
+  | "focus_next_pane"
+  | "focus_previous_pane"
   | "toggle_zoom"
   | "toggle_plan"
   | "close_pane"
@@ -302,6 +304,8 @@ export const REGISTRY: readonly Command[] = [
   { id: "keep_open", title: "Keep open", group: "Panes", browser: { code: "KeyK", meta: true, shift: true }, electron: { code: "KeyK", meta: true, shift: true }, moved: false },
   { id: "split_right", title: "Split right", group: "Panes", browser: { code: "KeyD", meta: true }, electron: { code: "KeyD", meta: true }, moved: false },
   { id: "split_down", title: "Split down", group: "Panes", browser: { code: "KeyD", meta: true, shift: true }, electron: { code: "KeyD", meta: true, shift: true }, moved: false },
+  { id: "focus_next_pane", title: "Focus next pane", group: "Panes", browser: null, electron: { code: "ArrowRight", meta: true, alt: true }, moved: false },
+  { id: "focus_previous_pane", title: "Focus previous pane", group: "Panes", browser: null, electron: { code: "ArrowLeft", meta: true, alt: true }, moved: false },
   { id: "toggle_zoom", title: "Zoom pane", group: "Panes", browser: { code: "Enter", meta: true, shift: true }, electron: { code: "Enter", meta: true, shift: true }, moved: false },
   // The focused pane's plan (PRD hide-plan B7), in the place the task list's
   // chord had: ⇧⌘U on macOS in both hosts, Alt+Shift+U on Windows and Linux
@@ -511,6 +515,8 @@ export const EDITABLE_PANE_COMMANDS: readonly CommandId[] = [
   "desk_terminal",
   "split_right",
   "split_down",
+  "focus_next_pane",
+  "focus_previous_pane",
   "toggle_zoom",
   "toggle_plan",
   "close_pane",

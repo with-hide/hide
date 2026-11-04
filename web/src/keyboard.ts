@@ -358,6 +358,10 @@ export function installKeyboard(actions: Actions): () => void {
         return actions.split("right");
       case "split_down":
         return actions.split("down");
+      case "focus_next_pane":
+        return actions.focusAdjacentPane(1);
+      case "focus_previous_pane":
+        return actions.focusAdjacentPane(-1);
       case "toggle_zoom": {
         // One chord for "this, full size", chosen by where the operator
         // works: in the right lane it expands the lane and back, anywhere

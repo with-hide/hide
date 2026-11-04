@@ -3602,6 +3602,8 @@ The app follows the phone's light or dark setting, draws text a quarter larger t
 
 ## Keyboard shortcuts per system
 
+Focus next pane and Focus previous pane cycle through the panes of the terminal tab that holds the keyboard, in that tab's pane order, wrapping at either end. They include ordinary shells and delegated canvases, stay within that tab, and do nothing for a single pane or when the keyboard is in a View or tool. Both commands can be rebound in Settings > Shortcuts and appear in the desktop Pane menu. They have no default browser chord because Chrome keeps the macOS keys for its own tabs.
+
 Web owner: `web/src/shortcuts.ts` (the registry, the rule and its exceptions), `web/src/keys.ts` (terminal keys), `web/src/shortcutLabels.ts` (every chord a screen prints), `web/src/keyboard.ts` (the window listener); desktop owner: `desktop/src/main/menu.ts` (the menu's accelerators); test owners: `web/src/shortcuts.test.ts`, `web/src/shortcutsDoc.test.ts` (fails when the Every command table below and the registry disagree), `web/src/keys.test.ts`, `desktop/src/main/menu.test.ts`, `web/e2e/korean-input.spec.ts` (Hangul composed through the browser's input-method path: the ⇧↩ order and a composing Escape), and `web/e2e/chords.ts`, through which every web e2e presses its chords as the runner's system does.
 
 The rest of this document writes chords as macOS has them; this section is how Windows and Linux press each one.
@@ -3712,6 +3714,8 @@ The sheet carries no row or explanation for a command the removed native app alo
 | Keep open | `⇧⌘K` | `Alt+Shift+K` | `⇧⌘K` | `Alt+Shift+K` |
 | Split right | `⌘D` | `Ctrl+Shift+D` | `⌘D` | `Ctrl+Shift+D` |
 | Split down | `⇧⌘D` | `Alt+Shift+D` | `⇧⌘D` | `Alt+Shift+D` |
+| Focus next pane | `⌥⌘→` | `Alt+Shift+Right` | none | none |
+| Focus previous pane | `⌥⌘←` | `Alt+Shift+Left` | none | none |
 | Zoom pane | `⇧⌘↩` | `Alt+Shift+Enter` | `⇧⌘↩` | `Alt+Shift+Enter` |
 | Show plan | `⇧⌘U` | `Alt+Shift+U` | `⇧⌘U` | `Alt+Shift+U` |
 | Close pane | `⇧⌘W` | `Alt+Shift+W` | `⌥⇧W` | `Alt+Shift+W` |
