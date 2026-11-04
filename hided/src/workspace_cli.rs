@@ -164,7 +164,10 @@ pub fn bootstrap(env: &Env, one_shot: bool) -> Result<PathBuf, String> {
     let pane_id = env.pane_id.as_deref().unwrap_or("");
     let mut nonce = [0u8; 16];
     getrandom::getrandom(&mut nonce).map_err(|_| "reference_unavailable".to_owned())?;
-    let request = json!({"pane_id":pane_id,"nonce":hex::encode(nonce),"one_shot":one_shot});
+    // The pane's installation goes with it, so a daemon of another one
+    // refuses it rather than bind it by its folder (`pane_auth`).
+    let request = json!({"pane_id":pane_id,"nonce":hex::encode(nonce),"one_shot":one_shot,
+        "install":env.install});
     let device_pane = env
         .install
         .as_deref()
