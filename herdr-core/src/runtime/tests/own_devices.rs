@@ -212,6 +212,13 @@ fn a_hooks_session_on_a_device_goes_to_that_devices_own_engine() {
     let node = Arc::new(HolderNode::default());
     connect(&shared, ready(Arc::clone(&node), Ok(())));
     wait_engine(&shared, true);
+    // A device's engine takes deliveries once its session reads connected,
+    // which the link's session sync reports after the engine opened.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while shared.lock().unwrap().delivery_engine(DEVICE).is_none() {
+        assert!(Instant::now() < deadline, "the device never read connected");
+        std::thread::sleep(Duration::from_millis(5));
+    }
     let report = |session: Option<&str>| hide_node_link::panes::HookStatusReport {
         runtime: "claude-code".to_owned(),
         version: hide_agent_hooks::HOOK_VERSION,
