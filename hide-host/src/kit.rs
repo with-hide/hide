@@ -808,6 +808,75 @@ mod tests {
         );
     }
 
+    /// A device helper started with a home of its own
+    /// (`HIDE_DEV_DEVICE_HOME`) keeps every place its kit and state write
+    /// under that home, whatever the account's environment still says: the
+    /// start step replaces the platform's home variable, clears
+    /// [`HOME_FOLDER_VARIABLES`] and sets each agent's home variable inside
+    /// it, and every other variable here names a
+    /// folder of the account's (Windows OpenSSH sets `HOME` beside the
+    /// `USERPROFILE` the start step replaces, and a kit that read `HOME`
+    /// there wrote the account's own hook files).
+    #[test]
+    fn every_kit_location_follows_the_home_the_platform_names() {
+        use crate::serve::{HOME_FOLDER_VARIABLES, agent_home_variables};
+        use hide_agent_adapter::{ADAPTERS, HomeScope};
+        let dir = tempfile::tempdir().unwrap();
+        let own = dir.path().join("own");
+        let account = dir.path().join("account");
+        let inherited = |name: &str| {
+            if name == hide_platform::host::HOME_VARIABLE {
+                Some(own.clone().into_os_string())
+            } else {
+                Some(account.join(name).into_os_string())
+            }
+        };
+        // Left as the account has them, the state folder is theirs.
+        let env = Env::of_variables(&inherited);
+        assert!(!env.state.unwrap().starts_with(&own));
+
+        let agents = agent_home_variables();
+        let started = |name: &str| {
+            if HOME_FOLDER_VARIABLES.contains(&name) {
+                None
+            } else if let Some((_, folder)) = agents.iter().find(|(variable, _)| *variable == name)
+            {
+                Some(own.join(folder).into_os_string())
+            } else {
+                inherited(name)
+            }
+        };
+        let env = Env::of_variables(&started);
+        assert_eq!(env.home.as_deref(), Some(own.as_path()));
+        assert_eq!(
+            env.state.as_deref(),
+            Some(own.join(".hide").join("state").as_path())
+        );
+        let home = env.home.unwrap();
+        let inputs = Inputs::read(&home, "~/.local/bin", None, &["~/work".to_owned()]).unwrap();
+        let mut locations = vec![hide_kit::kit_state_dir(&home), inputs.cli_dir];
+        locations.extend(inputs.projects);
+        locations.extend(
+            hide_agent_hooks::runtime::AgentRuntime::ALL.map(|runtime| runtime.config_path(&home)),
+        );
+        // Each agent's folder as the agent itself reads it in a pane.
+        for agent in ADAPTERS {
+            let value = agent.home_variable.and_then(started);
+            locations.push(
+                agent
+                    .home(Some(&home), value.as_deref(), HomeScope::Read)
+                    .unwrap(),
+            );
+        }
+        for location in locations {
+            assert!(
+                location.starts_with(&own),
+                "{} is outside the helper's home",
+                location.display()
+            );
+        }
+    }
+
     fn placed(dir: &Path, version: &str) -> Placement {
         let root = dir.join("host-helper");
         std::fs::create_dir_all(root.join(version)).unwrap();

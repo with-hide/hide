@@ -218,6 +218,21 @@ it("says an Intel Mac reached over ssh could not connect, once and in plain word
   }
 });
 
+it("says a Windows device reached by a core on Herdr's engine connects only on the new engine", async () => {
+  const message = "Windows devices connect only on the new engine; nothing was installed on this one";
+  const view = await mount(state([remote("win", {
+    state: "unavailable", problem: "needs_new_engine", message,
+    host: { ...host, platform: "windows-x86_64", consent: "granted", state: "unavailable", message },
+  })]));
+  try {
+    expect(view.q('[data-device-problem="win:needs_new_engine"]')?.textContent).toBe("!Couldn't connectWindows devices connect only on the new engine. Nothing was installed on this one.");
+    expect(view.row("win")?.textContent).not.toContain("does not run on this device's system");
+    expect(view.q('[data-device-host]')).toBeNull();
+  } finally {
+    await view.unmount();
+  }
+});
+
 it.each([
   "The matching release's device asset could not be downloaded",
   "Device archive size or SHA-256 does not match this app",

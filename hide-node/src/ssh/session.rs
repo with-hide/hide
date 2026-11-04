@@ -295,7 +295,7 @@ pub(super) fn sign_in(
         dial.alias,
         dial.resolved,
         version,
-        bootstrap::REMOTE_COMMAND,
+        &bootstrap::remote_command(),
     ));
     match (&desk, dial.askpass) {
         (Some(desk), Some(program)) => {

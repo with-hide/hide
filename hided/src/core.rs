@@ -1342,7 +1342,7 @@ fn owner_loop(
         .home
         .as_ref()
         .map(std::path::PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(std::path::PathBuf::from));
+        .or_else(|| hide_platform::host::home_dir().ok());
     let mut own_node = hide_node::Local::new(home.clone());
     // What the node measured of each repository's worktrees outlives the
     // daemon, in the core's state folder.
@@ -1371,6 +1371,13 @@ fn owner_loop(
     // sign-in questions, ship beside this binary; a daemon anywhere else
     // carries none, which leaves each device's node `unsupported` with that
     // reason.
+    let device_home = match crate::env::device_home() {
+        Ok(home) => home,
+        Err(reason) => {
+            let _ = ready.send(Err(reason));
+            return;
+        }
+    };
     let devices = hide_node::ssh::Connector::new(
         std::env::current_exe()
             .ok()
@@ -1385,6 +1392,7 @@ fn owner_loop(
     )
     .with_pane_events(panes)
     .with_terminals(Arc::clone(&terminals) as Arc<dyn DeviceSink>)
+    .with_device_home(device_home)
     // A core on its own engine runs every device's panes on it too, in pane
     // holders the device's node runs, and puts no Herdr on the device (PRD
     // engine-bundle-3-core-owns D-22).

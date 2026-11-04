@@ -1445,7 +1445,7 @@ fn serve(
             // app or the build this node runs, for the home the node serves
             // (a development build installs nothing).
             kit: std::env::current_exe().map_or(hide_host::serve::KitPlace::Standalone, |exe| {
-                let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+                let home = hide_platform::host::home_dir().ok();
                 hide_host::serve::KitPlace::of_program(&exe, home.as_deref())
             }),
         },

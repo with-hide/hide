@@ -70,6 +70,10 @@ pub const FIXTURE_HOME_MARKER: &str = hide_kit::layout::FIXTURE_HOME_MARKER;
 /// bundle 4, the switch release, once the new engine is the default
 /// (docs/ARCHITECTURE.md, The pane holder).
 pub const HIDE_DEV_PANE_HOLDER: &str = hide_node::terminal::holder::SWITCH;
+/// Development only: the home every SSH device's node runs with in place of
+/// its account's, so a candidate on a shared device keeps its state, sessions
+/// and pane holders apart from the account's own Hide there.
+pub const HIDE_DEV_DEVICE_HOME: &str = hide_node::ssh::DEVICE_HOME_VARIABLE;
 
 pub const REGISTRY: &[EnvKey] = &[
     EnvKey {
@@ -245,6 +249,12 @@ pub const REGISTRY: &[EnvKey] = &[
         required: false,
         format: "`1` (the daemon runs the core's own engine: each pane in a pane holder its node starts, with no Herdr server, socket or binary) or `0`; any other value fails the daemon's check with the values it takes",
         absent_behavior: "Off: the core runs on Herdr, every pane opens through Herdr's terminal sessions and no pane holder is started, adopted or read; a device's node logs a diagnostic and stays on Herdr even when it is `1`",
+    },
+    EnvKey {
+        key: HIDE_DEV_DEVICE_HOME,
+        required: false,
+        format: "`~/` and a path below the device account's home, or an absolute path on the device (`C:/...` on Windows), with no empty, `.` or `..` name; development only",
+        absent_behavior: "Each SSH device's node runs with its account's own home (HOME, or USERPROFILE on Windows); isolated verification sets it, beside HIDE_HOST_HELPER_ROOT, so a candidate's state, sessions and pane holders on a shared device never meet the account's own Hide there",
     },
     EnvKey {
         key: HOME,
@@ -580,6 +590,14 @@ fn resolve(mut read: impl FnMut(&str) -> Option<String>) -> (Env, Vec<EnvError>)
         }
         other => other,
     };
+    if read(HIDE_DEV_DEVICE_HOME)
+        .is_some_and(|value| hide_node::ssh::parse_device_home(&value).is_err())
+    {
+        errors.push(EnvError {
+            key: HIDE_DEV_DEVICE_HOME,
+            kind: "invalid",
+        });
+    }
     let host_cli_dir = match read(HIDE_HOST_CLI_DIR) {
         Some(value) if !valid_helper_root(&value) => {
             errors.push(EnvError {
@@ -794,6 +812,21 @@ pub(crate) fn pane_holder_switch() -> Result<hide_node::terminal::holder::Switch
     hide_node::terminal::holder::Switch::parse(std::env::var_os(HIDE_DEV_PANE_HOLDER).as_deref())
 }
 
+/// The home every SSH device's node runs with ([`HIDE_DEV_DEVICE_HOME`]),
+/// `None` when it is not set; a value it does not take is an error saying
+/// what it takes.
+pub(crate) fn device_home() -> Result<Option<String>, String> {
+    match std::env::var_os(HIDE_DEV_DEVICE_HOME) {
+        None => Ok(None),
+        Some(value) => {
+            let value = value
+                .into_string()
+                .map_err(|_| format!("{HIDE_DEV_DEVICE_HOME} is not Unicode"))?;
+            hide_node::ssh::parse_device_home(&value).map(Some)
+        }
+    }
+}
+
 /// Public ingestion token embedded by build.rs; runtime cannot replace it.
 pub(crate) fn product_analytics_token() -> Option<String> {
     let token = env!("HIDE_POSTHOG_PROJECT_TOKEN");
@@ -837,6 +870,7 @@ mod tests {
         (HIDE_HOST_HELPER_ROOT, "relative"),
         (HIDE_TAILSCALE_BIN, "relative"),
         (HIDE_DEV_PANE_HOLDER, "yes"),
+        (HIDE_DEV_DEVICE_HOME, "relative/home"),
     ];
 
     #[test]
