@@ -67,7 +67,7 @@ export function isolate(herdr: IsolatedEngine, label: string): Isolated {
   if (isolations.size >= MAX_ISOLATIONS) throw new Error(`desktop fixture has ${MAX_ISOLATIONS} unclosed homes; clean an owned fixture before creating another`);
   // macOS's temporary base already uses most of a Unix socket's path bound.
   // Keep the state's holder socket short regardless of the test's label.
-  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "hdd-")));
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(process.platform === "win32" ? os.tmpdir() : "/tmp", "hdd-")));
   const home = path.join(root, "home");
   let env: Record<string, string>;
   try {

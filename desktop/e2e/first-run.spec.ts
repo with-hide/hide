@@ -11,6 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { clickClosingItsPage } from "../../web/e2e/closing-click";
 import { startEngine, type EngineServer } from "../../web/e2e/engine-fixture";
+import { e2eEngine } from "../../web/e2e/e2e-engine";
 import { hostLog, isolate, launch, nodeOf, screenshot, test, type Isolated } from "./fixture";
 
 // Every test starts from a home with no project registered, as the first run does, so the engine is empty and the app starts its own daemon.
@@ -19,6 +20,7 @@ let run: Isolated;
 let app: ElectronApplication | null = null;
 
 test.describe.configure({ timeout: 180_000 });
+test.skip(e2eEngine() === "own", "b4-default 대기(first-run의 Herdr 프로필 읽기 미확정)");
 
 test.beforeEach(async () => {
   engine = await startEngine();

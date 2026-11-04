@@ -19,7 +19,7 @@ import { fitWindow, launchShell, startStack, test } from "./fixture";
 // the one thing that is missing when the engine's panes are made again.
 test("failed terminals remain legible and keyboard reachable in a narrow native window", { tag: "@platform" }, async () => {
   test.skip(e2eEngine() === "own", "own-restore-checkout 노드 대기: cold restore moves the nested folder's pane out of its original checkout");
-  test.skip(process.platform === "win32" && e2eEngine() === "herdr", "geometry close 대기열 제품 결함 판정 대기: close remains unfinished after split completes");
+  test.skip(process.platform === "win32" && e2eEngine() === "herdr", "b4-default의 Herdr 레인 삭제 대기: close remains unfinished after split completes");
   // Windows starts the integrated PowerShell, which no SHELL setting makes unstartable.
   test.skip(process.platform === "win32" && e2eEngine() === "own", "the own engine's restore fails only for a shell that cannot start, which no setting does for Windows' integrated PowerShell");
   const stack = await startStack("restoration", { agents: false });

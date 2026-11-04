@@ -217,6 +217,7 @@ When the behavior depends on the order of two events, the test fixes that order;
   Its opt-in `--deadline-comparison` compares a controlled 21-second child under the old 20-second watchdog and the journey's protocol budget; it cannot establish why an earlier Windows command failed.
   Journey observations (`pane read` and registration `agent list`) use the controller's claimed capability from the host, bounded by the same process owner, without typing an input turn into its pane.
   Repeated reads therefore consume none of the controller's 512 command-file budget; mutations still use that bounded command path, and a read failure retains its cause instead of becoming a registration timeout.
+  Desktop fixture homes use a short `/tmp` root on Unix, so the default state folder below HOME, as well as an explicit state folder, leaves room for the holder socket within the OS path limit.
   The private Herdr server, panes and `hided` use `fixturePath`: the shim directory followed by system-tool directories, including `/usr/sbin` for `lsof` on Unix and native Windows and Git directories on Windows.
   `fixtureExecutable` supplies native `.exe` names and `fixtureToolPath` uses the native path delimiter while refusing missing or non-absolute Windows system-root or program-files values.
   On disposable Windows CI runners, the web and desktop e2e jobs share `.github/actions/windows-fixture-path`, which prepends `%HIDE_E2E_ROOT%\bin` to the user's registry `Path` as `REG_EXPAND_SZ`, preserving its other entries.
@@ -758,7 +759,8 @@ The transition retains these explicit exceptions:
 | OpenCode own-engine fake journey, entire row | Excluded: `own-start-fixes 노드 대기(OpenCode 첫 지시문 미전달, 제품 결함)` | `own-start-fixes` delivers the first brief and removes this exclusion |
 | Windows own-engine desktop and package | Excluded: CI Job forbids holder breakaway | Holder lifetime fix and enabled cells by `b4-default` |
 | Own-engine desktop failed-restoration spec | Excluded: `own-restore-checkout 노드 대기`; cold restore moves a pane in a nested folder out of its original checkout | `own-restore-checkout` preserves the original checkout and removes this exclusion |
-| Windows Herdr desktop failed-restoration spec | Excluded: `geometry close 대기열 제품 결함 판정 대기`; close stays unfinished after the preceding split completes | Diagnose and fix the close queue, then remove this exclusion |
+| Windows Herdr desktop failed-restoration spec | Excluded: close stays unfinished after the preceding split completes | `b4-default` removes the Herdr lane |
+| Own-engine desktop first-run wizard, 5 tests | Excluded: `b4-default 대기(first-run의 Herdr 프로필 읽기 미확정)` | `b4-default` retires the Herdr profile read and enables these cells |
 | Desktop SSH specs on the own engine | Fixture prepared; existing private-SSH prerequisites still skip without that environment | Connect an isolated SSH CI lane |
 
 A run that plans every lane a pull request can plan starts at most 60 jobs.
