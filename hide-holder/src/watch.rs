@@ -20,8 +20,8 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use hide_holder_protocol::{
-    Closed, Facts, FrameError, HolderMessage, ScreenRead, ScreenState, Unknown, WatchMessage,
-    read_watch, write_holder,
+    Closed, Facts, FrameError, HolderMessage, LineEditing, ScreenRead, ScreenState, Unknown,
+    WatchMessage, read_watch, write_holder,
 };
 use hide_platform::ipc::{LocalStream, ShutdownHandle};
 use hide_screen_rules::{Input, Manifest, Rules, State};
@@ -33,6 +33,19 @@ use crate::pane::{Observed, Pane};
 /// The least time between two reads of the facts, as the screen is drawn at
 /// most once per frame of a 60 Hz screen.
 pub const MIN_FACTS_INTERVAL: Duration = Duration::from_millis(16);
+
+/// How often the writer asks the terminal again whether it edits lines
+/// while a program other than the pane's own holds it so: a program turns
+/// line editing off to read keys without writing anything, and one that
+/// drew its screen first would otherwise be known to read keys only at its
+/// next output.
+pub const LINE_EDITING_RECHECK: Duration = Duration::from_millis(100);
+
+/// How long after such a program takes the foreground the writer keeps
+/// asking: the deadline Hide gives an agent's start (`herdr-core`'s
+/// `AGENT_START_DEADLINE`), after which the start has ended either way and
+/// the mode is read again at the program's next output.
+pub const LINE_EDITING_RECHECK_FOR: Duration = Duration::from_secs(120);
 
 /// What a watch's writer has to do: messages to send first, then the facts
 /// when they may have changed.
@@ -189,7 +202,7 @@ fn state(state: State) -> ScreenState {
 }
 
 /// The pane's facts now: what the pane says of itself, its foreground, and
-/// its screen read by its rules.
+/// its screen read by its rules, with no facts extension.
 pub fn facts(
     pane: &Mutex<Pane>,
     rules: &SharedRules,
@@ -214,6 +227,8 @@ pub fn facts(
         bracketed_paste: observed.bracketed_paste,
         foreground,
         screen,
+        line_editing: None,
+        foreground_unread: None,
     })
 }
 
@@ -230,12 +245,23 @@ pub struct FactsWriter {
     pub program_package: bool,
     /// The terminal's foreground process group, or why it is not known.
     pub group: Box<dyn Fn() -> Result<u32, Unknown> + Send>,
+    /// Whether the terminal edits lines, where the watch's node accepted
+    /// [`hide_holder_protocol::Capability::LineEditing`].
+    pub line_editing: Option<Box<dyn Fn() -> LineEditing + Send>>,
+    /// Whether the watch's node accepted
+    /// [`hide_holder_protocol::Capability::ForegroundUnread`].
+    pub foreground_unread: bool,
     pub log: Log,
 }
 
 enum Job {
     Send(HolderMessage),
-    Read { owed: bool },
+    Read {
+        owed: bool,
+    },
+    /// Nothing changed by the time the terminal's line editing is asked
+    /// again ([`LINE_EDITING_RECHECK`]).
+    Recheck,
 }
 
 impl FactsWriter {
@@ -244,39 +270,85 @@ impl FactsWriter {
         let mut foreground = Foreground::default();
         let mut last: Option<Facts> = None;
         let mut next = Instant::now();
+        // The program that holds the terminal while it edits lines and since
+        // when, so its line editing is asked again for a bounded time.
+        let mut editing: Option<(u32, Instant)> = None;
+        // Whether the last read could not say what holds the terminal, so
+        // the log has it once per spell.
+        let mut was_unread = false;
         loop {
-            let message = match self.next_job(next) {
-                Job::Send(message) => message,
-                Job::Read { owed } => {
-                    next = Instant::now() + MIN_FACTS_INTERVAL;
-                    let mut program = foreground.program(self.shell, (self.group)(), &self.log);
-                    if !self.program_package
-                        && let Some(program) = &mut program
-                    {
-                        program.package = None;
+            let recheck = editing
+                .filter(|(_, since)| since.elapsed() < LINE_EDITING_RECHECK_FOR)
+                .map(|_| Instant::now() + LINE_EDITING_RECHECK);
+            let owed = match self.next_job(next, recheck) {
+                Job::Send(message) => {
+                    let closing = matches!(message, HolderMessage::Closed(_));
+                    if write_holder(&mut stream, &message).is_err() || closing {
+                        break;
                     }
-                    let facts = match facts(&self.pane, &self.rules, &mut reading, program) {
-                        Ok(facts) => facts,
-                        Err(error) => {
-                            self.log.event(
-                                "holder.facts_unread",
-                                &[
-                                    ("generation", self.generation.into()),
-                                    ("error", error.to_string().into()),
-                                ],
-                            );
-                            continue;
-                        }
-                    };
-                    if !owed && last.as_ref() == Some(&facts) {
+                    continue;
+                }
+                Job::Recheck => {
+                    let sent = last.as_ref().and_then(|facts| facts.line_editing);
+                    if self.line_editing.as_ref().map(|read| read()) == sent {
                         continue;
                     }
-                    last = Some(facts.clone());
-                    HolderMessage::Facts(facts)
+                    false
+                }
+                Job::Read { owed } => owed,
+            };
+            next = Instant::now() + MIN_FACTS_INTERVAL;
+            let (mut program, unread) =
+                match foreground.program(self.shell, (self.group)(), &self.log) {
+                    Ok(program) => (program, None),
+                    Err(unread) => (None, Some(unread)),
+                };
+            if let Some(unread) = unread
+                && !was_unread
+            {
+                self.log.event(
+                    "holder.foreground_unread",
+                    &[
+                        ("generation", self.generation.into()),
+                        ("reason", unread.reason().into()),
+                    ],
+                );
+            }
+            was_unread = unread.is_some();
+            if !self.program_package
+                && let Some(program) = &mut program
+            {
+                program.package = None;
+            }
+            let facts = match facts(&self.pane, &self.rules, &mut reading, program) {
+                Ok(facts) => Facts {
+                    line_editing: self.line_editing.as_ref().map(|read| read()),
+                    foreground_unread: self.foreground_unread.then_some(unread.is_some()),
+                    ..facts
+                },
+                Err(error) => {
+                    self.log.event(
+                        "holder.facts_unread",
+                        &[
+                            ("generation", self.generation.into()),
+                            ("error", error.to_string().into()),
+                        ],
+                    );
+                    continue;
                 }
             };
-            let closing = matches!(message, HolderMessage::Closed(_));
-            if write_holder(&mut stream, &message).is_err() || closing {
+            editing = match (&facts.foreground, facts.line_editing) {
+                (Some(program), Some(LineEditing::Edits)) => Some(match editing {
+                    Some((pid, since)) if pid == program.pid => (pid, since),
+                    _ => (program.pid, Instant::now()),
+                }),
+                _ => None,
+            };
+            if !owed && last.as_ref() == Some(&facts) {
+                continue;
+            }
+            last = Some(facts.clone());
+            if write_holder(&mut stream, &HolderMessage::Facts(facts)).is_err() {
                 break;
             }
         }
@@ -285,15 +357,16 @@ impl FactsWriter {
     }
 
     /// Waits for a message to send, or for the facts to have changed by the
-    /// time they may be read again; with neither, it waits with no bound.
-    fn next_job(&self, next: Instant) -> Job {
+    /// time they may be read again; with neither, it waits until `recheck`,
+    /// when it is given, and with no bound otherwise.
+    fn next_job(&self, next: Instant, recheck: Option<Instant>) -> Job {
         let mut pending = self.wake.pending();
         loop {
             if let Some(message) = pending.messages.pop_front() {
                 return Job::Send(message);
             }
+            let now = Instant::now();
             if pending.changed {
-                let now = Instant::now();
                 if now >= next {
                     pending.changed = false;
                     pending.waits_for_change = false;
@@ -311,11 +384,24 @@ impl FactsWriter {
                 continue;
             }
             pending.waits_for_change = true;
-            pending = self
-                .wake
-                .wake
-                .wait(pending)
-                .unwrap_or_else(PoisonError::into_inner);
+            pending = match recheck {
+                Some(at) if now >= at => {
+                    pending.waits_for_change = false;
+                    return Job::Recheck;
+                }
+                Some(at) => {
+                    self.wake
+                        .wake
+                        .wait_timeout(pending, at - now)
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .0
+                }
+                None => self
+                    .wake
+                    .wake
+                    .wait(pending)
+                    .unwrap_or_else(PoisonError::into_inner),
+            };
         }
     }
 }

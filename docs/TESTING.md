@@ -757,11 +757,6 @@ The transition retains these explicit exceptions:
 | Cursor legacy native readers, 3 tests | Herdr only: the retired integration supplies their session identity | Removed with Herdr by `b4-default` |
 | `agent-live-check`, 5 specs | Herdr integration checks, outside the dual-engine migration | CLI retirement by `b4-default` |
 | Windows own-engine journey | Excluded: CI Job forbids holder breakaway; Windows agent start proof is available | Holder lifetime integration and enabled cell by `b4-default` |
-| Pi own-engine fake journey, entire row | Excluded: `own-start-fixes 노드 대기(Pi 첫 지시문 input_unconfirmed, 제품 결함)`; cells outside the named exclusions and all Herdr rows remain required | `own-start-fixes` fixes the first brief and removes this exclusion |
-| OpenCode own-engine fake journey, entire row | Excluded: `own-start-fixes 노드 대기(OpenCode 첫 지시문 미전달, 제품 결함)` | `own-start-fixes` delivers the first brief and removes this exclusion |
-| Codex and Antigravity own-engine fake journey, `fork` only | Excluded: `own-start-fixes 노드 대기`; Codex's new pane has no session or fork lineage, and Antigravity's fork input is discarded before readiness is confirmed | `own-start-fixes` confirms the fork's readiness and registration and removes these exclusions |
-| OMP own-engine fake journey, `sleep_wake`, `fork`, `title` | Excluded: `own-start-fixes 노드 대기`; wake confirmation arrives after the cell ends, the following fork is not ready for input, and the title's row is gone | `own-start-fixes` fixes wake and its following operations and removes these exclusions |
-| OMP own-engine fake journey, `resume` | Excluded: `own-start-fixes(#2075) 대기(깨우기 제외에 따른 선행 조건 미충족)`; it compares the sessions before and after the excluded wake | Remove this exclusion when #2075 merges |
 | Windows own-engine desktop and package | Excluded: CI Job forbids holder breakaway | Holder lifetime fix and enabled cells by `b4-default` |
 | Windows and Linux Herdr desktop failed-restoration spec | Excluded: close stays unfinished after the preceding split completes | `b4-default` removes the Herdr lane |
 | Own-engine desktop first-run wizard, 4 tests | Excluded: `b4-default 대기(first-run의 Herdr 프로필 읽기 미확정)` | `b4-default` retires the Herdr profile read and enables these cells |

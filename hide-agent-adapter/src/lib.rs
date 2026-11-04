@@ -278,6 +278,24 @@ impl SessionFormat {
     pub const fn reports_wake_devices(self) -> bool {
         matches!(self, Self::Claude)
     }
+    /// Whether Hide's integration reports the agent's session as its session
+    /// file's path rather than the id its resume names: Pi 1.0.4 and omp
+    /// 18.7.0 hand the extension `sessionManager.getSessionFile()`
+    /// (`hide-agent-hooks/src/pi_extension/extension.js`), so a resume id is
+    /// not the session such an agent reports.
+    pub const fn reports_session_path(self) -> bool {
+        matches!(self, Self::Pi | Self::Omp)
+    }
+    /// Whether the integration reports the session only once the agent has
+    /// loaded it, and keys typed before then are lost: OpenCode 2.0.29's
+    /// plugin reports from its session event, and a prompt typed into a
+    /// woken OpenCode taken at once for the id it resumed never reached it,
+    /// while one typed after its report did (journeys 41879399661 and
+    /// 41850644522). A wake of such an agent is known by that report.
+    pub const fn reports_session_once_loaded(self) -> bool {
+        matches!(self, Self::OpenCode)
+    }
+
     pub const fn has_session_file(self) -> bool {
         matches!(
             self,

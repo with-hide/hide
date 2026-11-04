@@ -1252,6 +1252,35 @@ fn pane_scroll(scroll: HolderScroll) -> crate::find::pane::PaneScroll {
 /// waits.
 const PROMPT_SUBMIT_DELAY: std::time::Duration = std::time::Duration::from_millis(300);
 
+/// What the engine types as a prompt's text for an agent of `kind` on a
+/// machine that runs Windows or not, before the gap and its Enter, as
+/// Herdr's `agent.prompt` types it (src/app/api/agents.rs at 2ecf19a).
+/// Copilot ignores a typed Enter after it lost focus until it is told focus
+/// came back, so a focus report goes first. Codex's Windows input reader
+/// does not surface bracketed paste: it reads the text as a paste burst
+/// and, while the burst is buffered, takes an Enter for a newline; a
+/// non-character key flushes the burst at once, so an arrow right after the
+/// text, ahead of the gap, makes the submit's boundary certain however late
+/// the console delivers the text. At the end of the composer the arrow
+/// moves nothing. Only the engine's own text gets either: the operator's
+/// keys are never changed.
+fn prompt_text(kind: &str, windows: bool, body: PaneInput) -> Vec<PaneInput> {
+    let kind = hide_agent_adapter::canonical_kind(kind);
+    let mut text = Vec::with_capacity(3);
+    if kind == "copilot" {
+        text.push(PaneInput::Bytes(FOCUS_GAINED.to_vec()));
+    }
+    text.push(body);
+    if windows && kind == "codex" {
+        text.push(PaneInput::Keys(vec![HolderKey::Right]));
+    }
+    text
+}
+
+/// A terminal's focus report that focus came back (`CSI I`), as Herdr's
+/// Ghostty encoder writes it.
+const FOCUS_GAINED: &[u8] = b"\x1b[I";
+
 /// The source a session this engine knows is reported under: what the
 /// engine itself saw at a start or a report, never an agent's integration.
 const NATIVE_SESSION_SOURCE: &str = "hide";
@@ -1279,7 +1308,7 @@ fn delivery_of(
         status: agent.live.status.as_str().to_owned(),
         state_change_seq: agent.live.seq,
         readiness: Readiness::of(
-            Some(agent.live.shown),
+            Some(agent.interactive()),
             Some(agent.launch_pending(std::time::Instant::now())),
         ),
     }
@@ -1899,6 +1928,10 @@ impl<'g> Engine for OwnEngine<'g> {
         topology.pane_token(pane, token)
     }
 
+    /// The agent's status, `unknown` while it takes no input yet: a screen
+    /// no rule matches reads idle as soon as the program shows, before it
+    /// draws or reads keys, and agy's fork typed its `/fork` on that idle
+    /// into a program that dropped it (journey 871294628).
     fn pane_agent_status(&self, _wait: Wait, pane: &str) -> Answer<String> {
         self.check()?;
         let now = std::time::Instant::now();
@@ -1908,6 +1941,7 @@ impl<'g> Engine for OwnEngine<'g> {
             .agent
             .as_ref()
             .filter(|agent| agent.listed(now))
+            .filter(|agent| agent.interactive() && !agent.launch_pending(now))
             .map_or(agents::Status::Unknown, |agent| agent.live.status)
             .as_str()
             .to_owned())
@@ -2226,7 +2260,7 @@ impl<'g> Engine for OwnEngine<'g> {
             agents::PaneAgent::started(
                 &definition.id,
                 Some(&launch.name),
-                agents::resumed_in(definition, &argv),
+                agents::started_session(definition, &argv, launch.wakes),
             ),
             &line,
         )?;
@@ -2292,7 +2326,7 @@ impl<'g> Engine for OwnEngine<'g> {
                 "agent prompt must not be empty".to_owned(),
             ));
         }
-        let (pane, paste) = {
+        let (pane, paste, kind) = {
             let topology = self.topology();
             let (pane, held, agent) = topology.agent(target)?;
             if agent.live.status == agents::Status::Blocked {
@@ -2301,13 +2335,13 @@ impl<'g> Engine for OwnEngine<'g> {
                     format!("agent {target} is blocked and requires interactive input"),
                 ));
             }
-            if !agent.live.shown || agent.launch_pending(std::time::Instant::now()) {
+            if !agent.interactive() || agent.launch_pending(std::time::Instant::now()) {
                 return Err(refused(
                     "agent_not_ready",
                     format!("agent {target} is not ready for input"),
                 ));
             }
-            (pane, held.live.facts.bracketed_paste)
+            (pane, held.live.facts.bracketed_paste, agent.kind.clone())
         };
         // Herdr's `agent.prompt`: the text as one paste when the program
         // takes bracketed paste, then Enter a moment later, so a program that
@@ -2324,7 +2358,7 @@ impl<'g> Engine for OwnEngine<'g> {
             .holders
             .letter(
                 &pane,
-                body,
+                prompt_text(&kind, self.shared.windows, body),
                 PaneInput::Keys(vec![HolderKey::Enter]),
                 PROMPT_SUBMIT_DELAY,
             )
@@ -2774,12 +2808,12 @@ mod tests {
         fn letter(
             &self,
             pane: &str,
-            body: PaneInput,
+            text: Vec<PaneInput>,
             submit: PaneInput,
             _gap: Duration,
         ) -> Result<(), HolderError> {
             let mut letter = b"<letter>".to_vec();
-            letter.extend(shown(body));
+            letter.extend(text.into_iter().flat_map(shown));
             letter.extend(shown(submit));
             letter.extend(b"</letter>");
             self.typed.0.lock().unwrap().push((pane.to_owned(), letter));
@@ -3870,16 +3904,22 @@ mod tests {
             kind: kind.to_owned(),
             args: args.iter().map(|arg| (*arg).to_owned()).collect(),
             codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
+            wakes: false,
         }
     }
 
     /// Moves the start of the agent in `pane` back by the settle delay, as
     /// if it had been typed that long ago.
     fn settle_start(engine: &OwnEngine, pane: &str) {
+        age_start(engine, pane, agents::START_SETTLE);
+    }
+
+    /// Moves the start of the agent in `pane` back by `by`.
+    fn age_start(engine: &OwnEngine, pane: &str, by: std::time::Duration) {
         let mut topology = engine.topology();
         let agent = topology.pane_mut(pane).unwrap().agent.as_mut().unwrap();
         let started = agent.live.started.as_mut().unwrap();
-        *started -= agents::START_SETTLE;
+        *started -= by;
     }
 
     fn running(program: &str, screen: hide_node_link::holders::ScreenState) -> PaneFacts {
@@ -3979,6 +4019,12 @@ mod tests {
         assert_eq!(starting.readiness, Readiness::Launching);
         assert_eq!(starting.kind.as_deref(), Some("claude"));
         assert_eq!(starting.status, "unknown");
+        // Shown with a screen no rule matches, it reads idle, but takes no
+        // input until its start settles: a fork waiting for idle waits.
+        holders.say(&pane, &running("claude", ScreenState::Idle));
+        assert_eq!(engine.agent_state(WAIT, "worker").unwrap().status, "idle");
+        assert_eq!(engine.pane_agent_status(WAIT, &pane).unwrap(), "unknown");
+        holders.say(&pane, &running("claude", ScreenState::Working));
 
         settle_start(&engine, &pane);
         holders.say(&pane, &running("claude", ScreenState::Working));
@@ -4546,6 +4592,132 @@ mod tests {
             refused(engine.prompt_agent(WAIT, "worker", "hi")),
             "agent_blocked"
         );
+    }
+
+    /// A brief typed while the agent's program still leaves the terminal
+    /// editing lines sits in its line with its Enter read as a line break:
+    /// Pi 1.0.4 on a CI runner had not turned it off when its start's
+    /// settle passed (nightly 41789009557). The engine types nothing then,
+    /// whatever the time, and types the brief once the program reads keys.
+    #[test]
+    fn a_prompt_waits_for_the_agents_program_to_read_keys_past_the_settle() {
+        use hide_node_link::holders::ScreenState;
+        let holders = Arc::new(Holders::default());
+        let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+        let (_, _, pane) = engine
+            .create_workspace(WAIT, "/w", "w", true, Env::new())
+            .unwrap();
+        holders.idle_shell(41, "bash");
+        let start = engine
+            .prepare_start(launch(&pane, "worker", "pi", &[]))
+            .unwrap();
+        engine.start_agent(WAIT, &start).unwrap();
+        let before = holders.typed(&pane);
+        let at = |line_editing| PaneFacts {
+            line_editing,
+            ..running("pi", ScreenState::Idle)
+        };
+        holders.say(&pane, &at(Some(true)));
+        let refused = |when: &str| {
+            match engine.prompt_agent(WAIT, "worker", "brief") {
+                Err(EngineError::Refused { code, .. }) => assert_eq!(code, "agent_not_ready"),
+                other => panic!("{when}: expected the agent not ready, got {other:?}"),
+            }
+            assert_eq!(holders.typed(&pane), before, "{when}: nothing typed");
+            let readiness = engine.delivery_agent(WAIT, "worker").unwrap().readiness;
+            assert!(!readiness.accepts_input(), "{when}: {readiness:?}");
+        };
+        settle_start(&engine, &pane);
+        refused("past the settle");
+        // Past the start's deadline the start no longer waits, and a retried
+        // letter still finds a program that takes no input.
+        age_start(&engine, &pane, agents::START_DEADLINE);
+        assert_eq!(
+            engine.delivery_agent(WAIT, "worker").unwrap().readiness,
+            Readiness::NotReady,
+            "the start ended, but its program takes no input"
+        );
+        refused("past the deadline");
+
+        holders.say(&pane, &at(Some(false)));
+        settle_start(&engine, &pane);
+        assert!(
+            engine
+                .delivery_agent(WAIT, "worker")
+                .unwrap()
+                .readiness
+                .accepts_input()
+        );
+        engine.prompt_agent(WAIT, "worker", "brief").unwrap();
+        assert!(
+            holders.typed(&pane).ends_with("brief<Enter></letter>"),
+            "{:?}",
+            holders.typed(&pane)
+        );
+    }
+
+    /// Herdr's `agent.prompt` at 2ecf19a (src/app/api/agents.rs): a focus
+    /// report before a Copilot prompt, an arrow after a Windows Codex one's
+    /// text, before the gap.
+    #[test]
+    fn a_prompt_to_copilot_reports_focus_and_one_to_codex_on_windows_ends_its_paste_burst() {
+        let body = || PaneInput::Paste(b"brief".to_vec());
+        assert_eq!(
+            prompt_text("codex", true, body()),
+            vec![body(), PaneInput::Keys(vec![HolderKey::Right])]
+        );
+        assert_eq!(prompt_text("codex", false, body()), vec![body()]);
+        assert_eq!(prompt_text("claude-code", true, body()), vec![body()]);
+        assert_eq!(
+            prompt_text("copilot", false, body()),
+            vec![PaneInput::Bytes(b"\x1b[I".to_vec()), body()]
+        );
+    }
+
+    /// A fork's held prompt is handed over once its agent takes input
+    /// (`confirm_fork_started`): a Codex fork whose terminal still edits
+    /// lines past the settle is not confirmed, since its Enter would be a
+    /// line break and the fork's first turn, which reports its session and
+    /// lineage, would never come (journey 871294628).
+    #[test]
+    fn a_forks_held_prompt_waits_for_its_agent_to_read_keys() {
+        use hide_node_link::holders::ScreenState;
+        let holders = Arc::new(Holders::default());
+        let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+        let (_, _, pane) = engine
+            .create_workspace(WAIT, "/w", "w", true, Env::new())
+            .unwrap();
+        holders.idle_shell(41, "bash");
+        let start = engine
+            .prepare_start(launch(&pane, "fork-w1-p2", "codex", &[]))
+            .unwrap();
+        engine.start_agent(WAIT, &start).unwrap();
+        let at = |line_editing| PaneFacts {
+            line_editing,
+            ..running("codex", ScreenState::Idle)
+        };
+        let readiness = || engine.delivery_agent(WAIT, "fork-w1-p2").unwrap().readiness;
+        holders.say(&pane, &at(Some(true)));
+        settle_start(&engine, &pane);
+        assert!(
+            !readiness().accepts_input(),
+            "its terminal still edits lines: {:?}",
+            readiness()
+        );
+        holders.say(&pane, &at(Some(false)));
+        settle_start(&engine, &pane);
+        assert!(readiness().accepts_input(), "{:?}", readiness());
+        // What the fork's input waits on reads the same readiness; the
+        // deadline only guards the test against a hang.
+        crate::agent_start::confirm_fork_started(
+            &engine,
+            &pane,
+            "fork-w1-p2",
+            "codex",
+            &|| Ok(()),
+            std::time::Instant::now() + std::time::Duration::from_secs(30),
+        )
+        .unwrap();
     }
 
     /// D-7, B13: after a reboot each agent pane resumes its conversation

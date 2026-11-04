@@ -40,8 +40,8 @@ use std::time::{Duration, Instant};
 
 use hide_holder_protocol::{
     Ask, Capability, ClientMessage, CloseReason, Closed, Fragment, FrameError, HELLO_LIMIT, Hello,
-    HolderMessage, Notice, NoticeReason, Opening as FirstMessage, Size, Unknown, Watching, Welcome,
-    agree, read_client, read_opening, write_holder,
+    HolderMessage, LineEditing, Notice, NoticeReason, Opening as FirstMessage, Size, SubmitPart,
+    Unknown, Watching, Welcome, agree, read_client, read_opening, write_holder,
 };
 use hide_platform::ipc::{ListenerCloser, LocalListener, LocalStream, ShutdownHandle};
 use hide_platform::process::{Session, SessionEnd};
@@ -97,6 +97,11 @@ const ANSWER_QUEUE_CAP: usize = 64 * 1024;
 /// connection that sent them is closed (`input_queue_full`).
 const INPUT_QUEUE_CAP: usize = 1024 * 1024;
 
+/// The least a queued submission counts against [`INPUT_QUEUE_CAP`]: it
+/// holds the writer for its gap whatever its size, so at most 256 wait,
+/// and a connection that sends more is ended as one past the cap is.
+const SUBMIT_COST: usize = 4 * 1024;
+
 /// The most connections reading their hello at once; one past it is closed
 /// with `opening_full`.
 const MAX_OPENING: usize = 8;
@@ -123,10 +128,20 @@ const READ_CHUNK: usize = 64 * 1024;
 
 /// What this holder can send, and what it reads beyond version 1's input
 /// ([`Capability::Keys`]).
-const SENDS: [Capability; 3] = [Capability::Screen, Capability::Notices, Capability::Keys];
+const SENDS: [Capability; 4] = [
+    Capability::Screen,
+    Capability::Notices,
+    Capability::Keys,
+    Capability::Submit,
+];
 
 /// What this holder sends on a watch.
-const WATCH_SENDS: [Capability; 2] = [Capability::Facts, Capability::ProgramPackage];
+const WATCH_SENDS: [Capability; 4] = [
+    Capability::Facts,
+    Capability::ProgramPackage,
+    Capability::LineEditing,
+    Capability::ForegroundUnread,
+];
 
 enum Event {
     /// A connection whose hello was accepted.
@@ -242,50 +257,90 @@ impl InputPath {
         if *holding != generation {
             return Taken::Next;
         }
-        let (bytes, moved) = {
+        let (write, moved) = {
             let mut pane = self.pane.lock().unwrap_or_else(PoisonError::into_inner);
-            let encoded = match &message {
-                ClientMessage::Input(_) => Ok(None),
-                ClientMessage::Paste(text) => pane.paste(text).map(Some),
-                ClientMessage::Mouse(mouse) => pane.mouse(mouse),
-                ClientMessage::Key(keys) => pane.keys(keys).map(Some),
-                ClientMessage::Scroll(scroll) => match pane.scroll(scroll) {
-                    Ok(Wheel::Input(bytes)) => Ok(Some(bytes)),
-                    // The screen moved, or did not: nothing for the program.
-                    Ok(Wheel::Moved) => {
+            if let ClientMessage::Submit(submit) = &message {
+                let part = |pane: &mut Pane, part: &SubmitPart| match part {
+                    SubmitPart::Input(bytes) => Ok(bytes.clone()),
+                    SubmitPart::Paste(text) => pane.paste(text),
+                    SubmitPart::Keys(keys) => pane.keys(keys),
+                };
+                let encoded = submit
+                    .text
+                    .iter()
+                    .try_fold(Vec::new(), |mut text, each| {
+                        text.extend(part(&mut pane, each)?);
+                        Ok::<_, hide_vt::Error>(text)
+                    })
+                    .and_then(|text| Ok((text, part(&mut pane, &submit.enter)?)));
+                let (text, enter) = match encoded {
+                    Ok(encoded) => encoded,
+                    Err(error) => {
                         drop(pane);
-                        outbox.changed();
+                        self.log.event(
+                            "holder.input_unencoded",
+                            &[
+                                ("what", "submit".into()),
+                                ("error", error.to_string().into()),
+                            ],
+                        );
                         return Taken::Next;
                     }
-                    Ok(Wheel::Still) => return Taken::Next,
-                    Err(error) => Err(error),
-                },
-                _ => unreachable!("a reader hands over only the program's input"),
-            };
-            let bytes = match (encoded, message) {
-                (Ok(None), ClientMessage::Input(bytes)) => bytes,
-                (Ok(Some(bytes)), _) => bytes,
-                // The program tracks no mouse: nothing to send.
-                (Ok(None), _) => return Taken::Next,
-                (Err(error), message) => {
-                    drop(pane);
-                    self.log.event(
-                        "holder.input_unencoded",
-                        &[
-                            ("what", input_name(&message).into()),
-                            ("error", error.to_string().into()),
-                        ],
-                    );
-                    return Taken::Next;
-                }
-            };
-            let moved = pane.scroll_to_bottom();
-            (bytes, moved)
+                };
+                let moved = pane.scroll_to_bottom();
+                (
+                    PtyWrite::Submit {
+                        generation,
+                        text,
+                        gap: submit.gap,
+                        enter,
+                    },
+                    moved,
+                )
+            } else {
+                let encoded = match &message {
+                    ClientMessage::Input(_) => Ok(None),
+                    ClientMessage::Paste(text) => pane.paste(text).map(Some),
+                    ClientMessage::Mouse(mouse) => pane.mouse(mouse),
+                    ClientMessage::Key(keys) => pane.keys(keys).map(Some),
+                    ClientMessage::Scroll(scroll) => match pane.scroll(scroll) {
+                        Ok(Wheel::Input(bytes)) => Ok(Some(bytes)),
+                        // The screen moved, or did not: nothing for the program.
+                        Ok(Wheel::Moved) => {
+                            drop(pane);
+                            outbox.changed();
+                            return Taken::Next;
+                        }
+                        Ok(Wheel::Still) => return Taken::Next,
+                        Err(error) => Err(error),
+                    },
+                    _ => unreachable!("a reader hands over only the program's input"),
+                };
+                let bytes = match (encoded, message) {
+                    (Ok(None), ClientMessage::Input(bytes)) => bytes,
+                    (Ok(Some(bytes)), _) => bytes,
+                    // The program tracks no mouse: nothing to send.
+                    (Ok(None), _) => return Taken::Next,
+                    (Err(error), message) => {
+                        drop(pane);
+                        self.log.event(
+                            "holder.input_unencoded",
+                            &[
+                                ("what", input_name(&message).into()),
+                                ("error", error.to_string().into()),
+                            ],
+                        );
+                        return Taken::Next;
+                    }
+                };
+                let moved = pane.scroll_to_bottom();
+                (PtyWrite::Input { generation, bytes }, moved)
+            }
         };
         if moved {
             outbox.changed();
         }
-        let length = bytes.len();
+        let length = write.len();
         // Held to the end, so the takeover waits for this input to be queued.
         let _holding = holding;
         let queued = self.queued.load(Ordering::SeqCst);
@@ -299,11 +354,7 @@ impl InputPath {
         // Before the program can answer, so its answer is never taken for
         // a change before it.
         outbox.input();
-        if self
-            .writes
-            .send(PtyWrite::Input { generation, bytes })
-            .is_err()
-        {
+        if self.writes.send(write).is_err() {
             // The writer's thread is gone, which only a panic does, and a
             // panic ends the holder.
             self.queued.fetch_sub(length, Ordering::SeqCst);
@@ -314,6 +365,7 @@ impl InputPath {
 
 fn input_name(message: &ClientMessage) -> &'static str {
     match message {
+        ClientMessage::Submit(_) => "submit",
         ClientMessage::Paste(_) => "paste",
         ClientMessage::Mouse(_) => "mouse",
         ClientMessage::Scroll(_) => "scroll",
@@ -463,6 +515,15 @@ impl Connection {
 enum PtyWrite {
     /// A connection's input.
     Input { generation: u64, bytes: Vec<u8> },
+    /// A connection's submission ([`hide_holder_protocol::Submit`]): `text`,
+    /// then `enter` once `gap` has passed since `text` was written, with the
+    /// input written after it waiting until then.
+    Submit {
+        generation: u64,
+        text: Vec<u8>,
+        gap: Duration,
+        enter: Vec<u8>,
+    },
     /// The holder's answers to the program's questions.
     Answers(Vec<u8>),
 }
@@ -983,6 +1044,8 @@ impl Holder {
             .owner = generation;
         let wake = Arc::new(Wake::default());
         let program_package = sends.contains(&Capability::ProgramPackage);
+        let line_editing = sends.contains(&Capability::LineEditing);
+        let foreground_unread = sends.contains(&Capability::ForegroundUnread);
         wake.send(HolderMessage::Watching(Watching {
             version,
             rules_engine: hide_screen_rules::ENGINE_VERSION,
@@ -1010,8 +1073,13 @@ impl Holder {
                 shell: self.program,
                 program_package,
                 group: Box::new({
+                    let master = master.clone();
                     let shell = self.program;
                     move || master.group(shell)
+                }),
+                foreground_unread,
+                line_editing: line_editing.then(|| {
+                    Box::new(move || master.line_editing()) as Box<dyn Fn() -> LineEditing + Send>
                 }),
                 log: self.log.clone(),
             };
@@ -1504,6 +1572,29 @@ impl PtyMaster {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// Whether the terminal edits lines, as the platform reads the master
+    /// this holder keeps (`hide_platform::process::master_line_input`):
+    /// unknown where the system cannot say (Windows) and when the terminal
+    /// could not be asked, its pane having ended.
+    fn line_editing(&self) -> LineEditing {
+        use hide_platform::process::{LineInput, master_line_input};
+        let guard = self.lock();
+        #[cfg(unix)]
+        let read = guard
+            .as_ref()
+            .and_then(|master| master.as_raw_fd())
+            // SAFETY: the master stays open while its lock is held, for the
+            // whole of the call.
+            .map(|fd| master_line_input(unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) }));
+        #[cfg(windows)]
+        let read = guard.as_ref().map(|_| master_line_input(()));
+        match read {
+            Some(Ok(Some(LineInput::Lines { .. }))) => LineEditing::Edits,
+            Some(Ok(Some(LineInput::Keys))) => LineEditing::ReadsKeys,
+            _ => LineEditing::Unknown,
+        }
+    }
+
     /// The terminal's foreground process group, or why it is not known. On
     /// Windows, which names none for a console, the process that stands in
     /// for it under `shell`, the pane's program
@@ -1582,30 +1673,110 @@ fn write_pty(
         }
     }
     let mut refused = None;
-    for write in writes {
+    // Input that came while a submission waited for its gap, in order.
+    let mut waiting: VecDeque<PtyWrite> = VecDeque::new();
+    loop {
+        let write = match waiting.pop_front() {
+            Some(write) => write,
+            None => match writes.recv() {
+                Ok(write) => write,
+                Err(_) => return,
+            },
+        };
+        let length = write.len();
         match write {
             PtyWrite::Input { generation, bytes } => {
                 assert!(
                     !panic_on_input,
                     "asked to panic on input ({PANIC_ON_INPUT})"
                 );
-                if refused != Some(generation)
-                    && let Err(error) = writer.write_all(&bytes).and_then(|()| writer.flush())
-                {
-                    refused = Some(generation);
-                    let _ = events.send(Event::InputFailed {
-                        generation,
-                        error: error.to_string(),
-                    });
+                write_input(&mut *writer, events, generation, &bytes, &mut refused);
+                input.queued.fetch_sub(length, Ordering::SeqCst);
+            }
+            PtyWrite::Submit {
+                generation,
+                text,
+                gap,
+                enter,
+            } => {
+                // Herdr's `agent.prompt`: the gap runs from the text's
+                // flush, the program's answers go on meanwhile, and the
+                // input after it waits until the submit was written.
+                write_input(&mut *writer, events, generation, &text, &mut refused);
+                // Read before the gap's start, so the submit is written no
+                // sooner than a gap after this.
+                let text_at = std::time::SystemTime::now();
+                let due = Instant::now() + gap;
+                while refused != Some(generation) {
+                    let left = due.saturating_duration_since(Instant::now());
+                    if left.is_zero() {
+                        break;
+                    }
+                    match writes.recv_timeout(left) {
+                        Ok(PtyWrite::Answers(bytes)) => {
+                            let _ = writer.write_all(&bytes).and_then(|()| writer.flush());
+                            answers_queued.fetch_sub(bytes.len(), Ordering::SeqCst);
+                        }
+                        Ok(other) => waiting.push_back(other),
+                        Err(RecvTimeoutError::Timeout) => break,
+                        Err(RecvTimeoutError::Disconnected) => return,
+                    }
                 }
-                input.queued.fetch_sub(bytes.len(), Ordering::SeqCst);
+                write_input(&mut *writer, events, generation, &enter, &mut refused);
+                input.queued.fetch_sub(length, Ordering::SeqCst);
+                // One line a submission, never one a key.
+                input.log.event(
+                    "holder.submitted",
+                    &[
+                        ("generation", generation.into()),
+                        (
+                            "text_at_unix_ms",
+                            text_at
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map_or(0, |since| since.as_millis() as u64)
+                                .into(),
+                        ),
+                        ("gap_ms", (gap.as_millis() as u64).into()),
+                        ("written", (refused != Some(generation)).into()),
+                    ],
+                );
             }
             PtyWrite::Answers(bytes) => {
                 // A PTY that refuses answers refuses everything; the pane's
                 // end follows, and nothing waits for them.
                 let _ = writer.write_all(&bytes).and_then(|()| writer.flush());
-                answers_queued.fetch_sub(bytes.len(), Ordering::SeqCst);
+                answers_queued.fetch_sub(length, Ordering::SeqCst);
             }
+        }
+    }
+}
+
+/// Writes a connection's input unless the PTY already refused that
+/// connection's, and says so when it refuses now.
+fn write_input(
+    writer: &mut (dyn std::io::Write + Send),
+    events: &Sender<Event>,
+    generation: u64,
+    bytes: &[u8],
+    refused: &mut Option<u64>,
+) {
+    if *refused != Some(generation)
+        && let Err(error) = writer.write_all(bytes).and_then(|()| writer.flush())
+    {
+        *refused = Some(generation);
+        let _ = events.send(Event::InputFailed {
+            generation,
+            error: error.to_string(),
+        });
+    }
+}
+
+impl PtyWrite {
+    /// What it counts against its queue's cap.
+    fn len(&self) -> usize {
+        match self {
+            Self::Input { bytes, .. } | Self::Answers(bytes) => bytes.len(),
+            Self::Submit { text, enter, .. } => (text.len() + enter.len()).max(SUBMIT_COST),
         }
     }
 }
@@ -1824,7 +1995,8 @@ fn read_connection(
                     | ClientMessage::Paste(_)
                     | ClientMessage::Mouse(_)
                     | ClientMessage::Scroll(_)
-                    | ClientMessage::Key(_)) => {
+                    | ClientMessage::Key(_)
+                    | ClientMessage::Submit(_)) => {
                         match input.take(generation, outbox, input_message) {
                             Taken::Next => continue,
                             Taken::Full => return,

@@ -194,10 +194,23 @@ pub struct PaneFacts {
     /// typed for it as one paste is wrapped as Herdr's `agent.prompt` wraps
     /// it.
     pub bracketed_paste: bool,
+    /// Whether the terminal edits input a line at a time before its program
+    /// reads it (canonical mode), as the holder read it: a program reads
+    /// keys only once it turns that off, and until then an Enter typed for
+    /// it arrives as a line break. `None` where the system cannot say
+    /// (Windows) or the holder or node was built before it.
+    #[serde(default)]
+    pub line_editing: Option<bool>,
     /// The program in the terminal's foreground other than the pane's own
     /// program, `None` while the pane's program holds the terminal or the
-    /// system cannot say.
+    /// system cannot say ([`Self::foreground_unread`]).
     pub foreground: Option<ForegroundProgram>,
+    /// Whether the system could not say what holds the terminal, so a
+    /// `None` foreground is no evidence that the pane's own program holds
+    /// it. False from a holder or node built before it, which read such a
+    /// terminal as the shell's.
+    #[serde(default)]
+    pub foreground_unread: bool,
     /// What the pane's screen rules read on its screen.
     pub screen: ScreenRead,
 }
@@ -424,14 +437,16 @@ pub trait PaneHolders: Send + Sync {
     /// screen was let go is attached again for it. It is the engine's
     /// typing, never reported as the operator's.
     fn input(&self, pane: &str, input: PaneInput) -> Result<(), HolderError>;
-    /// Types a letter: `body`, then `submit` once `gap` has passed, holding
+    /// Types a letter: `text`'s parts in order, at most
+    /// `hide_holder_protocol::MAX_SUBMIT_PARTS`, then `submit` once `gap`
+    /// has passed, as one submission, holding
     /// the operator's keys typed into the pane meanwhile and writing them
     /// after the submit in the order typed (PRD engine-bundle-3-core-owns
     /// D-13). Returns once the submit was handed over.
     fn letter(
         &self,
         pane: &str,
-        body: PaneInput,
+        text: Vec<PaneInput>,
         submit: PaneInput,
         gap: std::time::Duration,
     ) -> Result<(), HolderError>;
@@ -523,7 +538,7 @@ pub enum PaneCall {
     /// over.
     Letter {
         pane: String,
-        body: PaneInput,
+        text: Vec<PaneInput>,
         submit: PaneInput,
         gap_ms: u64,
     },

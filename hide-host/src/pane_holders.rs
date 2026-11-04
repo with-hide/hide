@@ -184,11 +184,11 @@ fn ask(holders: &dyn PaneHolders, call: PaneCall) -> PaneAnswer {
         PaneCall::Input { pane, input } => holders.input(&pane, input).and_then(value),
         PaneCall::Letter {
             pane,
-            body,
+            text,
             submit,
             gap_ms,
         } => holders
-            .letter(&pane, body, submit, Duration::from_millis(gap_ms))
+            .letter(&pane, text, submit, Duration::from_millis(gap_ms))
             .and_then(value),
         PaneCall::Recovered { timeout_ms } => holders
             .recovered(Duration::from_millis(timeout_ms))
@@ -425,7 +425,7 @@ mod tests {
         fn letter(
             &self,
             _: &str,
-            _: PaneInput,
+            _: Vec<PaneInput>,
             _: PaneInput,
             _: Duration,
         ) -> Result<(), HolderError> {

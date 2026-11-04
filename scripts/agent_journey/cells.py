@@ -50,34 +50,17 @@ INTERRUPTED = "interrupted"
 
 
 def excluded_agents(engine="herdr", fake_model=False):
-    """Explicit transition gaps, shared by the run plan and CI verdict.
-
-    The own-start-fixes work removes these row exclusions once the product
-    confirms the first brief; later cells cannot run without it.
-    """
-    return {**EXCLUDED_AGENTS, **({"pi": "own-start-fixes 노드 대기(Pi 첫 지시문 input_unconfirmed, 제품 결함)",
-                                 "opencode": "own-start-fixes 노드 대기(OpenCode 첫 지시문 미전달, 제품 결함)"}
-                                if engine == "own" and fake_model else {})}
+    """The rows taken out of the journey, shared by the run plan and CI verdict."""
+    return dict(EXCLUDED_AGENTS)
 
 
 def excluded_cells(engine="herdr", fake_model=False):
-    """The approved transition gaps, by cell, for both planning and CI.
+    """The excluded cells, for both planning and CI: every cell of an excluded row.
 
-    A row exclusion still prevents its CLI from starting. A cell exclusion
-    leaves the rest of that agent's declared behavior required.
+    A row exclusion still prevents its CLI from starting.
     """
-    excluded = {(agent, name): reason for agent, reason in excluded_agents(engine, fake_model).items()
-                for name in CELLS}
-    if engine == "own" and fake_model:
-        excluded.update({
-            ("codex", "fork"): "own-start-fixes 노드 대기(Codex fork 세션과 계보 미등록, 제품 결함)",
-            ("antigravity", "fork"): "own-start-fixes 노드 대기(Antigravity fork 입력 준비 미확정, 제품 결함)",
-            ("omp", "sleep_wake"): "own-start-fixes 노드 대기(OMP 깨우기 확인 지연, 제품 결함)",
-            ("omp", "resume"): "own-start-fixes(#2075) 대기(깨우기 제외에 따른 선행 조건 미충족)",
-            ("omp", "fork"): "own-start-fixes 노드 대기(OMP 깨우기 뒤 fork 입력 준비 미확정, 제품 결함)",
-            ("omp", "title"): "own-start-fixes 노드 대기(OMP 깨우기 뒤 제목 대상 행 소실, 제품 결함)",
-        })
-    return excluded
+    return {(agent, name): reason for agent, reason in excluded_agents(engine, fake_model).items()
+            for name in CELLS}
 
 
 def cell(status, reason, evidence=None):

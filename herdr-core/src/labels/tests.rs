@@ -4152,6 +4152,56 @@ fn waits(worker: &LabelWorker, agent: &ObservedAgent) -> (Option<Waiting>, Optio
     (waiting, row)
 }
 
+/// omp reports its session file's path at its session's start, before it
+/// writes the file, and on the core's own engine it reads at rest through
+/// its turns, so no state change asks for another read. The read its hook's
+/// turn asks for (`read_again`) confirms the session well before the
+/// unavailable retry would, and the row has the native id a fork needs.
+#[test]
+fn an_omp_session_reported_before_its_file_is_written_is_confirmed_by_the_read_its_turn_asks_for() {
+    let harness = Harness::new();
+    let (mut worker, woken, _source) = harness.worker(harness.store());
+    let start = Instant::now();
+    worker.set_summaries(false, start);
+    let cwd = hide_platform::fs::identity::canonical(harness.home.path()).unwrap();
+    let folder = crate::fixture::native_session_folder(harness.home.path(), "omp", &cwd);
+    std::fs::create_dir_all(&folder).unwrap();
+    let path = folder.join("native.jsonl");
+    let idle = ObservedAgent {
+        agent: Some("omp".into()),
+        cwd: Some(cwd.display().to_string()),
+        ..agent(&path, "idle", 1)
+    };
+    let native =
+        |worker: &LabelWorker| shown_facts(worker, &idle).and_then(|f| f.native_session_id);
+    observe_at(&mut worker, &idle, start);
+    settle_with_clock(&mut worker, &woken, || start);
+    assert!(native(&worker).is_none());
+    std::fs::write(
+        &path,
+        format!(
+            "{}\n{}\n{}\n",
+            json!({"type":"session", "version":3, "id":"native-omp", "cwd":cwd}),
+            json!({"type":"message", "timestamp":"2026-10-03T01:00:00Z",
+                "message":{"role":"user", "content":"Reply"}}),
+            json!({"type":"message", "timestamp":"2026-10-03T01:00:00.100Z",
+                "message":{"role":"assistant", "content":[{"type":"text","text":"Done"}], "stopReason":"stop"}})
+        ),
+    )
+    .unwrap();
+    let turn = start + Duration::from_secs(2);
+    observe_at(&mut worker, &idle, turn);
+    settle_with_clock(&mut worker, &woken, || turn);
+    assert!(
+        native(&worker).is_none(),
+        "an observation that did not move reads nothing"
+    );
+    assert!(worker.read_again(&["w1:p1".to_owned()]));
+    worker.tick(turn);
+    settle_with_clock(&mut worker, &woken, || turn);
+    assert_eq!(native(&worker).as_deref(), Some("native-omp"));
+}
+
 #[test]
 fn an_omp_title_and_question_refresh_without_state_changes_or_repeated_analysis() {
     let harness = Harness::new();

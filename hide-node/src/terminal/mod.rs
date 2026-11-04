@@ -228,6 +228,9 @@ struct Pane {
     /// operator's keys typed meanwhile, written after the last letter's
     /// submit in the order typed (PRD engine-bundle-3-core-owns D-13).
     letter: Option<LetterHold>,
+    /// Held keys being written into the pane's program, from a submit on
+    /// (`Inner::replay`).
+    replay: Option<input::Replay>,
     first_frame_pending: bool,
     reported: Option<PaneTerminalState>,
 }
@@ -442,17 +445,20 @@ impl Service {
         input.receipt.wait()
     }
 
-    /// Types a letter into `pane` as the core's own engine: `body`, then
-    /// `submit` once `gap` has passed, on the caller's thread. The
-    /// operator's keys typed into the pane from the body until the submit
-    /// was handed over are held, at most 64 KiB and 3 s as a new pane's
-    /// are, and written after the submit in the order typed, so none lands
-    /// inside the letter and none is lost (PRD engine-bundle-3-core-owns
-    /// D-13). The hold ends on every way out, a panic included.
+    /// Types a letter into `pane` as the core's own engine: one submission
+    /// of `text`'s parts, then `submit` once `gap` has passed since the text
+    /// was written ([`Typed::Submit`]), as Herdr's `agent.prompt` makes one;
+    /// the holder that owns the program's terminal keeps the gap there, and
+    /// a holder built before submissions is refused it. The
+    /// operator's keys typed into the pane until the submission was handed
+    /// to the pane's writer are held, at most 64 KiB and 3 s as a new pane's
+    /// are, and written after it in the order typed, so none lands inside
+    /// the letter and none is lost (PRD engine-bundle-3-core-owns D-13). The
+    /// hold ends on every way out, a panic included.
     fn type_letter(
         &self,
         pane: &str,
-        body: Typed,
+        text: Vec<Typed>,
         submit: Typed,
         gap: Duration,
     ) -> Result<(), hide_node_link::holders::HolderError> {
@@ -463,25 +469,9 @@ impl Service {
         impl Drop for Letter<'_> {
             fn drop(&mut self) {
                 let now = Instant::now();
-                self.service.shared.run(|inner, _| {
-                    let Some(entry) = inner.panes.get_mut(self.pane) else {
-                        return;
-                    };
-                    let Some(letter) = entry.letter.as_mut() else {
-                        return;
-                    };
-                    letter.letters -= 1;
-                    if letter.letters > 0 {
-                        return;
-                    }
-                    let Some(held) = entry.letter.take() else {
-                        return;
-                    };
-                    for chunk in held.keys.take_in_order(self.pane, now) {
-                        inner.route_input(KeyTarget::Pane(self.pane.to_owned()), chunk, now);
-                    }
-                    inner.finish_input_release(self.pane);
-                });
+                self.service
+                    .shared
+                    .run(|inner, _| inner.end_letter(self.pane, now));
             }
         }
         let _work = self.shared.run(|inner, _| {
@@ -505,49 +495,79 @@ impl Service {
             service: self,
             pane,
         };
-        self.type_input(pane, body)?;
-        self.letter_gap(pane, gap).and_then(|()| self.type_input(pane, submit)).map_err(|error| hide_node_link::holders::HolderError::Unreachable {
-            message: format!("Letter body was delivered, but submit was not confirmed: {error}; do not resend automatically"),
-        })
-    }
-
-    /// The configured submit gap is unchanged, but closing the pane or
-    /// node wakes its caller instead of retaining the letter until the gap.
-    fn letter_gap(
-        &self,
-        pane: &str,
-        gap: Duration,
-    ) -> Result<(), hide_node_link::holders::HolderError> {
-        let began = Instant::now();
-        loop {
-            let version = self.shared.clock_lock().version;
-            {
-                let inner = self.shared.lock();
-                if inner.closed || inner.panes.get(pane).is_none_or(|entry| entry.closing) {
-                    return Err(command::refused(
-                        "pane_input_cancelled",
-                        "Pane closed during letter delivery",
-                    ));
-                }
-            }
-            let left = gap.saturating_sub(began.elapsed());
-            if left.is_zero() {
-                return Ok(());
-            }
-            let clock = self.shared.clock_lock();
-            if clock.version == version {
-                drop(
-                    self.shared
-                        .wake
-                        .wait_timeout(clock, left)
-                        .unwrap_or_else(|e| e.into_inner()),
-                );
-            }
+        let part = |typed: Typed| match typed {
+            Typed::Bytes(bytes) => Ok(hide_holder_protocol::SubmitPart::Input(bytes)),
+            Typed::Paste(text) => Ok(hide_holder_protocol::SubmitPart::Paste(text)),
+            Typed::Keys(keys) => Ok(hide_holder_protocol::SubmitPart::Keys(keys)),
+            Typed::Submit(_) => Err(command::refused(
+                "pane_input_invalid",
+                "A letter's text or submit is not a submission of its own",
+            )),
+        };
+        if text.len() > hide_holder_protocol::MAX_SUBMIT_PARTS {
+            return Err(command::refused(
+                "pane_input_invalid",
+                "A letter's text has more parts than a submission takes",
+            ));
         }
+        if gap > hide_holder_protocol::MAX_SUBMIT_GAP {
+            return Err(command::refused(
+                "pane_input_invalid",
+                "A letter's submit gap is longer than a submission takes",
+            ));
+        }
+        let submission = hide_holder_protocol::Submit {
+            text: text.into_iter().map(part).collect::<Result<_, _>>()?,
+            gap,
+            enter: part(submit)?,
+        };
+        self.type_input(pane, Typed::Submit(Box::new(submission)))
     }
 }
 
 impl Inner {
+    /// One letter typed into `pane` ended. Once the last has, the keys the
+    /// letters held go ahead of the pane's replay queue when it has one,
+    /// since they were typed before the fork held the pane, or are written
+    /// in the order typed.
+    fn end_letter(&mut self, pane: &str, now: Instant) {
+        let Some(entry) = self.panes.get_mut(pane) else {
+            return;
+        };
+        let Some(letter) = entry.letter.as_mut() else {
+            return;
+        };
+        letter.letters -= 1;
+        if letter.letters > 0 {
+            return;
+        }
+        let Some(held) = entry.letter.take() else {
+            return;
+        };
+        let keys = held.keys.take_in_order(pane, now);
+        if let Some(replay) = entry.replay.as_mut() {
+            if replay.put_first(pane, keys) {
+                let request = replay.request.clone();
+                self.replay_overflowed(request);
+            }
+        } else {
+            for chunk in keys {
+                self.route_input(KeyTarget::Pane(pane.to_owned()), chunk, now);
+            }
+        }
+        self.pump_replay(pane, now);
+        self.finish_input_release(pane);
+    }
+
+    /// The replay queue for `request` dropped keys past its cap: the core
+    /// asks the operator to type them again (the fork's input-loss notice).
+    fn replay_overflowed(&mut self, request: String) {
+        self.reports.push(TerminalReport::RequestDiscarded {
+            request,
+            reason: "limit".to_owned(),
+        });
+    }
+
     fn route_input(&mut self, target: KeyTarget, chunk: HeldChunk, now: Instant) {
         let target = match target {
             // A request holds the operator's keys typed into a new pane until
@@ -630,6 +650,9 @@ impl Service {
                     receipt.cancel("Terminal service closed");
                 }
                 session.hold.discard(pane, "service_closed");
+                if let Some(replay) = session.replay.take() {
+                    replay.discard(pane, "service_closed");
+                }
             }
             for (_, mut pane) in inner.panes.drain() {
                 inner.retired.extend(pane.session.take());
@@ -1198,6 +1221,9 @@ impl Inner {
                         receipt.cancel("Pane was forgotten");
                     }
                     entry.hold.discard(&pane, "pane_gone");
+                    if let Some(replay) = entry.replay.take() {
+                        replay.discard(&pane, "pane_gone");
+                    }
                 }
                 self.facts.remove(&pane);
                 self.watches.remove(&pane);
@@ -1279,6 +1305,7 @@ impl Inner {
             }
             TerminalControl::RequestResolve { request, pane } => {
                 self.expire_fork_input(now);
+                let fork = self.requests.is_fork(&request);
                 let held = self.requests.resolve(&request, &pane, now);
                 let held = input::fresh_chunks(&pane, held, now);
                 if held.is_empty() {
@@ -1291,8 +1318,12 @@ impl Inner {
                     "chunks": held.len(),
                     "bytes": held.iter().map(|chunk| chunk.input.len()).sum::<usize>(),
                 }));
-                for chunk in held {
-                    self.write_key(&pane, chunk, false, now);
+                if fork {
+                    self.replay(&pane, &request, held, now);
+                } else {
+                    for chunk in held {
+                        self.write_key(&pane, chunk, false, now);
+                    }
                 }
             }
             TerminalControl::RequestDiscard { request, reason } => {
@@ -1453,10 +1484,132 @@ impl Inner {
         });
     }
 
+    /// Hands the keys a fork request held for `pane` to the pane's one
+    /// replay queue ([`input::Replay`]), which gives them to the pane's
+    /// writer in the order typed once the pane takes keys.
+    fn replay(&mut self, pane: &str, request: &str, held: Vec<HeldChunk>, now: Instant) {
+        if !self.panes.contains_key(pane) && self.requests.names(pane) {
+            // Herdr made the pane for keys the operator is already typing,
+            // before the core asked for it to attach.
+            self.panes.insert(pane.to_owned(), Pane::default());
+        }
+        let Some(entry) = self.panes.get_mut(pane) else {
+            return;
+        };
+        match entry.replay.as_mut() {
+            Some(replay) => {
+                let mut crossed = false;
+                for chunk in held {
+                    crossed |= replay.push(pane, chunk);
+                }
+                if crossed {
+                    let request = replay.request.clone();
+                    self.replay_overflowed(request);
+                }
+            }
+            None => {
+                entry.replay = Some(input::Replay::new(
+                    request,
+                    now + input::HELD_INPUT_MAX_AGE,
+                    held,
+                ));
+            }
+        }
+        self.wake_clock = true;
+        self.pump_replay(pane, now);
+    }
+
+    /// Gives the pane's writer its whole replay queue once the pane takes
+    /// keys: a control session, no letter being typed and not closing. To a
+    /// transport that takes submissions whole, each submit goes with the
+    /// keys typed before it as one submission, whose gap the holder keeps
+    /// ([`input::submissions`]), and the operator's keys typed after go
+    /// behind it. As Herdr's Windows submission does, a queue whose
+    /// submission's gap would end past the hold's age is dropped and
+    /// reported rather than started; once handed over, every submit is
+    /// written. A Herdr session takes the keys as typed; a holder built
+    /// before submissions takes none of them, which is reported.
+    fn pump_replay(&mut self, pane: &str, now: Instant) {
+        loop {
+            let Some(entry) = self.panes.get_mut(pane) else {
+                return;
+            };
+            let submissions = entry
+                .session
+                .as_ref()
+                .filter(|session| {
+                    session.mode == Mode::Control && !entry.closing && entry.letter.is_none()
+                })
+                .map(Session::submissions);
+            let Some(replay) = entry.replay.as_mut() else {
+                return;
+            };
+            let chunks = match submissions {
+                None => {
+                    let Some(permit) = replay.take_permit_head() else {
+                        return;
+                    };
+                    self.write_now(pane, permit, false, now);
+                    continue;
+                }
+                Some(session::Submissions::Refused) => {
+                    return self.drop_replay(pane, "unsupported");
+                }
+                Some(session::Submissions::Whole)
+                    if replay.submits()
+                        && replay.ends.saturating_duration_since(now)
+                            <= input::REPLAYED_SUBMIT_GAP =>
+                {
+                    return self.drop_replay(pane, "timeout");
+                }
+                Some(session::Submissions::Whole) => {
+                    input::submissions(entry.replay.take().expect("looked at above").take())
+                }
+                Some(session::Submissions::AsTyped) => {
+                    entry.replay.take().expect("looked at above").take()
+                }
+            };
+            for chunk in chunks {
+                self.write_now(pane, chunk, false, now);
+            }
+            return;
+        }
+    }
+
+    /// Drops the rest of the pane's replay queue and tells the core, which
+    /// asks the operator to type it again (the fork's input-loss notice).
+    fn drop_replay(&mut self, pane: &str, reason: &str) {
+        let Some(replay) = self
+            .panes
+            .get_mut(pane)
+            .and_then(|entry| entry.replay.take())
+        else {
+            return;
+        };
+        let request = replay.request.clone();
+        replay.discard(pane, reason);
+        self.reports.push(TerminalReport::RequestDiscarded {
+            request,
+            reason: reason.to_owned(),
+        });
+    }
+
     /// Writes one key to its pane. `focus` is a key the operator typed into
     /// this pane on the screen; a key held for a creation reaches its new
     /// pane without moving the keyboard.
     fn write_key(&mut self, pane: &str, chunk: HeldChunk, focus: bool, now: Instant) {
+        if chunk.by == Typist::Operator
+            && let Some(replay) = self
+                .panes
+                .get_mut(pane)
+                .and_then(|entry| entry.replay.as_mut())
+        {
+            if replay.push(pane, chunk) {
+                let request = replay.request.clone();
+                self.replay_overflowed(request);
+            }
+            return;
+        }
         if chunk.by == Typist::Operator
             && let Some(letter) = self
                 .panes
@@ -1466,6 +1619,12 @@ impl Inner {
             letter.keys.hold(pane, chunk);
             return;
         }
+        self.write_now(pane, chunk, focus, now);
+    }
+
+    /// [`Self::write_key`] past the queues that hold the operator's keys: a
+    /// replay queue writes its own keys here.
+    fn write_now(&mut self, pane: &str, chunk: HeldChunk, focus: bool, now: Instant) {
         if let Some(permit) = &chunk.permit {
             use hide_node_link::terminal::InputPermitError;
             let result = if now >= permit.deadline() {
@@ -1521,6 +1680,11 @@ impl Inner {
         let operator = chunk.by == Typist::Operator;
         let submitted = match &chunk.input {
             Typed::Bytes(bytes) => operator && input::submits(bytes),
+            Typed::Submit(submit) => {
+                operator
+                    && matches!(&submit.enter, hide_holder_protocol::SubmitPart::Input(bytes)
+                        if input::submits(bytes))
+            }
             Typed::Paste(_) | Typed::Keys(_) => false,
         };
         // A sleeping agent's pane takes none of the operator's typing; the
@@ -1610,6 +1774,7 @@ impl Inner {
             Typed::Bytes(bytes) => session.write(&bytes),
             Typed::Paste(text) => session.paste(text),
             Typed::Keys(keys) => session.keys(keys),
+            Typed::Submit(submit) => session.submit(submit),
         }
     }
 
@@ -2258,6 +2423,7 @@ impl Inner {
             retry_decision: decision,
         };
         self.sync(pane);
+        self.pump_replay(pane, now);
         self.note(
             pane,
             "terminal.session_ready",
@@ -2677,6 +2843,9 @@ impl Inner {
         entry.awaiting_size = false;
         entry.recovery = None;
         entry.hold.discard(pane, "released");
+        if let Some(replay) = entry.replay.take() {
+            replay.discard(pane, "released");
+        }
         entry.lifecycle = Lifecycle {
             state: "released",
             message: Some(message),
@@ -2807,6 +2976,22 @@ impl Inner {
         for entry in self.panes.values_mut() {
             entry.hold.expire_permits(now);
         }
+        let replays = self
+            .panes
+            .iter()
+            .filter(|(_, entry)| {
+                entry
+                    .replay
+                    .as_ref()
+                    .is_some_and(|replay| now >= replay.ends)
+            })
+            .map(|(pane, _)| pane.clone())
+            .collect::<Vec<_>>();
+        for pane in replays {
+            // Its pane did not take the keys in time: an attaching pane
+            // drops keys that old too.
+            self.drop_replay(&pane, "timeout");
+        }
         let settled = self
             .panes
             .iter()
@@ -2889,6 +3074,9 @@ impl Inner {
                 // The pane is no longer connecting; keys held for it would
                 // run whenever the operator reconnects, so they end here.
                 entry.hold.discard(pane, "session_failed");
+                if let Some(replay) = entry.replay.take() {
+                    replay.discard(pane, "session_failed");
+                }
             }
             self.sync(pane);
         }
@@ -2913,7 +3101,8 @@ impl Inner {
             let observer = entry
                 .observer_resized_at
                 .map(|at| at + OBSERVER_RESIZE_QUIET);
-            [retry, observer, entry.hold.permit_deadline()]
+            let replay = entry.replay.as_ref().map(|replay| replay.ends);
+            [retry, observer, entry.hold.permit_deadline(), replay]
         });
         let facts = self.facts.values().map(InputFacts::deadline);
         panes

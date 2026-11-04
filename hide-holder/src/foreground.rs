@@ -28,8 +28,8 @@ pub struct Foreground {
 
 impl Foreground {
     /// The program in the foreground of a terminal whose group is `group`,
-    /// or none while `shell`, the pane's program, holds it or the system
-    /// cannot say.
+    /// none while `shell`, the pane's program, holds it, or why the system
+    /// could not say, which is never read as the shell holding it.
     ///
     /// It is read each time the pane's facts are, up to 60 times a second
     /// while the program writes, so it asks the system one name in the
@@ -42,28 +42,35 @@ impl Foreground {
         shell: u32,
         group: Result<u32, Unknown>,
         log: &crate::log::Log,
-    ) -> Option<Program> {
-        let group = group.ok()?;
+    ) -> Result<Option<Program>, Unread> {
+        let group = group.map_err(Unread::Group)?;
         if group == shell {
-            return None;
+            return Ok(None);
         }
         let key = match hide_platform::process::name_of(group) {
             Ok(name) => (group, name),
             Err(_) => {
-                let mut members = hide_platform::process::group_members(group).ok()?;
+                let mut members = hide_platform::process::group_members(group)
+                    .map_err(|error| Unread::Members(error.kind()))?;
                 if members.contains(&shell) {
-                    return None;
+                    return Ok(None);
                 }
                 members.sort_unstable();
-                let pid = *members.first()?;
-                (pid, hide_platform::process::name_of(pid).ok()?)
+                // A group whose last member ended since the terminal named
+                // it is read again with the next facts.
+                let pid = *members
+                    .first()
+                    .ok_or(Unread::Members(std::io::ErrorKind::NotFound))?;
+                let name = hide_platform::process::name_of(pid)
+                    .map_err(|error| Unread::Name(error.kind()))?;
+                (pid, name)
             }
         };
         let pid = key.0;
         if let Some((known, program)) = &self.known
             && *known == key
         {
-            return Some(program.clone());
+            return Ok(Some(program.clone()));
         }
         // A failed read still leaves the system's process name and a
         // busy terminal. Report it once for this cached process, without
@@ -91,7 +98,29 @@ impl Foreground {
             argv,
         };
         self.known = Some((key, program.clone()));
-        Some(program)
+        Ok(Some(program))
+    }
+}
+
+/// Why the system could not say what holds a terminal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unread {
+    /// The terminal's foreground group, the system's error when it gave one.
+    Group(Unknown),
+    /// The members of a group whose leader has ended.
+    Members(std::io::ErrorKind),
+    /// The name of the group's first member.
+    Name(std::io::ErrorKind),
+}
+
+impl Unread {
+    /// The reason as the holder's log names it.
+    pub fn reason(self) -> String {
+        match self {
+            Self::Group(unknown) => format!("group_{unknown:?}"),
+            Self::Members(kind) => format!("members_{kind:?}"),
+            Self::Name(kind) => format!("name_{kind:?}"),
+        }
     }
 }
 
@@ -249,6 +278,23 @@ mod tests {
     fn name(system: &str, argv: &[&str]) -> String {
         let argv: Vec<String> = argv.iter().map(|arg| (*arg).to_owned()).collect();
         program_name(system, &argv)
+    }
+
+    /// A terminal whose foreground the system could not name is unread,
+    /// never the pane's own program holding it: read as the shell, it would
+    /// end the agent the pane runs (Windows reads a console's foreground
+    /// from a process table it can fail to read).
+    #[test]
+    fn a_foreground_the_system_cannot_name_is_unread_not_the_shell() {
+        let log = crate::log::Log::open(None, "p").unwrap();
+        let mut foreground = Foreground::default();
+        for unknown in [Unknown::Unreadable, Unknown::NoGroup] {
+            assert_eq!(
+                foreground.program(41, Err(unknown), &log),
+                Err(Unread::Group(unknown))
+            );
+        }
+        assert_eq!(foreground.program(41, Ok(41), &log), Ok(None));
     }
 
     #[test]
