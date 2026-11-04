@@ -247,7 +247,7 @@ impl FactsWriter {
                 Job::Send(message) => message,
                 Job::Read { owed } => {
                     next = Instant::now() + MIN_FACTS_INTERVAL;
-                    let program = foreground.program(self.shell, (self.group)());
+                    let program = foreground.program(self.shell, (self.group)(), &self.log);
                     let facts = match facts(&self.pane, &self.rules, &mut reading, program) {
                         Ok(facts) => facts,
                         Err(error) => {

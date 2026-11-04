@@ -1015,6 +1015,19 @@ pub fn adapter(value: &str) -> Option<&'static AgentAdapter> {
     })
 }
 
+/// A script's npm package, reported by a Windows holder as `npm:<package>`.
+/// Installation and foreground detection share the package declaration;
+/// neither the holder nor the engine keeps a second agent-name table.
+pub fn adapter_for_package_program(program: &str) -> Option<&'static AgentAdapter> {
+    let package = program.strip_prefix("npm:")?;
+    ADAPTERS.iter().find(|row| {
+        row.updates.iter().any(|route| match route.method {
+            InstallMethod::Npm(name) | InstallMethod::Bun(name) => name.eq_ignore_ascii_case(package),
+            _ => false,
+        })
+    })
+}
+
 /// Known identities use Herdr's spelling; an unknown captured kind stays
 /// byte-for-byte intact, without granting it any adapter capability.
 pub fn canonical_kind(value: &str) -> &str {

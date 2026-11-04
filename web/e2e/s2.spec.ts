@@ -1,4 +1,3 @@
-import { skipOwnWindowsAgentStart } from "./own-windows-agent-start";
 // S2 flows on an isolated engine (PRD web-shell-pivot-s2 B16): two
 // checkouts, three tabs, two splits, one registration, one refusal, plus
 // the shortcut sheet, zoom, a pane close and a divider drag. Every command
@@ -220,7 +219,6 @@ async function splitShell(page: Page, flow: Flow): Promise<string> {
 
 // @platform: The checkout rows and tabs a platform's Herdr creates, owned by the core's wire path (a Windows drive path included), and the Overview round trip.
 test("switching checkouts is one focus_checkout, and a plain folder is a row of the Overview over its Workspace", { tag: "@platform" }, async ({ page }) => {
-  skipOwnWindowsAgentStart();
   const flow = await startFlow(page);
   try {
     const { herdr, beta, firstRow, sent } = flow;
@@ -252,7 +250,6 @@ test("switching checkouts is one focus_checkout, and a plain folder is a row of 
 
 // @platform: ⌥T and ⌥` are chords the platform's browser keeps or moves, the new tab's label is the process name Herdr reads on that platform, and a tab closes through its Herdr.
 test("a tab switch mounts the new tab, ⌥T opens a terminal directly, and recent agents, reorder and close still work", { tag: "@platform" }, async ({ page }) => {
-  skipOwnWindowsAgentStart();
   const flow = await startFlow(page);
   try {
     const { herdr, tabs, sent } = flow;
@@ -328,7 +325,6 @@ test("a tab switch mounts the new tab, ⌥T opens a terminal directly, and recen
 
 // @platform: Wheel and click input over a real PTY through the platform's Herdr and its shell: the bytes its shim reads, and the SGR report is the only thing it gets.
 test("a wheel over a shell pane is one terminal_scroll per batch, and a click is one terminal_click answered by the SGR report", { tag: "@platform" }, async ({ page }) => {
-  skipOwnWindowsAgentStart();
   const flow = await startFlow(page);
   try {
     const { herdr, sent, lastSent } = flow;
@@ -416,7 +412,6 @@ test("a wheel over a shell pane is one terminal_scroll per batch, and a click is
 
 // @platform: A full-screen program on the platform's PTY, which answers a wheel with the alternate screen's own keys.
 test("a wheel over an alternate-screen program is one terminal_scroll and no key event, and q reaches it", { tag: "@platform" }, async ({ page }) => {
-  skipOwnWindowsAgentStart();
   const flow = await startFlow(page);
   try {
     const { herdr, sent, lastSent } = flow;
@@ -455,7 +450,6 @@ test("a wheel over an alternate-screen program is one terminal_scroll and no key
 
 // @platform: Selection and the system's copy chord (⌘C, Ctrl+Shift+C) with the clipboard's own line endings.
 test("a drag selects locally without a click, and its copy joins wrapped lines and keeps a shared margin's indentation", { tag: "@platform" }, async ({ page, context }) => {
-  skipOwnWindowsAgentStart();
   const flow = await startFlow(page);
   try {
     const { sent } = flow;
@@ -507,7 +501,6 @@ test("a drag selects locally without a click, and its copy joins wrapped lines a
 
 // @platform: The shortcut sheet marks the chords a platform's browser keeps (⌘⇧M and the like), and ⌘F reaches the agent's own find through the platform's PTY.
 test("the shortcut sheet marks the moved chords and ⌘F reaches the agent's own find, each without a stray key or find bar", { tag: "@platform" }, async ({ page }) => {
-  skipOwnWindowsAgentStart();
   const flow = await startFlow(page);
   try {
     const { herdr, sent } = flow;
@@ -693,7 +686,6 @@ test("switching to another checkout and back keeps the first checkout's retained
 
 // @platform: Typed echo through the platform's PTY, a terminal parked across a tab switch, and a dropped socket that comes back to the platform's hided and Herdr.
 test("typed text echoes and parks across a tab switch, and a dropped socket comes back with the tab bar and splits", { tag: "@platform" }, async ({ page }) => {
-  skipOwnWindowsAgentStart();
   const flow = await startFlow(page);
   try {
     const { herdr, tabs, lastSent } = flow;

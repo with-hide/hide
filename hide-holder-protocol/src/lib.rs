@@ -311,9 +311,10 @@ pub struct Facts {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Program {
     pub pid: u32,
-    /// Its name as an agent's `executables` names it: a runtime's script.
+    /// Its executable or runtime script name, or `npm:<package>` when the
+    /// platform identifies an installed package from the script path.
     pub name: String,
-    /// Its arguments, the program first; empty where the system keeps none.
+    /// Its arguments, the program first; empty when the system cannot read them.
     pub argv: Vec<String>,
 }
 

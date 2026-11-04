@@ -242,9 +242,9 @@ export async function spawnRoot(
   fixture: AgentFixture,
   daemon: Pick<Daemon, "origin" | "token">,
   from: string,
-  { name, repo, branch = "main", session }: { name: string; repo: string; branch?: string; session?: string },
+  { name, repo, branch = "main", session, kind = "claude" }: { name: string; repo: string; branch?: string; session?: string; kind?: string },
 ): Promise<string> {
-  const args = ["agent", "spawn", "--name", name, "--intent", name, "--kind", "claude", "--repo", repo, "--branch", branch, ...(session ? ["--", "--resume", session] : [])];
+  const args = ["agent", "spawn", "--name", name, "--intent", name, "--kind", kind, "--repo", repo, "--branch", branch, ...(session ? ["--", "--resume", session] : [])];
   type Spawned = { ok?: boolean; value?: { pane?: string }; error?: { code?: string } } | null;
   const deadline = Date.now() + 30_000;
   let pane: string | undefined;

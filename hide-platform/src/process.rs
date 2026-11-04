@@ -1284,6 +1284,22 @@ pub fn name_of(pid: u32) -> io::Result<String> {
     sys::name_of(pid)
 }
 
+/// The installed package whose script Windows runs through an npm launcher.
+/// Windows has no exec transition from a launcher to its script; the package
+/// path distinguishes generic script names such as cli.js. Other systems
+/// keep their existing executable and script-name detection. No file is read.
+pub fn package_of_script(script: &str) -> Option<String> {
+    #[cfg(windows)]
+    {
+        crate::windows_process::package_name(script)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = script;
+        None
+    }
+}
+
 /// The arguments `pid` was started with, its program first, as the system
 /// keeps them: the kernel's copy of the start's arguments on macOS
 /// (`KERN_PROCARGS2`), `/proc/<pid>/cmdline` on Linux, where a program that
@@ -1347,8 +1363,10 @@ fn is_console_host(pid: u32) -> bool {
 /// the oldest process `shell` started that still runs, the program the
 /// shell runs now (a line typed into it starts one, and the shell waits on
 /// it), or `shell` itself while it runs none; a console host is never it.
-/// A process the shell started and that started others leads them all
-/// ([`group_members`]). Herdr reads a
+/// A single-child cmd or PowerShell wrapper is followed to the program it
+/// waits for; any other program leads its descendants ([`group_members`]).
+/// An unreadable process table or live child identity is an error, never
+/// evidence that the shell runs alone. Herdr reads a
 /// Windows pane's foreground the same way, from the shell down. `NotFound`
 /// when `shell` has ended.
 #[cfg(windows)]
@@ -1371,6 +1389,37 @@ pub fn console_foreground(shell: u32) -> io::Result<u32> {
             Err(error) => return Err(error),
         }
     }
+    let mut foreground = oldest.map_or(shell, |(_, child)| child);
+    // npm's .cmd launcher and an explicit PowerShell -File wrapper stay
+    // alive while their program runs. Follow only an unambiguous chain
+    // of shells, never a runtime's helpers or an agent-specific name.
+    for depth in 0..MAX_DEPTH {
+        if foreground == shell {
+            break;
+        }
+        let name = name_of(foreground)?;
+        if !["cmd.exe", "powershell.exe", "pwsh.exe"]
+            .iter()
+            .any(|wrapper| wrapper.eq_ignore_ascii_case(&name))
+        {
+            break;
+        }
+        let children: Vec<_> = walk
+            .confirmed_children_of(foreground)?
+            .into_iter()
+            .filter(|child| !is_console_host(*child))
+            .collect();
+        if children.len() != 1 {
+            break;
+        }
+        if depth + 1 == MAX_DEPTH || children[0] == foreground || children[0] == shell {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "console shell wrapper chain exceeds its depth limit",
+            ));
+        }
+        foreground = children[0];
+    }
     // The shell's start is read again, so a shell that ended during the
     // look, and whose pid another process took, is not answered for.
     if start_time(shell)? != shell_started {
@@ -1379,7 +1428,7 @@ pub fn console_foreground(shell: u32) -> io::Result<u32> {
             format!("process {shell} has ended"),
         ));
     }
-    Ok(oldest.map_or(shell, |(_, child)| child))
+    Ok(foreground)
 }
 
 /// The program file a process runs, as the kernel keeps it.

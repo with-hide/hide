@@ -281,6 +281,14 @@ The existing gh pipe reader still lacks a retained-byte cap; this is a pre-exist
 Notifications fan out only on an actual target, fact, error/recovery or stale-state transition; identical status reads renew only the internal freshness deadline.
 Regression owners are `checkout_header_reads_file_edits_unborn_head_and_tracking_ref_changes`, `header_fences_late_git_ci_and_reconnect_results_and_ages_without_false_clean`, and `web/e2e/checkout-git-header.spec.ts`; browser/native timings and captures belong to the run record, not an inferred responsiveness verdict.
 
+Windows foreground detection reuses the holder's output-driven fact reader, at most once per 16 ms, with no idle timer or new worker.
+The existing process-table snapshot validates child birth times and now follows only a single-child cmd or PowerShell wrapper chain, bounded by the process walk's depth limit; an unreadable identity refuses the readiness proof.
+A newly observed process adds one bounded native command-line query (at most three reads after its size probe, at most 64 KiB plus the native descriptor), cached by pid and image name; the Windows argument parser owns and releases its native allocation on every path.
+Package identity comes from the command-line path with no file read or subprocess, and the adapter reuses its static install declarations.
+The holder keeps one cached program and sends at most 64 arguments within 8 KiB; facts publish only when changed, with no added notification fan-out or pending queue.
+The existing process-table snapshot scales with the machine's process count and has no row cap; this change adds no process table or resident cache.
+The argv contract, real-holder busy-shell refusal and `agent-start-platform.spec.ts` own the regression checks; CPU and latency parity remain unmeasured.
+
 Every change adding resident work or touching a high-frequency path must explain its cost in the PR's Review section, even when it claims no performance improvement.
 This is a review requirement, not a new CI benchmark or permission to change runtime behavior through documentation.
 Apply engineering principle #14 by naming the resource's owner and cleanup on success, failure, cancellation, owner exit and partial startup.

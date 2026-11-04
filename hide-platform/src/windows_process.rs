@@ -74,7 +74,13 @@ pub(crate) fn argv(process: HANDLE) -> io::Result<Vec<String>> {
     let mut required = 0;
     // A null buffer asks for the required allocation only.
     let status = unsafe {
-        query(process, COMMAND_LINE_INFORMATION, std::ptr::null_mut(), 0, &mut required)
+        query(
+            process,
+            COMMAND_LINE_INFORMATION,
+            std::ptr::null_mut(),
+            0,
+            &mut required,
+        )
     };
     if !needs_buffer(status) {
         return Err(if status < 0 {
@@ -183,4 +189,61 @@ fn split_command_line(line: &[u16]) -> io::Result<Vec<String>> {
         );
     }
     Ok(result)
+}
+
+// npm launchers can run a generic cli.js. Its nearest node_modules path
+// identifies the package without reading a package file or knowing any agent.
+pub(crate) fn package_name(script: &str) -> Option<String> {
+    let parts: Vec<_> = script
+        .split(['/', '\\'])
+        .filter(|part| !part.is_empty())
+        .collect();
+    // The nearest node_modules owns this script, including nested npm and
+    // pnpm layouts. Dot segments would make that ownership ambiguous.
+    if parts.iter().any(|part| matches!(*part, "." | "..")) {
+        return None;
+    }
+    let at = parts
+        .iter()
+        .rposition(|part| part.eq_ignore_ascii_case("node_modules"))?;
+    let package = parts.get(at + 1)?;
+    let (package, first_script) = if package.starts_with('@') {
+        (format!("{package}/{}", parts.get(at + 2)?), at + 3)
+    } else {
+        ((*package).to_owned(), at + 2)
+    };
+    if package.len() > 214 || first_script >= parts.len() {
+        return None;
+    }
+    Some(package)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scoped_packages_with_the_same_script_keep_distinct_identities() {
+        assert_eq!(
+            package_name(r"C:\npm\node_modules\@earendil-works\pi-coding-agent\dist\cli.js"),
+            Some("@earendil-works/pi-coding-agent".into())
+        );
+        assert_eq!(
+            package_name(r"C:\npm\node_modules\@oh-my-pi\pi-coding-agent\dist\cli.js"),
+            Some("@oh-my-pi/pi-coding-agent".into())
+        );
+        assert_eq!(package_name(r"C:\work\cli.js"), None);
+        assert_eq!(
+            package_name(r"C:\node_modules\@oh-my-pi\pi-coding-agent\..\other\cli.js"),
+            None
+        );
+    }
+
+    #[test]
+    fn a_nested_dependency_is_not_its_outer_package() {
+        assert_eq!(
+            package_name(r"C:\npm\node_modules\@oh-my-pi\pi-coding-agent\node_modules\helper\cli.js"),
+            Some("helper".into())
+        );
+    }
 }

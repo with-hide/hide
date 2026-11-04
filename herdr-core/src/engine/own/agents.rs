@@ -74,13 +74,20 @@ pub(super) fn definition<'c>(catalog: &'c Catalog, kind: &str) -> Option<&'c Def
 
 /// The definition whose `executables` name `program`, by the name its
 /// holder gave it (`hide_holder::foreground::program_name`: its first
-/// argument's file name, or the script a runtime runs).
+/// argument's file name, the script a runtime runs, or its installed package
+/// resolved by the same declarations that install it).
 fn recognized<'c>(catalog: &'c Catalog, program: &ForegroundProgram) -> Option<&'c Definition> {
+    let package = hide_agent_adapter::adapter_for_package_program(&program.name);
     catalog.definitions.iter().find(|definition| {
-        definition
-            .executables
-            .iter()
-            .any(|executable| executable.eq_ignore_ascii_case(&program.name))
+        definition.executables.iter().any(|executable| {
+            executable.eq_ignore_ascii_case(&program.name)
+                || package.is_some_and(|adapter| {
+                    adapter
+                        .executables
+                        .iter()
+                        .any(|name| executable.eq_ignore_ascii_case(name))
+                })
+        })
     })
 }
 
@@ -525,6 +532,28 @@ mod tests {
         ScreenRead::Read {
             state,
             rule: Some("rule".to_owned()),
+        }
+    }
+
+    #[test]
+    fn installed_packages_identify_agents_without_guessing_from_cli_js() {
+        let catalog = catalog();
+        for (package, kind) in [
+            ("@anthropic-ai/claude-code", "claude"),
+            ("@openai/codex", "codex"),
+            ("@xai-official/grok", "grok"),
+            ("opencode-ai", "opencode"),
+            ("@earendil-works/pi-coding-agent", "pi"),
+            ("@oh-my-pi/pi-coding-agent", "omp"),
+        ] {
+            let program = program(&format!("npm:{package}")).unwrap();
+            assert_eq!(
+                recognized(&catalog, &program).map(kind_name).as_deref(),
+                Some(kind)
+            );
+        }
+        for unknown in ["cli", "npm:helper", "npm:@unknown/pi-coding-agent"] {
+            assert!(recognized(&catalog, &program(unknown).unwrap()).is_none());
         }
     }
 
