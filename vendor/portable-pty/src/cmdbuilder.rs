@@ -2,7 +2,8 @@
 // MIT License (vendor/portable-pty/LICENSE.md). Taken from Herdr v0.9.5's
 // vendor/portable-pty (commit 2ecf19a92fc3a7fff75b6ce3655ef04f4625ec01).
 // Herdr's patches in this file: 0002, 0003, 0004.
-// Hide's changes in this file: none.
+// Hide's changes in this file: the Windows registry environment only adds
+// what the starting environment lacks (PATCHES.md).
 // vendor/portable-pty/PATCHES.md lists both.
 #[cfg(unix)]
 use anyhow::Context;
@@ -171,70 +172,77 @@ fn get_base_env() -> BTreeMap<OsString, EnvEntry> {
         }
     }
 
+    // Changed by Hide: the account's registry environment (the system's,
+    // then the user's) only adds what the starting environment lacks, so a
+    // pane keeps the variables its starter gave it, as on Unix. `PATH`
+    // keeps the starting folders first and gains each registry folder it
+    // lacks, so a CLI installed since the starter began is still found.
     #[cfg(windows)]
     {
         use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
         use winreg::RegKey;
 
-        if let Ok(sys_env) = RegKey::predef(HKEY_LOCAL_MACHINE)
-            .open_subkey("System\\CurrentControlSet\\Control\\Session Manager\\Environment")
-        {
-            for res in sys_env.enum_values() {
-                if let Ok((name, value)) = res {
-                    if name.to_ascii_lowercase() == "username" {
-                        continue;
-                    }
-                    if let Ok(value) = reg_value_to_string(&value) {
-                        log::trace!("adding SYS env: {:?} {:?}", name, value);
-                        env.insert(
-                            EnvEntry::map_key(name.clone().into()),
-                            EnvEntry {
-                                is_from_base_env: true,
-                                preferred_key: name.into(),
-                                value,
-                            },
-                        );
-                    }
+        let keys = [
+            (
+                HKEY_LOCAL_MACHINE,
+                "System\\CurrentControlSet\\Control\\Session Manager\\Environment",
+            ),
+            (HKEY_CURRENT_USER, "Environment"),
+        ];
+        for (root, path) in keys {
+            let Ok(registry) = RegKey::predef(root).open_subkey(path) else {
+                continue;
+            };
+            for (name, value) in registry.enum_values().flatten() {
+                if name.eq_ignore_ascii_case("username") {
+                    continue;
                 }
-            }
-        }
-
-        if let Ok(sys_env) = RegKey::predef(HKEY_CURRENT_USER).open_subkey("Environment") {
-            for res in sys_env.enum_values() {
-                if let Ok((name, value)) = res {
-                    if let Ok(value) = reg_value_to_string(&value) {
-                        // Merge the system and user paths together
-                        let value = if name.to_ascii_lowercase() == "path" {
-                            match env.get(&EnvEntry::map_key(name.clone().into())) {
-                                Some(entry) => {
-                                    let mut result = OsString::new();
-                                    result.push(&entry.value);
-                                    result.push(";");
-                                    result.push(&value);
-                                    result
-                                }
-                                None => value,
-                            }
-                        } else {
-                            value
-                        };
-
-                        log::trace!("adding USER env: {:?} {:?}", name, value);
-                        env.insert(
-                            EnvEntry::map_key(name.clone().into()),
-                            EnvEntry {
-                                is_from_base_env: true,
-                                preferred_key: name.into(),
-                                value,
-                            },
-                        );
-                    }
+                if let Ok(value) = reg_value_to_string(&value) {
+                    add_registry_value(&mut env, name.into(), value);
                 }
             }
         }
     }
 
     env
+}
+
+/// Adds one registry variable to `env` without replacing what is there:
+/// a variable the starting environment lacks is added, and `PATH` gains
+/// each folder it does not already name, after its own.
+#[cfg(windows)]
+fn add_registry_value(env: &mut BTreeMap<OsString, EnvEntry>, name: OsString, value: OsString) {
+    let key = EnvEntry::map_key(name.clone());
+    match env.get_mut(&key) {
+        None => {
+            env.insert(
+                key,
+                EnvEntry {
+                    is_from_base_env: true,
+                    preferred_key: name,
+                    value,
+                },
+            );
+        }
+        Some(entry) if key == "path" => {
+            // A value that is not Unicode is left as the starter gave it.
+            let (Some(current), Some(value)) = (entry.value.to_str(), value.to_str()) else {
+                return;
+            };
+            let mut merged = current.to_owned();
+            let named: Vec<String> = merged.split(';').map(str::to_lowercase).collect();
+            for folder in value.split(';') {
+                if !folder.is_empty() && !named.contains(&folder.to_lowercase()) {
+                    if !merged.is_empty() && !merged.ends_with(';') {
+                        merged.push(';');
+                    }
+                    merged.push_str(folder);
+                }
+            }
+            entry.value = merged.into();
+        }
+        Some(_) => {}
+    }
 }
 
 /// `CommandBuilder` is used to prepare a command to be spawned into a pty.

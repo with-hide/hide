@@ -107,6 +107,47 @@ fn a_pane_program_is_told_its_terminal_whatever_its_starter_said() {
     holder.wait_gone();
 }
 
+/// The pane's program keeps the `PATH` and temporary folder its holder was
+/// started with, first, on every system: on Windows the account's registry
+/// environment only adds what they lack (vendor/portable-pty/PATCHES.md).
+#[test]
+fn a_pane_program_keeps_the_path_and_temporary_folder_its_holder_was_started_with() {
+    let home = Home::new();
+    let folder = home.prepare(current_version(), &source());
+    let socket = home.socket("e");
+    let (mark, path, temp, ask): (&str, OsString, OsString, String) = if cfg!(windows) {
+        let mark = "C:\\hide-start-path-mark";
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        (
+            mark,
+            format!("{mark};{}", path.to_string_lossy()).into(),
+            "C:\\hide-start-temp-mark".into(),
+            format!("call echo %PATH:~0,{}%-%TEMP%-told\r", mark.len()),
+        )
+    } else {
+        (
+            "/hide-start-path-mark",
+            "/hide-start-path-mark:/usr/bin:/bin".into(),
+            "/hide-start-temp-mark".into(),
+            "printf '%s-%s-%s\\n' \"${PATH%%:*}\" \"$TEMP\" told\r".to_owned(),
+        )
+    };
+    let holder = start_ready(
+        &folder.program,
+        &socket,
+        &shell(),
+        &[("PATH", &path), ("TEMP", &temp)],
+    );
+    drop(folder);
+    let mut connection = holder.open();
+    connection
+        .send(ClientMessage::Input(ask.into_bytes()))
+        .unwrap();
+    connection.wait_for_text(&format!("{mark}-{}-told", temp.to_string_lossy()));
+    connection.send(ClientMessage::Terminate).unwrap();
+    holder.wait_gone();
+}
+
 #[test]
 fn a_connection_that_drops_without_a_word_leaves_the_pane_running() {
     let home = Home::new();
