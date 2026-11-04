@@ -763,7 +763,6 @@ The transition retains these explicit exceptions:
 | OMP own-engine fake journey, `sleep_wake`, `fork`, `title` | Excluded: `own-start-fixes 노드 대기`; wake confirmation arrives after the cell ends, the following fork is not ready for input, and the title's row is gone | `own-start-fixes` fixes wake and its following operations and removes these exclusions |
 | OMP own-engine fake journey, `resume` | Excluded: `own-start-fixes(#2075) 대기(깨우기 제외에 따른 선행 조건 미충족)`; it compares the sessions before and after the excluded wake | Remove this exclusion when #2075 merges |
 | Windows own-engine desktop and package | Excluded: CI Job forbids holder breakaway | Holder lifetime fix and enabled cells by `b4-default` |
-| Own-engine desktop failed-restoration spec | Excluded: `own-restore-checkout 노드 대기`; cold restore moves a pane in a nested folder out of its original checkout | `own-restore-checkout` preserves the original checkout and removes this exclusion |
 | Windows and Linux Herdr desktop failed-restoration spec | Excluded: close stays unfinished after the preceding split completes | `b4-default` removes the Herdr lane |
 | Own-engine desktop first-run wizard, 4 tests | Excluded: `b4-default 대기(first-run의 Herdr 프로필 읽기 미확정)` | `b4-default` retires the Herdr profile read and enables these cells |
 | Desktop SSH specs on the own engine | Fixture prepared; existing private-SSH prerequisites still skip without that environment | Connect an isolated SSH CI lane |

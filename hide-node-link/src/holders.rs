@@ -132,6 +132,13 @@ pub struct HolderForeground {
     pub group: u32,
     /// Each member's pid and name, in the order the holder listed them.
     pub members: Vec<(u32, String)>,
+    /// The folders the members other than the pane's shell work in, as the
+    /// pane's machine observes them (`hide_platform::process::observed_cwd_of`),
+    /// in the wire spelling, each once; `None` when it could not say for one
+    /// of them, or the node predates this field, which a caller guarding a
+    /// folder takes as unknown, never as no folder.
+    #[serde(default)]
+    pub folders: Option<Vec<String>>,
 }
 
 /// A key the engine presses by name, which the pane's holder encodes for
@@ -397,8 +404,14 @@ pub trait PaneHolders: Send + Sync {
     /// moved screen. A holder built before scroll asks is refused
     /// [`UNSUPPORTED_HOLDER`].
     fn scroll(&self, pane: &str, to: Option<u64>) -> Result<HolderScroll, HolderError>;
-    /// The pane's program and its terminal's foreground processes.
-    fn processes(&self, pane: &str) -> Result<HolderProcesses, HolderError>;
+    /// The pane's program and its terminal's foreground processes, waiting
+    /// at most `within` for them, so a caller that reads many panes shares
+    /// one deadline among them.
+    fn processes(
+        &self,
+        pane: &str,
+        within: std::time::Duration,
+    ) -> Result<HolderProcesses, HolderError>;
     /// Which start of the pane runs now and the program it runs, as the
     /// pane's record says (PRD engine-bundle-3-core-owns D-9): what a
     /// process that names the pane is proved against. Read from the record

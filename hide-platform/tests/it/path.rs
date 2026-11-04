@@ -154,3 +154,25 @@ fn a_shell_word_on_a_drive_mount_names_that_drive() {
         assert_eq!(path::shell_drive_path(word).as_deref(), native, "{word}");
     }
 }
+
+/// A folder's parent is read from its spelling on every system: a root keeps
+/// its `/`, a drive's `C:/` too on a machine whose paths have no drives, and
+/// a root has none.
+#[test]
+fn a_wire_spelling_s_parent_keeps_its_root_whatever_system_reads_it() {
+    for (wire, parent) in [
+        ("/work/repo", Some("/work")),
+        ("/work/repo/", Some("/work")),
+        ("/work", Some("/")),
+        ("/", None),
+        ("C:/work/repo", Some("C:/work")),
+        ("C:/work", Some("C:/")),
+        ("C:/", None),
+        ("//server/share/work", Some("//server/share")),
+        ("//server/share", None),
+        ("src/main.rs", Some("src")),
+        ("src", None),
+    ] {
+        assert_eq!(path::wire_parent(wire), parent, "{wire}");
+    }
+}

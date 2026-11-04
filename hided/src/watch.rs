@@ -649,6 +649,7 @@ pub(crate) mod tests {
                 label: "fixture".into(),
                 cwds: vec![path],
                 purpose: None,
+                owner_mark: None,
             }],
             &Default::default(),
             &index,

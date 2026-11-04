@@ -159,6 +159,7 @@ fn cancellation_before_placement_prevents_a_late_spawn_record() {
     let placed = OwnEngine {
         shared: Arc::clone(&engine.shared),
         gates: vec![Gate::placing(Place(placement.clone()))],
+        saver: None,
     };
     // Pause at registry admission, immediately before the same effect phase
     // reserve_start runs. No callback has been invoked yet.

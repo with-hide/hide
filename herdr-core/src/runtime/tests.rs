@@ -518,7 +518,7 @@ impl RecordedStatistics {
     }
 }
 
-pub(super) fn runtime() -> Runtime {
+pub(crate) fn runtime() -> Runtime {
     let state = scratch_dir("herdr-core-runtime-");
     let options = CoreOptions {
         schema_version: SCHEMA_VERSION,

@@ -3319,4 +3319,4 @@ impl Drop for Runtime {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

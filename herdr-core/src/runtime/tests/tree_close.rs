@@ -100,6 +100,7 @@ pub(super) fn tree_catalog() -> session_sync::PrecomputedCatalog {
             label: "a".to_owned(),
             purpose: None,
             cwds: vec![A.to_owned()],
+            owner_mark: None,
         },
         workspace::SessionSpace {
             checkout: None,
@@ -107,6 +108,7 @@ pub(super) fn tree_catalog() -> session_sync::PrecomputedCatalog {
             label: "b".to_owned(),
             purpose: None,
             cwds: vec![B.to_owned()],
+            owner_mark: None,
         },
     ];
     session_sync::PrecomputedCatalog {

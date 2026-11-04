@@ -1137,6 +1137,7 @@ mod tests {
             cwds: vec!["/checkouts/fixture/src".into()],
             purpose: None,
             checkout: None,
+            owner_mark: None,
         }];
         match runtime
             .prepare_pane_command(NODE, "sender", &context, purpose())

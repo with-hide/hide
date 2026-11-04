@@ -177,7 +177,9 @@ fn ask(holders: &dyn PaneHolders, call: PaneCall) -> PaneAnswer {
             })
         }),
         PaneCall::Scroll { pane, to } => holders.scroll(&pane, to).and_then(value),
-        PaneCall::Processes { pane } => holders.processes(&pane).and_then(value),
+        PaneCall::Processes { pane } => holders
+            .processes(&pane, hide_node_link::link_panes::ASK_WAIT)
+            .and_then(value),
         PaneCall::Proof { pane } => holders.proof(&pane).and_then(value),
         PaneCall::Input { pane, input } => holders.input(&pane, input).and_then(value),
         PaneCall::Letter {
@@ -407,7 +409,7 @@ mod tests {
         fn scroll(&self, _: &str, _: Option<u64>) -> Result<HolderScroll, HolderError> {
             unreachable!()
         }
-        fn processes(&self, _: &str) -> Result<HolderProcesses, HolderError> {
+        fn processes(&self, _: &str, _: Duration) -> Result<HolderProcesses, HolderError> {
             unreachable!()
         }
         fn proof(&self, _: &str) -> Result<HolderProof, HolderError> {

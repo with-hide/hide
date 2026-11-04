@@ -170,6 +170,7 @@ fn manual_issue_runtime() -> Runtime {
         label: "Repo".into(),
         cwds: vec!["/repo/task".into()],
         purpose: None,
+        owner_mark: None,
     }];
     runtime
         .issue_tokens
