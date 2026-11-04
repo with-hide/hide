@@ -149,6 +149,11 @@ export function nativeSessionRef(kind: NativeFileReader, session: string): strin
   return kind === "grok" ? GROK_ID : kind === "cursor" ? CURSOR_ID : session;
 }
 
+/** The ID inside the native record, also shown in the sidebar, not its file reference. */
+export function nativeSessionId(kind: NativeFileReader): string {
+  return { pi: PI_ID, omp: OMP_ID, grok: GROK_ID, cursor: CURSOR_ID }[kind];
+}
+
 /**
  * Herdr's integration report of a native writer's session, which the stand-in
  * has no Hide integration to replace on Herdr's engine. On the core's own

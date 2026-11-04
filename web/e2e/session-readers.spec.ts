@@ -12,7 +12,7 @@ import { startHided, type Daemon } from "./hided-fixture";
 import crypto from "node:crypto";
 import {
   CURSOR_GOAL, CURSOR_ID, GROK_ID, GROK_PLAN, GROK_TITLE, OMP_ID, OMP_TITLE, OMP_UPDATED_TITLE, OPENCODE_CHILD_TITLE, OPENCODE_ID, OPENCODE_TITLE, PI_ID,
-  PI_TITLE, type NativeFileReader, appendOmpQuestion, nativeSessionRef, prepareEngineWriter, prepareOpenCodeWriter, reportNativeWriter, reportOpenCodeState, setGrokPlanApproval, updateOmpTitle,
+  PI_TITLE, type NativeFileReader, appendOmpQuestion, nativeSessionId, prepareEngineWriter, prepareOpenCodeWriter, reportNativeWriter, reportOpenCodeState, setGrokPlanApproval, updateOmpTitle,
   writeOpenCodeQuestion,
 } from "./session-reader-fixture";
 import { openSleepingProject, screenshot, sendEvent } from "./wire";
@@ -61,7 +61,7 @@ async function startNative(fixture: AgentFixture, daemon: Daemon, kind: NativeFi
  */
 async function reportSession(fixture: AgentFixture, daemon: Daemon, kind: NativeFileReader, pane: string, session: string): Promise<void> {
   if (fixture.engine === "herdr") reportNativeWriter(fixture as unknown as HerdrFixture, kind, pane, session);
-  await withControl(daemon, (control) => control.until((rest) => (agentIn(rest, pane)?.session_id === nativeSessionRef(kind, session) ? true : undefined), `${pane} on its ${kind} session`, 30_000));
+  await withControl(daemon, (control) => control.until((rest) => (agentIn(rest, pane)?.session_id === nativeSessionId(kind) ? true : undefined), `${pane} on its ${kind} session`, 30_000));
 }
 
 /** Waits until the daemon publishes no layout holding `pane`: its agent's pane was closed. */
