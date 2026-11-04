@@ -264,7 +264,7 @@ impl OwnEngine<'static> {
                 .collect();
             topology.gather(missing, GATHERED_LABEL);
             let placed: BTreeSet<String> = topology.panes().map(|(id, _)| id.to_owned()).collect();
-            let restarted: Vec<String> = topology
+            let mut restarted: Vec<String> = topology
                 .panes()
                 .filter(|(id, _)| {
                     (saved.contains(*id)
@@ -273,6 +273,9 @@ impl OwnEngine<'static> {
                 })
                 .map(|(id, _)| id.to_owned())
                 .collect();
+            // The shells of the tab the screen opens on start first, so its
+            // panes draw before the rest have their turn.
+            topology.front_first(&mut restarted);
             // A restarted pane's agent ended with its holder: the pane is a
             // shell until its resume is typed.
             let restarts: Vec<Restart> = restarted
