@@ -21,7 +21,8 @@
 //! The screen is pulled, not pushed: the PTY reader only marks it changed,
 //! and the connection's writer draws the screen as it is when it can write,
 //! at most once per [`MIN_FRAGMENT_INTERVAL`], as a fragment of what changed
-//! since the last one it wrote. A slow node therefore gets fewer, larger
+//! since the last one it wrote; the program's answer to input is drawn at
+//! once ([`Pending::input`]). A slow node therefore gets fewer, larger
 //! fragments and never a queue, and no connection means no drawing at all
 //! (PRD engine-bundle-2-pane-holder D-7, D-9). A watch's facts are pulled
 //! the same way.
@@ -69,8 +70,10 @@ const FLUSH_LIMIT: Duration = Duration::from_secs(2);
 /// How long one write to a connection may wait for the node to read.
 const WRITE_LIMIT: Duration = Duration::from_secs(5);
 
-/// The least time between two fragments a connection is sent, as Herdr
-/// draws at most once per frame of a 60 Hz screen.
+/// The least time between two fragments a connection is sent for output the
+/// program makes on its own, as Herdr draws at most once per frame of a
+/// 60 Hz screen; the program's answer to input does not wait for it
+/// ([`Pending::input`]).
 const MIN_FRAGMENT_INTERVAL: Duration = Duration::from_millis(16);
 
 /// How long a connection's screen stays still after a fragment before the
