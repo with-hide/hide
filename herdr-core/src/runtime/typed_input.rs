@@ -488,11 +488,12 @@ impl Runtime {
     }
 
     /// Asks this machine's label reader to read `pane`'s session again on
-    /// its next tick. A pane already waiting waits once, a closed one
-    /// leaves the list, and past `SESSION_REREADS_LIMIT` the pane is
-    /// refused and the refusal logged: nothing drains the list on a machine
-    /// whose reader never started, so it holds only open panes, and no more
-    /// than the limit.
+    /// its next tick. A pane already waiting waits once. A pane not yet
+    /// waiting first drops the waiting panes the core no longer projects (a
+    /// machine with no layout yet keeps them all), and past
+    /// `SESSION_REREADS_LIMIT` it is refused and the refusal logged once
+    /// until the reader takes the list: nothing takes it on a machine whose
+    /// reader never started, and it holds no more than the limit.
     pub(crate) fn queue_session_reread(&mut self, pane: String) {
         if self.plans.session_rereads.contains(&pane) {
             return;
