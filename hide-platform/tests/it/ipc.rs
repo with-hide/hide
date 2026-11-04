@@ -1362,11 +1362,11 @@ fn an_elevated_account_whose_default_owner_is_the_user_reaches_what_it_made() {
     let made = folder.path().join("bridge");
     let path = made.join("s.sock");
     let acting = ActingOwner::act(Owner::Administrators);
-    let created = private::create_dir(&made);
-    let bound = created.as_ref().map(|_| LocalListener::bind(&path));
+    let bound = private::create_dir(&made)
+        .map_err(|error| error.to_string())
+        .and_then(|()| LocalListener::bind(&path).map_err(|error| error.to_string()));
     drop(acting);
-    created.unwrap();
-    let listener = bound.unwrap().unwrap();
+    let listener = bound.unwrap();
     let accepted = thread::spawn(move || listener.accept().map(|_| ()));
 
     let acting = ActingOwner::act(Owner::User);
