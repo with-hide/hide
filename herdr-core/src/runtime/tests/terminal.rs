@@ -63,6 +63,71 @@ fn the_answer_to_an_attach_the_core_asked_for_is_kept_before_a_layout_holds_the_
     assert!(!runtime.request_terminal_control("w1:p9"));
 }
 
+/// with-hide/hide-private#464: a project's creation reads Herdr's session
+/// itself and shows the new pane before the event stream does. A session the
+/// stream publishes without that pane yet (its workspace held back while its
+/// first layout settles) keeps the pane's terminal and the size its view
+/// reported, so its node is not told to forget the pane and keys typed into
+/// it do not wait for a view that has already reported. Once the stream has
+/// laid the pane out, or the bound has passed, its absence retires it.
+#[test]
+fn a_pane_a_read_showed_first_keeps_its_terminal_until_the_stream_lays_it_out() {
+    const NEW: &str = "w2:p1";
+    let forgot = |terminals: &RecordedTerminals| {
+        terminals
+            .take()
+            .contains(&TerminalControl::Forget { pane: NEW.into() })
+    };
+    let stream = |mut payload: SessionSnapshotPayload| {
+        payload.tab_moves = Some(Default::default());
+        payload
+    };
+    let read = context_payload();
+    let mut before = read.clone();
+    before.workspaces.retain(|row| row.workspace_id == "w1");
+    before.tabs.retain(|row| row.workspace_id == "w1");
+    before.panes.retain(|row| row.pane_id != NEW);
+    before.layouts.retain(|row| row.workspace_id == "w1");
+    before
+        .agents
+        .retain(|row| row.pane_id.as_deref() != Some(NEW));
+    let resize = serde_json::to_vec(&serde_json::json!({
+        "schema_version": SCHEMA_VERSION, "kind": "terminal_resize",
+        "payload": {"pane_id": NEW, "rows": 40, "cols": 120}
+    }))
+    .unwrap();
+
+    for bound_passed in [false, true] {
+        let mut runtime = runtime();
+        let terminals = record_terminals(&mut runtime);
+        runtime.ingest_session(Ok(stream(before.clone())));
+        // The creation's own read, then its pane's view reports a size.
+        runtime.ingest_session(Ok(read.clone()));
+        runtime.request_terminal_control(NEW);
+        runtime.dispatch_json(&resize);
+        terminals.take();
+        if bound_passed {
+            for (_, read_at) in &mut runtime.read_ahead.panes {
+                *read_at = 0;
+            }
+            runtime.ingest_session(Ok(stream(before.clone())));
+            assert!(forgot(&terminals), "a read past its bound keeps nothing");
+            assert!(!runtime.terminal_sizes.contains_key(NEW));
+            continue;
+        }
+        runtime.ingest_session(Ok(stream(before.clone())));
+        assert!(!forgot(&terminals), "the stream is behind the read");
+        assert!(runtime.terminal_sizes.contains_key(NEW));
+        runtime.ingest_session(Ok(stream(read.clone())));
+        assert!(!forgot(&terminals));
+        assert!(runtime.terminal_sizes.contains_key(NEW));
+        // The stream has shown the pane, so its absence is a close again.
+        runtime.ingest_session(Ok(stream(before.clone())));
+        assert!(forgot(&terminals), "the stream closed the pane it showed");
+        assert!(!runtime.terminal_sizes.contains_key(NEW));
+    }
+}
+
 /// An answer for which no operation of this runtime is waiting (a late or a
 /// foreign one) moves nothing: only an operation Hide started is drawn ahead
 /// of Herdr.

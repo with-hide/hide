@@ -85,6 +85,7 @@ mod project_tasks;
 mod projects;
 mod ps;
 mod pull_requests;
+mod read_ahead;
 mod recent_checkouts;
 mod recent_panes;
 mod rename;
@@ -1536,6 +1537,9 @@ pub struct Runtime {
     drawn_closes: HashMap<String, Vec<pane_prediction::Prediction>>,
     /// Created tabs drawn until Herdr's layout for them arrives (D-05).
     provisional_tabs: Vec<drawn_ahead::ProvisionalTab>,
+    /// Panes a read of Herdr's own showed before its event stream did; their
+    /// absence from the stream retires nothing until it lays them out.
+    read_ahead: read_ahead::ReadAhead,
     recent_closed_sequence: u64,
     reopen_in_flight: Option<String>,
     /// A reopen asked for while this machine's newest close was still
@@ -2453,6 +2457,7 @@ impl Runtime {
             ingesting_session: false,
             pumping_geometry: false,
             provisional_tabs: Vec::new(),
+            read_ahead: read_ahead::ReadAhead::default(),
             recent_closed_sequence: 0,
             reopen_in_flight: None,
             reopen_after_close: None,
