@@ -155,13 +155,14 @@ class PaneShell:
                     f"printf '%s' \"$?\" > {shlex.quote(str(status))}")
         # Windows PowerShell rewrites a redirected native program's output as
         # UTF-16, so the redirection is cmd.exe's, from a file beside the
-        # status that PowerShell runs; `call echo %^errorlevel%` reads the
-        # status when it runs, not when the line is parsed.
+        # status that PowerShell runs. In a batch file `%%` is one `%`, so
+        # `call echo %%errorlevel%%` reads the status when it runs, not when
+        # the line is parsed.
         from .protection import write_private
         command = " ".join(cmd_quote(value) for value in argv)
         script = status.with_name(status.name + ".cmd")
         write_private(script, (f"@{command} > {cmd_quote(output)} 2> {cmd_quote(error)} & "
-                               f">{cmd_quote(status)} call echo %^errorlevel%\r\n").encode())
+                               f">{cmd_quote(status)} call echo %%errorlevel%%\r\n").encode())
         return f"& {ps_quote(script)}"
 
     def read_variable(self, name, source, ready):
