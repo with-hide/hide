@@ -816,7 +816,10 @@ impl CoreHandle {
             Arc::clone(&reports),
         )?;
         let pane_holders = holders.clone();
-        let engine = local_engine(&options, &state_dir, holders, &local)?;
+        // One node answers for this machine, to the core and to its engine
+        // alike, so the core's stop closes the one that owns the panes.
+        let own_node = Arc::new(own_node(&options, &state_dir, holders, &local)?);
+        let engine = local_engine(&options, &state_dir, Arc::clone(&own_node))?;
         let terminals = Arc::new(Router::new(
             Arc::clone(&local) as Arc<dyn hide_node_link::terminal::TerminalNode>,
             Arc::clone(&outputs) as Arc<dyn OutputSink>,
@@ -829,7 +832,7 @@ impl CoreHandle {
             .spawn(move || {
                 owner_loop(
                     options,
-                    core_engine,
+                    (own_node, core_engine),
                     panes,
                     (routes, terminal_reports),
                     command_rx,
@@ -1197,28 +1200,54 @@ impl Drop for CoreHandle {
     }
 }
 
-/// The engine that runs this machine's panes: the core's own engine over
-/// the node's pane holders, standing for this state folder's engine folder
-/// (PRD engine-bundle-3-core-owns D-5).
-fn local_engine(
+/// This machine's node: it answers for the core's home, keeps what it
+/// measured of each repository's worktrees and the View feedback in the
+/// state folder, installs the kit from the parts beside this program, and
+/// answers the core's own engine from the node's pane holders (PRD
+/// engine-bundle-3-core-owns D-5).
+fn own_node(
     options: &CoreOptions,
     state_dir: &std::path::Path,
     holders: Arc<Holders>,
     service: &Arc<Service>,
+) -> Result<hide_node::Local, String> {
+    let home = core_home(options)?;
+    let mut node = hide_node::Local::new(Some(home.clone()))
+        // What the node measured of each repository's worktrees outlives
+        // the daemon, in the core's state folder.
+        .keeping_worktree_facts_in(hide_kit::layout::worktree_facts(state_dir))
+        .keeping_feedback_in(state_dir.to_path_buf())
+        .with_panes(Arc::new(LocalPanes::for_account(
+            holders,
+            Arc::clone(service),
+            home.clone(),
+        )));
+    // The install kit's parts ship beside this binary: in the app bundle, or
+    // in the build folder a move or a core update placed in this account's
+    // helper root, which a moved core's login item runs. A daemon anywhere
+    // else, a development build among them, installs nothing (PRD
+    // device-parity D-19).
+    if let Ok(executable) = std::env::current_exe() {
+        node = node.with_kit(hide_host::serve::KitPlace::of_program(
+            &executable,
+            Some(&home),
+        ));
+    }
+    Ok(node)
+}
+
+/// The engine that runs this machine's panes: the core's own engine over
+/// `node`'s pane holders, standing for this state folder's engine folder
+/// (PRD engine-bundle-3-core-owns D-5).
+fn local_engine(
+    options: &CoreOptions,
+    state_dir: &std::path::Path,
+    node: Arc<hide_node::Local>,
 ) -> Result<EngineHandle, String> {
     let home = core_home(options)?;
-    // The engine's folders, Git and pane holders are this machine's, asked
-    // of a node answering for the core's home as the core's own node does,
-    // by the same requests a device's node answers.
-    let node =
-        Arc::new(
-            hide_node::Local::new(Some(home.clone())).with_panes(Arc::new(
-                LocalPanes::for_account(holders, Arc::clone(service), home.clone()),
-            )),
-        );
-    // The engine opens knowing the operator's agents, so the restore that
-    // starts with it resumes theirs too; a folder that cannot be read leaves
-    // the built-in ones, and the core's read logs why.
+    // The operator's agents are known as the engine opens, so the restore
+    // that starts with it resumes theirs too; a folder that cannot be read
+    // leaves the built-in ones, and the core's read logs why.
     let definitions = hide_kit::agent_definitions::read(&home)
         .unwrap_or_else(|_| hide_agent_adapter::definition::Catalog::read(Vec::new()));
     EngineHandle::own(node, state_dir.to_path_buf(), home, definitions)
@@ -1271,41 +1300,24 @@ impl Attacher for NoHerdr {
 
 fn owner_loop(
     options: CoreOptions,
-    own_engine: EngineHandle,
+    (own_node, own_engine): (Arc<hide_node::Local>, EngineHandle),
     panes: hide_node::ssh::PaneEventsSlot,
     (terminals, terminal_reports): (Arc<Router>, herdr_core::terminal_reports::TerminalReports),
     commands: Receiver<Command>,
     ready: Sender<Result<(), String>>,
     notify: broadcast::Sender<()>,
 ) {
-    // The core's own node answers for the home the core reads and writes
-    // for: the configured one, else the process's, as the core decides.
+    // The home the core reads and writes for: the configured one, else the
+    // process's, as the core decides.
     let home = options
         .home
         .as_ref()
         .map(std::path::PathBuf::from)
         .or_else(|| hide_platform::host::home_dir().ok());
-    let mut own_node = hide_node::Local::new(home.clone());
-    // What the node measured of each repository's worktrees outlives the
-    // daemon, in the core's state folder.
     let state_dir = std::path::Path::new(&options.app_state_path)
         .parent()
         .unwrap_or(std::path::Path::new("."))
         .to_path_buf();
-    own_node = own_node
-        .keeping_worktree_facts_in(hide_kit::layout::worktree_facts(&state_dir))
-        .keeping_feedback_in(state_dir.clone());
-    // The install kit's parts ship beside this binary: in the app bundle, or
-    // in the build folder a move or a core update placed in this account's
-    // helper root, which a moved core's login item runs. A daemon anywhere
-    // else, a development build among them, installs nothing (PRD
-    // device-parity D-19).
-    if let Ok(executable) = std::env::current_exe() {
-        own_node = own_node.with_kit(hide_host::serve::KitPlace::of_program(
-            &executable,
-            home.as_deref(),
-        ));
-    }
     // The program builds devices run, and the `hide` that answers ssh's
     // sign-in questions, ship beside this binary; a daemon anywhere else
     // carries none, which leaves each device's node `unsupported` with that
@@ -1347,7 +1359,7 @@ fn owner_loop(
     });
     let Some(core) = Core::create_with_product_analytics(
         options,
-        std::sync::Arc::new(own_node),
+        own_node,
         Some(own_engine),
         std::sync::Arc::new(devices),
         terminals,
@@ -1781,6 +1793,36 @@ mod tests {
             Ok(())
         }
         fn end(&self, _reason: &str) {}
+    }
+
+    /// A core stopped in its process, as a Herdr move stops it before the
+    /// core role starts again, gives up this machine's panes: the next core
+    /// takes their ownership at once, or its engine never lays the panes out
+    /// again (the move's restored panes waited for an owner that never let
+    /// go).
+    #[test]
+    fn a_core_stopped_in_its_process_gives_up_the_panes_for_the_next_one() {
+        let directory = tempfile::tempdir().unwrap();
+        let panes =
+            || hide_kit::panes::Panes::open(directory.path(), directory.path(), |_| {}).unwrap();
+        let core = CoreHandle::bare(directory.path());
+        // The engine takes the panes as it opens, on a thread of its own.
+        let started = Instant::now();
+        while panes().acquire(Duration::ZERO).is_ok() {
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "the core's engine never took this machine's panes"
+            );
+            thread::yield_now();
+        }
+        // The daemon's stop ends the core while its routes still hold the
+        // handle, as `RunningDaemon` does.
+        core.shutdown();
+        assert!(
+            panes().acquire(Duration::from_secs(5)).is_ok(),
+            "the stopped core still owns this machine's panes"
+        );
+        drop(core);
     }
 
     /// Dropping the core's handle while a device's terminals are linked
