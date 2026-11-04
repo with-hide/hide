@@ -125,9 +125,10 @@ impl std::error::Error for DurableWriteError {
 /// Writes `contents` to `path` whole or not at all: the bytes go to a file
 /// beside it, are synced with `sync_all`, and replace `path` in one step.
 /// Pass [`WriteOptions::UntilReboot`] only for records that need not survive
-/// power loss; passing an [`Access`] keeps the full file sync. Parent sync and
-/// temporary cleanup are best effort. A replacement error does not promise
-/// the old destination is unchanged on every system.
+/// power loss, which skips both syncs; passing an [`Access`] keeps the full
+/// file sync. Parent sync and temporary cleanup are best effort. A
+/// replacement error does not promise the old destination is unchanged on
+/// every system.
 /// Returns the identity of the file now at `path`.
 ///
 /// `path` itself is replaced, so a link there is replaced by a file; a caller
@@ -154,8 +155,10 @@ pub enum WriteOptions {
     SyncAll(Access),
     /// Only for records whose subjects cannot outlive this boot and whose
     /// owner recovers missing, damaged or older bytes after power loss.
-    /// Uses fsync on Unix, without macOS's extra device-cache barrier;
-    /// Windows retains sync_all. This is not a power-loss durability promise.
+    /// Neither the file nor its folder is synced: the replacement is whole
+    /// to every other process at once, and nothing a sync adds survives
+    /// longer than what the owner already recovers. This is not a
+    /// power-loss durability promise.
     UntilReboot(Access),
 }
 
@@ -261,11 +264,12 @@ fn write(
                 kept.apply(&file)?;
             }
             match mode {
-                WriteMode::UntilReboot => {
-                    #[cfg(test)]
-                    os_faults::fail(os_faults::Point::FileFlush)?;
-                    sys::flush(&file)?;
-                }
+                // A sync, even the plain `fsync`, waits for the device: under
+                // other work's writes that cost a pane holder's start tens of
+                // milliseconds a write, and a start writes its record three
+                // times under one lock, so a restore of 66 panes queued
+                // seconds of it.
+                WriteMode::UntilReboot => {}
                 WriteMode::Visibility | WriteMode::Durable => {
                     #[cfg(test)]
                     os_faults::fail(os_faults::Point::FileSync)?;
@@ -292,7 +296,8 @@ fn write(
         })?;
         temporary.disarm();
         match mode {
-            WriteMode::Visibility | WriteMode::UntilReboot => sync_path_parent(folder),
+            WriteMode::Visibility => sync_path_parent(folder),
+            WriteMode::UntilReboot => {}
             WriteMode::Durable => {
                 sync_durable_parent(folder).map_err(|source| {
                     DurableWriteError::ReplacedNotDurable {
@@ -461,22 +466,6 @@ mod sys {
         #[cfg(test)]
         super::os_faults::fail(super::os_faults::Point::ReplacementAcknowledgement)?;
         Ok(())
-    }
-
-    /// The flush a visible replacement pays for its file: `fsync`, which
-    /// hands the bytes to the device, and not `sync_all`, which on macOS is
-    /// `F_FULLFSYNC` and also empties the device's cache. That barrier is
-    /// [`super::write_file_durable`]'s; here it cost about 5 ms a write
-    /// against 0.2 ms (measured on this project's Mac, one writer or eight),
-    /// and a pane holder's start writes its record three times under one
-    /// lock, so a restore of 66 panes queued about a second of it.
-    pub(super) fn flush(file: &fs::File) -> io::Result<()> {
-        // SAFETY: the descriptor belongs to `file`, which outlives the call.
-        if unsafe { libc::fsync(std::os::fd::AsRawFd::as_raw_fd(file)) } == 0 {
-            Ok(())
-        } else {
-            Err(io::Error::last_os_error())
-        }
     }
 
     pub(super) fn sync_dir(dir: &impl Handle) -> io::Result<()> {
@@ -649,11 +638,6 @@ mod sys {
     use super::{Access, Handle};
     use crate::fs::{path_of, wide};
 
-    /// `FlushFileBuffers`, the one flush Windows has.
-    pub(super) fn flush(file: &fs::File) -> io::Result<()> {
-        file.sync_all()
-    }
-
     pub(super) fn create_temporary(
         path: &Path,
         access: Access,
@@ -781,7 +765,6 @@ mod os_faults {
     pub(super) enum Point {
         FileWrite,
         FileSync,
-        FileFlush,
         Replacement,
         ReplacementAcknowledgement,
         Cleanup,
@@ -1019,28 +1002,23 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_writes_keep_full_file_sync_and_boot_records_explicitly_choose_their_flush() {
-        for (options, point) in [
-            (Access::Private.into(), Point::FileSync),
-            (WriteOptions::UntilReboot(Access::Private), Point::FileFlush),
-        ] {
-            let folder = tempfile::tempdir().unwrap();
-            let path = folder.path().join("record");
-            fs::write(&path, b"old").unwrap();
-            let old_id = identity::file_id(&path).unwrap();
-            let fault = os_faults::install(&[point]);
+    fn ordinary_writes_keep_full_file_sync_and_boot_records_sync_nothing() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("record");
+        fs::write(&path, b"old").unwrap();
+        let old_id = identity::file_id(&path).unwrap();
+        let _fault = os_faults::install(&[Point::FileSync]);
 
-            let error = write_file(&path, b"new", options).unwrap_err();
-            assert_eq!(error.raw_os_error(), Some(os_faults::IO_ERROR));
-            assert_eq!(fs::read(&path).unwrap(), b"old");
-            assert_eq!(identity::file_id(&path).unwrap(), old_id);
-            assert_eq!(names(folder.path()), [OsString::from("record")]);
+        let error = write_file(&path, b"new", Access::Private).unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(os_faults::IO_ERROR));
+        assert_eq!(fs::read(&path).unwrap(), b"old");
+        assert_eq!(identity::file_id(&path).unwrap(), old_id);
+        assert_eq!(names(folder.path()), [OsString::from("record")]);
 
-            drop(fault);
-            let id = write_file(&path, b"new", options).unwrap();
-            assert_eq!(fs::read(&path).unwrap(), b"new");
-            assert_eq!(identity::file_id(&path).unwrap(), id);
-            assert!(super::super::private::is_private(&path).unwrap());
-        }
+        let id = write_file(&path, b"new", WriteOptions::UntilReboot(Access::Private)).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"new");
+        assert_eq!(identity::file_id(&path).unwrap(), id);
+        assert_eq!(names(folder.path()), [OsString::from("record")]);
+        assert!(super::super::private::is_private(&path).unwrap());
     }
 }
