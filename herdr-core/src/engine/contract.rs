@@ -961,7 +961,9 @@ fn a_program_run_in_another_folder_is_that_panes_foreground_folder() {
     let built = &running.0;
     let engine = &built.engine;
     let native = hide_platform::path::from_wire(&built.folder).unwrap();
-    let other = native.join("다른-작업-폴더");
+    // Typed into the shell, so plain ASCII: a shell reading its line in the
+    // C locale takes other bytes as keys.
+    let other = native.join("other-folder");
     std::fs::create_dir(&other).unwrap();
     // The folder as the system names it, which is what its machine reads.
     let other = hide_platform::fs::identity::canonical(&other).unwrap();
@@ -993,7 +995,11 @@ fn a_program_run_in_another_folder_is_that_panes_foreground_folder() {
         }
         assert!(
             Instant::now() < deadline,
-            "the program's folder was never reported: {places:?}"
+            "the program's folder was never reported: {places:?}, the holder says {:?}, the pane shows {:?}",
+            built.panes.processes(&pane),
+            engine
+                .read_pane(WAIT, &pane, "recent", 20)
+                .map(|text| text.text),
         );
         std::thread::sleep(Duration::from_millis(100));
     };

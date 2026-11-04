@@ -22,6 +22,14 @@ impl Starting {
         self.settled.notify_all();
     }
 
+    /// Whether the start has finished and the holder runs, without waiting.
+    pub(super) fn started(&self) -> bool {
+        matches!(
+            *self.result.lock().unwrap_or_else(PoisonError::into_inner),
+            Some(Ok(()))
+        )
+    }
+
     pub(super) fn wait(&self) -> Result<(), EngineError> {
         let result = self.result.lock().unwrap_or_else(PoisonError::into_inner);
         let (result, _) = self

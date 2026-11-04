@@ -1044,12 +1044,12 @@ impl OwnEngine<'_> {
     /// holder runs, as its machine observes them, so a folder a program has
     /// moved to is guarded as the folder the pane started in is; `None` when
     /// its machine could not say. A pane whose terminal could not start, one
-    /// still starting or closing, and one gone since, runs no such program.
+    /// still starting or closing, and one gone since, runs no such program;
+    /// a pane drawn before its start keeps the start's record after it.
     fn program_folders(&self, pane: &str, failed: bool) -> Option<Vec<String>> {
-        let settled = self
-            .topology()
-            .pane(pane)
-            .map(|held| held.starting.is_none() && !held.closing);
+        let settled = self.topology().pane(pane).map(|held| {
+            !held.closing && held.starting.as_ref().is_none_or(|start| start.started())
+        });
         if failed || !matches!(settled, Ok(true)) {
             return Some(Vec::new());
         }
@@ -4879,8 +4879,13 @@ mod tests {
     fn a_programs_folder_is_reported_with_its_pane_and_an_unread_one_is_unknown() {
         let holders = Arc::new(Holders::default());
         let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
-        let (_, _, pane) = engine
-            .create_workspace(WAIT, "/w", "w", true, Env::new())
+        let (workspace, _, first) = engine
+            .create_workspace(WAIT, "/v", "w", true, Env::new())
+            .unwrap();
+        // A tab's pane is drawn before its holder starts; once it has
+        // started, its programs are asked as any other pane's are.
+        let (_, pane) = engine
+            .create_tab(WAIT, &workspace, "/w", "t", true, Env::new())
             .unwrap();
         let program = |folders: Option<Vec<String>>| HolderProcesses {
             shell: 41,
@@ -4924,6 +4929,8 @@ mod tests {
             vec![(pane.clone(), Some("/w".to_owned()))]
         );
         assert_eq!(
+        engine.read_pane(WAIT, &pane, "recent", 1).unwrap();
+        engine.close_pane(WAIT, &first).unwrap();
             engine.pane_places(WAIT).unwrap(),
             vec![PanePlace {
                 pane_id: pane,
