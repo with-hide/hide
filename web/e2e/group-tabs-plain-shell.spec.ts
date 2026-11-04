@@ -94,15 +94,6 @@ async function shellIdentity(daemon: Daemon, pane: string): Promise<Identity> {
   return found!;
 }
 
-/**
- * The HOME the pane's shell reads its startup files from: a private Herdr's
- * panes keep the server's, the own engine's are children of the daemon, whose
- * HOME is `plain`.
- */
-function shellHome(fixture: AgentFixture, plain: string): string {
-  return fixture.engine === "herdr" ? (fixture as AgentFixture & Pick<HerdrFixture, "env">).env.HOME! : plain;
-}
-
 function paneText(page: Page, pane: string): Promise<string> {
   return page.evaluate((id) => window.__hideProbe?.paneText(id) ?? "", pane);
 }
@@ -119,10 +110,6 @@ async function typesInto(page: Page, daemon: Daemon, pane: string, suffix = "INP
 async function agentRunning(page: Page, daemon: Daemon, herdr: AgentFixture, pane: string, prompt: string) {
   await withControl(daemon, (control) => control.until((rest) => agentIn(rest, pane)?.agent_kind === "claude" || undefined, `a Claude agent in ${pane}`, 30_000));
   await expect.poll(async () => paneText(page, pane), { timeout: 30_000 }).toContain(prompt);
-  // Herdr also names the agent's command line, which carries the model; the own engine publishes no process arguments to read.
-  if (herdr.engine !== "herdr") return;
-  const direct = herdr as AgentFixture & HerdrFixture;
-  await expect.poll(() => JSON.stringify(direct.run(["pane", "process-info", "--pane", pane])), { timeout: 30_000 }).toContain("opus");
 }
 
 async function open(page: Page, daemon: Daemon) {
@@ -194,21 +181,18 @@ for (const scenario of [
   test(scenario.name, async ({ page }) => {
     test.skip(!fs.existsSync(scenario.shell), `This regression requires ${scenario.shell}`);
     const herdr = await startFixture({ agents: false });
-    let gate: Awaited<ReturnType<typeof herdrGate>> | undefined;
     let daemon: Daemon | null = null;
     let failure: unknown;
     try {
-      // The own engine's panes read the HOME its fixture made; a private Herdr's daemon runs in a home of its own.
-      const home = herdr.engine === "own" ? herdr.home! : path.join(herdr.root, "plain-home");
+      // The panes read the HOME the fixture made.
+      const home = herdr.home!;
       fs.mkdirSync(path.join(home, ".hide"), { recursive: true });
-      const shellEnv = privateShellEnv(shellHome(herdr, home), herdr.fixturePath);
-      // A pane made by the product reaches the private shell's environment by the engine's own route.
-      if (herdr.engine === "herdr") gate = await herdrGate(herdr as AgentFixture & HerdrFixture, shellEnv);
+      const shellEnv = privateShellEnv(home, herdr.fixturePath);
       const blocked = path.join(home, ".hide", "shell-integration");
       if (scenario.blockIntegration) fs.writeFileSync(blocked, "integration directory deliberately unavailable\n");
-      daemon = await startHided(herdr, "group-plain-shell", home, { SHELL: scenario.shell, ...(gate ? { HERDR_SOCKET_PATH: gate.socket } : shellEnv) });
-      // The own engine's panes read the daemon's HOME, whose login files the daemon's start rewrote.
-      if (herdr.engine === "own") privateShellEnv(home, herdr.fixturePath);
+      daemon = await startHided(herdr, "group-plain-shell", home, { SHELL: scenario.shell, ...shellEnv });
+      // The panes read the daemon's HOME, whose login files the daemon's start rewrote.
+      privateShellEnv(home, herdr.fixturePath);
       await open(page, daemon);
       await createGroup(page, "Plain terminal");
       const pane = await startTerminal(page);
@@ -219,8 +203,6 @@ for (const scenario of [
         state: "ready",
         effect: { shell_readiness: "plain", expected_command: plainCommand(scenario.shell), binding: { pane_id: pane, identity: actual } },
       });
-      // Herdr names the same terminal and shell process for the pane as the start recorded.
-      if (herdr.engine === "herdr") expect(identity(herdr as AgentFixture & HerdrFixture, pane)).toEqual({ terminal_id: actual.terminal_id, shell_pid: actual.shell_pid });
       const tab = (await stripTabs(page).getAttribute("data-tab"))!;
       const originalTabs = await tabsHeld(herdr, daemon);
       // D-01 removes Add agent. Exercise the preserved start lifecycle
@@ -234,7 +216,6 @@ for (const scenario of [
       const added = (await page.locator("[data-pane-view]").evaluateAll(panes => panes.map(pane => pane.getAttribute("data-pane-view")!))).find(id => id !== pane)!;
       await agentRunning(page, daemon, herdr, added, prompt);
       expect(await shellIdentity(daemon, pane)).toEqual(actual);
-      if (herdr.engine === "herdr") expect(identity(herdr as AgentFixture & HerdrFixture, pane)).toEqual({ terminal_id: actual.terminal_id, shell_pid: actual.shell_pid });
       expect((await tabsHeld(herdr, daemon)).sort()).toEqual(originalTabs.sort());
       await typesInto(page, daemon, pane, "AFTER_AGENT_ADD");
       await expect.poll(() => starts(daemon!).find(start => start.effect?.binding?.pane_id === added)).toMatchObject({
@@ -262,7 +243,7 @@ for (const scenario of [
       }
       if (scenario.blockIntegration) expect(fs.statSync(blocked).isFile()).toBe(true);
     } catch (error) { failure = error; }
-    finally { await cleanup(failure, [() => daemon?.stop(), async () => { await gate?.stop(); }, () => herdr.stop()]); }
+    finally { await cleanup(failure, [() => daemon?.stop(), () => herdr.stop()]); }
   });
 }
 

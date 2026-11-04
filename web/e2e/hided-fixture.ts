@@ -13,9 +13,9 @@ import { endPaneHolders } from "./pane-holders.mjs";
 import { endWindowsProcesses, fixtureExecutable, fixtureHomeEnv, fixtureLoginShellPath, fixtureOpenCommand, inheritedFixtureEnv, windowsProcessTree, type WindowsProcess } from "./platform-fixture";
 
 /**
- * What a fixture daemon runs its panes on: a private Herdr server (`socket`
- * and `bin`), or, with neither, the core's own engine over pane holders, the
- * development switch `HIDE_DEV_PANE_HOLDER` on (`engine-fixture.ts`).
+ * What a fixture daemon runs its panes on: the core's own engine over pane
+ * holders (`engine-fixture.ts`). A Herdr fixture's `socket` and `bin` reach
+ * no daemon.
  * `daemonEnv` is laid over the daemon's environment before a spec's own.
  */
 export type DaemonEngine = Pick<HerdrFixture, "root" | "fixturePath" | "afterStop"> & {
@@ -159,8 +159,6 @@ async function launch(herdr: DaemonEngine, label: string, dir: string, home: str
     HIDE_KEEP_ALIVE: "1",
     HIDE_PORT: port,
     HIDED_UI_DIR: path.resolve("dist"),
-    // The core's own engine takes no Herdr: a socket beside its switch fails the daemon's start.
-    ...(herdr.socket ? { HERDR_SOCKET_PATH: herdr.socket, HERDR_BIN_PATH: herdr.bin } : { HIDE_DEV_PANE_HOLDER: "1" }),
     // Catalog discovery probes every provider on hided's PATH, so use the
     // same controlled shim and system tools as the private Herdr server.
     // Specs adding a shim prepend it to this path through extraEnv.

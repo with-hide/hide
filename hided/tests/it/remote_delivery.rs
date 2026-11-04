@@ -1,5 +1,6 @@
-//! Candidate CLI + pinned Herdr lane. It crosses actual pane ancestry, SSH,
-//! helper attestation over the node link and the durable mailbox.
+//! Candidate CLI lane on the core's own engine. It crosses actual pane
+//! ancestry, SSH, helper attestation over the node link and the durable
+//! mailbox.
 #![cfg(unix)]
 
 use crate::support::remote_delivery as fixture;
@@ -23,19 +24,6 @@ fn context(stdout: &str) -> Result<String> {
         .to_owned())
 }
 
-/// The `value` of a `hide agent` answer, which does not use the envelope of
-/// the mailbox commands.
-fn agent_value(output: fixture::PaneOutput) -> Result<Value> {
-    ensure!(
-        output.status == 0,
-        "agent command failed: {}",
-        output.stderr
-    );
-    let answer: Value = serde_json::from_str(&output.stdout).context("agent command JSON")?;
-    ensure!(answer["ok"] == true, "agent command refused: {answer}");
-    answer.get("value").cloned().context("agent command value")
-}
-
 /// The prompt hook of a turn whose submitted prompt is `prompt`: only the
 /// turn the line Hide's doorbell typed opened receives the letter bodies
 /// (`Fixture::rung`), any other prompt receives a count.
@@ -49,7 +37,7 @@ fn hook(binary: &std::path::Path, session: &str, prompt: &str) -> String {
 
 /// The Stop hook that ends a Claude Code turn. The core's turn for the pane
 /// follows the hook (`docs/status-model.md`), so a turn a prompt hook opened
-/// works until this runs, whatever Herdr reads on the screen.
+/// works until this runs, whatever the screen reads.
 fn stop(binary: &std::path::Path, session: &str) -> String {
     format!(
         "printf '%s' {} | {} hook --runtime claude-code --event Stop",
@@ -69,19 +57,12 @@ fn stop(binary: &std::path::Path, session: &str) -> String {
 const OPERATOR_PROMPT: &str = "please run the tests";
 
 #[test]
-#[ignore = "external lane requires this worktree's CLI binaries and HIDE_E2E_HERDR_BIN"]
+#[ignore = "external lane requires this worktree's CLI binaries (scripts/verify-cargo.sh cli)"]
 fn connected_remote_panes_receive_once_and_disconnect_keeps_the_same_letter_pending() -> Result<()>
 {
     Fixture::journey(|fixture| {
-        let remote_hide = fixture.remote.environment.home.join("bin/hide");
-        let remote_hooks = std::fs::canonicalize(&remote_hide)?
-            .parent()
-            .context("installed private CLI directory")?
-            .join("hide-agent-hooks");
-        ensure!(
-            remote_hooks.is_file(),
-            "private remote kit lacks its hook sibling"
-        );
+        let remote_hide = fixture.remote.hide.clone();
+        let remote_hooks = fixture.remote.hooks.clone();
         // A named reference can disappear while the pane stays alive. The
         // actual remote CLI must still send a new kernel proof and get guidance.
         let missing = fixture.remote.environment.home.join("gone-reference.json");
@@ -344,19 +325,12 @@ fn connected_remote_panes_receive_once_and_disconnect_keeps_the_same_letter_pend
 /// reads that and the reason from `hide request show`; the log records it
 /// without the body.
 #[test]
-#[ignore = "external lane requires this worktree's CLI binaries and HIDE_E2E_HERDR_BIN"]
+#[ignore = "external lane requires this worktree's CLI binaries (scripts/verify-cargo.sh cli)"]
 fn ending_the_recipients_registration_ends_the_senders_answer_wait_and_says_why() -> Result<()> {
     Fixture::journey(|fixture| {
-        let remote_hide = fixture.remote.environment.home.join("bin/hide");
+        let remote_hide = fixture.remote.hide.clone();
         let hide = quote(&fixture.hide);
-        let recipient = agent_value(fixture.local.run_in_pane(&format!(
-                "{hide} agent register --host-scope \"$HERDR_SOCKET_PATH\" \
-                 --session fixture-local-session --instance {pane} --name local-parent --pane {pane}",
-                pane = fixture.local.pane
-            ))?)?["id"]
-            .as_str()
-            .context("the recipient's registration ID")?
-            .to_owned();
+        let recipient = fixture.local.registration.clone();
         let sent = fixture
             .remote
             .run_in_pane(&format!(
@@ -397,11 +371,10 @@ fn ending_the_recipients_registration_ends_the_senders_answer_wait_and_says_why(
             "an awaited request already reports an end: {waiting}"
         );
 
-        agent_value(
-            fixture
-                .local
-                .run_in_pane(&format!("{hide} agent end {recipient}"))?,
-        )?;
+        fixture
+            .local
+            .run_in_pane(&format!("{hide} agent end {recipient}"))?
+            .value()?;
 
         let shown = fixture.remote.run_in_pane(&show)?.json()?;
         ensure!(
@@ -437,25 +410,6 @@ fn ending_the_recipients_registration_ends_the_senders_answer_wait_and_says_why(
     })
 }
 
-/// The pane of the named agent in a Herdr answer, wherever the answer nests it.
-fn agent_pane(value: &Value, name: &str) -> Option<(String, bool)> {
-    match value {
-        Value::Object(map) => {
-            if map.get("name").and_then(Value::as_str) == Some(name)
-                && let Some(pane) = map.get("pane_id").and_then(Value::as_str)
-            {
-                let reported = map
-                    .get("agent_session")
-                    .is_some_and(|session| !session.is_null());
-                return Some((pane.to_owned(), reported));
-            }
-            map.values().find_map(|value| agent_pane(value, name))
-        }
-        Value::Array(rows) => rows.iter().find_map(|value| agent_pane(value, name)),
-        _ => None,
-    }
-}
-
 /// The agent row of a pane in a snapshot, wherever the snapshot nests it.
 fn row_of_pane<'a>(value: &'a Value, pane: &str) -> Option<&'a Value> {
     match value {
@@ -472,51 +426,38 @@ fn row_of_pane<'a>(value: &'a Value, pane: &str) -> Option<&'a Value> {
     }
 }
 
-/// Every string stored under `key`, wherever the answer nests it.
-fn strings_under(value: &Value, key: &str, found: &mut Vec<String>) {
-    match value {
-        Value::Object(map) => {
-            for (name, value) in map {
-                match value.as_str() {
-                    Some(text) if name == key => found.push(text.to_owned()),
-                    _ => strings_under(value, key, found),
-                }
-            }
-        }
-        Value::Array(rows) => rows.iter().for_each(|row| strings_under(row, key, found)),
-        _ => {}
-    }
-}
-
 #[test]
-#[ignore = "external lane requires this worktree's CLI binaries and HIDE_E2E_HERDR_BIN"]
+#[ignore = "external lane requires this worktree's CLI binaries (scripts/verify-cargo.sh cli)"]
 fn a_spawn_with_machine_starts_the_agent_on_the_device_under_its_caller() -> Result<()> {
     Fixture::journey(|fixture| {
         let project = fixture.commit_remote_project()?;
-        let remote_hide = fixture.remote.environment.home.join("bin/hide");
         let spawn = format!(
             "{} agent spawn --parent here --machine remote --name remote-worker --intent spawn-remote-1 --kind claude --repo {} --branch remote-worker",
             quote(&fixture.hide),
             quote(&project)
         );
         // The fixture provider reports no native session of its own, which a
-        // real provider's hook does as soon as it starts. Report it for the
-        // pane Hide starts so the spawn can finish.
+        // real provider's hook does as soon as it starts. Report it from the
+        // pane Hide starts on the device so the spawn can finish.
+        let before = fixture::ready_panes(&fixture.remote.environment.home)?;
         let finished = AtomicBool::new(false);
-        let (local, remote) = (&mut fixture.local, &fixture.remote);
-        let first = std::thread::scope(|scope| {
-            let reporter = scope.spawn(|| -> Result<()> {
+        let (local, remote) = (&mut fixture.local, &mut fixture.remote);
+        let (first, spawned) = std::thread::scope(|scope| {
+            let reporter = scope.spawn(|| -> Result<Option<String>> {
                 let pane = wait_for("the spawned agent's pane on the device", || {
                     if finished.load(Ordering::Relaxed) {
                         return Ok(Some(None));
                     }
-                    let agents = remote.run(&["agent", "list"])?;
-                    Ok(agent_pane(&agents, "remote-worker").map(|(pane, _)| Some(pane)))
+                    let ready = fixture::ready_panes(&remote.environment.home)?;
+                    Ok(ready
+                        .into_iter()
+                        .find(|pane| !before.contains(pane))
+                        .map(Some))
                 })?;
-                if let Some(pane) = pane {
-                    remote.report_session(&pane, "fixture-spawned-session")?;
+                if let Some(pane) = &pane {
+                    remote.report_session(&remote.core_pane(pane), "fixture-spawned-session")?;
                 }
-                Ok(())
+                Ok(pane)
             });
             let output = local.run_in_pane(&spawn);
             finished.store(true, Ordering::Relaxed);
@@ -524,8 +465,7 @@ fn a_spawn_with_machine_starts_the_agent_on_the_device_under_its_caller() -> Res
                 .join()
                 .map_err(|_| anyhow::anyhow!("reporter panicked"))?;
             let output = output?;
-            reported?;
-            Ok::<_, anyhow::Error>(output)
+            Ok::<_, anyhow::Error>((output, reported?))
         })?;
         ensure!(
             first.status == 0,
@@ -533,6 +473,8 @@ fn a_spawn_with_machine_starts_the_agent_on_the_device_under_its_caller() -> Res
             first.stdout,
             first.stderr
         );
+        let spawned = spawned.context("the spawned agent's pane on the device")?;
+        let screen_pane = fixture.remote.core_pane(&spawned);
 
         let ledger = fixture.ledger()?;
         let spawn_record = ledger
@@ -562,38 +504,19 @@ fn a_spawn_with_machine_starts_the_agent_on_the_device_under_its_caller() -> Res
             child.machine == "remote" && child.parent.as_deref() == Some(parent.id.as_str()),
             "child is not the device's agent under the caller: {child:?}"
         );
-        let device_agents = fixture.remote.run(&["agent", "list"])?;
         ensure!(
-            agent_pane(&device_agents, "remote-worker").is_some_and(|(pane, _)| pane == child.pane),
-            "the child's pane is not the device Herdr's agent pane"
+            child.pane == spawned || child.pane == screen_pane,
+            "the child's pane is not the device pane its agent runs in: {} vs {spawned}",
+            child.pane
         );
         ensure!(
-            agent_pane(&fixture.local.run(&["agent", "list"])?, "remote-worker").is_none(),
-            "the agent was also started on the caller's own Herdr"
+            fixture::ready_panes(&fixture.local.environment.home)?
+                == [fixture.local.pane.clone()],
+            "the agent was also started on the caller's own machine"
         );
-        // B8/B11: the real device server's workspace and tab leave their
-        // recovery markers only after placement has reached the receipt.
+        // B8/B11: the spawn's workspace and tab names reach the receipt only
+        // after placement has.
         wait_for("receipt-proven names on the device", || {
-            let state = fixture.remote.run(&["api", "snapshot"])?;
-            let state = &state["result"]["snapshot"];
-            let pane = state["panes"]
-                .as_array()
-                .context("device panes")?
-                .iter()
-                .find(|pane| pane["pane_id"] == child.pane)
-                .context("child pane")?;
-            let workspace = state["workspaces"]
-                .as_array()
-                .context("device workspaces")?
-                .iter()
-                .find(|workspace| workspace["workspace_id"] == pane["workspace_id"])
-                .context("child workspace")?;
-            let tab = state["tabs"]
-                .as_array()
-                .context("device tabs")?
-                .iter()
-                .find(|tab| tab["tab_id"] == pane["tab_id"])
-                .context("child tab")?;
             let saved = fixture.ledger()?;
             let record = saved
                 .spawns
@@ -601,10 +524,7 @@ fn a_spawn_with_machine_starts_the_agent_on_the_device_under_its_caller() -> Res
                 .find(|record| record.id == spawn_record.id)
                 .context("naming receipt")?;
             let names = serde_json::to_value(record)?;
-            Ok((workspace["label"] == "remote-worker"
-                && tab["label"] == "remote-worker"
-                && names["names"]["workspace"] == "applied"
-                && names["names"]["tab"] == "applied")
+            Ok((names["names"]["workspace"] == "applied" && names["names"]["tab"] == "applied")
                 .then_some(()))
         })?;
         ensure!(
@@ -615,17 +535,6 @@ fn a_spawn_with_machine_starts_the_agent_on_the_device_under_its_caller() -> Res
                     && watch.target.name == "remote-worker"
                     && Some(&watch.parent.name) == parent.name.as_ref()),
             "the caller has no watch on the device's agent"
-        );
-
-        // The device's Herdr holds the lineage: the child is its own pane there
-        // and its token names this machine as the parent's.
-        let snapshot = fixture.remote.run(&["api", "snapshot"])?;
-        let mut machines = Vec::new();
-        strings_under(&snapshot, "parent_machine", &mut machines);
-        ensure!(
-            machines.contains(&parent.native_machine),
-            "device lineage token does not name the caller's machine: {machines:?} vs {}",
-            parent.native_machine
         );
 
         // The same command returns the same agent and makes nothing twice.
@@ -656,9 +565,6 @@ fn a_spawn_with_machine_starts_the_agent_on_the_device_under_its_caller() -> Res
         );
 
         // This machine's screen places the device's agent under the lead.
-        let (pane, _) = agent_pane(&fixture.remote.run(&["agent", "list"])?, "remote-worker")
-            .context("spawned agent pane")?;
-        let screen_pane = format!("remote:remote:pane:{pane}");
         let lead_pane = fixture.local.pane.clone();
         wait_for(
             "the device agent under its lead on the caller's screen",
@@ -673,10 +579,7 @@ fn a_spawn_with_machine_starts_the_agent_on_the_device_under_its_caller() -> Res
         )?;
 
         // The lead's letter reaches the device agent through its own hook.
-        let remote_hooks = std::fs::canonicalize(&remote_hide)?
-            .parent()
-            .context("installed private CLI directory")?
-            .join("hide-agent-hooks");
+        let remote_hooks = fixture.remote.hooks.clone();
         let letter = fixture
             .local
             .run_in_pane(&format!(
@@ -686,11 +589,9 @@ fn a_spawn_with_machine_starts_the_agent_on_the_device_under_its_caller() -> Res
             ))?
             .json()?;
         let letter_id = letter["id"].as_str().context("lead letter ID")?.to_owned();
-        let (pane, _) = agent_pane(&fixture.remote.run(&["agent", "list"])?, "remote-worker")
-            .context("spawned agent pane")?;
         let bell = fixture.rung(&letter_id)?;
         let delivered = fixture.remote.run_in(
-            &pane,
+            &screen_pane,
             &hook(&remote_hooks, "fixture-spawned-session", &bell),
         )?;
         let intake = context(&delivered.stdout)?;
@@ -700,12 +601,11 @@ fn a_spawn_with_machine_starts_the_agent_on_the_device_under_its_caller() -> Res
         );
 
         // The child's report reaches its caller over the device's bridge.
-        let (pane, _) = agent_pane(&fixture.remote.run(&["agent", "list"])?, "remote-worker")
-            .context("spawned agent pane")?;
+        let remote_hide = fixture.remote.hide.clone();
         let report = fixture
             .remote
             .run_in(
-                &pane,
+                &screen_pane,
                 &format!(
                     "{} request send local-parent --intent spawn-report --kind report --body {}",
                     quote(&remote_hide),
@@ -736,10 +636,10 @@ fn a_spawn_with_machine_starts_the_agent_on_the_device_under_its_caller() -> Res
 /// the same command again only brings the project forward. A folder outside
 /// the device's home is refused, since only Add a project asks about one.
 #[test]
-#[ignore = "external lane requires this worktree's CLI binaries and HIDE_E2E_HERDR_BIN"]
+#[ignore = "external lane requires this worktree's CLI binaries (scripts/verify-cargo.sh cli)"]
 fn a_plain_shell_on_the_device_opens_its_folder_as_a_project() -> Result<()> {
     Fixture::journey(|fixture| {
-        let remote_hide = fixture.remote.environment.home.join("bin/hide");
+        let remote_hide = fixture.remote.hide.clone();
         let folder = fixture.remote.environment.home.join("plain-open");
         std::fs::create_dir_all(folder.join("src"))?;
         // The run directory lives inside this checkout, whose repository

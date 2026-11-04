@@ -290,13 +290,10 @@ jobs:
         # hide-host/src/shell_integration/real_shell_tests.rs: zsh, bash and
         # fish read the user's files in their order, zsh gives ZDOTDIR back,
         # and the mark comes after them. herdr-core's
-        # agent_start/real_herdr_tests.rs: zsh, bash and fish tabs on the
-        # pinned Herdr started with the integration, whose startup file asks
-        # a one-key question no start may answer. herdr-core's
         # engine/own/shell_line.rs: zsh, bash and fish run the resume line
         # the core's own engine types after a reboot. herdr-core's
-        # engine/contract.rs: the pinned Herdr, and the core's own engine over
-        # pane holders started from the built holder, meet the engine contract.
+        # engine/contract.rs: the core's own engine over pane holders started
+        # from the built holder meets the engine contract.
         # hide-node's ssh/bootstrap_tests.rs: the one remote command a device's
         # ssh runs starts the start script in zsh, bash, fish, tcsh and BSD csh
         # login shells.
@@ -307,10 +304,9 @@ jobs:
           export HIDE_TEST_ZSH_BIN=$(command -v zsh) HIDE_TEST_FISH_BIN=$(command -v fish) HIDE_TEST_BASH_BIN=$(command -v bash)
           export HIDE_TEST_TCSH_BIN=$(command -v tcsh) HIDE_TEST_CSH_BIN=$(command -v bsd-csh)
           bash scripts/verify-cargo.sh nextest --profile ci -p hide-node --lib -E 'test(=ssh::host::bootstrap::tests::the_remote_command_starts_the_script_in_every_login_shell)' --run-ignored only --no-capture
-          export HIDE_E2E_HERDR_BIN=$(zsh scripts/fetch-herdr-runtime.sh --platform linux-x86_64)
           bash scripts/verify-cargo.sh build -p hide-holder --bin hide-holder
           export HIDE_TEST_HOLDER_BIN=$PWD/target/debug/hide-holder
-          bash scripts/verify-cargo.sh nextest --profile ci -p hide-host -p herdr-core --lib -E 'test(/^shell_integration::real_shell_tests::/) | test(/^engine::own::shell_line::real_shell_tests::/) | test(/^agent_start::real_herdr_tests::/) | test(/^engine::contract::/)' --run-ignored only --no-capture
+          bash scripts/verify-cargo.sh nextest --profile ci -p hide-host -p herdr-core --lib -E 'test(/^shell_integration::real_shell_tests::/) | test(/^engine::own::shell_line::real_shell_tests::/) | (test(/^engine::contract::/) & !test(=engine::contract::the_pinned_herdr_meets_the_engine_contract))' --run-ignored only --no-capture
       - name: Mint the development issues token
         # Development issues live in with-hide/hide-private (docs/TESTING.md,
         # Flaky tests); one App token reads this run here and files there. A run
@@ -372,9 +368,9 @@ jobs:
   # workspace compiles for Windows, hided's pane bootstrap and end-to-end
   # tests pass there, `hide connect` starts and `hide stop` ends the hided
   # beside it (what the desktop app does first), the agent hook entries run
-  # through PowerShell as Claude Code and Codex run them, hided drives the
-  # pinned Herdr for Windows (a pane opened through `/ws` and a typed line
-  # echoed back), and the web and desktop unit suites. Warm-cache jobs took
+  # through PowerShell as Claude Code and Codex run them, the core's own
+  # engine meets its contract in Windows PowerShell, and the web and desktop
+  # unit suites. Warm-cache jobs took
   # 4-8 minutes on 2026-10-03; a cold run compiles the workspace from
   # nothing. The browser `@platform` tests are `windows-e2e` below, so a change
   # that needs the compile does not also wait for a browser, and the reverse.
@@ -466,8 +462,7 @@ jobs:
         # through the platform's directory flushes, and a letter goes from
         # one registered agent to the other's inbox and back from disk; the
         # record of an agent the sleep closes saves through the same barrier.
-        # Windows refused both before hide-platform flushed folders there;
-        # `real_herdr` below checks the daemon itself.
+        # Windows refused both before hide-platform flushed folders there.
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 5
         run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(herdr-core) & kind(lib) & (test(=delivery::ledger::tests::validated_startup_reestablishes_the_installed_version_without_repairing_corruption) | test(=delivery::ledger::tests::startup_bootstraps_private_sibling_state_and_preserves_refused_or_corrupt_bytes) | test(=runtime::delivery::tests::agents_register_and_a_letter_reaches_the_inbox_through_the_saved_ledger) | test(=runtime::tests::agent_sleep::a_dormant_intent_is_saved_through_the_state_folders_barrier) | test(=persistence::tests::a_save_makes_its_folders_chain_durable_once_until_the_folder_is_replaced) | test(=persistence::tests::an_archived_session_saves_through_the_folders_barrier_and_loads_back))'
@@ -526,16 +521,6 @@ jobs:
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 15
         run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-agent-hooks) & (kind(lib) | kind(bin) | test(/^(hook_deadline|windows_hook_command|windows_scripts)::/))'
-      - name: Fetch the pinned Herdr runtime
-        id: herdr
-        # The proof below stands on its own, so it runs whatever the step
-        # above answered.
-        if: ${{ !cancelled() }}
-        # Assigned first, so a failed fetch fails this step rather than
-        # handing the next one an empty path.
-        run: |
-          bin=$(pwsh -NoProfile -File scripts/fetch-herdr-runtime.ps1 | tr -d '\r')
-          echo "bin=$bin" >> "$GITHUB_OUTPUT"
       - name: Build the pane holder and fetch its pinned ConPTY runtime
         # For the core's own engine below: its panes run in holders started
         # from this build, on the ConPTY runtime contracts/conpty.json pins.
@@ -545,25 +530,15 @@ jobs:
         run: |
           bash scripts/verify-cargo.sh build -p hide-holder --bin hide-holder
           python scripts/fetch-conpty.py --out "$RUNNER_TEMP/holder-conpty"
-      - name: Agent start in Windows PowerShell on the pinned Herdr
-        # herdr-core/src/agent_start/real_herdr_tests.rs: a Windows
-        # PowerShell tab Hide starts with its integration, whose profile
-        # asks a question no start may answer; engine/contract.rs: the
-        # pinned Herdr, and the core's own engine over pane holders, meet the
-        # engine contract in Windows PowerShell.
-        if: ${{ !cancelled() && steps.tests.outcome == 'success' && steps.herdr.outcome == 'success' && steps.holder.outcome == 'success' }}
+      - name: The core's own engine in Windows PowerShell
+        # herdr-core/src/engine/contract.rs: the core's own engine over pane
+        # holders meets the engine contract in Windows PowerShell.
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' && steps.holder.outcome == 'success' }}
         timeout-minutes: 10
         env:
-          HIDE_E2E_HERDR_BIN: ${{ steps.herdr.outputs.bin }}
           HIDE_TEST_HOLDER_BIN: ${{ github.workspace }}\target\debug\hide-holder.exe
           HIDE_HOLDER_CONPTY: ${{ runner.temp }}\holder-conpty
-        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(herdr-core) & kind(lib) & (test(/^agent_start::real_herdr_tests::/) | test(/^engine::contract::/))' --run-ignored only --no-capture
-      - name: hided against the pinned Herdr
-        if: ${{ !cancelled() && steps.tests.outcome == 'success' && steps.herdr.outcome == 'success' }}
-        timeout-minutes: 10
-        env:
-          HIDE_E2E_HERDR_BIN: ${{ steps.herdr.outputs.bin }}
-        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^real_herdr::/)' --run-ignored only --no-capture
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(herdr-core) & kind(lib) & test(/^engine::contract::/) & !test(=engine::contract::the_pinned_herdr_meets_the_engine_contract)' --run-ignored only --no-capture
       - name: Windows' own OpenSSH asks through Hide's askpass
         # hided/tests/it/system_ssh.rs (PRD system-ssh-device-link, B34): the
         # inbox ssh-keygen.exe reads a key's passphrase through `hide` as its
@@ -636,10 +611,7 @@ jobs:
         run: python3 scripts/ci-flaky-report.py --suite rust --junit target/nextest/ci/junit*.xml
 
   # The browser `@platform` tests on Windows, the same set the macOS lane
-  # runs, against hided and the pinned Herdr for Windows, and once more on
-  # the core's own engine over the Windows pane holder (PRD
-  # engine-bundle-3-core-owns D-14: the same tests on both engines on every
-  # system).
+  # runs, against hided and the Windows pane holder.
   windows-e2e:
     name: windows e2e
     needs: plan
@@ -652,14 +624,12 @@ jobs:
     with:
       lane: windows
       runner: windows-latest
-      herdr-platform: windows-x86_64
-      own-engine: true
       shards: 1
       grep: "@platform"
 
   # The web shell is the same code on every operating system, so the whole
   # suite runs once, on Linux, where runners are plentiful. What differs by
-  # system is the daemon and Herdr under it, and the `@platform` tests cover
+  # system is the daemon and the pane holders under it, and the `@platform` tests cover
   # that: they run in this suite on Linux, in `windows-e2e` on Windows and in
   # `nightly.yml` on macOS.
   web-e2e:
@@ -674,10 +644,6 @@ jobs:
     with:
       lane: linux
       runner: ubuntu-latest
-      herdr-platform: linux-x86_64
-      # Every test not tagged `@herdr` once more on the core's own engine, over
-      # as many shards again (PRD engine-bundle-3-core-owns D-14, D-24).
-      own-engine: true
       # Median per test from twenty successful main runs, 2026-10-26..28:
       # 385 Linux tests total 3851.3 s; five shards plan at most 770.3 s,
       # six at most 641.9 s. Six is the smallest count within 720 s.
@@ -707,7 +673,6 @@ jobs:
       contents: read
     with:
       runner: ubuntu-latest
-      herdr-platform: linux-x86_64
 
   # The OS contract's Linux and Windows legs (see os-contract.yml), for any
   # change to what differs by system.

@@ -17,21 +17,7 @@ pub struct Renderer {
 
 impl Renderer {
     pub fn connect(port: u16, token: &str) -> Result<Self> {
-        Self::drawn(port, json!({"token": token, "schema_version": 2}))
-    }
-
-    /// A window as the web shell opens one (`client_kind` `web`), which the
-    /// daemon counts as drawing the snapshot, so the core runs the reads a
-    /// window is there for (PRD labels-in-hided B29).
-    pub fn window(port: u16, token: &str) -> Result<Self> {
-        Self::drawn(
-            port,
-            json!({"token": token, "schema_version": 2, "client_kind": "web"}),
-        )
-    }
-
-    fn drawn(port: u16, handshake: Value) -> Result<Self> {
-        let mut renderer = Self::held(port, &handshake)?;
+        let mut renderer = Self::held(port, &json!({"token": token, "schema_version": 2}))?;
         for _ in 0..8 {
             let frame = renderer
                 .read()

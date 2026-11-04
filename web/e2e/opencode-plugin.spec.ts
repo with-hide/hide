@@ -46,7 +46,7 @@ async function start(label: string): Promise<Stack> {
     // B1: the plugin names this build's helper, the bundle's.
     expect(fs.readFileSync(plugin, "utf8")).toContain(JSON.stringify(bundledExecutable("hide-agent-hooks")));
     const dir = path.join(herdr.root, "opencode");
-    installOpenCodeHost(path.join(herdr.root, "bin"), { herdr: herdr.engine === "herdr" ? herdr.bin : undefined, stateDir: daemon.stateDir, plugin, dir });
+    installOpenCodeHost(path.join(herdr.root, "bin"), { stateDir: daemon.stateDir, plugin, dir });
     await withControl(daemon, async (control) => { for (const pane of herdr.panes) sendKeys(control, pane, "opencode\r"); });
     const [sender, recipient] = await Promise.all(herdr.panes.map((pane) => openCodeHost(dir, pane)));
     return { herdr, daemon, home, sender: sender!, recipient: recipient! };

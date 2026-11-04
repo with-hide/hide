@@ -8,7 +8,6 @@ mod closed_stdout;
 mod connect_build;
 mod connect_stop;
 mod core_move_checks;
-mod device_bootstrap;
 mod device_own_engine;
 mod handshake;
 mod held_letter_notice;
@@ -24,7 +23,6 @@ mod opener_lifecycle;
 #[path = "support/private_herdr.rs"]
 mod private_herdr;
 mod remote_delivery;
-mod responsive_state;
 mod seat;
 mod shell_exec;
 #[allow(dead_code)] // This fixture needs readiness only, not stand-in placement.

@@ -1,12 +1,9 @@
-// Tabs, splits, zoom, closes, a closed tab given back and resizes, on the
-// engine HIDE_E2E_ENGINE names (PRD engine-bundle-3-core-owns D-14, D-24,
-// B37): each test starts its own checkout of two shell panes made through
-// the daemon (`engine-fixture.ts`), so the same body runs on the pinned
-// Herdr and on the core's own engine.
+// Tabs, splits, zoom, closes, a closed tab given back and resizes (PRD
+// engine-bundle-3-core-owns D-14, D-24, B37): each test starts its own
+// checkout of two shell panes made through the daemon (`engine-fixture.ts`).
 
 import { expect, test, type Page } from "@playwright/test";
 import { chord } from "./chords";
-import { e2eEngine } from "./e2e-engine";
 import { openLayout, startLayoutStack, type LayoutStack } from "./engine-fixture";
 import { corePaneFocus } from "./daemon-actions";
 import { panePrompt, paneSizeCommand, type PaneShell } from "./herdr-fixture";
@@ -248,12 +245,7 @@ test("Reopen closed tab gives back the tab just closed with a working shell", { 
     await expect.poll(() => sent.get("reopen_closed")).toBe(1);
     await expect(page.locator("[data-tab]")).toHaveCount(2);
     const reopened = (await page.locator("[data-tab]").evaluateAll((tabs) => tabs.map((el) => el.getAttribute("data-tab")!))).find((id) => id !== stack.tab)!;
-    // The reopened tab takes the screen by itself. Windows on the Herdr
-    // engine is the one exception: Herdr's late confirmation of the focus sent
-    // just before the reopen is read as its own move back to the old tab (the
-    // shape of #425), a Herdr-path defect that goes with Herdr in bundle 4, so
-    // there the tab is clicked and only its shell is checked.
-    if (process.platform === "win32" && e2eEngine() === "herdr") await page.locator(`[data-tab="${reopened}"]`).click();
+    // The reopened tab takes the screen by itself.
     await expect(page.locator("[data-canvas]")).toHaveAttribute("data-canvas", reopened);
     await expect(page.locator("[data-pane-view]")).toHaveCount(1);
     const pane = (await paneIds(page))[0]!;

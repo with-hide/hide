@@ -13,11 +13,8 @@ import { quietFor } from "./wait";
 
 // docs/UI_BEHAVIOR.md, Agent areas: closing the last tab of the checkout in
 // front leaves it for the checkout the operator was in before, and the engine
-// letting go of that checkout afterwards (Herdr closes its workspace) does not
-// move the screen.
+// letting go of that checkout afterwards does not move the screen.
 
-type Workspace = { workspace_id: string; worktree?: { checkout_path: string } | null };
-type HerdrRun = { run: (args: string[]) => unknown };
 
 test("Closing a worktree's last tab goes back to the checkout it was entered from", async ({ page }) => {
   test.setTimeout(120_000);
@@ -32,10 +29,6 @@ test("Closing a worktree's last tab goes back to the checkout it was entered fro
     git("init", "-q", "-b", "main"); git("add", ".");
     git("-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", "commit", "-qm", "Initial files");
     git("worktree", "add", "-q", "-b", "feature", linked);
-    // Herdr binds a workspace to the worktree the first terminal opens in; the own engine has no workspace to read.
-    const boundToLinked = () =>
-      ((fixture as unknown as HerdrRun).run(["workspace", "list"]) as { result: { workspaces: Workspace[] } }).result.workspaces
-        .filter((workspace) => workspace.worktree && fs.realpathSync(workspace.worktree.checkout_path) === fs.realpathSync(linked));
 
     daemon = await startHided(fixture, "last-tab-leaves-checkout");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
@@ -53,7 +46,6 @@ test("Closing a worktree's last tab goes back to the checkout it was entered fro
     await page.getByRole("menu", { name: "feature actions" }).locator('[data-menu-item="new_tab_here"]').click();
     const featureTab = await withControl(daemon, (control) => control.until((rest) => tabsOf(rest, fixture.workspace)?.find((id) => !tabsBefore.includes(id)), "the worktree's new tab", 20_000)) as string;
     await waitForTerminal(page, featureTab);
-    if (fixture.engine === "herdr") await expect.poll(() => boundToLinked().length, { timeout: 20_000 }).toBe(1);
     await expect(location).toHaveText("feature", { timeout: 15_000 });
     const tabs = page.locator('[data-agent-tab-bar] [role="tab"]');
     await expect(tabs).toHaveCount(1);
@@ -64,8 +56,6 @@ test("Closing a worktree's last tab goes back to the checkout it was entered fro
     await expect(page.locator("[data-area-empty]")).toHaveCount(0);
     await expect(page.locator("[data-terminal-host]").first()).toBeVisible();
 
-    // Herdr then closes the worktree's workspace and focuses one of its own.
-    if (fixture.engine === "herdr") await expect.poll(() => boundToLinked().length, { timeout: 20_000 }).toBe(0);
     await quietFor(page, 1_000, "the engine's own focus after the close does not move the screen");
     await expect(location).toHaveText("main");
     await screenshot(page, "last-tab-leaves-checkout");

@@ -15,7 +15,6 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { e2eEngine } from "./e2e-engine";
 import { fixtureExecutable } from "./platform-fixture";
 // Its exit handler stops every daemon the worker started; registered on import,
 // it runs before this module's, so no daemon still runs from a removed bundle.
@@ -24,8 +23,8 @@ import "./worker-owned";
 // Both suites run from their package folder (`web`, `desktop`), one below the repository.
 const DEBUG = path.resolve("..", "target", "debug");
 const BUNDLES = path.join(DEBUG, "e2e-apps");
-/** The build's programs a bundle carries; the pane holder only on the core's own engine, the one lane that builds it. */
-const binaries = (): string[] => ["hided", "hide", "hide-agent-hooks", ...(e2eEngine() === "own" ? ["hide-holder"] : [])];
+/** The build's programs a bundle carries, the pane holder among them. */
+const binaries = (): string[] => ["hided", "hide", "hide-agent-hooks", "hide-holder"];
 
 /** `plain` is the build alone; `herdr` also carries the fixture's pinned Herdr, as a packaged app does. */
 export type Bundle = "plain" | "herdr";
@@ -52,7 +51,7 @@ export function linkBundle(bundle: Bundle = "plain", herdrBin?: string): void {
   fs.mkdirSync(resources(bundle), { recursive: true });
   for (const name of binaries()) {
     const built = path.join(DEBUG, fixtureExecutable(name));
-    if (!fs.existsSync(built)) throw new Error(`${built} is missing; the lane must build it (scripts/verify-cargo.sh cli, and -p hide-holder on the own engine)`);
+    if (!fs.existsSync(built)) throw new Error(`${built} is missing; the lane must build it (scripts/verify-cargo.sh cli, and -p hide-holder)`);
     fs.linkSync(built, bundledExecutable(name, bundle));
   }
   if (herdrBin) {

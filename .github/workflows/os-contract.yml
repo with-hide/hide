@@ -3,15 +3,13 @@
 # `hide-platform` holds the code whose behaviour depends on the OS (today the
 # local stream, a Unix socket or a Windows named pipe); its tests under
 # `hide-platform/tests/` state each contract as what a caller observes and run
-# unchanged on every system. Each leg then runs `hide-herdr-client` against the
-# pinned Herdr for that system, the one place the pinned Windows asset runs.
-# The crates are small, so this lane builds in minutes and does not wait for
-# the workspace. The caller names the systems: `pr.yml` runs Linux and Windows
-# for a change to anything that differs by system, and macOS, whose runners are
-# the scarce ones, in a pull request only for a change to these two crates that
-# is also a macOS path (`os-contract-macos`; `scripts/ci-plan.py`, MACOS_CODE);
-# main's push run and the nightly's call of `pr.yml` plan every lane, so they
-# run all three.
+# unchanged on every system. The crates are small, so this lane builds in
+# minutes and does not wait for the workspace. The caller names the systems:
+# `pr.yml` runs Linux and Windows for a change to anything that differs by
+# system, and macOS, whose runners are the scarce ones, in a pull request only
+# for a change to these two crates that is also a macOS path
+# (`os-contract-macos`; `scripts/ci-plan.py`, MACOS_CODE); main's push run and
+# the nightly's call of `pr.yml` plan every lane, so they run all three.
 name: os contract
 
 on:
@@ -72,28 +70,6 @@ jobs:
         run: bash scripts/verify-cargo.sh nextest --profile ci -p hide-platform --test it -E 'test(/^user_agents::(a_login_agent_restarts|a_one_shot_job_runs_once)/)' --run-ignored only --no-capture
       - name: Lint the platform crates
         run: bash scripts/verify-cargo.sh clippy -p hide-platform -p hide-herdr-client --all-targets -- -D warnings
-      - name: Install zsh for the Herdr fetch
-        if: matrix.system == 'linux'
-        run: sudo apt-get install -y --no-install-recommends zsh
-      - name: Fetch the pinned Herdr runtime
-        id: herdr
-        # The manifest is the pin; both scripts verify the download against
-        # its digest before the binary answers anything.
-        run: |
-          case "${{ matrix.system }}" in
-            linux) bin=$(zsh scripts/fetch-herdr-runtime.sh --platform linux-x86_64) ;;
-            macos) bin=$(zsh scripts/fetch-herdr-runtime.sh --platform macos-aarch64) ;;
-            windows) bin=$(pwsh -NoProfile -File scripts/fetch-herdr-runtime.ps1 | tr -d '\r') ;;
-            *) echo "unknown system: ${{ matrix.system }}" >&2; exit 1 ;;
-          esac
-          echo "bin=$bin" >> "$GITHUB_OUTPUT"
-      - name: Compare the binary schema and version with the pin
-        run: python3 scripts/check-herdr-schema.py --herdr-bin "${{ steps.herdr.outputs.bin }}"
-      - name: The client against the pinned Herdr
-        timeout-minutes: 10
-        env:
-          HIDE_E2E_HERDR_BIN: ${{ steps.herdr.outputs.bin }}
-        run: bash scripts/verify-cargo.sh nextest --profile ci -p hide-herdr-client --test it --run-ignored only --no-capture
       - name: Mint the development issues token
         # Development issues live in with-hide/hide-private (docs/TESTING.md,
         # Flaky tests); one App token reads this run here and files there. A run

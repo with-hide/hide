@@ -111,24 +111,10 @@ impl Device {
         );
         // A holder's socket path is limited to about a hundred bytes.
         let root = tempfile::Builder::new().prefix("hdo-").tempdir_in("/tmp")?;
-        let absent = root.path().join("no-herdr");
         // The node binds its pane socket under its state folder, which must
         // stay short enough for a Unix socket path.
         let state = root.path().join("d");
-        let mut environment = Environment::new(
-            &root.path().join("r"),
-            &root.path().join("no-herdr.sock"),
-            &absent,
-            Some(&state),
-        )?;
-        for key in [
-            "HERDR_SOCKET_PATH",
-            "HERDR_BIN_PATH",
-            "HERDR_SESSION",
-            "HERDR_CONFIG_PATH",
-        ] {
-            environment.unset(key);
-        }
+        let environment = Environment::new(&root.path().join("r"), Some(&state))?;
         let packages = root.path().join("packages");
         std::fs::create_dir(&packages)?;
         shipped::place(

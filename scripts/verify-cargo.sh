@@ -143,8 +143,10 @@ case "${1:-}" in
         exec cargo build --release --locked -p hided --bins -p hide-agent-hooks --bin hide-agent-hooks -p hide-holder --bin hide-holder
         ;;
     cli)
+        # Every pane runs in a pane holder, which links hide-vt.
         report_toolchain
-        exec cargo build --locked -p hided --bins -p hide-agent-hooks --bin hide-agent-hooks
+        prepare_vt_inputs
+        exec cargo build --locked -p hided --bins -p hide-agent-hooks --bin hide-agent-hooks -p hide-holder --bin hide-holder
         ;;
     *)
         printf 'usage: %s test [args...]|lint|fmt-check|hakari|release|cli|test-scoped|check|build|clippy|metadata|nextest [args...]\n' "$0" >&2

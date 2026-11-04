@@ -12,15 +12,17 @@ use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use hide_node_link::device::{
     DeviceConnector, DialedTransport, HOST_CONSENT_CONTRACT, HostConsent,
 };
+use hide_node_link::holders::{HolderProof, HolderStart, PaneHolders};
+use hide_node_link::link_panes::LinkPanes;
 use hide_node_link::panes::{NodeEvent, ProofAnswer};
 use hide_node_link::protocol::{Call, RootOpened, RootRef};
 use hide_node_link::{NodeLink, call_as};
@@ -71,8 +73,8 @@ struct Device {
     attempt: hide_node_link::device::Cancel,
 }
 
-/// The pane of the device's Herdr whose shell is this test process, so a
-/// caller from here is one the device's node can prove.
+/// The device's pane whose program is the tests' caller ([`Caller`]), so a
+/// request from it is one the device's node can prove.
 const PROVED_PANE: &str = "w1:p2";
 /// The credential the core side of these tests issues for a proof.
 const TOKEN: &str = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
@@ -177,7 +179,6 @@ impl Device {
         let home = base.join("h");
         let project = home.join("project");
         fs::create_dir_all(&project).unwrap();
-        let herdr_socket = base.join("s.sock");
         let state = base.join("st");
         let account = Account {
             home: home.clone(),
@@ -186,10 +187,6 @@ impl Device {
                 ("PATH".into(), "/usr/bin:/bin:/usr/sbin:/sbin".into()),
                 ("SHELL".into(), "/bin/sh".into()),
                 ("HIDE_STATE_DIR".into(), state.clone().into()),
-                // The device's node bridges its own Herdr, the one its
-                // account's environment names (PRD system-ssh-device-link
-                // B24).
-                ("HERDR_SOCKET_PATH".into(), herdr_socket.clone().into()),
                 ("HIDE_TEST_HIDED".into(), env!("CARGO_BIN_EXE_hided").into()),
             ],
         };
@@ -206,37 +203,28 @@ impl Device {
         git(&["commit", "-q", "-m", "first"]);
         fs::write(project.join("a.txt"), "two\n").unwrap();
         fs::write(project.join("b.txt"), "new\n").unwrap();
-        // The device's Herdr answers where its server listens; nothing is
-        // served there but the socket a Herdr channel opens.
-        let bin = home.join(".local/bin");
-        fs::create_dir_all(&bin).unwrap();
-        let status = json!({"running": true, "socket": herdr_socket, "version": "0.9.1"});
-        executable(
-            &bin.join("herdr"),
-            &format!("#!/bin/sh\nprintf '%s\\n' '{status}'\n"),
-        );
-        // A Herdr that knows one pane, whose shell is this test process, and
-        // hangs up on anything else: a channel to it opens, and asking it
-        // about another pane fails rather than waits.
-        let herdr = UnixListener::bind(&herdr_socket).unwrap();
-        std::thread::spawn(move || {
-            for connection in herdr.incoming().flatten() {
-                std::thread::spawn(move || answer_herdr(connection));
-            }
-        });
-
         let ssh = Sshd::start(&base.join("k"), &account.values).unwrap();
         let local = base.join("l");
         fs::create_dir_all(local.join(".ssh")).unwrap();
         fs::write(local.join(".ssh/config"), ssh.client_config(ALIAS)).unwrap();
-        // The build this daemon carries for the device: a launcher for the
-        // `hided` under test, so the install moves a few bytes rather than a
-        // debug binary, and the device runs this build's node.
+        // The build this daemon carries for the device: launchers for the
+        // `hided` under test and the built pane holder, so the install moves
+        // a few bytes rather than a debug binary, and the device runs this
+        // build's node and holders. Every link starts its node's holders.
         let packages = base.join("p");
         fs::create_dir(&packages).unwrap();
         executable(
             &packages.join("hided"),
             "#!/bin/sh\nexec \"$HIDE_TEST_HIDED\" \"$@\"\n",
+        );
+        let holder = std::env::var_os("HIDE_TEST_HOLDER_BIN")
+            .expect("set HIDE_TEST_HOLDER_BIN to the built hide-holder");
+        executable(
+            &packages.join("hide-holder"),
+            &format!(
+                "#!/bin/sh\nexec '{}' \"$@\"\n",
+                Path::new(&holder).display()
+            ),
         );
         let events = Arc::new(Events::default());
         let slot: hide_node::ssh::PaneEventsSlot = Arc::default();
@@ -722,9 +710,6 @@ impl Drop for ReleaseOnDrop {
 #[test]
 #[ignore = "the system's sshd; the remote mailbox lane runs it"]
 fn a_saturated_core_answers_busy_over_ssh_and_keeps_its_reader_usable() {
-    use std::io::{BufRead, BufReader, Write};
-    use std::os::unix::net::UnixStream;
-
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(1)
         .max_blocking_threads(1)
@@ -772,31 +757,29 @@ fn a_saturated_core_answers_busy_over_ssh_and_keeps_its_reader_usable() {
                 .host,
         );
     }
-    let herdr_socket = device.state.parent().unwrap().join("s.sock");
+    // Each link's node started its holders and its pane service; asking
+    // again answers the socket it serves.
     let sockets = links
         .iter()
         .map(|link| {
-            call_as::<hide_node_link::panes::PanesStarted>(
-                link.as_ref(),
-                Call::PanesStart {
-                    herdr_socket: herdr_socket.to_str().unwrap().to_owned(),
-                },
-                TIMEOUT,
+            PathBuf::from(
+                call_as::<hide_node_link::panes::PanesStarted>(
+                    link.as_ref(),
+                    Call::HoldersStart,
+                    TIMEOUT,
+                )
+                .unwrap()
+                .socket,
             )
-            .unwrap()
-            .socket
         })
         .collect::<Vec<_>>();
-    let request = |socket: &str, nonce: usize| {
-        let mut stream = UnixStream::connect(socket).unwrap();
-        stream.set_read_timeout(Some(TIMEOUT)).unwrap();
-        writeln!(
-            stream,
-            "{}",
-            json!({"pane_id": PROVED_PANE, "nonce": format!("{nonce:032x}")})
+    let caller = Caller::start(&device);
+    let request = |socket: &Path, nonce: usize| {
+        caller.send(
+            socket,
+            &json!({"pane_id": PROVED_PANE, "nonce": format!("{nonce:032x}")}),
+            Read::Line,
         )
-        .unwrap();
-        BufReader::new(stream)
     };
     let mut waiting = Vec::new();
     for socket in &sockets[..2] {
@@ -805,29 +788,24 @@ fn a_saturated_core_answers_busy_over_ssh_and_keeps_its_reader_usable() {
         }
     }
     events.wait(32, |counts| counts.proofs);
-    let mut overflow = request(&sockets[2], 32);
+    let overflow = request(&sockets[2], 32);
     events.wait(33, |counts| counts.proofs);
     gate.release();
     runtime.block_on(worker).unwrap();
-    let read = |reader: &mut BufReader<UnixStream>| {
-        let mut line = String::new();
-        reader.read_line(&mut line).unwrap();
-        serde_json::from_str::<Value>(&line).unwrap()
-    };
     assert_eq!(
-        read(&mut overflow),
-        json!({"ok": false, "reason": "bridge_busy", "next_action": "Reconnect the pane and retry"})
+        caller.answer(overflow),
+        [json!({"ok": false, "reason": "bridge_busy", "next_action": "Reconnect the pane and retry"})]
     );
-    for reader in &mut waiting {
+    for asked in waiting {
         assert_eq!(
-            read(reader),
-            json!({"ok": false, "reason": "hide_unavailable", "next_action": "Reconnect the pane and retry"})
+            caller.answer(asked),
+            [json!({"ok": false, "reason": "hide_unavailable", "next_action": "Reconnect the pane and retry"})]
         );
     }
     assert!(links[2].call(Call::Hello, TIMEOUT).is_ok());
     assert_eq!(
-        read(&mut request(&sockets[2], 33)),
-        json!({"ok": false, "reason": "hide_unavailable", "next_action": "Reconnect the pane and retry"})
+        caller.answer(request(&sockets[2], 33)),
+        [json!({"ok": false, "reason": "hide_unavailable", "next_action": "Reconnect the pane and retry"})]
     );
     // Each attempt is one connection of its own, and nothing else dialed.
     assert_eq!(device.ssh.accepted(), 3);
@@ -836,40 +814,9 @@ fn a_saturated_core_answers_busy_over_ssh_and_keeps_its_reader_usable() {
     }
     events.wait(3, |counts| counts.closed);
     for socket in &sockets {
-        gone_within(Path::new(socket), TIMEOUT);
-        assert!(!Path::new(socket).exists());
+        gone_within(socket, TIMEOUT);
+        assert!(!socket.exists());
     }
-}
-
-/// One request to the fixture Herdr, answered only for [`PROVED_PANE`].
-fn answer_herdr(connection: std::os::unix::net::UnixStream) {
-    use std::io::{BufRead, BufReader, Write};
-    let mut line = String::new();
-    if BufReader::new(&connection).read_line(&mut line).is_err() {
-        return;
-    }
-    let Ok(request) = serde_json::from_str::<Value>(&line) else {
-        return;
-    };
-    let pane = if request["method"] == "pane.current" {
-        &request["params"]["caller_pane_id"]
-    } else {
-        &request["params"]["pane_id"]
-    };
-    if pane != PROVED_PANE {
-        return;
-    }
-    let result = match request["method"].as_str() {
-        Some("pane.current") => json!({"pane": {"pane_id": request["params"]["caller_pane_id"]}}),
-        Some("pane.process_info") => json!({"process_info": {"shell_pid": std::process::id()}}),
-        Some("pane.get") => json!({"pane": {"terminal_id": "t-proved"}}),
-        _ => return,
-    };
-    let _ = writeln!(
-        &connection,
-        "{}",
-        json!({"id": request["id"], "result": result})
-    );
 }
 
 fn executable(path: &Path, contents: &str) {
@@ -1023,8 +970,7 @@ fn a_device_s_channels_share_its_one_connection() {
     let device = Device::start();
     // The start script, the install and the link made one connection.
     assert_eq!(device.ssh.accepted(), 1);
-    // The device's Herdr is a stream of it, and an attachment rides it too.
-    device.transport.herdr_api_connector().connect().unwrap();
+    // An attachment rides it too.
     let request = "8a6e0e4c-3f0b-4d2c-9a51-0c6f2b9d7e10";
     let staged = stage(&device, request, 0, 1, "attached.txt").unwrap();
     assert!(
@@ -1042,10 +988,9 @@ fn a_device_s_channels_share_its_one_connection() {
     .unwrap();
     assert!(!Path::new(&staged).exists());
     assert_eq!(device.ssh.accepted(), 1);
-    // The link is the connection: closing it ends the device's Herdr too,
-    // and nothing dials again on its own.
+    // The link is the connection: nothing dials again on its own once it
+    // closes.
     device.link.close("contract");
-    assert!(device.transport.herdr_api_connector().connect().is_err());
     assert_eq!(device.ssh.accepted(), 1);
 }
 
@@ -1458,6 +1403,196 @@ fn gone_within(path: &Path, bound: Duration) {
     }
 }
 
+/// How much of its answer a [`Caller`] request reads.
+#[derive(Clone, Copy)]
+enum Read {
+    /// The first line.
+    Line,
+    /// Every line until the node closes the connection.
+    All,
+    /// Nothing: the connection stays open until [`Caller::release`].
+    Hold,
+}
+
+/// The tests' caller in a pane of the device: a relay its node starts in a
+/// holder pane, which asks the device's pane socket for the test, so the
+/// node proves each request by the pane's holder record, as it proves a
+/// pane's `hide` (PRD engine-bundle-3-core-owns D-9). Each request is a file
+/// the relay answers with another; every request comes from the relay's one
+/// process.
+struct Caller {
+    panes: LinkPanes,
+    folder: PathBuf,
+    /// The pane's program as its record names it.
+    proof: HolderProof,
+    sequence: AtomicUsize,
+}
+
+/// The relay [`Caller`] runs: it answers each `<n>.req` in its folder on a
+/// thread of its own with `<n>.ans`, the lines it read, or the error.
+const RELAY: &str = r#"
+import json, os, socket, sys, threading, time
+folder = sys.argv[1]
+def put(name, value):
+    staged = os.path.join(folder, name + ".tmp")
+    with open(staged, "w") as out:
+        json.dump(value, out)
+    os.rename(staged, os.path.join(folder, name))
+def serve(n):
+    try:
+        with open(os.path.join(folder, n + ".req")) as file:
+            request = json.load(file)
+        s = socket.socket(socket.AF_UNIX)
+        s.settimeout(30)
+        s.connect(request["socket"])
+        s.sendall((request["line"] + "\n").encode())
+        lines = []
+        if request["read"] == "hold":
+            while not os.path.exists(os.path.join(folder, n + ".close")):
+                time.sleep(0.02)
+        else:
+            reader = s.makefile()
+            first = reader.readline()
+            if first:
+                lines.append(first)
+            if request["read"] == "all":
+                lines += reader.readlines()
+        s.close()
+        put(n + ".ans", {"lines": lines})
+    except Exception as error:
+        put(n + ".ans", {"error": repr(error)})
+put("ready", {})
+seen = set()
+while True:
+    for name in os.listdir(folder):
+        if name.endswith(".req") and name not in seen:
+            seen.add(name)
+            threading.Thread(target=serve, args=(name[:-4],), daemon=True).start()
+    time.sleep(0.01)
+"#;
+
+impl Caller {
+    fn start(device: &Device) -> Self {
+        let folder = device.state.parent().unwrap().join("c");
+        fs::create_dir_all(&folder).unwrap();
+        let panes = LinkPanes::new(
+            Arc::clone(&device.link),
+            Arc::new(|record| eprintln!("device pane record: {record}")),
+        );
+        // As the core's own engine starts a pane: a number, the pane's
+        // reservation, its start, then the number retired.
+        let start = HolderStart {
+            pane: PROVED_PANE.to_owned(),
+            program: Some(vec![
+                "/usr/bin/python3".to_owned(),
+                "-c".to_owned(),
+                RELAY.to_owned(),
+                folder.to_str().unwrap().to_owned(),
+            ]),
+            cwd: hide_platform::path::to_wire(&device.home).unwrap(),
+            env: Vec::new(),
+            rows: 24,
+            cols: 120,
+            notice: None,
+        };
+        let request = panes.request().unwrap();
+        panes
+            .reserve(&start, None, request)
+            .and_then(|reserved| panes.start_reserved(&start, reserved, request))
+            .unwrap();
+        panes.retire(request).unwrap();
+        let proof = panes.proof(PROVED_PANE).unwrap();
+        let caller = Self {
+            panes,
+            folder,
+            proof,
+            sequence: AtomicUsize::new(0),
+        };
+        caller.wait_for(&caller.folder.join("ready"));
+        caller
+    }
+
+    /// The relay's process, as the node reads a proved caller's shell.
+    fn shell_pid(&self) -> i32 {
+        i32::try_from(self.proof.program).unwrap()
+    }
+
+    #[allow(clippy::disallowed_methods)] // a polling helper: it sleeps between observations of a state, bounded by a deadline
+    fn wait_for(&self, path: &Path) {
+        let deadline = std::time::Instant::now() + TIMEOUT;
+        while !path.exists() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the relay did not write {}",
+                path.display()
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// Asks `socket` from the pane with the line `request`, at once; its
+    /// answer is [`Caller::answer`]'s.
+    fn send(&self, socket: &Path, request: &Value, read: Read) -> usize {
+        let n = self.sequence.fetch_add(1, Ordering::Relaxed);
+        let read = match read {
+            Read::Line => "line",
+            Read::All => "all",
+            Read::Hold => "hold",
+        };
+        let staged = self.folder.join(format!("{n}.staged"));
+        fs::write(
+            &staged,
+            json!({"socket": socket, "line": request.to_string(), "read": read}).to_string(),
+        )
+        .unwrap();
+        fs::rename(&staged, self.folder.join(format!("{n}.req"))).unwrap();
+        n
+    }
+
+    /// The lines request `n` read, each as JSON.
+    fn answer(&self, n: usize) -> Vec<Value> {
+        let path = self.folder.join(format!("{n}.ans"));
+        self.wait_for(&path);
+        let answer: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        assert!(answer.get("error").is_none(), "the relay failed: {answer}");
+        answer["lines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|line| serde_json::from_str(line.as_str().unwrap()).unwrap())
+            .collect()
+    }
+
+    /// The first line `request` gets from `socket`.
+    fn ask(&self, socket: &Path, request: &Value) -> Value {
+        let mut lines = self.answer(self.send(socket, request, Read::Line));
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        lines.remove(0)
+    }
+
+    /// Ends a [`Read::Hold`] request's connection.
+    fn release(&self, n: usize) {
+        fs::write(self.folder.join(format!("{n}.close")), "").unwrap();
+        self.answer(n);
+    }
+}
+
+impl Drop for Caller {
+    fn drop(&mut self) {
+        // The holder outlives every node by design; the pane ends with its
+        // program's session, recorded by pid and start time.
+        if let Err(error) = self.panes.terminate(PROVED_PANE) {
+            eprintln!("the relay pane did not end through its node: {error:?}");
+        }
+        match hide_platform::process::Session::left_by(self.proof.program, self.proof.started)
+            .and_then(|mut session| session.end(TIMEOUT))
+        {
+            Ok(hide_platform::process::SessionEnd::Ended) => {}
+            other => eprintln!("the relay pane did not end: {other:?}"),
+        }
+    }
+}
+
 /// The device's pane sockets: one `bridge-*` folder per daemon's link, each
 /// holding the socket a device pane's `hide` asks.
 fn pane_sockets(state: &Path) -> Vec<PathBuf> {
@@ -1486,7 +1621,7 @@ fn a_device_s_pane_socket_lives_with_its_link() {
     assert_eq!(mode(socket.parent().unwrap()), 0o700);
     assert_eq!(mode(&device.state.join("workspace-bridges")), 0o700);
     assert_eq!(mode(socket) & 0o077, 0, "{:o}", mode(socket));
-    // This test process descends from no pane of the device's Herdr.
+    // This test process descends from no pane of the device.
     let mut stream = UnixStream::connect(socket).unwrap();
     writeln!(
         stream,
@@ -1510,13 +1645,19 @@ fn a_device_s_pane_socket_lives_with_its_link() {
     assert_eq!(*device.events.closed.lock().unwrap(), ["contract-node"]);
 }
 
-/// One credential request on the device's pane socket and the line it answers.
-fn ask(socket: &Path, pane_id: &str, nonce: char, one_shot: bool) -> Value {
+/// One credential request for `pane_id`.
+fn credential(pane_id: &str, nonce: char, one_shot: bool) -> Value {
+    json!({"pane_id": pane_id, "nonce": nonce.to_string().repeat(32), "one_shot": one_shot})
+}
+
+/// One credential request on the device's pane socket from this test
+/// process, which descends from no pane of the device, and the line it
+/// answers.
+fn ask_unproved(socket: &Path, request: &Value) -> Value {
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixStream;
     let mut stream = UnixStream::connect(socket).unwrap();
-    let request =
-        json!({"pane_id": pane_id, "nonce": nonce.to_string().repeat(32), "one_shot": one_shot});
+    stream.set_read_timeout(Some(TIMEOUT)).unwrap();
     writeln!(stream, "{request}").unwrap();
     let mut answer = String::new();
     BufReader::new(&stream).read_line(&mut answer).unwrap();
@@ -1537,35 +1678,36 @@ fn a_device_pane_s_proof_crosses_the_link_and_its_refusals_are_reported() {
     let sockets = pane_sockets(&device.state);
     assert_eq!(sockets.len(), 1, "{sockets:?}");
     let socket = &sockets[0];
+    let caller = Caller::start(&device);
 
-    let issued = ask(socket, PROVED_PANE, 'a', false);
+    let issued = caller.ask(socket, &credential(PROVED_PANE, 'a', false));
     assert_eq!(issued["ok"], true, "{issued}");
     let reference = PathBuf::from(issued["reference"].as_str().unwrap());
     let written: Value = serde_json::from_slice(&fs::read(&reference).unwrap()).unwrap();
     assert_eq!(written["token"], TOKEN);
     assert_eq!(written["socket"], socket.to_str().unwrap());
     let proofs = device.events.heard.lock().unwrap().clone();
-    let shell = i32::try_from(std::process::id()).unwrap();
     assert!(
         matches!(
             &proofs[..],
             [NodeEvent::PaneProof { pane_id, identity, .. }]
                 if pane_id == PROVED_PANE
-                    && identity.terminal_id == "t-proved"
-                    && identity.shell_pid == shell
+                    && identity.terminal_id == PROVED_PANE
+                    && identity.shell_pid == caller.shell_pid()
+                    && identity.shell_started == caller.proof.started
         ),
         "{proofs:?}"
     );
 
     // Refused by the core: the caller reads its reason, and the node
     // reports nothing, since the core records what it refused.
-    let changed = ask(socket, PROVED_PANE, 'b', true);
+    let changed = caller.ask(socket, &credential(PROVED_PANE, 'b', true));
     assert_eq!(
         changed,
         json!({"ok": false, "reason": "pane_changed", "next_action": "Reconnect the pane and retry"})
     );
-    // Refused by the node: a pane its Herdr does not know.
-    let unknown = ask(socket, "w1:p1", 'c', false);
+    // Refused by the node: a pane its holders do not hold.
+    let unknown = caller.ask(socket, &credential("w1:p1", 'c', false));
     assert_eq!(
         unknown,
         json!({"ok": false, "reason": "pane_unavailable", "next_action": "Reconnect the pane and retry"})
@@ -1574,7 +1716,7 @@ fn a_device_pane_s_proof_crosses_the_link_and_its_refusals_are_reported() {
     let waiting = (0..16)
         .map(|_| UnixStream::connect(socket).unwrap())
         .collect::<Vec<_>>();
-    let busy = ask(socket, PROVED_PANE, 'd', false);
+    let busy = ask_unproved(socket, &credential(PROVED_PANE, 'd', false));
     assert_eq!(
         busy,
         json!({"ok": false, "reason": "bridge_busy", "next_action": "Reconnect the pane and retry"})
@@ -1649,16 +1791,18 @@ impl hide_node::ssh::PaneEvents for IssuingEvents {
 #[test]
 #[ignore = "the system's sshd; the remote mailbox lane runs it"]
 fn a_stream_opened_by_a_one_shot_holder_names_its_pane() {
-    use std::io::Write;
-    use std::os::unix::net::UnixStream;
     let events = Arc::new(IssuingEvents::default());
     let device = Device::start_with_pane_events(Some(events.clone()));
     let sockets = pane_sockets(&device.state);
     assert_eq!(sockets.len(), 1, "{sockets:?}");
     let socket = &sockets[0];
+    let caller = Caller::start(&device);
     let open = |count: usize, token: Option<&str>| {
-        let mut stream = UnixStream::connect(socket).unwrap();
-        writeln!(stream, "{}", json!({"stream": true, "token": token})).unwrap();
+        let stream = caller.send(
+            socket,
+            &json!({"stream": true, "token": token}),
+            Read::Hold,
+        );
         let heard = events.0.heard_until(|heard| {
             heard
                 .iter()
@@ -1674,18 +1818,21 @@ fn a_stream_opened_by_a_one_shot_holder_names_its_pane() {
             })
             .nth(count - 1)
             .expect("the stream opened");
-        drop(stream);
+        caller.release(stream);
         opened
     };
 
-    assert_eq!(ask(socket, PROVED_PANE, 'a', false)["ok"], true);
+    assert_eq!(
+        caller.ask(socket, &credential(PROVED_PANE, 'a', false))["ok"],
+        true
+    );
     assert_eq!(open(1, None), None);
     assert_eq!(open(2, Some("unknown")), None);
     let persistent = open(3, Some(TOKEN)).expect("a persistent reference proves its peer too");
     assert_eq!(persistent.pane_id, PROVED_PANE);
-    assert_eq!(persistent.identity.shell_pid, std::process::id() as i32);
+    assert_eq!(persistent.identity.shell_pid, caller.shell_pid());
 
-    let issued = ask(socket, PROVED_PANE, 'b', true);
+    let issued = caller.ask(socket, &credential(PROVED_PANE, 'b', true));
     assert_eq!(issued["ok"], true, "{issued}");
     let proved = events
         .0
@@ -1716,31 +1863,22 @@ fn a_stream_opened_by_a_one_shot_holder_names_its_pane() {
 #[test]
 #[ignore = "the system's sshd; the remote mailbox lane runs it"]
 fn a_hook_proof_answers_once_and_never_hands_out_a_reference() {
-    use std::io::{BufRead, BufReader, Write};
-    use std::os::unix::net::UnixStream;
     let device = Device::start();
     let sockets = pane_sockets(&device.state);
     let socket = &sockets[0];
+    let caller = Caller::start(&device);
     let request = json!({"pane_id":PROVED_PANE,"nonce":"ab".repeat(16),"one_shot":true,"hook":{
         "request_id":"hook-1","token":null,"command":{"kind":"memory","event":"SessionStart","runtime":"claude","session":"session"}
     }});
-    let mut stream = UnixStream::connect(socket).unwrap();
-    stream.set_read_timeout(Some(TIMEOUT)).unwrap();
-    writeln!(stream, "{request}").unwrap();
-    let mut reader = BufReader::new(stream);
-    let mut line = String::new();
-    reader.read_line(&mut line).unwrap();
-    let answer: Value = serde_json::from_str(&line).unwrap();
+    // One socket answers only one hook: the node closes it after its line.
+    let answers = caller.answer(caller.send(socket, &request, Read::All));
+    let [answer] = &answers[..] else {
+        panic!("one socket answers only one hook: {answers:?}");
+    };
     assert_eq!(answer["request_id"], "hook-1");
     assert_eq!(answer["ok"], true);
     assert!(answer.get("reference").is_none());
     assert!(answer.get("token").is_none());
-    line.clear();
-    assert_eq!(
-        reader.read_line(&mut line).unwrap(),
-        0,
-        "one socket answers only one hook"
-    );
     assert!(
         !socket
             .parent()
@@ -1753,52 +1891,32 @@ fn a_hook_proof_answers_once_and_never_hands_out_a_reference() {
             .iter()
             .any(|event| matches!(event, NodeEvent::PaneProof { hook: Some(_), .. }))
     });
-    assert!(proofs.iter().any(|event| matches!(event, NodeEvent::PaneProof { pane_id, identity, one_shot: true, hook: Some(_), .. } if pane_id == PROVED_PANE && identity.terminal_id == "t-proved")));
+    assert!(proofs.iter().any(|event| matches!(event, NodeEvent::PaneProof { pane_id, identity, one_shot: true, hook: Some(_), .. } if pane_id == PROVED_PANE && identity.terminal_id == PROVED_PANE)));
     for invalid in [
         json!({"kind":"workspace_action","command":{"type":"close_pane"}}),
         json!({"kind":"letter_confirm","ids":["letter-1"]}),
     ] {
         let mut request = request.clone();
         request["hook"]["command"] = invalid;
-        let mut stream = UnixStream::connect(socket).unwrap();
-        stream.set_read_timeout(Some(TIMEOUT)).unwrap();
-        writeln!(stream, "{request}").unwrap();
-        let mut answer = String::new();
-        BufReader::new(stream).read_line(&mut answer).unwrap();
-        assert_eq!(
-            serde_json::from_str::<Value>(&answer).unwrap()["reason"],
-            "invalid_request"
-        );
+        assert_eq!(caller.ask(socket, &request)["reason"], "invalid_request");
     }
     let mut other_pane = request.clone();
     other_pane["pane_id"] = json!("w1:p999");
-    let mut stream = UnixStream::connect(socket).unwrap();
-    stream.set_read_timeout(Some(TIMEOUT)).unwrap();
-    writeln!(stream, "{other_pane}").unwrap();
-    let mut answer = String::new();
-    BufReader::new(stream).read_line(&mut answer).unwrap();
-    assert_eq!(serde_json::from_str::<Value>(&answer).unwrap()["ok"], false);
+    assert_eq!(caller.ask(socket, &other_pane)["ok"], false);
     assert!(!device.events.heard.lock().unwrap().iter().any(|event| matches!(event, NodeEvent::PaneProof { pane_id, hook: Some(_), .. } if pane_id == "w1:p999")));
 }
 
 #[test]
 #[ignore = "the system's sshd; the remote mailbox lane runs it"]
 fn workspace_guidance_gets_one_reusable_reference_and_rejects_writes() {
-    use std::io::{BufRead, BufReader, Write};
-    use std::os::unix::net::UnixStream;
     let device = Device::start();
     let sockets = pane_sockets(&device.state);
+    let caller = Caller::start(&device);
+    // Each answer is the node's one line, and it closes the socket after it.
     let ask = |request: &Value| {
-        let mut stream = UnixStream::connect(&sockets[0]).unwrap();
-        stream.set_read_timeout(Some(TIMEOUT)).unwrap();
-        writeln!(stream, "{request}").unwrap();
-        let mut reader = BufReader::new(stream);
-        let mut line = String::new();
-        reader.read_line(&mut line).unwrap();
-        let answer: Value = serde_json::from_str(&line).unwrap();
-        line.clear();
-        assert_eq!(reader.read_line(&mut line).unwrap(), 0);
-        answer
+        let mut answers = caller.answer(caller.send(&sockets[0], request, Read::All));
+        assert_eq!(answers.len(), 1, "{answers:?}");
+        answers.remove(0)
     };
     let request = json!({"pane_id":PROVED_PANE,"nonce":"cd".repeat(16),"one_shot":false,"hook":{
         "request_id":"guidance","token":null,"command":{"kind":"workspace_info"}
