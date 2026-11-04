@@ -1518,6 +1518,23 @@ pub enum LineInput {
     Console,
 }
 
+/// How the terminal whose pseudoterminal master the caller holds takes input
+/// now, read as [`line_input`] reads a process's terminal, from the master's
+/// own descriptor, so a pane's holder asks its terminal without finding it
+/// again by pid. `None` on Windows: a pseudoconsole keeps its program's
+/// console input mode (`ENABLE_LINE_INPUT`) inside the console host, which
+/// the holder of its master has no handle to ask.
+#[cfg(unix)]
+pub fn master_line_input(master: std::os::fd::BorrowedFd<'_>) -> io::Result<Option<LineInput>> {
+    sys::input_of_descriptor(std::os::fd::AsRawFd::as_raw_fd(&master)).map(Some)
+}
+
+/// See the Unix form: Windows' pseudoconsole cannot say.
+#[cfg(windows)]
+pub fn master_line_input(_master: ()) -> io::Result<Option<LineInput>> {
+    Ok(None)
+}
+
 /// How the controlling terminal of `pid` takes input now. `NotFound` when
 /// the process is gone or controls no terminal; `PermissionDenied` when the
 /// terminal is not this account's to read.
@@ -3884,11 +3901,19 @@ mod sys {
     }
 
     fn input_of(terminal: &std::fs::File) -> io::Result<super::LineInput> {
+        input_of_descriptor(terminal.as_raw_fd())
+    }
+
+    /// The input mode of the terminal open on `descriptor`, which the caller
+    /// keeps open for the call.
+    pub(super) fn input_of_descriptor(
+        descriptor: std::os::fd::RawFd,
+    ) -> io::Result<super::LineInput> {
         // SAFETY: an all-zero `termios` is a valid value for the call to fill.
         let mut attributes: libc::termios = unsafe { std::mem::zeroed() };
-        // SAFETY: the descriptor stays open for the call and the structure is
-        // valid for writes.
-        if unsafe { libc::tcgetattr(terminal.as_raw_fd(), &mut attributes) } != 0 {
+        // SAFETY: the caller keeps the descriptor open for the call and the
+        // structure is valid for writes.
+        if unsafe { libc::tcgetattr(descriptor, &mut attributes) } != 0 {
             return Err(io::Error::last_os_error());
         }
         Ok(if attributes.c_lflag & libc::ICANON != 0 {

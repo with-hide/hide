@@ -1516,29 +1516,26 @@ impl PtyMaster {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Whether the terminal edits lines (canonical mode), as its program
-    /// set it: unknown on Windows, whose console keeps its program's input
-    /// mode where a holder cannot read it, and when the terminal could not
-    /// be asked, its pane having ended.
+    /// Whether the terminal edits lines, as the platform reads the master
+    /// this holder keeps (`hide_platform::process::master_line_input`):
+    /// unknown where the system cannot say (Windows) and when the terminal
+    /// could not be asked, its pane having ended.
     fn line_editing(&self) -> LineEditing {
+        use hide_platform::process::{LineInput, master_line_input};
+        let guard = self.lock();
         #[cfg(unix)]
-        {
-            let Some(termios) = self.lock().as_ref().and_then(|master| master.get_termios()) else {
-                return LineEditing::Unknown;
-            };
-            if termios
-                .local_flags
-                .contains(nix::sys::termios::LocalFlags::ICANON)
-            {
-                LineEditing::Edits
-            } else {
-                LineEditing::ReadsKeys
-            }
-        }
+        let read = guard
+            .as_ref()
+            .and_then(|master| master.as_raw_fd())
+            // SAFETY: the master stays open while its lock is held, for the
+            // whole of the call.
+            .map(|fd| master_line_input(unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) }));
         #[cfg(windows)]
-        {
-            let _ = self;
-            LineEditing::Unknown
+        let read = guard.as_ref().map(|_| master_line_input(()));
+        match read {
+            Some(Ok(Some(LineInput::Lines { .. }))) => LineEditing::Edits,
+            Some(Ok(Some(LineInput::Keys))) => LineEditing::ReadsKeys,
+            _ => LineEditing::Unknown,
         }
     }
 

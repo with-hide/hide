@@ -1158,7 +1158,6 @@ dependencies = [
  "hide-screen-rules",
  "hide-vt",
  "libc",
- "nix",
  "portable-pty",
  "serde_json",
  "tempfile",
