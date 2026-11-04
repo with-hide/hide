@@ -166,9 +166,13 @@ fn an_idle_holder_does_not_wake_attached_or_not() {
     let mut connection = holder.open();
     // The capabilities a node's watch accepts: a shell at its prompt reads
     // keys, so its line editing is never asked again on a timer.
-    let (mut watch, _) = hide_holder_protocol::watch(
+    let (mut watch, watching) = hide_holder_protocol::watch(
         &holder.socket,
-        vec![Capability::Facts, Capability::LineEditing],
+        vec![
+            Capability::Facts,
+            Capability::ProgramPackage,
+            Capability::LineEditing,
+        ],
         Instant::now() + HANG_LIMIT,
     )
     .unwrap();
@@ -188,7 +192,7 @@ fn an_idle_holder_does_not_wake_attached_or_not() {
     // in its stream, a few small messages.
     watch.set_deadline(Instant::now() + HANG_LIMIT);
     loop {
-        match hide_holder_protocol::read_holder(&mut watch).unwrap() {
+        match hide_holder_protocol::read_watch_holder(&mut watch, &watching.sends).unwrap() {
             HolderMessage::Facts(facts)
                 if facts.screen
                     == (hide_holder_protocol::ScreenRead::Read {
@@ -215,7 +219,7 @@ fn an_idle_holder_does_not_wake_attached_or_not() {
     drop(connection);
     hide_holder_protocol::write_watch(&mut watch, &WatchMessage::Release).unwrap();
     watch.set_deadline(Instant::now() + HANG_LIMIT);
-    while let Ok(message) = hide_holder_protocol::read_holder(&mut watch) {
+    while let Ok(message) = hide_holder_protocol::read_watch_holder(&mut watch, &watching.sends) {
         if matches!(message, HolderMessage::Closed(_)) {
             break;
         }

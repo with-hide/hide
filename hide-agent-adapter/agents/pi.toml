@@ -8,6 +8,7 @@ schema = 1
 id = "pi"
 name = "Pi"
 executables = ["pi"]
+packages = ["@earendil-works/pi-coding-agent"]
 home = "~/.pi/agent"
 hooks = "pi"
 

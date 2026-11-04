@@ -2586,7 +2586,7 @@ fn hide_step(line: &str) -> Step {
             | ["inbox", ..]
             | ["request", "show", ..]
             | ["watch", "list", ..]
-            | ["plan", "show", ..]
+            | ["task" | "plan", "show", ..]
             | ["mission", "show" | "list", ..]
             | ["view", "list" | "status", ..] => Step::Sessions,
             _ => Step::Other,

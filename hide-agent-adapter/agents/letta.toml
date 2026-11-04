@@ -9,6 +9,7 @@ schema = 1
 id = "letta"
 name = "Letta Code"
 executables = ["letta", "letta-code"]
+packages = ["@letta-ai/letta-code"]
 hooks = "none"
 
 [screen]

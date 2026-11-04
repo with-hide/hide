@@ -1,4 +1,3 @@
-import { skipOwnWindowsAgentStart } from "./own-windows-agent-start";
 // The device Overview's backlog and the pane head's record button (PRD
 // overview-device-tasks B22-B24, B26-B32), on an isolated engine and hided.
 import { expect, test } from "@playwright/test";
@@ -84,7 +83,6 @@ test("a record shown in the lane's 보기 slot stays through pin, unpin and a wi
 });
 
 test("@platform an agent pane's head opens its session record in the lane and leaves the keyboard in the terminal", async ({ page }) => {
-  skipOwnWindowsAgentStart();
   const herdr = await startFixture();
   let daemon: Daemon | undefined;
   try {

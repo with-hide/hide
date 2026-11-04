@@ -10,6 +10,7 @@ schema = 1
 id = "qwen"
 name = "Qwen Code"
 executables = ["qwen", "qwen-code"]
+packages = ["@qwen-code/qwen-code"]
 hooks = "none"
 
 [resume]

@@ -2,6 +2,7 @@ schema = 1
 id = "omp"
 name = "omp"
 executables = ["omp"]
+packages = ["@oh-my-pi/pi-coding-agent"]
 home = "~/.omp/agent"
 hooks = "omp"
 

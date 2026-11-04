@@ -314,7 +314,7 @@ impl Runtime {
         Ok(())
     }
 
-    /// Runs a `hide plan` command from `caller`'s pane on `device`, judged
+    /// Runs a `hide task` command from `caller`'s pane on `device`, judged
     /// with the evidence `proofs` already read. Answers the command's answer
     /// and whether anything changed, or the reads its evidence still needs,
     /// which the caller makes off the lock before asking again.

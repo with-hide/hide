@@ -1284,14 +1284,32 @@ pub fn name_of(pid: u32) -> io::Result<String> {
     sys::name_of(pid)
 }
 
+/// The installed package whose script Windows runs through an npm launcher.
+/// Windows has no exec transition from a launcher to its script; the package
+/// path distinguishes generic script names such as cli.js. Other systems
+/// keep their existing executable and script-name detection. No file is read.
+pub fn package_of_script(script: &str) -> Option<String> {
+    #[cfg(windows)]
+    {
+        crate::windows_process::package_name(script)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = script;
+        None
+    }
+}
+
 /// The arguments `pid` was started with, its program first, as the system
 /// keeps them: the kernel's copy of the start's arguments on macOS
 /// (`KERN_PROCARGS2`), `/proc/<pid>/cmdline` on Linux, where a program that
 /// rewrote its arguments reads as it rewrote them and a process that has
-/// ended but not been reaped has none. `NotFound` when the process is gone,
+/// ended but not been reaped has none, and the native command-line query
+/// on Windows, parsed by the system's quote/backslash rules.
+/// `NotFound` when the process is gone,
 /// `PermissionDenied` when the system will not say (another account's
-/// process on macOS), `Unsupported` on Windows, which keeps a process's
-/// command line only inside the process.
+/// process on macOS). Windows bounds the command line to its system limit
+/// and reports a failed or unstable read instead of empty arguments.
 pub fn argv_of(pid: u32) -> io::Result<Vec<String>> {
     sys::argv_of(pid)
 }
@@ -1345,20 +1363,62 @@ fn is_console_host(pid: u32) -> bool {
 /// the oldest process `shell` started that still runs, the program the
 /// shell runs now (a line typed into it starts one, and the shell waits on
 /// it), or `shell` itself while it runs none; a console host is never it.
-/// A process the shell started and that started others leads them all
-/// ([`group_members`]). Herdr reads a
+/// A single-child cmd or PowerShell wrapper is followed to the program it
+/// waits for; any other program leads its descendants ([`group_members`]).
+/// An unreadable process table or live child identity is an error, never
+/// evidence that the shell runs alone. Herdr reads a
 /// Windows pane's foreground the same way, from the shell down. `NotFound`
 /// when `shell` has ended.
 #[cfg(windows)]
 pub fn console_foreground(shell: u32) -> io::Result<u32> {
     let shell_started = start_time(shell)?;
-    let mut walk = sys::Walk::new()?;
-    let oldest = walk
-        .children_of(shell)
-        .into_iter()
-        .filter(|child| !is_console_host(*child))
-        .filter_map(|child| start_time(child).ok().map(|started| (started, child)))
-        .min();
+    let walk = sys::Walk::new()?;
+    let mut oldest = None;
+    // A walk used to end a tree may leave an unreadable row alone. A
+    // readiness proof cannot: skipping that child would type into a busy
+    // pane. Propagate uncertainty, which the holder reports as unreadable.
+    for child in walk.child_identities(shell)? {
+        let (child, started) = child?;
+        if !is_console_host(child) {
+            oldest = Some(oldest.map_or((started, child), |previous| {
+                std::cmp::min(previous, (started, child))
+            }));
+        }
+    }
+    let mut foreground = oldest.map_or(shell, |(_, child)| child);
+    // npm's .cmd launcher and an explicit PowerShell -File wrapper stay
+    // alive while their program runs. Follow only an unambiguous chain
+    // of shells, never a runtime's helpers or an agent-specific name.
+    for depth in 0..MAX_DEPTH {
+        if foreground == shell {
+            break;
+        }
+        let name = name_of(foreground)?;
+        if !["cmd.exe", "powershell.exe", "pwsh.exe"]
+            .iter()
+            .any(|wrapper| wrapper.eq_ignore_ascii_case(&name))
+        {
+            break;
+        }
+        let children: Vec<_> = walk
+            .child_identities(foreground)?
+            .into_iter()
+            .collect::<io::Result<Vec<_>>>()?
+            .into_iter()
+            .map(|(pid, _)| pid)
+            .filter(|child| !is_console_host(*child))
+            .collect();
+        if children.len() != 1 {
+            break;
+        }
+        if depth + 1 == MAX_DEPTH || children[0] == foreground || children[0] == shell {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "console shell wrapper chain exceeds its depth limit",
+            ));
+        }
+        foreground = children[0];
+    }
     // The shell's start is read again, so a shell that ended during the
     // look, and whose pid another process took, is not answered for.
     if start_time(shell)? != shell_started {
@@ -1367,7 +1427,7 @@ pub fn console_foreground(shell: u32) -> io::Result<u32> {
             format!("process {shell} has ended"),
         ));
     }
-    Ok(oldest.map_or(shell, |(_, child)| child))
+    Ok(foreground)
 }
 
 /// The program file a process runs, as the kernel keeps it.
@@ -3081,22 +3141,20 @@ mod sys {
         // standard library opens its own descriptors close-on-exec. What the
         // parent was lent by its supervisor is neither, so it is marked here.
         command.process_group(0);
-        // `sysconf` is not on POSIX's list of calls safe between fork and
-        // exec, so the bound is read here, before the fork, and the child only
-        // uses the number.
-        let limit = fallback_limit();
+        let mut inherited = Inherited::prepare();
         // SAFETY: after fork the closure calls only `fcntl`, which POSIX lists
-        // as async-signal-safe, and `syscall`, the bare system-call entry:
-        // neither allocates or takes a lock, and it touches no memory this
-        // process shares with the child.
-        unsafe { command.pre_exec(move || mark_inherited_descriptors(limit)) };
+        // as async-signal-safe, `getpid`, and bare system-call entries
+        // (`syscall`, and `proc_pidinfo`, libproc's wrapper of one): none
+        // allocates or takes a lock, and the only memory written is the
+        // child's own copy of the listing buffer prepared before the fork.
+        unsafe { command.pre_exec(move || inherited.mark()) };
         Ok(())
     }
 
     /// The descriptor value below which the fallback scan marks: the open-file
     /// limit, or the bound when the limit is indeterminate (`sysconf` answers
     /// -1) or larger than the bound.
-    pub(super) fn fallback_limit() -> libc::c_int {
+    fn fallback_limit() -> libc::c_int {
         // SAFETY: `sysconf` takes an integer and has no memory effects.
         let table = unsafe { libc::sysconf(libc::_SC_OPEN_MAX) };
         if table <= 0 {
@@ -3108,40 +3166,137 @@ mod sys {
         }
     }
 
-    /// Marks every descriptor above the standard three close-on-exec, so the
-    /// exec that follows drops them. Marking, not closing: the standard
-    /// library reports a failed exec to its parent through a descriptor in
-    /// this range that must survive until the exec. `limit` is where the
-    /// fallback scan stops, computed before the fork.
-    pub(super) fn mark_inherited_descriptors(limit: libc::c_int) -> io::Result<()> {
-        #[cfg(target_os = "linux")]
-        {
-            // `close_range` with CLOSE_RANGE_CLOEXEC marks the whole range in
-            // one call (Linux 5.11). An older kernel answers ENOSYS or EINVAL.
-            const CLOSE_RANGE_CLOEXEC: libc::c_uint = 4;
-            // SAFETY: the call takes three integers and has no memory effects.
-            let marked = unsafe {
-                libc::syscall(
-                    libc::SYS_close_range,
-                    3 as libc::c_uint,
-                    libc::c_uint::MAX,
-                    CLOSE_RANGE_CLOEXEC,
-                )
+    /// Entries the descriptor listing keeps beyond the table's size when it
+    /// was prepared, for what other threads open before the fork; a listing
+    /// that fills its buffer anyway is not trusted and the scan runs.
+    #[cfg(target_os = "macos")]
+    const LISTING_SPARE: usize = 64;
+
+    /// What a child marks close-on-exec between its fork and its exec,
+    /// prepared before the fork: nothing may be allocated there and
+    /// `sysconf` is not on POSIX's list of calls safe there, so the fallback
+    /// scan's bound and, on macOS, the buffer the open descriptors are
+    /// listed into are made here, and the child only uses them.
+    pub(super) struct Inherited {
+        limit: libc::c_int,
+        #[cfg(target_os = "macos")]
+        listing: Vec<libc::proc_fdinfo>,
+    }
+
+    impl Inherited {
+        pub(super) fn prepare() -> Self {
+            #[cfg(target_os = "macos")]
+            let listing = {
+                // SAFETY: a null buffer asks only for the size the list
+                // takes now; nothing is written.
+                let needed = unsafe {
+                    libc::proc_pidinfo(
+                        libc::getpid(),
+                        libc::PROC_PIDLISTFDS,
+                        0,
+                        std::ptr::null_mut(),
+                        0,
+                    )
+                };
+                let entries =
+                    usize::try_from(needed).unwrap_or(0) / std::mem::size_of::<libc::proc_fdinfo>();
+                vec![
+                    libc::proc_fdinfo {
+                        proc_fd: 0,
+                        proc_fdtype: 0,
+                    };
+                    entries + LISTING_SPARE
+                ]
             };
-            if marked == 0 {
+            Self {
+                limit: fallback_limit(),
+                #[cfg(target_os = "macos")]
+                listing,
+            }
+        }
+
+        /// Marks every descriptor above the standard three close-on-exec, so
+        /// the exec that follows drops them. Marking, not closing: the
+        /// standard library reports a failed exec to its parent through a
+        /// descriptor in this range that must survive until the exec. Linux
+        /// marks the range in one call and macOS marks only the descriptors
+        /// the child holds, as the kernel lists them: a scan of every number
+        /// up to the limit cost a start about 7 ms there (65,536 `fcntl`s),
+        /// against microseconds for the list. Either falls back to the scan.
+        pub(super) fn mark(&mut self) -> io::Result<()> {
+            #[cfg(target_os = "linux")]
+            {
+                // `close_range` with CLOSE_RANGE_CLOEXEC marks the whole
+                // range in one call (Linux 5.11). An older kernel answers
+                // ENOSYS or EINVAL.
+                const CLOSE_RANGE_CLOEXEC: libc::c_uint = 4;
+                // SAFETY: the call takes three integers and has no memory
+                // effects.
+                let marked = unsafe {
+                    libc::syscall(
+                        libc::SYS_close_range,
+                        3 as libc::c_uint,
+                        libc::c_uint::MAX,
+                        CLOSE_RANGE_CLOEXEC,
+                    )
+                };
+                if marked == 0 {
+                    return Ok(());
+                }
+            }
+            #[cfg(target_os = "macos")]
+            if self.mark_listed() {
                 return Ok(());
             }
+            for descriptor in 3..self.limit {
+                mark_close_on_exec(descriptor);
+            }
+            Ok(())
         }
-        for descriptor in 3..limit {
-            // SAFETY: `fcntl` on a descriptor number this process may not
-            // hold fails with EBADF and does nothing else.
-            let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFD) };
+
+        /// Marks the descriptors the kernel lists for this process, and says
+        /// whether the list was whole.
+        #[cfg(target_os = "macos")]
+        fn mark_listed(&mut self) -> bool {
+            let entry = std::mem::size_of::<libc::proc_fdinfo>();
+            let Ok(capacity) = libc::c_int::try_from(self.listing.len() * entry) else {
+                return false;
+            };
+            // SAFETY: `proc_pidinfo` is libproc's wrapper of the bare
+            // `proc_info` system call: it writes at most `capacity` bytes into
+            // this process's own buffer and takes no lock.
+            let written = unsafe {
+                libc::proc_pidinfo(
+                    libc::getpid(),
+                    libc::PROC_PIDLISTFDS,
+                    0,
+                    self.listing.as_mut_ptr().cast(),
+                    capacity,
+                )
+            };
+            // Nothing written is a failure; a full buffer may be cut short.
+            if written <= 0 || written >= capacity {
+                return false;
+            }
+            for listed in &self.listing[..written as usize / entry] {
+                if listed.proc_fd >= 3 {
+                    mark_close_on_exec(listed.proc_fd);
+                }
+            }
+            true
+        }
+    }
+
+    fn mark_close_on_exec(descriptor: libc::c_int) {
+        // SAFETY: `fcntl` on a descriptor number this process may not hold
+        // fails with EBADF and does nothing else; the flag is the only thing
+        // set.
+        unsafe {
+            let flags = libc::fcntl(descriptor, libc::F_GETFD);
             if flags >= 0 && flags & libc::FD_CLOEXEC == 0 {
-                // SAFETY: as above; the flag is the only thing set.
-                unsafe { libc::fcntl(descriptor, libc::F_SETFD, flags | libc::FD_CLOEXEC) };
+                libc::fcntl(descriptor, libc::F_SETFD, flags | libc::FD_CLOEXEC);
             }
         }
-        Ok(())
     }
 
     /// Signals `target` (a pid, or a negative group id), where the process
@@ -5946,11 +6101,13 @@ mod sys {
         ))
     }
 
-    pub(super) fn argv_of(_: u32) -> io::Result<Vec<String>> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "Windows keeps a process's command line only inside the process",
-        ))
+    pub(super) fn argv_of(pid: u32) -> io::Result<Vec<String>> {
+        let process = open_live(pid, PROCESS_QUERY_LIMITED_INFORMATION)?;
+        let argv = crate::windows_process::argv(process.0)?;
+        if !running(&process) {
+            return Err(io::ErrorKind::NotFound.into());
+        }
+        Ok(argv)
     }
 
     /// The path `pid` was started from, as the system names it.
@@ -6073,6 +6230,11 @@ mod sys {
             // SAFETY: as for the first call.
             more = unsafe { Process32NextW(snapshot.0, &mut entry) } != 0;
         }
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() != Some(windows_sys::Win32::Foundation::ERROR_NO_MORE_FILES as i32)
+        {
+            return Err(error);
+        }
         Ok(table)
     }
 
@@ -6090,17 +6252,35 @@ mod sys {
             })
         }
 
+        /// A shell is idle only after every listed child's identity has
+        /// been checked. An exited child is absent, an unreadable one is
+        /// unknown, and a child older than this parent belongs to an old
+        /// holder of its pid.
+        pub(super) fn child_identities(&self, pid: u32) -> io::Result<Vec<io::Result<(u32, u64)>>> {
+            let parent_started = start_time(pid)?;
+            let mut children = Vec::new();
+            for &(child, parent) in &self.table {
+                if parent != pid {
+                    continue;
+                }
+                match start_time(child) {
+                    Ok(started) if started >= parent_started => children.push(Ok((child, started))),
+                    Ok(_) => {}
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => children.push(Err(error)),
+                }
+            }
+            Ok(children)
+        }
+
         /// A row whose start, or whose parent's, cannot be read is no child:
         /// it cannot be told from a later process holding an ended one's pid.
         pub(super) fn children_of(&mut self, pid: u32) -> Vec<u32> {
-            let Ok(parent_started) = start_time(pid) else {
-                return Vec::new();
-            };
-            self.table
-                .iter()
-                .filter(|(_, parent)| *parent == pid)
-                .map(|(child, _)| *child)
-                .filter(|child| start_time(*child).is_ok_and(|child| child >= parent_started))
+            self.child_identities(pid)
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(Result::ok)
+                .map(|(pid, _)| pid)
                 .collect()
         }
     }

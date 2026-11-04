@@ -40,8 +40,8 @@ use std::time::{Duration, Instant};
 
 use hide_holder_protocol::{
     Ask, Capability, ClientMessage, CloseReason, Closed, Fragment, FrameError, HELLO_LIMIT, Hello,
-    HolderMessage, Notice, NoticeReason, Opening as FirstMessage, Size, Unknown, Watching, Welcome,
-    agree, read_client, read_opening, write_holder,
+    HolderMessage, LineEditing, Notice, NoticeReason, Opening as FirstMessage, Size, Unknown,
+    Watching, Welcome, agree, read_client, read_opening, write_holder,
 };
 use hide_platform::ipc::{ListenerCloser, LocalListener, LocalStream, ShutdownHandle};
 use hide_platform::process::{Session, SessionEnd};
@@ -126,7 +126,11 @@ const READ_CHUNK: usize = 64 * 1024;
 const SENDS: [Capability; 3] = [Capability::Screen, Capability::Notices, Capability::Keys];
 
 /// What this holder sends on a watch.
-const WATCH_SENDS: [Capability; 2] = [Capability::Facts, Capability::LineEditing];
+const WATCH_SENDS: [Capability; 3] = [
+    Capability::Facts,
+    Capability::ProgramPackage,
+    Capability::LineEditing,
+];
 
 enum Event {
     /// A connection whose hello was accepted.
@@ -982,6 +986,7 @@ impl Holder {
             .unwrap_or_else(PoisonError::into_inner)
             .owner = generation;
         let wake = Arc::new(Wake::default());
+        let program_package = sends.contains(&Capability::ProgramPackage);
         let line_editing = sends.contains(&Capability::LineEditing);
         wake.send(HolderMessage::Watching(Watching {
             version,
@@ -1008,17 +1013,14 @@ impl Holder {
                 pane: self.pane.clone(),
                 rules: self.rules.clone(),
                 shell: self.program,
+                program_package,
                 group: Box::new({
                     let master = master.clone();
                     let shell = self.program;
                     move || master.group(shell)
                 }),
-                line_editing: Box::new(move || {
-                    if line_editing {
-                        master.line_editing()
-                    } else {
-                        None
-                    }
+                line_editing: line_editing.then(|| {
+                    Box::new(move || master.line_editing()) as Box<dyn Fn() -> LineEditing + Send>
                 }),
                 log: self.log.clone(),
             };
@@ -1512,22 +1514,29 @@ impl PtyMaster {
     }
 
     /// Whether the terminal edits lines (canonical mode), as its program
-    /// set it: `None` on Windows, whose console keeps its program's input
+    /// set it: unknown on Windows, whose console keeps its program's input
     /// mode where a holder cannot read it, and when the terminal could not
     /// be asked, its pane having ended.
-    fn line_editing(&self) -> Option<bool> {
+    fn line_editing(&self) -> LineEditing {
         #[cfg(unix)]
         {
-            self.lock().as_ref()?.get_termios().map(|termios| {
-                termios
-                    .local_flags
-                    .contains(nix::sys::termios::LocalFlags::ICANON)
-            })
+            let Some(termios) = self.lock().as_ref().and_then(|master| master.get_termios())
+            else {
+                return LineEditing::Unknown;
+            };
+            if termios
+                .local_flags
+                .contains(nix::sys::termios::LocalFlags::ICANON)
+            {
+                LineEditing::Edits
+            } else {
+                LineEditing::ReadsKeys
+            }
         }
         #[cfg(windows)]
         {
             let _ = self;
-            None
+            LineEditing::Unknown
         }
     }
 

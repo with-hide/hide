@@ -20,8 +20,8 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use hide_holder_protocol::{
-    Closed, Facts, FrameError, HolderMessage, ScreenRead, ScreenState, Unknown, WatchMessage,
-    read_watch, write_holder,
+    Closed, Facts, FrameError, HolderMessage, LineEditing, ScreenRead, ScreenState, Unknown,
+    WatchMessage, read_watch, write_holder,
 };
 use hide_platform::ipc::{LocalStream, ShutdownHandle};
 use hide_screen_rules::{Input, Manifest, Rules, State};
@@ -208,7 +208,7 @@ pub fn facts(
     rules: &SharedRules,
     reading: &mut Reading,
     foreground: Option<hide_holder_protocol::Program>,
-    line_editing: Option<bool>,
+    line_editing: Option<LineEditing>,
 ) -> Result<Facts, hide_vt::Error> {
     let (generation, set) = {
         let slot = slot(rules);
@@ -241,11 +241,13 @@ pub struct FactsWriter {
     pub rules: SharedRules,
     /// The pane's program, which never counts as its foreground.
     pub shell: u32,
+    /// Whether this watch negotiated the optional package extension.
+    pub program_package: bool,
     /// The terminal's foreground process group, or why it is not known.
     pub group: Box<dyn Fn() -> Result<u32, Unknown> + Send>,
-    /// Whether the terminal edits lines, `None` when it is not known or the
-    /// watch's node did not accept [`hide_holder_protocol::Capability::LineEditing`].
-    pub line_editing: Box<dyn Fn() -> Option<bool> + Send>,
+    /// Whether the terminal edits lines, where the watch's node accepted
+    /// [`hide_holder_protocol::Capability::LineEditing`].
+    pub line_editing: Option<Box<dyn Fn() -> LineEditing + Send>>,
     pub log: Log,
 }
 
@@ -282,7 +284,7 @@ impl FactsWriter {
                 }
                 Job::Recheck => {
                     let sent = last.as_ref().and_then(|facts| facts.line_editing);
-                    if (self.line_editing)() == sent {
+                    if self.line_editing.as_ref().map(|read| read()) == sent {
                         continue;
                     }
                     false
@@ -290,8 +292,13 @@ impl FactsWriter {
                 Job::Read { owed } => owed,
             };
             next = Instant::now() + MIN_FACTS_INTERVAL;
-            let program = foreground.program(self.shell, (self.group)());
-            let line_editing = (self.line_editing)();
+            let mut program = foreground.program(self.shell, (self.group)(), &self.log);
+            if !self.program_package
+                && let Some(program) = &mut program
+            {
+                program.package = None;
+            }
+            let line_editing = self.line_editing.as_ref().map(|read| read());
             let facts = match facts(&self.pane, &self.rules, &mut reading, program, line_editing) {
                 Ok(facts) => facts,
                 Err(error) => {
@@ -306,7 +313,7 @@ impl FactsWriter {
                 }
             };
             editing = match (&facts.foreground, facts.line_editing) {
-                (Some(program), Some(true)) => Some(match editing {
+                (Some(program), Some(LineEditing::Edits)) => Some(match editing {
                     Some((pid, since)) if pid == program.pid => (pid, since),
                     _ => (program.pid, Instant::now()),
                 }),

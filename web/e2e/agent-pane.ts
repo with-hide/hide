@@ -67,12 +67,27 @@ export function reportedMarker(root: string, pane: string): string {
   return path.join(root, `session-reported-${pane.replaceAll(":", "-")}`);
 }
 
+const inputMarker = (root: string, pane: string) => path.join(root, `terminal-ready-${pane.replaceAll(":", "-")}`);
+
+/** Before starting another program in the same pane, retire its previous program's readiness. */
+export function prepareAgentInput(root: string, pane: string): void {
+  fs.rmSync(inputMarker(root, pane), { force: true });
+}
+
+/** The current native stand-in has configured its terminal and can consume keys. */
+export async function waitForAgentInput(root: string, pane: string): Promise<void> {
+  const marker = inputMarker(root, pane);
+  await expect.poll(() => fs.existsSync(marker), { message: `the agent in ${pane} reading its terminal`, timeout: 30_000 }).toBe(true);
+}
+
 /**
  * Makes every fixture `claude` started from now on run as such an agent, as a
  * Reopen's resumed one does, and returns the way to run `hide` as the agent
- * in `pane` once one runs there.
+ * in `pane` once one runs there. Call before starting or reopening it: the
+ * previous program's input readiness is retired here.
  */
 export function agentRunner(fixture: AgentPaneFixture, stateDir: string, pane: string, kind: "claude" | "grok" = "claude"): (args: string[], run?: AgentRun) => Promise<HideAnswer> {
+  prepareAgentInput(fixture.root, pane);
   return installAgentRunner(fixture, stateDir, kind)(pane);
 }
 
@@ -111,6 +126,7 @@ fs.writeFileSync(${JSON.stringify(output)}, JSON.stringify({ status: ran.status 
 `);
   configureSpawnProvider(root, { reporter: writeSessionReporter(fixture), completed, command: [process.execPath, driver] });
   return (pane) => async (args, run = {}) => {
+    await waitForAgentInput(root, pane);
     fs.writeFileSync(command, JSON.stringify({ args, ...run }));
     fs.rmSync(completed, { force: true });
     fs.rmSync(output, { force: true });

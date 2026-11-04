@@ -1081,7 +1081,7 @@ fn a_finished_node_keeps_its_workers_plan_after_the_pane_closes() {
         }))
         .unwrap()
     };
-    // A plan written the way `hide plan set` writes one: the book moves.
+    // A plan written the way `hide task set` writes one: the book moves.
     let put = |runtime: &mut Runtime, plan: crate::plans::Plan| {
         runtime.plans.book.insert(plan.session.clone(), plan);
         runtime.plans.edit += 1;

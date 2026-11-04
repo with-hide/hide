@@ -361,86 +361,103 @@ struct BuiltHolders {
     _root: tempfile::TempDir,
 }
 
-impl BuiltHolders {
-    fn start() -> Self {
-        use std::path::PathBuf;
-        use std::sync::Arc;
+/// A folder for a built node's home (`h`), state (`s`) and panes (`w`). A
+/// holder's socket path is limited to about a hundred bytes on Unix.
+fn holder_root() -> (tempfile::TempDir, [std::path::PathBuf; 3]) {
+    let root = if cfg!(unix) {
+        tempfile::Builder::new()
+            .prefix("ho")
+            .tempdir_in("/tmp")
+            .unwrap()
+    } else {
+        tempfile::tempdir().unwrap()
+    };
+    let folders = ["h", "s", "w"].map(|name| root.path().join(name));
+    for dir in &folders {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    (root, folders)
+}
 
-        use hide_node::terminal::engine_panes::{LocalPanes, PaneShell};
-        use hide_node::terminal::holder::{HolderFolders, Holders};
-        use hide_node::terminal::{Attacher, Mode, OutputSink, ReportSink, SessionParts};
+/// A node over `home` and `state_dir`, as a daemon's: its pane holders
+/// started from the built holder (`HIDE_TEST_HOLDER_BIN`), whose panes run
+/// `/bin/sh` (PowerShell on Windows), and the service that runs their
+/// terminals.
+fn built_node(
+    home: &std::path::Path,
+    state_dir: &std::path::Path,
+) -> (
+    std::sync::Arc<hide_node::Local>,
+    std::sync::Arc<hide_node::terminal::Service>,
+) {
+    use std::path::PathBuf;
+    use std::sync::Arc;
 
-        struct NoHerdr;
-        impl Attacher for NoHerdr {
-            fn open(&self, _: &str, _: Mode, _: u16, _: u16) -> Result<SessionParts, String> {
-                Err("this test runs no Herdr".to_owned())
-            }
-        }
-        struct Nowhere;
-        impl OutputSink for Nowhere {
-            fn output(&self, _: &str, _: &[u8], _: bool) {}
-            fn forget(&self, _: &str) {}
-        }
-        impl ReportSink for Nowhere {
-            fn report(&self, _: hide_node_link::terminal::TerminalReport) {}
-        }
+    use hide_node::terminal::engine_panes::{LocalPanes, PaneShell};
+    use hide_node::terminal::holder::{HolderFolders, Holders};
+    use hide_node::terminal::{Attacher, Mode, OutputSink, ReportSink, SessionParts};
 
-        let program = PathBuf::from(
-            std::env::var_os("HIDE_TEST_HOLDER_BIN")
-                .expect("HIDE_TEST_HOLDER_BIN names the built hide-holder"),
-        );
-        let conpty = cfg!(windows).then(|| {
+    struct NoHerdr;
+    impl Attacher for NoHerdr {
+        fn open(&self, _: &str, _: Mode, _: u16, _: u16) -> Result<SessionParts, String> {
+            Err("this test runs no Herdr".to_owned())
+        }
+    }
+    struct Nowhere;
+    impl OutputSink for Nowhere {
+        fn output(&self, _: &str, _: &[u8], _: bool) {}
+        fn forget(&self, _: &str) {}
+    }
+    impl ReportSink for Nowhere {
+        fn report(&self, _: hide_node_link::terminal::TerminalReport) {}
+    }
+
+    let program = PathBuf::from(
+        std::env::var_os("HIDE_TEST_HOLDER_BIN")
+            .expect("HIDE_TEST_HOLDER_BIN names the built hide-holder"),
+    );
+    let conpty =
+        cfg!(windows).then(|| {
             PathBuf::from(std::env::var_os("HIDE_HOLDER_CONPTY").expect(
                 "HIDE_HOLDER_CONPTY names the pinned ConPTY runtime (scripts/fetch-conpty.py)",
             ))
         });
-        // A holder's socket path is limited to about a hundred bytes on Unix.
-        let root = if cfg!(unix) {
-            tempfile::Builder::new()
-                .prefix("ho")
-                .tempdir_in("/tmp")
-                .unwrap()
-        } else {
-            tempfile::tempdir().unwrap()
-        };
-        let (home, state_dir, folder) = (
-            root.path().join("h"),
-            root.path().join("s"),
-            root.path().join("w"),
-        );
-        for dir in [&home, &state_dir, &folder] {
-            std::fs::create_dir_all(dir).unwrap();
-        }
-        let terminals = Holders::start_from(
-            Some((
-                HolderFolders {
-                    home: &home,
-                    state_dir: &state_dir,
-                },
-                hide_kit::holders::Source { program, conpty },
-            )),
-            Box::new(NoHerdr),
-            Arc::new(Nowhere) as Arc<dyn OutputSink>,
-            Arc::new(Nowhere) as Arc<dyn ReportSink>,
-        )
-        .expect("the node's holders open");
-        let holders = terminals.holders.expect("the holders are on");
-        // The contract's command lines are a POSIX shell's and Windows
-        // PowerShell's, whatever shell this account uses.
-        let shell = if cfg!(windows) {
-            vec!["powershell.exe".into()]
-        } else {
-            vec!["/bin/sh".into()]
-        };
-        let panes = Arc::new(LocalPanes::new(
-            Arc::clone(&holders),
-            Arc::clone(&terminals.service),
-            PaneShell::Fixed(shell),
-        ));
+    let terminals = Holders::start_from(
+        Some((
+            HolderFolders { home, state_dir },
+            hide_kit::holders::Source { program, conpty },
+        )),
+        Box::new(NoHerdr),
+        Arc::new(Nowhere) as Arc<dyn OutputSink>,
+        Arc::new(Nowhere) as Arc<dyn ReportSink>,
+    )
+    .expect("the node's holders open");
+    let holders = terminals.holders.expect("the holders are on");
+    // The contract's command lines are a POSIX shell's and Windows
+    // PowerShell's, whatever shell this account uses.
+    let shell = if cfg!(windows) {
+        vec!["powershell.exe".into()]
+    } else {
+        vec!["/bin/sh".into()]
+    };
+    let panes = Arc::new(LocalPanes::new(
+        Arc::clone(&holders),
+        Arc::clone(&terminals.service),
+        PaneShell::Fixed(shell),
+    ));
+    (
+        Arc::new(hide_node::Local::new(Some(home.to_owned())).with_panes(panes)),
+        terminals.service,
+    )
+}
+
+impl BuiltHolders {
+    fn start() -> Self {
+        let (root, [home, state_dir, folder]) = holder_root();
+        let (node, service) = built_node(&home, &state_dir);
         // Asked as every own engine asks its machine's holders: through the
         // machine's node, here this machine's in-process node, by the
         // requests a device's node answers over its link (D-22).
-        let node = Arc::new(hide_node::Local::new(Some(home.clone())).with_panes(panes));
         let linked = super::own::link_panes(node);
         linked
             .recovered(Duration::from_secs(120))
@@ -448,7 +465,7 @@ impl BuiltHolders {
         Self {
             engine: super::own::OwnEngine::new(std::sync::Arc::clone(&linked)),
             panes: linked,
-            service: terminals.service,
+            service,
             folder: hide_platform::path::to_wire(&folder).unwrap(),
             _root: root,
         }
@@ -470,6 +487,55 @@ impl BuiltHolders {
 fn the_own_engine_meets_the_engine_contract() {
     let built = BuiltHolders::start();
     meets_the_contract(&built.engine, &built.folder, || built.stop());
+}
+
+/// An ordinary program above the shell must never receive an agent's
+/// launch line. This crosses the real holder and the OS process boundary.
+#[test]
+#[ignore = "needs the built pane holder: HIDE_TEST_HOLDER_BIN"]
+fn the_own_engine_refuses_an_agent_start_over_a_running_program() {
+    struct Running(BuiltHolders);
+    impl Drop for Running {
+        fn drop(&mut self) {
+            self.0.stop();
+        }
+    }
+    let running = Running(BuiltHolders::start());
+    let built = &running.0;
+    let engine = &built.engine;
+    let (_, _, pane) = engine
+        .create_workspace(WAIT, &built.folder, "busy", false, BTreeMap::new())
+        .unwrap();
+    prompted(engine, &pane);
+    until("the shell alone holds its terminal", || {
+        engine
+            .pane_processes(WAIT, &pane)
+            .is_ok_and(|processes| processes.shell_holds_terminal())
+    });
+    let command = if cfg!(windows) {
+        "ping.exe -n 60 127.0.0.1"
+    } else {
+        "sleep 60"
+    };
+    engine.submit_text(WAIT, &pane, command).unwrap();
+    until("the program runs above the shell", || {
+        engine.pane_processes(WAIT, &pane).is_ok_and(|processes| {
+            processes.foreground_process_group_id.is_some()
+                && processes.foreground_process_group_id != processes.shell_pid
+        })
+    });
+    let start = engine
+        .prepare_start(super::AgentLaunch {
+            pane_id: pane.clone(),
+            name: "refused".into(),
+            kind: "claude".into(),
+            args: Vec::new(),
+            codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
+        })
+        .unwrap();
+    let error = engine.start_agent(WAIT, &start).unwrap_err();
+    assert_eq!(error.code(), Some("agent_pane_busy"));
+    assert!(engine.agents(WAIT).unwrap().is_empty());
 }
 
 /// A caller may inspect a tab or split as soon as creation answers. Each
@@ -531,6 +597,259 @@ fn newly_answered_panes_can_be_read_without_waiting_for_another_event() {
             }
             engine.close_pane(WAIT, &pane).unwrap();
         }
+    }
+}
+
+/// Ends, when dropped, every holder and program a pane record under its
+/// state folder names that still runs as recorded (by pid and start time),
+/// whichever node started it: a test that opens one node after another over
+/// that folder leaves nothing running on any exit, a panic included. What it
+/// could not end fails the test, or, when the test already fails, is printed
+/// beside that failure, which stays the test's.
+struct RecordedProcesses(std::path::PathBuf);
+
+impl Drop for RecordedProcesses {
+    #[allow(clippy::disallowed_methods)] // polls each process's end, bounded by a deadline
+    fn drop(&mut self) {
+        let mut left = Vec::new();
+        let records = hide_kit::layout::pane_records(&self.0);
+        let entries = match std::fs::read_dir(&records) {
+            Ok(entries) => entries.collect::<Vec<_>>(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => {
+                left.push(format!("{}: {error}", records.display()));
+                Vec::new()
+            }
+        };
+        for entry in entries {
+            let path = match entry {
+                Ok(entry) => entry.path(),
+                Err(error) => {
+                    left.push(format!("{}: {error}", records.display()));
+                    continue;
+                }
+            };
+            if path.extension().is_none_or(|extension| extension != "json") {
+                continue;
+            }
+            let record = match std::fs::read(&path)
+                .map(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes))
+            {
+                Ok(Ok(record)) => record,
+                // A record the test left empty names nothing.
+                Ok(Err(_)) if std::fs::metadata(&path).is_ok_and(|meta| meta.len() == 0) => {
+                    continue;
+                }
+                Ok(Err(error)) => {
+                    left.push(format!("{}: {error}", path.display()));
+                    continue;
+                }
+                Err(error) => {
+                    left.push(format!("{}: {error}", path.display()));
+                    continue;
+                }
+            };
+            for process in ["holder", "program"] {
+                let (Some(pid), Some(started)) = (
+                    record[process]["pid"]
+                        .as_u64()
+                        .and_then(|pid| u32::try_from(pid).ok()),
+                    record[process]["started"].as_u64(),
+                ) else {
+                    continue;
+                };
+                let runs =
+                    || hide_platform::process::start_time(pid).is_ok_and(|now| now == started);
+                if !runs() {
+                    continue;
+                }
+                if let Err(error) = hide_platform::process::kill_tree(pid) {
+                    left.push(format!("{process} {pid} of {}: {error}", path.display()));
+                    continue;
+                }
+                let deadline = Instant::now() + SHOWN_WITHIN;
+                while runs() && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                if runs() {
+                    left.push(format!("{process} {pid} of {} still runs", path.display()));
+                }
+            }
+        }
+        if !left.is_empty() {
+            if std::thread::panicking() {
+                eprintln!("the test's cleanup also failed: {left:?}");
+            } else {
+                panic!("the test's cleanup failed: {left:?}");
+            }
+        }
+    }
+}
+
+/// What a daemon on the core's own engine finds after the machine went
+/// down: no holder runs, the layout save on disk is older than the last
+/// pane made, and the pane records are as a power loss may leave them.
+/// Every pane comes back under its own id, from its record or from the
+/// save, and neither the pane whose program exited nor the one the operator
+/// closed opens again, though the save still holds both:
+///
+/// - `kept`, in the save, whose record names the holder that ran (and on
+///   Unix, where a record names its boot, an earlier boot), starts again;
+/// - `unsaved`, made after the save, starts again from its record alone;
+/// - `lost`, in the save, its record gone, starts again from the save;
+/// - `damaged`, in the save, its record left empty before this boot,
+///   starts again from the save once the node removes that record;
+/// - `exited`, whose program exited, and `closed`, which the operator
+///   closed (its record cancelled), stay closed.
+#[test]
+#[ignore = "needs the built pane holder: HIDE_TEST_HOLDER_BIN"]
+#[allow(clippy::disallowed_methods)] // polls the save and the holders' ends, bounded by a deadline
+fn a_restart_after_the_machine_went_down_brings_each_pane_back_under_its_id_and_no_ended_one() {
+    use std::collections::BTreeSet;
+    use std::sync::Arc;
+
+    let (_root, [home, state_dir, folder]) = holder_root();
+    // Dropped before the folder and after both nodes, on every exit.
+    let _processes = RecordedProcesses(state_dir.clone());
+    let folder = hide_platform::path::to_wire(&folder).unwrap();
+    let engine_dir = hide_kit::layout::engine_dir(&state_dir);
+    let open = || {
+        let (node, service) = built_node(&home, &state_dir);
+        let place = super::own::Place {
+            engine_dir: engine_dir.clone(),
+            home: hide_platform::path::to_wire(&home).unwrap(),
+            hooks_home: Some(home.clone()),
+            node: Arc::clone(&node) as Arc<dyn hide_node_link::NodeLink>,
+            windows: cfg!(windows),
+            definitions: Arc::new(hide_agent_adapter::definition::Catalog::read(Vec::new())),
+            launches: Arc::default(),
+        };
+        let panes = super::own::link_panes(node);
+        let engine =
+            super::own::OwnEngine::open(Arc::clone(&panes), place).expect("the engine opens");
+        (engine, panes, service)
+    };
+    let until = |what: &str, done: &dyn Fn() -> bool| {
+        let deadline = Instant::now() + SHOWN_WITHIN;
+        while !done() {
+            assert!(Instant::now() < deadline, "{what}");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    };
+    let record =
+        |pane: &str| hide_kit::layout::pane_record(&state_dir, &hide_kit::panes::holder_pane(pane));
+    let read_record = |pane: &str| -> serde_json::Value {
+        serde_json::from_slice(&std::fs::read(record(pane)).unwrap()).unwrap()
+    };
+
+    let (first, first_panes, first_service) = open();
+    let (workspace, tab, kept) = first
+        .create_workspace(WAIT, &folder, "restart", true, BTreeMap::new())
+        .unwrap();
+    let mut saved = vec![kept.clone()];
+    for _ in 0..4 {
+        saved.push(
+            first
+                .split_beside(WAIT, &kept, None, BTreeMap::new())
+                .unwrap(),
+        );
+    }
+    for pane in &saved {
+        prompted(&first, pane);
+    }
+    // The save as it stood before the last pane was made.
+    let save = hide_kit::layout::engine_session_in(&engine_dir);
+    let names_every_pane = |bytes: &[u8]| {
+        let text = String::from_utf8_lossy(bytes);
+        saved
+            .iter()
+            .all(|pane| text.contains(&format!("\"{pane}\"")))
+    };
+    until("the save names every pane", &|| {
+        std::fs::read(&save).is_ok_and(|bytes| names_every_pane(&bytes))
+    });
+    let stale = std::fs::read(&save).unwrap();
+    let (_, unsaved) = first
+        .create_tab(WAIT, &workspace, &folder, "unsaved", false, BTreeMap::new())
+        .unwrap();
+    prompted(&first, &unsaved);
+    let [kept, lost, damaged, exited, closed] = <[String; 5]>::try_from(saved).unwrap();
+    first.close_pane(WAIT, &closed).unwrap();
+    assert_eq!(
+        read_record(&closed)["reservation"]["cancelled"],
+        true,
+        "a close is recorded as the pane's cancelled intent"
+    );
+    first.submit_text(WAIT, &exited, "exit").unwrap();
+    until("the exited pane closes", &|| {
+        panes(&first).iter().all(|(id, _)| *id != exited)
+    });
+
+    // The machine goes down: the daemon and every holder end, the save on
+    // disk is the one from before `unsaved`, one record is gone and one was
+    // left empty.
+    first.stop();
+    drop((first, first_panes, first_service));
+    for pane in [&kept, &lost, &damaged, &unsaved] {
+        let ran = read_record(pane);
+        for process in ["holder", "program"] {
+            let pid = u32::try_from(ran[process]["pid"].as_u64().unwrap()).unwrap();
+            let started = ran[process]["started"].as_u64().unwrap();
+            hide_platform::process::kill_tree(pid).unwrap();
+            until("the pane's processes end", &|| {
+                hide_platform::process::start_time(pid).map_or(true, |now| now != started)
+            });
+        }
+    }
+    std::fs::remove_file(record(&lost)).unwrap();
+    std::fs::write(record(&damaged), b"").unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(record(&damaged))
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1_000_000_000))
+        .unwrap();
+    if cfg!(unix) {
+        let mut earlier = read_record(&kept);
+        earlier["boot"] = "an-earlier-boot".into();
+        std::fs::write(record(&kept), serde_json::to_vec(&earlier).unwrap()).unwrap();
+    }
+    std::fs::write(&save, &stale).unwrap();
+
+    let (next, next_panes, _next_service) = open();
+    let back = [&kept, &lost, &damaged, &unsaved];
+    for pane in back {
+        prompted(&next, pane);
+    }
+    let found = panes(&next);
+    assert_eq!(
+        found
+            .iter()
+            .map(|(id, _)| id.clone())
+            .collect::<BTreeSet<_>>(),
+        back.iter().map(|id| (*id).clone()).collect::<BTreeSet<_>>(),
+        "every pane is back under its own id, and no ended one"
+    );
+    let tab_of = |pane: &str| {
+        found
+            .iter()
+            .find(|(id, _)| id == pane)
+            .map(|(_, tab)| tab.clone())
+            .unwrap()
+    };
+    for pane in [&kept, &lost, &damaged] {
+        assert_eq!(tab_of(pane), tab, "{pane} is back in the saved tab");
+    }
+    assert_ne!(tab_of(&unsaved), tab, "the unsaved pane is gathered apart");
+    for pane in back {
+        next.submit_text(WAIT, pane, &computed_echo("back"))
+            .unwrap();
+        shows(&next, pane, "back-42");
+    }
+    for pane in back {
+        next_panes
+            .terminate(pane)
+            .unwrap_or_else(|error| panic!("{pane} did not end: {error:?}"));
     }
 }
 
@@ -736,7 +1055,6 @@ fn an_own_engine_claude_slept_with_its_hooked_conversation_wakes_resuming_it() {
     built.stop();
 }
 
-#[cfg(unix)]
 #[allow(clippy::disallowed_methods)] // a polling helper bounded by a deadline
 fn until(what: &str, done: impl Fn() -> bool) {
     let deadline = Instant::now() + SHOWN_WITHIN;

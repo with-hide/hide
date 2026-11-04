@@ -10,7 +10,7 @@ use std::time::Instant;
 
 use hide_holder_protocol::{
     Capability, CloseReason, Closed, Facts, HolderMessage, PROTOCOL_VERSION, ScreenRead,
-    ScreenState, WatchMessage, Watching, read_holder, write_watch,
+    ScreenState, WatchMessage, Watching, read_watch_holder, write_watch,
 };
 use hide_platform::ipc::LocalStream;
 
@@ -55,7 +55,7 @@ impl Watch {
 
     fn next(&mut self) -> HolderMessage {
         self.stream.set_deadline(Instant::now() + HANG_LIMIT);
-        read_holder(&mut self.stream).unwrap_or_else(|error| {
+        read_watch_holder(&mut self.stream, &self.watching.sends).unwrap_or_else(|error| {
             panic!(
                 "the watch ended or never spoke ({error}); its facts were {:?}",
                 self.facts
@@ -242,34 +242,39 @@ fn a_watch_names_the_program_in_the_foreground_and_none_once_the_shell_holds_it(
 #[cfg(unix)]
 #[test]
 fn a_watch_says_when_the_program_in_the_foreground_turns_line_editing_off() {
-    use hide_holder_protocol::ClientMessage;
+    use hide_holder_protocol::{ClientMessage, LineEditing};
 
     let home = Home::new();
     let folder = home.prepare(current_version(), &source());
     let holder = start_ready(&folder.program, &home.socket("p"), &shell(), &[]);
     let mut connection = holder.open();
-    let mut watch = Watch::accepting(
-        &holder.socket,
-        vec![Capability::Facts, Capability::LineEditing],
-    );
-    assert_eq!(
-        watch.watching.sends,
-        vec![Capability::Facts, Capability::LineEditing]
-    );
+    let accepts = vec![
+        Capability::Facts,
+        Capability::ProgramPackage,
+        Capability::LineEditing,
+    ];
+    let mut watch = Watch::accepting(&holder.socket, accepts.clone());
+    assert_eq!(watch.watching.sends, accepts);
     watch.wait("the shell's facts", |facts| facts.foreground.is_none());
 
-    // It says it started, then turns line editing off and writes nothing
-    // more.
+    // It says it started and waits, writing nothing, for the test to have
+    // seen it in the terminal's line; then it turns line editing off.
+    let go = home.path().join("go");
     connection
         .send(ClientMessage::Input(
-            b"sh -c 'echo started; sleep 1; stty -icanon; sleep 30'\r".to_vec(),
+            format!(
+                "sh -c 'echo started; until [ -e {} ]; do sleep 0.05; done; stty -icanon; sleep 30'\r",
+                go.display()
+            )
+            .into_bytes(),
         ))
         .unwrap();
     let editing = watch.wait("the program in the terminal's line", |facts| {
-        facts.foreground.is_some() && facts.line_editing == Some(true)
+        facts.foreground.is_some() && facts.line_editing == Some(LineEditing::Edits)
     });
+    std::fs::write(&go, b"").unwrap();
     let reading = watch.wait("the program reading keys", |facts| {
-        facts.line_editing == Some(false)
+        facts.line_editing == Some(LineEditing::ReadsKeys)
     });
     assert_eq!(reading.foreground, editing.foreground);
 

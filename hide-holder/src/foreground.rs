@@ -11,7 +11,10 @@
 //! `executables` recognize it (PRD engine-bundle-3-core-owns D-21): the
 //! leader of the terminal's foreground group, or its first member once the
 //! leader has ended, when the group is not the pane's own program's, named
-//! by its file, or by the script a runtime (node, bun, deno, python) runs. The system is asked once per process: a process is
+//! by its file, or by the script a runtime (node, bun, deno, python) runs.
+//! On Windows the platform can name that script's installed npm package,
+//! which the core resolves through its agent definitions after the name.
+//! The system is asked once per process: a process is
 //! known again by its pid and the name the system gives it, which an `exec`
 //! changes.
 
@@ -34,7 +37,12 @@ impl Foreground {
     /// its group is the shell's, and any other group's leader is its
     /// program. Only a group whose leader has ended is listed, which on
     /// Linux reads the whole process table.
-    pub fn program(&mut self, shell: u32, group: Result<u32, Unknown>) -> Option<Program> {
+    pub fn program(
+        &mut self,
+        shell: u32,
+        group: Result<u32, Unknown>,
+        log: &crate::log::Log,
+    ) -> Option<Program> {
         let group = group.ok()?;
         if group == shell {
             return None;
@@ -57,12 +65,29 @@ impl Foreground {
         {
             return Some(program.clone());
         }
-        // A system that keeps no arguments (Windows) or a process gone
-        // since leaves them empty.
-        let argv = bounded(hide_platform::process::argv_of(pid).unwrap_or_default());
+        // A failed read still leaves the system's process name and a
+        // busy terminal. Report it once for this cached process, without
+        // persisting its arguments or a path from them.
+        let argv = bounded(match hide_platform::process::argv_of(pid) {
+            Ok(argv) => argv,
+            Err(error) => {
+                log.event(
+                    "holder.foreground_arguments_unreadable",
+                    &[
+                        ("pid", pid.into()),
+                        ("error_kind", format!("{:?}", error.kind()).into()),
+                    ],
+                );
+                Vec::new()
+            }
+        });
+        let name = program_name(&key.1, &argv);
+        let package =
+            runtime_script(&key.1, &argv).and_then(hide_platform::process::package_of_script);
         let program = Program {
             pid,
-            name: program_name(&key.1, &argv),
+            name,
+            package,
             argv,
         };
         self.known = Some((key, program.clone()));
@@ -86,22 +111,29 @@ fn bounded(argv: Vec<String>) -> Vec<String> {
 /// the system's name for it when it has none, without `.exe`; for a runtime
 /// that runs a script, the script's file name without its extension.
 pub fn program_name(system_name: &str, argv: &[String]) -> String {
+    let name = executable_name(system_name, argv);
+    match runtime_script(system_name, argv) {
+        Some(script) => without_extension(path_basename(script)).to_owned(),
+        None => name.to_owned(),
+    }
+}
+
+fn executable_name<'a>(system_name: &'a str, argv: &'a [String]) -> &'a str {
     let program = argv
         .first()
         .map(String::as_str)
         .filter(|first| !first.is_empty())
         .unwrap_or(system_name);
-    let name = without_exe(path_basename(program));
-    let runtime = name.to_lowercase();
-    let script = match runtime.as_str() {
+    without_exe(path_basename(program))
+}
+
+fn runtime_script<'a>(system_name: &str, argv: &'a [String]) -> Option<&'a str> {
+    let runtime = executable_name(system_name, argv).to_lowercase();
+    match runtime.as_str() {
         "node" | "bun" => script_arg(argv, &["-e", "--eval", "-p", "--print"], &[], false),
         "deno" => script_arg(argv, &["-e", "--eval"], &[], true),
         runtime if is_python_runtime(runtime) => script_arg(argv, &["-c"], &["-m"], false),
         _ => None,
-    };
-    match script {
-        Some(script) => without_extension(path_basename(script)).to_owned(),
-        None => name.to_owned(),
     }
 }
 

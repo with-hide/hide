@@ -307,11 +307,20 @@ A piece that another open change is still building is marked as pending with the
    Their reason lines name that owner; a green own-engine lane does not prove these excluded native session reads.
    The web and desktop native-caller fixtures share `web/e2e/spawn-provider.ts`; the compiled stand-in writes its own bounded config through `--write-config`, also used by the Python journey, so none of those callers repeats its line format.
    A synthetic trigger sent as a `key` event is operator input and moves keyboard focus: `agent-pane.ts` and `runInPaneKeepingFocus` hold the command behind a file gate until `restoreFocusAfterInput` observes that input and restores the prior focus, before the command runs as the agent.
+  The native stand-ins write `terminal-ready-<pane>` only after configuring their terminal and drawing their first screen; `waitForAgentInput` waits for that mark before a command trigger or a session-report key.
+  Before a start in an existing pane, `prepareAgentInput` removes the previous program's mark; `agentRunner` does this before Reopen, and `startAgentIn` before a typed start.
+  The Reopen journey holds the resumed program's session reporter before terminal setup and proves the previous readiness cannot admit its hook command.
+  A listed resume session is not input readiness: the own engine knows it from the launch arguments before the program starts, and a session reporter can finish before the stand-in sets its terminal mode.
+  `agent-start-platform.spec.ts` uses the captured resting screens and native session reports while spawn waits for identity; its rule-less stand-in reports idle through Herdr's native integration on Herdr and an interrupted turn through the real hook helper on the own engine.
+  The report's source comes from the generated journey contract; state-reporting integrations supply their session with the state report, and Pi and omp identify sessions by their file paths.
+  The Codex start fixture seeds an existing install record before the bundled kit runs, then waits for that device's kit capability in the navigator snapshot; first-run choices belong to their own flow tests.
+  A Windows own-engine fixture bundle carries the lane's pinned `holder-conpty` folder beside its linked programs, matching the packaged node's runtime lookup.
    Ordinary Windows shell panes use the private Herdr server's configured cmd.exe on Herdr, and the product's integrated PowerShell on the own engine; an agent-start tab uses the integrated launch recipe.
    The engine fixture names its ordinary shell, and shared command and prompt helpers use that syntax without changing the account's PowerShell profile.
    The disposable runner's registry PATH preparation above belongs to the CI job, not to a fixture running on a developer's account.
-   On the own engine's Windows lane, each test that needs an agent start explicitly calls `skipOwnWindowsAgentStart` with the bundle 4 PR A foreground-proof reason; this is a declared transition gap in [INSTALL.md](INSTALL.md#what-each-system-supports), not a flaky marker or a file-wide exclusion.
-   Herdr on Windows, shell-only own-engine flows, and both engines on macOS and Linux keep those tests enabled.
+   `agent-start-platform.spec.ts` runs all seven native stand-ins through `hide agent spawn` and a typed shell command and checks their visible state; its Windows npm cases run real `.ps1` and `.cmd` launchers over Node, distinguishing Pi and omp despite their shared `cli.js` filename.
+   Each package and launcher has its own start journey with both packages installed, keeping the shared-filename check within the ordinary per-test time budget.
+   The real-holder engine contract refuses `agent_pane_busy` while an ordinary program runs above the shell.
    The Windows stand-in waits for its command runner instead of overlaying itself: Windows exec ends that parent, which would break the live ancestry the pane capability proves.
    A failed engine-fixture setup keeps its final snapshot and at most 32 terminal updates within 256 KiB, with a dropped-update count, in the run directory; these are diagnostics, never a successful start assertion.
    Every web e2e lane runs once on each engine: the own engine's jobs run every test not tagged `@herdr` (`--grep-invert @herdr`) over as many shards as the Herdr jobs (`own-engine` in `web-e2e.yml`), on Linux in every full plan and on Windows with the `@platform` tests.

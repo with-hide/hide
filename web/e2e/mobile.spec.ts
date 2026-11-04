@@ -627,7 +627,7 @@ test("the phone caches group and row status words in the desktop language", asyn
         subject_mission_attention_wake_refused: "PR 일로 일꾼을 깨우지 못함",
         subject_mission_attention_worker_ended: "일꾼 끝남, 일 남음",
         subject_mission_decision: "판단",
-        subject_plan_review: "계획 검토 · {{count}}단계",
+        subject_plan_review: "작업 단계 검토 · {{count}}단계",
       });
     await page.locator("[data-interface-language]").click();
     await page.locator('[data-language-option="system"]').click();
