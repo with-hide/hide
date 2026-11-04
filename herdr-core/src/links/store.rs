@@ -2395,8 +2395,10 @@ fn migrate(connection: &Connection) -> Result<(), OpenFailure> {
         };
         // Version 15 drops the passive direct-input facts the hooks' direct
         // observation kept from version 5 on; nothing records them since.
+        // What the step owes is a store without the table, so one that never
+        // had it (a store a test relabels) is already there.
         let observations = if (5..15).contains(&version) {
-            "DROP TABLE direct_observations;"
+            "DROP TABLE IF EXISTS direct_observations;"
         } else {
             ""
         };
