@@ -148,6 +148,54 @@ fn a_pane_program_keeps_the_path_and_temporary_folder_its_holder_was_started_wit
     holder.wait_gone();
 }
 
+/// The registry's environment a Windows pane gains: the user's variable
+/// replaces the system's of the same name before anything is added, the
+/// two `PATH`s join system first, and only a variable the starter lacks is
+/// added, while the starter's `PATH` keeps its folders first and gains the
+/// registry's it lacks. Names compare without case. The rule is pure, so it
+/// is checked on every system with the registry's values handed in.
+#[test]
+fn a_windows_pane_takes_the_users_registry_value_over_the_systems_and_keeps_its_starters() {
+    let pairs = |values: &[(&str, &str)]| -> Vec<(OsString, OsString)> {
+        values
+            .iter()
+            .map(|(name, value)| (OsString::from(name), OsString::from(value)))
+            .collect()
+    };
+    let inherited = pairs(&[
+        ("Path", "C:\\run\\bin;C:\\Windows"),
+        ("TEMP", "C:\\run\\tmp"),
+    ]);
+    let system = pairs(&[
+        ("JAVA_HOME", "C:\\Java\\system"),
+        ("Path", "C:\\Windows;C:\\System"),
+        ("TEMP", "C:\\Windows\\Temp"),
+        ("USERNAME", "SYSTEM"),
+        ("ComSpec", "C:\\Windows\\cmd.exe"),
+    ]);
+    let user = pairs(&[
+        ("java_home", "C:\\Java\\user"),
+        ("PATH", "C:\\Users\\me\\npm"),
+        ("TEMP", "C:\\Users\\me\\Temp"),
+    ]);
+    let merged = portable_pty::cmdbuilder::merge_registry_environment(&inherited, &system, &user);
+    let value = |name: &str| -> Option<String> {
+        merged
+            .iter()
+            .find(|(key, _)| key.to_string_lossy().eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.to_string_lossy().into_owned())
+    };
+    assert_eq!(value("JAVA_HOME").as_deref(), Some("C:\\Java\\user"));
+    assert_eq!(
+        value("PATH").as_deref(),
+        Some("C:\\run\\bin;C:\\Windows;C:\\System;C:\\Users\\me\\npm")
+    );
+    assert_eq!(value("TEMP").as_deref(), Some("C:\\run\\tmp"));
+    assert_eq!(value("ComSpec").as_deref(), Some("C:\\Windows\\cmd.exe"));
+    assert_eq!(value("USERNAME"), None);
+    assert_eq!(merged.len(), 4, "{merged:?}");
+}
+
 #[test]
 fn a_connection_that_drops_without_a_word_leaves_the_pane_running() {
     let home = Home::new();
