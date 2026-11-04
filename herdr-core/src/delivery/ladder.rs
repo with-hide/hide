@@ -81,12 +81,12 @@ pub(crate) fn deliver(engine: &dyn Engine, target: &InputTarget, text: &str) -> 
             unavailable_reason(target, TYPED, "herdr_parameters");
             Delivered::NotYet("herdr_parameters")
         }
-        Err(EngineError::Answer(_)) => {
-            lost(target, TYPED, "herdr_format");
+        Err(error @ EngineError::Answer(_)) => {
+            lost(target, TYPED, "herdr_format", &error);
             Delivered::Lost("herdr_format")
         }
-        Err(_) => {
-            lost(target, TYPED, "herdr_call_failed");
+        Err(error) => {
+            lost(target, TYPED, "herdr_call_failed", &error);
             Delivered::Lost("herdr_call_failed")
         }
     }
@@ -109,9 +109,12 @@ fn unavailable_reason(target: &InputTarget, rung: &str, reason: &str) {
     );
 }
 
-fn lost(target: &InputTarget, rung: &str, reason: &str) {
+/// A prompt whose answer was lost; the engine's own words go to the log
+/// only, as the detail of a failure the caller handles (design principle 13).
+fn lost(target: &InputTarget, rung: &str, reason: &str, error: &EngineError) {
     crate::diagnostic!(json!({"component":"delivery","kind":"input.rung_lost",
-        "pane_id":target.pane_id,"raw_pane_id":target.raw_pane_id,"agent":target.kind,"rung":rung,"reason":reason}));
+        "pane_id":target.pane_id,"raw_pane_id":target.raw_pane_id,"agent":target.kind,"rung":rung,"reason":reason,
+        "detail":error.to_string()}));
 }
 
 #[cfg(test)]
