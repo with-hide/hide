@@ -1763,7 +1763,9 @@ mod tests {
         let output = std::sync::Mutex::new(Lines(Vec::new(), sent));
         let panes = hide_host::panes::Panes::new();
         let request = json!({"pane_id": "w1:p1", "nonce": "0".repeat(32)});
-        std::thread::scope(|scope| {
+        // The node is stopped before anything is asserted, so a failed
+        // assertion cannot leave the scope waiting on its thread.
+        let (socket, answer) = std::thread::scope(|scope| {
             let started = panes
                 .start(
                     scope,
@@ -1772,21 +1774,19 @@ mod tests {
                     hide_host::pane_holders::PaneSlot::default(),
                 )
                 .unwrap();
-            // Both ends read and write the wire spelling, which on Windows is
-            // the only one `from_wire` reads.
-            assert!(
-                node_socket(&started.socket).unwrap().starts_with(&bridges),
-                "{}",
-                started.socket
-            );
-            // No Herdr answers at the socket the node was given, so it cannot
-            // read the pane; it got that far only by seeing who called.
-            assert_eq!(
-                bootstrap_bridges(&bridges, &request),
-                Err("pane_unavailable".to_owned())
-            );
+            let answer = bootstrap_bridges(&bridges, &request);
             panes.stop();
+            (started.socket, answer)
         });
+        // Both ends read and write the wire spelling, which on Windows is the
+        // only one `from_wire` reads.
+        assert!(
+            node_socket(&socket).unwrap().starts_with(&bridges),
+            "{socket}"
+        );
+        // The node was given no pane holders, so it cannot read the pane; it
+        // got that far only by seeing who called.
+        assert_eq!(answer, Err("bridge_unavailable".to_owned()));
         panes.remove_folder();
         assert_eq!(bootstrap_bridges(&bridges, &request), Ok(None));
     }
