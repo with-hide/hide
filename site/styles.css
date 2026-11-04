@@ -444,7 +444,9 @@ code, .mono { font-family: var(--font-mono); }
 
 /* Pricing */
 .plans { display: grid; gap: 16px; margin-top: 48px; }
-.plans.solo { width: min(100%, 460px); margin-inline: auto; }
+.plans.pair { grid-template-columns: repeat(2, minmax(0, 1fr)); width: min(100%, 880px); margin-inline: auto; }
+.plans.pair .factory-line { grid-column: 1 / -1; }
+.plan.enterprise .button { justify-self: start; margin-top: 4px; }
 .plan { display: grid; align-content: start; gap: 14px; padding: 28px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--bg-raised); }
 .plan.free { border-color: color-mix(in srgb, var(--lime) 45%, transparent); background: color-mix(in srgb, var(--lime) 5%, var(--bg-raised)); }
 .plan-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
@@ -558,6 +560,7 @@ select { width: 100%; min-height: 48px; padding: 0 40px 0 14px; border: 1px soli
   .stage { margin-top: 72px; }
   .agents-strip ul { gap: 10px 24px; font-size: var(--t-small); }
   .chooser { grid-template-columns: minmax(0, 1fr); }
+  .plans.pair { grid-template-columns: minmax(0, 1fr); }
   .download-picker { padding: 22px; }
   .closing { padding-block: 88px; }
   .closing-head { margin-bottom: 56px; }
