@@ -18,8 +18,7 @@
 //! ([`store`]) and, as it opens, lays the saved session out again around the
 //! holders that ran on, starts the rest again and resumes their agents
 //! ([`restore`]), so a pane keeps its id across a restart and a reboot.
-//! Only a daemon with the development
-//! switch `HIDE_DEV_PANE_HOLDER` on builds this engine (D-5).
+//! Every daemon builds this engine (PRD engine-bundle-4-herdr-removal D-2).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;

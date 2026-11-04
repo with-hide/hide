@@ -6851,8 +6851,7 @@ pub struct StatusSnapshot {
     pub stray_hand_offs: Vec<StrayHandOffSnapshot>,
     /// The operator's agent definition files that were left out, each with
     /// why (PRD engine-bundle-3-core-owns D-17, B24): Settings › Agents draws
-    /// one dimmed line for each. `None` while the development switch
-    /// `HIDE_DEV_PANE_HOLDER` is off, which reads no definition file.
+    /// one dimmed line for each. `None` until the core has read them.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_definitions: Option<AgentDefinitionsSnapshot>,
 }

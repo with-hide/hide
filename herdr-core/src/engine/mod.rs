@@ -1,11 +1,11 @@
 //! The engine boundary: the one way the core speaks to the program that runs
 //! its panes (PRD engine-bundle-1 D-2). Pane existence, split geometry, zoom,
 //! cwd, agent lifecycle and the PTY are the engine's; the core asks for them
-//! through [`Engine`] and never names the engine's protocol. There are two
-//! engines: Herdr ([`herdr::HerdrEngine`]), the one users run, and the
-//! core's own ([`own::OwnEngine`]), which runs panes in the node's holders
-//! and only a daemon with the development switch `HIDE_DEV_PANE_HOLDER` on
-//! builds (PRD engine-bundle-3-core-owns D-3, D-5). Only the Herdr module
+//! through [`Engine`] and never names the engine's protocol. The core's own
+//! engine ([`own::OwnEngine`]), which runs panes in the node's holders, is
+//! the one every daemon builds (PRD engine-bundle-4-herdr-removal D-2);
+//! Herdr's ([`herdr::HerdrEngine`]) is built by nothing and goes with the
+//! rest of Hide's Herdr code. Only the Herdr module
 //! speaks Herdr's socket API and its generated wire types; the CI check
 //! `scripts/check-engine-boundary.py` keeps it so.
 //!
@@ -670,8 +670,7 @@ impl EngineHandle {
     /// gone, and `node` is this machine's node, which reads its folders, runs
     /// its Git and answers its pane holders through the same requests a
     /// device's node answers ([`hide_node_link::link_panes::LinkPanes`]).
-    /// Only a daemon with the development switch `HIDE_DEV_PANE_HOLDER` on
-    /// builds it (PRD engine-bundle-3-core-owns D-5, D-22).
+    /// Every daemon builds it (PRD engine-bundle-4-herdr-removal D-2).
     pub fn own(
         node: Arc<dyn hide_node_link::NodeLink>,
         state_dir: std::path::PathBuf,

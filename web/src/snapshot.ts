@@ -3299,7 +3299,7 @@ export type SnapshotRest = {
     background_ai?: BackgroundAi;
     /** The Host entries Add device lists, read on an `ssh_hosts_list` event (PRD settings-cleanup D-19). */
     ssh_hosts?: SshHosts;
-    /** The operator's agent definition files left out, with why (PRD engine-bundle-3-core-owns D-17, B24); absent while the development switch `HIDE_DEV_PANE_HOLDER` is off. */
+    /** The operator's agent definition files left out, with why (PRD engine-bundle-3-core-owns D-17, B24); absent until the core has read them. */
     agent_definitions?: AgentDefinitions | null;
     herdr_profiles?: HerdrProfiles;
     diagnostics?: CoreDiagnostic[];

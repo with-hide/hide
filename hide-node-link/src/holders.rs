@@ -6,8 +6,7 @@
 //! programs. The core's engine asks the node through [`PaneHolders`] and
 //! never names a holder record, socket or protocol. This machine's node
 //! answers it in the daemon's own process; a device's node answers it once
-//! its link carries the calls (the device bundle). Nothing here runs unless
-//! the development switch `HIDE_DEV_PANE_HOLDER` is on.
+//! its link carries the calls (the device bundle).
 
 /// The variable a pane's processes name their pane by, which the node sets
 /// in every pane it starts and the CLI, the hook helper and the agent

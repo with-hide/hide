@@ -82,14 +82,13 @@ Input an agent has not confirmed follows the same path, laid on the pane rather 
 
 ## agent_status provenance and background waits
 
-Herdr owns the raw `agent_status`; Hide reads it through `agent.list`/`agent.get`, converts it at `herdr-core/src/engine/herdr/wire.rs` and derives its axes in `agent_state/axes.rs`.
-On the core's own engine (`HIDE_DEV_PANE_HOLDER=1`) the raw `agent_status` is the engine's own, with Herdr's names and meaning: each pane's holder reads its screen with its agent's definition-file rules, and the engine turns a stop after work into `done` and its `completion_seq` ([ARCHITECTURE.md](ARCHITECTURE.md#agents-on-the-cores-own-engine)); the same axes are derived from it, so a row reads the same on either engine.
-For Claude Code and Codex, Herdr's [official agent reference](https://herdr.dev/docs/agents/) describes terminal-screen inference as the lifecycle source, rather than lifecycle state reported by their session hooks.
+The raw `agent_status` is the core's own engine's, with Herdr's names and meaning: each pane's holder reads its screen with its agent's definition-file rules, and the engine turns a stop after work into `done` and its `completion_seq` ([ARCHITECTURE.md](ARCHITECTURE.md#agents-on-the-cores-own-engine)); the core derives its axes in `agent_state/axes.rs`.
+The screen rules are Herdr's: for Claude Code and Codex, Herdr's [official agent reference](https://herdr.dev/docs/agents/) describes terminal-screen inference as the lifecycle source, rather than lifecycle state reported by their session hooks.
 A native session reference or display-only hook token does not prove that a tool is running or that its command completed.
 Other integrations can have full lifecycle reporting, so this screen-inference statement is specific to those two agents, not every agent Herdr supports.
 
 Hide's current mapping calls raw `done` a reported completion and `idle` a ready stopped pane, as specified below.
-That is a presentation signal supplied by Herdr, not a verified task outcome, successful test, exited background command or durable delivery receipt.
+That is a presentation signal read from the screen, not a verified task outcome, successful test, exited background command or durable delivery receipt.
 The current upstream documentation also distinguishes semantic state waits from arbitrary command completion; its display/attention descriptions must not replace Hide's pinned wire mapping without checking the bundled schema and adapter.
 Use a command's own exit/result or an explicit coordination receipt when a workflow needs completion evidence, rather than treating a quiet pane or Done group as that evidence.
 
