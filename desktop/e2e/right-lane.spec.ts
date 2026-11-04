@@ -9,12 +9,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { openProject, sendKeys, withControl } from "../../web/e2e/daemon-actions";
-import { startHerdr, type HerdrFixture } from "../../web/e2e/herdr-fixture";
 import { connectControl, type HidedControl } from "../../web/e2e/hided-control.mjs";
 import { chord } from "../../web/e2e/chords";
 import { chooseExpand, countSent, enterWorkspace, keyboardFocus, pinState, rest, sendEvent, setLanePinned, showExplorer, showProjectRow } from "../../web/e2e/wire";
 import { deviceHome, proveDeviceHome, resetDeviceHome, stageBuild, writeSshConfig } from "./device-home";
 import { isolate, launchShell, nodeOf, startStack, test } from "./fixture";
+import { startSshPaneFixture, type SshPaneFixture } from "./ssh-pane-fixture";
 
 type Probe = {
   arm: (marker: string) => void;
@@ -447,17 +447,26 @@ test("lane dividers retain every rapid arrow step before a snapshot arrives", as
   }
 });
 
+function prepareLaneRepositories(folders: string[], env: NodeJS.ProcessEnv): void {
+  for (const folder of folders) {
+    fs.mkdirSync(folder);
+    fs.writeFileSync(path.join(folder, "한글-notes.md"), "# Remote lane notes\n");
+    const initialized = spawnSync("git", ["-C", folder, "init", "-q"], { env, encoding: "utf8", timeout: 10_000 });
+    expect(initialized.status, initialized.stderr).toBe(0);
+  }
+}
+
 test("an SSH Workspace's lane keeps its chords, narrow fallback and saved widths apart from the same local path", async () => {
   test.skip(!process.env.HIDE_E2E_SSH_PORT, "requires the proved private SSH HOME in device-home.ts");
   test.setTimeout(300_000);
-  const local = await startHerdr({ agents: false });
-  let remote: HerdrFixture | null = null;
+  const local = await startSshPaneFixture();
+  let remote: SshPaneFixture | null = null;
   let run: ReturnType<typeof isolate> | null = null;
   let app: ElectronApplication | null = null;
   let remoteHome: string | null = null;
   const errors: unknown[] = [];
   try {
-    remote = await startHerdr({ agents: false });
+    remote = await startSshPaneFixture();
     run = isolate(local, "remote-lane");
     run.env.HIDE_HOST_HELPER_ROOT = path.join(run.root, "device-helper");
     run.env.HIDE_HOST_CLI_DIR = path.join(run.root, "device-bin");
@@ -470,21 +479,15 @@ test("an SSH Workspace's lane keeps its chords, narrow fallback and saved widths
     run.env.HIDE_CLI_PATH = path.join(stageBuild(run.root), "hide");
     const shared = path.join(fs.realpathSync(local.root), "shared-lane");
     const other = path.join(fs.realpathSync(remote.root), "remote-only");
-    for (const folder of [shared, other]) {
-      fs.mkdirSync(folder);
-      fs.writeFileSync(path.join(folder, "한글-notes.md"), "# Remote lane notes\n");
-      const initialized = spawnSync("git", ["-C", folder, "init", "-q"], { env: local.env, encoding: "utf8", timeout: 10_000 });
-      expect(initialized.status, initialized.stderr).toBe(0);
-    }
-    for (const [server, folder, label] of [[local, shared, "shared-lane"], [remote, shared, "shared-lane"], [remote, other, "remote-only"]] as const) {
-      server.run(["workspace", "create", "--cwd", folder, "--label", label, "--env", `PATH=${server.fixturePath}`, "--no-focus"]);
-    }
+    prepareLaneRepositories([shared, other], local.env);
     ({ app } = await launchShell(run.env));
+    await local.attach(run);
+    await local.open(shared, "shared-lane");
     const page = await app.firstWindow();
     const dir = process.env.HIDE_E2E_SCREENSHOT_DIR;
     if (dir) {
       const candidate = await app.evaluate(({ BrowserWindow }) => ({ pid: process.pid, window: BrowserWindow.getAllWindows()[0]!.getMediaSourceId(), executable: process.execPath }));
-      fs.writeFileSync(path.join(dir, "remote-lane-identity.json"), JSON.stringify({ ...candidate, daemonPid: run.daemonPid(), localSocket: local.socket, remoteSocket: remote.socket, home: run.env.HOME, deviceHome: remoteHome, state: run.env.HIDE_STATE_DIR, profile: run.env.HIDE_DESKTOP_USER_DATA_DIR, transport: "real loopback SSH to a separate private Herdr server" }, null, 2));
+      fs.writeFileSync(path.join(dir, "remote-lane-identity.json"), JSON.stringify({ ...candidate, daemonPid: run.daemonPid(), engine: local.engine, localSocket: local.socket, remoteSocket: remote.socket, home: run.env.HOME, deviceHome: remoteHome, state: run.env.HIDE_STATE_DIR, profile: run.env.HIDE_DESKTOP_USER_DATA_DIR, transport: "real loopback SSH to a separate private device" }, null, 2));
     }
     await enterWorkspace(page, "fixture");
     const state = JSON.parse(fs.readFileSync(path.join(run.env.HIDE_STATE_DIR!, "hided.json"), "utf8")) as { token: string };
@@ -493,6 +496,9 @@ test("an SSH Workspace's lane keeps its chords, narrow fallback and saved widths
     });
     const rail = (device: string) => page.locator(`[data-rail-tile="${device}"]`);
     await expect(rail("lane-ssh")).toHaveAttribute("data-rail-connected", "true", { timeout: 120_000 });
+    await remote.attach(run, "lane-ssh", remoteHome);
+    await remote.open(shared, "shared-lane");
+    await remote.open(other, "remote-only");
     await rail("lane-ssh").click();
     const row = (label: string) => page.locator("[data-project]", { hasText: label }).locator("[data-checkout]").first();
     await row("shared-lane").click();

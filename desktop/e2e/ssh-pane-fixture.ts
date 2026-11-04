@@ -41,9 +41,25 @@ export async function startSshPaneFixture() {
     control?.close();
     if (remoteState) endPaneHolders(remoteState);
   });
+  async function openOwnProject(folder: string, label: string): Promise<string[]> {
+    if (!control) throw new Error("attach the SSH fixture before opening a project");
+    if (!machine) return [(await openProject(control, folder, label)).pane];
+    folder = fs.realpathSync(folder);
+    control.send("create_workspace", { device_id: machine, path: folder, label, initialize_git: false, confirmed_outside_home: folder });
+    return control.until((rest) => {
+      const session = (rest as SshRest).status?.remote?.find((row) => row.target_id === machine)?.session;
+      const workspace = session?.workspaces.find((row) => row.path === folder);
+      const layout = session?.pane_layouts.find((row) => row.workspace_id === workspace?.id);
+      return layout?.frames.length ? layout.frames.map((frame) => frame.pane_id) : undefined;
+    }, `the project ${label} on ${machine}`, 60_000);
+  }
   return {
     ...server,
     herdr,
+    async open(folder: string, label: string): Promise<void> {
+      if (herdr) herdr.run(["workspace", "create", "--cwd", folder, "--label", label, "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]);
+      else await openOwnProject(folder, label);
+    },
     get panes() { return panes; },
     get control() { if (!control) throw new Error("attach the SSH fixture first"); return control; },
     /** After the daemon is healthy, and on a device after its registration connected. */
@@ -53,19 +69,12 @@ export async function startSshPaneFixture() {
       control = await connectStateDir(run.env.HIDE_STATE_DIR!);
       machine = device;
       if (!device) {
-        panes = [(await openProject(control, path.join(server.root, "fixture"), "fixture")).pane];
+        panes = await openOwnProject(path.join(server.root, "fixture"), "fixture");
       } else {
         remoteState = deviceState(home ?? deviceHome());
         const before = await control.until((rest) => ({ device: (rest as SshRest).navigator?.focused_device_id }), "the device in front");
         await control.until((rest) => (rest as SshRest).status?.remote?.some((row) => row.target_id === device && row.state === "connected"), `the device ${device} connected`, 120_000);
-        const folder = fs.realpathSync(path.join(server.root, "fixture"));
-        control.send("create_workspace", { device_id: device, path: folder, label: "fixture", initialize_git: false, confirmed_outside_home: folder });
-        panes = await control.until((rest) => {
-          const session = (rest as SshRest).status?.remote?.find((row) => row.target_id === device)?.session;
-          const workspace = session?.workspaces.find((row) => row.path === folder);
-          const layout = session?.pane_layouts.find((row) => row.workspace_id === workspace?.id);
-          return layout?.frames.length ? layout.frames.map((frame) => frame.pane_id) : undefined;
-        }, `the first shell on ${device}`, 60_000);
+        panes = await openOwnProject(path.join(server.root, "fixture"), "fixture");
         if (before.device) {
           control.send("focus_device", { device_id: before.device });
           await control.until((rest) => (rest as SshRest).navigator?.focused_device_id === before.device, "the device in front restored");
@@ -150,7 +159,7 @@ export function ownSshPaneRunning(home: string, device: string, text: string): {
       : execFileSync("lsof", ["-a", "-p", String(running.pid), "-d", "cwd", "-Fn"], { encoding: "utf8", timeout: 5_000 })
         .split("\n").find((line) => line.startsWith("n"))?.slice(1);
     if (!cwd) throw new Error(`no live cwd for fixture process ${running.pid}`);
-    return { pane: `remote:${device}:pane:${record.pane}`, info: running.command, cwd };
+    return { pane: `remote:${device}:pane:${record.pane.replaceAll("_", ":")}`, info: running.command, cwd };
   }
   return null;
 }
