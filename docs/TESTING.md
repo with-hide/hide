@@ -290,7 +290,10 @@ Nothing here is new policy.
 A piece that another open change is still building is marked as pending with the change that owns it, and the guide is aligned when that change merges.
 
 1. **Start from the fixture, one stack per test.**
-   `web/e2e/engine-fixture.ts` starts the engine a spec's panes run on and `web/e2e/hided-fixture.ts` a private `hided` over it; `desktop/e2e/fixture.ts` takes a started Herdr fixture and gives the packaged window its own `HOME` and `hided` state.
+   `web/e2e/engine-fixture.ts` starts the engine a spec's panes run on and `web/e2e/hided-fixture.ts` a private `hided` over it; `desktop/e2e/fixture.ts` gives the window its own `HOME` and `hided` state on either engine.
+   The desktop fixture's `startStack` starts that home's daemon through its bundled `hide connect`, then creates its panes over the daemon's connection; `prepare` makes any files or environment the daemon must read before it starts.
+   The packaged-window, install-kit and update checks in `package.yml` reuse one package for both engines, setting `HIDE_E2E_ENGINE` through `scripts/package-e2e.sh`.
+   Each pass retains its report, screenshots and traces separately under `agents/runs/package-e2e/<suite>/<engine>`, and each update pass reinstalls the previous version before starting.
    Why: a test that shares a server with another inherits its panes, focus and timers, and its failure cannot be read alone.
    Every web spec runs on both engines while bundle 3 brings the core's own engine and bundle 4 removes Herdr (PRD engine-bundle-3-core-owns D-14, D-24).
    The fixture reads `HIDE_E2E_ENGINE`: `herdr`, the default, is an empty private Herdr server (`startHerdr({ empty: true })` in `web/e2e/herdr-fixture.ts`); `own` is a daemon with `HIDE_DEV_PANE_HOLDER=1` over the `hide-holder` built beside `hided` and no Herdr at all; any other value fails the run.
