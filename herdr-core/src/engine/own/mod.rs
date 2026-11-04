@@ -4438,6 +4438,7 @@ mod tests {
         assert!(!readiness.accepts_input(), "{readiness:?}");
 
         holders.say(&pane, &at(Some(false)));
+        settle_start(&engine, &pane);
         assert!(
             engine
                 .delivery_agent(WAIT, "worker")

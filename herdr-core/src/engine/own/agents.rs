@@ -462,6 +462,16 @@ pub(super) fn apply(
             current.live.started = None;
         }
         if facts.line_editing != current.live.line_editing {
+            // The program taking the terminal's keys restarts a pending
+            // start's settle, as an answered question does: it draws its
+            // input screen after, and OpenCode 2.0.29 dropped what was typed
+            // up to a second after it took the keys.
+            if current.live.line_editing == Some(true)
+                && facts.line_editing == Some(false)
+                && current.live.started.is_some()
+            {
+                current.live.started = Some(now);
+            }
             current.live.line_editing = facts.line_editing;
             applied.changed |= current.live.started.is_some();
         }
@@ -716,9 +726,9 @@ mod tests {
     /// A program in the foreground whose screen rests can still leave the
     /// terminal editing lines: Pi 1.0.4 on a CI runner had not turned it off
     /// [`START_SETTLE`] after its start, and a brief typed then sat in its
-    /// editor with its Enter read as a line break. Its start settles once
-    /// the program reads keys; a holder that cannot say keeps the settle
-    /// alone.
+    /// editor with its Enter read as a line break. Its start settles a
+    /// settle after the program reads keys; a holder that cannot say keeps
+    /// the settle alone.
     #[test]
     fn a_start_takes_input_only_once_its_program_reads_keys() {
         let mut pane = Pane::new();
@@ -738,7 +748,15 @@ mod tests {
         );
         let applied = pane.facts(at(Some(false)));
         assert!(applied.changed, "the start's readiness moved");
-        assert!(!pane.agent.as_ref().unwrap().launch_pending(Instant::now()));
+        let agent = pane.agent.as_mut().unwrap();
+        assert!(
+            agent.launch_pending(Instant::now()),
+            "the screen it draws once it reads keys is drawn within a settle of its own"
+        );
+        let took_keys = agent.live.started.unwrap();
+        assert!(took_keys > started);
+        agent.live.started = Some(took_keys - START_SETTLE);
+        assert!(!agent.launch_pending(Instant::now()));
 
         let mut pane = Pane::new();
         pane.agent = Some(PaneAgent::started("pi", Some("worker"), None));
