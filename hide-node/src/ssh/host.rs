@@ -3194,9 +3194,7 @@ mod tests {
         std::fs::create_dir_all(conpty.join("x64")).unwrap();
         write(&conpty.join("conpty.dll"), b"dll", 0o644);
         write(&conpty.join("x64/OpenConsole.exe"), b"console", 0o755);
-        let own = packages
-            .payload_for("windows", "x86_64")
-            .unwrap();
+        let own = packages.payload_for("windows", "x86_64").unwrap();
         assert!(own.herdr.is_none());
         assert_eq!(
             own.files

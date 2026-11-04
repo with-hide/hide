@@ -1,6 +1,5 @@
 //! Single registry for every environment key this crate reads.
 
-
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 

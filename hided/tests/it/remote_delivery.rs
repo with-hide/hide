@@ -510,8 +510,7 @@ fn a_spawn_with_machine_starts_the_agent_on_the_device_under_its_caller() -> Res
             child.pane
         );
         ensure!(
-            fixture::ready_panes(&fixture.local.environment.home)?
-                == [fixture.local.pane.clone()],
+            fixture::ready_panes(&fixture.local.environment.home)? == [fixture.local.pane.clone()],
             "the agent was also started on the caller's own machine"
         );
         // B8/B11: the spawn's workspace and tab names reach the receipt only
@@ -524,8 +523,10 @@ fn a_spawn_with_machine_starts_the_agent_on_the_device_under_its_caller() -> Res
                 .find(|record| record.id == spawn_record.id)
                 .context("naming receipt")?;
             let names = serde_json::to_value(record)?;
-            Ok((names["names"]["workspace"] == "applied" && names["names"]["tab"] == "applied")
-                .then_some(()))
+            Ok(
+                (names["names"]["workspace"] == "applied" && names["names"]["tab"] == "applied")
+                    .then_some(()),
+            )
         })?;
         ensure!(
             ledger

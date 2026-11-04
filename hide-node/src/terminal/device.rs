@@ -459,8 +459,9 @@ impl NodeTerminals {
     /// and their output reaches its own `screen` always, and its link only
     /// while the core says a screen of the core's own draws them.
     pub fn for_screen(screen: Arc<dyn OutputSink>) -> Self {
-        let mut terminals =
-            Self::with_attacher(Box::new(|_: &str| Box::new(NoHerdr) as Box<dyn super::Attacher>));
+        let mut terminals = Self::with_attacher(Box::new(|_: &str| {
+            Box::new(NoHerdr) as Box<dyn super::Attacher>
+        }));
         terminals.uplink.withhold(true);
         terminals.screen = Some(screen);
         terminals

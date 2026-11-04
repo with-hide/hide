@@ -42,8 +42,8 @@ use hide_platform::wsl::Distribution;
 use serde_json::json;
 
 use super::{
-    ChildLink, HelperPackages, PaneHook, RemoteHost, TerminalHook, UnaskedStart,
-    bootstrap, helper_protocol_refusal, lock_recover,
+    ChildLink, HelperPackages, PaneHook, RemoteHost, TerminalHook, UnaskedStart, bootstrap,
+    helper_protocol_refusal, lock_recover,
 };
 
 /// `wsl.exe` calls this process runs at once, across every distribution: a

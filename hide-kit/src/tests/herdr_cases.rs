@@ -31,10 +31,7 @@ fn codex_hooks(fixture: &Fixture) -> PathBuf {
 fn herdr_command(fixture: &Fixture) -> String {
     format!(
         "bash '{}' session",
-        fixture
-            .home()
-            .join(".codex/herdr-agent-state.sh")
-            .display()
+        fixture.home().join(".codex/herdr-agent-state.sh").display()
     )
 }
 

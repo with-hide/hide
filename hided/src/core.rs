@@ -27,9 +27,7 @@ use hide_node::terminal::device::DeviceSink;
 use hide_node::terminal::engine_panes::LocalPanes;
 use hide_node::terminal::holder::{Holders, LocalTerminals};
 use hide_node::terminal::router::Router;
-use hide_node::terminal::{
-    Attacher, Mode, OutputSink, ReportSink, Service, SessionParts,
-};
+use hide_node::terminal::{Attacher, Mode, OutputSink, ReportSink, Service, SessionParts};
 use tokio::sync::broadcast;
 
 use crate::terminal_hub::TerminalHub;
@@ -1253,13 +1251,12 @@ fn local_engine(
     // The engine's folders, Git and pane holders are this machine's, asked
     // of a node answering for the core's home as the core's own node does,
     // by the same requests a device's node answers.
-    let node = Arc::new(
-        hide_node::Local::new(Some(home.clone())).with_panes(Arc::new(LocalPanes::for_account(
-            holders,
-            Arc::clone(service),
-            home.clone(),
-        ))),
-    );
+    let node =
+        Arc::new(
+            hide_node::Local::new(Some(home.clone())).with_panes(Arc::new(
+                LocalPanes::for_account(holders, Arc::clone(service), home.clone()),
+            )),
+        );
     // The engine opens knowing the operator's agents, so the restore that
     // starts with it resumes theirs too; a folder that cannot be read leaves
     // the built-in ones, and the core's read logs why.

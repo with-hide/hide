@@ -73,14 +73,7 @@ fn distribution() -> Distribution {
 
 impl Fixture {
     fn device(&self, packages: HelperPackages) -> WslDevice {
-        WslDevice::new(
-            "Ubuntu",
-            self.access.clone(),
-            packages,
-            None,
-            None,
-        )
-        .unwrap()
+        WslDevice::new("Ubuntu", self.access.clone(), packages, None, None).unwrap()
     }
 
     fn calls(&self) -> Vec<String> {

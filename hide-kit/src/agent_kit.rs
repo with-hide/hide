@@ -1049,7 +1049,10 @@ pub(crate) fn remove(target: &KitTarget) -> Vec<(String, RemoveOutcome)> {
 /// Takes the Herdr integrations Hide installed off a machine that is being
 /// removed from Hide, by the record's ownership (`herdr_integration`); an
 /// integration the operator installed stays.
-pub(crate) fn remove_herdr(target: &KitTarget, record: &mut Record) -> Vec<(String, RemoveOutcome)> {
+pub(crate) fn remove_herdr(
+    target: &KitTarget,
+    record: &mut Record,
+) -> Vec<(String, RemoveOutcome)> {
     let mut outcomes: Vec<(String, RemoveOutcome)> = ADAPTERS
         .iter()
         .filter_map(|adapter| {
