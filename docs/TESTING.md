@@ -217,7 +217,7 @@ When the behavior depends on the order of two events, the test fixes that order;
   Its opt-in `--deadline-comparison` compares a controlled 21-second child under the old 20-second watchdog and the journey's protocol budget; it cannot establish why an earlier Windows command failed.
   The private Herdr server, panes and `hided` use `fixturePath`: the shim directory followed by system-tool directories, including `/usr/sbin` for `lsof` on Unix and native Windows and Git directories on Windows.
   `fixtureExecutable` supplies native `.exe` names and `fixtureToolPath` uses the native path delimiter while refusing missing or non-absolute Windows system-root or program-files values.
-  On disposable Windows CI runners, the web e2e job also prepends `%HIDE_E2E_ROOT%\bin` to the user's registry `Path` as `REG_EXPAND_SZ`, preserving its other entries.
+  On disposable Windows CI runners, the web and desktop e2e jobs share `.github/actions/windows-fixture-path`, which prepends `%HIDE_E2E_ROOT%\bin` to the user's registry `Path` as `REG_EXPAND_SZ`, preserving its other entries.
   The PTY builds the pane's PATH from the registry and expands that entry in each daemon's private environment, so a start from the product's agent panel finds that test's compiled stand-ins.
   This setup is CI-only: it never edits a developer's registry, types a PATH command into a pane, or overrides the product's environment contract.
   Catalog discovery probes every provider, so appending the host's `PATH` also reaches its installed CLIs even when the test selects Claude.

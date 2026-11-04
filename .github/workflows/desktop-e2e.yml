@@ -161,6 +161,9 @@ jobs:
       - name: Compare the binary schema and version with the pin
         if: matrix.engine == 'herdr'
         run: python3 scripts/check-herdr-schema.py --herdr-bin "${{ steps.herdr.outputs.bin }}"
+      - name: Put the isolated fixture programs on the Windows pane PATH
+        if: runner.os == 'Windows'
+        uses: ./.github/actions/windows-fixture-path
       - name: Desktop app end-to-end
         id: suite
         # A cap, not a target: a shard that plans more than 720 s of tests
