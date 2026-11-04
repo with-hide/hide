@@ -738,8 +738,6 @@ The transition retains these explicit exceptions:
 | Codex and Antigravity own-engine fake journey, `fork` only | Excluded: `own-start-fixes 노드 대기`; Codex's new pane has no session or fork lineage, and Antigravity's fork input is discarded before readiness is confirmed | `own-start-fixes` confirms the fork's readiness and registration and removes these exclusions |
 | OMP own-engine fake journey, `sleep_wake`, `fork`, `title` | Excluded: `own-start-fixes 노드 대기`; wake confirmation arrives after the cell ends, the following fork is not ready for input, and the title's row is gone | `own-start-fixes` fixes wake and its following operations and removes these exclusions |
 | OMP own-engine fake journey, `resume` | Excluded: `own-start-fixes(#2075) 대기(깨우기 제외에 따른 선행 조건 미충족)`; it compares the sessions before and after the excluded wake | Remove this exclusion when #2075 merges |
-| Desktop failed-restoration spec | Excluded: `own-restore-checkout 노드 대기`; cold restore moves a pane in a nested folder out of its original checkout | `own-restore-checkout` preserves the original checkout and removes this exclusion |
-| Desktop first-run wizard, 4 tests | Excluded: `b4-default 대기(first-run의 Herdr 프로필 읽기 미확정)` | `b4-default` retires the Herdr profile read and enables these cells |
 | Desktop SSH specs on the own engine | Fixture prepared; existing private-SSH prerequisites still skip without that environment | Connect an isolated SSH CI lane |
 
 A run that plans every lane a pull request can plan starts at most 50 jobs.

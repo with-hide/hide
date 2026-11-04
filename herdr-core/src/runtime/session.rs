@@ -317,6 +317,12 @@ impl Runtime {
                                 path: paths.comparison(&worktree.checkout_path),
                                 repository: paths.comparison(&worktree.repo_root),
                             }),
+                        owner_mark: herdr_workspace
+                            .and_then(|workspace| {
+                                workspace.tokens.get(crate::checkout_owner::OWNER_TOKEN)
+                            })
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_owned),
                     });
                     spaces.len() - 1
                 }

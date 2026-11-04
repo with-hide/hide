@@ -24,6 +24,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::time::Instant;
 
 use hide_node_link::NodeLink;
 use hide_node_link::holders::{
@@ -121,9 +122,9 @@ struct Shared {
     wake: Mutex<Option<Wake>>,
     stopped: AtomicBool,
     place: Option<Place>,
-    /// The thread that saves the session, for a daemon's engine; dropped
-    /// with the engine, which writes the last change.
-    saver: OnceLock<store::Saver>,
+    /// Wakes the thread that saves the session, for a daemon's engine,
+    /// whose thread the engine [`OwnEngine::open`] returned owns.
+    saving: OnceLock<store::SaveSignal>,
     /// Whether the restore has finished: until it has, no pane is made, so
     /// a new pane never takes an id a holder still running was recorded
     /// under before the restore counted past it.
@@ -176,7 +177,7 @@ impl Drop for Held<'_> {
 
 /// Whether a restore has finished, which the restore marks once it has let
 /// go of the engine, so an engine dropped after a pane was made is dropped
-/// whole, its last change written.
+/// whole.
 #[derive(Default)]
 pub(super) struct Restored {
     done: Mutex<Option<Result<(), EngineError>>>,
@@ -194,6 +195,11 @@ impl Restored {
 pub(crate) struct OwnEngine<'g> {
     shared: Arc<Shared>,
     gates: Vec<Gate<'g>>,
+    /// The thread that saves the session, held only by the engine
+    /// [`OwnEngine::open`] returned: dropping that engine writes the last
+    /// change before the drop returns, while a holder start finishing or a
+    /// fact arriving may hold the shared state a moment longer elsewhere.
+    saver: Option<store::Saver>,
 }
 
 /// The pane holders of the machine `node` reaches, as every engine of this
@@ -274,7 +280,7 @@ impl OwnEngine<'static> {
         let backups = hide_kit::layout::engine_backups_in(&place.engine_dir);
         let topology = restore::read(&path, &backups);
         let saved = topology.panes().map(|(id, _)| id.to_owned()).collect();
-        let engine = Self::with(topology, holders, Some(place), false)?;
+        let mut engine = Self::with(topology, holders, Some(place), false)?;
         let session = Arc::clone(&engine.shared.topology);
         let saver = store::Saver::start(path, move || {
             Some(
@@ -284,7 +290,8 @@ impl OwnEngine<'static> {
                     .to_saved(),
             )
         })?;
-        let _ = engine.shared.saver.set(saver);
+        let _ = engine.shared.saving.set(saver.signal());
+        engine.saver = Some(saver);
         // A pane whose program exits on its own closes, as Herdr closes it.
         // The node holds no engine: it is told the engine's shared state
         // weakly, so an engine dropped is not kept by its holders.
@@ -297,6 +304,7 @@ impl OwnEngine<'static> {
                     OwnEngine {
                         shared,
                         gates: Vec::new(),
+                        saver: None,
                     }
                     .program_exited(pane);
                 }
@@ -305,6 +313,7 @@ impl OwnEngine<'static> {
             OwnEngine {
                 shared: Arc::clone(&engine.shared),
                 gates: Vec::new(),
+                saver: None,
             },
             saved,
         )?;
@@ -333,7 +342,7 @@ impl OwnEngine<'static> {
                 wake: Mutex::default(),
                 stopped: AtomicBool::new(false),
                 place,
-                saver: OnceLock::new(),
+                saving: OnceLock::new(),
                 restored: Arc::new(Restored {
                     done: Mutex::new(restored.then_some(Ok(()))),
                     finished: Condvar::new(),
@@ -343,6 +352,7 @@ impl OwnEngine<'static> {
                 cut: Mutex::default(),
             }),
             gates: Vec::new(),
+            saver: None,
         };
         // What runs in each pane and what its screen shows, whether or not a
         // screen shows it (D-18). The node holds no engine, as for the ends
@@ -356,6 +366,7 @@ impl OwnEngine<'static> {
                     OwnEngine {
                         shared,
                         gates: Vec::new(),
+                        saver: None,
                     }
                     .pane_facts(pane, facts);
                 }
@@ -449,8 +460,8 @@ impl OwnEngine<'_> {
     /// saved.
     fn changed(&self) {
         self.settle_early();
-        if let Some(saver) = self.shared.saver.get() {
-            saver.changed();
+        if let Some(saving) = self.shared.saving.get() {
+            saving.changed();
         }
         let wake = self
             .shared
@@ -748,6 +759,7 @@ impl OwnEngine<'_> {
                 OwnEngine {
                     shared,
                     gates: Vec::new(),
+                    saver: None,
                 }
                 .changed();
             }
@@ -1038,9 +1050,51 @@ impl OwnEngine<'_> {
         self.shared.holders.input(pane, input).map_err(holder_error)
     }
 
+    /// The folders a program other than its shell works in, in a pane whose
+    /// holder runs, as its machine observes them, so a folder a program has
+    /// moved to is guarded as the folder the pane started in is; `None` when
+    /// its machine could not say by `by`, which a read of many panes shares,
+    /// so no ask starts once it has passed. A pane whose terminal could not
+    /// start, one still starting, and one gone since runs no such program; a
+    /// pane drawn before its start keeps the start's record after it. A
+    /// closing pane is asked like any other until its holder is gone, since
+    /// an end that failed or is still under way leaves its program running.
+    fn program_folders(&self, pane: &str, failed: bool, by: Instant) -> Option<Vec<String>> {
+        let started = self
+            .topology()
+            .pane(pane)
+            .map(|held| held.starting.as_ref().is_none_or(|start| start.started()));
+        if failed || !matches!(started, Ok(true)) {
+            return Some(Vec::new());
+        }
+        let within = by
+            .checked_duration_since(Instant::now())
+            .filter(|left| !left.is_zero())?;
+        match self.shared.holders.processes(pane, within) {
+            Ok(processes) => match processes.foreground {
+                Some(foreground)
+                    if foreground
+                        .members
+                        .iter()
+                        .all(|(pid, _)| *pid == processes.shell) =>
+                {
+                    Some(Vec::new())
+                }
+                Some(foreground) => foreground.folders,
+                None => None,
+            },
+            Err(HolderError::NoPane { .. }) => Some(Vec::new()),
+            Err(_) => None,
+        }
+    }
+
     fn processes(&self, pane: &str) -> Answer<PaneProcessGroup> {
         self.ready(pane)?;
-        let processes = self.shared.holders.processes(pane).map_err(holder_error)?;
+        let processes = self
+            .shared
+            .holders
+            .processes(pane, hide_node_link::link_panes::ASK_WAIT)
+            .map_err(holder_error)?;
         let (group, members) = match processes.foreground {
             Some(foreground) => (Some(foreground.group), foreground.members),
             None => (None, Vec::new()),
@@ -1104,6 +1158,15 @@ enum Settled {
 
 /// Settles the start of `pane`, drawn `starting`, once its holder started
 /// or did not, `failed` saying why ([`OwnEngine::start_drawn`]).
+/// The instant a call bounded by `wait` ends by: a read of many panes asks
+/// each holder only for what is left of it.
+fn deadline(wait: Wait) -> Instant {
+    match wait {
+        Wait::Each(within) | Wait::Small(within) => Instant::now() + within,
+        Wait::By(by) => by,
+    }
+}
+
 fn settle_start(
     topology: &Mutex<Topology>,
     holders: &dyn PaneHolders,
@@ -1302,6 +1365,7 @@ impl<'g> Engine for OwnEngine<'g> {
         Box::new(OwnEngine {
             shared: Arc::clone(&self.shared),
             gates,
+            saver: None,
         })
     }
 
@@ -1363,26 +1427,58 @@ impl<'g> Engine for OwnEngine<'g> {
         Ok(self.session(wait)?.project())
     }
 
+    /// Each pane's folder and the folders a program other than its shell
+    /// works in; a pane whose program's folder its machine could not say
+    /// adds the pane with no folder, which a cleanup reads as unknown.
     fn pane_folders(&self, wait: Wait) -> Answer<Vec<(String, Option<String>)>> {
-        Ok(self
-            .session(wait)?
-            .panes
-            .into_iter()
-            .map(|pane| (pane.pane_id, pane.cwd))
-            .collect())
+        let by = deadline(wait);
+        let mut folders = Vec::new();
+        for pane in self.session(wait)?.panes {
+            let programs = self.program_folders(&pane.pane_id, pane.restore_error.is_some(), by);
+            folders.push((pane.pane_id.clone(), pane.cwd));
+            match programs {
+                Some(programs) => folders.extend(
+                    programs
+                        .into_iter()
+                        .map(|folder| (pane.pane_id.clone(), Some(folder))),
+                ),
+                None => folders.push((pane.pane_id, None)),
+            }
+        }
+        Ok(folders)
     }
 
+    /// Each pane with its folder and, once for each folder a program other
+    /// than its shell works in, that folder as its foreground folder; a pane
+    /// whose program's folder its machine could not say refuses the answer,
+    /// so a close is never confirmed past a folder nobody could read.
     fn pane_places(&self, wait: Wait) -> Answer<Vec<PanePlace>> {
-        Ok(self
-            .session(wait)?
-            .panes
-            .into_iter()
-            .map(|pane| PanePlace {
-                pane_id: pane.pane_id,
-                cwd: pane.cwd,
-                foreground_cwd: None,
-            })
-            .collect())
+        let by = deadline(wait);
+        let mut places = Vec::new();
+        for pane in self.session(wait)?.panes {
+            let programs = self
+                .program_folders(&pane.pane_id, pane.restore_error.is_some(), by)
+                .ok_or_else(|| {
+                    EngineError::Answer(format!(
+                        "pane {} runs a program whose folder its machine could not say",
+                        pane.pane_id
+                    ))
+                })?;
+            if programs.is_empty() {
+                places.push(PanePlace {
+                    pane_id: pane.pane_id,
+                    cwd: pane.cwd,
+                    foreground_cwd: None,
+                });
+                continue;
+            }
+            places.extend(programs.into_iter().map(|folder| PanePlace {
+                pane_id: pane.pane_id.clone(),
+                cwd: pane.cwd.clone(),
+                foreground_cwd: Some(folder),
+            }));
+        }
+        Ok(places)
     }
 
     fn agents(&self, wait: Wait) -> Answer<Vec<ProjectedAgent>> {
@@ -2255,6 +2351,17 @@ mod tests {
         std::sync::mpsc::Receiver<Result<(), HolderError>>,
     );
 
+    /// The panes the engine's session lists, by id.
+    fn listed(engine: &OwnEngine) -> Vec<String> {
+        engine
+            .session(WAIT)
+            .unwrap()
+            .panes
+            .into_iter()
+            .map(|pane| pane.pane_id)
+            .collect()
+    }
+
     /// Holders that start every pane until told to refuse, as a node whose
     /// holder program cannot start refuses, and say what they found of the
     /// last daemon's holders once the test hands them that.
@@ -2307,6 +2414,11 @@ mod tests {
         processes: Mutex<Option<HolderProcesses>>,
         /// Panes whose terminal runs another program in its foreground.
         busy: Mutex<BTreeSet<String>>,
+        /// While set, a process ask's answer never comes: each ask waits
+        /// the time it was given and gives up, as a node's unanswered ask
+        /// does. The time each ask was given, in order.
+        processes_held: (Mutex<bool>, Condvar),
+        processes_within: Mutex<Vec<Duration>>,
     }
 
     impl Holders {
@@ -2416,6 +2528,7 @@ mod tests {
                 foreground: Some(hide_node_link::holders::HolderForeground {
                     group: pid,
                     members: vec![(pid, name.to_owned())],
+                    folders: Some(Vec::new()),
                 }),
             });
         }
@@ -2544,7 +2657,17 @@ mod tests {
                 message: "not asked".to_owned(),
             })
         }
-        fn processes(&self, pane: &str) -> Result<HolderProcesses, HolderError> {
+        fn processes(&self, pane: &str, within: Duration) -> Result<HolderProcesses, HolderError> {
+            self.processes_within.lock().unwrap().push(within);
+            let (held, released) = &self.processes_held;
+            let (held, _) = released
+                .wait_timeout_while(held.lock().unwrap(), within, |held| *held)
+                .unwrap();
+            if *held {
+                return Err(HolderError::Unreachable {
+                    message: "the ask timed out".to_owned(),
+                });
+            }
             let mut processes =
                 self.processes
                     .lock()
@@ -2557,6 +2680,7 @@ mod tests {
                 processes.foreground = Some(hide_node_link::holders::HolderForeground {
                     group: processes.shell + 8,
                     members: vec![(processes.shell + 8, "vim".to_owned())],
+                    folders: Some(Vec::new()),
                 });
             }
             Ok(processes)
@@ -2747,6 +2871,7 @@ mod tests {
         let handle = Arc::new(OwnEngine {
             shared: Arc::clone(&engine.shared),
             gates: Vec::new(),
+            saver: None,
         });
         let seen = Arc::new(Mutex::new(Vec::new()));
         let placing = |refuse| {
@@ -2798,7 +2923,7 @@ mod tests {
             before,
             "nothing starts in a pane the record refused"
         );
-        assert_eq!(engine.pane_folders(WAIT).unwrap().len(), 2);
+        assert_eq!(listed(&engine).len(), 2);
     }
 
     #[test]
@@ -2832,7 +2957,7 @@ mod tests {
             .next()
             .unwrap()
             .clone();
-        assert_eq!(engine.pane_folders(WAIT).unwrap().len(), 1);
+        assert_eq!(listed(&engine).len(), 1);
         assert_eq!(
             seen.lock().unwrap().len(),
             1,
@@ -2886,7 +3011,7 @@ mod tests {
         std::thread::scope(|scope| {
             let work = scope.spawn(|| gated.split_beside(WAIT, &first, None, Env::new()));
             let pane = entered.recv_timeout(Duration::from_secs(5)).unwrap();
-            assert_eq!(engine.pane_folders(WAIT).unwrap().len(), 1);
+            assert_eq!(listed(&engine).len(), 1);
             allowed.store(false, Ordering::Release);
             go.send(()).unwrap();
             assert_eq!(
@@ -2896,7 +3021,7 @@ mod tests {
             assert!(holders.ended.lock().unwrap().contains(&pane));
             assert!(!holders.started().iter().any(|start| start.pane == pane));
         });
-        assert_eq!(engine.pane_folders(WAIT).unwrap().len(), 1);
+        assert_eq!(listed(&engine).len(), 1);
         assert!(engine.shared.pending.lock().unwrap().is_empty());
     }
 
@@ -2931,13 +3056,7 @@ mod tests {
         let (workspace, _, first) = engine
             .create_workspace(WAIT, "/w", "w", true, Env::new())
             .unwrap();
-        let shown = |pane: &str| {
-            engine
-                .pane_folders(WAIT)
-                .unwrap()
-                .iter()
-                .any(|(id, _)| id == pane)
-        };
+        let shown = |pane: &str| listed(&engine).iter().any(|id| id == pane);
         let held = || {
             let (began, starting) = std::sync::mpsc::channel();
             let (go, wait) = std::sync::mpsc::channel();
@@ -3087,13 +3206,13 @@ mod tests {
                 "eight creation callers admitted to the waiting bound",
                 || engine.shared.starts.waiting() == 8,
             );
-            let before = engine.pane_folders(WAIT).unwrap().len();
+            let before = listed(&engine).len();
             let error = engine
                 .split_beside(WAIT, &first, None, Env::new())
                 .unwrap_err();
             assert_eq!(error.code(), Some("holder_start_queue_full"));
             assert_eq!(
-                engine.pane_folders(WAIT).unwrap().len(),
+                listed(&engine).len(),
                 before,
                 "refused admission publishes no pane"
             );
@@ -3136,7 +3255,7 @@ mod tests {
 
         holders.refuse.store(true, Ordering::Release);
         refused_for_the_holder(engine.create_workspace(WAIT, "/w", "w", true, Env::new()));
-        assert!(engine.pane_folders(WAIT).unwrap().is_empty());
+        assert!(listed(&engine).is_empty());
         assert_eq!(engine.topology().focused_workspace, None);
 
         holders.refuse.store(false, Ordering::Release);
@@ -3156,12 +3275,7 @@ mod tests {
             Env::new(),
             &["sh".to_owned()],
         ));
-        let panes: Vec<String> = engine
-            .pane_folders(WAIT)
-            .unwrap()
-            .into_iter()
-            .map(|(id, _)| id)
-            .collect();
+        let panes: Vec<String> = listed(&engine);
         assert_eq!(panes, vec![pane]);
     }
 
@@ -3314,6 +3428,35 @@ mod tests {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// The engine `open` returned writes its last change as it is dropped,
+    /// even while another thread still holds its shared state for a moment
+    /// (a holder start finishing, a fact arriving): the next engine opened
+    /// on its place reads the change at once.
+    #[test]
+    fn an_engine_dropped_while_a_worker_holds_it_has_written_its_last_change() {
+        let root = tempfile::tempdir().unwrap();
+        let place = place(root.path());
+        let folder = root.path().join("w");
+        for dir in [&home(&place), &folder] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let first =
+            OwnEngine::open(Holders::found(HolderRecovery::default()), place.clone()).unwrap();
+        let (_, tab, pane) = first
+            .create_workspace(WAIT, &wire(&folder), "w", true, Env::new())
+            .unwrap();
+        let worker = Arc::clone(&first.shared);
+        drop(first);
+
+        let next = OwnEngine::open(Holders::found(HolderRecovery::default()), place).unwrap();
+        assert_eq!(
+            layout_of(&next.session_payload(WAIT).unwrap(), &tab),
+            [pane],
+            "the change is saved before the drop returns"
+        );
+        drop(worker);
     }
 
     /// D-7 and letter-19977: a daemon opened again lays its saved session
@@ -4293,6 +4436,7 @@ mod tests {
             foreground: Some(hide_node_link::holders::HolderForeground {
                 group: 90,
                 members: vec![(90, "vim".to_owned())],
+                folders: Some(Vec::new()),
             }),
         });
         let start = engine
@@ -4716,6 +4860,7 @@ mod tests {
             foreground: Some(hide_node_link::holders::HolderForeground {
                 group: 60,
                 members: vec![(60, "claude".to_owned())],
+                folders: Some(Vec::new()),
             }),
         });
         assert_eq!(running.typed(&claude), "");
@@ -4726,6 +4871,7 @@ mod tests {
             foreground: Some(hide_node_link::holders::HolderForeground {
                 group: 52,
                 members: vec![(52, "zsh".to_owned())],
+                folders: Some(Vec::new()),
             }),
         });
         assert!(
@@ -4738,5 +4884,164 @@ mod tests {
             idle.started().is_empty(),
             "the adopted pane keeps its shell"
         );
+    }
+
+    /// A program a pane's shell runs in another folder keeps that folder in
+    /// use: the pane reports it beside its own, as Herdr's foreground cwd
+    /// does. A folder its machine could not read is unknown, never none: the
+    /// cleanup's read lists the pane with no folder, which it refuses, and a
+    /// close is not confirmed. The shell alone adds no folder.
+    #[test]
+    fn a_programs_folder_is_reported_with_its_pane_and_an_unread_one_is_unknown() {
+        let holders = Arc::new(Holders::default());
+        let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+        let (workspace, _, first) = engine
+            .create_workspace(WAIT, "/v", "w", true, Env::new())
+            .unwrap();
+        // A tab's pane is drawn before its holder starts; once it has
+        // started, its programs are asked as any other pane's are.
+        let (_, pane) = engine
+            .create_tab(WAIT, &workspace, "/w", "t", true, Env::new())
+            .unwrap();
+        engine.read_pane(WAIT, &pane, "recent", 1).unwrap();
+        engine.close_pane(WAIT, &first).unwrap();
+        let program = |folders: Option<Vec<String>>| HolderProcesses {
+            shell: 41,
+            foreground: Some(hide_node_link::holders::HolderForeground {
+                group: 90,
+                members: vec![(90, "vim".to_owned())],
+                folders,
+            }),
+        };
+
+        *holders.processes.lock().unwrap() = Some(program(Some(vec!["/elsewhere".to_owned()])));
+        assert_eq!(
+            engine.pane_folders(WAIT).unwrap(),
+            vec![
+                (pane.clone(), Some("/w".to_owned())),
+                (pane.clone(), Some("/elsewhere".to_owned())),
+            ]
+        );
+        assert_eq!(
+            engine.pane_places(WAIT).unwrap(),
+            vec![PanePlace {
+                pane_id: pane.clone(),
+                cwd: Some("/w".to_owned()),
+                foreground_cwd: Some("/elsewhere".to_owned()),
+            }]
+        );
+
+        *holders.processes.lock().unwrap() = Some(program(None));
+        assert_eq!(
+            engine.pane_folders(WAIT).unwrap(),
+            vec![(pane.clone(), Some("/w".to_owned())), (pane.clone(), None)]
+        );
+        assert!(
+            engine.pane_places(WAIT).is_err(),
+            "no close is confirmed past it"
+        );
+
+        holders.idle_shell(41, "zsh");
+        assert_eq!(
+            engine.pane_folders(WAIT).unwrap(),
+            vec![(pane.clone(), Some("/w".to_owned()))]
+        );
+        assert_eq!(
+            engine.pane_places(WAIT).unwrap(),
+            vec![PanePlace {
+                pane_id: pane,
+                cwd: Some("/w".to_owned()),
+                foreground_cwd: None,
+            }]
+        );
+    }
+
+    /// A program in `/elsewhere`, in every pane's terminal.
+    fn elsewhere(holders: &Holders) {
+        *holders.processes.lock().unwrap() = Some(HolderProcesses {
+            shell: 41,
+            foreground: Some(hide_node_link::holders::HolderForeground {
+                group: 90,
+                members: vec![(90, "vim".to_owned())],
+                folders: Some(vec!["/elsewhere".to_owned()]),
+            }),
+        });
+    }
+
+    /// A pane being closed keeps its program's folder in use until its
+    /// holder has ended: a close still under way, or one whose end failed,
+    /// leaves the program running there.
+    #[test]
+    fn a_closing_pane_keeps_its_programs_folder_until_its_holder_has_ended() {
+        let holders = Arc::new(Holders::default());
+        let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+        let (_, _, pane) = engine
+            .create_workspace(WAIT, "/w", "w", true, Env::new())
+            .unwrap();
+        elsewhere(&holders);
+        let (ending, ended) = std::sync::mpsc::channel();
+        let (finish, finished) = std::sync::mpsc::channel();
+        *holders.terminate_hold.lock().unwrap() = Some((pane.clone(), ending, finished));
+        std::thread::scope(|scope| {
+            let close = scope.spawn(|| engine.close_pane(WAIT, &pane));
+            ended.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert!(
+                engine
+                    .pane_folders(WAIT)
+                    .unwrap()
+                    .contains(&(pane.clone(), Some("/elsewhere".to_owned()))),
+                "the folder stays guarded while the close is under way"
+            );
+            assert_eq!(
+                engine.pane_places(WAIT).unwrap()[0]
+                    .foreground_cwd
+                    .as_deref(),
+                Some("/elsewhere")
+            );
+            finish.send(()).unwrap();
+            close.join().unwrap().unwrap();
+        });
+        assert!(engine.pane_folders(WAIT).unwrap().is_empty());
+    }
+
+    /// A read of every pane's folders ends by the caller's bound, however
+    /// many panes it asks: each holder is given only what is left of it, no
+    /// ask starts once it has passed, and a pane left unasked is unknown.
+    #[test]
+    fn a_read_of_every_panes_folders_shares_its_callers_bound() {
+        let holders = Arc::new(Holders::default());
+        let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+        let (workspace, _, first) = engine
+            .create_workspace(WAIT, "/w", "w", true, Env::new())
+            .unwrap();
+        for _ in 0..3 {
+            let (_, pane) = engine
+                .create_tab(WAIT, &workspace, "/w", "t", false, Env::new())
+                .unwrap();
+            engine.read_pane(WAIT, &pane, "recent", 1).unwrap();
+        }
+        engine.read_pane(WAIT, &first, "recent", 1).unwrap();
+        elsewhere(&holders);
+        *holders.processes_held.0.lock().unwrap() = true;
+
+        let bound = Duration::from_millis(300);
+        let began = std::time::Instant::now();
+        let folders = engine.pane_folders(Wait::Each(bound)).unwrap();
+        assert!(began.elapsed() < bound * 3, "{:?}", began.elapsed());
+        assert_eq!(
+            folders
+                .iter()
+                .filter(|(_, folder)| folder.is_none())
+                .count(),
+            4
+        );
+        let given = holders.processes_within.lock().unwrap().clone();
+        assert_eq!(given.len(), 1, "no ask starts past the bound: {given:?}");
+        assert!(given[0] <= bound, "{given:?}");
+
+        holders.processes_within.lock().unwrap().clear();
+        let began = std::time::Instant::now();
+        assert!(engine.pane_places(Wait::Each(bound)).is_err());
+        assert!(began.elapsed() < bound * 3, "{:?}", began.elapsed());
     }
 }

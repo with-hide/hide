@@ -104,6 +104,24 @@ pub(crate) fn node_owner_of<'a>(
         .find_in(workspaces)
 }
 
+/// The plain folder a workspace carrying `mark` owns on the core's own node,
+/// when it is `path` or a folder above it: a pane of that workspace whose cwd
+/// is a folder within is that folder's, as a cwd within a repository is the
+/// repository's checkout. The mark names its folder only as a digest, so the
+/// folders `path` names are tried from the deepest up, read from its wire
+/// spelling so a device's drive root `C:/` stays a root on any core.
+pub(crate) fn marked_folder<'a>(node: &str, mark: &str, path: &'a str) -> Option<&'a str> {
+    std::iter::successors(Some(path), |folder| {
+        hide_platform::path::wire_parent(folder)
+    })
+    .filter(|folder| !folder.is_empty())
+    .find(|folder| {
+        OwnerOpen::for_checkout(node, folder, folder, false, "")
+            .on_node()
+            .marks(mark)
+    })
+}
+
 /// How a checkout with no open owner gets one.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OwnerOpen {
@@ -267,5 +285,22 @@ mod tests {
             owner_of("local", "/notes", false, [workspaces[0], workspaces[1]]),
             None
         );
+    }
+
+    /// A marked folder holds the folders below it, tried from the deepest
+    /// up by spelling alone: a Windows device's drive root `C:/` read on a
+    /// Unix core is still `C:/`, never the relative `C:`.
+    #[test]
+    fn a_marked_folder_holds_its_subfolders_and_a_drive_root_stays_a_root() {
+        let notes = owner_mark("mac", "/notes");
+        assert_eq!(
+            marked_folder("mac", &notes, "/notes/2026/11"),
+            Some("/notes")
+        );
+        assert_eq!(marked_folder("mac", &notes, "/elsewhere/notes"), None);
+        let drive = owner_mark("pc", "C:/");
+        assert_eq!(marked_folder("pc", &drive, "C:/work/repo"), Some("C:/"));
+        let root = owner_mark("mac", "/");
+        assert_eq!(marked_folder("mac", &root, "/work"), Some("/"));
     }
 }

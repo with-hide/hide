@@ -2674,6 +2674,7 @@ fn a_pane_in_a_second_directory_projects_into_its_own_project() {
         label: "hide".to_owned(),
         purpose: None,
         cwds: vec![repository_path.to_owned(), checkout_path.to_owned()],
+        owner_mark: None,
     }];
     let workspace_id = workspace::workspace_id_for_path(Path::new(checkout_path));
     let checkout_id = workspace::checkout_id_for_path(&workspace_id, Path::new(checkout_path));
@@ -2764,6 +2765,7 @@ fn another_workspace_layout_does_not_steal_the_selected_checkout_projection() {
             label: "other".to_owned(),
             purpose: None,
             cwds: vec![checkout_path.to_owned()],
+            owner_mark: None,
         },
         workspace::SessionSpace {
             checkout: None,
@@ -2771,6 +2773,7 @@ fn another_workspace_layout_does_not_steal_the_selected_checkout_projection() {
             label: "selected".to_owned(),
             purpose: None,
             cwds: vec![checkout_path.to_owned()],
+            owner_mark: None,
         },
     ];
     // Two Herdr workspaces in one directory are one project; the selected
@@ -2883,6 +2886,7 @@ fn a_registration_herdr_already_has_a_workspace_for_is_listed_once() {
         label: "duplicate".to_owned(),
         purpose: None,
         cwds: vec![checkout_path.to_owned()],
+        owner_mark: None,
     }];
     let registrations = vec![WorkspaceRegistration {
         primary_checkout_id: None,
@@ -2961,6 +2965,7 @@ fn closing_the_last_pane_keeps_an_unregistered_project_listed() {
         label: "hide main".to_owned(),
         purpose: None,
         cwds: vec![checkout_path.to_owned()],
+        owner_mark: None,
     }];
     let project_id = workspace::workspace_id_for_path(Path::new(checkout_path));
     let checkout_id = workspace::checkout_id_for_path(&project_id, Path::new(checkout_path));
@@ -3579,6 +3584,76 @@ fn a_plain_folder_tab_goes_to_its_marked_workspace_and_marks_a_new_one_when_the_
         }
         other => panic!("expected a new marked owner, got {other:?}"),
     }
+    let _ = std::fs::remove_dir_all(&path);
+}
+
+/// After a restart no created-tab record is left, so a registered plain
+/// folder's tab whose only pane sits in a plain folder below it stays in the
+/// folder because its workspace carries the folder's owner mark, which the
+/// core's own engine saves; no row is made for the subfolder. A workspace
+/// without the mark is placed by its pane's cwd, as before.
+#[test]
+fn a_tab_of_a_plain_folders_owner_stays_in_that_folder_while_its_pane_is_in_a_subfolder() {
+    let path = owner_fixture("subfolder", false);
+    let sub = std::path::Path::new(&path)
+        .join("복구할-작업-폴더")
+        .to_string_lossy()
+        .into_owned();
+    std::fs::create_dir(&sub).expect("subfolder");
+    let registration =
+        workspace::registration(&path, "fixture", crate::node::TEST_NODE).expect("registration");
+    let payload = |tokens: serde_json::Value| {
+        crate::sidebar::owned_label_fixture(serde_json::json!({
+            "agents": [],
+            "workspaces": [{"workspace_id": "h1", "label": "fixture", "tokens": tokens}],
+            "panes": [{"pane_id": "h1:p4", "cwd": sub}],
+            "tabs": [{"workspace_id": "h1", "tab_id": "h1:t2", "label": "복구 작업"}],
+            "layouts": [{
+                "workspace_id": "h1", "tab_id": "h1:t2", "zoomed": false,
+                "area": {"x": 0, "y": 0, "width": 80, "height": 24},
+                "focused_pane_id": "h1:p4",
+                "panes": [{"pane_id": "h1:p4", "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],
+                "splits": []
+            }]
+        }))
+        .expect("restored session")
+    };
+    let holding = |runtime: &Runtime| {
+        runtime
+            .snapshot()
+            .navigator
+            .workspaces
+            .iter()
+            .flat_map(|workspace| &workspace.checkouts)
+            .find(|checkout| {
+                checkout
+                    .tabs
+                    .iter()
+                    .any(|tab| tab.id.as_deref() == Some("h1:t2"))
+            })
+            .map(|checkout| checkout.path.clone())
+    };
+    let rows = |runtime: &Runtime| {
+        runtime
+            .snapshot()
+            .navigator
+            .workspaces
+            .iter()
+            .map(|workspace| workspace.path.clone())
+            .collect::<Vec<_>>()
+    };
+
+    let mut owned = runtime();
+    owned.snapshot.ui_state.workspace_registrations = vec![registration.clone()];
+    let mark = crate::checkout_owner::owner_mark(crate::node::TEST_NODE, &path);
+    assert!(owned.ingest_session(Ok(payload(serde_json::json!({"hide_owner": mark})))));
+    assert_eq!(holding(&owned).as_deref(), Some(path.as_str()));
+    assert_eq!(rows(&owned), vec![path.clone()]);
+
+    let mut unmarked = runtime();
+    unmarked.snapshot.ui_state.workspace_registrations = vec![registration];
+    assert!(unmarked.ingest_session(Ok(payload(serde_json::json!({})))));
+    assert_eq!(holding(&unmarked).as_deref(), Some(sub.as_str()));
     let _ = std::fs::remove_dir_all(&path);
 }
 

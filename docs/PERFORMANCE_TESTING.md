@@ -325,7 +325,7 @@ HIDE_VERSION='<candidate-version>' bash scripts/verify-web.sh desktop package
 Replace `<candidate-version>` with the intended local candidate version before packaging.
 
 `verify-cargo.sh release` builds the release `hided`, `hide` and `hide-agent-hooks` binaries; release `hided` embeds `web/dist`, so run `bash scripts/verify-web.sh web build` first.
-`bash scripts/verify-web.sh desktop package` (`desktop/scripts/package.mjs`) runs that release build, fetches the pinned Herdr through `scripts/fetch-herdr-runtime.sh`, and packages `desktop/out/hide-darwin-<arch>/hide.app`; it refuses to produce an app if any binary it ships is missing or not executable.
+`bash scripts/verify-web.sh desktop package` (`desktop/scripts/package.mjs`) runs that release build and packages `desktop/out/hide-darwin-<arch>/hide.app`; it refuses to produce an app if any binary it ships is missing or not executable.
 For an unpackaged dev run, `pnpm --dir desktop dev` finds this worktree's `target/{debug,release}/hide`.
 Archive baseline and candidate from separate worktrees so each keeps its own `target/` and `desktop/out/`; never redirect build output with `CARGO_TARGET_DIR` or share it across revisions.
 Building, testing, installing, launching, committing, and merging are separate states; report each accurately.

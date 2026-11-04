@@ -208,6 +208,23 @@ impl LocalPanes {
     }
 }
 
+/// The folders the foreground members other than the pane's `shell` work in,
+/// each once, as this machine observes them; `None` when one of them could
+/// not be read. A member that ended since the holder listed it works nowhere.
+fn program_folders(shell: u32, members: impl Iterator<Item = u32>) -> Option<Vec<String>> {
+    let mut folders = Vec::new();
+    for pid in members.filter(|pid| *pid != shell) {
+        match hide_platform::process::observed_cwd_of(pid) {
+            Ok(folder) => folders.push(hide_platform::path::to_wire(&folder).ok()?),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return None,
+        }
+    }
+    folders.sort();
+    folders.dedup();
+    Some(folders)
+}
+
 impl PaneHolders for LocalPanes {
     fn own(
         self: Arc<Self>,
@@ -385,13 +402,18 @@ impl PaneHolders for LocalPanes {
         }
     }
 
-    fn processes(&self, pane: &str) -> Result<HolderProcesses, HolderError> {
-        match self.holders.processes(pane).map_err(ask_error)? {
+    fn processes(
+        &self,
+        pane: &str,
+        within: std::time::Duration,
+    ) -> Result<HolderProcesses, HolderError> {
+        match self.holders.processes(pane, within).map_err(ask_error)? {
             Answer::Processes { shell, foreground } => Ok(HolderProcesses {
                 shell,
                 foreground: match foreground {
                     Foreground::Known { group, members } => Some(HolderForeground {
                         group,
+                        folders: program_folders(shell, members.iter().map(|member| member.pid)),
                         members: members
                             .into_iter()
                             .map(|member| (member.pid, member.name.unwrap_or_default()))

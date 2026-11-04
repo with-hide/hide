@@ -91,7 +91,7 @@ pub(super) fn start(engine: OwnEngine<'static>, saved: BTreeSet<String>) -> Resu
             let gate = engine.restore_gate();
             let resumes = engine.restore(&saved);
             // Release the restore's ownership before opening the gate, so
-            // a caller can drop the engine and reopen its completed save.
+            // an engine its caller drops is dropped whole.
             // Resumes hold it only while each one runs; the next stops when
             // its owner has let the engine go (a device's, with its link).
             let shared = std::sync::Arc::downgrade(&engine.shared);
@@ -519,7 +519,11 @@ impl OwnEngine<'static> {
     /// foreground group) or a holder that does not answer is not read as
     /// one, so nothing is typed over a program that may run.
     fn at_its_prompt(&self, pane: &str) -> bool {
-        match self.shared.holders.processes(pane) {
+        match self
+            .shared
+            .holders
+            .processes(pane, hide_node_link::link_panes::ASK_WAIT)
+        {
             Ok(processes) => processes
                 .foreground
                 .is_some_and(|foreground| foreground.group == processes.shell),
@@ -732,6 +736,7 @@ impl OwnEngine<'static> {
             let engine = OwnEngine {
                 shared,
                 gates: Vec::new(),
+                saver: None,
             };
             if engine.check().is_err() {
                 return;

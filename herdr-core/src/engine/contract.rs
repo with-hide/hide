@@ -838,6 +838,166 @@ fn a_restart_after_the_machine_went_down_brings_each_pane_back_under_its_id_and_
     }
 }
 
+/// A tab made in a plain folder whose only pane now runs in a plain folder
+/// below it is still that folder's after the daemon restarts. The core's
+/// record that it made the tab there does not outlive the daemon, so it reads
+/// the restored session: the engine brings back the workspace's owner mark
+/// with the pane, and the core places the pane's cwd under the folder the
+/// mark names, where the cwd alone made the subfolder a project of its own.
+#[test]
+#[ignore = "needs the built pane holder: HIDE_TEST_HOLDER_BIN"]
+fn a_restored_tab_whose_pane_is_in_a_subfolder_stays_in_the_folder_its_workspace_owns() {
+    use std::sync::Arc;
+
+    let (_root, [home, state_dir, folder]) = holder_root();
+    let _processes = RecordedProcesses(state_dir.clone());
+    // The real path, as a registration keeps it and the owner mark names it.
+    let folder = hide_platform::fs::identity::canonical(&folder).unwrap();
+    let sub = folder.join("복구할-작업-폴더");
+    std::fs::create_dir(&sub).unwrap();
+    let folder = hide_platform::path::to_wire(&folder).unwrap();
+    let sub = hide_platform::path::to_wire(&sub).unwrap();
+    let engine_dir = hide_kit::layout::engine_dir(&state_dir);
+    let open = || {
+        let (node, service) = built_node(&home, &state_dir);
+        let place = super::own::Place {
+            engine_dir: engine_dir.clone(),
+            home: hide_platform::path::to_wire(&home).unwrap(),
+            hooks_home: Some(home.clone()),
+            node: Arc::clone(&node) as Arc<dyn hide_node_link::NodeLink>,
+            windows: cfg!(windows),
+            definitions: Arc::new(hide_agent_adapter::definition::Catalog::read(Vec::new())),
+            launches: Arc::default(),
+        };
+        let panes = super::own::link_panes(node);
+        let engine =
+            super::own::OwnEngine::open(Arc::clone(&panes), place).expect("the engine opens");
+        (engine, panes, service)
+    };
+
+    let (first, first_panes, first_service) = open();
+    let (workspace, tab, root) = first
+        .create_workspace(WAIT, &folder, "fixture", true, BTreeMap::new())
+        .unwrap();
+    // What the core writes on a plain folder's owner when it opens one.
+    let mark = crate::checkout_owner::owner_mark(crate::node::TEST_NODE, &folder);
+    first
+        .report_workspace_token(
+            WAIT,
+            &workspace,
+            crate::checkout_owner::OWNER_TOKEN,
+            Some(&mark),
+        )
+        .unwrap();
+    let pane = first
+        .split_beside(WAIT, &root, Some(&sub), BTreeMap::new())
+        .unwrap();
+    prompted(&first, &pane);
+    first.close_pane(WAIT, &root).unwrap();
+    // The daemon ends and starts again; the pane's holder runs on.
+    first.stop();
+    drop((first, first_panes, first_service));
+
+    let (next, next_panes, _next_service) = open();
+    prompted(&next, &pane);
+    let mut core = crate::runtime::tests::runtime();
+    assert!(core.ingest_session(Ok(next.session_payload(WAIT).unwrap())));
+    let navigator = &core.snapshot().navigator;
+    let holding = navigator
+        .workspaces
+        .iter()
+        .flat_map(|project| &project.checkouts)
+        .find(|checkout| {
+            checkout
+                .tabs
+                .iter()
+                .any(|shown| shown.id.as_deref() == Some(tab.as_str()))
+        })
+        .map(|checkout| checkout.path.clone());
+    assert_eq!(holding, Some(folder.clone()), "the tab stays in its folder");
+    assert_eq!(
+        navigator
+            .workspaces
+            .iter()
+            .map(|project| project.path.clone())
+            .collect::<Vec<_>>(),
+        vec![folder],
+        "no project is made for the subfolder"
+    );
+    next_panes
+        .terminate(&pane)
+        .unwrap_or_else(|error| panic!("{pane} did not end: {error:?}"));
+}
+
+/// A program a pane's shell runs in another folder is reported with the
+/// pane, as its machine reads the program's folder, so a checkout a program
+/// works in is not removed as unused while the pane's own folder is elsewhere.
+#[test]
+#[ignore = "needs the built pane holder: HIDE_TEST_HOLDER_BIN"]
+#[allow(clippy::disallowed_methods)] // polls the pane's places, bounded by a deadline
+fn a_program_run_in_another_folder_is_that_panes_foreground_folder() {
+    struct Running(BuiltHolders);
+    impl Drop for Running {
+        fn drop(&mut self) {
+            self.0.stop();
+        }
+    }
+    let running = Running(BuiltHolders::start());
+    let built = &running.0;
+    let engine = &built.engine;
+    let native = hide_platform::path::from_wire(&built.folder).unwrap();
+    // Typed into the shell, so plain ASCII: a shell reading its line in the
+    // C locale takes other bytes as keys.
+    let other = native.join("other-folder");
+    std::fs::create_dir(&other).unwrap();
+    // The folder as the system names it, which is what its machine reads.
+    let other = hide_platform::fs::identity::canonical(&other).unwrap();
+    let (_, _, pane) = engine
+        .create_workspace(WAIT, &built.folder, "folders", true, BTreeMap::new())
+        .unwrap();
+    prompted(engine, &pane);
+    // A program outside the shell, started in the other folder: Windows
+    // PowerShell's own location is not its process's folder, so it starts
+    // `cmd.exe`, which changes its own.
+    let line = if cfg!(windows) {
+        format!(
+            "cmd.exe /c \"cd /d {} && ping -n 60 127.0.0.1 > nul\"",
+            other.display()
+        )
+    } else {
+        format!("(cd '{}' && exec sleep 60)", other.display())
+    };
+    engine.submit_text(WAIT, &pane, &line).unwrap();
+    let other = hide_platform::path::to_wire(&other).unwrap();
+    let deadline = Instant::now() + SHOWN_WITHIN;
+    let places = loop {
+        let places = engine.pane_places(WAIT).unwrap();
+        if places
+            .iter()
+            .any(|place| place.foreground_cwd.as_deref() == Some(other.as_str()))
+        {
+            break places;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the program's folder was never reported: {places:?}, the holder says {:?}, the pane shows {:?}",
+            built.panes.processes(&pane, Duration::from_secs(5)),
+            engine
+                .read_pane(WAIT, &pane, "recent", 20)
+                .map(|text| text.text),
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert!(places.iter().all(|place| place.pane_id == pane));
+    assert!(
+        engine
+            .pane_folders(WAIT)
+            .unwrap()
+            .contains(&(pane.clone(), Some(other))),
+        "the cleanup's read guards the program's folder"
+    );
+}
+
 /// PRD engine-bundle-3-core-owns B28, D-9: a pane on the core's own engine
 /// names itself `HIDE_PANE_ID` and no Herdr pane, says its terminal is
 /// Hide's, and its proof names the shell its record holds, by the start time

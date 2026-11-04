@@ -202,6 +202,12 @@ pub struct SessionSpace {
     pub cwds: Vec<String>,
     pub purpose: Option<String>,
     pub checkout: Option<HerdrCheckout>,
+    /// The workspace's `hide_owner` token: Hide opened it as the owner of a
+    /// plain folder (`checkout_owner::owner_mark`), so a cwd in that folder
+    /// or below it is that folder's checkout. The core's own engine saves the
+    /// token with its session, so a tab Hide created there stays in its
+    /// folder across a restart, wherever below it its pane has gone.
+    pub owner_mark: Option<String>,
 }
 
 /// The checkout Herdr attached a workspace to (`workspace.worktree`) and the
@@ -765,9 +771,23 @@ fn inspect_space(node: &NodeId, space: &SessionSpace, places: &Places) -> Vec<Wo
         // A checkout only Git's list or Herdr's record places is one the
         // node could not read; it says whether the folder is gone.
         let recorded_only = repository.is_some() && paths.place(cwd).is_none();
-        let root_comparison = repository
-            .map(|place| place.root.clone())
-            .unwrap_or_else(|| paths.comparison(cwd));
+        let root_comparison = match repository {
+            Some(place) => place.root.clone(),
+            None => {
+                // Outside any repository, the plain folder the workspace was
+                // opened for holds this cwd when it is the folder or above
+                // it; otherwise the cwd is a folder of its own.
+                let folder = paths.comparison(cwd);
+                let owned = space
+                    .owner_mark
+                    .as_deref()
+                    .and_then(|mark| {
+                        crate::checkout_owner::marked_folder(node.as_str(), mark, &folder)
+                    })
+                    .map(str::to_owned);
+                owned.unwrap_or(folder)
+            }
+        };
         let project_comparison = repository
             .map(|place| place.main_root.clone())
             .unwrap_or_else(|| root_comparison.clone());
@@ -1427,6 +1447,7 @@ mod tests {
                     root.to_string_lossy().into_owned(),
                     nested.to_string_lossy().into_owned(),
                 ],
+                owner_mark: None,
             },
             SessionSpace {
                 checkout: None,
@@ -1434,6 +1455,7 @@ mod tests {
                 label: "two".to_owned(),
                 purpose: None,
                 cwds: vec![folder.to_string_lossy().into_owned()],
+                owner_mark: None,
             },
         ];
 
@@ -1552,6 +1574,7 @@ mod tests {
                     root.to_string_lossy().into_owned(),
                     checkout_path.to_string_lossy().into_owned(),
                 ],
+                owner_mark: None,
             }],
             &no_worktrees(),
         );
@@ -1594,6 +1617,7 @@ mod tests {
             label: "Registered".to_owned(),
             purpose: None,
             cwds: vec![root.to_string_lossy().into_owned()],
+            owner_mark: None,
         }];
 
         let catalog = catalog(
@@ -1624,6 +1648,7 @@ mod tests {
             label: "hide main".to_owned(),
             purpose: None,
             cwds: vec![root.to_string_lossy().into_owned()],
+            owner_mark: None,
         };
 
         let occupied = catalog(
@@ -1655,6 +1680,7 @@ mod tests {
                 first.to_string_lossy().into_owned(),
                 second.to_string_lossy().into_owned(),
             ],
+            owner_mark: None,
         };
         let registrations = [
             registration(first.to_str().unwrap(), "First", crate::node::TEST_NODE).expect("first"),
@@ -1690,6 +1716,7 @@ mod tests {
             label: "scratch".to_owned(),
             purpose: None,
             cwds: vec![root.to_string_lossy().into_owned()],
+            owner_mark: None,
         };
 
         let catalog = catalog(&[], &[space], &no_worktrees());
@@ -1712,6 +1739,7 @@ mod tests {
                 label: "first".to_owned(),
                 purpose: Some("Earlier purpose".to_owned()),
                 cwds: vec![cwd.clone()],
+                owner_mark: None,
             },
             SessionSpace {
                 checkout: None,
@@ -1719,6 +1747,7 @@ mod tests {
                 label: "second".to_owned(),
                 purpose: None,
                 cwds: vec![cwd.clone()],
+                owner_mark: None,
             },
         ];
 
@@ -1750,6 +1779,7 @@ mod tests {
                 label: "Outer first".to_owned(),
                 purpose: Some("First".to_owned()),
                 cwds: vec!["/fixture/outer/worktree".to_owned()],
+                owner_mark: None,
             },
             SessionSpace {
                 checkout: None,
@@ -1757,6 +1787,7 @@ mod tests {
                 label: "Nested".to_owned(),
                 purpose: Some("Wrong repository".to_owned()),
                 cwds: vec!["/fixture/outer/worktree/nested".to_owned()],
+                owner_mark: None,
             },
             SessionSpace {
                 checkout: None,
@@ -1764,6 +1795,7 @@ mod tests {
                 label: "Outer last".to_owned(),
                 purpose: Some("Last".to_owned()),
                 cwds: vec!["/fixture/outer/worktree".to_owned()],
+                owner_mark: None,
             },
         ];
         let project = WorkspaceSnapshot {
@@ -1823,6 +1855,7 @@ mod tests {
                 label: "Symlink".to_owned(),
                 purpose: Some("Earlier".to_owned()),
                 cwds: vec![paths.comparison(&alias)],
+                owner_mark: None,
             },
             SessionSpace {
                 checkout: None,
@@ -1830,6 +1863,7 @@ mod tests {
                 label: "Dot segment".to_owned(),
                 purpose: None,
                 cwds: vec![paths.comparison(&dotted)],
+                owner_mark: None,
             },
         ];
         let checkout = fs::canonicalize(&checkout).expect("the checkout's real path");
@@ -1939,6 +1973,7 @@ mod tests {
                 label: "Project".to_owned(),
                 purpose: None,
                 cwds: vec![root.to_string_lossy().into_owned()],
+                owner_mark: None,
             }],
             &worktrees,
         );
@@ -2077,6 +2112,7 @@ mod tests {
                 path: "/worktrees/topic".to_owned(),
                 repository: "/repo".to_owned(),
             }),
+            owner_mark: None,
         };
         (paths, space)
     }
@@ -2198,6 +2234,7 @@ mod tests {
             cwds: vec![cwd.to_owned()],
             purpose: None,
             checkout: None,
+            owner_mark: None,
         }
     }
 

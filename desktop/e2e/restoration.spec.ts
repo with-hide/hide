@@ -15,7 +15,6 @@ import { fitWindow, launchShell, startStack, test } from "./fixture";
 // marks a pane failed only when its shell cannot start, so the shell is the one thing that
 // is missing when the engine's panes are made again.
 test("failed terminals remain legible and keyboard reachable in a narrow native window", { tag: "@platform" }, async () => {
-  test.skip(true, "own-restore-checkout 노드 대기: cold restore moves the nested folder's pane out of its original checkout");
   // Windows starts the integrated PowerShell, which no SHELL setting makes unstartable.
   test.skip(process.platform === "win32", "the engine's restore fails only for a shell that cannot start, which no setting does for Windows' integrated PowerShell");
   const stack = await startStack("restoration", { agents: false });
