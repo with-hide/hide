@@ -13,7 +13,7 @@ import { startFixture, type AgentFixture } from "./engine-fixture";
 import { openProject, openWorktree, tabOfPane, viewPane, withControl } from "./daemon-actions";
 import { labelAgentPane, startAgentIn } from "./fixture-agents";
 import { startHided, type Daemon } from "./hided-fixture";
-import { countSent, screenshot, showProjectRow } from "./wire";
+import { countSent, enterWorkspace, screenshot, showProjectRow } from "./wire";
 
 test.describe.configure({ timeout: 180_000 });
 
@@ -70,7 +70,7 @@ async function featureRow(page: Page) {
 
 async function openDeletion(page: Page, daemon: Daemon, repo: string, worktree: string) {
   await page.goto(`${daemon.origin}/#token=${daemon.token}`);
-  await expect(page.locator("[data-main-screen]")).toBeVisible({ timeout: 20_000 });
+  await enterWorkspace(page, "fixture");
   const pane = await openDeletionProject(daemon, repo, worktree);
   const feature = await featureRow(page);
   await feature.locator("[data-checkout-menu]").click({ button: "right" });
@@ -191,7 +191,7 @@ test("an open deletion dialog receives refreshed Git facts and retires Discard t
     });
     daemon = await startHided(fixture, "worktree-refreshed-consent");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
-    await expect(page.locator("[data-main-screen]")).toBeVisible({ timeout: 20_000 });
+    await enterWorkspace(page, "fixture");
     const pane = await openDeletionProject(daemon, linked.repo, linked.worktree);
     const project = page.locator("[data-project]").filter({ has: page.locator("[data-project-row]").filter({ hasText: "preflight-repo" }) });
     const feature = await featureRow(page);
