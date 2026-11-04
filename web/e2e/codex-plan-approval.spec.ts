@@ -1,5 +1,5 @@
-// A Codex plan waiting for approval on an isolated engine and hided, either
-// engine (PRD codex-plan-approval-hold B1, B4, B12): the engine reads Codex's
+// A Codex plan waiting for approval on an isolated engine and hided (PRD
+// codex-plan-approval-hold B1, B4, B12): the engine reads Codex's
 // "Implement this plan?" menu as an ordinary stop, so the wait is read from
 // the session file. A rollout whose last plan-mode turn proposed a plan puts
 // the Codex row in Needs You with the approval mark, and the next turn's
@@ -14,7 +14,6 @@
 // wait is read for the state the row is in.
 
 import { expect, test } from "@playwright/test";
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { startFixture, type EngineServer } from "./engine-fixture";
@@ -51,7 +50,7 @@ function planWaiting(cwd: string): string {
     + event("task_complete", "turn-1", { last_agent_message: null });
 }
 
-/** The session read the daemon keeps for the pane: its Herdr state and the last turn it folded. */
+/** The session read the daemon keeps for the pane: its engine state and the last turn it folded. */
 function turnRead(daemon: Daemon, pane: string): { seq?: number; mode?: string } {
   type Stored = { turns_seq?: number; turns?: { last?: { mode?: string } } };
   try {
@@ -78,18 +77,17 @@ async function drawTitle(daemon: Daemon, pane: string, state: "working" | "ended
 /**
  * Starts the Codex stand-in in `pane`, whose shell is at its prompt, and
  * returns once its row names `SESSION`, as Codex's integration reports the
- * session at SessionStart: Herdr's report on Herdr; on the core's own engine
- * Hide's hook helper with Codex's payload, run from a process of the pane's
- * shell once the agent runs (the stand-in's own report is Claude Code's, and
- * its screen takes the pane's keys). The reporter waits for a marker file the
- * test writes when the agent is listed, so the hook never races the start.
+ * session at SessionStart: Hide's hook helper with Codex's payload, run from
+ * a process of the pane's shell once the agent runs (the stand-in's own report
+ * is Claude Code's, and its screen takes the pane's keys). The reporter waits
+ * for a marker file the test writes when the agent is listed, so the hook
+ * never races the start.
  */
 async function startCodex(fixture: EngineServer, daemon: Daemon, pane: string, cwd: string): Promise<void> {
   const go = path.join(fixture.root, "codex-session-go");
-  if (fixture.engine === "own") {
-    const hooks = path.resolve("..", "target", "debug", fixtureExecutable("hide-agent-hooks"));
-    const reporter = path.join(fixture.root, "codex-session-report.cjs");
-    fs.writeFileSync(reporter, `
+  const hooks = path.resolve("..", "target", "debug", fixtureExecutable("hide-agent-hooks"));
+  const reporter = path.join(fixture.root, "codex-session-report.cjs");
+  fs.writeFileSync(reporter, `
 const fs = require("node:fs");
 const { spawnSync } = require("node:child_process");
 const [hooks, session, cwd, go] = process.argv.slice(2);
@@ -97,19 +95,13 @@ const wait = () => (fs.existsSync(go) ? hook() : setTimeout(wait, 100));
 const hook = () => process.exit(spawnSync(hooks, ["hook", "--runtime", "codex", "--event", "SessionStart"], { input: JSON.stringify({ session_id: session, hook_event_name: "SessionStart", source: "startup", cwd }), encoding: "utf8", timeout: 20000 }).status ?? 1);
 wait();
 `);
-    const background = paneCommandLine(fixture.shell, [process.execPath, reporter, hooks, SESSION, cwd, go]);
-    await withControl(daemon, async (control) => sendKeys(control, pane, `${fixture.shell === "cmd" ? "start /b " : ""}${background}${fixture.shell === "cmd" ? "" : " &"}\r`));
-  }
+  const background = paneCommandLine(fixture.shell, [process.execPath, reporter, hooks, SESSION, cwd, go]);
+  await withControl(daemon, async (control) => sendKeys(control, pane, `${fixture.shell === "cmd" ? "start /b " : ""}${background}${fixture.shell === "cmd" ? "" : " &"}\r`));
   await withControl(daemon, async (control) => {
     sendKeys(control, pane, "codex\r");
     await control.until((rest) => agentIn(rest, pane), "the Codex agent in the plan project", 30_000);
   });
-  if (fixture.engine === "herdr") {
-    const server = fixture as EngineServer & { env: NodeJS.ProcessEnv; bin: string };
-    execFileSync(server.bin, ["pane", "report-agent-session", pane, "--source", "herdr:codex", "--agent", "codex", "--agent-session-id", SESSION, "--seq", "2", "--session-start-source", "clear"], { env: server.env, timeout: 30_000 });
-  } else {
-    fs.writeFileSync(go, "");
-  }
+  fs.writeFileSync(go, "");
   await withControl(daemon, (control) => control.until((rest) => agentIn(rest, pane)?.session_id === SESSION, `${pane} on session ${SESSION}`, 20_000));
 }
 
@@ -141,7 +133,7 @@ test("a Codex plan waiting for approval holds its row in Needs You until the nex
     const row = page.locator(`nav[data-sidebar] [data-project] [data-pane="${pane}"]`);
     await expect(row).toBeVisible({ timeout: 20_000 });
 
-    // B1: the turn that proposed the plan has ended, as Herdr's next state
+    // B1: the turn that proposed the plan has ended, as the engine's next state
     // reads it; the row is the operator's to answer, with the approval mark.
     await drawTitle(daemon, pane, "working");
     await drawTitle(daemon, pane, "ended");
@@ -153,7 +145,7 @@ test("a Codex plan waiting for approval holds its row in Needs You until the nex
     const planSeq = turnRead(daemon, pane).seq;
     await screenshot(page, "codex-plan-approval-waiting");
 
-    // B4: approving starts the next turn; once Herdr's state moves, the row
+    // B4: approving starts the next turn; once the engine's state moves, the row
     // leaves Needs You.
     // A project of one agent that no longer waits folds to its project row, so the operator opens it to see the agent's row.
     const toggle = page.locator("nav[data-sidebar] [data-project]", { hasText: "plan" }).locator("[data-checkout-toggle]");
