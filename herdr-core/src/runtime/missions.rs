@@ -754,6 +754,9 @@ impl Runtime {
             (_, MissionEnd::Cancelled) => MissionStatus::Cancelled,
         };
         let before = target.clone();
+        // A started mission's first close: a reopened one closing again, or a
+        // waiting one closing as done, was counted when it first closed.
+        let first_end = before.status == MissionStatus::Running && before.reopened_on.is_none();
         target.status = status;
         target.end_asked_at_unix_ms = None;
         if report.is_some() {
@@ -785,6 +788,15 @@ impl Runtime {
             "component": "missions", "kind": "mission.closed",
             "mission": id, "end": status, "by": by,
         }));
+        if first_end && let Some(sink) = &self.product_analytics {
+            use crate::product_analytics::{Event, MissionOutcome};
+            let outcome = match status {
+                MissionStatus::MergeWait => MissionOutcome::MergeWait,
+                MissionStatus::Cancelled => MissionOutcome::Cancelled,
+                _ => MissionOutcome::Done,
+            };
+            sink.capture(Event::MissionEnded { outcome });
+        }
         let place = (target.device_id.clone(), target.project.clone());
         self.record_mission_events(id, events);
         // A mission now waiting for its branches reads them at once.
@@ -1282,6 +1294,10 @@ impl Runtime {
                     target.status = MissionStatus::Running;
                     target.started_at_unix_ms = Some(now);
                     target.updated_at_unix_ms = now;
+                    let nodes = crate::product_analytics::MissionSize::of(target.nodes.len());
+                    if let Some(sink) = &self.product_analytics {
+                        sink.capture(crate::product_analytics::Event::MissionStarted { nodes });
+                    }
                     self.save_missions();
                     self.follow_mission_outside(&id);
                 }

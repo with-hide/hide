@@ -160,17 +160,18 @@ impl Sink for RuntimeSink {
         self.apply(move |runtime| runtime.ingest_archive_record_deleted(request, answer));
     }
 
-    fn agent_started(&self, agent: hide_session::Agent) {
-        // Only the sink's handle is taken under the lock; the capture is the
-        // sink's own nonblocking enqueue and publishes nothing.
-        let sink = self.runtime.upgrade().and_then(|runtime| {
-            runtime
-                .lock()
-                .ok()
-                .and_then(|runtime| runtime.product_analytics.clone())
+    fn agent_started(&self, agent: hide_session::Agent, session: &SessionIdentity) {
+        // Only the sink's handle and who started the agent are read under
+        // the lock; the capture is the sink's own nonblocking enqueue and
+        // publishes nothing.
+        let found = self.runtime.upgrade().and_then(|runtime| {
+            runtime.lock().ok().and_then(|runtime| {
+                let sink = runtime.product_analytics.clone()?;
+                Some((sink, runtime.agent_start_source(session)))
+            })
         });
-        if let Some(sink) = sink {
-            sink.capture(crate::product_analytics::Event::AgentStarted(agent));
+        if let Some((sink, source)) = found {
+            sink.capture(crate::product_analytics::Event::AgentStarted { agent, source });
         }
     }
 
@@ -804,6 +805,58 @@ impl Runtime {
                 }
             })
             .collect()
+    }
+
+    /// Who started the agent whose pane carries `session`: a mission node's
+    /// worker or checker, an agent `hide agent spawn` started (with a parent or as a
+    /// handoff), or the operator. None when the delivery ledger cannot be
+    /// read or no pane carries the session any more.
+    pub(super) fn agent_start_source(
+        &self,
+        session: &SessionIdentity,
+    ) -> Option<crate::product_analytics::AgentSource> {
+        use crate::product_analytics::AgentSource;
+        let ledger = self.delivery_ledger.as_ref().ok()?;
+        let device = session.device_id.as_str();
+        let pane = self.machine_agents(device).iter().find(|agent| {
+            agent.session_id.as_deref() == Some(session.session_id.as_str())
+                && session_agent(&agent.agent_kind) == Some(session.agent.as_str())
+        })?;
+        let record = ledger.agents.iter().rev().find(|record| {
+            !record.ended
+                && record.actor.device_id == device
+                && crate::address::same_pane(
+                    self.node.as_str(),
+                    device,
+                    &record.pane,
+                    &pane.pane_id,
+                )
+        });
+        let Some(record) = record else {
+            return Some(AgentSource::Operator);
+        };
+        let id = Some(record.id.as_str());
+        let worker = self
+            .missions
+            .book
+            .missions
+            .iter()
+            .flat_map(|mission| &mission.nodes)
+            .any(|node| {
+                node.agent_id.as_deref() == id
+                    || node
+                        .criteria
+                        .iter()
+                        .flat_map(|criterion| &criterion.checkers)
+                        .any(|checker| checker.agent_id.as_deref() == id)
+            });
+        Some(if worker {
+            AgentSource::Mission
+        } else if record.parent.is_some() || (record.origin.is_some() && !record.forked) {
+            AgentSource::Spawn
+        } else {
+            AgentSource::Operator
+        })
     }
 
     /// The agent sessions Hide panes carry now, with each pane's folder and
