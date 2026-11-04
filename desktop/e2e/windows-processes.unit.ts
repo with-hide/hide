@@ -5,13 +5,13 @@ import { beforeAll, expect, test } from "vitest";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { endWindowsProcesses, windowsProcessTree } from "../../web/e2e/platform-fixture";
-import { buildFixtureShims } from "../../web/e2e/shims/build";
+import { buildFixtureShims, fixtureBuildTimeout } from "../../web/e2e/shims/build";
 
 // vitest has no `globalSetup` of Playwright's, so this file builds the
 // programs the teardown runs, the same way, before it uses one.
 beforeAll(async () => {
   if (process.platform === "win32") await buildFixtureShims(fileURLToPath(new URL("..", import.meta.url)), ["hide-processes"]);
-}, 120_000);
+}, fixtureBuildTimeout(["hide-processes"]));
 
 test("a child its owner started after the owner was listed is ended once the owner is gone", { timeout: 30_000 }, async (context) => {
   if (process.platform !== "win32") return context.skip();
