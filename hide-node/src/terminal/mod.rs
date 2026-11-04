@@ -228,6 +228,9 @@ struct Pane {
     /// operator's keys typed meanwhile, written after the last letter's
     /// submit in the order typed (PRD engine-bundle-3-core-owns D-13).
     letter: Option<LetterHold>,
+    /// Held keys being written into the pane's program, from a submit on
+    /// (`Inner::replay`).
+    replay: Option<input::Replay>,
     first_frame_pending: bool,
     reported: Option<PaneTerminalState>,
 }
@@ -630,6 +633,9 @@ impl Service {
                     receipt.cancel("Terminal service closed");
                 }
                 session.hold.discard(pane, "service_closed");
+                if let Some(replay) = session.replay.take() {
+                    replay.discard(pane, "service_closed");
+                }
             }
             for (_, mut pane) in inner.panes.drain() {
                 inner.retired.extend(pane.session.take());
@@ -1198,6 +1204,9 @@ impl Inner {
                         receipt.cancel("Pane was forgotten");
                     }
                     entry.hold.discard(&pane, "pane_gone");
+                    if let Some(replay) = entry.replay.take() {
+                        replay.discard(&pane, "pane_gone");
+                    }
                 }
                 self.facts.remove(&pane);
                 self.watches.remove(&pane);
@@ -1279,6 +1288,7 @@ impl Inner {
             }
             TerminalControl::RequestResolve { request, pane } => {
                 self.expire_fork_input(now);
+                let fork = self.requests.is_fork(&request);
                 let held = self.requests.resolve(&request, &pane, now);
                 let held = input::fresh_chunks(&pane, held, now);
                 if held.is_empty() {
@@ -1291,8 +1301,12 @@ impl Inner {
                     "chunks": held.len(),
                     "bytes": held.iter().map(|chunk| chunk.input.len()).sum::<usize>(),
                 }));
-                for chunk in held {
-                    self.write_key(&pane, chunk, false, now);
+                if fork {
+                    self.replay(&pane, held, now);
+                } else {
+                    for chunk in held {
+                        self.write_key(&pane, chunk, false, now);
+                    }
                 }
             }
             TerminalControl::RequestDiscard { request, reason } => {
@@ -1456,7 +1470,51 @@ impl Inner {
     /// Writes one key to its pane. `focus` is a key the operator typed into
     /// this pane on the screen; a key held for a creation reaches its new
     /// pane without moving the keyboard.
+    /// Writes keys a fork request held for `pane` in the order typed, into
+    /// the agent that now runs there. The
+    /// operator's submit behind other replayed keys waits
+    /// [`input::REPLAYED_SUBMIT_GAP`], with everything after it, so a
+    /// program that reads keys arriving together as a paste still submits.
+    fn replay(&mut self, pane: &str, chunks: Vec<HeldChunk>, now: Instant) {
+        if let Some(replay) = self
+            .panes
+            .get_mut(pane)
+            .and_then(|entry| entry.replay.as_mut())
+        {
+            for chunk in chunks {
+                replay.push(pane, chunk);
+            }
+            return;
+        }
+        let mut chunks = chunks.into_iter();
+        let mut wrote = false;
+        while let Some(chunk) = chunks.next() {
+            if wrote
+                && input::paces(&chunk)
+                && let Some(entry) = self.panes.get_mut(pane)
+            {
+                entry.replay = Some(input::Replay::new(
+                    now + input::REPLAYED_SUBMIT_GAP,
+                    std::iter::once(chunk).chain(chunks),
+                ));
+                self.wake_clock = true;
+                return;
+            }
+            self.write_key(pane, chunk, false, now);
+            wrote = true;
+        }
+    }
+
     fn write_key(&mut self, pane: &str, chunk: HeldChunk, focus: bool, now: Instant) {
+        if chunk.by == Typist::Operator
+            && let Some(replay) = self
+                .panes
+                .get_mut(pane)
+                .and_then(|entry| entry.replay.as_mut())
+        {
+            replay.push(pane, chunk);
+            return;
+        }
         if chunk.by == Typist::Operator
             && let Some(letter) = self
                 .panes
@@ -2807,6 +2865,26 @@ impl Inner {
         for entry in self.panes.values_mut() {
             entry.hold.expire_permits(now);
         }
+        let replays = self
+            .panes
+            .iter()
+            .filter(|(_, entry)| {
+                entry
+                    .replay
+                    .as_ref()
+                    .is_some_and(|replay| now >= replay.due)
+            })
+            .map(|(pane, _)| pane.clone())
+            .collect::<Vec<_>>();
+        for pane in replays {
+            let replay = self
+                .panes
+                .get_mut(&pane)
+                .and_then(|entry| entry.replay.take());
+            if let Some(replay) = replay {
+                self.replay(&pane, replay.take(), now);
+            }
+        }
         let settled = self
             .panes
             .iter()
@@ -2913,7 +2991,8 @@ impl Inner {
             let observer = entry
                 .observer_resized_at
                 .map(|at| at + OBSERVER_RESIZE_QUIET);
-            [retry, observer, entry.hold.permit_deadline()]
+            let replay = entry.replay.as_ref().map(|replay| replay.due);
+            [retry, observer, entry.hold.permit_deadline(), replay]
         });
         let facts = self.facts.values().map(InputFacts::deadline);
         panes

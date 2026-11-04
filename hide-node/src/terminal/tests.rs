@@ -920,6 +920,49 @@ fn bare_pane_keys_wait_for_the_fork_and_reach_only_its_terminal() {
 }
 
 #[test]
+fn a_held_enter_reaches_the_fork_a_moment_after_the_keys_before_it() {
+    // Codex reads an Enter that arrives with the keys before it as a
+    // newline of a paste; the operator had pressed it after a pause.
+    let harness = harness(RetryPolicy::Automatic);
+    let fork = harness.controlling("w1:p2");
+    harness.service.control(TerminalControl::RequestOpen {
+        request: "fork-1".into(),
+        fork: true,
+    });
+    harness.service.control(TerminalControl::RequestHold {
+        request: "fork-1".into(),
+        pane: "w1:p2".into(),
+    });
+    harness.key("w1:p2", b"hello");
+    harness.key("w1:p2", b"\r");
+    harness.key("w1:p2", b"more");
+    let released = Instant::now();
+    harness.service.control(TerminalControl::RequestResolve {
+        request: "fork-1".into(),
+        pane: "w1:p2".into(),
+    });
+    assert_eq!(fork.next_input(), b"hello");
+    // A key typed while the Enter waits goes behind it.
+    harness.key("w1:p2", b"!");
+    fork.assert_no_input();
+    let due = harness
+        .service
+        .shared
+        .lock()
+        .next_deadline()
+        .expect("the held Enter owns a deadline");
+    assert!(due >= released + input::REPLAYED_SUBMIT_GAP);
+    harness.service.shared.run(|inner, shared| {
+        inner.tick(shared, due);
+    });
+    let mut written = Vec::new();
+    while written.len() < b"\rmore!".len() {
+        written.extend(fork.next_input());
+    }
+    assert_eq!(written, b"\rmore!");
+}
+
+#[test]
 fn unconfirmed_fork_input_is_discarded_and_reported_only_when_keys_were_held() {
     for typed in [true, false] {
         let harness = harness(RetryPolicy::Automatic);

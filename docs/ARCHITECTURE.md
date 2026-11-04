@@ -1066,9 +1066,10 @@ Keys typed from the press until the agent starts wait in a fork input request (`
 The start acknowledgment only says its command was typed: the fork worker reads `agent.get` for the reserved name until the expected agent kind in the created pane accepts input, using the same `Readiness::accepts_input` predicate as delivery (`Ready` or `Unreported`, never launch-pending).
 This wait decides only input release, never fork success: an expired deadline, changed identity or lost daemon owner discards held keys and preserves the successful fork's pane; a transient read failure keeps waiting within the same bound and is recorded if that bound expires.
 Only discarded bytes produce the existing input-loss notice, once; with no held keys there is no loss notice.
+Released keys are written in the order typed, and the operator's Enter that follows other held keys waits 300 ms behind them, with everything after it, as Herdr's `agent.prompt` waits before its Enter (`input::REPLAYED_SUBMIT_GAP`, `Inner::replay`): held keys reach the program together, and Codex reads an Enter inside keys that arrive together as a newline of a paste, so a fork's held prompt stayed in its composer.
 The existing worker polls every 100 ms, with each socket read bounded by five seconds and the remaining time, until 115 seconds from worker entry, including pane creation and the start acknowledgment, so it never extends Herdr's 120-second start reservation and makes at most 1,150 reads.
 Each read checks the named fork's pane and kind and the weak daemon owner for every agent kind, including Claude and Codex; it does not read the parent's changing status or lock Runtime during polling.
-It adds no work per key, worker or timer.
+It adds no work per key or worker, and a timer only while a held Enter waits.
 Every fork opens a request, including a non-shell caller that supplies no request id.
 `RequestHold` binds its pane on the node, where bare pane and request keys share one ordered queue, capped at 64 KiB and 30 s from request opening; keys older than 3 s remain valid while the fork starts.
 At readiness the node releases the guard and hands valid queued keys to the pane; if its terminal is still attaching, that separate holder gets its ordinary 3 s window, while input facts retain the original wall time.

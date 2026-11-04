@@ -498,6 +498,14 @@ impl Requests {
     }
 
     /// Whether a creation's answer named `pane_id`.
+    /// Whether `request_id` holds keys for a fork, whose agent runs by the
+    /// time they are released; any other request's go to a starting shell.
+    pub(super) fn is_fork(&self, request_id: &str) -> bool {
+        self.requests
+            .iter()
+            .any(|request| request.id == request_id && request.fork)
+    }
+
     pub(super) fn names(&self, pane_id: &str) -> bool {
         self.requests
             .iter()
@@ -683,6 +691,77 @@ impl PaneHold {
                 "bytes": bytes,
             }));
         }
+    }
+}
+
+/// How long a submit replayed from a hold waits behind the keys replayed
+/// before it, as Herdr's `agent.prompt` waits before its Enter. Held keys
+/// reach the program together, and a program that reads keys arriving
+/// together as a paste (Codex) takes an Enter inside one for a newline,
+/// where the operator had pressed it after a pause.
+pub(super) const REPLAYED_SUBMIT_GAP: Duration = Duration::from_millis(300);
+
+/// Whether a replayed chunk is the operator's submit, which waits
+/// [`REPLAYED_SUBMIT_GAP`] behind the keys replayed before it.
+pub(super) fn paces(chunk: &HeldChunk) -> bool {
+    chunk.by == Typist::Operator && matches!(&chunk.input, Typed::Bytes(bytes) if submits(bytes))
+}
+
+/// The rest of a replay of held keys, from a submit on, written at `due`;
+/// the operator's keys typed meanwhile queue behind it. Capped at
+/// [`INPUT_HOLD_LIMIT_BYTES`] like every hold: past the cap the keys
+/// typed until the replay ends are dropped, with one diagnostic.
+pub(super) struct Replay {
+    pub(super) due: Instant,
+    chunks: Vec<HeldChunk>,
+    bytes: usize,
+    overflowed: bool,
+}
+
+impl Replay {
+    pub(super) fn new(due: Instant, chunks: impl IntoIterator<Item = HeldChunk>) -> Self {
+        let chunks: Vec<HeldChunk> = chunks.into_iter().collect();
+        let bytes = chunks.iter().map(|chunk| chunk.input.len()).sum();
+        Self {
+            due,
+            chunks,
+            bytes,
+            overflowed: false,
+        }
+    }
+
+    pub(super) fn push(&mut self, pane_id: &str, chunk: HeldChunk) {
+        if self.overflowed {
+            return;
+        }
+        if self.bytes + chunk.input.len() > INPUT_HOLD_LIMIT_BYTES {
+            self.overflowed = true;
+            crate::diagnostic!(json!({
+                "component": "terminal_input",
+                "kind": "terminal.input_discarded",
+                "pane_id": pane_id,
+                "reason": "limit",
+                "bytes": chunk.input.len(),
+            }));
+            return;
+        }
+        self.bytes += chunk.input.len();
+        self.chunks.push(chunk);
+    }
+
+    pub(super) fn take(self) -> Vec<HeldChunk> {
+        self.chunks
+    }
+
+    /// The pane will not take the rest of this replay.
+    pub(super) fn discard(self, pane_id: &str, reason: &str) {
+        crate::diagnostic!(json!({
+            "component": "terminal_input",
+            "kind": "terminal.input_discarded",
+            "pane_id": pane_id,
+            "reason": reason,
+            "bytes": self.bytes,
+        }));
     }
 }
 
