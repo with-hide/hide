@@ -87,7 +87,10 @@ export function installAgentRunner(fixture: AgentPaneFixture, stateDir: string, 
   // An engine reads the agent from the program in the pane's foreground, so the runner takes the agent's name.
   const runner = path.join(root, "worker-bin", fixtureExecutable(kind));
   fs.mkdirSync(path.dirname(runner), { recursive: true });
-  copyFixtureShim("spawn-provider", runner);
+  // Binding another pane reuses this run's immutable program. Rewriting an
+  // executable already running can invalidate its code signature on macOS
+  // or fail with a sharing violation on Windows.
+  if (!fs.existsSync(runner)) copyFixtureShim("spawn-provider", runner);
   fs.writeFileSync(path.join(root, "agent-pane-runner.config"), runner);
   const command = path.join(root, "agent-pane-command.json");
   const output = path.join(root, "agent-pane-output.json");
