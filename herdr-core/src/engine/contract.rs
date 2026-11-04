@@ -551,6 +551,92 @@ fn newly_answered_panes_can_be_read_without_waiting_for_another_event() {
     }
 }
 
+/// Ends, when dropped, every holder and program a pane record under its
+/// state folder names that still runs as recorded (by pid and start time),
+/// whichever node started it: a test that opens one node after another over
+/// that folder leaves nothing running on any exit, a panic included. What it
+/// could not end fails the test, or, when the test already fails, is printed
+/// beside that failure, which stays the test's.
+struct RecordedProcesses(std::path::PathBuf);
+
+impl Drop for RecordedProcesses {
+    #[allow(clippy::disallowed_methods)] // polls each process's end, bounded by a deadline
+    fn drop(&mut self) {
+        let mut left = Vec::new();
+        let records = hide_kit::layout::pane_records(&self.0);
+        let entries = match std::fs::read_dir(&records) {
+            Ok(entries) => entries.collect::<Vec<_>>(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => {
+                left.push(format!("{}: {error}", records.display()));
+                Vec::new()
+            }
+        };
+        for entry in entries {
+            let path = match entry {
+                Ok(entry) => entry.path(),
+                Err(error) => {
+                    left.push(format!("{}: {error}", records.display()));
+                    continue;
+                }
+            };
+            if path.extension().is_none_or(|extension| extension != "json") {
+                continue;
+            }
+            let record = match std::fs::read(&path)
+                .map(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes))
+            {
+                Ok(Ok(record)) => record,
+                // A record the test left empty names nothing.
+                Ok(Err(_)) if std::fs::metadata(&path).is_ok_and(|meta| meta.len() == 0) => {
+                    continue;
+                }
+                Ok(Err(error)) => {
+                    left.push(format!("{}: {error}", path.display()));
+                    continue;
+                }
+                Err(error) => {
+                    left.push(format!("{}: {error}", path.display()));
+                    continue;
+                }
+            };
+            for process in ["holder", "program"] {
+                let (Some(pid), Some(started)) = (
+                    record[process]["pid"]
+                        .as_u64()
+                        .and_then(|pid| u32::try_from(pid).ok()),
+                    record[process]["started"].as_u64(),
+                ) else {
+                    continue;
+                };
+                let runs =
+                    || hide_platform::process::start_time(pid).is_ok_and(|now| now == started);
+                if !runs() {
+                    continue;
+                }
+                if let Err(error) = hide_platform::process::kill_tree(pid) {
+                    left.push(format!("{process} {pid} of {}: {error}", path.display()));
+                    continue;
+                }
+                let deadline = Instant::now() + SHOWN_WITHIN;
+                while runs() && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                if runs() {
+                    left.push(format!("{process} {pid} of {} still runs", path.display()));
+                }
+            }
+        }
+        if !left.is_empty() {
+            if std::thread::panicking() {
+                eprintln!("the test's cleanup also failed: {left:?}");
+            } else {
+                panic!("the test's cleanup failed: {left:?}");
+            }
+        }
+    }
+}
+
 /// What a daemon on the core's own engine finds after the machine went
 /// down: no holder runs, the layout save on disk is older than the last
 /// pane made, and the pane records are as a power loss may leave them.
@@ -574,6 +660,8 @@ fn a_restart_after_the_machine_went_down_brings_each_pane_back_under_its_id_and_
     use std::sync::Arc;
 
     let (_root, [home, state_dir, folder]) = holder_root();
+    // Dropped before the folder and after both nodes, on every exit.
+    let _processes = RecordedProcesses(state_dir.clone());
     let folder = hide_platform::path::to_wire(&folder).unwrap();
     let engine_dir = hide_kit::layout::engine_dir(&state_dir);
     let open = || {
@@ -706,9 +794,10 @@ fn a_restart_after_the_machine_went_down_brings_each_pane_back_under_its_id_and_
             .unwrap();
         shows(&next, pane, "back-42");
     }
-    next.stop();
     for pane in back {
-        let _ = next_panes.terminate(pane);
+        next_panes
+            .terminate(pane)
+            .unwrap_or_else(|error| panic!("{pane} did not end: {error:?}"));
     }
 }
 
