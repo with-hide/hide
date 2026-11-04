@@ -12,12 +12,6 @@ export HIDE_E2E_SCREENSHOT_DIR="$output/screenshots"
 # A test that looks at Herdr itself is tagged `@herdr`; no package carries Herdr.
 package_test=(bash scripts/verify-web.sh desktop e2e "$@" --grep-invert @herdr)
 if [[ "${RUNNER_OS:-}" == Linux ]]; then package_test=(xvfb-run -a "${package_test[@]}"); fi
-# The runner's job forbids a holder's breakaway; an operator's desktop session
-# does not (scripts/windows-breakaway-job.py). Git's bash by its Windows path:
-# CreateProcess looks in System32, where WSL's bash is, before PATH.
-if [[ "${RUNNER_OS:-}" == Windows ]]; then
-  package_test=(python scripts/windows-breakaway-job.py -- "$(cygpath -w "$(command -v bash)")" "${package_test[@]:1}")
-fi
 # Never attribute a preceding run's report to a build that failed before Playwright.
 rm -f desktop/e2e-report.json
 status=0

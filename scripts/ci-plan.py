@@ -489,9 +489,6 @@ NAMED_LANES = (
     ("scripts/holder-restart-check.py", HOLDER_RESTART_LANES),
     ("scripts/holder_owned.py", HOLDER_RESTART_LANES),
     ("scripts/holder-restart-spawn.mjs", HOLDER_RESTART_LANES),
-    # The job the Windows desktop and package e2e steps run in, which lets a
-    # holder leave it as an operator's desktop session does.
-    ("scripts/windows-breakaway-job.py", {"windows-desktop", "package"}),
     ("scripts/agent_journey/*", JOURNEY_LANES),
     ("scripts/agent-journey-check.py", JOURNEY_LANES),
     ("scripts/agent-journey-lane.py", JOURNEY_LANES),

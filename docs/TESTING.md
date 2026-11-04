@@ -316,7 +316,6 @@ A piece that another open change is still building is marked as pending with the
    Ordinary Windows shell panes use the private Herdr server's configured cmd.exe on Herdr, and the product's integrated PowerShell on the own engine; an agent-start tab uses the integrated launch recipe.
    The engine fixture names its ordinary shell, and shared command and prompt helpers use that syntax without changing the account's PowerShell profile.
    The disposable runner's registry PATH preparation above belongs to the CI job, not to a fixture running on a developer's account.
-   On Windows the desktop and package e2e steps run inside a job that allows breakaway (`scripts/windows-breakaway-job.py`): the runner's job forbids it, and the daemon the app's `hide connect` starts leaves Node's and Electron's libuv jobs silently, so without that job every holder start is refused; an operator's desktop session puts the app in no such job.
    The desktop SSH specs use `ssh-pane-fixture.ts`: a native pane is made through the connected device's node, and cleanup ends its private HOME's holder records.
    They retain their isolated-SSH environment skips; the native fixture is prepared, while connecting an SSH CI lane remains follow-up work.
    `agent-start-platform.spec.ts` runs all seven native stand-ins through `hide agent spawn` and a typed shell command and checks their visible state; its Windows npm cases run real `.ps1` and `.cmd` launchers over Node, distinguishing Pi and omp despite their shared `cli.js` filename.
