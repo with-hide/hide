@@ -65,6 +65,7 @@ hide agent end <id> [--actor <id>]
 
 ```
 hide pane read <pane> [--lines <n>] [--json]
+hide pane read <pane> --source visible --format ansi [--json]
 hide pane send <pane> [<text>] [--key <name>]... [--enter] [--paste]
 hide pane open --beside [--focus] -- <command>
 hide agent read <agent> [--lines <n>] [--json]
@@ -73,6 +74,7 @@ hide workspace purpose <text>
 
 - A pane is a pane id of your machine, as `hide ps` lists it; an agent is its name, registration id or pane, as a letter's target.
 - A read prints the pane's last 120 lines, unwrapped (`--lines` up to 2000); `--json` prints the answer line instead.
+  To keep the whole visible screen's rows and styling, use `hide pane read <pane> --source visible --format ansi`; this form does not take `--lines`.
 - `hide pane send` types the text (one line, 16 KiB at most), then presses each `--key` in order (`esc`, `enter`, `tab`, `shift-tab`, `up`, `down`, `left`, `right`, `backspace`, `ctrl-c`, 32 at most), then Enter with `--enter`; keys alone or Enter alone are fine. It answers what landed: `text_sent`, `keys_sent` and `enter_sent`, an Enter written, not a prompt the agent took.
   `--paste` puts several lines in as one paste, only into an agent known to take one (`paste_unsupported` otherwise, such as Grok on Windows).
   It is refused with `composer_not_empty` when someone typed into the pane since the agent last took input and its input box still holds text, a draft a person may be writing; a question, approval or review screen no one typed into takes it, and so does text your own earlier send left there. If a typed command and its `--enter` in one send leave the command in the box, as Codex's command menu can, send `--key enter` on its own; `keys_not_sent` says the text landed and the keys did not, `send_unconfirmed` that an answer was lost, and `operator_typing` that someone typed into the pane during the send, which stopped there; each says in `sent` what landed: read the pane before sending again.

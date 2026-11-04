@@ -47,6 +47,9 @@ const SHELL_POLL: Duration = Duration::from_millis(100);
 pub enum PaneCommand {
     /// `hide pane read <pane> [--lines N]`.
     Read { pane: String, lines: u32 },
+    /// `hide pane read <pane> --source visible --format ansi`: the whole
+    /// visible screen, retaining its physical rows and styling.
+    ReadScreen { pane: String },
     /// `hide agent read <agent> [--lines N]`: the agent by its name,
     /// registration id or pane, as a letter's target is named.
     AgentRead { agent: String, lines: u32 },
@@ -84,6 +87,13 @@ impl PaneCommand {
             }
         };
         match self {
+            Self::ReadScreen { pane } => {
+                if key(pane) {
+                    Ok(())
+                } else {
+                    Err("pane_unavailable")
+                }
+            }
             Self::Read { pane, lines: count } => {
                 if !key(pane) {
                     return Err("pane_unavailable");
@@ -226,7 +236,7 @@ pub fn next_action(code: &str) -> Option<&'static str> {
     })
 }
 
-/// `hide pane read` and `hide agent read`: the pane's last lines, unwrapped.
+/// `hide pane read` and `hide agent read`: text in the requested form.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct PaneRead {
     /// The pane read: a pane of the caller's own machine bare, as `hide ps`
@@ -281,6 +291,10 @@ pub fn answer_schemas() -> Vec<(&'static str, Value)> {
 /// What the runtime resolved for one command: the engine of the machine it
 /// acts on and the engine's own pane or workspace ids.
 pub(crate) enum Step {
+    ReadScreen {
+        pane: String,
+        raw: String,
+    },
     Read {
         pane: String,
         raw: String,
@@ -341,6 +355,16 @@ impl Prepared {
         let engine = engine.as_ref();
         let wait = Wait::Each(CALL_WAIT);
         let value = match step {
+            Step::ReadScreen { pane, raw } => {
+                let read = engine
+                    .read_screen(wait, &raw)
+                    .map_err(|error| failed("read_screen", &raw, &error, "pane_unavailable"))?;
+                serde_json::to_value(PaneRead {
+                    pane,
+                    text: read.text,
+                    truncated: read.truncated,
+                })
+            }
             Step::Read { pane, raw, lines } => {
                 let read = engine
                     .read_pane(wait, &raw, "recent_unwrapped", lines)
