@@ -163,7 +163,7 @@ test(`${kind} native title and durable sleep wake the exact conversation in a fr
     await expect.poll(() => fs.readFileSync(path.join(fixture.root, `${kind}-launches.jsonl`), "utf8").trim().split("\n").map(line => JSON.parse(line) as string[])).toContainEqual([resumeFlag, id, ...fullAccess]);
     await reportSession(fixture, daemon, kind, fresh, session);
     await expect(sleeping).toHaveCount(0, { timeout: 30_000 });
-    await expect(page.locator(`nav[data-sidebar] [data-pane="${fresh}"]`)).toContainText(title);
+    await expect(await showNativeRow(page, fresh)).toContainText(title);
     expect(fs.readFileSync(session)).toEqual(prior);
     await screenshot(page, `${kind}-exact-wake`);
   } catch (error) {

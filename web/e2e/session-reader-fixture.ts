@@ -205,7 +205,15 @@ function writeSessionReport(root: string, kind: NativeFileReader, session: strin
   if (process.platform === "win32") throw new Error("a native writer's session report is written for a Unix shell; no Windows lane runs it");
   const { env, args, input } = sessionReport(kind, nativeSessionRef(kind, session));
   const words = [...Object.entries(env).map(([name, value]) => `${name}=${shellQuoted(value)}`), shellQuoted(builtHooks()), ...args.map(shellQuoted)];
-  fs.writeFileSync(path.join(root, `${kind}-session-report.config`), `${words.join(" ")} >/dev/null 2>&1\n${JSON.stringify(input)}`);
+  let command = `${words.join(" ")} >/dev/null 2>&1`;
+  if (kind === "omp") {
+    // The seed ends with a completed assistant reply. Session identity alone
+    // reports no activity, and omp has no screen rules. Its real extension
+    // also reports that completed turn at agent_end, from inside its pane.
+    const turn = JSON.stringify({ session_id: session, version: piExtensionVersion(), turn: "done" });
+    command += ` && printf %s ${shellQuoted(turn)} | ${shellQuoted(builtHooks())} ${kind} turn >/dev/null 2>&1`;
+  }
+  fs.writeFileSync(path.join(root, `${kind}-session-report.config`), `${command}\n${JSON.stringify(input)}`);
 }
 
 /**
