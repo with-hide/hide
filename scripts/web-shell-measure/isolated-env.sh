@@ -14,17 +14,21 @@ mkdir -p "$run_dir" "$run_dir/logs" "$run_dir/fixture" "$run_dir/chrome-profile"
 run_dir="$(cd "$run_dir" && pwd)"
 
 operator_socket="${HOME}/.config/herdr/herdr.sock"
-manifest="$worktree_root/contracts/herdr-bundle.json"
-pin_version="$(jq -er '.version' "$manifest")"
-if [[ -n "${HERDR_BIN_PATH:-}" && -x "${HERDR_BIN_PATH}" ]]; then
-  herdr_bin="$HERDR_BIN_PATH"
-else
-  herdr_bin="$(command -v herdr)"
-fi
-herdr_version="$("$herdr_bin" --version | awk '{print $2}')"
-if [[ "$herdr_version" != "$pin_version" ]]; then
-  printf 'isolated-env: herdr %s is not pin %s (%s)\n' "$herdr_version" "$pin_version" "$herdr_bin" >&2
-  exit 2
+# The core's own engine (MEASURE_ENGINE=own) runs no Herdr, so it needs none.
+herdr_bin=""
+if [[ "${MEASURE_ENGINE:-herdr}" == herdr ]]; then
+  manifest="$worktree_root/contracts/herdr-bundle.json"
+  pin_version="$(jq -er '.version' "$manifest")"
+  if [[ -n "${HERDR_BIN_PATH:-}" && -x "${HERDR_BIN_PATH}" ]]; then
+    herdr_bin="$HERDR_BIN_PATH"
+  else
+    herdr_bin="$(command -v herdr)"
+  fi
+  herdr_version="$("$herdr_bin" --version | awk '{print $2}')"
+  if [[ "$herdr_version" != "$pin_version" ]]; then
+    printf 'isolated-env: herdr %s is not pin %s (%s)\n' "$herdr_version" "$pin_version" "$herdr_bin" >&2
+    exit 2
+  fi
 fi
 
 private="$run_dir/isolated"

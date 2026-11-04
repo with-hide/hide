@@ -1,21 +1,21 @@
 // The exact candidate window, with private PTYs and renderer-addressed input.
 import { expect, type ElectronApplication, type Page } from "@playwright/test";
-import { labelAgent, startHerdr } from "../../web/e2e/herdr-fixture";
+import { labelAgentPane } from "../../web/e2e/fixture-agents";
 import { enterWorkspace } from "../../web/e2e/wire";
 import { compositorPresents } from "../../web/e2e/wait";
 import { captureElectronWindow } from "./electron-window";
-import { fitWindow, isolate, launchShell, test } from "./fixture";
+import { fitWindow, launchShell, startStack, test } from "./fixture";
 
 const paneView = (page: Page, id: string) => page.locator(`[data-pane-view="${id}"]`);
 
 test("pane moves render and cancel in a narrow candidate with long titles and large text", async () => {
-  const herdr = await startHerdr();
-  const run = isolate(herdr, "pane-move");
+  const stack = await startStack("pane-move");
+  const { fixture, run, daemon } = stack;
   let app: ElectronApplication | undefined;
   try {
-    const source = herdr.panes[0], target = herdr.panes[1];
-    labelAgent(herdr, source, { task: "로그인 화면과 예외 처리의 진행 상황 확인하기" });
-    labelAgent(herdr, target, { task: "Review authentication changes" });
+    const source = fixture.panes[0], target = fixture.panes[1];
+    await labelAgentPane(fixture, daemon, source, { task: "로그인 화면과 예외 처리의 진행 상황 확인하기" });
+    await labelAgentPane(fixture, daemon, target, { task: "Review authentication changes" });
     const opened = await launchShell(run.env);
     app = opened.app;
     const page = opened.page;
@@ -24,7 +24,7 @@ test("pane moves render and cancel in a narrow candidate with long titles and la
     for (const id of [source, target]) await expect(paneView(page, id)).toHaveAttribute("data-transport", "controlling");
     await expect(paneView(page, source).locator("[data-pane-move-title]")).toContainText("로그인", { timeout: 30_000 });
     await expect(paneView(page, target).locator("[data-pane-move-title]")).toContainText("Review");
-    const facts = { build: "worktree debug candidate", daemonPid: run.daemonPid(), socket: herdr.socket, state: run.env.HIDE_STATE_DIR, input: "Playwright renderer", provider: "controlled fixture CLI", window: "sole candidate, shown inactive" };
+    const facts = { build: "worktree debug candidate", daemonPid: run.daemonPid(), socket: fixture.socket, state: run.env.HIDE_STATE_DIR, input: "Playwright renderer", provider: "controlled fixture CLI", window: "sole candidate, shown inactive" };
     for (const [theme, language] of [["dark", "ko"], ["light", "en"]] as const) {
       await page.locator("[data-open-settings]").click();
       await page.locator('[data-settings-tab="general"]').click();
@@ -71,6 +71,6 @@ test("pane moves render and cancel in a narrow candidate with long titles and la
     await captureElectronWindow(app, "pane-move-completed", facts);
   } finally {
     try { await app?.close(); }
-    finally { try { run.cleanup(); } finally { herdr.stop(); } }
+    finally { stack.stop(); }
   }
 });

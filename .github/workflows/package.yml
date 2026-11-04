@@ -249,7 +249,7 @@ jobs:
     # checkout. docs/BUILD.md, "CI's Rust caches", says why a restored
     # dependency cannot change what ships, and where that argument stops.
     # It waits for nothing: the Linux app carries no device kit.
-    timeout-minutes: 60
+    timeout-minutes: 80
     defaults:
       run:
         shell: bash
@@ -356,7 +356,7 @@ jobs:
           # The fixture's own `hide status` and `hide stop` read target/debug;
           # these are the package's binaries, so no workspace is built twice.
           mkdir -p target/debug
-          cp "${{ steps.installed.outputs.app }}/resources/hide" "${{ steps.installed.outputs.app }}/resources/hided" target/debug/
+          cp "${{ steps.installed.outputs.app }}/resources/"{hide,hided,hide-agent-hooks,hide-holder} target/debug/
       - name: Build two release versions of the same app for the update test
         # N is installed, N+1 is served from a local feed (PRD auto-update
         # D-29); both are the package above with another version, so the
@@ -372,19 +372,22 @@ jobs:
           sudo apt-get install -y --allow-downgrades "$RUNNER_TEMP/update-n/hide-v0.0.1-linux-x64.deb"
       - name: Update the installed app to the next version
         # The installed N finds N+1, downloads it, and Restart in the Help
-        # menu installs it while the Herdr server and the daemon keep running
+        # menu installs it while the engine's panes and the daemon keep running
         # (desktop/e2e/packaged-update.spec.ts).
         id: update
-        timeout-minutes: 15
+        timeout-minutes: 30
         env:
           HIDE_E2E_UPDATE_APP: ${{ steps.installed.outputs.app }}/hide
           HIDE_E2E_UPDATE_FEED: ${{ runner.temp }}/update-next
           HIDE_E2E_UPDATE_VERSION: 0.0.2
           HIDE_E2E_HERDR_BIN: ${{ steps.installed.outputs.app }}/resources/herdr
-          HIDE_E2E_SCREENSHOT_DIR: ${{ runner.temp }}/hide-e2e
         run: |
-          mkdir -p "$HIDE_E2E_SCREENSHOT_DIR"
-          xvfb-run -a bash scripts/verify-web.sh desktop e2e packaged-update.spec.ts
+          status=0
+          for engine in herdr own; do
+            sudo apt-get install -y --reinstall --allow-downgrades "$RUNNER_TEMP/update-n/hide-v0.0.1-linux-x64.deb"
+            bash scripts/package-e2e.sh update "$engine" packaged-update.spec.ts || status=1
+          done
+          exit "$status"
       - name: Mint the development issues token
         # Development issues live in with-hide/hide-private (docs/TESTING.md,
         # Flaky tests); one App token reads this run here and files there. A run
@@ -407,15 +410,15 @@ jobs:
         timeout-minutes: 5
         env:
           GH_TOKEN: ${{ steps.issues-token.outputs.token }}
-        run: python3 scripts/ci-flaky-report.py --suite desktop --playwright desktop/e2e-report.json
+        run: |
+          python3 scripts/package-e2e-report.py agents/runs/package-e2e
+          python3 scripts/ci-flaky-report.py --suite desktop --playwright agents/runs/package-e2e/report.json
       - name: Keep the failed window run
         if: ${{ failure() || steps.flaky.outputs.flaky == 'true' }}
         uses: actions/upload-artifact@v7
         with:
           name: hide-package-window-logs-linux
-          path: |
-            ${{ runner.temp }}/hide-e2e
-            desktop/test-results
+          path: agents/runs/package-e2e
           if-no-files-found: ignore
       - name: Keep the package
         # Exactly the system's release files (installers.mjs leaves nothing else there); kept
@@ -438,7 +441,7 @@ jobs:
     env:
       HIDE_POSTHOG_PROJECT_TOKEN: ${{ vars.HIDE_POSTHOG_PROJECT_TOKEN }}
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     defaults:
       run:
         shell: bash
@@ -509,20 +512,20 @@ jobs:
           # The fixture's own `hide status` and `hide stop` read target/debug;
           # these are the package's binaries, so no workspace is built twice.
           mkdir -p target/debug
-          cp "${{ steps.installed.outputs.app }}/resources/hide.exe" "${{ steps.installed.outputs.app }}/resources/hided.exe" target/debug/
+          cp "${{ steps.installed.outputs.app }}/resources/"{hide,hided,hide-agent-hooks,hide-holder}.exe target/debug/
+          cp -R "${{ steps.installed.outputs.app }}/resources/holder-conpty" target/debug/
       - name: The packaged app's window
         # The installed hide.exe with its window, against a private HOME, state
         # and Herdr (desktop/e2e/packaged-window.spec.ts); the shell it draws
         # is kept below.
         id: window
-        timeout-minutes: 10
+        timeout-minutes: 20
         env:
           HIDE_E2E_PACKAGED_APP: ${{ steps.installed.outputs.app }}/hide.exe
           HIDE_E2E_HERDR_BIN: ${{ steps.installed.outputs.app }}/resources/herdr.exe
-          HIDE_E2E_SCREENSHOT_DIR: ${{ runner.temp }}/hide-e2e
         run: |
-          mkdir -p "$HIDE_E2E_SCREENSHOT_DIR"
-          bash scripts/verify-web.sh desktop e2e packaged-window.spec.ts status-page.spec.ts
+          echo 'Own engine excluded: CI Job forbids holder breakaway; b4-default owns holder lifetime.' >> "$GITHUB_STEP_SUMMARY"
+          bash scripts/package-e2e.sh window herdr packaged-window.spec.ts status-page.spec.ts
       - name: Build two release versions of the same app for the update test
         # N is installed, N+1 is served from a local feed (PRD auto-update
         # D-29); both are the package above with another version, so the
@@ -538,25 +541,25 @@ jobs:
           MSYS_NO_PATHCONV=1 "$RUNNER_TEMP/update-n/hide-v0.0.1-windows-x64-setup.exe" /S
       - name: Update the installed app to the next version
         # The installed N finds N+1, downloads it, and Restart in the Help
-        # menu installs it while the Herdr server and the daemon keep running
+        # menu installs it while the engine's panes and the daemon keep running
         # (desktop/e2e/packaged-update.spec.ts).
         id: update
-        timeout-minutes: 15
+        timeout-minutes: 30
         env:
           HIDE_E2E_UPDATE_APP: ${{ steps.installed.outputs.app }}/hide.exe
           HIDE_E2E_UPDATE_FEED: ${{ runner.temp }}/update-next
           HIDE_E2E_UPDATE_VERSION: 0.0.2
           HIDE_E2E_HERDR_BIN: ${{ steps.installed.outputs.app }}/resources/herdr.exe
-          HIDE_E2E_SCREENSHOT_DIR: ${{ runner.temp }}/hide-e2e
         run: |
-          mkdir -p "$HIDE_E2E_SCREENSHOT_DIR"
           # The installer stops every program under the install folder, and
           # the app runs its Herdr server from the build's runtime copy, so
           # the test's server runs from the packaged folder, not the install.
           HIDE_E2E_HERDR_BIN="$(sed -n 's/^bundle=//p' "$RUNNER_TEMP/package.out")/resources/herdr.exe"
           export HIDE_E2E_HERDR_BIN
           test -f "$HIDE_E2E_HERDR_BIN"
-          bash scripts/verify-web.sh desktop e2e packaged-update.spec.ts
+          echo 'Own engine excluded: CI Job forbids holder breakaway; b4-default owns holder lifetime.' >> "$GITHUB_STEP_SUMMARY"
+          MSYS_NO_PATHCONV=1 "$RUNNER_TEMP/update-n/hide-v0.0.1-windows-x64-setup.exe" /S
+          bash scripts/package-e2e.sh update herdr packaged-update.spec.ts
       - name: Mint the development issues token
         # Development issues live in with-hide/hide-private (docs/TESTING.md,
         # Flaky tests); one App token reads this run here and files there. A run
@@ -579,22 +582,22 @@ jobs:
         timeout-minutes: 5
         env:
           GH_TOKEN: ${{ steps.issues-token.outputs.token }}
-        run: python3 scripts/ci-flaky-report.py --suite desktop --playwright desktop/e2e-report.json
+        run: |
+          python3 scripts/package-e2e-report.py agents/runs/package-e2e
+          python3 scripts/ci-flaky-report.py --suite desktop --playwright agents/runs/package-e2e/report.json
       - name: Keep the packaged window
         if: steps.window.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: hide-package-window-windows
-          path: ${{ runner.temp }}/hide-e2e/*.png
+          path: agents/runs/package-e2e/window/*/screenshots/*.png
           if-no-files-found: error
       - name: Keep the failed window run
         if: ${{ failure() || steps.flaky.outputs.flaky == 'true' }}
         uses: actions/upload-artifact@v7
         with:
           name: hide-package-window-logs-windows
-          path: |
-            ${{ runner.temp }}/hide-e2e
-            desktop/test-results
+          path: agents/runs/package-e2e
           if-no-files-found: ignore
       - name: Keep the package
         # Exactly the system's release files (installers.mjs leaves nothing else there); kept
@@ -680,7 +683,7 @@ jobs:
     if: ${{ inputs.include-macos }}
     runs-on: macos-15
     # Notarization waits on Apple, which takes minutes and now and then longer.
-    timeout-minutes: 100
+    timeout-minutes: 110
     # An empty name is no environment: the ad-hoc runs reach no secret.
     environment: ${{ inputs.macos-signing == 'developer-id' && 'release' || '' }}
     steps:
@@ -802,20 +805,22 @@ jobs:
           # The existing fixtures locate the CLI in target/debug. These exact
           # packaged release binaries avoid building a second workspace.
           mkdir -p target/debug
-          cp "$app/Contents/Resources/hide" "$app/Contents/Resources/hided" target/debug/
+          cp "$app/Contents/Resources/"{hide,hided,hide-agent-hooks,hide-holder} target/debug/
       - name: Install the pinned Electron runtime for the package fixtures
         timeout-minutes: 5
         run: bash scripts/verify-web.sh desktop electron-install
       - name: Packaged app launch, session search, and isolated install kit
-        timeout-minutes: 10
+        timeout-minutes: 20
         env:
           HIDE_E2E_APP: ${{ steps.bundle.outputs.app }}
           HIDE_E2E_PACKAGED_APP: ${{ steps.bundle.outputs.app }}/Contents/MacOS/hide
           HIDE_E2E_HERDR_BIN: ${{ steps.bundle.outputs.app }}/Contents/Resources/herdr
-          HIDE_E2E_SCREENSHOT_DIR: ${{ runner.temp }}/hide-e2e
         run: |
-          mkdir -p "$HIDE_E2E_SCREENSHOT_DIR"
-          bash scripts/verify-web.sh desktop e2e local-kit.spec.ts server-picker.spec.ts status-page.spec.ts --project background
+          status=0
+          for engine in herdr own; do
+            bash scripts/package-e2e.sh macos "$engine" local-kit.spec.ts server-picker.spec.ts status-page.spec.ts --project background || status=1
+          done
+          exit "$status"
       - name: Mint the development issues token
         # Development issues live in with-hide/hide-private (docs/TESTING.md,
         # Flaky tests); one App token reads this run here and files there. A run
@@ -841,16 +846,16 @@ jobs:
         timeout-minutes: 5
         env:
           GH_TOKEN: ${{ steps.issues-token.outputs.token }}
-        run: python3 scripts/ci-flaky-report.py --suite desktop --playwright desktop/e2e-report.json
+        run: |
+          python3 scripts/package-e2e-report.py agents/runs/package-e2e
+          python3 scripts/ci-flaky-report.py --suite desktop --playwright agents/runs/package-e2e/report.json
       - name: Keep the failed package run
         # A flaky run keeps it as a failed one does; see web-e2e.yml.
         if: ${{ failure() || steps.flaky.outputs.flaky == 'true' }}
         uses: actions/upload-artifact@v7
         with:
           name: hide-macos-package-logs
-          path: |
-            ${{ runner.temp }}/hide-e2e
-            desktop/test-results
+          path: agents/runs/package-e2e
           if-no-files-found: ignore
       - name: Keep the package
         uses: actions/upload-artifact@v7

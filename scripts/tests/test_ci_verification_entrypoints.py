@@ -284,18 +284,21 @@ if name == 'playwright' and '--list' in args:
         (self.root / "desktop/e2e").mkdir()
         (self.root / "desktop/e2e/shard-durations.json").write_text(
             json.dumps({"a.spec.ts › one": 1, "a.spec.ts › two": 1}))
-        for system, shard in (("macOS", "1/2"), ("Windows", "2/2"), ("Linux", "1/1")):
-            with self.subTest(system=system):
+        for system, shard, engine in ((system, shard, engine)
+                for system, shard in (("macOS", "1/2"), ("Windows", "2/2"), ("Linux", "1/1"))
+                for engine in ("herdr", "own")):
+            with self.subTest(system=system, engine=engine):
                 self.record.unlink(missing_ok=True)
                 result = self.workflow_step("desktop-e2e.yml", "e2e", "Desktop app end-to-end",
                                             RUNNER_OS=system, RUNNER_TEMP=str(self.root),
                                             HIDE_E2E_SCREENSHOT_DIR=str(self.root / "screenshots"),
-                                            GREP="@platform", SHARD=shard)
+                                            GREP="@platform", GREP_INVERT="@herdr" if engine == "own" else "", SHARD=shard)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(self.tool_calls("node", "desktop"), [["scripts/build.mjs"]])
                 calls = self.tool_calls("playwright", "desktop")
                 self.assertEqual(len(calls), 3 if shard.endswith("/2") else 1)
                 self.assertTrue(all("--grep" in call and "@platform" in call for call in calls))
+                self.assertTrue(all(("--grep-invert" in call) == (engine == "own") for call in calls))
                 self.assertNotIn("--list", calls[-1])
                 if shard.endswith("/2"):
                     self.assertTrue(all("--list" in call for call in calls[:2]))

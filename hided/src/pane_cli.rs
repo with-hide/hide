@@ -9,7 +9,7 @@ use serde_json::json;
 
 use crate::env::Env;
 
-pub const USAGE: &str = "hide pane read <pane> [--lines <n>] [--json]\nhide pane send <pane> [<text>] [--key <name>]... [--enter] [--paste]\nhide pane open --beside [--focus] -- <command>\nhide agent read <agent> [--lines <n>] [--json]\nhide workspace purpose <text>";
+pub const USAGE: &str = "hide pane read <pane> [--lines <n>] [--json]\nhide pane read <pane> --source visible --format ansi [--json]\nhide pane send <pane> [<text>] [--key <name>]... [--enter] [--paste]\nhide pane open --beside [--focus] -- <command>\nhide agent read <agent> [--lines <n>] [--json]\nhide workspace purpose <text>";
 
 /// One parsed command, and whether its read is printed as the answer line.
 #[derive(Debug, Eq, PartialEq)]
@@ -34,9 +34,13 @@ fn word(value: &str) -> bool {
     !value.is_empty() && !value.starts_with('-') && !value.chars().any(char::is_control)
 }
 
-/// A read of `pane read` or `agent read`: the subject, then `--lines` and
-/// `--json` in any order.
-fn read(args: &[String], subject: impl Fn(String, u32) -> PaneCommand) -> Result<PaneCli, String> {
+/// A read of `pane read` or `agent read`: the subject, then flags in any
+/// order. Only `pane read` offers the whole styled screen.
+fn read(
+    args: &[String],
+    screen_allowed: bool,
+    subject: impl Fn(String, u32) -> PaneCommand,
+) -> Result<PaneCli, String> {
     let [target, rest @ ..] = args else {
         return Err(USAGE.to_owned());
     };
@@ -45,18 +49,30 @@ fn read(args: &[String], subject: impl Fn(String, u32) -> PaneCommand) -> Result
     }
     let mut count = None;
     let mut json = false;
+    let mut source = None;
+    let mut format = None;
     let mut rest = rest.iter();
     while let Some(flag) = rest.next() {
         match flag.as_str() {
             "--lines" if count.is_none() => count = Some(lines(rest.next())?),
             "--json" if !json => json = true,
+            "--source" if screen_allowed && source.is_none() => {
+                source = Some(rest.next().ok_or_else(|| USAGE.to_owned())?.as_str());
+            }
+            "--format" if screen_allowed && format.is_none() => {
+                format = Some(rest.next().ok_or_else(|| USAGE.to_owned())?.as_str());
+            }
             _ => return Err(USAGE.to_owned()),
         }
     }
-    Ok(PaneCli {
-        command: subject(target.clone(), count.unwrap_or(DEFAULT_LINES)),
-        json,
-    })
+    let command = match (source, format, count) {
+        (None, None, count) => subject(target.clone(), count.unwrap_or(DEFAULT_LINES)),
+        (Some("visible"), Some("ansi"), None) => PaneCommand::ReadScreen {
+            pane: target.clone(),
+        },
+        _ => return Err(USAGE.to_owned()),
+    };
+    Ok(PaneCli { command, json })
 }
 
 /// `hide pane <verb> …`, the words after `pane`.
@@ -65,7 +81,7 @@ pub fn parse(args: &[String]) -> Result<PaneCli, String> {
         return Err(USAGE.to_owned());
     };
     match verb.as_str() {
-        "read" => read(rest, |pane, lines| PaneCommand::Read { pane, lines }),
+        "read" => read(rest, true, |pane, lines| PaneCommand::Read { pane, lines }),
         "send" => send(rest),
         "open" => {
             let split = rest
@@ -154,7 +170,10 @@ fn send(args: &[String]) -> Result<PaneCli, String> {
 
 /// `hide agent read …`, the words after `read`.
 pub fn parse_agent_read(args: &[String]) -> Result<PaneCli, String> {
-    read(args, |agent, lines| PaneCommand::AgentRead { agent, lines })
+    read(args, false, |agent, lines| PaneCommand::AgentRead {
+        agent,
+        lines,
+    })
 }
 
 /// `hide workspace purpose <text>`, the words after `purpose`.
@@ -183,7 +202,7 @@ pub fn run(env: &Env, cli: PaneCli) -> Result<(), String> {
     }
     let raw = matches!(
         cli.command,
-        PaneCommand::Read { .. } | PaneCommand::AgentRead { .. }
+        PaneCommand::Read { .. } | PaneCommand::ReadScreen { .. } | PaneCommand::AgentRead { .. }
     ) && !cli.json;
     let answer = crate::workspace_cli::Credential::acquire(env).and_then(|mut credential| {
         crate::workspace_cli::request_pane(&mut credential, &cli.command)
@@ -256,6 +275,42 @@ mod tests {
         let past = parse(&words(&["read", "w1:p2", "--lines", "99999999999"])).unwrap();
         assert_eq!(past.command.check(), Err("lines_out_of_range"));
         assert!(parse(&words(&["read", "w1:p2", "--lines", "-1"])).is_err());
+    }
+
+    #[test]
+    fn a_styled_screen_requires_both_options_and_never_takes_a_line_limit() {
+        assert_eq!(
+            parse(&words(&[
+                "read", "w1:p2", "--json", "--format", "ansi", "--source", "visible"
+            ]))
+            .unwrap(),
+            PaneCli {
+                command: PaneCommand::ReadScreen {
+                    pane: "w1:p2".into()
+                },
+                json: true,
+            }
+        );
+        for flags in [
+            vec!["--source", "visible"],
+            vec!["--format", "ansi"],
+            vec!["--source", "visible", "--format", "text"],
+            vec!["--source", "recent", "--format", "ansi"],
+            vec!["--source", "visible", "--format", "ansi", "--lines", "120"],
+            vec![
+                "--source", "visible", "--format", "ansi", "--source", "visible",
+            ],
+        ] {
+            let mut args = vec!["read", "w1:p2"];
+            args.extend(flags);
+            assert!(parse(&words(&args)).is_err(), "{args:?}");
+        }
+        assert!(
+            parse_agent_read(&words(&[
+                "child", "--source", "visible", "--format", "ansi"
+            ]))
+            .is_err()
+        );
     }
 
     #[test]

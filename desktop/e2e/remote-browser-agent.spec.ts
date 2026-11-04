@@ -6,12 +6,12 @@
 // Herdr servers, daemon, helper install and desktop profile are private, and
 // the device sessions get the private HOME desktop/e2e/device-home.ts proves.
 import { expect } from "@playwright/test";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
-import { startHerdr, type HerdrFixture } from "../../web/e2e/herdr-fixture";
+import { startSshPaneFixture, type SshPaneFixture } from "./ssh-pane-fixture";
 import { enterWorkspace } from "../../web/e2e/wire";
 import { deviceBridges, deviceHome, proveDeviceHome, resetDeviceHome, writeSshConfig } from "./device-home";
 import { endChild, HIDE_CLI, hostLog, isolate, launch, test, type Isolated } from "./fixture";
@@ -23,22 +23,18 @@ const PAGE = '<!doctype html><meta charset="utf-8"><title>Device page</title><bu
 
 function quote(value: string): string { return `'${value.replaceAll("'", "'\\''")}'`; }
 /** Runs the `hide` the kit linked on the device, in the device's pane. */
-async function deviceCli(remote: HerdrFixture, run: Isolated, bridge: string, args: string[], label: string): Promise<{ status: number; out: string }> {
-  const out = path.join(remote.root, `${label}.out`), exit = path.join(remote.root, `${label}.exit`);
+async function deviceCli(remote: SshPaneFixture, run: Isolated, bridge: string, args: string[], label: string): Promise<{ status: number; out: string }> {
   const cli = path.join(run.env.HIDE_HOST_CLI_DIR!, "hide");
-  const command = `HIDE_STATE_DIR=${quote(path.dirname(bridge))} ${[cli, ...args].map(quote).join(" ")} > ${quote(out)}; printf '%s' "$?" > ${quote(exit)}\n`;
-  const sent = spawnSync(remote.bin, ["pane", "send-text", remote.panes[0]!, command], { env: remote.env, encoding: "utf8", timeout: 10_000 });
-  expect(sent.status, sent.stderr).toBe(0);
-  await expect.poll(() => fs.existsSync(exit), { timeout: 60_000 }).toBe(true);
-  return { status: Number(fs.readFileSync(exit, "utf8")), out: fs.readFileSync(out, "utf8") };
+  const result = await remote.command(`HIDE_STATE_DIR=${quote(path.dirname(bridge))} ${[cli, ...args].map(quote).join(" ")}`, label);
+  return { status: result.status, out: result.stdout };
 }
 const lastJson = (out: string) => JSON.parse(out.trim().split("\n").at(-1) || "{}") as Record<string, unknown>;
 const liveBridges = (bridge: string) => fs.existsSync(bridge) ? fs.readdirSync(bridge).filter((name) => fs.existsSync(path.join(bridge, name, "bootstrap.sock"))) : [];
 const appliedFor = (log: string, device: string) => fs.readFileSync(log, "utf8").split("\n").some((line) => line.startsWith("{") && line.includes('"apply.completed"') && line.includes(`"${device}"`));
 
 test("hide browser from a device pane reads and clicks its page, and fails like a Workspace command without a desktop", async () => {
-  const local = await startHerdr({ agents: false });
-  const remote = await startHerdr({ agents: false });
+  const local = await startSshPaneFixture();
+  const remote = await startSshPaneFixture();
   const run = isolate(local, "ssh-browser");
   run.env.HIDE_HOST_HELPER_ROOT = path.join(run.root, "remote-helper");
   run.env.HIDE_HOST_CLI_DIR = path.join(run.root, "remote-bin");
@@ -57,6 +53,7 @@ test("hide browser from a device pane reads and clicks its page, and fails like 
   let app: Awaited<ReturnType<typeof launch>>["app"] | undefined;
   try {
     await expect.poll(() => run.hide(["status", "--json"]).stdout.includes('"running":true'), { timeout: 30_000 }).toBe(true);
+    await local.attach(run);
     ({ app } = await launch(run.env));
     const page = await app.firstWindow();
     await enterWorkspace(page, "fixture");
@@ -77,6 +74,7 @@ test("hide browser from a device pane reads and clicks its page, and fails like 
     }, { port: state.port, token: state.token, socket: remote.socket });
     await expect.poll(() => liveBridges(bridge).length, { timeout: 60_000 }).toBe(1);
     await expect.poll(() => appliedFor(daemonLog, "ssh-browser"), { timeout: 120_000 }).toBe(true);
+    await remote.attach(run, "ssh-browser");
 
     // The operator goes to the device, so its agent's page opens in front:
     // from a pane the operator is not in it would only join the list behind.

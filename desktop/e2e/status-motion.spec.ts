@@ -3,7 +3,7 @@
 import { expect, type ElectronApplication } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
-import { startHerdr, type HerdrFixture } from "../../web/e2e/herdr-fixture";
+import { startEngine, type EngineServer } from "../../web/e2e/engine-fixture";
 import { fixtureProgram } from "../../web/e2e/platform-fixture";
 import { bundledExecutable, linkBundle } from "../../web/e2e/bundled-app";
 import { captureElectronWindow } from "./electron-window";
@@ -11,13 +11,14 @@ import { captureNativeWindow } from "./native-window";
 import { fitWindow, hostLog, isolate, launch, launchNative, test, type Isolated } from "./fixture";
 
 const packaged = process.env.HIDE_E2E_PACKAGED_APP;
-let herdr: HerdrFixture;
+// No test needs a pane: the engine is empty, one serves every test, and the one test that lets a daemon start only needs it to answer.
+let engine: EngineServer;
 let run: Isolated;
 let app: ElectronApplication | null = null;
 
-test.beforeAll(async () => { herdr = await startHerdr({ agents: false }); });
-test.afterAll(() => { herdr?.stop(); });
-test.beforeEach(() => { run = isolate(herdr, "status-motion"); });
+test.beforeAll(async () => { engine = await startEngine(); });
+test.afterAll(() => { engine?.stop(); });
+test.beforeEach(() => { run = isolate(engine, "status-motion"); });
 test.afterEach(async () => {
   if (test.info().status !== test.info().expectedStatus) console.log("[status-motion host]", JSON.stringify(hostLog(run.env)));
   await app?.close();
@@ -62,7 +63,7 @@ test("the local flight draws offline, freezes live for reduced motion, and yield
   await expect(page.getByRole("status")).toHaveText("Starting Hide…");
   await expect(page.locator("#brand strong")).toHaveText("hide");
   await captureElectronWindow(app, "startup-flight", { packaged: Boolean(packaged), offline: true });
-  await captureNativeWindow(app, "startup-flight-native", { method: "screencapture exact candidate window without activation", packaged: Boolean(packaged), privateSocket: herdr.socket });
+  await captureNativeWindow(app, "startup-flight-native", { method: "screencapture exact candidate window without activation", packaged: Boolean(packaged), privateSocket: engine.socket });
   expect(await fitWindow(app, { width: 720, height: 480 })).toEqual({ width: 720, height: 480 });
   const overflow = () => page.evaluate(() => ({
     width: innerWidth, html: document.documentElement.scrollWidth, body: document.body.scrollWidth,

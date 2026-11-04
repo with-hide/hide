@@ -9,7 +9,9 @@ import { expect, type ElectronApplication } from "@playwright/test";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { startHerdr } from "../../web/e2e/herdr-fixture";
+import { openProject } from "../../web/e2e/daemon-actions";
+import { startEngine, type EngineServer } from "../../web/e2e/engine-fixture";
+import { connectStateDir } from "../../web/e2e/hided-control.mjs";
 import { enterWorkspace } from "../../web/e2e/wire";
 import {
   claudeSettings, codexDaemonWritten, codexHooks, readSettings, seedAgentFiles,
@@ -34,7 +36,7 @@ test("the app's daemon installs this Mac's kit into its HOME at launch and chang
   const bundle = fs.realpathSync(process.env.HIDE_E2E_APP!);
   if (bundle.startsWith("/Applications/")) throw new Error("HIDE_E2E_APP must name a build, never the operator's installed app");
   const resources = path.join(bundle, "Contents", "Resources");
-  const local = await startHerdr({ agents: false });
+  const local = await startEngine();
   const run = isolate(local, "lk");
   // The release daemon and the host's discovery CLI must come from this bundle.
   run.env.HIDE_CLI_PATH = path.join(resources, "hide");
@@ -53,6 +55,9 @@ test("the app's daemon installs this Mac's kit into its HOME at launch and chang
   const errors: unknown[] = [];
   try {
     await expect.poll(() => run.hide(["status", "--json"]).stdout.includes('"running":true'), { timeout: 30_000 }).toBe(true);
+    // The project the window opens below, made through the bundle's daemon as the web shell makes it.
+    const control = await connectStateDir(run.env.HIDE_STATE_DIR!);
+    try { await openProject(control, path.join(local.root, "fixture"), "fixture"); } finally { control.close(); }
     // B1: the first launch installs every part, asking nothing.
     await expect.poll(() => applied(daemonLog, nodeOf(run.env)).length, { timeout: 120_000 }).toBeGreaterThan(0);
     expect(applied(daemonLog, nodeOf(run.env))[0]!.components).toEqual(PARTS.map((id) => expect.objectContaining({ id, state: "installed" })));
@@ -65,10 +70,14 @@ test("the app's daemon installs this Mac's kit into its HOME at launch and chang
       expect(now.hooks.SessionStart).toEqual(expect.arrayContaining(before.hooks.SessionStart!));
       expect({ ...now, hooks: undefined }).toEqual({ ...before, hooks: undefined });
     }
-    const plugins = spawnSync(local.bin, ["plugin", "list", "--json"], { env: local.env, encoding: "utf8", timeout: 10_000 });
-    // Labels are hided's own now; the kit links no plugin (PRD labels-in-hided B2).
-    expect(plugins.status, plugins.stderr).toBe(0);
-    expect(plugins.stdout).not.toContain(LABELS_ID);
+    // Herdr only: this step reads the plugins Herdr itself lists, and the own engine has no such list.
+    if (local.engine === "herdr") {
+      const herdr = local as EngineServer & { bin: string; env: NodeJS.ProcessEnv };
+      const plugins = spawnSync(herdr.bin, ["plugin", "list", "--json"], { env: herdr.env, encoding: "utf8", timeout: 10_000 });
+      // Labels are hided's own now; the kit links no plugin (PRD labels-in-hided B2).
+      expect(plugins.status, plugins.stderr).toBe(0);
+      expect(plugins.stdout).not.toContain(LABELS_ID);
+    }
 
     app = await relaunch(run.env);
     const page = await shellPage(app);

@@ -851,8 +851,9 @@ def runner_jobs(block):
         # With more than one shard parallel daemon and web builds precede them.
         return shards * engines + (2 if shards > 1 else 0)
     if "uses: ./.github/workflows/desktop-e2e.yml" in block:
-        # Each shard builds in place.
-        return int(re.search(r"\n      shards: (\d+)", block).group(1))
+        # Each shard builds in place; the core's own engine runs them again.
+        engines = 2 if "\n      own-engine: true" in block else 1
+        return int(re.search(r"\n      shards: (\d+)", block).group(1)) * engines
     if any(f"uses: ./.github/workflows/{name}.yml" in block for name in ("os-contract", "vt", "holder-restart", "agy-contract", "omp-contract", "agent-clis")):
         # A lane whose macOS leg follows the plan names both lists; the most is the longer.
         systems = re.search(r"\n      systems: (.*)", block).group(1)
@@ -863,9 +864,9 @@ def runner_jobs(block):
         # Windows cannot build the Linux programs the distribution runs.
         return 2
     if "uses: ./.github/workflows/agent-journey.yml" in block:
-        # The stand-ins run on each system but Windows, and Windows has its forms job.
+        # Both engines run stand-ins on each system but Windows; Windows has its forms job.
         systems = json.loads(re.search(r"systems: '(\[[^']*\])'", block).group(1))
-        return len([system for system in systems if system != "windows"]) + ("windows" in systems)
+        return 2 * len([system for system in systems if system != "windows"]) + ("windows" in systems)
     if "uses: ./.github/workflows/package.yml" in block:
         package = (ROOT / ".github/workflows/package.yml").read_text()
         helpers = (ROOT / ".github/workflows/device-helpers.yml").read_text()
@@ -998,11 +999,14 @@ class Workflows(unittest.TestCase):
         # planned only for a change to the holder, the node's holder code, the
         # agent pins or the lane's scripts, add three.
         # Native and WASM relay interoperability adds one job on each OS.
+        # The core's own engine runs the web suite over as many shards again
+        # as Herdr's, on Linux and Windows, until the Herdr lane goes with
+        # Herdr (PRD engine-bundle-3-core-owns D-24): seven more. It runs the
+        # desktop suite again too, its two macOS shards; Windows awaits the
+        # holder lifetime fix because its CI Job forbids breakaway.
         # The package lane already ran six preparation/compile jobs omitted
         # from the old count; correcting the accounting starts no new job.
-        # The web suite runs once, on the core's own engine, since Herdr's
-        # lane went with Herdr (PRD engine-bundle-4-herdr-removal D-2).
-        self.assertLessEqual(most, 50, "a run starts more jobs than the suites and native SDK contracts need")
+        self.assertLessEqual(most, 60, "a run starts more jobs than the suites and native SDK contracts need")
         testing = (ROOT / "docs/TESTING.md").read_text()
         self.assertIn(f"starts at most {most} jobs", testing)
 

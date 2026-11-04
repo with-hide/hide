@@ -145,26 +145,26 @@ class FinishedAgent(unittest.TestCase):
     def test_each_pane_the_journey_opened_is_closed_once_and_one_that_stays_is_named(self):
         calls = []
 
-        def command(argv, check=True):
-            calls.append(argv)
-            return (1, "", "pane_not_found\n") if argv[-1] == "w5:p1" else (0, "", "")
-        runtime = SimpleNamespace(run=Path("/run"), command=command,
+        def close_pane(pane):
+            calls.append(pane)
+            return (1, "pane_not_found\n") if pane == "w5:p1" else (0, "")
+        runtime = SimpleNamespace(run=Path("/run"), close_pane=close_pane,
                                   owner=SimpleNamespace(cancelled=threading.Event()))
         record = {}
         journey = Journey(runtime, None, None, {}, {"id": "codex", "herdr_kind": "codex", "model_flag": []},
                           Path("/repo"), record, None, branch="b", created=[], sessions=Path("/h"), route={}, composer_judge=None)
         journey.opened += ["w4:p2", "w4:p3", "w4:p2", None, "w5:p1"]
         journey.close()
-        self.assertEqual(calls, [["pane", "close", pane] for pane in ("w4:p2", "w4:p3", "w5:p1")])
+        self.assertEqual(calls, ["w4:p2", "w4:p3", "w5:p1"])
         self.assertEqual(record["closed"], {"w4:p2": "closed", "w4:p3": "closed", "w5:p1": "pane_not_found"})
 
     def test_a_pane_no_later_cell_types_into_closes_after_its_step_and_each_pane_closes_once(self):
         calls = []
 
-        def command(argv, check=True):
-            calls.append(argv[-1])
-            return 0, "", ""
-        runtime = SimpleNamespace(run=Path("/run"), command=command,
+        def close_pane(pane):
+            calls.append(pane)
+            return 0, ""
+        runtime = SimpleNamespace(run=Path("/run"), close_pane=close_pane,
                                   owner=SimpleNamespace(cancelled=threading.Event()))
         journey = Journey(runtime, None, None, {}, {"id": "omp", "herdr_kind": "omp", "model_flag": []},
                           Path("/repo"), {}, None, branch="b", created=[], sessions=Path("/h"), route={}, composer_judge=None)
@@ -188,13 +188,13 @@ class FailedCellScreen(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             read = []
 
-            def command(argv, check=True):
-                read.append(argv[2])
-                return 0, f"screen of {argv[2]}\n", ""
-            runtime = SimpleNamespace(run=Path(folder), command=command,
+            def read_pane(pane, **_kwargs):
+                read.append(pane)
+                return f"screen of {pane}\n"
+            runtime = SimpleNamespace(run=Path(folder),
                                       owner=SimpleNamespace(cancelled=threading.Event()))
             table = {"opencode": {name: {"status": "pending"} for name in ("fork", "resume")}}
-            journey = Journey(runtime, None, None, table, {"id": "opencode", "herdr_kind": "opencode", "model_flag": []},
+            journey = Journey(runtime, None, SimpleNamespace(read_pane=read_pane), table, {"id": "opencode", "herdr_kind": "opencode", "model_flag": []},
                               Path("/repo"), {}, None, branch="b", created=[], sessions=Path("/h"), route={}, composer_judge=None)
             journey.pane = "w3:p1"
             # A fork is measured in its own pane while the journey's stays the source's.

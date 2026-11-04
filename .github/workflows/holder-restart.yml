@@ -8,9 +8,9 @@
 # a cell that cannot run fails, and the lane fails unless all seven passed.
 #
 # It shares the journey's pinned installs and fake model and nothing else:
-# no Herdr runs but the color question's comparison, no hided, no kit; on
-# Windows the pinned ConPTY runtime a holder runs its pane on is fetched from
-# its NuGet pin (contracts/conpty.json) into the binaries' folder. `pr.yml` runs
+# no Herdr, no hided, no kit; on Windows the pinned ConPTY runtime a holder
+# runs its pane on is fetched from its NuGet pin (contracts/conpty.json) into
+# the binaries' folder. `pr.yml` runs
 # it for a change to the holder, the node's holder code, the pins or this
 # lane's scripts (scripts/ci-plan.py), and `nightly.yml` every night.
 name: holder restart
@@ -117,21 +117,6 @@ jobs:
       - name: Install the xterm the lane draws frames on
         timeout-minutes: 3
         run: bash scripts/verify-web.sh install holder
-      - name: Fetch the pinned Herdr
-        # Herdr runs only for the color question's comparison below.
-        id: herdr
-        timeout-minutes: 5
-        # Assigned first, so a failed fetch fails this step rather than
-        # handing the next one an empty path.
-        run: |
-          case "$RUNNER_OS" in
-            Windows) bin=$(pwsh -NoProfile -File scripts/fetch-herdr-runtime.ps1 | tr -d '\r' | tail -n 1) ;;
-            Linux)
-              command -v zsh >/dev/null || sudo apt-get install -y --no-install-recommends zsh
-              bin=$(zsh scripts/fetch-herdr-runtime.sh --platform linux-x86_64) ;;
-            *) bin=$(zsh scripts/fetch-herdr-runtime.sh --platform macos-aarch64) ;;
-          esac
-          echo "bin=$bin" >> "$GITHUB_OUTPUT"
       - name: Restart each agent's node
         timeout-minutes: 60
         run: |

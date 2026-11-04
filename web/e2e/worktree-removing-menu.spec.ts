@@ -9,7 +9,7 @@ import path from "node:path";
 import { startFixture } from "./engine-fixture";
 import { openProject, withControl } from "./daemon-actions";
 import { startHided, type Daemon } from "./hided-fixture";
-import { screenshot, showProjectRow } from "./wire";
+import { enterWorkspace, screenshot, showProjectRow } from "./wire";
 
 test.describe.configure({ timeout: 180_000 });
 
@@ -60,7 +60,7 @@ test("a checkout row being deleted opens no empty menu", async ({ page }) => {
     const held = heldGit(herdr.root, herdr.fixturePath);
     daemon = await startHided(herdr, "worktree-removing-menu", undefined, { PATH: held.path });
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
-    await expect(page.locator("[data-main-screen]")).toBeVisible({ timeout: 20_000 });
+    await enterWorkspace(page, "fixture");
     // A pane in main keeps the project listed once the worktree goes; the core lists the worktree, with no tab of its own, once a client shows its repository.
     await withControl(daemon, (control) => openProject(control, repo, "repo"));
 

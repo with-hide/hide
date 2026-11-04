@@ -1,11 +1,10 @@
 // Settings' Desk switch and the app menu (PRD session-docs-and-assistant
 // D-76, B41): the View menu carries Desk's command and its chord only while
-// Desk is on, on the real Electron build against a private Herdr and hided.
+// Desk is on, on the real Electron build against a private engine and hided.
 
 import { expect, type ElectronApplication, type Page } from "@playwright/test";
-import { startHerdr } from "../../web/e2e/herdr-fixture";
 import { enterWorkspace } from "../../web/e2e/wire";
-import { isolate, launch, test } from "./fixture";
+import { launchShell, startStack, test } from "./fixture";
 
 const deskItem = (app: ElectronApplication) =>
   app.evaluate(({ Menu }) => {
@@ -23,11 +22,10 @@ async function switchDesk(page: Page, on: boolean) {
 }
 
 test("the View menu has no Desk command while Desk is off and gains it with its chord when Settings turns Desk on", { tag: "@platform" }, async () => {
-  const herdr = await startHerdr({ agents: false });
-  const run = isolate(herdr, "desk-switch");
+  const stack = await startStack("desk-switch", { agents: false });
   let app: ElectronApplication | null = null;
   try {
-    const launched = await launch(run.env);
+    const launched = await launchShell(stack.run.env);
     app = launched.app;
     const page = launched.page;
     await enterWorkspace(page, "fixture");
@@ -43,7 +41,6 @@ test("the View menu has no Desk command while Desk is off and gains it with its 
     await expect.poll(() => deskItem(app!)).toBeNull();
   } finally {
     await app?.close().catch(() => undefined);
-    run.cleanup();
-    herdr.stop();
+    stack.stop();
   }
 });

@@ -3,19 +3,22 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expect, type ElectronApplication } from "@playwright/test";
-import { startHerdr } from "../../web/e2e/herdr-fixture";
+import { startFixture } from "../../web/e2e/engine-fixture";
 import { usageShim } from "../../web/e2e/usage-fixture";
-import { fitWindow, isolate, launchShell, screenshot, test } from "./fixture";
+import { connectHome, fitWindow, isolate, launchShell, screenshot, test } from "./fixture";
 
 test("three usage chips, View, Help and Settings fit the minimum native window in English and Korean", async () => {
-  const herdr = await startHerdr();
-  const run = isolate(herdr, "usage");
+  // Two shells, not agents: the usage shim stands in for `claude` on the daemon's PATH, where an agent
+  // start would find it too. The daemon starts after that PATH is set, so this composes `startStack`'s steps.
+  const fixture = await startFixture({ agents: false });
+  const run = isolate(fixture, "usage");
   const usage = usageShim();
   run.env.PATH = usage.path;
   usage.release();
   let app: ElectronApplication | undefined;
   const failures: unknown[] = [];
   try {
+    await fixture.opened!(await connectHome(run));
     const opened = await launchShell(run.env);
     app = opened.app;
     const page = opened.page;
@@ -26,7 +29,7 @@ test("three usage chips, View, Help and Settings fit the minimum native window i
     await page.getByRole("switch", { name: "Claude Code 5 hours" }).click();
     await page.locator('[data-settings-tab="general"]').click();
     await page.locator('[data-font-size] [role="slider"]').press("End");
-    const facts = { home: run.env.HOME, state: run.env.HIDE_STATE_DIR, socket: herdr.socket, provider: "external Claude CLI shim; Codex signed out", window: "720x480, maximum Interface text" };
+    const facts = { home: run.env.HOME, state: run.env.HIDE_STATE_DIR, socket: fixture.socket, provider: "external Claude CLI shim; Codex signed out", window: "720x480, maximum Interface text" };
     const capture = async (name: string) => {
       const candidate = await app!.evaluate(({ BrowserWindow }) => ({
         pid: process.pid, executable: process.execPath, windows: BrowserWindow.getAllWindows().length,
@@ -94,7 +97,7 @@ test("three usage chips, View, Help and Settings fit the minimum native window i
   finally {
     try { await app?.close(); } catch (error) { failures.push(error); }
     try { run.cleanup(); } catch (error) { failures.push(error); }
-    try { herdr.stop(); } catch (error) { failures.push(error); }
+    try { fixture.stop(); } catch (error) { failures.push(error); }
     try { usage.cleanup(); } catch (error) { failures.push(error); }
   }
   if (failures.length) throw new AggregateError(failures, "native Usage or teardown failed");

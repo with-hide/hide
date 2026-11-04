@@ -2,7 +2,7 @@
 // Electron host, the `hide` CLI and daemon in its resources (on Windows run
 // from the build's runtime copy under the private home; PRD auto-update
 // D-10), and the web shell that daemon embeds, against a private HOME, state
-// and Herdr. The package lane runs it on Windows, where `smoke-package.mjs`
+// and engine. The package lane runs it on Windows, where `smoke-package.mjs`
 // starts the same package without a window and no other job draws the
 // packaged one. HIDE_E2E_PACKAGED_APP names the packaged executable (`hide.exe`
 // in the install folder on Windows, `hide.app/Contents/MacOS/hide` on macOS),
@@ -11,7 +11,8 @@
 import { expect, type ElectronApplication } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
-import { startHerdr } from "../../web/e2e/herdr-fixture";
+import { openProject, withControl } from "../../web/e2e/daemon-actions";
+import { startEngine } from "../../web/e2e/engine-fixture";
 import { fixtureExecutable } from "../../web/e2e/platform-fixture";
 import { enterWorkspace } from "../../web/e2e/wire";
 import { hostLog, isolate, launch, screenshot, shellPage, test } from "./fixture";
@@ -29,8 +30,9 @@ test("the packaged app opens its window on the shell its own daemon serves", asy
   const file = fs.realpathSync.native(executable!);
   if (file.startsWith("/Applications/")) throw new Error("HIDE_E2E_PACKAGED_APP must name a build, never the operator's installed app");
   const resources = packagedResources(file);
-  const herdr = await startHerdr({ agents: false });
-  const run = isolate(herdr, "packaged");
+  // The package starts its own daemon, so none runs before the launch: an empty engine, whose project is made once that daemon answers.
+  const engine = await startEngine();
+  const run = isolate(engine, "packaged");
   let app: ElectronApplication | null = null;
   try {
     // The host finds the package's own CLI, whose `hide connect` starts the
@@ -65,6 +67,8 @@ test("the packaged app opens its window on the shell its own daemon serves", asy
     // shortcut a toast is attributed through, named from the executable's product name, before
     // any notification shows.
     if (startMenu) await expect.poll(() => fs.existsSync(path.join(startMenu, "hide.lnk")), { timeout: 30_000 }).toBe(true);
+    const { port, token } = JSON.parse(fs.readFileSync(path.join(run.env.HIDE_STATE_DIR!, "hided.json"), "utf8")) as { port: number; token: string };
+    await withControl({ origin: `http://127.0.0.1:${port}`, token }, (control) => openProject(control, path.join(engine.root, "fixture"), "fixture"));
     await enterWorkspace(page, "fixture");
     await expect(page.locator("[data-pane-view] .xterm").first()).toBeVisible();
     await screenshot(page, "packaged-window");
@@ -74,6 +78,6 @@ test("the packaged app opens its window on the shell its own daemon serves", asy
   } finally {
     await app?.close().catch(() => undefined);
     run.cleanup();
-    herdr.stop();
+    engine.stop();
   }
 });

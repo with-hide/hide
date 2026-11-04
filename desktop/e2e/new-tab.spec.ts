@@ -1,10 +1,9 @@
 import { expect, type ElectronApplication, type Page, type TestInfo } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
-import { startHerdr } from "../../web/e2e/herdr-fixture";
 import { enterWorkspace, pinState, setLanePinned, showExplorer } from "../../web/e2e/wire";
 import { afterCleanup } from "../../web/e2e/worker-owned";
-import { fitWindow, isolate, launch, NEEDS_FOCUS, test } from "./fixture";
+import { fitWindow, launchShell, NEEDS_FOCUS, startStack, test } from "./fixture";
 
 const TITLE = "New tab page";
 
@@ -128,14 +127,14 @@ async function observeMenu(page: Page, info: TestInfo): Promise<() => Promise<vo
 
 // eslint-disable-next-line no-empty-pattern -- Playwright supplies TestInfo after the fixtures argument.
 test("Command T and Command W from a native page act on its View area, and after any other command on the terminal that has the keyboard", { tag: NEEDS_FOCUS }, async ({}, info) => {
-  const herdr = await startHerdr({ agents: false });
-  const run = isolate(herdr, "new-tab");
+  const stack = await startStack("new-tab", { agents: false });
+  const { fixture } = stack;
   let app: ElectronApplication | null = null;
   let stopObserving: (() => Promise<void>) | undefined;
   const failures: unknown[] = [];
   try {
-    fs.writeFileSync(path.join(herdr.root, "fixture", "page.html"), `<!doctype html><meta charset="utf-8"><title>${TITLE}</title><h1>Browser keyboard owner</h1>`);
-    const launched = await launch(run.env);
+    fs.writeFileSync(path.join(fixture.root, "fixture", "page.html"), `<!doctype html><meta charset="utf-8"><title>${TITLE}</title><h1>Browser keyboard owner</h1>`);
+    const launched = await launchShell(stack.run.env);
     app = launched.app;
     const page = launched.page;
     // D-07/B25 place a 1024px body in the 848..1115px step: Agent Views
@@ -168,7 +167,7 @@ test("Command T and Command W from a native page act on its View area, and after
     await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "docked");
 
     // Command T: the page's area gets the View strip's New tab.
-    await terminal(herdr.panes[0]);
+    await terminal(fixture.panes[0]);
     await enterPage(app, page);
     await handBack(page);
     await menuClick(app, "new_tab");
@@ -180,7 +179,7 @@ test("Command T and Command W from a native page act on its View area, and after
     // Command W: the page's display closes and every pane stays.
     await viewTabs.filter({ hasText: TITLE }).click();
     await expect(page.locator("[data-browser-slot]")).toBeVisible();
-    await terminal(herdr.panes[0]);
+    await terminal(fixture.panes[0]);
     await enterPage(app, page);
     await handBack(page);
     await menuClick(app, "close_tab");
@@ -195,24 +194,24 @@ test("Command T and Command W from a native page act on its View area, and after
     await page.locator('[data-explorer-row$="/page.html"]').click({ button: "right" });
     await page.locator('[data-explorer-menu] [data-menu-item="open-browser"]').click();
     await expect(viewTabs.filter({ hasText: TITLE })).toHaveCount(1);
-    await terminal(herdr.panes[0]);
+    await terminal(fixture.panes[0]);
     await enterPage(app, page);
     await handBack(page);
     await menuClick(app, "toggle_lane");
     await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "closed");
-    await expect(page.locator(`[data-terminal-host="${herdr.panes[0]}"] textarea`)).toBeFocused();
+    await expect(page.locator(`[data-terminal-host="${fixture.panes[0]}"] textarea`)).toBeFocused();
     await menuClick(app, "toggle_lane");
     await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-view", "documents");
     await menuClick(app, "toggle_lane");
     await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "closed");
     await menuClick(app, "close_tab");
-    await expect(page.locator(`[data-pane-view="${herdr.panes[0]}"]`)).toHaveCount(0, { timeout: 15_000 });
+    await expect(page.locator(`[data-pane-view="${fixture.panes[0]}"]`)).toHaveCount(0, { timeout: 15_000 });
     await expect(panes).toHaveCount(1);
     await page.locator('[data-lane-tool="documents"]').click();
     await expect(viewTabs.filter({ hasText: TITLE })).toHaveCount(1);
 
     // A click back into a terminal is the operator's move: Command T is an agent tab again.
-    await terminal(herdr.panes[1]);
+    await terminal(fixture.panes[1]);
     await menuClick(app, "new_tab");
     await expect(agentTabs).toHaveCount(2);
   } catch (error) {
@@ -220,8 +219,7 @@ test("Command T and Command W from a native page act on its View area, and after
   } finally {
     try { await stopObserving?.(); } catch (error) { failures.push(error); }
     try { await app?.close(); } catch (error) { failures.push(new Error(`close menu candidate: ${String(error)}`, { cause: error })); }
-    try { run.cleanup(); } catch (error) { failures.push(new Error(`clean menu fixture: ${String(error)}`, { cause: error })); }
-    try { herdr.stop(); } catch (error) { failures.push(new Error(`stop private menu Herdr: ${String(error)}`, { cause: error })); }
+    try { stack.stop(); } catch (error) { failures.push(new Error(`clean menu fixture: ${String(error)}`, { cause: error })); }
   }
   if (failures.length) {
     let primary = failures[0];

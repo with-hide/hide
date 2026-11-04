@@ -504,7 +504,7 @@ Regression owners: `a_parent_declared_as_a_pane_token_is_the_lineage`, `a_child_
 The shell draws only the `raised` kind, as the turn mark and N, and only in the tree popover on a folded branch: a sidebar or 태스크 row draws no count, because its root already stands in Needs You with the raised ask on its line (needs-you-cleanup D-03, B7).
 The `working` kind is still computed and draws nowhere: a parent waiting on its children shows its ring and the working child's line (PRD session-record-redesign D-04).
 Idle, done and unknown descendants add nothing, so a mark never says only that children exist.
-`row.state.tree_rank` orders siblings in every tree: asking or raised, itself or below it, first; then working; then finished and unread; then the rest.
+`row.state.tree_rank` orders siblings in every tree: asking or raised, itself or below it, first; then waiting on a reply or background work; then working; then finished and unread; then the rest.
 The sidebar tree under an opened root is `agent_scope.sidebar_tree.visible_rows` from `agent_state/tally/lineage.rs::sidebar_tree`: children and grandchildren wherever they work, two levels only, with the digit shortcuts on roots alone.
 The shell shows five siblings per parent and folds the rest behind `N개 더` (`web/src/sidebarTree.ts`).
 A grandchild's own children open in the tree popover instead of a third level.

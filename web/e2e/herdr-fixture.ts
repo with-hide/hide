@@ -392,15 +392,16 @@ export function paneSizeCommand(shell: PaneShell, marker: string): string {
 
 /** The text that runs `program` in a pane's shell, ready for `pane run`. */
 export function paneProgramLine(shell: PaneShell, program: PaneProgram): string {
-  if (shell === "powershell") {
-    // Keep redirected bytes and exit status independent of PowerShell 5's
-    // UTF-16 redirection. The private file also keeps the typed line bounded.
-    const script = `${program.status}.cjs`;
-    fs.writeFileSync(script, `
+  // Type only a short command, even when the preceding process has finished
+  // before the shell restores its line editor. Long multiline arguments can
+  // otherwise hit the terminal's canonical input limit. The private script
+  // also keeps bytes independent of PowerShell 5's UTF-16 redirection.
+  const script = `${program.status}.cjs`;
+  fs.writeFileSync(script, `
 const fs = require("node:fs");
 const { spawnSync } = require("node:child_process");
 const program = ${JSON.stringify(program)};
-const out = fs.openSync(program.stdout ?? "NUL", "w");
+const out = fs.openSync(program.stdout ?? ${JSON.stringify(process.platform === "win32" ? "NUL" : "/dev/null")}, "w");
 const err = fs.openSync(program.stderr, "w");
 try {
   const [binary, ...args] = program.argv;
@@ -409,17 +410,7 @@ try {
   fs.writeFileSync(program.status, String(result.status ?? 1));
 } finally { fs.closeSync(out); fs.closeSync(err); }
 `);
-    return paneCommandLine(shell, [process.execPath, script]);
-  }
-  const env = Object.entries(program.env ?? {});
-  if (shell === "cmd") {
-    const sets = env.map(([key, value]) => `set ${cmdQuote(`${key}=${value}`)} && `).join("");
-    const run = paneCommandLine(shell, program.argv);
-    // `call echo %^errorlevel%` reads the status when it runs, not when the line is parsed.
-    return `${sets}${run} > ${cmdQuote(program.stdout ?? "nul")} 2> ${cmdQuote(program.stderr)} & >${cmdQuote(program.status)} call echo %^errorlevel%`;
-  }
-  const sets = env.map(([key, value]) => `${key}=${posixQuote(value)} `).join("");
-  return `${sets}${paneCommandLine(shell, program.argv)} > ${posixQuote(program.stdout ?? "/dev/null")} 2> ${posixQuote(program.stderr)}; printf '%s' "$?" > ${posixQuote(program.status)}`;
+  return paneCommandLine(shell, [process.execPath, script]);
 }
 
 /**

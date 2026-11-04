@@ -12,7 +12,7 @@ import { expect, type Page } from "@playwright/test";
 import { connectControl, type HidedControl } from "./hided-control.mjs";
 import { agentIn, areaShowing, checkoutAt, closePane, focusPane, openProject, splitPane, tabPanes, viewPane, waitForPaneInput } from "./daemon-actions";
 import { claudeProjects, panePrompt, paneShellOf, writeFixtureTranscript, type PaneShell } from "./herdr-fixture";
-import { startHided, type Daemon, type DaemonEngine } from "./hided-fixture";
+import { startHided, type Daemon, type DaemonEngine, type OpenedDaemon } from "./hided-fixture";
 import { fixtureExecutable, fixturePrograms } from "./platform-fixture";
 import { installAgentRunner, reportedMarker, type AgentPaneFixture, type AgentRun, type HideAnswer } from "./agent-pane";
 
@@ -147,6 +147,11 @@ export function paneInputLog(root: string, pane: string): string {
   return path.join(root, `input-${pane.replaceAll(":", "-")}.log`);
 }
 
+/** The `hide-agent-hooks` this worktree built, which a stand-in runs from inside its pane as the agent's own integration does. */
+export function builtHooks(): string {
+  return path.resolve("..", "target", "debug", fixtureExecutable("hide-agent-hooks"));
+}
+
 /** The session each of the fixture's two agents runs, whose transcript names its task. */
 const FIXTURE_AGENTS = [
   { session: "fixture-one", task: "Agent one" },
@@ -186,7 +191,7 @@ export async function startFixture({ agents = true, family = false }: { agents?:
     if (!made) throw new Error("the fixture's checkout and panes are made by its first daemon: read them after startHided");
     return made;
   };
-  const opened = async (daemon: Daemon) => {
+  const opened = async (daemon: OpenedDaemon) => {
     if (made) return;
     // Preserve the setup's last output when no page could open yet. A fixed
     // byte cap keeps an unexpected output flood from growing the run's memory.
@@ -222,7 +227,7 @@ export async function startFixture({ agents = true, family = false }: { agents?:
   return {
     ...server,
     // The stand-in reports a new session through Hide's own hook from inside its pane (`setAgentSession`).
-    daemonEnv: { ...server.daemonEnv, HIDE_E2E_HOOKS: path.resolve("..", "target", "debug", fixtureExecutable("hide-agent-hooks")) },
+    daemonEnv: { ...server.daemonEnv, HIDE_E2E_HOOKS: builtHooks() },
     opened,
     get workspace() { return need().workspace; },
     get checkout() { return need().checkout; },
@@ -241,7 +246,7 @@ export async function startFixture({ agents = true, family = false }: { agents?:
 
 type Opened = { workspace: string; checkout: string; tab: string; panes: [string, string]; runAs?: (pane: string) => HideRunner };
 
-async function openFixture(control: HidedControl, server: EngineServer, daemon: Daemon, kind: "shells" | "agents" | "family"): Promise<Opened> {
+async function openFixture(control: HidedControl, server: EngineServer, daemon: OpenedDaemon, kind: "shells" | "agents" | "family"): Promise<Opened> {
   const dir = path.join(server.root, "fixture");
   // A child beside its parent opens in the parent's own worktree (docs/delivery.md, Agent registration and spawning).
   if (kind === "family") gitRepository(dir);
@@ -255,6 +260,9 @@ async function openFixture(control: HidedControl, server: EngineServer, daemon: 
     // running shells, including to a spec that restarts the daemon at once.
     // Waiting must not select a checkout before the spec opens its page.
     for (const pane of [first.pane, second]) await waitForPaneInput(control, pane);
+    // Match the agent fixture and the original Herdr fixture: a command
+    // from the first pane is a command from the operator's current pane.
+    await focusPane(control, first.pane);
     return { workspace: first.workspace, checkout: first.checkout, tab: first.tab, panes: [first.pane, second] };
   }
   // A family's agents run `hide` as a real agent does, from inside their panes.

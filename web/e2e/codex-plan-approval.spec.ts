@@ -18,7 +18,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { startFixture, type EngineServer } from "./engine-fixture";
 import { agentIn, openProject, sendKeys, withControl } from "./daemon-actions";
-import { paneCommandLine } from "./herdr-fixture";
+import { setAgentSession } from "./fixture-agents";
 import { fixtureExecutable } from "./platform-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace, screenshot, showProjectRow } from "./wire";
@@ -77,31 +77,16 @@ async function drawTitle(daemon: Daemon, pane: string, state: "working" | "ended
 /**
  * Starts the Codex stand-in in `pane`, whose shell is at its prompt, and
  * returns once its row names `SESSION`, as Codex's integration reports the
- * session at SessionStart: Hide's hook helper with Codex's payload, run from
- * a process of the pane's shell once the agent runs (the stand-in's own report
- * is Claude Code's, and its screen takes the pane's keys). The reporter waits
- * for a marker file the test writes when the agent is listed, so the hook
- * never races the start.
+ * session at SessionStart: Hide's hook helper with Codex's payload, run by
+ * the stand-in itself after the engine lists it. No background shell job
+ * shares the stand-in's tty.
  */
-async function startCodex(fixture: EngineServer, daemon: Daemon, pane: string, cwd: string): Promise<void> {
-  const go = path.join(fixture.root, "codex-session-go");
-  const hooks = path.resolve("..", "target", "debug", fixtureExecutable("hide-agent-hooks"));
-  const reporter = path.join(fixture.root, "codex-session-report.cjs");
-  fs.writeFileSync(reporter, `
-const fs = require("node:fs");
-const { spawnSync } = require("node:child_process");
-const [hooks, session, cwd, go] = process.argv.slice(2);
-const wait = () => (fs.existsSync(go) ? hook() : setTimeout(wait, 100));
-const hook = () => process.exit(spawnSync(hooks, ["hook", "--runtime", "codex", "--event", "SessionStart"], { input: JSON.stringify({ session_id: session, hook_event_name: "SessionStart", source: "startup", cwd }), encoding: "utf8", timeout: 20000 }).status ?? 1);
-wait();
-`);
-  const background = paneCommandLine(fixture.shell, [process.execPath, reporter, hooks, SESSION, cwd, go]);
-  await withControl(daemon, async (control) => sendKeys(control, pane, `${fixture.shell === "cmd" ? "start /b " : ""}${background}${fixture.shell === "cmd" ? "" : " &"}\r`));
+async function startCodex(fixture: EngineServer, daemon: Daemon, pane: string): Promise<void> {
   await withControl(daemon, async (control) => {
     sendKeys(control, pane, "codex\r");
     await control.until((rest) => agentIn(rest, pane), "the Codex agent in the plan project", 30_000);
   });
-  fs.writeFileSync(go, "");
+  await setAgentSession(fixture, daemon, pane, SESSION);
   await withControl(daemon, (control) => control.until((rest) => agentIn(rest, pane)?.session_id === SESSION, `${pane} on session ${SESSION}`, 20_000));
 }
 
@@ -123,7 +108,7 @@ test("a Codex plan waiting for approval holds its row in Needs You until the nex
     await (await showProjectRow(page, page.locator("[data-project]", { hasText: "plan" }).locator("[data-checkout]").first())).click();
     await expect(page.locator("[data-canvas]").first()).toHaveAttribute("data-canvas", plan.tab);
     await expect.poll(() => page.evaluate((id) => window.__hideProbe?.paneText(id) ?? "", pane), { timeout: 20_000, message: "the prompt in the plan project" }).toContain("fixture %");
-    await startCodex(fixture, daemon, pane, plan.folder);
+    await startCodex(fixture, daemon, pane);
 
     const sessions = path.join(daemon.home, ".codex", "sessions", "2026", "10", "07");
     fs.mkdirSync(sessions, { recursive: true });

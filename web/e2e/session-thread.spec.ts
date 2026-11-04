@@ -1,17 +1,18 @@
 // A pane's session read as a thread on either engine and hided (PRD
 // session-docs-and-assistant B25, B29): the node reads the record, reads on
 // as the session writes, and the input box's words reach that pane's program.
-// The Claude pane runs on both engines; the Pi pane learns its session file from
-// Herdr's pi integration, so its test is Herdr only.
+// The Claude and Pi panes run on both engines; the Pi stand-in reports its
+// session file as Pi's own integration does (`prepareEngineWriter`).
 import { expect, test, type Page } from "@playwright/test";
-import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import path from "node:path";
+import { agentIn, preparePaneInput, sendKeys, withControl } from "./daemon-actions";
 import { startFixture } from "./engine-fixture";
 import { setAgentState } from "./fixture-agents";
-import { continueFixtureTranscript, startHerdr } from "./herdr-fixture";
+import { continueFixtureTranscript, type HerdrFixture } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
-import { prepareNativeWriter, reportNativeWriter } from "./session-reader-fixture";
+import { nativeSessionId, prepareEngineWriter, reportNativeWriter } from "./session-reader-fixture";
 import { sendEvent } from "./wire";
 import { afterCleanup } from "./worker-owned";
 import type { SessionThreadHistorySection, SessionThreadSection } from "../src/snapshot";
@@ -37,11 +38,11 @@ function watchThread(page: Page): { thread: () => SessionThreadSection | null; w
 
 test("a Claude pane's record reads as a thread, follows what the session writes, and takes the input box's words", async ({ page }) => {
   const { thread, words } = watchThread(page);
-  const herdr = await startFixture();
+  const fixture = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "claude-thread");
-    const pane = herdr.panes[0];
+    daemon = await startHided(fixture, "claude-thread");
+    const pane = fixture.panes[0];
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await expect(page.locator(`nav[data-sidebar] [data-pane="${pane}"]`)).toBeVisible({ timeout: 30_000 });
 
@@ -51,7 +52,7 @@ test("a Claude pane's record reads as a thread, follows what the session writes,
     expect(words()).toContain("Agent one 진행해줘");
 
     // The session writes on while it works: the thread reads what it wrote.
-    continueFixtureTranscript(herdr, "fixture-one", { task: "스레드가 따라 읽는 새 말" });
+    continueFixtureTranscript(fixture, "fixture-one", { task: "스레드가 따라 읽는 새 말" });
     await setAgentState(daemon, pane, "working");
     await expect.poll(() => words(), { timeout: 30_000 }).toContain("스레드가 따라 읽는 새 말");
 
@@ -59,26 +60,28 @@ test("a Claude pane's record reads as a thread, follows what the session writes,
     const request = crypto.randomUUID();
     await sendEvent(page, daemon, "thread_input", { generation: thread()!.generation, pane_id: pane, request_id: request, text: "계속해 주세요", stages: [] });
     await expect.poll(() => thread()?.input, { timeout: 30_000 }).toEqual({ request_id: request, state: "sent" });
-    await expect.poll(() => fs.readFileSync(herdr.inputLogs[0], "utf8"), { timeout: 10_000 }).toContain("계속해 주세요");
-    expect(fs.existsSync(herdr.inputLogs[1]) ? fs.readFileSync(herdr.inputLogs[1], "utf8") : "").not.toContain("계속해 주세요");
+    await expect.poll(() => fs.readFileSync(fixture.inputLogs[0], "utf8"), { timeout: 10_000 }).toContain("계속해 주세요");
+    expect(fs.existsSync(fixture.inputLogs[1]) ? fs.readFileSync(fixture.inputLogs[1], "utf8") : "").not.toContain("계속해 주세요");
   } finally {
     daemon?.stop();
-    herdr.stop();
+    fixture.stop();
   }
 });
 
-// Herdr only: bundle 4 PR A (b4-transition) owns Pi's first-session report. The fixture binds it through Herdr's `report-agent-session`, with no Hide extension.
-test("a Pi pane's record reads as a thread, follows what the session writes, and takes the input box's words @herdr", async ({ page }) => {
+test("a Pi pane's record reads as a thread, follows what the session writes, and takes the input box's words", async ({ page }) => {
   const { thread, words } = watchThread(page);
-  const herdr = await startHerdr({ agents: false });
+  const fixture = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
-    const pane = herdr.panes[0];
-    const session = prepareNativeWriter(herdr, "pi");
-    herdr.run(["agent", "start", "pi-thread", "--kind", "pi", "--pane", pane]);
+    daemon = await startHided(fixture, "pi-thread", path.join(fixture.root, "home"));
+    const pane = fixture.panes[0];
+    const session = prepareEngineWriter(fixture, "pi");
+    await withControl(daemon, async (control) => sendKeys(control, pane, "pi\r"));
     await expect.poll(() => fs.existsSync(session)).toBe(true);
-    reportNativeWriter(herdr, "pi", pane, session);
-    daemon = await startHided(herdr, "pi-thread", herdr.env.HOME);
+    await withControl(daemon, (control) => control.until((rest) => (agentIn(rest, pane)?.agent_kind === "pi" ? true : undefined), `a pi agent in ${pane}`, 30_000));
+    // Herdr takes the session from its integration's report; on the own engine the stand-in made Pi's own.
+    if (fixture.engine === "herdr") reportNativeWriter(fixture as unknown as HerdrFixture, "pi", pane, session);
+    await withControl(daemon, (control) => control.until((rest) => (agentIn(rest, pane)?.session_id === nativeSessionId("pi") ? true : undefined), `${pane} on its pi session`, 30_000));
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await expect(page.locator(`nav[data-sidebar] [data-pane="${pane}"]`)).toBeVisible({ timeout: 30_000 });
 
@@ -90,18 +93,22 @@ test("a Pi pane's record reads as a thread, follows what the session writes, and
     // The session writes on while it works: the thread reads what it wrote.
     const record = { type: "message", id: "a0000004", parentId: "a0000003", timestamp: "2026-10-03T01:01:00Z", message: { role: "assistant", content: [{ type: "text", text: "스레드가 따라 읽는 새 말" }], stopReason: "stop" } };
     fs.appendFileSync(session, `${JSON.stringify(record)}\n`);
-    execFileSync(herdr.bin, ["pane", "report-agent", pane, "--source", "herdr:pi", "--agent", "pi", "--state", "working", "--agent-session-path", session, "--seq", "3"], { env: herdr.env, timeout: 30_000 });
+    await withControl(daemon, async (control) => {
+      await preparePaneInput(control, pane);
+      sendKeys(control, pane, "\x1b[2J\x1b[HWorking...\r\n");
+      await control.until((rest) => agentIn(rest, pane)?.activity === "working" ? true : undefined, `${pane} working`, 30_000);
+    });
     await expect.poll(() => words(), { timeout: 30_000 }).toContain("스레드가 따라 읽는 새 말");
 
     // The input box's words reach the pane's program, with Enter, and nowhere else.
     const request = crypto.randomUUID();
     await sendEvent(page, daemon, "thread_input", { generation: thread()!.generation, pane_id: pane, request_id: request, text: "계속해 주세요", stages: [] });
     await expect.poll(() => thread()?.input, { timeout: 30_000 }).toEqual({ request_id: request, state: "sent" });
-    await expect.poll(() => fs.readFileSync(herdr.inputLogs[0], "utf8"), { timeout: 10_000 }).toContain("계속해 주세요");
-    expect(fs.existsSync(herdr.inputLogs[1]) ? fs.readFileSync(herdr.inputLogs[1], "utf8") : "").not.toContain("계속해 주세요");
+    await expect.poll(() => fs.readFileSync(fixture.inputLogs[0], "utf8"), { timeout: 10_000 }).toContain("계속해 주세요");
+    expect(fs.existsSync(fixture.inputLogs[1]) ? fs.readFileSync(fixture.inputLogs[1], "utf8") : "").not.toContain("계속해 주세요");
   } catch (error) {
-    throw afterCleanup(afterCleanup(error, () => daemon?.stop()), () => herdr.stop());
+    throw afterCleanup(afterCleanup(error, () => daemon?.stop()), () => fixture.stop());
   }
-  try { daemon?.stop(); } catch (error) { throw afterCleanup(error, () => herdr.stop()); }
-  herdr.stop();
+  try { daemon?.stop(); } catch (error) { throw afterCleanup(error, () => fixture.stop()); }
+  fixture.stop();
 });

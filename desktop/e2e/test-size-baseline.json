@@ -20,10 +20,6 @@
       "lines": 161,
       "expect": 42
     },
-    "device-home.spec.ts::a device's Home is made on its first start, the rail follows registration, and a device start lands on that device": {
-      "lines": 126,
-      "expect": 35
-    },
     "digit-shortcuts.spec.ts::⌥⌘n selects a device, ⌥n an agent, ⌃n nothing, and holding ⌥⌘ or ⌥ shows the numbers without moving anything": {
       "lines": 173,
       "expect": 39
@@ -47,10 +43,6 @@
     "right-lane.spec.ts::the lane comes and goes over the terminals without a resize, the pin and a docked divider resize once, and input continues through all of it": {
       "lines": 222,
       "expect": 49
-    },
-    "right-lane.spec.ts::an SSH Workspace's lane keeps its chords, narrow fallback and saved widths apart from the same local path": {
-      "lines": 123,
-      "expect": 28
     }
   }
 }

@@ -1,40 +1,31 @@
 // The desktop app's keys end to end: the operator's macOS pane chords, which
 // hided brings across from the removed native app's state once, and the held-modifier
-// cycles, whose commit waits for the modifier's release. A private Herdr
-// server for this file, a private hided and Electron app per test.
+// cycles, whose commit waits for the modifier's release. A private engine, a
+// private hided and Electron app per test.
 
 import { expect, type ElectronApplication, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { startHerdr, type HerdrFixture } from "../../web/e2e/herdr-fixture";
+import { focusTab, newTab, openProject, splitPane, withControl } from "../../web/e2e/daemon-actions";
+import { startEngine } from "../../web/e2e/engine-fixture";
+import { startAgentIn } from "../../web/e2e/fixture-agents";
 import "../../web/src/host";
 import { countSent, enterWorkspace, showProjectRow } from "../../web/e2e/wire";
-import { hostLog, isolate, launch, screenshot, test, type Isolated } from "./fixture";
+import { connectHome, hostLog, isolate, launchShell, screenshot, startStack, test, type Isolated } from "./fixture";
 import { quietFor } from "../../web/e2e/wait";
 
-let herdr: HerdrFixture;
 let run: Isolated;
+let stopHome: (() => void) | null = null;
 let app: ElectronApplication | null = null;
-
-test.beforeAll(async () => {
-  herdr = await startHerdr();
-});
-
-test.afterAll(() => {
-  herdr?.stop();
-});
-
-test.beforeEach(() => {
-  run = isolate(herdr, test.info().title.split(":")[0]!);
-});
 
 test.afterEach(async () => {
   const info = test.info();
-  if (info.status !== info.expectedStatus) console.log(hostLog(run.env).map((line) => JSON.stringify(line)).join("\n"));
+  if (info.status !== info.expectedStatus && stopHome) console.log(hostLog(run.env).map((line) => JSON.stringify(line)).join("\n"));
   await app?.close().catch(() => undefined);
   app = null;
-  run.cleanup();
+  stopHome?.();
+  stopHome = null;
 });
 
 /** A menu item's accelerator as the app menu holds it now. */
@@ -52,6 +43,10 @@ async function exactlyOnce(sent: Map<string, number>, kind: string, expected: nu
 test("pane chords: the macOS app's set comes across, runs once, and Settings edits it", async () => {
   // The operator's native-app state on the day of the decision, with the fields
   // that app kept around the one hided reads.
+  // hided reads that state when its core starts, so the home's daemon starts after it is written.
+  const engine = await startEngine();
+  run = isolate(engine, test.info().title.split(":")[0]!);
+  stopHome = () => { try { run.cleanup(); } finally { engine.stop(); } };
   const nativeState = path.join(run.env.HOME!, "Library", "Application Support", "hide", "state.json");
   fs.mkdirSync(path.dirname(nativeState), { recursive: true });
   fs.writeFileSync(
@@ -73,10 +68,19 @@ test("pane chords: the macOS app's set comes across, runs once, and Settings edi
       },
     }),
   );
-  ({ app } = await launch(run.env));
-  const page = await app.firstWindow();
+  const daemon = await connectHome(run);
+  const fixtureDir = path.join(engine.root, "fixture");
+  fs.mkdirSync(fixtureDir, { recursive: true });
+  await withControl(daemon, async (control) => {
+    const made = await openProject(control, fixtureDir, "fixture");
+    await splitPane(control, made.tab, made.folder);
+  });
+  const launched = await launchShell(run.env);
+  app = launched.app;
+  const page = launched.page;
   const lastSent = new Map<string, Record<string, unknown>>();
   const sent = countSent(page, lastSent);
+  await page.reload();
   await enterWorkspace(page);
   await expect(page.locator("[data-pane-view]")).toHaveCount(2);
 
@@ -120,120 +124,118 @@ test("pane chords: the macOS app's set comes across, runs once, and Settings edi
 test("cycles: ⌃Tab and ⌥Tab commit once, on releasing the held modifier", async () => {
   // Two more tabs in the fixture Workspace, each running an agent, since the
   // Agent area's ⌃Tab walks agent panes, and two more Projects.
-  const tabs = [herdr.tab];
+  const stack = await startStack("cycles");
+  const { fixture } = stack;
+  run = stack.run;
+  stopHome = stack.stop;
+  const tabs = [fixture.tab];
   for (const label of ["second", "third"]) {
-    const made = herdr.run([
-      "tab", "create", "--workspace", herdr.workspace, "--cwd", path.join(herdr.root, "fixture"), "--label", label, "--env", `PATH=${herdr.fixturePath}`, "--no-focus",
-    ]) as { result: { tab: { tab_id: string }; root_pane: { pane_id: string } } };
-    tabs.push(made.result.tab.tab_id);
-    const pane = made.result.root_pane.pane_id;
-    await expect.poll(() => execFileSync(herdr.bin, ["pane", "read", pane, "--source", "recent", "--lines", "5"], { env: herdr.env, encoding: "utf8" }), { timeout: 20_000 }).toContain("fixture %");
-    herdr.run(["agent", "start", label, "--kind", "claude", "--pane", pane]);
+    const made = await withControl(stack.daemon, (control) => newTab(control, fixture, label));
+    tabs.push(made.tab);
+    // Each of those tabs runs an agent, started as the operator starts one in a shell.
+    await startAgentIn(fixture, stack.daemon, made.pane);
   }
-  const extraWorkspaces: string[] = [];
-  for (const name of ["beta", "gamma"]) {
-    fs.mkdirSync(path.join(herdr.root, name), { recursive: true });
-    const made = herdr.run([
-      "workspace", "create", "--cwd", path.join(herdr.root, name), "--label", name, "--env", `PATH=${herdr.fixturePath}`, "--no-focus",
-    ]) as { result: { workspace: { workspace_id: string } } };
-    extraWorkspaces.push(made.result.workspace.workspace_id);
+  // Two more Projects, and the first tab shown again, as it was before they were made.
+  await withControl(stack.daemon, async (control) => {
+    for (const name of ["beta", "gamma"]) {
+      fs.mkdirSync(path.join(fixture.root, name), { recursive: true });
+      await openProject(control, path.join(fixture.root, name), name);
+    }
+    await focusTab(control, fixture, fixture.tab);
+  });
+  const launched = await launchShell(run.env);
+  app = launched.app;
+  const page = launched.page;
+  const sent = countSent(page);
+  await page.reload();
+  await enterWorkspace(page, "fixture");
+  const canvas = page.locator("[data-canvas]").first();
+  const cycleRow = (kind: string) => page.locator(`[data-cycle=${kind}] [aria-selected=true]`);
+
+  // Recent order third, second, first: the first tab's focused pane is current.
+  const paneOf = new Map<string, string>();
+  for (const tab of [tabs[2]!, tabs[1]!, tabs[0]!]) {
+    await page.locator(`[data-tab="${tab}"]`).click();
+    await expect(canvas).toHaveAttribute("data-canvas", tab);
+    paneOf.set(tab, (await page.locator('[data-pane-view][data-focused="true"]').getAttribute("data-pane-view"))!);
   }
-  try {
-    ({ app } = await launch(run.env));
-    const page = await app.firstWindow();
-    const sent = countSent(page);
-    await enterWorkspace(page, "fixture");
-    const canvas = page.locator("[data-canvas]").first();
-    const cycleRow = (kind: string) => page.locator(`[data-cycle=${kind}] [aria-selected=true]`);
 
-    // Recent order third, second, first: the first tab's focused pane is current.
-    const paneOf = new Map<string, string>();
-    for (const tab of [tabs[2]!, tabs[1]!, tabs[0]!]) {
-      await page.locator(`[data-tab="${tab}"]`).click();
-      await expect(canvas).toHaveAttribute("data-canvas", tab);
-      paneOf.set(tab, (await page.locator('[data-pane-view][data-focused="true"]').getAttribute("data-pane-view"))!);
-    }
+  // ⌃Tab twice with ⌃ held walks two Agent panes back; releasing ⌃ commits one focus_pane.
+  let focused = sent.get("focus_pane") ?? 0;
+  await page.keyboard.down("Control");
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("Tab");
+  await expect(cycleRow("agents")).toHaveAttribute("data-cycle-row", paneOf.get(tabs[2]!)!);
+  expect(sent.get("focus_pane") ?? 0).toBe(focused);
+  await page.keyboard.up("Control");
+  await expect(page.locator("[data-cycle]")).toHaveCount(0);
+  await expect(canvas).toHaveAttribute("data-canvas", tabs[2]!);
+  await exactlyOnce(sent, "focus_pane", focused + 1, page);
 
-    // ⌃Tab twice with ⌃ held walks two Agent panes back; releasing ⌃ commits one focus_pane.
-    let focused = sent.get("focus_pane") ?? 0;
-    await page.keyboard.down("Control");
-    await page.keyboard.press("Tab");
-    await page.keyboard.press("Tab");
-    await expect(cycleRow("agents")).toHaveAttribute("data-cycle-row", paneOf.get(tabs[2]!)!);
-    expect(sent.get("focus_pane") ?? 0).toBe(focused);
-    await page.keyboard.up("Control");
-    await expect(page.locator("[data-cycle]")).toHaveCount(0);
-    await expect(canvas).toHaveAttribute("data-canvas", tabs[2]!);
-    await exactlyOnce(sent, "focus_pane", focused + 1, page);
+  // ⌃⇧Tab walks back toward the start: from third, two forward then one
+  // back is first.
+  focused = sent.get("focus_pane") ?? 0;
+  await page.keyboard.down("Control");
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("Shift+Tab");
+  await expect(cycleRow("agents")).toHaveAttribute("data-cycle-row", paneOf.get(tabs[0]!)!);
+  await page.keyboard.up("Control");
+  await expect(canvas).toHaveAttribute("data-canvas", tabs[0]!);
+  await exactlyOnce(sent, "focus_pane", focused + 1, page);
 
-    // ⌃⇧Tab walks back toward the start: from third, two forward then one
-    // back is first.
-    focused = sent.get("focus_pane") ?? 0;
-    await page.keyboard.down("Control");
-    await page.keyboard.press("Tab");
-    await page.keyboard.press("Tab");
-    await page.keyboard.press("Shift+Tab");
-    await expect(cycleRow("agents")).toHaveAttribute("data-cycle-row", paneOf.get(tabs[0]!)!);
-    await page.keyboard.up("Control");
-    await expect(canvas).toHaveAttribute("data-canvas", tabs[0]!);
-    await exactlyOnce(sent, "focus_pane", focused + 1, page);
-
-    // Sidebar focus also opens recent Agent panes. It has no pane origin,
-    // so the first chord selects the most recent pane, then walks the list.
-    const sidebarOverview = page.locator('[data-sidebar-overview]');
-    await sidebarOverview.focus();
-    await expect(sidebarOverview).toBeFocused();
-    focused = sent.get("focus_pane") ?? 0;
-    await page.keyboard.down("Control");
-    await page.keyboard.press("Tab");
-    await expect(cycleRow("agents")).toHaveAttribute("data-cycle-row", paneOf.get(tabs[0]!)!);
-    await page.keyboard.press("Tab");
-    await expect(cycleRow("agents")).toHaveAttribute("data-cycle-row", paneOf.get(tabs[2]!)!);
-    await screenshot(page, "desktop-recent-agents-from-sidebar");
-    const captureDir = process.env.HIDE_E2E_SCREENSHOT_DIR;
-    if (captureDir) {
-      const candidate = await app!.evaluate(({ BrowserWindow }) => {
-        const windows = BrowserWindow.getAllWindows();
-        if (windows.length !== 1) throw new Error("expected one isolated candidate window");
-        return { pid: process.pid, windowId: windows[0]!.getMediaSourceId().split(":")[1]! };
-      });
-      fs.writeFileSync(path.join(captureDir, "desktop-recent-agents-candidate.json"), JSON.stringify(candidate));
-      execFileSync("/usr/sbin/screencapture", ["-x", "-o", "-l", candidate.windowId, path.join(captureDir, "desktop-recent-agents-from-sidebar-native.png")]);
-    }
-    expect(sent.get("focus_pane") ?? 0).toBe(focused);
-    await page.keyboard.up("Control");
-    await expect(canvas).toHaveAttribute("data-canvas", tabs[2]!);
-    await exactlyOnce(sent, "focus_pane", focused + 1, page);
-
-    // Recent Projects gamma, beta, fixture: fixture is current.
-    const checkout = (name: string) => page.locator("[data-project]", { hasText: name }).locator("[data-checkout]").first();
-    for (const name of ["gamma", "beta", "fixture"]) {
-      await (await showProjectRow(page, checkout(name))).click();
-      await expect(checkout(name)).toHaveAttribute("aria-current", "true");
-    }
-
-    // ⌥Tab twice walks to gamma; releasing ⌥ commits one focus_tab, back on
-    // the tab gamma was last used on.
-    focused = sent.get("focus_tab") ?? 0;
-    await page.keyboard.down("Alt");
-    await page.keyboard.press("Tab");
-    await page.keyboard.press("Tab");
-    await expect(cycleRow("projects")).toBeVisible();
-    expect(sent.get("focus_tab") ?? 0).toBe(focused);
-    await page.keyboard.up("Alt");
-    await expect(page.locator("[data-cycle]")).toHaveCount(0);
-    await expect(checkout("gamma")).toHaveAttribute("aria-current", "true");
-    await exactlyOnce(sent, "focus_tab", focused + 1, page);
-
-    // ⌥⇧Tab walks backward: from gamma, one back past the end is beta.
-    focused = sent.get("focus_tab") ?? 0;
-    await page.keyboard.down("Alt");
-    await page.keyboard.press("Shift+Tab");
-    await page.keyboard.up("Alt");
-    await expect(checkout("beta")).toHaveAttribute("aria-current", "true");
-    await exactlyOnce(sent, "focus_tab", focused + 1, page);
-  } finally {
-    for (const id of extraWorkspaces) herdr.run(["workspace", "close", id]);
-    for (const id of tabs.slice(1)) herdr.run(["tab", "close", id]);
+  // Sidebar focus also opens recent Agent panes. It has no pane origin,
+  // so the first chord selects the most recent pane, then walks the list.
+  const sidebarOverview = page.locator('[data-sidebar-overview]');
+  await sidebarOverview.focus();
+  await expect(sidebarOverview).toBeFocused();
+  focused = sent.get("focus_pane") ?? 0;
+  await page.keyboard.down("Control");
+  await page.keyboard.press("Tab");
+  await expect(cycleRow("agents")).toHaveAttribute("data-cycle-row", paneOf.get(tabs[0]!)!);
+  await page.keyboard.press("Tab");
+  await expect(cycleRow("agents")).toHaveAttribute("data-cycle-row", paneOf.get(tabs[2]!)!);
+  await screenshot(page, "desktop-recent-agents-from-sidebar");
+  const captureDir = process.env.HIDE_E2E_SCREENSHOT_DIR;
+  if (captureDir) {
+    const candidate = await app!.evaluate(({ BrowserWindow }) => {
+      const windows = BrowserWindow.getAllWindows();
+      if (windows.length !== 1) throw new Error("expected one isolated candidate window");
+      return { pid: process.pid, windowId: windows[0]!.getMediaSourceId().split(":")[1]! };
+    });
+    fs.writeFileSync(path.join(captureDir, "desktop-recent-agents-candidate.json"), JSON.stringify(candidate));
+    execFileSync("/usr/sbin/screencapture", ["-x", "-o", "-l", candidate.windowId, path.join(captureDir, "desktop-recent-agents-from-sidebar-native.png")]);
   }
+  expect(sent.get("focus_pane") ?? 0).toBe(focused);
+  await page.keyboard.up("Control");
+  await expect(canvas).toHaveAttribute("data-canvas", tabs[2]!);
+  await exactlyOnce(sent, "focus_pane", focused + 1, page);
+
+  // Recent Projects gamma, beta, fixture: fixture is current.
+  const checkout = (name: string) => page.locator("[data-project]", { hasText: name }).locator("[data-checkout]").first();
+  for (const name of ["gamma", "beta", "fixture"]) {
+    await (await showProjectRow(page, checkout(name))).click();
+    await expect(checkout(name)).toHaveAttribute("aria-current", "true");
+  }
+
+  // ⌥Tab twice walks to gamma; releasing ⌥ commits one focus_tab, back on
+  // the tab gamma was last used on.
+  focused = sent.get("focus_tab") ?? 0;
+  await page.keyboard.down("Alt");
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("Tab");
+  await expect(cycleRow("projects")).toBeVisible();
+  expect(sent.get("focus_tab") ?? 0).toBe(focused);
+  await page.keyboard.up("Alt");
+  await expect(page.locator("[data-cycle]")).toHaveCount(0);
+  await expect(checkout("gamma")).toHaveAttribute("aria-current", "true");
+  await exactlyOnce(sent, "focus_tab", focused + 1, page);
+
+  // ⌥⇧Tab walks backward: from gamma, one back past the end is beta.
+  focused = sent.get("focus_tab") ?? 0;
+  await page.keyboard.down("Alt");
+  await page.keyboard.press("Shift+Tab");
+  await page.keyboard.up("Alt");
+  await expect(checkout("beta")).toHaveAttribute("aria-current", "true");
+  await exactlyOnce(sent, "focus_tab", focused + 1, page);
 });
