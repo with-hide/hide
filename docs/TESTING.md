@@ -711,9 +711,8 @@ A passing fixture does not prove paid-service authentication or standalone suppo
 
 ### How many jobs a run starts
 
-A run that plans every lane a pull request can plan starts at most 57 jobs.
-The earlier count of 51 omitted six jobs already running in the package lane: helper identity, two Linux device helpers, device bundles and the separate Windows and macOS compiles.
-Correcting that count adds no runner or workflow.
+A run that plans every lane a pull request can plan starts at most 50 jobs.
+The package lane's six preparation and compile jobs (helper identity, two Linux device helpers, device bundles and the separate Windows and macOS compiles) are counted, and the web suite runs once, on the core's own engine.
 The core's own engine adds seven web jobs beside Herdr's: six Linux shards and one Windows job, until the Herdr lane goes with Herdr (PRD engine-bundle-3-core-owns D-24).
 `scripts/tests/test_ci_plan.py` counts them from the workflows:
 

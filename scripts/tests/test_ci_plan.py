@@ -998,12 +998,11 @@ class Workflows(unittest.TestCase):
         # planned only for a change to the holder, the node's holder code, the
         # agent pins or the lane's scripts, add three.
         # Native and WASM relay interoperability adds one job on each OS.
-        # The core's own engine runs the web suite over as many shards again
-        # as Herdr's, on Linux and Windows, until the Herdr lane goes with
-        # Herdr (PRD engine-bundle-3-core-owns D-24): seven more.
         # The package lane already ran six preparation/compile jobs omitted
         # from the old count; correcting the accounting starts no new job.
-        self.assertLessEqual(most, 57, "a run starts more jobs than the suites and native SDK contracts need")
+        # The web suite runs once, on the core's own engine, since Herdr's
+        # lane went with Herdr (PRD engine-bundle-4-herdr-removal D-2).
+        self.assertLessEqual(most, 50, "a run starts more jobs than the suites and native SDK contracts need")
         testing = (ROOT / "docs/TESTING.md").read_text()
         self.assertIn(f"starts at most {most} jobs", testing)
 

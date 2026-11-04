@@ -94,22 +94,12 @@ ALLOWED = {
     # Herdr runtime management: the operator's Herdr server and its program.
     "hided/src/herdr_handoff.rs": (
         20, "moves the operator's Herdr server onto the bundled one; bundle 4 deletes the handoff"),
-    "hided/src/login_item.rs": (
-        1, "starts this account's Herdr server at login; bundle 4 deletes the bundled Herdr"),
-    "hided/src/core_move/preflight.rs": (
-        1, "asks a moved core's Herdr whether it runs; bundle 4 deletes the bundled Herdr"),
     "desktop/src/main/herdr.ts": (
         5, "chooses the Herdr program `hide` runs; bundle 4 removes `HERDR_*`"),
-    "desktop/src/main/host.ts": (
-        3, "hands that Herdr program to `hide`; bundle 4 removes `HERDR_*`"),
-    "desktop/src/main/env.ts": (
-        5, "reads `HERDR_BIN_PATH` into the host's environment; bundle 4 removes `HERDR_*`"),
     # The terminal path: Herdr's own terminal client.
     "hide-node/src/terminal/session.rs": (
         1, "runs `herdr terminal session` for a pane's bytes; bundle 2 replaces the terminal path"),
     # Herdr's plugin, which the kit installs and retires.
-    "hide-kit/src/herdr_integration.rs": (
-        1, "installs and removes Hide's Herdr plugin; bundle 4 deletes the plugin"),
     "hide-kit/src/labels.rs": (
         10, "uninstalls the retired labels plugin; bundle 4 deletes the plugin"),
     "hide-kit/src/coordination_retirement.rs": (
@@ -121,13 +111,13 @@ ALLOWED = {
     "hide-node/src/ssh.rs": (
         2, "names the Herdr connection a device transport hands out; bundle 3 moves panes to the node"),
     "hide-node/src/ssh/device.rs": (
-        4, "carries a device's Herdr connection over its link; bundle 3 moves panes to the node"),
+        3, "carries a device's Herdr connection over its link; bundle 4 PR B deletes it with the core's Herdr engine"),
     "hide-node/src/ssh/inbound.rs": (
         2, "carries an inbound node's Herdr connection; bundle 3 moves panes to the node"),
     "hide-node/src/ssh/link_streams.rs": (
         3, "opens Herdr streams over a device link; bundle 3 moves panes to the node"),
     "hide-node/src/ssh/wsl.rs": (
-        8, "carries a WSL device's Herdr connection; bundle 3 moves panes to the node"),
+        7, "carries a WSL device's Herdr connection; bundle 4 PR B deletes it with the core's Herdr engine"),
     "hide-node-link/src/device.rs": (
         2, "names a device's Herdr connection in the link contract; bundle 3 moves panes to the node"),
     "hide-host/src/herdr_save.rs": (
