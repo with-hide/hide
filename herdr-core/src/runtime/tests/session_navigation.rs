@@ -2332,6 +2332,45 @@ fn view_authority_a_pane_click_moves_focus_and_a_stale_layout_does_not_undo_it()
     assert_eq!(diagnostic_count(&runtime, "pane.focus.followed"), 0);
 }
 
+/// A key typed into another pane moves the keyboard as a click does: the
+/// engine is told, and its layout that still names the old pane does not
+/// take the keyboard back (an own-engine pane's find searched the wrong
+/// pane after the operator typed into the one they then clicked).
+#[test]
+fn a_key_that_moves_the_keyboard_tells_the_engine_and_a_stale_layout_does_not_undo_it() {
+    let mut runtime = live_runtime();
+    let panes = [("w1:p1", 6018_u64), ("w1:p2", 6019), ("w1:p3", 6020)];
+    runtime.ingest_session(Ok(finished_tab_payload(&panes, "w1:p1")));
+    let typed = |submitted| TerminalReport::Input {
+        pane: "w1:p2".into(),
+        at_unix_ms: 1,
+        submitted,
+        focus: true,
+    };
+    assert!(runtime.ingest_terminal_reports(vec![typed(false)]));
+    assert_eq!(runtime.snapshot().focused.pane_id.as_deref(), Some("w1:p2"));
+    assert_eq!(
+        runtime
+            .pane_focus_in_flight
+            .as_ref()
+            .map(|control| control.target_id.as_str()),
+        Some("w1:p2"),
+        "the engine is told where the keyboard went"
+    );
+    // A second key into the same pane moves nothing and tells nothing more.
+    let serial = runtime.next_pane_focus_serial;
+    assert!(!runtime.ingest_terminal_reports(vec![typed(false)]));
+    assert_eq!(runtime.next_pane_focus_serial, serial);
+
+    runtime.ingest_session(Ok(finished_tab_payload(&panes, "w1:p1")));
+    assert_eq!(runtime.snapshot().focused.pane_id.as_deref(), Some("w1:p2"));
+    assert_eq!(
+        runtime.snapshot().terminal.pane_id.as_deref(),
+        Some("w1:p2")
+    );
+    assert_eq!(diagnostic_count(&runtime, "pane.focus.followed"), 0);
+}
+
 #[test]
 fn pane_focus_burst_keeps_only_the_latest_successor_and_resumes_external_follow() {
     let mut runtime = live_runtime();

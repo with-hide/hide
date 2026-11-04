@@ -1771,11 +1771,23 @@ impl Runtime {
                     self.record_operator_submit(&pane);
                 }
                 if focus && self.terminal_keyboard_pane() != Some(pane.as_str()) {
-                    self.snapshot.focused.surface = Surface::Terminal;
-                    self.snapshot.focused.pane_id = Some(pane.clone());
-                    self.snapshot.terminal.pane_id = Some(pane.clone());
                     self.ensure_terminal_pane(&pane);
-                    self.sync_focused_terminal_projection();
+                    if crate::address::is_device_pane(&pane) {
+                        // A device's pane is no pane of this engine, and this
+                        // machine's selection stays its own.
+                        self.snapshot.focused.surface = Surface::Terminal;
+                        self.snapshot.focused.pane_id = Some(pane.clone());
+                        self.snapshot.terminal.pane_id = Some(pane);
+                        self.sync_focused_terminal_projection();
+                    } else {
+                        // A focus like any other the core makes, told to the
+                        // engine, whose layout then confirms it while that is
+                        // pending; set here alone, the engine's next layout,
+                        // still on the old pane, read as the engine's own
+                        // move and took the keyboard back. Only on a move,
+                        // never per key.
+                        self.focus_pane(pane, super::events::PaneFocusOrigin::Operator, None);
+                    }
                     return true;
                 }
                 false
