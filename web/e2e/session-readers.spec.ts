@@ -82,7 +82,7 @@ async function disableAgentSummaries(page: Page): Promise<void> {
 
 // The last column is the option the default 전부 허용 adds to every restart; Pi never asks and has none.
 for (const [kind, id, initialTitle, resumeFlag, fullAccess] of [["pi", PI_ID, PI_TITLE, "--session", []], ["omp", OMP_ID, OMP_TITLE, "--resume", ["--auto-approve"]], ["grok", GROK_ID, GROK_TITLE, "--resume", ["--always-approve"]]] as const) {
-test(`${kind} native title and durable sleep wake the exact conversation in a fresh pane `, async ({ page }) => {
+test(`${kind} native title and durable sleep wake the exact conversation in a fresh pane`, async ({ page }) => {
   let agents: QuestionRow[] = [];
   page.on("websocket", (socket) => socket.on("framereceived", (frame) => {
     if (typeof frame.payload !== "string") return;
@@ -165,7 +165,7 @@ test(`${kind} native title and durable sleep wake the exact conversation in a fr
 }
 
 for (const refusal of ["override", "duplicate"] as const) {
-test(`Cursor ${refusal} root retains its historical goal while retired Sleep refuses to close its pane `, async ({ page }) => {
+test(`Cursor ${refusal} root retains its historical goal while retired Sleep refuses to close its pane`, async ({ page }) => {
   const fixture = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
@@ -221,7 +221,7 @@ test(`Cursor ${refusal} root retains its historical goal while retired Sleep ref
 });
 }
 
-test("Cursor phone reads native message units and omits an unrecorded time ", async ({ browser, page }) => {
+test("Cursor phone reads native message units and omits an unrecorded time", async ({ browser, page }) => {
   const fixture = await startFixture({ agents: false });
   const tailscale = new FakeTailscale();
   let daemon: Daemon | null = null;
