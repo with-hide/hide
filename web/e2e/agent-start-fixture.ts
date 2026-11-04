@@ -51,9 +51,9 @@ process.stdin.on("data", bytes => {
     execFileSync(config.herdr, ["pane", "report-agent-session", pane, ...identity,
       "--session-start-source", "startup", "--seq", "2"], { timeout: 10000 });
   }
-  // omp has no screen rules. Reproduce its extension's idle report after
-  // an interrupted turn, rather than inventing a resting-screen rule.
-  if (config.kind === "omp") {
+  // omp has no screen rules. Herdr's native integration reports idle above;
+  // on the own engine its extension reports an interrupted turn through Hide.
+  if (config.kind === "omp" && !config.herdr) {
     for (const operation of ["session", "turn"]) {
       const report = execFileSync(config.hooks, ["omp", operation], {
         input: JSON.stringify({ version: 14, session_id: session, turn: "idle" }), encoding: "utf8", timeout: 10000,

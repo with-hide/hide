@@ -9,7 +9,7 @@
 // Herdr's rules for Claude Code (`hide-agent-adapter/agents/claude-code.toml`).
 
 import path from "node:path";
-import { waitForAgentInput } from "./agent-pane";
+import { prepareAgentInput, waitForAgentInput } from "./agent-pane";
 import { claudeProjects, declareAgentSession, writeFixtureTranscript, type FixtureLabel } from "./herdr-fixture";
 import { agentIn, checkoutAt, closePane, focusTab, newTab, preparePaneInput, sendKeys, tabPanes, withControl, type AgentRow, type OpenedProject } from "./daemon-actions";
 import type { Daemon } from "./hided-fixture";
@@ -109,6 +109,7 @@ export async function finishUnseenTurn(fixture: AgentFixture, daemon: Pick<Daemo
 export async function startAgentIn(fixture: EngineServer, daemon: Pick<Daemon, "origin" | "token">, pane: string, session?: string): Promise<AgentRow> {
   const row = await withControl(daemon, async (control) => {
     await preparePaneInput(control, pane);
+    prepareAgentInput(fixture.root, pane);
     sendKeys(control, pane, "claude\r");
     return control.until((rest) => agentIn(rest, pane), `an agent in ${pane}`, 30_000);
   });

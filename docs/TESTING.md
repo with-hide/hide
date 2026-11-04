@@ -308,10 +308,13 @@ A piece that another open change is still building is marked as pending with the
    The web and desktop native-caller fixtures share `web/e2e/spawn-provider.ts`; the compiled stand-in writes its own bounded config through `--write-config`, also used by the Python journey, so none of those callers repeats its line format.
    A synthetic trigger sent as a `key` event is operator input and moves keyboard focus: `agent-pane.ts` and `runInPaneKeepingFocus` hold the command behind a file gate until `restoreFocusAfterInput` observes that input and restores the prior focus, before the command runs as the agent.
   The native stand-ins write `terminal-ready-<pane>` only after configuring their terminal and drawing their first screen; `waitForAgentInput` waits for that mark before a command trigger or a session-report key.
+  Before a start in an existing pane, `prepareAgentInput` removes the previous program's mark; `agentRunner` does this before Reopen, and `startAgentIn` before a typed start.
+  The Reopen journey holds the resumed program's session reporter before terminal setup and proves the previous readiness cannot admit its hook command.
   A listed resume session is not input readiness: the own engine knows it from the launch arguments before the program starts, and a session reporter can finish before the stand-in sets its terminal mode.
-  `agent-start-platform.spec.ts` uses the captured resting screens and native session reports while spawn waits for identity; its rule-less stand-in reports an interrupted turn through the real hook helper instead of inventing a screen rule.
+  `agent-start-platform.spec.ts` uses the captured resting screens and native session reports while spawn waits for identity; its rule-less stand-in reports idle through Herdr's native integration on Herdr and an interrupted turn through the real hook helper on the own engine.
   The report's source comes from the generated journey contract; state-reporting integrations supply their session with the state report, and Pi and omp identify sessions by their file paths.
   The Codex start fixture seeds an existing install record before the bundled kit runs, then waits for that device's kit capability in the navigator snapshot; first-run choices belong to their own flow tests.
+  A Windows own-engine fixture bundle carries the lane's pinned `holder-conpty` folder beside its linked programs, matching the packaged node's runtime lookup.
    Ordinary Windows shell panes use the private Herdr server's configured cmd.exe on Herdr, and the product's integrated PowerShell on the own engine; an agent-start tab uses the integrated launch recipe.
    The engine fixture names its ordinary shell, and shared command and prompt helpers use that syntax without changing the account's PowerShell profile.
    The disposable runner's registry PATH preparation above belongs to the CI job, not to a fixture running on a developer's account.
