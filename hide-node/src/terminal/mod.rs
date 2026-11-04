@@ -483,7 +483,7 @@ impl Service {
                     for chunk in held.keys.take_in_order(self.pane, now) {
                         inner.route_input(KeyTarget::Pane(self.pane.to_owned()), chunk, now);
                     }
-                    inner.await_written(shared, self.pane);
+                    inner.pump_replay(shared, self.pane, now);
                     inner.finish_input_release(self.pane);
                 });
             }
@@ -1303,7 +1303,7 @@ impl Inner {
                     "bytes": held.iter().map(|chunk| chunk.input.len()).sum::<usize>(),
                 }));
                 if fork {
-                    self.replay(shared, &pane, held, now + input::HELD_INPUT_MAX_AGE, now);
+                    self.replay(shared, &pane, &request, held);
                 } else {
                     for chunk in held {
                         self.write_key(&pane, chunk, false, now);
@@ -1468,106 +1468,145 @@ impl Inner {
         });
     }
 
-    /// Writes keys a fork request held for `pane` in the order typed, into
-    /// the agent that now runs there, as Herdr's `agent.prompt` submits:
-    /// the operator's submit behind other replayed keys waits
-    /// [`input::REPLAYED_SUBMIT_GAP`] from when the pane's writer has
-    /// written those keys ([`Self::await_written`]), with everything after
-    /// it, so a program that reads keys arriving together as a paste still
-    /// submits; past the replay's end ([`input::Replay::ends`]) the rest is
-    /// written at once.
-    fn replay(
-        &mut self,
-        shared: &Arc<Shared>,
-        pane: &str,
-        chunks: Vec<HeldChunk>,
-        ends: Instant,
-        now: Instant,
-    ) {
-        if let Some(replay) = self
-            .panes
-            .get_mut(pane)
-            .and_then(|entry| entry.replay.as_mut())
-        {
-            for chunk in chunks {
-                replay.push(pane, chunk);
-            }
-            return;
+    /// Hands the keys a fork request held for `pane` to the pane's one
+    /// replay queue ([`input::Replay`]), which writes them in the order
+    /// typed as Herdr's `agent.prompt` submits.
+    fn replay(&mut self, shared: &Arc<Shared>, pane: &str, request: &str, held: Vec<HeldChunk>) {
+        let now = Instant::now();
+        if !self.panes.contains_key(pane) && self.requests.names(pane) {
+            // Herdr made the pane for keys the operator is already typing,
+            // before the core asked for it to attach.
+            self.panes.insert(pane.to_owned(), Pane::default());
         }
-        let mut chunks = chunks.into_iter();
-        let mut wrote = false;
-        while let Some(chunk) = chunks.next() {
-            if wrote
-                && now < ends
-                && input::paces(&chunk)
-                && let Some(entry) = self.panes.get_mut(pane)
-            {
-                entry.replay = Some(input::Replay::new(
-                    ends,
-                    std::iter::once(chunk).chain(chunks),
-                ));
-                self.wake_clock = true;
-                self.await_written(shared, pane);
-                return;
-            }
-            self.write_key(pane, chunk, false, now);
-            wrote = true;
-        }
-    }
-
-    /// Asks the pane's writer to say when it has written what it was given
-    /// before a waiting replay's submit, which starts the submit's gap. Keys
-    /// still held for an attaching terminal or behind a letter have not
-    /// reached the writer: the session's open and the letter's end ask
-    /// again once they have. A barrier asked twice starts the gap once.
-    fn await_written(&mut self, shared: &Arc<Shared>, pane: &str) {
-        let Some(entry) = self.panes.get(pane) else {
+        let Some(entry) = self.panes.get_mut(pane) else {
             return;
         };
-        if entry
-            .replay
-            .as_ref()
-            .is_none_or(|replay| !replay.waits_for_write())
-            || !matches!(entry.hold, PaneHold::Empty)
-            || entry.letter.is_some()
-        {
-            return;
-        }
-        if let Some(session) = entry
-            .session
-            .as_ref()
-            .filter(|session| session.mode == Mode::Control)
-        {
-            Self::barrier(shared, session, pane);
-        }
-    }
-
-    /// The writer's barrier behind what `session` was given so far: once it
-    /// has written that, the pane's waiting replay starts its gap. A write
-    /// that failed leaves the replay waiting until its end drops it.
-    fn barrier(shared: &Arc<Shared>, session: &Session, pane: &str) {
-        let shared = Arc::downgrade(shared);
-        let pane = pane.to_owned();
-        // A refused barrier is a writer that is gone, which the same end
-        // covers.
-        let _ = session.after_writes(session::Written::new(move |written| {
-            if written && let Some(shared) = shared.upgrade() {
-                shared.run(|inner, _| inner.replay_gap(&pane, Instant::now()));
+        match entry.replay.as_mut() {
+            Some(replay) => {
+                for chunk in held {
+                    replay.push(pane, chunk);
+                }
             }
-        }));
+            None => {
+                entry.replay = Some(input::Replay::new(
+                    request,
+                    now + input::HELD_INPUT_MAX_AGE,
+                    held,
+                ));
+            }
+        }
+        self.wake_clock = true;
+        self.pump_replay(shared, pane, now);
     }
 
-    /// The pane's writer has written the keys before a waiting replay's
-    /// submit: its gap starts now.
-    fn replay_gap(&mut self, pane: &str, now: Instant) {
-        if let Some(replay) = self
+    /// Writes what the pane's replay queue has ready, once the pane takes
+    /// keys: a control session, no letter being typed and not closing. A
+    /// batch that stops before a submit asks the writer for a barrier, whose
+    /// answer starts the submit's gap ([`Self::replay_written`]).
+    fn pump_replay(&mut self, shared: &Arc<Shared>, pane: &str, now: Instant) {
+        loop {
+            let Some(entry) = self.panes.get_mut(pane) else {
+                return;
+            };
+            let takes_keys = !entry.closing
+                && entry.letter.is_none()
+                && entry
+                    .session
+                    .as_ref()
+                    .is_some_and(|session| session.mode == Mode::Control);
+            let Some(replay) = entry.replay.as_mut() else {
+                return;
+            };
+            if replay.done() {
+                entry.replay = None;
+                return;
+            }
+            if !takes_keys {
+                if let Some(permit) = replay.take_permit_head() {
+                    self.write_now(pane, permit, false, now);
+                    continue;
+                }
+                return;
+            }
+            match replay.step(now) {
+                input::ReplayStep::Wait => return,
+                input::ReplayStep::Expired => {
+                    self.drop_replay(pane, "timeout");
+                    return;
+                }
+                input::ReplayStep::Write { chunks, barrier } => {
+                    for chunk in chunks {
+                        self.write_now(pane, chunk, false, now);
+                    }
+                    if let Some(serial) = barrier {
+                        self.barrier(shared, pane, serial);
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Asks the pane's writer to answer once it has written what it was
+    /// given, as Herdr's `agent.prompt` waits for its text's flush. A writer
+    /// that is gone or fails answers too, and the queue is dropped.
+    fn barrier(&mut self, shared: &Arc<Shared>, pane: &str, serial: u64) {
+        let weak = Arc::downgrade(shared);
+        let answer_pane = pane.to_owned();
+        let asked = self
+            .panes
+            .get(pane)
+            .and_then(|entry| entry.session.as_ref())
+            .map(|session| {
+                session.after_writes(session::Written::new(move |written| {
+                    if let Some(shared) = weak.upgrade() {
+                        shared.run(|inner, _| {
+                            inner.replay_written(&answer_pane, serial, written, Instant::now())
+                        });
+                    }
+                }))
+            });
+        if !matches!(asked, Some(Ok(()))) {
+            self.drop_replay(pane, "write_failed");
+        }
+    }
+
+    /// The writer's answer to barrier `serial`: written, the submit's gap
+    /// starts now; not, the keys before it may not have arrived, so the
+    /// rest is dropped rather than submitted after them.
+    fn replay_written(&mut self, pane: &str, serial: u64, written: bool, now: Instant) {
+        let Some(replay) = self
             .panes
             .get_mut(pane)
             .and_then(|entry| entry.replay.as_mut())
-            && replay.start_gap(now)
-        {
+            .filter(|replay| replay.awaits(serial))
+        else {
+            return;
+        };
+        if written {
+            replay.written(serial, now);
             self.wake_clock = true;
+        } else {
+            self.drop_replay(pane, "write_failed");
         }
+    }
+
+    /// Drops the rest of the pane's replay queue and tells the core, which
+    /// asks the operator to type it again (the fork's input-loss notice).
+    fn drop_replay(&mut self, pane: &str, reason: &str) {
+        let Some(replay) = self
+            .panes
+            .get_mut(pane)
+            .and_then(|entry| entry.replay.take())
+        else {
+            return;
+        };
+        let request = replay.request.clone();
+        replay.discard(pane, reason);
+        self.reports.push(TerminalReport::RequestDiscarded {
+            request,
+            reason: reason.to_owned(),
+        });
     }
 
     /// Writes one key to its pane. `focus` is a key the operator typed into
@@ -1592,6 +1631,12 @@ impl Inner {
             letter.keys.hold(pane, chunk);
             return;
         }
+        self.write_now(pane, chunk, focus, now);
+    }
+
+    /// [`Self::write_key`] past the queues that hold the operator's keys: a
+    /// replay queue writes its own keys here.
+    fn write_now(&mut self, pane: &str, chunk: HeldChunk, focus: bool, now: Instant) {
         if let Some(permit) = &chunk.permit {
             use hide_node_link::terminal::InputPermitError;
             let result = if now >= permit.deadline() {
@@ -2320,14 +2365,6 @@ impl Inner {
                         self.error(pane, "terminal.write_failed", refused.message(pane));
                     }
                 }
-                if self
-                    .panes
-                    .get(pane)
-                    .and_then(|entry| entry.replay.as_ref())
-                    .is_some_and(input::Replay::waits_for_write)
-                {
-                    Self::barrier(shared, &session, pane);
-                }
             } else {
                 crate::diagnostic!(json!({
                     "component": "terminal_input",
@@ -2336,14 +2373,6 @@ impl Inner {
                     "reason": "read_only",
                     "bytes": held.iter().map(|chunk| chunk.input.len()).sum::<usize>(),
                 }));
-            }
-            if mode != Mode::Control
-                && let Some(replay) = self
-                    .panes
-                    .get_mut(pane)
-                    .and_then(|entry| entry.replay.take())
-            {
-                replay.discard(pane, "read_only");
             }
         }
         let reader_shared = Arc::downgrade(shared);
@@ -2400,6 +2429,7 @@ impl Inner {
             retry_decision: decision,
         };
         self.sync(pane);
+        self.pump_replay(shared, pane, now);
         self.note(
             pane,
             "terminal.session_ready",
@@ -2964,19 +2994,17 @@ impl Inner {
             .map(|(pane, _)| pane.clone())
             .collect::<Vec<_>>();
         for pane in replays {
-            let replay = self
+            let expired = self
                 .panes
-                .get_mut(&pane)
-                .and_then(|entry| entry.replay.take());
-            match replay {
-                // The keys before it were not written in time: an attaching
-                // pane's hold drops keys that old too.
-                Some(replay) if replay.waits_for_write() => replay.discard(&pane, "stale"),
-                Some(replay) => {
-                    let ends = replay.ends();
-                    self.replay(shared, &pane, replay.take(), ends, now);
-                }
-                None => {}
+                .get(&pane)
+                .and_then(|entry| entry.replay.as_ref())
+                .is_some_and(|replay| replay.expired(now));
+            if expired {
+                // Its pane did not take the keys, or its writer did not
+                // answer, in time: an attaching pane drops keys that old too.
+                self.drop_replay(&pane, "timeout");
+            } else {
+                self.pump_replay(shared, &pane, now);
             }
         }
         let settled = self

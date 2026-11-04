@@ -29,10 +29,14 @@ impl Read for LineReader {
     }
 }
 
+/// Each key a session's writer wrote, with when it wrote it.
+pub(super) type Writes = Arc<Mutex<Vec<(Instant, Vec<u8>)>>>;
+
 /// A session's stdin as the test reads it, one line per write.
 pub(super) struct LineWriter {
     lines: Sender<serde_json::Value>,
     pending: Vec<u8>,
+    writes: Writes,
 }
 
 impl Write for LineWriter {
@@ -40,7 +44,11 @@ impl Write for LineWriter {
         self.pending.extend_from_slice(bytes);
         while let Some(end) = self.pending.iter().position(|byte| *byte == b'\n') {
             let line = self.pending.drain(..=end).collect::<Vec<_>>();
-            let value = serde_json::from_slice(&line[..line.len() - 1]).unwrap();
+            let value: serde_json::Value = serde_json::from_slice(&line[..line.len() - 1]).unwrap();
+            if value["type"] == "terminal.input" {
+                let bytes = protocol::decode_base64(value["bytes"].as_str().unwrap()).unwrap();
+                self.writes.lock().unwrap().push((Instant::now(), bytes));
+            }
             self.lines
                 .send(value)
                 .map_err(|_| std::io::Error::other("closed"))?;
@@ -60,6 +68,7 @@ pub(super) struct Opened {
     pub(super) size: GridSize,
     pub(super) output: Sender<String>,
     pub(super) input: Receiver<serde_json::Value>,
+    pub(super) writes: Writes,
 }
 
 impl Opened {
@@ -122,6 +131,7 @@ impl Attacher for FakeAttacher {
         }
         let (output, lines) = channel();
         let (written, input) = channel();
+        let writes = Writes::default();
         self.opened
             .lock()
             .unwrap()
@@ -131,6 +141,7 @@ impl Attacher for FakeAttacher {
                 size: GridSize { rows, cols },
                 output,
                 input,
+                writes: Arc::clone(&writes),
             })
             .unwrap();
         Ok(SessionParts {
@@ -141,6 +152,7 @@ impl Attacher for FakeAttacher {
             writer: Some(Box::new(LineWriter {
                 lines: written,
                 pending: Vec::new(),
+                writes,
             })),
             cleanup: Cleanup::None,
         })
@@ -935,70 +947,111 @@ fn fork_holding(harness: &Harness, pane: &str, keys: &[&[u8]]) {
     }
 }
 
-/// What `opened` is written from now until `expected` has arrived, and when
-/// its byte at `mark` arrived.
-fn written_until(opened: &Opened, expected: &[u8], mark: usize) -> (Vec<u8>, Instant) {
-    let mut written = Vec::new();
-    let mut marked = None;
-    while written.len() < expected.len() {
-        written.extend(opened.next_input());
-        if marked.is_none() && written.len() > mark {
-            marked = Some(Instant::now());
+/// The keys `opened`'s writer wrote, each with when, once they amount to
+/// `expected`.
+fn written(opened: &Opened, expected: &[u8]) -> Vec<(Instant, Vec<u8>)> {
+    let until = Instant::now() + WAIT;
+    loop {
+        let writes = opened.writes.lock().unwrap().clone();
+        if writes.iter().map(|(_, bytes)| bytes.len()).sum::<usize>() >= expected.len() {
+            assert_eq!(writes.concat_bytes(), expected);
+            return writes;
+        }
+        assert!(Instant::now() < until, "the writer wrote {writes:?}");
+        std::thread::yield_now();
+    }
+}
+
+trait ConcatBytes {
+    fn concat_bytes(&self) -> Vec<u8>;
+}
+
+impl ConcatBytes for Vec<(Instant, Vec<u8>)> {
+    fn concat_bytes(&self) -> Vec<u8> {
+        self.iter().flat_map(|(_, bytes)| bytes.clone()).collect()
+    }
+}
+
+/// When the writer wrote the key that holds `byte` of everything written.
+fn written_at(writes: &[(Instant, Vec<u8>)], byte: usize) -> Instant {
+    let mut seen = 0;
+    for (at, bytes) in writes {
+        seen += bytes.len();
+        if seen > byte {
+            return *at;
         }
     }
-    (written, marked.expect("the marked byte arrived"))
+    panic!("byte {byte} was not written");
 }
 
 #[test]
-fn a_held_enter_reaches_the_fork_a_moment_after_the_keys_before_it() {
+fn a_held_enter_reaches_the_fork_a_moment_after_its_writer_wrote_the_keys_before_it() {
     // Codex reads an Enter that arrives with the keys before it as a
-    // newline of a paste; the operator had pressed it after a pause. The
-    // node's clock writes the Enter, so only what cannot race it is
-    // asserted: it never comes sooner than the gap, and a key typed while
-    // it waits goes behind it.
+    // newline of a paste; the operator had pressed it after a pause. As
+    // Herdr's `agent.prompt` waits from its text's flush, the gap is
+    // measured between the writer's own writes, and a key typed while the
+    // Enter waits goes behind it.
     let harness = harness(RetryPolicy::Automatic);
     let fork = harness.controlling("w1:p2");
     fork_holding(&harness, "w1:p2", &[b"hello", b"\r", b"more"]);
-    let released = Instant::now();
     harness.service.control(TerminalControl::RequestResolve {
         request: "fork-1".into(),
         pane: "w1:p2".into(),
     });
-    assert_eq!(fork.next_input(), b"hello");
     harness.key("w1:p2", b"!");
-    let (written, entered) = written_until(&fork, b"\rmore!", 0);
-    assert_eq!(written, b"\rmore!");
-    assert!(entered >= released + input::REPLAYED_SUBMIT_GAP);
+    let writes = written(&fork, b"hello\rmore!");
+    assert!(written_at(&writes, 5) >= written_at(&writes, 4) + input::REPLAYED_SUBMIT_GAP);
 }
 
 #[test]
-fn a_held_enter_waits_for_the_keys_before_it_to_reach_an_attaching_fork() {
-    // The fork's terminal attaches after its keys were released: the gap
-    // starts once the keys before the Enter were written there, so the two
-    // are never handed to the terminal together however long it took.
+fn a_held_enter_waits_for_an_attaching_forks_writer_to_write_the_keys_before_it() {
+    // The fork's terminal attaches after its keys were released: the queue
+    // writes nothing until it has, and the gap runs from the writer's write.
     let harness = harness(RetryPolicy::Automatic);
     fork_holding(&harness, "w1:p2", &[b"hello", b"\r"]);
     harness.service.control(TerminalControl::RequestResolve {
         request: "fork-1".into(),
         pane: "w1:p2".into(),
     });
-    assert!(
-        harness.service.shared.lock().panes["w1:p2"]
-            .replay
-            .as_ref()
-            .is_some_and(input::Replay::waits_for_write),
-        "the Enter waits for the keys before it to be written, not for a time"
-    );
-    let attached = Instant::now();
     harness.attach("w1:p2", Some(SIZE));
     let opened = harness.opened();
-    let (written, entered) = written_until(&opened, b"hello\r", 5);
-    assert_eq!(written, b"hello\r");
-    assert!(entered >= attached + input::REPLAYED_SUBMIT_GAP);
+    let writes = written(&opened, b"hello\r");
+    assert!(written_at(&writes, 5) >= written_at(&writes, 4) + input::REPLAYED_SUBMIT_GAP);
 }
 
 #[test]
-fn a_held_enter_whose_terminal_never_attaches_is_dropped_at_the_holds_age() {
+fn a_letter_typed_into_the_fork_keeps_the_released_keys_behind_it_in_order() {
+    // A letter's hold and the replay queue never split the operator's keys:
+    // the queue writes nothing while a letter is typed and keeps the order
+    // typed, the Enter apart from the keys before it.
+    let harness = harness(RetryPolicy::Automatic);
+    let fork = harness.controlling("w1:p2");
+    harness.service.shared.run(|inner, _| {
+        inner
+            .panes
+            .get_mut("w1:p2")
+            .unwrap()
+            .letter
+            .get_or_insert_with(LetterHold::default)
+            .letters += 1;
+    });
+    fork_holding(&harness, "w1:p2", &[b"hello", b"\r"]);
+    harness.service.control(TerminalControl::RequestResolve {
+        request: "fork-1".into(),
+        pane: "w1:p2".into(),
+    });
+    harness.key("w1:p2", b"!");
+    fork.assert_no_input();
+    harness.service.shared.run(|inner, shared| {
+        inner.panes.get_mut("w1:p2").unwrap().letter = None;
+        inner.pump_replay(shared, "w1:p2", Instant::now());
+    });
+    let writes = written(&fork, b"hello\r!");
+    assert!(written_at(&writes, 5) >= written_at(&writes, 4) + input::REPLAYED_SUBMIT_GAP);
+}
+
+#[test]
+fn released_keys_whose_fork_never_takes_them_are_dropped_and_reported_at_the_holds_age() {
     let harness = harness(RetryPolicy::Automatic);
     fork_holding(&harness, "w1:p2", &[b"hello", b"\r"]);
     harness.service.control(TerminalControl::RequestResolve {
@@ -1010,7 +1063,7 @@ fn a_held_enter_whose_terminal_never_attaches_is_dropped_at_the_holds_age() {
         .shared
         .lock()
         .next_deadline()
-        .expect("the waiting Enter owns a deadline");
+        .expect("the released keys own a deadline");
     assert!(deadline <= Instant::now() + input::HELD_INPUT_MAX_AGE);
     harness.service.shared.run(|inner, shared| {
         inner.tick(shared, deadline);
@@ -1020,6 +1073,10 @@ fn a_held_enter_whose_terminal_never_attaches_is_dropped_at_the_holds_age() {
             .replay
             .is_none()
     );
+    harness.report_where(|report| {
+        matches!(report, TerminalReport::RequestDiscarded { request, reason }
+            if request == "fork-1" && reason == "timeout")
+    });
 }
 
 #[test]

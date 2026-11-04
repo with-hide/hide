@@ -1190,6 +1190,23 @@ fn pane_scroll(scroll: HolderScroll) -> crate::find::pane::PaneScroll {
 /// waits.
 const PROMPT_SUBMIT_DELAY: std::time::Duration = std::time::Duration::from_millis(300);
 
+/// The keys that submit a prompt the engine typed for an agent of `kind`.
+/// Codex's Windows input reader does not surface bracketed paste: it reads
+/// the text as a paste burst and, while the burst is buffered, takes an
+/// Enter for a newline; a non-character key flushes the burst at once, so
+/// an arrow ahead of the Enter makes the submit's boundary certain however
+/// late the console delivers the text, as Herdr's `agent.prompt` types one
+/// after Codex's text there. At the end of the composer the arrow moves
+/// nothing. Only the engine's own text gets it: the operator's keys are
+/// never changed.
+fn prompt_submit(kind: &str, windows: bool) -> Vec<HolderKey> {
+    if windows && hide_agent_adapter::canonical_kind(kind) == "codex" {
+        vec![HolderKey::Right, HolderKey::Enter]
+    } else {
+        vec![HolderKey::Enter]
+    }
+}
+
 /// The source a session this engine knows is reported under: what the
 /// engine itself saw at a start or a report, never an agent's integration.
 const NATIVE_SESSION_SOURCE: &str = "hide";
@@ -2202,7 +2219,7 @@ impl<'g> Engine for OwnEngine<'g> {
                 "agent prompt must not be empty".to_owned(),
             ));
         }
-        let (pane, paste) = {
+        let (pane, paste, kind) = {
             let topology = self.topology();
             let (pane, held, agent) = topology.agent(target)?;
             if agent.live.status == agents::Status::Blocked {
@@ -2217,7 +2234,7 @@ impl<'g> Engine for OwnEngine<'g> {
                     format!("agent {target} is not ready for input"),
                 ));
             }
-            (pane, held.live.facts.bracketed_paste)
+            (pane, held.live.facts.bracketed_paste, agent.kind.clone())
         };
         // Herdr's `agent.prompt`: the text as one paste when the program
         // takes bracketed paste, then Enter a moment later, so a program that
@@ -2235,7 +2252,7 @@ impl<'g> Engine for OwnEngine<'g> {
             .letter(
                 &pane,
                 body,
-                PaneInput::Keys(vec![HolderKey::Enter]),
+                PaneInput::Keys(prompt_submit(&kind, cfg!(windows))),
                 PROMPT_SUBMIT_DELAY,
             )
             .map_err(holder_error)
@@ -4488,6 +4505,14 @@ mod tests {
     /// lines past the settle is not confirmed, since its Enter would be a
     /// line break and the fork's first turn, which reports its session and
     /// lineage, would never come (journey 871294628).
+    #[test]
+    fn a_prompt_to_codex_on_windows_flushes_its_paste_burst_before_the_enter() {
+        use HolderKey::{Enter, Right};
+        assert_eq!(prompt_submit("codex", true), vec![Right, Enter]);
+        assert_eq!(prompt_submit("codex", false), vec![Enter]);
+        assert_eq!(prompt_submit("claude-code", true), vec![Enter]);
+    }
+
     #[test]
     fn a_forks_held_prompt_waits_for_its_agent_to_read_keys() {
         use hide_node_link::holders::ScreenState;

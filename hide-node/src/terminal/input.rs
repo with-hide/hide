@@ -694,74 +694,85 @@ impl PaneHold {
     }
 }
 
-/// How long a submit replayed from a hold waits behind the keys replayed
-/// before it, as Herdr's `agent.prompt` waits before its Enter. Held keys
-/// reach the program together, and a program that reads keys arriving
-/// together as a paste (Codex) takes an Enter inside one for a newline,
-/// where the operator had pressed it after a pause.
+/// How long a submit replayed from a fork's hold waits after the keys
+/// before it were written, as Herdr's `agent.prompt` waits from its text's
+/// flush before its Enter. Held keys reach the program together, and a
+/// program that reads keys arriving together as a paste (Codex) takes an
+/// Enter inside one for a newline, where the operator had pressed it after
+/// a pause.
 pub(super) const REPLAYED_SUBMIT_GAP: Duration = Duration::from_millis(300);
 
 /// Whether a replayed chunk is the operator's submit, which waits
-/// [`REPLAYED_SUBMIT_GAP`] behind the keys replayed before it.
+/// [`REPLAYED_SUBMIT_GAP`] after the keys replayed before it were written.
 pub(super) fn paces(chunk: &HeldChunk) -> bool {
     chunk.by == Typist::Operator && matches!(&chunk.input, Typed::Bytes(bytes) if submits(bytes))
 }
 
-/// The rest of a replay of held keys, from a submit on, and when it is
-/// written; the operator's keys typed meanwhile queue behind it. Capped at
-/// [`INPUT_HOLD_LIMIT_BYTES`] like every hold: past the cap the keys typed
-/// until the replay ends are dropped, with one diagnostic.
+/// The one queue a fork's released keys wait in until its pane's writer has
+/// them all, in the order typed, with the operator's keys typed meanwhile
+/// behind them, so no other hold reorders them. It hands the pane's writer
+/// the keys up to the next submit, waits for the writer to say it wrote
+/// them, then [`REPLAYED_SUBMIT_GAP`], then goes on from the submit, as
+/// Herdr's `agent.prompt` does. Nothing new starts past [`Self::ends`],
+/// [`HELD_INPUT_MAX_AGE`] after the release: what was not handed over by
+/// then is dropped and reported, while a submit whose gap had begun keeps
+/// it. Capped at [`INPUT_HOLD_LIMIT_BYTES`] like every hold: past the cap
+/// the keys typed until the queue ends are dropped, with one diagnostic.
 pub(super) struct Replay {
-    /// When the rest is written: [`REPLAYED_SUBMIT_GAP`] after the pane's
-    /// writer has written the keys before it, `None` until it has, as
-    /// Herdr's `agent.prompt` waits from its text's flush.
-    due: Option<Instant>,
-    /// [`HELD_INPUT_MAX_AGE`] after the fork's keys were released, kept by
-    /// every replay that follows: no key waits on pacing past it, so the
-    /// rest is written at once then, or dropped when the keys before it
-    /// were not written yet, as an attaching pane's hold drops keys that
-    /// old.
+    /// The fork request the keys were held for, which a drop reports.
+    pub(super) request: String,
+    /// Names the barrier the queue waits on, so an answer for an earlier
+    /// queue of the pane is not taken for this one's.
+    serial: u64,
+    phase: ReplayPhase,
     ends: Instant,
-    chunks: Vec<HeldChunk>,
+    chunks: VecDeque<HeldChunk>,
     bytes: usize,
     overflowed: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReplayPhase {
+    /// It writes once the pane takes keys: a control session and no letter
+    /// being typed.
+    Ready,
+    /// It handed the writer the keys before a submit and waits for the
+    /// writer's barrier behind them.
+    Writing,
+    /// The writer wrote them; the submit goes at this instant.
+    Gap(Instant),
+}
+
+/// What a queue does now.
+pub(super) enum ReplayStep {
+    /// Nothing until its barrier, its gap or its pane.
+    Wait,
+    /// Hand these to the writer; `barrier` when a submit waits behind them.
+    Write {
+        chunks: Vec<HeldChunk>,
+        barrier: Option<u64>,
+    },
+    /// Its end passed with keys not handed over: drop them and report it.
+    Expired,
+}
+
 impl Replay {
-    pub(super) fn new(ends: Instant, chunks: impl IntoIterator<Item = HeldChunk>) -> Self {
-        let chunks: Vec<HeldChunk> = chunks.into_iter().collect();
+    pub(super) fn new(
+        request: &str,
+        ends: Instant,
+        chunks: impl IntoIterator<Item = HeldChunk>,
+    ) -> Self {
+        let chunks: VecDeque<HeldChunk> = chunks.into_iter().collect();
         let bytes = chunks.iter().map(|chunk| chunk.input.len()).sum();
         Self {
-            due: None,
+            request: request.to_owned(),
+            serial: 0,
+            phase: ReplayPhase::Ready,
             ends,
             chunks,
             bytes,
             overflowed: false,
         }
-    }
-
-    pub(super) fn ends(&self) -> Instant {
-        self.ends
-    }
-
-    /// When the clock next looks at it: its gap's end, or its end.
-    pub(super) fn deadline(&self) -> Instant {
-        self.due.map_or(self.ends, |due| due.min(self.ends))
-    }
-
-    /// The pane's writer has not written the keys before it yet.
-    pub(super) fn waits_for_write(&self) -> bool {
-        self.due.is_none()
-    }
-
-    /// The pane's writer wrote the keys before it at `now`; whether that
-    /// started its gap.
-    pub(super) fn start_gap(&mut self, now: Instant) -> bool {
-        if self.due.is_some() {
-            return false;
-        }
-        self.due = Some(now + REPLAYED_SUBMIT_GAP);
-        true
     }
 
     pub(super) fn push(&mut self, pane_id: &str, chunk: HeldChunk) {
@@ -780,19 +791,102 @@ impl Replay {
             return;
         }
         self.bytes += chunk.input.len();
-        self.chunks.push(chunk);
+        self.chunks.push_back(chunk);
     }
 
-    pub(super) fn take(self) -> Vec<HeldChunk> {
-        self.chunks
+    /// A side channel's permit at its head, which no earlier key waits in
+    /// front of: it is answered the way it would have been unqueued.
+    pub(super) fn take_permit_head(&mut self) -> Option<HeldChunk> {
+        if self.phase != ReplayPhase::Ready
+            || self
+                .chunks
+                .front()
+                .is_none_or(|chunk| chunk.permit.is_none())
+        {
+            return None;
+        }
+        let chunk = self.chunks.pop_front()?;
+        self.bytes -= chunk.input.len();
+        Some(chunk)
     }
 
-    /// The pane will not take the rest of this replay.
+    /// Whether it has handed the writer everything and waits on nothing.
+    pub(super) fn done(&self) -> bool {
+        self.chunks.is_empty() && self.phase == ReplayPhase::Ready
+    }
+
+    /// When the clock next looks at it: its submit's gap, or its end.
+    pub(super) fn deadline(&self) -> Instant {
+        match self.phase {
+            ReplayPhase::Gap(due) => due,
+            ReplayPhase::Ready | ReplayPhase::Writing => self.ends,
+        }
+    }
+
+    /// What it does at `now` for a pane that takes keys: the keys from its
+    /// head up to the next submit behind them, once any gap has passed.
+    pub(super) fn step(&mut self, now: Instant) -> ReplayStep {
+        match self.phase {
+            ReplayPhase::Writing => return ReplayStep::Wait,
+            ReplayPhase::Gap(due) if now < due => return ReplayStep::Wait,
+            // A submit whose gap had begun keeps it, past the end too.
+            ReplayPhase::Gap(_) => {}
+            ReplayPhase::Ready if now >= self.ends => return ReplayStep::Expired,
+            ReplayPhase::Ready => {}
+        }
+        let mut chunks = Vec::new();
+        while let Some(front) = self.chunks.front() {
+            if !chunks.is_empty() && paces(front) {
+                break;
+            }
+            let chunk = self.chunks.pop_front().expect("looked at above");
+            self.bytes -= chunk.input.len();
+            chunks.push(chunk);
+        }
+        let barrier = if self.chunks.is_empty() {
+            self.phase = ReplayPhase::Ready;
+            None
+        } else if now >= self.ends {
+            // No new gap starts past the end; the rest is dropped.
+            self.phase = ReplayPhase::Ready;
+            None
+        } else {
+            static SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+            self.serial = SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.phase = ReplayPhase::Writing;
+            Some(self.serial)
+        };
+        ReplayStep::Write { chunks, barrier }
+    }
+
+    /// Whether the clock should drop it at `now`: its end passed while it
+    /// waited for its pane or its barrier.
+    pub(super) fn expired(&self, now: Instant) -> bool {
+        now >= self.ends && matches!(self.phase, ReplayPhase::Ready | ReplayPhase::Writing)
+    }
+
+    /// The writer wrote the keys before the submit behind barrier `serial`
+    /// at `now`; whether that started the submit's gap.
+    pub(super) fn written(&mut self, serial: u64, now: Instant) -> bool {
+        if self.phase != ReplayPhase::Writing || self.serial != serial {
+            return false;
+        }
+        self.phase = ReplayPhase::Gap(now + REPLAYED_SUBMIT_GAP);
+        true
+    }
+
+    /// Whether barrier `serial` is the one it waits on.
+    pub(super) fn awaits(&self, serial: u64) -> bool {
+        self.phase == ReplayPhase::Writing && self.serial == serial
+    }
+
+    /// The pane will not take the rest of it.
     pub(super) fn discard(self, pane_id: &str, reason: &str) {
         crate::diagnostic!(json!({
             "component": "terminal_input",
             "kind": "terminal.input_discarded",
             "pane_id": pane_id,
+            "request_id": self.request,
             "reason": reason,
             "bytes": self.bytes,
         }));
