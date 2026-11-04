@@ -530,6 +530,14 @@ impl Topology {
             .collect())
     }
 
+    /// The next moment a pending agent start can end with nothing else
+    /// changing ([`agents::PaneAgent::start_changes_at`]), over every pane.
+    pub(super) fn next_start_change(&self, now: Instant) -> Option<Instant> {
+        self.panes()
+            .filter_map(|(_, pane)| pane.agent.as_ref()?.start_changes_at(now))
+            .min()
+    }
+
     /// Every pane, by id.
     pub(super) fn panes(&self) -> impl Iterator<Item = (&str, &Pane)> {
         self.workspaces.iter().flat_map(|workspace| {

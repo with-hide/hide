@@ -1231,14 +1231,13 @@ pub(crate) fn agent_activity(agent: &SessionAgentPayload) -> AgentActivity {
     }
 }
 
-/// Where an agent stands in the start Herdr made of it.
+/// Where an agent stands in the start the engine made of it.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum AgentStart {
-    /// Herdr has reported a state for the agent, or holds no start of it.
+    /// The engine's start of the agent has settled, or it holds none.
     #[default]
     Settled,
-    /// Herdr is still starting the agent and it has reported nothing yet
-    /// (`agent_starting`).
+    /// The engine is still starting the agent (`agent_starting`).
     Starting {
         /// The start Hide made carried the operator's first prompt, which the
         /// agent took as its argument; the core's own fact from the start
@@ -1247,16 +1246,23 @@ pub enum AgentStart {
     },
 }
 
-/// Whether Herdr is still starting this agent and it has reported no state
-/// since: the start Herdr made of it is pending (`launch_pending`) and its
-/// state has never changed on this server (`state_change_seq` 0). Herdr
-/// reports such an agent `unknown` until it detects it (measured on the
-/// pinned 0.9.5: about 2.5 s after `agent.start`), so its activity is
-/// unknown, yet it has not been given anything to do. A pane on a restored
-/// server is also at sequence 0 and unknown, but carries no pending start,
-/// and an unconfirmed list says nothing about the agent now.
+/// Whether the engine is still starting this agent: the start it made of it
+/// is pending (`launch_pending`), and the agent neither works nor finished a
+/// turn since. The own engine reads a start pending until its program takes
+/// input and its screen rests past the settle, so a screen that already reads
+/// at rest (a woken agent's pane still shows the last run's screen) is not
+/// yet an agent that takes what is typed to it: input typed then reaches a
+/// program still starting, which drops it. A pane on a restored server
+/// carries no pending start, and an unconfirmed list says nothing about the
+/// agent now.
 pub(crate) fn agent_starting(agent: &SessionAgentPayload) -> bool {
-    !reports_nothing(agent) && agent.launch_pending && agent.state_change_seq == Some(0)
+    !reports_nothing(agent)
+        && agent.launch_pending
+        && match agent_activity(agent) {
+            AgentActivity::Unknown => true,
+            AgentActivity::Stopped => !agent_completed(agent),
+            AgentActivity::Working => false,
+        }
 }
 
 /// Whether this stopped pane has actually completed work: its hook saying the

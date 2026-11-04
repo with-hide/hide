@@ -3778,6 +3778,47 @@ fn a_starting_agent_asks_before_closing_only_when_its_start_carried_a_first_prom
     }
 }
 
+/// A woken agent's pane still shows its last run's screen, which the engine
+/// reads at rest before the program it started again takes input. While the
+/// start is pending the row says Starting, so neither the operator nor a
+/// journey reads it ready and types into a program that drops the keys
+/// (journey 41929631031); work it does shows as work, a turn it finished
+/// shows as finished, and the row reads at rest once the start settles.
+#[test]
+fn an_agent_whose_start_is_pending_reads_starting_though_its_screen_rests() {
+    let mut runtime = runtime();
+    let status = |runtime: &Runtime| {
+        runtime
+            .snapshot()
+            .navigator
+            .agents
+            .iter()
+            .find(|agent| agent.pane_id == "w1:p9")
+            .map(|agent| agent.status_code)
+            .expect("the woken agent's row")
+    };
+    assert!(runtime.ingest_session(Ok(starting_task_agent(Some("codex"), "idle", 7, true))));
+    assert_eq!(
+        status(&runtime),
+        AgentStatusCode::Starting,
+        "pending, at rest"
+    );
+    assert!(runtime.ingest_session(Ok(starting_task_agent(Some("codex"), "working", 8, true))));
+    assert_eq!(
+        status(&runtime),
+        AgentStatusCode::Working,
+        "pending, working"
+    );
+    assert!(runtime.ingest_session(Ok(starting_task_agent(Some("codex"), "done", 9, true))));
+    assert_ne!(
+        status(&runtime),
+        AgentStatusCode::Starting,
+        "pending, finished"
+    );
+    assert!(runtime.ingest_session(Ok(starting_task_agent(Some("codex"), "idle", 10, false))));
+    assert_eq!(status(&runtime), AgentStatusCode::Idle, "settled");
+}
+
 /// The chosen agent starts after the creation is published, and its answer
 /// lands on its own axis: a failure keeps the created pane and path, and only
 /// a definite failure is offered again.

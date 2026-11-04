@@ -373,6 +373,21 @@ impl PaneAgent {
                 || now.duration_since(started) < START_DEADLINE)
     }
 
+    /// The next moment this agent's pending start can end with nothing the
+    /// holder reports changing: its settle, then its deadline. `None` once it
+    /// is not pending. Past the settle a start still pending waits on what
+    /// the holder reports next (its program reading keys, its screen
+    /// resting), which is a change of its own.
+    pub(super) fn start_changes_at(&self, now: Instant) -> Option<Instant> {
+        let started = self.live.started?;
+        if !self.launch_pending(now) {
+            return None;
+        }
+        [started + START_SETTLE, started + START_DEADLINE]
+            .into_iter()
+            .find(|at| *at > now)
+    }
+
     /// Whether the agent's program takes what is typed to it: it shows, the
     /// holder can say what holds the terminal, and the program does not
     /// leave it editing lines. This is not whether its

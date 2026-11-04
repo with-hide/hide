@@ -52,6 +52,7 @@ pub(crate) mod layout;
 mod restore;
 mod rules;
 mod shell_line;
+mod start_clock;
 mod starts;
 mod store;
 mod topology;
@@ -119,7 +120,11 @@ struct Shared {
     holders: Arc<dyn PaneHolders>,
     starts: Arc<starts::Starts>,
     pending: Mutex<BTreeMap<String, creation::Ticket>>,
-    wake: Mutex<Option<Wake>>,
+    wake: Arc<Mutex<Option<Wake>>>,
+    /// Wakes the watcher when a pending agent start can end with nothing
+    /// else changing (its settle or its deadline), armed by each read of the
+    /// session.
+    start_clock: start_clock::StartClock,
     stopped: AtomicBool,
     place: Option<Place>,
     /// Wakes the thread that saves the session, for a daemon's engine,
@@ -331,15 +336,17 @@ impl OwnEngine<'static> {
             |place| Arc::clone(&place.definitions),
         );
         let windows = place.as_ref().map_or(cfg!(windows), |place| place.windows);
+        let wake: Arc<Mutex<Option<Wake>>> = Arc::default();
         let engine = Self {
             shared: Arc::new(Shared {
+                start_clock: start_clock::StartClock::start(Arc::clone(&wake))?,
                 windows,
                 topology: Arc::new(Mutex::new(topology)),
                 rules: rules::RulesWorker::start(Arc::clone(&holders), restored)?,
                 holders,
                 starts: Arc::default(),
                 pending: Mutex::default(),
-                wake: Mutex::default(),
+                wake,
                 stopped: AtomicBool::new(false),
                 place,
                 saving: OnceLock::new(),
@@ -1449,7 +1456,14 @@ impl<'g> Engine for OwnEngine<'g> {
     fn session(&self, _wait: Wait) -> Answer<ProjectionState> {
         self.check()?;
         let catalog = self.shared.definitions.get();
-        self.topology().state(&catalog)
+        let topology = self.topology();
+        let state = topology.state(&catalog)?;
+        // The read says whether each start is pending now; the clock has the
+        // core read again when one can stop being pending on its own.
+        self.shared
+            .start_clock
+            .arm(topology.next_start_change(Instant::now()));
+        Ok(state)
     }
 
     fn session_payload(&self, wait: Wait) -> Answer<SessionSnapshotPayload> {
@@ -4529,6 +4543,60 @@ mod tests {
             refused(engine.prompt_agent(WAIT, "worker", "hi")),
             "agent_blocked"
         );
+    }
+
+    /// A woken agent's pane still shows the last run's screen, which reads
+    /// at rest at once, so nothing the holder reports changes when its
+    /// start's settle passes. The engine still tells its watcher then, and
+    /// the read that follows no longer has the start pending: until then the
+    /// core shows the agent starting, and what is typed waits for it
+    /// (journey 41929631031, a resumed Codex that dropped the prompt typed
+    /// half a second after its wake).
+    #[test]
+    fn a_start_whose_screen_already_rests_is_read_settled_once_its_settle_passes() {
+        use hide_node_link::holders::ScreenState;
+        let holders = Arc::new(Holders::default());
+        let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+        let (_, _, pane) = engine
+            .create_workspace(WAIT, "/w", "w", true, Env::new())
+            .unwrap();
+        holders.idle_shell(41, "bash");
+        let start = engine
+            .prepare_start(launch(&pane, "worker", "codex", &[]))
+            .unwrap();
+        engine.start_agent(WAIT, &start).unwrap();
+        holders.say(&pane, &running("codex", ScreenState::Idle));
+        let pending = |engine: &OwnEngine| {
+            let session = engine.session(WAIT).unwrap();
+            let agent = session
+                .agents
+                .iter()
+                .find(|agent| agent.pane_id == pane)
+                .unwrap();
+            (agent.agent_status.clone(), agent.launch_pending)
+        };
+        assert_eq!(
+            pending(&engine),
+            (Some("idle".to_owned()), true),
+            "a screen at rest within the settle"
+        );
+        let (woke, woken) = std::sync::mpsc::channel();
+        let woke = Mutex::new(woke);
+        engine.changes(Arc::new(move || {
+            let _ = woke.lock().unwrap().send(());
+        }));
+        age_start(
+            &engine,
+            &pane,
+            agents::START_SETTLE - std::time::Duration::from_millis(300),
+        );
+        // The read arms the clock for the settle, 300 ms from now.
+        assert!(pending(&engine).1);
+        woken
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the watcher is told when the settle passes");
+        assert_eq!(pending(&engine), (Some("idle".to_owned()), false));
+        assert_eq!(engine.shared.start_clock.armed(), None, "nothing pending");
     }
 
     /// A brief typed while the agent's program still leaves the terminal
