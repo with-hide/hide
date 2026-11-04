@@ -29,6 +29,7 @@ def own_cell_gaps():
         "antigravity": {"fork": {"status": "excluded", "reason": "own-start-fixes 노드 대기(Antigravity fork 입력 준비 미확정, 제품 결함)"}},
         "omp": {
             "sleep_wake": {"status": "excluded", "reason": "own-start-fixes 노드 대기(OMP 깨우기 확인 지연, 제품 결함)"},
+            "resume": {"status": "excluded", "reason": "own-start-fixes(#2075) 대기(깨우기 제외에 따른 선행 조건 미충족)"},
             "fork": {"status": "excluded", "reason": "own-start-fixes 노드 대기(OMP 깨우기 뒤 fork 입력 준비 미확정, 제품 결함)"},
             "title": {"status": "excluded", "reason": "own-start-fixes 노드 대기(OMP 깨우기 뒤 제목 대상 행 소실, 제품 결함)"},
         },

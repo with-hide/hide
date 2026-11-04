@@ -73,6 +73,7 @@ def excluded_cells(engine="herdr", fake_model=False):
             ("codex", "fork"): "own-start-fixes 노드 대기(Codex fork 세션과 계보 미등록, 제품 결함)",
             ("antigravity", "fork"): "own-start-fixes 노드 대기(Antigravity fork 입력 준비 미확정, 제품 결함)",
             ("omp", "sleep_wake"): "own-start-fixes 노드 대기(OMP 깨우기 확인 지연, 제품 결함)",
+            ("omp", "resume"): "own-start-fixes(#2075) 대기(깨우기 제외에 따른 선행 조건 미충족)",
             ("omp", "fork"): "own-start-fixes 노드 대기(OMP 깨우기 뒤 fork 입력 준비 미확정, 제품 결함)",
             ("omp", "title"): "own-start-fixes 노드 대기(OMP 깨우기 뒤 제목 대상 행 소실, 제품 결함)",
         })

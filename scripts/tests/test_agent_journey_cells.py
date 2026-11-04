@@ -80,7 +80,7 @@ class Plan(unittest.TestCase):
 
     def test_product_gaps_exclude_only_the_approved_cells_of_other_rows(self):
         expected = {("codex", "fork"), ("antigravity", "fork"),
-                    ("omp", "sleep_wake"), ("omp", "fork"), ("omp", "title")}
+                    ("omp", "sleep_wake"), ("omp", "resume"), ("omp", "fork"), ("omp", "title")}
         selected = ["codex", "antigravity", "omp", "claude-code", "grok"]
         for engine, fake in (("own", True), ("herdr", True), ("own", False)):
             with self.subTest(engine=engine, fake=fake):
@@ -89,7 +89,7 @@ class Plan(unittest.TestCase):
                           if value["status"] == cells.EXCLUDED}
                 self.assertEqual(actual, expected if engine == "own" and fake else set())
                 for agent, name in actual:
-                    self.assertIn("own-start-fixes 노드 대기", table[agent][name]["reason"])
+                    self.assertIn("own-start-fixes", table[agent][name]["reason"])
                     self.assertFalse(cells.measurable(table, agent, name))
                     self.assertFalse(cells.settle(table, agent, name, cells.PASS, "not run"))
                 self.assertEqual(table["omp"]["usage"]["status"], cells.PENDING)
