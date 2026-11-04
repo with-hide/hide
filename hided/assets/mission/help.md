@@ -149,8 +149,8 @@ Every worker's brief, change or verify, says in its first line what the node is,
 - the checks the diff touches, by the repository's own commands;
 - the pull request rules: the repository's template, its title form, no agent attribution anywhere;
 - the limits: start no agents of its own, merge nothing, never touch the operator's app, terminals or panes, never force push or rebase, stop and write a letter when the goal or scope would change;
-- its plan, for a node of three steps or more: before code, put the steps up with `hide plan set` as `hide plan help` says, three to eight of them, each something it delivers or checks inside this node (the schema, the core change, the screen, the tests, the pull request), never research and never the node itself restated; no `--ask`, since you read the plan, not the operator; each step marked `working` when it starts and `done` when it ends, so the node's panel on the map shows where the work is;
-- what to send back and when: a `--kind progress` letter once the plan is up, with its approach in a few lines (`hide plan show <agent>` shows you its steps), and a `--kind report` letter with the pull request number and the evidence when done.
+- its plan, for a node of three steps or more: before code, put the steps up with `hide task set` as `hide task help` says, three to eight of them, each something it delivers or checks inside this node (the schema, the core change, the screen, the tests, the pull request), never research and never the node itself restated; no `--ask`, since you read the plan, not the operator; each step marked `working` when it starts and `done` when it ends, so the node's panel on the map shows where the work is;
+- what to send back and when: a `--kind progress` letter once the plan is up, with its approach in a few lines (`hide task show <agent>` shows you its steps), and a `--kind report` letter with the pull request number and the evidence when done.
 
 ## 3. Starting
 

@@ -307,7 +307,7 @@ export const REGISTRY: readonly Command[] = [
   // chord had: ⇧⌘U on macOS in both hosts, Alt+Shift+U on Windows and Linux
   // by the rule (⇧⌘L is the Memory tool, and Chrome keeps Alt+Shift+I); no
   // shell, agent CLI, Chrome or system keeps either.
-  { id: "toggle_plan", title: "Show plan", group: "Panes", browser: { code: "KeyU", meta: true, shift: true }, electron: { code: "KeyU", meta: true, shift: true }, moved: false },
+  { id: "toggle_plan", title: "Show task steps", group: "Panes", browser: { code: "KeyU", meta: true, shift: true }, electron: { code: "KeyU", meta: true, shift: true }, moved: false },
   { id: "close_pane", title: "Close pane", group: "Panes", browser: { code: "KeyW", alt: true, shift: true }, electron: { code: "KeyW", meta: true, shift: true }, moved: true },
   { id: "text_larger", title: "Larger text", group: "Panes", browser: { code: "Equal", meta: true }, electron: { code: "Equal", meta: true }, moved: false },
   { id: "text_smaller", title: "Smaller text", group: "Panes", browser: { code: "Minus", meta: true }, electron: { code: "Minus", meta: true }, moved: false },

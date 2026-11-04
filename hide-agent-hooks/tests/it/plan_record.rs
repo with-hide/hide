@@ -118,9 +118,9 @@ fn a_plan_waiting_for_review_refuses_a_write_from_the_record_without_calling_hid
         json!({"session_id": SESSION, "cwd": "/tmp/fixture-project",
             "hook_event_name": "UserPromptSubmit", "prompt": "go on"}),
     );
-    assert!(prompt.contains("Plan: now Core events (1/4)"), "{prompt}");
+    assert!(prompt.contains("Task: now Core events (1/4)"), "{prompt}");
     assert!(
-        prompt.contains("The plan waits for the operator's review"),
+        prompt.contains("The task's steps wait for the operator's review"),
         "{prompt}"
     );
     let pulled = kit.asked();
@@ -137,7 +137,7 @@ fn a_plan_waiting_for_review_refuses_a_write_from_the_record_without_calling_hid
         answer["hookSpecificOutput"]["permissionDecisionReason"]
             .as_str()
             .unwrap()
-            .contains("the plan is waiting for the operator's review")
+            .contains("the task's steps are waiting for the operator's review")
     );
     let commit = kit.tool("Bash", json!({"command": "git commit -m wip"}));
     assert!(commit.contains("\"deny\""), "{commit}");

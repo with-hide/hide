@@ -89,7 +89,7 @@ it("asks for agent notices while the switch is on, words each one, withdraws a s
   await act(async () => receiveAgentNotice({ notices: [review], clear: [] }));
   await act(async () => { await clientI18n.changeLanguage("en"); });
   await act(async () => receiveAgentNotice({ notices: [review], clear: [] }));
-  expect(shown.slice(-2).map((notice) => notice[2])).toEqual(["질문 · 계획 검토 · 5단계 · my-app", "Question · Plan review · 5 steps · my-app"]);
+  expect(shown.slice(-2).map((notice) => notice[2])).toEqual(["질문 · 작업 단계 검토 · 5단계 · my-app", "Question · Task steps review · 5 steps · my-app"]);
 
   await act(async () => open?.("agent:node|w1:p1"));
   expect(events.some((event) => event.kind === "focus_pane" && event.payload.pane_id === "w1:p1")).toBe(true);

@@ -1,5 +1,5 @@
 //! A session's own plan (PRD hide-plan): the steps an agent declares for
-//! its work with `hide plan`, kept by the core for the native session that
+//! its work with `hide task`, kept by the core for the native session that
 //! declared it (D-06) and drawn as a map (D-10).
 //!
 //! The graph rules are [`crate::dag`]'s, the ones a mission's plan follows
@@ -72,7 +72,7 @@ pub enum Output {
 
 /// Whether the operator's review is still awaited (D-04): a plan put up
 /// with `--ask` is proposed until the agent records the operator's answer
-/// with `hide plan approve`.
+/// with `hide task approve`.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Review {
@@ -219,7 +219,7 @@ impl Plan {
     }
 }
 
-/// What `hide plan set` sends: the whole step list, each step with its key,
+/// What `hide task set` sends: the whole step list, each step with its key,
 /// title, the keys it waits on and its status (D-02).
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -258,7 +258,7 @@ impl dag::Node for StepInput {
     }
 }
 
-/// One `hide plan` command (D-27). `set` and `node` change the caller's own
+/// One `hide task` command (D-27). `set` and `node` change the caller's own
 /// plan; `approve` and `drop` name another agent only to be refused, since
 /// the operator answers a plan in its own conversation (D-05); `show` reads
 /// the caller's plan or another agent's.
@@ -831,7 +831,7 @@ pub fn file_below(root: &str, path: &str) -> Option<String> {
         .map(hide_platform::path::RelPath::into_string)
 }
 
-/// What a `hide plan` command answers, or the reads its evidence needs off
+/// What a `hide task` command answers, or the reads its evidence needs off
 /// the lock before it can be judged.
 pub enum PlanTurn {
     Answered { answer: Value, changed: bool },
@@ -1143,25 +1143,25 @@ pub fn progress(plan: &Plan) -> Progress {
 pub fn next_action(code: &str) -> &'static str {
     match code {
         "plan_invalid" => {
-            "Fix the plan where the reason says: each node needs key, title, depends_on (other nodes' keys, no loop) and status planned|working|done|dropped; then run hide plan set again"
+            "Fix the plan where the reason says: each node needs key, title, depends_on (other nodes' keys, no loop) and status planned|working|done|dropped; then run hide task set again"
         }
         "plan_order_refused" => {
-            "Finish or drop the step it waits on first: hide plan node <that key> --status done (or dropped), then run this again"
+            "Finish or drop the step it waits on first: hide task node <that key> --status done (or dropped), then run this again"
         }
         "plan_too_large" => {
-            "A plan holds at most 64 steps; merge steps and run hide plan set again"
+            "A plan holds at most 64 steps; merge steps and run hide task set again"
         }
         "plan_node_unknown" => {
-            "Run hide plan show for the plan's keys, then run the command again with one of them"
+            "Run hide task show for the plan's keys, then run the command again with one of them"
         }
         "plan_node_finished" => {
-            "That step is already done or dropped; hand an unfinished step, or set this one back with hide plan node <key> --status planned first"
+            "That step is already done or dropped; hand an unfinished step, or set this one back with hide task node <key> --status planned first"
         }
         "plan_missing" => {
-            "This session has no plan; put one up with hide plan set --file <plan.json>"
+            "This session has no plan; put one up with hide task set --file <plan.json>"
         }
         "plan_not_yours" => {
-            "A plan is changed only by its own session: send that agent a letter (hide request send <agent> ...) saying what the operator answered, and it runs hide plan approve or drop itself"
+            "A plan is changed only by its own session: send that agent a letter (hide request send <agent> ...) saying what the operator answered, and it runs hide task approve or drop itself"
         }
         "plan_unavailable" => {
             "Hide cannot read its plan record right now; go on with the work and run the same command again in a minute"
@@ -1170,13 +1170,13 @@ pub fn next_action(code: &str) -> &'static str {
             "Hide does not know this pane's agent session yet; run the same command again after your next message"
         }
         "plan_full" => {
-            "Hide keeps 128 plans and every one belongs to an agent on screen; finish or drop a plan you no longer need (hide plan drop), then run hide plan set again"
+            "Hide keeps 128 plans and every one belongs to an agent on screen; finish or drop a plan you no longer need (hide task drop), then run hide task set again"
         }
         "plan_agent_unknown" => {
             "No running agent has that id or name; run hide agent list for its id and run the command again"
         }
         "plan_evidence_missing" => {
-            "A step whose output is pr ends with its pull request and one whose output is file with its file: run hide plan node <key> --status done --pr <number> (or --file <path>)"
+            "A step whose output is pr ends with its pull request and one whose output is file with its file: run hide task node <key> --status done --pr <number> (or --file <path>)"
         }
         "plan_pr_not_yours" => {
             "That pull request was not made from a branch of this session's checkout or of a child it handed a step to; name the pull request this step made"
@@ -1194,10 +1194,10 @@ pub fn next_action(code: &str) -> &'static str {
             "Hide could not ask the session's machine about the file just now; run the same command again in a minute"
         }
         "plan_report_missing" => {
-            "The step is handed to a child and its current attempt has sent no report yet; wait for its report letter (hide inbox), or take the step back with hide plan node <key> --status working once it is blocked or closed"
+            "The step is handed to a child and its current attempt has sent no report yet; wait for its report letter (hide inbox), or take the step back with hide task node <key> --status working once it is blocked or closed"
         }
         "plan_review_pending" => {
-            "The plan waits for the operator's review; hand a step to another agent once the operator approved it (hide plan approve)"
+            "The task's steps wait for the operator's review; hand a step to another agent once the operator approved it (hide task approve)"
         }
         "plan_delegate_needs_parent" => {
             "A step is handed to your own child: run hide agent spawn --parent here --plan-node <key> ..."
@@ -1211,7 +1211,7 @@ pub fn next_action(code: &str) -> &'static str {
         "plan_delegate_not_permitted" => {
             "An agent a plan or a mission started does its own work and starts no agents; do the step yourself, or tell your parent with hide request send"
         }
-        _ => "Check the hide plan command (hide plan help) and run it again",
+        _ => "Check the hide task command (hide task help) and run it again",
     }
 }
 
@@ -1518,12 +1518,12 @@ mod tests {
         assert_eq!(done.steps[0].evidence, claim());
     }
 
-    /// The example plan `hide plan help` shows is one `set` takes as it
+    /// The example plan `hide task help` shows is one `set` takes as it
     /// stands, its done file step carrying the file (PRD risk: a stricter
     /// `set` would refuse the old example).
     #[test]
     fn the_plan_help_example_is_a_plan_set_takes() {
-        let help = include_str!("../../hided/assets/plan/help.md");
+        let help = include_str!("../../hided/assets/task/help.md");
         let example = help
             .split("```json\n")
             .nth(1)

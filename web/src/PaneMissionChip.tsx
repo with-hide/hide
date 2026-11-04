@@ -63,7 +63,7 @@ function PaneMissionChip({ paneId, mission, actions }: { paneId: string; mission
       <PopoverAnchor asChild>
         <button
           {...chip.anchor}
-          // The press opens the map rather than pinning the popover; the Show plan chord still pins it.
+          // The press opens the map rather than pinning the popover; the Show task steps chord still pins it.
           aria-pressed={undefined}
           onClick={() => {
             chip.close();

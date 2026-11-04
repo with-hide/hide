@@ -1,5 +1,5 @@
 // A session's own plan as the operator meets it, on an isolated pinned Herdr
-// and hided (PRD hide-plan B4-B7, B11, B13, B14): the real `hide plan`
+// and hided (PRD hide-plan B4-B7, B11, B13, B14): the real `hide task`
 // commands from the agent's own pane change the core's record, a plan put up
 // for review asks the operator on the pane's band and the chip says Review,
 // the agent's approval clears both, a working step takes the pane's second
@@ -19,7 +19,7 @@ test.describe.configure({ timeout: 120_000 });
 
 type Answer = { ok: boolean; reason?: string; result?: Record<string, unknown> };
 
-/** One `hide plan` command run as the agent; every one here is expected to succeed. */
+/** One `hide task` command run as the agent; every one here is expected to succeed. */
 async function plan(hide: (args: string[]) => Promise<HideAnswer>, args: string[]): Promise<Answer> {
   const ran = await hide(["plan", ...args]);
   const line = ran.out.trim().split("\n").at(-1) ?? "";
@@ -67,7 +67,7 @@ test("a plan put up for review asks on the pane, the agent's approval clears it,
     await expect(chip).toHaveText("Review");
     // The review is the agent's question: the pane's ask band says it, in
     // the interface language, from the subject the core sent (B14).
-    await expect(page.locator('[data-pane-header-band="answer"]')).toContainText("Plan review · 4 steps");
+    await expect(page.locator('[data-pane-header-band="answer"]')).toContainText("Task steps review · 4 steps");
     // The visible pane has read the core's question: the project tree is quiet,
     // while the header and the read task card keep the request until answered.
     const sidebar = page.locator("[data-sidebar-content]").first();
@@ -75,7 +75,7 @@ test("a plan put up for review asks on the pane, the agent's approval clears it,
     const tasks = await showTasks(page);
     const task = tasks.locator(`[data-task-row="${pane}"]`);
     await expect(task).toHaveAttribute("data-task-read", "true");
-    await expect(task).toContainText("Plan review · 4 steps");
+    await expect(task).toContainText("Task steps review · 4 steps");
     // Putting a plan up opens no 보기 slot by itself (D-29).
     await expect(page.locator('aside[data-detail="plan"]')).toHaveCount(0);
 
@@ -83,7 +83,7 @@ test("a plan put up for review asks on the pane, the agent's approval clears it,
     await expect(chip).toHaveAttribute("data-plan-chip-state", "running");
     await expect(chip).toHaveText("Plan1/4");
     await expect(page.locator('[data-pane-header-band="answer"]')).toHaveCount(0);
-    await expect(sidebar).not.toContainText("Plan review");
+    await expect(sidebar).not.toContainText("Task steps review");
 
     await plan(agent, ["node", "core", "--status", "working", "--line", "이벤트 쓰는 중"]);
     // The working step and its line take the pane's second line (B7).

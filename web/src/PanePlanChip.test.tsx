@@ -81,26 +81,26 @@ async function mount(plans: PlanView[], what: "chip" | "map" = "chip", agents: A
 
 const cells = (view: { chip: () => HTMLButtonElement | null }) => view.chip()?.querySelector<HTMLElement>("[data-progress-cells]")?.dataset.progressCells;
 
-it("says 계획 with a cell per step and n/m while the plan runs, 검토 while it waits for review, a green m/m once finished, and nothing without a plan (PRD mission-plan-visibility B1, B36; hide-plan B7, B21)", async () => {
+it("says 작업 단계 with a cell per step and n/m while the plan runs, 검토 while it waits for review, a green m/m once finished, and nothing without a plan (PRD mission-plan-visibility B1, B36; hide-plan B7, B21)", async () => {
   const running = await mount([plan()]);
   try {
-    expect(running.chip()?.textContent).toBe("Plan1/3");
+    expect(running.chip()?.textContent).toBe("Task steps1/3");
     expect(running.chip()?.getAttribute("data-plan-chip-state")).toBe("running");
     // A dropped step has no cell; the current one is blue, the rest still ahead empty.
     expect(cells(running)).toBe("done working waiting");
     // The cells are not read out, so the name carries the exact count and the step.
-    expect(running.chip()?.getAttribute("aria-label")).toBe("Plan 1/3, now core title");
+    expect(running.chip()?.getAttribute("aria-label")).toBe("Task steps 1/3, now core title");
   } finally { await running.unmount(); }
   const proposed = await mount([plan({ review: "proposed" })]);
   try {
     expect(proposed.chip()?.textContent).toBe("Review");
     expect(cells(proposed)).toBe("done hold waiting");
     expect(proposed.chip()?.className).toContain("text-mission-hold");
-    expect(proposed.chip()?.getAttribute("aria-label")).toBe("Plan waiting for review · 3 steps");
+    expect(proposed.chip()?.getAttribute("aria-label")).toBe("Task steps waiting for review · 3 steps");
   } finally { await proposed.unmount(); }
   const finished = await mount([plan({ steps: plan().steps.map((one) => (one.status === "dropped" ? one : { ...one, status: "done" as const })), progress: { current: null, next: null, done: 3, total: 3, finished: true } })]);
   try {
-    expect([finished.chip()?.textContent, finished.chip()?.getAttribute("data-plan-chip-state")]).toEqual(["Plan3/3", "finished"]);
+    expect([finished.chip()?.textContent, finished.chip()?.getAttribute("data-plan-chip-state")]).toEqual(["Task steps3/3", "finished"]);
     expect(cells(finished)).toBe("done done done");
     expect(finished.chip()?.className).toContain("text-mission-done");
   } finally { await finished.unmount(); }
@@ -109,7 +109,7 @@ it("says 계획 with a cell per step and n/m while the plan runs, 검토 while i
   const long = await mount([plan({ steps: many, progress: { current: "s12", next: "s13", done: 12, total: 30, finished: false } })]);
   try {
     expect(long.chip()?.querySelectorAll("[data-progress-cells] > span")).toHaveLength(3);
-    expect(long.chip()?.textContent).toBe("Plan12/30");
+    expect(long.chip()?.textContent).toBe("Task steps12/30");
   } finally { await long.unmount(); }
   const none = await mount([]);
   try {
@@ -330,7 +330,7 @@ it("draws every map card in two lines, who and what now, and opens a handed card
     const fields = [...detail.querySelectorAll("dt")].map((dt) => [dt.textContent, dt.nextElementSibling?.textContent]);
     expect(fields).toEqual([["Agent", "web-ui · Codex"], ["State", "Working"], ["Done when", "web-ui's report + its PR number"], ["Waits on", "spec title (Done)"]]);
     const checklist = detail.querySelector<HTMLElement>("[data-plan-child-plan=web-ui]")!;
-    expect(checklist.querySelector("p")?.textContent).toBe("web-ui's plan2/4");
+    expect(checklist.querySelector("p")?.textContent).toBe("web-ui's task steps2/4");
     expect([...checklist.querySelectorAll<HTMLElement>("[data-plan-row]")].map((row) => [row.dataset.planRow, row.dataset.stepStatus])).toEqual([["parts", "done"], ["store", "done"], ["map", "working"], ["e2e", "planned"]]);
     await act(async () => detail.querySelector<HTMLButtonElement>("[data-plan-child-go=c1]")!.click());
     expect(view.events.at(-1)).toMatchObject({ kind: "focus_pane", payload: { pane_id: "c1", origin: "operator" } });
@@ -345,7 +345,7 @@ it("says a child works without a plan, and draws no count and no way to a pane t
     expect(view.container.querySelector("[data-step-line=web]")?.textContent).toBe("web-ui·In progress");
     await act(async () => view.container.querySelector<HTMLElement>("[data-plan-step=web]")!.click());
     const detail = document.querySelector<HTMLElement>("[data-plan-step-detail=web]")!;
-    expect(detail.querySelector("[data-plan-child-plan]")?.textContent).toBe("Working without a plan");
+    expect(detail.querySelector("[data-plan-child-plan]")?.textContent).toBe("Working without steps");
     expect(detail.querySelector("[data-plan-child-go]")).not.toBeNull();
   } finally { await view.unmount(); }
   // Still starting: a name and nothing it cannot know.

@@ -369,10 +369,10 @@ it("opens the Partial popover from the chip and lists every feature with a mark 
 
 it("lists the three skills Hide installs, each with its mark, what it is for and the help it points at (PRD hide-plan B20)", async () => {
   const { all, q, unmount } = await mount(state([device("local")]));
-  expect(all("[data-agents-skill]").map((row) => row.getAttribute("data-agents-skill"))).toEqual(["hide", "hide-mission", "hide-plan"]);
-  expect(q('[data-agents-skill="hide-plan"]')?.textContent).toBe("hide-planPut up a plan, get it reviewed and keep it current · hide plan help");
+  expect(all("[data-agents-skill]").map((row) => row.getAttribute("data-agents-skill"))).toEqual(["hide", "hide-mission", "hide-task"]);
+  expect(q('[data-agents-skill="hide-task"]')?.textContent).toBe("hide-taskCarry a task yourself: put up its steps, get them reviewed and keep them current · hide task help");
   expect(q('[data-agents-skill="hide-mission"] svg')?.getAttribute("class")).toContain("lucide-waypoints");
-  expect(q('[data-agents-skill="hide-plan"] svg')?.getAttribute("class")).toContain("lucide-list-checks");
+  expect(q('[data-agents-skill="hide-task"] svg')?.getAttribute("class")).toContain("lucide-list-checks");
   await unmount();
 });
 
