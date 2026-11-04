@@ -669,8 +669,11 @@ fn a_restart_after_the_machine_went_down_brings_each_pane_back_under_its_id_and_
         let place = super::own::Place {
             engine_dir: engine_dir.clone(),
             home: hide_platform::path::to_wire(&home).unwrap(),
+            hooks_home: Some(home.clone()),
             node: Arc::clone(&node) as Arc<dyn hide_node_link::NodeLink>,
+            windows: cfg!(windows),
             definitions: Arc::new(hide_agent_adapter::definition::Catalog::read(Vec::new())),
+            launches: Arc::default(),
         };
         let panes = super::own::link_panes(node);
         let engine =
