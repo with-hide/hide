@@ -36,7 +36,8 @@ test("Agent edge drag splits the desktop column into two live tab groups", async
     await expect(page.locator("[data-agent-tab-bar]")).toHaveCount(2);
     await expect(page.locator(`[data-canvas="${fixture.tab}"]`)).toBeVisible();
     await expect(page.locator(`[data-canvas="${created.tab}"]`)).toBeVisible();
-    const screen = (pane: string) => page.evaluate((id) => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneText(id), pane);
+    // The drawn grid pads each row with blank cells; compare its output text.
+    const rows = (pane: string) => page.evaluate((id) => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneText(id).split("\n").map((row) => row.trimEnd()), pane);
     const groups = [fixture.panes[0], created.pane];
     for (const pane of groups) {
       const terminal = page.locator(`[data-terminal-host="${pane}"]`);
@@ -45,12 +46,12 @@ test("Agent edge drag splits the desktop column into two live tab groups", async
       // The first group's split pane is narrow; keep the output on one row.
       await page.keyboard.type("printf 'group-live\\n'");
       await page.keyboard.press("Enter");
-      await expect.poll(() => screen(pane)).toMatch(/(?:^|\n)group-live\r?(?:\n|$)/);
+      await expect.poll(() => rows(pane)).toContain("group-live");
     }
     // Each group ran the line exactly once: Herdr's late answer to the drop's
     // focus once moved the keyboard to the other group mid-line (#413).
     for (const pane of groups) {
-      expect((await screen(pane)).match(/(?:^|\n)group-live\r?(?=\n|$)/g) ?? [], `${pane} output`).toHaveLength(1);
+      expect((await rows(pane)).filter((row) => row === "group-live"), `${pane} output`).toHaveLength(1);
     }
     await expect(page.locator('[data-transport="released"]')).toHaveCount(0);
     await screenshot(page, "desktop-agent-groups-split");
