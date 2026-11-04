@@ -14,7 +14,7 @@ from agent_live_check.authentication import require_no_login
 from agent_live_check.processes import ProcessError
 from agent_live_check.protection import ProtectionError, write_private
 from agent_live_check.runtime import Runtime
-from agent_live_check.system import WINDOWS, remove_pane_files
+from agent_live_check.system import remove_pane_files
 from holder_owned import Owned
 
 from .daemon import Daemon
