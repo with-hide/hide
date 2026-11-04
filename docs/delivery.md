@@ -512,8 +512,8 @@ The doorbell decides when; the input path submits once, off the runtime lock.
 | Answer | Meaning | What follows |
 | --- | --- | --- |
 | Sent, `typed` | the engine acknowledged submission | the agent's own record decides intake |
-| NotYet, `herdr_parameters` | Herdr refused before typing | the doorbell may retry; a brief fails with `brief.prompt_refused` |
-| Lost, `herdr_format` or `herdr_call_failed` | submission may have arrived | never retry blindly; the agent's record decides |
+| NotYet, `herdr_parameters` or `engine_refused` | nothing was typed: the request could not be put to the engine, or the engine refused before writing (Herdr's `agent_blocked`; the core's own engine's `agent_blocked`, `agent_not_ready` and `empty_agent_prompt`) | the doorbell may retry; a brief fails with `brief.prompt_refused` |
+| Lost, `herdr_format` or `herdr_call_failed` | any other refusal (Herdr's `timeout` comes after the submission), a failed connection, or an answer that never came or could not be read, so the submission may have arrived | never retry blindly; the agent's record decides |
 
 The durable reservation still saves `lost` before sending and records the outcome afterwards.
 A save that never lands therefore cannot make a possibly submitted input free to send again (engineering principle 11).
