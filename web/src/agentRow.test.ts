@@ -235,8 +235,8 @@ describe("the line's words (status-marks D-04, B7, B10, B13, B16)", () => {
   it("words a question the core asks for the agent from its subject, in the interface language (hide-plan B14)", async () => {
     const review = row("r", { status_code: "question", demand: "question", group: "needs_you", mark: "turn", detail: null });
     review.state = { ...review.state, line: { text: "", mode: "request", tone: { kind: "warning", read: false }, subject: { cause: "plan_review", steps: 4 } } };
-    expect(lineText((await createInterfaceI18n("en")).t, review, sidebarLine(review)!)).toBe("Question · Plan review · 4 steps");
-    expect(lineText((await createInterfaceI18n("ko")).t, review, sidebarLine(review)!)).toBe("질문 · 계획 검토 · 4단계");
+    expect(lineText((await createInterfaceI18n("en")).t, review, sidebarLine(review)!)).toBe("Plan review · 4 steps");
+    expect(lineText((await createInterfaceI18n("ko")).t, review, sidebarLine(review)!)).toBe("계획 검토 · 4단계");
   });
 
   it("ends a finished turn's line with the tasks it left, kept apart from the sentence a narrow row cuts (D-19, B27)", async () => {
@@ -328,6 +328,6 @@ describe("a View to look at (PRD unseen-agent-views D-05, D-14, D-18)", () => {
   it("gives the line to a question on the same row and ends it with the count", async () => {
     const { t } = await createInterfaceI18n("ko");
     const asking = row("q", { demand: "question", activity: "stopped", status_code: "question", detail: "배포할까요?", group: "needs_you", emphasized: true, unread: true, mark: "turn", look: look(2) });
-    expect(lineText(t, asking, sidebarLine(asking)!)).toBe("질문 · 배포할까요? · 볼 것 2");
+    expect(lineText(t, asking, sidebarLine(asking)!)).toBe("배포할까요? · 볼 것 2");
   });
 });

@@ -3,7 +3,7 @@ import { useMemo, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import type { Actions } from "./actions";
 import { agentProductName } from "./agentAdapters";
-import { askWhat, VerbText } from "./components/agent-tree";
+import { askWhat } from "./components/agent-tree";
 import { AgentPrMark } from "./components/pr-mark";
 import { rowPulls } from "./prMark";
 import { AgentTreePopover } from "./components/agent-tree-popover";
@@ -262,9 +262,11 @@ function unfinished(band: PaneBand): boolean {
 }
 
 /**
- * An ask, led by whose it is: the pane's own approval, answer, block or stop
- * starts with its verb, and a raised descendant's starts with that agent's
- * name and relationship, so the row never reads as its parent's own ask.
+ * An ask, led by whose it is: the pane's own approval or answer says only what
+ * is asked, its rail and colour saying whose turn it is; a block or a stop
+ * starts with its word (`막힘`, `일 남음`); and a raised descendant's starts
+ * with that agent's name and relationship, so the row never reads as its
+ * parent's own ask.
  * The pane's own ask dims once the operator has looked and stays until it is
  * answered. The older more-asks trigger remains only when it is the
  * available tree access.
@@ -298,7 +300,7 @@ function AskBand({ paneId, band, navigation, unreachable, failed, actions, hasTr
   const read = !raised && band.read;
   return <>
     <span className={cn("flex min-w-0 flex-[3] items-center gap-xs", read && "opacity-(--opacity-read-status)")} data-pane-band-read={read ? "true" : undefined}>
-      {raised ? <VerbText verb={raised.verb} /> : band.kind === "approval" || band.kind === "answer" ? <VerbText verb={band.kind} /> : <span className={cn("shrink-0 font-semibold", unfinished(band) ? "text-foreground" : "text-warning")} data-verb={band.kind}>{bandVerbWords(t, band.kind)}</span>}
+      {raised || band.kind === "approval" || band.kind === "answer" ? null : <span className={cn("shrink-0 font-semibold", unfinished(band) ? "text-foreground" : "text-warning")} data-verb={band.kind}>{bandVerbWords(t, band.kind)}</span>}
       {raised && originTitle ? <Hint label={who!}><span className="flex min-w-0 max-w-1/3 shrink items-center gap-xxs font-semibold" data-pane-band-who={raised.raised_pane_id}><span className="min-w-0 truncate">{originTitle}</span><span className="shrink-0 text-muted-foreground">({t(originDepth > 2 ? "panes.children.descendant" : "panes.children.direct")})</span></span></Hint> : null}
       <Hint label={navigation ?? what ?? ""}><span className={cn("min-w-0 flex-1 truncate", failed && "text-destructive")} role={failed ? "alert" : navigation ? "status" : undefined} data-pane-band-navigation={navigation ? failed ? "failed" : "pending" : undefined}>{navigation ?? what}</span></Hint>
     </span>
@@ -393,14 +395,14 @@ export function PanePrChip({ paneId, actions }: { paneId: string; actions: Actio
   return <AgentPrMark agent={agent} pulls={pulls} side="bottom" onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: null, url: pull.url, number: pull.number })} onExternal={(pull) => actions.openLink(pull.url, true)} />;
 }
 
-/** How many direct children the children button draws a mark for before `+N`. */
-const CHILD_MARKS = 3;
+/** How many direct children the children button draws a mark for beside the count. */
+const CHILD_MARKS = 1;
 
 /**
  * The children button, at the row's left edge or, while off, on the head. Its face holds the tree, the
- * first direct children's status marks in tree order with `+N` for the rest,
- * and the chevron; its hint and name spell out every state count. A child of
- * unknown state draws no mark, so it is counted in `+N`, and with a device
+ * first direct child's status mark in tree order and how many direct
+ * children there are, and the chevron; its hint and name spell out every
+ * state count. A child of unknown state draws no mark, and with a device
  * away the face keeps the last total, since no mark can claim current work.
  */
 function PaneTreeButton({ paneId, children, agents, actions, connection }: { paneId: string; children: PaneChildren; agents: AgentRow[]; actions: Actions; connection: string | null }) {
@@ -411,7 +413,6 @@ function PaneTreeButton({ paneId, children, agents, actions, connection }: { pan
   // tree still opens on the raised branches that remain reachable.
   const raised = connection ? 0 : children.raised;
   const marked = connection ? [] : children.children.filter((child) => child.mark !== "unknown").slice(0, CHILD_MARKS);
-  const rest = count - marked.length;
   return <AgentTreePopover
     parent={children.parent}
     agents={agents}
@@ -423,7 +424,7 @@ function PaneTreeButton({ paneId, children, agents, actions, connection }: { pan
     trigger={<button type="button" aria-label={label} data-pane-tree={paneId} className={cn("flex h-(--size-sidebar-line-detail) shrink-0 items-center gap-xxs rounded-xs border bg-background px-xs text-micro text-subtle-foreground outline-none hover:bg-popover focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:bg-secondary", raised > 0 ? "border-warning/60" : "border-border")}>
       <ListTreeIcon aria-hidden="true" className="size-(--size-icon-sm) text-muted-foreground" />
       {marked.map((child) => <StatusMark key={child.pane_id} mark={child.mark} className={markTone(child)} data-pane-tree-mark={child.pane_id} />)}
-      {rest > 0 ? <span aria-hidden="true" className="font-mono">{marked.length > 0 ? `+${rest}` : rest}</span> : null}
+      {count > 1 || marked.length === 0 ? <span aria-hidden="true" className="font-mono" data-pane-tree-count="">{count}</span> : null}
       <ChevronDownIcon aria-hidden="true" className="size-(--size-icon-sm) text-muted-foreground" />
     </button>}
   />;
