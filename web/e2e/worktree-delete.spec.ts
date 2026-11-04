@@ -299,7 +299,7 @@ test("a dirty worktree with an unmerged branch and an agent is deleted once both
 
     daemon = await startHided(fixture, "worktree-delete");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
-    await expect(page.locator("[data-main-screen]")).toBeVisible({ timeout: 20_000 });
+    await enterWorkspace(page, "fixture");
     // The worktree's terminal runs the agent, typed at its prompt as the operator starts one.
     const pane = await withControl(daemon, async (control) => {
       await openProject(control, repo, "repo");

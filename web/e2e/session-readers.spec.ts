@@ -100,6 +100,10 @@ test(`${kind} native title and durable sleep wake the exact conversation in a fr
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await page.locator("[data-checkout]").first().click();
     const row = page.locator(`nav[data-sidebar] [data-checkout-agents-open] [data-pane="${sourcePane}"]`);
+    // A quiet agent's project can already be folded when its session is read.
+    const folded = page.locator('nav[data-sidebar] [data-checkout-toggle][aria-expanded="false"]');
+    await expect(row.or(folded)).toBeVisible();
+    if (!(await row.isVisible())) await folded.click();
     // status-model.md, Task identity: an automatic/source-less name follows the goal.
     const selected = kind === "pi" ? "Generated Pi goal" : kind === "grok" ? "Generated Grok goal" : initialTitle;
     await expect(row).toContainText(selected, { timeout: 30_000 });
