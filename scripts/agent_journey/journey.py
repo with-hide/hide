@@ -205,8 +205,7 @@ class Journey:
         if not pane:
             return None
         try:
-            _, text, _ = self.runtime.command(["pane", "read", pane, "--source", "recent-unwrapped",
-                                               "--lines", "200"], check=False)
+            text = self.controller.read_pane(pane, lines=200)
         except ProcessError:
             return None
         path = self.run / f"{self.id}-{name}-pane.txt"
@@ -276,7 +275,7 @@ class Journey:
         try:
             agent = self.herdr_agent() or {}
             moment["herdr"] = {key: agent.get(key) for key in ("agent_status", "interactive_ready", "launch_pending")}
-            _, moment["screen"], _ = self.runtime.command(["pane", "read", self.pane, "--source", "visible"], check=False)
+            moment["screen"] = self.controller.read_pane(self.pane, visible=True)
         except ProcessError as error:
             moment["unreadable"] = str(error)
         return moment
@@ -698,7 +697,7 @@ class Journey:
                         self.evidence("letter_menu", record))
             return
         self.runtime.owner.cancelled.wait(3)
-        _, record["picker"], _ = self.runtime.command(["pane", "read", self.pane, "--source", "visible"], check=False)
+        record["picker"] = self.controller.read_pane(self.pane, visible=True)
         log = self.log_mark()
         letter = self.send_now("journey-letter-menu-" + self.id, value, record)
         if letter is None:
@@ -708,8 +707,7 @@ class Journey:
             return
         if self.runtime.owner.cancelled.wait(PICKER_SECONDS):
             raise ProcessError("run_cancelled")
-        _, record["picker_after"], _ = self.runtime.command(["pane", "read", self.pane, "--source", "visible"],
-                                                            check=False)
+        record["picker_after"] = self.controller.read_pane(self.pane, visible=True)
         self.daemon.dispatch("key", {"pane_id": self.pane, "bytes_base64": base64.b64encode(b"\x1b").decode()})
         turn, read, record["activities"] = self.wait_turn(since, value, lambda _events: before, seconds=LETTER_SECONDS)
         record["turn"] = turn
