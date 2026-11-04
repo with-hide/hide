@@ -25,7 +25,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use hide_node_link::NodeLink;
 use hide_node_link::holders::{
@@ -1054,17 +1054,24 @@ impl OwnEngine<'_> {
     /// The folders a program other than its shell works in, in a pane whose
     /// holder runs, as its machine observes them, so a folder a program has
     /// moved to is guarded as the folder the pane started in is; `None` when
-    /// its machine could not say. A pane whose terminal could not start, one
-    /// still starting or closing, and one gone since, runs no such program;
-    /// a pane drawn before its start keeps the start's record after it.
-    fn program_folders(&self, pane: &str, failed: bool) -> Option<Vec<String>> {
-        let settled = self.topology().pane(pane).map(|held| {
-            !held.closing && held.starting.as_ref().is_none_or(|start| start.started())
-        });
-        if failed || !matches!(settled, Ok(true)) {
+    /// its machine could not say by `by`, which a read of many panes shares,
+    /// so no ask starts once it has passed. A pane whose terminal could not
+    /// start, one still starting, and one gone since runs no such program; a
+    /// pane drawn before its start keeps the start's record after it. A
+    /// closing pane is asked like any other until its holder is gone, since
+    /// an end that failed or is still under way leaves its program running.
+    fn program_folders(&self, pane: &str, failed: bool, by: Instant) -> Option<Vec<String>> {
+        let started = self
+            .topology()
+            .pane(pane)
+            .map(|held| held.starting.as_ref().is_none_or(|start| start.started()));
+        if failed || !matches!(started, Ok(true)) {
             return Some(Vec::new());
         }
-        match self.shared.holders.processes(pane) {
+        let within = by
+            .checked_duration_since(Instant::now())
+            .filter(|left| !left.is_zero())?;
+        match self.shared.holders.processes(pane, within) {
             Ok(processes) => match processes.foreground {
                 Some(foreground)
                     if foreground
@@ -1084,7 +1091,11 @@ impl OwnEngine<'_> {
 
     fn processes(&self, pane: &str) -> Answer<PaneProcessGroup> {
         self.ready(pane)?;
-        let processes = self.shared.holders.processes(pane).map_err(holder_error)?;
+        let processes = self
+            .shared
+            .holders
+            .processes(pane, hide_node_link::link_panes::ASK_WAIT)
+            .map_err(holder_error)?;
         let (group, members) = match processes.foreground {
             Some(foreground) => (Some(foreground.group), foreground.members),
             None => (None, Vec::new()),
@@ -1148,6 +1159,15 @@ enum Settled {
 
 /// Settles the start of `pane`, drawn `starting`, once its holder started
 /// or did not, `failed` saying why ([`OwnEngine::start_drawn`]).
+/// The instant a call bounded by `wait` ends by: a read of many panes asks
+/// each holder only for what is left of it.
+fn deadline(wait: Wait) -> Instant {
+    match wait {
+        Wait::Each(within) | Wait::Small(within) => Instant::now() + within,
+        Wait::By(by) => by,
+    }
+}
+
 fn settle_start(
     topology: &Mutex<Topology>,
     holders: &dyn PaneHolders,
@@ -1418,9 +1438,10 @@ impl<'g> Engine for OwnEngine<'g> {
     /// works in; a pane whose program's folder its machine could not say
     /// adds the pane with no folder, which a cleanup reads as unknown.
     fn pane_folders(&self, wait: Wait) -> Answer<Vec<(String, Option<String>)>> {
+        let by = deadline(wait);
         let mut folders = Vec::new();
         for pane in self.session(wait)?.panes {
-            let programs = self.program_folders(&pane.pane_id, pane.restore_error.is_some());
+            let programs = self.program_folders(&pane.pane_id, pane.restore_error.is_some(), by);
             folders.push((pane.pane_id.clone(), pane.cwd));
             match programs {
                 Some(programs) => folders.extend(
@@ -1439,10 +1460,11 @@ impl<'g> Engine for OwnEngine<'g> {
     /// whose program's folder its machine could not say refuses the answer,
     /// so a close is never confirmed past a folder nobody could read.
     fn pane_places(&self, wait: Wait) -> Answer<Vec<PanePlace>> {
+        let by = deadline(wait);
         let mut places = Vec::new();
         for pane in self.session(wait)?.panes {
             let programs = self
-                .program_folders(&pane.pane_id, pane.restore_error.is_some())
+                .program_folders(&pane.pane_id, pane.restore_error.is_some(), by)
                 .ok_or_else(|| {
                     EngineError::Answer(format!(
                         "pane {} runs a program whose folder its machine could not say",
@@ -2451,6 +2473,10 @@ mod tests {
         processes: Mutex<Option<HolderProcesses>>,
         /// Panes whose terminal runs another program in its foreground.
         busy: Mutex<BTreeSet<String>>,
+        /// How long each process ask takes before it answers, and the most
+        /// time each one was given.
+        processes_delay: Mutex<Duration>,
+        processes_within: Mutex<Vec<Duration>>,
     }
 
     impl Holders {
@@ -2689,7 +2715,17 @@ mod tests {
                 message: "not asked".to_owned(),
             })
         }
-        fn processes(&self, pane: &str) -> Result<HolderProcesses, HolderError> {
+        fn processes(&self, pane: &str, within: Duration) -> Result<HolderProcesses, HolderError> {
+            self.processes_within.lock().unwrap().push(within);
+            let delay = *self.processes_delay.lock().unwrap();
+            if !delay.is_zero() {
+                std::thread::sleep(delay.min(within));
+                if delay > within {
+                    return Err(HolderError::Unreachable {
+                        message: "the ask timed out".to_owned(),
+                    });
+                }
+            }
             let mut processes =
                 self.processes
                     .lock()
@@ -4980,5 +5016,94 @@ mod tests {
                 foreground_cwd: None,
             }]
         );
+    }
+
+    /// A program in `/elsewhere`, in every pane's terminal.
+    fn elsewhere(holders: &Holders) {
+        *holders.processes.lock().unwrap() = Some(HolderProcesses {
+            shell: 41,
+            foreground: Some(hide_node_link::holders::HolderForeground {
+                group: 90,
+                members: vec![(90, "vim".to_owned())],
+                folders: Some(vec!["/elsewhere".to_owned()]),
+            }),
+        });
+    }
+
+    /// A pane being closed keeps its program's folder in use until its
+    /// holder has ended: a close still under way, or one whose end failed,
+    /// leaves the program running there.
+    #[test]
+    fn a_closing_pane_keeps_its_programs_folder_until_its_holder_has_ended() {
+        let holders = Arc::new(Holders::default());
+        let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+        let (_, _, pane) = engine
+            .create_workspace(WAIT, "/w", "w", true, Env::new())
+            .unwrap();
+        elsewhere(&holders);
+        let (ending, ended) = std::sync::mpsc::channel();
+        let (finish, finished) = std::sync::mpsc::channel();
+        *holders.terminate_hold.lock().unwrap() = Some((pane.clone(), ending, finished));
+        std::thread::scope(|scope| {
+            let close = scope.spawn(|| engine.close_pane(WAIT, &pane));
+            ended.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert!(
+                engine
+                    .pane_folders(WAIT)
+                    .unwrap()
+                    .contains(&(pane.clone(), Some("/elsewhere".to_owned()))),
+                "the folder stays guarded while the close is under way"
+            );
+            assert_eq!(
+                engine.pane_places(WAIT).unwrap()[0]
+                    .foreground_cwd
+                    .as_deref(),
+                Some("/elsewhere")
+            );
+            finish.send(()).unwrap();
+            close.join().unwrap().unwrap();
+        });
+        assert!(engine.pane_folders(WAIT).unwrap().is_empty());
+    }
+
+    /// A read of every pane's folders ends by the caller's bound, however
+    /// many panes it asks: each holder is given only what is left of it, no
+    /// ask starts once it has passed, and a pane left unasked is unknown.
+    #[test]
+    fn a_read_of_every_panes_folders_shares_its_callers_bound() {
+        let holders = Arc::new(Holders::default());
+        let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+        let (workspace, _, first) = engine
+            .create_workspace(WAIT, "/w", "w", true, Env::new())
+            .unwrap();
+        for _ in 0..3 {
+            let (_, pane) = engine
+                .create_tab(WAIT, &workspace, "/w", "t", false, Env::new())
+                .unwrap();
+            engine.read_pane(WAIT, &pane, "recent", 1).unwrap();
+        }
+        engine.read_pane(WAIT, &first, "recent", 1).unwrap();
+        elsewhere(&holders);
+        *holders.processes_delay.lock().unwrap() = Duration::from_secs(30);
+
+        let bound = Duration::from_millis(300);
+        let began = std::time::Instant::now();
+        let folders = engine.pane_folders(Wait::Each(bound)).unwrap();
+        assert!(began.elapsed() < bound * 3, "{:?}", began.elapsed());
+        assert_eq!(
+            folders
+                .iter()
+                .filter(|(_, folder)| folder.is_none())
+                .count(),
+            4
+        );
+        let given = holders.processes_within.lock().unwrap().clone();
+        assert_eq!(given.len(), 1, "no ask starts past the bound: {given:?}");
+        assert!(given[0] <= bound, "{given:?}");
+
+        holders.processes_within.lock().unwrap().clear();
+        let began = std::time::Instant::now();
+        assert!(engine.pane_places(Wait::Each(bound)).is_err());
+        assert!(began.elapsed() < bound * 3, "{:?}", began.elapsed());
     }
 }

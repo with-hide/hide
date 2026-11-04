@@ -403,8 +403,12 @@ impl PaneHolders for LocalPanes {
         }
     }
 
-    fn processes(&self, pane: &str) -> Result<HolderProcesses, HolderError> {
-        match self.holders.processes(pane).map_err(ask_error)? {
+    fn processes(
+        &self,
+        pane: &str,
+        within: std::time::Duration,
+    ) -> Result<HolderProcesses, HolderError> {
+        match self.holders.processes(pane, within).map_err(ask_error)? {
             Answer::Processes { shell, foreground } => Ok(HolderProcesses {
                 shell,
                 foreground: match foreground {

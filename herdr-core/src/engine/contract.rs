@@ -996,7 +996,7 @@ fn a_program_run_in_another_folder_is_that_panes_foreground_folder() {
         assert!(
             Instant::now() < deadline,
             "the program's folder was never reported: {places:?}, the holder says {:?}, the pane shows {:?}",
-            built.panes.processes(&pane),
+            built.panes.processes(&pane, Duration::from_secs(5)),
             engine
                 .read_pane(WAIT, &pane, "recent", 20)
                 .map(|text| text.text),

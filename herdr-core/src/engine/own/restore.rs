@@ -519,7 +519,11 @@ impl OwnEngine<'static> {
     /// foreground group) or a holder that does not answer is not read as
     /// one, so nothing is typed over a program that may run.
     fn at_its_prompt(&self, pane: &str) -> bool {
-        match self.shared.holders.processes(pane) {
+        match self
+            .shared
+            .holders
+            .processes(pane, hide_node_link::link_panes::ASK_WAIT)
+        {
             Ok(processes) => processes
                 .foreground
                 .is_some_and(|foreground| foreground.group == processes.shell),

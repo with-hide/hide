@@ -404,8 +404,14 @@ pub trait PaneHolders: Send + Sync {
     /// moved screen. A holder built before scroll asks is refused
     /// [`UNSUPPORTED_HOLDER`].
     fn scroll(&self, pane: &str, to: Option<u64>) -> Result<HolderScroll, HolderError>;
-    /// The pane's program and its terminal's foreground processes.
-    fn processes(&self, pane: &str) -> Result<HolderProcesses, HolderError>;
+    /// The pane's program and its terminal's foreground processes, waiting
+    /// at most `within` for them, so a caller that reads many panes shares
+    /// one deadline among them.
+    fn processes(
+        &self,
+        pane: &str,
+        within: std::time::Duration,
+    ) -> Result<HolderProcesses, HolderError>;
     /// Which start of the pane runs now and the program it runs, as the
     /// pane's record says (PRD engine-bundle-3-core-owns D-9): what a
     /// process that names the pane is proved against. Read from the record

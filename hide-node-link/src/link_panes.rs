@@ -28,7 +28,7 @@ const START_WAIT: Duration = Duration::from_secs(40);
 /// tree that ignores it is ended by its pids after that.
 const END_WAIT: Duration = Duration::from_secs(50);
 /// How long an ask, an input or new rules may take.
-const ASK_WAIT: Duration = Duration::from_secs(15);
+pub const ASK_WAIT: Duration = Duration::from_secs(15);
 /// What a letter may take beyond its gap.
 const LETTER_WAIT: Duration = Duration::from_secs(15);
 /// How long one pane watch call is held open before it is opened again, so
@@ -373,12 +373,12 @@ impl PaneHolders for LinkPanes {
         )
     }
 
-    fn processes(&self, pane: &str) -> Result<HolderProcesses, HolderError> {
+    fn processes(&self, pane: &str, within: Duration) -> Result<HolderProcesses, HolderError> {
         self.answer(
             PaneCall::Processes {
                 pane: pane.to_owned(),
             },
-            ASK_WAIT,
+            within.min(ASK_WAIT),
         )
     }
 
