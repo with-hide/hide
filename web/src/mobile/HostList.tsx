@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { TFunction } from "i18next";
 import { LaptopIcon, PlusIcon, Trash2 } from "lucide-react";
 import { Button } from "../components/ui/button";
-import { readHosts, hostLink, removeHost, type PairedHost } from "./hosts";
+import { readHosts, hostLink, removeHost, revokeHost, dropHostPush, type PairedHost } from "./hosts";
 import { watchHost, type Presence } from "./presence";
 import { Landing, DeviceIdentity } from "./Landing";
 import { PHONE_PROTOCOL } from "./phoneVersion";
@@ -19,10 +19,15 @@ export function HostList({ t, active, choose = (host: PairedHost) => window.loca
   useEffect(() => {
     let stops: (() => void)[] = [];
     const stop = () => { for (const close of stops) close(); stops = []; };
+    // The device refused this phone: its row stays, without the credential, and is watched no more.
+    const revoked = (room: string) => {
+      try { revokeHost(localStorage, room); setHosts(readHosts(localStorage)); } catch { setError(true); }
+      void dropHostPush(room);
+    };
     const followVisibility = () => {
       stop();
-      if (!document.hidden) stops = hosts?.filter((host) => host.room !== activeRoom).map((host) =>
-        watchHost(host, (next) => setPresence((all) => ({ ...all, [host.room]: next })))) ?? [];
+      if (!document.hidden) stops = hosts?.filter((host): host is PairedHost & { credential: string } => host.room !== activeRoom && host.credential !== null).map((host) =>
+        watchHost(host, (next) => { if (next.revoked) revoked(host.room); else setPresence((all) => ({ ...all, [host.room]: next })); })) ?? [];
     };
     followVisibility();
     document.addEventListener("visibilitychange", followVisibility);
@@ -35,6 +40,24 @@ export function HostList({ t, active, choose = (host: PairedHost) => window.loca
       const seen = state?.lastSeen ?? host.lastSeen;
       const mismatch = state?.protocolMismatch !== undefined
         ? t("mobile.relay.versions", { app: PHONE_PROTOCOL, device: state.protocolMismatch }) : null;
+      const trash = <Button variant="ghost" size="icon" className="mt-md min-h-(--size-touch-target) min-w-(--size-touch-target) text-muted-foreground" aria-label={t("mobile.relay.remove")} onClick={() => setRemoving(host)}><Trash2 aria-hidden="true" /></Button>;
+      if (host.credential === null) return <div key={host.room} className="flex min-w-0 items-start" data-phone-host-revoked={host.room}>
+        <div className="flex min-w-0 flex-1 items-start gap-md px-sm py-md">
+          <LaptopIcon aria-hidden="true" className="mt-xs size-(--size-icon-lg) shrink-0 text-muted-foreground opacity-(--opacity-dimmed)" />
+          <span className="flex min-w-0 flex-1 flex-col gap-xs">
+            <span className="flex min-w-0 flex-col gap-xs opacity-(--opacity-dimmed)">
+              <span className="whitespace-normal break-keep text-subhead font-medium wrap-anywhere">{host.name}</span>
+              <span className="flex items-center gap-xs text-body text-muted-foreground">
+                <span aria-hidden="true" className="size-(--size-status-mark) shrink-0 rounded-full bg-muted-foreground" />
+                {t("mobile.relay.revoked")}
+              </span>
+              <span className="whitespace-normal break-keep text-body text-muted-foreground">{t("mobile.relay.revokedReason")}</span>
+            </span>
+            <Button variant="text" className="min-h-(--size-touch-target) self-start px-none text-body" onClick={() => window.location.assign("/?add=1")}>{t("mobile.relay.reconnect")}</Button>
+          </span>
+        </div>
+        {trash}
+      </div>;
       return <div key={host.room} className="flex min-w-0 items-start">
         <Button variant="ghost" className="h-auto min-h-(--size-touch-target) min-w-0 flex-1 items-start justify-start gap-md px-sm py-md text-left" onClick={() => choose(host)}>
           <LaptopIcon aria-hidden="true" className="mt-xs size-(--size-icon-lg) shrink-0 text-muted-foreground" />
@@ -49,7 +72,7 @@ export function HostList({ t, active, choose = (host: PairedHost) => window.loca
               : seen ? t("mobile.relay.lastSeen", { time: new Date(seen).toLocaleString() }) : t("mobile.relay.neverSeen"))}</span>
           </span>
         </Button>
-        <Button variant="ghost" size="icon" className="mt-md min-h-(--size-touch-target) min-w-(--size-touch-target) text-muted-foreground" aria-label={t("mobile.relay.remove")} onClick={() => setRemoving(host)}><Trash2 aria-hidden="true" /></Button>
+        {trash}
       </div>;
     })}
     {removing ? <div className="flex flex-col gap-sm px-sm py-md">

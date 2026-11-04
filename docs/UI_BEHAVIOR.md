@@ -3536,6 +3536,8 @@ Choosing another device replaces the page and closes the old connection; drafts 
 다른 기기 연결 opens the camera scanner inside the installed app, with a QR-link paste alternative when camera permission is unavailable.
 The browser holds at most sixteen devices and reports its limit or a failed storage write inline.
 기기 지우기 asks for confirmation before removing that browser's saved connection and its notification subscription; scanning a fresh QR connects it again.
+A device that refused this phone's credential (`revoked`) stays listed as a dimmed row marked 연결 해제됨, with the one line 7일 동안 쓰지 않았거나 이 기기에서 해제했어요 and 다시 연결, which opens the QR scanner, beside 기기 지우기.
+The browser keeps that device's name and room but not the refused credential, opens no status check, reconnect or notification worker for it, and a link to it shows the revoked guidance without dialing; a fresh QR from the same device clears the mark.
 When a relay device is unreachable, the list stays dimmed and the list, detail and start sheet say `<device>의 Hide가 꺼져 있거나 잠자고 있어요 · 다시 시도 중`, with no Tailscale wording.
 The existing automatic reconnect resumes when the device answers.
 
@@ -3613,7 +3615,7 @@ With push on, the list offers 알림 켜기; a Safari tab without push is told t
 A notification's title is the root's row title and, with a sentence, its body is `<translated row status> · <exact sentence> · <project>`; without a sentence it is the row's status word with the project (`승인 · <project>` in Korean), and a payload with no status code says the section (내 차례 or 읽을 것) in the phone's language.
 The sentence is the core's chosen row detail, untranslated, and may appear in lock-screen previews according to the phone's setting (operator-approved update 2026-10-13); tapping the notice opens that agent's detail.
 See [With and without Hide AI](status-model.md#with-and-without-hide-ai) for native question and plain-text question behavior, and cached-worker compatibility.
-A revoked phone shows "이 폰의 연결이 해제됐어요. Mac에서 QR을 다시 여세요." and drops its own push subscription.
+A revoked phone shows "이 폰의 연결이 해제됐어요. Mac에서 QR을 다시 여세요." and drops its own push subscription; a subscription it could not drop goes to the log, and the storage line appears only when browser storage failed.
 The app follows the phone's light or dark setting, draws text a quarter larger than the desktop, and keeps every control at least 44 points tall.
 
 ## Keyboard shortcuts per system
