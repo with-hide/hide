@@ -28,6 +28,20 @@ impl Runtime {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = facts;
     }
 
+    /// The engine that keeps the session a hook in a pane of `device`
+    /// reported: the engine of the machine the pane runs on, this machine's
+    /// or a dialed device's own (`own_devices`), which binds a spawned
+    /// agent's identity by it. A device on Herdr's engine ignores it, since
+    /// Herdr learns a pane's session itself.
+    pub(crate) fn hook_session_engine(
+        &self,
+        device: &str,
+        report: &HookStatusReport,
+    ) -> Option<crate::engine::SharedEngine> {
+        report.session.as_ref()?;
+        self.delivery_engine(device)
+    }
+
     /// Records what the hook in `caller`'s pane on `device` reported.
     pub(crate) fn ingest_hook_status(
         &mut self,

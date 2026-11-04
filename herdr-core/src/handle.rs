@@ -772,13 +772,8 @@ impl Core {
         let engine = {
             let mut runtime = lock_recover(&self.runtime);
             runtime.ingest_hook_status(device, caller, report)?;
-            // Only this machine's engine can be the core's own (a device's
-            // node still runs Herdr), and its panes are named bare.
-            report
-                .session
-                .as_ref()
-                .filter(|_| device == runtime.node().as_str())
-                .and_then(|_| runtime.delivery_engine(device))
+            // Each machine's engine names its panes bare, as `caller` is.
+            runtime.hook_session_engine(device, report)
         };
         // The engine is asked off the runtime lock, as every engine call is.
         if let (Some(engine), Some(session)) = (engine, report.session.as_deref())

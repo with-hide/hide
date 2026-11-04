@@ -197,3 +197,32 @@ fn a_core_on_herdr_opens_no_device_engine() {
     assert!(shared.lock().unwrap().own_device_engines().is_empty());
     assert!(shared.lock().unwrap().own_devices.is_none());
 }
+
+/// A spawned agent's identity on a device binds by the session its hook
+/// reports, which only the device's own engine can keep: the core once
+/// handed a hook's session to this machine's engine alone, so an agent on a
+/// device never had one and its spawn waited for an identity for good.
+#[test]
+fn a_hooks_session_on_a_device_goes_to_that_devices_own_engine() {
+    let state = tempfile::tempdir().unwrap();
+    let shared = own_runtime(state.path());
+    let node = Arc::new(HolderNode::default());
+    connect(&shared, ready(Arc::clone(&node), Ok(())));
+    wait_engine(&shared, true);
+    let report = |session: Option<&str>| hide_node_link::panes::HookStatusReport {
+        runtime: "claude-code".to_owned(),
+        version: hide_agent_hooks::HOOK_VERSION,
+        session: session.map(str::to_owned),
+        turn: None,
+        counts: None,
+        session_start: true,
+        waiting: None,
+    };
+    let runtime = shared.lock().unwrap();
+    let device = runtime.own_device_engines().remove(0);
+    let taken = runtime
+        .hook_session_engine(DEVICE, &report(Some("s-1")))
+        .expect("the device's engine takes the session");
+    assert!(Arc::ptr_eq(&taken, &device));
+    assert!(runtime.hook_session_engine(DEVICE, &report(None)).is_none());
+}
