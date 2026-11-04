@@ -300,7 +300,7 @@ If the conditions cannot be matched, label the result a functional reference or 
 
 ## 2. Identify the build and protect the operator
 
-Before visual checks, record the exact executable path, source revision, dirty diff, bundled Herdr version, build configuration, and PID for `hided` and, for the desktop app, its dev or packaged Electron process.
+Before visual checks, record the exact executable path, source revision, dirty diff, build configuration, and PID for `hided` and its `hide-holder` and, for the desktop app, its dev or packaged Electron process.
 Inspect running processes rather than assuming the build launched from this checkout is the visible one.
 
 ```sh
@@ -311,7 +311,7 @@ The operator's app and an isolated candidate may run simultaneously; there is no
 Identify the candidate by executable path, PID, and exact window ID before capture or interaction, and re-resolve them after any restart.
 Keep the operator's app running by default; building and automated tests do not require quitting it.
 Never quit, restart, activate, or otherwise manipulate the operator's app, panes, or server for QA without explicit coordination; never kill all matching processes.
-Prove the private server, socket, `HIDE_STATE_DIR` and `HIDE_DESKTOP_USER_DATA_DIR` are isolated before running both apps; ambiguous targeting or shared state blocks the affected check, not the operator's work.
+Prove the private `HOME`, `HIDE_STATE_DIR` and `HIDE_DESKTOP_USER_DATA_DIR` are isolated before running both apps; ambiguous targeting or shared state blocks the affected check, not the operator's work.
 Background exact-window screenshots need not activate the candidate, but foreground keyboard, IME, drag and focus scenarios can interrupt the logged-in user's work; coordinate a bounded foreground QA window for those, or use a separately authorized machine/session.
 
 Build with the existing scripts:
@@ -332,43 +332,38 @@ Building, testing, installing, launching, committing, and merging are separate s
 
 ## 3. Isolate runtime state before making fixtures
 
-Use that exact binary for the private server, fixture CLI, and reference TUI, not whichever executable happens to be on PATH.
-Every invocation, including cleanup, must use the same explicit routing environment:
+Use that exact build for the daemon, the fixture CLI and the pane holders the daemon starts from beside it, not whichever executable happens to be on PATH.
+Every invocation, including cleanup, must use the same explicit environment:
 
 | Input | Required isolation |
 | --- | --- |
 | `HOME` | A private home under the run directory, including kit and retirement state |
 | Provider homes | Private `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and platform home/config roots; exclude inherited credential and provider routing overrides |
 | Provider executable search | A controlled tool `PATH`, private login-shell startup path and verified fixture resolution for supported provider names; a private HOME alone does not restrict executable discovery |
-| `HERDR_SESSION` | A unique run-owned session name |
-| `HERDR_SOCKET_PATH` | An unused short absolute socket path |
-| `HERDR_CONFIG_PATH` | A private config file under the run directory |
 | `XDG_CONFIG_HOME`, `XDG_STATE_HOME` | Private configuration and state roots under the run directory |
-| `HERDR_PANE_ID`, `HERDR_TAB_ID`, `HERDR_WORKSPACE_ID` | Clear inherited identifiers before launching the fixture |
-| `HERDR_ENV` | Clear inherited nesting marker when starting the standalone reference TUI |
-| `HIDE_STATE_DIR`, `HERDR_BIN_PATH` | A run-owned `hided` state directory and pinned Herdr binary path |
+| Inherited `HIDE_*` variables | Cleared before launching the fixture: a Hide pane hands its programs its pane id and capability, which would route the fixture's CLI to the operator's daemon |
+| `HIDE_STATE_DIR` | A run-owned `hided` state directory; the pane holders' records and sockets live under it |
 | `HIDE_DESKTOP_USER_DATA_DIR` | A run-owned Electron user-data directory for the desktop app |
 
-`desktop/e2e/fixture.ts` builds exactly this environment and refuses to launch unless `HOME`, `HIDE_STATE_DIR`, `HIDE_DESKTOP_USER_DATA_DIR`, and `HERDR_SOCKET_PATH` all resolve under the run's own temporary directory; `web/e2e/herdr-fixture.ts` does the same for the private Herdr server and clears the inherited `HERDR_PANE_ID`/`HERDR_TAB_ID`/`HERDR_WORKSPACE_ID`/`HERDR_ENV` identifiers.
+`desktop/e2e/fixture.ts` builds exactly this environment (`inheritedFixtureEnv` in `web/e2e/platform-fixture.ts` drops every inherited `HIDE_` variable) and refuses to launch unless `HOME`, `HIDE_STATE_DIR` and `HIDE_DESKTOP_USER_DATA_DIR`, and on Windows `USERPROFILE`, `APPDATA` and `LOCALAPPDATA`, resolve under the run's own temporary directory (`assertIsolated`).
+`web/e2e/hided-fixture.ts` starts the daemon on that state directory and, when the daemon stops, ends every pane holder its records name (`web/e2e/pane-holders.mjs`), because a holder outlives its daemon by design; `web/e2e/engine-fixture.ts` makes the workspace and panes with the events the web shell sends.
 The state directory must also be private (`0700` on Unix): the delivery ledger refuses an existing directory readable by another account, and timing hooks against a daemon logging `ledger.load_failed` measures a failed letter pull rather than working delivery.
 `scripts/web-shell-measure/isolated-env.sh` establishes that permission before starting the daemon.
-Follow that same pattern for an ad hoc fixture: forward `HERDR_SESSION`, `HERDR_CONFIG_PATH`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME` and the resolved socket to every child Herdr process, so the server it starts and the core that reads it stay inside the same routing boundary.
-Check the pinned runtime's path behavior when updating it.
-The tested session layout stores sessions under `<XDG_CONFIG_HOME>/herdr/sessions/<HERDR_SESSION>`; changing `HERDR_CONFIG_PATH` alone does not isolate session data.
-The client socket inserts `-client` before `.sock`; allow room for that suffix in the platform's Unix socket path limit.
+Follow that same pattern for an ad hoc fixture: give every child the same HOME, XDG roots and state directory, and end the holders by their records when the run ends.
+A holder's socket lives under the state directory, so keep that directory's path short (directly under `/tmp` on Unix) for the platform's Unix socket path limit.
 Do not repurpose the shell's own `HOME`; pass a private HOME explicitly to fixture children, and do not assume a private local socket disables SSH discovery.
 Inspect remote registrations, automatic SSH connection attempts, and remote client state too; an unexpected remote connection is an isolation failure to resolve before interacting.
 SSH devices are registrations kept under the daemon's state directory (the operator's is `~/.hide/state`), so a run-owned `HIDE_STATE_DIR` is what keeps a scenario that does not exercise remote behavior from making an SSH connection attempt.
 Do not edit the operator's SSH configuration or stop remote services to make a local fixture pass.
 
-For a no-provider run, reuse the existing private provider shims and system-tool path pattern in `web/e2e/{herdr,hided,platform}-fixture.ts`.
+For a no-provider run, reuse the existing private provider shims and system-tool path pattern in `web/e2e/{engine,hided,platform}-fixture.ts`.
 Create the private executable set from the supported-provider declarations, keep inherited environment values to an explicit fixture allowlist, and link required tools individually instead of appending an account's executable directory.
 Set private login-shell startup files to the same fixture-bin plus system-tool PATH, and repeat the actual login-shell resolution check after the runner has created its shell startup files.
 Check the actual executable each supported provider name resolves to, its inherited and login-shell paths, and its private configuration roots before allowing the daemon's discovery, usage or Background AI work.
 `hide-platform/src/programs.rs` searches the login-shell path, inherited tool path and usual installation folders; restricting only one of those inputs does not prove real provider binaries are unreachable.
 Record the approved fixture executables and verify that fallback resolution cannot escape to an installed provider; never use a real model or authenticated probe to establish no-provider isolation.
 Synthetic status or authentication answers from a fixture shim establish only that fixture's response, not real authentication or provider availability.
-`--isolated-headless` selects browser mode and skips operator topology observation; it does not enforce this provider boundary.
+`--isolated-headless` selects browser mode; it does not enforce this provider boundary.
 Unexpected real-provider discovery or execution invalidates a no-provider measurement even when no authenticated request or model turn is established; stop and retire only the run-owned processes before correcting the fixture.
 
 Save process/socket ownership before launch, prove the private server has zero workspaces before creating fixtures, and verify that the operator server gained no QA connection.

@@ -26,7 +26,7 @@ export async function executeTerminalCheck(page: Page, fixture: Pick<EngineServe
 }
 
 /**
- * Waits for the page to select and draw `tab`, a tab Herdr created
+ * Waits for the page to select and draw `tab`, a tab the engine created
  * (`createdTabs`). The page's own selection is never the expectation: the
  * canvas can draw the new tab while the strip still selects the one before.
  */
