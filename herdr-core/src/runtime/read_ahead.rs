@@ -8,8 +8,9 @@
 //! A workspace held back while its first layout settles, or not announced yet,
 //! is simply absent there. That absence is not a close. A pane the read laid
 //! out and the stream has not keeps its terminal, the size its view reported
-//! and its held keys until the stream first lays it out, the bound passes, or
-//! the connection to Herdr is lost; only then does its absence retire it.
+//! and its held keys until the stream first lays it out, a later read of its
+//! own no longer does, the bound passes, or the connection to Herdr is lost;
+//! only then does its absence retire it.
 //!
 //! A session the sync published carries its tab moves
 //! ([`SessionSnapshotPayload::tab_moves`]) and a read of its own has none,
@@ -31,11 +32,12 @@ pub(super) struct ReadAhead {
 }
 
 impl ReadAhead {
-    /// Notes what `payload` lays out. A read of its own records each pane it
-    /// lays out that the core does not lay out yet (`laid_out`, read before
-    /// the payload is applied); a session the stream published ends the
-    /// record of every pane it lays out. A record past its bound ends either
-    /// way.
+    /// Notes what `payload` lays out. A session the stream published ends the
+    /// record of every pane it lays out. A read of its own is newer than every
+    /// record, so it ends the record of each pane it does not lay out, and
+    /// records each pane it lays out that the core does not lay out yet
+    /// (`laid_out`, read before the payload is applied). A record past its
+    /// bound ends either way.
     pub(super) fn observe(
         &mut self,
         payload: &SessionSnapshotPayload,
@@ -53,19 +55,24 @@ impl ReadAhead {
             }
             live
         });
-        let shown = payload
-            .layouts
-            .iter()
-            .flat_map(|layout| &layout.panes)
-            .map(|pane| pane.pane_id.as_str());
-        if payload.tab_moves.is_some() {
-            let shown = shown.collect::<std::collections::HashSet<_>>();
+        let shown = || {
+            payload
+                .layouts
+                .iter()
+                .flat_map(|layout| &layout.panes)
+                .map(|pane| pane.pane_id.as_str())
+        };
+        let from_stream = payload.tab_moves.is_some();
+        if !self.panes.is_empty() {
+            let laid_out_here = shown().collect::<std::collections::HashSet<_>>();
             self.panes
-                .retain(|(pane_id, _)| !shown.contains(pane_id.as_str()));
+                .retain(|(pane_id, _)| laid_out_here.contains(pane_id.as_str()) != from_stream);
+        }
+        if from_stream {
             return;
         }
         let mut dropped = Vec::new();
-        for pane_id in shown {
+        for pane_id in shown() {
             if laid_out(pane_id) || self.holds(pane_id) {
                 continue;
             }

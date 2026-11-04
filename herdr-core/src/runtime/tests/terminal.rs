@@ -69,7 +69,8 @@ fn the_answer_to_an_attach_the_core_asked_for_is_kept_before_a_layout_holds_the_
 /// first layout settles) keeps the pane's terminal and the size its view
 /// reported, so its node is not told to forget the pane and keys typed into
 /// it do not wait for a view that has already reported. Once the stream has
-/// laid the pane out, or the bound has passed, its absence retires it.
+/// laid the pane out, a later read no longer shows it, or the bound has
+/// passed, its absence retires it.
 #[test]
 fn a_pane_a_read_showed_first_keeps_its_terminal_until_the_stream_lays_it_out() {
     const NEW: &str = "w2:p1";
@@ -97,7 +98,7 @@ fn a_pane_a_read_showed_first_keeps_its_terminal_until_the_stream_lays_it_out() 
     }))
     .unwrap();
 
-    for bound_passed in [false, true] {
+    for ends in ["stream", "bound", "later read"] {
         let mut runtime = runtime();
         let terminals = record_terminals(&mut runtime);
         runtime.ingest_session(Ok(stream(before.clone())));
@@ -106,13 +107,18 @@ fn a_pane_a_read_showed_first_keeps_its_terminal_until_the_stream_lays_it_out() 
         runtime.request_terminal_control(NEW);
         runtime.dispatch_json(&resize);
         terminals.take();
-        if bound_passed {
-            for (_, read_at) in &mut runtime.read_ahead.panes {
-                *read_at = 0;
+        if ends != "stream" {
+            if ends == "bound" {
+                for (_, read_at) in &mut runtime.read_ahead.panes {
+                    *read_at = 0;
+                }
+                runtime.ingest_session(Ok(stream(before.clone())));
+            } else {
+                // A newer read of its own no longer shows the pane: it closed.
+                runtime.ingest_session(Ok(before.clone()));
             }
-            runtime.ingest_session(Ok(stream(before.clone())));
-            assert!(forgot(&terminals), "a read past its bound keeps nothing");
-            assert!(!runtime.terminal_sizes.contains_key(NEW));
+            assert!(forgot(&terminals), "{ends}: the absence retires the pane");
+            assert!(!runtime.terminal_sizes.contains_key(NEW), "{ends}");
             continue;
         }
         runtime.ingest_session(Ok(stream(before.clone())));
