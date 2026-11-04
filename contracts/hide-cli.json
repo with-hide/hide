@@ -1967,7 +1967,7 @@
         },
         "pane_read": {
             "$schema": "http://json-schema.org/draft-07/schema#",
-            "description": "`hide pane read` and `hide agent read`: the pane's last lines, unwrapped.",
+            "description": "`hide pane read` and `hide agent read`: text in the requested form.",
             "properties": {
                 "pane": {
                     "description": "The pane read: a pane of the caller's own machine bare, as `hide ps` lists it there (`w1:p2`), another machine's as `remote:<device>:pane:<id>`.",
@@ -3532,11 +3532,47 @@
             "command": "pane read",
             "options": [
                 {
+                    "conflicts": [
+                        "--source",
+                        "--format"
+                    ],
                     "name": "--lines",
                     "required": false,
                     "requires": [],
                     "value": {
                         "type": "unsigned"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--lines"
+                    ],
+                    "name": "--source",
+                    "required": false,
+                    "requires": [
+                        "--format"
+                    ],
+                    "value": {
+                        "type": "one_of",
+                        "values": [
+                            "visible"
+                        ]
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--lines"
+                    ],
+                    "name": "--format",
+                    "required": false,
+                    "requires": [
+                        "--source"
+                    ],
+                    "value": {
+                        "type": "one_of",
+                        "values": [
+                            "ansi"
+                        ]
                     }
                 },
                 {
@@ -5206,7 +5242,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:e17d435b7f4754fc8ae369e8f60100e120a4518a38b403b9304813b6386151db",
+    "digest": "sha256:a7f256d2987af61c21622f083fdd8add0d313557c9275ebc46e6103a94a31422",
     "envelopes": {
         "agent": {
             "answer": "value",
