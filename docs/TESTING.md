@@ -761,7 +761,7 @@ The transition retains these explicit exceptions:
 | OpenCode own-engine fake journey, entire row | Excluded: `own-start-fixes 노드 대기(OpenCode 첫 지시문 미전달, 제품 결함)` | `own-start-fixes` delivers the first brief and removes this exclusion |
 | Windows own-engine desktop and package | Excluded: CI Job forbids holder breakaway | Holder lifetime fix and enabled cells by `b4-default` |
 | Own-engine desktop failed-restoration spec | Excluded: `own-restore-checkout 노드 대기`; cold restore moves a pane in a nested folder out of its original checkout | `own-restore-checkout` preserves the original checkout and removes this exclusion |
-| Windows Herdr desktop failed-restoration spec | Excluded: close stays unfinished after the preceding split completes | `b4-default` removes the Herdr lane |
+| Windows and Linux Herdr desktop failed-restoration spec | Excluded: close stays unfinished after the preceding split completes | `b4-default` removes the Herdr lane |
 | Own-engine desktop first-run wizard, 4 tests | Excluded: `b4-default 대기(first-run의 Herdr 프로필 읽기 미확정)` | `b4-default` retires the Herdr profile read and enables these cells |
 | Desktop SSH specs on the own engine | Fixture prepared; existing private-SSH prerequisites still skip without that environment | Connect an isolated SSH CI lane |
 
