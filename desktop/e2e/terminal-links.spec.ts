@@ -438,13 +438,12 @@ test("terminal HTML opens a rendered page and right-click offers actions for the
   const copied = () => page.evaluate(() => (window as unknown as { copied?: string }).copied);
   const paneId = await page.evaluate(() => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneId()!);
   await dockFiles(page, paneId);
-  // The page this HTML link opens widens the lane until Agent Views keep
-  // their 480px (UI_BEHAVIOR.md, lane widths), about 31 columns on macOS
-  // and 29 on Linux here, so the address goes on a line of its own that
-  // still fits. Herdr's frames carry no wrap flag, so an address that ends
-  // at the terminal's edge reads as running on into a next row that starts
-  // with a word (`terminalLinks.ts`); the blank row after it keeps the
-  // address whole at any width the font gives.
+  // This menu scenario addresses whole, unwrapped links. Give the fixture's
+  // split pane the full lane so opening Agent Views cannot wrap the URL.
+  await zoomPane(page, paneId);
+  await expect.poll(() => page.evaluate((id) => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneGrid(id)?.cols ?? 0, paneId)).toBeGreaterThan(`${origin}/a.html`.length);
+  // Herdr frames have no wrap flag; a blank row terminates the URL even
+  // when its last character reaches the grid's right edge.
   await print(page, paneId, [
     "html src/report.HTML:2",
     `${origin}/a.html`,
@@ -678,8 +677,8 @@ test("Korean prose links only the real path and opens that file", async () => {
 });
 
 
-/** The shared fixture has two splits; give an unwrapped dense row one whole pane. */
-async function zoomDensePane(page: Page, paneId: string): Promise<void> {
+/** The shared fixture has two splits; give unwrapped links one whole pane. */
+async function zoomPane(page: Page, paneId: string): Promise<void> {
   await page.locator(`[data-terminal="${paneId}"]`).click({ button: "right" });
   await page.locator('[data-menu-item="toggle_zoom"]').click();
 }
@@ -735,7 +734,7 @@ test("dense terminal path hover measures cold and warm native work", async () =>
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents.setZoomFactor(0.3));
   await enterWorkspace(page, "fixture");
   const paneId = await page.evaluate(() => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneId()!);
-  await zoomDensePane(page, paneId);
+  await zoomPane(page, paneId);
   await expect.poll(() => page.evaluate((id) => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneGrid(id)?.cols ?? 0, paneId)).toBeGreaterThan(tokens.join(" ").length + 12);
   const grid = await page.evaluate((id) => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneGrid(id)!, paneId);
   await print(page, paneId, [tokens.join(" "), "DENSE-END"], "DENSE-END");
