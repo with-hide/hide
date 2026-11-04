@@ -526,7 +526,8 @@ test("the shortcut sheet marks the moved chords and ⌘F reaches the agent's own
     // the pane's Show plan (hide-plan B7), the Memory tool's toggle, Next and Previous tab,
     // Desk's thread ⇄ terminal (session-docs-and-assistant B35) is listed only
     // while Desk is on, and Desk is off by default (D-76, B41).
-    await expect(page.locator("[data-shortcut]")).toHaveCount(60);
+    // The four directional terminal focus commands are listed too.
+    await expect(page.locator("[data-shortcut]")).toHaveCount(64);
     await expect(page.locator('[data-shortcut="desk_terminal"]')).toHaveCount(0);
     for (const title of ["Overview", "Focus sidebar", "Add to backlog"]) await expect(page.locator("[data-shortcut-sheet]")).toContainText(title);
     // Add to backlog moves in a macOS browser, where Chrome keeps ⌘⇧M for its profiles; Alt+Shift+M is free on Windows and Linux.
