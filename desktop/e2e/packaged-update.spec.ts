@@ -132,7 +132,7 @@ test("the installed app updates to the next version and the panes and daemon kee
           message: `the shell in ${pane} ready before updating`, timeout: 20_000,
         }).toMatch(panePrompt(engine.shell));
       }
-      if (engine.engine === "own" && process.platform !== "win32") {
+      if (process.platform !== "win32") {
         await expect.poll(() => ownedHolders(stateDir).filter(holder => {
           if (!holder.program) return false;
           try { process.kill(holder.program, 0); return true; }
@@ -140,13 +140,13 @@ test("the installed app updates to the next version and the panes and daemon kee
         }).length, { message: "both holders and their shell processes ready before updating", timeout: 20_000 }).toBe(panes.length);
       }
     } finally { control.close(); }
-    // The panes the daemon lists, and on the own engine, off Windows, the holder processes that run them.
+    // The panes the daemon lists, and off Windows the holder processes that run them.
     const panesNow = async () => {
       const reading = await connectStateDir(stateDir);
       try {
         // The first snapshot holds every layout, so an empty answer is a pane that is gone, not one not yet drawn.
         const listed = await reading.until((rest) => tabPanes(rest, tab).join(",") || "none", `the panes of ${tab}`);
-        const holders = engine.engine === "own" && process.platform !== "win32" ? JSON.stringify(ownedHolders(stateDir)) : "";
+        const holders = process.platform !== "win32" ? JSON.stringify(ownedHolders(stateDir)) : "";
         return `${listed};${holders}`;
       } finally { reading.close(); }
     };

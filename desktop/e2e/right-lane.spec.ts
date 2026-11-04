@@ -487,7 +487,7 @@ test("an SSH Workspace's lane keeps its chords, narrow fallback and saved widths
     const dir = process.env.HIDE_E2E_SCREENSHOT_DIR;
     if (dir) {
       const candidate = await app.evaluate(({ BrowserWindow }) => ({ pid: process.pid, window: BrowserWindow.getAllWindows()[0]!.getMediaSourceId(), executable: process.execPath }));
-      fs.writeFileSync(path.join(dir, "remote-lane-identity.json"), JSON.stringify({ ...candidate, daemonPid: run.daemonPid(), engine: local.engine, localSocket: local.socket, remoteSocket: remote.socket, home: run.env.HOME, deviceHome: remoteHome, state: run.env.HIDE_STATE_DIR, profile: run.env.HIDE_DESKTOP_USER_DATA_DIR, transport: "real loopback SSH to a separate private device" }, null, 2));
+      fs.writeFileSync(path.join(dir, "remote-lane-identity.json"), JSON.stringify({ ...candidate, daemonPid: run.daemonPid(), home: run.env.HOME, deviceHome: remoteHome, state: run.env.HIDE_STATE_DIR, profile: run.env.HIDE_DESKTOP_USER_DATA_DIR, transport: "real loopback SSH to a separate private device" }, null, 2));
     }
     await enterWorkspace(page, "fixture");
     const state = JSON.parse(fs.readFileSync(path.join(run.env.HIDE_STATE_DIR!, "hided.json"), "utf8")) as { token: string };

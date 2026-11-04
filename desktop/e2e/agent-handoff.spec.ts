@@ -1,13 +1,13 @@
-// A native caller hands off roots through the real hided on either engine.
+// A native caller hands off roots through the real hided.
 import { expect, type ElectronApplication } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
-import { agentPane, installAgentRunner } from "../../web/e2e/agent-pane";
+import { agentPane } from "../../web/e2e/agent-pane";
 import { openProject, openWorktree, showTabOf, withControl } from "../../web/e2e/daemon-actions";
 import { enterWorkspace, openTaskFolds, showTasks } from "../../web/e2e/wire";
 import { launchShell, screenshot, startStack, test } from "./fixture";
 import { captureNativeWindow } from "./native-window";
-import { coreFocus, expectCoreFocus, herdrAgents, hideAnswer, makeSpawnRepository, type SpawnedAgent } from "./agent-spawn-fixture";
+import { coreFocus, expectCoreFocus, hideAnswer, makeSpawnRepository, type SpawnedAgent } from "./agent-spawn-fixture";
 
 test("handoff roots have provenance without delegation or a focus change in either checkout path", async () => {
   const stack = await startStack("agent-handoff", { agents: false });
@@ -31,8 +31,6 @@ test("handoff roots have provenance without delegation or a focus change in eith
     const purpose = await caller(["workspace", "purpose", "Spawn handoff fixture"]);
     expect(purpose.status, purpose.out).toBe(0);
     const command = (args: string[]) => hideAnswer(caller, args);
-    // Bind spawned roots without retiring their running program's input readiness.
-    const runAs = installAgentRunner(fixture, daemon.stateDir);
     await expect(page.locator(`[data-pane-view="${parent}"]`)).toHaveAttribute("data-focused", "true");
     const keyboard = page.locator(`[data-pane-view="${parent}"] .xterm-helper-textarea`);
     await keyboard.focus();
@@ -49,21 +47,11 @@ test("handoff roots have provenance without delegation or a focus change in eith
       expect(root.watch).toBeNull();
       expect(root.pane).not.toBe(parent);
       expect(root.pane.split(":")[0]).not.toBe(parent.split(":")[0]);
-      // Herdr alone keeps agent tokens, which a handoff never gives the root a parent_pane.
-      if (fixture.engine === "herdr") expect(herdrAgents(fixture).find((agent) => agent.pane_id === root.pane)?.tokens?.parent_pane).toBeUndefined();
       await expect(page.locator(`[data-pane-view="${parent}"]`)).toHaveAttribute("data-focused", "true");
       await expect(keyboard).toBeFocused();
       expect(await coreFocus(daemon)).toBe(parent);
       const shown = await command(["agent", "show", root.id]);
       expect(shown).toMatchObject({ parent: null, origin: registered.id, watch: null });
-      // Registering a root again by Herdr's own host scope is a Herdr integration contract, which the own engine has no counterpart for.
-      if (fixture.engine === "herdr") {
-        const child = herdrAgents(fixture).find((agent) => agent.pane_id === root.pane)!;
-        for (const check of [[], ["--check"]]) {
-          const reply = await hideAnswer(runAs(root.pane), ["agent", "register", "--host-scope", fixture.socket!, "--session", child.agent_session!.value, "--instance", child.terminal_id, "--name", name!, "--pane", root.pane, ...check]);
-          expect(reply).toMatchObject({ id: root.id, parent: null, origin: registered.id });
-        }
-      }
       roots.push(root);
     }
     const parentRow = page.locator(`nav[data-sidebar] [data-pane="${parent}"]`);

@@ -8,7 +8,7 @@ import { openProject, openWorktree, showTabOf, withControl } from "../../web/e2e
 import { enterWorkspace } from "../../web/e2e/wire";
 import { launchShell, nodeOf, screenshot, startStack, test } from "./fixture";
 import { captureNativeWindow } from "./native-window";
-import { expectCoreFocus, herdrAgents, hideAnswer, makeSpawnRepository, type SpawnedAgent } from "./agent-spawn-fixture";
+import { expectCoreFocus, hideAnswer, makeSpawnRepository, type SpawnedAgent } from "./agent-spawn-fixture";
 
 test("a spawned child appears in the native delegation tree", async () => {
   const stack = await startStack("agent-spawn", { agents: false });
@@ -51,18 +51,9 @@ test("a spawned child appears in the native delegation tree", async () => {
       await expect(keyboard).toBeFocused();
       await expectCoreFocus(daemon, parent);
       expect(spawned.watch).toBeTruthy();
-      // Herdr alone keeps agent tokens, where the lineage is written as the child's parent_pane.
-      if (fixture.engine === "herdr") expect(herdrAgents(fixture).find((agent) => agent.pane_id === spawned.pane)?.tokens?.parent_pane).toBe(parent);
       children.push(spawned);
     }
     const child = children[1]!;
-    // Herdr's tokens are Herdr's: a live handoff drops them all, and they are written again from
-    // the ledger on this machine too, whose records carry its node id (issue 772).
-    if (fixture.engine === "herdr") {
-      const herdr = fixture as typeof fixture & { env: NodeJS.ProcessEnv; bin: string };
-      execFileSync(herdr.bin, ["pane", "report-metadata", child.pane, "--source", "hide", ...["parent_pane", "parent_session", "child_session"].flatMap((key) => ["--clear-token", key])], { env: herdr.env, timeout: 20_000 });
-      await expect.poll(() => herdrAgents(fixture).find((agent) => agent.pane_id === child.pane)?.tokens?.parent_pane).toBe(parent);
-    }
     const parentRow = page.locator(`nav[data-sidebar] [data-pane="${parent}"]`);
     await expect(parentRow).toHaveAttribute("data-delegated", "false");
     // The root folds its children behind its chevron; the pane header's tree

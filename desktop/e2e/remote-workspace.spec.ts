@@ -117,20 +117,13 @@ async function hookFromPane(fixture: SshPaneFixture, stateDir: string, runtime: 
   return { status: result.status, context: output.hookSpecificOutput.additionalContext };
 }
 
-async function provePaneHooks(local: SshPaneFixture, remote: SshPaneFixture, run: Isolated, bridge: string): Promise<void> {
+async function provePaneHooks(local: SshPaneFixture, run: Isolated): Promise<void> {
   for (const runtime of ["claude-code", "codex"] as const) {
     const localContext = await hookFromPane(local, run.env.HIDE_STATE_DIR!, runtime, `local-${runtime}-hook`);
     expect(localContext.status).toBe(0);
     expect(localContext.context).toContain("Hide Workspace control is available for this session's checkout");
     expect(localContext.context).toContain("file open <path>");
     expect(localContext.context).toContain("browser open <url-or-path>");
-    // Only Herdr can have a pane before its first node connects. Native
-    // panes are made by that node after registration; reconnect is proved below.
-    if (remote.herdr) {
-      const remoteBeforeConnection = await hookFromPane(remote, path.dirname(bridge), runtime, `disconnected-${runtime}-hook`);
-      expect(remoteBeforeConnection.status).toBe(0);
-      expect(remoteBeforeConnection.context).not.toContain("Hide Workspace control is available");
-    }
   }
 }
 
@@ -182,7 +175,7 @@ test("remote pane CLI reaches its own Workspace over SSH and leaves the local Wo
       expect(result.status, JSON.stringify(result.answer)).toBe(0);
       expect(result.answer).toMatchObject({ ok: true, result: { context: { device_id: nodeOf(run.env) } } });
     }
-    await provePaneHooks(local, remote, run, bridge);
+    await provePaneHooks(local, run);
     const plain = spawnSync(HOOK_CLI, ["hook", "--runtime", "codex", "--event", "SessionStart", "--memory-injection", "--source", "hide-subagents@6"], {
       env: { ...run.env, HERDR_PANE_ID: "", HIDE_PANE_ID: "", HIDE_CAP_REF: "" },
       input: "{}", encoding: "utf8", timeout: 10_000,

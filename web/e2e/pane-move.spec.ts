@@ -7,23 +7,12 @@ import { screenshot } from "./wire";
 
 test.describe.configure({ timeout: 90_000 });
 
-/**
- * What the engine says of the pane's shell and processes, to compare before
- * and after a move. Only Herdr reports it (`pane process-info`); nothing Hide
- * publishes names a pane's process, so the core's own engine has none to
- * compare and the terminal's kept screen and the agent's kept session stand
- * for it there.
- */
-function processBefore(flow: Awaited<ReturnType<typeof startMove>>, pane: string) {
-  return flow.fixture.engine === "herdr" ? processFacts(flow.fixture as unknown as Parameters<typeof processFacts>[0], pane) : null;
-}
-
 // Process ownership and PTY identity must hold through each system's engine.
 test("header edges insert in all four directions while retaining terminal, process, session and xterm", { tag: "@platform" }, async ({ page }) => {
   const flow = await startMove(page);
   try {
     const [source, target] = flow.panes;
-    const process = processBefore(flow, source), session = await sessionIn(flow.daemon, source), tab = await tabNow(flow, source);
+    const session = await sessionIn(flow.daemon, source), tab = await tabNow(flow, source);
     const textarea = await paneView(page, source).locator(".xterm-helper-textarea").elementHandle();
     // The terminal keeps what it showed: a line typed before the moves is still on its screen after them.
     await paneView(page, source).locator(".xterm-helper-textarea").focus(); await page.keyboard.type("MOVE_KEPT\n");
@@ -38,7 +27,6 @@ test("header edges insert in all four directions while retaining terminal, proce
     expect(await tabNow(flow, source)).toBe(tab);
     expect(await page.evaluate(id => window.__hideProbe!.paneText(id), source)).toContain("MOVE_KEPT");
     expect(await sessionIn(flow.daemon, source)).toBe(session);
-    expect(processBefore(flow, source)).toEqual(process);
     expect(await textarea!.evaluate((node, source) => node === document.querySelector(`[data-pane-view="${source}"] .xterm-helper-textarea`), source)).toBe(true);
     await screenshot(page, "pane-move-four-directions");
   } finally { flow.stop(); }
@@ -73,7 +61,7 @@ test("a tab drop and the keyboard move menu keep the same terminal in a new tab"
   const flow = await startMove(page);
   try {
     const source = flow.panes[0];
-    const process = processBefore(flow, source), session = await sessionIn(flow.daemon, source);
+    const session = await sessionIn(flow.daemon, source);
     await paneView(page, source).locator(".xterm-helper-textarea").focus(); await page.keyboard.type("MOVE_KEPT\n");
     await expect.poll(() => page.evaluate(id => window.__hideProbe!.paneText(id), source)).toContain("MOVE_KEPT");
     await beginDrag(page, source, tabTitle(page, flow.target.tab)); await page.mouse.up(); await flow.completed();
@@ -86,7 +74,6 @@ test("a tab drop and the keyboard move menu keep the same terminal in a new tab"
     const choice = page.getByRole("menuitem", { name: "Move to new tab", exact: true }); await choice.focus(); await page.keyboard.press("Enter"); await flow.completed(2);
     await expect.poll(async () => { const tab = await tabNow(flow, source); return tab !== undefined && tab !== flow.target.tab; }).toBe(true);
     expect(await page.evaluate(id => window.__hideProbe!.paneText(id), source)).toContain("MOVE_KEPT");
-    expect(processBefore(flow, source)).toEqual(process);
     expect(await sessionIn(flow.daemon, source)).toBe(session);
     expect(flow.sent.get("pane_move")).toBe(2);
     await screenshot(page, "pane-move-menu-new-tab");

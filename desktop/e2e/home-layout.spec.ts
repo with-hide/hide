@@ -7,8 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { stageBuild } from "./device-home";
 import { HIDE_CLI, isolate, nodeOf, relaunch, screenshot, shellPage, test } from "./fixture";
-import { startEngine, type EngineServer } from "../../web/e2e/engine-fixture";
-import { herdrBinary } from "../../web/e2e/herdr-fixture";
+import { startEngine } from "../../web/e2e/engine-fixture";
 import { captureNativeWindow } from "./native-window";
 
 test.describe.configure({ timeout: 240_000 });
@@ -16,19 +15,13 @@ test.skip(process.platform !== "darwin", "the staged bundle uses the macOS layou
 
 /**
  * A bundle around the staged build so its daemon applies the install kit.
- * It carries what the packaged app carries for the engine the run uses
- * (`stageBuild`); on Herdr the app's Herdr is the file the test's server
- * runs, not the build's copy a device would get.
+ * It carries what the packaged app carries (`stageBuild`).
  */
-function stageBundle(root: string, engine: EngineServer["engine"]): string {
+function stageBundle(root: string): string {
   const build = stageBuild(root);
   const contents = path.join(root, "Hide.app", "Contents");
   fs.mkdirSync(path.join(contents, "MacOS"), { recursive: true });
   fs.renameSync(build, path.join(contents, "Resources"));
-  if (engine === "herdr") {
-    fs.rmSync(path.join(contents, "Resources", "herdr"));
-    fs.symlinkSync(herdrBinary(), path.join(contents, "Resources", "herdr"));
-  }
   fs.writeFileSync(path.join(contents, "Info.plist"), "<plist><dict><key>CFBundleExecutable</key><string>hide</string></dict></plist>\n");
   fs.writeFileSync(path.join(contents, "MacOS", "hide"), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} "$@"\n`, { mode: 0o755 });
   return path.join(contents, "Resources");
@@ -48,7 +41,7 @@ test("the first connect of a new app moves the old layout into ~/.hide once", as
   const home = run.env.HOME!;
   const env: Record<string, string> = { ...run.env };
   for (const key of ["HIDE_STATE_DIR", "XDG_STATE_HOME"]) delete env[key];
-  const resources = stageBundle(run.root, engine.engine);
+  const resources = stageBundle(run.root);
   const appHide = path.join(resources, "hide");
   const legacyState = path.join(home, ".local", "state", "hide");
   let oldPid = 0;

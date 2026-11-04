@@ -6,7 +6,7 @@ import { expect, test, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { CLAUDE_FULL_ACCESS, herdrHasFocus, startHerdr, type HerdrFixture } from "./herdr-fixture";
+import { herdrHasFocus, startHerdr, type HerdrFixture } from "./herdr-fixture";
 import { startFixture } from "./engine-fixture";
 import { tabsOf, withControl } from "./daemon-actions";
 import { herdrGate } from "./herdr-gate";
@@ -240,15 +240,6 @@ test("Start agent opens a tab with its chosen model and prompt beside a terminal
     await expect(stripTabs(page)).toHaveCount(2);
     await expect(page.locator(`[data-agent-tab-bar] [data-tab="${tab}"]`)).toBeVisible();
     expect(await tabsNow(daemon, fixture.workspace)).toHaveLength(originalTabs.length + 1);
-    const added = (await page.locator("[data-pane-view]").evaluateAll((panes) => panes.map((pane) => pane.getAttribute("data-pane-view")!))).find((id) => id !== originalPane)!;
-    // The argument list the agent was started with is the engine's to say; nothing Hide publishes carries it.
-    if (fixture.engine === "herdr") {
-      const server = fixture as typeof fixture & { run: HerdrFixture["run"] };
-      await expect.poll(() => {
-        const info = server.run(["pane", "process-info", "--pane", added]) as { result: { process_info: { foreground_processes: { argv?: string[] | null }[] } } };
-        return info.result.process_info.foreground_processes.map((process) => process.argv);
-      }, { timeout: 30_000 }).toContainEqual([expect.stringMatching(/(?:^|[/\\])claude(?:\.exe)?$/), ...CLAUDE_FULL_ACCESS, "--model", "opus", "--", "새 탭의 에이전트"]);
-    }
     await page.locator(`[data-agent-tab-bar] [data-tab="${tab}"]`).click();
     await expect(page.locator(`[data-pane-view="${originalPane}"]`)).toBeVisible();
     await screenshot(page, "group-tabs-new-agent-tab");

@@ -2,8 +2,6 @@ import { expect, type ElectronApplication } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 import { closePane, newTab, preparePaneInput, splitPane, withControl } from "../../web/e2e/daemon-actions";
-import { e2eEngine } from "../../web/e2e/e2e-engine";
-import type { EngineServer } from "../../web/e2e/engine-fixture";
 import { endPaneHolders } from "../../web/e2e/pane-holders.mjs";
 import { endWindowsProcesses, windowsProcessTree } from "../../web/e2e/platform-fixture";
 import { enterWorkspace } from "../../web/e2e/wire";
@@ -13,15 +11,13 @@ import { fitWindow, launchShell, startStack, test } from "./fixture";
 // B16: native presentation of a real failed cold restore in both themes,
 // with a long Korean cwd and a narrow window. OS keyboard input is not claimed.
 // @platform: the engine's native folder becomes a wire path before the page renders it.
-// How the restore fails differs by engine. Herdr cannot start a pane whose folder moved away
-// while its server was down. The own engine opens such a pane in the home folder with a
-// notice, and marks a pane failed only when its shell cannot start, so there the shell is
-// the one thing that is missing when the engine's panes are made again.
+// The engine opens a pane whose folder moved away in the home folder with a notice, and
+// marks a pane failed only when its shell cannot start, so the shell is the one thing that
+// is missing when the engine's panes are made again.
 test("failed terminals remain legible and keyboard reachable in a narrow native window", { tag: "@platform" }, async () => {
-  test.skip(e2eEngine() === "own", "own-restore-checkout 노드 대기: cold restore moves the nested folder's pane out of its original checkout");
-  test.skip((process.platform === "win32" || process.platform === "linux") && e2eEngine() === "herdr", "b4-default의 Herdr 레인 삭제 대기: close remains unfinished after split completes");
+  test.skip(true, "own-restore-checkout 노드 대기: cold restore moves the nested folder's pane out of its original checkout");
   // Windows starts the integrated PowerShell, which no SHELL setting makes unstartable.
-  test.skip(process.platform === "win32" && e2eEngine() === "own", "the own engine's restore fails only for a shell that cannot start, which no setting does for Windows' integrated PowerShell");
+  test.skip(process.platform === "win32", "the engine's restore fails only for a shell that cannot start, which no setting does for Windows' integrated PowerShell");
   const stack = await startStack("restoration", { agents: false });
   const { fixture, run, daemon } = stack;
   let app: ElectronApplication | null = null;
@@ -37,19 +33,15 @@ test("failed terminals remain legible and keyboard reachable in a narrow native 
       const pane = await splitPane(control, made.tab, toPage(folder));
       await preparePaneInput(control, pane);
       await closePane(control, made.pane);
-      // Only this pane belongs to the cold-restore scenario. In the own
-      // engine the missing shell would fail every other saved pane too.
+      // Only this pane belongs to the cold-restore scenario. The missing
+      // shell would fail every other saved pane too.
       for (const initial of fixture.panes) await closePane(control, initial);
       return made.tab;
     });
     // The engine's panes end and are made again from what was saved, as a reboot does.
     expect(run.hide(["stop"]).status).toBe(0);
-    if (fixture.engine === "herdr") {
-      await (fixture as unknown as EngineServer & { restart: (beforeStart?: () => void) => Promise<void> }).restart(() => fs.renameSync(folder, `${folder}-moved`));
-    } else {
-      endPaneHolders(daemon.stateDir, process.platform === "win32" ? { endTree: (pid: number) => endWindowsProcesses(windowsProcessTree(pid)) } : {});
-      run.env.SHELL = path.join(run.root, "no-such-shell");
-    }
+    endPaneHolders(daemon.stateDir, process.platform === "win32" ? { endTree: (pid: number) => endWindowsProcesses(windowsProcessTree(pid)) } : {});
+    run.env.SHELL = path.join(run.root, "no-such-shell");
     const launched = await launchShell(run.env);
     app = launched.app;
     const page = launched.page;
