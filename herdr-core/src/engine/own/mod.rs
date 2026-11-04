@@ -2473,9 +2473,10 @@ mod tests {
         processes: Mutex<Option<HolderProcesses>>,
         /// Panes whose terminal runs another program in its foreground.
         busy: Mutex<BTreeSet<String>>,
-        /// How long each process ask takes before it answers, and the most
-        /// time each one was given.
-        processes_delay: Mutex<Duration>,
+        /// While set, a process ask's answer never comes: each ask waits
+        /// the time it was given and gives up, as a node's unanswered ask
+        /// does. The time each ask was given, in order.
+        processes_held: (Mutex<bool>, Condvar),
         processes_within: Mutex<Vec<Duration>>,
     }
 
@@ -2717,14 +2718,14 @@ mod tests {
         }
         fn processes(&self, pane: &str, within: Duration) -> Result<HolderProcesses, HolderError> {
             self.processes_within.lock().unwrap().push(within);
-            let delay = *self.processes_delay.lock().unwrap();
-            if !delay.is_zero() {
-                std::thread::sleep(delay.min(within));
-                if delay > within {
-                    return Err(HolderError::Unreachable {
-                        message: "the ask timed out".to_owned(),
-                    });
-                }
+            let (held, released) = &self.processes_held;
+            let (held, _) = released
+                .wait_timeout_while(held.lock().unwrap(), within, |held| *held)
+                .unwrap();
+            if *held {
+                return Err(HolderError::Unreachable {
+                    message: "the ask timed out".to_owned(),
+                });
             }
             let mut processes =
                 self.processes
@@ -5084,7 +5085,7 @@ mod tests {
         }
         engine.read_pane(WAIT, &first, "recent", 1).unwrap();
         elsewhere(&holders);
-        *holders.processes_delay.lock().unwrap() = Duration::from_secs(30);
+        *holders.processes_held.0.lock().unwrap() = true;
 
         let bound = Duration::from_millis(300);
         let began = std::time::Instant::now();
