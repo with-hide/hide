@@ -93,6 +93,14 @@ def ps_quote(value):
     return "'" + str(value).replace("'", "''") + "'"
 
 
+def ps_mark(path):
+    """The PowerShell statement that writes `ready` to `path`. .NET's
+    WriteAllText lets the controller read the file while it is written, where
+    Set-Content's open refuses that read with a sharing violation; a read that
+    finds it still empty waits on."""
+    return f"[IO.File]::WriteAllText({ps_quote(path)}, 'ready')"
+
+
 class PaneShell:
     """What an owned pane's shell is told: zsh on Unix, from SHELL with a
     private ZDOTDIR; PowerShell on Windows, the shell the pane holder starts
@@ -115,8 +123,7 @@ class PaneShell:
                                  + f"\nprintf ready > {shlex.quote(str(ready))}\n").encode())
             return f". {shlex.quote(str(path))}"
         lines = [f"$env:{name} = {ps_quote(value)}" for name, value in environment.items()]
-        lines += [f"function global:prompt {{ {ps_quote(READY + ' ')} }}",
-                  f"Set-Content -NoNewline -LiteralPath {ps_quote(ready)} -Value ready"]
+        lines += [f"function global:prompt {{ {ps_quote(READY + ' ')} }}", ps_mark(ready)]
         write_private(path, ("\r\n".join(lines) + "\r\n").encode())
         # A script block, not the file itself, so no execution policy applies.
         return f". ([scriptblock]::Create((Get-Content -Raw -LiteralPath {ps_quote(path)})))"
@@ -163,8 +170,7 @@ class PaneShell:
         if not WINDOWS:
             return (f"IFS= read -r {name} < {shlex.quote(str(source))}; export {name}; "
                     f"printf 'ready' > {shlex.quote(str(ready))}")
-        return (f"$env:{name} = (Get-Content -Raw -LiteralPath {ps_quote(source)}).Trim(); "
-                f"Set-Content -NoNewline -LiteralPath {ps_quote(ready)} -Value ready")
+        return f"$env:{name} = (Get-Content -Raw -LiteralPath {ps_quote(source)}).Trim(); {ps_mark(ready)}"
 
 
 def remove_pane_files(*paths):

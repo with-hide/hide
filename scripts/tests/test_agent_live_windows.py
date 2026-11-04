@@ -229,17 +229,17 @@ class ShellForms(unittest.TestCase):
         self.folder = Path(tempfile.mkdtemp(prefix="aclw-"))
         self.addCleanup(remove_tree, self.folder)
 
-    def cmd(self, line):
-        """`line` run by cmd.exe as a pane's prompt would run it: passed whole,
-        which a list's quoting would not."""
-        shell = os.environ["ComSpec"]
-        return subprocess.run(f'"{shell}" /d /s /c "{line}"', capture_output=True, timeout=60)
+    def powershell(self, line):
+        """`line` run by Windows PowerShell, the shell a pane's holder starts,
+        as typed at its prompt."""
+        return subprocess.run(["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", line],
+                              capture_output=True, timeout=60)
 
     def test_a_pane_command_keeps_its_output_and_exit_status(self):
         output, error, status = self.folder / "pane out", self.folder / "pane err", self.folder / "status"
         program = [sys.executable, "-c", "import sys; print(sys.argv[1:]); sys.stderr.write('noise'); sys.exit(3)",
                    "two words", "it's"]
-        ran = self.cmd(PaneShell().program(program, output, error, status))
+        ran = self.powershell(PaneShell().program(program, output, error, status))
         self.assertEqual(ran.stderr, b"")
         self.assertEqual(output.read_text().strip(), str(["two words", "it's"]))
         self.assertEqual(error.read_text(), "noise")
@@ -248,8 +248,9 @@ class ShellForms(unittest.TestCase):
     def test_a_variable_read_from_a_file_reaches_what_the_shell_starts(self):
         source, ready = self.folder / "reference", self.folder / "ready"
         source.write_bytes(b"C:/private/pane capabilities/reference.json")
-        ran = self.cmd(PaneShell().read_variable("HIDE_CAP_REF", source, ready)
-                       + f' & "{sys.executable}" -c "import os; print(os.environ[\'HIDE_CAP_REF\'])"')
+        shell = PaneShell()
+        ran = self.powershell(shell.read_variable("HIDE_CAP_REF", source, ready) + "; "
+                              + shell.run([sys.executable, "-c", "import os; print(os.environ['HIDE_CAP_REF'])"]))
         self.assertEqual(ran.returncode, 0, ran.stderr)
         self.assertEqual(ran.stdout.decode().strip(), "C:/private/pane capabilities/reference.json")
         self.assertEqual(ready.read_text().strip(), "ready")
@@ -287,8 +288,14 @@ class ShellForms(unittest.TestCase):
             if handle is not None:
                 kernel.CloseHandle(handle)
 
-    def test_the_pane_shell_prompt_reads_ready(self):
-        self.assertEqual(PaneShell().environment(self.folder), {"PROMPT": "LIVE_CHECK_READY$G "})
+    def test_the_setup_sets_the_environment_and_the_ready_prompt_then_marks_ready(self):
+        setup, ready = self.folder / "setup", self.folder / "ready"
+        shell = PaneShell()
+        ran = self.powershell(shell.setup(setup, {"ROUTE": "it's a b"}, ready) + "; prompt; "
+                              + shell.run([sys.executable, "-c", "import os; print(os.environ['ROUTE'])"]))
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertEqual(ran.stdout.decode().split(), ["LIVE_CHECK_READY>", "it's", "a", "b"])
+        self.assertEqual(ready.read_text(), "ready")
 
     def test_a_launcher_sets_its_environment_and_passes_arguments_and_status(self):
         private_directory(self.folder / "bin")
