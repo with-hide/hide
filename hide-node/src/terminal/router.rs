@@ -197,14 +197,10 @@ fn cut(message: &mut String) {
 fn bound_device_report(report: &mut TerminalReport) -> bool {
     match report {
         TerminalReport::State { state, .. } => {
-            let names = [
-                Some(&state.state),
-                state.mode.as_ref(),
-                Some(&state.retry_decision),
-            ]
-            .into_iter()
-            .chain([state.exit_category.as_ref()])
-            .flatten();
+            let names = [Some(&state.state), Some(&state.retry_decision)]
+                .into_iter()
+                .chain([state.exit_category.as_ref()])
+                .flatten();
             if !names.into_iter().all(|name| plain_name(name)) {
                 return false;
             }
@@ -289,7 +285,6 @@ impl Router {
             pane,
             state: PaneTerminalState {
                 state: "unavailable".to_owned(),
-                mode: None,
                 generation: 0,
                 attempt: 0,
                 message: Some(message),
@@ -1219,7 +1214,6 @@ mod tests {
         DeviceSink::report(&router, "mini", error("Not a name", "m".into()));
         let mut state = PaneTerminalState {
             state: "controlling".into(),
-            mode: Some("control".into()),
             generation: 1,
             attempt: 1,
             message: Some("m".repeat(4_000)),

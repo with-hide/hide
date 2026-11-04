@@ -8,11 +8,11 @@
 //! asks what it must ask through Hide's askpass, which puts it on the device
 //! row ([`super::askpass`]), and the same input and output carry the start
 //! script, the install and then the helper's link ([`super::host::bootstrap`]).
-//! Herdr, files, Git, terminals and pages are that link's streams and calls,
+//! Files, Git, terminals and pages are that link's streams and calls,
 //! so a connection signs in once.
 
 use super::gate::Gate;
-use super::host::bootstrap::{self, HerdrChoice};
+use super::host::bootstrap;
 use super::host::{ATTEMPT_ENDED as ENDED, HelperPackages, PaneEventsSlot, PaneHook, TerminalHook};
 use super::hosts::{Resolve, ssh_g};
 use super::openssh::{SshProgram, Version};
@@ -210,45 +210,12 @@ impl DeviceConnector for Connector {
         home: &Path,
         node: &str,
         alias: &str,
-        herdr_socket: Option<String>,
     ) -> Result<Arc<dyn DialedTransport>, String> {
-        self.transport_session(home, node, alias, herdr_socket, None)
-    }
-
-    fn transport_session(
-        &self,
-        home: &Path,
-        node: &str,
-        alias: &str,
-        herdr_socket: Option<String>,
-        session: Option<String>,
-    ) -> Result<Arc<dyn DialedTransport>, String> {
-        let herdr = match (session, herdr_socket) {
-            (Some(_), Some(_)) => {
-                return Err(
-                    "A saved session cannot also select a different Herdr socket".to_owned(),
-                );
-            }
-            (Some(session), None) => {
-                super::destination::validate_session(&session)?;
-                HerdrChoice::Session(session)
-            }
-            (None, Some(socket)) => {
-                if !hide_node_link::device::valid_remote_socket_path(&socket) {
-                    return Err(
-                        "The device's Herdr socket must be an absolute single-line path".to_owned(),
-                    );
-                }
-                HerdrChoice::Socket(socket)
-            }
-            (None, None) => HerdrChoice::Account,
-        };
         super::destination::Target::parse(alias)?;
         let (panes, terminals) = self.hooks(node);
         Ok(Arc::new(SshDevice {
             program: SshProgram::new(self.ssh.clone(), home),
             alias: alias.to_owned(),
-            herdr,
             askpass: self.askpass.clone(),
             packages: self.packages.clone(),
             device_home: self.device_home.clone(),
@@ -287,14 +254,13 @@ impl DeviceConnector for Connector {
 pub struct SshDevice {
     program: SshProgram,
     alias: String,
-    herdr: HerdrChoice,
     askpass: Option<PathBuf>,
     packages: HelperPackages,
     device_home: Option<String>,
     panes: Option<PaneHook>,
     terminals: Option<TerminalHook>,
-    /// The link the latest attempt started, which carries the device's
-    /// Herdr; reaching Herdr never starts `ssh`.
+    /// The link the latest attempt started, which the device's test reads;
+    /// reading it never starts `ssh`.
     link: Arc<Mutex<Option<Linked>>>,
 }
 
@@ -305,7 +271,6 @@ struct Linked {
     version: Version,
     signed_in: String,
     protocol: u32,
-    herdr_socket: Option<String>,
     terminals: Result<(), String>,
 }
 
@@ -321,37 +286,7 @@ impl SshDevice {
     }
 }
 
-impl DeviceTransport for SshDevice {
-    fn herdr_api_connector(&self) -> Arc<dyn ApiConnector> {
-        Arc::new(LinkedHerdr(Arc::clone(&self.link)))
-    }
-
-    fn cached_herdr_version(&self) -> Option<String> {
-        None
-    }
-
-    fn cached_herdr_socket(&self) -> Option<String> {
-        lock_recover(&self.link)
-            .as_ref()
-            .and_then(|linked| linked.herdr_socket.clone())
-    }
-}
-
-/// The device's Herdr through its current link; no link, no Herdr, and
-/// nothing is started to find one.
-struct LinkedHerdr(Arc<Mutex<Option<Linked>>>);
-
-impl ApiConnector for LinkedHerdr {
-    fn connect(&self) -> Result<Box<dyn ApiStream>, ApiError> {
-        let host = lock_recover(&self.0)
-            .as_ref()
-            .map(|linked| linked.host.clone())
-            .ok_or_else(|| {
-                ApiError::Transport("The device's helper is not connected".to_owned())
-            })?;
-        host.herdr_connector().connect()
-    }
-}
+impl DeviceTransport for SshDevice {}
 
 /// The dials [`MAX_DIALING`] admits at once, shared by every device. A dial
 /// waiting for its place reads connecting: the operator has nothing to do
@@ -359,7 +294,7 @@ impl ApiConnector for LinkedHerdr {
 static DIALING: Gate = Gate::new(MAX_DIALING);
 
 impl DialedTransport for SshDevice {
-    fn capability_test(&self, operation_id: &str, check: SnapshotCheck<'_>) -> CapabilityReport {
+    fn capability_test(&self, operation_id: &str) -> CapabilityReport {
         let mut report = CapabilityReport::new(
             operation_id,
             RemoteHostIdentity {
@@ -389,24 +324,6 @@ impl DialedTransport for SshDevice {
             RemoteStage::Protocol,
             format!("protocol {}", linked.protocol),
         );
-        let socket = linked.herdr_socket.clone().unwrap_or_default();
-        let snapshot = hide_herdr_client::request_with_connector(
-            &linked.host.herdr_connector(),
-            "session.snapshot",
-            json!({}),
-            Duration::from_secs(10),
-        );
-        match snapshot
-            .map_err(|error| error.to_string())
-            .and_then(|value| {
-                check(&value, &self.target(), &socket).map_err(|error| error.to_string())
-            }) {
-            Ok(_) => report.pass(RemoteStage::Herdr, socket),
-            Err(reason) => {
-                report.fail(RemoteStage::Herdr, reason, true, false);
-                return report;
-            }
-        }
         match &linked.terminals {
             Ok(()) => report.pass(RemoteStage::Pty, "through the node link"),
             Err(reason) => {
@@ -505,7 +422,7 @@ impl DialedTransport for SshDevice {
                 &payload,
             )?;
             stage("start");
-            bootstrap::start(&mut *pipe, &installed.helper_relative, &self.herdr, home.as_deref())?;
+            bootstrap::start(&mut *pipe, &installed.helper_relative, home.as_deref())?;
             Ok((identity, installed))
         })(&mut pipe);
         let (identity, installed) = match started {
@@ -566,7 +483,6 @@ impl DialedTransport for SshDevice {
             version,
             signed_in: format!("{}@{}:{}", resolved.user, resolved.hostname, resolved.port),
             protocol: hello.protocol,
-            herdr_socket: None,
             terminals: terminals.as_ref().map(|_| ()).map_err(Clone::clone),
         });
         stage("ready");

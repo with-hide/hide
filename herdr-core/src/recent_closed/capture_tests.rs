@@ -1,8 +1,8 @@
 use super::*;
-use crate::fake_herdr::FakeHerdr;
+use crate::engine::EngineError;
+use crate::engine::fake::{FakeEngine, closed_layout, refused, reply, session, unanswered};
 use crate::live::{RemoteControlAction, RemoteControlOutcome, execute_local_control};
 use crate::recent_closed::reopen::REOPEN_INTENT_ENV;
-use hide_herdr_client::HERDR_PROTOCOL_REVISION;
 use serde_json::{Value, json};
 
 /// B5: authorization never follows a failed pane into another tab or covers
@@ -47,8 +47,8 @@ fn failed_tab_close_rechecks_membership_and_live_peers() {
             false,
         ),
     ] {
-        let herdr = FakeHerdr::start("failed-tab-scope", move |method, _| match method {
-            "session.snapshot" => {
+        let herdr = FakeEngine::start(move |method, _| match method {
+            "session" => {
                 let mut value = snapshot(false);
                 let mut panes = vec![
                     json!({"pane_id":"w1:p1","terminal_id":"failed","workspace_id":"w1","tab_id":failed_tab,"focused":false,"agent_status":"unknown","revision":1,"restore_error":"ENOENT"}),
@@ -64,9 +64,9 @@ fn failed_tab_close_rechecks_membership_and_live_peers() {
                     value["snapshot"]["agents"] = json!([peer]);
                 }
                 value["snapshot"]["panes"] = json!(panes);
-                value
+                reply(session(value))
             }
-            "tab.close" => json!({"type":"ok"}),
+            "close_tab" => reply(()),
             other => panic!("unexpected {other}"),
         });
         let result = run_close_effect(
@@ -102,14 +102,14 @@ fn failed_tab_close_rechecks_membership_and_live_peers() {
             },
         );
         assert_eq!(result.is_ok(), allowed);
-        assert_eq!(herdr.methods().contains(&"tab.close".into()), allowed);
+        assert_eq!(herdr.methods().contains(&"close_tab"), allowed);
     }
 }
 
 #[test]
 fn failed_pane_close_preserves_a_new_working_descendant_in_another_tab() {
-    let herdr = FakeHerdr::start("failed-descendant", |method, params| match method {
-        "session.snapshot" => {
+    let herdr = FakeEngine::start(|method, params| match method {
+        "session" => {
             let mut value = snapshot(false);
             let parent = json!({"pane_id":"w1:p1","terminal_id":"original","workspace_id":"w1","tab_id":"w1:t1","focused":false,"agent":"claude","agent_status":"unknown","revision":1,"restore_error":"ENOENT",
                 "agent_session":{"source":"herdr:claude","agent":"claude","kind":"id","value":"parent"}});
@@ -118,14 +118,14 @@ fn failed_pane_close_preserves_a_new_working_descendant_in_another_tab() {
                 "tokens":{"parent_pane":"w1:p1","child_session":crate::engine::tokens::session_digest("child"),"parent_session":crate::engine::tokens::session_digest("parent")}});
             value["snapshot"]["panes"] = json!([parent.clone(), child.clone()]);
             value["snapshot"]["agents"] = json!([parent, child]);
-            value
+            reply(session(value))
         }
-        "pane.close" => {
+        "close_pane" => {
             assert_eq!(
-                params["pane_id"], "w1:p1",
+                params["pane"], "w1:p1",
                 "Close only this must leave the child running"
             );
-            json!({"type":"ok"})
+            reply(())
         }
         other => panic!("unexpected {other}"),
     });
@@ -149,15 +149,13 @@ fn failed_pane_close_preserves_a_new_working_descendant_in_another_tab() {
         },
     );
     assert!(result.is_ok());
-    assert_eq!(herdr.methods(), ["session.snapshot", "pane.close"]);
+    assert_eq!(herdr.methods(), ["session", "close_pane"]);
 }
 
 /// B6: time spent obtaining permission cannot become extra mutation time.
 #[test]
 fn an_expired_failed_close_sends_no_snapshot_or_mutation() {
-    let herdr = FakeHerdr::start("expired-close", |method, _| {
-        panic!("expired close sent {method}")
-    });
+    let herdr = FakeEngine::start(|method, _| panic!("expired close sent {method}"));
     let result = run_close_effect(
         herdr.engine().as_ref(),
         &CloseEffectRequest {
@@ -184,14 +182,14 @@ fn an_expired_failed_close_sends_no_snapshot_or_mutation() {
 /// The snapshot answers successfully, but its read used up the admission.
 #[test]
 fn failed_close_cannot_mutate_after_its_fresh_read_consumes_the_deadline() {
-    let herdr = FakeHerdr::start("slow-fresh-close", |method, _| match method {
-        "session.snapshot" => {
+    let herdr = FakeEngine::start(|method, _| match method {
+        "session" => {
             let mut value = snapshot(false);
             value["snapshot"]["panes"] = json!([{
                 "pane_id":"w1:p1","terminal_id":"original","workspace_id":"w1","tab_id":"w1:t1",
                 "focused":false,"agent_status":"unknown","revision":1,"restore_error":"ENOENT"
             }]);
-            value
+            reply(session(value))
         }
         other => panic!("the expired close sent {other}"),
     });
@@ -223,7 +221,7 @@ fn failed_close_cannot_mutate_after_its_fresh_read_consumes_the_deadline() {
         &clock,
     );
     assert_eq!(result.unwrap_err().code(), Some("close_deadline_expired"));
-    assert_eq!(herdr.methods(), ["session.snapshot"]);
+    assert_eq!(herdr.methods(), ["session"]);
 }
 
 /// Coexistence B4-B6: a fresh restoration failure can close, but the same
@@ -236,18 +234,18 @@ fn failed_terminal_close_checks_incarnation_and_retains_refusals() {
         ("original", false, false, false),
         ("original", true, true, false),
     ] {
-        let herdr = FakeHerdr::start_with_errors("restore-close", move |method, _| match method {
-            "session.snapshot" => {
+        let herdr = FakeEngine::start(move |method, _| match method {
+            "session" => {
                 let mut value = snapshot(false);
                 value["snapshot"]["panes"] = json!([{
                     "pane_id":"w1:p1", "terminal_id":terminal, "workspace_id":"w1", "tab_id":"w1:t1",
                     "focused":false, "agent_status":"idle", "revision":1,
                     "restore_error": if failed { Some("ENOENT") } else { None },
                 }]);
-                Ok(value)
+                reply(session(value))
             }
-            "pane.close" if refuses => Err(("fixture_refusal".into(), "close refused".into())),
-            "pane.close" => Ok(json!({"type":"ok"})),
+            "close_pane" if refuses => refused("fixture_refusal", "close refused"),
+            "close_pane" => reply(()),
             other => panic!("unexpected request {other}"),
         });
         let result = run_close_effect(
@@ -267,7 +265,7 @@ fn failed_terminal_close_checks_incarnation_and_retains_refusals() {
         );
         assert_eq!(result.is_ok(), expected);
         assert_eq!(
-            herdr.methods().contains(&"pane.close".to_owned()),
+            herdr.methods().contains(&"close_pane"),
             terminal == "original" && failed
         );
     }
@@ -306,7 +304,6 @@ fn snapshot(created: bool) -> Value {
         tabs.push(tab("w1:t2"));
     }
     json!({"type":"session_snapshot","snapshot":{
-        "version":"fixture","protocol":HERDR_PROTOCOL_REVISION,
         "workspaces":[{"workspace_id":"w1","number":1,"label":"primary","focused":false,"pane_count":tabs.len(),"tab_count":tabs.len(),"active_tab_id":"w1:t1","agent_status":"idle"}],
         "tabs":tabs,"panes":[],"layouts":[],"agents":[]
     }})
@@ -314,9 +311,9 @@ fn snapshot(created: bool) -> Value {
 
 #[test]
 fn replacement_creation_failure_sends_no_close() {
-    let herdr = FakeHerdr::start_with_errors("replacement-failure", |method, _| match method {
-        "session.snapshot" => Ok(snapshot(false)),
-        "tab.create" => Err(("fixture_create_refused".into(), "private diagnostic".into())),
+    let herdr = FakeEngine::start(|method, _| match method {
+        "session" => reply(session(snapshot(false))),
+        "create_tab" => refused("fixture_create_refused", "private diagnostic"),
         other => panic!("unexpected effect {other}"),
     });
     let error = prepare_close_replacement(
@@ -328,34 +325,29 @@ fn replacement_creation_failure_sends_no_close() {
     )
     .unwrap_err();
     assert!(error.message.contains("fixture_create_refused"));
-    assert_eq!(herdr.methods(), ["session.snapshot", "tab.create"]);
+    assert_eq!(herdr.methods(), ["session", "create_tab"]);
 }
 
 #[test]
 fn replacement_retry_after_close_refusal_adopts_its_shell_without_another_create() {
     let mut created = false;
-    let herdr = FakeHerdr::start_with_errors(
-        "replacement-retry",
-        move |method, params| match method {
-            "session.snapshot" => Ok(snapshot(created)),
-            "tab.create" => {
-                assert!(!created);
-                assert_eq!(params["cwd"], "/tmp");
-                assert_eq!(params["focus"], false);
-                assert_eq!(params["env"][REOPEN_INTENT_ENV], "intent:close-replacement");
-                created = true;
-                Ok(json!({"type":"tab_created","tab":tab("w1:t2"),"root_pane":{
-                    "pane_id":"w1:p2","terminal_id":"terminal","workspace_id":"w1","tab_id":"w1:t2","focused":false,"agent_status":"idle","revision":0
-                }}))
-            }
-            "layout.export" => Ok(json!({"type":"layout_export","layout":{
-                "workspace_id":"w1","tab_id":"w1:t2","zoomed":false,"focused_pane_id":"w1:p2",
-                "root":{"type":"pane","pane_id":"w1:p2","cwd":"/tmp","env":{(REOPEN_INTENT_ENV):"intent:close-replacement"}}
-            }})),
-            "tab.close" => Err(("fixture_close_refused".into(), "private diagnostic".into())),
-            other => panic!("unexpected effect {other}"),
-        },
-    );
+    let herdr = FakeEngine::start(move |method, params| match method {
+        "session" => reply(session(snapshot(created))),
+        "create_tab" => {
+            assert!(!created);
+            assert_eq!(params["cwd"], "/tmp");
+            assert_eq!(params["focus"], false);
+            assert_eq!(params["env"][REOPEN_INTENT_ENV], "intent:close-replacement");
+            created = true;
+            reply(("w1:t2".to_owned(), "w1:p2".to_owned()))
+        }
+        "export_layout" => reply(closed_layout(json!({
+            "workspace_id":"w1","tab_id":"w1:t2","zoomed":false,"focused_pane_id":"w1:p2",
+            "root":{"type":"pane","pane_id":"w1:p2","cwd":"/tmp","env":{(REOPEN_INTENT_ENV):"intent:close-replacement"}}
+        }))),
+        "close_tab" => refused("fixture_close_refused", "private diagnostic"),
+        other => panic!("unexpected effect {other}"),
+    });
     let connector = herdr.engine();
     assert_eq!(
         prepare_close_replacement(
@@ -398,7 +390,7 @@ fn replacement_retry_after_close_refusal_adopts_its_shell_without_another_create
         herdr
             .methods()
             .iter()
-            .filter(|method| method.as_str() == "tab.create")
+            .filter(|method| **method == "create_tab")
             .count(),
         1
     );
@@ -406,7 +398,7 @@ fn replacement_retry_after_close_refusal_adopts_its_shell_without_another_create
         herdr
             .methods()
             .iter()
-            .filter(|method| method.as_str() == "tab.close")
+            .filter(|method| **method == "close_tab")
             .count(),
         1
     );
@@ -418,8 +410,8 @@ fn replacement_retry_after_close_refusal_adopts_its_shell_without_another_create
 #[test]
 fn replacement_shell_is_placed_at_its_checkout_while_herdr_still_names_the_servers_folder() {
     let mut created = false;
-    let herdr = FakeHerdr::start("replacement-early-cwd", move |method, _| match method {
-        "session.snapshot" => {
+    let herdr = FakeEngine::start(move |method, _| match method {
+        "session" => {
             let mut value = snapshot(created);
             if created {
                 let body = &mut value["snapshot"];
@@ -434,18 +426,16 @@ fn replacement_shell_is_placed_at_its_checkout_while_herdr_still_names_the_serve
                     "splits":[]
                 }]);
             }
-            value
+            reply(session(value))
         }
-        "tab.create" => {
+        "create_tab" => {
             created = true;
-            json!({"type":"tab_created","tab":tab("w1:t2"),"root_pane":{
-                "pane_id":"w1:p2","terminal_id":"t2","workspace_id":"w1","tab_id":"w1:t2","focused":false,"agent_status":"idle","revision":0
-            }})
+            reply(("w1:t2".to_owned(), "w1:p2".to_owned()))
         }
-        "layout.export" => json!({"type":"layout_export","layout":{
+        "export_layout" => reply(closed_layout(json!({
             "workspace_id":"w1","tab_id":"w1:t1","zoomed":false,"focused_pane_id":"w1:p1",
             "root":{"type":"pane","pane_id":"w1:p1","cwd":"/tmp","env":{}}
-        }}),
+        }))),
         other => panic!("unexpected {other}"),
     });
     let (tab_id, payload) = prepare_close_replacement(
@@ -470,8 +460,8 @@ fn replacement_shell_is_placed_at_its_checkout_while_herdr_still_names_the_serve
 
 #[test]
 fn reuse_only_retry_cannot_create_when_its_shell_disappears_before_worker_reads() {
-    let herdr = FakeHerdr::start("replacement-reuse-only", |method, _| match method {
-        "session.snapshot" => snapshot(false),
+    let herdr = FakeEngine::start(|method, _| match method {
+        "session" => reply(session(snapshot(false))),
         other => panic!("reuse-only retry must not send {other}"),
     });
     let error = prepare_close_replacement(
@@ -483,32 +473,31 @@ fn reuse_only_retry_cannot_create_when_its_shell_disappears_before_worker_reads(
     )
     .unwrap_err();
     assert!(error.message.contains("disappeared"));
-    assert_eq!(herdr.methods(), ["session.snapshot"]);
+    assert_eq!(herdr.methods(), ["session"]);
 }
 
 #[test]
 fn malformed_create_ack_is_recovered_by_its_marker_without_repeating_the_effect() {
     let mut marker = String::new();
-    let herdr = FakeHerdr::start("create-recover", move |method, params| match method {
-        "tab.create" => {
+    let herdr = FakeEngine::start(move |method, params| match method {
+        "create_tab" => {
             assert!(marker.is_empty(), "creation must not be repeated");
             marker = params["env"][REOPEN_INTENT_ENV]
                 .as_str()
                 .unwrap()
                 .to_owned();
-            json!({"type":"tab_created","tab":tab(""),"root_pane":{
-                "pane_id":"w1:p2","terminal_id":"terminal","workspace_id":"w1","tab_id":"w1:t2","focused":false,"agent_status":"idle","revision":0
-            }})
+            // An answer that names no tab: the effect happened, its id is lost.
+            Err(EngineError::Answer("tab created without an id".into()))
         }
-        "session.snapshot" => snapshot(true),
-        "layout.export" => {
-            let id = params["tab_id"].as_str().unwrap();
-            json!({"type":"layout_export","layout":{
+        "session" => reply(session(snapshot(true))),
+        "export_layout" => {
+            let id = params["tab"].as_str().unwrap();
+            reply(closed_layout(json!({
                 "workspace_id":"w1","tab_id":id,"zoomed":false,"focused_pane_id":"w1:p2",
                 "root":{"type":"pane","pane_id":"w1:p2","cwd":"/tmp","env":{
                     (REOPEN_INTENT_ENV): if id == "w1:t2" {marker.clone()} else {"other-intent".into()}
                 }}
-            }})
+            })))
         }
         other => panic!("unexpected {other}"),
     });
@@ -529,12 +518,7 @@ fn malformed_create_ack_is_recovered_by_its_marker_without_repeating_the_effect(
     );
     assert_eq!(
         herdr.methods(),
-        [
-            "tab.create",
-            "session.snapshot",
-            "layout.export",
-            "layout.export"
-        ]
+        ["create_tab", "session", "export_layout", "export_layout"]
     );
 }
 
@@ -583,8 +567,8 @@ fn named_tab_export(shell: bool) -> Value {
     } else {
         agent
     };
-    json!({"type":"layout_export","layout":{"workspace_id":"w1","tab_id":"w1:t1","zoomed":false,
-        "focused_pane_id":"w1:p1","root":root}})
+    json!({"workspace_id":"w1","tab_id":"w1:t1","zoomed":false,
+        "focused_pane_id":"w1:p1","root":root})
 }
 
 /// A named tab's last agent leaves a shell in the same tab: split beside
@@ -593,27 +577,20 @@ fn named_tab_export(shell: bool) -> Value {
 #[test]
 fn a_named_tabs_shell_is_split_into_its_tab_and_a_retry_adopts_it() {
     let mut split = false;
-    let herdr = FakeHerdr::start_with_errors(
-        "named-tab-shell",
-        move |method, params| match method {
-            "layout.export" => Ok(named_tab_export(split)),
-            "pane.split" => {
-                assert!(!split, "the shell is made once");
-                assert_eq!(params["target_pane_id"], "w1:p1");
-                assert_eq!(params["cwd"], "/tmp");
-                assert_eq!(params["focus"], false);
-                assert_eq!(params["env"][REOPEN_INTENT_ENV], "intent:close-replacement");
-                split = true;
-                Ok(
-                    json!({"type":"pane_info","pane":{"pane_id":"w1:p2","terminal_id":"w1:p2-terminal",
-                "workspace_id":"w1","tab_id":"w1:t1","focused":false,"agent_status":"idle","revision":1}}),
-                )
-            }
-            "session.snapshot" => Ok(named_tab_snapshot(split)),
-            "pane.close" => Err(("fixture_close_refused".into(), "private diagnostic".into())),
-            other => panic!("unexpected effect {other}"),
-        },
-    );
+    let herdr = FakeEngine::start(move |method, params| match method {
+        "export_layout" => reply(closed_layout(named_tab_export(split))),
+        "split_replacement" => {
+            assert!(!split, "the shell is made once");
+            assert_eq!(params["pane"], "w1:p1");
+            assert_eq!(params["cwd"], "/tmp");
+            assert_eq!(params["env"][REOPEN_INTENT_ENV], "intent:close-replacement");
+            split = true;
+            reply("w1:p2".to_owned())
+        }
+        "session" => reply(session(named_tab_snapshot(split))),
+        "close_pane" => refused("fixture_close_refused", "private diagnostic"),
+        other => panic!("unexpected effect {other}"),
+    });
     let connector = herdr.engine();
     let (shell, payload) = prepare_close_replacement(
         connector.as_ref(),
@@ -660,14 +637,14 @@ fn a_named_tabs_shell_is_split_into_its_tab_and_a_retry_adopts_it() {
         herdr
             .methods()
             .iter()
-            .filter(|method| *method == name)
+            .filter(|method| **method == name)
             .count()
     };
     assert_eq!(
         (
-            count("pane.split"),
-            count("pane.close"),
-            count("tab.create")
+            count("split_replacement"),
+            count("close_pane"),
+            count("create_tab")
         ),
         (1, 1, 0)
     );
@@ -675,9 +652,9 @@ fn a_named_tabs_shell_is_split_into_its_tab_and_a_retry_adopts_it() {
 
 #[test]
 fn a_named_tab_whose_shell_cannot_be_made_closes_nothing() {
-    let herdr = FakeHerdr::start_with_errors("named-tab-refused", |method, _| match method {
-        "layout.export" => Ok(named_tab_export(false)),
-        "pane.split" => Err(("fixture_split_refused".into(), "private diagnostic".into())),
+    let herdr = FakeEngine::start(|method, _| match method {
+        "export_layout" => reply(closed_layout(named_tab_export(false))),
+        "split_replacement" => refused("fixture_split_refused", "private diagnostic"),
         other => panic!("unexpected effect {other}"),
     });
     let error = prepare_close_replacement(
@@ -689,10 +666,10 @@ fn a_named_tab_whose_shell_cannot_be_made_closes_nothing() {
     )
     .unwrap_err();
     assert!(error.message.contains("fixture_split_refused"));
-    assert_eq!(error.shell_in_tab, None, "Herdr made no shell");
+    assert_eq!(error.shell_in_tab, None, "the engine made no shell");
     assert_eq!(
         herdr.methods(),
-        ["layout.export", "pane.split", "layout.export"]
+        ["export_layout", "split_replacement", "export_layout"]
     );
 }
 
@@ -701,12 +678,12 @@ fn a_named_tab_whose_shell_cannot_be_made_closes_nothing() {
 #[test]
 fn a_named_tabs_shell_whose_split_answer_is_lost_is_named_by_its_marker() {
     let mut split = false;
-    let herdr = FakeHerdr::start_with_errors("named-tab-lost-ack", move |method, _| match method {
-        "layout.export" => Ok(named_tab_export(split)),
-        "pane.split" => {
+    let herdr = FakeEngine::start(move |method, _| match method {
+        "export_layout" => reply(closed_layout(named_tab_export(split))),
+        "split_replacement" => {
             assert!(!split, "the shell is made once");
             split = true;
-            Err(("fixture_answer_lost".into(), "private diagnostic".into()))
+            unanswered("private diagnostic")
         }
         other => panic!("unexpected effect {other}"),
     });
@@ -721,6 +698,6 @@ fn a_named_tabs_shell_whose_split_answer_is_lost_is_named_by_its_marker() {
     assert_eq!(error.shell_in_tab.as_deref(), Some("w1:p2"));
     assert_eq!(
         herdr.methods(),
-        ["layout.export", "pane.split", "layout.export"]
+        ["export_layout", "split_replacement", "export_layout"]
     );
 }

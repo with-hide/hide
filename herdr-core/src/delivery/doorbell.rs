@@ -1496,8 +1496,8 @@ mod tests {
     fn native_alias_identity_preserves_pane_name_session_readiness_and_sequence_guards() {
         let flags = Arc::new(Mutex::new(json!({})));
         let answer = Arc::clone(&flags);
-        let herdr = crate::fake_herdr::FakeHerdr::start("bell-alias", move |method, _| {
-            assert_eq!(method, "agent.get");
+        let fake = crate::engine::fake::FakeEngine::start(move |method, _| {
+            assert_eq!(method, "delivery_agent");
             let mut agent = json!({
                 "pane_id": "pane", "terminal_id": "term", "workspace_id": "w1", "tab_id": "w1:t1",
                 "name": "agent", "agent": "claude", "agent_status": "idle", "state_change_seq": 7,
@@ -1507,7 +1507,7 @@ mod tests {
             for (key, value) in answer.lock().unwrap().as_object().unwrap() {
                 agent[key] = value.clone();
             }
-            json!({"type": "agent_info", "agent": agent})
+            crate::engine::fake::reply(crate::engine::fake::delivery_agent(&agent))
         });
         let mut observed = at_rest(" CLAUDE_CODE ");
         observed.actor.session = crate::engine::tokens::session_digest("session");
@@ -1520,7 +1520,7 @@ mod tests {
             observed.actor.kind = kind.into();
             *flags.lock().unwrap() = json!({"agent": canonical});
             assert_eq!(
-                native_current(herdr.engine().as_ref(), &observed),
+                native_current(fake.engine().as_ref(), &observed),
                 Ok(Ok(())),
                 "{kind}"
             );
@@ -1543,14 +1543,14 @@ mod tests {
         ] {
             *flags.lock().unwrap() = change;
             assert_eq!(
-                native_current(herdr.engine().as_ref(), &observed),
+                native_current(fake.engine().as_ref(), &observed),
                 Ok(Err(expected))
             );
         }
         observed.actor.kind = "future-agent".into();
         *flags.lock().unwrap() = json!({"agent": "FUTURE-AGENT"});
         assert_eq!(
-            native_current(herdr.engine().as_ref(), &observed),
+            native_current(fake.engine().as_ref(), &observed),
             Ok(Err(Hold::Identity))
         );
     }
@@ -1758,21 +1758,21 @@ mod tests {
         assert_eq!(judge(&pane, urgent, NOW), Err(Hold::Kind));
     }
 
-    /// A recipient pane at rest on a Herdr whose `agent.get` answer carries
+    /// A recipient pane at rest on an engine whose agent answer carries
     /// the readiness flags the test sets, with one letter pending for it.
     /// The delivery store runs without its own doorbell, so the passes a test
     /// drives at its chosen times are the only ones (issues 809, 814, 831).
     struct Bell {
         runtime: Arc<Mutex<Runtime>>,
         client: Client,
-        herdr: crate::fake_herdr::FakeHerdr,
+        fake: Arc<crate::engine::fake::FakeEngine<'static>>,
         flags: Arc<Mutex<Value>>,
         letter: String,
-        /// What the pane's visible screen shows when Herdr reads it.
+        /// What the pane's visible screen shows when the engine reads it.
         screen: Arc<Mutex<String>>,
-        /// How Herdr answers a read of that screen.
+        /// How the engine answers a read of that screen.
         read_answer: Arc<Mutex<ReadAnswer>>,
-        /// A key that reaches the pane, at this time, while Herdr answers
+        /// A key that reaches the pane, at this time, while the engine answers
         /// the next read.
         key_during_read: Arc<Mutex<Option<u64>>>,
         _worker: crate::delivery::worker::Worker,
@@ -1798,65 +1798,61 @@ mod tests {
             let key_during_read = Arc::new(Mutex::new(None::<u64>));
             let typed_during_read = Arc::clone(&key_during_read);
             let owner = Arc::downgrade(&runtime);
-            let herdr =
-                crate::fake_herdr::FakeHerdr::start_with_errors("doorbell", move |method, _| {
-                    match method {
-                        "pane.read" => {
-                            // The operator's key reaches the core while Herdr
-                            // answers, after the screen it answers was drawn.
-                            if let Some(at) = typed_during_read.lock().unwrap().take()
-                                && let Some(runtime) = owner.upgrade()
-                            {
-                                runtime
-                                    .lock()
-                                    .unwrap()
-                                    .note_delivery_key_at("recipient", at);
-                            }
-                            let truncated = match *answered.lock().unwrap() {
-                                ReadAnswer::Screen => false,
-                                ReadAnswer::Truncated => true,
-                                ReadAnswer::Refused(code) => {
-                                    return Err((code.into(), "read refused or timed out".into()));
-                                }
-                            };
-                            Ok(json!({"type": "pane_read", "read": {
-                                "pane_id": "recipient", "workspace_id": "w1", "tab_id": "w1:t1",
-                                "source": "visible", "format": "ansi", "revision": 1,
-                                "truncated": truncated, "text": *shown.lock().unwrap()}}))
+            let fake = crate::engine::fake::FakeEngine::start(move |method, _| {
+                use crate::engine::fake::{refused, reply, unanswered};
+                match method {
+                    "read_screen" => {
+                        // The operator's key reaches the core while the
+                        // engine answers, after the screen it answers was
+                        // drawn.
+                        if let Some(at) = typed_during_read.lock().unwrap().take()
+                            && let Some(runtime) = owner.upgrade()
+                        {
+                            runtime
+                                .lock()
+                                .unwrap()
+                                .note_delivery_key_at("recipient", at);
                         }
-                        "agent.get" | "agent.prompt" => {
-                            if method == "agent.prompt"
-                                && let Some(code) = submission_error
-                            {
-                                return Err((
-                                    code.into(),
-                                    "submission refused or timed out".into(),
-                                ));
+                        let truncated = match *answered.lock().unwrap() {
+                            ReadAnswer::Screen => false,
+                            ReadAnswer::Truncated => true,
+                            ReadAnswer::Refused("timeout") => {
+                                return unanswered("read timed out");
                             }
-                            let mut agent = json!({
-                                "pane_id": "recipient", "terminal_id": "terminal",
-                                "workspace_id": "w1", "tab_id": "w1:t1", "focused": false,
-                                "revision": 1, "name": "recipient", "agent": "codex",
-                                "agent_status": "idle", "state_change_seq": 2,
-                                "agent_session": {"source": "hook", "agent": "codex",
-                                    "kind": "id", "value": "recipient-native"},
-                            });
-                            for (key, value) in answer.lock().unwrap().as_object().unwrap() {
-                                agent[key] = value.clone();
+                            ReadAnswer::Refused(code) => {
+                                return refused(code, "read refused");
                             }
-                            let response = if method == "agent.prompt" {
-                                "agent_prompted"
-                            } else {
-                                "agent_info"
-                            };
-                            Ok(json!({"type": response, "agent": agent}))
-                        }
-                        "pane.send_input" => Ok(json!({"type": "ok"})),
-                        other => panic!("unexpected {other}"),
+                        };
+                        reply(hide_node_link::holders::PaneText {
+                            text: shown.lock().unwrap().clone(),
+                            truncated,
+                        })
                     }
-                });
+                    "prompt_agent" => match submission_error {
+                        Some("timeout") => unanswered("submission timed out"),
+                        Some(code) => refused(code, "submission refused"),
+                        None => reply(()),
+                    },
+                    "delivery_agent" => {
+                        let mut agent = json!({
+                            "pane_id": "recipient", "terminal_id": "terminal",
+                            "workspace_id": "w1", "tab_id": "w1:t1", "focused": false,
+                            "revision": 1, "name": "recipient", "agent": "codex",
+                            "agent_status": "idle", "state_change_seq": 2,
+                            "agent_session": {"source": "hook", "agent": "codex",
+                                "kind": "id", "value": "recipient-native"},
+                        });
+                        for (key, value) in answer.lock().unwrap().as_object().unwrap() {
+                            agent[key] = value.clone();
+                        }
+                        reply(crate::engine::fake::delivery_agent(&agent))
+                    }
+                    "submit_text" | "press_key" | "paste_text" | "send_keys" => reply(()),
+                    other => panic!("unexpected {other}"),
+                }
+            });
             let recipient =
-                recipient_at_rest(&mut runtime.lock().unwrap(), "recipient-native", &herdr);
+                recipient_at_rest(&mut runtime.lock().unwrap(), "recipient-native", &fake);
             let (worker, client) = crate::delivery::worker::Worker::store(
                 Arc::downgrade(&runtime),
                 crate::handle::ChangeNotifier::noop(),
@@ -1894,7 +1890,7 @@ mod tests {
             Self {
                 runtime,
                 client,
-                herdr,
+                fake,
                 flags,
                 screen,
                 read_answer,
@@ -2005,21 +2001,12 @@ mod tests {
 
         /// What the pane was typed, in order.
         fn typed(&self) -> Vec<Value> {
-            self.herdr
-                .calls()
-                .into_iter()
-                .filter(|(method, _)| method == "agent.prompt")
-                .map(|(_, params)| params)
-                .collect()
+            self.fake.calls_of("prompt_agent")
         }
 
         /// How many times the pane's screen was read.
         fn reads(&self) -> usize {
-            self.herdr
-                .methods()
-                .iter()
-                .filter(|method| *method == "pane.read")
-                .count()
+            self.fake.calls_of("read_screen").len()
         }
 
         /// Hide knows the recipient's Codex as `0.163.0`, as the hook
@@ -2053,11 +2040,7 @@ mod tests {
         }
 
         fn asked(&self) -> usize {
-            self.herdr
-                .methods()
-                .iter()
-                .filter(|method| *method == "agent.get")
-                .count()
+            self.fake.calls_of("delivery_agent").len()
         }
 
         fn line(&self) -> Option<String> {
@@ -2511,7 +2494,11 @@ mod tests {
         use crate::runtime::delivery::tests::set_live;
         let bell = Bell::start(json!({}));
         let mut doorbell = Doorbell::default();
-        let gone = crate::fake_herdr::FakeHerdr::start("doorbell-gone", |_, _| json!({}));
+        let gone = crate::engine::fake::FakeEngine::start(|_, _| {
+            Err(crate::engine::EngineError::NotRunning(
+                "the link is gone".into(),
+            ))
+        });
         set_live(&mut bell.runtime.lock().unwrap(), Some(&gone));
         drop(gone);
         let records = bell.pass(&mut doorbell, now());
@@ -2527,7 +2514,7 @@ mod tests {
         );
         set_live(&mut bell.runtime.lock().unwrap(), None);
         assert_eq!(held(&bell.pass(&mut doorbell, now())), ["pane_unavailable"]);
-        set_live(&mut bell.runtime.lock().unwrap(), Some(&bell.herdr));
+        set_live(&mut bell.runtime.lock().unwrap(), Some(&bell.fake));
         bell.pass(&mut doorbell, now());
         assert_eq!(bell.typed().len(), 1);
         assert!(bell.line().is_some());
@@ -2661,16 +2648,15 @@ mod tests {
                 typed[0]["text"], "🦉 Codex report: private · hide inbox",
                 "{flags}"
             );
-            // Herdr owns each input reader's submission. Hide neither sends
-            // cursor keys nor waits for a turn to finish before confirming it.
-            assert!(typed[0].get("keys").is_none());
-            assert!(typed[0].get("wait").is_none());
+            // The engine owns each input reader's submission: one prompt is
+            // never also sent as raw input.
             assert!(
-                !bell
-                    .herdr
-                    .methods()
-                    .iter()
-                    .any(|method| method == "pane.send_input"),
+                !bell.fake.methods().iter().any(|method| [
+                    "submit_text",
+                    "press_key",
+                    "paste_text"
+                ]
+                .contains(method)),
                 "one prompt must not also be sent as raw input"
             );
             assert_eq!(bell.attempts(), 1, "{flags}");

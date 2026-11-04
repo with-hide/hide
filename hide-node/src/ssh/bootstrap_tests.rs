@@ -400,22 +400,15 @@ fn the_helper_starts_on_the_same_pipes_with_the_chosen_herdr() {
         .map(|(name, _)| format!(" ${{{name}:-}}"))
         .collect();
     let helper = format!(
-        "#!/bin/sh\necho \"args:$*\"\necho \"session:${{HERDR_SESSION:-}} socket:${{HERDR_SOCKET_PATH:-}}\"\necho \"home:$HOME pwd:$(pwd -P)\"\necho \"moved:{moved}\"\necho \"agents:{agents}\"\n"
+        "#!/bin/sh\necho \"args:$*\"\necho \"home:$HOME pwd:$(pwd -P)\"\necho \"moved:{moved}\"\necho \"agents:{agents}\"\n"
     );
     let packages = device.packages(std::env::consts::OS, std::env::consts::ARCH, &helper);
     let mut pipe = device.connect("");
     let facts = probe(&mut pipe, soon()).unwrap();
     let payload = packages.payload(&facts.os, &facts.arch).unwrap();
     let installed = install(&mut pipe, "~/.hide/helper", &facts.home, &payload).unwrap();
-    start(
-        &mut pipe,
-        &installed.helper_relative,
-        &HerdrChoice::Session("work".to_owned()),
-        None,
-    )
-    .unwrap();
+    start(&mut pipe, &installed.helper_relative, None).unwrap();
     assert_eq!(pipe.line(soon()).unwrap(), b"args:node serve");
-    assert_eq!(pipe.line(soon()).unwrap(), b"session:work socket:");
     let home = std::fs::canonicalize(device.home()).unwrap();
     assert_eq!(
         String::from_utf8(pipe.line(soon()).unwrap()).unwrap(),
@@ -447,14 +440,7 @@ fn the_helper_starts_on_the_same_pipes_with_the_chosen_herdr() {
     let mut pipe = device.connect("");
     let facts = probe(&mut pipe, soon()).unwrap();
     let installed = install(&mut pipe, "~/.hide/helper", &facts.home, &payload).unwrap();
-    start(
-        &mut pipe,
-        &installed.helper_relative,
-        &HerdrChoice::Account,
-        Some(&own),
-    )
-    .unwrap();
-    pipe.line(soon()).unwrap();
+    start(&mut pipe, &installed.helper_relative, Some(&own)).unwrap();
     pipe.line(soon()).unwrap();
     let made = home.join("candidate/home");
     assert_eq!(
@@ -565,15 +551,7 @@ fn a_step_naming_a_line_end_is_never_sent() {
     let device = Device::new();
     let mut pipe = device.connect("");
     probe(&mut pipe, soon()).unwrap();
-    assert!(
-        start(
-            &mut pipe,
-            "v1/hided",
-            &HerdrChoice::Socket("/tmp/a\nstart\tx".to_owned()),
-            None
-        )
-        .is_err()
-    );
+    assert!(start(&mut pipe, "v1/hided", Some("/tmp/a\nstart\tx")).is_err());
 }
 
 fn words(words: &[&str]) -> Vec<String> {

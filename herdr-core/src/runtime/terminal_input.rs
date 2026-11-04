@@ -948,22 +948,20 @@ mod tests {
         }
     }
 
-    /// A Herdr whose pane `w1:p2` runs the shell alone in the foreground.
-    fn shell_pane(name: &str) -> crate::fake_herdr::FakeHerdr {
-        crate::fake_herdr::FakeHerdr::start(name, |method, _| match method {
-            "pane.process_info" => {
-                serde_json::json!({"type": "pane_process_info", "process_info": {
-                    "pane_id": "w1:p2", "shell_pid": SHELL, "foreground_process_group_id": SHELL,
-                    "foreground_processes": [{"pid": SHELL, "name": "zsh"}]
-                }})
-            }
+    /// An engine whose pane `w1:p2` runs the shell alone in the foreground.
+    fn shell_pane() -> std::sync::Arc<crate::engine::fake::FakeEngine<'static>> {
+        crate::engine::fake::FakeEngine::start(|method, _| match method {
+            "pane_processes" => crate::engine::fake::reply(crate::engine::fake::processes(
+                &serde_json::json!({"shell_pid": SHELL, "foreground_process_group_id": SHELL,
+                    "foreground_processes": [{"pid": SHELL, "name": "zsh"}]}),
+            )),
             other => panic!("unexpected {other}"),
         })
     }
 
     #[test]
     fn the_wait_ends_when_the_shell_s_line_editor_reads() {
-        let herdr = shell_pane("shell-wait-reading");
+        let herdr = shell_pane();
         let node = Terminal::answering(vec![
             Ok(LineInput::Lines { limit: 1024 }),
             Ok(LineInput::Lines { limit: 1024 }),
@@ -984,7 +982,7 @@ mod tests {
     /// it again rather than writing the keys into its line mode.
     #[test]
     fn a_failed_read_is_read_again_within_the_wait() {
-        let herdr = shell_pane("shell-wait-retry");
+        let herdr = shell_pane();
         let node = Terminal::answering(vec![
             Err("controls no terminal".to_owned()),
             Ok(LineInput::Keys),
@@ -1004,7 +1002,7 @@ mod tests {
     /// ends at its bound and the keys are written anyway.
     #[test]
     fn a_shell_that_never_reads_ends_the_wait_at_its_bound() {
-        let herdr = shell_pane("shell-wait-timeout");
+        let herdr = shell_pane();
         let node = Terminal::answering(vec![Ok(LineInput::Lines { limit: 1024 })]);
         // The bound is the subject: a short one keeps the test short.
         let outcome = wait_for_shell_reading(
@@ -1022,7 +1020,7 @@ mod tests {
     /// a failed read, still starting at the bound, ends as a timeout.
     #[test]
     fn a_read_after_a_failure_ends_the_wait_as_a_timeout() {
-        let herdr = shell_pane("shell-wait-recovered");
+        let herdr = shell_pane();
         let node = Terminal::answering(vec![
             Err("controls no terminal".to_owned()),
             Ok(LineInput::Lines { limit: 1024 }),
@@ -1131,7 +1129,7 @@ mod tests {
 
     #[test]
     fn a_wait_nothing_waits_for_reads_nothing() {
-        let herdr = shell_pane("shell-wait-dropped");
+        let herdr = shell_pane();
         let node = Terminal::answering(vec![Ok(LineInput::Keys)]);
         let outcome = wait_for_shell_reading(
             herdr.engine().as_ref(),

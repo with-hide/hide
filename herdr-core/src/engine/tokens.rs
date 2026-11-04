@@ -128,11 +128,6 @@ pub(crate) fn session_holds(declared: Option<&str>, current: Option<&str>) -> bo
 /// the existing device-scoped path.
 pub(crate) const PARENT_MACHINE_TOKEN: &str = "parent_machine";
 
-/// The source under which Hide writes its own pane tokens. Herdr keeps one
-/// token set per source, so a token Hide wrote can never overwrite one an
-/// orchestrator or the hook helper wrote under theirs.
-pub(crate) const HIDE_METADATA_SOURCE: &str = "hide";
-
 /// The parent a spawner declared. An empty value is no declaration, because
 /// Herdr clears a token by setting it empty.
 pub(crate) fn lineage_parent(declared: Option<&str>) -> Option<String> {

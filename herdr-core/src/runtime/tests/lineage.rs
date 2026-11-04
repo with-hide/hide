@@ -49,7 +49,6 @@ fn remote_lineage_session(agents: Vec<SidebarAgentSnapshot>) -> RemoteSessionSna
         pane_hook_tokens: Default::default(),
         issue_tokens: Default::default(),
         issue_links: Default::default(),
-        herdr_version: None,
     }
 }
 
@@ -113,7 +112,6 @@ fn cross_machine_runtime() -> Runtime {
         target_id: "mini".to_owned(),
         state: "connected".to_owned(),
         message: None,
-        herdr_version: Some("0.9.1".to_owned()),
         session: Some(remote_lineage_session(vec![remote_parent, remote_child])),
         files: RemoteFileListSnapshot::idle(),
         catalog: Default::default(),
@@ -1037,22 +1035,6 @@ fn a_strip_entry_carries_its_one_agents_identity_and_mark() {
             .map(|chip| chip.label),
         Some("Coordinate implementation".to_owned()),
         "a rebuilt strip is named again before it is published"
-    );
-}
-
-#[test]
-fn moving_a_delegated_child_asks_for_a_new_tab_in_the_workspace_it_is_already_in() {
-    let params =
-        crate::engine::herdr::wire::pane_move_to_new_tab_params("w1:p2", "w1", "Implementor")
-            .expect("params encode");
-    assert_eq!(
-        params,
-        serde_json::json!({
-            "pane_id": "w1:p2",
-            "destination": {"type": "new_tab", "workspace_id": "w1", "label": "Implementor"},
-            "focus": false
-        }),
-        "a new workspace would split one checkout into two rows for one path"
     );
 }
 
@@ -2547,7 +2529,6 @@ fn a_descendant_on_a_disconnected_device_is_never_listed_for_a_close() {
         target_id: "mini".to_owned(),
         state: "connected".to_owned(),
         message: None,
-        herdr_version: Some("0.9.1".to_owned()),
         session: Some(remote_lineage_session(vec![remote_child])),
         files: RemoteFileListSnapshot::idle(),
         catalog: Default::default(),

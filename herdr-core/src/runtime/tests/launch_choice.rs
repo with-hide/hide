@@ -9,7 +9,6 @@
 //! default.
 
 use super::*;
-use crate::fake_herdr::FakeHerdr;
 use crate::model::PaneLaunch;
 use hide_agent_adapter::LaunchChoice;
 use serde_json::json;
@@ -122,46 +121,39 @@ fn checkout_of(folder: &tempfile::TempDir) -> String {
         .to_string()
 }
 
-/// A fake Herdr that starts any agent in a pane whose shell holds the
-/// terminal, and hands each `agent.start`'s arguments to the test.
-fn starting_herdr(
-    name: &str,
-) -> (
-    FakeHerdr,
-    std::sync::mpsc::Receiver<(String, serde_json::Value)>,
-) {
+/// A fake engine that starts any agent in a pane whose shell holds the
+/// terminal, and hands each start's arguments to the test.
+fn starting_herdr() -> (Fake, std::sync::mpsc::Receiver<(String, serde_json::Value)>) {
     let (sent, starts) = std::sync::mpsc::channel();
-    let observed = std::sync::Mutex::new(json!({}));
-    let herdr = FakeHerdr::start_with_errors(name, move |method, params| match method {
-        "pane.process_info" => Ok(json!({"type": "pane_process_info", "process_info": {
-            "pane_id": params["pane_id"], "shell_pid": 42, "foreground_process_group_id": 42,
+    let observed = std::sync::Mutex::new(None::<serde_json::Value>);
+    let herdr = FakeEngine::start(move |method, params| match method {
+        "pane_processes" => reply(fake::processes(&json!({
+            "shell_pid": 42, "foreground_process_group_id": 42,
             "foreground_processes": [{"pid": 42, "name": "zsh"}]
-        }})),
-        "pane.split" => Ok(json!({"type": "pane_info", "pane": {
-            "pane_id": "w-order:t2:fork", "terminal_id": "fork-terminal",
-            "workspace_id": "w-order", "tab_id": "w-order:t2", "focused": false,
-            "agent_status": "idle", "revision": 1
-        }})),
-        "agent.get" => Ok(json!({"type":"agent_info", "agent": *observed.lock().unwrap()})),
-        "agent.start" => {
-            *observed.lock().unwrap() = json!({
-                "pane_id":params["pane_id"], "terminal_id":"term", "workspace_id":"w-order",
-                "tab_id":"w-order:t2", "name":params["name"], "agent":params["kind"],
-                "interactive_ready":true, "focused":false, "agent_status":"idle", "revision":3
-            });
+        }))),
+        "split_beside" => reply("w-order:t2:fork".to_owned()),
+        "delivery_agent" => match observed.lock().unwrap().as_ref() {
+            Some(agent) => reply(fake::delivery_agent(agent)),
+            None => refused("agent_not_found", "no agent started yet"),
+        },
+        "start_agent" => {
+            *observed.lock().unwrap() = Some(json!({
+                "pane_id": params["pane"], "name": params["name"], "agent": params["kind"],
+                "interactive_ready": true, "agent_status": "idle"
+            }));
             sent.send((
-                params["pane_id"].as_str().unwrap().to_owned(),
+                params["pane"].as_str().unwrap().to_owned(),
                 params["args"].clone(),
             ))
             .unwrap();
-            Ok(json!({"type": "agent_started", "argv": [], "agent": {
-                "pane_id": params["pane_id"], "terminal_id": "term", "workspace_id": "w-order",
-                "tab_id": "w-order:t2", "focused": false, "agent_status": "idle", "revision": 2
-            }}))
+            reply(crate::engine::StartedAgent {
+                pane_id: params["pane"].as_str().unwrap().to_owned(),
+                terminal_id: Some("term".into()),
+            })
         }
         // What the fork's registration asks after its start is no part of
         // the start; refusing it leaves a working fork.
-        other => Err(("unsupported".into(), format!("fixture answers no {other}"))),
+        other => refused("unsupported", &format!("fixture answers no {other}")),
     });
     (herdr, starts)
 }
@@ -174,7 +166,7 @@ fn next_start(
         .expect("the worker started the agent")
 }
 
-/// Puts the t2 agent to sleep and has Herdr forget it, as the end does.
+/// Puts the t2 agent to sleep and has the engine forget it, as the end does.
 fn sleep(runtime: &mut Runtime, folder: &tempfile::TempDir, kind: &str) {
     runtime.dispatch_json(&event("agent_sleep", json!({"pane_id": AGENT})));
     assert!(runtime.snapshot().status.last_error.is_none());
@@ -182,7 +174,7 @@ fn sleep(runtime: &mut Runtime, folder: &tempfile::TempDir, kind: &str) {
     runtime.ingest_session(Ok(session(&checkout_of(folder), kind, false)));
 }
 
-fn wake(runtime: &mut Runtime, herdr: &FakeHerdr) {
+fn wake(runtime: &mut Runtime, herdr: &Fake) {
     runtime.live.as_mut().unwrap().engine = herdr.engine();
     assert!(runtime.dispatch_json(&event("agent_wake", json!({"pane_id": AGENT}))));
 }
@@ -203,7 +195,7 @@ fn a_wake_resumes_the_agent_with_the_model_and_effort_it_was_started_with() {
     ] {
         let (mut runtime, folder) = started(kind, Some(&launch));
         sleep(&mut runtime, &folder, kind);
-        let (herdr, starts) = starting_herdr("launch-choice-wake");
+        let (herdr, starts) = starting_herdr();
         wake(&mut runtime, &herdr);
         assert_eq!(
             next_start(&starts),
@@ -267,7 +259,7 @@ fn a_choice_kept_before_the_session_arrives_reaches_the_wake() {
         (Some("gpt-6-luna"), Some("low"))
     );
     sleep(&mut runtime, &folder, "codex");
-    let (herdr, starts) = starting_herdr("launch-choice-late-wake");
+    let (herdr, starts) = starting_herdr();
     wake(&mut runtime, &herdr);
     assert_eq!(
         next_start(&starts),
@@ -301,7 +293,7 @@ fn a_wake_of_an_agent_with_no_recorded_choice_resumes_as_before() {
     );
     saved.as_object_mut().unwrap().remove("launch");
     *record = serde_json::from_value(saved).unwrap();
-    let (herdr, starts) = starting_herdr("launch-choice-legacy-wake");
+    let (herdr, starts) = starting_herdr();
     wake(&mut runtime, &herdr);
     assert_eq!(next_start(&starts).1, resumed("claude", &[]));
     assert!(runtime.snapshot().ui_state.pane_launches.is_empty());
@@ -325,7 +317,7 @@ fn a_fork_starts_with_the_model_and_effort_its_source_was_started_with() {
     ] {
         let (mut runtime, _folder) = started(kind, Some(&launch));
         let terminals = record_terminals(&mut runtime);
-        let (herdr, starts) = starting_herdr("launch-choice-fork");
+        let (herdr, starts) = starting_herdr();
         let shared = SharedRuntime::new(runtime);
         {
             let mut runtime = shared.lock().unwrap();
@@ -384,7 +376,7 @@ fn a_fork_on_a_choice_its_agent_does_not_take_is_refused_before_a_pane_is_made()
         effort: Some("ultra".into()),
     };
     let (mut runtime, _folder) = started("codex", Some(&launch));
-    let (herdr, starts) = starting_herdr("launch-choice-fork-refused");
+    let (herdr, starts) = starting_herdr();
     runtime.live.as_mut().unwrap().engine = herdr.engine();
     runtime.dispatch_json(&event(
         "fork_pane",
@@ -574,8 +566,6 @@ fn launch_records_leave_with_their_device_and_stop_at_the_cap() {
             origin: crate::model::LinkOrigin::Dialed {
                 ssh_alias: device.to_owned(),
             },
-            herdr_socket_path: None,
-            herdr_session: None,
             host_consent: None,
         });
     let remote = format!("remote:{device}:pane:w1:p1");
@@ -673,7 +663,7 @@ fn a_wake_follows_the_permission_saved_now_and_adds_nothing_for_ask() {
             .extend(permission.as_object().unwrap().clone());
         set_permission(&mut runtime, payload);
         sleep(&mut runtime, &folder, "claude");
-        let (herdr, starts) = starting_herdr("launch-permission-wake");
+        let (herdr, starts) = starting_herdr();
         wake(&mut runtime, &herdr);
         assert_eq!(
             next_start(&starts),

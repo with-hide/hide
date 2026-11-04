@@ -4196,7 +4196,12 @@ mod tests {
             serde_json::json!({"type":"workspace_result","ok":true,"result":{"label":"app"}});
         std::thread::scope(|scope| {
             panes
-                .start(scope, &output, &bridges, "/tmp/hide-test-herdr.sock")
+                .start(
+                    scope,
+                    &output,
+                    &bridges,
+                    hide_host::pane_holders::PaneSlot::default(),
+                )
                 .unwrap();
             let panes = &panes;
             let answered = answer.clone();

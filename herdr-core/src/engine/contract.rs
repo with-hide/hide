@@ -340,16 +340,6 @@ pub(crate) fn meets_the_contract(engine: &dyn Engine, folder: &str, stop: impl F
     }
 }
 
-#[test]
-#[ignore = "needs the pinned Herdr: HIDE_E2E_HERDR_BIN"]
-fn the_pinned_herdr_meets_the_engine_contract() {
-    use crate::agent_start::real_herdr_tests::PrivateHerdr;
-    let herdr = PrivateHerdr::new(cfg!(unix).then(|| "/bin/sh".to_owned()));
-    let engine = herdr.engine();
-    let folder = herdr.home.to_string_lossy().into_owned();
-    meets_the_contract(engine.as_ref(), &folder, || drop(herdr));
-}
-
 /// The core's own engine over holders started from the built holder
 /// (`HIDE_TEST_HOLDER_BIN`), whose panes run `/bin/sh` (PowerShell on
 /// Windows) in a folder of their own; the holders end with it (also
@@ -358,8 +348,9 @@ pub(crate) struct BuiltHolders {
     pub(crate) engine: super::own::OwnEngine<'static>,
     panes: std::sync::Arc<dyn hide_node_link::holders::PaneHolders>,
     service: std::sync::Arc<hide_node::terminal::Service>,
-    /// The panes' folder, in the wire spelling.
-    pub(crate) folder: String,
+    /// The node's account home, which its panes' programs run in.
+    pub(crate) home: std::path::PathBuf,
+    folder: String,
     _root: tempfile::TempDir,
 }
 
@@ -397,14 +388,8 @@ fn built_node(
 
     use hide_node::terminal::engine_panes::{LocalPanes, PaneShell};
     use hide_node::terminal::holder::{HolderFolders, Holders};
-    use hide_node::terminal::{Attacher, Mode, OutputSink, ReportSink, SessionParts};
+    use hide_node::terminal::{OutputSink, ReportSink};
 
-    struct NoHerdr;
-    impl Attacher for NoHerdr {
-        fn open(&self, _: &str, _: Mode, _: u16, _: u16) -> Result<SessionParts, String> {
-            Err("this test runs no Herdr".to_owned())
-        }
-    }
     struct Nowhere;
     impl OutputSink for Nowhere {
         fn output(&self, _: &str, _: &[u8], _: bool) {}
@@ -427,7 +412,6 @@ fn built_node(
     let terminals = Holders::start_from(
         HolderFolders { home, state_dir },
         hide_kit::holders::Source { program, conpty },
-        Box::new(NoHerdr),
         Arc::new(Nowhere) as Arc<dyn OutputSink>,
         Arc::new(Nowhere) as Arc<dyn ReportSink>,
     )
@@ -466,6 +450,7 @@ impl BuiltHolders {
             engine: super::own::OwnEngine::new(std::sync::Arc::clone(&linked)),
             panes: linked,
             service,
+            home,
             folder: hide_platform::path::to_wire(&folder).unwrap(),
             _root: root,
         }
@@ -589,7 +574,7 @@ fn newly_answered_panes_can_be_read_without_waiting_for_another_event() {
                     engine.read_screen(WAIT, &pane).unwrap();
                 }
                 3 => {
-                    engine.foreground_program(WAIT, &pane).unwrap();
+                    engine.pane_processes(WAIT, &pane).unwrap();
                 }
                 _ => {
                     engine.pane_identity(WAIT, &pane).unwrap();
@@ -901,8 +886,7 @@ fn an_own_engine_pane_names_itself_and_proves_its_recorded_shell() {
     // no node or Herdr socket to ask.
     let inspected = engine
         .inspect_pane(WAIT, &pane)
-        .expect("the own engine answers for its pane")
-        .expect("the pane is inspected");
+        .expect("the own engine answers for its pane");
     assert_eq!(inspected.terminal_id, proof.terminal_id);
     assert_eq!(inspected.shell_pid, proof.shell_pid);
     assert_eq!(Some(inspected.shell_started), proof.shell_started);

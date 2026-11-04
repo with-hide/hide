@@ -740,15 +740,12 @@ fn a_registered_device_project_keeps_its_memory_scope_while_the_link_is_down() {
             origin: crate::model::LinkOrigin::Dialed {
                 ssh_alias: "mini-host".into(),
             },
-            herdr_socket_path: None,
-            herdr_session: None,
             host_consent: None,
         });
     runtime.snapshot.status.remote.push(RemoteStatusSnapshot {
         target_id: "mini".into(),
         state: "connected".into(),
         message: None,
-        herdr_version: None,
         session: Some(RemoteSessionSnapshot {
             workspaces: vec![project],
             agents: Vec::new(),
@@ -761,7 +758,6 @@ fn a_registered_device_project_keeps_its_memory_scope_while_the_link_is_down() {
             pane_hook_tokens: Default::default(),
             issue_tokens: Default::default(),
             issue_links: Default::default(),
-            herdr_version: None,
         }),
         files: RemoteFileListSnapshot::idle(),
         catalog: Default::default(),

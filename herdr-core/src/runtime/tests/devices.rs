@@ -737,8 +737,6 @@ fn a_device_id_holding_a_colon_is_refused_and_never_connected() {
                 origin: crate::model::LinkOrigin::Dialed {
                     ssh_alias: alias.to_owned(),
                 },
-                herdr_socket_path: None,
-                herdr_session: None,
                 host_consent: None,
             });
     }
@@ -786,7 +784,6 @@ fn hide_device_adds_without_the_helper_and_says_who_allows_it() {
             DeviceCommand::Add {
                 ssh_alias: "Studio.local".into(),
                 name: None,
-                herdr_socket_path: None,
             },
         )
         .expect("added");
@@ -836,7 +833,6 @@ fn hide_device_adds_without_the_helper_and_says_who_allows_it() {
         DeviceCommand::Add {
             ssh_alias: "Studio.local".into(),
             name: Some("Second".into()),
-            herdr_socket_path: None,
         },
     );
     assert_eq!(
@@ -890,7 +886,6 @@ fn hide_device_refuses_a_device_caller_an_option_alias_and_open_files() {
     let add = |alias: &str| DeviceCommand::Add {
         ssh_alias: alias.into(),
         name: None,
-        herdr_socket_path: None,
     };
     assert_eq!(
         runtime

@@ -375,14 +375,14 @@ fn start_dormant(
 mod tests {
     use super::*;
     use crate::agent_sleep::{DormantRegistration, fixture_record};
-    use crate::fake_herdr::FakeHerdr;
+    use crate::engine::fake::{FakeEngine, delivery_agent, processes, refused, reply};
     use serde_json::json;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    /// Runs one dormant start against a Herdr that refuses the first
+    /// Runs one dormant start against an engine that refuses the first
     /// `refusals` starts with `agent_name_taken` and returns the outcome with
-    /// the name each `agent.start` carried.
+    /// the name each start carried.
     fn wake(registered: bool, refusals: usize) -> (DormantStartOutcome, Vec<String>) {
         let folder = tempfile::tempdir().unwrap();
         let mut record = fixture_record("w1:p1");
@@ -404,36 +404,31 @@ mod tests {
         let names = Arc::new(Mutex::new(Vec::new()));
         let seen = Arc::clone(&names);
         let starts = Arc::new(AtomicUsize::new(0));
-        let herdr =
-            FakeHerdr::start_with_errors("dormant-wake-name", move |method, params| match method {
-                "pane.process_info" => Ok(json!({"type":"pane_process_info","process_info":{
-                    "pane_id":"w1:p1","shell_pid":42,"foreground_process_group_id":42,
-                    "foreground_processes":[{"pid":42,"name":"zsh"}]
-                }})),
-                "agent.start" => {
-                    seen.lock()
-                        .unwrap()
-                        .push(params["name"].as_str().unwrap().to_owned());
-                    if starts.fetch_add(1, Ordering::SeqCst) < refusals {
-                        Err((
-                            "agent_name_taken".into(),
-                            "agent name reviewer is already used".into(),
-                        ))
-                    } else {
-                        Ok(json!({"type":"agent_started","argv":[],"agent":{
-                            "pane_id":"w1:p1","terminal_id":"term_1","workspace_id":"w1",
-                            "tab_id":"w1:t1","focused":false,"agent_status":"idle","revision":1
-                        }}))
-                    }
+        let herdr = FakeEngine::start(move |method, params| match method {
+            "pane_processes" => reply(processes(&json!({
+                "shell_pid":42,"foreground_process_group_id":42,
+                "foreground_processes":[{"pid":42,"name":"zsh"}]
+            }))),
+            "start_agent" => {
+                seen.lock()
+                    .unwrap()
+                    .push(params["name"].as_str().unwrap().to_owned());
+                if starts.fetch_add(1, Ordering::SeqCst) < refusals {
+                    refused("agent_name_taken", "agent name reviewer is already used")
+                } else {
+                    reply(crate::engine::StartedAgent {
+                        pane_id: "w1:p1".into(),
+                        terminal_id: Some("term_1".into()),
+                    })
                 }
-                // A name Herdr still holds after it is read is its refusal.
-                "agent.get" => Ok(json!({"type":"agent_info","agent":{
-                    "pane_id":"w1:p2","terminal_id":"term_2","workspace_id":"w1",
-                    "tab_id":"w1:t2","name":"held","focused":false,
-                    "agent_status":"unknown","revision":0,"launch_pending":true
-                }})),
-                other => panic!("unexpected {other}"),
-            });
+            }
+            // A name the engine still holds after it is read is its refusal.
+            "delivery_agent" => reply(delivery_agent(&json!({
+                "pane_id":"w1:p2","name":"held",
+                "agent_status":"unknown","launch_pending":true
+            }))),
+            other => panic!("unexpected {other}"),
+        });
         let work = DormantWork {
             id: SleepId::new().unwrap(),
             record,
@@ -467,26 +462,23 @@ mod tests {
     }
 
     /// What `report_resumed_session` does for a record of `kind` against a
-    /// Herdr that accepts or refuses session reports, with the requests it got.
+    /// engine that accepts or refuses session reports, with the requests it got.
     fn report_of(kind: &str, accepts: bool) -> (Result<(), EngineError>, Vec<serde_json::Value>) {
         let mut record = fixture_record("w1:p1");
         record.kind = kind.into();
         let reports = Arc::new(Mutex::new(Vec::new()));
         let reported = Arc::clone(&reports);
-        let herdr =
-            FakeHerdr::start_with_errors("dormant-session-report", move |method, params| {
-                match method {
-                    "pane.report_agent_session" => {
-                        reported.lock().unwrap().push(params.clone());
-                        if accepts {
-                            Ok(json!({"type":"ok"}))
-                        } else {
-                            Err(("invalid_request".into(), "session refused".into()))
-                        }
-                    }
-                    other => panic!("unexpected {other}"),
+        let herdr = FakeEngine::start(move |method, params| match method {
+            "report_agent_session" => {
+                reported.lock().unwrap().push(params.clone());
+                if accepts {
+                    reply(())
+                } else {
+                    refused("invalid_request", "session refused")
                 }
-            });
+            }
+            other => panic!("unexpected {other}"),
+        });
         let work = DormantWork {
             id: SleepId::new().unwrap(),
             record,

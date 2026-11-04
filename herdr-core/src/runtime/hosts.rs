@@ -1353,7 +1353,6 @@ impl Runtime {
         let mut ended = Vec::new();
         for (pane_id, state) in panes {
             state.state = "unavailable".to_owned();
-            state.mode = None;
             state.message = Some(reason.to_owned());
             state.exit_category = Some("device_unavailable".to_owned());
             state.retry_decision = "manual".to_owned();

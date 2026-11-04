@@ -269,12 +269,11 @@ function sceneHost(system: OnboardingSystem, permission: NotificationPermission,
 }
 
 /** This machine's Herdr connection and its save, as the core publishes them for the `import-*` states. */
-function sceneHerdr(state: OnboardingState): { herdr: Record<string, unknown>; herdr_import?: HerdrImport; herdr_import_devices?: HerdrImport[]; herdr_versions: Record<string, unknown> } {
-  const versions = { hide: "0.9.5", path_herdr: { version: "0.8.2", behind: true, update_command: "sudo install -m 755 '/Applications/hide.app/Contents/Resources/herdr' '/usr/local/bin/herdr'" } };
+function sceneHerdr(state: OnboardingState): { herdr: Record<string, unknown>; herdr_import?: HerdrImport; herdr_import_devices?: HerdrImport[] } {
   const connected = { state: "connected", received_version: "0.9.5", received_protocol: 22, expected_protocol: 22 };
   switch (state) {
-    case "import-device": return { herdr: connected, herdr_import_devices: [{ ...sceneHerdrImport("import-ask")!, tabs: 2, agents: 1, device: "build" }], herdr_versions: versions };
-    default: return { herdr: connected, herdr_import: sceneHerdrImport(state), herdr_versions: versions };
+    case "import-device": return { herdr: connected, herdr_import_devices: [{ ...sceneHerdrImport("import-ask")!, tabs: 2, agents: 1, device: "build" }] };
+    default: return { herdr: connected, herdr_import: sceneHerdrImport(state) };
   }
 }
 

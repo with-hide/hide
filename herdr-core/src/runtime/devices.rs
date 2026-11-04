@@ -28,16 +28,11 @@ enum Source {
 #[derive(Clone)]
 pub(crate) enum DeviceReach {
     Dialed(Arc<dyn DialedTransport>),
-    Inbound(Arc<dyn DeviceTransport>),
-}
-
-impl DeviceReach {
-    pub(crate) fn device(&self) -> &dyn DeviceTransport {
-        match self {
-            Self::Dialed(transport) => &**transport,
-            Self::Inbound(transport) => &**transport,
-        }
-    }
+    /// Held, never read: the node's link lives while the device is
+    /// registered and closes when this last handle drops.
+    Inbound(
+        #[expect(dead_code, reason = "held so the inbound link lives")] Arc<dyn DeviceTransport>,
+    ),
 }
 
 /// Why a device's connection is retired. A removed device keeps nothing of
@@ -173,7 +168,6 @@ impl Runtime {
                 target_id: device_id.clone(),
                 state: "not_connected".to_owned(),
                 message: Some("Waiting for the first remote connection attempt".to_owned()),
-                herdr_version: None,
                 session: None,
                 files: RemoteFileListSnapshot::idle(),
                 catalog: Default::default(),
@@ -204,25 +198,15 @@ impl Runtime {
                     let home_path = self.home_path.as_ref().ok_or_else(|| {
                         "HOME is unavailable, so the SSH config cannot be resolved".to_owned()
                     })?;
-                    let transport = self.devices.transport_session(
-                        home_path,
-                        &device_id,
-                        &ssh_alias,
-                        registration.herdr_socket_path.clone(),
-                        registration.herdr_session.clone(),
-                    )?;
+                    let transport = self.devices.transport(home_path, &device_id, &ssh_alias)?;
                     (DeviceReach::Dialed(transport), None)
                 }
             };
-            // A device of the core's own engine has none until its node is
-            // ready (`own_devices`); a Herdr device's engine reaches its
-            // Herdr through the link once there is one.
-            let engine = (!self.device_on_own_engine(registration)).then(|| {
-                crate::engine::herdr::HerdrEngine::shared(transport.device().herdr_api_connector())
-            });
-            Ok::<_, String>((transport, arrived, engine))
+            // The device's engine opens once its node is ready
+            // (`own_devices`).
+            Ok::<_, String>((transport, arrived))
         })();
-        let (transport, arrived, engine) = match started {
+        let (transport, arrived) = match started {
             Ok(parts) => parts,
             Err(message) => {
                 if registration.origin.core_redials() {
@@ -241,7 +225,7 @@ impl Runtime {
                 );
             }
         };
-        let Some(context) = self.worker_context.clone() else {
+        if self.worker_context.is_none() {
             if registration.origin.core_redials() {
                 self.begin_device_connect(&device_id);
                 self.fail_device_connect_install(&device_id);
@@ -252,25 +236,13 @@ impl Runtime {
                     "The remote session worker is unavailable".to_owned(),
                 )),
             );
-        };
+        }
         self.install_remote_file_transport(device_id.clone(), transport.clone());
-        let (sync, changed) = match engine {
-            Some(engine) => {
-                self.install_remote_control(live::RemoteControlContext::new(
-                    device_id.clone(),
-                    Arc::clone(&engine),
-                    context.runtime.clone(),
-                    context.notifier.clone(),
-                ));
-                self.spawn_remote_sync(registration, engine)
-            }
-            None => (None, false),
-        };
         self.remote_connections.insert(
             device_id.clone(),
             RemoteDeviceConnection {
                 transport,
-                sync,
+                sync: None,
                 test_in_flight: false,
             },
         );
@@ -278,7 +250,7 @@ impl Runtime {
             Some((node, hear_close)) => self.start_arrived_host(&device_id, node, hear_close),
             None => self.start_device_host(&device_id, attempt),
         };
-        changed || host_changed || self.refresh_device_snapshots()
+        host_changed || self.refresh_device_snapshots()
     }
 
     /// Starts the coordinator of `registration`'s session on `engine`: what
@@ -576,10 +548,7 @@ impl Runtime {
         let spawned = thread::Builder::new()
             .name(format!("herdr-core-device-test-{device_id}"))
             .spawn(move || {
-                let report = transport.capability_test(
-                    "device-connection-test",
-                    &crate::engine::herdr::check_test_snapshot,
-                );
+                let report = transport.capability_test("device-connection-test");
                 let Some(runtime) = context.runtime.upgrade() else {
                     return;
                 };
@@ -848,32 +817,6 @@ impl Runtime {
                 "A device id cannot contain \":\"",
             ));
         }
-        let herdr_socket_path = payload
-            .herdr_socket_path
-            .as_deref()
-            .map(str::trim)
-            .filter(|path| !path.is_empty())
-            .map(str::to_owned);
-        if payload
-            .herdr_session
-            .as_deref()
-            .is_some_and(|session| !hide_node_link::device::valid_herdr_session(session))
-            || (payload.herdr_session.is_some() && herdr_socket_path.is_some())
-        {
-            return Err(DeviceRefusal::new(
-                "device.invalid",
-                "Choose one valid Herdr session or an explicit socket",
-            ));
-        }
-        if herdr_socket_path
-            .as_deref()
-            .is_some_and(|path| !crate::remote::valid_remote_socket_path(path))
-        {
-            return Err(DeviceRefusal::new(
-                "device.invalid",
-                "The device's Herdr socket must be an absolute path on the device",
-            ));
-        }
         // `local` named this machine before node ids; a device under
         // that name would read as this machine in an unconverted key.
         if id == self.node.as_str()
@@ -896,8 +839,6 @@ impl Runtime {
             origin: crate::model::LinkOrigin::Dialed {
                 ssh_alias: ssh_alias.clone(),
             },
-            herdr_socket_path,
-            herdr_session: payload.herdr_session,
             host_consent: payload.host_consent.then(|| self.new_host_consent()),
         };
         self.snapshot
@@ -946,8 +887,6 @@ impl Runtime {
             origin: LinkOrigin::Wsl {
                 distro: distro.to_owned(),
             },
-            herdr_socket_path: None,
-            herdr_session: None,
             host_consent: consent.then(|| self.new_host_consent()),
         };
         self.snapshot
@@ -1072,11 +1011,7 @@ impl Runtime {
                     .collect::<Vec<_>>();
                 Ok((serde_json::json!({ "devices": devices }), false))
             }
-            DeviceCommand::Add {
-                ssh_alias,
-                name,
-                herdr_socket_path,
-            } => {
+            DeviceCommand::Add { ssh_alias, name } => {
                 let ssh_alias = ssh_alias.trim().to_owned();
                 let id = crate::device_command::device_id_for(
                     &ssh_alias,
@@ -1093,8 +1028,6 @@ impl Runtime {
                     id,
                     label: name.unwrap_or_else(|| ssh_alias.clone()),
                     ssh_alias,
-                    herdr_socket_path,
-                    herdr_session: None,
                     host_consent: false,
                     wsl_distro: None,
                 };

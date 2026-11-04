@@ -1,14 +1,7 @@
-//! What a device's SSH destination and Herdr session may be, checked before
-//! anything reaches `ssh`.
+//! What a device's SSH destination may be, checked before anything reaches
+//! `ssh`.
 
 const MAX_FIELD_BYTES: usize = 2048;
-
-pub(super) fn validate_session(session: &str) -> Result<(), String> {
-    if !hide_node_link::device::valid_herdr_session(session) {
-        return Err("The saved Herdr session name is invalid. Fix the profile in Herdr".to_owned());
-    }
-    Ok(())
-}
 
 /// OpenSSH destination forms: an alias or host, `user@host`, or an
 /// `ssh://` address. A literal hostname never requires a Host row, and
@@ -69,13 +62,11 @@ mod tests {
     use super::*;
 
     /// A destination `ssh` would read as an option, or one with a zero
-    /// port, is never one; nor is a session that names a path.
+    /// port, is never one.
     #[test]
-    fn only_a_destination_and_a_plain_session_pass() {
+    fn only_a_plain_destination_passes() {
         assert!(Target::parse("ssh://grab@box:2222").is_ok());
         assert!(Target::parse("-oProxyCommand=x").is_err());
         assert!(Target::parse("ssh://u@host:0").is_err());
-        assert!(validate_session("../default").is_err());
-        assert!(validate_session("").is_err());
     }
 }

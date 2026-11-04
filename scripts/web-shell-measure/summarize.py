@@ -300,14 +300,12 @@ def timing(path):
     result = {}
     for op, rows in records.items():
         stages = {}
-        for stage in ("herdr_ack_ms", "drawn_ms", "first_event_ms", "layout_event_ms", "applied_ms", "sent_ms", "first_frame_ms"):
+        for stage in ("drawn_ms", "applied_ms", "sent_ms", "first_frame_ms"):
             stages[stage] = stats([float(r[stage]) for r in rows if stage in r])
-        herdr = [float(r["layout_event_ms"]) - float(r["herdr_ack_ms"]) for r in rows if "layout_event_ms" in r and "herdr_ack_ms" in r]
-        hide = [float(r["sent_ms"]) - float(r["layout_event_ms"]) for r in rows if "sent_ms" in r and "layout_event_ms" in r]
         outcomes = {}
         for r in rows:
             outcomes[r.get("outcome")] = outcomes.get(r.get("outcome"), 0) + 1
-        result[op] = {"records": len(rows), "outcomes": outcomes, "stages": stages, "herdr_share_ms": stats(herdr), "hide_share_ms": stats(hide)}
+        result[op] = {"records": len(rows), "outcomes": outcomes, "stages": stages}
     return result
 
 

@@ -98,7 +98,6 @@ fn device_runtime_with_host(
         target_id: DEVICE.to_owned(),
         state: "connected".to_owned(),
         message: None,
-        herdr_version: None,
         session: Some(RemoteSessionSnapshot {
             workspaces: vec![project],
             agents: Vec::new(),
@@ -111,7 +110,6 @@ fn device_runtime_with_host(
             pane_hook_tokens: Default::default(),
             issue_tokens: Default::default(),
             issue_links: Default::default(),
-            herdr_version: None,
         }),
         files: RemoteFileListSnapshot::idle(),
         catalog: Default::default(),
@@ -132,11 +130,11 @@ fn device_runtime_with_host(
     runtime.request_device_worktrees(DEVICE, true);
     let shared = SharedRuntime::new(runtime);
     let mut runtime = shared.lock().unwrap();
-    // No pane sits in the worktree, so the deletion never reaches Herdr.
-    let connector = crate::engine::herdr::local("/tmp/herdr-core-never-connect.sock");
+    // No pane sits in the worktree, so the deletion never reaches the
+    // device's engine.
     runtime.install_remote_control(RemoteControlContext::new(
         DEVICE,
-        connector,
+        FakeEngine::absent().engine(),
         shared.weak(),
         ChangeNotifier::noop(),
     ));
@@ -528,8 +526,6 @@ fn scoped_remote_base_reaches_real_git_facts_and_obsolete_read_is_discarded() {
                 id: DEVICE.into(),
                 label: "Fixture".into(),
                 origin: crate::model::LinkOrigin::Inbound,
-                herdr_socket_path: None,
-                herdr_session: None,
                 host_consent: None,
             });
         runtime
@@ -637,8 +633,6 @@ fn a_branch_made_on_a_device_is_read_again_without_a_reconnect() {
                 id: DEVICE.into(),
                 label: "Fixture".into(),
                 origin: crate::model::LinkOrigin::Inbound,
-                herdr_socket_path: None,
-                herdr_session: None,
                 host_consent: None,
             });
     }
@@ -881,8 +875,8 @@ fn a_missing_worktree_row_git_has_not_answered_for_is_not_removed() {
 
 /// The device's runtime with an agent's pane in the main checkout, the
 /// caller of `hide workspace remove`, and a finished agent's pane left in the
-/// linked worktree, whose Herdr is `herdr`.
-fn command_runtime(repo: &Repo, herdr: &crate::fake_herdr::FakeHerdr) -> SharedRuntime {
+/// linked worktree, whose engine is `herdr`.
+fn command_runtime(repo: &Repo, herdr: &Fake) -> SharedRuntime {
     let shared = device_runtime(repo);
     let mut runtime = shared.lock().unwrap();
     let project = &mut runtime.snapshot.status.remote[0]
@@ -916,14 +910,11 @@ fn command_runtime(repo: &Repo, herdr: &crate::fake_herdr::FakeHerdr) -> SharedR
     shared
 }
 
-/// A device Herdr that closes what it is asked to and then lists no pane.
-fn closing_herdr(name: &str) -> crate::fake_herdr::FakeHerdr {
-    crate::fake_herdr::FakeHerdr::start(name, |method, _| match method {
-        "pane.close" => serde_json::json!({"type": "ok"}),
-        "session.snapshot" => serde_json::json!({"type": "session_snapshot", "snapshot": {
-            "version": "fixture", "protocol": hide_herdr_client::HERDR_PROTOCOL_REVISION,
-            "workspaces": [], "tabs": [], "panes": [], "layouts": [], "agents": []
-        }}),
+/// A device engine that closes what it is asked to and then lists no pane.
+fn closing_herdr() -> Fake {
+    FakeEngine::start(|method, _| match method {
+        "close_pane" => reply(()),
+        "session" => reply(fake::session(serde_json::json!({}))),
         other => panic!("unexpected {other}"),
     })
 }
@@ -971,7 +962,7 @@ fn removal(path: &str) -> crate::worktree_command::WorktreeRemove {
 #[test]
 fn the_remove_command_closes_the_worktrees_herdr_panes_then_removes_it() {
     let repo = repo();
-    let herdr = closing_herdr("workspace-remove");
+    let herdr = closing_herdr();
     let shared = command_runtime(&repo, &herdr);
 
     let removed = remove_command(&shared, &repo, removal(&repo.linked)).unwrap();
@@ -982,7 +973,7 @@ fn the_remove_command_closes_the_worktrees_herdr_panes_then_removes_it() {
         herdr
             .calls()
             .iter()
-            .any(|(method, params)| method == "pane.close" && params["pane_id"] == "w2:p1"),
+            .any(|(method, params)| *method == "close_pane" && params["pane"] == "w2:p1"),
         "{:?}",
         herdr.calls()
     );
@@ -1020,7 +1011,7 @@ fn the_remove_command_refuses_what_the_dialog_refuses_and_closes_nothing() {
         ],
     );
     std::fs::write(Path::new(&repo.linked).join("draft.txt"), "wip\n").unwrap();
-    let herdr = closing_herdr("workspace-remove-refusals");
+    let herdr = closing_herdr();
     let shared = command_runtime(&repo, &herdr);
     let refused = |command| {
         let code = remove_command(&shared, &repo, command).unwrap_err();

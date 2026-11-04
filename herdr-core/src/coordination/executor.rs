@@ -263,9 +263,7 @@ fn agents_with_timeout(
     engine
         .agents(Wait::Each(timeout))
         .map_err(|error| match error {
-            EngineError::Answer(_) | EngineError::Protocol { .. } => {
-                "native_identity_unavailable".into()
-            }
+            EngineError::Answer(_) => "native_identity_unavailable".into(),
             error => error.to_string(),
         })
 }
@@ -1090,9 +1088,7 @@ fn spawn(
                 // discoverable before a retry could create another child pane.
                 let snapshot = engine.session(Wait::Each(Duration::from_secs(5))).map_err(
                     |error| match error {
-                        EngineError::Answer(_) | EngineError::Protocol { .. } => {
-                            "snapshot_unavailable".to_owned()
-                        }
+                        EngineError::Answer(_) => "snapshot_unavailable".to_owned(),
                         error => error.to_string(),
                     },
                 )?;
@@ -2162,7 +2158,7 @@ mod tests {
     }
 
     use super::*;
-    use crate::fake_herdr::FakeHerdr;
+    use crate::engine::fake::{FakeEngine, processes, reply, session};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// A `worktree.create` whose answer never came may still finish in
@@ -2221,14 +2217,14 @@ mod tests {
     /// name that only restates the pane.
     #[test]
     fn registering_an_agent_herdr_never_named_stores_no_name() {
-        let herdr = FakeHerdr::start("coordination-unnamed", move |method, _| {
-            assert_eq!(method, "agent.list");
-            json!({"type":"agent_list","agents":[{
+        let herdr = FakeEngine::start(move |method, _| {
+            assert_eq!(method, "session");
+            reply(session(json!({"agents":[{
                 "pane_id":"w9J:p9R","workspace_id":"w9J","tab_id":"w9J:t1",
                 "terminal_id":"terminal","revision":1,"focused":false,
                 "agent_status":"idle","agent":"claude",
                 "agent_session":{"source":"herdr:claude","agent":"claude",
-                    "kind":"id","value":"parent-session"}}]})
+                    "kind":"id","value":"parent-session"}}]})))
         });
         let native =
             wait_native_identity(herdr.engine().as_ref(), "w9J:p9R", None, "claude").unwrap();
@@ -2263,14 +2259,14 @@ mod tests {
             let file = "/session.jsonl";
             let path = format!("/{}{file}", "d".repeat(bytes - file.len() - 1));
             let reported = path.clone();
-            let herdr = FakeHerdr::start("coordination-session-path", move |method, _| {
-                assert_eq!(method, "agent.list");
-                json!({"type":"agent_list","agents":[{
+            let herdr = FakeEngine::start(move |method, _| {
+                assert_eq!(method, "session");
+                reply(session(json!({"agents":[{
                     "pane_id":"w9J:p9R","workspace_id":"w9J","tab_id":"w9J:t1",
                     "terminal_id":"terminal","revision":1,"focused":false,
                     "agent_status":"idle","agent":"pi","name":"child",
                     "agent_session":{"source":"herdr:pi","agent":"pi",
-                        "kind":"path","value":reported}}]})
+                        "kind":"path","value":reported}}]})))
             });
             let native =
                 wait_native_identity(herdr.engine().as_ref(), "w9J:p9R", Some("child"), "pi")
@@ -2303,15 +2299,15 @@ mod tests {
             ("codex", " Codex", "codex"),
             ("claude_code", "claude", "claude"),
         ] {
-            let herdr = FakeHerdr::start("coordination-native-alias", move |method, _| {
-                assert_eq!(method, "agent.list");
-                json!({"type":"agent_list","agents":[{
+            let herdr = FakeEngine::start(move |method, _| {
+                assert_eq!(method, "session");
+                reply(session(json!({"agents":[{
                     "pane_id":"w2:p1","workspace_id":"w2","tab_id":"w2:t1",
                     "terminal_id":"fixture-child-terminal","revision":1,
                     "focused":false,"agent_status":"idle","agent":reported,"name":"child",
                     "agent_session":{"source":format!("herdr:{session_agent}"),
                         "agent":session_agent,"kind":"id","value":"fixture-child-session"}
-                }]})
+                }]})))
             });
             let child =
                 wait_native_identity(herdr.engine().as_ref(), "w2:p1", Some("child"), requested)
@@ -2328,8 +2324,8 @@ mod tests {
     fn an_accepted_start_waits_for_native_identity_without_starting_again() {
         let observations = Arc::new(AtomicUsize::new(0));
         let reads = observations.clone();
-        let herdr = FakeHerdr::start("coordination-native-ready", move |method, _| {
-            assert_eq!(method, "agent.list");
+        let herdr = FakeEngine::start(move |method, _| {
+            assert_eq!(method, "session");
             let mut agent = json!({"pane_id":"w2:p1","workspace_id":"w2",
                 "tab_id":"w2:t1","terminal_id":"fixture-child-terminal",
                 "revision":1,"focused":false,"agent_status":"idle",
@@ -2338,7 +2334,7 @@ mod tests {
                 agent["agent_session"] = json!({"source":"herdr:claude",
                     "agent":"claude","kind":"id","value":"fixture-child-session"});
             }
-            json!({"type":"agent_list","agents":[agent]})
+            reply(session(json!({"agents":[agent]})))
         });
         let child = wait_native_identity(herdr.engine().as_ref(), "w2:p1", Some("child"), "claude")
             .unwrap();
@@ -2347,7 +2343,7 @@ mod tests {
             crate::engine::tokens::session_digest("fixture-child-session")
         );
         assert_eq!(observations.load(Ordering::SeqCst), 2);
-        assert_eq!(herdr.methods(), ["agent.list", "agent.list"]);
+        assert_eq!(herdr.methods(), ["session", "session"]);
     }
     /// A Factory parent and the spawn records of its attempts, each made the
     /// way the executor makes them: reserved, then advanced with its pane and
@@ -2463,45 +2459,40 @@ mod tests {
     /// alone at the prompt unless named busy, and that closes what it is
     /// asked to.
     fn attempt_panes(
-        name: &str,
         terminals: &'static [(&'static str, &'static str)],
         busy: &'static [&'static str],
-    ) -> FakeHerdr {
-        FakeHerdr::start(name, move |method, params| {
-            let pane = params["pane_id"].as_str().unwrap().to_owned();
+    ) -> Arc<FakeEngine<'static>> {
+        FakeEngine::start(move |method, params| {
+            let pane = params["pane"].as_str().unwrap().to_owned();
             match method {
-                "pane.get" => {
+                "pane_terminal" => {
                     let (_, terminal) = terminals
                         .iter()
                         .find(|(id, _)| *id == pane)
                         .expect("a pane the fixture runs");
-                    json!({"type": "pane_info", "pane": {"pane_id": pane,
-                        "terminal_id": terminal, "workspace_id": "w2", "tab_id": "w2:t1",
-                        "focused": false, "agent_status": "idle", "revision": 1}})
+                    reply((*terminal).to_owned())
                 }
-                "pane.process_info" => {
+                "pane_processes" => {
                     let foreground = if busy.contains(&pane.as_str()) {
                         4200
                     } else {
                         4100
                     };
-                    json!({"type": "pane_process_info", "process_info": {
-                        "pane_id": pane, "shell_pid": 4100,
+                    reply(processes(&json!({"shell_pid": 4100,
                         "foreground_process_group_id": foreground,
-                        "foreground_processes": [{"pid": foreground, "name": "zsh"}]}})
+                        "foreground_processes": [{"pid": foreground, "name": "zsh"}]})))
                 }
-                "pane.close" => json!({"type": "ok"}),
+                "close_pane" => reply(()),
                 other => panic!("unexpected {other}"),
             }
         })
     }
 
-    fn closed_panes(herdr: &FakeHerdr) -> Vec<String> {
+    fn closed_panes(herdr: &FakeEngine<'static>) -> Vec<String> {
         herdr
-            .calls()
+            .calls_of("close_pane")
             .into_iter()
-            .filter(|(method, _)| method == "pane.close")
-            .map(|(_, params)| params["pane_id"].as_str().unwrap().to_owned())
+            .map(|params| params["pane"].as_str().unwrap().to_owned())
             .collect()
     }
 
@@ -2520,7 +2511,6 @@ mod tests {
         let current = attempts.attempt("worker", "factory-801-a3", "w2:p4", Some("t4"));
         // The shell runs a command in w2:p3: that attempt is busy.
         let herdr = attempt_panes(
-            "coordination-earlier-attempts",
             &[
                 ("w2:p1", "t1"),
                 ("w2:p2", "t2"),
@@ -2531,16 +2521,15 @@ mod tests {
         );
         // An agent shows in w2:p2, and Herdr holds the name for the start in
         // w2:p1 that never showed one.
-        let observed: Vec<ProjectedAgent> =
-            crate::engine::herdr::wire::agents_response(json!({"type": "agent_list", "agents": [
-                {"pane_id": "w2:p1", "workspace_id": "w2", "tab_id": "w2:t1",
-                    "terminal_id": "t1", "revision": 0, "focused": false,
-                    "agent_status": "unknown", "name": "worker", "launch_pending": true},
-                {"pane_id": "w2:p2", "workspace_id": "w2", "tab_id": "w2:t2",
-                    "terminal_id": "t2", "revision": 0, "focused": false,
-                    "agent_status": "idle", "agent": "claude"},
-            ]}))
-            .unwrap();
+        let observed: Vec<ProjectedAgent> = session(json!({"agents": [
+            {"pane_id": "w2:p1", "workspace_id": "w2", "tab_id": "w2:t1",
+                "terminal_id": "t1", "revision": 0, "focused": false,
+                "agent_status": "unknown", "name": "worker", "launch_pending": true},
+            {"pane_id": "w2:p2", "workspace_id": "w2", "tab_id": "w2:t2",
+                "terminal_id": "t2", "revision": 0, "focused": false,
+                "agent_status": "idle", "agent": "claude"},
+        ]}))
+        .agents;
         close_unstarted_attempts(
             herdr.engine().as_ref(),
             &attempts.ledger,
@@ -2564,7 +2553,6 @@ mod tests {
         let unrecorded = attempts.attempt("worker", "factory-801-a2", "w2:p3", None);
         let current = attempts.attempt("worker", "factory-801-a3", "w2:p4", Some("t4"));
         let herdr = attempt_panes(
-            "coordination-earlier-attempt-identity",
             &[("w2:p1", "t1"), ("w2:p2", "t2-after"), ("w2:p3", "t3")],
             &[],
         );

@@ -85,7 +85,6 @@ OS_CRATES = {
     "herdr-core",
     "hided",
     "hide-agent-hooks",
-    "hide-herdr-client",
     "hide-host",
     "hide-kit",
     "hide-platform",
@@ -237,7 +236,7 @@ MACOS_LANE_INPUTS = {
         # Desktop fixtures import the other web/e2e helpers and C shims.
         "exclude": ("web/public/m/*", "web/e2e/*.spec.ts", "web/e2e/*.md", "desktop/e2e/*.md"),
     },
-    "os-contract-macos": {"paths": ("hide-platform/*", "hide-herdr-client/*")},
+    "os-contract-macos": {"paths": ("hide-platform/*",)},
     "omp-contract": {"paths": ("hide-ai/*", "hide-platform/*")},
     "package": {
         # compile (macos) and package (macos) are one dependency chain. Keep
@@ -379,7 +378,7 @@ POLICY_ONLY = (
     # Scripts only `policy`, another workflow or nobody runs.
     "scripts/check-capability-readers-off-lock.sh",
     "scripts/check-harness-ignore-anchor.sh", "scripts/check-herdr-pin-single-source.sh",
-    "scripts/check-core-touches-no-machine.py", "scripts/check-engine-boundary.py", "scripts/rust_scan.py",
+    "scripts/check-core-touches-no-machine.py", "scripts/rust_scan.py",
     "scripts/check-ai-prompt-language.py", "scripts/check-pr-screenshots.py",
     "scripts/check-agent-screen-rules.py",
     "scripts/check-no-workstation-identity.*", "scripts/check-worktree-removal-boundary.sh",

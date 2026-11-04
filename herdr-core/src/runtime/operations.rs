@@ -327,19 +327,15 @@ fn remote_operation_confirmed_by(
 }
 
 impl Runtime {
+    /// The shell asked for the session to be read again: the coordinator
+    /// reads it whole on its next wake.
     pub(crate) fn request_status_refresh(&mut self) -> bool {
-        self.status_refresh_requested = true;
+        self.request_republish();
         self.push_diagnostic(
             "session.status_refresh_requested",
             "A read-only session refresh was requested by the shell",
         );
         true
-    }
-
-    pub(crate) fn take_status_refresh_request(&mut self) -> bool {
-        let requested = self.status_refresh_requested;
-        self.status_refresh_requested = false;
-        requested
     }
 
     /// Advances every bounded asynchronous operation from a coordinator timer.
@@ -1850,9 +1846,6 @@ impl Runtime {
                     );
                     return true;
                 }
-                let now = std::time::Instant::now();
-                self.op_timings
-                    .stamp(id, super::op_timing::Stage::HerdrAck, now);
                 if let Some(created) = created_pane_id.as_deref() {
                     self.op_timings.learn(id, None, Some(created));
                     self.await_op_frame(id, created, false);

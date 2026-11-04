@@ -970,8 +970,6 @@ pub struct DeviceSnapshot {
     pub ssh_alias: Option<String>,
     /// The WSL distribution of this PC the device is (PRD wsl-device D-20).
     pub wsl_distro: Option<String>,
-    /// The Herdr socket the registration names on the device, if any.
-    pub herdr_socket_path: Option<String>,
     pub agent_count: u32,
     /// The last connection test the operator asked for, or the one running.
     pub test: Option<DeviceTestSnapshot>,
@@ -3252,9 +3250,9 @@ pub struct FirstRun {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FirstRunStep {
-    /// Moving the operator's older Herdr server onto this app's Herdr,
-    /// shown only while there is one to move (PRD herdr-takeover B1).
-    Herdr,
+    /// Also a step an earlier build saved as `herdr`, which moved an older
+    /// Herdr server first; there is no Herdr to move, so it opens on Agents.
+    #[serde(alias = "herdr")]
     Agents,
     Devices,
     Notifications,
@@ -3265,7 +3263,6 @@ pub enum FirstRunStep {
 impl FirstRunStep {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Herdr => "herdr",
             Self::Agents => "agents",
             Self::Devices => "devices",
             Self::Notifications => "notifications",
@@ -5460,12 +5457,6 @@ pub struct DeviceRegistration {
     pub id: String,
     pub label: String,
     pub origin: LinkOrigin,
-    /// The Herdr socket on the device, for a host whose server does not
-    /// listen at its default path; absent reads the host's default server.
-    pub herdr_socket_path: Option<String>,
-    /// A saved profile selects this named Herdr server, never an implicit
-    /// fallback to the account's default session.
-    pub herdr_session: Option<String>,
     /// The operator's one consent for Hide's helper on this device (PRD S5.5
     /// D-20, D-23). Absent until given; a device registered before consent
     /// existed asks before its first file or Git use.
@@ -5542,10 +5533,6 @@ struct StoredDeviceRegistration {
     #[serde(default)]
     ssh_alias: Option<String>,
     #[serde(default)]
-    herdr_socket_path: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    herdr_session: Option<String>,
-    #[serde(default)]
     host_consent: Option<HostConsent>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     inbound: bool,
@@ -5578,8 +5565,6 @@ impl TryFrom<StoredDeviceRegistration> for DeviceRegistration {
             id: stored.id,
             label: stored.label,
             origin,
-            herdr_socket_path: stored.herdr_socket_path,
-            herdr_session: stored.herdr_session,
             host_consent: stored.host_consent,
         })
     }
@@ -5592,8 +5577,6 @@ impl From<DeviceRegistration> for StoredDeviceRegistration {
             id: registration.id,
             label: registration.label,
             ssh_alias: registration.origin.ssh_alias().map(str::to_owned),
-            herdr_socket_path: registration.herdr_socket_path,
-            herdr_session: registration.herdr_session,
             host_consent: registration.host_consent,
             inbound,
             wsl_distro: registration.origin.wsl_distro().map(str::to_owned),
@@ -6779,7 +6762,6 @@ pub struct StatusSnapshot {
     pub server_discovery: ServerDiscoverySnapshot,
     pub tab_rename: Option<TabRenameSnapshot>,
     pub herdr: ProviderStatusSnapshot,
-    pub herdr_takeover: Option<HerdrTakeoverSnapshot>,
     /// What this machine's Herdr save offers to move into the core's own
     /// engine (PRD engine-bundle-4-herdr-removal); absent while there is
     /// nothing to show.
@@ -6787,7 +6769,6 @@ pub struct StatusSnapshot {
     /// What each device of that engine offers, on the link its engine
     /// opened on (B18), each naming its `device`.
     pub herdr_import_devices: Vec<HerdrImportSnapshot>,
-    pub herdr_versions: Option<HerdrVersionsSnapshot>,
     pub remote: Vec<RemoteStatusSnapshot>,
     pub environment: Vec<EnvironmentStatusSnapshot>,
     pub agent_hooks: AgentHooksSnapshot,
@@ -7218,59 +7199,6 @@ pub struct ProviderStatusSnapshot {
     pub state: String,
     pub socket_path: Option<String>,
     pub message: Option<String>,
-    pub expected_protocol: Option<u64>,
-    pub received_protocol: Option<u64>,
-    pub received_version: Option<String>,
-}
-
-/// What Settings > About names for this machine's Herdr programs: the
-/// release this app ships and the operator's own `herdr`. Absent where the
-/// daemon has no Herdr of its package's own (a development build).
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct HerdrVersionsSnapshot {
-    pub hide: String,
-    pub path_herdr: Option<PathHerdrSnapshot>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct PathHerdrSnapshot {
-    pub version: String,
-    /// Its protocol is not the one this build speaks, so a server Hide reads
-    /// refuses its commands.
-    pub behind: bool,
-    /// The command that brings it to this app's Herdr without touching a
-    /// running server.
-    pub update_command: String,
-}
-
-/// What Hide offers for the operator's own older Herdr server on this
-/// machine's socket, and how far the offer went (PRD herdr-takeover). Absent
-/// while there is nothing to offer.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct HerdrTakeoverSnapshot {
-    /// `move`, `restart` (Herdr cannot hand over here: Windows),
-    /// `update_hide` (a newer protocol than this build speaks) or `look` (a
-    /// server Hide cannot use could not be read, so the offer is to look
-    /// again).
-    pub kind: String,
-    /// `offered`, `moving` (a move starts on its own once offered),
-    /// `failed`, or `moved` while the first-run wizard shows the move's
-    /// result or the operator's own `herdr` is not yet settled.
-    pub stage: String,
-    /// Empty for `look`, which read no server.
-    pub server_version: String,
-    /// The release this app ships; empty for `look` when it was not read.
-    pub version: String,
-    /// The server speaks the protocol this build reads, so Hide works with
-    /// it as it is and the operator may leave it for later (D-16).
-    pub same_protocol: bool,
-    /// `refused`, `not_confirmed` or `unreadable` while `stage` is `failed`
-    /// after a move, `stop_failed` after a restart that did not stop the
-    /// server.
-    pub failure: Option<String>,
-    /// After a move that left the operator's own `herdr` on an older
-    /// protocol: how Hide's update of it went (B5).
-    pub path_herdr: Option<MovedPathHerdrSnapshot>,
 }
 
 /// What this machine's Herdr save offers to move into the core's own engine,
@@ -7314,27 +7242,11 @@ pub struct HerdrImportRefusedSnapshot {
     pub reason: String,
 }
 
-/// The operator's own `herdr` after a move left it behind.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct MovedPathHerdrSnapshot {
-    /// `updating` while Hide runs its update command, `updated` once it
-    /// speaks the server's protocol, `behind` when it could not be brought
-    /// up (the command asks for an administrator, failed, or brought another
-    /// protocol), so the operator copies the command.
-    pub stage: String,
-    /// Its version: the one being updated while `updating`, the one it names
-    /// afterwards otherwise.
-    pub version: String,
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct RemoteStatusSnapshot {
     pub target_id: String,
     pub state: String,
     pub message: Option<String>,
-    /// The version reported by `herdr status server --json` on this device.
-    /// A missing version keeps version-gated mutations disabled.
-    pub herdr_version: Option<String>,
     pub session: Option<RemoteSessionSnapshot>,
     pub files: RemoteFileListSnapshot,
     /// Whether the session's projects are grouped from the device's own
@@ -7433,12 +7345,6 @@ pub struct RemoteSessionSnapshot {
     /// in a raw session. Not sent to the shell.
     #[serde(skip)]
     pub issue_links: BTreeMap<String, Vec<crate::issues::IssueReference>>,
-    /// The version the device's Herdr server named in the snapshot this
-    /// session was read from, which follows a live handoff where the status
-    /// read the connection made once does not (PRD device-herdr-update B3).
-    /// Not sent to the shell: the device's remote status carries it.
-    #[serde(skip)]
-    pub herdr_version: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -7591,14 +7497,9 @@ impl Snapshot {
                     state: herdr_state.to_owned(),
                     socket_path: options.herdr_socket_path.clone(),
                     message: herdr_message,
-                    expected_protocol: None,
-                    received_protocol: None,
-                    received_version: None,
                 },
-                herdr_takeover: None,
                 herdr_import: None,
                 herdr_import_devices: Vec::new(),
-                herdr_versions: None,
                 remote: Vec::new(),
                 environment: Vec::new(),
                 agent_hooks: AgentHooksSnapshot::default(),
@@ -8749,7 +8650,6 @@ mod wire_enum_tests {
         checked.insert("agent_onboarding");
 
         let first_run = [
-            FirstRunStep::Herdr,
             FirstRunStep::Agents,
             FirstRunStep::Devices,
             FirstRunStep::Notifications,
@@ -8758,8 +8658,7 @@ mod wire_enum_tests {
         ];
         for variant in first_run {
             match variant {
-                FirstRunStep::Herdr
-                | FirstRunStep::Agents
+                FirstRunStep::Agents
                 | FirstRunStep::Devices
                 | FirstRunStep::Notifications
                 | FirstRunStep::Project

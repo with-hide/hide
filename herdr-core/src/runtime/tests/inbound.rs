@@ -29,8 +29,6 @@ fn dialed_link(runtime: &mut Runtime, device: &str, host: Arc<dyn crate::node_ac
                 origin: crate::model::LinkOrigin::Dialed {
                     ssh_alias: "fixture-host".to_owned(),
                 },
-                herdr_socket_path: None,
-                herdr_session: None,
                 host_consent: None,
             });
     }
@@ -62,33 +60,9 @@ impl crate::node_access::NodeLink for OldMemoryReader {
     }
 }
 
-/// The transport of a node that dialed in. Its Herdr answers nothing while
-/// the link stands, so the node's session sync reports no state of its own
-/// over the one a test hands the core: a socket that never existed answered
-/// at once, and that answer landed after the test's own often enough.
-struct HeldLink(Arc<LinkEnd>);
-
-/// Whether the test let the link go, which ends every wait on its Herdr.
-#[derive(Default)]
-struct LinkEnd {
-    ended: Mutex<bool>,
-    changed: std::sync::Condvar,
-}
-
-/// The node's Herdr as [`HeldLink`] reaches it.
-struct HeldHerdr(Arc<LinkEnd>);
-
-impl hide_herdr_client::ApiConnector for HeldHerdr {
-    fn connect(
-        &self,
-    ) -> Result<Box<dyn hide_herdr_client::ApiStream>, hide_herdr_client::ApiError> {
-        let ended = self.0.ended.lock().unwrap();
-        drop(self.0.changed.wait_while(ended, |ended| !*ended).unwrap());
-        Err(hide_herdr_client::ApiError::NotRunning(
-            "the test's link ended".to_owned(),
-        ))
-    }
-}
+/// The transport of a node that dialed in, standing until the test lets it
+/// go.
+struct HeldLink;
 
 /// A node's link that stands until the test lets it go, and then ends, so
 /// the core's phase for it can be read at each step.
@@ -101,31 +75,19 @@ pub(super) fn held_link() -> (Arrived, mpsc::Sender<()>) {
 /// [`held_link`] whose node answers as `host` does.
 fn held_link_to(host: Arc<dyn crate::node_access::NodeLink>) -> (Arrived, mpsc::Sender<()>) {
     let (release, wait) = mpsc::channel::<()>();
-    let end = Arc::new(LinkEnd::default());
-    let ending = Arc::clone(&end);
     let arrived = Arrived {
-        transport: Arc::new(HeldLink(end)),
+        transport: Arc::new(HeldLink),
         node: super::device_kit::node_ready(host, None),
         hear_close: Box::new(move |on_close| {
             // The test drops its end, or unwinds past it.
             let _ = wait.recv();
-            *ending.ended.lock().unwrap() = true;
-            ending.changed.notify_all();
             on_close("the test's link ended".to_owned());
         }),
     };
     (arrived, release)
 }
 
-impl DeviceTransport for HeldLink {
-    fn herdr_api_connector(&self) -> Arc<dyn hide_herdr_client::ApiConnector> {
-        Arc::new(HeldHerdr(Arc::clone(&self.0)))
-    }
-
-    fn cached_herdr_version(&self) -> Option<String> {
-        None
-    }
-}
+impl DeviceTransport for HeldLink {}
 
 pub(super) fn shared_runtime() -> SharedRuntime {
     let shared = SharedRuntime::new(runtime());
@@ -359,7 +321,7 @@ fn a_node_s_agents_are_reached_only_through_its_link() {
             socket_path: socket.clone().into(),
             runtime: std::sync::Weak::new(),
             notifier: crate::handle::ChangeNotifier::noop(),
-            engine: crate::engine::herdr::local(&socket),
+            engine: FakeEngine::absent().engine(),
             node: Arc::new(hide_node::Local::of_process()),
         });
         let own = runtime.node.as_str().to_owned();
@@ -445,8 +407,6 @@ fn inbound_nodes_are_capped_and_their_labels_are_plain_text() {
                     id: format!("node-{index}"),
                     label: format!("node {index}"),
                     origin: crate::model::LinkOrigin::Inbound,
-                    herdr_socket_path: None,
-                    herdr_session: None,
                     host_consent: None,
                 });
         }

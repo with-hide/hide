@@ -1759,14 +1759,18 @@ mod tests {
     fn a_device_node_answers_this_device_until_it_stops() {
         let directory = short_dir();
         let bridges = directory.path().join("bridges");
-        let herdr = directory.path().join("no-herdr.sock");
         let (sent, _lines) = mpsc::channel();
         let output = std::sync::Mutex::new(Lines(Vec::new(), sent));
         let panes = hide_host::panes::Panes::new();
         let request = json!({"pane_id": "w1:p1", "nonce": "0".repeat(32)});
         std::thread::scope(|scope| {
             let started = panes
-                .start(scope, &output, &bridges, herdr.to_str().unwrap())
+                .start(
+                    scope,
+                    &output,
+                    &bridges,
+                    hide_host::pane_holders::PaneSlot::default(),
+                )
                 .unwrap();
             // Both ends read and write the wire spelling, which on Windows is
             // the only one `from_wire` reads.
@@ -1820,7 +1824,6 @@ mod tests {
         use hide_node_link::panes::ProofAnswer;
         let directory = short_dir();
         let bridges = directory.path().join("bridges");
-        let herdr = directory.path().join("no-herdr.sock");
         let (sent, lines) = mpsc::channel();
         let output = std::sync::Mutex::new(Lines(Vec::new(), sent));
         let panes = hide_host::panes::Panes::new();
@@ -1828,7 +1831,12 @@ mod tests {
         let answer = json!({"type":"workspace_result","ok":true,"result":{"label":"app","path":"/home/me/app","added":true,"window":true}});
         std::thread::scope(|scope| {
             panes
-                .start(scope, &output, &bridges, herdr.to_str().unwrap())
+                .start(
+                    scope,
+                    &output,
+                    &bridges,
+                    hide_host::pane_holders::PaneSlot::default(),
+                )
                 .unwrap();
             let panes = &panes;
             let answered = answer.clone();
@@ -1850,7 +1858,12 @@ mod tests {
             );
             core.join().unwrap();
             other
-                .start(scope, &output, &bridges, herdr.to_str().unwrap())
+                .start(
+                    scope,
+                    &output,
+                    &bridges,
+                    hide_host::pane_holders::PaneSlot::default(),
+                )
                 .unwrap();
             assert_eq!(
                 project_open_on_bridge(&bridges, "/home/me/app"),
@@ -1883,7 +1896,6 @@ mod tests {
         let encode = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
         let directory = short_dir();
         let bridges = directory.path().join("bridges");
-        let herdr = directory.path().join("no-herdr.sock");
         let (sent, lines) = mpsc::channel();
         let output = std::sync::Mutex::new(Lines(Vec::new(), sent));
         let panes = hide_host::panes::Panes::new();
@@ -1893,7 +1905,12 @@ mod tests {
             .unwrap();
         std::thread::scope(|scope| {
             let started = panes
-                .start(scope, &output, &bridges, herdr.to_str().unwrap())
+                .start(
+                    scope,
+                    &output,
+                    &bridges,
+                    hide_host::pane_holders::PaneSlot::default(),
+                )
                 .unwrap();
             let socket = node_socket(&started.socket).unwrap();
             runtime.block_on(async {

@@ -44,10 +44,6 @@ pub const MAX_STREAMS: usize = 8;
 pub const MAX_CHUNK: usize = 48 * 1024;
 /// Chunks the core holds for one stream before the stream is ended.
 pub const MAX_PENDING_CHUNKS: usize = 64;
-/// Herdr streams one link carries at once (PRD core-host-node-remote-core
-/// D-20): the session subscription, controls, doorbell, find and phone
-/// reply of a node that dialed its core each hold one while they run.
-pub const MAX_HERDR_STREAMS: usize = 32;
 /// Browser relay streams one link carries at once (B15): as many as the
 /// core relays `hide browser` commands at once.
 pub const MAX_BROWSER_STREAMS: usize = 4;

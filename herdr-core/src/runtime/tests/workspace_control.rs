@@ -195,7 +195,6 @@ fn attested_device_resolves_colliding_pane_ids_without_crossing_workspaces() {
         target_id: device.to_owned(),
         state: "connected".to_owned(),
         message: None,
-        herdr_version: None,
         session: Some(RemoteSessionSnapshot {
             workspaces: vec![remote_workspace],
             agents: Vec::new(),
@@ -208,7 +207,6 @@ fn attested_device_resolves_colliding_pane_ids_without_crossing_workspaces() {
             pane_hook_tokens: Default::default(),
             issue_tokens: Default::default(),
             issue_links: Default::default(),
-            herdr_version: None,
         }),
         files: RemoteFileListSnapshot::idle(),
         catalog: Default::default(),
@@ -1755,8 +1753,6 @@ fn hide_memory_refuses_a_disconnected_or_unknown_caller_and_a_changed_checkout()
             origin: crate::model::LinkOrigin::Dialed {
                 ssh_alias: "studio-host".into(),
             },
-            herdr_socket_path: None,
-            herdr_session: None,
             host_consent: None,
         });
     let command = || crate::memory_command::MemoryCommand::Show { number: 1 };

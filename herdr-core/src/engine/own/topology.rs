@@ -61,7 +61,7 @@ const ZOOMED_TAB: &str = "zoomed_tab";
 #[derive(Default)]
 pub(super) struct Topology {
     workspaces: Vec<Workspace>,
-    focused_workspace: Option<String>,
+    pub(super) focused_workspace: Option<String>,
     /// The last workspace number given.
     workspace_numbers: usize,
     /// The tab the keyboard's workspace shows, each time it changed, in the
@@ -576,10 +576,6 @@ impl Topology {
         Ok(self.workspace(workspace)?.active_tab.clone())
     }
 
-    pub(super) fn focused_workspace(&self) -> Option<String> {
-        self.focused_workspace.clone()
-    }
-
     pub(super) fn workspace_tokens(&self, token: &str) -> Vec<(String, Option<String>)> {
         self.workspaces
             .iter()
@@ -1076,7 +1072,6 @@ impl Topology {
             panes: Vec::new(),
             layouts: Vec::new(),
             agents: Vec::new(),
-            herdr_version: None,
         };
         for workspace in &self.workspaces {
             state.workspaces.push(ProjectedWorkspace {
@@ -2011,7 +2006,7 @@ mod tests {
                 .workspaces
                 .is_empty()
         );
-        assert_eq!(topology.focused_workspace(), None);
+        assert_eq!(topology.focused_workspace, None);
     }
 
     #[test]

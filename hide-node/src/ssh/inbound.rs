@@ -158,15 +158,7 @@ pub fn establish(
     Ok((link, arrived))
 }
 
-impl DeviceTransport for InboundTransport {
-    fn herdr_api_connector(&self) -> Arc<dyn hide_herdr_client::ApiConnector> {
-        Arc::new(self.link.herdr_connector())
-    }
-
-    fn cached_herdr_version(&self) -> Option<String> {
-        None
-    }
-}
+impl DeviceTransport for InboundTransport {}
 
 impl Drop for InboundTransport {
     fn drop(&mut self) {
@@ -210,7 +202,6 @@ mod tests {
                 home: None,
                 machine_identity: MachineIdentity::Available { id: machine },
                 reader_features: None,
-                herdr_socket: None,
                 windows_drives: None,
             };
             let response = Response {

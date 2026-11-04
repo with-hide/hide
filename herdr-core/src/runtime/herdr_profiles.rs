@@ -191,9 +191,7 @@ impl Runtime {
     /// device's own decision (`ssh_registration`), where an alias leads where
     /// this listing resolved it.
     fn endpoint_registration(&self, alias: &str) -> Option<&crate::model::DeviceRegistration> {
-        self.ssh_registration(alias, "default", |alias| {
-            self.ssh_host_endpoints.get(alias).cloned()
-        })
+        self.ssh_registration(alias, |alias| self.ssh_host_endpoints.get(alias).cloned())
     }
 
     fn profile_connection(&self, device: &str) -> String {
@@ -421,8 +419,6 @@ impl Runtime {
                     label: profile.label.clone(),
                     ssh_alias: profile.target.clone(),
                     wsl_distro: None,
-                    herdr_socket_path: None,
-                    herdr_session: None,
                     host_consent: true,
                 }) {
                     Ok(id) => {
@@ -706,7 +702,6 @@ mod tests {
             (id.as_str(), "WSL Ubuntu", Some("Ubuntu"))
         );
         assert!(registration.host_consent.is_some());
-        assert_eq!(registration.herdr_session, None);
         assert_eq!(
             runtime.snapshot.navigator.focused_device_id.as_deref(),
             Some(id.as_str())
@@ -751,8 +746,6 @@ mod tests {
         assert_eq!(registrations[0].id, "config-ubuntu");
         assert_eq!(registrations[0].label, "Config.Ubuntu");
         assert_eq!(registrations[0].origin.ssh_alias(), Some("Config.Ubuntu"));
-        assert_eq!(registrations[0].herdr_session, None);
-        assert_eq!(registrations[0].herdr_socket_path, None);
         assert!(registrations[0].host_consent.is_some());
         let row = &runtime.snapshot.status.herdr_profiles.profiles[0];
         assert_eq!(row.device_id.as_deref(), Some("config-ubuntu"));

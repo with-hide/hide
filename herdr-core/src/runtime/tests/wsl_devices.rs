@@ -9,7 +9,7 @@ use crate::remote::{
     Attempt, CapabilityReport, DeviceConnector, DeviceTransport, DialedTransport, EstablishError,
     Established, SshHostListing, Wake, WslListing,
 };
-use hide_node_link::device::{HostConsent, RemoteHostIdentity, SnapshotCheck, WslDistribution};
+use hide_node_link::device::{HostConsent, RemoteHostIdentity, WslDistribution};
 use std::sync::mpsc;
 
 /// Every attempt's leave, in order, and a gate an attempt waits at when
@@ -31,7 +31,6 @@ impl DeviceConnector for Distributions {
         _home: &std::path::Path,
         _node: &str,
         _alias: &str,
-        _herdr_socket: Option<String>,
     ) -> Result<Arc<dyn DialedTransport>, String> {
         Err("this test has no SSH devices".to_owned())
     }
@@ -79,20 +78,10 @@ impl DeviceConnector for Distributions {
 /// which leave each attempt had without anything to connect.
 struct OffDistribution(Arc<Attempts>);
 
-impl DeviceTransport for OffDistribution {
-    fn herdr_api_connector(&self) -> Arc<dyn hide_herdr_client::ApiConnector> {
-        Arc::new(hide_herdr_client::LocalSocketConnector::new(
-            "/tmp/herdr-core-never-connect.sock",
-        ))
-    }
-
-    fn cached_herdr_version(&self) -> Option<String> {
-        None
-    }
-}
+impl DeviceTransport for OffDistribution {}
 
 impl DialedTransport for OffDistribution {
-    fn capability_test(&self, operation_id: &str, _check: SnapshotCheck<'_>) -> CapabilityReport {
+    fn capability_test(&self, operation_id: &str) -> CapabilityReport {
         CapabilityReport::new(
             operation_id,
             RemoteHostIdentity {
@@ -221,8 +210,6 @@ fn only_the_app_opening_or_the_operators_reconnect_may_start_an_off_distribution
                 origin: crate::model::LinkOrigin::Wsl {
                     distro: "Ubuntu".to_owned(),
                 },
-                herdr_socket_path: None,
-                herdr_session: None,
                 host_consent: Some(consent),
             });
         runtime.rebuild_device_rows();
@@ -287,8 +274,6 @@ fn the_app_opening_during_an_attempt_without_leave_is_taken_by_the_next() {
                 origin: crate::model::LinkOrigin::Wsl {
                     distro: "Ubuntu".to_owned(),
                 },
-                herdr_socket_path: None,
-                herdr_session: None,
                 host_consent: Some(consent),
             });
         runtime.rebuild_device_rows();
@@ -326,8 +311,6 @@ fn the_app_opening_during_an_attempt_that_fails_is_taken_by_its_retry() {
                 origin: crate::model::LinkOrigin::Wsl {
                     distro: "Ubuntu".to_owned(),
                 },
-                herdr_socket_path: None,
-                herdr_session: None,
                 host_consent: Some(consent),
             });
         runtime.rebuild_device_rows();
@@ -420,8 +403,6 @@ fn a_distribution_whose_state_cannot_be_read_is_retried_without_leave() {
                 origin: crate::model::LinkOrigin::Wsl {
                     distro: "Ubuntu".to_owned(),
                 },
-                herdr_socket_path: None,
-                herdr_session: None,
                 host_consent: Some(consent),
             });
         runtime.rebuild_device_rows();

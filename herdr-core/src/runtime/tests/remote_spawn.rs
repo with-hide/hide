@@ -9,7 +9,6 @@
 use super::*;
 use crate::coordination::{AgentRecord, Command, split_refusal};
 use crate::delivery::{Actor, ledger, worker::Worker};
-use crate::fake_herdr::FakeHerdr;
 use crate::handle::ChangeNotifier;
 use crate::node_access::{LinkAnswer, LinkError, NodeLink};
 use crate::runtime::delivery::tests::{authority, fixture};
@@ -121,14 +120,15 @@ fn agent_row(session: Option<&str>, shows: bool) -> Value {
     row
 }
 
-/// The device's Herdr: no worktree yet, one created on request, an agent that
-/// exists once it is started, unless `shows` is false, and reports `session`
-/// once it has one; closing its pane ends it. A start whose agent
-/// does not show holds its name (`held`) until the test says Herdr's deadline
-/// passed; `agent.get` then answers the name is gone. The pane shows its
-/// shell's first-prompt mark once `unmarked` reads of it have passed,
-/// `refused` makes Herdr refuse the next start before typing anything, and
-/// `list_fails` is how many agent lists after the start Herdr fails to answer.
+/// The device's engine: no worktree yet, one created on request, an agent
+/// that exists once it is started, unless `shows` is false, and reports
+/// `session` once it has one; closing its pane ends it. A start whose agent
+/// does not show holds its name (`held`) until the test says the engine's
+/// deadline passed; a read of the name then answers it is gone. The pane
+/// shows its shell's first-prompt mark once `unmarked` reads of it have
+/// passed, `refused` makes the engine refuse the next start before typing
+/// anything, and `list_fails` is how many agent lists after the start the
+/// engine fails to answer.
 fn device_herdr(
     started: Arc<AtomicBool>,
     session: Arc<Mutex<Option<String>>>,
@@ -137,95 +137,79 @@ fn device_herdr(
     unmarked: Arc<AtomicUsize>,
     refused: Arc<AtomicBool>,
     list_fails: Arc<AtomicUsize>,
-) -> FakeHerdr {
-    FakeHerdr::start_with_errors("remote-spawn", move |method, _| {
-        Ok(match method {
-            "worktree.list" => json!({"type": "worktree_list", "source": {
-            "repo_key": "/srv/repo/.git", "repo_name": "repo",
-            "repo_root": "/srv/repo", "source_checkout_path": "/srv/repo",
-            "source_workspace_id": "w1"}, "worktrees": []}),
-            "worktree.create" => json!({
-                "type": "worktree_created",
-                "workspace": {"workspace_id": "w2", "label": "repo", "number": 2, "focused": false,
-                    "pane_count": 1, "tab_count": 1, "active_tab_id": "w2:t1", "agent_status": "idle"},
-                "tab": {"workspace_id": "w2", "tab_id": "w2:t1", "label": "hide", "number": 1,
-                    "focused": false, "pane_count": 1, "agent_status": "idle"},
-                "root_pane": {"workspace_id": "w2", "tab_id": "w2:t1", "pane_id": "w2:p1",
-                    "terminal_id": "device-terminal", "cwd": WORKTREE, "focused": false,
-                    "agent_status": "idle", "revision": 0},
-                "worktree": {"branch": "topic", "is_bare": false, "is_detached": false,
-                    "is_linked_worktree": true, "is_prunable": false, "label": "repo",
-                    "open_workspace_id": "w2", "path": WORKTREE}
-            }),
-            "layout.apply" => json!({"type": "layout_apply", "layout": {"workspace_id": "w2",
-            "tab_id": "w2:t2", "zoomed": false, "focused_pane_id": "w2:p1",
-            "root": {"type": "pane", "pane_id": "w2:p1"}}}),
-            "pane.get" => {
-                let marked = unmarked
+) -> Fake {
+    FakeEngine::start(move |method, _| match method {
+        "worktree_path" => reply(None::<String>),
+        "create_worktree" => reply(crate::engine::CreatedWorktree {
+            tab_label: "hide".into(),
+            workspace_id: "w2".into(),
+            tab_id: "w2:t1".into(),
+            pane_id: "w2:p1".into(),
+            path: WORKTREE.into(),
+            branch: Some("topic".into()),
+        }),
+        "launch_tab" => reply(("w2:t2".to_owned(), "w2:p1".to_owned())),
+        "pane_terminal" => reply("device-terminal".to_owned()),
+        "pane_token" => {
+            let marked = unmarked
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                    left.checked_sub(1)
+                })
+                .is_err();
+            reply(marked.then(|| "1".to_owned()))
+        }
+        "pane_processes" => reply(fake::processes(&json!({
+            "shell_pid": 4100, "foreground_process_group_id": 4100,
+            "foreground_processes": [{"pid": 4100, "name": "zsh"}]}))),
+        "start_agent" if refused.swap(false, Ordering::SeqCst) => {
+            self::refused("internal_error", "the start was refused")
+        }
+        "start_agent" => {
+            started.store(true, Ordering::SeqCst);
+            held.store(true, Ordering::SeqCst);
+            reply(crate::engine::StartedAgent {
+                pane_id: "w2:p1".into(),
+                terminal_id: Some("device-terminal".into()),
+            })
+        }
+        // The agent list, and the lineage writer's naming of the spawn's
+        // workspace and tab, which finds none of them here.
+        "session"
+            if started.load(Ordering::SeqCst)
+                && list_fails
                     .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
                         left.checked_sub(1)
                     })
-                    .is_err();
-                json!({"type": "pane_info", "pane": {"workspace_id": "w2",
-                "tab_id": "w2:t1", "pane_id": "w2:p1", "terminal_id": "device-terminal",
-                "focused": false, "agent_status": "idle", "revision": 0,
-                "tokens": if marked { json!({"hide_prompt": "1"}) } else { json!({}) }}})
-            }
-            "pane.process_info" => json!({"type": "pane_process_info", "process_info": {
-            "pane_id": "w2:p1", "shell_pid": 4100, "foreground_process_group_id": 4100,
-            "foreground_processes": [{"pid": 4100, "name": "zsh"}]}}),
-            "agent.start" if refused.swap(false, Ordering::SeqCst) => {
-                return Err(("internal_error".into(), "the start was refused".into()));
-            }
-            "agent.start" => {
-                started.store(true, Ordering::SeqCst);
-                held.store(true, Ordering::SeqCst);
-                json!({"type": "agent_started", "argv": [], "agent": agent_row(None, true)})
-            }
-            "agent.list"
-                if started.load(Ordering::SeqCst)
-                    && list_fails
-                        .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
-                            left.checked_sub(1)
-                        })
-                        .is_ok() =>
+                    .is_ok() =>
+        {
+            self::refused("internal_error", "the agent list timed out")
+        }
+        "session" => {
+            let shows = shows.load(Ordering::SeqCst);
+            let agents = if started.load(Ordering::SeqCst) && (shows || held.load(Ordering::SeqCst))
             {
-                return Err(("internal_error".into(), "the agent list timed out".into()));
-            }
-            "agent.list" => {
-                let shows = shows.load(Ordering::SeqCst);
-                json!({"type": "agent_list", "agents":
-                if started.load(Ordering::SeqCst) && (shows || held.load(Ordering::SeqCst)) {
-                    vec![agent_row(session.lock().unwrap().as_deref(), shows)]
-                } else {
-                    Vec::new()
-                }})
-            }
-            "agent.get" if !held.load(Ordering::SeqCst) => {
-                return Err((
-                    "agent_not_found".into(),
-                    "agent target worker not found".into(),
-                ));
-            }
-            "agent.get" => json!({"type": "agent_info", "agent": agent_row(None, false)}),
-            "pane.close" => {
-                started.store(false, Ordering::SeqCst);
-                json!({"type": "ok"})
-            }
-            "pane.report_metadata" => json!({"type": "ok"}),
-            // The lineage writer's naming of the spawn's workspace and tab,
-            // which these tests do not follow.
-            "session.snapshot" => {
-                return Err(("internal_error".into(), "not followed here".into()));
-            }
-            other => panic!("unexpected {other}"),
-        })
+                vec![agent_row(session.lock().unwrap().as_deref(), shows)]
+            } else {
+                Vec::new()
+            };
+            reply(fake::session(json!({"agents": agents})))
+        }
+        "delivery_agent" if !held.load(Ordering::SeqCst) => {
+            self::refused("agent_not_found", "agent target worker not found")
+        }
+        "delivery_agent" => reply(fake::delivery_agent(&agent_row(None, false))),
+        "close_pane" => {
+            started.store(false, Ordering::SeqCst);
+            reply(())
+        }
+        "report_pane_tokens" => reply(()),
+        other => panic!("unexpected {other}"),
     })
 }
 
 struct Spawner {
     _turn: std::sync::MutexGuard<'static, ()>,
-    root: tempfile::TempDir,
+    _root: tempfile::TempDir,
     runtime: Arc<Mutex<Runtime>>,
     actor: Actor,
     node: Arc<Node>,
@@ -241,7 +225,7 @@ struct Spawner {
     refused: Arc<AtomicBool>,
     /// How many agent lists after the start Herdr fails to answer.
     list_fails: Arc<AtomicUsize>,
-    herdr: FakeHerdr,
+    herdr: Fake,
     path: PathBuf,
     _worker: Worker,
     client: crate::delivery::worker::Client,
@@ -304,8 +288,6 @@ fn spawner() -> Spawner {
                     origin: crate::model::LinkOrigin::Dialed {
                         ssh_alias: id.to_owned(),
                     },
-                    herdr_socket_path: None,
-                    herdr_session: None,
                     host_consent: None,
                 });
         }
@@ -313,7 +295,6 @@ fn spawner() -> Spawner {
             target_id: DEVICE.to_owned(),
             state: "connected".to_owned(),
             message: None,
-            herdr_version: None,
             session: None,
             files: RemoteFileListSnapshot::idle(),
             catalog: Default::default(),
@@ -390,7 +371,7 @@ fn spawner() -> Spawner {
     .unwrap();
     Spawner {
         _turn: turn,
-        root,
+        _root: root,
         runtime,
         actor,
         node,
@@ -465,7 +446,7 @@ impl Spawner {
         self.herdr
             .methods()
             .iter()
-            .filter(|seen| seen.as_str() == method)
+            .filter(|seen| **seen == method)
             .count()
     }
 
@@ -484,17 +465,14 @@ impl Spawner {
         .unwrap()
     }
 
-    /// Hands the writer the agent list the device's Herdr answers now, as
-    /// the session sync does on each refresh.
+    /// Hands the writer the agents the device's engine lists now, as the
+    /// session sync does on each refresh.
     fn refresh(&self, writer: &mut crate::coordination::lineage::Writer) {
-        let listed = hide_herdr_client::request_with_connector(
-            &self.herdr.connector(),
-            "agent.list",
-            crate::engine::herdr::wire::empty_params(),
-            Duration::from_secs(2),
+        let agents = crate::engine::Engine::agents(
+            self.herdr.as_ref(),
+            crate::engine::Wait::Each(Duration::from_secs(2)),
         )
         .unwrap();
-        let agents = crate::engine::herdr::wire::agents_response(listed).unwrap();
         let ledger = self.runtime.lock().unwrap().delivery_state().unwrap();
         writer.observe(
             &ledger,
@@ -598,7 +576,7 @@ fn a_spawn_desk_asks_for_starts_with_no_record_made_beforehand_and_takes_its_pla
         .map(|job| (job.state, job.queue_position));
     assert_eq!(queued, Some((crate::model::DeskJobState::Queued, Some(1))));
     drop(runtime);
-    assert_eq!(spawner.count("agent.start"), 1);
+    assert_eq!(spawner.count("start_agent"), 1);
 }
 
 /// B1, B2, B3, B7 (the token's `parent_machine`): a delegated child is made on
@@ -613,8 +591,8 @@ fn a_delegated_spawn_makes_the_child_on_the_device_under_the_caller() {
     assert_eq!(child["project"], WORKTREE);
     assert_eq!(child["parent"], "agent-1");
     assert_eq!(child["watch"]["parent"]["pane_id"], "sender");
-    assert_eq!(spawner.count("worktree.create"), 1);
-    assert_eq!(spawner.count("agent.start"), 1);
+    assert_eq!(spawner.count("create_worktree"), 1);
+    assert_eq!(spawner.count("start_agent"), 1);
     // Codex's trust of the worktree the spawn made is recorded on the
     // device, where Codex runs.
     assert_eq!(
@@ -641,7 +619,7 @@ fn a_delegated_spawn_makes_the_child_on_the_device_under_the_caller() {
         .herdr
         .calls()
         .into_iter()
-        .find(|(method, _)| method == "pane.report_metadata")
+        .find(|(method, _)| *method == "report_pane_tokens")
         .expect("lineage tokens written on the device")
         .1["tokens"]
         .clone();
@@ -667,7 +645,7 @@ fn a_spawn_starts_the_agent_with_its_choice_ahead_of_the_prompt() {
         .herdr
         .calls()
         .into_iter()
-        .find(|(method, _)| method == "agent.start")
+        .find(|(method, _)| *method == "start_agent")
         .expect("the agent was started")
         .1;
     // The device saved no 권한, so Codex starts with full access, which the
@@ -769,7 +747,6 @@ fn a_spawn_whose_session_comes_late_keeps_its_choice_and_binds_it_on_arrival() {
         pane_hook_tokens: Default::default(),
         issue_tokens: Default::default(),
         issue_links: Default::default(),
-        herdr_version: None,
     };
     let mut runtime = spawner.runtime.lock().unwrap();
     runtime.ingest_remote_session(DEVICE, Ok(session));
@@ -819,7 +796,7 @@ fn a_device_that_cannot_record_the_worktree_trust_starts_no_agent_there() {
             && refused.contains("Codex marks /srv/repo untrusted"),
         "{refused}"
     );
-    assert_eq!(spawner.count("agent.start"), 0);
+    assert_eq!(spawner.count("start_agent"), 0);
     assert!(spawner.node.trusted.lock().unwrap().is_empty());
 }
 
@@ -843,8 +820,8 @@ fn the_machine_is_part_of_the_intent() {
     let first = spawner.spawn(Some("here"), Some(DEVICE), "one").unwrap();
     let again = spawner.spawn(Some("here"), Some(DEVICE), "one").unwrap();
     assert_eq!(first["id"], again["id"]);
-    assert_eq!(spawner.count("worktree.create"), 1);
-    assert_eq!(spawner.count("agent.start"), 1);
+    assert_eq!(spawner.count("create_worktree"), 1);
+    assert_eq!(spawner.count("start_agent"), 1);
     // Even with the device gone, the finished spawn answers from its receipt.
     spawner.runtime.lock().unwrap().snapshot.status.remote[0].state = "not_connected".into();
     assert_eq!(
@@ -945,8 +922,8 @@ fn a_spawn_that_stopped_after_its_pane_resumes_without_the_device_checks() {
         .expect_err("still no session");
     assert_eq!(again, error);
     let before = spawner.herdr.methods();
-    assert_eq!(count(&before, "worktree.create"), 1);
-    assert_eq!(count(&before, "agent.start"), 1);
+    assert_eq!(count(&before, "create_worktree"), 1);
+    assert_eq!(count(&before, "start_agent"), 1);
     // The repository and the agent were used by the first attempt; the retry
     // does not ask the node about them again.
     spawner.node.repository.store(false, Ordering::SeqCst);
@@ -956,8 +933,8 @@ fn a_spawn_that_stopped_after_its_pane_resumes_without_the_device_checks() {
         .spawn(Some("here"), Some(DEVICE), "resume")
         .expect("the retry finishes the same spawn");
     let after = spawner.herdr.methods();
-    assert_eq!(count(&after, "worktree.create"), 1, "{after:?}");
-    assert_eq!(count(&after, "agent.start"), 1, "{after:?}");
+    assert_eq!(count(&after, "create_worktree"), 1, "{after:?}");
+    assert_eq!(count(&after, "start_agent"), 1, "{after:?}");
     assert_eq!(spawner.ledger().spawns.len(), 1);
     assert_eq!(
         spawner.ledger().spawns[0].child.as_deref(),
@@ -976,7 +953,7 @@ fn the_same_intent_types_its_start_once_more_only_after_herdr_lets_the_name_go()
     let spawner = spawner();
     spawner.shows.store(false, Ordering::SeqCst);
     let ask = || spawner.spawn(Some("here"), Some(DEVICE), "unseen");
-    let starts = || count(&spawner.herdr.methods(), "agent.start");
+    let starts = || count(&spawner.herdr.methods(), "start_agent");
     assert_eq!(
         split_refusal(&ask().expect_err("never showed")).0,
         "native_identity_unavailable"
@@ -1008,8 +985,8 @@ fn the_same_intent_types_its_start_once_more_only_after_herdr_lets_the_name_go()
         "agent_not_started"
     );
     let methods = spawner.herdr.methods();
-    assert_eq!(count(&methods, "agent.start"), 2, "{methods:?}");
-    assert_eq!(count(&methods, "worktree.create"), 1, "{methods:?}");
+    assert_eq!(count(&methods, "start_agent"), 2, "{methods:?}");
+    assert_eq!(count(&methods, "create_worktree"), 1, "{methods:?}");
 }
 
 /// B1, D-04: a spawn whose pane runs Hide's launch of the shell keeps
@@ -1023,7 +1000,7 @@ fn a_retry_of_an_integrated_spawn_still_waits_for_the_first_prompt() {
     let ask = || spawner.spawn(Some("here"), Some(DEVICE), "integrated");
     ask().expect_err("Herdr refused the first start");
     assert_eq!(
-        spawner.count("layout.apply"),
+        spawner.count("launch_tab"),
         1,
         "the seed tab runs the launch"
     );
@@ -1031,25 +1008,25 @@ fn a_retry_of_an_integrated_spawn_still_waits_for_the_first_prompt() {
     assert_eq!(spawner.ledger().spawns[0].typed, 0);
     // The shell is still at its startup question: three reads show no mark.
     spawner.unmarked.store(3, Ordering::SeqCst);
-    let reads = spawner.count("pane.get");
+    let reads = spawner.count("pane_token");
     ask().expect("the retry starts once the first prompt is marked");
     assert_eq!(spawner.unmarked.load(Ordering::SeqCst), 0);
-    assert!(spawner.count("pane.get") >= reads + 4);
+    assert!(spawner.count("pane_token") >= reads + 4);
     let methods = spawner.herdr.methods();
     let marked = methods
         .iter()
-        .rposition(|method| method == "pane.get")
+        .rposition(|method| *method == "pane_token")
         .unwrap();
     let typed = methods
         .iter()
-        .rposition(|method| method == "agent.start")
+        .rposition(|method| *method == "start_agent")
         .unwrap();
     assert!(marked < typed, "{methods:?}");
-    assert_eq!(count(&methods, "worktree.create"), 1, "{methods:?}");
+    assert_eq!(count(&methods, "create_worktree"), 1, "{methods:?}");
 }
 
-fn count(methods: &[String], name: &str) -> usize {
-    methods.iter().filter(|method| *method == name).count()
+fn count(methods: &[&str], name: &str) -> usize {
+    methods.iter().filter(|method| **method == name).count()
 }
 
 /// Another agent's id as the parent is judged before any device is probed, so
@@ -1099,9 +1076,7 @@ fn a_device_herdr_that_stops_answering_is_unavailable_and_the_retry_converges() 
                 ChangeNotifier::noop(),
             ));
     };
-    install(crate::engine::herdr::local(
-        spawner.root.path().join("no-herdr.sock"),
-    ));
+    install(FakeEngine::absent().engine());
     assert_eq!(
         spawner
             .spawn(Some("here"), Some(DEVICE), "down")
@@ -1118,7 +1093,7 @@ fn a_device_herdr_that_stops_answering_is_unavailable_and_the_retry_converges() 
     let ledger = spawner.ledger();
     assert_eq!(ledger.spawns.len(), 1);
     assert_eq!(ledger.spawns[0].child.as_deref(), answer["id"].as_str());
-    assert_eq!(count(&spawner.herdr.methods(), "worktree.create"), 1);
+    assert_eq!(count(&spawner.herdr.methods(), "create_worktree"), 1);
 }
 
 /// An agent on a device is refused by the spawn itself, before the intent is
@@ -1188,9 +1163,9 @@ fn a_busy_spawn_lock_refuses_after_the_checks_and_creates_nothing() {
 #[test]
 fn a_device_herdr_that_refuses_keeps_its_own_failure() {
     let spawner = spawner();
-    let refusing = FakeHerdr::start_with_errors("remote-spawn-refuses", |method, _| match method {
-        "worktree.list" => Err(("repository_busy".into(), "the repository is busy".into())),
-        "agent.list" => Ok(json!({"type": "agent_list", "agents": []})),
+    let refusing = FakeEngine::start(|method, _| match method {
+        "worktree_path" => refused("repository_busy", "the repository is busy"),
+        "session" => reply(fake::session(json!({}))),
         other => panic!("unexpected {other}"),
     });
     spawner
@@ -1260,7 +1235,7 @@ fn a_child_that_reports_its_session_late_is_bound_by_the_core_and_its_intent_ans
     assert_eq!(answer["id"], child.as_str());
     assert_eq!(answer["watch"]["parent"]["pane_id"], "sender");
     assert_eq!(spawner.published().agents.len(), 2);
-    assert_eq!(spawner.count("agent.start"), 1);
+    assert_eq!(spawner.count("start_agent"), 1);
 }
 
 /// A child whose first agent list after its start Herdr fails to answer, as
@@ -1277,7 +1252,7 @@ fn a_child_whose_first_agent_list_fails_after_its_start_is_still_registered() {
     let ledger = spawner.published();
     assert_eq!(ledger.spawns[0].child.as_deref(), child["id"].as_str());
     assert!(ledger.spawns[0].completed);
-    assert_eq!(spawner.count("agent.start"), 1);
+    assert_eq!(spawner.count("start_agent"), 1);
 }
 
 /// The caller asking again after the session showed binds the child itself;
@@ -1327,7 +1302,7 @@ fn a_late_child_whose_session_cannot_be_kept_ends_its_wait_and_its_pane_closes()
         Some(format!("/{}", "s".repeat(crate::delivery::SESSION_LIMIT)));
     spawner.refresh(&mut writer);
     wait_for("the core ends the wait and closes the pane", || {
-        spawner.published().identity_waits.is_empty() && spawner.count("pane.close") == 1
+        spawner.published().identity_waits.is_empty() && spawner.count("close_pane") == 1
     });
     let ledger = spawner.published();
     assert_eq!(ledger.agents.len(), 1, "only the caller is registered");
@@ -1355,7 +1330,7 @@ fn a_child_whose_session_passes_256_bytes_is_spawned_and_kept() {
                 .any(|record| record.session == session),
             "{bytes}"
         );
-        assert_eq!(spawner.count("pane.close"), 0, "{bytes}");
+        assert_eq!(spawner.count("close_pane"), 0, "{bytes}");
     }
 }
 
@@ -1371,7 +1346,7 @@ fn a_child_whose_session_cannot_be_kept_is_refused_and_its_pane_closed() {
         .spawn(Some("here"), Some(DEVICE), "too-long")
         .unwrap_err();
     assert_eq!(split_refusal(&error).0, "session_too_long");
-    assert_eq!(spawner.count("pane.close"), 1);
+    assert_eq!(spawner.count("close_pane"), 1);
     let ledger = spawner.ledger();
     assert_eq!(ledger.agents.len(), 1, "only the caller is registered");
     assert!(ledger.spawns[0].child.is_none());
@@ -1385,14 +1360,12 @@ fn an_explicit_registration_keeps_a_session_past_256_bytes() {
     let spawner = spawner();
     let session = format!("/{}.jsonl", "s".repeat(300));
     let reported = session.clone();
-    let local = FakeHerdr::start("register-long-session", move |method, _| match method {
-        "agent.list" => json!({"type": "agent_list", "agents": [{
+    let local = FakeEngine::start(move |method, _| match method {
+        "session" => reply(fake::session(json!({"agents": [{
             "pane_id": "w5:p1", "workspace_id": "w5", "tab_id": "w5:t1",
-            "terminal_id": "local-terminal", "revision": 1, "focused": false,
-            "agent_status": "idle", "agent": "pi", "name": "pi-child",
-            "agent_session": {"source": "herdr:pi", "agent": "pi",
-                "kind": "path", "value": reported}}]}),
-        "pane.report_metadata" => json!({"type": "ok"}),
+            "terminal_id": "local-terminal", "agent_status": "idle", "agent": "pi",
+            "name": "pi-child", "agent_session": {"kind": "path", "value": reported}}]}))),
+        "report_pane_tokens" => reply(()),
         other => panic!("unexpected {other}"),
     });
     crate::runtime::delivery::tests::set_live(&mut spawner.runtime.lock().unwrap(), Some(&local));
@@ -1404,7 +1377,7 @@ fn an_explicit_registration_keeps_a_session_past_256_bytes() {
             Command::Register {
                 check: false,
                 machine: None,
-                host_scope: local.socket_path().to_str().unwrap().to_owned(),
+                host_scope: local.scope().to_str().unwrap().to_owned(),
                 session,
                 instance: "w5:p1".into(),
                 name: "pi-child".into(),
@@ -1444,13 +1417,11 @@ fn a_session_registers_itself_once_from_its_own_pane() {
         device_id: crate::node::TEST_NODE.into(),
         session: crate::engine::tokens::session_digest("native-heir"),
     };
-    let local = FakeHerdr::start("register-self", move |method, _| match method {
-        "agent.list" => json!({"type": "agent_list", "agents": [{
+    let local = FakeEngine::start(move |method, _| match method {
+        "session" => reply(fake::session(json!({"agents": [{
             "pane_id": "recipient", "workspace_id": "w5", "tab_id": "w5:t1",
-            "terminal_id": "heir-terminal", "revision": 1, "focused": false,
-            "agent_status": "idle", "agent": "codex", "name": "heir",
-            "agent_session": {"source": "herdr:codex", "agent": "codex",
-                "kind": "id", "value": "native-heir"}}]}),
+            "terminal_id": "heir-terminal", "agent_status": "idle", "agent": "codex",
+            "name": "heir", "agent_session": {"kind": "id", "value": "native-heir"}}]}))),
         other => panic!("unexpected {other}"),
     });
     {
@@ -1547,7 +1518,7 @@ fn a_queued_spawn_waits_while_desk_is_off_and_starts_when_it_is_on_again() {
     };
     assert_eq!(state, Some(crate::model::DeskJobState::Working));
     // The second spawn made its own worktree on the device, as the first did.
-    assert_eq!(spawner.count("worktree.create"), 2);
+    assert_eq!(spawner.count("create_worktree"), 2);
 }
 
 /// A spawn takes the 권한 of the machine it starts on, read when it starts:
@@ -1603,7 +1574,7 @@ fn a_spawn_takes_its_devices_permission_and_codex_overrides_go_beside_its_own_fl
             .herdr
             .calls()
             .into_iter()
-            .find(|(method, _)| method == "agent.start")
+            .find(|(method, _)| *method == "start_agent")
             .expect("the agent was started")
             .1;
         assert_eq!(start["args"], json!(expected), "{device_choice:?}");

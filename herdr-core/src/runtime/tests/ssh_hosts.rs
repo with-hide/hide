@@ -40,8 +40,6 @@ fn registration(id: &str, label: &str, alias: &str) -> DeviceRegistration {
         origin: crate::model::LinkOrigin::Dialed {
             ssh_alias: alias.to_owned(),
         },
-        herdr_socket_path: None,
-        herdr_session: None,
         host_consent: None,
     }
 }
@@ -250,11 +248,9 @@ fn add_device_and_the_first_run_step_agree_on_which_host_is_added() {
         // Added under an alias the config no longer names, in capitals.
         registration("box", "Box", "upper"),
         DeviceRegistration {
-            herdr_session: Some("work".to_owned()),
             ..registration("box-work", "Box work", "named")
         },
         DeviceRegistration {
-            herdr_socket_path: Some("/run/herdr.sock".to_owned()),
             ..registration("box-socket", "Box socket", "socket")
         },
     ];

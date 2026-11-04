@@ -587,10 +587,15 @@ fn clear_antigravity_composer(
 mod tests {
     use serde_json::json;
 
-    use hide_herdr_client::HERDR_PROTOCOL_REVISION;
-
     use super::*;
-    use crate::fake_herdr::FakeHerdr;
+    use crate::engine::fake::{FakeEngine, processes, refused, reply, session};
+
+    fn started() -> crate::engine::fake::Reply {
+        reply(crate::engine::StartedAgent {
+            pane_id: "child-pane".to_owned(),
+            terminal_id: Some("child-terminal".to_owned()),
+        })
+    }
 
     #[test]
     fn a_native_fork_gets_its_own_unfocused_tab_and_failed_start_closes_only_its_pane() {
@@ -614,7 +619,7 @@ mod tests {
             "source-missing-before",
             "source-missing-after",
         ] {
-            let refused = case == "refused";
+            let refuse = case == "refused";
             let home = tempfile::tempdir().unwrap();
             let cwd = hide_platform::fs::identity::canonical(home.path()).unwrap();
             let folder = crate::fixture::native_session_folder(home.path(), kind, &cwd);
@@ -647,18 +652,17 @@ mod tests {
             let expected_cwd = cwd.display().to_string();
             let tab_source = source.clone();
             let tab_other = other_before.clone();
-            let herdr = FakeHerdr::start_with_errors("pi-fork-tab", move |method, params| {
-                Ok(match method {
-                    "session.snapshot" => json!({"type": "session_snapshot", "snapshot": {
-                        "version": "fixture", "protocol": HERDR_PROTOCOL_REVISION,
-                        "workspaces": [], "tabs": [], "panes": [], "agents": [],
+            let herdr = FakeEngine::start(move |method, params| {
+                match method {
+                    "session" => reply(session(json!({"type": "session_snapshot", "snapshot": {
+                                                "workspaces": [], "tabs": [], "panes": [], "agents": [],
                         "layouts": [{"workspace_id": "w1", "tab_id": "w1:t1", "zoomed": false,
                             "area": {"x":0,"y":0,"width":80,"height":24},
                             "focused_pane_id": "parent-pane",
                             "panes": [{"pane_id":"parent-pane", "focused":true,
                                 "rect":{"x":0,"y":0,"width":80,"height":24}}], "splits": []}]
-                    }}),
-                    "layout.apply" => {
+                    }}))),
+                    "launch_tab" => {
                         if case == "source-missing-after" {
                             std::fs::write(tab_source.with_file_name("other.jsonl"), &tab_other)
                                 .unwrap();
@@ -674,29 +678,27 @@ mod tests {
                         if case == "execution-after" {
                             observed_changed.store(true, std::sync::atomic::Ordering::SeqCst);
                         }
-                        assert_eq!(params["workspace_id"], "w1");
-                        assert_eq!(params["root"]["cwd"], expected_cwd);
+                        assert_eq!(params["workspace"], "w1");
+                        assert_eq!(params["cwd"], expected_cwd);
                         assert_eq!(params["focus"], false);
                         // Named as a new tab, so the strip shows the agent;
                         // it runs the node's shell with the integration's
                         // launch.
-                        assert_eq!(params["tab_label"], "Tab 2");
-                        assert_eq!(params["root"]["command"][0], expected_shell);
-                        json!({"type":"layout_apply","layout":{"workspace_id":"w1","tab_id":"w1:t2",
-                            "zoomed":false,"focused_pane_id":"child-pane",
-                            "root":{"type":"pane","pane_id":"child-pane"}}})
+                        assert_eq!(params["label"], "Tab 2");
+                        assert_eq!(params["command"][0], expected_shell);
+                        reply(("w1:t2".to_owned(), "child-pane".to_owned()))
                     }
-                    "pane.process_info" => json!({"type":"pane_process_info","process_info":{
+                    "pane_processes" => reply(processes(
+                        &json!({"type":"pane_process_info","process_info":{
                         "pane_id":"child-pane","shell_pid":42,"foreground_process_group_id":42,
                         "foreground_processes":[{"pid":42,"name":"zsh"}]}}),
-                    "pane.get" => {
-                        assert_eq!(params["pane_id"], "child-pane");
-                        json!({"type":"pane_info","pane":{
-                            "pane_id":"child-pane","terminal_id":"child-terminal","workspace_id":"w1","tab_id":"w1:t2","focused":false,"agent_status":"unknown","revision":1,
-                            "tokens":{"hide_prompt":"1"}}})
+                    )),
+                    "pane_token" => {
+                        assert_eq!(params["pane"], "child-pane");
+                        reply(Some("1".to_owned()))
                     }
-                    "agent.start" => {
-                        assert_eq!(params["pane_id"], "child-pane");
+                    "start_agent" => {
+                        assert_eq!(params["pane"], "child-pane");
                         assert_eq!(params["kind"], kind);
                         // Pi asks no permission question; omp's full access
                         // is `--auto-approve` (its help, 18.7.0).
@@ -709,18 +711,17 @@ mod tests {
                             params["args"],
                             json!([["--fork", "native-pi"].as_slice(), access].concat())
                         );
-                        if refused {
-                            return Err(("start_refused".into(), "fixture refused".into()));
+                        if refuse {
+                            return refused("start_refused", "fixture refused");
                         }
-                        json!({"type":"agent_started","argv":[],"agent":{
-                            "pane_id":"child-pane","terminal_id":"child-terminal","workspace_id":"w1","tab_id":"w1:t2","focused":false,"agent_status":"idle","revision":2}})
+                        started()
                     }
-                    "pane.close" => {
-                        assert_eq!(params["pane_id"], "child-pane");
-                        json!({"type":"ok"})
+                    "close_pane" => {
+                        assert_eq!(params["pane"], "child-pane");
+                        reply(())
                     }
                     other => panic!("unexpected {other}"),
-                })
+                }
             });
             let request = ForkRequest {
                 source_reference: Some(crate::sidebar::SessionAgentSessionPayload {
@@ -762,10 +763,7 @@ mod tests {
             assert_eq!(result.is_err(), case != "success", "{case}");
             // The core hears of the fork's tab once, as soon as Herdr made it,
             // whatever happens to its start afterwards.
-            let made_tab = herdr
-                .methods()
-                .iter()
-                .any(|method| method == "layout.apply");
+            let made_tab = herdr.methods().contains(&"launch_tab");
             assert_eq!(
                 created.into_inner(),
                 if made_tab {
@@ -793,11 +791,11 @@ mod tests {
                 assert_eq!(result.unwrap(), "child-pane");
             }
             let mut expected = vec![
-                "session.snapshot",
-                "layout.apply",
-                "pane.process_info",
-                "pane.get",
-                "agent.start",
+                "session",
+                "launch_tab",
+                "pane_processes",
+                "pane_token",
+                "start_agent",
             ];
             if case == "duplicate-before" || case == "source-missing-before" {
                 expected.clear();
@@ -812,11 +810,11 @@ mod tests {
                     expected.pop();
                     expected.pop();
                 }
-                expected.push("pane.close");
+                expected.push("close_pane");
             } else if case == "panic-created" {
-                expected = vec!["session.snapshot", "layout.apply", "pane.close"];
-            } else if refused {
-                expected.push("pane.close");
+                expected = vec!["session", "launch_tab", "close_pane"];
+            } else if refuse {
+                expected.push("close_pane");
             }
             assert_eq!(herdr.methods(), expected, "{case}");
         }
@@ -847,7 +845,7 @@ mod tests {
                     ("ses_child", Some("ses_root"), directory.as_str()),
                 ],
             );
-            let session = if case == "child-session" {
+            let source = if case == "child-session" {
                 "ses_child"
             } else {
                 "ses_root"
@@ -861,18 +859,17 @@ mod tests {
             let expected_shell = shell.shell.clone().unwrap();
             let node = hide_node::Local::new(Some(home.path().to_path_buf())).with_shell(shell);
             let expected_cwd = checkout.clone();
-            let herdr = FakeHerdr::start_with_errors("opencode-fork-tab", move |method, params| {
-                Ok(match method {
-                    "session.snapshot" => json!({"type": "session_snapshot", "snapshot": {
-                        "version": "fixture", "protocol": HERDR_PROTOCOL_REVISION,
-                        "workspaces": [], "tabs": [], "panes": [], "agents": [],
+            let herdr = FakeEngine::start(move |method, params| {
+                match method {
+                    "session" => reply(session(json!({"type": "session_snapshot", "snapshot": {
+                                                "workspaces": [], "tabs": [], "panes": [], "agents": [],
                         "layouts": [{"workspace_id": "w1", "tab_id": "w1:t1", "zoomed": false,
                             "area": {"x":0,"y":0,"width":80,"height":24},
                             "focused_pane_id": "parent-pane",
                             "panes": [{"pane_id":"parent-pane", "focused":true,
                                 "rect":{"x":0,"y":0,"width":80,"height":24}}], "splits": []}]
-                    }}),
-                    "layout.apply" => {
+                    }}))),
+                    "launch_tab" => {
                         if case == "removed-after" {
                             rusqlite::Connection::open(&database)
                                 .unwrap()
@@ -882,53 +879,50 @@ mod tests {
                         if case == "execution-after" {
                             observed_changed.store(true, std::sync::atomic::Ordering::SeqCst);
                         }
-                        assert_eq!(params["root"]["cwd"], expected_cwd);
+                        assert_eq!(params["cwd"], expected_cwd);
                         assert_eq!(params["focus"], false);
                         // The fork's tab runs the node's shell with the
                         // integration's launch.
-                        assert_eq!(params["root"]["command"][0], expected_shell);
-                        json!({"type":"layout_apply","layout":{"workspace_id":"w1","tab_id":"w1:t2",
-                            "zoomed":false,"focused_pane_id":"child-pane",
-                            "root":{"type":"pane","pane_id":"child-pane"}}})
+                        assert_eq!(params["command"][0], expected_shell);
+                        reply(("w1:t2".to_owned(), "child-pane".to_owned()))
                     }
-                    "pane.process_info" => json!({"type":"pane_process_info","process_info":{
+                    "pane_processes" => reply(processes(
+                        &json!({"type":"pane_process_info","process_info":{
                         "pane_id":"child-pane","shell_pid":42,"foreground_process_group_id":42,
                         "foreground_processes":[{"pid":42,"name":"zsh"}]}}),
-                    "pane.get" => {
-                        assert_eq!(params["pane_id"], "child-pane");
-                        json!({"type":"pane_info","pane":{
-                            "pane_id":"child-pane","terminal_id":"child-terminal","workspace_id":"w1","tab_id":"w1:t2","focused":false,"agent_status":"unknown","revision":1,
-                            "tokens":{"hide_prompt":"1"}}})
+                    )),
+                    "pane_token" => {
+                        assert_eq!(params["pane"], "child-pane");
+                        reply(Some("1".to_owned()))
                     }
-                    "agent.start" => {
+                    "start_agent" => {
                         assert_eq!(params["kind"], "opencode");
                         assert_eq!(
                             params["args"],
                             json!(["-s", "ses_root", "--fork", "--auto"])
                         );
                         if case == "refused" {
-                            return Err(("start_refused".into(), "fixture refused".into()));
+                            return refused("start_refused", "fixture refused");
                         }
-                        json!({"type":"agent_started","argv":[],"agent":{
-                            "pane_id":"child-pane","terminal_id":"child-terminal","workspace_id":"w1","tab_id":"w1:t2","focused":false,"agent_status":"idle","revision":2}})
+                        started()
                     }
-                    "pane.close" => {
-                        assert_eq!(params["pane_id"], "child-pane");
-                        json!({"type":"ok"})
+                    "close_pane" => {
+                        assert_eq!(params["pane"], "child-pane");
+                        reply(())
                     }
                     other => panic!("unexpected {other}"),
-                })
+                }
             });
             let request = ForkRequest {
                 source_reference: Some(crate::sidebar::SessionAgentSessionPayload {
                     kind: "id".into(),
-                    value: session.into(),
+                    value: source.into(),
                 }),
                 connection_generation: 0,
                 codex_daemon: Default::default(),
                 parent_pane_id: "parent-pane".into(),
                 agent: crate::fork::ForkableAgent::OpenCode,
-                session_id: session.into(),
+                session_id: source.into(),
                 cwd: Some(checkout.clone()),
                 name: "fork-opencode-1".into(),
                 tab_label: Some("Tab 2".into()),
@@ -953,29 +947,29 @@ mod tests {
             assert_eq!(result.is_err(), case != "success", "{case}");
             let expected: &[&str] = match case {
                 "success" => &[
-                    "session.snapshot",
-                    "layout.apply",
-                    "pane.process_info",
-                    "pane.get",
-                    "agent.start",
+                    "session",
+                    "launch_tab",
+                    "pane_processes",
+                    "pane_token",
+                    "start_agent",
                 ],
                 "refused" => &[
-                    "session.snapshot",
-                    "layout.apply",
-                    "pane.process_info",
-                    "pane.get",
-                    "agent.start",
-                    "pane.close",
+                    "session",
+                    "launch_tab",
+                    "pane_processes",
+                    "pane_token",
+                    "start_agent",
+                    "close_pane",
                 ],
                 "other-checkout" | "child-session" => &[],
                 "removed-after" => &[
-                    "session.snapshot",
-                    "layout.apply",
-                    "pane.process_info",
-                    "pane.get",
-                    "pane.close",
+                    "session",
+                    "launch_tab",
+                    "pane_processes",
+                    "pane_token",
+                    "close_pane",
                 ],
-                _ => &["session.snapshot", "layout.apply", "pane.close"],
+                _ => &["session", "launch_tab", "close_pane"],
             };
             assert_eq!(herdr.methods(), expected, "{case}");
         }
@@ -1048,48 +1042,39 @@ mod tests {
                 log: Arc::clone(&log),
             };
             let herdr_log = Arc::clone(&log);
-            let herdr = FakeHerdr::start_with_errors(
-                "opencode-2-fork-tab",
-                move |method, params| {
-                    herdr_log.lock().unwrap().push(method.to_owned());
-                    Ok(match method {
-                        "session.snapshot" => json!({"type": "session_snapshot", "snapshot": {
-                            "version": "fixture", "protocol": HERDR_PROTOCOL_REVISION,
-                            "workspaces": [], "tabs": [], "panes": [], "agents": [],
-                            "layouts": [{"workspace_id": "w1", "tab_id": "w1:t1", "zoomed": false,
-                                "area": {"x":0,"y":0,"width":80,"height":24},
-                                "focused_pane_id": "parent-pane",
-                                "panes": [{"pane_id":"parent-pane", "focused":true,
-                                    "rect":{"x":0,"y":0,"width":80,"height":24}}], "splits": []}]
-                        }}),
-                        "layout.apply" => {
-                            json!({"type":"layout_apply","layout":{"workspace_id":"w1","tab_id":"w1:t2",
-                        "zoomed":false,"focused_pane_id":"child-pane",
-                        "root":{"type":"pane","pane_id":"child-pane"}}})
-                        }
-                        "pane.process_info" => json!({"type":"pane_process_info","process_info":{
+            let herdr = FakeEngine::start(move |method, params| {
+                herdr_log.lock().unwrap().push(method.to_owned());
+                match method {
+                    "session" => reply(session(json!({"type": "session_snapshot", "snapshot": {
+                                                    "workspaces": [], "tabs": [], "panes": [], "agents": [],
+                        "layouts": [{"workspace_id": "w1", "tab_id": "w1:t1", "zoomed": false,
+                            "area": {"x":0,"y":0,"width":80,"height":24},
+                            "focused_pane_id": "parent-pane",
+                            "panes": [{"pane_id":"parent-pane", "focused":true,
+                                "rect":{"x":0,"y":0,"width":80,"height":24}}], "splits": []}]
+                    }}))),
+                    "launch_tab" => reply(("w1:t2".to_owned(), "child-pane".to_owned())),
+                    "pane_processes" => reply(processes(
+                        &json!({"type":"pane_process_info","process_info":{
                         "pane_id":"child-pane","shell_pid":42,"foreground_process_group_id":42,
                         "foreground_processes":[{"pid":42,"name":"zsh"}]}}),
-                        "pane.get" => json!({"type":"pane_info","pane":{
-                        "pane_id":"child-pane","terminal_id":"child-terminal","workspace_id":"w1","tab_id":"w1:t2","focused":false,"agent_status":"unknown","revision":1,
-                        "tokens":{"hide_prompt":"1"}}}),
-                        "agent.start" => {
-                            assert_eq!(params["kind"], "opencode");
-                            assert_eq!(params["args"], json!(["-s", "ses_fork", "--auto"]));
-                            if case == "start_failed" {
-                                return Err(("start_refused".into(), "fixture refused".into()));
-                            }
-                            json!({"type":"agent_started","argv":[],"agent":{
-                            "pane_id":"child-pane","terminal_id":"child-terminal","workspace_id":"w1","tab_id":"w1:t2","focused":false,"agent_status":"idle","revision":2}})
+                    )),
+                    "pane_token" => reply(Some("1".to_owned())),
+                    "start_agent" => {
+                        assert_eq!(params["kind"], "opencode");
+                        assert_eq!(params["args"], json!(["-s", "ses_fork", "--auto"]));
+                        if case == "start_failed" {
+                            return refused("start_refused", "fixture refused");
                         }
-                        "pane.close" => {
-                            assert_eq!(params["pane_id"], "child-pane");
-                            json!({"type":"ok"})
-                        }
-                        other => panic!("unexpected {other}"),
-                    })
-                },
-            );
+                        started()
+                    }
+                    "close_pane" => {
+                        assert_eq!(params["pane"], "child-pane");
+                        reply(())
+                    }
+                    other => panic!("unexpected {other}"),
+                }
+            });
             let request = ForkRequest {
                 source_reference: Some(crate::sidebar::SessionAgentSessionPayload {
                     kind: "id".into(),
@@ -1118,11 +1103,11 @@ mod tests {
             let fork = format!("opencode_fork ses_root {checkout}");
             let opened = [
                 fork.as_str(),
-                "session.snapshot",
-                "layout.apply",
-                "pane.process_info",
-                "pane.get",
-                "agent.start",
+                "session",
+                "launch_tab",
+                "pane_processes",
+                "pane_token",
+                "start_agent",
             ];
             match case {
                 "forked" => {
@@ -1143,7 +1128,7 @@ mod tests {
                         "{error}"
                     );
                     let mut closed = opened.to_vec();
-                    closed.push("pane.close");
+                    closed.push("close_pane");
                     assert_eq!(*log.lock().unwrap(), closed);
                 }
             }
@@ -1177,53 +1162,49 @@ mod tests {
             let shell = crate::fixture::integrated_shell(home.path());
             let expected_shell = shell.shell.clone().unwrap();
             let node = hide_node::Local::new(Some(home.path().to_path_buf())).with_shell(shell);
-            let herdr = FakeHerdr::start_with_errors("grok-fork-tab", move |method, params| {
-                Ok(match method {
-                    "session.snapshot" => json!({"type": "session_snapshot", "snapshot": {
-                        "version": "fixture", "protocol": HERDR_PROTOCOL_REVISION,
-                        "workspaces": [], "tabs": [], "panes": [], "agents": [],
+            let herdr = FakeEngine::start(move |method, params| {
+                match method {
+                    "session" => reply(session(json!({"type": "session_snapshot", "snapshot": {
+                                                "workspaces": [], "tabs": [], "panes": [], "agents": [],
                         "layouts": [{"workspace_id": "w1", "tab_id": "w1:t1", "zoomed": false,
                             "area": {"x":0,"y":0,"width":80,"height":24},
                             "focused_pane_id": "parent-pane",
                             "panes": [{"pane_id":"parent-pane", "focused":true,
                                 "rect":{"x":0,"y":0,"width":80,"height":24}}], "splits": []}]
-                    }}),
-                    "layout.apply" => {
+                    }}))),
+                    "launch_tab" => {
                         if case == "execution-after" {
                             observed_changed.store(true, std::sync::atomic::Ordering::SeqCst);
                         }
                         assert_eq!(params["focus"], false);
                         // The fork's tab runs the node's shell with the
                         // integration's launch.
-                        assert_eq!(params["root"]["command"][0], expected_shell);
-                        json!({"type":"layout_apply","layout":{"workspace_id":"w1","tab_id":"w1:t2",
-                            "zoomed":false,"focused_pane_id":"child-pane",
-                            "root":{"type":"pane","pane_id":"child-pane"}}})
+                        assert_eq!(params["command"][0], expected_shell);
+                        reply(("w1:t2".to_owned(), "child-pane".to_owned()))
                     }
-                    "pane.process_info" => json!({"type":"pane_process_info","process_info":{
+                    "pane_processes" => reply(processes(
+                        &json!({"type":"pane_process_info","process_info":{
                         "pane_id":"child-pane","shell_pid":42,"foreground_process_group_id":42,
                         "foreground_processes":[{"pid":42,"name":"zsh"}]}}),
-                    "pane.get" => {
-                        assert_eq!(params["pane_id"], "child-pane");
-                        json!({"type":"pane_info","pane":{
-                            "pane_id":"child-pane","terminal_id":"child-terminal","workspace_id":"w1","tab_id":"w1:t2","focused":false,"agent_status":"unknown","revision":1,
-                            "tokens":{"hide_prompt":"1"}}})
+                    )),
+                    "pane_token" => {
+                        assert_eq!(params["pane"], "child-pane");
+                        reply(Some("1".to_owned()))
                     }
-                    "agent.start" => {
+                    "start_agent" => {
                         assert_eq!(params["kind"], "grok");
                         assert_eq!(
                             params["args"],
                             json!(["--resume", id, "--fork-session", "--always-approve"])
                         );
                         if case == "refused" {
-                            return Err(("start_refused".into(), "fixture refused".into()));
+                            return refused("start_refused", "fixture refused");
                         }
-                        json!({"type":"agent_started","argv":[],"agent":{
-                            "pane_id":"child-pane","terminal_id":"child-terminal","workspace_id":"w1","tab_id":"w1:t2","focused":false,"agent_status":"idle","revision":2}})
+                        started()
                     }
-                    "pane.close" => json!({"type":"ok"}),
+                    "close_pane" => reply(()),
                     other => panic!("unexpected {other}"),
-                })
+                }
             });
             // The label overlay hands a native-file agent its proven file.
             let request = ForkRequest {
@@ -1261,22 +1242,22 @@ mod tests {
             assert_eq!(std::fs::read(&summary).unwrap(), before, "{case}");
             let expected: &[&str] = match case {
                 "success" => &[
-                    "session.snapshot",
-                    "layout.apply",
-                    "pane.process_info",
-                    "pane.get",
-                    "agent.start",
+                    "session",
+                    "launch_tab",
+                    "pane_processes",
+                    "pane_token",
+                    "start_agent",
                 ],
                 "refused" => &[
-                    "session.snapshot",
-                    "layout.apply",
-                    "pane.process_info",
-                    "pane.get",
-                    "agent.start",
-                    "pane.close",
+                    "session",
+                    "launch_tab",
+                    "pane_processes",
+                    "pane_token",
+                    "start_agent",
+                    "close_pane",
                 ],
                 "summary-changed-before" => &[],
-                _ => &["session.snapshot", "layout.apply", "pane.close"],
+                _ => &["session", "launch_tab", "close_pane"],
             };
             assert_eq!(herdr.methods(), expected, "{case}");
         }
@@ -1353,9 +1334,8 @@ mod tests {
             let index_cwd = cwd.clone();
             let statuses = Arc::new(Mutex::new(vec!["working", "idle"]));
             let held = Arc::new(Mutex::new(matches!(case, "stray" | "stuck")));
-            let herdr = FakeHerdr::start("agy-fork", move |method, params| match method {
-                "pane.read" => {
-                    assert_eq!(params["format"], "ansi");
+            let herdr = FakeEngine::start(move |method, params| match method {
+                "read_screen" => {
                     let text = if case == "no-composer" {
                         "$ "
                     } else if *held.lock().unwrap() {
@@ -1363,36 +1343,33 @@ mod tests {
                     } else {
                         AGY_EMPTY
                     };
-                    json!({"type":"pane_read","read":{
-                        "pane_id":"child-pane","workspace_id":"w1","tab_id":"w1:t2",
-                        "source":"visible","format":"ansi","revision":1,
-                        "truncated":false,"text":text}})
+                    reply(crate::engine::PaneText {
+                        text: text.to_owned(),
+                        truncated: false,
+                    })
                 }
-                "pane.send_keys" => {
+                "send_keys" => {
                     assert_eq!(params["keys"], json!(vec!["backspace"; 8]));
                     if case == "stray" {
                         *held.lock().unwrap() = false;
                     }
-                    json!({"type":"ok"})
+                    reply(())
                 }
-                "pane.get" => {
+                "pane_token" => {
                     let mut statuses = statuses.lock().unwrap();
                     let status = if statuses.len() > 1 {
                         statuses.remove(0)
                     } else {
                         statuses[0]
                     };
-                    json!({"type":"pane_info","pane":{
-                        "pane_id":"child-pane","terminal_id":"child-terminal","workspace_id":"w1",
-                        "tab_id":"w1:t2","focused":false,"agent_status":status,"revision":1}})
+                    reply(status.to_owned())
                 }
-                "pane.send_input" => {
+                "submit_text" => {
                     assert!(
                         case == "stuck" || !*held.lock().unwrap(),
                         "/fork was typed behind text"
                     );
                     assert_eq!(params["text"], "/fork");
-                    assert_eq!(params["keys"], json!(["enter"]));
                     // agy writes the fork's row at the source's step count.
                     crate::fixture::antigravity_conversation(
                         &index_home,
@@ -1422,13 +1399,12 @@ mod tests {
                             None,
                         );
                     }
-                    json!({"type":"ok"})
+                    reply(())
                 }
-                "pane.report_agent_session" => {
-                    assert_eq!(params["agent_session_id"], fork);
-                    assert_eq!(params["agent"], "agy");
-                    assert_eq!(params["source"], "herdr:antigravity_cli");
-                    json!({"type":"ok"})
+                "report_agent_session" => {
+                    assert_eq!(params["session"], fork);
+                    assert_eq!(params["kind"], "agy");
+                    reply(())
                 }
                 other => panic!("unexpected {other}"),
             });
@@ -1448,23 +1424,23 @@ mod tests {
             };
             let result = fork_antigravity(herdr.engine().as_ref(), &node, &request, "child-pane");
             // Eight erases of eight reach the limit of 64.
-            let mut stuck = vec!["pane.get", "pane.get", "pane.read"];
+            let mut stuck = vec!["pane_agent_status", "pane_agent_status", "read_screen"];
             for _ in 0..8 {
-                stuck.extend(["pane.send_keys", "pane.read"]);
+                stuck.extend(["send_keys", "read_screen"]);
             }
-            stuck.extend(["pane.get", "pane.send_input", "pane.report_agent_session"]);
+            stuck.extend(["pane_agent_status", "submit_text", "report_agent_session"]);
             let expected: &[&str] = match case {
                 "stray" => {
                     assert_eq!(result, Ok(()), "{case}");
                     &[
-                        "pane.get",
-                        "pane.get",
-                        "pane.read",
-                        "pane.send_keys",
-                        "pane.read",
-                        "pane.get",
-                        "pane.send_input",
-                        "pane.report_agent_session",
+                        "pane_agent_status",
+                        "pane_agent_status",
+                        "read_screen",
+                        "send_keys",
+                        "read_screen",
+                        "pane_agent_status",
+                        "submit_text",
+                        "report_agent_session",
                     ]
                 }
                 "stuck" => {
@@ -1474,12 +1450,12 @@ mod tests {
                 "success" | "moved" | "in-motion" | "no-composer" => {
                     assert_eq!(result, Ok(()), "{case}");
                     &[
-                        "pane.get",
-                        "pane.get",
-                        "pane.read",
-                        "pane.get",
-                        "pane.send_input",
-                        "pane.report_agent_session",
+                        "pane_agent_status",
+                        "pane_agent_status",
+                        "read_screen",
+                        "pane_agent_status",
+                        "submit_text",
+                        "report_agent_session",
                     ]
                 }
                 "unreadable" => {
@@ -1490,7 +1466,7 @@ mod tests {
                             .contains("antigravity_db_unreadable"),
                         "{result:?}"
                     );
-                    &["pane.get", "pane.get"]
+                    &["pane_agent_status", "pane_agent_status"]
                 }
                 "untrusted" => {
                     assert!(
@@ -1500,7 +1476,7 @@ mod tests {
                             .contains("antigravity_fork_untrusted"),
                         "{result:?}"
                     );
-                    &["pane.get", "pane.get"]
+                    &["pane_agent_status", "pane_agent_status"]
                 }
                 _ => {
                     assert!(
@@ -1511,11 +1487,11 @@ mod tests {
                         "{result:?}"
                     );
                     &[
-                        "pane.get",
-                        "pane.get",
-                        "pane.read",
-                        "pane.get",
-                        "pane.send_input",
+                        "pane_agent_status",
+                        "pane_agent_status",
+                        "read_screen",
+                        "pane_agent_status",
+                        "submit_text",
                     ]
                 }
             };
@@ -1671,21 +1647,15 @@ mod tests {
 
     #[test]
     fn internal_registration_failure_keeps_the_started_fork() {
-        let herdr = FakeHerdr::start("fork-registration-failure", |method, _| match method {
-            "pane.split" => json!({"type": "pane_info", "pane": {
-                "pane_id": "child-pane", "terminal_id": "child-terminal",
-                "workspace_id": "w1", "tab_id": "w1:t1", "focused": true,
-                "agent_status": "idle", "revision": 1
-            }}),
-            "pane.process_info" => json!({"type": "pane_process_info", "process_info": {
-                "pane_id": "child-pane", "shell_pid": 42, "foreground_process_group_id": 42,
-                "foreground_processes": [{"pid": 42, "name": "zsh"}]
-            }}),
-            "agent.start" => json!({"type": "agent_started", "argv": [], "agent": {
-                "pane_id": "child-pane", "terminal_id": "child-terminal",
-                "workspace_id": "w1", "tab_id": "w1:t1", "focused": true,
-                "agent_status": "idle", "revision": 2
-            }}),
+        let herdr = FakeEngine::start(|method, _| match method {
+            "split_beside" => reply("child-pane".to_owned()),
+            "pane_processes" => reply(processes(
+                &json!({"type": "pane_process_info", "process_info": {
+                    "pane_id": "child-pane", "shell_pid": 42, "foreground_process_group_id": 42,
+                    "foreground_processes": [{"pid": 42, "name": "zsh"}]
+                }}),
+            )),
+            "start_agent" => started(),
             other => panic!("unexpected {other}"),
         });
         let request = ForkRequest {
@@ -1715,7 +1685,7 @@ mod tests {
         assert_eq!(pane_id, "child-pane");
         assert_eq!(
             herdr.methods(),
-            ["pane.split", "pane.process_info", "agent.start",]
+            ["split_beside", "pane_processes", "start_agent",]
         );
     }
 }

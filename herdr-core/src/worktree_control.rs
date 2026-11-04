@@ -1374,7 +1374,6 @@ fn start_task_agent(
                         .ok_or_else(|| "agent_start.terminal_device_unavailable".to_owned())?;
                     let actual = crate::node_access::pane_terminal(
                         engine.as_ref(),
-                        node.as_ref(),
                         &binding.pane_id,
                         Duration::from_secs(5),
                     )
@@ -1852,7 +1851,6 @@ fn open_tab_and_start_agent(target: &TabTarget, request: &CheckoutTabRequest) {
             return create_checked_checkout_tab(
                 target,
                 engine.as_ref(),
-                node.as_ref(),
                 request,
                 launch.as_ref(),
                 &current_geometry,
@@ -1860,13 +1858,14 @@ fn open_tab_and_start_agent(target: &TabTarget, request: &CheckoutTabRequest) {
         }
         let engine = current_session(target.engine.as_ref(), &current_geometry);
         if request.start.is_some() {
-            let node = node
-                .as_deref()
-                .ok_or_else(|| ControlFailure::Definite("agent_start.terminal_unchecked".into()))?;
+            if node.is_none() {
+                return Err(ControlFailure::Definite(
+                    "agent_start.terminal_unchecked".into(),
+                ));
+            }
             create_checked_checkout_tab(
                 target,
                 engine.as_ref(),
-                node,
                 request,
                 launch.as_ref(),
                 &current_geometry,
@@ -1983,7 +1982,6 @@ fn open_tab_and_start_agent(target: &TabTarget, request: &CheckoutTabRequest) {
 fn create_checked_checkout_tab(
     target: &TabTarget,
     engine: &dyn Engine,
-    node: &dyn crate::node_access::NodeLink,
     request: &CheckoutTabRequest,
     launch: Option<&hide_node_link::protocol::ShellLaunch>,
     check: &dyn Fn() -> Result<(), String>,
@@ -1994,7 +1992,6 @@ fn create_checked_checkout_tab(
     crate::checkout_start::run(
         &crate::checkout_start::Control {
             engine,
-            node,
             check,
             save: &|effect| target.save_start_effect(request.id, effect),
         },
@@ -2965,11 +2962,9 @@ fn open_worktree(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hide_herdr_client::{ApiConnector, ApiError, ApiStream};
-    use hide_platform::ipc::LocalStream;
+    use crate::engine::fake::{FakeEngine, Reply, processes, refused, reply, session, unanswered};
     use serde_json::Value;
     use std::collections::VecDeque;
-    use std::io::{BufRead, BufReader, Write};
     use std::process::Command;
 
     #[test]
@@ -2999,12 +2994,12 @@ mod tests {
         );
     }
 
-    // The only fake is the external server's newline-delimited protocol,
-    // asked through the Herdr engine as the core asks it.
+    /// An engine that answers each call with the next queued answer, in
+    /// order, and records every call.
     struct Server {
+        fake: Arc<FakeEngine<'static>>,
         engine: crate::engine::SharedEngine,
-        replies: Arc<Mutex<VecDeque<Value>>>,
-        requests: Arc<Mutex<Vec<Value>>>,
+        replies: Arc<Mutex<VecDeque<Reply>>>,
     }
     impl std::ops::Deref for Server {
         type Target = dyn Engine;
@@ -3012,79 +3007,55 @@ mod tests {
             self.engine.as_ref()
         }
     }
-    struct Script {
-        replies: Arc<Mutex<VecDeque<Value>>>,
-        requests: Arc<Mutex<Vec<Value>>>,
+    impl Server {
+        /// Every call so far, as `{"method", "params"}`.
+        fn requests(&self) -> Vec<Value> {
+            self.fake
+                .calls()
+                .into_iter()
+                .map(|(method, params)| json!({"method": method, "params": params}))
+                .collect()
+        }
     }
-    impl ApiConnector for Script {
-        fn connect(&self) -> Result<Box<dyn ApiStream>, ApiError> {
-            let reply = self
-                .replies
+    fn server(replies: Vec<Reply>) -> Server {
+        let replies = Arc::new(Mutex::new(replies.into_iter().collect::<VecDeque<_>>()));
+        let queued = Arc::clone(&replies);
+        let fake = FakeEngine::start(move |_, _| {
+            queued
                 .lock()
                 .unwrap()
                 .pop_front()
-                .expect("unexpected request");
-            let requests = self.requests.clone();
-            let (client, mut server) = LocalStream::pair().unwrap();
-            thread::spawn(move || {
-                let mut line = String::new();
-                BufReader::new(&mut server).read_line(&mut line).unwrap();
-                let request: Value = serde_json::from_str(&line).unwrap();
-                let mut response = reply;
-                response["id"] = request["id"].clone();
-                requests.lock().unwrap().push(request);
-                writeln!(server, "{response}").unwrap();
-            });
-            Ok(Box::new(client))
-        }
-    }
-    fn server(replies: Vec<Value>) -> Server {
-        let replies = Arc::new(Mutex::new(replies.into()));
-        let requests = Arc::new(Mutex::new(vec![]));
+                .expect("unexpected request")
+        });
         Server {
-            engine: crate::engine::herdr::HerdrEngine::shared(Arc::new(Script {
-                replies: Arc::clone(&replies),
-                requests: Arc::clone(&requests),
-            })),
+            engine: fake.engine(),
+            fake,
             replies,
-            requests,
         }
     }
 
-    fn snapshot(ids: &[&str]) -> Value {
-        json!({"result":{"type":"session_snapshot","snapshot":{"panes":ids.iter().map(|id|json!({"pane_id":id})).collect::<Vec<_>>()}}})
+    fn ok() -> Reply {
+        reply(())
     }
-    fn workspace_created(path: &str, workspace_id: &str, pane_id: &str) -> Value {
-        json!({"result":{
-            "type":"workspace_created",
-            "workspace":{"workspace_id":workspace_id,"label":"hide","number":1,"focused":true,"pane_count":1,"tab_count":1,"active_tab_id":format!("{workspace_id}:t1"),"agent_status":"unknown"},
-            "tab":{"workspace_id":workspace_id,"tab_id":format!("{workspace_id}:t1"),"label":"hide codex","number":1,"focused":true,"pane_count":1,"agent_status":"unknown"},
-            "root_pane":{"workspace_id":workspace_id,"tab_id":format!("{workspace_id}:t1"),"pane_id":pane_id, "terminal_id": "fixture-terminal","cwd":path,"foreground_cwd":path,"focused":true,"agent_status":"unknown","revision":0,"scroll":{"max_offset_from_bottom":0,"offset_from_bottom":0,"viewport_rows":40}}
-        }})
+    fn snapshot(ids: &[&str]) -> Reply {
+        reply(session(json!({
+            "panes": ids.iter().map(|id| json!({"pane_id": id})).collect::<Vec<_>>()
+        })))
     }
-    fn worktree_created(path: &str, branch: &str) -> Value {
-        let mut value = workspace_created(path, "w2", "w2:p1");
-        let result = value["result"].as_object_mut().unwrap();
-        result.insert("type".into(), json!("worktree_created"));
-        result.insert(
-            "worktree".into(),
-            json!({
-                "branch":branch,"is_bare":false,"is_detached":false,
-                "is_linked_worktree":true,"is_prunable":false,"label":"repo",
-                "open_workspace_id":"w2","path":path
-            }),
-        );
-        value
+    fn worktree_created(path: &str, branch: &str) -> Reply {
+        reply(crate::engine::CreatedWorktree {
+            tab_label: "hide codex".into(),
+            workspace_id: "w2".into(),
+            tab_id: "w2:t1".into(),
+            pane_id: "w2:p1".into(),
+            path: path.into(),
+            branch: Some(branch.into()),
+        })
     }
-    fn worktree_list(path: &str, branch: &str) -> Value {
-        json!({"result":{"type":"worktree_list","source":{
-            "repo_key":"/fixture/repo/.git","repo_name":"repo","repo_root":"/fixture/repo",
-            "source_checkout_path":"/fixture/repo","source_workspace_id":"w1"
-        },"worktrees":[{
-            "branch":branch,"is_bare":false,"is_detached":false,
-            "is_linked_worktree":true,"is_prunable":false,"label":"repo",
-            "open_workspace_id":"w2","path":path
-        }]}})
+    /// The worktree the engine lists for the requested branch, `feature`:
+    /// `path` when the listed one is that branch, none otherwise.
+    fn worktree_list(path: &str, branch: &str) -> Reply {
+        reply((branch == "feature").then(|| path.to_owned()))
     }
     struct ScriptedGit {
         replies: Mutex<VecDeque<Result<String, String>>>,
@@ -3139,10 +3110,7 @@ mod tests {
 
     #[test]
     fn issue_writer_uses_the_same_token_first_boundary_and_clears_both_values() {
-        let server = server(vec![
-            json!({"result":{"type":"ok"}}),
-            json!({"result":{"type":"ok"}}),
-        ]);
+        let server = server(vec![ok(), ok()]);
         let git = ScriptedGit::new(vec![Ok(""), Ok("")]);
         write_workspace_metadata(
             &*server,
@@ -3160,9 +3128,9 @@ mod tests {
             BranchConfigKey::Issue,
         )
         .unwrap();
-        let requests = server.requests.lock().unwrap();
-        assert_eq!(requests[0]["params"]["tokens"]["issue"], "acme/project#42");
-        assert!(requests[1]["params"]["tokens"]["issue"].is_null());
+        let requests = server.requests();
+        assert_eq!(requests[0]["params"]["value"], "acme/project#42");
+        assert!(requests[1]["params"]["value"].is_null());
         let calls = git.calls.lock().unwrap();
         assert_eq!(
             calls[0],
@@ -3176,7 +3144,7 @@ mod tests {
 
     #[test]
     fn purpose_writes_the_workspace_token_before_the_branch_description() {
-        let server = server(vec![json!({"result":{"type":"ok"}})]);
+        let server = server(vec![ok()]);
         let git = ScriptedGit::new(vec![Ok("")]);
 
         assert_eq!(
@@ -3187,15 +3155,12 @@ mod tests {
             }
         );
 
-        let requests = server.requests.lock().unwrap();
+        let requests = server.requests();
         assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0]["method"], "workspace.report_metadata");
-        assert_eq!(requests[0]["params"]["workspace_id"], "w7");
-        assert_eq!(requests[0]["params"]["source"], "hide");
-        assert_eq!(
-            requests[0]["params"]["tokens"]["purpose"],
-            "Ship checkout row D"
-        );
+        assert_eq!(requests[0]["method"], "report_workspace_token");
+        assert_eq!(requests[0]["params"]["workspace"], "w7");
+        assert_eq!(requests[0]["params"]["token"], "purpose");
+        assert_eq!(requests[0]["params"]["value"], "Ship checkout row D");
         assert_eq!(
             git.calls.lock().unwrap().as_slice(),
             [vec![
@@ -3290,11 +3255,11 @@ mod tests {
     fn issue_rollback_reports_only_an_uncertain_token_as_unconfirmed() {
         for failed_rollback in [false, true] {
             let rollback = if failed_rollback {
-                json!({"error":{"code":"unavailable","message":"rollback refused"}})
+                refused("unavailable", "rollback refused")
             } else {
-                json!({"result":{"type":"ok"}})
+                ok()
             };
-            let server = server(vec![json!({"result":{"type":"ok"}}), rollback]);
+            let server = server(vec![ok(), rollback]);
             let git = ScriptedGit::new(vec![Err("git locked")]);
             let error = write_issue_metadata(
                 &*server,
@@ -3304,18 +3269,13 @@ mod tests {
             )
             .unwrap_err();
             assert_eq!(error.unconfirmed_token, failed_rollback);
-            assert_eq!(
-                server.requests.lock().unwrap()[1]["params"]["tokens"]["issue"],
-                "acme/project#1"
-            );
+            assert_eq!(server.requests()[1]["params"]["value"], "acme/project#1");
         }
     }
 
     #[test]
     fn rejected_workspace_token_never_writes_git() {
-        let server = server(vec![json!({
-            "error":{"code":"unavailable","message":"injected token refusal"}
-        })]);
+        let server = server(vec![refused("unavailable", "injected token refusal")]);
         let git = ScriptedGit::new(vec![]);
 
         let error = write_purpose(&*server, &git, &purpose_request("Keep input")).unwrap_err();
@@ -3326,7 +3286,7 @@ mod tests {
 
     #[test]
     fn git_failure_after_a_workspace_token_is_a_partial_save() {
-        let server = server(vec![json!({"result":{"type":"ok"}})]);
+        let server = server(vec![ok()]);
         let git = ScriptedGit::new(vec![Err("injected git lock")]);
 
         assert_eq!(
@@ -3354,12 +3314,12 @@ mod tests {
                 detail: "injected git lock".into(),
             }
         );
-        assert!(server.requests.lock().unwrap().is_empty());
+        assert!(server.requests().is_empty());
     }
 
     #[test]
     fn clearing_a_purpose_clears_the_token_and_branch_description() {
-        let server = server(vec![json!({"result":{"type":"ok"}})]);
+        let server = server(vec![ok()]);
         let git = ScriptedGit::new(vec![Ok("")]);
 
         assert!(matches!(
@@ -3367,8 +3327,8 @@ mod tests {
             Ok(PurposeTaskOutcome::Saved { purpose, .. }) if purpose.is_empty()
         ));
 
-        let requests = server.requests.lock().unwrap();
-        assert!(requests[0]["params"]["tokens"]["purpose"].is_null());
+        let requests = server.requests();
+        assert!(requests[0]["params"]["value"].is_null());
         assert_eq!(
             git.calls.lock().unwrap().as_slice(),
             [vec![
@@ -3382,10 +3342,7 @@ mod tests {
 
     #[test]
     fn creation_compensates_a_token_when_the_git_mirror_fails() {
-        let server = server(vec![
-            json!({"result":{"type":"ok"}}),
-            json!({"result":{"type":"ok"}}),
-        ]);
+        let server = server(vec![ok(), ok()]);
         let git = ScriptedGit::new(vec![Err("injected git lock")]);
 
         assert_eq!(
@@ -3396,20 +3353,17 @@ mod tests {
             })
         );
 
-        let requests = server.requests.lock().unwrap();
+        let requests = server.requests();
         assert_eq!(requests.len(), 2);
-        assert_eq!(
-            requests[0]["params"]["tokens"]["purpose"],
-            "Use the fallback"
-        );
-        assert!(requests[1]["params"]["tokens"]["purpose"].is_null());
+        assert_eq!(requests[0]["params"]["value"], "Use the fallback");
+        assert!(requests[1]["params"]["value"].is_null());
     }
 
     #[test]
     fn creation_marks_a_token_unconfirmed_when_git_and_cleanup_both_fail() {
         let server = server(vec![
-            json!({"result":{"type":"ok"}}),
-            json!({"error":{"code":"unavailable","message":"injected cleanup refusal"}}),
+            ok(),
+            refused("unavailable", "injected cleanup refusal"),
         ]);
         let git = ScriptedGit::new(vec![Err("injected git lock")]);
 
@@ -3420,7 +3374,7 @@ mod tests {
                 unconfirmed_token: Some("Use the fallback".to_owned()),
             })
         );
-        assert_eq!(server.requests.lock().unwrap().len(), 2);
+        assert_eq!(server.requests().len(), 2);
     }
 
     #[test]
@@ -3702,9 +3656,7 @@ mod tests {
 
     #[test]
     fn refusal_never_authorizes_removal_or_closes_the_next_pane() {
-        let server = server(vec![
-            json!({"error":{"code":"confirmation_required","message":"close refused"}}),
-        ]);
+        let server = server(vec![refused("confirmation_required", "close refused")]);
         let result = close_checkout_panes(
             &*server,
             &hide_node::Local::of_process(),
@@ -3714,13 +3666,13 @@ mod tests {
             CONFIRM_TIMEOUT,
         );
         assert!(result.unwrap_err().contains("close refused"));
-        assert_eq!(server.requests.lock().unwrap().len(), 1);
+        assert_eq!(server.requests().len(), 1);
     }
     #[test]
     fn every_requested_pane_must_disappear_before_removal_is_ready() {
         let server = server(vec![
-            json!({"result":{"type":"ok"}}),
-            json!({"result":{"type":"ok"}}),
+            ok(),
+            ok(),
             snapshot(&["w1:p2", "w2:p1"]),
             snapshot(&["w2:p1"]),
         ]);
@@ -3734,10 +3686,7 @@ mod tests {
         )
         .unwrap();
         assert!(server.replies.lock().unwrap().is_empty());
-        assert_eq!(
-            server.requests.lock().unwrap()[1]["params"],
-            json!({"pane_id":"w1:p2"})
-        );
+        assert_eq!(server.requests()[1]["params"], json!({"pane":"w1:p2"}));
     }
     #[test]
     fn a_new_pane_at_the_checkout_blocks_removal_authorization() {
@@ -3752,32 +3701,27 @@ mod tests {
     }
     #[test]
     fn malformed_confirmation_cannot_authorize_removal() {
-        for invalid in [
-            json!({}),
-            json!({"type":"session_snapshot","snapshot":{}}),
-            json!({"type":"session_snapshot","snapshot":{"panes":[{}]}}),
-        ] {
-            let server = server(vec![
-                json!({"result":{"type":"ok"}}),
-                json!({"result":invalid}),
-            ]);
-            assert!(
-                close_checkout_panes(
-                    &*server,
-                    &hide_node::Local::of_process(),
-                    &["/fixture/topic".into()],
-                    &["w1:p1".into()],
-                    ProcessWait::Skip,
-                    CONFIRM_TIMEOUT
-                )
-                .is_err()
-            );
-        }
+        let server = server(vec![
+            ok(),
+            Err(crate::engine::EngineError::Malformed("no panes".into())),
+        ]);
+        assert!(
+            close_checkout_panes(
+                &*server,
+                &hide_node::Local::of_process(),
+                &["/fixture/topic".into()],
+                &["w1:p1".into()],
+                ProcessWait::Skip,
+                CONFIRM_TIMEOUT
+            )
+            .is_err()
+        );
     }
-    fn process_info(pane: &str, shell: u32) -> Value {
-        json!({"result":{"type":"pane_process_info","process_info":{
-            "pane_id":pane,"shell_pid":shell,"foreground_process_group_id":shell,
-            "foreground_processes":[{"pid":shell,"name":"sleep"}]}}})
+    fn process_info(_pane: &str, shell: u32) -> Reply {
+        reply(processes(
+            &json!({"shell_pid":shell,"foreground_process_group_id":shell,
+            "foreground_processes":[{"pid":shell,"name":"sleep"}]}),
+        ))
     }
 
     /// A child that is ended however the test leaves.
@@ -3836,13 +3780,14 @@ mod tests {
     #[cfg(unix)]
     impl ShellWithChild {
         fn start() -> Self {
+            use std::io::BufRead as _;
             let mut shell = Command::new("sh")
                 .args(["-c", "sleep 30 & echo $!; wait"])
                 .stdout(std::process::Stdio::piped())
                 .spawn()
                 .unwrap();
             let mut line = String::new();
-            BufReader::new(shell.stdout.take().unwrap())
+            std::io::BufReader::new(shell.stdout.take().unwrap())
                 .read_line(&mut line)
                 .unwrap();
             let child = line.trim().parse().unwrap();
@@ -3979,9 +3924,7 @@ mod tests {
 
     #[test]
     fn a_pane_whose_processes_cannot_be_read_closes_no_pane() {
-        let server = server(vec![
-            json!({"error":{"code":"pane_not_found","message":"no such pane"}}),
-        ]);
+        let server = server(vec![refused("pane_not_found", "no such pane")]);
         let error = close_checkout_panes(
             &*server,
             &hide_node::Local::of_process(),
@@ -3992,12 +3935,12 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.contains("pane.process_info failed"), "{error}");
-        assert_eq!(server.requests.lock().unwrap().len(), 1);
+        assert_eq!(server.requests().len(), 1);
     }
 
     #[test]
     fn a_wait_that_is_skipped_never_asks_for_processes() {
-        let server = server(vec![json!({"result":{"type":"ok"}}), snapshot(&[])]);
+        let server = server(vec![ok(), snapshot(&[])]);
         close_checkout_panes(
             &*server,
             &hide_node::Local::of_process(),
@@ -4007,12 +3950,12 @@ mod tests {
             CONFIRM_TIMEOUT,
         )
         .unwrap();
-        assert_eq!(server.requests.lock().unwrap()[0]["method"], "pane.close");
+        assert_eq!(server.requests()[0]["method"], "close_pane");
     }
 
     #[test]
     fn confirmation_timeout_cannot_authorize_removal() {
-        let server = server(vec![json!({"result":{"type":"ok"}}), snapshot(&["w1:p1"])]);
+        let server = server(vec![ok(), snapshot(&["w1:p1"])]);
         assert!(
             close_checkout_panes(
                 &*server,
@@ -4029,25 +3972,30 @@ mod tests {
     #[test]
     fn open_uses_repository_context_and_existing_pane_focus_is_exact() {
         let server = server(vec![
-            json!({"result":{"type":"ok"}}),
-            json!({"result":{"type":"ok"}}),
+            reply(crate::engine::OpenedWorktree {
+                tab_label: "1".into(),
+                workspace_id: "w2".into(),
+                label: "topic".into(),
+                tab_id: "w2:t1".into(),
+                pane_id: "w2:p1".into(),
+                already_open: false,
+            }),
+            ok(),
         ]);
         open_worktree(&*server, "/fixture/topic", "/fixture/main", None).unwrap();
         open_worktree(&*server, "/fixture/topic", "/fixture/main", Some("w1:p2")).unwrap();
-        let requests = server.requests.lock().unwrap();
-        assert_eq!(requests[0]["method"], "worktree.open");
+        let requests = server.requests();
+        assert_eq!(requests[0]["method"], "open_worktree");
         assert_eq!(
             requests[0]["params"],
-            json!({"cwd":"/fixture/main","path":"/fixture/topic","focus":true})
+            json!({"repository_root":"/fixture/main","path":"/fixture/topic","focus":true})
         );
-        assert_eq!(requests[1]["method"], "pane.focus");
-        assert_eq!(requests[1]["params"], json!({"pane_id":"w1:p2"}));
+        assert_eq!(requests[1]["method"], "focus_pane");
+        assert_eq!(requests[1]["params"], json!({"pane":"w1:p2"}));
     }
     #[test]
     fn open_preserves_the_server_rejection() {
-        let server = server(vec![
-            json!({"error":{"code":"not_found","message":"checkout no longer exists"}}),
-        ]);
+        let server = server(vec![refused("not_found", "checkout no longer exists")]);
         assert!(
             open_worktree(&*server, "/fixture/topic", "/fixture/main", None)
                 .unwrap_err()
@@ -4061,7 +4009,7 @@ mod tests {
         let server = server(vec![
             worktree_created(missing, "feature"),
             worktree_list(missing, "other"),
-            json!({"result":{"type":"ok"}}),
+            ok(),
             worktree_list(missing, "other"),
         ]);
         let error = create_worktree(
@@ -4074,19 +4022,17 @@ mod tests {
         assert!(error.contains("rolled back"));
         assert!(!Path::new(missing).exists());
         let methods = server
-            .requests
-            .lock()
-            .unwrap()
+            .requests()
             .iter()
             .map(|request| request["method"].as_str().unwrap().to_owned())
             .collect::<Vec<_>>();
         assert_eq!(
             methods,
             [
-                "worktree.create",
-                "worktree.list",
-                "worktree.remove",
-                "worktree.list"
+                "create_worktree",
+                "worktree_path",
+                "remove_worktree",
+                "worktree_path"
             ]
         );
     }
@@ -4117,14 +4063,12 @@ mod tests {
         // No retry of the creation can succeed, so the next step is named.
         assert!(error.contains("start the agent in its pane"), "{error}");
         let methods = server
-            .requests
-            .lock()
-            .unwrap()
+            .requests()
             .iter()
             .map(|request| request["method"].as_str().unwrap().to_owned())
             .collect::<Vec<_>>();
         assert!(
-            !methods.iter().any(|method| method == "worktree.remove"),
+            !methods.iter().any(|method| method == "remove_worktree"),
             "{methods:?}"
         );
     }
@@ -4156,13 +4100,11 @@ mod tests {
         assert_eq!(outcome.path, response_path);
         assert_eq!(
             server
-                .requests
-                .lock()
-                .unwrap()
+                .requests()
                 .iter()
                 .map(|request| request["method"].as_str().unwrap())
                 .collect::<Vec<_>>(),
-            ["worktree.create", "worktree.list"]
+            ["create_worktree", "worktree_path"]
         );
     }
 
@@ -4190,9 +4132,7 @@ mod tests {
             }
         }
         let path = "/fixture/repo.worktrees/feature";
-        let replaced = json!({"result":{"type":"layout_apply","layout":{"workspace_id":"w2",
-            "tab_id":"w2:t2","zoomed":false,"focused_pane_id":"w2:p2",
-            "root":{"type":"pane","pane_id":"w2:p2"}}}});
+        let replaced = reply(("w2:t2".to_owned(), "w2:p2".to_owned()));
         let replacing = server(vec![
             worktree_created(path, "feature"),
             worktree_list(path, "feature"),
@@ -4218,10 +4158,10 @@ mod tests {
                 program: "zsh".into()
             }
         );
-        let requests = replacing.requests.lock().unwrap();
+        let requests = replacing.requests();
         let apply = &requests[2];
-        assert_eq!(apply["method"], "layout.apply");
-        assert_eq!(apply["params"]["tab_id"], "w2:t1");
+        assert_eq!(apply["method"], "launch_tab");
+        assert_eq!(apply["params"]["replace"], "w2:t1");
         assert_eq!(apply["params"]["focus"], true);
         drop(requests);
 
@@ -4246,7 +4186,7 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.contains("uncommitted changes"));
-        assert!(server.requests.lock().unwrap().is_empty());
+        assert!(server.requests().is_empty());
     }
 
     #[test]
@@ -4271,10 +4211,10 @@ mod tests {
             git.calls.lock().unwrap()[2],
             ["checkout", "--no-overwrite-ignore", "main", "--"]
         );
-        let requests = server.requests.lock().unwrap();
+        let requests = server.requests();
         let create = requests
             .iter()
-            .find(|request| request["method"] == "worktree.create")
+            .find(|request| request["method"] == "create_worktree")
             .unwrap();
         assert_eq!(
             create["params"]["focus"], false,
@@ -4285,11 +4225,7 @@ mod tests {
     #[test]
     fn a_checkout_tab_is_focused_in_herdr_only_when_the_request_asks() {
         for focus in [true, false] {
-            let server = server(vec![json!({"result":{
-                "type":"tab_created",
-                "tab":{"tab_id":"w9:t2","workspace_id":"w9","number":2,"label":"Tab 2","focused":focus,"pane_count":1,"agent_status":"idle"},
-                "root_pane":{"pane_id":"w9:p2","terminal_id":"fixture-terminal","workspace_id":"w9","tab_id":"w9:t2","focused":focus,"agent_status":"idle","revision":1}
-            }})]);
+            let server = server(vec![reply(("w9:t2".to_owned(), "w9:p2".to_owned()))]);
             let outcome = create_checkout_tab(
                 &*server,
                 &CheckoutTabRequest {
@@ -4308,17 +4244,15 @@ mod tests {
             )
             .unwrap();
             assert_eq!(outcome.pane_id, "w9:p2");
-            let requests = server.requests.lock().unwrap();
-            assert_eq!(requests[0]["method"], "tab.create");
+            let requests = server.requests();
+            assert_eq!(requests[0]["method"], "create_tab");
             assert_eq!(requests[0]["params"]["focus"], focus);
         }
     }
 
     #[test]
     fn migrate_branch_restores_on_failure() {
-        let server = server(vec![
-            json!({"error":{"code":"injected","message":"pane creation failed"}}),
-        ]);
+        let server = server(vec![refused("injected", "pane creation failed")]);
         let git = ScriptedGit::new(vec![Ok(""), Ok("feature"), Ok(""), Ok("")]);
         let error = migrate_branch(
             &*server,
@@ -4334,22 +4268,18 @@ mod tests {
         );
         assert_eq!(
             server
-                .requests
-                .lock()
-                .unwrap()
+                .requests()
                 .iter()
                 .map(|request| request["method"].as_str().unwrap())
                 .collect::<Vec<_>>(),
-            ["worktree.create"]
+            ["create_worktree"]
         );
     }
 
     #[test]
     fn migrate_branch_leaves_panes_and_focus() {
         let git = ScriptedGit::new(vec![Ok(""), Ok("feature"), Ok(""), Ok("")]);
-        let server = server(vec![
-            json!({"error":{"code":"injected","message":"create failed"}}),
-        ]);
+        let server = server(vec![refused("injected", "create failed")]);
         let _ = migrate_branch(
             &*server,
             &hide_node::Local::of_process(),
@@ -4358,20 +4288,19 @@ mod tests {
         );
         assert!(
             server
-                .requests
-                .lock()
-                .unwrap()
+                .requests()
                 .iter()
-                .all(|request| request["method"] != "pane.focus"
-                    && request["method"] != "pane.close")
+                .all(|request| request["method"] != "focus_pane"
+                    && request["method"] != "close_pane")
         );
     }
 
     #[test]
     fn migrate_branch_does_not_remove_an_unowned_worktree_after_create_failure() {
-        let server = server(vec![
-            json!({"error":{"code":"injected","message":"create failed after another client used the branch"}}),
-        ]);
+        let server = server(vec![refused(
+            "injected",
+            "create failed after another client used the branch",
+        )]);
         let git = ScriptedGit::new(vec![Ok(""), Ok("feature"), Ok(""), Ok("")]);
 
         let error = migrate_branch(
@@ -4385,13 +4314,11 @@ mod tests {
         assert!(error.contains("restored the main worktree to feature"));
         assert_eq!(
             server
-                .requests
-                .lock()
-                .unwrap()
+                .requests()
                 .iter()
                 .map(|request| request["method"].as_str().unwrap())
                 .collect::<Vec<_>>(),
-            ["worktree.create"],
+            ["create_worktree"],
             "an ambiguous create failure must not remove a worktree it cannot prove it owns"
         );
     }
@@ -4413,7 +4340,7 @@ mod tests {
         .unwrap_err();
         assert!(error.contains("checkout base branch"));
         assert_eq!(git.calls.lock().unwrap().len(), 3);
-        assert!(server.requests.lock().unwrap().is_empty());
+        assert!(server.requests().is_empty());
     }
 
     #[test]
@@ -4466,14 +4393,12 @@ mod tests {
             .run(root.to_str().unwrap(), GitCommand::CurrentBranch)
             .unwrap();
         assert_eq!(branch, "feature");
-        assert!(server.requests.lock().unwrap().is_empty());
+        assert!(server.requests().is_empty());
     }
 
     #[test]
     fn migrate_branch_restore_failure_reports_repo_state() {
-        let server = server(vec![
-            json!({"error":{"code":"injected","message":"create failed"}}),
-        ]);
+        let server = server(vec![refused("injected", "create failed")]);
         let git = ScriptedGit::new(vec![
             Ok(""),
             Ok("feature"),
@@ -4499,14 +4424,20 @@ mod tests {
             "focused": false, "interactive_ready": true, "revision": 0
         })
     }
-    fn shell_ready() -> Value {
-        json!({"result":{"type":"pane_process_info","process_info":{
-            "pane_id":"w1:p1","shell_pid":4100,"foreground_process_group_id":4100,
-            "foreground_processes":[{"pid":4100,"name":"zsh"}]
-        }}})
+    fn shell_ready() -> Reply {
+        reply(processes(
+            &json!({"shell_pid":4100,"foreground_process_group_id":4100,
+            "foreground_processes":[{"pid":4100,"name":"zsh"}]}),
+        ))
+    }
+    fn started() -> Reply {
+        reply(crate::engine::StartedAgent {
+            pane_id: "w1:p1".into(),
+            terminal_id: Some("term_1".into()),
+        })
     }
     fn requests_of(server: &Server) -> Vec<Value> {
-        server.requests.lock().unwrap().clone()
+        server.requests()
     }
 
     fn methods_of(requests: &[Value]) -> Vec<&str> {
@@ -4646,10 +4577,7 @@ mod tests {
             // No Windows journey cell proves a launch, so there every first
             // prompt is typed.
             let typed = prompt.is_empty() || cfg!(windows);
-            let mut replies = vec![
-                shell_ready(),
-                json!({"result":{"type":"agent_started","argv":[],"agent":agent("working")}}),
-            ];
+            let mut replies = vec![shell_ready(), started()];
             if typed {
                 replies.extend(typed_replies(kind));
             }
@@ -4684,9 +4612,9 @@ mod tests {
                 "{kind}: {outcome:?}"
             );
             let requests = requests_of(&server);
-            let mut methods = vec!["pane.process_info", "agent.start"];
+            let mut methods = vec!["pane_processes", "start_agent"];
             if typed {
-                methods.extend(["agent.get", "agent.prompt"]);
+                methods.extend(["delivery_agent", "prompt_agent"]);
                 assert_eq!(requests[3]["params"]["text"], "-fix the tests", "{kind}");
             }
             assert_eq!(methods_of(&requests), methods, "{kind}");
@@ -4726,10 +4654,7 @@ mod tests {
         };
         // A device start: no agent node (its Herdr answers for its PATH), a
         // pane node that is the device's.
-        let server = server(vec![
-            shell_ready(),
-            json!({"result":{"type":"agent_started","argv":[],"agent":agent("working")}}),
-        ]);
+        let server = server(vec![shell_ready(), started()]);
         let outcome =
             launch_with_prompt_checked(&*server, None, Some(&node), false, 7, make(), &|| Ok(()));
         assert!(matches!(outcome, TaskAgentOutcome::Started), "{outcome:?}");
@@ -4831,10 +4756,7 @@ mod tests {
 
     #[test]
     fn a_codex_with_the_shared_daemon_starts_without_it() {
-        let server = server(vec![
-            shell_ready(),
-            json!({"result":{"type":"agent_started","argv":[],"agent":agent("working")}}),
-        ]);
+        let server = server(vec![shell_ready(), started()]);
         let outcome = launch_with_prompt(
             &*server,
             Some(&Starts(StartForm::Program)),
@@ -4864,10 +4786,7 @@ mod tests {
     /// typed into the pane, where a startup question would take it.
     #[test]
     fn a_multi_line_prompt_travels_as_one_argument_and_is_never_typed() {
-        let server = server(vec![
-            shell_ready(),
-            json!({"result":{"type":"agent_started","argv":[],"agent":agent("idle")}}),
-        ]);
+        let server = server(vec![shell_ready(), started()]);
         let outcome = launch_with_prompt(
             &*server,
             Some(&Starts(StartForm::Program)),
@@ -4886,7 +4805,7 @@ mod tests {
         );
         assert!(matches!(outcome, TaskAgentOutcome::Started), "{outcome:?}");
         let requests = requests_of(&server);
-        assert_eq!(methods_of(&requests), ["pane.process_info", "agent.start"]);
+        assert_eq!(methods_of(&requests), ["pane_processes", "start_agent"]);
         assert_eq!(
             requests[1]["params"]["args"],
             json!([
@@ -4970,7 +4889,10 @@ mod tests {
     fn a_refused_start_is_reported_and_not_retried_without_the_prompt() {
         let server = server(vec![
             shell_ready(),
-            json!({"error":{"code":"invalid_agent_argument","message":"agent arguments cannot be encoded safely for the target shell"}}),
+            refused(
+                "invalid_agent_argument",
+                "agent arguments cannot be encoded safely for the target shell",
+            ),
         ]);
         let outcome = launch_with_prompt(
             &*server,
@@ -5002,7 +4924,7 @@ mod tests {
         );
         assert_eq!(
             methods_of(&requests_of(&server)),
-            ["pane.process_info", "agent.start"]
+            ["pane_processes", "start_agent"]
         );
     }
 
@@ -5026,14 +4948,11 @@ mod tests {
     /// What Herdr answers after a start whose first prompt is typed: the
     /// agent ready for input under the name the task gave it, then the
     /// typing taken.
-    fn typed_replies(kind: &str) -> [Value; 2] {
+    fn typed_replies(kind: &str) -> [Reply; 2] {
         let mut ready = agent("idle");
         ready["agent"] = json!(kind);
         ready["name"] = json!(crate::fork::task_agent_name(kind, "w1:p1"));
-        [
-            json!({"result":{"type":"agent_info","agent":ready}}),
-            json!({"result":{"type":"agent_prompted","agent":agent("working")}}),
-        ]
+        [reply(crate::engine::fake::delivery_agent(&ready)), ok()]
     }
 
     fn codex_start(prompt: &str) -> PendingAgentStart {
@@ -5055,10 +4974,7 @@ mod tests {
     /// whole, after its screen takes input.
     #[test]
     fn a_first_prompt_to_a_device_start_is_typed_after_the_screen() {
-        let mut replies = vec![
-            shell_ready(),
-            json!({"result":{"type":"agent_started","argv":[],"agent":agent("working")}}),
-        ];
+        let mut replies = vec![shell_ready(), started()];
         replies.extend(typed_replies("codex"));
         let server = server(replies);
         let prompt = "50% done, say \"hi\"\nthen stop";
@@ -5068,14 +4984,14 @@ mod tests {
         assert_eq!(
             methods_of(&requests),
             [
-                "pane.process_info",
-                "agent.start",
-                "agent.get",
-                "agent.prompt"
+                "pane_processes",
+                "start_agent",
+                "delivery_agent",
+                "prompt_agent"
             ]
         );
         // The start carries no argument, so Herdr is sent none.
-        assert_eq!(requests[1]["params"]["args"], Value::Null);
+        assert_eq!(requests[1]["params"]["args"], json!([]));
         assert_eq!(requests[3]["params"]["text"], prompt);
     }
 
@@ -5085,18 +5001,16 @@ mod tests {
     /// again: the agent runs, and a Retry would start a second one.
     #[test]
     fn a_first_prompt_not_confirmed_typed_settles_the_start_as_unconfirmed() {
-        let refused = json!({"error":{"code":"invalid_params","message":"bad text"}});
-        let lost = json!({"result":{"type":"pane_info","pane":agent("working")}});
-        let unread = json!({"error":{"code":"internal","message":"agent read failed"}});
+        let ready = || typed_replies("codex").into_iter().next().unwrap();
         for (case, tail) in [
-            ("refused", vec![typed_replies("codex")[0].clone(), refused]),
-            ("lost", vec![typed_replies("codex")[0].clone(), lost]),
-            ("unread", vec![unread]),
+            (
+                "refused",
+                vec![ready(), refused("invalid_params", "bad text")],
+            ),
+            ("lost", vec![ready(), unanswered("the answer was lost")]),
+            ("unread", vec![refused("internal", "agent read failed")]),
         ] {
-            let mut replies = vec![
-                shell_ready(),
-                json!({"result":{"type":"agent_started","argv":[],"agent":agent("working")}}),
-            ];
+            let mut replies = vec![shell_ready(), started()];
             replies.extend(tail);
             let server = server(replies);
             let outcome = launch_with_prompt(&*server, None, 7, codex_start("go"));
@@ -5106,7 +5020,7 @@ mod tests {
             assert_eq!(failure.reason, "agent_start.prompt_not_typed", "{case}");
             let agent_prompts = requests_of(&server)
                 .iter()
-                .filter(|request| request["method"] == "agent.prompt")
+                .filter(|request| request["method"] == "prompt_agent")
                 .count();
             assert!(agent_prompts <= 1, "{case}: typed once at most");
         }

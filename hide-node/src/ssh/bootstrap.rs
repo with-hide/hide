@@ -185,9 +185,8 @@ put) [ -n "$root" ] || { say fail "no install folder was chosen"; exit 65; }; be
 find "${f%/*}" -maxdepth 1 -name '.upload-*' -mmin +10 -exec rm -f {} + 2>/dev/null;
 if head -c "$d" | store "$t" && [ "$(sum "$t")" = "$b" ] && chmod -- "$c" "$t" && mv -f -- "$t" "$f"; then t=; say ok; else rm -f -- "$t"; t=; say fail "$a did not arrive whole"; fi;;
 start) [ -n "$root" ] || { say fail "no install folder was chosen"; exit 65; }; h=$root/$a;
-case $b in session=*) unset HERDR_SOCKET_PATH; HERDR_SESSION=${b#session=}; export HERDR_SESSION;; socket=*) unset HERDR_SESSION; HERDR_SOCKET_PATH=${b#socket=}; export HERDR_SOCKET_PATH;; esac;
 below "$a" || { say fail "$ub"; exit 65; }; [ -x "$h" ] && mine "$h" || { say fail "the helper $h is missing or can be changed by other accounts"; exit 65; };
-case ${c:--} in -) ;; *) { (umask 077; mkdir -p -- "$c") && HOME=$c && export HOME && unset @HOME_FOLDER_VARIABLES@@AGENT_HOMES@; } || { say fail "the home $c could not be made"; exit 65; };; esac;
+case ${b:--} in -) ;; *) { (umask 077; mkdir -p -- "$b") && HOME=$b && export HOME && unset @HOME_FOLDER_VARIABLES@@AGENT_HOMES@; } || { say fail "the home $b could not be made"; exit 65; };; esac;
 cd -- "$HOME" 2>/dev/null || :;
 say start; exec "$h" node serve;;
 run) set --; i=0; while [ "$i" -lt "$a" ] && IFS= read -r w; do set -- "$@" "$w"; i=$((i+1)); done;
@@ -518,15 +517,6 @@ pub(crate) fn install(
     })
 }
 
-/// Which Herdr server the helper bridges to the core: the account's own,
-/// a named session, or a socket the registration names (B24).
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum HerdrChoice {
-    Account,
-    Session(String),
-    Socket(String),
-}
-
 /// Starts the helper in place of the script; from its answer on, the pipes
 /// are the helper's link. `home`, an absolute path in the device's own wire
 /// spelling, is the home the helper runs with in place of the account's
@@ -540,17 +530,11 @@ pub(crate) enum HerdrChoice {
 pub(crate) fn start(
     pipe: &mut dyn Pipe,
     helper_relative: &str,
-    herdr: &HerdrChoice,
     home: Option<&str>,
 ) -> Result<(), EstablishError> {
-    let choice = match herdr {
-        HerdrChoice::Account => "-".to_owned(),
-        HerdrChoice::Session(session) => format!("session={session}"),
-        HerdrChoice::Socket(socket) => format!("socket={socket}"),
-    };
-    if !plain(&choice) || !plain(helper_relative) {
+    if !plain(helper_relative) {
         return Err(EstablishError::Helper(
-            "The device's Herdr session or socket is not a plain name".to_owned(),
+            "The device's helper path is not a plain name".to_owned(),
         ));
     }
     let home = match home {
@@ -565,7 +549,7 @@ pub(crate) fn start(
     let deadline = Instant::now() + STEP_TIMEOUT;
     match step(
         pipe,
-        &format!("start\t{helper_relative}\t{choice}\t{home}\n"),
+        &format!("start\t{helper_relative}\t{home}\n"),
         deadline,
     )?
     .as_slice()

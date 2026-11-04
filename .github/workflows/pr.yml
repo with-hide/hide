@@ -195,7 +195,6 @@ jobs:
           bash scripts/check-worktree-removal-boundary.sh
           zsh scripts/check-herdr-pin-single-source.sh
           python3 scripts/check-core-touches-no-machine.py
-          python3 scripts/check-engine-boundary.py
           python3 scripts/check-ai-prompt-language.py
           python3 scripts/check-agent-screen-rules.py
 
@@ -538,7 +537,7 @@ jobs:
         env:
           HIDE_TEST_HOLDER_BIN: ${{ github.workspace }}\target\debug\hide-holder.exe
           HIDE_HOLDER_CONPTY: ${{ runner.temp }}\holder-conpty
-        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(herdr-core) & kind(lib) & test(/^engine::contract::/) & !test(=engine::contract::the_pinned_herdr_meets_the_engine_contract)' --run-ignored only --no-capture
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(herdr-core) & kind(lib) & test(/^engine::contract::/)' --run-ignored only --no-capture
       - name: Windows' own OpenSSH asks through Hide's askpass
         # hided/tests/it/system_ssh.rs (PRD system-ssh-device-link, B34): the
         # inbox ssh-keygen.exe reads a key's passphrase through `hide` as its

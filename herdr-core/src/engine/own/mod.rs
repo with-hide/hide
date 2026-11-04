@@ -24,7 +24,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
-use std::time::Duration;
 
 use hide_node_link::NodeLink;
 use hide_node_link::holders::{
@@ -34,10 +33,10 @@ use hide_node_link::holders::{
 
 use super::keys::PaneKey;
 use super::{
-    AgentLaunch, AgentState, Answer, Changes, CreatedWorktree, DeliveryAgent, Engine, EngineError,
-    Env, EventStream, Gate, Notified, OpenedWorktree, PaneJoinResult, PanePlace, PaneProcessGroup,
-    PaneProof, PaneSession, PaneSessionKind, PaneText, PreparedStart, Readiness, ServerPong,
-    StartedAgent, Wait, Wake, Zoom,
+    AgentLaunch, AgentState, Answer, CreatedWorktree, DeliveryAgent, Engine, EngineError, Env,
+    Gate, Notified, OpenedWorktree, PaneJoinResult, PanePlace, PaneProcessGroup, PaneProof,
+    PaneSession, PaneSessionKind, PaneText, PreparedStart, Readiness, ServerPong, StartedAgent,
+    Wait, Wake, Zoom,
 };
 use crate::model::PaneLayoutDirection;
 use crate::recent_closed::{ClosedLayout, ClosedLayoutNode, ClosedSplitDirection};
@@ -1306,13 +1305,12 @@ impl<'g> Engine for OwnEngine<'g> {
         })
     }
 
-    fn changes(&self, wake: Wake) -> Changes {
+    fn changes(&self, wake: Wake) {
         *self
             .shared
             .wake
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Some(wake);
-        Changes::Pulled
     }
 
     fn set_agent_definitions(&self, catalog: Arc<hide_agent_adapter::definition::Catalog>) {
@@ -1400,15 +1398,6 @@ impl<'g> Engine for OwnEngine<'g> {
         })
     }
 
-    fn subscribe(&self, _timeout: Duration) -> Answer<EventStream> {
-        self.check()?;
-        Err(EngineError::Refused {
-            code: "no_event_stream".to_owned(),
-            message: "the core's own engine wakes its watcher instead of streaming events"
-                .to_owned(),
-        })
-    }
-
     fn create_workspace(
         &self,
         _wait: Wait,
@@ -1435,11 +1424,6 @@ impl<'g> Engine for OwnEngine<'g> {
     fn workspace_active_tab(&self, _wait: Wait, workspace: &str) -> Answer<String> {
         self.check()?;
         self.topology().active_tab(workspace)
-    }
-
-    fn focused_workspace(&self, _wait: Wait) -> Answer<Option<String>> {
-        self.check()?;
-        Ok(self.topology().focused_workspace())
     }
 
     fn workspace_tokens(&self, _wait: Wait, token: &str) -> Answer<Vec<(String, Option<String>)>> {
@@ -1972,14 +1956,6 @@ impl<'g> Engine for OwnEngine<'g> {
         self.processes(pane)
     }
 
-    fn foreground_program(&self, _wait: Wait, pane: &str) -> Answer<Option<String>> {
-        self.check()?;
-        Ok(self
-            .processes(pane)?
-            .foreground_program()
-            .map(str::to_owned))
-    }
-
     fn resumed_session(
         &self,
         _wait: Wait,
@@ -2046,12 +2022,8 @@ impl<'g> Engine for OwnEngine<'g> {
         })
     }
 
-    fn inspect_pane(
-        &self,
-        wait: Wait,
-        pane: &str,
-    ) -> Option<Answer<hide_node_link::panes::PaneIdentity>> {
-        Some(self.pane_identity(wait, pane).and_then(|proof| {
+    fn inspect_pane(&self, wait: Wait, pane: &str) -> Answer<hide_node_link::panes::PaneIdentity> {
+        self.pane_identity(wait, pane).and_then(|proof| {
             Ok(hide_node_link::panes::PaneIdentity {
                 terminal_id: proof.terminal_id,
                 shell_pid: proof.shell_pid,
@@ -2059,7 +2031,7 @@ impl<'g> Engine for OwnEngine<'g> {
                     refused("pane_not_running", format!("pane {pane} has no start"))
                 })?,
             })
-        }))
+        })
     }
 
     fn prepare_start(&self, launch: AgentLaunch) -> Result<PreparedStart, String> {
@@ -2265,6 +2237,7 @@ mod tests {
 
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Condvar, Mutex};
+    use std::time::Duration;
 
     use hide_node_link::holders::{HolderProcesses, HolderRecovery};
 
@@ -2736,7 +2709,7 @@ mod tests {
             let (sent, read) = std::sync::mpsc::channel();
             let engine = Arc::clone(&self.engine);
             std::thread::spawn(move || {
-                let _ = sent.send(engine.focused_workspace(WAIT).is_ok());
+                let _ = sent.send(engine.session(WAIT).is_ok());
             });
             let topology_free = read.recv_timeout(Duration::from_secs(2)).unwrap_or(false);
             self.seen
@@ -3154,10 +3127,6 @@ mod tests {
         );
         assert_eq!(engine.read_screen(WAIT, &failed).unwrap_err(), expected);
         assert_eq!(engine.pane_identity(WAIT, &failed).unwrap_err(), expected);
-        assert_eq!(
-            engine.foreground_program(WAIT, &failed).unwrap_err(),
-            expected
-        );
     }
 
     #[test]
@@ -3168,7 +3137,7 @@ mod tests {
         holders.refuse.store(true, Ordering::Release);
         refused_for_the_holder(engine.create_workspace(WAIT, "/w", "w", true, Env::new()));
         assert!(engine.pane_folders(WAIT).unwrap().is_empty());
-        assert_eq!(engine.focused_workspace(WAIT).unwrap(), None);
+        assert_eq!(engine.topology().focused_workspace, None);
 
         holders.refuse.store(false, Ordering::Release);
         let (workspace, tab, pane) = engine
@@ -3669,7 +3638,7 @@ mod tests {
         assert!(again.already_open);
         assert_eq!(again.workspace_id, opened.workspace_id);
         assert_eq!(
-            engine.focused_workspace(WAIT).unwrap().as_deref(),
+            engine.topology().focused_workspace.as_deref(),
             Some(opened.workspace_id.as_str())
         );
 

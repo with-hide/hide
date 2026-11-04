@@ -28,13 +28,11 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use hide_herdr_client::ApiError;
-
 use hide_node_link::call_as;
 use hide_node_link::device::{
     Attempt, CapabilityReport, DeviceTransport, DialedTransport, EstablishError, Established,
-    HostConsent, HostIdentity, NodeReady, RemoteHostIdentity, RemoteStage, SnapshotCheck, Wake,
-    WslDistribution, WslListing,
+    HostConsent, HostIdentity, NodeReady, RemoteHostIdentity, RemoteStage, Wake, WslDistribution,
+    WslListing,
 };
 use hide_node_link::protocol::{Call, Hello};
 use hide_platform::wsl::Distribution;
@@ -131,11 +129,9 @@ pub struct WslDevice {
     packages: HelperPackages,
     panes: Option<PaneHook>,
     terminals: Option<TerminalHook>,
-    /// The link the latest attempt started, which carries the device's
-    /// Herdr; reaching Herdr never starts `wsl.exe`.
+    /// The link the latest attempt started, which the device's test reads;
+    /// reading it never starts `wsl.exe`.
     link: Arc<Mutex<Option<RemoteHost>>>,
-    /// The Herdr socket inside WSL the node bridges, as its Hello said.
-    herdr_socket: Arc<Mutex<Option<String>>>,
 }
 
 impl WslDevice {
@@ -156,7 +152,6 @@ impl WslDevice {
             panes,
             terminals,
             link: Arc::default(),
-            herdr_socket: Arc::default(),
         })
     }
 
@@ -236,35 +231,10 @@ fn covers(bound: &HostIdentity, observed: &HostIdentity) -> bool {
         && machine == observed.machine_id.as_deref()
 }
 
-impl DeviceTransport for WslDevice {
-    fn herdr_api_connector(&self) -> Arc<dyn hide_herdr_client::ApiConnector> {
-        Arc::new(WslHerdr(Arc::clone(&self.link)))
-    }
-
-    fn cached_herdr_version(&self) -> Option<String> {
-        None
-    }
-
-    fn cached_herdr_socket(&self) -> Option<String> {
-        lock_recover(&self.herdr_socket).clone()
-    }
-}
-
-/// The device's Herdr through its current link; no link, no Herdr, and
-/// nothing is started to find one.
-struct WslHerdr(Arc<Mutex<Option<RemoteHost>>>);
-
-impl hide_herdr_client::ApiConnector for WslHerdr {
-    fn connect(&self) -> Result<Box<dyn hide_herdr_client::ApiStream>, ApiError> {
-        let link = lock_recover(&self.0).clone().ok_or_else(|| {
-            ApiError::Transport("The WSL distribution's helper is not connected".to_owned())
-        })?;
-        link.herdr_connector().connect()
-    }
-}
+impl DeviceTransport for WslDevice {}
 
 impl DialedTransport for WslDevice {
-    fn capability_test(&self, operation_id: &str, check: SnapshotCheck<'_>) -> CapabilityReport {
+    fn capability_test(&self, operation_id: &str) -> CapabilityReport {
         let mut report = CapabilityReport::new(
             operation_id,
             RemoteHostIdentity {
@@ -297,31 +267,22 @@ impl DialedTransport for WslDevice {
         let link = lock_recover(&self.link).clone();
         let Some(link) = link.filter(|link| link.closed_reason().is_none()) else {
             report.fail(
-                RemoteStage::Herdr,
+                RemoteStage::Protocol,
                 "The distribution's helper is not connected",
                 true,
                 false,
             );
             return report;
         };
-        let socket = self.cached_herdr_socket().unwrap_or_default();
-        let snapshot = hide_herdr_client::request_with_connector(
-            &link.herdr_connector(),
-            "session.snapshot",
-            json!({}),
-            Duration::from_secs(10),
-        );
-        match snapshot
-            .map_err(|error| error.to_string())
-            .and_then(|value| {
-                check(&value, &self.target(), &socket).map_err(|error| error.to_string())
-            }) {
-            Ok(protocol) => {
-                report.pass(RemoteStage::Herdr, socket.clone());
-                report.pass(RemoteStage::Protocol, format!("protocol {protocol}"));
-            }
-            Err(reason) => {
-                report.fail(RemoteStage::Herdr, reason, true, false);
+        match link.protocol() {
+            Some(protocol) => report.pass(RemoteStage::Protocol, format!("protocol {protocol}")),
+            None => {
+                report.fail(
+                    RemoteStage::Protocol,
+                    "The distribution's helper has not greeted the core",
+                    true,
+                    false,
+                );
                 return report;
             }
         }
@@ -424,12 +385,7 @@ impl DialedTransport for WslDevice {
             let installed =
                 bootstrap::install(&mut *pipe, &consent.helper_root, &facts.home, &payload)?;
             stage("start");
-            bootstrap::start(
-                &mut *pipe,
-                &installed.helper_relative,
-                &bootstrap::HerdrChoice::Account,
-                None,
-            )?;
+            bootstrap::start(&mut *pipe, &installed.helper_relative, None)?;
             Ok((installed, identity))
         })(&mut pipe);
         let (installed, identity) = match started {

@@ -46,7 +46,6 @@ pub(crate) mod group_starts;
 mod guardrails;
 mod herdr_import;
 mod herdr_profiles;
-mod herdr_takeover;
 mod hide_notes;
 mod home;
 mod hosts;
@@ -134,7 +133,6 @@ use agent_sleep::{AgentSleepSetPayload, AgentWakePayload, SleepingSessionPayload
 use control_lane::ControlLane;
 pub(crate) use control_lane::LaneStart;
 use events::*;
-pub(crate) use op_timing::HerdrArrival;
 use operations::*;
 #[cfg(test)]
 pub(crate) use terminal::NoTerminals;
@@ -1402,9 +1400,6 @@ pub struct Runtime {
     /// (`runtime/first_run.rs`); session-only, since a relaunch reopens the
     /// step and its next Continue asks again.
     first_run_apply: Option<first_run::FirstRunApply>,
-    /// Moving the operator's older Herdr server onto this app's Herdr
-    /// (`runtime/herdr_takeover.rs`); session-only.
-    herdr_takeover: herdr_takeover::Takeover,
     /// Moving this machine's Herdr save into the core's own engine
     /// (`runtime/herdr_import.rs`); session-only.
     herdr_import: herdr_import::Import,
@@ -1554,9 +1549,6 @@ pub struct Runtime {
     /// Advances on every `set_live`, so a worker started against an earlier
     /// local Herdr connection cannot settle an operation on the current one.
     live_generation: u64,
-    /// A shell-requested read-only `agent.list` refresh, drained by the
-    /// coordinator on its next pass.
-    status_refresh_requested: bool,
     /// The checkout each tab Hide created was created for, keyed by the tab
     /// id Herdr acknowledged; it decides the tab's checkout instead of the
     /// pane cwd (`session.rs`, `CreatedTabCheckout`).
@@ -2416,7 +2408,6 @@ impl Runtime {
             unknown_kit_agents_limit_reported: false,
             local_kit_pending: None,
             first_run_apply: None,
-            herdr_takeover: herdr_takeover::Takeover::default(),
             herdr_import: herdr_import::Import::default(),
             desk: desk::Desk::default(),
             local_kit_next_status: None,
@@ -2473,7 +2464,6 @@ impl Runtime {
             reopen_in_flight: None,
             reopen_after_close: None,
             live_generation: 0,
-            status_refresh_requested: false,
             created_tab_checkouts: BTreeMap::new(),
             created_device_tabs: BTreeMap::new(),
             republish_waker: None,

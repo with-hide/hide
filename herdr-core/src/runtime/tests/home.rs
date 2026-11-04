@@ -1,13 +1,12 @@
 //! Each device's Home and the one start path (PRD home-device-rail B17-B22,
 //! B25, B38): a Home start brings `~/hide` in step through the device's
 //! helper before its tab opens, registers Home, hands the linked folders to
-//! the agent CLI, and a device checkout's start goes to that device's Herdr.
+//! the agent CLI, and a device checkout's start goes to that device's engine.
 //!
 //! The helper double answers `home_sync` with the real `hide_host::home` on a
-//! temporary home directory; Herdr is the socket fake.
+//! temporary home directory; the engine is the fake engine.
 
 use super::*;
-use crate::fake_herdr::FakeHerdr;
 use crate::node_access::{LinkAnswer, LinkError, NodeLink};
 use hide_node_link::protocol::Call;
 use serde_json::{Value, json};
@@ -112,72 +111,49 @@ fn registration(path: &str, device: &str) -> WorkspaceRegistration {
     }
 }
 
-fn workspace_row(id: &str, label: &str) -> Value {
-    json!({"workspace_id": id, "number": 4, "label": label, "focused": false, "pane_count": 1,
-           "tab_count": 1, "active_tab_id": format!("{id}:t1"), "agent_status": "idle"})
-}
-
 fn agent(status: &str) -> Value {
-    json!({"pane_id": "w4:p1", "tab_id": "w4:t1", "workspace_id": "w4", "terminal_id": "term_1",
-           "agent": "codex", "agent_status": status, "state_change_seq": 1, "focused": false,
-           "interactive_ready": true, "revision": 0})
+    json!({"pane_id": "w4:p1", "agent": "codex", "agent_status": status,
+           "state_change_seq": 1, "interactive_ready": true,
+           "name": crate::fork::task_agent_name("codex", "w4:p1")})
 }
 
-/// A Herdr with no workspace open that opens a marked Folder owner and
+/// An engine with no workspace open that opens a marked Folder owner and
 /// starts whatever agent it is asked for.
-fn herdr(name: &str) -> FakeHerdr {
-    FakeHerdr::start(name, |method, params| match method {
-        "workspace.list" => {
-            json!({"type": "workspace_list", "workspaces": [workspace_row("w1", "other")]})
-        }
-        "workspace.create" => json!({
-            "type": "workspace_created",
-            "workspace": workspace_row("w4", "Home"),
-            "tab": {"tab_id": "w4:t1", "workspace_id": "w4", "number": 1, "label": "1", "focused": true, "pane_count": 1, "agent_status": "idle"},
-            "root_pane": {"pane_id": "w4:p1", "terminal_id": "fixture-terminal", "workspace_id": "w4", "tab_id": "w4:t1", "focused": true, "agent_status": "idle", "revision": 1}
-        }),
-        "workspace.report_metadata" => json!({"type": "ok"}),
-        "tab.rename" => json!({
-            "type": "tab_info",
-            "tab": {"tab_id": "w4:t1", "workspace_id": "w4", "number": 1, "label": "Tab 1", "focused": true, "pane_count": 1, "agent_status": "idle"}
-        }),
-        "tab.create" => json!({
-            "type": "tab_created",
-            "tab": {"tab_id": "w9:t2", "workspace_id": "w9", "number": 2, "label": "Tab 2", "focused": true, "pane_count": 1, "agent_status": "idle"},
-            "root_pane": {"pane_id": "w9:p2", "terminal_id": "fixture-terminal-2", "workspace_id": "w9", "tab_id": "w9:t2", "focused": true, "agent_status": "idle", "revision": 1}
-        }),
-        "pane.process_info" => json!({"type": "pane_process_info", "process_info": {
-            "pane_id": "w4:p1", "shell_pid": 4100, "foreground_process_group_id": 4100,
+fn herdr() -> Fake {
+    FakeEngine::start(|method, params| match method {
+        "workspace_tokens" => reply(vec![("w1".to_owned(), None::<String>)]),
+        "create_workspace" => reply(("w4".to_owned(), "w4:t1".to_owned(), "w4:p1".to_owned())),
+        "report_workspace_token" | "rename_tab" | "prompt_agent" => reply(()),
+        "create_tab" => reply(("w9:t2".to_owned(), "w9:p2".to_owned())),
+        "pane_processes" => reply(fake::processes(&json!({
+            "shell_pid": 4100, "foreground_process_group_id": 4100,
             "foreground_processes": [{"pid": 4100, "name": "zsh"}]
-        }}),
-        "agent.start" => json!({"type": "agent_started", "argv": [], "agent": agent("idle")}),
-        "agent.prompt" => json!({"type": "agent_prompted", "agent": agent("working")}),
-        "agent.get" => {
-            let mut started = agent("idle");
-            started["name"] = json!(crate::fork::task_agent_name("codex", "w4:p1"));
-            json!({"type": "agent_info", "agent": started})
+        }))),
+        "start_agent" => reply(crate::engine::StartedAgent {
+            pane_id: "w4:p1".into(),
+            terminal_id: Some("term_1".into()),
+        }),
+        "delivery_agent" => reply(fake::delivery_agent(&agent("idle"))),
+        "focus_pane" => {
+            assert_eq!(params["pane"], "w4:p1");
+            reply(())
         }
-        "pane.focus" => {
-            assert_eq!(params["pane_id"], "w4:p1");
-            json!({"type":"pane_info", "pane": agent("idle")})
-        }
-        "pane.layout" => {
-            assert_eq!(params["pane_id"], "w4:p1");
-            json!({"type":"pane_layout", "layout":{
+        "pane_layout" => {
+            assert_eq!(params["pane"], "w4:p1");
+            reply(serde_json::from_value::<crate::sidebar::SessionLayoutPayload>(json!({
                 "workspace_id":"w4", "tab_id":"w4:t1", "zoomed":false,
                 "area":{"x":0,"y":0,"width":80,"height":24}, "focused_pane_id":"w4:p1",
-                "panes":[{"pane_id":"w4:p1","focused":true,"rect":{"x":0,"y":0,"width":80,"height":24}}], "splits":[]}})
+                "panes":[{"pane_id":"w4:p1","focused":true,"rect":{"x":0,"y":0,"width":80,"height":24}}], "splits":[]
+            })).unwrap())
         }
-        "workspace.get" => json!({"type":"workspace_info", "workspace":{
-            "workspace_id":"w4", "number":4, "label":"Home", "focused":true,
-            "pane_count":1, "tab_count":1, "active_tab_id":"w4:t1", "agent_status":"idle"}}),
+        "workspace_active_tab" => reply("w4:t1".to_owned()),
         other => panic!("unexpected {other}"),
     })
 }
 
 /// A runtime whose device `DEVICE` is connected through `herdr` and whose
 /// helper's account home is `user_home`.
-fn device_runtime(herdr: &FakeHerdr, machine: &Machine) -> SharedRuntime {
+fn device_runtime(herdr: &Fake, machine: &Machine) -> SharedRuntime {
     let mut runtime = runtime();
     runtime
         .snapshot
@@ -189,8 +165,6 @@ fn device_runtime(herdr: &FakeHerdr, machine: &Machine) -> SharedRuntime {
             origin: crate::model::LinkOrigin::Dialed {
                 ssh_alias: DEVICE.to_owned(),
             },
-            herdr_socket_path: None,
-            herdr_session: None,
             host_consent: None,
         });
     runtime.device_hosts.insert(
@@ -218,18 +192,15 @@ fn device_runtime(herdr: &FakeHerdr, machine: &Machine) -> SharedRuntime {
     shared
 }
 
-/// The same for this machine: its own Herdr and in-process helper.
-fn local_runtime(herdr: &FakeHerdr, machine: &Machine) -> SharedRuntime {
+/// The same for this machine: its own engine and in-process helper.
+fn local_runtime(herdr: &Fake, machine: &Machine) -> SharedRuntime {
     let mut runtime = runtime();
     runtime.own_node = machine.helper();
     let shared = SharedRuntime::new(runtime);
     let mut runtime = shared.lock().unwrap();
     runtime.live = Some(live::LiveContext {
-        socket_path: herdr.socket_path().to_owned(),
         runtime: shared.weak(),
-        notifier: ChangeNotifier::noop(),
-        engine: herdr.engine(),
-        node: Arc::new(hide_node::Local::of_process()),
+        ..herdr.live()
     });
     runtime.install_worker_context(shared.weak(), ChangeNotifier::noop());
     drop(runtime);
@@ -263,7 +234,7 @@ fn operation(shared: &Arc<Mutex<Runtime>>) -> crate::model::TaskOperationSnapsho
 #[test]
 fn a_device_home_start_makes_home_then_starts_the_agent_with_its_folders() {
     let machine = machine();
-    let herdr = herdr("home-device");
+    let herdr = herdr();
     let shared = device_runtime(&herdr, &machine);
     shared.lock().unwrap().ingest_kit_report(
         DEVICE,
@@ -354,9 +325,9 @@ fn a_device_home_start_makes_home_then_starts_the_agent_with_its_folders() {
     let calls = herdr.calls();
     let start = calls
         .iter()
-        .find(|(method, _)| method == "agent.start")
+        .find(|(method, _)| *method == "start_agent")
         .map(|(_, params)| params.clone())
-        .expect("agent.start");
+        .expect("start_agent");
     let mut expected: Vec<String> = [
         &["--no-daemon"][..],
         &crate::agent_permission::CODEX_FULL_ACCESS,
@@ -378,13 +349,13 @@ fn a_device_home_start_makes_home_then_starts_the_agent_with_its_folders() {
     // first prompt is typed once the agent takes input, never carried.
     let typed: Vec<_> = calls
         .iter()
-        .filter(|(method, _)| method == "agent.prompt")
+        .filter(|(method, _)| *method == "prompt_agent")
         .map(|(_, params)| params["text"].clone())
         .collect();
     assert_eq!(typed, [json!("tidy the notes")]);
     let created = calls
         .iter()
-        .find(|(method, _)| method == "workspace.create")
+        .find(|(method, _)| *method == "create_workspace")
         .map(|(_, params)| params.clone())
         .expect("the Home owner is opened");
     assert_eq!(created["cwd"], json!(home_path));
@@ -393,7 +364,7 @@ fn a_device_home_start_makes_home_then_starts_the_agent_with_its_folders() {
 #[test]
 fn a_device_home_start_with_unknown_codex_reports_the_next_action_without_starting() {
     let machine = machine();
-    let herdr = herdr("home-device-unknown-codex");
+    let herdr = herdr();
     let shared = device_runtime(&herdr, &machine);
     dispatch(
         &shared,
@@ -416,7 +387,7 @@ fn a_device_home_start_with_unknown_codex_reports_the_next_action_without_starti
         herdr
             .calls()
             .iter()
-            .all(|(method, _)| method != "agent.start")
+            .all(|(method, _)| *method != "start_agent")
     );
 }
 
@@ -426,7 +397,7 @@ fn a_device_home_start_with_unknown_codex_reports_the_next_action_without_starti
 #[test]
 fn home_links_follow_registrations_once_home_exists() {
     let machine = machine();
-    let herdr = herdr("home-local");
+    let herdr = herdr();
     let shared = local_runtime(&herdr, &machine);
     shared
         .lock()
@@ -454,7 +425,7 @@ fn home_links_follow_registrations_once_home_exists() {
     });
     let home = machine.user_home.join("hide");
     // The worker fixture has no session-sync thread. Publish the accepted
-    // Home pane as Herdr does before waiting for its ordered focus.
+    // Home pane as the engine does before waiting for its ordered focus.
     let mut session = tab_order_payload(home.to_str().unwrap(), &["w4:t1"], &["w4:t1"], "w4:t1");
     session.focused_workspace_id = Some("w4".into());
     session.focused_pane_id = Some("w4:p1".into());
@@ -485,12 +456,12 @@ fn home_links_follow_registrations_once_home_exists() {
         },
     );
     assert!(shared.lock().unwrap().snapshot.status.last_error.is_none());
-    assert!(herdr.methods().iter().any(|method| method == "pane.focus"));
+    assert!(herdr.methods().contains(&"focus_pane"));
     assert!(
         herdr
             .calls()
             .iter()
-            .all(|(method, _)| method != "agent.start"),
+            .all(|(method, _)| *method != "start_agent"),
         "a new tab starts no agent"
     );
 
@@ -534,7 +505,7 @@ fn home_links_follow_registrations_once_home_exists() {
 #[test]
 fn the_first_registration_after_launch_is_linked_into_an_existing_home() {
     let machine = machine();
-    let herdr = herdr("home-relaunch");
+    let herdr = herdr();
     // The earlier run's Home, with the first project linked.
     let earlier = hide_host::home::sync(&machine.user_home, &machine.projects[..1]).unwrap();
     let shared = local_runtime(&herdr, &machine);
@@ -562,7 +533,7 @@ fn the_first_registration_after_launch_is_linked_into_an_existing_home() {
 #[test]
 fn a_link_change_missed_while_the_helper_reconnects_is_sent_once_it_is_ready() {
     let machine = machine();
-    let herdr = herdr("home-reconnect");
+    let herdr = herdr();
     let earlier = hide_host::home::sync(&machine.user_home, &machine.projects[..1]).unwrap();
     let shared = device_runtime(&herdr, &machine);
     let home = machine.user_home.join("hide");
@@ -631,7 +602,7 @@ fn a_link_change_missed_while_the_helper_reconnects_is_sent_once_it_is_ready() {
 #[test]
 fn a_foreign_home_folder_refuses_the_start_and_is_left_alone() {
     let machine = machine();
-    let herdr = herdr("home-conflict");
+    let herdr = herdr();
     let shared = local_runtime(&herdr, &machine);
     let home = machine.user_home.join("hide");
     std::fs::create_dir(&home).unwrap();
@@ -676,11 +647,11 @@ fn a_foreign_home_folder_refuses_the_start_and_is_left_alone() {
 }
 
 /// B25, D-22: a start in a device's checkout opens its tab in the checkout's
-/// owner on that device's Herdr and reports the device-scoped pane.
+/// owner on that device's engine and reports the device-scoped pane.
 #[test]
 fn a_device_checkout_start_opens_its_tab_on_that_device() {
     let machine = machine();
-    let herdr = herdr("home-device-checkout");
+    let herdr = herdr();
     let shared = device_runtime(&herdr, &machine);
     {
         let mut runtime = shared.lock().unwrap();
@@ -695,7 +666,6 @@ fn a_device_checkout_start_opens_its_tab_on_that_device() {
             target_id: DEVICE.to_owned(),
             state: "connected".to_owned(),
             message: None,
-            herdr_version: None,
             session: Some(RemoteSessionSnapshot {
                 workspaces: vec![project],
                 agents: Vec::new(),
@@ -708,7 +678,6 @@ fn a_device_checkout_start_opens_its_tab_on_that_device() {
                 pane_hook_tokens: Default::default(),
                 issue_tokens: Default::default(),
                 issue_links: Default::default(),
-                herdr_version: None,
             }),
             files: RemoteFileListSnapshot::idle(),
             catalog: Default::default(),
@@ -736,10 +705,10 @@ fn a_device_checkout_start_opens_its_tab_on_that_device() {
     let created = herdr
         .calls()
         .into_iter()
-        .find(|(method, _)| method == "tab.create")
+        .find(|(method, _)| *method == "create_tab")
         .map(|(_, params)| params)
-        .expect("tab.create on the device");
-    assert_eq!(created["workspace_id"], "w9");
+        .expect("a tab is made on the device");
+    assert_eq!(created["workspace"], "w9");
     assert_eq!(created["cwd"], "/srv/app");
     assert!(
         !machine.user_home.join("hide").exists(),
@@ -748,7 +717,7 @@ fn a_device_checkout_start_opens_its_tab_on_that_device() {
 }
 
 /// A start names exactly one place; neither or both is refused under its own
-/// request id before anything is asked of Herdr or a helper.
+/// request id before anything is asked of the engine or a helper.
 #[test]
 fn a_start_naming_no_place_or_two_is_refused() {
     let shared = SharedRuntime::new(runtime());
@@ -778,7 +747,7 @@ fn a_start_naming_no_place_or_two_is_refused() {
 #[test]
 fn a_prompt_the_command_line_cannot_carry_is_refused_before_anything_opens() {
     let machine = machine();
-    let herdr = herdr("home-bad-prompt");
+    let herdr = herdr();
     let shared = local_runtime(&herdr, &machine);
     let long = "a".repeat(300 * 1024);
     for (request_id, payload) in [

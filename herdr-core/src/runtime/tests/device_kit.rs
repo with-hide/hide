@@ -2181,7 +2181,6 @@ pub(super) fn node_ready(
                 reason: "test".to_owned(),
             },
             reader_features: None,
-            herdr_socket: None,
             windows_drives: None,
         },
         terminals: terminals.ok_or_else(|| "the test's node runs no terminal service".to_owned()),
@@ -2226,7 +2225,6 @@ fn session_with_pane() -> RemoteSessionSnapshot {
         pane_hook_tokens: Default::default(),
         issue_tokens: Default::default(),
         issue_links: Default::default(),
-        herdr_version: None,
     }
 }
 
@@ -2290,7 +2288,7 @@ fn installed() -> KitReport {
     report(&[(ComponentId::Cli, ComponentState::Installed)])
 }
 
-fn live_session(herdr_version: &str) -> RemoteSessionSnapshot {
+fn live_session() -> RemoteSessionSnapshot {
     RemoteSessionSnapshot {
         workspaces: Vec::new(),
         agents: Vec::new(),
@@ -2303,47 +2301,7 @@ fn live_session(herdr_version: &str) -> RemoteSessionSnapshot {
         pane_hook_tokens: Default::default(),
         issue_tokens: Default::default(),
         issue_links: Default::default(),
-        herdr_version: Some(herdr_version.to_owned()),
     }
-}
-
-/// PRD device-herdr-update B3, B11: the device's Herdr version is the one
-/// its server names in the session, so a handoff shows at once, and a
-/// device on an older protocol is told the device's step, never this
-/// machine's advice to reopen Hide.
-#[test]
-fn a_device_reads_its_servers_own_version_and_device_advice_for_an_older_protocol() {
-    let shared = with_consent(None);
-    let mut runtime = shared.lock().unwrap();
-    let remote = |runtime: &Runtime| {
-        runtime
-            .snapshot
-            .status
-            .remote
-            .iter()
-            .find(|status| status.target_id == DEVICE)
-            .cloned()
-            .expect("the device's remote status")
-    };
-    runtime.ingest_remote_session(DEVICE, Ok(live_session("0.9.3")));
-    assert_eq!(remote(&runtime).herdr_version.as_deref(), Some("0.9.3"));
-
-    runtime.ingest_remote_session(
-        DEVICE,
-        Err(crate::engine::herdr::wire::protocol_mismatch(
-            21,
-            Some("0.8.0".to_owned()),
-        )),
-    );
-    let status = remote(&runtime);
-    assert_eq!(status.state, "protocol_mismatch");
-    assert_eq!(status.herdr_version.as_deref(), Some("0.8.0"));
-    let message = status.message.expect("the device row says why");
-    assert!(
-        message.contains("Allow and install Hide's helper"),
-        "{message}"
-    );
-    assert!(!message.contains("reopen Hide"), "{message}");
 }
 
 fn status_of(runtime: &Runtime) -> crate::model::RemoteStatusSnapshot {
@@ -2393,7 +2351,7 @@ fn a_device_session_that_answers_again_makes_the_helper_retry_due_once_per_outag
             DEVICE,
             Err(SessionFetchError::Unreachable("no answer".to_owned())),
         );
-        runtime.ingest_remote_session(DEVICE, Ok(live_session("0.9.3")));
+        runtime.ingest_remote_session(DEVICE, Ok(live_session()));
     };
     flap(&mut runtime);
     let attempt = runtime.device_host_generation(DEVICE);
@@ -2564,7 +2522,7 @@ fn a_session_back_while_the_helper_link_starts_makes_its_failure_retry_at_once_o
     runtime.device_hosts.get_mut(DEVICE).unwrap().phase = hosts::HostPhase::Connecting;
     let generation = runtime.device_host_generation(DEVICE);
 
-    runtime.ingest_remote_session(DEVICE, Ok(live_session("0.9.3")));
+    runtime.ingest_remote_session(DEVICE, Ok(live_session()));
     assert_eq!(
         runtime.device_host_generation(DEVICE),
         generation,
@@ -2584,7 +2542,7 @@ fn a_session_back_while_the_helper_link_starts_makes_its_failure_retry_at_once_o
         DEVICE,
         Err(SessionFetchError::Unreachable("no answer".to_owned())),
     );
-    runtime.ingest_remote_session(DEVICE, Ok(live_session("0.9.3")));
+    runtime.ingest_remote_session(DEVICE, Ok(live_session()));
     let before = super::unix_milliseconds();
     runtime.ingest_host_established(DEVICE, generation, helper_failed());
     let at = runtime.device_host_retries[DEVICE].at_unix_ms.unwrap();

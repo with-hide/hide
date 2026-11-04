@@ -8,8 +8,7 @@ import type { NotificationPermission } from "./host";
 import { FIRST_RUN_VERSION, type AgentUpdate, type AiProvider, type FirstRunStep, type HerdrProfiles, type Kit, type KitAgent, type KitPiece, type KitWhy, type SnapshotRest } from "./snapshot";
 
 /** The desktop route includes saved devices; a browser tab has its first step alone. */
-/** A Herdr step an earlier version saved opens as the agent step (`firstRunStep`). */
-export type WizardStep = Exclude<FirstRunStep, "done" | "herdr">;
+export type WizardStep = Exclude<FirstRunStep, "done">;
 
 /**
  * Failed or unread discovery has its own retry step; only a complete read that found nothing skips it, so a list cut
@@ -30,9 +29,7 @@ export function wizardSteps(profiles: HerdrProfiles | undefined): readonly Wizar
 export function firstRunStep(rest: SnapshotRest | null, desktop: boolean): WizardStep | null {
   const run = rest?.ui_state?.first_run;
   if (!run || run.version !== FIRST_RUN_VERSION || run.step === "done") return null;
-  // The Herdr step an earlier version saved is the agent step now: Hide runs no Herdr to move (PRD
-  // engine-bundle-4-herdr-removal D-2).
-  const step = run.step === "herdr" ? "agents" : run.step;
+  const step = run.step;
   // A browser tab's wizard is the agent step alone.
   if (!desktop) return step === "agents" ? "agents" : null;
   return step;

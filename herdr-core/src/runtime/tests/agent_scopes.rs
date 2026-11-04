@@ -83,7 +83,6 @@ fn a_task_is_its_root_and_every_descendant_with_their_projects_and_devices() {
         target_id: "other-device".into(),
         state: "connected".into(),
         message: None,
-        herdr_version: None,
         files: RemoteFileListSnapshot::idle(),
         catalog: Default::default(),
         session: Some(RemoteSessionSnapshot {
@@ -98,7 +97,6 @@ fn a_task_is_its_root_and_every_descendant_with_their_projects_and_devices() {
             pane_hook_tokens: Default::default(),
             issue_tokens: Default::default(),
             issue_links: Default::default(),
-            herdr_version: None,
         }),
         unreachable_since_unix_ms: None,
     }];
@@ -660,7 +658,6 @@ fn disconnected_devices_zero_the_physical_tile_but_keep_overview_members_from_th
         target_id: "mini".into(),
         state: "connected".into(),
         message: None,
-        herdr_version: None,
         files: RemoteFileListSnapshot::idle(),
         catalog: Default::default(),
         session: Some(RemoteSessionSnapshot {
@@ -675,7 +672,6 @@ fn disconnected_devices_zero_the_physical_tile_but_keep_overview_members_from_th
             pane_hook_tokens: Default::default(),
             issue_tokens: Default::default(),
             issue_links: Default::default(),
-            herdr_version: None,
         }),
         unreachable_since_unix_ms: None,
     }];
@@ -736,8 +732,6 @@ fn a_wsl_distributions_device_is_scoped_to_its_own_session() {
             origin: crate::model::LinkOrigin::Wsl {
                 distro: "Ubuntu".to_owned(),
             },
-            herdr_socket_path: None,
-            herdr_session: None,
             host_consent: Some(consent),
         });
     runtime.rebuild_device_rows();
@@ -757,7 +751,6 @@ fn a_wsl_distributions_device_is_scoped_to_its_own_session() {
         target_id: id.clone(),
         state: "connected".into(),
         message: None,
-        herdr_version: None,
         files: RemoteFileListSnapshot::idle(),
         catalog: Default::default(),
         session: Some(RemoteSessionSnapshot {
@@ -772,7 +765,6 @@ fn a_wsl_distributions_device_is_scoped_to_its_own_session() {
             pane_hook_tokens: Default::default(),
             issue_tokens: Default::default(),
             issue_links: Default::default(),
-            herdr_version: None,
         }),
         unreachable_since_unix_ms: None,
     }];

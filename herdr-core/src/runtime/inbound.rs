@@ -95,8 +95,6 @@ impl Runtime {
                     id: node.to_owned(),
                     label: label.to_owned(),
                     origin: LinkOrigin::Inbound,
-                    herdr_socket_path: None,
-                    herdr_session: None,
                     host_consent: None,
                 };
                 self.snapshot

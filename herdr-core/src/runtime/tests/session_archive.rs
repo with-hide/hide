@@ -820,7 +820,6 @@ fn a_status_check_waits_for_a_devices_session_to_load() {
         target_id: "mini".into(),
         state: "connected".into(),
         message: None,
-        herdr_version: None,
         session: None,
         files: RemoteFileListSnapshot::idle(),
         catalog: Default::default(),

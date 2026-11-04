@@ -167,7 +167,7 @@ mod tests {
 
     use super::*;
     use crate::codex_launch::CodexDaemon;
-    use crate::fake_herdr::FakeHerdr;
+    use crate::engine::fake::{FakeEngine, Reply, refused, reply};
 
     fn request(kind: &str, daemon: CodexDaemon) -> ReopenRequest {
         ReopenRequest {
@@ -182,32 +182,37 @@ mod tests {
         }
     }
 
-    fn agent_info(kind: &str, status: &str) -> Value {
-        json!({"type": "agent_info", "agent": {
-            "pane_id": "w1:p1", "tab_id": "w1:t1", "workspace_id": "w1", "terminal_id": "term_1",
-            "agent": kind, "agent_status": status, "state_change_seq": 7,
-            "focused": false, "interactive_ready": true, "revision": 0
-        }})
+    fn agent_info(kind: &str, status: &str) -> Reply {
+        reply(crate::engine::fake::agent_state(&json!({
+            "agent": kind, "agent_status": status, "state_change_seq": 7
+        })))
     }
 
-    fn process_info(shell: u32, foreground: u32) -> Value {
-        json!({"type": "pane_process_info", "process_info": {
-            "pane_id": "w1:p1", "shell_pid": shell, "foreground_process_group_id": foreground,
+    fn process_info(shell: u32, foreground: u32) -> Reply {
+        reply(crate::engine::fake::processes(&json!({
+            "shell_pid": shell, "foreground_process_group_id": foreground,
             "foreground_processes": [{"pid": shell, "name": "zsh"}]
-        }})
+        })))
     }
 
-    /// The agent's screen as `pane.read` answers it: one that asks for no
-    /// second press.
-    fn screen() -> Value {
-        json!({"type": "pane_read", "read": {"pane_id": "w1:p1", "workspace_id": "w1",
-            "tab_id": "w1:t1", "source": "visible", "format": "ansi", "revision": 1,
-            "truncated": false, "text": "\u{203a} \n"}})
+    /// The agent's screen: one that asks for no second press.
+    fn screen() -> Reply {
+        reply(crate::engine::PaneText {
+            text: "\u{203a} \n".to_owned(),
+            truncated: false,
+        })
+    }
+
+    fn started() -> Reply {
+        reply(crate::engine::StartedAgent {
+            pane_id: "w1:p1".to_owned(),
+            terminal_id: Some("term_1".to_owned()),
+        })
     }
 
     /// B29: a refusal known up front touches nothing, so the pane is as it was.
     #[test]
-    fn a_refusal_known_before_the_end_asks_herdr_nothing() {
+    fn a_refusal_known_before_the_end_asks_the_engine_nothing() {
         for (case, kind, daemon, expected) in [
             (
                 "unread",
@@ -222,9 +227,7 @@ mod tests {
                 PaneReopenFailure::SessionGone,
             ),
         ] {
-            let herdr = FakeHerdr::start("pane-reopen-refused", |method, _| {
-                panic!("unexpected {method}")
-            });
+            let herdr = FakeEngine::start(|method, _| panic!("unexpected {method}"));
             let error = reopen(
                 herdr.engine().as_ref(),
                 &hide_node::Local::of_process(),
@@ -235,7 +238,7 @@ mod tests {
             assert!(!error.ended, "{case}");
             assert!(herdr.methods().is_empty(), "{case}");
         }
-        let herdr = FakeHerdr::start("pane-reopen-cwd", |method, _| panic!("unexpected {method}"));
+        let herdr = FakeEngine::start(|method, _| panic!("unexpected {method}"));
         let mut gone = request("claude", CodexDaemon::Unknown);
         gone.cwd = Some("/nonexistent/pane-reopen-test".into());
         let error = reopen(
@@ -251,8 +254,8 @@ mod tests {
     /// An agent that started working since the decision is not ended.
     #[test]
     fn an_agent_that_is_working_now_is_not_ended_or_started_again() {
-        let herdr = FakeHerdr::start("pane-reopen-working", |method, _| match method {
-            "agent.get" => agent_info("claude", "working"),
+        let herdr = FakeEngine::start(|method, _| match method {
+            "agent_state" => agent_info("claude", "working"),
             other => panic!("unexpected {other}"),
         });
         let error = reopen(
@@ -262,11 +265,11 @@ mod tests {
         )
         .expect_err("working");
         assert_eq!(error.code, PaneReopenFailure::AgentBusy);
-        assert_eq!(herdr.methods(), ["agent.get"]);
+        assert_eq!(herdr.methods(), ["agent_state"]);
     }
 
     /// B29: the agent ends first, and only after the shell holds the terminal
-    /// does `agent.start` run, resuming the same conversation; Codex goes
+    /// does the start run, resuming the same conversation; Codex goes
     /// first with `--no-daemon`.
     #[test]
     fn the_agent_ends_and_then_starts_again_with_its_own_conversation() {
@@ -280,27 +283,23 @@ mod tests {
             let exited = Arc::new(AtomicBool::new(false));
             let seen = Arc::clone(&exited);
             let presses = Arc::new(AtomicUsize::new(0));
-            let herdr = FakeHerdr::start("pane-reopen-ok", move |method, _| match method {
-                "agent.get" => agent_info(kind, "idle"),
-                "pane.process_info" => {
+            let herdr = FakeEngine::start(move |method, _| match method {
+                "agent_state" => agent_info(kind, "idle"),
+                "pane_processes" => {
                     let shell = std::process::id();
                     let gone = !process::is_alive(pid) || seen.load(Ordering::SeqCst);
                     process_info(shell, if gone { shell } else { pid })
                 }
                 // The agent quits on the first press of its quit key, as
                 // Codex does into an empty composer.
-                "pane.read" => screen(),
-                "pane.send_keys" => {
+                "read_screen" => screen(),
+                "send_keys" => {
                     if presses.fetch_add(1, Ordering::SeqCst) == 0 {
                         process::terminate(pid).expect("the agent quits");
                     }
-                    json!({"type": "ok"})
+                    reply(())
                 }
-                "agent.start" => json!({"type": "agent_started", "argv": [], "agent": {
-                    "pane_id": "w1:p1", "tab_id": "w1:t1", "workspace_id": "w1",
-                    "terminal_id": "term_1", "agent_status": "idle", "focused": false,
-                    "revision": 1
-                }}),
+                "start_agent" => started(),
                 other => panic!("unexpected {other}"),
             });
             let reaper = thread::spawn(move || {
@@ -317,9 +316,9 @@ mod tests {
             let methods = herdr.methods();
             let first_start = methods
                 .iter()
-                .position(|method| method == "agent.start")
+                .position(|method| *method == "start_agent")
                 .expect("a start was sent");
-            assert_eq!(methods[0], "agent.get", "{kind}");
+            assert_eq!(methods[0], "agent_state", "{kind}");
             let calls = herdr.calls();
             let (_, start) = &calls[first_start];
             let args: Vec<&str> = start["args"]
@@ -339,11 +338,11 @@ mod tests {
             assert!(
                 methods[..first_start]
                     .iter()
-                    .all(|method| method != "agent.start"),
+                    .all(|method| *method != "start_agent"),
                 "{kind}: {methods:?}"
             );
             assert_eq!(
-                methods.iter().filter(|m| *m == "agent.start").count(),
+                methods.iter().filter(|m| **m == "start_agent").count(),
                 1,
                 "{kind}: one start only"
             );
@@ -359,26 +358,22 @@ mod tests {
         let pid = child.id();
         let exited = Arc::new(AtomicBool::new(false));
         let seen = Arc::clone(&exited);
-        let herdr =
-            FakeHerdr::start_with_errors(
-                "pane-reopen-start-refused",
-                move |method, _| match method {
-                    "agent.get" => Ok(agent_info("claude", "idle")),
-                    "pane.process_info" => {
-                        let shell = std::process::id();
-                        let gone = !process::is_alive(pid) || seen.load(Ordering::SeqCst);
-                        Ok(process_info(shell, if gone { shell } else { pid }))
-                    }
-                    // The agent quits on its key; the start is the subject.
-                    "pane.read" => Ok(screen()),
-                    "pane.send_keys" => {
-                        let _ = process::terminate(pid);
-                        Ok(json!({"type": "ok"}))
-                    }
-                    "agent.start" => Err(("agent_name_taken".into(), "name is used".into())),
-                    other => panic!("unexpected {other}"),
-                },
-            );
+        let herdr = FakeEngine::start(move |method, _| match method {
+            "agent_state" => agent_info("claude", "idle"),
+            "pane_processes" => {
+                let shell = std::process::id();
+                let gone = !process::is_alive(pid) || seen.load(Ordering::SeqCst);
+                process_info(shell, if gone { shell } else { pid })
+            }
+            // The agent quits on its key; the start is the subject.
+            "read_screen" => screen(),
+            "send_keys" => {
+                let _ = process::terminate(pid);
+                reply(())
+            }
+            "start_agent" => refused("agent_name_taken", "name is used"),
+            other => panic!("unexpected {other}"),
+        });
         let reaper = thread::spawn(move || {
             let _ = child.wait();
             exited.store(true, Ordering::SeqCst);
@@ -403,10 +398,11 @@ mod tests {
         let methods = herdr.methods();
         let first_start = methods
             .iter()
-            .position(|method| method == "agent.start")
+            .position(|method| *method == "start_agent")
             .expect("a start was sent");
         assert!(
-            methods[..first_start].iter().all(|m| m != "agent.start") && methods[0] == "agent.get",
+            methods[..first_start].iter().all(|m| *m != "start_agent")
+                && methods[0] == "agent_state",
             "the end came first: {methods:?}"
         );
     }
@@ -423,31 +419,25 @@ mod tests {
         let seen = Arc::clone(&exited);
         let starts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let attempts = Arc::clone(&starts);
-        let herdr =
-            FakeHerdr::start_with_errors("pane-reopen-name", move |method, _| match method {
-                "agent.get" => Ok(agent_info("claude", "idle")),
-                "pane.process_info" => {
-                    let shell = std::process::id();
-                    let gone = !process::is_alive(pid) || seen.load(Ordering::SeqCst);
-                    Ok(process_info(shell, if gone { shell } else { pid }))
-                }
-                // The agent quits on its key; the start is the subject.
-                "pane.read" => Ok(screen()),
-                "pane.send_keys" => {
-                    let _ = process::terminate(pid);
-                    Ok(json!({"type": "ok"}))
-                }
-                "agent.start" if attempts.fetch_add(1, Ordering::SeqCst) < 2 => Err((
-                    "agent_name_taken".into(),
-                    "agent name reviewer is already used".into(),
-                )),
-                "agent.start" => Ok(json!({"type": "agent_started", "argv": [], "agent": {
-                    "pane_id": "w1:p1", "tab_id": "w1:t1", "workspace_id": "w1",
-                    "terminal_id": "term_1", "agent_status": "idle", "focused": false,
-                    "revision": 1
-                }})),
-                other => panic!("unexpected {other}"),
-            });
+        let herdr = FakeEngine::start(move |method, _| match method {
+            "agent_state" => agent_info("claude", "idle"),
+            "pane_processes" => {
+                let shell = std::process::id();
+                let gone = !process::is_alive(pid) || seen.load(Ordering::SeqCst);
+                process_info(shell, if gone { shell } else { pid })
+            }
+            // The agent quits on its key; the start is the subject.
+            "read_screen" => screen(),
+            "send_keys" => {
+                let _ = process::terminate(pid);
+                reply(())
+            }
+            "start_agent" if attempts.fetch_add(1, Ordering::SeqCst) < 2 => {
+                refused("agent_name_taken", "agent name reviewer is already used")
+            }
+            "start_agent" => started(),
+            other => panic!("unexpected {other}"),
+        });
         let reaper = thread::spawn(move || {
             let _ = child.wait();
             exited.store(true, Ordering::SeqCst);

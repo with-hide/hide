@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 pub const FIXTURE_PREFIX: &str = "hide-verify-";
 
-/// An account shell for FakeHerdr journeys. Unix owns an executable file;
+/// An account shell for fake engine journeys. Unix owns an executable file;
 /// Windows uses Herdr's PowerShell recipe. The peer never runs the shell.
 #[cfg(test)]
 pub(crate) fn integrated_shell(home: &std::path::Path) -> hide_host::shell_integration::UserShell {

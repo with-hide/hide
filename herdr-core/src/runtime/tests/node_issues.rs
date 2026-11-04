@@ -185,7 +185,7 @@ fn node_runtime(
     own: Arc<dyn NodeLink>,
     store: crate::local_issues::LocalIssueStore,
 ) -> SharedRuntime {
-    let connector = crate::engine::herdr::local("/tmp/herdr-core-never-connect.sock");
+    let connector = FakeEngine::absent().engine();
     let workspaces = vec![
         herdr_workspace(NODE, "w1", &repo.root, &[("t1", &repo.root)]),
         herdr_workspace(NODE, "w2", &repo.linked, &[("t2", &repo.linked)]),
@@ -214,15 +214,12 @@ fn node_runtime_with(
             id: NODE.to_owned(),
             label: "MacBook".to_owned(),
             origin: crate::model::LinkOrigin::Inbound,
-            herdr_socket_path: None,
-            herdr_session: None,
             host_consent: None,
         });
     runtime.snapshot.status.remote.push(RemoteStatusSnapshot {
         target_id: NODE.to_owned(),
         state: "connected".to_owned(),
         message: None,
-        herdr_version: None,
         session: None,
         files: RemoteFileListSnapshot::idle(),
         catalog: Default::default(),
@@ -1775,12 +1772,9 @@ fn a_node_s_merged_worktree_is_removed_on_the_node_and_a_changed_one_is_refused(
         &repo.root,
         &["worktree", "add", "-q", "-b", "changed", &changed],
     );
-    let herdr = crate::fake_herdr::FakeHerdr::start("node-cleanup", |method, _| match method {
-        "session.snapshot" => serde_json::json!({"type": "session_snapshot", "snapshot": {
-            "version": "fixture", "protocol": hide_herdr_client::HERDR_PROTOCOL_REVISION,
-            "workspaces": [], "tabs": [], "panes": [], "layouts": [], "agents": []
-        }}),
-        other => panic!("the node's Herdr is asked {other}"),
+    let herdr = FakeEngine::start(|method, _| match method {
+        "session" => reply(fake::session(serde_json::json!({}))),
+        other => panic!("the node's engine is asked {other}"),
     });
     let own = Recording::of(None);
     let shared = node_runtime_with(
@@ -1914,7 +1908,7 @@ fn a_node_s_worktree_with_no_pane_keeps_its_id_from_before_the_move_and_folds_wh
         .status()
         .unwrap();
     assert!(committed.success());
-    let connector = crate::engine::herdr::local("/tmp/herdr-core-never-connect.sock");
+    let connector = FakeEngine::absent().engine();
     let shared = node_runtime_with(
         &repo,
         FakeDevice::new(),
@@ -1942,8 +1936,6 @@ fn a_node_s_worktree_with_no_pane_keeps_its_id_from_before_the_move_and_folds_wh
             id: NODE.to_owned(),
             label: "MacBook".to_owned(),
             origin: crate::model::LinkOrigin::Inbound,
-            herdr_socket_path: None,
-            herdr_session: None,
             host_consent: None,
         },
         old_owner_herdr_socket: "/tmp/macbook-herdr.sock".to_owned(),
@@ -2029,39 +2021,21 @@ fn starting_a_node_project_s_issue_links_the_new_worktree_on_the_node() {
     let created = format!("{}-4-start", repo.root);
     let root = repo.root.clone();
     let path = created.clone();
-    let herdr = crate::fake_herdr::FakeHerdr::start_with_errors("node-start", move |method, _| {
-        match method {
-            "worktree.create" => {
-                git(&root, &["worktree", "add", "-q", "-b", "4-start", &path]);
-                Ok(serde_json::json!({
-                    "type": "worktree_created",
-                    "workspace": {"workspace_id": "w9", "label": "app", "number": 3, "focused": true,
-                        "pane_count": 1, "tab_count": 1, "active_tab_id": "w9:t1", "agent_status": "unknown"},
-                    "tab": {"workspace_id": "w9", "tab_id": "w9:t1", "label": "app", "number": 1,
-                        "focused": true, "pane_count": 1, "agent_status": "unknown"},
-                    "root_pane": {"workspace_id": "w9", "tab_id": "w9:t1", "pane_id": "w9:p1",
-                        "terminal_id": "fixture-terminal", "cwd": path, "foreground_cwd": path,
-                        "focused": true, "agent_status": "unknown", "revision": 0,
-                        "scroll": {"max_offset_from_bottom": 0, "offset_from_bottom": 0, "viewport_rows": 40}},
-                    "worktree": {"branch": "4-start", "is_bare": false, "is_detached": false,
-                        "is_linked_worktree": true, "is_prunable": false, "label": "app",
-                        "open_workspace_id": "w9", "path": path},
-                }))
-            }
-            "worktree.list" => Ok(serde_json::json!({
-                "type": "worktree_list",
-                "source": {"repo_key": format!("{root}/.git"), "repo_name": "app", "repo_root": root,
-                    "source_checkout_path": root, "source_workspace_id": "w1"},
-                "worktrees": [{"branch": "4-start", "is_bare": false, "is_detached": false,
-                    "is_linked_worktree": true, "is_prunable": false, "label": "app",
-                    "open_workspace_id": "w9", "path": path}],
-            })),
-            "workspace.report_metadata" => Ok(serde_json::json!({"type": "ok"})),
-            other => Err((
-                "unsupported".to_owned(),
-                format!("the fixture answers no {other}"),
-            )),
+    let herdr = FakeEngine::start(move |method, _| match method {
+        "create_worktree" => {
+            git(&root, &["worktree", "add", "-q", "-b", "4-start", &path]);
+            reply(crate::engine::CreatedWorktree {
+                tab_label: "app".into(),
+                workspace_id: "w9".into(),
+                tab_id: "w9:t1".into(),
+                pane_id: "w9:p1".into(),
+                path: path.clone(),
+                branch: Some("4-start".into()),
+            })
         }
+        "worktree_path" => reply(Some(path.clone())),
+        "report_workspace_token" => reply(()),
+        other => refused("unsupported", &format!("the fixture answers no {other}")),
     });
     let own = Recording::of(None);
     let shared = node_runtime_with(
@@ -2106,7 +2080,7 @@ fn starting_a_node_project_s_issue_links_the_new_worktree_on_the_node() {
     let tokens: Vec<serde_json::Value> = herdr
         .calls()
         .into_iter()
-        .filter(|(method, _)| method == "workspace.report_metadata")
+        .filter(|(method, _)| *method == "workspace.report_metadata")
         .map(|(_, params)| params)
         .collect();
     assert!(
@@ -2318,11 +2292,8 @@ fn a_node_pull_request_is_handed_to_an_agent_on_the_node() {
     let own = Recording::of(None);
     *own.gh_stdout.lock().unwrap() =
         Some(r#"{"body":"b","statusCheckRollup":[],"reviews":[]}"#.to_owned());
-    let herdr = crate::fake_herdr::FakeHerdr::start_with_errors("node-delegate", |method, _| {
-        Err((
-            "unsupported".to_owned(),
-            format!("the fixture answers no {method}"),
-        ))
+    let herdr = FakeEngine::start(|method, _| {
+        refused("unsupported", &format!("the fixture answers no {method}"))
     });
     let shared = node_runtime_with(
         &repo,
@@ -2371,34 +2342,30 @@ fn a_node_pull_request_is_handed_to_an_agent_on_the_node() {
         serde_json::json!({"workspace_id": workspace_id, "pr_number": 7, "provider": "claude",
             "prompt": "Fix the failing checks"}),
     );
-    herdr.wait_for_requests(1, Duration::from_secs(10));
+    herdr.wait_for_calls(1, Duration::from_secs(10));
     let opened = herdr.calls();
     assert_eq!(
         opened
             .iter()
-            .map(|(method, params)| (method.as_str(), params["path"].as_str()))
+            .map(|(method, params)| (*method, params["path"].as_str()))
             .collect::<Vec<_>>(),
-        [("worktree.open", Some(repo.linked.as_str()))],
+        [("open_worktree", Some(repo.linked.as_str()))],
         "{opened:?}"
     );
 }
 
 /// A node pull request whose branch has no checkout is handed to an agent
 /// on the node too: the branch is checked over the node's link and the
-/// worktree is asked of the node's Herdr, never of this machine.
+/// worktree is asked of the node's engine, never of this machine.
 #[test]
 fn a_node_pull_request_with_no_checkout_gets_its_worktree_on_the_node() {
     let repo = repo(Some("https://github.com/acme/app.git"), "feature");
     git(&repo.root, &["branch", "pr-branch"]);
     let node = Recording::of(Some(FakeDevice::new()));
     let own = Recording::of(None);
-    let herdr =
-        crate::fake_herdr::FakeHerdr::start_with_errors("node-delegate-new", |method, _| {
-            Err((
-                "unsupported".to_owned(),
-                format!("the fixture answers no {method}"),
-            ))
-        });
+    let herdr = FakeEngine::start(|method, _| {
+        refused("unsupported", &format!("the fixture answers no {method}"))
+    });
     let shared = node_runtime_with(
         &repo,
         node.clone(),
@@ -2424,14 +2391,14 @@ fn a_node_pull_request_with_no_checkout_gets_its_worktree_on_the_node() {
         serde_json::json!({"workspace_id": workspace_id, "pr_number": 7, "provider": "claude",
             "prompt": "Fix the failing checks", "request_id": "start-pr-7"}),
     );
-    herdr.wait_for_requests(1, Duration::from_secs(10));
+    herdr.wait_for_calls(1, Duration::from_secs(10));
     let asked = herdr.calls();
     assert_eq!(
         asked
             .iter()
-            .map(|(method, params)| (method.as_str(), params["branch"].as_str()))
+            .map(|(method, params)| (*method, params["branch"].as_str()))
             .collect::<Vec<_>>(),
-        [("worktree.create", Some("pr-branch"))],
+        [("create_worktree", Some("pr-branch"))],
         "{asked:?}"
     );
     let checked = node.calls.lock().unwrap().iter().any(|call| {
@@ -2564,7 +2531,7 @@ fn a_failed_node_write_s_token_is_not_drawn_as_a_direct_link() {
         }
         raw
     };
-    let connector = crate::engine::herdr::local("/tmp/herdr-core-never-connect.sock");
+    let connector = FakeEngine::absent().engine();
     let shared = node_runtime_with(
         &repo,
         FakeDevice::new(),
@@ -2787,12 +2754,9 @@ fn a_node_cleanup_says_why_github_cannot_prove_a_merge() {
             "work",
         ],
     );
-    let herdr = crate::fake_herdr::FakeHerdr::start("node-cleanup-why", |method, _| match method {
-        "session.snapshot" => serde_json::json!({"type": "session_snapshot", "snapshot": {
-            "version": "fixture", "protocol": hide_herdr_client::HERDR_PROTOCOL_REVISION,
-            "workspaces": [], "tabs": [], "panes": [], "layouts": [], "agents": []
-        }}),
-        other => panic!("the node's Herdr is asked {other}"),
+    let herdr = FakeEngine::start(|method, _| match method {
+        "session" => reply(fake::session(serde_json::json!({}))),
+        other => panic!("the node's engine is asked {other}"),
     });
     let shared = node_runtime_with(
         &repo,
@@ -2848,7 +2812,7 @@ fn a_node_worktree_the_window_selected_stays_out_of_the_inactive_fold() {
         FakeDevice::new(),
         Recording::of(None),
         Default::default(),
-        crate::engine::herdr::local("/tmp/herdr-core-never-connect.sock"),
+        FakeEngine::absent().engine(),
         vec![herdr_workspace(
             NODE,
             "w1",

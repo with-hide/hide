@@ -9,9 +9,7 @@ use crate::remote::{
     Attempt, Cancel, CapabilityReport, DeviceConnector, DeviceTransport, DialedTransport,
     EstablishError, Established, SshFailure, SshHostListing, SshProblem, Wake, WslListing,
 };
-use hide_node_link::device::{
-    Answer, HostConsent, Refusal, RemoteHostIdentity, SignInWait, SnapshotCheck,
-};
+use hide_node_link::device::{Answer, HostConsent, Refusal, RemoteHostIdentity, SignInWait};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 const DEVICE: &str = "mini";
@@ -46,7 +44,6 @@ impl DeviceConnector for Devices {
         _home: &std::path::Path,
         _node: &str,
         alias: &str,
-        _herdr_socket: Option<String>,
     ) -> Result<Arc<dyn DialedTransport>, String> {
         assert!(alias.starts_with(DEVICE), "{alias}");
         Ok(Arc::new(AskingDevice(Arc::clone(&self.0))))
@@ -78,20 +75,10 @@ impl DeviceConnector for Devices {
 /// ends the attempt as ssh does when its askpass gives none.
 struct AskingDevice(Arc<Asked>);
 
-impl DeviceTransport for AskingDevice {
-    fn herdr_api_connector(&self) -> Arc<dyn hide_herdr_client::ApiConnector> {
-        Arc::new(hide_herdr_client::LocalSocketConnector::new(
-            "/tmp/herdr-core-never-connect.sock",
-        ))
-    }
-
-    fn cached_herdr_version(&self) -> Option<String> {
-        None
-    }
-}
+impl DeviceTransport for AskingDevice {}
 
 impl DialedTransport for AskingDevice {
-    fn capability_test(&self, operation_id: &str, _check: SnapshotCheck<'_>) -> CapabilityReport {
+    fn capability_test(&self, operation_id: &str) -> CapabilityReport {
         CapabilityReport::new(
             operation_id,
             RemoteHostIdentity {
@@ -168,8 +155,6 @@ fn ssh_runtime() -> (Arc<Mutex<Runtime>>, Arc<Asked>) {
             origin: crate::model::LinkOrigin::Dialed {
                 ssh_alias: DEVICE.to_owned(),
             },
-            herdr_socket_path: None,
-            herdr_session: None,
             host_consent: Some(consent),
         });
     runtime.rebuild_device_rows();
@@ -552,8 +537,6 @@ fn ended_attempts_leave_no_slot_for_their_devices() {
                     origin: crate::model::LinkOrigin::Dialed {
                         ssh_alias: id.to_owned(),
                     },
-                    herdr_socket_path: None,
-                    herdr_session: None,
                     host_consent: Some(consent),
                 });
         }

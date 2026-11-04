@@ -96,7 +96,7 @@ def memory(path):
 def stages(run):
     timing = summarize.timing(run / "isolated" / "hide-state" / "Logs" / "core.jsonl")
     return {op: {"records": row["records"], "outcomes": row["outcomes"],
-                 "herdr_share_ms": row["herdr_share_ms"], "hide_share_ms": row["hide_share_ms"]}
+                 "drawn_ms": row["stages"]["drawn_ms"], "sent_ms": row["stages"]["sent_ms"]}
             for op, row in timing.items()}
 
 
@@ -181,11 +181,11 @@ def table(record):
         lines.append(
             f"| {kind} | {row['count']} | {row['timeouts']} | {ms(screen['p50'])} | {ms(screen['p95'])} | {ms(screen['max'])} | "
             f"{ms(frame['p50'])} | {ms(frame['p95'])} | {ms(frame['max'])} |")
-    lines += ["", "| `pane_op.timing` | records | Herdr share p50 | p95 | Hide share p50 | p95 |",
+    lines += ["", "| `pane_op.timing` | records | drawn p50 | p95 | sent p50 | p95 |",
               "| --- | ---: | ---: | ---: | ---: | ---: |"]
     for op, row in (record["stages"] or {}).items():
-        herdr, hide = row["herdr_share_ms"], row["hide_share_ms"]
-        lines.append(f"| {op} | {row['records']} | {ms(herdr['p50'])} | {ms(herdr['p95'])} | {ms(hide['p50'])} | {ms(hide['p95'])} |")
+        drawn, sent = row["drawn_ms"], row["sent_ms"]
+        lines.append(f"| {op} | {row['records']} | {ms(drawn['p50'])} | {ms(drawn['p95'])} | {ms(sent['p50'])} | {ms(sent['p95'])} |")
     settled, after = record["memory"]["settled"] or {}, record["memory"]["after_topology"] or {}
     lines += [
         "",

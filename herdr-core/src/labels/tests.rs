@@ -353,7 +353,7 @@ impl Harness {
                             Arc::new(hide_node::Local::new(None));
                         Box::new(move || Ok(Arc::clone(&node)))
                     },
-                    herdr_socket: Some(self.locks.path().join(socket_name).display().to_string()),
+                    scope: Some(self.locks.path().join(socket_name).display().to_string()),
                 },
                 input: Arc::clone(&self.input),
                 ledger,

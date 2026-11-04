@@ -805,7 +805,6 @@ fn mini_in_front_at(runtime: &mut Runtime, path: &str) {
         target_id: "mini".into(),
         state: "connected".into(),
         message: None,
-        herdr_version: None,
         unreachable_since_unix_ms: None,
         session: Some(RemoteSessionSnapshot {
             workspaces: vec![project],
@@ -819,7 +818,6 @@ fn mini_in_front_at(runtime: &mut Runtime, path: &str) {
             pane_hook_tokens: Default::default(),
             issue_tokens: Default::default(),
             issue_links: Default::default(),
-            herdr_version: None,
         }),
         files: RemoteFileListSnapshot::idle(),
         catalog: Default::default(),
@@ -839,8 +837,6 @@ fn acknowledged_remote_repository_edits_invalidate_native_intake_before_returnin
             origin: crate::model::LinkOrigin::Dialed {
                 ssh_alias: "mini".into(),
             },
-            herdr_socket_path: None,
-            herdr_session: None,
             host_consent: None,
         });
     let mut project = runtime.snapshot.navigator.workspaces.remove(0);
@@ -860,7 +856,6 @@ fn acknowledged_remote_repository_edits_invalidate_native_intake_before_returnin
         pane_hook_tokens: Default::default(),
         issue_tokens: Default::default(),
         issue_links: Default::default(),
-        herdr_version: None,
     });
     runtime.snapshot.status.remote = vec![remote];
     runtime.device_hosts.insert(

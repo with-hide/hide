@@ -6,11 +6,10 @@
 # runner, then runs the two real-binary checks in a throwaway home: Codex's
 # app-server loads a worktree's own settings once Hide trusted it and stops
 # once Hide took the trust out (`hide-agent-hooks/tests/it/codex_binary.rs`),
-# and Claude Code in a pane starts at its prompt in the worktree Hide trusted
-# and asks its question in another
-# (`herdr-core/src/agent_start/real_agent_trust_tests.rs`), once in a pane of
-# the pinned Herdr and once on the core's own engine, in a pane holder started
-# from the `hide-holder` built here. The format,
+# and Claude Code in a pane of the core's own engine starts at its prompt in
+# the worktree Hide trusted and asks its question in another
+# (`herdr-core/src/agent_start/real_agent_trust_tests.rs`), in a pane holder
+# started from the `hide-holder` built here. The format,
 # preservation and removal tests run on every pull request in `rust` and
 # `windows check`; this registry install runs only in `nightly.yml`, so a
 # network failure that is not Hide's never holds a pull request.
@@ -60,11 +59,6 @@ jobs:
         with:
           set: workspace
           save: false
-      - name: Install zsh on Linux
-        # The Herdr fetch script is zsh; the Linux image has none.
-        if: ${{ matrix.system == 'linux' }}
-        timeout-minutes: 3
-        run: sudo apt-get install -y --no-install-recommends zsh
       - name: Install cargo-nextest
         timeout-minutes: 3
         run: bash scripts/install-nextest.sh
@@ -86,25 +80,11 @@ jobs:
         id: agents
         timeout-minutes: 5
         run: python3 scripts/install-agent-clis.py claude codex
-      - name: Fetch the pinned Herdr runtime
-        id: herdr
-        timeout-minutes: 5
-        # Assigned first, so a failed fetch fails this step rather than
-        # handing the next one an empty path.
-        run: |
-          case "$RUNNER_OS" in
-            Windows) bin=$(pwsh -NoProfile -File scripts/fetch-herdr-runtime.ps1 | tr -d '\r') ;;
-            Linux) bin=$(zsh scripts/fetch-herdr-runtime.sh --platform linux-x86_64) ;;
-            *) bin=$(zsh scripts/fetch-herdr-runtime.sh --platform macos-aarch64) ;;
-          esac
-          echo "bin=$bin" >> "$GITHUB_OUTPUT"
-      - name: The real Codex and Claude Code read the trust Hide records on both engines
-        # One result file retains each engine's verdict even when another fails.
+      - name: The real Codex and Claude Code read the trust Hide records
         timeout-minutes: 10
         env:
           HIDE_CODEX_BINARY: ${{ steps.agents.outputs.codex }}
           HIDE_TEST_CLAUDE_BIN: ${{ steps.agents.outputs.claude }}
-          HIDE_E2E_HERDR_BIN: ${{ steps.herdr.outputs.bin }}
           HIDE_TEST_HOLDER_BIN: ${{ github.workspace }}/target/debug/hide-holder${{ matrix.system == 'windows' && '.exe' || '' }}
           HIDE_HOLDER_CONPTY: ${{ matrix.system == 'windows' && format('{0}/holder-conpty', runner.temp) || '' }}
         run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'test(/^codex_binary::/) | test(/^agent_start::real_agent_trust_tests::/)' --run-ignored only --no-capture --no-fail-fast

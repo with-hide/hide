@@ -1,23 +1,20 @@
-//! One label generator per Herdr server (PRD labels-in-hided D-10,
+//! One label generator per engine (PRD labels-in-hided D-10,
 //! core-host-node-remote-core amendment 3).
 //!
-//! Every core that follows the same Herdr server would otherwise analyze the
-//! same turns. The worker whose node holds the server's lock for it
-//! generates; any other shows provider names, logs once that it is standing
-//! by, and asks again every thirty seconds, so it takes over when the holder
-//! ends. The lock is the node's (`hide_host::label_lock`): it sits beside
-//! the server's socket on the machine that runs the server, so cores on any
-//! machine that label one server meet at one file, and the core keeps no
-//! file of its own for it.
+//! Two daemons that open the same engine would otherwise analyze the same
+//! turns. The worker whose node holds the engine's lock for it generates;
+//! any other shows provider names, logs once that it is standing by, and
+//! asks again every thirty seconds, so it takes over when the holder ends.
+//! The lock is the node's (`hide_host::label_lock`): it sits beside the
+//! engine's folder, and the core keeps no file of its own for it.
 //!
-//! A worker that generates asks again every thirty seconds too: a node lets
-//! its locks go with the link it served, so a link that came back has to
-//! take the lock again, or learn that another core took it meanwhile. The
-//! core's own node answers in this process, at once; a linked node's answer
-//! crosses its link, so that ask runs on a thread of its own, because the
-//! worker runs on the session-sync thread, which never blocks. A node that
-//! serves no Herdr server it can name has no shared place to meet at, and
-//! its worker generates.
+//! A worker that generates asks again every thirty seconds too, so a lock
+//! another daemon took meanwhile is learned. The core's own node answers in
+//! this process, at once; a linked node's answer crosses its link, so that
+//! ask runs on a thread of its own, because the worker runs on the
+//! session-sync thread, which never blocks. A worker with no engine folder
+//! to name (a device's, whose engine only this core opens) has no shared
+//! place to meet at, and generates.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -42,12 +39,11 @@ const ASK_WITHIN: Duration = Duration::from_secs(10);
 /// shares or frees the lock the other took.
 static NEXT_GENERATOR: AtomicU64 = AtomicU64::new(1);
 
-/// Where a worker's lock is: the node of the machine that runs its Herdr
-/// server, and the server's socket there when the core knows it; `None`
-/// asks for the server the node's pane service serves.
+/// Where a worker's lock is: the node of the machine that runs its engine,
+/// and the engine's folder there; `None` names no shared place.
 pub(crate) struct LockPlace {
     pub(crate) node: ChannelSource,
-    pub(crate) herdr_socket: Option<String>,
+    pub(crate) scope: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -150,38 +146,34 @@ impl GeneratorLock {
         self.role.shows()
     }
 
-    fn call(&self, take: bool) -> Call {
-        let herdr_socket = self.place.herdr_socket.clone();
+    /// The lock's call, `None` when the worker names no engine folder.
+    fn call(&self, take: bool) -> Option<Call> {
+        let scope = self.place.scope.clone()?;
         let generator = self.generator;
-        if take {
-            Call::LabelLock {
-                herdr_socket,
-                generator,
-            }
+        Some(if take {
+            Call::LabelLock { scope, generator }
         } else {
-            Call::LabelUnlock {
-                herdr_socket,
-                generator,
-            }
-        }
+            Call::LabelUnlock { scope, generator }
+        })
     }
 
     /// Asks the node: in this process, the answer; across a link, `None`,
     /// and the answer comes on a later `ensure` after the worker is woken.
     fn ask(&mut self) -> Option<Answer> {
+        let (Some(call), Some(unlock)) = (self.call(true), self.call(false)) else {
+            return Some(Answer::NoServer);
+        };
         let node = match (self.place.node)() {
             Ok(node) => node,
             Err(reason) => return Some(Answer::Failed(reason.to_owned())),
         };
         self.node = Some(Arc::clone(&node));
-        let call = self.call(true);
         if node.in_process() {
             return Some(ask(node.as_ref(), call));
         }
         let asked = Arc::new(Mutex::new(Asked::default()));
         let shared = Arc::clone(&asked);
         let wake = Arc::clone(&self.wake);
-        let unlock = self.call(false);
         let spawned = std::thread::Builder::new()
             .name("label-lock".to_owned())
             .spawn(move || {
@@ -273,7 +265,9 @@ impl Drop for GeneratorLock {
         let Some(node) = self.node.take().filter(|_| held) else {
             return;
         };
-        let unlock = self.call(false);
+        let Some(unlock) = self.call(false) else {
+            return;
+        };
         if node.in_process() {
             give_back(node.as_ref(), unlock);
             return;
@@ -332,7 +326,7 @@ mod tests {
         GeneratorLock::new(
             LockPlace {
                 node: Box::new(move || Ok(Arc::clone(&node))),
-                herdr_socket: Some(socket.display().to_string()),
+                scope: Some(socket.display().to_string()),
             },
             "local",
             Arc::new(|| {}),
@@ -421,7 +415,7 @@ mod tests {
             let linked: Arc<dyn NodeLink> = linked.clone();
             LockPlace {
                 node: Box::new(move || Ok(Arc::clone(&linked))),
-                herdr_socket: Some(socket.display().to_string()),
+                scope: Some(socket.display().to_string()),
             }
         };
         let mut worker = GeneratorLock::new(
@@ -477,7 +471,7 @@ mod tests {
                         Err("device_helper_not_ready")
                     }
                 }),
-                herdr_socket: Some(socket.display().to_string()),
+                scope: Some(socket.display().to_string()),
             },
             "device:mini",
             Arc::new(|| {}),
@@ -515,7 +509,7 @@ mod tests {
             GeneratorLock::new(
                 LockPlace {
                     node: Box::new(move || Ok(Arc::clone(&node))),
-                    herdr_socket: None,
+                    scope: None,
                 },
                 "device:mini",
                 Arc::new(|| {}),
@@ -539,7 +533,7 @@ mod tests {
         let mut worker = GeneratorLock::new(
             LockPlace {
                 node: Box::new(move || Ok(Arc::clone(&node))),
-                herdr_socket: None,
+                scope: None,
             },
             "device:mini",
             Arc::new(|| {}),

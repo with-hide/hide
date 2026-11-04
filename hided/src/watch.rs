@@ -674,7 +674,6 @@ pub(crate) mod tests {
                 target_id: "mac".into(),
                 state: "connected".into(),
                 message: None,
-                herdr_version: None,
                 session: Some(herdr_core::RemoteSessionSnapshot {
                     focused_checkout_id: Some(workspaces[0].checkouts[0].id.clone()),
                     workspaces,
@@ -687,7 +686,6 @@ pub(crate) mod tests {
                     pane_hook_tokens: Default::default(),
                     issue_tokens: Default::default(),
                     issue_links: Default::default(),
-                    herdr_version: None,
                 }),
                 files: herdr_core::RemoteFileListSnapshot::idle(),
                 catalog: Default::default(),

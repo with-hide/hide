@@ -148,17 +148,14 @@ fn lost(target: &InputTarget, rung: &str, reason: &str, error: &EngineError) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fake_herdr::FakeHerdr;
-    use serde_json::json;
+    use crate::engine::answers::{DeliveryAgent, Readiness};
+    use crate::engine::fake::{FakeEngine, refused, reply, unanswered};
 
     #[test]
     fn a_working_codex_receives_one_prompt_in_its_current_turn() {
-        let herdr = FakeHerdr::start("live-letter", |method, _| {
-            assert_eq!(method, "agent.prompt");
-            json!({"type":"agent_prompted","agent":{
-                "pane_id":"w1:p2","tab_id":"w1:t1","workspace_id":"w1",
-                "terminal_id":"term_1","agent":"codex","agent_status":"working",
-                "state_change_seq":2,"focused":false,"interactive_ready":true,"revision":0}})
+        let fake = FakeEngine::start(|method, _| {
+            assert_eq!(method, "prompt_agent");
+            reply(())
         });
         let target = InputTarget {
             kind: "codex".into(),
@@ -166,22 +163,19 @@ mod tests {
             raw_pane_id: "w1:p2".into(),
         };
         assert_eq!(
-            deliver(herdr.engine().as_ref(), &target, "letter"),
+            deliver(fake.engine().as_ref(), &target, "letter"),
             Delivered::Sent(SendRoute::Typed)
         );
-        let calls = herdr.calls();
+        let calls = fake.calls();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].1["text"], "letter");
     }
 
     #[test]
     fn a_tab_in_the_input_reaches_the_agent_as_four_spaces() {
-        let herdr = FakeHerdr::start("ladder-tabs", |method, _| {
-            assert_eq!(method, "agent.prompt");
-            json!({"type":"agent_prompted","agent":{
-                "pane_id":"w1:p2","tab_id":"w1:t1","workspace_id":"w1",
-                "terminal_id":"term_1","agent":"omp","agent_status":"idle",
-                "state_change_seq":2,"focused":false,"interactive_ready":true,"revision":0}})
+        let fake = FakeEngine::start(|method, _| {
+            assert_eq!(method, "prompt_agent");
+            reply(())
         });
         let target = InputTarget {
             kind: "omp".into(),
@@ -190,27 +184,27 @@ mod tests {
         };
         assert_eq!(
             deliver(
-                herdr.engine().as_ref(),
+                fake.engine().as_ref(),
                 &target,
                 "names no file.\n\tIt needs no change.\nReply TOKEN"
             ),
             Delivered::Sent(SendRoute::Typed)
         );
         assert_eq!(
-            herdr.calls()[0].1["text"],
+            fake.calls()[0].1["text"],
             "names no file.\n    It needs no change.\nReply TOKEN"
         );
     }
 
     /// A refusal the engine makes before writing typed nothing, so a bell may
     /// ring again and a brief is not submitted; a submission whose answer
-    /// never came, or that Herdr's wait after it timed out, may have arrived
+    /// never came, or whose wait after it timed out, may have arrived
     /// and is never sent again blindly.
     #[test]
     fn a_refused_submission_is_not_typed_and_an_unanswered_one_may_be() {
-        let herdr = FakeHerdr::start_with_errors("ladder-refused", |method, _| {
-            assert_eq!(method, "agent.prompt");
-            Err(("agent_blocked".into(), "agent is blocked".into()))
+        let fake = FakeEngine::start(|method, _| {
+            assert_eq!(method, "prompt_agent");
+            refused("agent_blocked", "agent is blocked")
         });
         let target = InputTarget {
             kind: "claude".into(),
@@ -218,12 +212,12 @@ mod tests {
             raw_pane_id: "w1:p2".into(),
         };
         assert_eq!(
-            deliver(herdr.engine().as_ref(), &target, "letter"),
+            deliver(fake.engine().as_ref(), &target, "letter"),
             Delivered::NotYet("engine_refused")
         );
         assert_eq!(
             crate::coordination::executor::send_brief(
-                herdr.engine().as_ref(),
+                fake.engine().as_ref(),
                 &target,
                 "spawn-1",
                 "brief"
@@ -231,16 +225,11 @@ mod tests {
             Err("brief_not_submitted".to_owned())
         );
 
-        for code in [crate::fake_herdr::NO_REPLY, "timeout"] {
-            let uncertain = FakeHerdr::start_with_errors("ladder-uncertain", move |_, _| {
-                Err((code.into(), String::new()))
-            });
-            assert_eq!(
-                deliver(uncertain.engine().as_ref(), &target, "letter"),
-                Delivered::Lost("herdr_call_failed"),
-                "{code}"
-            );
-        }
+        let uncertain = FakeEngine::start(|_, _| unanswered("the answer never came"));
+        assert_eq!(
+            deliver(uncertain.engine().as_ref(), &target, "letter"),
+            Delivered::Lost("herdr_call_failed"),
+        );
     }
 
     /// An agent that never takes input within the wait is `Late`, with
@@ -249,16 +238,20 @@ mod tests {
     #[test]
     fn an_agent_that_never_takes_input_is_late_and_nothing_is_typed() {
         for (name, interactive) in [("hide-codex-w1-p2", false), ("someone-else", true)] {
-            let herdr = FakeHerdr::start("ladder-never-ready", move |method, _| match method {
-                "agent.get" => json!({"type": "agent_info", "agent": {
-                    "pane_id": "w1:p2", "tab_id": "w1:t1", "workspace_id": "w1",
-                    "terminal_id": "term_1", "agent": "codex", "agent_status": "idle",
-                    "state_change_seq": 1, "focused": false, "interactive_ready": interactive,
-                    "name": name, "revision": 0}}),
+            let fake = FakeEngine::start(move |method, _| match method {
+                "delivery_agent" => reply(DeliveryAgent {
+                    pane_id: "w1:p2".into(),
+                    name: name.into(),
+                    kind: Some("codex".into()),
+                    session: None,
+                    status: "idle".into(),
+                    state_change_seq: 1,
+                    readiness: Readiness::of(Some(interactive), None),
+                }),
                 other => panic!("unexpected {other}"),
             });
             let answer = ready(
-                herdr.engine().as_ref(),
+                fake.engine().as_ref(),
                 "w1:p2",
                 "hide-codex-w1-p2",
                 Duration::from_millis(300),
@@ -268,10 +261,9 @@ mod tests {
                 "{name}: {answer:?}"
             );
             assert!(
-                herdr
-                    .calls()
+                fake.methods()
                     .iter()
-                    .all(|(method, _)| method == "agent.get")
+                    .all(|method| *method == "delivery_agent")
             );
         }
     }

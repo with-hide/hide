@@ -1963,18 +1963,7 @@ impl Runtime {
         target_id: &str,
         fetched: Result<RemoteSessionSnapshot, SessionFetchError>,
     ) -> bool {
-        // The server's own answer names its version; the status read the
-        // connection made once does not follow a live handoff (PRD
-        // device-herdr-update B3).
-        let live_herdr_version = match &fetched {
-            Ok(session) => session.herdr_version.clone(),
-            Err(error) => error
-                .protocol_details()
-                .and_then(|(_, _, version)| version.map(str::to_owned)),
-        };
-        // A device's server on an older protocol is the device's to update
-        // or hand over, never this machine's to stop (D-15).
-        let mut fetched = fetched.map_err(SessionFetchError::for_device);
+        let mut fetched = fetched;
         // A remote projection is built off the runtime, so it cannot see the
         // read ledger; without this every stopped remote pane published `Done`
         // and demanded a close confirmation. Hide never focuses a remote pane,
@@ -2066,18 +2055,9 @@ impl Runtime {
         // The machine answers again: its helper link does not wait out a
         // retry that doubled while it was away.
         let reachable_again = session_ok && !was_connected;
-        let herdr_version = live_herdr_version.or_else(|| {
-            self.remote_connections
-                .get(target_id)
-                .and_then(|connection| connection.transport.device().cached_herdr_version())
-        });
         let status = &mut self.snapshot.status.remote[status_index];
 
         let mut changed = read_changed;
-        if status.herdr_version != herdr_version {
-            status.herdr_version = herdr_version;
-            changed = true;
-        }
         let mut observed_session = None;
         match fetched {
             Ok(session) => {
@@ -2404,11 +2384,6 @@ impl Runtime {
         Some(identity)
     }
 
-    #[cfg(test)]
-    pub(crate) fn pane_focus_readback_is_outstanding(&self) -> bool {
-        self.pane_focus_readback.is_some()
-    }
-
     /// Frees the readback slot for a worker that ended without an answer.
     pub(crate) fn abandon_pane_focus_readback(&mut self) {
         self.pane_focus_readback = None;
@@ -2716,21 +2691,6 @@ impl Runtime {
             .as_ref()
             .map(|payload| self.reconcile_session_catalog(payload, precomputed, inline_paths))
             .unwrap_or(false);
-        // A refused revision names both protocols; a connected Herdr's details
-        // are its version and the revision this build requires, which its
-        // snapshot already matched, so Settings can show real values (B5).
-        let protocol_details = match fetched.as_ref() {
-            Ok(payload) => Some((
-                u64::from(crate::engine::herdr::contract::HERDR_PROTOCOL_REVISION),
-                u64::from(crate::engine::herdr::contract::HERDR_PROTOCOL_REVISION),
-                payload.herdr_version.clone(),
-            )),
-            Err(error) => error
-                .protocol_details()
-                .map(|(expected, received, version)| {
-                    (expected, received, version.map(str::to_owned))
-                }),
-        };
         let (state, message, agents, layouts, layout, selection_changed) = match fetched {
             Ok(payload) => {
                 self.consume_restore_hint(&payload);
@@ -3113,21 +3073,11 @@ impl Runtime {
             || close_topology_changed
             || pane_topology_changed
             || !excluded.is_empty();
-        let (expected_protocol, received_protocol, received_version) = protocol_details
-            .map(|(expected, received, version)| (Some(expected), Some(received), version))
-            .unwrap_or((None, None, None));
         if self.snapshot.status.herdr.state != state
             || self.snapshot.status.herdr.message.as_deref() != message.as_deref()
-            || self.snapshot.status.herdr.expected_protocol != expected_protocol
-            || self.snapshot.status.herdr.received_protocol != received_protocol
-            || self.snapshot.status.herdr.received_version != received_version
         {
             self.snapshot.status.herdr.state = state.to_owned();
             self.snapshot.status.herdr.message = message;
-            self.snapshot.status.herdr.expected_protocol = expected_protocol;
-            self.snapshot.status.herdr.received_protocol = received_protocol;
-            self.snapshot.status.herdr.received_version = received_version;
-            self.herdr_connection_changed();
             changed = true;
         }
         if let Some(mut agents) = agents {
@@ -4112,11 +4062,6 @@ impl Runtime {
                 let timing_id = super::op_timing::task_create_op_id(id);
                 match (device.as_deref(), created_tab_id.as_deref()) {
                     (None, Some(tab_id)) => {
-                        self.op_timings.stamp(
-                            &timing_id,
-                            super::op_timing::Stage::HerdrAck,
-                            std::time::Instant::now(),
-                        );
                         self.op_timings
                             .learn(&timing_id, Some(tab_id), Some(pane_id.as_str()));
                         self.await_op_frame(&timing_id, &pane_id, false);
@@ -5349,11 +5294,6 @@ impl Runtime {
                     created_tab_id,
                     created_pane_id,
                 }) => {
-                    self.op_timings.stamp(
-                        id,
-                        super::op_timing::Stage::HerdrAck,
-                        std::time::Instant::now(),
-                    );
                     self.op_timings.learn(
                         id,
                         created_tab_id.as_deref(),

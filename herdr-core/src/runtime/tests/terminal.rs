@@ -380,39 +380,35 @@ fn a_wheel_before_the_attach_is_sent_with_the_first_frame() {
     assert!(runtime.wheel_before_attach.is_empty());
 }
 
-/// A fake Herdr holding one pane's scroll position, answering `pane.get` and
-/// `pane.scroll` the way the pinned server does: an overshoot at the top is
-/// clamped, and the answer carries the metrics after the move.
-fn scrolling_herdr(name: &str, max: Arc<Mutex<u64>>) -> FakeHerdr {
+/// A fake engine holding one pane's scroll position, answering its reads
+/// and moves the way the own engine does: an overshoot at the top is
+/// clamped, and the answer carries the position after the move.
+fn scrolling_herdr(max: Arc<Mutex<u64>>) -> Fake {
     let offset = Arc::new(Mutex::new(0_u64));
-    FakeHerdr::start(name, move |method, params| {
+    FakeEngine::start(move |method, params| {
         let max = *max.lock().unwrap();
         let mut offset = offset.lock().unwrap();
         match method {
-            "pane.get" => {}
-            "pane.scroll" => {
+            "pane_scroll" => {}
+            "scroll_pane" => {
                 *offset = params["offset_from_bottom"].as_u64().unwrap().min(max);
             }
             other => panic!("unexpected {other}"),
         }
-        serde_json::json!({"type": "pane_info", "pane": {
-            "pane_id": params["pane_id"], "terminal_id": "t", "workspace_id": "w1",
-            "tab_id": "w1:t1", "focused": false, "agent_status": "idle", "revision": 1,
-            "scroll": {"offset_from_bottom": *offset, "max_offset_from_bottom": max, "viewport_rows": 20}
-        }})
+        reply(Some(crate::find::pane::PaneScroll {
+            offset_from_bottom: *offset,
+            max_offset_from_bottom: max,
+        }))
     })
 }
 
-fn observed_runtime(herdr: &FakeHerdr, pane: &str) -> SharedRuntime {
+fn observed_runtime(herdr: &Fake, pane: &str) -> SharedRuntime {
     let shared = SharedRuntime::new(runtime());
     {
         let mut runtime = shared.lock().unwrap();
         runtime.live = Some(live::LiveContext {
-            socket_path: herdr.socket_path().to_path_buf(),
             runtime: shared.weak(),
-            notifier: crate::handle::ChangeNotifier::noop(),
-            engine: herdr.engine(),
-            node: Arc::new(hide_node::Local::of_process()),
+            ..herdr.live()
         });
         runtime
             .terminal_states
@@ -431,11 +427,11 @@ fn settle(shared: &Arc<Mutex<Runtime>>) {
     }
 }
 
-fn scroll_offsets(herdr: &FakeHerdr) -> Vec<u64> {
+fn scroll_offsets(herdr: &Fake) -> Vec<u64> {
     herdr
         .calls()
         .into_iter()
-        .filter(|(method, _)| method == "pane.scroll")
+        .filter(|(method, _)| *method == "scroll_pane")
         .map(|(_, params)| params["offset_from_bottom"].as_u64().unwrap())
         .collect()
 }
@@ -448,7 +444,7 @@ fn scroll_offsets(herdr: &FakeHerdr) -> Vec<u64> {
 #[test]
 fn a_wheel_on_an_observed_pane_moves_herdrs_viewport() {
     let max = Arc::new(Mutex::new(300));
-    let herdr = scrolling_herdr("observed-wheel", Arc::clone(&max));
+    let herdr = scrolling_herdr(Arc::clone(&max));
     let pane = "w1:p1";
     let shared = observed_runtime(&herdr, pane);
     {
@@ -478,7 +474,7 @@ fn a_wheel_on_an_observed_pane_moves_herdrs_viewport() {
 #[test]
 fn an_observed_wheel_herdr_cannot_move_shows_the_hold_until_one_moves() {
     let max = Arc::new(Mutex::new(0));
-    let herdr = scrolling_herdr("observed-held", Arc::clone(&max));
+    let herdr = scrolling_herdr(Arc::clone(&max));
     let pane = "w1:p1";
     let shared = observed_runtime(&herdr, pane);
     shared
@@ -530,9 +526,12 @@ fn an_observed_wheel_herdr_cannot_move_shows_the_hold_until_one_moves() {
 #[test]
 fn an_observed_wheel_that_cannot_reach_herdr_is_logged_not_held() {
     let pane = "w1:p1";
-    let herdr = scrolling_herdr("observed-unreachable", Arc::new(Mutex::new(300)));
+    let herdr = FakeEngine::start(|method, _| {
+        Err(crate::engine::EngineError::Transport(format!(
+            "{method}: no route"
+        )))
+    });
     let shared = observed_runtime(&herdr, pane);
-    drop(herdr);
     shared
         .lock()
         .unwrap()
@@ -561,14 +560,13 @@ fn an_observed_wheel_that_cannot_reach_herdr_is_logged_not_held() {
 /// in the find bar instead of searching this machine.
 #[test]
 fn a_device_pane_is_searched_on_its_own_herdr() {
-    let herdr = FakeHerdr::start("device-find", |method, params| {
-        assert_eq!(method, "pane.read");
-        assert_eq!(params["pane_id"], "w1:p2");
-        serde_json::json!({"type": "pane_read", "read": {
-            "pane_id": "w1:p2", "workspace_id": "w1", "tab_id": "w1:t1",
-            "source": params["source"], "format": "text",
-            "text": "alpha\nneedle\nomega\n", "revision": 1, "truncated": false
-        }})
+    let herdr = FakeEngine::start(|method, params| {
+        assert_eq!(method, "read_pane");
+        assert_eq!(params["pane"], "w1:p2");
+        reply(crate::engine::PaneText {
+            text: "alpha\nneedle\nomega\n".to_owned(),
+            truncated: false,
+        })
     });
     let shared = SharedRuntime::new(runtime());
     let pane = "remote:mini:pane:w1:p2";
@@ -591,15 +589,12 @@ fn a_device_pane_is_searched_on_its_own_herdr() {
                 origin: crate::model::LinkOrigin::Dialed {
                     ssh_alias: "mini".to_owned(),
                 },
-                herdr_socket_path: None,
-                herdr_session: None,
                 host_consent: None,
             });
         runtime.snapshot.status.remote.push(RemoteStatusSnapshot {
             target_id: "mini".to_owned(),
             state: "reconnecting".to_owned(),
             message: None,
-            herdr_version: Some("0.9.1".to_owned()),
             session: None,
             files: RemoteFileListSnapshot::idle(),
             catalog: Default::default(),
@@ -616,7 +611,7 @@ fn a_device_pane_is_searched_on_its_own_herdr() {
             runtime.snapshot.find.unavailable_reason.as_deref(),
             Some("Mini is not connected")
         );
-        assert!(herdr.requests().is_empty());
+        assert!(herdr.calls().is_empty());
         runtime.snapshot.status.remote[0].state = "connected".to_owned();
         runtime.dispatch_json(&find);
     }
@@ -1434,20 +1429,19 @@ fn find_opens_the_agents_own_search_only_where_herdr_holds_no_history() {
     let herdr = {
         let history = Arc::clone(&history);
         let screen = Arc::clone(&screen);
-        FakeHerdr::start("agent-find", move |method, params| match method {
-            "pane.get" => serde_json::json!({"type": "pane_info", "pane": {
-                "pane_id": params["pane_id"], "terminal_id": "t", "workspace_id": "w1",
-                "tab_id": "w1:t1", "focused": true, "agent_status": "idle", "revision": 1,
-                "scroll": {"offset_from_bottom": 0,
-                           "max_offset_from_bottom": *history.lock().unwrap(),
-                           "viewport_rows": 40}
-            }}),
-            "pane.read" => serde_json::json!({"type": "pane_read", "read": {
-                "pane_id": params["pane_id"], "workspace_id": "w1", "tab_id": "w1:t1",
-                "source": params["source"], "format": "text",
-                "text": *screen.lock().unwrap(), "revision": 1, "truncated": false
-            }}),
-            "pane.send_keys" => serde_json::json!({"type": "ok"}),
+        FakeEngine::start(move |method, params| match method {
+            "pane_scroll" => reply(Some(crate::find::pane::PaneScroll {
+                offset_from_bottom: 0,
+                max_offset_from_bottom: *history.lock().unwrap(),
+            })),
+            "read_pane" => {
+                assert_eq!(params["source"], "visible");
+                reply(crate::engine::PaneText {
+                    text: screen.lock().unwrap().clone(),
+                    truncated: false,
+                })
+            }
+            "send_keys" => reply(()),
             other => panic!("unexpected {other}"),
         })
     };
@@ -1484,7 +1478,7 @@ fn find_opens_the_agents_own_search_only_where_herdr_holds_no_history() {
         herdr
             .calls()
             .into_iter()
-            .filter(|(method, _)| method == "pane.send_keys")
+            .filter(|(method, _)| *method == "send_keys")
             .map(|(_, params)| params["keys"].clone())
             .collect::<Vec<_>>()
     };

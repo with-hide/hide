@@ -237,9 +237,7 @@ impl Device {
         if let Some(sink) = terminals {
             connector = connector.with_terminals(sink);
         }
-        let transport = connector
-            .transport(&local, "contract-node", ALIAS, None)
-            .unwrap();
+        let transport = connector.transport(&local, "contract-node", ALIAS).unwrap();
         let consent = HostConsent {
             contract: HOST_CONSENT_CONTRACT,
             helper_root: "~/helper".to_owned(),
@@ -605,7 +603,7 @@ fn a_retained_protocol24_node_keeps_legacy_readers_then_upgrades_normally() {
     device.link.close("ordinary build upgrade");
     let transport = hide_node::ssh::Connector::new(Some(device.current_packages.clone()))
         .with_askpass_program(PathBuf::from(env!("CARGO_BIN_EXE_hide")))
-        .transport(&device.local, "contract-node", ALIAS, None)
+        .transport(&device.local, "contract-node", ALIAS)
         .unwrap();
     let consent = HostConsent {
         contract: HOST_CONSENT_CONTRACT,

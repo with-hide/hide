@@ -30,8 +30,6 @@ pub mod domain;
 mod effects;
 pub mod engine;
 mod environment;
-#[cfg(test)]
-mod fake_herdr;
 mod fetch;
 mod files;
 pub use files::{FileRoots, inode_text};
@@ -46,7 +44,6 @@ mod github_store;
 pub mod global_instruction;
 mod handle;
 pub mod herdr_import;
-pub mod herdr_takeover;
 pub mod input_gate;
 pub mod issues;
 mod kit;

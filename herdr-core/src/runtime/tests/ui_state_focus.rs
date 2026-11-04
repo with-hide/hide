@@ -59,7 +59,6 @@ fn fixture() -> Runtime {
         sign_in: None,
         ssh_alias: Some("mini".to_owned()),
         wsl_distro: None,
-        herdr_socket_path: None,
         agent_count: 0,
         test: None,
         host: Default::default(),

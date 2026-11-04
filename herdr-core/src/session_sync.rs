@@ -1,5 +1,4 @@
-//! The projection of an engine's session: Herdr's, applied from its event
-//! stream, or the core's own engine's, read whole on each wake.
+//! The projection of the engine's session, read whole on each wake.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
@@ -11,14 +10,14 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 
-use crate::engine::{Changes, EngineError, SharedEngine, Wait};
+use crate::engine::{EngineError, SharedEngine, Wait};
 use crate::handle::ChangeNotifier;
 use crate::live::{LiveContext, SessionFetchError};
 use crate::model::{
     CheckoutSnapshot, PaneSnapshot, RemotePaneLayoutFrame, RemotePaneLayoutSnapshot,
     RemoteSessionSnapshot, StripTabSnapshot, TabSnapshot, WorkspaceRegistration, WorkspaceSnapshot,
 };
-use crate::runtime::{HerdrArrival, Runtime};
+use crate::runtime::Runtime;
 use crate::sidebar::{
     SessionAgentPayload, SessionLayoutPayload, SessionPanePayload, SessionSnapshotPayload,
     SessionTabPayload, SessionWorkspacePayload,
@@ -27,26 +26,7 @@ use crate::workspace;
 
 const SYNC_REQUEST_TIMEOUT: Duration = Duration::from_secs(1);
 const REMOTE_SYNC_REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
-/// How long after the bootstrap snapshot arrives an event read off the
-/// stream is still reconciled against it rather than applied strictly
-/// (`ApplyMode`). A line the reader thread had already pulled off the
-/// socket before the snapshot answered is stamped earlier than this, so
-/// the grace only has to cover the reader being scheduled late.
-const RECONCILE_GRACE: Duration = Duration::from_secs(1);
-const AGENT_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
-/// The least time between two agent lists asked for because the session
-/// moved while one was out; a steady event stream re-asks at this pace.
-const AGENT_REASK_SPACING: Duration = Duration::from_millis(250);
 const ASYNC_OPERATION_TICK_INTERVAL: Duration = Duration::from_millis(250);
-/// Herdr events kept between two publishes for the operation stage records;
-/// a burst longer than this keeps its newest events.
-const ARRIVAL_BUFFER_LIMIT: usize = 256;
-/// How many `workspace.get` reads a workspace waiting for its replacement
-/// active tab gets, one per event that leaves it waiting and one per
-/// operation tick, before the replica is declared stale and rebuilt from a
-/// fresh snapshot. Eight ticks is two seconds, longer than any event the
-/// read can have run ahead of takes to arrive.
-const ACTIVE_TAB_READ_ATTEMPT_LIMIT: u32 = 8;
 const CATALOG_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 const RECONNECT_INITIAL_DELAY: Duration = Duration::from_millis(100);
 const RECONNECT_MAX_DELAY: Duration = Duration::from_secs(5);
@@ -271,21 +251,6 @@ struct CatalogState {
     reader: Option<path_facts::PathReader>,
     connection: u64,
     wake: Option<RepublishWaker>,
-    /// The last publish was held for a pane whose cwd Herdr had not
-    /// confirmed and nothing could stand in for, so the worker's answer has
-    /// to publish even when it changes no cwd; a publish that ran clears it
-    /// (PRD grid-ahead-of-herdr D-12).
-    held_for_cwd: bool,
-    /// One last accepted topology per coordinator. A new pane's cwd must
-    /// not hold freshness invalidation of panes already on screen.
-    accepted: Option<ProjectionState>,
-    accepted_stale: bool,
-    /// The cwd the last publish showed for each pane whose own cwd Herdr
-    /// had not confirmed, a sibling's standing in. An answer that leaves the
-    /// pane at a different cwd than the screen shows has to publish even
-    /// when it changes nothing in the replica. At most
-    /// `UNCONFIRMED_CWD_LIMIT` panes wait, so at most that many are kept.
-    stand_ins: Vec<(String, String)>,
 }
 
 impl CatalogState {
@@ -328,30 +293,13 @@ impl Drop for SessionSyncHandle {
 
 pub(crate) enum CoordinatorMessage {
     Stop,
-    SubscriptionLine {
-        generation: u64,
-        line: Box<crate::engine::EventLine>,
-        /// When the reader pulled the line off the socket, which is what
-        /// places it before or after the bootstrap snapshot.
-        received_at: Instant,
-    },
-    SubscriptionEnded {
-        generation: u64,
-        message: String,
-    },
     /// The label worker has a read or an analysis result to take.
     Labels,
     /// The runtime drew something ahead of Herdr, or took it back, and the
     /// session has to be read again with it (`RepublishWaker`).
     Republish,
-    /// Rebootstrap the event replica after a multi-step topology transaction.
+    /// Read the session again after a multi-step topology transaction.
     RefreshTopology,
-    /// A socket read the sync-read worker made for the subscription of
-    /// `generation` (`sync_reads.rs`).
-    SyncRead {
-        generation: u64,
-        answer: sync_reads::SyncReadAnswer,
-    },
 }
 
 /// Wakes the local coordinator to publish its session again at once: the
@@ -379,55 +327,16 @@ impl RepublishWaker {
     }
 }
 
-pub(crate) struct ActiveSubscription {
-    generation: u64,
-    stopper: Box<dyn crate::engine::StopEvents>,
-    worker: Option<JoinHandle<()>>,
-}
-
-impl ActiveSubscription {
-    fn stop(mut self) {
-        self.stopper.stop();
-        // A reader is blocked in its socket read. Waiting for it here made a
-        // disconnect hold the coordinator until the peer happened to close
-        // its copy, so the reconnect deadline was no longer meaningful.
-        // Shutdown wakes the socket; the detached reader's next message is
-        // ignored by its generation check, and its weak runtime reference
-        // keeps the stop path independent of the old connection.
-        let _ = self.worker.take();
-    }
-}
-
 mod coordinator;
-mod launch_settle;
-pub(crate) use launch_settle::record_start;
 mod path_facts;
-mod process_info;
 mod projection;
 mod pulled;
-mod replica;
-mod subscription;
-mod sync_reads;
-#[cfg(test)]
-mod tests;
 
-#[cfg(test)]
-pub(crate) use coordinator::agent_tick_needs_publish;
 pub(crate) use coordinator::spawn;
 pub(crate) use projection::{
     ProjectedAgent, ProjectedPane, ProjectedTab, ProjectedWorkspace, ProjectedWorktree,
     ProjectionState,
 };
-#[cfg(test)]
-pub(crate) use replica::SNAPSHOT_FIELDS_THE_REPLICA_READS;
-pub(crate) use replica::{ApplyMode, PaneMove, ReplicaEvent, SessionReplica, SubscriptionLine};
-#[cfg(test)]
-pub(crate) use subscription::connect_failure_from_engine;
-pub(crate) use subscription::{
-    Connected, connect, fetch_agent_launch, fetch_agents, fetch_focused_workspace, fetch_pane_cwd,
-    fetch_workspace_active_tab, log_sync_failure, stop_subscription,
-};
-use sync_reads::{ActiveTabRead, SyncRead, SyncReadAnswer, SyncReader};
 
 /// A worker's authoritative read uses the same device projection as the replica.
 pub(crate) fn project_remote_read(
@@ -435,7 +344,6 @@ pub(crate) fn project_remote_read(
     device: &str,
 ) -> Result<(SessionSnapshotPayload, RemoteSessionSnapshot), SessionFetchError> {
     let payload = state.project();
-    let (remote, _) =
-        replica::SessionReplica::project_remote_state(&state, device, payload.clone())?;
+    let (remote, _) = state.project_remote(device, payload.clone())?;
     Ok((payload, remote))
 }

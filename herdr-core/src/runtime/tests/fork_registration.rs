@@ -1,15 +1,14 @@
 //! Fork agent registers the fork as the operator's root whose origin is its
 //! source (docs/status-model.md, Where a parent comes from). Codex started as
-//! `codex fork <id>` reports its session to Herdr only at its first turn, so
+//! `codex fork <id>` reports its session only at its first turn, so
 //! a fork left at rest has none for as long as the operator leaves it; the
-//! registration waits for that session in the ledger and is made when Herdr
-//! shows it, or ends with the fork's pane.
+//! registration waits for that session in the ledger and is made when the
+//! engine shows it, or ends with the fork's pane.
 
 use super::*;
 use crate::coordination::identity_wait::Owed;
 use crate::coordination::lineage::Writer;
 use crate::delivery::{ledger, worker::Worker};
-use crate::fake_herdr::FakeHerdr;
 use crate::handle::ChangeNotifier;
 use crate::runtime::delivery::tests::fixture;
 use serde_json::{Value, json};
@@ -33,9 +32,9 @@ fn row(pane: &str, name: &str, session: Option<&str>) -> Value {
 struct Forking {
     _root: tempfile::TempDir,
     runtime: Arc<Mutex<Runtime>>,
-    herdr: FakeHerdr,
+    herdr: Fake,
     live: crate::live::LiveContext,
-    /// Whether Herdr lists the fork's agent.
+    /// Whether the engine lists the fork's agent.
     listed: Arc<AtomicBool>,
     /// Whether the fork's agent has reported its own session.
     reported: Arc<AtomicBool>,
@@ -43,28 +42,19 @@ struct Forking {
 }
 
 /// The source `sender` runs Codex in session `sender-native` on this
-/// machine's Herdr, which lists the fork's agent in `FORK_PANE` once
+/// machine's engine, which lists the fork's agent in `FORK_PANE` once
 /// `listed` and with its own session once `reported`.
 fn forking() -> Forking {
     let root = tempfile::tempdir().unwrap();
     let (runtime, _, _, path) = fixture(root.path());
     let listed = Arc::new(AtomicBool::new(true));
     let reported = Arc::new(AtomicBool::new(false));
-    let (shown, own) = (listed.clone(), reported.clone());
-    let herdr = FakeHerdr::start("fork-registration", move |method, _| match method {
-        "agent.list" => {
-            let mut agents = vec![row("sender", "sender", Some("sender-native"))];
-            if shown.load(Ordering::SeqCst) {
-                let session = own.load(Ordering::SeqCst).then_some("fork-native");
-                agents.push(row(FORK_PANE, FORK_NAME, session));
-            }
-            json!({"type": "agent_list", "agents": agents})
-        }
-        "pane.report_metadata" => json!({"type": "ok"}),
+    let herdr = FakeEngine::start(move |method, _| match method {
+        "report_pane_tokens" => reply(()),
         other => panic!("unexpected {other}"),
     });
     let live = crate::live::LiveContext {
-        socket_path: herdr.socket_path().to_path_buf(),
+        socket_path: herdr.scope(),
         runtime: Arc::downgrade(&runtime),
         notifier: ChangeNotifier::noop(),
         engine: herdr.engine(),
@@ -74,8 +64,8 @@ fn forking() -> Forking {
         Worker::spawn(Arc::downgrade(&runtime), ChangeNotifier::noop(), path).unwrap();
     {
         let mut guard = runtime.lock().unwrap();
-        // The source as Herdr reports it: its pane's session is the digest
-        // of the native session Herdr lists.
+        // The source as the engine reports it: its pane's session is the
+        // digest of the native session the engine lists.
         let payload: crate::sidebar::SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
             {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"idle",
              "state_change_seq":1,"lineage_session":crate::engine::tokens::session_digest("sender-native")},
@@ -118,17 +108,23 @@ impl Forking {
         .unwrap()
     }
 
-    /// One session-sync refresh: the agent list Herdr answers now, against
-    /// the panes `pane_exists` says the server still has.
+    /// The agents the engine lists now.
+    fn agents(&self) -> Vec<crate::session_sync::ProjectedAgent> {
+        let mut agents = vec![row("sender", "sender", Some("sender-native"))];
+        if self.listed.load(Ordering::SeqCst) {
+            let session = self
+                .reported
+                .load(Ordering::SeqCst)
+                .then_some("fork-native");
+            agents.push(row(FORK_PANE, FORK_NAME, session));
+        }
+        fake::session(json!({"agents": agents})).agents
+    }
+
+    /// One session-sync refresh: the agents the engine lists now, against
+    /// the panes `pane_exists` says the engine still has.
     fn refresh(&self, writer: &mut Writer, pane_exists: bool) {
-        let listed = hide_herdr_client::request_with_connector(
-            &self.herdr.connector(),
-            "agent.list",
-            crate::engine::herdr::wire::empty_params(),
-            Duration::from_secs(2),
-        )
-        .unwrap();
-        let agents = crate::engine::herdr::wire::agents_response(listed).unwrap();
+        let agents = self.agents();
         let ledger = self.runtime.lock().unwrap().delivery_state().unwrap();
         writer.observe(
             &ledger,
@@ -191,8 +187,8 @@ fn a_fork_whose_session_arrives_late_registers_as_the_operators_root_from_its_so
     // the row as forked from it.
     wait_for("the fork's pane is told its source", || {
         forking.herdr.calls().iter().any(|(method, params)| {
-            method == "pane.report_metadata"
-                && params["pane_id"] == FORK_PANE
+            *method == "report_pane_tokens"
+                && params["pane"] == FORK_PANE
                 && params["tokens"]["fork_pane"] == "sender"
         })
     });

@@ -317,11 +317,6 @@ pub(super) struct RegisterDevicePayload {
     /// (PRD wsl-device B4, D-20).
     #[serde(default)]
     pub(super) wsl_distro: Option<String>,
-    /// The device's Herdr socket when its server is not at the default path.
-    #[serde(default)]
-    pub(super) herdr_socket_path: Option<String>,
-    #[serde(default)]
-    pub(super) herdr_session: Option<String>,
     /// The operator allowed Hide's helper on the device in the same form
     /// (PRD S5.5 B50); absent or false registers it without file access.
     #[serde(default)]
@@ -1442,13 +1437,6 @@ pub(super) struct FirstRunAdvancePayload {
     pub(super) notifications: Option<bool>,
 }
 
-/// The operator's answer to moving their older Herdr server (PRD
-/// herdr-takeover): one press, one event.
-#[derive(Debug, Deserialize)]
-pub(super) struct HerdrTakeoverPayload {
-    pub(super) action: super::herdr_takeover::TakeoverAction,
-}
-
 /// The operator's answer to moving this machine's Herdr save into the
 /// core's own engine (PRD engine-bundle-4-herdr-removal): one press, one
 /// event.
@@ -1766,7 +1754,6 @@ pub(super) enum Event {
     AgentOnboardingApply(AgentOnboardingApplyPayload),
     FirstRunAdvance(FirstRunAdvancePayload),
     FirstRunBack(FirstRunBackPayload),
-    HerdrTakeover(HerdrTakeoverPayload),
     HerdrImport(HerdrImportPayload),
     Desk(super::desk::DeskEvent),
     FirstRunDraft(FirstRunDraftPayload),
@@ -2114,7 +2101,6 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "agent_onboarding_apply" => decode!(AgentOnboardingApplyPayload, AgentOnboardingApply),
         "first_run_advance" => decode!(FirstRunAdvancePayload, FirstRunAdvance),
         "first_run_back" => decode!(FirstRunBackPayload, FirstRunBack),
-        "herdr_takeover" => decode!(HerdrTakeoverPayload, HerdrTakeover),
         "herdr_import" => decode!(HerdrImportPayload, HerdrImport),
         "first_run_draft" => decode!(FirstRunDraftPayload, FirstRunDraft),
         "desktop_notifications_set" => {
@@ -4213,7 +4199,6 @@ impl Runtime {
                 self.advance_first_run(payload.from, payload.notifications)
             }
             Event::FirstRunBack(payload) => self.back_first_run(payload.from),
-            Event::HerdrTakeover(payload) => self.herdr_takeover_action(payload.action),
             Event::HerdrImport(payload) => self.herdr_import_action(payload.action, payload.device),
             Event::Desk(event) => self.desk_event(event),
             Event::FirstRunDraft(payload) => self.update_first_run_draft(payload),

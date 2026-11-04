@@ -308,19 +308,9 @@ fn a_missing_hook_asks_for_setup_and_a_switched_off_agent_claims_nothing() {
 }
 
 fn with_live(runtime: &mut Runtime) {
-    // A worker started against this socket finds no Herdr and no runtime to
-    // answer, so each answer below is fed in the way a worker would.
-    let socket = std::env::temp_dir()
-        .join(format!("herdr-core-reopen-{}.sock", std::process::id()))
-        .to_string_lossy()
-        .into_owned();
-    runtime.live = Some(crate::live::LiveContext {
-        socket_path: socket.clone().into(),
-        runtime: std::sync::Weak::new(),
-        notifier: crate::handle::ChangeNotifier::noop(),
-        engine: crate::engine::herdr::local(&socket),
-        node: Arc::new(hide_node::Local::of_process()),
-    });
+    // A worker started here finds no engine and no runtime to answer, so
+    // each answer below is fed in the way a worker would.
+    runtime.live = Some(FakeEngine::absent().live());
 }
 
 fn reopen(runtime: &mut Runtime, pane_id: &str) -> bool {
@@ -863,7 +853,6 @@ fn a_machine_with_no_kit_or_no_such_device_refuses_the_request_with_an_error() {
 /// never mutates before Herdr has confirmed.
 #[test]
 fn a_reopen_through_the_worker_waits_for_herdr_to_release_the_name() {
-    use crate::fake_herdr::FakeHerdr;
     use hide_platform::process;
     use serde_json::json;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -876,35 +865,31 @@ fn a_reopen_through_the_worker_waits_for_herdr_to_release_the_name() {
     let gone_flag = Arc::clone(&exited);
     let starts = Arc::new(AtomicUsize::new(0));
     let attempts = Arc::clone(&starts);
-    let herdr = FakeHerdr::start_with_errors("runtime-reopen-name", move |method, params| {
+    let herdr = FakeEngine::start(move |method, params| {
         let info = |shell: u32, foreground: u32| {
-            json!({"type": "pane_process_info", "process_info": {
-                "pane_id": "w1:p2", "shell_pid": shell, "foreground_process_group_id": foreground,
+            reply(fake::processes(&json!({
+                "shell_pid": shell, "foreground_process_group_id": foreground,
                 "foreground_processes": [{"pid": shell, "name": "zsh"}]
-            }})
+            })))
         };
         match method {
-            "agent.get" => Ok(json!({"type": "agent_info", "agent": {
-                "pane_id": "w1:p2", "tab_id": "w1:t1", "workspace_id": "w1",
-                "terminal_id": "term_1", "agent": "claude", "agent_status": "idle",
-                "state_change_seq": 2, "focused": false, "interactive_ready": true, "revision": 0
-            }})),
-            "pane.process_info" => {
+            "agent_state" => reply(crate::engine::fake::agent_state(&reopened_agent())),
+            "delivery_agent" => reply(fake::delivery_agent(&reopened_agent())),
+            "pane_processes" => {
                 let shell = std::process::id();
                 let gone = !process::is_alive(pid) || gone_flag.load(Ordering::SeqCst);
-                Ok(info(shell, if gone { shell } else { pid }))
+                info(shell, if gone { shell } else { pid })
             }
             // The agent quits on its own key, so the node never ends it.
-            "pane.read" => Ok(
-                json!({"type": "pane_read", "read": {"pane_id": "w1:p2", "workspace_id": "w1",
-                "tab_id": "w1:t1", "source": "visible", "format": "ansi", "revision": 1,
-                "truncated": false, "text": "\u{203a} \n"}}),
-            ),
-            "pane.send_keys" => {
+            "read_screen" => reply(crate::engine::PaneText {
+                text: "\u{203a} \n".to_owned(),
+                truncated: false,
+            }),
+            "send_keys" => {
                 let _ = process::terminate(pid);
-                Ok(json!({"type": "ok"}))
+                reply(())
             }
-            "agent.start" => {
+            "start_agent" => {
                 assert_eq!(
                     params["args"],
                     json!(
@@ -916,15 +901,9 @@ fn a_reopen_through_the_worker_waits_for_herdr_to_release_the_name() {
                     )
                 );
                 if attempts.fetch_add(1, Ordering::SeqCst) < 2 {
-                    Err((
-                        "agent_name_taken".into(),
-                        "agent name agent-w1:p2 is already used".into(),
-                    ))
+                    refused("agent_name_taken", "agent name agent-w1:p2 is already used")
                 } else {
-                    Ok(json!({"type": "agent_started", "argv": [], "agent": {
-                        "pane_id": "w1:p2", "tab_id": "w1:t1", "workspace_id": "w1",
-                        "terminal_id": "term_1", "agent_status": "idle", "focused": false, "revision": 1
-                    }}))
+                    reopened_start()
                 }
             }
             other => panic!("unexpected {other}"),
@@ -959,7 +938,7 @@ fn a_reopen_through_the_worker_waits_for_herdr_to_release_the_name() {
     {
         let mut runtime = shared.lock().unwrap();
         runtime.live = Some(crate::live::LiveContext {
-            socket_path: herdr.socket_path().to_path_buf(),
+            socket_path: herdr.scope(),
             runtime: Arc::downgrade(&shared),
             notifier: crate::handle::ChangeNotifier::noop(),
             engine: herdr.engine(),
@@ -988,11 +967,24 @@ fn a_reopen_through_the_worker_waits_for_herdr_to_release_the_name() {
     assert_eq!(starts.load(Ordering::SeqCst), 3);
     let methods = herdr.methods();
     assert_eq!(
-        methods[0], "agent.get",
+        methods[0], "agent_state",
         "the agent is read before it is touched"
     );
-    let first_start = methods.iter().position(|m| m == "agent.start").unwrap();
-    assert!(methods[..first_start].iter().all(|m| m != "agent.start"));
+    let first_start = methods.iter().position(|m| *m == "start_agent").unwrap();
+    assert!(methods[..first_start].iter().all(|m| *m != "start_agent"));
+}
+
+/// The pane's agent as the reopen reads it before touching it.
+fn reopened_agent() -> serde_json::Value {
+    serde_json::json!({"pane_id": "w1:p2", "agent": "claude", "agent_status": "idle",
+        "state_change_seq": 2, "interactive_ready": true})
+}
+
+fn reopened_start() -> Reply {
+    reply(crate::engine::StartedAgent {
+        pane_id: "w1:p2".into(),
+        terminal_id: Some("term_1".into()),
+    })
 }
 
 /// A reopen in the pane resumes the conversation with the model and effort
@@ -1000,7 +992,6 @@ fn a_reopen_through_the_worker_waits_for_herdr_to_release_the_name() {
 /// configured default (`launch_choice.rs` holds the other restarts).
 #[test]
 fn a_reopen_in_its_pane_resumes_with_the_choice_the_agent_was_started_with() {
-    use crate::fake_herdr::FakeHerdr;
     use hide_platform::process;
     use serde_json::json;
 
@@ -1009,41 +1000,31 @@ fn a_reopen_in_its_pane_resumes_with_the_choice_the_agent_was_started_with() {
         .expect("sleep starts");
     let pid = child.id();
     let (sent, starts) = std::sync::mpsc::channel();
-    let herdr = FakeHerdr::start(
-        "runtime-reopen-choice",
-        move |method, params| match method {
-            "agent.get" => json!({"type": "agent_info", "agent": {
-                "pane_id": "w1:p2", "tab_id": "w1:t1", "workspace_id": "w1",
-                "terminal_id": "term_1", "agent": "claude", "agent_status": "idle",
-                "state_change_seq": 2, "focused": false, "interactive_ready": true, "revision": 0
-            }}),
-            "pane.process_info" => {
-                let shell = std::process::id();
-                let foreground = if process::is_alive(pid) { pid } else { shell };
-                json!({"type": "pane_process_info", "process_info": {
-                    "pane_id": "w1:p2", "shell_pid": shell, "foreground_process_group_id": foreground,
-                    "foreground_processes": [{"pid": shell, "name": "zsh"}]
-                }})
-            }
-            "pane.read" => {
-                json!({"type": "pane_read", "read": {"pane_id": "w1:p2", "workspace_id": "w1",
-                "tab_id": "w1:t1", "source": "visible", "format": "ansi", "revision": 1,
-                "truncated": false, "text": "\u{203a} \n"}})
-            }
-            "pane.send_keys" => {
-                let _ = process::terminate(pid);
-                json!({"type": "ok"})
-            }
-            "agent.start" => {
-                sent.send(params["args"].clone()).unwrap();
-                json!({"type": "agent_started", "argv": [], "agent": {
-                    "pane_id": "w1:p2", "tab_id": "w1:t1", "workspace_id": "w1",
-                    "terminal_id": "term_1", "agent_status": "idle", "focused": false, "revision": 1
-                }})
-            }
-            other => panic!("unexpected {other}"),
-        },
-    );
+    let herdr = FakeEngine::start(move |method, params| match method {
+        "agent_state" => reply(crate::engine::fake::agent_state(&reopened_agent())),
+        "delivery_agent" => reply(fake::delivery_agent(&reopened_agent())),
+        "pane_processes" => {
+            let shell = std::process::id();
+            let foreground = if process::is_alive(pid) { pid } else { shell };
+            reply(fake::processes(&json!({
+                "shell_pid": shell, "foreground_process_group_id": foreground,
+                "foreground_processes": [{"pid": shell, "name": "zsh"}]
+            })))
+        }
+        "read_screen" => reply(crate::engine::PaneText {
+            text: "\u{203a} \n".to_owned(),
+            truncated: false,
+        }),
+        "send_keys" => {
+            let _ = process::terminate(pid);
+            reply(())
+        }
+        "start_agent" => {
+            sent.send(params["args"].clone()).unwrap();
+            reopened_start()
+        }
+        other => panic!("unexpected {other}"),
+    });
     let reaper = std::thread::spawn(move || {
         let _ = child.wait();
     });
@@ -1077,7 +1058,7 @@ fn a_reopen_in_its_pane_resumes_with_the_choice_the_agent_was_started_with() {
     {
         let mut runtime = shared.lock().unwrap();
         runtime.live = Some(crate::live::LiveContext {
-            socket_path: herdr.socket_path().to_path_buf(),
+            socket_path: herdr.scope(),
             runtime: shared.weak(),
             notifier: crate::handle::ChangeNotifier::noop(),
             engine: herdr.engine(),

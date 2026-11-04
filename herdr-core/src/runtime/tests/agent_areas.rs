@@ -855,13 +855,11 @@ fn cross_machine_lineage_updates_agent_tab_placement_in_every_arrival_order() {
             pane_hook_tokens: Default::default(),
             issue_tokens: Default::default(),
             issue_links: Default::default(),
-            herdr_version: None,
         };
             runtime.snapshot.status.remote.push(RemoteStatusSnapshot {
                 target_id: "mini".into(),
                 state: "connected".into(),
                 message: None,
-                herdr_version: Some("0.9.1".into()),
                 session: None,
                 files: RemoteFileListSnapshot::idle(),
                 catalog: Default::default(),
@@ -2433,7 +2431,7 @@ fn fork_worker_panic_and_runtime_teardown_discard_the_node_request() {
             socket_path: Default::default(),
             runtime: Arc::downgrade(&runtime),
             notifier: crate::handle::ChangeNotifier::noop(),
-            engine: crate::engine::herdr::local(std::path::PathBuf::new()),
+            engine: FakeEngine::absent().engine(),
             node: Arc::new(hide_node::Local::of_process()),
         };
         if panic_worker {

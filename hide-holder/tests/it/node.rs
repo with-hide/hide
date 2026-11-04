@@ -1,7 +1,6 @@
 //! A node's holder panes, through hide-node's own code with the built
 //! holder (PRD engine-bundle-2-pane-holder D-10, D-11, D-15, D-17, B1, B2,
-//! B7, B9, B10): the development switch off opens Herdr and starts no
-//! holder; on, a start shows the pane's first full screen, takes input and
+//! B7, B9, B10): a start shows the pane's first full screen, takes input and
 //! converges when asked again; a node killed outright finds its holders
 //! again when the next one starts, attaches 64 and keeps the rest running,
 //! and reports the pane that ended meanwhile; a takeover ends the first
@@ -31,9 +30,7 @@ use hide_kit::panes::{StartRequest, Started};
 use hide_node::terminal::engine_panes::{LocalPanes, PaneShell};
 use hide_node::terminal::holder::{HolderFolders, Holders, open_holder};
 use hide_node::terminal::protocol::SessionEvent;
-use hide_node::terminal::{
-    Attacher, Mode, OutputSink, ReportSink, RetryPolicy, Service, SessionParts,
-};
+use hide_node::terminal::{Attacher, OutputSink, ReportSink, RetryPolicy, Service};
 use hide_node_link::holders::{
     HolderError, HolderStart, NO_RULES_FOR_HOLDER, PaneFacts, PaneFactsSink, PaneHolders, RuleSet,
     ScreenRead, ScreenRules, ScreenState, UNSUPPORTED_HOLDER, WATCH_LOST,
@@ -326,21 +323,6 @@ impl Told {
     }
 }
 
-/// The node's Herdr in these tests: it answers no attach, and says which
-/// panes it was asked to open.
-struct Herdr(Mutex<Sender<String>>);
-
-impl Attacher for Herdr {
-    fn open(&self, pane: &str, _: Mode, _: u16, _: u16) -> Result<SessionParts, String> {
-        let _ = self
-            .0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .send(pane.to_owned());
-        Err("this test has no Herdr".to_owned())
-    }
-}
-
 /// A node over one state folder, as the daemon builds it.
 struct Node {
     service: Service,
@@ -348,7 +330,6 @@ struct Node {
     owner: Option<hide_kit::panes::Owner>,
     screens: Arc<Screens>,
     reports: Arc<Reports>,
-    herdr_opened: Mutex<Receiver<String>>,
 }
 
 impl Node {
@@ -364,10 +345,8 @@ impl Node {
             Arc::clone(&reports) as Arc<dyn ReportSink>,
         )
         .unwrap();
-        let (opened, herdr_opened) = channel();
-        let herdr: Box<dyn Attacher> = Box::new(Herdr(Mutex::new(opened)));
         let service = Service::start(
-            holders.attacher(herdr),
+            holders.attacher(),
             Arc::clone(&screens) as Arc<dyn OutputSink>,
             Arc::clone(&reports) as Arc<dyn ReportSink>,
             RetryPolicy::Automatic,
@@ -380,7 +359,6 @@ impl Node {
             owner,
             screens,
             reports,
-            herdr_opened: Mutex::new(herdr_opened),
         }
     }
 
@@ -571,7 +549,7 @@ fn a_started_pane_shows_its_first_full_screen_takes_input_and_converges() {
 
 /// The saved layout, or a newly drawn pane, can attach before its holder's
 /// start was registered. The node's engine already owns that pane: it
-/// waits for the same holder start and draws its output, without Herdr.
+/// waits for the same holder start and draws its output.
 #[test]
 fn an_engine_pane_attaches_before_its_holder_start_is_registered() {
     let folder = Folder::new();
@@ -580,7 +558,6 @@ fn an_engine_pane_attaches_before_its_holder_start_is_registered() {
         holders,
         screens,
         reports,
-        herdr_opened,
         owner,
     } = Node::start(folder.home.path(), &folder.state);
     drop(owner);
@@ -595,11 +572,8 @@ fn an_engine_pane_attaches_before_its_holder_start_is_registered() {
     .unwrap();
     let pane = "w1:p1";
     assert!(holders.record(pane).unwrap().is_none());
-    let (opened, _) = channel();
     assert!(
-        holders
-            .attacher(Box::new(Herdr(Mutex::new(opened))))
-            .keeps_own_size(pane),
+        holders.attacher().keeps_own_size(pane),
         "an engine pane belongs to its holder before a record or start exists"
     );
     service.control(TerminalControl::Attach {
@@ -624,7 +598,6 @@ fn an_engine_pane_attaches_before_its_holder_start_is_registered() {
     screens.first_full(pane);
     service.key(KeyTarget::Pane(pane.to_owned()), print_ok().to_vec(), 0);
     screens.wait_drawn_after(pane, 0, "hide-ok");
-    assert!(herdr_opened.lock().unwrap().try_recv().is_err());
     assert!(
         !reports
             .states(pane)
@@ -1130,7 +1103,7 @@ fn a_second_node_takes_the_pane_over_and_the_first_does_not_try_again() {
     });
 
     node.type_into("t1", &print_node("first-late"));
-    let mut writer = second.writer.unwrap();
+    let mut writer = second.writer;
     writer.input(&print_node("second")).unwrap();
     wait_until("the second node's input", || {
         node.text("t1").contains("second-node")
@@ -1528,7 +1501,6 @@ fn a_starting_node_removes_the_old_version_folders_nothing_runs_from() {
     let unused_dir = folder.home.prepare(0, &unused).dir.clone();
     let unused_name = folder_name(&unused_dir);
 
-    let (opened, _herdr_opened) = channel();
     let reports = Arc::new(Reports::default());
     let terminals = Holders::start_from(
         HolderFolders {
@@ -1536,7 +1508,6 @@ fn a_starting_node_removes_the_old_version_folders_nothing_runs_from() {
             state_dir: &folder.state,
         },
         current,
-        Box::new(Herdr(Mutex::new(opened))),
         Arc::new(Screens::default()) as Arc<dyn OutputSink>,
         Arc::clone(&reports) as Arc<dyn ReportSink>,
     )
@@ -1634,7 +1605,6 @@ fn a_node_logs_the_answers_its_holder_refused_with_the_pane_and_keeps_the_sessio
             SessionEvent::Ended { category, message } => {
                 panic!("the session ended ({category}): {message}")
             }
-            _ => {}
         }
     }
 }

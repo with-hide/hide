@@ -41,7 +41,7 @@ def complete_run(run):
         {"kind": "split", "screen_ms": 30.0, "frame_ms": 45.0, "timeout": False},
         {"kind": "split", "screen_ms": None, "frame_ms": None, "timeout": True}]})
     write(run / "isolated" / "hide-state" / "Logs" / "core.jsonl", json.dumps({"event": {
-        "kind": "pane_op.timing", "op": "split", "outcome": "applied", "herdr_ack_ms": 5, "layout_event_ms": 12, "sent_ms": 14}}) + "\n")
+        "kind": "pane_op.timing", "op": "split", "outcome": "applied", "drawn_ms": 5, "applied_ms": 12, "sent_ms": 14}}) + "\n")
     for name in ("memory-settled.json", "memory-after-topology.json"):
         write(run / name, {"hided_rss_kb": 40960, "chrome_tree_rss_kb": 409600, "page": {"js_heap_used_bytes": 1, "live_terminals": 2}})
 
@@ -69,7 +69,7 @@ class Verdict(unittest.TestCase):
         self.assertEqual((record["echo"]["p50_ms"], record["echo"]["p95_ms"], record["echo"]["max_ms"]), (25, 48, 50))
         self.assertIsNone(record["echo"]["pass"], "the guide names no agreed echo limit")
         self.assertEqual(record["topology"]["operations"]["split"]["timeouts"], 1)
-        self.assertEqual(record["stages"]["split"]["herdr_share_ms"]["p50"], 7.0)
+        self.assertEqual(record["stages"]["split"]["sent_ms"]["p50"], 14.0)
         self.assertEqual(record["fixture"]["panes"], 66)
         self.assertFalse(record["frames"]["covered"])
 

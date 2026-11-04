@@ -2,8 +2,6 @@ use super::worktree_command::{RemovalConsent, RemovalRefused, RemovalStart};
 use super::*;
 use crate::model::GithubReadOutcome;
 
-const MINIMUM_PURPOSE_HERDR_VERSION: (u64, u64, u64) = (0, 9, 1);
-
 /// How long a project's pull requests are trusted before the core asks again.
 const GITHUB_REREAD: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 
@@ -117,33 +115,6 @@ const GITHUB_PROJECT_LIMIT: usize = 64;
 /// How long a merge Hide saw succeed reads as merged without GitHub's list
 /// saying so.
 const MERGED_HERE_LIFETIME_MS: u64 = 10 * 60 * 1000;
-
-fn herdr_version_supports_purpose(version: Option<&str>) -> bool {
-    parse_herdr_version(version.unwrap_or_default())
-        .is_some_and(|version| version >= MINIMUM_PURPOSE_HERDR_VERSION)
-}
-
-fn parse_herdr_version(version: &str) -> Option<(u64, u64, u64)> {
-    let version = version.strip_prefix('v').unwrap_or(version);
-    let numeric = version.split(['-', '+']).next()?;
-    let mut parts = numeric.split('.');
-    let parsed = (
-        parts.next()?.parse().ok()?,
-        parts.next()?.parse().ok()?,
-        parts.next()?.parse().ok()?,
-    );
-    parts.next().is_none().then_some(parsed)
-}
-
-fn remote_purpose_unavailable_reason(version: Option<&str>) -> String {
-    match version {
-        Some(version) => format!(
-            "Set purpose requires Herdr 0.9.1 or newer on the remote device; {version} is installed"
-        ),
-        None => "Set purpose requires Herdr 0.9.1 or newer on the remote device; its version is unavailable"
-            .to_owned(),
-    }
-}
 
 /// Puts the measured sizes on a repository's worktrees and its shared Git
 /// directory, matched by path, and sums them for its facts line. A device's
@@ -4485,22 +4456,6 @@ impl Runtime {
                 "checkout_purpose.invalid",
             );
         }
-        if let Some(target_id) = remote_target_id.as_deref() {
-            let version = self
-                .snapshot
-                .status
-                .remote
-                .iter()
-                .find(|remote| remote.target_id == target_id)
-                .and_then(|remote| remote.herdr_version.as_deref());
-            if !herdr_version_supports_purpose(version) {
-                return self.fail_purpose_operation(
-                    id,
-                    remote_purpose_unavailable_reason(version),
-                    "checkout_purpose.remote_unsupported",
-                );
-            }
-        }
         // A device checkout's purpose goes to its owner workspace; its other
         // workspaces only hold tabs there (D-10).
         let session_workspace_id = if remote_target_id.is_some() {
@@ -5717,20 +5672,5 @@ pub(super) fn with_review_proofs(
         (Some(listed), Some(proved)) => {
             Some(listed.into_iter().chain(proved.iter().cloned()).collect())
         }
-    }
-}
-
-#[cfg(test)]
-mod purpose_version_tests {
-    use super::*;
-
-    #[test]
-    fn remote_purpose_requires_the_pinned_minimum_version() {
-        assert!(!herdr_version_supports_purpose(None));
-        assert!(!herdr_version_supports_purpose(Some("0.9.0")));
-        assert!(herdr_version_supports_purpose(Some("0.9.1")));
-        assert!(herdr_version_supports_purpose(Some("v0.10.0")));
-        assert!(herdr_version_supports_purpose(Some("1.0.0-beta.1")));
-        assert!(!herdr_version_supports_purpose(Some("unknown")));
     }
 }

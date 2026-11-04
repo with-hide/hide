@@ -59,14 +59,10 @@ const MAX_REQUEST_BYTES: usize = 40 * 1024 * 1024;
 /// [`Terminals::line`] as they are read, never behind a request, and the
 /// service's own lines go out between the answers.
 pub trait Terminals: Send + Sync {
-    /// Starts the service for the Herdr at `herdr_socket`; starting it again
-    /// while it runs changes nothing. No call starts it now; it goes with the
-    /// Herdr terminal sessions it attaches.
-    fn start(&self, herdr_socket: &str) -> Result<(), String>;
     /// Starts the service over the node's own pane holders, with no Herdr,
     /// and answers those holders for the core's own engine (PRD
     /// engine-bundle-3-core-owns D-22); asked again, it answers the same
-    /// holders. A service already running on a Herdr refuses it.
+    /// holders.
     fn start_holders(&self) -> Result<Arc<dyn hide_node_link::holders::PaneHolders>, String> {
         Err("This node's terminals cannot run pane holders".to_owned())
     }
@@ -95,7 +91,6 @@ pub fn serve_with_terminals(
         output,
         Services {
             terminals: Some(terminals),
-            herdr_socket: None,
             heartbeat: false,
             checkout_callers: false,
             opened_roots: None,
@@ -114,11 +109,6 @@ pub fn serve_with_terminals(
 pub struct Services<'a> {
     /// The node's terminal service.
     pub terminals: Option<&'a dyn Terminals>,
-    /// The node's own Herdr socket, which its core reaches only through the
-    /// link: a node that dialed its core (PRD core-host-node-remote-core
-    /// D-18), and a WSL distribution's helper (PRD wsl-device D-07). An SSH
-    /// device has none, and refuses Herdr streams.
-    pub herdr_socket: Option<PathBuf>,
     /// Whether the node says it is alive every
     /// [`hide_node_link::panes::HEARTBEAT`]: a node that dialed its core,
     /// whose attach role ends a link that falls silent.
@@ -206,7 +196,6 @@ impl Services<'_> {
     pub fn none() -> Self {
         Self {
             terminals: None,
-            herdr_socket: None,
             heartbeat: false,
             checkout_callers: false,
             opened_roots: None,
@@ -240,7 +229,6 @@ fn serve_in(
     let env = Env {
         kit: services.kit,
         stop: Arc::default(),
-        bridged_herdr: services.herdr_socket.clone(),
         ai: Arc::default(),
         ..env
     };
@@ -256,7 +244,7 @@ fn serve_in(
     let opened_roots = services.opened_roots;
     // Ends the heartbeat when the input does.
     let input_ended = (Mutex::new(false), std::sync::Condvar::new());
-    let link = crate::link_bridge::LinkBridge::new(services.herdr_socket, services.browser);
+    let link = crate::link_bridge::LinkBridge::new(services.browser);
     let staging = crate::attachments::Staging::new(env.state.as_deref(), env.home.as_deref());
     let output = Mutex::new(output);
     // The calls handed to a worker and not yet answered, each with whether
@@ -333,12 +321,7 @@ fn serve_in(
                                 .map_err(|message| HostError::new(ErrorCode::Io, message))
                                 .and_then(|holders| {
                                     env.panes.fill(holders);
-                                    panes.start_for(
-                                        scope,
-                                        output,
-                                        bridges,
-                                        crate::panes::PaneSource::Holders(env.panes.clone()),
-                                    )
+                                    panes.start(scope, output, bridges, env.panes.clone())
                                 })
                                 .and_then(to_value),
                             (None, _) => Err(HostError::new(
@@ -383,36 +366,6 @@ fn serve_in(
                                 hide_node_link::protocol::LinkEnd::BrowserRelay,
                             )),
                         },
-                        // A core that names no server labels the one this
-                        // link's pane service serves.
-                        Call::LabelLock {
-                            herdr_socket,
-                            generator,
-                        } => label_socket(link.herdr_socket(), herdr_socket, panes).and_then(
-                            |herdr_socket| {
-                                handle_in(
-                                    Call::LabelLock {
-                                        herdr_socket,
-                                        generator,
-                                    },
-                                    env,
-                                )
-                            },
-                        ),
-                        Call::LabelUnlock {
-                            herdr_socket,
-                            generator,
-                        } => label_socket(link.herdr_socket(), herdr_socket, panes).and_then(
-                            |herdr_socket| {
-                                handle_in(
-                                    Call::LabelUnlock {
-                                        herdr_socket,
-                                        generator,
-                                    },
-                                    env,
-                                )
-                            },
-                        ),
                         Call::RootOpen { root } => {
                             let opened = handle_in(Call::RootOpen { root: root.clone() }, env);
                             if opened.is_ok()
@@ -531,37 +484,6 @@ fn windows_drives() -> Option<String> {
             );
             None
         }
-    }
-}
-
-/// Why a node asked for the label lock of no named server refuses: its
-/// pane service has not started, so it serves no Herdr server yet.
-fn no_labeled_server() -> HostError {
-    HostError::new(
-        ErrorCode::Unsupported,
-        "This node serves no Herdr server whose labels it could lock",
-    )
-}
-
-/// The Herdr server whose label lock a core asks for. A node that dialed
-/// its core (it bridges its own Herdr) locks only that server's, so a core
-/// cannot have it create a lock file anywhere else; a device locks the
-/// server its core names, or the one its pane service serves.
-fn label_socket(
-    bridged: Option<&Path>,
-    named: Option<String>,
-    panes: &crate::panes::Panes,
-) -> HostResult<Option<String>> {
-    let Some(bridged) = bridged else {
-        return Ok(named.or_else(|| panes.herdr_socket()));
-    };
-    let own = bridged.to_string_lossy().into_owned();
-    match named {
-        Some(named) if named != own => Err(HostError::new(
-            ErrorCode::InvalidRequest,
-            "A node that dialed its core locks only its own Herdr server's labels",
-        )),
-        _ => Ok(Some(own)),
     }
 }
 
@@ -906,9 +828,6 @@ pub struct Env {
     /// The account's state folder, where View feedback screenshots are
     /// staged and letter attachments placed (`crate::feedback`).
     pub state: Option<PathBuf>,
-    /// The socket of the Herdr this node's link bridges, which its Hello
-    /// names; none for a node that bridges none.
-    pub bridged_herdr: Option<PathBuf>,
     /// The node's pane holders, once it runs them for the core's own engine
     /// (`Call::Pane`, `Call::PaneWatch`).
     pub panes: crate::pane_holders::PaneSlot,
@@ -1034,7 +953,6 @@ impl Env {
             ai: process_ai(),
             label_locks: Arc::default(),
             worktrees: Arc::default(),
-            bridged_herdr: None,
             panes: Default::default(),
         }
     }
@@ -1052,7 +970,6 @@ impl Env {
             label_locks: Arc::default(),
             worktrees: Arc::default(),
             state: None,
-            bridged_herdr: None,
             panes: Default::default(),
         }
     }
@@ -1102,28 +1019,15 @@ pub fn handle_with_progress(
                 },
             },
             reader_features: Some(hide_node_link::sessions::ReaderFeatures::implemented()),
-            herdr_socket: env
-                .bridged_herdr
-                .as_ref()
-                .map(|socket| socket.to_string_lossy().into_owned()),
             windows_drives: windows_drives(),
         }),
-        Call::LabelLock {
-            herdr_socket,
-            generator,
-        } => {
-            let socket = herdr_socket.ok_or_else(no_labeled_server)?;
-            env.label_locks
-                .take(Path::new(&socket), generator)
-                .map_err(|error| HostError::new(ErrorCode::Io, error.to_string()))
-                .and_then(to_value)
-        }
-        Call::LabelUnlock {
-            herdr_socket,
-            generator,
-        } => {
-            let socket = herdr_socket.ok_or_else(no_labeled_server)?;
-            env.label_locks.release(Path::new(&socket), generator);
+        Call::LabelLock { scope, generator } => env
+            .label_locks
+            .take(Path::new(&scope), generator)
+            .map_err(|error| HostError::new(ErrorCode::Io, error.to_string()))
+            .and_then(to_value),
+        Call::LabelUnlock { scope, generator } => {
+            env.label_locks.release(Path::new(&scope), generator);
             to_value(())
         }
         Call::RootOpen { root } => {

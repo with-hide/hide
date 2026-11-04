@@ -2048,11 +2048,7 @@ impl Runtime {
         let mut schedule_status_check = false;
         let timing_id = super::op_timing::pane_close_op_id(&request.key);
         match &result {
-            Ok(()) => self.op_timings.stamp(
-                &timing_id,
-                super::op_timing::Stage::HerdrAck,
-                std::time::Instant::now(),
-            ),
+            Ok(()) => {}
             Err(crate::engine::EngineError::Refused { .. }) => {
                 self.op_timings.finish(&timing_id, "refused")
             }

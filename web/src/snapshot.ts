@@ -1931,7 +1931,7 @@ export type KitComponentState = "installed" | "outdated" | "not_installed" | "re
 export type KitAgentAvailability = "available" | "not_installed" | "unsupported_system";
 
 /** The first-run wizard's steps (`contracts/snapshot-wire-enums.json`: `first_run_step`). */
-export type FirstRunStep = "herdr" | "agents" | "devices" | "notifications" | "project" | "done";
+export type FirstRunStep = "agents" | "devices" | "notifications" | "project" | "done";
 
 export type FirstRun = { version: number; step: FirstRunStep };
 export type FirstRunProjectForm = { view?: "add" | "clone" | "create" | ""; url?: string; parent?: string; name?: string };
@@ -2136,26 +2136,6 @@ export type HerdrStatus = {
 };
 
 /**
- * The operator's own older Herdr server on this machine and how far moving it
- * went (PRD herdr-takeover): `kind` is `move`, `restart` (Herdr cannot hand it
- * over here), `update_hide` (a newer protocol) or `look` (a server Hide cannot
- * use could not be read: always `failed`, with no versions); `stage` is
- * `offered`, `moving` (a move starts on its own), `failed`, or `moved` while
- * the wizard shows the result or the operator's own `herdr` is not settled.
- * `path_herdr` is that `herdr` after a move left it behind: Hide `updating`
- * it, `updated`, or `behind` when the operator has to run the command.
- */
-export type HerdrTakeover = {
-  kind: "move" | "restart" | "update_hide" | "look";
-  stage: "offered" | "moving" | "failed" | "moved";
-  server_version: string;
-  version: string;
-  same_protocol: boolean;
-  failure: "refused" | "not_confirmed" | "unreadable" | "stop_failed" | null;
-  path_herdr: { stage: "updating" | "updated" | "behind"; version: string } | null;
-};
-
-/**
  * What this machine's Herdr save offers to move into Hide's own engine, and what the last move came to (PRD
  * engine-bundle-4-herdr-removal D-6 to D-8). `move` while Hide's own Herdr runs, which moving stops (the question);
  * `import` for any other save, read only; `result` when only the last move's left-out workspaces wait to be read.
@@ -2175,18 +2155,6 @@ export type HerdrImport = {
   refused: { label: string; reason: string }[];
   /** The device whose save this is; absent for this machine's (B18). */
   device?: string;
-};
-
-/**
- * The Herdr this app ships and the operator's own `herdr`, as Settings > About
- * names them; `path_herdr` is null when the operator's terminal finds none.
- * `behind` says its commands are refused by a server on Hide's protocol, and
- * `update_command` is the one command that brings it up, which Hide runs after
- * a move unless it asks for `sudo`.
- */
-export type HerdrVersions = {
-  hide: string;
-  path_herdr: { version: string; behind: boolean; update_command: string } | null;
 };
 
 export type EnvironmentStatus = {
@@ -3268,13 +3236,10 @@ export type SnapshotRest = {
   status?: {
     server_discovery?: { loading: boolean; failure: string | null };
     herdr?: HerdrStatus;
-    /** What Hide offers for the operator's own older Herdr server on this machine (PRD herdr-takeover); absent when nothing. */
-    herdr_takeover?: HerdrTakeover | null;
     /** What this machine's Herdr save offers to move into Hide's own engine; absent when nothing (B11). */
     herdr_import?: HerdrImport | null;
     /** What each device of Hide's own engine offers, each naming its `device` (B18). */
     herdr_import_devices?: HerdrImport[];
-    herdr_versions?: HerdrVersions | null;
     remote?: RemoteStatus[];
     environment?: EnvironmentStatus[];
     agent_hooks?: AgentHooks;

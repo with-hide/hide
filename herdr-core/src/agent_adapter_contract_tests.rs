@@ -3,17 +3,14 @@
 use hide_agent_adapter::{ADAPTERS, Feature};
 
 #[test]
-fn an_unknown_captured_start_kind_and_its_arguments_remain_byte_exact() {
-    let params = crate::engine::herdr::wire::agent_start_params(
-        "pane",
-        "name",
+fn an_unknown_start_kind_keeps_its_arguments_byte_exact() {
+    let args = crate::codex_launch::start_arguments(
         " Future-Agent ",
-        vec!["--option".into(), "value".into()],
         crate::codex_launch::CodexDaemon::Unknown,
+        vec!["--option".into(), "value".into()],
     )
     .unwrap();
-    assert_eq!(params["kind"], " Future-Agent ");
-    assert_eq!(params["args"], serde_json::json!(["--option", "value"]));
+    assert_eq!(args, ["--option", "value"]);
     assert!(hide_agent_adapter::adapter(" Future-Agent ").is_none());
 }
 

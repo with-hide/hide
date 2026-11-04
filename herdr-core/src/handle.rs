@@ -963,21 +963,6 @@ impl Core {
         released
     }
 
-    /// What moves this machine's Herdr server onto the Herdr this app ships
-    /// (PRD herdr-takeover); a daemon outside a desktop package installs one
-    /// that finds nothing (`NoTakeover`), so nothing is offered and a saved
-    /// Herdr step goes on. Looks at the server at once.
-    pub fn set_herdr_takeover(&self, takeover: Arc<dyn crate::herdr_takeover::HerdrTakeover>) {
-        if check_owner_thread(self, "set_herdr_takeover") {
-            let mut runtime = lock_recover(&self.runtime);
-            runtime.install_herdr_takeover(
-                takeover,
-                Arc::downgrade(&self.runtime),
-                self.notifier.clone(),
-            );
-        }
-    }
-
     /// What moves this machine's Herdr save into the core's own engine
     /// (PRD engine-bundle-4-herdr-removal D-6 to D-8); `hided` installs one
     /// only on a core that runs its own engine. Looks at the save at once.

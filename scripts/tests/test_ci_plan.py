@@ -173,7 +173,7 @@ class Selection(unittest.TestCase):
         # The web shell, its specs and the desktop host do not reach it.
         for path in (
             "web/e2e/s3.spec.ts", "web/e2e/new-tab.spec.ts", "web/src/host.ts", "web/src/Overview.tsx", "web/playwright.config.ts",
-            "web/e2e/herdr-fixture.ts", "desktop/src/main/wirePath.ts", "desktop/src/preload/index.ts", "docs/TESTING.md",
+            "web/e2e/pane-fixture.ts", "desktop/src/main/wirePath.ts", "desktop/src/preload/index.ts", "docs/TESTING.md",
         ):
             with self.subTest(path=path):
                 self.assertNotIn("remote-mailbox", plan(path)["lanes"])
@@ -231,7 +231,7 @@ class Selection(unittest.TestCase):
         self.assertIn("windows-desktop", plan("desktop/e2e/gone.spec.ts", status="D")["lanes"])
 
     def test_the_windows_desktop_lane_follows_what_differs_by_system(self):
-        for path in ("hided/src/lib.rs", "hide-platform/src/process.rs", "hide-kit/src/lib.rs", "web/src/host.ts", "web/e2e/herdr-fixture.ts"):
+        for path in ("hided/src/lib.rs", "hide-platform/src/process.rs", "hide-kit/src/lib.rs", "web/src/host.ts", "web/e2e/pane-fixture.ts"):
             with self.subTest(path=path):
                 self.assertIn("windows-desktop", plan(path)["lanes"])
         for path in ("web/src/Overview.tsx", "hide-session/src/lib.rs", "web/e2e/new-tab.spec.ts", "docs/TESTING.md"):
@@ -310,8 +310,8 @@ class Selection(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertNotIn("vt", plan(path)["lanes"])
 
-    def test_the_macos_os_contract_runs_for_the_two_crates_it_tests(self):
-        for path in ("hide-herdr-client/src/lib.rs", "hide-platform/src/process.rs"):
+    def test_the_macos_os_contract_runs_for_the_crate_it_tests(self):
+        for path in ("hide-platform/src/process.rs",):
             with self.subTest(path=path):
                 lanes = set(plan(path)["lanes"])
                 self.assertTrue({"os-contract", "os-contract-macos"} <= lanes)
@@ -357,7 +357,7 @@ class Selection(unittest.TestCase):
             ("web/public/m/sw.js", set()),
             ("web/e2e/new-tab.spec.ts", set()),
             ("web/src/Overview.tsx", {"desktop-e2e"}),
-            ("web/e2e/herdr-fixture.ts", {"desktop-e2e"}),
+            ("web/e2e/pane-fixture.ts", {"desktop-e2e"}),
             ("desktop/src/main/index.ts", {"desktop-e2e"}),
             ("desktop/src/main/updater.ts", {"desktop-e2e", "package"}),
             ("desktop/src/main/updater.test.ts", set()),
@@ -365,7 +365,6 @@ class Selection(unittest.TestCase):
             ("hide-kit/src/lib.rs", {"package"}),
             ("hide-ai/src/omp.rs", {"omp-contract"}),
             ("hide-platform/src/process.rs", {"os-contract-macos", "omp-contract"}),
-            ("hide-herdr-client/src/lib.rs", {"os-contract-macos"}),
         )
         for status in ("A", "M", "D"):
             for path, expected in cases:
@@ -413,7 +412,7 @@ class Selection(unittest.TestCase):
     def test_the_desktop_lane_follows_what_the_app_runs(self):
         for path in (
             "desktop/src/main/index.ts", "desktop/static/icon.png", "desktop/e2e/desktop.spec.ts", "web/src/shortcuts.ts",
-            "web/src/Overview.tsx", "web/index.html", "web/e2e/herdr-fixture.ts",
+            "web/src/Overview.tsx", "web/index.html", "web/e2e/pane-fixture.ts",
         ):
             with self.subTest(path=path):
                 self.assertIn("desktop-e2e", plan(path)["lanes"])
@@ -601,7 +600,7 @@ class NamedPaths(unittest.TestCase):
 
     def test_web_e2e_helpers_reach_the_desktop_and_windows_lanes_but_not_rust(self):
         want = {"policy", "checks", "web-e2e", "windows-e2e", "desktop-e2e", "windows-desktop", "windows-check"}
-        for path in ("web/e2e/herdr-fixture.ts", "web/e2e/shims/build.ts", "web/e2e/shims/noop.c", "web/e2e/test-size-baseline.json"):
+        for path in ("web/e2e/pane-fixture.ts", "web/e2e/shims/build.ts", "web/e2e/shims/noop.c", "web/e2e/test-size-baseline.json"):
             with self.subTest(path=path):
                 self.assertEqual(self.lanes(path), want)
 
@@ -1042,8 +1041,8 @@ class MacosOnPullRequests(unittest.TestCase):
         for status in ("A", "M"):
             for path in (
                 "herdr-core/src/lib.rs", "hided/src/lib.rs", "desktop/src/main/index.ts", "desktop/src/main/host.ts",
-                "desktop/static/icon.png", "desktop/e2e/desktop.spec.ts", "web/e2e/herdr-fixture.ts",
-                "hide-herdr-client/src/lib.rs", "hide-platform/src/wsl.rs", "hide-platform/src/path.rs",
+                "desktop/static/icon.png", "desktop/e2e/desktop.spec.ts", "web/e2e/pane-fixture.ts",
+                "hide-platform/src/wsl.rs", "hide-platform/src/path.rs",
                 "hide-kit/src/lib.rs", "hide-ai/src/omp.rs", "hide-holder/src/lib.rs",
                 "desktop/scripts/build-identity.mjs", "desktop/scripts/macos-signing.test.mjs",
                 "desktop/src/main/updater.test.ts", "Cargo.lock", "mystery/file.txt",

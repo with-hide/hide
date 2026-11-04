@@ -3182,63 +3182,49 @@ pub(super) mod tests {
 
     type Shared = Arc<std::sync::Mutex<Repository>>;
 
-    fn herdr(repository: &Shared) -> crate::fake_herdr::FakeHerdr {
+    fn herdr(repository: &Shared) -> Arc<crate::engine::fake::FakeEngine<'static>> {
+        use crate::engine::fake::{processes, reply, session};
         let repository = Arc::clone(repository);
-        crate::fake_herdr::FakeHerdr::start("promotion-release", move |method, params| {
+        crate::engine::fake::FakeEngine::start(move |method, params| {
             let mut repository = repository.lock().unwrap();
             match method {
-                "worktree.list" => json!({"type": "worktree_list", "source": {
-                    "repo_key": "/r/.git", "repo_name": "r", "repo_root": "/r",
-                    "source_checkout_path": "/r", "source_workspace_id": "w1"},
-                    "worktrees": repository.worktrees.iter().map(|(branch, path)| json!({
-                        "branch": branch, "is_bare": false, "is_detached": false,
-                        "is_linked_worktree": true, "is_prunable": false, "label": "r",
-                        "open_workspace_id": "w2", "path": path})).collect::<Vec<_>>()}),
-                "session.snapshot" => json!({"type": "session_snapshot", "snapshot": {
-                    "version": "fixture", "protocol": hide_herdr_client::HERDR_PROTOCOL_REVISION,
-                    "workspaces": [], "tabs": [], "layouts": [], "agents": [],
+                "worktree_path" => reply(
+                    params["branch"]
+                        .as_str()
+                        .and_then(|branch| repository.worktrees.get(branch).cloned()),
+                ),
+                "session" => reply(session(json!({
                     "panes": repository.panes.iter().map(|(pane, cwd)| json!({
                         "pane_id": pane, "workspace_id": "w2", "tab_id": "w2:t1",
-                        "terminal_id": "t", "focused": false, "agent_status": "idle",
-                        "revision": 1, "cwd": cwd})).collect::<Vec<_>>()}}),
-                "agent.list" => json!({"type": "agent_list", "agents":
-                    repository.agents.iter().map(|pane| (pane, "m7"))
+                        "terminal_id": "t", "agent_status": "idle", "cwd": cwd}))
+                        .collect::<Vec<_>>(),
+                    "agents": repository.agents.iter().map(|pane| (pane, "m7"))
                         .chain(repository.attempt_agents.iter().map(|pane| (pane, "memory-promote-m7-1")))
                         .chain(repository.lookalikes.iter().map(|pane| (pane, "memory-promote-m9-1")))
                         .map(|(pane, name)| json!({"pane_id": pane,
                         "workspace_id": "w2", "tab_id": "w2:t1", "terminal_id": "t",
-                        "revision": 1, "focused": false, "agent_status": "idle",
-                        "name": name})).collect::<Vec<_>>()}),
-                "pane.process_info" => {
-                    let busy = repository
-                        .busy
-                        .iter()
-                        .any(|pane| *pane == params["pane_id"]);
-                    let (foreground, processes) = if busy {
-                        (200, json!([{"pid": 200, "name": "vite"}]))
+                        "agent_status": "idle", "name": name})).collect::<Vec<_>>(),
+                }))),
+                "pane_processes" => {
+                    let busy = repository.busy.iter().any(|pane| *pane == params["pane"]);
+                    reply(processes(&if busy {
+                        json!({"shell_pid": 100, "foreground_process_group_id": 200,
+                            "foreground_processes": [{"pid": 200, "name": "vite"}]})
                     } else {
-                        (100, json!([{"pid": 100, "name": "zsh"}]))
-                    };
-                    json!({"type": "pane_process_info", "process_info": {
-                        "pane_id": params["pane_id"], "shell_pid": 100,
-                        "foreground_process_group_id": foreground,
-                        "foreground_processes": processes}})
+                        json!({"shell_pid": 100, "foreground_process_group_id": 100,
+                            "foreground_processes": [{"pid": 100, "name": "zsh"}]})
+                    }))
                 }
-                "pane.close" => {
-                    repository
-                        .panes
-                        .retain(|(pane, _)| *pane != params["pane_id"]);
-                    repository.agents.retain(|pane| *pane != params["pane_id"]);
-                    repository
-                        .attempt_agents
-                        .retain(|pane| *pane != params["pane_id"]);
-                    repository
-                        .lookalikes
-                        .retain(|pane| *pane != params["pane_id"]);
+                "close_pane" => {
+                    let pane = params["pane"].clone();
+                    repository.panes.retain(|(id, _)| *id != pane);
+                    repository.agents.retain(|id| *id != pane);
+                    repository.attempt_agents.retain(|id| *id != pane);
+                    repository.lookalikes.retain(|id| *id != pane);
                     if let Some(commits) = repository.committed_on_close {
                         repository.commits = commits;
                     }
-                    json!({"type": "ok"})
+                    reply(())
                 }
                 other => panic!("unexpected {other}"),
             }
@@ -3722,23 +3708,14 @@ pub(super) mod tests {
         assert_eq!(repository.lock().unwrap().panes.len(), 1);
     }
 
-    /// A Herdr that cannot be reached is a failure to try again, never a
+    /// An engine that cannot be reached is a failure to try again, never a
     /// kept worktree or a finished one.
     #[test]
-    fn retiring_while_herdr_is_unreachable_fails_to_be_tried_again() {
-        struct Down;
-        impl hide_herdr_client::ApiConnector for Down {
-            fn connect(
-                &self,
-            ) -> Result<Box<dyn hide_herdr_client::ApiStream>, hide_herdr_client::ApiError>
-            {
-                Err(hide_herdr_client::ApiError::NotRunning("fixture".into()))
-            }
-        }
+    fn retiring_while_the_engine_is_unreachable_fails_to_be_tried_again() {
         let repository = settled_repository(|_| {});
         assert_eq!(
             retire_attempt(
-                crate::engine::herdr::HerdrEngine::shared(Arc::new(Down)).as_ref(),
+                crate::engine::fake::FakeEngine::absent().engine().as_ref(),
                 &Machine(Arc::clone(&repository)),
                 &retire_of(&branch(7, 1)),
                 &own(),

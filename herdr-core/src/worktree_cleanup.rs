@@ -5,7 +5,7 @@
 //! like any other, and the confirmation closes those panes before it removes.
 //! All inspection and filesystem effects run on the existing action-worker
 //! path, never under the runtime lock.
-use crate::engine::{EngineError, SharedEngine};
+use crate::engine::SharedEngine;
 use crate::handle::ChangeNotifier;
 use crate::live::{CONTROL_WAIT, failed};
 use crate::model::ListeningPortSnapshot;
@@ -578,10 +578,7 @@ fn pane_paths(context: &CleanupPlace) -> Result<PanePaths, String> {
     let paths = context
         .engine
         .pane_folders(CONTROL_WAIT)
-        .map_err(|error| match error {
-            EngineError::Protocol { message, .. } => message,
-            error => error.within("session.snapshot failed"),
-        })?;
+        .map_err(|error| error.within("session.snapshot failed"))?;
     verified_pane_paths(context.node.as_ref(), paths)
 }
 

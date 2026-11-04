@@ -151,7 +151,7 @@ fn live_runtime(payload: SessionSnapshotPayload) -> Runtime {
         socket_path: socket_path.clone().into(),
         runtime: std::sync::Weak::new(),
         notifier: crate::handle::ChangeNotifier::noop(),
-        engine: crate::engine::herdr::local(&socket_path),
+        engine: FakeEngine::absent().engine(),
         node: Arc::new(hide_node::Local::of_process()),
     });
     assert!(runtime.ingest_session_with_catalog(Ok(payload), Some(tree_catalog())));
@@ -758,7 +758,6 @@ fn a_device_descendant_closes_through_the_device_and_fails_when_it_disconnects()
         target_id: "mini".to_owned(),
         state: "connected".to_owned(),
         message: None,
-        herdr_version: Some("0.9.1".to_owned()),
         session: Some(RemoteSessionSnapshot {
             workspaces: vec![workspace(
                 "remote:mini:project",
@@ -776,7 +775,6 @@ fn a_device_descendant_closes_through_the_device_and_fails_when_it_disconnects()
             pane_hook_tokens: Default::default(),
             issue_tokens: Default::default(),
             issue_links: Default::default(),
-            herdr_version: None,
         }),
         files: RemoteFileListSnapshot::idle(),
         catalog: Default::default(),
@@ -786,7 +784,7 @@ fn a_device_descendant_closes_through_the_device_and_fails_when_it_disconnects()
         "mini".to_owned(),
         live::RemoteControlContext::new(
             "mini",
-            crate::engine::herdr::local("/tmp/hide-tree-close-none.sock"),
+            FakeEngine::absent().engine(),
             std::sync::Weak::new(),
             crate::handle::ChangeNotifier::noop(),
         ),

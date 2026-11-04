@@ -21,7 +21,7 @@ pub(super) struct FirstRunApply {
 impl Runtime {
     /// Discovery proves saved configuration only. Unknown and failed reads
     /// keep a step with loading/retry; only an actual empty result, no
-    /// Herdr profile and no ssh config Host, skips it. A list cut short
+    /// ssh config Host and no default WSL distribution, skips it. A list cut short
     /// (an Include past its bounds) proves nothing.
     pub(super) fn first_run_has_devices(&self) -> bool {
         let profiles = &self.snapshot.status.herdr_profiles;
@@ -45,7 +45,7 @@ impl Runtime {
             FirstRunStep::Notifications if self.first_run_has_devices() => FirstRunStep::Devices,
             FirstRunStep::Notifications => FirstRunStep::Agents,
             FirstRunStep::Project => FirstRunStep::Notifications,
-            FirstRunStep::Herdr | FirstRunStep::Agents | FirstRunStep::Done => return false,
+            FirstRunStep::Agents | FirstRunStep::Done => return false,
         };
         self.move_first_run(from, to)
     }
@@ -122,20 +122,12 @@ impl Runtime {
     }
 
     /// Starts the wizard on a Mac whose kit record waits for the first-run
-    /// agent choice; any progress already saved stands. It opens on moving
-    /// the operator's older Herdr when there is one to move or the look at
-    /// the server has not answered yet (PRD herdr-takeover B1, D-09), and
-    /// stays closed after its move was left unanswered (B9). The caller
-    /// saves.
+    /// agent choice; any progress already saved stands. The caller saves.
     pub(super) fn open_first_run(&mut self) -> bool {
-        if self.snapshot.ui_state.first_run.is_some() || self.first_run_closed_for_herdr() {
+        if self.snapshot.ui_state.first_run.is_some() {
             return false;
         }
-        let step = if self.first_run_herdr_pending() {
-            FirstRunStep::Herdr
-        } else {
-            FirstRunStep::Agents
-        };
+        let step = FirstRunStep::Agents;
         self.snapshot.ui_state.first_run = Some(FirstRun {
             version: FIRST_RUN_VERSION,
             step,
@@ -203,8 +195,7 @@ impl Runtime {
                 }));
                 return true;
             }
-            // The Herdr step ends through its own event (`herdr_takeover`).
-            FirstRunStep::Herdr | FirstRunStep::Agents | FirstRunStep::Done => {
+            FirstRunStep::Agents | FirstRunStep::Done => {
                 crate::diagnostic!(serde_json::json!({
                     "component": "first_run",
                     "kind": "first_run.advance_refused",
@@ -243,12 +234,6 @@ impl Runtime {
         finish: bool,
         answer: bool,
     ) -> bool {
-        // A browser tab's wizard is the agent step alone (PRD herdr-takeover
-        // D-24): its Continue leaves a Herdr step the desktop app would have
-        // shown first unanswered, and Overview offers the move instead.
-        if finish && self.first_run_step() == Some(FirstRunStep::Herdr) {
-            self.move_first_run(FirstRunStep::Herdr, FirstRunStep::Agents);
-        }
         if self.first_run_step() != Some(FirstRunStep::Agents) {
             return false;
         }

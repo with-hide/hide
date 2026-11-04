@@ -1426,7 +1426,6 @@ fn serve(
         writer,
         hide_host::serve::Services {
             terminals: Some(terminals),
-            herdr_socket: None,
             heartbeat: true,
             checkout_callers: true,
             opened_roots: Some(roots),

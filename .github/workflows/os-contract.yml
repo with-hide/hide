@@ -44,8 +44,8 @@ jobs:
       - name: Keep line endings as committed
         run: git config --global core.autocrlf false
       - uses: actions/checkout@v7
-      # hide-platform and hide-herdr-client alone, outside the shared feature
-      # set, are a dependency set of their own, which only this lane builds.
+      # hide-platform alone, outside the shared feature set, is a dependency
+      # set of its own, which only this lane builds.
       - uses: ./.github/actions/rust-cache
         with:
           set: platform
@@ -54,11 +54,11 @@ jobs:
         # The Rust tests run under nextest's `ci` profile (one retry).
         timeout-minutes: 3
         run: bash scripts/install-nextest.sh
-      - name: Contract tests and the client's own tests
+      - name: Contract tests
         # Usually a minute or two; a contract test that hangs fails here
         # rather than holding the runner until the job's timeout.
         timeout-minutes: 10
-        run: bash scripts/verify-cargo.sh nextest --profile ci -p hide-platform -p hide-herdr-client
+        run: bash scripts/verify-cargo.sh nextest --profile ci -p hide-platform
       - name: A login agent on the runner's real launchd
         # hide-platform/tests/it/user_agents.rs (PRD core-host-node-move
         # D-16, B3): the core machine's login item, installed, killed, exited
@@ -68,8 +68,8 @@ jobs:
         if: matrix.system == 'macos'
         timeout-minutes: 5
         run: bash scripts/verify-cargo.sh nextest --profile ci -p hide-platform --test it -E 'test(/^user_agents::(a_login_agent_restarts|a_one_shot_job_runs_once)/)' --run-ignored only --no-capture
-      - name: Lint the platform crates
-        run: bash scripts/verify-cargo.sh clippy -p hide-platform -p hide-herdr-client --all-targets -- -D warnings
+      - name: Lint the platform crate
+        run: bash scripts/verify-cargo.sh clippy -p hide-platform --all-targets -- -D warnings
       - name: Mint the development issues token
         # Development issues live in with-hide/hide-private (docs/TESTING.md,
         # Flaky tests); one App token reads this run here and files there. A run

@@ -12,14 +12,13 @@
 //! (`scripts/fetch-conpty.py --out`).
 //!
 //! ```text
-//! holder_node node --home <dir> --state <dir> [--herdr-bin <herdr>] [--herdr-socket <socket>]
+//! holder_node node --home <dir> --state <dir>
 //! holder_node echo <log>
 //! ```
 //!
 //! `node` reads one JSON request a line and writes one JSON answer a line,
-//! `{"ok": true, ...}` or `{"ok": false, "error": "..."}`, in order. With
-//! `--herdr-socket` the node's Herdr sessions go to that server through the
-//! pinned client. `echo` is a pane program for the
+//! `{"ok": true, ...}` or `{"ok": false, "error": "..."}`, in order. `echo` is
+//! a pane program for the
 //! measurements: on a raw terminal it writes each byte it reads to `<log>`
 //! and draws it on the first row (`echo.rs`). `rules` gives a pane an agent
 //! definition's built-in screen rules and `facts` and `wait_screen` read
@@ -41,7 +40,7 @@ use hide_holder_protocol::{Answer, Appearance, Rgb, Size, Theme};
 use hide_kit::layout;
 use hide_kit::panes::{StartRequest, Started};
 use hide_node::terminal::holder::{HolderFolders, Holders, LocalTerminals};
-use hide_node::terminal::{Attacher, LocalAttacher, Mode, OutputSink, ReportSink, SessionParts};
+use hide_node::terminal::{OutputSink, ReportSink};
 use hide_node_link::terminal::{GridSize, KeyTarget, TerminalControl, TerminalNode};
 use serde_json::{Value, json};
 
@@ -67,22 +66,18 @@ fn main() {
 }
 
 fn usage() -> i32 {
-    eprintln!(
-        "usage: holder_node node --home <dir> --state <dir> [--herdr-bin <herdr>] [--herdr-socket <socket>]\n       holder_node echo <log>"
-    );
+    eprintln!("usage: holder_node node --home <dir> --state <dir>\n       holder_node echo <log>");
     2
 }
 
 struct Options {
     home: PathBuf,
     state: PathBuf,
-    herdr_bin: Option<PathBuf>,
-    herdr_socket: Option<PathBuf>,
 }
 
 impl Options {
     fn parse(args: &[OsString]) -> Result<Self, String> {
-        let (mut home, mut state, mut herdr_bin, mut herdr_socket) = (None, None, None, None);
+        let (mut home, mut state) = (None, None);
         let mut words = args.iter();
         while let Some(word) = words.next() {
             let value = words
@@ -92,26 +87,13 @@ impl Options {
             match word.to_str() {
                 Some("--home") => home = Some(value),
                 Some("--state") => state = Some(value),
-                Some("--herdr-bin") => herdr_bin = Some(value),
-                Some("--herdr-socket") => herdr_socket = Some(value),
                 _ => return Err(format!("unknown option {}", word.to_string_lossy())),
             }
         }
         Ok(Self {
             home: home.ok_or("--home is required")?,
             state: state.ok_or("--state is required")?,
-            herdr_bin,
-            herdr_socket,
         })
-    }
-}
-
-/// Herdr's sessions when no Herdr server was named: none.
-struct NoHerdr;
-
-impl Attacher for NoHerdr {
-    fn open(&self, _: &str, _: Mode, _: u16, _: u16) -> Result<SessionParts, String> {
-        Err("this node was started without a Herdr server".to_owned())
     }
 }
 
@@ -137,19 +119,11 @@ impl Node {
 fn node(options: &Options) -> Result<(), String> {
     let screens = Arc::new(Screens::default());
     let reports = Arc::new(Reports::default());
-    let herdr: Box<dyn Attacher> = match &options.herdr_socket {
-        Some(socket) => Box::new(LocalAttacher::new(
-            options.herdr_bin.clone(),
-            socket.clone(),
-        )),
-        None => Box::new(NoHerdr),
-    };
     let terminals = Holders::start_local(
         HolderFolders {
             home: &options.home,
             state_dir: &options.state,
         },
-        herdr,
         Arc::clone(&screens) as Arc<dyn OutputSink>,
         Arc::clone(&reports) as Arc<dyn ReportSink>,
     )?;

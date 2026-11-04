@@ -20,9 +20,6 @@ pub enum DeviceCommand {
         ssh_alias: String,
         /// The name the device is shown under; the alias when absent.
         name: Option<String>,
-        /// The device's Herdr socket when its server is not at the default
-        /// path.
-        herdr_socket_path: Option<String>,
     },
     Remove {
         device_id: String,
@@ -33,7 +30,7 @@ pub enum DeviceCommand {
     },
 }
 
-/// The most bytes an alias, name, socket or id may take.
+/// The most bytes an alias, name or id may take.
 const VALUE_LIMIT: usize = 256;
 
 fn valid_value(value: &str) -> bool {
@@ -44,14 +41,8 @@ impl DeviceCommand {
     pub fn valid(&self) -> bool {
         match self {
             Self::List => true,
-            Self::Add {
-                ssh_alias,
-                name,
-                herdr_socket_path,
-            } => {
-                valid_value(ssh_alias)
-                    && name.as_deref().is_none_or(valid_value)
-                    && herdr_socket_path.as_deref().is_none_or(valid_value)
+            Self::Add { ssh_alias, name } => {
+                valid_value(ssh_alias) && name.as_deref().is_none_or(valid_value)
             }
             Self::Remove { device_id } | Self::Retry { device_id } => valid_value(device_id),
         }

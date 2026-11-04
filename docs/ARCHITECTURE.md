@@ -761,9 +761,8 @@ Outside a fork holder, each key keeps the time the node received it from the req
 The rule is per key, as D-11 states it, so the fresh part can act without the stale part: an Enter typed a second ago runs whatever the prompt holds after the command typed four seconds ago was discarded, and the shell sends each key, a whole escape sequence or a whole paste, as one chunk, so no sequence is split by the discard.
 Only Herdr's own layout marks a request's pane laid out, never a pane Hide drew ahead, so a provisional tab that expires before Herdr lays its pane out keeps its keys; the cost is that a pane Herdr names and then removes before any layout lists it keeps its request and held bytes until a newer request evicts it or Hide closes the pane, bounded by `INPUT_REQUEST_LIMIT` rows and 64 KiB each; the bytes reach another pane only if Herdr gives that pane the same id within `HELD_INPUT_MAX_AGE` of their being typed, which the restore worker below records the pinned Herdr doing for a just-closed pane.
 
-Every tab creation and pane operation Hide starts leaves one `pane_op.timing` line in the diagnostic log with each stage's milliseconds after the request: Herdr's answer, the first drawn snapshot, the first and the first layout event, the confirmed layout ingested, its snapshot sent, and the pane's first frame (D-14, `runtime/op_timing.rs`).
-Herdr's share is `layout_event - herdr_ack`; the rest is Hide's.
-On the core's own engine, whose own layout already holds a created pane when it answers, `drawn` is the first snapshot sent whose layout holds the pane, and for a new tab shows that tab, so the stage reads the same on both engines.
+Every tab creation and pane operation Hide starts leaves one `pane_op.timing` line in the diagnostic log with each stage's milliseconds after the request: the first drawn snapshot, the confirmed layout ingested, its snapshot sent, and the pane's first frame (D-14, `runtime/op_timing.rs`).
+The engine's own layout already holds a created pane when it answers, so `drawn` is the first snapshot sent whose layout holds the pane, and for a new tab shows that tab.
 The record carries ids and times only, and at most `OP_TIMING_LIMIT` are open at once.
 
 The notifier announces once per burst rather than once per change.

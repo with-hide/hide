@@ -7,8 +7,8 @@
 //! These tests assert what the core tells the node about each request and
 //! what the snapshot says of it; the node's own tests
 //! (`hide-node/src/terminal/{input,tests}.rs`) assert where the keys go.
-//! The fake Herdr records what left over the socket and each test hands the
-//! runtime Herdr's answer, and the end of the wait for a new pane's shell to
+//! The fake engine records each call and each test hands the runtime the
+//! engine's answer, and the end of the wait for a new pane's shell to
 //! read keys, itself, so the order under test never depends on the scheduler
 //! (docs/TESTING.md).
 
@@ -28,37 +28,21 @@ fn event(kind: &str, payload: serde_json::Value) -> Vec<u8> {
     .unwrap()
 }
 
-fn fake_herdr(name: &str) -> FakeHerdr {
-    FakeHerdr::start(name, |method, _| match method {
-        "pane.split" => serde_json::json!({"type": "pane_info", "pane": {
-            "pane_id": SPLIT_PANE, "terminal_id": "fixture-terminal", "workspace_id": "w-order",
-            "tab_id": "w-order:t1", "focused": true, "agent_status": "idle", "revision": 1
-        }}),
-        "tab.create" => serde_json::json!({
-            "type": "tab_created",
-            "tab": {"tab_id": "w-order:t9", "workspace_id": "w-order", "number": 9, "label": "9",
-                    "focused": true, "pane_count": 1, "agent_status": "idle"},
-            "root_pane": {"pane_id": "w-order:t9:p", "terminal_id": "fixture-terminal",
-                          "workspace_id": "w-order", "tab_id": "w-order:t9", "focused": true,
-                          "agent_status": "idle", "revision": 1}
-        }),
+fn fake_herdr() -> Fake {
+    FakeEngine::start(|method, _| match method {
+        "split_pane" | "split_pane_at" => reply(SPLIT_PANE.to_owned()),
+        "create_tab" => reply(("w-order:t9".to_owned(), "w-order:t9:p".to_owned())),
         other => panic!("unexpected {other}"),
     })
 }
 
-/// One tab with one attached pane, on a fake Herdr, with recorded terminal
-/// routes. Workers cannot report back; each Herdr answer reaches the
+/// One tab with one attached pane, on a fake engine, with recorded terminal
+/// routes. Workers cannot report back; each engine answer reaches the
 /// runtime when the test hands it.
-fn runtime_on(herdr: &FakeHerdr) -> (Runtime, Arc<RecordedTerminals>) {
+fn runtime_on(herdr: &Fake) -> (Runtime, Arc<RecordedTerminals>) {
     let (mut runtime, _) = tab_order_runtime(CHECKOUT);
     let terminals = record_terminals(&mut runtime);
-    runtime.live = Some(live::LiveContext {
-        socket_path: herdr.socket_path().to_path_buf(),
-        runtime: std::sync::Weak::new(),
-        notifier: crate::handle::ChangeNotifier::noop(),
-        engine: herdr.engine(),
-        node: Arc::new(hide_node::Local::of_process()),
-    });
+    runtime.live = Some(herdr.live());
     runtime.ingest_session(Ok(tab_order_payload(
         CHECKOUT,
         &["w-order:t1"],
@@ -169,7 +153,7 @@ fn split_answer(runtime: &mut Runtime, answer: Result<PaneControlOutcome, String
 /// write them there and the request reads ready.
 #[test]
 fn keys_typed_before_a_split_answers_reach_only_the_new_pane() {
-    let herdr = fake_herdr("key-routing-split");
+    let herdr = fake_herdr();
     let (mut runtime, terminals) = runtime_on(&herdr);
     runtime.dispatch_json(&split("r-split"));
     assert_eq!(
@@ -213,7 +197,7 @@ fn keys_typed_before_a_split_answers_reach_only_the_new_pane() {
 /// slow startup file) still gets them: nothing typed is lost to the wait.
 #[test]
 fn keys_for_a_split_whose_shell_never_reads_still_reach_it() {
-    let herdr = fake_herdr("key-routing-shell-timeout");
+    let herdr = fake_herdr();
     let (mut runtime, terminals) = runtime_on(&herdr);
     runtime.dispatch_json(&split("r-slow"));
     split_answer(
@@ -242,7 +226,7 @@ fn keys_for_a_split_whose_shell_never_reads_still_reach_it() {
 /// was typed for it and anything typed for it afterwards.
 #[test]
 fn a_refused_split_drops_its_keys_everywhere() {
-    let herdr = fake_herdr("key-routing-refused");
+    let herdr = fake_herdr();
     let (mut runtime, terminals) = runtime_on(&herdr);
     runtime.dispatch_json(&split("r-refused"));
     split_answer(&mut runtime, Err("pane too small".to_owned()));
@@ -261,7 +245,7 @@ fn a_refused_split_drops_its_keys_everywhere() {
 /// drops any it holds.
 #[test]
 fn a_split_refused_before_herdr_answers_its_request_as_discarded() {
-    let herdr = fake_herdr("key-routing-offline");
+    let herdr = fake_herdr();
     let (mut runtime, terminals) = runtime_on(&herdr);
     runtime.live = None;
     runtime.dispatch_json(&split("r-offline"));
@@ -282,7 +266,7 @@ fn a_split_refused_before_herdr_answers_its_request_as_discarded() {
 /// answered inside it waits for the shell.
 #[test]
 fn keys_for_a_creation_answered_after_the_wait_s_bound_reach_its_pane_at_once() {
-    let herdr = fake_herdr("key-routing-late-answer");
+    let herdr = fake_herdr();
     let (mut runtime, terminals) = runtime_on(&herdr);
     let late = super::terminal_input::InputOrigin::TabCreate(41);
     let opened_long_ago = std::time::Instant::now()
@@ -321,7 +305,7 @@ fn keys_for_a_creation_answered_after_the_wait_s_bound_reach_its_pane_at_once() 
 /// shell reads keys.
 #[test]
 fn keys_typed_before_a_new_tab_answers_reach_its_pane() {
-    let herdr = fake_herdr("key-routing-tab");
+    let herdr = fake_herdr();
     let (mut runtime, terminals) = runtime_on(&herdr);
     let workspace_id = runtime.snapshot().navigator.workspaces[0].id.clone();
     let checkout_id = runtime.snapshot().navigator.focused_checkout_id.clone();
@@ -346,7 +330,7 @@ fn keys_typed_before_a_new_tab_answers_reach_its_pane() {
     else {
         panic!("the creation opened its key request");
     };
-    herdr.wait_for_requests(1, Duration::from_secs(5));
+    herdr.wait_for_calls(1, Duration::from_secs(5));
     runtime.complete_lane_tab(
         RemoteControlAction::CreateTab {
             workspace_id: "w-order".to_owned(),
@@ -387,7 +371,7 @@ fn keys_typed_before_a_new_tab_answers_reach_its_pane() {
 /// drawing of the tab has expired: the node keeps the keys for it.
 #[test]
 fn keys_for_a_new_tab_survive_an_update_before_herdr_lays_out_its_pane() {
-    let herdr = fake_herdr("key-routing-tab-late");
+    let herdr = fake_herdr();
     let (mut runtime, terminals) = runtime_on(&herdr);
     let workspace_id = runtime.snapshot().navigator.workspaces[0].id.clone();
     let checkout_id = runtime.snapshot().navigator.focused_checkout_id.clone();
@@ -410,7 +394,7 @@ fn keys_for_a_new_tab_survive_an_update_before_herdr_lays_out_its_pane() {
     else {
         panic!("the creation opened its key request");
     };
-    herdr.wait_for_requests(1, Duration::from_secs(5));
+    herdr.wait_for_calls(1, Duration::from_secs(5));
     runtime.complete_lane_tab(
         RemoteControlAction::CreateTab {
             workspace_id: "w-order".to_owned(),
@@ -498,7 +482,7 @@ fn session_with_split_pane(laid_out: bool) -> SessionSnapshotPayload {
 /// gives that id; a wait for its shell that ends afterwards writes nothing.
 #[test]
 fn keys_for_a_split_whose_pane_left_reach_no_pane_that_reuses_its_id() {
-    let herdr = fake_herdr("key-routing-pane-gone");
+    let herdr = fake_herdr();
     let (mut runtime, terminals) = runtime_on(&herdr);
     runtime.dispatch_json(&split("r-gone"));
     split_answer(

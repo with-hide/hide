@@ -117,7 +117,7 @@ mod unix {
             std::fs::write(self.local.join(".ssh/config"), config).unwrap();
             let transport = hide_node::ssh::Connector::new(Some(self.packages.clone()))
                 .with_askpass_program(PathBuf::from(env!("CARGO_BIN_EXE_hide")))
-                .transport(&self.local, "system-ssh", alias, None)
+                .transport(&self.local, "system-ssh", alias)
                 .unwrap();
             transport.establish(
                 &HostConsent {
@@ -589,7 +589,7 @@ for last; do :; done
         let transport = hide_node::ssh::Connector::new(Some(packages))
             .with_askpass_program(PathBuf::from(env!("CARGO_BIN_EXE_hide")))
             .with_ssh_program(ssh.clone())
-            .transport(&local, "system-ssh", "device", None)
+            .transport(&local, "system-ssh", "device")
             .unwrap();
         let attempt = Cancel::default();
         let returned = Arc::new(std::sync::atomic::AtomicBool::new(false));

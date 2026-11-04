@@ -134,7 +134,7 @@ impl Device {
             .with_askpass_program(PathBuf::from(env!("CARGO_BIN_EXE_hide")))
             .with_terminals(Arc::new(Unseen))
             .with_pane_events(slot)
-            .transport(&local, "own-device", "own-device", None)
+            .transport(&local, "own-device", "own-device")
             .map_err(|reason| anyhow::anyhow!("{reason}"))?;
         Ok(Self {
             _root: root,

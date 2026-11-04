@@ -610,22 +610,34 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
-    use crate::fake_herdr::FakeHerdr;
+    use crate::engine::fake::{FakeEngine, Reply, delivery_agent, processes, refused, reply};
     use hide_platform::process;
 
-    fn agent_info(status: &str, seq: u64) -> Value {
-        json!({"type": "agent_info", "agent": {
-            "pane_id": "w1:p1", "tab_id": "w1:t1", "workspace_id": "w1", "terminal_id": "term_1",
-            "agent": "claude", "agent_status": status, "state_change_seq": seq,
-            "focused": false, "interactive_ready": true, "revision": 0
-        }})
+    type Fake = Arc<FakeEngine<'static>>;
+
+    /// The pane's Claude agent, as the check before its end reads it.
+    fn agent_info(status: &str, seq: u64) -> Reply {
+        agent_of("claude", status, seq)
     }
 
-    fn process_info(shell: u32, foreground: u32) -> Value {
-        json!({"type": "pane_process_info", "process_info": {
-            "pane_id": "w1:p1", "shell_pid": shell, "foreground_process_group_id": foreground,
+    fn agent_of(kind: &str, status: &str, seq: u64) -> Reply {
+        reply(crate::engine::fake::agent_state(&json!({
+            "agent": kind, "agent_status": status, "state_change_seq": seq
+        })))
+    }
+
+    fn process_info(shell: u32, foreground: u32) -> Reply {
+        reply(processes(&json!({
+            "shell_pid": shell, "foreground_process_group_id": foreground,
             "foreground_processes": []
-        }})
+        })))
+    }
+
+    fn started() -> Reply {
+        reply(crate::engine::StartedAgent {
+            pane_id: "w1:p1".into(),
+            terminal_id: Some("term_1".into()),
+        })
     }
 
     #[test]
@@ -637,15 +649,13 @@ mod tests {
             (" CODEX ", "codex", vec!["resume", "session"]),
         ] {
             let expected = args.clone();
-            let herdr = FakeHerdr::start("wake-alias", move |method, params| match method {
-                "pane.process_info" => process_info(42, 42),
-                "agent.start" => {
+            let herdr = FakeEngine::start(move |method, params| match method {
+                "pane_processes" => process_info(42, 42),
+                "start_agent" => {
                     assert_eq!(params["kind"], canonical);
                     assert_eq!(params["args"], json!(expected));
-                    assert_eq!(params["pane_id"], "w1:p1");
-                    let mut agent = agent_info("idle", 3)["agent"].clone();
-                    agent["agent"] = json!(canonical);
-                    json!({"type": "agent_started", "argv": [], "agent": agent})
+                    assert_eq!(params["pane"], "w1:p1");
+                    started()
                 }
                 other => panic!("unexpected {other}"),
             });
@@ -667,16 +677,16 @@ mod tests {
                 WakeOutcome::Started,
                 "{kind}"
             );
-            assert_eq!(herdr.methods(), ["pane.process_info", "agent.start"]);
+            assert_eq!(herdr.methods(), ["pane_processes", "start_agent"]);
         }
     }
 
     #[test]
     fn sleep_end_accepts_known_aliases_but_keeps_process_group_and_agent_guards() {
         for kind in ["claude-code", " CLAUDE ", " CLAUDE_CODE "] {
-            let herdr = FakeHerdr::start("end-alias", |method, _| match method {
-                "agent.get" => agent_info("idle", 3),
-                "pane.process_info" => process_info(42, 42),
+            let herdr = FakeEngine::start(|method, _| match method {
+                "agent_state" => agent_info("idle", 3),
+                "pane_processes" => process_info(42, 42),
                 other => panic!("unexpected {other}"),
             });
             let error = end_agent(
@@ -688,11 +698,11 @@ mod tests {
             .expect_err("a canonical identity still cannot signal the shell")
             .to_string();
             assert!(error.contains("shell already holds"), "{kind}: {error}");
-            assert_eq!(herdr.methods(), ["agent.get", "pane.process_info"]);
+            assert_eq!(herdr.methods(), ["agent_state", "pane_processes"]);
         }
         for kind in ["codex", "future-agent"] {
-            let herdr = FakeHerdr::start("end-other-agent", |method, _| match method {
-                "agent.get" => agent_info("idle", 3),
+            let herdr = FakeEngine::start(|method, _| match method {
+                "agent_state" => agent_info("idle", 3),
                 other => panic!("identity refusal must not query or signal a group: {other}"),
             });
             assert!(
@@ -706,14 +716,11 @@ mod tests {
                 .to_string()
                 .contains("rather than")
             );
-            assert_eq!(herdr.methods(), ["agent.get"]);
+            assert_eq!(herdr.methods(), ["agent_state"]);
         }
     }
 
-    fn sleep_target(
-        herdr: &FakeHerdr,
-        gate: &Arc<crate::input_gate::PaneInputGate>,
-    ) -> SleepTarget {
+    fn sleep_target(herdr: &Fake, gate: &Arc<crate::input_gate::PaneInputGate>) -> SleepTarget {
         SleepTarget {
             engine: herdr.engine(),
             node: Arc::new(hide_node::Local::of_process()),
@@ -731,8 +738,8 @@ mod tests {
     fn the_end_waits_for_a_write_admitted_before_the_pane_closed() {
         let released = Arc::new(AtomicBool::new(false));
         let seen = Arc::clone(&released);
-        let herdr = FakeHerdr::start("agent-sleep-drain", move |method, _| match method {
-            "agent.get" => {
+        let herdr = FakeEngine::start(move |method, _| match method {
+            "agent_state" => {
                 assert!(
                     seen.load(Ordering::SeqCst),
                     "the end began while a write was still landing"
@@ -756,7 +763,7 @@ mod tests {
         assert!(gate.admit("w1:p1").is_err(), "a later write is refused");
         released.store(true, Ordering::SeqCst);
         drop(admission);
-        herdr.wait_for_requests(1, Duration::from_secs(30));
+        herdr.wait_for_calls(1, Duration::from_secs(30));
     }
 
     /// A write stalled past the drain bound is not waited out and not ended
@@ -765,7 +772,7 @@ mod tests {
     /// any refused end (it reopens the pane and backs off).
     #[test]
     fn a_write_stalled_past_the_drain_bound_leaves_the_agent_awake() {
-        let herdr = FakeHerdr::start("agent-sleep-stalled", |method, _| {
+        let herdr = FakeEngine::start(|method, _| {
             panic!("a stalled write must not let the end begin: {method}")
         });
         let gate = Arc::new(crate::input_gate::PaneInputGate::default());
@@ -837,11 +844,12 @@ mod tests {
         }
     }
 
-    /// The pane's visible screen as `pane.read` answers it, rows `text`.
-    fn screen(text: &str) -> Value {
-        json!({"type": "pane_read", "read": {"pane_id": "w1:p1", "workspace_id": "w1",
-            "tab_id": "w1:t1", "source": "visible", "format": "ansi", "revision": 1,
-            "truncated": false, "text": text}})
+    /// The pane's visible screen, rows `text`.
+    fn screen(text: &str) -> Reply {
+        reply(crate::engine::PaneText {
+            text: text.to_owned(),
+            truncated: false,
+        })
     }
 
     /// A composer as Codex CLI draws it: its marker and what follows, dim
@@ -866,24 +874,20 @@ mod tests {
         let pid = agent.id();
         let presses = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let pressed = Arc::clone(&presses);
-        let herdr = FakeHerdr::start("agent-sleep-quit", move |method, _| match method {
-            "agent.get" => {
-                let mut info = agent_info("idle", 7);
-                info["agent"]["agent"] = json!(kind);
-                info
-            }
-            "pane.process_info" => {
+        let herdr = FakeEngine::start(move |method, _| match method {
+            "agent_state" => agent_of(kind, "idle", 7),
+            "pane_processes" => {
                 let shell = std::process::id();
                 process_info(shell, if process::is_alive(pid) { pid } else { shell })
             }
-            "pane.read" => {
+            "read_screen" => {
                 let presses = pressed.load(Ordering::SeqCst);
                 read(presses, pid);
                 screen(shown(presses))
             }
-            "pane.send_keys" => {
+            "send_keys" => {
                 press(pressed.fetch_add(1, Ordering::SeqCst), pid);
-                json!({"type": "ok"})
+                reply(())
             }
             other => panic!("unexpected {other}"),
         });
@@ -895,7 +899,7 @@ mod tests {
         herdr
             .calls()
             .into_iter()
-            .filter(|(method, _)| method == "pane.send_keys")
+            .filter(|(method, _)| *method == "send_keys")
             .map(|(_, params)| params["keys"].clone())
             .collect()
     }
@@ -992,9 +996,9 @@ mod tests {
         .find_map(|line| line.split_once("READY ")?.1.trim().parse::<u32>().ok());
         let tool = said.expect("the agent said its tool's pid");
         let pid = agent.id();
-        let herdr = FakeHerdr::start("agent-sleep-end", move |method, _| match method {
-            "agent.get" => agent_info("idle", 7),
-            "pane.process_info" => {
+        let herdr = FakeEngine::start(move |method, _| match method {
+            "agent_state" => agent_info("idle", 7),
+            "pane_processes" => {
                 // This test process stands in for the shell, which takes the
                 // terminal back once the agent has ended.
                 let shell = std::process::id();
@@ -1002,8 +1006,8 @@ mod tests {
             }
             // The stand-in reads no keys and shows nothing that asks for
             // another, as an agent in a dialog does not quit.
-            "pane.send_keys" => json!({"type": "ok"}),
-            "pane.read" => screen("A dialog the quit key does not close\n"),
+            "send_keys" => reply(()),
+            "read_screen" => screen("A dialog the quit key does not close\n"),
             other => panic!("unexpected {other}"),
         });
         assert_eq!(
@@ -1054,15 +1058,15 @@ mod tests {
         ] {
             let asked = Arc::new(AtomicBool::new(false));
             let node = EndingNode(answer.clone(), Arc::clone(&asked));
-            let herdr = FakeHerdr::start_with_errors("agent-sleep-gone", move |method, _| {
+            let herdr = FakeEngine::start(move |method, _| {
                 match method {
-                    "agent.get" => Ok(agent_info("idle", 7)),
-                    "pane.process_info" if asked.load(Ordering::SeqCst) => Ok(process_info(42, 42)),
-                    "pane.process_info" => Ok(process_info(42, 9)),
+                    "agent_state" => agent_info("idle", 7),
+                    "pane_processes" if asked.load(Ordering::SeqCst) => process_info(42, 42),
+                    "pane_processes" => process_info(42, 9),
                     // Refused keys go to the node at once, so no grace is
                     // waited out here.
-                    "pane.read" => Ok(screen("\u{276f} \n")),
-                    "pane.send_keys" => Err(("pane_send_failed".into(), "refused".into())),
+                    "read_screen" => screen("\u{276f} \n"),
+                    "send_keys" => refused("pane_send_failed", "refused"),
                     other => panic!("unexpected {other}"),
                 }
             });
@@ -1076,9 +1080,9 @@ mod tests {
 
     #[test]
     fn a_pane_whose_shell_holds_the_terminal_is_left_alone() {
-        let herdr = FakeHerdr::start("agent-sleep-shell", |method, _| match method {
-            "agent.get" => agent_info("idle", 3),
-            "pane.process_info" => process_info(42, 42),
+        let herdr = FakeEngine::start(|method, _| match method {
+            "agent_state" => agent_info("idle", 3),
+            "pane_processes" => process_info(42, 42),
             other => panic!("unexpected {other}"),
         });
         let error = end_agent(
@@ -1090,15 +1094,15 @@ mod tests {
         .expect_err("nothing to end")
         .to_string();
         assert!(error.contains("shell already holds"), "{error}");
-        assert_eq!(herdr.methods(), ["agent.get", "pane.process_info"]);
+        assert_eq!(herdr.methods(), ["agent_state", "pane_processes"]);
     }
 
     #[test]
     fn a_group_that_would_signal_every_process_is_refused() {
         for (shell, foreground) in [(42, 0), (42, 1), (0, 42), (1, 42)] {
-            let herdr = FakeHerdr::start("agent-sleep-broadcast", move |method, _| match method {
-                "agent.get" => agent_info("idle", 3),
-                "pane.process_info" => process_info(shell, foreground),
+            let herdr = FakeEngine::start(move |method, _| match method {
+                "agent_state" => agent_info("idle", 3),
+                "pane_processes" => process_info(shell, foreground),
                 other => panic!("unexpected {other}"),
             });
             let error = end_agent(
@@ -1110,14 +1114,14 @@ mod tests {
             .expect_err("refused")
             .to_string();
             assert!(error.contains("not a pane's"), "{error}");
-            assert_eq!(herdr.methods(), ["agent.get", "pane.process_info"]);
+            assert_eq!(herdr.methods(), ["agent_state", "pane_processes"]);
         }
     }
 
     #[test]
     fn an_agent_that_started_working_is_not_ended() {
-        let herdr = FakeHerdr::start("agent-sleep-working", |method, _| match method {
-            "agent.get" => agent_info("working", 3),
+        let herdr = FakeEngine::start(|method, _| match method {
+            "agent_state" => agent_info("working", 3),
             other => panic!("unexpected {other}"),
         });
         let error = end_agent(
@@ -1128,14 +1132,12 @@ mod tests {
         )
         .expect_err("working");
         assert!(matches!(error, EndError::Busy(ref message) if message.contains("working")));
-        assert_eq!(herdr.methods(), ["agent.get"]);
+        assert_eq!(herdr.methods(), ["agent_state"]);
     }
 
     #[test]
     fn an_unknown_codex_wake_keeps_the_next_action_and_sends_no_start() {
-        let herdr = FakeHerdr::start("codex-wake-capability", |method, _| {
-            panic!("unexpected {method}")
-        });
+        let herdr = FakeEngine::start(|method, _| panic!("unexpected {method}"));
         let outcome = start_agent(
             herdr.engine().as_ref(),
             &hide_node::Local::of_process(),
@@ -1160,17 +1162,13 @@ mod tests {
 
     #[test]
     fn a_refused_wake_names_a_plain_reason_and_keeps_herdrs_words_for_the_log() {
-        let herdr = FakeHerdr::start_with_errors("agent-wake-refused", |method, _| match method {
-            "pane.process_info" => Ok(process_info(42, 42)),
-            "agent.start" => Err((
-                "agent_name_taken".into(),
-                "agent name one is already used".into(),
-            )),
+        let herdr = FakeEngine::start(|method, _| match method {
+            "pane_processes" => process_info(42, 42),
+            "start_agent" => refused("agent_name_taken", "agent name one is already used"),
             // Another agent holds the name, so reading it changes nothing.
-            "agent.get" => Ok(serde_json::json!({"type": "agent_info", "agent": {
-                "pane_id": "w1:p2", "terminal_id": "term_2", "workspace_id": "w1",
-                "tab_id": "w1:t2", "name": "one", "focused": false, "agent": "claude",
-                "agent_status": "working", "revision": 0}})),
+            "delivery_agent" => reply(delivery_agent(&json!({
+                "pane_id": "w1:p2", "name": "one", "agent": "claude",
+                "agent_status": "working"}))),
             other => panic!("unexpected {other}"),
         });
         let outcome = start_agent(
@@ -1198,7 +1196,7 @@ mod tests {
 
     #[test]
     fn a_wake_into_a_folder_that_is_gone_asks_herdr_nothing() {
-        let herdr = FakeHerdr::start("agent-wake-cwd", |method, _| panic!("unexpected {method}"));
+        let herdr = FakeEngine::start(|method, _| panic!("unexpected {method}"));
         let outcome = start_agent(
             herdr.engine().as_ref(),
             &hide_node::Local::of_process(),

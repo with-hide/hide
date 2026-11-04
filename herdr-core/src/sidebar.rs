@@ -42,13 +42,6 @@ pub struct SessionTabMoves {
 }
 
 impl SessionTabMoves {
-    pub(crate) fn new(generation: u64) -> Self {
-        Self {
-            generation,
-            ..Self::default()
-        }
-    }
-
     pub(crate) fn record(&mut self, tab_id: String) {
         self.applied += 1;
         self.recent.push_back(tab_id);
@@ -94,9 +87,6 @@ pub struct SessionSnapshotPayload {
     pub panes: Vec<SessionPanePayload>,
     #[serde(default)]
     pub workspaces: Vec<SessionWorkspacePayload>,
-    /// The version of the Herdr that answered; the snapshot's own `version`.
-    #[serde(default)]
-    pub herdr_version: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]

@@ -91,18 +91,10 @@ struct Gated {
     gates: Arc<Gates>,
 }
 impl Attacher for Gated {
-    fn open(&self, pane: &str, mode: Mode, rows: u16, cols: u16) -> Result<SessionParts, String> {
-        self.actual.open(pane, mode, rows, cols)
-    }
     fn keeps_own_size(&self, pane: &str) -> bool {
         self.actual.keeps_own_size(pane)
     }
-    fn open_transport(
-        &self,
-        pane: &str,
-        mode: Mode,
-        size: Option<GridSize>,
-    ) -> Result<Transport, OpenFailure> {
+    fn open_transport(&self, pane: &str, size: Option<GridSize>) -> Result<Transport, OpenFailure> {
         let number = self.gates.sequence.fetch_add(1, Ordering::SeqCst) + 1;
         self.gates.trace.lock().unwrap().push(("open", number));
         let pauses = self.gates.next.lock().unwrap().take();
@@ -116,7 +108,7 @@ impl Attacher for Gated {
         } else {
             None
         };
-        let mut transport = self.actual.open_transport(pane, mode, size)?;
+        let mut transport = self.actual.open_transport(pane, size)?;
         let Cleanup::Other(cleanup) = std::mem::replace(&mut transport.cleanup, Cleanup::None)
         else {
             panic!("the actual holder supplies its socket shutdown");
@@ -131,13 +123,13 @@ impl Attacher for Gated {
                 .unwrap()
                 .push((if resumed { "closed" } else { "barrier_timeout" }, number));
         }));
-        transport.writer = transport.writer.map(|actual| {
-            Box::new(GatedWriter {
-                actual,
+        Ok(Transport {
+            writer: Box::new(GatedWriter {
+                actual: transport.writer,
                 gates: self.gates.clone(),
-            }) as Box<dyn SessionWriter>
-        });
-        Ok(transport)
+            }),
+            ..transport
+        })
     }
 }
 

@@ -541,9 +541,8 @@ function Hand-Over([string]$program, $words, [string]$answer) {
     exit $child.ExitCode
 }
 
-function Step-Start([string]$relative, [string]$herdr, [string]$homeWire) {
+function Step-Start([string]$relative, [string]$homeWire) {
     if (-not $state.Root) { Say fail 'no install folder was chosen'; exit 65 }
-    if ($herdr -ne '-') { Say fail 'a Windows device runs no Herdr, so it takes no Herdr session or socket'; exit 65 }
     $bad = Below $relative $false
     if ($bad) { Say fail $bad; exit 65 }
     $helper = Join-Root $relative
@@ -715,7 +714,7 @@ try {
             'root' { Step-Root $fields[1] }
             'held' { Step-Held $fields[1] }
             'put' { Step-Put $fields[1] $fields[2] $fields[4] }
-            'start' { Step-Start $fields[1] $fields[2] $fields[3] }
+            'start' { Step-Start $fields[1] $fields[2] }
             'run' { Step-Run $fields[1] $fields[2] }
             'fput' { Step-Fput $fields[1] $fields[2] $fields[3] }
             'fget' { Step-Fget $fields[1] }

@@ -2239,83 +2239,6 @@ pub(crate) mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
-    /// The state a retired coordinator must leave exactly as its owner left it.
-    pub(crate) fn coordinator_memory(runtime: &Runtime) -> serde_json::Value {
-        let panes = runtime
-            .delivery_panes
-            .iter()
-            .map(|(device, read)| {
-                let panes = read
-                    .panes
-                    .as_ref()
-                    .map(|panes| panes.iter().collect::<std::collections::BTreeSet<_>>());
-                (
-                    device,
-                    json!({"scope": read.host_scope, "floor": read.floor, "panes": panes}),
-                )
-            })
-            .collect::<std::collections::BTreeMap<_, _>>();
-        let observations = runtime
-            .delivery_observations
-            .iter()
-            .map(|(pane, observed)| {
-                (
-                    pane,
-                    json!({
-                        "actor": observed.actor, "raw_pane": observed.raw_pane_id,
-                        "status": observed.status, "sequence": observed.state_change_seq,
-                        "changed": observed.status_changed_at_unix_ms,
-                        "input": observed.last_input_at_unix_ms,
-                        "submit": observed.last_submit_at_unix_ms,
-                        "working": observed.entered_working_at_unix_ms,
-                        "released": observed.released_input_at_unix_ms,
-                        "scope": observed.host_scope, "turn": format!("{:?}", observed.turn),
-                        "session": observed.session.as_ref().map(|session| json!({
-                            "kind": session.reference_kind, "value": session.reference_value,
-                            "cwd": session.cwd,
-                        })),
-                    }),
-                )
-            })
-            .collect::<std::collections::BTreeMap<_, _>>();
-        let gone = runtime
-            .registrations_gone
-            .iter()
-            .map(|(id, reason)| (id, reason.reason()))
-            .collect::<std::collections::BTreeMap<_, _>>();
-        json!({
-            "panes": panes, "observations": observations, "gone": gone,
-            "overflow": runtime.delivery_overflow.iter().collect::<std::collections::BTreeSet<_>>(),
-            "connected": runtime.delivery_connected.iter().collect::<std::collections::BTreeSet<_>>(),
-            "remote": runtime.snapshot.status.remote,
-            "raw_sessions": runtime.device_raw_sessions.iter().collect::<std::collections::BTreeMap<_, _>>(),
-            "generations": runtime.remote_connection_generations.iter().collect::<std::collections::BTreeMap<_, _>>(),
-        })
-    }
-
-    pub(crate) fn coordinator_bootstrap(
-        runtime: &mut Runtime,
-        device: &str,
-        connector: &crate::engine::SharedEngine,
-    ) {
-        let control = runtime
-            .remote_controls
-            .get(device)
-            .expect("installed owner");
-        assert!(Arc::ptr_eq(&control.engine(), connector));
-        let status = runtime
-            .snapshot
-            .status
-            .remote
-            .iter_mut()
-            .find(|status| status.target_id == device)
-            .expect("registered device status");
-        // A Reconnect keeps the last session on screen until the new
-        // coordinator publishes its own, so only the connection starts over.
-        status.state = "not_connected".into();
-        status.message = None;
-    }
-
     pub(crate) fn fixture(
         root: &std::path::Path,
     ) -> (Arc<Mutex<Runtime>>, Actor, Observation, PathBuf) {
@@ -2500,7 +2423,7 @@ pub(crate) mod tests {
     pub(crate) fn recipient_at_rest(
         runtime: &mut Runtime,
         native: &str,
-        herdr: &crate::fake_herdr::FakeHerdr,
+        fake: &std::sync::Arc<crate::engine::fake::FakeEngine<'static>>,
     ) -> Observation {
         let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
             {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"sender-session"},
@@ -2516,10 +2439,10 @@ pub(crate) mod tests {
         observation.entered_working_at_unix_ms = 0;
         let observation = observation.clone();
         runtime.live = Some(crate::live::LiveContext {
-            socket_path: herdr.socket_path().to_path_buf(),
+            socket_path: fake.scope(),
             runtime: std::sync::Weak::new(),
             notifier: ChangeNotifier::noop(),
-            engine: herdr.engine(),
+            engine: fake.engine(),
             node: Arc::new(hide_node::Local::of_process()),
         });
         observation
@@ -2599,13 +2522,16 @@ pub(crate) mod tests {
         runtime.note_prompt_submitted(pane);
     }
 
-    /// The core's Herdr link, as a device's connection makes and drops it.
-    pub(crate) fn set_live(runtime: &mut Runtime, herdr: Option<&crate::fake_herdr::FakeHerdr>) {
-        runtime.live = herdr.map(|herdr| crate::live::LiveContext {
-            socket_path: herdr.socket_path().to_path_buf(),
+    /// The core's engine link, as a device's connection makes and drops it.
+    pub(crate) fn set_live(
+        runtime: &mut Runtime,
+        fake: Option<&std::sync::Arc<crate::engine::fake::FakeEngine<'static>>>,
+    ) {
+        runtime.live = fake.map(|fake| crate::live::LiveContext {
+            socket_path: fake.scope(),
             runtime: std::sync::Weak::new(),
             notifier: ChangeNotifier::noop(),
-            engine: herdr.engine(),
+            engine: fake.engine(),
             node: Arc::new(hide_node::Local::of_process()),
         });
     }
@@ -2913,7 +2839,6 @@ pub(crate) mod tests {
             pane: "recipient".to_owned(),
             state: PaneTerminalState {
                 state: state.to_owned(),
-                mode: Some("control".to_owned()),
                 generation: 2,
                 attempt: 1,
                 message: None,
@@ -3738,7 +3663,6 @@ pub(crate) mod tests {
                     target_id: "device".into(),
                     state: "connected".into(),
                     message: None,
-                    herdr_version: None,
                     session: None,
                     files: crate::model::RemoteFileListSnapshot::idle(),
                     catalog: Default::default(),
@@ -3842,7 +3766,6 @@ pub(crate) mod tests {
                 target_id: "device".into(),
                 state: "connected".into(),
                 message: None,
-                herdr_version: None,
                 session: None,
                 files: crate::model::RemoteFileListSnapshot::idle(),
                 catalog: Default::default(),
@@ -4673,12 +4596,11 @@ pub(crate) mod tests {
                 "agent_status":"working","agent":"codex",
                 "agent_session":{"source":"herdr:codex","agent":"codex","kind":"id","value":session}})
         };
-        let herdr =
-            crate::fake_herdr::FakeHerdr::start("delivery-register-send-read", move |method, _| {
-                assert_eq!(method, "agent.list");
-                json!({"type":"agent_list","agents":[
-                native("sender", "writer-session"), native("recipient", "reader-session")]})
-            });
+        let fake = crate::engine::fake::FakeEngine::start(move |method, _| {
+            assert_eq!(method, "session");
+            crate::engine::fake::reply(crate::engine::fake::session(json!({"agents":[
+                native("sender", "writer-session"), native("recipient", "reader-session")]})))
+        });
         let (worker, client) = Worker::store(
             Arc::downgrade(&runtime),
             ChangeNotifier::noop(),
@@ -4688,7 +4610,7 @@ pub(crate) mod tests {
         {
             let mut guard = runtime.lock().unwrap();
             guard.install_delivery_client(client);
-            set_live(&mut guard, Some(&herdr));
+            set_live(&mut guard, Some(&fake));
             let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
                 {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working","state_change_seq":1,
                     "lineage_session":crate::engine::tokens::session_digest("writer-session")},
@@ -4708,7 +4630,7 @@ pub(crate) mod tests {
             )?;
             prepared.run(Duration::from_secs(5))
         };
-        let scope = herdr.socket_path().to_str().unwrap().to_owned();
+        let scope = fake.scope().to_str().unwrap().to_owned();
         for (pane, name, session) in [
             ("sender", "writer", "writer-session"),
             ("recipient", "reader", "reader-session"),

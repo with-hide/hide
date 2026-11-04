@@ -27,7 +27,7 @@ use hide_node::terminal::device::DeviceSink;
 use hide_node::terminal::engine_panes::LocalPanes;
 use hide_node::terminal::holder::{Holders, LocalTerminals};
 use hide_node::terminal::router::Router;
-use hide_node::terminal::{Attacher, Mode, OutputSink, ReportSink, Service, SessionParts};
+use hide_node::terminal::{OutputSink, ReportSink, Service};
 use tokio::sync::broadcast;
 
 use crate::terminal_hub::TerminalHub;
@@ -1273,7 +1273,6 @@ fn local_terminals(
             home: &home,
             state_dir: &state_dir,
         },
-        Box::new(NoHerdr),
         outputs,
         reports,
     )
@@ -1286,15 +1285,6 @@ fn core_home(options: &CoreOptions) -> Result<std::path::PathBuf, String> {
         Some(home) => Ok(std::path::PathBuf::from(home)),
         None => hide_platform::host::home_dir()
             .map_err(|error| format!("pane holders need a home folder: {error}")),
-    }
-}
-
-/// Panes outside the holders: this machine runs none.
-struct NoHerdr;
-
-impl Attacher for NoHerdr {
-    fn open(&self, _: &str, _: Mode, _: u16, _: u16) -> Result<SessionParts, String> {
-        Err("This pane is not one of this machine's pane holders".to_owned())
     }
 }
 

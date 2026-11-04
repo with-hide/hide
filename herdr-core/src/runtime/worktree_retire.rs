@@ -196,9 +196,7 @@ pub(super) fn agents_listed(
     engine: &dyn crate::engine::Engine,
 ) -> Result<Vec<crate::session_sync::ProjectedAgent>, String> {
     engine.agents(READ_WAIT).map_err(|error| match error {
-        crate::engine::EngineError::Answer(_) | crate::engine::EngineError::Protocol { .. } => {
-            "agent.list is malformed".to_owned()
-        }
+        crate::engine::EngineError::Answer(_) => "agent.list is malformed".to_owned(),
         error => error.to_string(),
     })
 }
@@ -219,9 +217,7 @@ pub(super) fn panes_in(
     path: &str,
 ) -> Result<Vec<String>, String> {
     let snapshot = engine.session(READ_WAIT).map_err(|error| match error {
-        crate::engine::EngineError::Answer(_) | crate::engine::EngineError::Protocol { .. } => {
-            "snapshot_unavailable".to_owned()
-        }
+        crate::engine::EngineError::Answer(_) => "snapshot_unavailable".to_owned(),
         error => error.to_string(),
     })?;
     Ok(snapshot
@@ -253,50 +249,40 @@ mod tests {
 
     type Shared = Arc<Mutex<Repository>>;
 
-    fn herdr(repository: &Shared) -> crate::fake_herdr::FakeHerdr {
+    fn herdr(repository: &Shared) -> Arc<crate::engine::fake::FakeEngine<'static>> {
+        use crate::engine::fake::{processes, reply, session};
         let repository = Arc::clone(repository);
-        crate::fake_herdr::FakeHerdr::start("worktree-retire", move |method, params| {
+        crate::engine::fake::FakeEngine::start(move |method, params| {
             let mut repository = repository.lock().unwrap();
             match method {
-                "worktree.list" => json!({"type": "worktree_list", "source": {
-                    "repo_key": "/r/.git", "repo_name": "r", "repo_root": "/r",
-                    "source_checkout_path": "/r", "source_workspace_id": "w1"},
-                    "worktrees": repository.worktree.iter().map(|path| json!({
-                        "branch": "fix", "is_bare": false, "is_detached": false,
-                        "is_linked_worktree": true, "is_prunable": false, "label": "r",
-                        "open_workspace_id": "w2", "path": path})).collect::<Vec<_>>()}),
-                "session.snapshot" => json!({"type": "session_snapshot", "snapshot": {
-                    "version": "fixture", "protocol": hide_herdr_client::HERDR_PROTOCOL_REVISION,
-                    "workspaces": [], "tabs": [], "layouts": [], "agents": [],
+                "worktree_path" => reply(
+                    repository
+                        .worktree
+                        .clone()
+                        .filter(|_| params["branch"] == "fix"),
+                ),
+                "session" => reply(session(json!({
                     "panes": repository.panes.iter().map(|(pane, cwd)| json!({
                         "pane_id": pane, "workspace_id": "w2", "tab_id": "w2:t1",
-                        "terminal_id": "t", "focused": false, "agent_status": "idle",
-                        "revision": 1, "cwd": cwd})).collect::<Vec<_>>()}}),
-                "agent.list" => json!({"type": "agent_list", "agents":
-                    repository.agents.iter().map(|pane| json!({"pane_id": pane,
+                        "terminal_id": "t", "agent_status": "idle", "cwd": cwd}))
+                        .collect::<Vec<_>>(),
+                    "agents": repository.agents.iter().map(|pane| json!({"pane_id": pane,
                         "workspace_id": "w2", "tab_id": "w2:t1", "terminal_id": "t",
-                        "revision": 1, "focused": false, "agent_status": "idle",
-                        "name": "worker"})).collect::<Vec<_>>()}),
-                "pane.process_info" => {
-                    let busy = repository
-                        .busy
-                        .iter()
-                        .any(|pane| *pane == params["pane_id"]);
-                    let (foreground, processes) = if busy {
-                        (200, json!([{"pid": 200, "name": "cargo"}]))
+                        "agent_status": "idle", "name": "worker"})).collect::<Vec<_>>(),
+                }))),
+                "pane_processes" => {
+                    let busy = repository.busy.iter().any(|pane| *pane == params["pane"]);
+                    reply(processes(&if busy {
+                        json!({"shell_pid": 100, "foreground_process_group_id": 200,
+                            "foreground_processes": [{"pid": 200, "name": "cargo"}]})
                     } else {
-                        (100, json!([{"pid": 100, "name": "zsh"}]))
-                    };
-                    json!({"type": "pane_process_info", "process_info": {
-                        "pane_id": params["pane_id"], "shell_pid": 100,
-                        "foreground_process_group_id": foreground,
-                        "foreground_processes": processes}})
+                        json!({"shell_pid": 100, "foreground_process_group_id": 100,
+                            "foreground_processes": [{"pid": 100, "name": "zsh"}]})
+                    }))
                 }
-                "pane.close" => {
-                    repository
-                        .panes
-                        .retain(|(pane, _)| *pane != params["pane_id"]);
-                    json!({"type": "ok"})
+                "close_pane" => {
+                    repository.panes.retain(|(pane, _)| *pane != params["pane"]);
+                    reply(())
                 }
                 other => panic!("unexpected {other}"),
             }

@@ -31,9 +31,7 @@ pub use hide_node_link::LinkError;
 use hide_node_link::panes::{NodeEvent, PanesStarted};
 use hide_node_link::protocol::{Call, Hello, PROTOCOL_VERSION, Request};
 use hide_node_link::{LinkAnswer, NodeLink, call_as};
-pub use link_streams::{
-    LinkHerdrConnector, LinkStream, LinkWriter, MAX_HERDR_PENDING, OpenError, StreamCloser,
-};
+pub use link_streams::{LinkStream, LinkWriter, OpenError, StreamCloser};
 use serde_json::value::RawValue;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -980,6 +978,11 @@ impl RemoteHost {
             lock_recover(&inner.pending).remove(&id);
         }
         written
+    }
+
+    /// The protocol the node's Hello named, once it has greeted the core.
+    pub fn protocol(&self) -> Option<u32> {
+        self.inner.protocol.get().copied()
     }
 
     /// Takes the protocol and reader facts the node's Hello advertised;
@@ -2844,7 +2847,6 @@ mod tests {
                 reason: "fixture identity is unavailable".to_owned(),
             },
             reader_features: None,
-            herdr_socket: None,
             windows_drives: None,
         };
         let refusal = helper_protocol_refusal(&hello(23)).expect("refused");
