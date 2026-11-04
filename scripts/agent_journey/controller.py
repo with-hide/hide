@@ -15,7 +15,6 @@ from pathlib import Path
 import shutil
 import shlex
 import sys
-import time
 
 from agent_live_check.processes import ProcessError
 from agent_live_check.protection import private_directory, write_private
@@ -29,7 +28,6 @@ SUPERVISOR_CLEANUP_SECONDS = 20
 COMPLETION_SECONDS = COMMAND_SECONDS + SUPERVISOR_CLEANUP_SECONDS + 5
 OUTPUT_BYTES = 1024 * 1024
 MAX_COMMANDS = 512
-START_SECONDS = 60
 
 
 def command_answer(diagnostic, text):
@@ -89,21 +87,14 @@ class Controller:
                               env={**clean_env(), **temp_env(runtime.run / "agent-tmp")})
         driver = Path(__file__).resolve().with_name("controller_command.py")
         # The provider reports its session as `<python> <reporter> <pane> <session>`
-        # (spawn-provider.c): to the pinned Herdr, as Herdr's integration does.
+        # (spawn-provider.c): through Hide's SessionStart hook, as Claude Code does.
         reporter = self.root / "session_report.py"
-        if runtime.engine == "own":
-            hooks = runtime.hided.with_name(exe("hide-agent-hooks"))
-            write_private(reporter, (
-                "import json, os, subprocess, sys\n"
-                "pane, session = sys.argv[1:3]\n"
-                "payload = json.dumps(dict(session_id=session, hook_event_name='SessionStart', source='startup', cwd=os.getcwd()))\n"
-                f"sys.exit(subprocess.run([{str(hooks)!r}, 'hook', '--runtime', 'claude-code', '--event', 'SessionStart'], input=payload, text=True, timeout=20).returncode)\n").encode())
-        else:
-            write_private(reporter, (
-                "import subprocess, sys\n"
-                "pane, session = sys.argv[1:3]\n"
-                f"sys.exit(subprocess.run([{str(runtime.herdr_bin)!r}, 'pane', 'report-agent-session', pane, '--source', 'herdr:claude',"
-                " '--agent', 'claude', '--agent-session-id', session, '--seq', '1'], timeout=20).returncode)\n").encode())
+        hooks = runtime.hided.with_name(exe("hide-agent-hooks"))
+        write_private(reporter, (
+            "import json, os, subprocess, sys\n"
+            "pane, session = sys.argv[1:3]\n"
+            "payload = json.dumps(dict(session_id=session, hook_event_name='SessionStart', source='startup', cwd=os.getcwd()))\n"
+            f"sys.exit(subprocess.run([{str(hooks)!r}, 'hook', '--runtime', 'claude-code', '--event', 'SessionStart'], input=payload, text=True, timeout=20).returncode)\n").encode())
         write_private(self.root / "provider.config", b"")
         runtime.owner.run([str(shim), "--write-config", str(self.root / "provider.config"),
                            sys.executable, str(reporter), str(self.completed),
@@ -113,45 +104,17 @@ class Controller:
         workspace, pane, _ = runtime.new_workspace(recipe, "journey", runtime.home, shim,
                                                    {"env": {"HIDE_E2E_ROOT": str(self.root)}})
         self.workspace, self.pane = workspace, pane
-        if runtime.engine == "own":
-            runtime.send(pane, shlex.quote(str(shim)))
-            runtime.initial_shells.discard(pane)
-        else:
-            # Herdr starts an agent only in a shell with nothing of its own in the
-            # foreground; the bootstrap's last command may still be finishing.
-            def shell_alone():
-                _, out, _ = runtime.command(["pane", "process-info", "--pane", pane], check=False)
-                try:
-                    info = json.loads(out)["result"]["process_info"]
-                except (ValueError, KeyError, TypeError):
-                    return False
-                shell = info.get("shell_pid")
-                return bool(shell) and info.get("foreground_process_group_id") == shell and all(
-                    process.get("pid") == shell for process in info.get("foreground_processes", []))
-            # Herdr can still read the pane busy just after the shell looks alone
-            # (its own process read lags); each refusal waits for the shell again,
-            # within one bound.
-            end = time.monotonic() + START_SECONDS
-            while True:
-                runtime.wait(shell_alone, 20)
-                code, out, err = runtime.command(["agent", "start", "controller", "--kind", "claude", "--pane", pane,
-                                                  "--timeout", "5000"], seconds=15, check=False)
-                # Herdr's own wait for the start can run out on a loaded machine
-                # while the provider still starts; its session report below decides.
-                if not code or '"timeout"' in out + err:
-                    break
-                if "agent_pane_busy" not in out + err or time.monotonic() > end or runtime.owner.cancelled.wait(2):
-                    raise ProcessError("controller_start_refused:" + (out + err).strip()[:300])
+        runtime.send(pane, shlex.quote(str(shim)))
+        runtime.initial_shells.discard(pane)
         native = runtime.wait(lambda: (agent := runtime.agent(pane)) and (agent.get("agent_session") or {}).get("value")
                               and agent, 20)
-        answer = self.hide(["agent", "register", "--host-scope", str(runtime.state / "engine" if runtime.engine == "own" else runtime.socket),
+        answer = self.hide(["agent", "register", "--host-scope", str(runtime.state / "engine"),
                             "--session", native["agent_session"]["value"], "--instance", native["terminal_id"],
                             "--name", "journey-controller", "--pane", pane])
         if answer.get("ok") is not True:
             raise ProcessError("controller_register_refused:" + json.dumps(answer)[:300])
         self.agent_id = answer["value"]["id"]
-        if runtime.engine == "own":
-            runtime.controller_registered = True
+        runtime.controller_registered = True
         return self.agent_id
 
     def _read(self, args):

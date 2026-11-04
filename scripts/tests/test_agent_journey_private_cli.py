@@ -34,14 +34,12 @@ class PrivateCLI(unittest.TestCase):
         shutil.copyfile(SOURCE / 'contracts/agent-journey.json', contracts / 'agent-journey.json')
         # These executable fixtures would fail if reached: watch refusal must happen first.
         program = b'#!/bin/sh\necho unexpected_execution >&2\nexit 99\n'
-        for name in ('hided', 'hide', 'herdr', 'examples/journey_conversation', 'examples/journey_memory',
+        for name in ('hided', 'hide', 'hide-holder', 'examples/journey_conversation', 'examples/journey_memory',
                      'examples/journey_composer'):
             path = self.checkout / 'target/debug' / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(program)
             path.chmod(0o700)
-        (contracts / 'herdr-bundle.json').write_text(json.dumps({
-            'version': 'fixture', 'sha256': hashlib.sha256(program).hexdigest()}))
         self.env = {'HOME': str(self.operator), 'PATH': os.environ['PATH'], 'LC_ALL': 'C',
                     'PYTHONPATH': str(self.checkout / 'scripts'),
                     'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': os.devnull,
@@ -64,8 +62,7 @@ class PrivateCLI(unittest.TestCase):
                        + '    return original_mkdir(path, *args, **kwargs)\n'
                        + 'os.mkdir = mkdir\n' + command)
         result = subprocess.run([sys.executable, '-c', command, '--mode', 'local', '--fake-model',
-                                 '--agents', 'pi', '--run-dir', str(self.run), '--herdr-bin',
-                                 str(self.checkout / 'target/debug/herdr')],
+                                 '--agents', 'pi', '--run-dir', str(self.run)],
                                 env=self.env, cwd=self.checkout, capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         report = json.loads((self.run / 'report.json').read_text())
@@ -154,7 +151,7 @@ class PrivateCLI(unittest.TestCase):
         private_directory(self.run)
         owner = OwnedProcesses(diagnostics=self.run / 'process-diagnostics')
         runtime = Runtime(self.checkout, self.run, self.operator, owner,
-                          herdr_bin=self.checkout / 'target/debug/herdr', private_env=True)
+                          private_env=True)
         self.addCleanup(runtime.close)
         cache = Cache(self.base / 'cache', 1024 ** 2)
         self.addCleanup(cache.close)
@@ -182,7 +179,7 @@ class PrivateCLI(unittest.TestCase):
         private_directory(self.run)
         owner = OwnedProcesses(diagnostics=self.run / 'process-diagnostics')
         runtime = Runtime(self.checkout, self.run, self.operator, owner,
-                          herdr_bin=self.checkout / 'target/debug/herdr', private_env=True)
+                          private_env=True)
         self.addCleanup(runtime.close)
         cache = Cache(self.base / 'cache', 1024 ** 2)
         self.addCleanup(cache.close)

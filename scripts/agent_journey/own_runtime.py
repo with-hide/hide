@@ -28,7 +28,7 @@ def layout_panes(node):
 
 class OwnRuntime(Runtime):
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs, engine="own")
+        super().__init__(*args, **kwargs)
         self.control = None
         self.owned = Owned()
         self.owned.records(self.state)
@@ -41,9 +41,6 @@ class OwnRuntime(Runtime):
         self.control = Daemon(self.state, self.owner.cancelled)
         self.control.wait(lambda rest: rest, 20, "the native engine's first snapshot")
         return result
-
-    def command(self, *_args, **_kwargs):
-        raise ProcessError("native_journey_called_herdr")
 
     def pane_ids(self):
         return {pane for layout in (self.control.snapshot() or {}).get("pane_layouts", [])

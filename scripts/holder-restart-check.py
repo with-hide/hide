@@ -132,7 +132,6 @@ class Node:
         # The runner's environment less any Herdr, Hide or provider
         # variable: a holder hands the node's environment to its program.
         env = {**clean_env(), **home_env(home)}
-        env["HIDE_DEV_PANE_HOLDER"] = "1"
         argv = [str(program), "node", "--home", str(home), "--state", str(state)]
         if WINDOWS:
             # Through libuv's job, as the desktop app starts its daemon: a

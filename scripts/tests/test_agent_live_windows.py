@@ -287,9 +287,7 @@ class ShellForms(unittest.TestCase):
             if handle is not None:
                 kernel.CloseHandle(handle)
 
-    def test_the_pane_shell_is_the_one_herdr_is_told_to_start(self):
-        config = PaneShell().herdr_config()
-        self.assertEqual(config, f"[terminal]\ndefault_shell = {json.dumps(os.environ['ComSpec'])}\n")
+    def test_the_pane_shell_prompt_reads_ready(self):
         self.assertEqual(PaneShell().environment(self.folder), {"PROMPT": "LIVE_CHECK_READY$G "})
 
     def test_a_launcher_sets_its_environment_and_passes_arguments_and_status(self):
@@ -324,59 +322,6 @@ class ShellForms(unittest.TestCase):
         (folder / "object").chmod(0o444)
         remove_tree(self.folder / "checkout")
         self.assertFalse((self.folder / "checkout").exists())
-
-
-@unittest.skipUnless(WINDOWS, "the Windows forms run on Windows")
-class UserPathHold(unittest.TestCase):
-    """The account's Path in the registry, where a Herdr pane reads its PATH."""
-
-    def read(self):
-        import winreg
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
-            try:
-                return winreg.QueryValueEx(key, "Path")
-            except FileNotFoundError:
-                return None
-
-    def write(self, value):
-        import winreg
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_SET_VALUE) as key:
-            if value is None:
-                winreg.DeleteValue(key, "Path")
-            else:
-                winreg.SetValueEx(key, "Path", 0, value[1], value[0])
-
-    def test_the_run_folder_comes_first_and_leaves_what_changed_meanwhile(self):
-        from agent_live_check.windows import UserPath
-        before = self.read()
-        self.addCleanup(self.write, before)
-        folder = Path(tempfile.gettempdir()) / "journey-run/bin"
-        held = UserPath(folder)
-        value, kind = self.read()
-        self.assertEqual(value.split(";")[0], str(folder))
-        # An installer adds its own folder while the run holds the Path.
-        self.write((value + ";C:\\installed\\bin", kind))
-        held.close()
-        expected = ";".join(filter(None, [before[0] if before else "", "C:\\installed\\bin"]))
-        self.assertEqual(self.read(), (expected, before[1] if before else kind))
-
-    def test_it_is_refused_outside_a_ci_runner(self):
-        from agent_live_check.protection import ProtectionError
-        from agent_live_check.windows import UserPath
-        before = self.read()
-        with patch.dict(os.environ, {"GITHUB_ACTIONS": "false"}):
-            with self.assertRaisesRegex(ProtectionError, "only_on_a_ci_runner"):
-                UserPath(Path(tempfile.gettempdir()) / "journey-run/bin")
-        self.assertEqual(self.read(), before)
-
-    def test_a_path_that_did_not_exist_is_removed_again(self):
-        from agent_live_check.windows import UserPath
-        before = self.read()
-        self.addCleanup(self.write, before)
-        if before is not None:
-            self.write(None)
-        UserPath(Path(tempfile.gettempdir()) / "journey-run/bin").close()
-        self.assertIsNone(self.read())
 
 
 if __name__ == "__main__":

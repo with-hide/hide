@@ -300,7 +300,6 @@ A piece that another open change is still building is marked as pending with the
    The own engine's pane holders outlive their daemon by design, so a daemon restart leaves them for the next daemon to adopt, and the fixture's end ends each one by the pid its record in that daemon's state folder names (`endPaneHolders` in `web/e2e/pane-holders.mjs`, the rule the web shell measurement runs too) and fails while any process of that folder still runs: leaked holders once used up every PTY of a machine.
    Only a test that looks at Herdr itself (its protocol, its server's lifecycle, Hide following a change made in Herdr outside Hide, coexistence with an operator's Herdr) is tagged `@herdr`, with a `// Herdr only:` line above it saying why; it starts from `startHerdr` and drives Herdr's CLI.
    The native writers in `session-readers.spec.ts` (Pi, omp, OpenCode and Grok) and the Pi flow in `session-thread.spec.ts` run on the core's own engine.
-   `agent-live-check`'s five specs remain Herdr integration checks tagged `@herdr`; their CLI retirement belongs to `b4-default`.
    The stand-in reports its session from inside its pane through the agent's Hide integration.
    These synthetic native-format records prove session reading and continuation, while `pi-omp-extension.spec.ts` and `opencode-plugin.spec.ts` exercise the integrations themselves.
    The web and desktop native-caller fixtures share `web/e2e/spawn-provider.ts`; the compiled stand-in writes its own bounded config through `--write-config`, also used by the Python journey, so none of those callers repeats its line format.
@@ -735,7 +734,6 @@ The transition retains these explicit exceptions:
 
 | Cell | Current coverage | What closes it |
 | --- | --- | --- |
-| `agent-live-check`, 5 specs | Herdr integration checks, outside the dual-engine migration | CLI retirement by `b4-default` |
 | Pi own-engine fake journey, entire row | Excluded: `own-start-fixes 노드 대기(Pi 첫 지시문 input_unconfirmed, 제품 결함)`; cells outside the named exclusions remain required | `own-start-fixes` fixes the first brief and removes this exclusion |
 | OpenCode own-engine fake journey, entire row | Excluded: `own-start-fixes 노드 대기(OpenCode 첫 지시문 미전달, 제품 결함)` | `own-start-fixes` delivers the first brief and removes this exclusion |
 | Codex and Antigravity own-engine fake journey, `fork` only | Excluded: `own-start-fixes 노드 대기`; Codex's new pane has no session or fork lineage, and Antigravity's fork input is discarded before readiness is confirmed | `own-start-fixes` confirms the fork's readiness and registration and removes these exclusions |

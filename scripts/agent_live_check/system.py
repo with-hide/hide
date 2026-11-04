@@ -112,15 +112,6 @@ class PaneShell:
                             "unset journey_pane_path\n"
                             f"skip_global_compinit=1\nPS1='{READY} '\n").encode())]
 
-    def herdr_config(self):
-        """The lines of Herdr's configuration that name the pane shell."""
-        if not WINDOWS:
-            return ""
-        shell = os.environ.get("ComSpec", "")
-        if not Path(shell).is_absolute() or not Path(shell).is_file():
-            raise FileNotFoundError("Windows needs an absolute ComSpec for the pane shell")
-        return f"[terminal]\ndefault_shell = {json.dumps(shell)}\n"
-
     def program(self, argv, output, error, status):
         """Runs `argv` with separate output streams and writes its exit status last."""
         if not WINDOWS:

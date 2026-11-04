@@ -249,7 +249,7 @@ class LeftoversAndReport(unittest.TestCase):
                           "and the fake model refused 3 past it"])
 
     def test_a_fixture_report_says_so_and_lists_what_a_stand_in_cannot_show(self):
-        report = {"mode": "ci", "fixture": True, "fixture_limits": ci.FIXTURE_LIMITS, "herdr": {}, "table": {},
+        report = {"mode": "ci", "fixture": True, "fixture_limits": ci.FIXTURE_LIMITS, "holders": {}, "table": {},
                   "systems": {}, "agents": []}
         text = markdown(report)
         self.assertIn("**Fixture run**", text)

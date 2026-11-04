@@ -130,9 +130,8 @@ Whether the pane takes input now is apart from the turn, and a row shown at rest
 Herdr's `blocked` status holds every permission or selection menu it reports that way.
 For a menu it reports as idle or done, a bell target also needs Hide's draft record or a native session wait to hold the bell.
 Claude Code and Codex can be rung at rest and while working; Grok can be rung only at rest, with Hide's draft guard and the native-session wait guard below.
-Repeat the complete scene matrix with the [local measurement tool](VERIFICATION.md#local-agent-bell-measurement) before enabling another target or relying on a result after a Herdr or agent CLI update.
-Its ignored run report records active detection-manifest versions and native outcomes, including unsafe picker/startup effects and unknown cells.
-The adapter declaration is a reviewed product decision; the tool never changes it automatically.
+Enabling another target needs its menus measured on the pinned CLI, with the unsafe and unknown cells named in its pull request; the local measurement tool that once repeated that scene matrix retired with Herdr.
+The adapter declaration is a reviewed product decision, never changed by a measurement.
 The shared agent adapter declares bell eligibility separately from prompt intake, spawn refusal and session format; its contract requires a submission hook and either prompt context or a turn-end intake hook for every bell, and adding prompt intake alone never widens the bell targets.
 Claude Code's plan approval reads `blocked`; Codex's does not, and the session read guards it instead (next section).
 Cursor is not a target: its menus have not been observed, and the agent checks leave Cursor out by the operator's decision of 2026-10-17.

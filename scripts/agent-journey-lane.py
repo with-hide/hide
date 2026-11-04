@@ -86,7 +86,7 @@ def judge(report, lane, contract=None, agents=None):
             return False, [annotation("error", "agent journey", f"--agents names no active adapter: {', '.join(unknown)}")]
         rows = [row for row in rows if row["id"] in agents]
     required = [row for row in rows if lane != "fixture" or row["id"] in FIXTURE_AGENTS]
-    excluded = excluded_cells(report.get("engine", "herdr"), lane == "fake")
+    excluded = excluded_cells(lane == "fake")
     for row in required:
         agent = row["id"]
         if agent not in table:

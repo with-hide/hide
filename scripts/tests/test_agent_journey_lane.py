@@ -18,6 +18,11 @@ def passing_table():
 
 def report(table, agents, **extra):
     complete = passing_table()
+    # A fake-model run records every approved transition gap as excluded.
+    if extra.get("fake_model"):
+        for (agent, name), reason in lane.excluded_cells(True).items():
+            if agent in complete:
+                complete[agent][name] = {"status": "excluded", "reason": reason}
     for key, cells in table.items():
         complete[key] = {**complete.get(key, {}), **cells}
     return {"fixture": False, "cleanup": {"confirmed": True}, "failures": [], "table": complete, "agents": agents, **extra}
@@ -82,7 +87,11 @@ class Fixture(unittest.TestCase):
 
 class FakeModel(unittest.TestCase):
     def table(self, **override):
-        return {agent: {**cells, **override} for agent, cells in passing_table().items()}
+        table = {agent: {**cells, **override} for agent, cells in passing_table().items()}
+        for (agent, name), reason in lane.excluded_cells(True).items():
+            if agent in table:
+                table[agent][name] = {"status": "excluded", "reason": reason}
+        return table
 
     def test_every_declared_cell_passing_passes(self):
         self.assertEqual(lane.judge(report(self.table(), [], fake_model=True), "fake"), (True, []))
@@ -95,28 +104,26 @@ class FakeModel(unittest.TestCase):
         for agent, reason in reasons.items():
             with self.subTest(agent=agent):
                 row = excluded[agent]
-                value = report(excluded, [], fake_model=True, engine="own")
+                value = report(excluded, [], fake_model=True)
                 self.assertEqual(lane.judge(value, "fake"), (True, []))
-                self.assertFalse(lane.judge({**value, "engine": "herdr"}, "fake")[0])
                 self.assertFalse(lane.judge({**value, "cleanup": {"confirmed": False}}, "fake")[0])
                 for name in lane.CELLS:
                     with self.subTest(cell=name):
                         changed = report({**excluded, agent: {**row, name: {"status": "excluded", "reason": "unapproved"}}},
-                                         [], fake_model=True, engine="own")
+                                         [], fake_model=True)
                         self.assertFalse(lane.judge(changed, "fake")[0])
                 value["table"]["codex"]["start"] = {"status": "excluded", "reason": reason}
                 self.assertFalse(lane.judge(value, "fake")[0])
 
-    def test_a_cell_exclusion_cannot_hide_other_behavior_or_apply_to_the_other_engine(self):
+    def test_a_cell_exclusion_cannot_hide_other_behavior(self):
         selected = ["codex", "antigravity", "omp"]
-        value = report(own_cell_gaps(), [], fake_model=True, engine="own")
+        value = report(own_cell_gaps(), [], fake_model=True)
         self.assertEqual(lane.judge(value, "fake", agents=selected), (True, []))
-        self.assertFalse(lane.judge({**value, "engine": "herdr"}, "fake", agents=selected)[0])
         self.assertFalse(lane.judge({**value, "cleanup": {"confirmed": False}}, "fake", agents=selected)[0])
         for agent, names in own_cell_gaps().items():
             for name in names:
                 with self.subTest(agent=agent, cell=name):
-                    changed = report(own_cell_gaps(), [], fake_model=True, engine="own")
+                    changed = report(own_cell_gaps(), [], fake_model=True)
                     changed["table"][agent][name] = {"status": "excluded", "reason": "unapproved"}
                     self.assertFalse(lane.judge(changed, "fake", agents=selected)[0])
         value["table"]["omp"]["usage"] = {"status": "fail", "reason": "no usage"}

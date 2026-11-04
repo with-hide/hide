@@ -450,9 +450,8 @@ def is_journey_product(path):
             and path.stem != "tests" and not path.stem.endswith("_tests"))
 
 
-# The live check's code, which the journey runs and `agent-live-check.spec.ts`
-# drives in the web e2e; its unit tests are `policy`'s.
-LIVE_CHECK_LANES = {"web-e2e"} | JOURNEY_LANES
+# The live check's code, which the journey runs; its unit tests are `policy`'s.
+LIVE_CHECK_LANES = JOURNEY_LANES
 # Script tests that also run on another system than `policy`'s Linux, in
 # these lanes: `agent-journey.yml` runs the live check's Windows forms on Windows.
 SYSTEM_TESTS = (
@@ -466,7 +465,6 @@ NAMED_LANES = (
     # runs through `verify-cargo.sh`, plans every lane.
     ("scripts/check-vt-build-refusals.sh", {"vt"}),
     ("scripts/agent_live_check/*", LIVE_CHECK_LANES | HOLDER_RESTART_LANES),
-    ("scripts/agent-live-check.py", LIVE_CHECK_LANES),
     ("web/e2e/shims/claude-shim.c", WEB_E2E_LANES | JOURNEY_LANES),
     ("web/e2e/shims/live-check.h", WEB_E2E_LANES | JOURNEY_LANES),
     # The journey's controller builds the desktop e2e's spawn provider.
