@@ -240,7 +240,7 @@ pub(super) struct PaneAgent {
 #[derive(Clone, Debug, Default)]
 pub(super) struct Live {
     /// When the engine typed its start, until the start settled
-    /// ([`PaneAgent::starting`]).
+    /// ([`PaneAgent::launch_pending`]).
     pub(super) started: Option<Instant>,
     /// The start whose not-yet-delivered metadata can still be withdrawn.
     /// Foreground or session evidence invalidates it, even at the same value.
@@ -286,14 +286,24 @@ impl PaneAgent {
         self.live.shown || self.starting(now)
     }
 
+    /// Whether the engine typed its start and its program has not shown yet,
+    /// within the start's deadline.
+    pub(super) fn starting(&self, now: Instant) -> bool {
+        !self.live.shown
+            && self
+                .live
+                .started
+                .is_some_and(|started| now.duration_since(started) < START_DEADLINE)
+    }
+
     /// Whether the start the engine typed is still pending, as Herdr's
     /// `launch_pending` reads a start of its own: until, at least
-    /// [`START_SETTLE`] after the start, the agent's program shows and its
-    /// screen is at rest. A screen that asks a question (Claude Code's
-    /// folder trust) keeps the start pending past its deadline, since what
-    /// is typed there answers the question; anything else ends it at the
-    /// deadline.
-    pub(super) fn starting(&self, now: Instant) -> bool {
+    /// [`START_SETTLE`] after the start, or after the answer to a question
+    /// its screen asked, the agent's program shows and its screen is at
+    /// rest. A screen that asks a question (Claude Code's folder trust)
+    /// keeps the start pending past its deadline, since what is typed there
+    /// answers the question; anything else ends it at the deadline.
+    pub(super) fn launch_pending(&self, now: Instant) -> bool {
         let Some(started) = self.live.started else {
             return false;
         };
@@ -437,6 +447,15 @@ pub(super) fn apply(
             current.live.started = None;
         }
         let status = status_of(&facts.screen, current.live.status);
+        // An answered question restarts a pending start's settle: the agent
+        // draws its next screen after it, and input typed while it does is
+        // lost (Claude Code 2.1.318 on Windows after its folder trust).
+        if current.live.status == Status::Blocked
+            && status != Status::Blocked
+            && current.live.started.is_some()
+        {
+            current.live.started = Some(now);
+        }
         if status != current.live.status {
             *seq += 1;
             current.live.completion = match status {
@@ -641,24 +660,35 @@ mod tests {
         pane.facts(at(ScreenState::Idle));
         let agent = pane.agent.as_ref().unwrap();
         assert!(agent.live.shown);
-        assert!(agent.starting(Instant::now()), "drawn within the settle");
+        assert!(
+            agent.launch_pending(Instant::now()),
+            "drawn within the settle"
+        );
 
         pane.facts(at(ScreenState::Blocked));
         let started = Instant::now() - START_SETTLE;
         pane.agent.as_mut().unwrap().live.started = Some(started);
         let agent = pane.agent.as_ref().unwrap();
-        assert!(agent.starting(Instant::now()));
+        assert!(agent.launch_pending(Instant::now()));
         assert!(
-            agent.starting(started + START_DEADLINE * 2),
+            agent.launch_pending(started + START_DEADLINE * 2),
             "a question waits for its answer"
         );
 
         pane.facts(at(ScreenState::Idle));
-        assert!(!pane.agent.as_ref().unwrap().starting(Instant::now()));
+        let agent = pane.agent.as_mut().unwrap();
+        assert!(
+            agent.launch_pending(Instant::now()),
+            "the screen after an answer is drawn within a settle of its own"
+        );
+        let answered = agent.live.started.unwrap();
+        assert!(answered > started);
+        agent.live.started = Some(answered - START_SETTLE);
+        assert!(!agent.launch_pending(Instant::now()));
         pane.facts(at(ScreenState::Working));
         let agent = pane.agent.as_ref().unwrap();
         assert!(
-            !agent.starting(Instant::now()),
+            !agent.launch_pending(Instant::now()),
             "a settled start stays settled"
         );
         assert_eq!(agent.live.started, None);
@@ -675,8 +705,8 @@ mod tests {
         });
         let agent = pane.agent.as_ref().unwrap();
         let started = agent.live.started.unwrap();
-        assert!(agent.starting(started + START_SETTLE));
-        assert!(!agent.starting(started + START_DEADLINE));
+        assert!(agent.launch_pending(started + START_SETTLE));
+        assert!(!agent.launch_pending(started + START_DEADLINE));
     }
 
     #[test]

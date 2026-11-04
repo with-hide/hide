@@ -1176,7 +1176,7 @@ fn delivery_of(
         state_change_seq: agent.live.seq,
         readiness: Readiness::of(
             Some(agent.live.shown),
-            Some(agent.starting(std::time::Instant::now())),
+            Some(agent.launch_pending(std::time::Instant::now())),
         ),
     }
 }
@@ -2157,7 +2157,7 @@ impl<'g> Engine for OwnEngine<'g> {
                     format!("agent {target} is blocked and requires interactive input"),
                 ));
             }
-            if !agent.live.shown || agent.starting(std::time::Instant::now()) {
+            if !agent.live.shown || agent.launch_pending(std::time::Instant::now()) {
                 return Err(refused(
                     "agent_not_ready",
                     format!("agent {target} is not ready for input"),

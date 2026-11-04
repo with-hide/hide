@@ -1665,7 +1665,7 @@ fn projected_agent(
         lineage_session: own_session,
         state_change_seq: agent.live.seq,
         completion_seq: agent.live.completion,
-        launch_pending: agent.starting(now),
+        launch_pending: agent.launch_pending(now),
         tokens: pane.tokens.clone(),
     }
 }
