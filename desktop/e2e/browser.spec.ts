@@ -19,6 +19,7 @@ import { chooseExpand, countSent, enterWorkspace, setLanePinned, showDocuments, 
 import { fitWindow, focusPage, hostLog, launchShell, NEEDS_FOCUS, nodeOf, relaunch, screenshot, shellPage, startStack, test, type Isolated, type Stack } from "./fixture";
 import { dumpOnFailure } from "../../web/e2e/failure-dump";
 import { compositorPresents, quietFor } from "../../web/e2e/wait";
+import { withProbe, type Probe } from "./terminal-probe";
 
 test.describe.configure({ timeout: 240_000 });
 test.use({ actionTimeout: 15_000 });
@@ -192,11 +193,22 @@ async function backgroundTab(label: string): Promise<{ tab: string; pane: string
 
 async function cliFromPane(args: string[], pane = fixture.panes[0]): Promise<Record<string, unknown>> {
   // The pane is the one an agent runs in, whichever the operator is in: the command must not take the keyboard from it.
-  const result = await runInPaneKeepingFocus(fixture, stack.daemon, pane, `desktop-cli-${++cliSequence}`, {
+  const name = `desktop-cli-${++cliSequence}`;
+  const result = await dumpOnFailure("pane command", async () => {
+    const page = await shellPage(app!);
+    return {
+      pane, name,
+      terminal: await page.evaluate((id) => (window as unknown as { __hideProbe?: Probe }).__hideProbe?.paneText(id), pane),
+      files: Object.fromEntries(["out", "err", "status"].map(extension => {
+        const file = path.join(fixture.root, `${name}.${extension}`);
+        return [extension, fs.existsSync(file) ? fs.readFileSync(file, "utf8").slice(-8192) : null];
+      })),
+    };
+  }, () => runInPaneKeepingFocus(fixture, stack.daemon, pane, name, {
     env: { HIDE_STATE_DIR: run.env.HIDE_STATE_DIR! },
     argv: [path.resolve("..", "target", "debug", fixtureExecutable("hide")), ...args],
     stdout: true,
-  });
+  }));
   return { status: result.status, ...(JSON.parse(result.stdout.trim().split("\n").at(-1) || "{}") as Record<string, unknown>) };
 }
 
@@ -325,6 +337,7 @@ test("browser: a page opens from an agent's pane, follows its area, moves withou
   // a CI runner's screen is 1024 points wide.
   await fitWindow(app, WINDOW);
   const page = await shellPage(app);
+  await withProbe(page);
   await enterWorkspace(page, "fixture");
   const checkout = path.join(fs.realpathSync(fixture.root), "fixture");
 

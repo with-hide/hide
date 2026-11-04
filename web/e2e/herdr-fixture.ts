@@ -392,16 +392,16 @@ export function paneSizeCommand(shell: PaneShell, marker: string): string {
 
 /** The text that runs `program` in a pane's shell, ready for `pane run`. */
 export function paneProgramLine(shell: PaneShell, program: PaneProgram): string {
-  if (shell !== "posix") {
-    // Keep redirected bytes and exit status independent of PowerShell 5's
-    // UTF-16 redirection and cmd.exe's quoting. The private file also keeps
-    // multiline program arguments out of the typed command.
-    const script = `${program.status}.cjs`;
-    fs.writeFileSync(script, `
+  // Type only a short command, even when the preceding process has finished
+  // before the shell restores its line editor. Long multiline arguments can
+  // otherwise hit the terminal's canonical input limit. The private script
+  // also keeps bytes independent of PowerShell 5's UTF-16 redirection.
+  const script = `${program.status}.cjs`;
+  fs.writeFileSync(script, `
 const fs = require("node:fs");
 const { spawnSync } = require("node:child_process");
 const program = ${JSON.stringify(program)};
-const out = fs.openSync(program.stdout ?? "NUL", "w");
+const out = fs.openSync(program.stdout ?? ${JSON.stringify(process.platform === "win32" ? "NUL" : "/dev/null")}, "w");
 const err = fs.openSync(program.stderr, "w");
 try {
   const [binary, ...args] = program.argv;
@@ -410,11 +410,7 @@ try {
   fs.writeFileSync(program.status, String(result.status ?? 1));
 } finally { fs.closeSync(out); fs.closeSync(err); }
 `);
-    return paneCommandLine(shell, [process.execPath, script]);
-  }
-  const env = Object.entries(program.env ?? {});
-  const sets = env.map(([key, value]) => `${key}=${posixQuote(value)} `).join("");
-  return `${sets}${paneCommandLine(shell, program.argv)} > ${posixQuote(program.stdout ?? "/dev/null")} 2> ${posixQuote(program.stderr)}; printf '%s' "$?" > ${posixQuote(program.status)}`;
+  return paneCommandLine(shell, [process.execPath, script]);
 }
 
 /**
