@@ -20,6 +20,7 @@ import { usePracticeChannel } from "./practice/channel";
 import { installProbe, probeEnabled } from "./probe";
 import { configurePaneVisits, expectPane, expectSurface, focusSignature } from "./recent";
 import { FirstRunWizard } from "./FirstRunWizard";
+import { HerdrImportQuestion } from "./HerdrImport";
 import { HerdrGate } from "./HerdrTakeover";
 import { herdrGate } from "./herdrTakeoverRules";
 import { useAgentNotifications } from "./agentNotices";
@@ -283,6 +284,7 @@ export function App() {
     ["shortcuts", <ShortcutSheetGate actions={actions} />],
     ["settings", <SettingsGate actions={actions} />],
     ["first_run", <FirstRunWizard actions={actions} />],
+    ["herdr_import", <HerdrImportQuestion actions={actions} />],
     ["workspace_dialogs", <WorkspaceDialogs actions={actions} />],
     ["add_project", <AddProjectDialog actions={actions} />],
     ["browser", <BrowserHost actions={actions} />],

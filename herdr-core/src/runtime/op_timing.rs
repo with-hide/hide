@@ -6,7 +6,10 @@
 //! The stages, each in milliseconds after the request:
 //! - `herdr_ack`: Herdr answered the request.
 //! - `drawn`: the snapshot that first showed the expected layout was read
-//!   for the browser.
+//!   for the browser: a layout drawn ahead of Herdr, or, for a created pane,
+//!   the engine's own layout already holding it (and for a new tab, showing
+//!   its tab), which is how the core's own engine shows one, so the stage
+//!   reads the same on both engines.
 //! - `first_event` / `layout_event`: the first Herdr event, and the first
 //!   layout event, naming the operation's tab or panes reached the
 //!   coordinator.
@@ -222,6 +225,23 @@ impl OpTimings {
         }
     }
 
+    /// The snapshot about to be read already shows the created pane of each
+    /// open record `shows` answers for, from the engine's own layout rather
+    /// than a prediction: the read stamps `drawn`. `shows` is asked with the
+    /// record's tab, when known, and its created pane.
+    pub(super) fn shown(&mut self, shows: impl Fn(Option<&str>, &str) -> bool) {
+        for record in &mut self.open {
+            if record.has(Stage::Drawn) || record.drawn_pending {
+                continue;
+            }
+            if let Some((pane, false)) = &record.frame_pane
+                && shows(record.tab_id.as_deref(), pane)
+            {
+                record.drawn_pending = true;
+            }
+        }
+    }
+
     /// Names the tab and the pane the answer revealed, and reads the events
     /// already received for them.
     pub(super) fn learn(&mut self, id: &str, tab_id: Option<&str>, pane_id: Option<&str>) {
@@ -421,8 +441,19 @@ impl super::Runtime {
         );
     }
 
-    /// A snapshot is being read for the browser.
+    /// A snapshot is being read for the browser. A created pane its engine
+    /// already lays out, in a tab its checkout shows when the record names
+    /// one, counts as drawn by this read.
     pub(super) fn note_snapshot_sent(&mut self) {
+        let layouts = &self.snapshot.pane_layouts;
+        let shown_tabs = &self.visible_tab_ids;
+        self.op_timings.shown(|tab, pane| {
+            layouts.iter().any(|layout| {
+                tab.is_none_or(|tab| {
+                    layout.tab_id == tab && shown_tabs.values().any(|shown| shown == tab)
+                }) && layout.pane_ids().contains(&pane)
+            })
+        });
         self.op_timings.note_sent(Instant::now());
     }
 }
@@ -531,6 +562,33 @@ mod tests {
         assert!(
             timings.open_ids().is_empty(),
             "a frame before the resize is not the resized grid; the one after it is, even ahead of applied"
+        );
+    }
+
+    #[test]
+    fn a_created_pane_its_engine_already_shows_is_drawn_by_the_next_read() {
+        let start = Instant::now();
+        let mut timings = OpTimings::default();
+        timings.begin("tab-create-1", "tab.create", None, &[], start, 0);
+        timings.learn("tab-create-1", Some("w1:t2"), Some("w1:p3"));
+        timings.await_frame("tab-create-1", "w1:p3", false);
+        let shows_only = |shown_tab: &'static str| {
+            move |tab: Option<&str>, pane: &str| tab == Some(shown_tab) && pane == "w1:p3"
+        };
+        timings.shown(shows_only("w1:t1"));
+        timings.note_sent(start + Duration::from_millis(4));
+        let record = timings.record("tab-create-1").unwrap();
+        assert_eq!(
+            record.stages[Stage::Drawn.index()],
+            None,
+            "a pane in a tab the checkout does not show yet is not drawn"
+        );
+        timings.shown(shows_only("w1:t2"));
+        timings.note_sent(start + Duration::from_millis(7));
+        let record = timings.record("tab-create-1").unwrap();
+        assert_eq!(
+            record.stages[Stage::Drawn.index()],
+            Some(start + Duration::from_millis(7))
         );
     }
 

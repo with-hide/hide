@@ -11,7 +11,7 @@
 // a dialog over the dimmed shell, the three-part progress above the title,
 // the step's main button at the footer's right with its ⌘↵ keycap.
 
-import { CheckIcon, ChevronRightIcon, FolderPlusIcon, GraduationCapIcon } from "lucide-react";
+import { CheckIcon, ChevronRightIcon, FolderInputIcon, FolderPlusIcon, GraduationCapIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ComponentProps, type KeyboardEvent, type ReactNode } from "react";
 import { create } from "zustand";
 import type { TFunction } from "i18next";
@@ -28,6 +28,7 @@ import { accountHome, agentsToUpdate, failedAgents, firstRunStep, type FailedAge
 import { FirstRunDevices } from "./FirstRunDevices";
 import { FirstRunHerdr } from "./HerdrTakeover";
 import { herdrStepShown } from "./herdrTakeoverRules";
+import { offersImport } from "./herdrImportRules";
 import { firstRunAgent } from "./hideAi";
 import { BrandOwl } from "./components/brand-owl";
 import { hostBridge, keySystem } from "./host";
@@ -523,6 +524,11 @@ function StartStep({ actions, reopened, onBack }: { actions: Actions; reopened: 
     if (reopened) useSetupWalk.getState().close();
     else actions.advanceFirstRun("project");
   };
+  // A Herdr save no Hide Herdr runs is offered as a third way to start (PRD engine-bundle-4-herdr-removal B14).
+  const herdr = useShellStore((s) => {
+    const found = s.rest?.status?.herdr_import;
+    return found && offersImport(found) ? found.tabs : null;
+  });
   const showAdding = (next: boolean) => {
     setAdding(next);
     const form = useShellStore.getState().rest?.ui_state?.first_run_choices?.project_form;
@@ -587,6 +593,21 @@ function StartStep({ actions, reopened, onBack }: { actions: Actions; reopened: 
           onClick={() => showAdding(true)}
           data-first-run-way="project"
         />
+        {herdr !== null ? (
+          <StartWay
+            icon={<FolderInputIcon />}
+            title={t("herdrImport.import.title")}
+            line={t("herdrImport.import.note", { count: herdr })}
+            className="border-border bg-secondary text-foreground hover:bg-accent"
+            lineClassName="text-muted-foreground"
+            iconClassName="border-border bg-background text-muted-foreground"
+            onClick={() => {
+              actions.herdrImport("import");
+              finish();
+            }}
+            data-first-run-way="herdr_import"
+          />
+        ) : null}
         {noDevices ? <Note data-first-run-devices-later="true">{t("firstRun.start.devicesLater")}</Note> : null}
       </DialogBody>
       <DialogFooter>

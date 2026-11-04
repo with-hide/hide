@@ -74,10 +74,55 @@ impl Runtime {
                 .map(|state| state.catalog.clone())
                 .unwrap_or_else(|| hide_agent_adapter::definition::Catalog::read(Vec::new())),
         );
+        // The device's agents resume with the choices they were started
+        // with (D-24), keyed by the device's own pane ids as its engine's are.
+        let launches: std::collections::BTreeMap<String, crate::model::PaneLaunch> = self
+            .snapshot
+            .ui_state
+            .pane_launches
+            .iter()
+            .filter_map(|(pane, launch)| {
+                Some((
+                    crate::address::pane_of(pane, device_id)?.to_owned(),
+                    launch.clone(),
+                ))
+            })
+            .collect();
+        let launches = Arc::new(launches);
         let device = device_id.to_owned();
+        // The device's Herdr save is looked at before its engine opens, by
+        // its node (B18); a device whose machine the core cannot name is
+        // not, since its registrations could not be told apart.
+        let local = self.herdr_import_local();
+        let machine = self.device_machine_ids.get(device_id).cloned();
+        if local.is_some() && machine.is_none() {
+            crate::diagnostic!(serde_json::json!({
+                "component": "own_devices",
+                "kind": "herdr_import.device_unnamed",
+                "target": device_id,
+            }));
+        }
         let spawned = thread::Builder::new()
             .name("herdr-core-device-engine".to_owned())
             .spawn(move || {
+                let mover = local.zip(machine).and_then(|(local, machine)| {
+                    let engine_dir =
+                        hide_kit::layout::device_engine_dir(&state_dir, &device).ok()?;
+                    Some(crate::herdr_import::device::Device {
+                        link: Arc::clone(&link),
+                        engine_dir,
+                        machine,
+                        hide_used: crate::herdr_import::hide_used(&state_dir, &device),
+                        local,
+                    })
+                });
+                let seen = match mover.as_ref().map(|mover| mover.look_first()) {
+                    // The core role starts again and moves it before any
+                    // link to the device is up (D-7).
+                    Some((_, true)) => return,
+                    Some((seen, false)) => Some(seen),
+                    None => None,
+                };
                 let opened = home
                     .ok_or_else(|| "the device's node named no home".to_owned())
                     .and_then(|home| {
@@ -88,6 +133,7 @@ impl Runtime {
                             home,
                             windows,
                             definitions,
+                            launches,
                         )
                     })
                     .map(|engine| Arc::new(engine) as crate::engine::SharedEngine);
@@ -99,8 +145,14 @@ impl Runtime {
                 // install retired, whose end takes the lock.
                 let (changed, unused, retired) = match runtime.lock() {
                     Ok(mut guard) => {
-                        let (changed, unused) =
+                        let (mut changed, unused) =
                             guard.install_own_device_engine(&device, generation, opened);
+                        if let (Some(mover), Some(seen)) = (mover, seen)
+                            && guard.device_link_current(&device, generation)
+                        {
+                            changed |=
+                                guard.install_device_herdr_import(&device, Arc::new(mover), seen);
+                        }
                         (changed, unused, guard.take_retired_remote_syncs())
                     }
                     Err(_) => return,
@@ -132,9 +184,7 @@ impl Runtime {
         generation: u64,
         opened: Result<crate::engine::SharedEngine, String>,
     ) -> (bool, Option<crate::engine::SharedEngine>) {
-        let current = self.device_hosts.get(device_id).is_some_and(|host| {
-            host.generation == generation && matches!(host.phase, hosts::HostPhase::Ready { .. })
-        });
+        let current = self.device_link_current(device_id, generation);
         let registration = self.device_registration(device_id).cloned();
         let (Some(registration), true) = (registration, current) else {
             return (false, opened.ok());
@@ -182,6 +232,13 @@ impl Runtime {
         (changed, None)
     }
 
+    /// Whether attempt `generation` is still `device_id`'s ready link.
+    fn device_link_current(&self, device_id: &str, generation: u64) -> bool {
+        self.device_hosts.get(device_id).is_some_and(|host| {
+            host.generation == generation && matches!(host.phase, hosts::HostPhase::Ready { .. })
+        })
+    }
+
     /// The device's node is ready but its holders did not start (`reason`):
     /// no engine opens on that link, and the device's row reads why until a
     /// new link starts them.
@@ -212,6 +269,7 @@ impl Runtime {
             return false;
         }
         self.remote_controls.remove(device_id);
+        let import_changed = self.retire_device_herdr_import(device_id);
         if let Some(sync) = self
             .remote_connections
             .get_mut(device_id)
@@ -222,7 +280,7 @@ impl Runtime {
         self.ingest_remote_session(
             device_id,
             Err(live::SessionFetchError::Unreachable(reason.to_owned())),
-        )
+        ) | import_changed
     }
 
     /// The engines of the devices on the core's own engine, whose

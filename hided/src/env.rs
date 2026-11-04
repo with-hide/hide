@@ -90,7 +90,7 @@ pub const REGISTRY: &[EnvKey] = &[
         key: HERDR_SOCKET_PATH,
         required: false,
         format: "absolute local socket path (a named pipe's name on Windows)",
-        absent_behavior: "The socket Herdr's default session uses (see XDG_CONFIG_HOME) when it exists; otherwise core starts without a Herdr socket and the sidebar shows that state. Ignored, with the default, while HIDE_DEV_PANE_HOLDER is `1`",
+        absent_behavior: "The socket Herdr's default session uses (see XDG_CONFIG_HOME) when it exists; otherwise core starts without a Herdr socket and the sidebar shows that state. While HIDE_DEV_PANE_HOLDER is `1` no Herdr is attached on it; a named socket is only where the move into the core's own engine reads Hide's Herdr, and with none it reads the default",
     },
     EnvKey {
         key: HERDR_BIN_PATH,
@@ -286,6 +286,11 @@ pub struct Env {
     /// registration events (`boundary.rs`); read once, never configured.
     pub home: PathBuf,
     pub herdr_socket_path: Option<String>,
+    /// While the core runs its own engine, the socket `HERDR_SOCKET_PATH`
+    /// names: the one Hide's Herdr ran on, whose session moves into the
+    /// engine (PRD engine-bundle-4-herdr-removal D-5); `None` reads the
+    /// account's default socket. Read by the move only.
+    pub herdr_move_socket: Option<PathBuf>,
     /// `HERDR_BIN_PATH` as given; [`Env::herdr_program`] is the herdr a
     /// daemon runs.
     pub herdr_bin_path: Option<PathBuf>,
@@ -470,8 +475,14 @@ fn resolve(mut read: impl FnMut(&str) -> Option<String>) -> (Env, Vec<EnvError>)
         },
     };
     // The core's own engine runs no Herdr: neither the socket a caller
-    // names nor the default one is read.
-    let herdr_socket_path = match read(HERDR_SOCKET_PATH) {
+    // names nor the default one is read, except by the move of the session
+    // Hide's Herdr ran there, which reads the named one as it is.
+    let named_socket = read(HERDR_SOCKET_PATH);
+    let herdr_move_socket = named_socket
+        .as_deref()
+        .filter(|value| own_engine && Path::new(value).is_absolute())
+        .map(PathBuf::from);
+    let herdr_socket_path = match named_socket {
         _ if own_engine => None,
         Some(value) if value.is_empty() => {
             errors.push(EnvError {
@@ -667,6 +678,7 @@ fn resolve(mut read: impl FnMut(&str) -> Option<String>) -> (Env, Vec<EnvError>)
     let env = Env {
         home,
         herdr_socket_path,
+        herdr_move_socket,
         herdr_bin_path,
         own_engine,
         login_shell,
@@ -915,6 +927,11 @@ mod tests {
         assert_eq!(env.herdr_socket_path, None);
         assert_eq!(env.herdr_bin_path, None);
         assert_eq!(env.herdr_program(), None);
+        // Only the move reads the named socket, where Hide's Herdr ran.
+        assert_eq!(
+            env.herdr_move_socket,
+            Some(PathBuf::from("/tmp/herdr.sock"))
+        );
     }
 
     #[test]

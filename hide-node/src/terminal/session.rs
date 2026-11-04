@@ -21,6 +21,7 @@ use hide_node_link::terminal::GridSize;
 use hide_platform::process::OwnedChild;
 use serde_json::json;
 
+use super::echo_timing::EchoClock;
 use super::protocol::{self, Mode, SessionEvent};
 
 /// Opens a pane's session; the node's own Herdr in production, a stand-in
@@ -573,6 +574,8 @@ pub(super) struct Session {
     pane_id: String,
     /// [`Transport::reads_keys`].
     reads_keys: bool,
+    /// Times input to the next frame; its writer stamps, its reader closes.
+    echo: Arc<EchoClock>,
 }
 
 impl Session {
@@ -595,11 +598,13 @@ impl Session {
             reads_keys,
         } = transport;
         let unwritten = Arc::new(Unwritten::default());
+        let echo = Arc::new(EchoClock::new(pane_id));
         let writer = match (mode, writer) {
             (Mode::Control, Some(writer)) => match spawn_session_writer(
                 pane_id,
                 writer,
                 Arc::clone(&unwritten),
+                Arc::clone(&echo),
                 on_write_failure,
             ) {
                 Ok(writer) => Some(writer),
@@ -625,9 +630,15 @@ impl Session {
                 child: None,
                 pane_id: pane_id.to_owned(),
                 reads_keys,
+                echo,
             },
             events,
         ))
+    }
+
+    /// The clock its reader closes at each frame.
+    pub(super) fn echo(&self) -> Arc<EchoClock> {
+        Arc::clone(&self.echo)
     }
 
     /// Counts this session's child live until it has been reaped.
@@ -763,13 +774,20 @@ fn spawn_writer(
     unwritten: Arc<Unwritten>,
     on_failure: Box<dyn Fn(String) + Send>,
 ) -> Result<Sender<WriterCommand>, String> {
-    spawn_session_writer(pane_id, Box::new(LineWriter(stdin)), unwritten, on_failure)
+    spawn_session_writer(
+        pane_id,
+        Box::new(LineWriter(stdin)),
+        unwritten,
+        Arc::new(EchoClock::new(pane_id)),
+        on_failure,
+    )
 }
 
 fn spawn_session_writer(
     pane_id: &str,
     mut writer: Box<dyn SessionWriter>,
     unwritten: Arc<Unwritten>,
+    echo: Arc<EchoClock>,
     on_failure: Box<dyn Fn(String) + Send>,
 ) -> Result<Sender<WriterCommand>, String> {
     let (sender, receiver) = channel::<WriterCommand>();
@@ -835,6 +853,7 @@ fn spawn_session_writer(
                         (writer.scroll(lines, column, row, modifiers), None, None)
                     }
                     WriterCommand::Input { bytes, written } => {
+                        echo.input();
                         (writer.input(&bytes), None, written)
                     }
                     WriterCommand::Engine { input, command } => {
@@ -842,6 +861,7 @@ fn spawn_session_writer(
                             unwritten.bytes.fetch_sub(cost, Ordering::AcqRel);
                             continue;
                         }
+                        echo.input();
                         let result = match input {
                             super::input::Typed::Bytes(bytes) => writer.input(&bytes),
                             super::input::Typed::Paste(text) => writer.paste(&text),
@@ -855,8 +875,14 @@ fn spawn_session_writer(
                             None,
                         )
                     }
-                    WriterCommand::Paste(text) => (writer.paste(&text), None, None),
-                    WriterCommand::Keys(keys) => (writer.keys(&keys), None, None),
+                    WriterCommand::Paste(text) => {
+                        echo.input();
+                        (writer.paste(&text), None, None)
+                    }
+                    WriterCommand::Keys(keys) => {
+                        echo.input();
+                        (writer.keys(&keys), None, None)
+                    }
                     WriterCommand::Resize(size) => (writer.resize(size), None, None),
                     WriterCommand::Redraw(size) => (writer.redraw(size), None, None),
                     WriterCommand::Barrier(written) => (writer.flush(), None, Some(written)),

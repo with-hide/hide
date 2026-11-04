@@ -21,7 +21,8 @@
 //! The screen is pulled, not pushed: the PTY reader only marks it changed,
 //! and the connection's writer draws the screen as it is when it can write,
 //! at most once per [`MIN_FRAGMENT_INTERVAL`], as a fragment of what changed
-//! since the last one it wrote. A slow node therefore gets fewer, larger
+//! since the last one it wrote; the program's answer to input is drawn at
+//! once ([`Pending::input`]). A slow node therefore gets fewer, larger
 //! fragments and never a queue, and no connection means no drawing at all
 //! (PRD engine-bundle-2-pane-holder D-7, D-9). A watch's facts are pulled
 //! the same way.
@@ -69,8 +70,10 @@ const FLUSH_LIMIT: Duration = Duration::from_secs(2);
 /// How long one write to a connection may wait for the node to read.
 const WRITE_LIMIT: Duration = Duration::from_secs(5);
 
-/// The least time between two fragments a connection is sent, as Herdr
-/// draws at most once per frame of a 60 Hz screen.
+/// The least time between two fragments a connection is sent for output the
+/// program makes on its own, as Herdr draws at most once per frame of a
+/// 60 Hz screen; the program's answer to input does not wait for it
+/// ([`Pending::input`]).
 const MIN_FRAGMENT_INTERVAL: Duration = Duration::from_millis(16);
 
 /// How long a connection's screen stays still after a fragment before the
@@ -293,6 +296,9 @@ impl InputPath {
             return Taken::Full;
         }
         self.queued.fetch_add(length, Ordering::SeqCst);
+        // Before the program can answer, so its answer is never taken for
+        // a change before it.
+        outbox.input();
         if self
             .writes
             .send(PtyWrite::Input { generation, bytes })
@@ -337,6 +343,42 @@ struct Pending {
     /// 100,000 wakes for 100 MB on macOS, where a PTY read gives about
     /// 1 KiB).
     waits_for_change: bool,
+    /// The screen's version when input was handed to the program and no
+    /// fragment has answered it yet: a change after it is the program's
+    /// answer, such as a key's echo, and is drawn at once rather than after
+    /// the interval between fragments, so an echo never waits on the
+    /// fragment before it. One fragment more per input message at most;
+    /// output the program makes on its own stays paced.
+    input: Option<u64>,
+}
+
+impl Pending {
+    /// When the changed screen may be drawn, and whether a change should
+    /// wake the writer before then: once `next` passes, at once when the
+    /// change answers input, and never before the end of the synchronized
+    /// output the screen was `held` at, unless it changes again.
+    fn draw_at(
+        &self,
+        next: Instant,
+        held: Option<(u64, Instant)>,
+        now: Instant,
+    ) -> (Instant, bool) {
+        let mut at = if self.answers_input() { now } else { next };
+        // Held for the program's synchronized output: a change may be the
+        // end of it, so it wakes the writer.
+        let mut waits_for_change = false;
+        if let Some((version, until)) = held
+            && version == self.version
+        {
+            at = at.max(until);
+            waits_for_change = true;
+        }
+        (at, waits_for_change)
+    }
+
+    fn answers_input(&self) -> bool {
+        self.input.is_some_and(|input| input < self.version)
+    }
 }
 
 impl Outbox {
@@ -371,11 +413,21 @@ impl Outbox {
         let mut pending = self.pending();
         pending.changed = true;
         pending.version += 1;
-        let wake = std::mem::take(&mut pending.waits_for_change);
+        // The program's answer to input is drawn at once, so it wakes a
+        // writer waiting out the interval too.
+        let wake = std::mem::take(&mut pending.waits_for_change) || pending.input.is_some();
         drop(pending);
         if wake {
             self.wake.notify_one();
         }
+    }
+
+    /// Input is being handed to the program: the next change is its answer
+    /// ([`Pending::input`]).
+    fn input(&self) {
+        let mut pending = self.pending();
+        let version = pending.version;
+        pending.input.get_or_insert(version);
     }
 
     /// The next screen is sent whole.
@@ -1675,20 +1727,14 @@ impl ScreenWriter {
                 return Job::Send(message);
             }
             if pending.changed {
-                let mut at = next;
-                // Held for the program's synchronized output: a change may
-                // be the end of it, so it wakes the writer.
-                let mut waits_for_change = false;
-                if let Some((version, until)) = held
-                    && version == pending.version
-                {
-                    at = at.max(until);
-                    waits_for_change = true;
-                }
                 let now = Instant::now();
+                let (at, waits_for_change) = pending.draw_at(next, held, now);
                 if now >= at {
                     pending.changed = false;
                     pending.waits_for_change = false;
+                    if pending.answers_input() {
+                        pending.input = None;
+                    }
                     return Job::Draw {
                         full: std::mem::take(&mut pending.full),
                     };
@@ -2183,5 +2229,34 @@ mod tests {
         assert_eq!(held.len(), 2, "{held:?}");
         assert_eq!(held[1].reason, NoticeReason::AnswersRefused);
         assert_eq!(held[1].count, 1001);
+    }
+
+    /// The program's answer to input is drawn at once, however recently the
+    /// last fragment went out; output before the input, or with none, waits
+    /// out the interval, and synchronized output still holds an answer.
+    #[test]
+    fn a_change_after_input_is_drawn_at_once_and_other_output_is_paced() {
+        let now = Instant::now();
+        let next = now + Duration::from_secs(3600);
+        let outbox = Outbox::default();
+
+        outbox.changed();
+        assert_eq!(outbox.pending().draw_at(next, None, now), (next, false));
+
+        outbox.input();
+        assert_eq!(
+            outbox.pending().draw_at(next, None, now),
+            (next, false),
+            "the change before the input does not answer it"
+        );
+        outbox.changed();
+        assert_eq!(outbox.pending().draw_at(next, None, now), (now, false));
+
+        let pending = outbox.pending();
+        let until = now + Duration::from_secs(1);
+        assert_eq!(
+            pending.draw_at(next, Some((pending.version, until)), now),
+            (until, true)
+        );
     }
 }

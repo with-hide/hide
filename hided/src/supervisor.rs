@@ -143,11 +143,14 @@ async fn core_turn(
         Request(MoveRequest),
         Release(Release),
         LeaseEnded,
+        HerdrMove,
     }
     let gate = Arc::clone(&running.move_gate);
+    let herdr_move = Arc::clone(&running.herdr_move);
     let event = tokio::select! {
         () = running.shutdown.ended() => Event::Stop,
         () = seat.stop.ended() => Event::Stop,
+        () = herdr_move.notified() => Event::HerdrMove,
         Some(asked) = requests.recv() => match asked {
             Asked::Window(request) => Event::Request(request),
             Asked::Release(release) => Event::Release(release),
@@ -180,6 +183,16 @@ async fn core_turn(
         Event::Stop => {
             stop_core(&env.state_dir, running).await;
             Ok(None)
+        }
+        // A Herdr session's move was asked for: the core role starts again
+        // and moves it before its engine opens; the pane holders run on
+        // (PRD engine-bundle-4-herdr-removal D-7).
+        Event::HerdrMove => {
+            log("herdr_move.restart", json!({}));
+            stop_core(&env.state_dir, running).await;
+            Ok(Some(Role::Core(
+                crate::start_core_role(env.clone(), seat.parts()).await?,
+            )))
         }
         Event::Request(MoveRequest::Check { device }) => {
             let Some(prepared) =

@@ -128,8 +128,10 @@ pub(crate) fn answer(request_id: &str, outcome: Result<Value, Refused>) -> Value
 
 /// The one request a `/ws` connection that proved the daemon's own token
 /// with `client_kind: "cli"` makes: `{type: "project_open", request_id,
-/// path}`, answered with a `workspace_result` as every scoped request is,
-/// then closed. It is never a screen: no snapshot, no terminal, no event.
+/// path}`, or `{type: "herdr_import", request_id, yes}` for `hide import
+/// herdr` (`herdr_transition::cli_answer`), answered with a
+/// `workspace_result` as every scoped request is, then closed. It is never a
+/// screen: no snapshot, no terminal.
 pub(crate) async fn operator_request(mut socket: WebSocket, state: AppState, connection: u64) {
     let previous = state.clients.fetch_add(1, Ordering::SeqCst);
     if previous >= crate::state_file::MAX_CLIENTS {
@@ -159,8 +161,27 @@ pub(crate) async fn operator_request(mut socket: WebSocket, state: AppState, con
         .filter(|value| value["type"] == "project_open")
         .and_then(|value| value["path"].as_str())
         .map(str::to_owned);
-    let response = match (request_id, path) {
-        (Some(request_id), Some(path)) => {
+    let herdr_import = request
+        .as_ref()
+        .filter(|value| value["type"] == "herdr_import")
+        .map(|value| value["yes"] == true);
+    let response = match (request_id, path, herdr_import) {
+        (Some(request_id), None, Some(yes)) => {
+            let core = std::sync::Arc::clone(&state.core);
+            let outcome = tokio::task::spawn_blocking(move || {
+                crate::herdr_transition::cli_answer(&core, yes)
+            })
+            .await;
+            let outcome = match outcome {
+                Ok(Ok(result)) => Ok(result),
+                Ok(Err(_)) | Err(_) => Err((
+                    "herdr_import_unavailable".to_owned(),
+                    "Run the command again once Hide has started",
+                )),
+            };
+            answer(&request_id, outcome)
+        }
+        (Some(request_id), Some(path), None) => {
             let (core, roots, calls) = (
                 std::sync::Arc::clone(&state.core),
                 std::sync::Arc::clone(&state.roots),

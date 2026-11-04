@@ -123,10 +123,29 @@ pub(crate) const PANE_LAUNCH_LIMIT: usize = 1024;
 /// started it under, or, for an agent that came back from a Herdr restart
 /// without a name, the conversation that named agent last reported.
 fn describes(launch: &crate::model::PaneLaunch, agent: &SidebarAgentSnapshot) -> bool {
-    hide_agent_adapter::canonical_kind(&agent.agent_kind) == launch.kind
-        && match agent.started_name.as_deref() {
+    launch_describes(
+        launch,
+        &agent.agent_kind,
+        agent.started_name.as_deref(),
+        agent.session_id.as_deref(),
+    )
+}
+
+/// Whether `launch` describes an agent of `kind` started under `name` (none
+/// for one that came back without its name) whose conversation is
+/// `session`: the one rule a pane's row and the own engine's resume of a
+/// saved agent both read a launch record by (PRD engine-bundle-4-herdr-removal
+/// D-24).
+pub(crate) fn launch_describes(
+    launch: &crate::model::PaneLaunch,
+    kind: &str,
+    name: Option<&str>,
+    session: Option<&str>,
+) -> bool {
+    hide_agent_adapter::canonical_kind(kind) == launch.kind
+        && match name {
             Some(name) => name == launch.name,
-            None => launch.session.is_some() && launch.session == agent.session_id,
+            None => launch.session.is_some() && launch.session.as_deref() == session,
         }
 }
 

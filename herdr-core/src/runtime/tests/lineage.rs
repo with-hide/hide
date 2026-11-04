@@ -490,7 +490,7 @@ fn lineage_expansion_persists_without_attention_opening_it_and_prunes_on_disappe
     assert!(crate::agent_state::prune_lineage_expansion(
         &mut scoped,
         &[],
-        ReadRecordScope::Local
+        ReadRecordScope::Local(&crate::herdr_import::Held::Nothing)
     ));
     assert_eq!(scoped, ["remote:mini:p1"]);
     // Fresh ingestion is the production cleanup boundary, not the toggle.

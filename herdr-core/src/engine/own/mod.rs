@@ -21,7 +21,7 @@
 //! Only a daemon with the development
 //! switch `HIDE_DEV_PANE_HOLDER` on builds this engine (D-5).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
@@ -47,6 +47,7 @@ use crate::sidebar::{SessionLayoutPayload, SessionSnapshotPayload};
 
 mod agents;
 mod creation;
+pub(crate) mod herdr_session;
 mod ids;
 pub(crate) mod layout;
 mod restore;
@@ -91,6 +92,11 @@ const UNKNOWN_SOURCE: &str = "unknown_read_source";
 pub(crate) struct Place {
     pub(crate) engine_dir: PathBuf,
     pub(crate) home: String,
+    /// The home whose Hide agent hook files this engine's panes write, when
+    /// those files are on the machine the core runs on: the daemon's own
+    /// engine. A device's engine has none; its panes' files are on the
+    /// device.
+    pub(crate) hooks_home: Option<PathBuf>,
     pub(crate) node: Arc<dyn NodeLink>,
     /// Whether the machine `node` answers for runs Windows: a device's
     /// system, from its node's hello, never the core's own, since a Mac core
@@ -100,6 +106,12 @@ pub(crate) struct Place {
     /// started, so a restore resumes their agents before the core's first
     /// read reaches the engine.
     pub(crate) definitions: Arc<hide_agent_adapter::definition::Catalog>,
+    /// The model and effort Hide started each pane's agent with, by this
+    /// engine's pane id, as the core keeps them (`ui_state.pane_launches`):
+    /// a restore resumes a saved agent with the choice whose record
+    /// describes it, so a mission worker does not come back on another
+    /// model (PRD engine-bundle-4-herdr-removal D-24).
+    pub(crate) launches: Arc<BTreeMap<String, crate::model::PaneLaunch>>,
 }
 
 /// The engine and whatever it holds, shared by every gated view of it.
@@ -129,6 +141,11 @@ struct Shared {
     /// reserves its id and starts its holder first), laid on once it has.
     /// The oldest goes first past [`EARLY_FACTS_CAP`].
     early: Mutex<Vec<(String, PaneFacts)>>,
+    /// The panes whose agent the restore resumed after its turn was cut off,
+    /// by the definition resumed there, until its hook names its session
+    /// (PRD engine-bundle-4-herdr-removal D-22). Bounded by one restore's
+    /// resumes.
+    cut: Mutex<BTreeMap<String, String>>,
 }
 
 /// The most panes whose facts wait to enter the topology: a node's cap of
@@ -204,6 +221,7 @@ pub(crate) fn open_device(
     home: String,
     windows: bool,
     definitions: Arc<hide_agent_adapter::definition::Catalog>,
+    launches: Arc<BTreeMap<String, crate::model::PaneLaunch>>,
 ) -> Result<OwnEngine<'static>, String> {
     let engine_dir = hide_kit::layout::device_engine_dir(state_dir, device)?;
     OwnEngine::open(
@@ -211,11 +229,34 @@ pub(crate) fn open_device(
         Place {
             engine_dir,
             home,
+            hooks_home: None,
             node,
             windows,
             definitions,
+            launches,
         },
     )
+}
+
+/// Whether the workspace, tab or pane id `id` is in a workspace this engine
+/// numbered (PRD engine-bundle-4-herdr-removal D-26): the only ids a
+/// machine's cleanup owns while its Herdr save cannot be read (D-25).
+pub(crate) fn made_by_engine(id: &str) -> bool {
+    ids::made_by_engine(id)
+}
+
+/// The workspaces the engine whose folder is `engine_dir` saved, read as its
+/// open reads them, while no engine is open there.
+pub(crate) fn saved_workspaces(engine_dir: &std::path::Path) -> BTreeSet<String> {
+    restore::read(
+        &hide_kit::layout::engine_session_in(engine_dir),
+        &hide_kit::layout::engine_backups_in(engine_dir),
+    )
+    .to_saved()
+    .workspaces
+    .into_iter()
+    .map(|workspace| workspace.id)
+    .collect()
 }
 
 impl OwnEngine<'static> {
@@ -301,6 +342,7 @@ impl OwnEngine<'static> {
                 }),
                 definitions: agents::Definitions::new(definitions),
                 early: Mutex::default(),
+                cut: Mutex::default(),
             }),
             gates: Vec::new(),
         };
@@ -1295,7 +1337,7 @@ impl<'g> Engine for OwnEngine<'g> {
         self.changed();
     }
 
-    fn hook_session(&self, pane: &str, kind: &str, session: &str) -> Answer<()> {
+    fn hook_session(&self, pane: &str, kind: &str, session: &str) -> Answer<bool> {
         self.check()?;
         let catalog = self.shared.definitions.get();
         let definition =
@@ -1309,7 +1351,14 @@ impl<'g> Engine for OwnEngine<'g> {
         {
             self.changed();
         }
-        Ok(())
+        // The first session the resumed agent names is the conversation it
+        // resumed, whatever id its runtime gives it now.
+        let mut cut = self
+            .shared
+            .cut
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Ok(cut.get(pane) == Some(&definition.id) && cut.remove(pane).is_some())
     }
 
     fn session(&self, _wait: Wait) -> Answer<ProjectionState> {
@@ -2316,6 +2365,8 @@ mod tests {
         start_facts: Mutex<Option<PaneFacts>>,
         /// What every pane's terminal holds; `None` answers unreachable.
         processes: Mutex<Option<HolderProcesses>>,
+        /// Panes whose terminal runs another program in its foreground.
+        busy: Mutex<BTreeSet<String>>,
     }
 
     impl Holders {
@@ -2553,14 +2604,22 @@ mod tests {
                 message: "not asked".to_owned(),
             })
         }
-        fn processes(&self, _: &str) -> Result<HolderProcesses, HolderError> {
-            self.processes
-                .lock()
-                .unwrap()
-                .clone()
-                .ok_or_else(|| HolderError::Unreachable {
-                    message: "not asked".to_owned(),
-                })
+        fn processes(&self, pane: &str) -> Result<HolderProcesses, HolderError> {
+            let mut processes =
+                self.processes
+                    .lock()
+                    .unwrap()
+                    .clone()
+                    .ok_or_else(|| HolderError::Unreachable {
+                        message: "not asked".to_owned(),
+                    })?;
+            if self.busy.lock().unwrap().contains(pane) {
+                processes.foreground = Some(hide_node_link::holders::HolderForeground {
+                    group: processes.shell + 8,
+                    members: vec![(processes.shell + 8, "vim".to_owned())],
+                });
+            }
+            Ok(processes)
         }
         fn proof(&self, _: &str) -> Result<hide_node_link::holders::HolderProof, HolderError> {
             // Every pane's program is this test's own process.
@@ -3291,7 +3350,9 @@ mod tests {
             node: Arc::new(hide_node::Local::new(Some(home.clone()))),
             windows: cfg!(windows),
             home: wire(&home),
+            hooks_home: Some(home.clone()),
             definitions: Arc::new(hide_agent_adapter::definition::Catalog::read(Vec::new())),
+            launches: Arc::default(),
         }
     }
 
@@ -3485,10 +3546,12 @@ mod tests {
             .expect("the running panes' tab");
         assert_eq!(gathered.label, "restored");
         assert_eq!(layout_of(&session, &gathered.tab_id), ["w2:p1", "w2:p3"]);
+        // The engine numbers its own workspaces apart from the gathered
+        // Herdr ones (PRD engine-bundle-4-herdr-removal D-26).
         assert_eq!(
             (workspace.as_str(), pane.as_str()),
-            ("w3", "w3:p1"),
-            "a new workspace past the recorded ones"
+            ("h1", "h1:p1"),
+            "a new workspace numbered apart from the gathered ones"
         );
         assert_eq!(holders.started().len(), 1, "only the new pane started");
         assert!(holders.ended.lock().unwrap().is_empty(), "nothing ended");
@@ -4422,6 +4485,251 @@ mod tests {
         );
         let reader = next.delivery_agent(WAIT, "reader").unwrap();
         assert_eq!(reader.pane_id, gemini, "the resumed agent keeps its name");
+    }
+
+    /// PRD engine-bundle-4-herdr-removal D-24, B37: a rebooted agent resumes
+    /// with the model and effort Hide started it with when its pane's launch
+    /// record describes it; a record that names another agent is not read,
+    /// so that pane resumes on its CLI's defaults.
+    #[test]
+    fn a_reboot_resumes_an_agent_with_the_model_and_effort_it_was_started_with() {
+        let root = tempfile::tempdir().unwrap();
+        let place = place(root.path());
+        let folder = root.path().join("repo");
+        for dir in [&home(&place), &folder] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let first_holders = Holders::found(HolderRecovery::default());
+        first_holders.idle_shell(41, "zsh");
+        let first = OwnEngine::open(
+            Arc::clone(&first_holders) as Arc<dyn PaneHolders>,
+            place.clone(),
+        )
+        .unwrap();
+        let (_, _, worker) = first
+            .create_workspace(WAIT, &wire(&folder), "w", true, Env::new())
+            .unwrap();
+        let other = first
+            .split_pane_at(
+                WAIT,
+                &worker,
+                ClosedSplitDirection::Right,
+                &wire(&folder),
+                0.5,
+                Env::new(),
+            )
+            .unwrap();
+        for (pane, name, session) in [(&worker, "worker", "s-1"), (&other, "other", "s-2")] {
+            let start = first
+                .prepare_start(launch(pane, name, "claude", &[]))
+                .unwrap();
+            first.start_agent(WAIT, &start).unwrap();
+            first
+                .report_agent_session(WAIT, pane, "claude", session, 1)
+                .unwrap();
+        }
+        drop(first);
+
+        let chosen = hide_agent_adapter::LaunchChoice {
+            model: Some("opus".to_owned()),
+            effort: Some("high".to_owned()),
+        };
+        let record = |name: &str| crate::model::PaneLaunch {
+            kind: "claude".to_owned(),
+            name: name.to_owned(),
+            choice: chosen.clone(),
+            session: None,
+        };
+        let place = Place {
+            launches: Arc::new(BTreeMap::from([
+                (worker.clone(), record("worker")),
+                // The other pane's record names an agent it no longer runs.
+                (other.clone(), record("someone-else")),
+            ])),
+            ..place
+        };
+        let holders = Arc::new(Holders::default());
+        holders.idle_shell(52, "zsh");
+        let next = OwnEngine::open(Arc::clone(&holders) as Arc<dyn PaneHolders>, place).unwrap();
+        holders.hand(HolderRecovery {
+            owner: 1,
+            ended: vec![worker.clone(), other.clone()],
+            ..HolderRecovery::default()
+        });
+        next.restored().unwrap();
+
+        assert!(
+            holders
+                .wait_typed(&worker)
+                .starts_with("claude --resume s-1 --model opus --effort high || printf"),
+            "{:?}",
+            holders.typed(&worker)
+        );
+        assert!(
+            holders
+                .wait_typed(&other)
+                .starts_with("claude --resume s-2 || printf"),
+            "{:?}",
+            holders.typed(&other)
+        );
+    }
+
+    /// PRD engine-bundle-4-herdr-removal D-22, B9: an agent whose hook last
+    /// said its turn was running when the machine went down is resumed and,
+    /// once its hook names its session, said to be owed its letter, once; an
+    /// agent that had finished its turn is owed none.
+    #[test]
+    fn a_resumed_agent_whose_turn_was_cut_off_is_owed_one_letter_and_a_resting_one_none() {
+        use hide_agent_hooks::counters::{Change, Reporter, Said, apply};
+        use hide_agent_hooks::report::HookTurn;
+        let root = tempfile::tempdir().unwrap();
+        let place = place(root.path());
+        let folder = root.path().join("repo");
+        for dir in [&home(&place), &folder] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let first_holders = Holders::found(HolderRecovery::default());
+        first_holders.idle_shell(41, "zsh");
+        let first = OwnEngine::open(
+            Arc::clone(&first_holders) as Arc<dyn PaneHolders>,
+            place.clone(),
+        )
+        .unwrap();
+        let (_, _, working) = first
+            .create_workspace(WAIT, &wire(&folder), "w", true, Env::new())
+            .unwrap();
+        let resting = first
+            .split_pane_at(
+                WAIT,
+                &working,
+                ClosedSplitDirection::Right,
+                &wire(&folder),
+                0.5,
+                Env::new(),
+            )
+            .unwrap();
+        for (pane, session, turn) in [
+            (&working, "s-1", HookTurn::Working),
+            (&resting, "s-2", HookTurn::Done),
+        ] {
+            first
+                .report_agent_session(WAIT, pane, "claude", session, 1)
+                .unwrap();
+            // What the agent's hook wrote last in the pane's file.
+            apply(
+                &home(&place),
+                pane,
+                Change::None,
+                Reporter {
+                    agent: Some("claude"),
+                    session: Some(session),
+                },
+                Said::Turn(turn),
+                None,
+            )
+            .unwrap();
+        }
+        drop(first);
+
+        let holders = Arc::new(Holders::default());
+        holders.idle_shell(52, "zsh");
+        let next =
+            OwnEngine::open(Arc::clone(&holders) as Arc<dyn PaneHolders>, place.clone()).unwrap();
+        holders.hand(HolderRecovery {
+            owner: 1,
+            ended: vec![working.clone(), resting.clone()],
+            ..HolderRecovery::default()
+        });
+        next.restored().unwrap();
+        for pane in [&working, &resting] {
+            assert!(
+                holders.wait_typed(pane).starts_with("claude --resume"),
+                "{:?}",
+                holders.typed(pane)
+            );
+        }
+
+        assert!(next.hook_session(&working, "claude", "s-1").unwrap());
+        assert!(
+            !next.hook_session(&working, "claude", "s-1").unwrap(),
+            "owed once"
+        );
+        assert!(!next.hook_session(&resting, "claude", "s-2").unwrap());
+    }
+
+    /// D-8, B15: a conversation an import gave back once its Herdr stopped,
+    /// whose pane runs another command, resumes in a new tab of the pane's
+    /// workspace; nothing is typed over the program, and the give-back is
+    /// settled, so nothing waits for the next import.
+    #[test]
+    fn a_given_back_conversation_whose_pane_is_busy_resumes_in_a_new_tab_of_its_workspace() {
+        let root = tempfile::tempdir().unwrap();
+        let place = place(root.path());
+        std::fs::create_dir_all(home(&place)).unwrap();
+        let save = hide_host::herdr_save::fetch(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/herdr-session/herdr-0.9.5.json"),
+        );
+        // Imported beside its running Herdr, then again once it stopped.
+        for resume in [false, true] {
+            crate::herdr_import::import(
+                &place.engine_dir,
+                &save,
+                crate::herdr_import::Asked { resume },
+            )
+            .unwrap();
+        }
+        let busy = "w1:p1".to_owned();
+        assert_eq!(
+            crate::herdr_import::given_back(&place.engine_dir),
+            BTreeSet::from([busy.clone()])
+        );
+        let saved: BTreeSet<String> = restore::read(
+            &hide_kit::layout::engine_session_in(&place.engine_dir),
+            &hide_kit::layout::engine_backups_in(&place.engine_dir),
+        )
+        .panes()
+        .map(|(id, _)| id.to_owned())
+        .collect();
+
+        let holders = Arc::new(Holders::default());
+        holders.idle_shell(52, "zsh");
+        holders.busy.lock().unwrap().insert(busy.clone());
+        let engine =
+            OwnEngine::open(Arc::clone(&holders) as Arc<dyn PaneHolders>, place.clone()).unwrap();
+        holders.hand(HolderRecovery {
+            owner: 1,
+            present: vec![busy.clone()],
+            ..HolderRecovery::default()
+        });
+        engine.restored().unwrap();
+        settles("the conversation's new tab started", || {
+            holders
+                .started()
+                .iter()
+                .any(|start| !saved.contains(&start.pane))
+        });
+        let tab = holders
+            .started()
+            .into_iter()
+            .find(|start| !saved.contains(&start.pane))
+            .unwrap()
+            .pane;
+        assert!(
+            holders
+                .wait_typed(&tab)
+                .starts_with("claude --resume 0b6a3f1e-claude-session"),
+            "{:?}",
+            holders.typed(&tab)
+        );
+        assert_eq!(engine.topology().pane_place(&tab).unwrap().0, "w1");
+        assert_eq!(
+            holders.typed(&busy),
+            "",
+            "nothing is typed over its program"
+        );
+        assert!(crate::herdr_import::given_back(&place.engine_dir).is_empty());
+        assert!(crate::herdr_import::waiting(&place.engine_dir).is_empty());
     }
 
     /// D-7: a pane whose holder outlived the daemon keeps its program, but

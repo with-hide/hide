@@ -26,6 +26,7 @@ pub mod env;
 pub mod file_url;
 pub mod guide;
 pub mod herdr_handoff;
+mod herdr_transition;
 pub mod index;
 pub mod link_mux;
 pub mod login_item;
@@ -154,6 +155,10 @@ pub struct RunningDaemon {
     core: Arc<CoreHandle>,
     /// Closed while this core runs on a move's copy that has not committed.
     pub move_gate: Arc<core_move::gate::MoveGate>,
+    /// Told when a Herdr session's move is asked for: the supervisor starts
+    /// the core role again, which moves it before the engine opens (PRD
+    /// engine-bundle-4-herdr-removal D-7).
+    pub(crate) herdr_move: Arc<tokio::sync::Notify>,
     /// Told when the role ends, before the core stops, so the role's sockets
     /// close (`AppState::role_ended`).
     role_ended: tokio::sync::watch::Sender<bool>,
@@ -359,6 +364,17 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
             eprintln!("the conversion could not be logged: {error}");
         }
     }
+    // A Herdr session asked to move is moved, and what is not moved yet is
+    // recorded, before the engine opens (PRD engine-bundle-4-herdr-removal
+    // D-3, D-25).
+    seat.starting("core.herdr_import");
+    let herdr_look = {
+        let env = env.clone();
+        let node = node.as_str().to_owned();
+        tokio::task::spawn_blocking(move || herdr_transition::before_core(&env, &node))
+            .await
+            .map_err(|error| format!("the Herdr session could not be read: {error}"))?
+    };
     let host_id = state_file::host_id(&env.state_dir)
         .map_err(|error| format!("the daemon host id could not be read or written: {error}"))?;
     let token = seat.token.clone();
@@ -638,6 +654,29 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         shutdown.clone(),
     ));
     let idle = server::mount(&seat, app);
+    // Once the core is ready, Hide's own Herdr session that no server runs
+    // moves without asking, and the core role starts again with it; any
+    // other save the core offers on the screen (PRD
+    // engine-bundle-4-herdr-removal D-6 to D-8, D-27).
+    let herdr_move = Arc::new(tokio::sync::Notify::new());
+    if env.own_engine {
+        let env = env.clone();
+        let herdr_move = Arc::clone(&herdr_move);
+        let core = Arc::clone(&core);
+        tokio::task::spawn_blocking(move || {
+            if herdr_transition::after_ready(&env, &herdr_look, &herdr_move) {
+                return;
+            }
+            let machine = herdr_transition::LocalMachine::new(&env, herdr_move);
+            if let Err(reason) = core.set_herdr_import(Arc::new(machine)) {
+                herdr_core::diagnostic!(serde_json::json!({
+                    "component": "herdr_transition",
+                    "kind": "herdr_transition.install_failed",
+                    "reason": reason,
+                }));
+            }
+        });
+    }
     Ok(RunningDaemon {
         port,
         token,
@@ -652,6 +691,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         core,
         move_gate,
         role_ended,
+        herdr_move,
         own: None,
     })
 }

@@ -2173,6 +2173,28 @@ export type HerdrTakeover = {
 };
 
 /**
+ * What this machine's Herdr save offers to move into Hide's own engine, and what the last move came to (PRD
+ * engine-bundle-4-herdr-removal D-6 to D-8). `move` while Hide's own Herdr runs, which moving stops (the question);
+ * `import` for any other save, read only; `result` when only the last move's left-out workspaces wait to be read.
+ * `herdr_running` says a Herdr runs on with the save's conversations open, so an import opens them as shells.
+ */
+export type HerdrImport = {
+  kind: "move" | "import" | "result";
+  stage: "offered" | "moving" | "failed" | "moved";
+  workspaces: number;
+  tabs: number;
+  agents: number;
+  /** Conversations an earlier import left open in their Herdr, which an import resumes now that it is closed (B15). */
+  waiting: number;
+  herdr_running: boolean;
+  failure: "not_stopped" | "unreadable" | null;
+  reason: string | null;
+  refused: { label: string; reason: string }[];
+  /** The device whose save this is; absent for this machine's (B18). */
+  device?: string;
+};
+
+/**
  * The Herdr this app ships and the operator's own `herdr`, as Settings > About
  * names them; `path_herdr` is null when the operator's terminal finds none.
  * `behind` says its commands are refused by a server on Hide's protocol, and
@@ -3266,6 +3288,10 @@ export type SnapshotRest = {
     herdr?: HerdrStatus;
     /** What Hide offers for the operator's own older Herdr server on this machine (PRD herdr-takeover); absent when nothing. */
     herdr_takeover?: HerdrTakeover | null;
+    /** What this machine's Herdr save offers to move into Hide's own engine; absent when nothing (B11). */
+    herdr_import?: HerdrImport | null;
+    /** What each device of Hide's own engine offers, each naming its `device` (B18). */
+    herdr_import_devices?: HerdrImport[];
     herdr_versions?: HerdrVersions | null;
     remote?: RemoteStatus[];
     environment?: EnvironmentStatus[];
