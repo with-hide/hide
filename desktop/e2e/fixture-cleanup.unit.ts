@@ -46,7 +46,7 @@ vi.mock("../../web/e2e/shims/build", () => ({
   copyFixtureShim: vi.fn((name: string, executable: string) => {
     const privateRoot = path.dirname(path.dirname(executable));
     if (name !== "noop" || path.basename(executable) !== "hide-open.exe" || path.basename(path.dirname(executable)) !== "bin"
-      || !path.basename(privateRoot).startsWith("hide-desktop-")) {
+      || !path.basename(privateRoot).startsWith("hdd-")) {
       throw new Error(`unexpected fixture program copy: ${name} -> ${executable}`);
     }
     fs.writeFileSync(executable, Buffer.alloc(0), { flag: "wx" });

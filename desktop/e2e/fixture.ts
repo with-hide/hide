@@ -65,7 +65,9 @@ export type IsolatedEngine = Partial<Pick<HerdrFixture, "socket" | "bin" | "root
 export function isolate(herdr: IsolatedEngine, label: string): Isolated {
   const own = !herdr.socket;
   if (isolations.size >= MAX_ISOLATIONS) throw new Error(`desktop fixture has ${MAX_ISOLATIONS} unclosed homes; clean an owned fixture before creating another`);
-  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), `hide-desktop-${label}-`)));
+  // macOS's temporary base already uses most of a Unix socket's path bound.
+  // Keep the state's holder socket short regardless of the test's label.
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "hdd-")));
   const home = path.join(root, "home");
   let env: Record<string, string>;
   try {
@@ -121,7 +123,7 @@ export function isolate(herdr: IsolatedEngine, label: string): Isolated {
     const live = [...owner.candidates].filter((child) => child.exitCode === null && child.signalCode === null);
     if (live.length || owner.launching) {
       const pids = live.map((child) => child.pid ?? "unavailable").join(", ");
-      throw new Error(`fixture cleanup incomplete; preserve ${root}: candidate exit unconfirmed (PIDs: ${pids || "none"}, pending launches: ${owner.launching}); close only the recorded owned candidates, confirm their exit, then call cleanup() again`);
+      throw new Error(`fixture cleanup incomplete (${label}); preserve ${root}: candidate exit unconfirmed (PIDs: ${pids || "none"}, pending launches: ${owner.launching}); close only the recorded owned candidates, confirm their exit, then call cleanup() again`);
     }
     // Read before the root goes: an exception nothing in the host caught fails
     // the test with its stack, instead of passing unseen (issue 675).
