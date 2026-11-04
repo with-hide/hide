@@ -10,6 +10,7 @@ schema = 1
 id = "kimi"
 name = "Kimi Code"
 executables = ["kimi", "kimi-code"]
+packages = ["@moonshot-ai/kimi-code"]
 hooks = "none"
 
 [resume]

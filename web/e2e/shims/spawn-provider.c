@@ -507,6 +507,14 @@ int main(int argc, char **argv) {
   if (terminal_write(ready, sizeof ready - 1) != (fixture_count_t)(sizeof ready - 1)) return 1;
   static const char prompt[] = "\r\n────────────────\r\n❯ \r\n────────────────\r\n";
   if (terminal_write(prompt, sizeof prompt - 1) != (fixture_count_t)(sizeof prompt - 1)) return 1;
+  const char *root = getenv("HIDE_E2E_ROOT");
+  if (root) {
+    char marker[4096];
+    if (snprintf(marker, sizeof marker, "%s/terminal-ready-%s", root, pane) >= (int)sizeof marker) return 1;
+    for (char *at = marker + strlen(root); *at; at++) if (*at == ':') *at = '-';
+    FILE *file = file_open(marker);
+    if (!file || fclose(file) != 0) return 1;
+  }
   char bytes[16384];
   /* Everything else typed is echoed, as the `claude` stand-in echoes it
      (`claude-shim.c`), so a spec draws the screens an engine reads an

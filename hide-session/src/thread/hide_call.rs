@@ -11,7 +11,7 @@ use serde_json::Value;
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum HideCall {
-    /// `hide plan set|node|approve|drop`: the session's own plan moved.
+    /// `hide task set|node|approve|drop`: the session's own plan moved.
     Plan,
     /// `hide agent spawn`: a new session, by the name and intent it was
     /// given, and the agent id its answer named when the call printed one.
@@ -39,7 +39,7 @@ pub enum ViewKind {
 
 /// The `hide` command a shell call's command line ran, the first one when
 /// it ran several; `None` when it ran none a thread draws as a part (a read
-/// such as `hide plan show` or `hide inbox` stays a shell call).
+/// such as `hide task show` or `hide inbox` stays a shell call).
 pub fn hide_call(command: &str) -> Option<HideCall> {
     simple_commands(command)
         .iter()
@@ -76,7 +76,8 @@ fn read(args: &[String]) -> Option<HideCall> {
     let sub = rest.first().map(String::as_str);
     let tail = rest.get(1..).unwrap_or_default();
     match (verb.as_str(), sub) {
-        ("plan", Some("set" | "node" | "approve" | "drop")) => Some(HideCall::Plan),
+        // `plan` is the name `task` had; a session file still holds it.
+        ("task" | "plan", Some("set" | "node" | "approve" | "drop")) => Some(HideCall::Plan),
         ("agent", Some("spawn")) => Some(HideCall::Spawn {
             name: option(tail, "--name"),
             intent: option(tail, "--intent"),
@@ -146,10 +147,12 @@ mod tests {
     fn each_hide_command_a_thread_draws_is_read_as_its_part() {
         let cases = [
             (
-                "hide plan set --json '{\"nodes\":[]}'",
+                "hide task set --json '{\"nodes\":[]}'",
                 Some(HideCall::Plan),
             ),
-            ("hide plan node core --status done", Some(HideCall::Plan)),
+            ("hide task node core --status done", Some(HideCall::Plan)),
+            ("hide task show", None),
+            ("hide plan set --json '{}'", Some(HideCall::Plan)),
             ("hide plan show", None),
             (
                 "hide agent spawn --name review --intent m:review --kind claude --repo . --branch main",
@@ -189,7 +192,7 @@ mod tests {
             ),
             ("hide inbox", None),
             ("hidden plan set", None),
-            ("echo hide plan set", None),
+            ("echo hide task set", None),
         ];
         for (command, expected) in cases {
             assert_eq!(hide_call(command), expected, "{command}");

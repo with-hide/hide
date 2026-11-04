@@ -1,9 +1,9 @@
 // Chapter 8's world: one Claude agent the learner asks for a bigger change,
 // plan first. Whatever words the learner sends play the next part of the
 // script, since a practice understands no words: the agent puts up a plan
-// for review (`hide plan set --ask`), which the core lays on its row as a
+// for review (`hide task set --ask`), which the core lays on its row as a
 // question, and the next words are the review's answer, so the agent approves
-// its plan (`hide plan approve`) and starts on the first step. Approval is a
+// its plan (`hide task approve`) and starts on the first step. Approval is a
 // conversation, as in Hide: no event of the shell's approves a plan.
 
 import type { AgentRow, AgentState, AskSubject, DetailItem, PaneHeader, PlanStep, PlanView, StatusTone, WorkSession } from "../../snapshot";
@@ -137,7 +137,7 @@ function submit(model: PlanModel): PlanModel {
     case 0:
       return { ...sent, stage: 1, createdAt: now, updatedAt: now, desk: row((one) => reviewing(one, SUBJECT, now)) };
     case 1:
-      // `hide plan approve` lifts the question; the agent is at work on the first step.
+      // `hide task approve` lifts the question; the agent is at work on the first step.
       return {
         ...sent, stage: 2, updatedAt: now,
         desk: row(() => agent({ pane_id: LEAD, identity_label: LABEL, agent_kind: "claude", group: "working", mark: "going", status_code: "working", activity: "working", elapsed: "1s", session_id: SESSION.session_id })),
@@ -224,14 +224,14 @@ function leadScreen(model: PlanModel, cols: number): string {
   if (model.stage >= 1) {
     rows.push(
       ...said(model.said[0]!),
-      ...ran("hide plan set --ask …", `Plan put up for review · ${STEPS.length} steps`),
+      ...ran("hide task set --ask …", `Plan put up for review · ${STEPS.length} steps`),
       "● Here is the plan before I change anything:",
       ...STEPS.map((step, index) => `  ${index + 1}. ${step.title}`),
       "  Tell me to go, or what to change.",
     );
   }
   if (model.stage >= 2) {
-    rows.push(...said(model.said[1]!), ...ran("hide plan approve", "Plan approved"), ...ran(`hide plan node ${STEPS[0]!.key} --status working`, STEPS[0]!.title));
+    rows.push(...said(model.said[1]!), ...ran("hide task approve", "Plan approved"), ...ran(`hide task node ${STEPS[0]!.key} --status working`, STEPS[0]!.title));
     for (const later of model.said.slice(2)) rows.push(...said(later), "● Noted. I'll fold that into the plan as I go.");
     rows.push("", `${CLAUDE}✻ ${FIRST_LINE}… ${DIM}(esc to interrupt)${RESET}`);
   }

@@ -489,6 +489,55 @@ fn the_own_engine_meets_the_engine_contract() {
     meets_the_contract(&built.engine, &built.folder, || built.stop());
 }
 
+/// An ordinary program above the shell must never receive an agent's
+/// launch line. This crosses the real holder and the OS process boundary.
+#[test]
+#[ignore = "needs the built pane holder: HIDE_TEST_HOLDER_BIN"]
+fn the_own_engine_refuses_an_agent_start_over_a_running_program() {
+    struct Running(BuiltHolders);
+    impl Drop for Running {
+        fn drop(&mut self) {
+            self.0.stop();
+        }
+    }
+    let running = Running(BuiltHolders::start());
+    let built = &running.0;
+    let engine = &built.engine;
+    let (_, _, pane) = engine
+        .create_workspace(WAIT, &built.folder, "busy", false, BTreeMap::new())
+        .unwrap();
+    prompted(engine, &pane);
+    until("the shell alone holds its terminal", || {
+        engine
+            .pane_processes(WAIT, &pane)
+            .is_ok_and(|processes| processes.shell_holds_terminal())
+    });
+    let command = if cfg!(windows) {
+        "ping.exe -n 60 127.0.0.1"
+    } else {
+        "sleep 60"
+    };
+    engine.submit_text(WAIT, &pane, command).unwrap();
+    until("the program runs above the shell", || {
+        engine.pane_processes(WAIT, &pane).is_ok_and(|processes| {
+            processes.foreground_process_group_id.is_some()
+                && processes.foreground_process_group_id != processes.shell_pid
+        })
+    });
+    let start = engine
+        .prepare_start(super::AgentLaunch {
+            pane_id: pane.clone(),
+            name: "refused".into(),
+            kind: "claude".into(),
+            args: Vec::new(),
+            codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
+        })
+        .unwrap();
+    let error = engine.start_agent(WAIT, &start).unwrap_err();
+    assert_eq!(error.code(), Some("agent_pane_busy"));
+    assert!(engine.agents(WAIT).unwrap().is_empty());
+}
+
 /// A caller may inspect a tab or split as soon as creation answers. Each
 /// first read crosses the real node and holder, without a readiness poll.
 #[test]
@@ -1097,7 +1146,6 @@ fn an_own_engine_claude_slept_with_its_hooked_conversation_wakes_resuming_it() {
     built.stop();
 }
 
-#[cfg(unix)]
 #[allow(clippy::disallowed_methods)] // a polling helper bounded by a deadline
 fn until(what: &str, done: impl Fn() -> bool) {
     let deadline = Instant::now() + SHOWN_WITHIN;

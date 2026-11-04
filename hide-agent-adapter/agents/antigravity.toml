@@ -8,6 +8,7 @@ schema = 1
 id = "antigravity"
 name = "Antigravity"
 executables = ["agy"]
+packages = []
 aliases = ["agy", "antigravity-cli", "antigravity_cli"]
 home = "~/.gemini/config"
 hooks = "agy"

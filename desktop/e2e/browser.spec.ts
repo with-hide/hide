@@ -1157,6 +1157,29 @@ test("expand: Zoom pane in a focused page expands the lane and back while the pa
   expect((await zoomOf(pageA)).focused, "the page lost the keyboard to the shell").toBe(true);
 });
 
+test("directional terminal menu commands leave a native page holding its next input", { tag: NEEDS_FOCUS }, async () => {
+  ({ app } = await launch(run.env));
+  await fitWindow(app, WINDOW);
+  const page = await app.firstWindow();
+  await enterWorkspace(page, "fixture");
+  const address = `${origin}/a.html`;
+  expect(await openFromCli(address, ["--wait"])).toMatchObject({ ok: true });
+  await expect.poll(async () => (await viewOf(address)).visible).toBe(true);
+  await focusPage(app, { url: address });
+  await inPage(address, "document.querySelector('input').focus()");
+  for (const direction of ["left", "right", "up", "down"] as const) {
+    await menuClick(`focus_pane_${direction}`);
+    await expect.poll(async () => (await zoomOf(address)).focused).toBe(true);
+  }
+  await app.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows().find((candidate) => candidate.getParentWindow() === null)!;
+    const contents = [window.webContents, ...window.contentView.children.map((view) => (view as unknown as { webContents: Electron.WebContents }).webContents)].find((contents) => contents.isFocused());
+    if (!contents) throw new Error("no page holds the keyboard");
+    contents.insertText("page-kept-input");
+  });
+  await expect.poll(() => inPage(address, "document.querySelector('input').value")).toBe("page-kept-input");
+});
+
 /** The documents expanded over the body with the tool column closed, so their areas have the width to sit side by side (PRD right-lane B8; lane-two-columns B14, B20). */
 async function widenFiles(page: Page): Promise<void> {
   await showDocuments(page);

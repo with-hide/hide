@@ -337,7 +337,7 @@ export function MissionScene({ params }: { params: URLSearchParams }) {
     const conductor = { pane_id: CONDUCTOR_PANE, device_id: "local", mark: closed ? "asleep" : state === "decision" ? "quiet" : "going" };
     const agents = (pane ? [{ pane_id: CONDUCTOR_PANE, device_id: "local" }] : state === "no-conductor" || state === "failed" ? [] : state === "decision" ? [conductor, raised] : [conductor]) as unknown as AgentRow[];
     useShellStore.setState({ rest: fixture.rest, agents, connection: "live" });
-    // The popover pinned, as a press, the Show plan chord or a first plan watched leaves it.
+    // The popover pinned, as a press, the Show task steps chord or a first plan watched leaves it.
     useUiStore.setState({ planPane: pane ? CONDUCTOR_PANE : null });
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");

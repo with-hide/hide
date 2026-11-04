@@ -6,6 +6,7 @@
 // it; this one runs the same everywhere and its log can.
 import fs from "node:fs";
 import { fixtureProgram } from "./platform-fixture";
+import { paneCommandLine, type PaneShell } from "./herdr-fixture";
 
 // argv[2] is the log path. Raw mode makes each key reach the program as its
 // bytes; a pipe has no raw mode and delivers the same bytes unchanged.
@@ -30,9 +31,9 @@ process.stdin.on("data", (chunk) => {
  * The pager program made in `dir`, as the command line that runs it and
  * appends everything it reads to `log`; `bytesReceived` reads that log.
  */
-export function altScreenProgram(dir: string, log: string): { command: string } {
+export function altScreenProgram(dir: string, log: string, shell: PaneShell): { command: string } {
   const executable = fixtureProgram(dir, "alt-screen", SCRIPT);
-  return { command: `"${executable}" "${log}"` };
+  return { command: paneCommandLine(shell, [executable, log]) };
 }
 
 /** Every byte the pager has read so far, in order. */

@@ -76,6 +76,8 @@ pub struct Definition {
     pub id: String,
     pub name: String,
     pub executables: Vec<String>,
+    /// Exact npm package identities for scripts whose file names are generic.
+    pub packages: Vec<String>,
     pub aliases: Vec<String>,
     /// The agent's own folder under the account's home, as its parts.
     pub home: Option<Vec<String>>,
@@ -261,6 +263,7 @@ fn new_definition(
         id: file.id,
         name: display,
         executables,
+        packages: file.packages.unwrap_or_default(),
         aliases: file.aliases.unwrap_or_default(),
         home: file.home,
         hooks,
@@ -300,6 +303,9 @@ fn based_on(
         executables: file
             .executables
             .unwrap_or_else(|| builtin.executables.clone()),
+        // Like aliases, package identities belong to this definition,
+        // rather than claiming the copied agent's identity a second time.
+        packages: file.packages.unwrap_or_default(),
         aliases: file.aliases.unwrap_or_default(),
         home: file.home.or_else(|| builtin.home.clone()),
         hooks: builtin.hooks,
@@ -328,6 +334,7 @@ fn screen_override(name: &str, (file, screen): (Fields, Option<Rules>)) -> Resul
         ("name", file.name.is_some()),
         ("based_on", file.based_on.is_some()),
         ("executables", file.executables.is_some()),
+        ("packages", file.packages.is_some()),
         ("aliases", file.aliases.is_some()),
         ("home", file.home.is_some()),
         ("hooks", file.hooks.is_some()),
@@ -361,6 +368,7 @@ fn screen_override(name: &str, (file, screen): (Fields, Option<Rules>)) -> Resul
 struct Claims {
     names: BTreeMap<String, String>,
     executables: BTreeMap<String, String>,
+    packages: BTreeMap<String, String>,
 }
 
 impl Claims {
@@ -380,12 +388,22 @@ impl Claims {
         }) {
             return Err(format!("{file}: program {executable} is taken by {owner}"));
         }
+        if let Some((package, owner)) = definition
+            .packages
+            .iter()
+            .find_map(|package| self.packages.get(package).map(|owner| (package, owner)))
+        {
+            return Err(format!("{file}: package {package} is taken by {owner}"));
+        }
         for name in names {
             self.names.insert(name.clone(), definition.id.clone());
         }
         for executable in &definition.executables {
             self.executables
                 .insert(executable.clone(), definition.id.clone());
+        }
+        for package in &definition.packages {
+            self.packages.insert(package.clone(), definition.id.clone());
         }
         Ok(())
     }

@@ -703,7 +703,7 @@ it("counts a worker's plan at the end of its card's run line, and keeps a finish
   try {
     // One number at the end of the run line, never a line of its own.
     expect(["live", "over", "none"].map((key) => card(map, key).querySelector("[data-node-run] [data-node-plan-count]")?.textContent ?? null)).toEqual(["· 3/5", "· 4/4", null]);
-    expect(card(map, "live").getAttribute("aria-label")).toContain("Plan 3/5");
+    expect(card(map, "live").getAttribute("aria-label")).toContain("Task steps 3/5");
     await act(async () => card(map, "live").click());
     const live = map.q('[data-mission-detail="live"]')!;
     expect(live.querySelector("[data-panel-plan]")?.getAttribute("data-panel-plan")).toBe("open");

@@ -261,7 +261,7 @@ impl Watches {
     fn read_watch(&self, pane: &str, socket: &Path, generation: u64) -> Ended {
         let opened = hide_holder_protocol::watch(
             socket,
-            vec![Capability::Facts],
+            vec![Capability::Facts, Capability::ProgramPackage],
             Instant::now() + OPEN_LIMIT,
         );
         if let Some(version) = sends_no_facts(&opened) {
@@ -470,6 +470,7 @@ fn pane_facts(pane: &str, facts: Facts) -> PaneFacts {
         foreground: facts.foreground.map(|program| ForegroundProgram {
             pid: program.pid,
             name: program.name,
+            package: program.package,
             argv: program.argv,
         }),
         screen: match facts.screen {
