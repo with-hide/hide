@@ -277,6 +277,12 @@ pub(super) struct Live {
     /// is stays as it was and it takes no input until it can: read as the
     /// shell holding it, it would have ended the agent and its session.
     pub(super) foreground_unread: bool,
+    /// Its definition declares no screen rules (omp), so its screen never
+    /// reads at rest and a start cannot wait for that: it settles on what
+    /// the holder can say, its program shown and reading keys, and the
+    /// settle. Waiting for a rest that never comes held every omp start
+    /// pending to its 120 s deadline (journey 871294628).
+    pub(super) rest_unread: bool,
     pub(super) status: Status,
     /// One more each time its status changed, from the engine's own count.
     pub(super) seq: u64,
@@ -351,11 +357,12 @@ impl PaneAgent {
     }
 
     /// Whether a start made at `started` has settled by `now`: its program
-    /// takes input ([`Self::interactive`]) and its screen rests, at least
-    /// [`START_SETTLE`] after the start.
+    /// takes input ([`Self::interactive`]) and its screen rests, or cannot be
+    /// read at rest ([`Live::rest_unread`]), at least [`START_SETTLE`] after
+    /// the start.
     fn settled(&self, started: Instant, now: Instant) -> bool {
         self.interactive()
-            && matches!(self.live.status, Status::Idle | Status::Done)
+            && (matches!(self.live.status, Status::Idle | Status::Done) || self.live.rest_unread)
             && now.duration_since(started) >= START_SETTLE
     }
 }
@@ -486,6 +493,8 @@ pub(super) fn apply(
     }
     applied.rules_for = live.rules_due(agent.as_ref());
     if let Some(current) = agent.as_mut().filter(|current| current.live.shown) {
+        current.live.rest_unread =
+            definition(catalog, &current.kind).is_none_or(|definition| definition.screen.is_none());
         // A start that settled on what the screen read last stays settled
         // whatever this screen reads, as Herdr's active agent does.
         if current
@@ -765,6 +774,46 @@ mod tests {
         assert!(agent.live.shown);
         assert_eq!(agent.name.as_deref(), Some("worker"));
         assert_eq!(agent.live.status, Status::Unknown);
+    }
+
+    /// An agent whose definition has no screen rules (omp) never reads at
+    /// rest, so its start settles once its program reads keys and the settle
+    /// passed, not at its 120 s deadline; one with rules still waits for its
+    /// screen to rest.
+    #[test]
+    fn a_start_without_screen_rules_settles_once_its_program_reads_keys() {
+        let at = |name: &str, line_editing| PaneFacts {
+            foreground: program(name),
+            line_editing,
+            ..PaneFacts::default()
+        };
+        let mut pane = Pane::new();
+        pane.agent = Some(PaneAgent::started("omp", Some("worker"), None));
+        pane.facts(at("omp", Some(true)));
+        let started = Instant::now() - START_SETTLE;
+        pane.agent.as_mut().unwrap().live.started = Some(started);
+        assert!(
+            pane.agent.as_ref().unwrap().launch_pending(Instant::now()),
+            "its terminal still edits lines"
+        );
+        pane.facts(at("omp", Some(false)));
+        let agent = pane.agent.as_mut().unwrap();
+        assert_eq!(agent.live.status, Status::Unknown);
+        assert!(agent.launch_pending(Instant::now()), "a settle of its own");
+        agent.live.started = Some(Instant::now() - START_SETTLE);
+        assert!(!agent.launch_pending(Instant::now()));
+
+        let mut pane = Pane::new();
+        pane.agent = Some(PaneAgent::started("claude-code", Some("worker"), None));
+        pane.facts(PaneFacts {
+            screen: read(ScreenState::Working),
+            ..at("claude", Some(false))
+        });
+        pane.agent.as_mut().unwrap().live.started = Some(started);
+        assert!(
+            pane.agent.as_ref().unwrap().launch_pending(Instant::now()),
+            "a screen with rules that does not rest keeps its start pending"
+        );
     }
 
     /// Herdr's `launch_pending` for a start of its own: the agent takes

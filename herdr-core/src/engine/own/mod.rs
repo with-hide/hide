@@ -1804,6 +1804,10 @@ impl<'g> Engine for OwnEngine<'g> {
         topology.pane_token(pane, token)
     }
 
+    /// The agent's status, `unknown` while it takes no input yet: a screen
+    /// no rule matches reads idle as soon as the program shows, before it
+    /// draws or reads keys, and agy's fork typed its `/fork` on that idle
+    /// into a program that dropped it (journey 871294628).
     fn pane_agent_status(&self, _wait: Wait, pane: &str) -> Answer<String> {
         self.check()?;
         let now = std::time::Instant::now();
@@ -1813,6 +1817,7 @@ impl<'g> Engine for OwnEngine<'g> {
             .agent
             .as_ref()
             .filter(|agent| agent.listed(now))
+            .filter(|agent| agent.interactive() && !agent.launch_pending(now))
             .map_or(agents::Status::Unknown, |agent| agent.live.status)
             .as_str()
             .to_owned())
@@ -3842,6 +3847,12 @@ mod tests {
         assert_eq!(starting.readiness, Readiness::Launching);
         assert_eq!(starting.kind.as_deref(), Some("claude"));
         assert_eq!(starting.status, "unknown");
+        // Shown with a screen no rule matches, it reads idle, but takes no
+        // input until its start settles: a fork waiting for idle waits.
+        holders.say(&pane, &running("claude", ScreenState::Idle));
+        assert_eq!(engine.agent_state(WAIT, "worker").unwrap().status, "idle");
+        assert_eq!(engine.pane_agent_status(WAIT, &pane).unwrap(), "unknown");
+        holders.say(&pane, &running("claude", ScreenState::Working));
 
         settle_start(&engine, &pane);
         holders.say(&pane, &running("claude", ScreenState::Working));
