@@ -758,6 +758,7 @@ Only Herdr's own layout marks a request's pane laid out, never a pane Hide drew 
 
 Every tab creation and pane operation Hide starts leaves one `pane_op.timing` line in the diagnostic log with each stage's milliseconds after the request: Herdr's answer, the first drawn snapshot, the first and the first layout event, the confirmed layout ingested, its snapshot sent, and the pane's first frame (D-14, `runtime/op_timing.rs`).
 Herdr's share is `layout_event - herdr_ack`; the rest is Hide's.
+On the core's own engine, whose own layout already holds a created pane when it answers, `drawn` is the first snapshot sent whose layout holds the pane, and for a new tab shows that tab, so the stage reads the same on both engines.
 The record carries ids and times only, and at most `OP_TIMING_LIMIT` are open at once.
 
 The notifier announces once per burst rather than once per change.
