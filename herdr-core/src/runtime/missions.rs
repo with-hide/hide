@@ -972,12 +972,17 @@ impl Runtime {
         if let Some(id) = taken {
             // A take whose workers cannot be handed over is not made, so
             // asking it again tries again.
+            let former = before
+                .get(&id)
+                .and_then(|mission| mission.conductor.agent_id.clone());
             let conductor = self
                 .missions
                 .book
                 .get(&id)
                 .and_then(|mission| mission.conductor.agent_id.clone());
-            if let Err(code) = self.adopt_mission_workers(&id, conductor.as_deref()) {
+            if let Err(code) =
+                self.adopt_mission_workers(&id, conductor.as_deref(), former.as_deref())
+            {
                 self.missions.book = before;
                 self.save_missions();
                 return Err(code);
@@ -1536,13 +1541,21 @@ impl Runtime {
         Ok(true)
     }
 
-    /// Hands the workers of `mission` to the registration that took it over,
-    /// so the heir's retry of a start finds the worker it made, and the
-    /// workers' reports and watches reach the Conductor there now. It is
-    /// queued before the takeover answers, so it lands before any command
-    /// the heir sends next. A heir with no registration yet is handed them
-    /// when it registers to start a worker (`coordination`, the reserve).
-    fn adopt_mission_workers(&self, mission: &str, conductor: Option<&str>) -> Result<(), String> {
+    /// Hands the workers of `mission`, and every other child of the
+    /// registration `former` that conducted it, to the registration that
+    /// took it over, so the heir's retry of a start finds the worker it
+    /// made, and the children's reports and watches reach the Conductor
+    /// there now. It is queued before the takeover answers, so it lands
+    /// before any command the heir sends next. `hide mission take` registers
+    /// the heir before it asks (`Command::RegisterSelf`); a heir with no
+    /// registration still is handed the mission's workers when it registers
+    /// to start one (`coordination`, the reserve).
+    fn adopt_mission_workers(
+        &self,
+        mission: &str,
+        conductor: Option<&str>,
+        former: Option<&str>,
+    ) -> Result<(), String> {
         let Some(conductor) = conductor else {
             return Ok(());
         };
@@ -1558,6 +1571,7 @@ impl Runtime {
                 mutation: Box::new(crate::coordination::Mutation::AdoptMissionWorkers {
                     mission: mission.to_owned(),
                     conductor: conductor.to_owned(),
+                    former: former.map(str::to_owned),
                 }),
             })
             .inspect_err(|code| {
@@ -1688,7 +1702,9 @@ impl Runtime {
             };
             let former = std::mem::replace(&mut mission.conductor, conductor);
             mission.updated_at_unix_ms = now;
-            if let Err(code) = self.adopt_mission_workers(&id, agent_id.as_deref()) {
+            if let Err(code) =
+                self.adopt_mission_workers(&id, agent_id.as_deref(), former.agent_id.as_deref())
+            {
                 // Not moved, so the next sight of the pane tries again.
                 if let Some(mission) = self.missions.book.get_mut(&id) {
                     mission.conductor = former;

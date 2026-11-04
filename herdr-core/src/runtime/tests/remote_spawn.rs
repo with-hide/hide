@@ -1430,6 +1430,65 @@ fn an_explicit_registration_keeps_a_session_past_256_bytes() {
     assert_eq!(local.methods().len(), asked);
 }
 
+/// `hide mission take` registers the session taking the mission over from
+/// what this machine's Herdr reports of its pane, so the former Conductor's
+/// children have a registration to move to; asked again it answers the
+/// same registration without asking Herdr (B43).
+#[test]
+fn a_session_registers_itself_once_from_its_own_pane() {
+    let spawner = spawner();
+    let heir = Actor {
+        pane_id: "recipient".into(),
+        name: "heir".into(),
+        kind: "codex".into(),
+        device_id: crate::node::TEST_NODE.into(),
+        session: crate::engine::tokens::session_digest("native-heir"),
+    };
+    let local = FakeHerdr::start("register-self", move |method, _| match method {
+        "agent.list" => json!({"type": "agent_list", "agents": [{
+            "pane_id": "recipient", "workspace_id": "w5", "tab_id": "w5:t1",
+            "terminal_id": "heir-terminal", "revision": 1, "focused": false,
+            "agent_status": "idle", "agent": "codex", "name": "heir",
+            "agent_session": {"source": "herdr:codex", "agent": "codex",
+                "kind": "id", "value": "native-heir"}}]}),
+        other => panic!("unexpected {other}"),
+    });
+    {
+        let mut runtime = spawner.runtime.lock().unwrap();
+        crate::runtime::delivery::tests::set_live(&mut runtime, Some(&local));
+        let payload: crate::sidebar::SessionSnapshotPayload =
+            serde_json::from_value(json!({"agents":[
+                {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working",
+                    "state_change_seq":1,"lineage_session":spawner.actor.session},
+                {"id":"recipient","pane_id":"recipient","agent":"codex","agent_status":"idle",
+                    "state_change_seq":1,"lineage_session":heir.session},
+            ]}))
+            .unwrap();
+        runtime.observe_delivery_laid(crate::node::TEST_NODE, &payload, None, None);
+    }
+    let register = || {
+        crate::coordination::run(
+            spawner.client.clone(),
+            authority(&heir),
+            heir.clone(),
+            Command::RegisterSelf {
+                project: Some("/checkouts/fixture".into()),
+            },
+        )
+    };
+    let first = register().unwrap();
+    let id = first["id"].as_str().unwrap().to_owned();
+    let ledger = spawner.ledger();
+    let record = ledger.agents.iter().find(|agent| agent.id == id).unwrap();
+    assert!(record.actor.same_identity(&heir));
+    assert_eq!(record.parent, None);
+    assert_eq!(record.project.as_deref(), Some("/checkouts/fixture"));
+    let asked = local.methods().len();
+    assert_eq!(register().unwrap()["id"], id.as_str());
+    assert_eq!(local.methods().len(), asked, "the registration it has");
+    assert_eq!(spawner.ledger().agents.len(), 2);
+}
+
 /// D-76: a spawn waiting in Desk's queue starts nothing while Desk is
 /// switched off, even with a place free, and starts once Desk is on again.
 #[test]
