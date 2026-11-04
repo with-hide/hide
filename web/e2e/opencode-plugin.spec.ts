@@ -69,11 +69,7 @@ async function hide(host: Host, ...args: string[]): Promise<{ ok?: boolean; resu
   return JSON.parse(String(ran.stdout)) as { ok?: boolean; result?: Record<string, unknown> };
 }
 
-// Herdr only: bundle 4 PR A (b4-transition) owns the first-session report from the OpenCode plugin. Herdr takes the stand-in's
-// session from its integration report, but on the own engine hook-facts hold `session: null` for the pane and a
-// start resuming that session is refused `session_route_unconfirmed` without an OpenCode session file, so a
-// letter sent from the pane fails `native_identity_required`.
-test("a letter rides the recipient's next prompt and is confirmed only once OpenCode stored it @herdr", async ({ page }) => {
+test("a letter rides the recipient's next prompt and is confirmed only once OpenCode stored it", async ({ page }) => {
   const stack = await start("opencode-letter");
   try {
     // The plugin registered the hooks it works through in a managed pane.

@@ -130,6 +130,8 @@ ALLOWED = {
         8, "carries a WSL device's Herdr connection; bundle 3 moves panes to the node"),
     "hide-node-link/src/device.rs": (
         2, "names a device's Herdr connection in the link contract; bundle 3 moves panes to the node"),
+    "hide-host/src/herdr_save.rs": (
+        1, "stops Hide's Herdr when its machine's session moves into the core's own engine; bundle 4 PR B deletes Herdr"),
     "hide-host/src/pane_peer.rs": (
         3, "proves a pane's process on a device against its Herdr; bundle 3 proves it with `HIDE_PANE_ID`"),
 }

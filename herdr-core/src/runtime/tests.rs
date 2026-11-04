@@ -62,6 +62,8 @@ mod group_start_admission;
 mod group_tabs;
 mod group_tabs_remote;
 mod guardrails;
+#[path = "tests/herdr_import.rs"]
+mod herdr_import;
 #[path = "tests/herdr_takeover.rs"]
 mod herdr_takeover;
 mod hide_ai_devices;

@@ -357,6 +357,8 @@ async function onEvent(state, client, event) {
     remember(state, state.parents, info.id, info.parentID ?? null, parentEviction(state));
     // A child still running is never forgotten: it would leave the working count while it works.
     if (info.parentID) remember(state, state.children, info.id, { busy: false, ran: false }, [(child) => !child.busy]);
+    // A new root session is the pane's from its start, so letters and the inbox reach it before its first turn.
+    else await helper(state, "session", { session_id: info.id }, COUNT_BUDGET_MS);
     return;
   }
   if (type === "session.status") {

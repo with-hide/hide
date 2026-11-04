@@ -193,6 +193,8 @@ function setup(api) {
     state.turn = null;
     place = root ? api.data.session.get(root)?.location : undefined;
     attach(false);
+    // The session the pane now shows is its session, so letters and the inbox reach it before its first turn.
+    if (root) void helper(state, "session", { session_id: root }, COUNT_BUDGET_MS, state.pane);
     void publishCounts(state, api, true);
   };
   const offAsk = rpc.events.on("ask", (event) => {

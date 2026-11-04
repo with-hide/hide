@@ -107,6 +107,15 @@ STORES = {
         "writer's own access type, and a file it cannot use moved into its "
         "backups folder, the newest three kept",
     ),
+    "herdr-core/src/herdr_import.rs": (
+        10,
+        "the core's record of a Herdr session's move beside the engine's saved "
+        "layout (PRD engine-bundle-4-herdr-removal D-25) and the save a "
+        "device's node read, kept there until the next start imports it, both "
+        "written with the durable writer's own access type; and the core's "
+        "delivery ledger, whose registrations the move hands over before the "
+        "core runs",
+    ),
     "herdr-core/src/labels/mod.rs": (
         1,
         "reads the operator's AI choice, a core store beside the core's "

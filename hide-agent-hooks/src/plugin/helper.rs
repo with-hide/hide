@@ -167,6 +167,7 @@ pub fn run(agent: &str, operation: Option<&str>, started: Instant) {
             subagents(&home, &agent, input, started)
         }
         Some("turn") => turn(&home, &agent, input, started),
+        Some("session") => session_start(&home, &agent, input, started),
         _ => json!({}),
     };
     answer(&output);
@@ -541,6 +542,47 @@ fn turn(home: &Path, agent: &Agent, input: Input, started: Instant) -> Value {
         )
     });
     let _ = report::record_outcome(home, &pane, agent.runtime(), "turn", &outcome);
+    json!({ "reported": outcome.is_ok() })
+}
+
+/// The session the pane's agent started or was switched to, reported as a
+/// command hook's session start is, so the core knows the pane's session
+/// before its first turn and letters and the inbox reach it from the start
+/// (PRD engine-bundle-4-herdr-removal, mission c3): on the core's own engine
+/// nothing else names it, where Herdr's integration did. The counts are the
+/// script's to send; a session start says nothing of them.
+fn session_start(home: &Path, agent: &Agent, input: Input, started: Instant) -> Value {
+    let Some(pane) = pane() else {
+        return json!({});
+    };
+    let who = reporter(agent, &input);
+    if input.guard_only || who.session.is_none() {
+        return json!({});
+    }
+    let outcome = counters::apply(
+        home,
+        &pane,
+        counters::Change::None,
+        who,
+        counters::Said::Nothing,
+        None,
+    )
+    .map_err(|error| format!("the pane's record could not be changed: {error}"))
+    .and_then(|_| {
+        report::report(
+            &report::HookStatusReport {
+                runtime: agent.runtime().to_owned(),
+                version: hide_agent_hooks::HOOK_VERSION,
+                session: who.session.map(str::to_owned),
+                turn: None,
+                counts: None,
+                session_start: true,
+                waiting: None,
+            },
+            started + report::REPORT_TIMEOUT,
+        )
+    });
+    let _ = report::record_outcome(home, &pane, agent.runtime(), "session start", &outcome);
     json!({ "reported": outcome.is_ok() })
 }
 

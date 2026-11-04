@@ -289,10 +289,14 @@ fn run_basic_hook(agent: GuidanceAgent, arguments: &[String], started: Instant) 
     if dialect == HookDialect::Cursor && inside_grok() {
         return;
     }
-    // Stop has one payload shared by its intake and subagent count.
-    let payload = matches!(event, HookEvent::Stop | HookEvent::UserPromptSubmit)
-        .then(|| read_stdin_before_deadline(started + GUARD_PAYLOAD_BUDGET))
-        .flatten();
+    // Stop has one payload shared by its intake and subagent count; a
+    // session start's names the session it starts.
+    let payload = matches!(
+        event,
+        HookEvent::Stop | HookEvent::UserPromptSubmit | HookEvent::SessionStart
+    )
+    .then(|| read_stdin_before_deadline(started + GUARD_PAYLOAD_BUDGET))
+    .flatten();
     let (answer, intake) = std::panic::catch_unwind(|| match event {
         HookEvent::PreToolUse => basic_tool_call(dialect, agent.id(), started),
         HookEvent::Stop | HookEvent::UserPromptSubmit => {
@@ -777,11 +781,19 @@ fn report_basic(
     let counted = dialect.adapter().subagent_counts.is_some();
     let change = if counted { change } else { Change::None };
     let Some(home) = home_directory() else { return };
-    // Neither agent's hook input is read for its session here, so the record
-    // names the agent and no session.
+    // A session start names the session it starts, so the core knows the
+    // pane's session before its first turn and letters and the inbox reach
+    // it from the start (PRD engine-bundle-4-herdr-removal, mission c3). No
+    // other event's input is read for its session here: a subagent's events
+    // name the subagent's own, so the record names the agent's last session.
+    let session = (event == HookEvent::SessionStart)
+        .then_some(payload)
+        .flatten()
+        .and_then(|(payload, truncated)| basic::session(payload, *truncated, dialect).ok())
+        .flatten();
     let who = Reporter {
         agent: Some(dialect.adapter().id),
-        session: None,
+        session: session.as_deref(),
     };
     report_pane(
         &home,

@@ -40,7 +40,7 @@ pub const BACKUP_DIR: &str = "node-migration-backup";
 pub(crate) const MARKER_VERSION: u32 = 1;
 
 pub const CORE_STATE: &str = "core-state.json";
-const WORKSPACE_VIEWS: &str = "workspace-views.json";
+pub(crate) const WORKSPACE_VIEWS: &str = "workspace-views.json";
 const LABELS: &str = "labels.json";
 const DELIVERY_LEDGER: &str = "delivery-ledger.json";
 const PROJECT_MEMORY: &str = hide_memory::DATABASE_FILE;

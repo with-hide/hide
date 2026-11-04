@@ -304,6 +304,17 @@ impl Core {
         }
         // Before the runtime exists, so the read is never made under its lock.
         let system_language = crate::runtime::output_language::read_system_language();
+        // What the import record keeps of this machine's Herdr panes, set
+        // before the engine's first publish reaches the cleanup (PRD
+        // engine-bundle-4-herdr-removal D-25). Read once, at the start: every
+        // move or import starts the core role again, which reads it again,
+        // and a workspace Herdr makes meanwhile is numbered apart from the
+        // engine's (D-26), so nothing the cleanup sees until then is one.
+        let herdr_held = own_engine
+            .as_ref()
+            .and_then(|engine| engine.own_scope())
+            .map(crate::herdr_import::held)
+            .unwrap_or_default();
         let runtime = Arc::new(Mutex::new(Runtime::new(
             options.clone(),
             environment,
@@ -314,6 +325,7 @@ impl Core {
             lock_recover(&runtime).install_product_analytics(sink);
         }
         lock_recover(&runtime).set_system_language(system_language);
+        lock_recover(&runtime).hold_herdr_state(herdr_held);
         let notifier = ChangeNotifier::new();
         lock_recover(&runtime).install_worker_context(Arc::downgrade(&runtime), notifier.clone());
         lock_recover(&runtime).set_guardrails_own_file(options.account_state_folder);
@@ -781,14 +793,22 @@ impl Core {
                 .and_then(|_| runtime.delivery_engine(device))
         };
         // The engine is asked off the runtime lock, as every engine call is.
-        if let (Some(engine), Some(session)) = (engine, report.session.as_deref())
-            && let Err(error) = engine.hook_session(caller, &report.runtime, session)
-        {
-            crate::diagnostic!(serde_json::json!({
-                "component": "agent_hooks", "kind": "hook_session.refused",
-                "pane": caller, "device": device, "agent": report.runtime,
-                "message": error.to_string(),
-            }));
+        if let (Some(engine), Some(session)) = (engine, report.session.as_deref()) {
+            match engine.hook_session(caller, &report.runtime, session) {
+                Ok(false) => {}
+                // An agent resumed after its turn was cut off is owed one
+                // letter (PRD engine-bundle-4-herdr-removal D-22).
+                Ok(true) => lock_recover(&self.runtime).owe_transition_letter(
+                    caller,
+                    session,
+                    crate::links::now_ms(),
+                ),
+                Err(error) => crate::diagnostic!(serde_json::json!({
+                    "component": "agent_hooks", "kind": "hook_session.refused",
+                    "pane": caller, "device": device, "agent": report.runtime,
+                    "message": error.to_string(),
+                })),
+            }
         }
         Ok(())
     }
@@ -995,6 +1015,31 @@ impl Core {
                 self.notifier.clone(),
             );
         }
+    }
+
+    /// What moves this machine's Herdr save into the core's own engine
+    /// (PRD engine-bundle-4-herdr-removal D-6 to D-8); `hided` installs one
+    /// only on a core that runs its own engine. Looks at the save at once.
+    pub fn set_herdr_import(&self, machine: Arc<dyn crate::herdr_import::Machine>) {
+        if check_owner_thread(self, "set_herdr_import") {
+            let mut runtime = lock_recover(&self.runtime);
+            runtime.install_herdr_import(
+                machine,
+                Arc::downgrade(&self.runtime),
+                self.notifier.clone(),
+            );
+        }
+    }
+
+    /// What the screen offers for this machine's Herdr save now
+    /// (`status.herdr_import`), for `hide import herdr` (PRD
+    /// engine-bundle-4-herdr-removal B17).
+    pub fn herdr_import_shown(&self) -> Option<crate::model::HerdrImportSnapshot> {
+        lock_recover(&self.runtime)
+            .snapshot()
+            .status
+            .herdr_import
+            .clone()
     }
 
     /// What gives the Desk process its identity and places (PRD Desk 1차);

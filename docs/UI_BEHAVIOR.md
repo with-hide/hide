@@ -2660,6 +2660,7 @@ Settings > Notifications' desktop group has independent `Notify me when an agent
 The last step asks `How do you want to start?` under `Either way, you can do the other one later. Practice is always in Help (?) > Practice Hide.`, with two ways, each a whole-width button with no choice to confirm and no Continue, then Back at the footer's left and `Skip for now` at its right (operator decision 2026-10-24).
 The first way, with no chip that ranks it over the other (operator decision 2026-10-27), is `Try it on a practice screen first` over `Your real agents and files stay untouched`, drawn as the same plain bordered button as the second, only its graduation cap in the practice's amber (`--practice-accent-strong`) as on the sidebar's invitation; it ends the wizard and opens the [Practice window](#practice-window) on chapter 0, handing over a mission, the Home behind it empty.
 The second is `Add a project` over `Start right in your own repository`: it shows Add a project under `Add your first project`, with its Host select, Browse folder, Clone from URL and Create new project, its refusals and its clone progress, and `Skip for now` (B22, B25); a folder pick cancelled there leaves those views as they were, and their Back returns to the two ways.
+With the development switch `HIDE_DEV_PANE_HOLDER=1` on and a Herdr save no Hide Herdr runs offered to import (`status.herdr_import`, kind `import`), a third way follows them, `Import Herdr work` over `<n> tabs open with the same layout and folders. Herdr is left as it is.`: it imports that save and ends the wizard (PRD engine-bundle-4-herdr-removal B14).
 Which of the two is on screen is the project draft's view (`first_run_choices.project_form.view`, empty for the two ways), so a reload reopens it.
 `Skip for now` ends the wizard to the empty Home in either.
 Add a project's Host list has no Add device, which would take the wizard's place, and only a project on the chosen host counts as the one added.
@@ -2925,6 +2926,21 @@ The version is the release the app was built as, such as `0.4.0`, and a developm
 When the desktop app has an update ready ([INSTALL.md](INSTALL.md#update)), a dot in the primary color sits on the `?`, whose name and tooltip become `Help · Update ready`, and the last line becomes a menu item, `hide <new version> ready` with `Restart` at its end, which installs the update and reopens the app.
 Nothing else of an update reaches the footer or this menu: looking, downloading and a failure show only in Settings > About.
 A browser tab and the phone have no dot and no update line.
+
+## Moving a Herdr session into Hide
+
+Core owner: `herdr-core/src/runtime/herdr_import.rs` (`status.herdr_import`, `status.herdr_import_devices`, the `herdr_import` event), `hided/src/herdr_transition.rs` (what is found and what a move or an import does on this machine), `herdr-core/src/herdr_import/device.rs` (on a device). Web owner: `web/src/HerdrImport.tsx`, `web/src/herdrImportRules.ts`, `web/src/i18n/resources/herdrImport.ts`.
+
+Only with the development switch `HIDE_DEV_PANE_HOLDER=1` on (PRD engine-bundle-4-herdr-removal D-6 to D-8, D-10, B2 to B5, B11, B14 to B18); [ARCHITECTURE.md](ARCHITECTURE.md#moving-a-herdr-session-into-the-cores-own-engine) owns what a move and an import do.
+While Hide's own Herdr runs with something to move, a dialog asks `Herdr is running <n> tabs and <n> agents` (or `Herdr is running <n> tabs` with no agent), says `Moving ends the commands running in them, and the agents reopen where their conversations left off.`, and offers `Later` and a destructive `Move <n> agents` (or `Move <n> tabs`), with neither chosen beforehand, so Enter presses nothing; Escape and a press outside do not close it.
+Pressing Move shows `Moving…` with a spinner in place of the buttons until Hide starts again with the moved workspaces; a Herdr that could not be stopped leaves the dialog with `Couldn't stop Herdr. Stop Herdr yourself, then move again.` and the same two buttons.
+`Later` puts the question off on this page only, so the next launch of the app asks again: the sidebar shows one quiet row above the footer, `<n> Herdr agents not moved` (or tabs) with `Move`, which asks the question again.
+A save no Hide Herdr runs is offered read only: the sidebar's row says `Herdr has <n> tabs` with `Import`, adding `Conversations open in Herdr open here as shells` while that Herdr runs, and Settings > General shows `Import Herdr work` with the same note and an `Import` button.
+A save Hide could not read shows `Couldn't read the Herdr session` with the reason under it and `Try again`; once a move or an import has left workspaces out, the row lists each as `<workspace>: <reason>` with `OK`, which clears it.
+Conversations an import left open in a Herdr that has closed since show `Herdr closed: <n> conversations can resume here` with `Resume`, which resumes each in its pane, or in a new tab of the same workspace, named for the agent, when that pane runs something else.
+A dialed device asks the same, under its name, once its link is up: `Herdr on <device> is running <n> tabs and <n> agents`, one dialog at a time after this machine's; its sidebar row starts with the device's name, Settings names it in `Import Herdr work from <device>`, and `Later` puts off that machine's question only.
+With nothing to move, import or read, no dialog, row or Settings group shows.
+`hide import herdr` prints what would move or be imported and what ends, and moves or imports only with `--yes`.
 
 ## Practice window
 

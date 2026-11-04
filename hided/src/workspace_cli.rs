@@ -614,6 +614,40 @@ pub fn request_project_open_with_token(
     token: &str,
     path: &str,
 ) -> Result<Value, String> {
+    let request_id = fresh_request_id()?;
+    request_with_token(
+        port,
+        token,
+        json!({"type":"project_open","request_id":request_id,"path":path}),
+        &request_id,
+        PROJECT_OPEN_TIMEOUT,
+    )
+}
+
+/// `hide import herdr` on the core's own machine, with the daemon's token,
+/// as `hide <path>` asks (PRD engine-bundle-4-herdr-removal B17): what this
+/// machine's Herdr save offers, and with `yes` the move itself.
+pub fn request_herdr_import_with_token(port: u16, token: &str, yes: bool) -> Result<Value, String> {
+    let request_id = fresh_request_id()?;
+    request_with_token(
+        port,
+        token,
+        json!({"type":"herdr_import","request_id":request_id,"yes":yes}),
+        &request_id,
+        TIMEOUT,
+    )
+}
+
+/// One `request` named `request_id` and its answer over one `/ws`
+/// connection whose handshake names `client_kind: "cli"`, with the daemon's
+/// token from the state file this account owns.
+fn request_with_token(
+    port: u16,
+    token: &str,
+    request: Value,
+    request_id: &str,
+    within: Duration,
+) -> Result<Value, String> {
     let reference = Reference {
         token: token.to_owned(),
         route: Route::Daemon {
@@ -621,13 +655,12 @@ pub fn request_project_open_with_token(
             origin_port: port,
         },
     };
-    let request_id = fresh_request_id()?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|_| "request_unavailable".to_owned())?;
     runtime.block_on(async {
-        tokio::time::timeout(PROJECT_OPEN_TIMEOUT, async {
+        tokio::time::timeout(within, async {
             let mut socket = connect(&reference).await.map_err(reported)?;
             socket
                 .send(Message::Text(
@@ -638,11 +671,7 @@ pub fn request_project_open_with_token(
                 .await
                 .map_err(|_| "hide_unavailable".to_owned())?;
             socket
-                .send(Message::Text(
-                    json!({"type":"project_open","request_id":request_id,"path":path})
-                        .to_string()
-                        .into(),
-                ))
+                .send(Message::Text(request.to_string().into()))
                 .await
                 .map_err(|_| "hide_unavailable".to_owned())?;
             match socket.next().await {
@@ -1850,6 +1879,7 @@ mod tests {
         Env {
             home: directory.to_path_buf(),
             herdr_socket_path: None,
+            herdr_move_socket: None,
             herdr_bin_path: None,
             own_engine: false,
             login_shell: None,

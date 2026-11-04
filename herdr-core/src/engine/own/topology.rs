@@ -1211,8 +1211,7 @@ impl Topology {
             agent_seq: 0,
         };
         for workspace in saved.workspaces {
-            if ids::workspace_number(&workspace.id).is_none() || !seen.insert(workspace.id.clone())
-            {
+            if ids::workspace_of(&workspace.id).is_none() || !seen.insert(workspace.id.clone()) {
                 return Err(format!(
                     "workspace id {:?} is malformed or repeated",
                     workspace.id
@@ -1306,13 +1305,17 @@ impl Topology {
     }
 
     /// Takes every counter past the ids given, so none is given again: a
-    /// workspace id moves the workspace count, a tab or pane id its
-    /// workspace's count when that workspace is held. An id of another shape
-    /// moves nothing.
+    /// workspace id this engine made moves the workspace count, a tab or
+    /// pane id its workspace's count when that workspace is held. A
+    /// workspace moved from Herdr (`w<n>`) moves no workspace count, since
+    /// this engine's new workspaces are numbered apart from Herdr's (D-26).
+    /// An id of another shape moves nothing.
     pub(super) fn count_past<'a>(&mut self, given: impl IntoIterator<Item = &'a str>) {
         for id in given {
-            if let Some(number) = ids::workspace_number(id) {
-                self.workspace_numbers = self.workspace_numbers.max(number);
+            if ids::workspace_of(id).is_some() {
+                if let Some(number) = ids::engine_workspace_number(id) {
+                    self.workspace_numbers = self.workspace_numbers.max(number);
+                }
                 continue;
             }
             let (kind, (workspace, number)) = match ids::numbered(id, 't') {
@@ -1322,7 +1325,7 @@ impl Topology {
                     None => continue,
                 },
             };
-            if let Some(number_of) = ids::workspace_number(workspace) {
+            if let Some(number_of) = ids::engine_workspace_number(workspace) {
                 self.workspace_numbers = self.workspace_numbers.max(number_of);
             }
             if let Ok(found) = self.workspace_mut(workspace) {
@@ -2005,7 +2008,7 @@ mod tests {
             Some(first.pane.as_str())
         );
         let next = topology.reserve_pane(&first.workspace).unwrap();
-        assert_eq!(next, "w1:p3");
+        assert_eq!(next, "h1:p3");
         assert!(matches!(
             topology.pane(&beside),
             Err(EngineError::Refused { code, .. }) if code == "pane_not_found"
@@ -2112,7 +2115,7 @@ mod tests {
         assert_eq!(moved.pane_id, beside);
         assert_eq!(moved.previous_tab_id, first.tab);
         let created = moved.created_tab_id.clone().unwrap();
-        assert_eq!(created, "w1:t2");
+        assert_eq!(created, "h1:t2");
         assert_eq!(
             topology.tab_panes(&created).unwrap(),
             std::slice::from_ref(&beside)
@@ -2197,17 +2200,17 @@ mod tests {
         );
         assert_eq!(planned.new.len(), 1);
         let (new_pane, started) = &planned.new[0];
-        assert_eq!(new_pane, "w1:p3");
+        assert_eq!(new_pane, "h1:p3");
         assert_eq!(started.cwd, "/w");
         let (dropped, applied) = topology.add_planned(planned, Some(&first.tab)).unwrap();
         assert!(dropped.is_empty());
-        assert_eq!(applied.tab_id, "w1:t2");
+        assert_eq!(applied.tab_id, "h1:t2");
         assert_eq!(applied.root.pane_count(), 3);
         assert!(matches!(
             topology.tab_panes(&first.tab),
             Err(EngineError::Refused { code, .. }) if code == "tab_not_found"
         ));
-        assert_eq!(topology.active_tab(&first.workspace).unwrap(), "w1:t2");
+        assert_eq!(topology.active_tab(&first.workspace).unwrap(), "h1:t2");
     }
 
     #[test]
@@ -2229,8 +2232,8 @@ mod tests {
             read.state(&Catalog::read(Vec::new())).unwrap(),
             topology.state(&Catalog::read(Vec::new())).unwrap()
         );
-        assert_eq!(read.reserve_pane(&first.workspace).unwrap(), "w1:p4");
-        assert_eq!(read.reserve_workspace().workspace, "w2");
+        assert_eq!(read.reserve_pane(&first.workspace).unwrap(), "h1:p4");
+        assert_eq!(read.reserve_workspace().workspace, "h2");
     }
 
     // The agents' state sequences start again with the engine, so the mark
@@ -2267,7 +2270,7 @@ mod tests {
         let mut topology = Topology::default();
         let first = workspace(&mut topology);
         let mut saved = topology.to_saved();
-        saved.workspaces[0].tabs[0].focused = "w1:p9".to_owned();
+        saved.workspaces[0].tabs[0].focused = "h1:p9".to_owned();
         assert!(Topology::from_saved(saved).is_err());
         let mut saved = topology.to_saved();
         saved.workspaces[0].tabs[0].panes.clear();
@@ -2285,19 +2288,52 @@ mod tests {
         let first = workspace(&mut topology);
         let made = topology.gather(
             vec![
-                ("w1:p7".to_owned(), Pane::new("/a", None)),
-                ("w1:p8".to_owned(), Pane::new("/b", None)),
-                ("w5:p2".to_owned(), Pane::new("/c", None)),
+                ("h1:p7".to_owned(), Pane::new("/a", None)),
+                ("h1:p8".to_owned(), Pane::new("/b", None)),
+                ("h5:p2".to_owned(), Pane::new("/c", None)),
             ],
             "restored",
         );
-        assert_eq!(made, ["w1:t2", "w5:t1"]);
+        assert_eq!(made, ["h1:t2", "h5:t1"]);
         assert_eq!(
-            topology.tab_panes("w1:t2").unwrap(),
-            ["w1:p7".to_owned(), "w1:p8".to_owned()]
+            topology.tab_panes("h1:t2").unwrap(),
+            ["h1:p7".to_owned(), "h1:p8".to_owned()]
         );
-        assert_eq!(topology.reserve_pane(&first.workspace).unwrap(), "w1:p9");
-        assert_eq!(topology.reserve_pane("w5").unwrap(), "w5:p3");
-        assert_eq!(topology.reserve_workspace().workspace, "w6");
+        assert_eq!(topology.reserve_pane(&first.workspace).unwrap(), "h1:p9");
+        assert_eq!(topology.reserve_pane("h5").unwrap(), "h5:p3");
+        assert_eq!(topology.reserve_workspace().workspace, "h6");
+    }
+
+    // A workspace moved from Herdr keeps its `w` id and counts its tabs and
+    // panes on past Herdr's numbers, while this engine's next workspace is
+    // numbered apart from Herdr's, so a Herdr that runs on and makes `w6`
+    // meets nothing this engine made (D-26).
+    #[test]
+    fn a_workspace_moved_from_herdr_keeps_its_id_and_moves_no_count_of_the_engine_s_own() {
+        let mut topology = Topology::default();
+        let first = workspace(&mut topology);
+        let mut saved = topology.to_saved();
+        let mut moved = topology.to_saved().workspaces.remove(0);
+        moved.id = "w5".to_owned();
+        moved.active_tab = "w5:t3".to_owned();
+        moved.tab_numbers = 3;
+        moved.pane_numbers = 7;
+        moved.tabs[0].id = "w5:t3".to_owned();
+        moved.tabs[0].focused = "w5:p7".to_owned();
+        moved.tabs[0].root = SavedNode::Pane {
+            id: "w5:p7".to_owned(),
+        };
+        moved.tabs[0].panes[0].id = "w5:p7".to_owned();
+        saved.workspaces.push(moved);
+        let mut read = Topology::from_saved(saved).unwrap();
+        assert_eq!(read.reserve_pane("w5").unwrap(), "w5:p8");
+        assert_eq!(read.reserve_tab("w5").unwrap().0, "w5:t4");
+        assert_eq!(read.reserve_pane(&first.workspace).unwrap(), "h1:p2");
+        assert_eq!(read.reserve_workspace().workspace, "h2");
+        read.gather(
+            vec![("w9:p1".to_owned(), Pane::new("/c", None))],
+            "restored",
+        );
+        assert_eq!(read.reserve_workspace().workspace, "h3");
     }
 }
