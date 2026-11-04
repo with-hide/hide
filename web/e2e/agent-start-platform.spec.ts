@@ -99,35 +99,37 @@ for (const [kind, executable] of [
 }
 
 for (const launcher of ["ps1", "cmd"] as const) {
-  test(`Windows npm ${launcher} launchers distinguish packages sharing cli.js`, { tag: "@platform" }, async ({ page }) => {
-    test.skip(process.platform !== "win32", "Windows npm launchers require a real Windows shell and process table");
-    const fixture = await startFixture({ family: true });
-    let daemon: Daemon | undefined;
-    try {
-      const bin = path.join(fixture.root, "bin");
-      for (const [kind, scope] of [["pi", "@earendil-works"], ["omp", "@oh-my-pi"]] as const) {
-        const script = path.join(bin, "node_modules", scope, "pi-coding-agent", "dist", "cli.js");
-        fs.mkdirSync(path.dirname(script), { recursive: true });
-        fs.writeFileSync(script, startProgram(fixture, kind));
-        const psQuote = (text: string) => `'${text.replaceAll("'", "''")}'`;
-        const body = launcher === "ps1"
-          ? `& ${psQuote(process.execPath)} ${psQuote(script)} @args\r\nexit $LASTEXITCODE\r\n`
-          : `@echo off\r\n"${process.execPath}" "${script}" %*\r\n`;
-        fs.writeFileSync(path.join(bin, `${kind}.${launcher}`), body);
-      }
-      daemon = await startHided(fixture, `npm-${launcher}`);
-      for (const kind of ["pi", "omp"]) {
+  for (const kind of ["pi", "omp"] as const) {
+    test(`Windows npm ${launcher} detects ${kind} beside another cli.js package`, { tag: "@platform" }, async ({ page }) => {
+      test.skip(process.platform !== "win32", "Windows npm launchers require a real Windows shell and process table");
+      const fixture = await startFixture({ family: true });
+      let daemon: Daemon | undefined;
+      try {
+        const bin = path.join(fixture.root, "bin");
+        // Both packages remain installed so each case must retain the scope
+        // that distinguishes their identical entry-point filenames.
+        for (const [installedKind, scope] of [["pi", "@earendil-works"], ["omp", "@oh-my-pi"]] as const) {
+          const script = path.join(bin, "node_modules", scope, "pi-coding-agent", "dist", "cli.js");
+          fs.mkdirSync(path.dirname(script), { recursive: true });
+          fs.writeFileSync(script, startProgram(fixture, installedKind));
+          const psQuote = (text: string) => `'${text.replaceAll("'", "''")}'`;
+          const body = launcher === "ps1"
+            ? `& ${psQuote(process.execPath)} ${psQuote(script)} @args\r\nexit $LASTEXITCODE\r\n`
+            : `@echo off\r\n"${process.execPath}" "${script}" %*\r\n`;
+          fs.writeFileSync(path.join(bin, `${installedKind}.${launcher}`), body);
+        }
+        daemon = await startHided(fixture, `npm-${launcher}-${kind}`);
         // Herdr's ordinary fixture shell is cmd, which cannot directly
         // execute a .ps1. The own engine's PowerShell resolves it by name.
         const command = fixture.shell === "cmd" && launcher === "ps1"
           ? `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${path.join(bin, `${kind}.ps1`)}"`
           : kind;
         await bothStarts(page, fixture, daemon, kind, command);
+      } catch (error) {
+        throw afterCleanup(afterCleanup(error, () => daemon?.stop()), () => fixture.stop());
       }
-    } catch (error) {
-      throw afterCleanup(afterCleanup(error, () => daemon?.stop()), () => fixture.stop());
-    }
-    try { daemon?.stop(); } catch (error) { throw afterCleanup(error, () => fixture.stop()); }
-    fixture.stop();
-  });
+      try { daemon?.stop(); } catch (error) { throw afterCleanup(error, () => fixture.stop()); }
+      fixture.stop();
+    });
+  }
 }

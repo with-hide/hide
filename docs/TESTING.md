@@ -319,6 +319,7 @@ A piece that another open change is still building is marked as pending with the
    The engine fixture names its ordinary shell, and shared command and prompt helpers use that syntax without changing the account's PowerShell profile.
    The disposable runner's registry PATH preparation above belongs to the CI job, not to a fixture running on a developer's account.
    `agent-start-platform.spec.ts` runs all seven native stand-ins through `hide agent spawn` and a typed shell command and checks their visible state; its Windows npm cases run real `.ps1` and `.cmd` launchers over Node, distinguishing Pi and omp despite their shared `cli.js` filename.
+   Each package and launcher has its own start journey with both packages installed, keeping the shared-filename check within the ordinary per-test time budget.
    The real-holder engine contract refuses `agent_pane_busy` while an ordinary program runs above the shell.
    The Windows stand-in waits for its command runner instead of overlaying itself: Windows exec ends that parent, which would break the live ancestry the pane capability proves.
    A failed engine-fixture setup keeps its final snapshot and at most 32 terminal updates within 256 KiB, with a dropped-update count, in the run directory; these are diagnostics, never a successful start assertion.
