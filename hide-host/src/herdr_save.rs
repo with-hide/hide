@@ -8,12 +8,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
-pub use hide_node_link::herdr_save::{Fetched, Found, Server};
-
-/// The largest save read: an operator's session of 25 workspaces and 83
-/// panes took 51 KB on 2026-11-04, so this is far past any session and
-/// bounds what an unreadable file can cost.
-pub const READ_CAP: u64 = 4 * 1024 * 1024;
+pub use hide_node_link::herdr_save::{Fetched, Found, READ_CAP, Server};
 
 /// How long Hide's Herdr has to end on each way of asking it (D-6).
 pub const STOP_WITHIN: Duration = Duration::from_secs(10);

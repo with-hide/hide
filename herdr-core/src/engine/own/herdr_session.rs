@@ -5,7 +5,7 @@
 //! Hide's own Herdr, or the read-only import of an operator's Herdr).
 //!
 //! The file is only read, never written or moved. It is read up to
-//! `hide_host::herdr_save::READ_CAP` bytes in every form Herdr v0.9.5 reads (`src/persist/
+//! `hide_node_link::herdr_save::READ_CAP` bytes in every form Herdr v0.9.5 reads (`src/persist/
 //! snapshot.rs` of the pinned tag: version 3 and the versions before it,
 //! whose workspaces held one tab inline). Herdr's public ids are kept: a
 //! workspace keeps its `w<n>`, and its tabs and panes the ids Herdr's restore
@@ -191,13 +191,13 @@ struct Header {
 
 /// The Herdr session a machine read from its save
 /// (`hide_host::herdr_save::fetch`, on that machine), only reading it.
-pub(crate) fn of(fetched: &hide_host::herdr_save::Fetched) -> HerdrRead {
+pub(crate) fn of(fetched: &hide_node_link::herdr_save::Fetched) -> HerdrRead {
     match fetched {
-        hide_host::herdr_save::Fetched::Missing => HerdrRead::Missing,
-        hide_host::herdr_save::Fetched::Unreadable { reason } => {
+        hide_node_link::herdr_save::Fetched::Missing => HerdrRead::Missing,
+        hide_node_link::herdr_save::Fetched::Unreadable { reason } => {
             HerdrRead::Unreadable(reason.clone())
         }
-        hide_host::herdr_save::Fetched::Text { text, .. } => match parse(text) {
+        hide_node_link::herdr_save::Fetched::Text { text, .. } => match parse(text) {
             Ok(session) => HerdrRead::Read(session),
             Err(why) => HerdrRead::Unreadable(why),
         },

@@ -6,6 +6,11 @@
 
 use serde::{Deserialize, Serialize};
 
+/// The largest save read: an operator's session of 25 workspaces and 83
+/// panes took 51 KB on 2026-11-04, so this is far past any session and
+/// bounds what an unreadable file can cost.
+pub const READ_CAP: u64 = 4 * 1024 * 1024;
+
 /// A save as read, with its length and last change, which tell a save Herdr
 /// wrote again (D-9).
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

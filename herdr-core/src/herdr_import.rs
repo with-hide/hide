@@ -24,7 +24,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use serde::{Deserialize, Serialize};
 
-pub use hide_host::herdr_save::Fetched;
+pub use hide_node_link::herdr_save::Fetched;
 
 pub(crate) mod device;
 
@@ -364,7 +364,7 @@ pub fn kept_save(engine_dir: &Path) -> Result<Option<KeptSave>, String> {
         Err(error) => return Err(format!("{} could not be opened: {error}", path.display())),
     };
     // The save and its JSON quoting.
-    let cap = 2 * hide_host::herdr_save::READ_CAP + 4096;
+    let cap = 2 * hide_node_link::herdr_save::READ_CAP + 4096;
     let mut text = String::new();
     std::io::Read::read_to_string(&mut std::io::Read::take(file, cap + 1), &mut text)
         .map_err(|error| format!("{} could not be read: {error}", path.display()))?;
