@@ -24,7 +24,7 @@ SAVERS = {
         ('pr.yml', 'rust'): ON_MAIN,
         ('pr.yml', 'windows-check'): ON_MAIN,
         ('desktop-e2e.yml', 'e2e'):
-            "${{ github.ref == 'refs/heads/main' && matrix.shard == 1 && runner.os == 'macOS' }}",
+            "${{ github.ref == 'refs/heads/main' && matrix.shard == 1 && matrix.engine == 'herdr' && runner.os == 'macOS' }}",
     },
     'platform': {('os-contract.yml', 'contract'): ON_MAIN},
     # The Windows app's binaries compile in their own job, beside the device

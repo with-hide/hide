@@ -28,6 +28,7 @@ class PrivateCLI(unittest.TestCase):
         for name in ('agent_journey', 'agent_live_check'):
             shutil.copytree(SOURCE / 'scripts' / name, self.checkout / 'scripts' / name,
                             ignore=shutil.ignore_patterns('__pycache__'))
+        shutil.copyfile(SOURCE / 'scripts/holder_owned.py', self.checkout / 'scripts/holder_owned.py')
         contracts = self.checkout / 'contracts'
         contracts.mkdir()
         shutil.copyfile(SOURCE / 'contracts/agent-journey.json', contracts / 'agent-journey.json')

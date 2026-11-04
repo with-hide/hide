@@ -19,6 +19,29 @@ from agent_live_check.runtime import Runtime
 
 
 class PrivateConfiguration(unittest.TestCase):
+    def test_unconfirmed_native_panes_keep_state_but_remove_disposable_credentials(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            runtime = Runtime.__new__(Runtime)
+            runtime.probe, runtime.short, runtime.state = root / "probe", root / "short", root / "state"
+            for folder in (runtime.probe, runtime.short, runtime.state):
+                folder.mkdir(mode=0o700)
+            credential = runtime.probe / "config-fixture"
+            credential.mkdir(mode=0o700)
+            (credential / "auth.json").write_bytes(b"private-fixture-token")
+            runtime.credential_roots = {credential}
+            runtime.owner = OwnedProcesses()
+            runtime.workspaces, runtime.started, runtime.servers = set(), False, []
+            def refused():
+                raise RuntimeError("injected_holder_end_refused")
+            runtime.stop_panes = refused
+            result = runtime.close()
+            self.assertFalse(result["confirmed"])
+            self.assertFalse(result["processes_confirmed"])
+            self.assertTrue(result["credential_copies_removed"])
+            self.assertTrue(runtime.probe.exists())
+            self.assertTrue(runtime.short.exists())
+
     def test_protocol_cleanup_failure_does_not_retain_credential_copies(self):
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)

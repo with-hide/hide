@@ -74,6 +74,21 @@ class FakeModel(unittest.TestCase):
     def test_every_declared_cell_passing_passes(self):
         self.assertEqual(lane.judge(report(self.table(), [], fake_model=True), "fake"), (True, []))
 
+    def test_no_agent_cell_may_record_an_exclusion_on_either_engine(self):
+        # Pi, OpenCode, and the Codex, Antigravity and OMP fork and wake
+        # cells waited for the own engine's first-input fix; every one of
+        # them is required on both engines now.
+        cells_of = {"pi": lane.CELLS, "opencode": lane.CELLS, "codex": ("fork",), "antigravity": ("fork",),
+                    "omp": ("sleep_wake", "resume", "fork", "title")}
+        for engine in ("own", "herdr"):
+            for agent, names in cells_of.items():
+                for name in names:
+                    with self.subTest(engine=engine, agent=agent, cell=name):
+                        value = report(self.table(), [], fake_model=True, engine=engine)
+                        self.assertEqual(lane.judge(value, "fake"), (True, []))
+                        value["table"][agent][name] = {"status": "excluded", "reason": "own-start-fixes 노드 대기"}
+                        self.assertFalse(lane.judge(value, "fake")[0])
+
     def test_the_folder_question_a_stand_in_cannot_ask_must_pass(self):
         # The lane takes the stand-ins' place only when it measures what they cannot.
         passed, notes = lane.judge(report(self.table(start_untrusted={"status": "not measured", "reason": "x"}), [],

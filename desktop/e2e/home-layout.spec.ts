@@ -7,22 +7,28 @@ import fs from "node:fs";
 import path from "node:path";
 import { stageBuild } from "./device-home";
 import { HIDE_CLI, isolate, nodeOf, relaunch, screenshot, shellPage, test } from "./fixture";
-import { herdrBinary, startHerdr } from "../../web/e2e/herdr-fixture";
+import { startEngine, type EngineServer } from "../../web/e2e/engine-fixture";
+import { herdrBinary } from "../../web/e2e/herdr-fixture";
 import { captureNativeWindow } from "./native-window";
 
 test.describe.configure({ timeout: 240_000 });
 test.skip(process.platform !== "darwin", "the staged bundle uses the macOS layout");
 
-/** A bundle around the staged build so its daemon applies the install kit. */
-function stageBundle(root: string): string {
+/**
+ * A bundle around the staged build so its daemon applies the install kit.
+ * It carries what the packaged app carries for the engine the run uses
+ * (`stageBuild`); on Herdr the app's Herdr is the file the test's server
+ * runs, not the build's copy a device would get.
+ */
+function stageBundle(root: string, engine: EngineServer["engine"]): string {
   const build = stageBuild(root);
   const contents = path.join(root, "Hide.app", "Contents");
   fs.mkdirSync(path.join(contents, "MacOS"), { recursive: true });
   fs.renameSync(build, path.join(contents, "Resources"));
-  // The app's Herdr is the file the test's server runs, not the build's copy
-  // a device would get.
-  fs.rmSync(path.join(contents, "Resources", "herdr"));
-  fs.symlinkSync(herdrBinary(), path.join(contents, "Resources", "herdr"));
+  if (engine === "herdr") {
+    fs.rmSync(path.join(contents, "Resources", "herdr"));
+    fs.symlinkSync(herdrBinary(), path.join(contents, "Resources", "herdr"));
+  }
   fs.writeFileSync(path.join(contents, "Info.plist"), "<plist><dict><key>CFBundleExecutable</key><string>hide</string></dict></plist>\n");
   fs.writeFileSync(path.join(contents, "MacOS", "hide"), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} "$@"\n`, { mode: 0o755 });
   return path.join(contents, "Resources");
@@ -37,12 +43,12 @@ function json(command: string, args: string[], env: Record<string, string>): Rec
 const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
 test("the first connect of a new app moves the old layout into ~/.hide once", async () => {
-  const herdr = await startHerdr({ agents: false });
-  const run = isolate(herdr, "hl");
+  const engine = await startEngine();
+  const run = isolate(engine, "hl");
   const home = run.env.HOME!;
   const env: Record<string, string> = { ...run.env };
   for (const key of ["HIDE_STATE_DIR", "XDG_STATE_HOME"]) delete env[key];
-  const resources = stageBundle(run.root);
+  const resources = stageBundle(run.root, engine.engine);
   const appHide = path.join(resources, "hide");
   const legacyState = path.join(home, ".local", "state", "hide");
   let oldPid = 0;
@@ -93,7 +99,7 @@ test("the first connect of a new app moves the old layout into ~/.hide once", as
       await page.locator(`[data-device-details="${movedNode}"]`).click();
       await expect(page.locator(`[data-kit-part="${movedNode}:coordination_retirement:installed"]`)).toBeVisible();
       await screenshot(page, "home-layout-this-mac-kit");
-      await captureNativeWindow(app, "coordination-retirement-native", { state: moved, home, socket: run.env.HERDR_SOCKET_PATH, retirement: "installed" });
+      await captureNativeWindow(app, "coordination-retirement-native", { state: moved, home, socket: engine.socket, retirement: "installed" });
     } finally {
       await app.close().catch(() => undefined);
     }
@@ -101,6 +107,6 @@ test("the first connect of a new app moves the old layout into ~/.hide once", as
     spawnSync(appHide, ["stop"], { env, timeout: 20_000 });
     if (oldPid && alive(oldPid)) spawnSync(HIDE_CLI, ["stop"], { env: { ...env, HIDE_STATE_DIR: legacyState }, timeout: 20_000 });
     run.cleanup();
-    herdr.stop();
+    engine.stop();
   }
 });

@@ -286,7 +286,7 @@ test("A new tab in a linked worktree opens in that worktree's checkout and the n
 
     daemon = await startHided(fixture, "checkout-owner-linked-tabs");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
-    await expect(page.locator("[data-main-screen]")).toBeVisible({ timeout: 20_000 });
+    await enterWorkspace(page, "fixture");
     const project = page.locator("[data-project]").filter({ has: page.locator("[data-project-row]", { hasText: /^fixture/ }) });
     const feature = project.locator("[data-checkout-row]").filter({ has: page.locator('[data-checkout][aria-label^="feature"]') });
     // Session UI B9: a clean worktree with no agent starts in this fold.

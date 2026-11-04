@@ -1,22 +1,25 @@
 import { expect, type ElectronApplication } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
-import { startHerdr } from "../../web/e2e/herdr-fixture";
+import { startFixture } from "../../web/e2e/engine-fixture";
 import { checkoutGitFixture } from "../../web/e2e/checkout-git-fixture";
 import { enterWorkspace } from "../../web/e2e/wire";
 import { git } from "../../web/e2e/work-prs-fixture";
-import { fitWindow, isolate, launchShell, test } from "./fixture";
+import { connectHome, fitWindow, isolate, launchShell, test } from "./fixture";
 import { captureElectronWindow } from "./electron-window";
 
 test("checkout Git header fits the isolated native candidate at 720 by 480", async () => {
-  const herdr = await startHerdr();
+  const engine = await startFixture();
   let run: ReturnType<typeof isolate> | undefined;
   let app: ElectronApplication | undefined;
   const errors: unknown[] = [];
   try {
-    const fixture = checkoutGitFixture(herdr, { divergedUpstream: true, historyCount: 6 });
+    // The repository and the `gh` stand-in exist before the home's daemon registers the checkout, so
+    // this composes `startStack`'s steps: the fixture, its home, the daemon, then the fixture's panes.
+    const fixture = checkoutGitFixture(engine, { divergedUpstream: true, historyCount: 6 });
     git(fixture.root, ["branch", "-m", "feature/매우-긴-한글과-English-checkout-name"]);
-    run = isolate(herdr, "checkout-header");
+    run = isolate(engine, "checkout-header");
+    await engine.opened!(await connectHome(run));
     const opened = await launchShell(run.env);
     app = opened.app;
     const page = opened.page;
@@ -55,7 +58,7 @@ test("checkout Git header fits the isolated native candidate at 720 by 480", asy
         children: [...node.children].map(child => ({ tag: child.tagName, text: child.textContent, color: getComputedStyle(child).color })),
       }));
       console.log(`${theme} upstream: ${JSON.stringify(upstream)}`);
-      await captureElectronWindow(app, `checkout-header-renderer-720-${theme}`, { geometry, upstream, sha: fixture.sha, provider: "private synthetic exact-SHA GraphQL rollups; actual local Git diverged from origin/main", home: run.env.HOME, socket: herdr.socket, state: run.env.HIDE_STATE_DIR });
+      await captureElectronWindow(app, `checkout-header-renderer-720-${theme}`, { geometry, upstream, sha: fixture.sha, provider: "private synthetic exact-SHA GraphQL rollups; actual local Git diverged from origin/main", home: run.env.HOME, socket: engine.socket, state: run.env.HIDE_STATE_DIR });
       for (const [index, control] of geometry.controls.entries()) {
         expect(control.hit, `${control.attribute} center reaches its own button`).toBe(true);
         expect(control.contentRight, `${control.attribute} contents fit its button`).toBeLessThanOrEqual(control.right + 1);
@@ -68,7 +71,7 @@ test("checkout Git header fits the isolated native candidate at 720 by 480", asy
       const local = page.locator('[data-commit-history-item]:not([data-commit-incoming])');
       await expect(local).toHaveCount(5);
       await expect(local.first()).toHaveAttribute("data-commit-history-item", fixture.sha);
-      await captureElectronWindow(app, `checkout-history-renderer-720-${theme}`, { sha: fixture.sha, commits: 5, provider: "private synthetic exact-SHA GraphQL rollups", home: run.env.HOME, socket: herdr.socket, state: run.env.HIDE_STATE_DIR });
+      await captureElectronWindow(app, `checkout-history-renderer-720-${theme}`, { sha: fixture.sha, commits: 5, provider: "private synthetic exact-SHA GraphQL rollups", home: run.env.HOME, socket: engine.socket, state: run.env.HIDE_STATE_DIR });
       await page.keyboard.press("Escape");
       await page.locator('[data-open-overview]').click();
       await expect(page.locator('[data-overview-page]')).toBeVisible();
@@ -83,7 +86,7 @@ test("checkout Git header fits the isolated native candidate at 720 by 480", asy
   } finally {
     try { await app?.close(); } catch (error) { errors.push(error); }
     try { run?.cleanup(); } catch (error) { errors.push(error); }
-    try { herdr.stop(); } catch (error) { errors.push(error); }
+    try { engine.stop(); } catch (error) { errors.push(error); }
   }
   if (errors.length === 1) throw errors[0];
   if (errors.length) throw new AggregateError(errors, "private checkout header fixture failed; original and cleanup errors are retained");

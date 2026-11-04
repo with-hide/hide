@@ -76,13 +76,19 @@ def write_private(path: Path, data: bytes) -> None:
 
 def validate_isolation(run: Path, home: Path, socket: Path, state: Path,
                        operator_home: Path, operator_socket: Path | None,
-                       socket_root: Path | None = None) -> None:
+                       socket_root: Path | None = None, *, short_state=False) -> None:
     """Refuse operator routing before even starting a version/auth subprocess."""
     if not all(path.is_absolute() for path in (run, home, socket, state)):
         raise ProtectionError("isolation_paths_must_be_absolute")
     if home.resolve() == operator_home.resolve():
         raise ProtectionError("daemon_home_is_operator_home")
     for path in (home, state):
+        if short_state and path == state:
+            if (socket_root is None or state != socket_root / "state"
+                    or not socket_root.is_dir() or state.is_symlink()
+                    or socket_root.is_symlink() or not private(socket_root)):
+                raise ProtectionError("state_parent_not_owned_by_run")
+            continue
         if not beneath(path, run) or path.resolve() == run.resolve():
             raise ProtectionError("runtime_path_outside_run")
     # Herdr's config folder, where its default socket is: ~/.config/herdr,

@@ -2,54 +2,45 @@
 // the native Edit menu owns ⌘C and ⌘V as roles, so the tree has to answer the
 // clipboard events those roles raise as well as its own keydown. Both routes
 // copy a file into its folder under a `copy` name, and a file dropped from
-// the file manager lands in a folder. Everything runs on a private Herdr
-// server, hided and Electron profile (see `fixture.ts`).
+// the file manager lands in a folder. Everything runs on a private engine,
+// hided and Electron profile (see `fixture.ts`).
 
 import { expect, type ElectronApplication } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
-import { startHerdr, type HerdrFixture } from "../../web/e2e/herdr-fixture";
 import { enterWorkspace, showExplorer } from "../../web/e2e/wire";
 import { toPage } from "../src/main/wirePath";
-import { fitWindow, hostLog, isolate, launch, screenshot, shellPage, test, type Isolated } from "./fixture";
+import { fitWindow, hostLog, launchShell, screenshot, startStack, test, type Stack } from "./fixture";
 
 test.describe.configure({ timeout: 240_000 });
 test.use({ actionTimeout: 15_000 });
 
-let herdr: HerdrFixture;
-let run: Isolated;
+let stack: Stack;
 let app: ElectronApplication | null = null;
 
-test.beforeAll(async () => {
-  herdr = await startHerdr({ agents: false });
-});
-
-test.afterAll(() => {
-  herdr?.stop();
-});
-
-test.beforeEach(() => {
-  run = isolate(herdr, "explorer-clipboard");
+test.beforeEach(async () => {
+  stack = await startStack("explorer-clipboard", { agents: false });
 });
 
 test.afterEach(async () => {
   const info = test.info();
-  if (info.status !== info.expectedStatus) console.log(hostLog(run.env).map((line) => JSON.stringify(line)).join("\n"));
+  if (info.status !== info.expectedStatus) console.log(hostLog(stack.run.env).map((line) => JSON.stringify(line)).join("\n"));
   await app?.close().catch(() => undefined);
   app = null;
-  run.cleanup();
+  stack.stop();
 });
 
 // @platform: ⌘C and ⌘V reach the page through the system's own Edit menu roles.
 test("clipboard: the native copy and paste roles copy a file under a copy name, and a dropped file lands in a folder", { tag: "@platform" }, async () => {
-  const checkout = path.join(fs.realpathSync(herdr.root), "fixture");
+  const checkout = path.join(fs.realpathSync(stack.fixture.root), "fixture");
   fs.mkdirSync(path.join(checkout, "src"), { recursive: true });
   fs.writeFileSync(path.join(checkout, "notes.md"), "# notes\n");
   fs.writeFileSync(path.join(checkout, "src", "a.txt"), "a\n");
 
-  ({ app } = await launch(run.env));
+  const launched = await launchShell(stack.run.env);
+  app = launched.app;
+  const page = launched.page;
   await fitWindow(app, { width: 1024, height: 681 });
-  const page = await shellPage(app);
   await enterWorkspace(page, "fixture");
   await showExplorer(page);
   const row = (name: string) => page.locator(`[data-explorer-row="${toPage(path.join(checkout, name))}"]`);

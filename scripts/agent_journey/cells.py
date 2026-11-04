@@ -49,18 +49,33 @@ EXCLUDED_AGENTS = {"cursor": "operator decision 2026-10-17"}
 INTERRUPTED = "interrupted"
 
 
+def excluded_agents(engine="herdr", fake_model=False):
+    """The rows taken out of the journey, shared by the run plan and CI verdict."""
+    return dict(EXCLUDED_AGENTS)
+
+
+def excluded_cells(engine="herdr", fake_model=False):
+    """The excluded cells, for both planning and CI: every cell of an excluded row.
+
+    A row exclusion still prevents its CLI from starting.
+    """
+    return {(agent, name): reason for agent, reason in excluded_agents(engine, fake_model).items()
+            for name in CELLS}
+
+
 def cell(status, reason, evidence=None):
     return {"status": status, "reason": reason, "evidence": evidence}
 
 
-def plan(contract, selected):
+def plan(contract, selected, *, engine="herdr", fake_model=False):
     """Every registered adapter participates; undeclared and unselected cells are final."""
     table = {}
+    excluded = excluded_cells(engine, fake_model)
     for row in contract:
         cells = {}
         for name in CELLS:
-            if row["id"] in EXCLUDED_AGENTS:
-                cells[name] = cell(EXCLUDED, EXCLUDED_AGENTS[row["id"]])
+            if (row["id"], name) in excluded:
+                cells[name] = cell(EXCLUDED, excluded[row["id"], name])
             elif not row["cells"][name]:
                 cells[name] = cell(NA, "not declared by the adapter")
             elif row["id"] not in selected:
@@ -400,6 +415,11 @@ def with_turn(verdict, turn):
 def emitter_verdict(session, expected):
     """Herdr's own integration reported the pane's session under `expected`,
     the contract's `herdr_source`."""
+    if expected is None:
+        if ((session or {}).get("observation") == "hide.agent.list" and session.get("kind") in ("id", "path")
+                and isinstance(session.get("value"), str) and session["value"]):
+            return PASS, "Hide's registration ledger names the native session checked by the conversation reader"
+        return FAIL, "Hide's registration ledger did not name a native session"
     source = (session or {}).get("source")
     if source == expected:
         return PASS, "Herdr integration reported the session as " + source

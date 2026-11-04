@@ -199,6 +199,8 @@ jobs:
       shards: ${{ matrix.system == 'macos' && 2 || 1 }}
       grep: ${{ matrix.system != 'macos' && '@platform' || '' }}
       keep-screenshots: ${{ matrix.system != 'macos' }}
+      # Windows CI Job forbids holder breakaway; b4-default owns its lifetime fix.
+      own-engine: ${{ matrix.system != 'windows' }}
 
   # One fixed fixture measured against the release hided on macOS
   # (docs/PERFORMANCE_TESTING.md, "The nightly performance lane"). A failed
