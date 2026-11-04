@@ -5,8 +5,7 @@ Usage: agent-cli-latest.py <out.json>
 
 The daily agent canary installs from the written table through
 `HIDE_AGENT_CLIS_TABLE` (scripts/agent_journey/clis.py). It prints the
-versions as one JSON object on stdout, by kind, with Herdr's latest release
-under `herdr`.
+versions as one JSON object on stdout, by kind.
 """
 
 import json
@@ -25,12 +24,11 @@ def main(argv=None):
     pinned = json.loads(clis.PINNED.read_text())
     try:
         rows = latest.latest_table(pinned["clis"])
-        herdr = latest.herdr_latest()
     except (latest.SourceError, OSError, ValueError) as error:
         print(f"::error title=agent canary::a latest release could not be read: {error}", file=sys.stderr)
         return 1
     Path(argv[0]).write_text(json.dumps({**pinned, "clis": rows}, indent=2) + "\n")
-    print(json.dumps({**{kind: row["version"] for kind, row in rows.items()}, "herdr": herdr}))
+    print(json.dumps({kind: row["version"] for kind, row in rows.items()}))
     return 0
 
 

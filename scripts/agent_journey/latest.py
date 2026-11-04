@@ -23,7 +23,6 @@ OMP_LATEST = "https://api.github.com/repos/can1357/oh-my-pi/releases/latest"
 # the names `clis.AGY_SYSTEMS` gives the systems CI installs agy on.
 AGY_MANIFESTS = {system: f"https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/{name}.json"
                  for system, name in zip(clis.AGY_SYSTEMS, ("darwin_arm64", "linux_amd64", "windows_amd64"))}
-HERDR_LATEST = "https://api.github.com/repos/herdrdev/herdr/releases/latest"
 VERSION = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?$")
 
 
@@ -88,6 +87,3 @@ def latest_table(rows, read=fetch, npm=npm_latest):
     """`rows` with each release replaced by its latest."""
     return {kind: {**row, **latest(kind, row, read, npm)} for kind, row in rows.items()}
 
-
-def herdr_latest(read=fetch):
-    return checked("herdr", json.loads(read(HERDR_LATEST)).get("tag_name"))

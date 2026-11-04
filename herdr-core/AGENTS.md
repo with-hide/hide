@@ -1,7 +1,7 @@
 # Rust core working conventions
 
 This file covers conventions already established under `herdr-core/`.
-Read the repository `AGENTS.md` for architecture, ownership, the runtime mutex, the Herdr contract, the snapshot wire, and performance invariants.
+Read the repository `AGENTS.md` for architecture, ownership, the runtime mutex, the snapshot wire, and performance invariants.
 Read `CONTRIBUTING.md` for required gates.
 Do not copy those contracts here.
 
@@ -12,8 +12,7 @@ Do not copy those contracts here.
 - Default modules and helpers to private or `pub(crate)`.
 - Add a public module or item only when a crate consumer needs that surface.
 - Keep the owner-thread handle hided drives in `handle.rs` and re-export only `Core` from `lib.rs`; the crate has no C ABI.
-- Speak to Herdr only through the `Engine` trait in `src/engine/`; keep conversions to and from the generated Herdr contract in `src/engine/herdr/wire.rs`, which only the engine's Herdr implementation calls.
-- Before changing that boundary, follow the Herdr API procedure in the root `AGENTS.md`.
+- Reach the panes only through the `Engine` trait in `src/engine/`, whose one implementation is the core's own engine (`src/engine/own/`).
 - Extend the existing feature owner instead of adding a second module for the same decision.
 
 ## Results and failures

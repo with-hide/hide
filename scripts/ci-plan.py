@@ -243,7 +243,6 @@ MACOS_LANE_INPUTS = {
         # both for the package's scripts, resources, kit, hooks and updater.
         "paths": (
             "desktop/scripts/*", "desktop/package.json", "desktop/resources/*", "desktop/native/*",
-            "contracts/herdr-bundle.json", "scripts/fetch-herdr-runtime.*",
             "contracts/conpty.json", "scripts/fetch-conpty.py",
             "scripts/verify-cargo.sh", "scripts/verify-web.sh", "scripts/toolchain-env.sh", "scripts/package-e2e.sh", "scripts/package-e2e-report.py",
             "hided/build.rs", "hided/src/cli.rs", "hide-kit/*", "hide-agent-hooks/*",
@@ -311,8 +310,6 @@ MACOS_PATHS = (
     # hide-vt's Zig build: the macOS target it maps and the macOS Zig and
     # inputs it downloads, which `vt (macos)` builds.
     "hide-vt/build.rs", "hide-vt/build-inputs.json",
-    # The Herdr pin names the macOS asset, which only macOS jobs run.
-    "contracts/herdr-bundle.json",
 )
 # Folders whose macOS form sits in shared files: a file there counts when it
 # holds macOS-only code. `hide-platform` is where each system's form is
@@ -377,12 +374,11 @@ POLICY_ONLY = (
     "scripts/tests/*",
     # Scripts only `policy`, another workflow or nobody runs.
     "scripts/check-capability-readers-off-lock.sh",
-    "scripts/check-harness-ignore-anchor.sh", "scripts/check-herdr-pin-single-source.sh",
+    "scripts/check-harness-ignore-anchor.sh",
     "scripts/check-core-touches-no-machine.py", "scripts/rust_scan.py",
     "scripts/check-ai-prompt-language.py", "scripts/check-pr-screenshots.py",
     "scripts/check-agent-screen-rules.py",
     "scripts/check-no-workstation-identity.*", "scripts/check-worktree-removal-boundary.sh",
-    "scripts/check-typed-live-remote.sh",
     "scripts/check-release-assets.mjs", "scripts/release-draft.mjs", "scripts/premerge-check.py",
     "scripts/merge-order.py", "scripts/pull_requests.py",
     "scripts/web-shell-measure/*",

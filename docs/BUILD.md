@@ -71,7 +71,7 @@ Cargo's own `resolver.feature-unification = "workspace"` does the same without a
 After adding or changing a dependency or its features, run `cargo hakari generate` and `cargo hakari manage-deps --yes` and commit what they write; `bash scripts/install-hakari.sh` installs the pinned release.
 It writes each version as a semver range rather than the members' exact pins, since `Cargo.lock` decides the version either way, so a patch or minor bump such as Dependabot's weekly group leaves it unchanged; a major bump or a changed feature set needs the two commands.
 The rust lane runs `scripts/verify-cargo.sh hakari`, which fails when either command would change a file.
-`hide-platform` and `hide-herdr-client` stay off the shared set (`final-excludes`): the OS contract lanes build and test exactly those two, which would otherwise compile tokio, hyper and schemars for nothing.
+`hide-platform` stays off the shared set (`final-excludes`): the OS contract lanes build and test exactly that crate, which would otherwise compile tokio, hyper and schemars for nothing.
 `hide-vt`, `hide-holder` and `hide-holder-protocol` stay off it too: a pane's holder runs for as long as its pane, so the program carries only the few dependencies it names.
 Their own dependencies still count toward the set, and a command that selects them alone builds their small subtree once more.
 
@@ -153,7 +153,7 @@ Three things made the copies: a key named after the job, so the rust lane, the w
 | Set | What it holds | Saved by, on main only | Read by |
 | --- | --- | --- | --- |
 | `workspace` | The debug build of the dependencies, one feature set for every member (`workspace-hack`) | `rust workspace` on Linux, `windows check` on Windows, `desktop e2e` shard 1 on macOS | Every other lane that builds Rust, and a release tag's tests |
-| `platform` | `hide-platform` and `hide-herdr-client` built alone, outside that feature set | `os contract` on each system | Nothing else |
+| `platform` | `hide-platform` built alone, outside that feature set | `os contract` on each system | Nothing else |
 | `release` | The release profile's dependencies | `package.yml`'s Windows and Linux package jobs and its macOS compile | The packages of a pull request and a release tag, and the nightly measurement |
 
 Each set is saved by one job per system, the one that builds the most of it, because a key that exists is never saved again: two savers would race and the loser's extra build would be lost every run.

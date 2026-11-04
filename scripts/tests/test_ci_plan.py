@@ -35,7 +35,6 @@ PACKAGED = FULL + ["package"]
 # The paths a pull request changed when `package.yml` had its own trigger.
 PACKAGE_INPUTS = (
     "desktop/scripts/package.mjs", "desktop/scripts/build.mjs", "desktop/package.json", "desktop/resources/entitlements.plist",
-    "contracts/herdr-bundle.json", "scripts/fetch-herdr-runtime.sh", "scripts/fetch-herdr-runtime.ps1",
     "scripts/verify-cargo.sh", "scripts/verify-web.sh", "scripts/toolchain-env.sh",
     "hided/build.rs", "hided/src/cli.rs", "hide-kit/src/lib.rs", "hide-agent-hooks/src/main.rs",
     ".github/workflows/package.yml", ".github/workflows/device-helpers.yml", ".github/workflows/release.yml",
@@ -451,10 +450,8 @@ class Selection(unittest.TestCase):
         for entries in (
             [("M", ".github/workflows/pr.yml")],
             [("M", "scripts/verify-web.sh")],
-            [("M", "contracts/herdr-bundle.json")],
             [("M", "Cargo.lock")],
             [("M", "pnpm-lock.yaml")],
-            [("M", "scripts/check-runtime-gates.sh")],
             [("M", "contracts/delivery-envelope.json")],
             [("M", "web/package.json")],
             [("M", "scripts/design-scratch.mjs")],
@@ -769,11 +766,10 @@ class NamedPaths(unittest.TestCase):
         for path in (
             ".github/workflows/pr.yml",
             "scripts/ci-plan.py", "scripts/verify-cargo.sh", "scripts/verify-web.sh", "scripts/ci-flaky-report.py",
-            "scripts/fetch-herdr-runtime.sh", "scripts/install-nextest.sh", "scripts/toolchain-env.sh",
+            "scripts/install-nextest.sh", "scripts/toolchain-env.sh",
             # Every member but two depends on `workspace-hack`, which holds
             # nearly every third-party crate: a lock change reaches them all.
             "pnpm-lock.yaml", "web/package.json", "desktop/package.json", "Cargo.lock", ".config/nextest.toml", "clippy.toml",
-            "contracts/herdr-bundle.json", "contracts/herdr-api.schema.json",
             "mystery/file.txt", "scripts/some-new-script.sh", "web/some-new-config.json",
         ):
             with self.subTest(path=path):
@@ -800,8 +796,7 @@ class NamedPaths(unittest.TestCase):
             (workflows / name).read_text()
             for name in ("web-e2e.yml", "desktop-e2e.yml", "os-contract.yml", "remote-mailbox.yml", "package.yml")
         )
-        for helper in ("verify-cargo.sh", "verify-web.sh", "toolchain-env.sh", "install-nextest.sh", "fetch-herdr-runtime.sh",
-                       "fetch-herdr-runtime.ps1", "ci-flaky-report.py", "check-herdr-schema.py"):
+        for helper in ("verify-cargo.sh", "verify-web.sh", "toolchain-env.sh", "install-nextest.sh", "ci-flaky-report.py"):
             callers += (ROOT / "scripts" / helper).read_text()
         checked = 0
         for pattern in ci.POLICY_ONLY:
@@ -1073,7 +1068,6 @@ class MacosOnPullRequests(unittest.TestCase):
             ("desktop/native/notification-status/main.swift", set(MACOS_LANES) - {"holder-restart"}),
             ("desktop/resources/entitlements/app.plist", set(MACOS_LANES) - {"holder-restart"}),
             ("hide-vt/build.rs", {"vt", "holder-restart"}),
-            ("contracts/herdr-bundle.json", set(MACOS_LANES) - {"holder-restart"}),
             (".github/workflows/pr.yml", set(MACOS_LANES)),
             (".github/workflows/desktop-e2e.yml", set(MACOS_LANES)),
             (".github/actions/rust-cache/action.yml", set(MACOS_LANES)),
@@ -1505,7 +1499,7 @@ class LastGreenRun(unittest.TestCase):
                      "scripts/tests/test_ci_plan.py"):
             self.assertTrue(ci.reads_no_lane("M", name, CRATES, ROOT), name)
         for name in ("docs/UI_BEHAVIOR.md", "AGENTS.md", "hided/README.md", "web/src/App.tsx", "Cargo.lock",
-                     "contracts/herdr-bundle.json", "web/e2e/cmdk.spec.ts", "unknown/file"):
+                     "contracts/conpty.json", "web/e2e/cmdk.spec.ts", "unknown/file"):
             self.assertFalse(ci.reads_no_lane("M", name, CRATES, ROOT), name)
         self.assertFalse(ci.reads_no_lane("T", "docs/ARCHITECTURE.md", CRATES, ROOT))
 

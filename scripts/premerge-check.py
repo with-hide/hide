@@ -46,7 +46,6 @@ CHECKS = (
     ("capability readers off lock", ".", ["bash", "scripts/check-capability-readers-off-lock.sh"]),
     ("no workstation identity", ".", ["bash", "scripts/check-no-workstation-identity.sh"]),
     ("worktree removal boundary", ".", ["bash", "scripts/check-worktree-removal-boundary.sh"]),
-    ("herdr pin single source", ".", ["zsh", "scripts/check-herdr-pin-single-source.sh"]),
     ("core touches no machine", ".", ["python3", "scripts/check-core-touches-no-machine.py"]),
     ("ai prompt language", ".", ["python3", "scripts/check-ai-prompt-language.py"]),
     ("agent screen rules", ".", ["python3", "scripts/check-agent-screen-rules.py"]),

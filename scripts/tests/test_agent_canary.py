@@ -35,7 +35,6 @@ def sources(url):
         latest.GROK_CHANNEL: "1.0.70\n",
         latest.OMP_LATEST: json.dumps({"tag_name": "v18.13.1"}),
         **{manifest: agy_manifest(system) for system, manifest in latest.AGY_MANIFESTS.items()},
-        latest.HERDR_LATEST: json.dumps({"tag_name": "v0.9.6"}),
     }[url]
 
 
@@ -65,7 +64,6 @@ class Latest(unittest.TestCase):
                                                     for system in clis.AGY_SYSTEMS})
         self.assertEqual(versions["claude"]["version"], "9.9.9")
         self.assertEqual(versions["claude"]["package"], clis.table()["claude"]["package"])
-        self.assertEqual(latest.herdr_latest(read=sources), "0.9.6")
 
     def test_a_source_that_answers_no_version_fails_rather_than_leaving_the_pin(self):
         with self.assertRaises(latest.SourceError):
@@ -91,7 +89,7 @@ class Latest(unittest.TestCase):
 
 class Record(unittest.TestCase):
     # Every latest release moved off its pin: `1.0.0` is pinned, `2.0.0` the latest.
-    versions = {**{kind: "2.0.0" for kind in KINDS.values()}, "herdr": "0.9.5"}
+    versions = {kind: "2.0.0" for kind in KINDS.values()}
     pins = {kind: "1.0.0" for kind in KINDS.values()}
 
     def test_each_system_has_one_report_and_a_missing_one_is_not_a_pass(self):
@@ -173,7 +171,7 @@ class Record(unittest.TestCase):
         self.assertIn("abc123", body)
         self.assertEqual(after["hide"]["issue"], 77)
         self.assertTrue(record.changed(self.versions, after), "a Hide failure is measured again the next day")
-        body = record.render(after, {}, {}, "0.9.5", "https://run")
+        body = record.render(after, {}, {}, "https://run")
         self.assertIn("| codex | 2.0.0 (2026-10-27) | ⚠️ Hide |", body)
         self.assertIn("#77", body)
 
@@ -237,7 +235,7 @@ class Record(unittest.TestCase):
 
     def test_the_body_carries_the_table_and_the_state_the_next_run_reads(self):
         after, _ = self.run_once({"agents": {}}, {system: report() for system in record.SYSTEMS})
-        body = record.render(after, {"codex": "0.163.0"}, {"codex": "0.155.1"}, "0.9.5", "https://run")
+        body = record.render(after, {"codex": "0.163.0"}, {"codex": "0.155.1"}, "https://run")
         self.assertIn("| Agent | Latest checked | Status | Minimum | Last passed | Pinned | Issue |", body)
         self.assertIn("| codex | 2.0.0 (2026-10-27) | ✅ | 0.155.1 | 2.0.0 (2026-10-27) | 0.163.0 |  |", body)
         self.assertEqual(record.read_state(body), after)

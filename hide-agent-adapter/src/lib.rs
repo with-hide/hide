@@ -767,14 +767,6 @@ pub struct HerdrIntegration {
     pub target: &'static str,
 }
 
-impl HerdrIntegration {
-    /// The source the agent's own Herdr integration reports its sessions
-    /// under, named by the integration target (`herdr:antigravity_cli` for agy).
-    pub fn session_source(&self) -> String {
-        format!("herdr:{}", self.target.replace('-', "_"))
-    }
-}
-
 /// The agent as a Hide AI provider (`hide-ai`, registry).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AiProvider {

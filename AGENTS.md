@@ -126,21 +126,11 @@ Read `docs/ARCHITECTURE.md` in full before changing anything under `herdr-core/`
 - An attach lives only while its tab is among the last five shown (`ATTACHED_TAB_LIMIT`); a released pane keeps its projection entry as `released`, because a missing entry reads as a failure.
 - Design principle #13 governs what reaches the screen: a failure the operator cannot act on goes to the diagnostic log, and an alert, a banner, or a sheet is a PRD decision, not a default.
 
-## Herdr API Contract
+## Herdr Source
 
-Before changing, debugging, or reviewing any Herdr integration, read both official references in full for the Herdr this repository pins: the [CLI reference](https://herdr.dev/docs/cli-reference/) and the [Socket API](https://herdr.dev/docs/socket-api/).
-The CLI is a wrapper over the same local socket API: use CLI wrappers for shell scripts, orchestration, debugging and portable plugin commands, and the raw socket only for custom-client control or long-lived subscriptions.
-
-- Do not guess method names, parameters, response fields, or protocol compatibility from existing call sites.
-  Check the target binary with `herdr --version` and `herdr api schema --json`, then compare with `contracts/herdr-api.schema.json` through `scripts/check-herdr-contract.sh`.
-- The pin lives only in `contracts/herdr-bundle.json`, and the contract is what that exact binary answers, never a copy from a Herdr checkout; `check-herdr-pin-single-source.sh` fails when anything restates it.
-  The pin no longer moves: no package carries Herdr.
-- The core and hided speak to Herdr only through the engine boundary, `herdr-core/src/engine/`: the `Engine` trait inside the core and `EngineHandle` off its owner thread; its Herdr implementation (`engine/herdr.rs`) is the only code that holds a Herdr connection or reads its wire (`docs/ARCHITECTURE.md`, The core, the shell and Herdr).
-  `scripts/check-engine-boundary.py` fails a Herdr connection, wire type, `hide-herdr-client` use or Herdr launch outside it, except the files its allow-list names with the bundle that deletes each.
-- The generated wire types live in a private module of `herdr-core/src/engine/herdr/wire.rs` (built by `herdr-core/build.rs`), so only that file can name them and an import anywhere else fails to compile; `wire.rs` is itself private to the engine's Herdr implementation.
-  Another crate reaches Herdr through `EngineHandle`, or, where it cannot depend on the core (`hide-kit`), through the typed helpers of `hide-herdr-client` (transport plus the plugin registry entry); never through a generated type.
-  Do not write wire deserialization in `session_sync/{projection,replica}.rs`.
-  `docs/ARCHITECTURE.md` lists the schema gaps the boundary still handwrites and the tests that demand migration when the schema closes them.
+Hide no longer runs Herdr: the core's own engine (`herdr-core/src/engine/own/`, over each pane's holder) runs every pane.
+When the own engine is stuck, or behaves differently from what Herdr did, read Herdr's source at its last pinned release ([herdrdev/herdr](https://github.com/herdrdev/herdr), tag `v0.9.5`) before designing a fix, and follow it where it fits; a pull request that goes another way says why in `Review`.
+Read it with `gh api` or a shallow clone under your own `agents/runs/`, and delete the clone when done.
 
 ## Performance Guide
 

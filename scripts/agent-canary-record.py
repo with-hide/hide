@@ -75,7 +75,6 @@ def changed(versions, state):
     measured again every day until they pass."""
     rows = state["agents"].values()
     measured = {row.get("kind"): row.get("checked") for row in rows}
-    measured["herdr"] = state.get("herdr", {}).get("checked")
     return (any(measured.get(kind) != version for kind, version in versions.items())
             or any(row.get("status") in ("unknown", "hide") for row in rows))
 
@@ -205,13 +204,13 @@ def updated_state(state, contract, versions, results, today):
             "issue": None if passed else before.get("issue"),
         }
     hide = [results[agent] for agent in agents if results[agent][0] == "hide"]
-    return {"agents": agents, "herdr": {"checked": versions.get("herdr"), "date": today},
+    return {"agents": agents,
             "hide": {"issue": state.get("hide", {}).get("issue"),
                      "failures": [text for _, failures, _ in hide for text in failures],
                      "keys": sorted(key for _, _, keys in hide for key in keys)}}
 
 
-def render(state, pins, minimums, herdr_pin, run_url):
+def render(state, pins, minimums, run_url):
     """The record issue's body: the table, then the state for the next run."""
     lines = [
         "Each agent CLI's latest release, measured daily by the agent journey on the fake model on "
@@ -233,9 +232,7 @@ def render(state, pins, minimums, herdr_pin, run_url):
     if hide.get("issue"):
         lines += ["", f"⚠️ Hide: the pinned version fails the same cells on the same commit, so Hide is what broke "
                   f"(#{hide['issue']}); the canary measures again every day until they pass."]
-    herdr = state.get("herdr", {})
-    lines += ["", f"Herdr: latest release {herdr.get('checked')}, bundled {herdr_pin} "
-              "(moved by `.github/workflows/herdr-update.yml`).", "", f"Last run: {run_url}", "",
+    lines += ["", f"Last run: {run_url}", "",
               STATE + json.dumps(state, separators=(",", ":")) + " -->"]
     return "\n".join(lines) + "\n"
 
@@ -349,8 +346,7 @@ def main(argv=None):
        "--description", "The daily agent CLI canary's record and failures")
     apply(after, state, args.run_url, args.commit, pins)
     minimums = {row["id"]: row["minimum_version"] for row in active_rows(contract)}
-    herdr_pin = json.loads((ROOT / "contracts/herdr-bundle.json").read_text())["version"]
-    text = render(after, pins, minimums, herdr_pin, args.run_url)
+    text = render(after, pins, minimums, args.run_url)
     if number:
         gh("issue", "edit", str(number), "--body", text)
     else:
