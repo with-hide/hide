@@ -3270,6 +3270,7 @@ mod tests {
             label: "Fixture".into(),
             cwds: vec!["/fixture/repo/worktrees/topic".into()],
             purpose: None,
+            owner_mark: None,
         };
         mirror.sync(&[space], &[project], &HashMap::new());
         let PurposeMirrorMessage::RemoveIssue {
@@ -3432,6 +3433,7 @@ mod tests {
             label: "Fixture".to_owned(),
             cwds: vec!["/fixture/repo/worktrees/topic".to_owned()],
             purpose: Some("Initial purpose".to_owned()),
+            owner_mark: None,
         };
         let checkout = WorkspaceSnapshot {
             agent_presence: Default::default(),
@@ -3543,6 +3545,7 @@ mod tests {
                 label: "Outer".to_owned(),
                 cwds: vec!["/fixture/repo/worktrees/topic".to_owned()],
                 purpose: Some("Outer purpose".to_owned()),
+                owner_mark: None,
             },
             workspace::SessionSpace {
                 checkout: None,
@@ -3550,6 +3553,7 @@ mod tests {
                 label: "Nested".to_owned(),
                 cwds: vec!["/fixture/repo/worktrees/topic/nested".to_owned()],
                 purpose: Some("Nested purpose".to_owned()),
+                owner_mark: None,
             },
             workspace::SessionSpace {
                 checkout: None,
@@ -3557,6 +3561,7 @@ mod tests {
                 label: "Outer second".to_owned(),
                 cwds: vec!["/fixture/repo/worktrees/topic".to_owned()],
                 purpose: Some("Authoritative purpose".to_owned()),
+                owner_mark: None,
             },
         ];
         let project = WorkspaceSnapshot {
@@ -3617,6 +3622,7 @@ mod tests {
             label: "First".to_owned(),
             cwds: vec!["/fixture/repo/worktrees/topic".to_owned()],
             purpose: Some("First purpose".to_owned()),
+            owner_mark: None,
         };
         let later_without_token = workspace::SessionSpace {
             checkout: None,
@@ -3624,6 +3630,7 @@ mod tests {
             label: "Later".to_owned(),
             cwds: vec!["/fixture/repo/worktrees/topic".to_owned()],
             purpose: None,
+            owner_mark: None,
         };
         let mut project = WorkspaceSnapshot {
             agent_presence: Default::default(),

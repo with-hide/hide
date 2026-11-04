@@ -104,6 +104,23 @@ pub(crate) fn node_owner_of<'a>(
         .find_in(workspaces)
 }
 
+/// The plain folder a workspace carrying `mark` owns on the core's own node,
+/// when it is `path` or a folder above it: a pane of that workspace whose cwd
+/// is a folder within is that folder's, as a cwd within a repository is the
+/// repository's checkout. The mark names its folder only as a digest, so the
+/// folders `path` names are tried from the deepest up.
+pub(crate) fn marked_folder<'a>(node: &str, mark: &str, path: &'a str) -> Option<&'a str> {
+    std::path::Path::new(path)
+        .ancestors()
+        .filter_map(std::path::Path::to_str)
+        .filter(|folder| !folder.is_empty())
+        .find(|folder| {
+            OwnerOpen::for_checkout(node, folder, folder, false, "")
+                .on_node()
+                .marks(mark)
+        })
+}
+
 /// How a checkout with no open owner gets one.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OwnerOpen {

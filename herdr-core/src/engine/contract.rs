@@ -804,6 +804,97 @@ fn a_restart_after_the_machine_went_down_brings_each_pane_back_under_its_id_and_
     }
 }
 
+/// A tab made in a plain folder whose only pane now runs in a plain folder
+/// below it is still that folder's after the daemon restarts. The core's
+/// record that it made the tab there does not outlive the daemon, so it reads
+/// the restored session: the engine brings back the workspace's owner mark
+/// with the pane, and the core places the pane's cwd under the folder the
+/// mark names, where the cwd alone made the subfolder a project of its own.
+#[test]
+#[ignore = "needs the built pane holder: HIDE_TEST_HOLDER_BIN"]
+fn a_restored_tab_whose_pane_is_in_a_subfolder_stays_in_the_folder_its_workspace_owns() {
+    use std::sync::Arc;
+
+    let (_root, [home, state_dir, folder]) = holder_root();
+    let _processes = RecordedProcesses(state_dir.clone());
+    // The real path, as a registration keeps it and the owner mark names it.
+    let folder = hide_platform::fs::identity::canonical(&folder).unwrap();
+    let sub = folder.join("복구할-작업-폴더");
+    std::fs::create_dir(&sub).unwrap();
+    let folder = hide_platform::path::to_wire(&folder).unwrap();
+    let sub = hide_platform::path::to_wire(&sub).unwrap();
+    let engine_dir = hide_kit::layout::engine_dir(&state_dir);
+    let open = || {
+        let (node, service) = built_node(&home, &state_dir);
+        let place = super::own::Place {
+            engine_dir: engine_dir.clone(),
+            home: hide_platform::path::to_wire(&home).unwrap(),
+            hooks_home: Some(home.clone()),
+            node: Arc::clone(&node) as Arc<dyn hide_node_link::NodeLink>,
+            windows: cfg!(windows),
+            definitions: Arc::new(hide_agent_adapter::definition::Catalog::read(Vec::new())),
+            launches: Arc::default(),
+        };
+        let panes = super::own::link_panes(node);
+        let engine =
+            super::own::OwnEngine::open(Arc::clone(&panes), place).expect("the engine opens");
+        (engine, panes, service)
+    };
+
+    let (first, first_panes, first_service) = open();
+    let (workspace, tab, root) = first
+        .create_workspace(WAIT, &folder, "fixture", true, BTreeMap::new())
+        .unwrap();
+    // What the core writes on a plain folder's owner when it opens one.
+    let mark = crate::checkout_owner::owner_mark(crate::node::TEST_NODE, &folder);
+    first
+        .report_workspace_token(
+            WAIT,
+            &workspace,
+            crate::checkout_owner::OWNER_TOKEN,
+            Some(&mark),
+        )
+        .unwrap();
+    let pane = first
+        .split_beside(WAIT, &root, Some(&sub), BTreeMap::new())
+        .unwrap();
+    prompted(&first, &pane);
+    first.close_pane(WAIT, &root).unwrap();
+    // The daemon ends and starts again; the pane's holder runs on.
+    first.stop();
+    drop((first, first_panes, first_service));
+
+    let (next, next_panes, _next_service) = open();
+    prompted(&next, &pane);
+    let mut core = crate::runtime::tests::runtime();
+    assert!(core.ingest_session(Ok(next.session_payload(WAIT).unwrap())));
+    let navigator = &core.snapshot().navigator;
+    let holding = navigator
+        .workspaces
+        .iter()
+        .flat_map(|project| &project.checkouts)
+        .find(|checkout| {
+            checkout
+                .tabs
+                .iter()
+                .any(|shown| shown.id.as_deref() == Some(tab.as_str()))
+        })
+        .map(|checkout| checkout.path.clone());
+    assert_eq!(holding, Some(folder.clone()), "the tab stays in its folder");
+    assert_eq!(
+        navigator
+            .workspaces
+            .iter()
+            .map(|project| project.path.clone())
+            .collect::<Vec<_>>(),
+        vec![folder],
+        "no project is made for the subfolder"
+    );
+    next_panes
+        .terminate(&pane)
+        .unwrap_or_else(|error| panic!("{pane} did not end: {error:?}"));
+}
+
 /// PRD engine-bundle-3-core-owns B28, D-9: a pane on the core's own engine
 /// names itself `HIDE_PANE_ID` and no Herdr pane, says its terminal is
 /// Hide's, and its proof names the shell its record holds, by the start time
