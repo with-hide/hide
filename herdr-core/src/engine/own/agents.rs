@@ -336,12 +336,20 @@ impl PaneAgent {
                 || now.duration_since(started) < START_DEADLINE)
     }
 
+    /// Whether the agent's program takes what is typed to it: it shows and
+    /// does not leave the terminal editing lines. This is not whether its
+    /// start is pending: a start ends at its deadline, while a program that
+    /// never turns line editing off takes no input however long ago it
+    /// started, and a retried letter must not be typed into its line.
+    pub(super) fn interactive(&self) -> bool {
+        self.live.shown && self.live.line_editing != Some(true)
+    }
+
     /// Whether a start made at `started` has settled by `now`: its program
-    /// shows, does not leave the terminal editing lines, and its screen
-    /// rests, at least [`START_SETTLE`] after the start.
+    /// takes input ([`Self::interactive`]) and its screen rests, at least
+    /// [`START_SETTLE`] after the start.
     fn settled(&self, started: Instant, now: Instant) -> bool {
-        self.live.shown
-            && self.live.line_editing != Some(true)
+        self.interactive()
             && matches!(self.live.status, Status::Idle | Status::Done)
             && now.duration_since(started) >= START_SETTLE
     }
@@ -815,9 +823,17 @@ mod tests {
         pane.facts(at(Some(true)));
         let started = Instant::now() - START_SETTLE;
         pane.agent.as_mut().unwrap().live.started = Some(started);
+        let agent = pane.agent.as_ref().unwrap();
         assert!(
-            pane.agent.as_ref().unwrap().launch_pending(Instant::now()),
+            agent.launch_pending(Instant::now()),
             "its screen rests past the settle, but the terminal edits lines"
+        );
+        assert!(!agent.interactive());
+        let deadline = started + START_DEADLINE;
+        assert!(!agent.launch_pending(deadline), "the start ends at its deadline");
+        assert!(
+            !agent.interactive(),
+            "yet a program that leaves the terminal editing lines takes no input"
         );
         let applied = pane.facts(at(Some(false)));
         assert!(applied.changed, "the start's readiness moved");
@@ -828,6 +844,7 @@ mod tests {
         );
         let took_keys = agent.live.started.unwrap();
         assert!(took_keys > started);
+        assert!(agent.interactive());
         agent.live.started = Some(took_keys - START_SETTLE);
         assert!(!agent.launch_pending(Instant::now()));
 

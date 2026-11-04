@@ -1217,7 +1217,7 @@ fn delivery_of(
         status: agent.live.status.as_str().to_owned(),
         state_change_seq: agent.live.seq,
         readiness: Readiness::of(
-            Some(agent.live.shown),
+            Some(agent.interactive()),
             Some(agent.launch_pending(std::time::Instant::now())),
         ),
     }
@@ -2206,7 +2206,7 @@ impl<'g> Engine for OwnEngine<'g> {
                     format!("agent {target} is blocked and requires interactive input"),
                 ));
             }
-            if !agent.live.shown || agent.launch_pending(std::time::Instant::now()) {
+            if !agent.interactive() || agent.launch_pending(std::time::Instant::now()) {
                 return Err(refused(
                     "agent_not_ready",
                     format!("agent {target} is not ready for input"),
@@ -3734,10 +3734,15 @@ mod tests {
     /// Moves the start of the agent in `pane` back by the settle delay, as
     /// if it had been typed that long ago.
     fn settle_start(engine: &OwnEngine, pane: &str) {
+        age_start(engine, pane, agents::START_SETTLE);
+    }
+
+    /// Moves the start of the agent in `pane` back by `by`.
+    fn age_start(engine: &OwnEngine, pane: &str, by: std::time::Duration) {
         let mut topology = engine.topology();
         let agent = topology.pane_mut(pane).unwrap().agent.as_mut().unwrap();
         let started = agent.live.started.as_mut().unwrap();
-        *started -= agents::START_SETTLE;
+        *started -= by;
     }
 
     fn running(program: &str, screen: hide_node_link::holders::ScreenState) -> PaneFacts {
@@ -4429,14 +4434,26 @@ mod tests {
             ..running("pi", ScreenState::Idle)
         };
         holders.say(&pane, &at(Some(true)));
+        let refused = |when: &str| {
+            match engine.prompt_agent(WAIT, "worker", "brief") {
+                Err(EngineError::Refused { code, .. }) => assert_eq!(code, "agent_not_ready"),
+                other => panic!("{when}: expected the agent not ready, got {other:?}"),
+            }
+            assert_eq!(holders.typed(&pane), before, "{when}: nothing typed");
+            let readiness = engine.delivery_agent(WAIT, "worker").unwrap().readiness;
+            assert!(!readiness.accepts_input(), "{when}: {readiness:?}");
+        };
         settle_start(&engine, &pane);
-        match engine.prompt_agent(WAIT, "worker", "brief") {
-            Err(EngineError::Refused { code, .. }) => assert_eq!(code, "agent_not_ready"),
-            other => panic!("expected the agent not ready, got {other:?}"),
-        }
-        assert_eq!(holders.typed(&pane), before, "nothing typed");
-        let readiness = engine.delivery_agent(WAIT, "worker").unwrap().readiness;
-        assert!(!readiness.accepts_input(), "{readiness:?}");
+        refused("past the settle");
+        // Past the start's deadline the start no longer waits, and a retried
+        // letter still finds a program that takes no input.
+        age_start(&engine, &pane, agents::START_DEADLINE);
+        assert_eq!(
+            engine.delivery_agent(WAIT, "worker").unwrap().readiness,
+            Readiness::NotReady,
+            "the start ended, but its program takes no input"
+        );
+        refused("past the deadline");
 
         holders.say(&pane, &at(Some(false)));
         settle_start(&engine, &pane);
