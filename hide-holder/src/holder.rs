@@ -97,6 +97,11 @@ const ANSWER_QUEUE_CAP: usize = 64 * 1024;
 /// connection that sent them is closed (`input_queue_full`).
 const INPUT_QUEUE_CAP: usize = 1024 * 1024;
 
+/// The least a queued submission counts against [`INPUT_QUEUE_CAP`]: it
+/// holds the writer for its gap whatever its size, so at most 256 wait,
+/// and a connection that sends more is ended as one past the cap is.
+const SUBMIT_COST: usize = 4 * 1024;
+
 /// The most connections reading their hello at once; one past it is closed
 /// with `opening_full`.
 const MAX_OPENING: usize = 8;
@@ -1698,6 +1703,9 @@ fn write_pty(
                 // flush, the program's answers go on meanwhile, and the
                 // input after it waits until the submit was written.
                 write_input(&mut *writer, events, generation, &text, &mut refused);
+                // Read before the gap's start, so the submit is written no
+                // sooner than a gap after this.
+                let text_at = std::time::SystemTime::now();
                 let due = Instant::now() + gap;
                 while refused != Some(generation) {
                     let left = due.saturating_duration_since(Instant::now());
@@ -1716,6 +1724,22 @@ fn write_pty(
                 }
                 write_input(&mut *writer, events, generation, &enter, &mut refused);
                 input.queued.fetch_sub(length, Ordering::SeqCst);
+                // One line a submission, never one a key.
+                input.log.event(
+                    "holder.submitted",
+                    &[
+                        ("generation", generation.into()),
+                        (
+                            "text_at_unix_ms",
+                            text_at
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map_or(0, |since| since.as_millis() as u64)
+                                .into(),
+                        ),
+                        ("gap_ms", (gap.as_millis() as u64).into()),
+                        ("written", (refused != Some(generation)).into()),
+                    ],
+                );
             }
             PtyWrite::Answers(bytes) => {
                 // A PTY that refuses answers refuses everything; the pane's
@@ -1752,7 +1776,7 @@ impl PtyWrite {
     fn len(&self) -> usize {
         match self {
             Self::Input { bytes, .. } | Self::Answers(bytes) => bytes.len(),
-            Self::Submit { text, enter, .. } => text.len() + enter.len(),
+            Self::Submit { text, enter, .. } => (text.len() + enter.len()).max(SUBMIT_COST),
         }
     }
 }

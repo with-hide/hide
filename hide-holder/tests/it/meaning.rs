@@ -277,7 +277,6 @@ fn a_submission_writes_its_submit_a_gap_after_its_text_and_holds_the_input_behin
     let mut connection = holder.open_accepting(vec![Capability::Screen, Capability::Keys]);
     connection.wait_for_drawn("ready");
     let gap = Duration::from_millis(300);
-    let sent = SystemTime::now();
     connection
         .send(ClientMessage::Submit(Submit {
             text: vec![
@@ -292,8 +291,19 @@ fn a_submission_writes_its_submit_a_gap_after_its_text_and_holds_the_input_behin
         .send(ClientMessage::Input(b"!".to_vec()))
         .unwrap();
     script.wait_heard(b"hello\r!");
+    // The holder logs when it had written the text, before the gap began:
+    // the program reads the submit a gap after that, never with the text.
+    holder.wait_logged("holder.submitted", 1, &mut connection);
+    let line = holder
+        .log_text()
+        .lines()
+        .find(|line| line.contains("\"event\":\"holder.submitted\""))
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .unwrap();
+    let text_at =
+        SystemTime::UNIX_EPOCH + Duration::from_millis(line["text_at_unix_ms"].as_u64().unwrap());
     assert!(
-        script.heard_at(5) >= sent + gap,
-        "the submit came before its gap"
+        script.heard_at(5) >= text_at + gap,
+        "the submit came less than a gap after its text was written"
     );
 }

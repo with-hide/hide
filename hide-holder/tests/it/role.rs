@@ -185,14 +185,10 @@ fn script() {
                     Ok(0) | Err(_) => return,
                     Ok(count) => count,
                 };
-                let mut file = std::fs::OpenOptions::new()
-                    .append(true)
-                    .create(true)
-                    .open(&heard)
-                    .unwrap();
-                file.write_all(&buffer[..count]).unwrap();
                 // When each read came, for a test that times what the
-                // holder wrote: one line of nanoseconds and the bytes' count.
+                // holder wrote: one line of nanoseconds and the bytes' count,
+                // written before the bytes, so a test that has seen the
+                // bytes finds their time.
                 let at = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
@@ -204,6 +200,12 @@ fn script() {
                     .unwrap()
                     .write_all(format!("{at} {count}\n").as_bytes())
                     .unwrap();
+                let mut file = std::fs::OpenOptions::new()
+                    .append(true)
+                    .create(true)
+                    .open(&heard)
+                    .unwrap();
+                file.write_all(&buffer[..count]).unwrap();
             }
         }
     });

@@ -1024,7 +1024,8 @@ pub enum ClientMessage {
     Terminate,
 }
 
-/// One submission, as Herdr's `agent.prompt` makes it: the holder writes
+/// One submission, as Herdr's `agent.prompt` makes it, never without text
+/// or a submit: the holder writes
 /// `text`'s parts to the program in order and flushes them, waits `gap`,
 /// then writes `enter`,
 /// and the connection's input that came after waits until `enter` was
@@ -1421,6 +1422,12 @@ pub fn write_client(writer: &mut impl Write, message: &ClientMessage) -> io::Res
                     MAX_SUBMIT_PARTS,
                 ));
             }
+            if submit.text.iter().all(SubmitPart::is_empty) || submit.enter.is_empty() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "a submission types text and a submit",
+                ));
+            }
             payload.push(u8::try_from(submit.text.len()).expect("bounded above"));
             let mut left = MAX_PASTE + MAX_SUBMIT_ENTER;
             for part in &submit.text {
@@ -1640,7 +1647,7 @@ pub fn read_client(reader: &mut impl Read) -> Result<ClientMessage, FrameError> 
                 )));
             }
             let mut left = MAX_PASTE + MAX_SUBMIT_ENTER;
-            let text = (0..parts)
+            let text: Vec<SubmitPart> = (0..parts)
                 .map(|_| {
                     let part = SubmitPart::take(&mut payload, left)?;
                     left -= part.len();
@@ -1648,6 +1655,11 @@ pub fn read_client(reader: &mut impl Read) -> Result<ClientMessage, FrameError> 
                 })
                 .collect::<Result<_, FrameError>>()?;
             let enter = SubmitPart::take(&mut payload, MAX_SUBMIT_ENTER)?;
+            if text.iter().all(SubmitPart::is_empty) || enter.is_empty() {
+                return Err(FrameError::Malformed(
+                    "a submission without text or a submit".to_owned(),
+                ));
+            }
             ClientMessage::Submit(Submit { text, gap, enter })
         }
         kind::RESIZE => ClientMessage::Resize(payload.size()?),
@@ -2752,6 +2764,40 @@ mod tests {
         write_frame(&mut bytes, kind::ASK, &payload).unwrap();
         assert!(matches!(
             read_opening(&mut &bytes[..]),
+            Err(FrameError::Malformed(_))
+        ));
+    }
+
+    /// A submission without text or a submit would hold the holder's writer
+    /// for its gap and count nothing against its queue's cap.
+    #[test]
+    fn a_submission_without_text_or_a_submit_is_not_written_or_read() {
+        for (text, enter) in [
+            (
+                vec![SubmitPart::Input(Vec::new())],
+                SubmitPart::Keys(vec![Key::Enter]),
+            ),
+            (Vec::new(), SubmitPart::Keys(vec![Key::Enter])),
+            (
+                vec![SubmitPart::Input(b"hi".to_vec())],
+                SubmitPart::Input(Vec::new()),
+            ),
+        ] {
+            let submit = ClientMessage::Submit(Submit {
+                text,
+                gap: MAX_SUBMIT_GAP,
+                enter,
+            });
+            assert!(write_client(&mut Vec::new(), &submit).is_err());
+        }
+        // Gap 2000 ms, one empty text part, then an Enter.
+        let mut payload = 2000u16.to_le_bytes().to_vec();
+        payload.extend([1, 0, 0, 0, 0, 0]);
+        payload.extend([2, 1, 0, 0, 0, Key::Enter.code()]);
+        let mut forged = Vec::new();
+        write_frame(&mut forged, kind::SUBMIT, &payload).unwrap();
+        assert!(matches!(
+            read_client(&mut &forged[..]),
             Err(FrameError::Malformed(_))
         ));
     }
