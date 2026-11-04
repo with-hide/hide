@@ -29,9 +29,12 @@ test("failed terminals remain legible and keyboard reachable in a narrow native 
     // A tab whose only pane runs in that folder.
     const tab = await withControl(daemon, async (control) => {
       const made = await newTab(control, fixture, "복구 작업");
+      // No window is open yet to report the panes' sizes. Finish each
+      // attachment before the next geometry operation, as the view would.
+      await preparePaneInput(control, made.pane);
       const pane = await splitPane(control, made.tab, toPage(folder));
-      await closePane(control, made.pane);
       await preparePaneInput(control, pane);
+      await closePane(control, made.pane);
       // Only this pane belongs to the cold-restore scenario. In the own
       // engine the missing shell would fail every other saved pane too.
       for (const initial of fixture.panes) await closePane(control, initial);
