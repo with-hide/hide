@@ -5,8 +5,8 @@
 # fixture contract and what a red run means.
 #
 # `scripts/web-shell-measure/run.sh --isolated-headless` with
-# `MEASURE_SCENARIO=topology MEASURE_SCALE=operator` fills a private pinned
-# Herdr, and in a second job the core's own engine, to the operator's scale
+# `MEASURE_SCENARIO=topology MEASURE_SCALE=operator` fills the core's own
+# engine (`MEASURE_ENGINE=own`) to the operator's scale
 # through the daemon (fixture.mjs: 43 workspaces, 62 tabs, 66 panes,
 # 5 printing), opens the release `hided` built here in the hosted
 # image's Google Chrome, headless, and records idle resources, one key echo
@@ -40,16 +40,9 @@ permissions:
 
 jobs:
   measure:
-    name: topology operator${{ matrix.engine == 'own' && ' own engine' || '' }}
+    name: topology operator own engine
     runs-on: macos-15
     timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        # The same fixture on the core's own engine too (MEASURE_ENGINE=own:
-        # the daemon with HIDE_DEV_PANE_HOLDER=1 over the `hide-holder` built
-        # beside it, and no Herdr), a record of its own each night.
-        engine: [herdr, own]
     steps:
       - uses: actions/checkout@v7
         timeout-minutes: 5
@@ -72,14 +65,12 @@ jobs:
           save: false
       - name: Name the run
         id: run
-        env:
-          ENGINE: ${{ matrix.engine }}
         run: |
           day=$(date -u +%F)
           echo "date=$day" >> "$GITHUB_OUTPUT"
-          echo "dir=$GITHUB_WORKSPACE/agents/runs/perf-nightly/$day-$ENGINE-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
-          # Herdr's artifacts keep the names their series began with.
-          if [ "$ENGINE" = own ]; then echo "suffix=-own" >> "$GITHUB_OUTPUT"; else echo "suffix=" >> "$GITHUB_OUTPUT"; fi
+          echo "dir=$GITHUB_WORKSPACE/agents/runs/perf-nightly/$day-own-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+          # The own engine's artifacts keep the `-own` names its series began with.
+          echo "suffix=-own" >> "$GITHUB_OUTPUT"
       - name: Install web dependencies
         timeout-minutes: 5
         run: bash scripts/verify-web.sh install
@@ -93,24 +84,13 @@ jobs:
         timeout-minutes: 30
         run: bash scripts/verify-cargo.sh build --release -p hided --bin hided
       - name: Build the release pane holder
-        # The own engine's node starts each pane's holder from the one beside hided.
-        if: matrix.engine == 'own'
+        # The node starts each pane's holder from the one beside hided.
         timeout-minutes: 15
         run: bash scripts/verify-cargo.sh build --release -p hide-holder --bin hide-holder
-      - name: Fetch the pinned Herdr runtime
-        id: herdr
-        if: matrix.engine == 'herdr'
-        timeout-minutes: 5
-        # Assigned first, so a failed fetch fails this step rather than
-        # handing the next one an empty path.
-        run: |
-          bin=$(zsh scripts/fetch-herdr-runtime.sh --platform macos-aarch64)
-          echo "bin=$bin" >> "$GITHUB_OUTPUT"
       - name: Measure the topology at operator scale
         timeout-minutes: 15
         env:
-          HERDR_BIN_PATH: ${{ steps.herdr.outputs.bin }}
-          MEASURE_ENGINE: ${{ matrix.engine }}
+          MEASURE_ENGINE: own
           HIDE_MEASURE_RUN_DIR: ${{ steps.run.outputs.dir }}
           MEASURE_SCENARIO: topology
           MEASURE_SCALE: operator

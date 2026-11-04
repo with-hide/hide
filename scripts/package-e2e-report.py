@@ -1,7 +1,7 @@
 """Combine package passes before the job's single bounded failure report.
 
-The original files stay beside each engine's logs. Nested suite titles keep
-the engine and package scenario in a failure's name.
+The original files stay beside each scenario's logs. Nested suite titles keep
+the package scenario in a failure's name.
 """
 
 import json
@@ -12,16 +12,15 @@ import sys
 def combine(root):
     suites = []
     for scenario in ("window", "update", "macos"):
-        for engine in ("herdr", "own"):
-            path = root / scenario / engine / "report.json"
-            if not path.is_file():
-                continue  # A build failure has no Playwright result.
-            with path.open("rb") as stream:
-                content = stream.read(16 * 1024 * 1024 + 1)
-            if len(content) > 16 * 1024 * 1024:
-                raise ValueError(f"package report over budget: {scenario}/{engine}")
-            report = json.loads(content)
-            suites.append({"title": f"{scenario}/{engine}", "suites": report["suites"]})
+        path = root / scenario / "report.json"
+        if not path.is_file():
+            continue  # A build failure has no Playwright result.
+        with path.open("rb") as stream:
+            content = stream.read(16 * 1024 * 1024 + 1)
+        if len(content) > 16 * 1024 * 1024:
+            raise ValueError(f"package report over budget: {scenario}")
+        report = json.loads(content)
+        suites.append({"title": scenario, "suites": report["suites"]})
     return {"suites": [{"title": "package", "suites": suites}]}
 
 

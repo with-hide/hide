@@ -106,7 +106,8 @@ jobs:
     with:
       # The pinned rerun measures this same commit.
       source-sha: ${{ github.sha }}
-      systems: '["linux","macos","windows"]'
+      # Windows runs no journey while a holder cannot leave the CI job (docs/INSTALL.md).
+      systems: '["linux","macos"]'
       fake: true
       stand-ins: false
       clis-table: ${{ needs.latest.outputs.table }}

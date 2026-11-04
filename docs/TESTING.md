@@ -299,10 +299,9 @@ A piece that another open change is still building is marked as pending with the
    `hide pane read` and `hide pane send` answer only inside a pane, so a spec reads a pane through the page's probe.
    The own engine's pane holders outlive their daemon by design, so a daemon restart leaves them for the next daemon to adopt, and the fixture's end ends each one by the pid its record in that daemon's state folder names (`endPaneHolders` in `web/e2e/pane-holders.mjs`, the rule the web shell measurement runs too) and fails while any process of that folder still runs: leaked holders once used up every PTY of a machine.
    Only a test that looks at Herdr itself (its protocol, its server's lifecycle, Hide following a change made in Herdr outside Hide, coexistence with an operator's Herdr) is tagged `@herdr`, with a `// Herdr only:` line above it saying why; it starts from `startHerdr` and drives Herdr's CLI.
-   The native writers in `session-readers.spec.ts` (Pi, omp, OpenCode and Grok) and the Pi flow in `session-thread.spec.ts` run on both engines.
-   Cursor's three legacy native-reader tests retain `@herdr`: their session identity comes from its retired Herdr integration, which the own engine does not support.
-   `agent-live-check`'s five specs remain Herdr integration checks, outside this migration; their CLI retirement belongs to the default-engine transition.
-   On the own engine the stand-in reports its session from inside its pane through the agent's Hide integration; on Herdr the fixture retains Herdr's integration report.
+   The native writers in `session-readers.spec.ts` (Pi, omp, OpenCode and Grok) and the Pi flow in `session-thread.spec.ts` run on the core's own engine.
+   `agent-live-check`'s five specs remain Herdr integration checks tagged `@herdr`; their CLI retirement belongs to `b4-default`.
+   The stand-in reports its session from inside its pane through the agent's Hide integration.
    These synthetic native-format records prove session reading and continuation, while `pi-omp-extension.spec.ts` and `opencode-plugin.spec.ts` exercise the integrations themselves.
    The web and desktop native-caller fixtures share `web/e2e/spawn-provider.ts`; the compiled stand-in writes its own bounded config through `--write-config`, also used by the Python journey, so none of those callers repeats its line format.
    A synthetic trigger sent as a `key` event is operator input and moves keyboard focus: `agent-pane.ts` and `runInPaneKeepingFocus` hold the command behind a file gate until `restoreFocusAfterInput` observes that input and restores the prior focus, before the command runs as the agent.
@@ -317,17 +316,15 @@ A piece that another open change is still building is marked as pending with the
    Ordinary Windows shell panes use the private Herdr server's configured cmd.exe on Herdr, and the product's integrated PowerShell on the own engine; an agent-start tab uses the integrated launch recipe.
    The engine fixture names its ordinary shell, and shared command and prompt helpers use that syntax without changing the account's PowerShell profile.
    The disposable runner's registry PATH preparation above belongs to the CI job, not to a fixture running on a developer's account.
-   Windows desktop and package own-engine cells are excluded: CI Job forbids holder breakaway; `b4-default` owns holder lifetime, and no test-only start helper bypasses it.
-   The desktop SSH specs use `ssh-pane-fixture.ts` on either engine: a native pane is made through the connected device's node, and cleanup ends its private HOME's holder records.
+   The desktop SSH specs use `ssh-pane-fixture.ts`: a native pane is made through the connected device's node, and cleanup ends its private HOME's holder records.
    They retain their isolated-SSH environment skips; the native fixture is prepared, while connecting an SSH CI lane remains follow-up work.
-   Only the pinned-Herdr repair case and the pre-connection Herdr pane premise stay Herdr-specific.
    `agent-start-platform.spec.ts` runs all seven native stand-ins through `hide agent spawn` and a typed shell command and checks their visible state; its Windows npm cases run real `.ps1` and `.cmd` launchers over Node, distinguishing Pi and omp despite their shared `cli.js` filename.
    Each package and launcher has its own start journey with both packages installed, keeping the shared-filename check within the ordinary per-test time budget.
    The real-holder engine contract refuses `agent_pane_busy` while an ordinary program runs above the shell.
    The Windows stand-in waits for its command runner instead of overlaying itself: Windows exec ends that parent, which would break the live ancestry the pane capability proves.
    A failed engine-fixture setup keeps its final snapshot and at most 32 terminal updates within 256 KiB, with a dropped-update count, in the run directory; these are diagnostics, never a successful start assertion.
-   Every web e2e lane runs once on each engine: the own engine's jobs run every test not tagged `@herdr` (`--grep-invert @herdr`) over as many shards as the Herdr jobs (`own-engine` in `web-e2e.yml`), on Linux in every full plan and on Windows with the `@platform` tests.
-   Locally: `bash scripts/verify-cargo.sh build -p hided -p hide-agent-hooks -p hide-holder`, `bash scripts/verify-web.sh web build`, then `HIDE_E2E_ENGINE=own bash scripts/verify-web.sh web e2e --grep-invert @herdr`, and the same without `HIDE_E2E_ENGINE` for the Herdr lane.
+   Every web and desktop e2e lane runs every test not tagged `@herdr` (`--grep-invert @herdr`) on the core's own engine, on Linux in every full plan and on Windows with the `@platform` tests.
+   Locally: `bash scripts/verify-cargo.sh build -p hided -p hide-agent-hooks -p hide-holder`, `bash scripts/verify-web.sh web build`, then `bash scripts/verify-web.sh web e2e --grep-invert @herdr`.
    The config runs one worker (`web/playwright.config.ts`) so a timing assertion does not compete with a neighbour for cores; CI deals tests out across runners by their recorded durations (`scripts/e2e-shard.py`, [Balancing the e2e shards](#balancing-the-e2e-shards)).
    A desktop spec sizes its window with `fitWindow` in `desktop/e2e/fixture.ts`, inside the work area of a CI runner's 1024-point screen; `hide-e2e/window-size-through-fixture` refuses `setSize` and `setBounds` anywhere else, and a spec whose subject needs a larger window (`right-lane.spec.ts` asserts lane widths in whole CSS pixels of bodies wider than the screen) says why in a line allow and never orders that window out and in.
    Why: macOS can keep a window larger than the work area until the window is next ordered in, by the test's own `blur()` or `focus()`, and clamp it then, so the layout changes in the middle of the test; `area cycle native` lost both View areas that way in about one run in ten (issue 511).
@@ -738,43 +735,39 @@ The transition retains these explicit exceptions:
 
 | Cell | Current coverage | What closes it |
 | --- | --- | --- |
-| Cursor legacy native readers, 3 tests | Herdr only: the retired integration supplies their session identity | Removed with Herdr by `b4-default` |
 | `agent-live-check`, 5 specs | Herdr integration checks, outside the dual-engine migration | CLI retirement by `b4-default` |
-| Windows own-engine journey | Excluded: CI Job forbids holder breakaway; Windows agent start proof is available | Holder lifetime integration and enabled cell by `b4-default` |
-| Pi own-engine fake journey, entire row | Excluded: `own-start-fixes 노드 대기(Pi 첫 지시문 input_unconfirmed, 제품 결함)`; cells outside the named exclusions and all Herdr rows remain required | `own-start-fixes` fixes the first brief and removes this exclusion |
+| Windows journey | Excluded: CI Job forbids holder breakaway; Windows agent start proof is available | Holder lifetime integration and enabled cell by `b4-default` |
+| Pi own-engine fake journey, entire row | Excluded: `own-start-fixes 노드 대기(Pi 첫 지시문 input_unconfirmed, 제품 결함)`; cells outside the named exclusions remain required | `own-start-fixes` fixes the first brief and removes this exclusion |
 | OpenCode own-engine fake journey, entire row | Excluded: `own-start-fixes 노드 대기(OpenCode 첫 지시문 미전달, 제품 결함)` | `own-start-fixes` delivers the first brief and removes this exclusion |
 | Codex and Antigravity own-engine fake journey, `fork` only | Excluded: `own-start-fixes 노드 대기`; Codex's new pane has no session or fork lineage, and Antigravity's fork input is discarded before readiness is confirmed | `own-start-fixes` confirms the fork's readiness and registration and removes these exclusions |
 | OMP own-engine fake journey, `sleep_wake`, `fork`, `title` | Excluded: `own-start-fixes 노드 대기`; wake confirmation arrives after the cell ends, the following fork is not ready for input, and the title's row is gone | `own-start-fixes` fixes wake and its following operations and removes these exclusions |
 | OMP own-engine fake journey, `resume` | Excluded: `own-start-fixes(#2075) 대기(깨우기 제외에 따른 선행 조건 미충족)`; it compares the sessions before and after the excluded wake | Remove this exclusion when #2075 merges |
-| Windows own-engine desktop and package | Excluded: CI Job forbids holder breakaway | Holder lifetime fix and enabled cells by `b4-default` |
-| Own-engine desktop failed-restoration spec | Excluded: `own-restore-checkout 노드 대기`; cold restore moves a pane in a nested folder out of its original checkout | `own-restore-checkout` preserves the original checkout and removes this exclusion |
-| Own-engine desktop first-run wizard, 4 tests | Excluded: `b4-default 대기(first-run의 Herdr 프로필 읽기 미확정)` | `b4-default` retires the Herdr profile read and enables these cells |
+| Desktop failed-restoration spec | Excluded: `own-restore-checkout 노드 대기`; cold restore moves a pane in a nested folder out of its original checkout | `own-restore-checkout` preserves the original checkout and removes this exclusion |
+| Desktop first-run wizard, 4 tests | Excluded: `b4-default 대기(first-run의 Herdr 프로필 읽기 미확정)` | `b4-default` retires the Herdr profile read and enables these cells |
 | Desktop SSH specs on the own engine | Fixture prepared; existing private-SSH prerequisites still skip without that environment | Connect an isolated SSH CI lane |
 
-A run that plans every lane a pull request can plan starts at most 60 jobs.
-The earlier count of 51 omitted six jobs already running in the package lane: helper identity, two Linux device helpers, device bundles and the separate Windows and macOS compiles.
-Correcting that count adds no runner or workflow.
-The core's own engine adds ten jobs beside Herdr's until the Herdr lanes go with Herdr (PRD engine-bundle-3-core-owns D-24): six Linux web shards, one Windows web job, two macOS desktop shards and one Linux journey job.
+A run that plans every lane a pull request can plan starts at most 50 jobs.
+The package lane's six preparation and compile jobs (helper identity, two Linux device helpers, device bundles and the separate Windows and macOS compiles) are counted, and every suite runs once, on the core's own engine, since Herdr's lanes went with Herdr (PRD engine-bundle-4-herdr-removal D-2).
 `scripts/tests/test_ci_plan.py` counts them from the workflows:
 
 | Jobs | Count | Why |
 | --- | --- | --- |
 | `plan`, `policy`, `rust`, `checks`, `windows check`, `verify` | 6 | `checks` merges `web checks` and `desktop checks`: both install the same dependencies, run for a minute or two and start a runner each |
-| `windows e2e` | 2 | the reusable workflow no longer starts a `plan` job that only fanned the shard numbers out; a matrix picks its list by index; the second job runs the same tests on the core's own engine |
-| `windows desktop` | 1 | the desktop `@platform` tests on Herdr, with the window kept as an artifact; own engine excluded because CI Job forbids holder breakaway, with holder lifetime owned by `b4-default` |
-| `web e2e` (Linux) | 14 | six more shards run every test not tagged `@herdr` on the core's own engine beside the Herdr shards, so the lane's wall-clock time stays the Herdr shards'; parallel daemon and web shell builds, with the daemon job also downloading the zsh packages, and six shards dealt by recorded durations: six were cut to four in 2026-10-05 after queues at the 20-job limit, returned to six as the suite grew, and six now meet the 720-second budget using the refreshed twenty-run median ([Balancing the e2e shards](#balancing-the-e2e-shards)) |
+| `windows e2e` | 1 | the reusable workflow no longer starts a `plan` job that only fanned the shard numbers out; a matrix picks its list by index |
+| `windows desktop` | 1 | the desktop `@platform` tests on Windows, the one job that starts the Electron app there in a pull request; it keeps the window it drew as the run's artifact |
+| `web e2e` (Linux) | 8 | parallel daemon and web shell builds, with the daemon job also downloading the zsh packages, and six shards dealt by recorded durations: six were cut to four in 2026-10-05 after queues at the 20-job limit, returned to six as the suite grew, and six now meet the 720-second budget using the refreshed twenty-run median ([Balancing the e2e shards](#balancing-the-e2e-shards)) |
 | `os contract` (Linux, Windows), `os contract (macOS)` | 3 | one job per system, the macOS leg planned only for its two crates and a macOS path |
 | `agy contract` (Windows) | 1 | agy's hook block, trust, conversations and Hide AI backend, and the real agy reading Hide's block, where the hook commands and install folder differ; `rust` runs the same tests on Linux and the nightly runs all three systems |
 | `omp SDK contract` (Linux, macOS, Windows) | 3 | both supported exact npm SDK versions on Bun 1.3.14, with synthetic stored login and localhost inference; the native SQLite, Bun runtime and package resolution need each system |
-| `agent journey` (Linux, Windows) | 3 | the journey on the compiled Claude and Codex stand-ins on both engines on Linux and its Windows forms (process jobs, private files, pane commands) on Windows, planned for the journey's code, its contract, the stand-ins and a crate's product code (about 4.4 minutes on Linux and half a minute on Windows, the median of 22 pull request runs to 2026-10-30); the nightly and a release run every system with the fake model lane ([VERIFICATION.md](VERIFICATION.md#agent-journey)) |
+| `agent journey` (Linux, Windows) | 2 | the journey on the compiled Claude and Codex stand-ins on Linux and its Windows forms (process jobs, private files, pane commands) on Windows, planned for the journey's code, its contract, the stand-ins and a crate's product code (about 4.4 minutes on Linux and half a minute on Windows, the median of 22 pull request runs to 2026-10-30); the nightly and a release run every system with the fake model lane ([VERIFICATION.md](VERIFICATION.md#agent-journey)) |
 | `agent CLIs` (Linux, Windows) | 2 | every agent CLI `contracts/agent-clis.json` pins, installed at its pin and failing on another version, planned only for the table, its reader and the installers, so a pin moves in the pull request that installs it; the nightly's journey installs them on macOS too |
 | `windows wsl` (Linux, Windows) | 2 | a real WSL 2 distribution on the Windows runner connected as a device through `wsl.exe`, with this build's Linux programs, which only a Linux job can build, planned only for the crates the WSL link crosses (`hide-platform`, `hide-node`, `hide-node-link`, `hide-host`) and the node command ([WSL device lane](#wsl-device-lane)) |
 | `remote mailbox` | 1 | the lane that was the tail of the macOS `@platform` job, now on Linux and, in the nightly, on macOS |
-| `desktop e2e` | 4 | the only macOS lane of the desktop app's own changes, in two shards that build in place, because the whole suite outgrew one job's step cap ([Balancing the e2e shards](#balancing-the-e2e-shards)); two more shards run every test not tagged `@herdr` on the core's own engine, four of the organization's five macOS runners |
+| `desktop e2e` | 2 | the only macOS lane of the desktop app's own changes, in two shards that build in place, because the whole suite outgrew one job's step cap ([Balancing the e2e shards](#balancing-the-e2e-shards)) |
 | `vt`, holder restart, relay interoperability | 9 | each lane runs once on Linux, macOS and Windows |
 | `package` (Windows, Linux, macOS) | 9 | helper identity, two Linux device helpers, device bundles, Windows and macOS compiles, and three packages; without macOS, its compile and package are omitted, leaving seven jobs |
 
-The common runs are smaller: a `herdr-core` or `hided` change starts 27 jobs, a web shell change 22, a desktop-only change 5 (6 for `desktop/src/main`, which adds `windows check`), a `hide-platform` change 31, a `hide-kit` or `hide-agent-hooks` change 35, all with none on macOS, and a documentation change 3, as does a push that reuses the pull request's last green run.
+The common runs are smaller: a `herdr-core` or `hided` change starts 27 jobs, a web shell change 19, a desktop-only change 5 (6 for `desktop/src/main`, which adds `windows check`), a `hide-platform` change 31, a `hide-kit` or `hide-agent-hooks` change 35, all with none on macOS, and a documentation change 3, as does a push that reuses the pull request's last green run.
 A macOS path adds its macOS jobs: a change to a macOS file of `desktop/src/main` starts 10 jobs with four on macOS, and one to `hide-platform`'s macOS code 33 with two.
 The median wall time and the share of runs whose Linux shards waited more than 10 minutes come from a measurement of the pull request runs after a change merges, taken the way issue #561 took its baseline; they are not in this guide because a pull request cannot prove them.
 The `plan` job's summary lists each lane with the paths that chose it.

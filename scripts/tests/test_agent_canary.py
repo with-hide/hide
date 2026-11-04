@@ -94,26 +94,20 @@ class Record(unittest.TestCase):
     versions = {**{kind: "2.0.0" for kind in KINDS.values()}, "herdr": "0.9.5"}
     pins = {kind: "1.0.0" for kind in KINDS.values()}
 
-    def test_engine_reports_stay_apart_and_a_missing_native_leg_is_not_a_pass(self):
+    def test_each_system_has_one_report_and_a_missing_one_is_not_a_pass(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             for system in record.SYSTEMS:
-                for engine in (("herdr",) if system == "windows" else ("herdr", "own")):
-                    path = root / f"{record.LATEST}-{system}-{engine}" / "report.json"
-                    path.parent.mkdir()
-                    value = report(failing="codex") if (system, engine) == ("linux", "own") else report()
-                    path.write_text(json.dumps(value))
+                path = root / f"{record.LATEST}-{system}" / "report.json"
+                path.parent.mkdir()
+                path.write_text(json.dumps(report(failing="codex") if system == "linux" else report()))
             reports = record.load_reports(root)
             self.assertEqual(record.reruns(CONTRACT, self.versions, self.pins, reports), (["codex"], ["linux"]))
-            # The same cell failing only on Herdr at the pin cannot be used
-            # as evidence that the native failure was already in Hide.
-            pinned = {"linux": {"selected": AGENTS, "engine_reports": {
-                "herdr": report(failing="codex"), "own": report()}}}
-            result = record.verdicts(CONTRACT, self.versions, self.pins, reports, pinned)
-            self.assertEqual(result["codex"][0], "fail")
-            pinned["linux"]["engine_reports"]["own"] = report(failing="codex")
+            pinned = {"linux": report()}
+            self.assertEqual(record.verdicts(CONTRACT, self.versions, self.pins, reports, pinned)["codex"][0], "fail")
+            pinned = {"linux": report(failing="codex")}
             self.assertEqual(record.verdicts(CONTRACT, self.versions, self.pins, reports, pinned)["codex"][0], "hide")
-            (root / f"{record.LATEST}-linux-own/report.json").unlink()
+            (root / f"{record.LATEST}-linux/report.json").unlink()
             incomplete = record.load_reports(root)
             self.assertNotIn("linux", incomplete)
             self.assertEqual(record.verdicts(CONTRACT, self.versions, self.pins, incomplete, pinned)["codex"][0], "unknown")
@@ -142,12 +136,12 @@ class Record(unittest.TestCase):
         before = {"agents": {"codex": {"kind": "codex", "checked": "1.0.0", "last_pass": "1.0.0",
                                        "last_pass_date": "2026-10-26", "status": "pass"}}}
         reports = {system: report() for system in record.SYSTEMS}
-        reports["windows"] = report(failing="codex")
-        pinned = {"windows": report(agents=["codex"])}
+        reports["macos"] = report(failing="codex")
+        pinned = {"macos": report(agents=["codex"])}
         after, calls = self.run_once(before, reports, pinned)
         row = after["agents"]["codex"]
         self.assertEqual((row["status"], row["last_pass"], row["issue"]), ("fail", "1.0.0", 77))
-        self.assertEqual(row["failures"], ["windows: composer is fail (erase: not_empty)"])
+        self.assertEqual(row["failures"], ["macos: composer is fail (erase: not_empty)"])
         self.assertEqual([call[:2] for call in calls], [["issue", "create"]])
         body = calls[0][calls[0].index("--body") + 1]
         self.assertIn("the pinned 1.0.0 does not fail these on the same commit abc123", body)
@@ -218,17 +212,17 @@ class Record(unittest.TestCase):
 
     def test_the_reruns_are_the_failing_releases_on_the_systems_they_failed(self):
         reports = {system: report() for system in record.SYSTEMS}
-        reports["windows"] = report(failing="codex")
+        reports["macos"] = report(failing="codex")
         reports["linux"] = report(failing="claude-code", cell="letter")
         self.assertEqual(record.reruns(CONTRACT, self.versions, self.pins, reports),
-                         (["claude-code", "codex"], ["linux", "windows"]))
+                         (["claude-code", "codex"], ["linux", "macos"]))
         self.assertEqual(record.reruns(CONTRACT, self.versions, self.pins,
                                        {system: report() for system in record.SYSTEMS}), ([], []))
         # A missing system's report judges no agent, so nothing is rerun.
         self.assertEqual(record.reruns(CONTRACT, self.versions, self.pins, {"linux": reports["linux"]}), ([], []))
 
     def test_a_system_without_a_report_judges_no_agent(self):
-        reports = {system: report() for system in ("linux", "macos")}
+        reports = {"linux": report()}
         after, calls = self.run_once({"agents": {}}, reports)
         self.assertEqual({row["status"] for row in after["agents"].values()}, {"unknown"})
         self.assertEqual(calls, [])
