@@ -758,6 +758,7 @@ Only Herdr's own layout marks a request's pane laid out, never a pane Hide drew 
 
 Every tab creation and pane operation Hide starts leaves one `pane_op.timing` line in the diagnostic log with each stage's milliseconds after the request: Herdr's answer, the first drawn snapshot, the first and the first layout event, the confirmed layout ingested, its snapshot sent, and the pane's first frame (D-14, `runtime/op_timing.rs`).
 Herdr's share is `layout_event - herdr_ack`; the rest is Hide's.
+On the core's own engine, whose own layout already holds a created pane when it answers, `drawn` is the first snapshot sent whose layout holds the pane, and for a new tab shows that tab, so the stage reads the same on both engines.
 The record carries ids and times only, and at most `OP_TIMING_LIMIT` are open at once.
 
 The notifier announces once per burst rather than once per change.
@@ -2231,6 +2232,9 @@ A full fragment starts an epoch, numbered across the holder's life, at sequence 
 A full one first puts the receiver back to a known display (the normal screen, a soft reset, autowrap and reverse video off, a clear), so whatever the receiver drew before is gone, and no fragment turns on an input mode or asks the receiver anything, so a terminal that draws one answers nothing; the encoder is Herdr v0.9.5's `render_ansi.rs`, changed for this (`hide-holder/src/encode.rs`).
 Hidden text is sent as hidden (SGR 8), not as Herdr draws it, in the background color, which shows it on the receiver's default background.
 The screen is pulled, not pushed: the PTY reader only marks it changed, and the connection's own writer draws it as it is when the connection can take a write, at most once per 16 ms, so a slow node gets fewer, larger fragments and never a queue, and with no connection nothing is drawn.
+The first change after input reaches the program is the one exception: it is drawn at once rather than after the 16 ms, so a key's echo never waits on the fragment before it, at the cost of at most one fragment more per input message; output the program makes on its own stays paced.
+Herdr paces its stream 16 ms after its last render whatever the change, and a holder that did the same made the next key's echo wait whenever the round trip from one echo to the next key took less than 16 ms, which the node's shorter path made common.
+The writer is woken for that change even while it waits out the interval.
 The reader wakes the writer only when the writer waits for a change, not while it waits out the 16 ms, as Herdr's render signal does: a wake per read cost a 100 MB flood about 100,000 wakes and put the holder's CPU above the Herdr server's.
 An allocator keeps what a flood's work freed, about 5 MB more than an idle holder on macOS, so once a connection's screen has been still for a second after a fragment its writer gives those pages back (`hide_platform::memory::return_freed`), once, and then waits with no bound until the next change; an idle holder therefore wakes once after its last fragment and never periodically.
 The writer that sent a flood's fragments is the one whose return gives most back: on macOS a debug holder released right after a flood read 7.0 MiB after the next connection's return against 5.5 MiB after the flooding connection's own; a holder flooded with no connection keeps less to give (5.2 MiB after 300 MB, release).
