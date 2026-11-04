@@ -9,7 +9,7 @@ import path from "node:path";
 import { startFixture, type AgentFixture } from "./engine-fixture";
 import { closePane, focusTab, newTab, openProject, openWorktree, viewPane, withControl, type OpenedProject } from "./daemon-actions";
 import { agentReading, elsewhereTab, finishUnseenTurn, labelAgentPane, setAgentAsking, setAgentState, spawnChild, startAgentIn, startAgentInProject } from "./fixture-agents";
-import { continueFixtureTranscript } from "./herdr-fixture";
+import { continueFixtureTranscript } from "./pane-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { countSent, keyboardFocus, rest, rowGeometry, screenshot, sendEvent, sidebarColumns, sidebarOverflow, sidebarRowsFit } from "./wire";
 import { chord } from "./chords";

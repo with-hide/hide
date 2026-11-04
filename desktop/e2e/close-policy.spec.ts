@@ -31,7 +31,7 @@ async function inWorkspace(label: string, body: (session: Session) => Promise<vo
     // The window is a CI runner's screen wide on every machine; zoomed out,
     // the lane over the agents leaves both panes in sight.
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents.setZoomFactor(0.6));
-    if (evidence) fs.writeFileSync(path.join(evidence, `${label}-identity.json`), JSON.stringify({ ...identity, daemonPid: run.daemonPid(), state: run.env.HIDE_STATE_DIR, socket: fixture.socket }, null, 2));
+    if (evidence) fs.writeFileSync(path.join(evidence, `${label}-identity.json`), JSON.stringify({ ...identity, daemonPid: run.daemonPid(), state: run.env.HIDE_STATE_DIR }, null, 2));
     const capture = (name: string) => {
       if (evidence && process.platform === "darwin") {
         const id = identity.window.split(":")[1]!;

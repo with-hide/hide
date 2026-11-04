@@ -68,7 +68,7 @@ test("a spawned child appears in the native delegation tree", async () => {
     await page.keyboard.press("Escape");
     await expect(treeButton).toBeFocused();
     await screenshot(page, "agent-spawn-delegation");
-    await captureNativeWindow(app, "agent-spawn-delegation-native", { parent, children, state: run.env.HIDE_STATE_DIR, home: run.env.HOME, socket: fixture.socket, head: execFileSync("git", ["rev-parse", "HEAD"], { cwd: path.resolve(__dirname, "../.."), encoding: "utf8" }).trim(), provider: "synthetic native CLI" });
+    await captureNativeWindow(app, "agent-spawn-delegation-native", { parent, children, state: run.env.HIDE_STATE_DIR, home: run.env.HOME, head: execFileSync("git", ["rev-parse", "HEAD"], { cwd: path.resolve(__dirname, "../.."), encoding: "utf8" }).trim(), provider: "synthetic native CLI" });
   } catch (error) {
     failures.push(error);
   } finally {

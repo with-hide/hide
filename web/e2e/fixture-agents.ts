@@ -8,7 +8,7 @@
 
 import path from "node:path";
 import { prepareAgentInput, waitForAgentInput } from "./agent-pane";
-import { claudeProjects, writeFixtureTranscript, type FixtureLabel } from "./herdr-fixture";
+import { claudeProjects, writeFixtureTranscript, type FixtureLabel } from "./pane-fixture";
 import { agentIn, checkoutAt, closePane, focusTab, newTab, preparePaneInput, sendKeys, tabPanes, withControl, type AgentRow, type OpenedProject } from "./daemon-actions";
 import type { Daemon } from "./hided-fixture";
 import type { AgentFixture, EngineServer } from "./engine-fixture";

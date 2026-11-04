@@ -198,7 +198,7 @@ test("remote pane CLI reaches its own Workspace over SSH and leaves the local Wo
     expect(plainInCheckout.stdout).toContain("Hide Workspace control is available for this session's checkout");
     expect(plainInCheckout.stdout).toContain(fs.realpathSync(path.join(local.root, "fixture")));
     const state = JSON.parse(fs.readFileSync(path.join(run.env.HIDE_STATE_DIR!, "hided.json"), "utf8")) as { port: number; token: string };
-    await page.evaluate(async ({ port, token, socket }) => {
+    await page.evaluate(async ({ port, token }) => {
       await new Promise<void>((resolve, reject) => {
         const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
         const timer = setTimeout(() => reject(new Error("device registration timed out")), 10_000);
@@ -207,14 +207,14 @@ test("remote pane CLI reaches its own Workspace over SSH and leaves the local Wo
         ws.onmessage = () => {
           ws.send(JSON.stringify({ schema_version: 2, kind: "register_device", payload: {
             id: "ssh-e2e", label: "SSH fixture", ssh_alias: "isolated-workspace",
-            herdr_socket_path: socket, host_consent: true,
+            host_consent: true,
           } }));
           clearTimeout(timer);
           ws.close();
           resolve();
         };
       });
-    }, { port: state.port, token: state.token, socket: remote.socket });
+    }, { port: state.port, token: state.token });
     await expect.poll(() => liveBridges(bridge).length, { timeout: 60_000 }).toBe(1);
     // The connection installed Hide's kit on the device: `hide` is linked
     // where the device's panes find it, through the helper root's `current`.
@@ -298,7 +298,7 @@ test("remote pane CLI reaches its own Workspace over SSH and leaves the local Wo
     const firstCheckout = fs.realpathSync(path.join(remote.root, "fixture"));
     await sendFrame(page, state, { kind: "register_device", payload: {
       id: "ssh-e2e-2", label: "SSH fixture 2", ssh_alias: "isolated-workspace-2",
-      herdr_socket_path: second.socket, host_consent: true,
+      host_consent: true,
     } });
     await expect.poll(() => liveBridges(bridge).length, { timeout: 60_000 }).toBe(2);
     await second.attach(run, "ssh-e2e-2");

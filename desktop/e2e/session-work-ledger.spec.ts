@@ -3,7 +3,7 @@
 import { expect, type ElectronApplication, type Locator } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import { setAgentState } from "../../web/e2e/fixture-agents";
-import { continueFixtureTranscript } from "../../web/e2e/herdr-fixture";
+import { continueFixtureTranscript } from "../../web/e2e/pane-fixture";
 import { FIRST_GOAL, NEXT_GOAL, nextWork, seedFirstWork, workFixture, workRepositoryReady } from "../../web/e2e/session-work-fixture";
 import { chord } from "../../web/e2e/chords";
 import { enterWorkspace, openTaskFolds, setLanePinned, showExplorer, taskRow } from "../../web/e2e/wire";
@@ -74,7 +74,7 @@ test("@platform session records by goal flow, ended work and search render in bo
     await expectRecordPrs(record, child, 3);
     // The child is a row of the parent's record (B20); the capture keeps the parent in front.
     await expect(record.locator(`[data-record-child="${child}"]`)).toBeVisible();
-    const fixtureIdentity = { head: execFileSync("git", ["rev-parse", "HEAD"], { cwd: REPO, encoding: "utf8" }).trim(), home: run.env.HOME, state: run.env.HIDE_STATE_DIR, socket: fixture.socket, daemon: run.daemonPid(), parent: pane, child, provider: "scripted", github: "scripted" };
+    const fixtureIdentity = { head: execFileSync("git", ["rev-parse", "HEAD"], { cwd: REPO, encoding: "utf8" }).trim(), home: run.env.HOME, state: run.env.HIDE_STATE_DIR, daemon: run.daemonPid(), parent: pane, child, provider: "scripted", github: "scripted" };
     for (const theme of ["light", "dark"] as const) {
       await page.locator('[data-open-settings]').click();
       await page.locator('[data-settings-tab="general"]').click();

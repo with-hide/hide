@@ -6,7 +6,7 @@
 // it; this one runs the same everywhere and its log can.
 import fs from "node:fs";
 import { fixtureProgram } from "./platform-fixture";
-import { paneCommandLine, type PaneShell } from "./herdr-fixture";
+import { paneCommandLine, type PaneShell } from "./pane-fixture";
 
 // argv[2] is the log path. Raw mode makes each key reach the program as its
 // bytes; a pipe has no raw mode and delivers the same bytes unchanged.

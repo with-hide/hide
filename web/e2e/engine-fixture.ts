@@ -11,7 +11,7 @@ import path from "node:path";
 import { expect, type Page } from "@playwright/test";
 import { connectControl, type HidedControl } from "./hided-control.mjs";
 import { agentIn, areaShowing, checkoutAt, closePane, focusPane, openProject, splitPane, tabPanes, viewPane, waitForPaneInput } from "./daemon-actions";
-import { claudeProjects, panePrompt, paneShellOf, writeFixtureTranscript, type PaneShell } from "./herdr-fixture";
+import { claudeProjects, panePrompt, paneShellOf, writeFixtureTranscript, type PaneShell } from "./pane-fixture";
 import { startHided, type Daemon, type DaemonEngine, type OpenedDaemon } from "./hided-fixture";
 import { fixtureExecutable, fixturePrograms } from "./platform-fixture";
 import { installAgentRunner, reportedMarker, type AgentPaneFixture, type AgentRun, type HideAnswer } from "./agent-pane";
@@ -65,7 +65,7 @@ function startOwnEngine(): EngineServer {
     const daemonEnv: NodeJS.ProcessEnv = {
       SHELL: shell,
       ...(process.platform === "win32" ? { PROMPT: "fixture % " } : {}),
-      // Ubuntu's /etc/zsh/zshrc stops at compinit's question before this HOME's .zshrc (herdr-fixture.ts).
+      // Ubuntu's /etc/zsh/zshrc stops at compinit's question before this HOME's .zshrc.
       skip_global_compinit: "1",
       HIDE_E2E_ROOT: root,
     };

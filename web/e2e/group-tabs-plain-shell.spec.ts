@@ -3,18 +3,13 @@ import { createLegacyDraft } from "./group-start-helper";
 // and /bin/bash, rather than the fixture server's configured zsh. Windows
 // retains its separate PowerShell recipe and cannot exercise these shells.
 import { expect, test, type Page } from "@playwright/test";
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { toPage } from "../../desktop/src/main/wirePath";
-import { herdrTabs } from "./failure-dump";
 import { agentIn, checkoutAt, sendKeys, withControl } from "./daemon-actions";
 import { startFixture, type AgentFixture } from "./engine-fixture";
-import { startHerdr, type HerdrFixture } from "./herdr-fixture";
-import { herdrGate } from "./herdr-gate";
 import { startHided, type Daemon } from "./hided-fixture";
 import { fixtureLoginShellPath } from "./platform-fixture";
-import { quietFor } from "./wait";
 import { enterWorkspace, sendEvent } from "./wire";
 
 test.describe.configure({ timeout: 150_000 });
@@ -44,16 +39,6 @@ function starts(daemon: Daemon): Start[] {
   if (!fs.existsSync(file)) return [];
   const saved = JSON.parse(fs.readFileSync(file, "utf8")) as { workspaces: { agent_starts?: Record<string, Start> }[] };
   return saved.workspaces.flatMap(view => Object.values(view.agent_starts ?? {}));
-}
-
-function topology(herdr: HerdrFixture): string[] {
-  return (herdrTabs(herdr) as { tabs: string[] }[]).flatMap(workspace => workspace.tabs);
-}
-
-function identity(herdr: HerdrFixture, pane: string): Identity {
-  const row = herdr.run(["pane", "get", pane]) as { result: { pane: { terminal_id: string } } };
-  const info = herdr.run(["pane", "process-info", "--pane", pane]) as { result: { process_info: { shell_pid: number } } };
-  return { terminal_id: row.result.pane.terminal_id, shell_pid: info.result.process_info.shell_pid };
 }
 
 function plainCommand(shell: string): string[] {
@@ -134,21 +119,6 @@ async function startTerminal(page: Page): Promise<string> {
   await expect(blank(page)).toHaveCount(0, { timeout: 30_000 });
   await expect(page.locator("[data-pane-view]")).toHaveCount(1);
   return (await page.locator("[data-pane-view]").getAttribute("data-pane-view"))!;
-}
-
-async function acceptsInput(herdr: HerdrFixture, pane: string, suffix = "INPUT_OK") {
-  // The contiguous expected output never appears in the typed command, so
-  // terminal echo alone cannot satisfy this assertion.
-  const sent = spawnSync(herdr.bin, ["pane", "run", pane, `printf '%s%s\\n' PLAIN_ ${suffix}`], { env: herdr.env, encoding: "utf8", timeout: 10_000 });
-  expect(sent.status, sent.stderr).toBe(0);
-  let output = "";
-  await expect.poll(() => {
-    const read = spawnSync(herdr.bin, ["pane", "read", pane, "--source", "recent-unwrapped", "--lines", "80", "--format", "text"], { env: herdr.env, encoding: "utf8", timeout: 10_000 });
-    expect(read.status, read.stderr).toBe(0);
-    output = read.stdout;
-    return output;
-  }).toContain(`PLAIN_${suffix}`);
-  expect(output).toContain("fixture $ ");
 }
 
 async function startClaude(page: Page, prompt: string) {
@@ -246,59 +216,3 @@ for (const scenario of [
     finally { await cleanup(failure, [() => daemon?.stop(), () => herdr.stop()]); }
   });
 }
-
-// Herdr only: it holds Herdr's layout.apply answer, ends the daemon, and checks the restarted daemon adopts the shell Herdr made.
-test("a plain sh start with a lost answer adopts the same shell after daemon restart @herdr", async ({ page }) => {
-  const herdr = await startHerdr({ agents: false });
-  let gate: Awaited<ReturnType<typeof herdrGate>> | undefined;
-  let daemon: Daemon | null = null;
-  let failure: unknown;
-  try {
-    gate = await herdrGate(herdr, privateShellEnv(herdr.env.HOME!, herdr.fixturePath));
-    daemon = await startHided(herdr, "group-plain-recover", undefined, { SHELL: "/bin/sh", HERDR_SOCKET_PATH: gate.socket });
-    await open(page, daemon);
-    await createGroup(page, "Owner");
-    await startTerminal(page);
-    const originalTabs = topology(herdr);
-    await createGroup(page, "Plain recovery");
-    const held = gate.arm("layout.apply");
-    await terminal(page).click();
-    await held;
-    const pending = starts(daemon).filter(start => start.state === "pending");
-    expect(pending).toHaveLength(1);
-    expect(pending[0]!.effect).toMatchObject({ shell_readiness: "plain", expected_command: plainCommand("/bin/sh"), binding: null });
-    const claim = pending[0]!.marker;
-    await page.goto("about:blank");
-    const previousPid = daemon.pid;
-    process.kill(previousPid, "SIGKILL");
-    await expect.poll(() => { try { process.kill(previousPid, 0); return true; } catch { return false; } }).toBe(false);
-    let created!: { tab: string; pane: string; identity: Identity };
-    daemon = await daemon.restart(async () => {
-      // Forward once to real Herdr only after the caller died. Capture the
-      // actual incarnation before a new daemon can attempt confirmation.
-      await gate!.release();
-      const added = topology(herdr).filter(tab => !originalTabs.includes(tab));
-      expect(added).toHaveLength(1);
-      const panes = (herdr.run(["pane", "list"]) as { result: { panes: { tab_id: string; pane_id: string }[] } }).result.panes.filter(pane => pane.tab_id === added[0]);
-      expect(panes).toHaveLength(1);
-      created = { tab: added[0]!, pane: panes[0]!.pane_id, identity: identity(herdr, panes[0]!.pane_id) };
-      expect(created.identity.shell_pid).toBeGreaterThan(0);
-      await acceptsInput(herdr, created.pane, "BEFORE_RECOVERY");
-    });
-    await open(page, daemon);
-    await page.getByRole("button", { name: "Check start status", exact: true }).click();
-    await expect(blank(page)).toHaveCount(0, { timeout: 30_000 });
-    await expect(page.locator("[data-pane-view]")).toHaveCount(1);
-    await expect(page.locator("[data-pane-view]")).toHaveAttribute("data-pane-view", created.pane);
-    await expect.poll(() => starts(daemon!).find(start => start.marker === claim)).toMatchObject({
-      state: "ready",
-      effect: { binding: { tab_id: created.tab, pane_id: created.pane, identity: created.identity } },
-    });
-    expect(identity(herdr, created.pane)).toEqual(created.identity);
-    await acceptsInput(herdr, created.pane, "AFTER_RECOVERY");
-    await quietFor(page, 300, "confirming the restored plain-shell intent must not create a replacement shell");
-    expect(topology(herdr).sort()).toEqual([...originalTabs, created.tab].sort());
-    expect(gate.params("layout.apply")).toHaveLength(1);
-  } catch (error) { failure = error; }
-  finally { await cleanup(failure, [() => daemon?.stop(), async () => { await gate?.stop(); }, () => herdr.stop()]); }
-});

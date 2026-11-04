@@ -7,12 +7,10 @@
 // observing. Find and the lane run on either engine.
 
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { startFixture, type AgentFixture } from "./engine-fixture";
 import { sendKeys, withControl } from "./daemon-actions";
-import { startHerdr, type HerdrFixture } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { countSent, enterWorkspace, screenshot, setLanePinned, showExplorer } from "./wire";
 import { chord } from "./chords";
@@ -20,64 +18,12 @@ import { chord } from "./chords";
 test.describe.configure({ timeout: 180_000 });
 test.use({ actionTimeout: 15_000 });
 
-function herdrCli(herdr: HerdrFixture, args: string[]): string {
-  return execFileSync(herdr.bin, args, { env: herdr.env, encoding: "utf8", timeout: 30_000 });
-}
-
-/** Herdr's own scroll position for a pane, lines above the bottom. */
-function scrollOffset(herdr: HerdrFixture, pane: string): number {
-  const answer = herdr.run(["pane", "get", pane]) as { result: { pane: { scroll?: { offset_from_bottom: number } } } };
-  return answer.result.pane.scroll?.offset_from_bottom ?? -1;
-}
-
 async function paneText(page: Page, pane: string): Promise<string> {
   return page.evaluate((id) => window.__hideProbe?.paneText(id) ?? "", pane);
 }
 
 /** The last rows sit on adjacent lines: a frame drawn at another grid wraps each row onto two. */
 const DRAWN_AT_GRID = /row-159 *\nrow-160/;
-
-// Herdr only: the pane is observed because another Herdr client holds its control, and its wheel moves Herdr's own viewport.
-test("an observed agent pane scrolls beside another client @herdr", async ({ page }) => {
-  await page.setViewportSize({ width: 1680, height: 900 });
-  const herdr = await startHerdr();
-  let daemon: Daemon | null = null;
-  let other: ChildProcess | null = null;
-  try {
-    const [observed] = herdr.panes;
-    // Long history in both agent panes: the shim echoes what the PTY gets.
-    const rows = Array.from({ length: 160 }, (_, index) => `row-${String(index + 1).padStart(3, "0")}`).join("\n");
-    for (const pane of herdr.panes) herdrCli(herdr, ["pane", "send-text", pane, `${rows}\n`]);
-    // Another client holds control of the first pane, at its own grid.
-    other = spawn(herdr.bin, ["terminal", "session", "control", observed, "--cols", "70", "--rows", "20"], {
-      env: herdr.env,
-      stdio: ["pipe", "ignore", "ignore"],
-    });
-    daemon = await startHided(herdr, "scroll-find");
-    await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
-    await enterWorkspace(page, "fixture");
-
-    // B1, B2: the pane is observed, not dropped; its wheel moves Herdr's
-    // viewport and the frame at the view's own grid shows older rows.
-    const observedView = page.locator(`[data-pane-view="${observed}"]`);
-    await expect(observedView).toHaveAttribute("data-transport", "observing", { timeout: 20_000 });
-    await expect.poll(() => paneText(page, observed), { timeout: 15_000 }).toContain("row-160");
-    expect(scrollOffset(herdr, observed)).toBe(0);
-    await observedView.locator("[data-terminal-host]").hover();
-    await page.mouse.wheel(0, -900);
-    await expect.poll(() => scrollOffset(herdr, observed), { timeout: 10_000 }).toBeGreaterThan(0);
-    await expect.poll(() => paneText(page, observed), { timeout: 10_000 }).not.toContain("row-160");
-    await expect(observedView.locator("header")).not.toContainText("starting");
-    await screenshot(page, "pane-scroll-observed-up");
-    await page.mouse.wheel(0, 4000);
-    await expect.poll(() => scrollOffset(herdr, observed), { timeout: 10_000 }).toBe(0);
-    await expect.poll(() => paneText(page, observed), { timeout: 10_000 }).toContain("row-160");
-  } finally {
-    other?.kill();
-    daemon?.stop();
-    herdr.stop();
-  }
-});
 
 type Docked = { page: Page; daemon: Daemon; fixture: AgentFixture; focused: string; workspace: Locator; sent: Map<string, number>; last: Map<string, Record<string, unknown>> };
 

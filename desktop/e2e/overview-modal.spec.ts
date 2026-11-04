@@ -21,7 +21,7 @@ test('shared Overview covers native pages, retains work and restores the keyboar
       return {pid: process.pid, executable: process.execPath, window: windows[0]!.getMediaSourceId()};
     });
     const evidence = process.env.HIDE_E2E_SCREENSHOT_DIR;
-    if (evidence) fs.writeFileSync(path.join(evidence, 'native-overview-identity.json'), JSON.stringify({...identity, daemonPid: run.daemonPid(), state: run.env.HIDE_STATE_DIR, socket: fixture.socket}));
+    if (evidence) fs.writeFileSync(path.join(evidence, 'native-overview-identity.json'), JSON.stringify({...identity, daemonPid: run.daemonPid(), state: run.env.HIDE_STATE_DIR}));
     const capture = (name: string) => {
       if (evidence && process.platform === 'darwin') execFileSync('/usr/sbin/screencapture', ['-x','-o','-l',identity.window.split(':')[1]!,path.join(evidence, `${name}.png`)]);
     };

@@ -29,7 +29,7 @@ test("three usage chips, View, Help and Settings fit the minimum native window i
     await page.getByRole("switch", { name: "Claude Code 5 hours" }).click();
     await page.locator('[data-settings-tab="general"]').click();
     await page.locator('[data-font-size] [role="slider"]').press("End");
-    const facts = { home: run.env.HOME, state: run.env.HIDE_STATE_DIR, socket: fixture.socket, provider: "external Claude CLI shim; Codex signed out", window: "720x480, maximum Interface text" };
+    const facts = { home: run.env.HOME, state: run.env.HIDE_STATE_DIR, provider: "external Claude CLI shim; Codex signed out", window: "720x480, maximum Interface text" };
     const capture = async (name: string) => {
       const candidate = await app!.evaluate(({ BrowserWindow }) => ({
         pid: process.pid, executable: process.execPath, windows: BrowserWindow.getAllWindows().length,

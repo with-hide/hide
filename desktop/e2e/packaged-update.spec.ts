@@ -30,7 +30,7 @@ import { startEngine } from "../../web/e2e/engine-fixture";
 import { connectStateDir } from "../../web/e2e/hided-control.mjs";
 import { ownedHolders } from "../../web/e2e/pane-holders.mjs";
 import { fixtureExecutable } from "../../web/e2e/platform-fixture";
-import { panePrompt } from "../../web/e2e/herdr-fixture";
+import { panePrompt } from "../../web/e2e/pane-fixture";
 import { enterWorkspace } from "../../web/e2e/wire";
 import { hostLog, isolate, launch, screenshot, shellPage, test } from "./fixture";
 import { withProbe, type Probe } from "./terminal-probe";

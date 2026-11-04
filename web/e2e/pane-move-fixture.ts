@@ -1,23 +1,10 @@
 import { expect, type Locator, type Page } from "@playwright/test";
-import path from "node:path";
 import { startFixture } from "./engine-fixture";
 import { focusTab, newTab, tabOfPane, viewPane } from "./daemon-actions";
 import { connectControl, type HidedControl, type Rest } from "./hided-control.mjs";
-import { startHerdr, type HerdrFixture } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { countSent, enterWorkspace } from "./wire";
 
-/** What `pane list` says of a pane, which only Herdr answers. */
-export type PaneFact = { pane_id: string; terminal_id: string; tab_id: string };
-export function paneFacts(herdr: Pick<HerdrFixture, "run">): PaneFact[] {
-  return (herdr.run(["pane", "list"]) as { result: { panes: PaneFact[] } }).result.panes;
-}
-/** The shell, terminal and foreground processes of a pane as Herdr reports them. */
-export function processFacts(herdr: Pick<HerdrFixture, "run">, paneId: string) {
-  const info = (herdr.run(["pane", "process-info", "--pane", paneId]) as { result: { process_info: { shell_pid: number | null; tty: string | null; foreground_process_group_id: number | null; foreground_processes: { pid: number }[] } } }).result.process_info;
-  expect(info.shell_pid).toBeGreaterThan(0);
-  return { shell: info.shell_pid, tty: info.tty, group: info.foreground_process_group_id, foreground: info.foreground_processes.map(process => process.pid) };
-}
 export const paneView = (page: Page, paneId: string) => page.locator(`[data-pane-view="${paneId}"]`);
 export const tabTitle = (page: Page, tabId: string) => page.locator(`[data-agent-tab-bar] [role=tab][data-tab="${tabId}"]`);
 
@@ -87,24 +74,6 @@ export async function startMove(page: Page) {
     // The new tab came forward as New tab makes it; the pair of panes stays in front.
     await focusTab(control, fixture, fixture.tab);
     return { fixture, ...(await drive(page, daemon, control, fixture.panes, fixture.tab, target)), stop };
-  } catch (error) { stop(); throw error; }
-}
-
-/**
- * The same journey with the destination tab in a second native Herdr
- * workspace, where Herdr changes the public pane id of a pane moved to it.
- */
-export async function startCrossWorkspaceMove(page: Page) {
-  const herdr = await startHerdr();
-  let daemon: Daemon | undefined;
-  let control: HidedControl | undefined;
-  const stop = () => { control?.close(); try { daemon?.stop(); } finally { herdr.stop(); } };
-  try {
-    const made = (herdr.run(["workspace", "create", "--cwd", path.join(herdr.root, "fixture"), "--label", "Move destination", "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]) as { result: { tab: { tab_id: string }; root_pane: { pane_id: string } } }).result;
-    daemon = await startHided(herdr, "pane-move");
-    control = await connectControl(daemon);
-    const target = { tab: made.tab.tab_id, pane: made.root_pane.pane_id };
-    return { herdr, ...(await drive(page, daemon, control, herdr.panes, herdr.tab, target)), stop };
   } catch (error) { stop(); throw error; }
 }
 

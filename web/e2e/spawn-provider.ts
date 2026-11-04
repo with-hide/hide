@@ -3,7 +3,6 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import type { EngineServer } from "./engine-fixture";
 import { fixtureExecutable } from "./platform-fixture";
 import { fixtureShimPath } from "./shims/build";
 
@@ -13,12 +12,10 @@ export function configureSpawnProvider(root: string, fields: { reporter: string;
 }
 
 /** A session report made by the actual pane process, followed by its report-completion marker. */
-export function writeSessionReporter(fixture: Pick<EngineServer, "root" | "bin">): string {
+export function writeSessionReporter(fixture: { root: string }): string {
   const reporter = path.join(fixture.root, "agent-pane-session.cjs");
   const hooks = path.resolve("..", "target", "debug", fixtureExecutable("hide-agent-hooks"));
-  const report = fixture.bin
-    ? `[${JSON.stringify(fixture.bin)}, ["pane", "report-agent-session", pane, "--source", "herdr:claude", "--agent", "claude", "--agent-session-id", session, "--seq", "1"], {}]`
-    : `[${JSON.stringify(hooks)}, ["hook", "--runtime", "claude-code", "--event", "SessionStart"], { input: JSON.stringify({ session_id: session, hook_event_name: "SessionStart", source: "startup", cwd: process.cwd() }) }]`;
+  const report = `[${JSON.stringify(hooks)}, ["hook", "--runtime", "claude-code", "--event", "SessionStart"], { input: JSON.stringify({ session_id: session, hook_event_name: "SessionStart", source: "startup", cwd: process.cwd() }) }]`;
   fs.writeFileSync(reporter, `
 const fs = require("node:fs");
 const path = require("node:path");

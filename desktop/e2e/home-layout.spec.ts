@@ -92,7 +92,7 @@ test("the first connect of a new app moves the old layout into ~/.hide once", as
       await page.locator(`[data-device-details="${movedNode}"]`).click();
       await expect(page.locator(`[data-kit-part="${movedNode}:coordination_retirement:installed"]`)).toBeVisible();
       await screenshot(page, "home-layout-this-mac-kit");
-      await captureNativeWindow(app, "coordination-retirement-native", { state: moved, home, socket: engine.socket, retirement: "installed" });
+      await captureNativeWindow(app, "coordination-retirement-native", { state: moved, home, retirement: "installed" });
     } finally {
       await app.close().catch(() => undefined);
     }

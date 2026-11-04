@@ -4,7 +4,7 @@ import path from "node:path";
 import os from "node:os";
 import { createHash, randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import { labelMarker } from "./herdr-fixture";
+import { labelMarker } from "./pane-fixture";
 import { copyFixtureShim } from "./shims/build";
 import { fixtureExecutable, fixtureProgram } from "./platform-fixture";
 import { agentIn, preparePaneInput, sendKeys, withControl } from "./daemon-actions";

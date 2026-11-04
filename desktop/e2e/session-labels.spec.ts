@@ -15,7 +15,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { setAgentSession } from "../../web/e2e/fixture-agents";
-import { claudeProjects, writeFixtureTranscript } from "../../web/e2e/herdr-fixture";
+import { claudeProjects, writeFixtureTranscript } from "../../web/e2e/pane-fixture";
 import { enterWorkspace } from "../../web/e2e/wire";
 import { launchShell, startStack, test } from "./fixture";
 import { compositorPresents, quietFor } from "../../web/e2e/wait";

@@ -8,13 +8,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { sendKeys, withControl } from "./daemon-actions";
 import { startFixture } from "./engine-fixture";
-import { herdrGate } from "./herdr-gate";
-import { paneCommandLine, startHerdr } from "./herdr-fixture";
+import { paneCommandLine } from "./pane-fixture";
 import { fixtureProgram } from "./platform-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { countSent, enterWorkspace, screenshot } from "./wire";
 import { chord } from "./chords";
-import { unchangedForFrames } from "./wait";
 
 test.describe.configure({ timeout: 120_000 });
 test.use({ actionTimeout: 15_000 });
@@ -93,52 +91,5 @@ test("Cmd+F on a full-screen agent opens the agent's own search instead of the f
   } finally {
     daemon?.stop();
     fixture.stop();
-  }
-});
-
-// Herdr only: the late answer is ordered by holding a request at Herdr's socket, which the core's own engine has none of.
-test("an agent search answer that lands after the keyboard moved leaves the keyboard where it went @herdr", async ({ page }) => {
-  await page.setViewportSize({ width: 1680, height: 900 });
-  const herdr = await startHerdr();
-  let gate: Awaited<ReturnType<typeof herdrGate>> | undefined;
-  let daemon: Daemon | null = null;
-  try {
-    const [agent, other] = herdr.panes;
-    gate = await herdrGate(herdr);
-    daemon = await startHided({ ...herdr, socket: gate.socket }, "agent-find-late");
-    const last = new Map<string, Record<string, unknown>>();
-    countSent(page, last);
-    const received: string[] = [];
-    page.on("websocket", (socket) => socket.on("framereceived", ({ payload }) => { received.push(String(payload)); }));
-    await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
-    await enterWorkspace(page, "fixture");
-    await expect(page.locator(`[data-pane-view="${agent}"]`)).toHaveAttribute("data-focused", "true", { timeout: 20_000 });
-    await expect.poll(() => keyboardPane(page)).toBe(agent);
-
-    // ⌘F asks the core where the agent's search goes, and its answer waits
-    // on Herdr: the keys it sends the agent are held at the socket.
-    const held = gate.arm("pane.send_keys");
-    await page.keyboard.press(chord("find_in_pane"));
-    await held;
-    const request = String(last.get("pane_find_open")?.request_id);
-    // Meanwhile the operator moves on to the other pane.
-    await page.locator(`[data-pane-view="${other}"] [data-terminal-host]`).click({ position: { x: 40, y: 60 } });
-    await expect(page.locator(`[data-pane-view="${other}"]`)).toHaveAttribute("data-focused", "true");
-    expect(received.some((frame) => frame.includes(`{"request_id":"${request}",`))).toBe(false);
-
-    // The answer lands after the move: the agent's search opened in its pane,
-    // and the keyboard stays where the operator took it.
-    await gate.release();
-    await expect.poll(() => received.some((frame) => frame.includes(`{"request_id":"${request}","route":"agent"}`))).toBe(true);
-    await unchangedForFrames(page, () => keyboardPane(page));
-    expect(await keyboardPane(page)).toBe(other);
-    const agentHeard = fs.readFileSync(herdr.inputLogs[0], "latin1").length;
-    await page.keyboard.type("LATE_FIND_ANSWER");
-    await expect.poll(() => fs.readFileSync(herdr.inputLogs[1], "latin1"), { timeout: 10_000 }).toContain("LATE_FIND_ANSWER");
-    expect(fs.readFileSync(herdr.inputLogs[0], "latin1").slice(agentHeard)).not.toContain("LATE");
-  } finally {
-    daemon?.stop();
-    await gate?.stop();
-    herdr.stop();
   }
 });

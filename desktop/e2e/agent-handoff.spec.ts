@@ -63,7 +63,7 @@ test("handoff roots have provenance without delegation or a focus change in eith
       await expect(row).toHaveAttribute("data-depth", "0");
     }
     await expect(page.locator(`[data-pane-children="${parent}"]`)).toHaveCount(0);
-    const facts = { parent, roots, state: run.env.HIDE_STATE_DIR, home: run.env.HOME, socket: fixture.socket, head: execFileSync("git", ["rev-parse", "HEAD"], { cwd: path.resolve(__dirname, "../.."), encoding: "utf8" }).trim(), provider: "synthetic native CLI" };
+    const facts = { parent, roots, state: run.env.HIDE_STATE_DIR, home: run.env.HOME, head: execFileSync("git", ["rev-parse", "HEAD"], { cwd: path.resolve(__dirname, "../.."), encoding: "utf8" }).trim(), provider: "synthetic native CLI" };
     await screenshot(page, "agent-handoff-roots");
     await captureNativeWindow(app, "agent-handoff-roots-native", facts).catch((error) => failures.push(error));
     // Each handed-off root is its own task in the sidebar's 태스크 list, not a child of the spawner's (PRD sidebar-task-lens B4, B7).

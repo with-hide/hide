@@ -526,7 +526,7 @@ async function nativeCapture(name: string): Promise<void> {
   expect(listed.status, listed.stderr).toBe(0);
   const windows = JSON.parse(listed.stdout) as { id: number; pid: number }[];
   expect(windows).toHaveLength(1);
-  fs.writeFileSync(path.join(dir, name + ".json"), JSON.stringify({ candidate: "worktree desktop/dist/main.js", ...windows[0], daemonPid: run.daemonPid(), socket: fixture.socket }, null, 2));
+  fs.writeFileSync(path.join(dir, name + ".json"), JSON.stringify({ candidate: "worktree desktop/dist/main.js", ...windows[0], daemonPid: run.daemonPid() }, null, 2));
   const captured = spawnSync("screencapture", ["-x", "-o", "-l", String(windows[0]!.id), path.join(dir, name + ".png")], { encoding: "utf8", timeout: 10_000 });
   expect(captured.status, captured.stderr).toBe(0);
 }

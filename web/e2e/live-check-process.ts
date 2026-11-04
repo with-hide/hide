@@ -18,7 +18,7 @@ elif mode=='-c': exec(compile(subject,'<live-check-fixture>','exec'))
 else: raise SystemExit(2)
 `;
 
-export function startPython(args: string[], options: { timeout: number; env?: NodeJS.ProcessEnv }) {
+function startPython(args: string[], options: { timeout: number; env?: NodeJS.ProcessEnv }) {
   const child = spawn("python3", ["-c", ownerRunner, ...args],
     { env: options.env, stdio: ["pipe", "pipe", "pipe"] });
   let stdout = "", stderr = "", error: Error | undefined;

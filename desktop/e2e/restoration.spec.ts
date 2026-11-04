@@ -57,7 +57,7 @@ test("failed terminals remain legible and keyboard reachable in a narrow native 
     await expect(failed).toHaveCount(1);
     await expect(failed).toContainText(toPage(folder));
     const evidence = process.env.HIDE_E2E_SCREENSHOT_DIR;
-    if (evidence) fs.writeFileSync(path.join(evidence, "native-restoration-identity.json"), JSON.stringify({ ...identity, daemonPid: run.daemonPid(), state: run.env.HIDE_STATE_DIR, socket: fixture.socket }));
+    if (evidence) fs.writeFileSync(path.join(evidence, "native-restoration-identity.json"), JSON.stringify({ ...identity, daemonPid: run.daemonPid(), state: run.env.HIDE_STATE_DIR }));
     for (const theme of ["dark", "light"]) {
       await page.locator("[data-open-settings]").click();
       await page.locator('[data-settings-tab="general"]').click();

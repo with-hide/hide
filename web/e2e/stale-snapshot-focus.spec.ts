@@ -1,5 +1,4 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { herdrHasFocus, startHerdr } from "./herdr-fixture";
 import { startFixture } from "./engine-fixture";
 import { corePaneFocus, withControl } from "./daemon-actions";
 import { startHided, type Daemon } from "./hided-fixture";
@@ -204,35 +203,6 @@ test("a focus move that waited for the last click is dropped once the operator t
   } finally {
     daemon?.stop();
     fixture.stop();
-  }
-});
-
-// Herdr only: Hide following a pane focus that Herdr moved on its own, outside Hide.
-test("a focus move the core followed from Herdr still takes the keys once the clicks are answered @herdr", { tag: "@platform" }, async ({ page }) => {
-  const herdr = await startHerdr();
-  let daemon: Daemon | undefined;
-  try {
-    daemon = await startHided(herdr, "stale-snapshot-external");
-    const net = await holdSnapshots(page);
-    await page.goto(`${daemon.origin}/#token=${daemon.token}`);
-    await enterWorkspace(page, "fixture");
-    const panes = herdr.panes.map((pane) => page.locator(`[data-pane-view="${pane}"]`));
-    const keys = panes.map((pane) => pane.locator(".xterm-helper-textarea"));
-    for (const pane of panes) await expect(pane).toHaveAttribute("data-transport", "controlling");
-    await expect.poll(() => herdrHasFocus(herdr, herdr.panes[0])).toBe(true);
-    const box = (await panes[1].boundingBox())!;
-    await page.mouse.click(box.x + 100, box.y + 100);
-    await expect(keys[1]).toBeFocused();
-    await expect(panes[1]).toHaveAttribute("data-focused", "true");
-    await expect.poll(() => net.sent().length).toBe(1);
-    await expect.poll(() => herdrHasFocus(herdr, herdr.panes[1])).toBe(true);
-
-    herdr.run(["pane", "focus", "--direction", "left", "--pane", herdr.panes[1]]);
-    await expect(panes[0]).toHaveAttribute("data-focused", "true");
-    await expect(keys[0]).toBeFocused();
-  } finally {
-    daemon?.stop();
-    herdr.stop();
   }
 });
 

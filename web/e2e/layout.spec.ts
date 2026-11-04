@@ -6,7 +6,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { chord, SYSTEM } from "./chords";
 import { openLayout, startLayoutStack, type LayoutStack } from "./engine-fixture";
 import { shownTab, corePaneFocus } from "./daemon-actions";
-import { panePrompt, paneSizeCommand, type PaneShell } from "./herdr-fixture";
+import { panePrompt, paneSizeCommand, type PaneShell } from "./pane-fixture";
 import { countSent, screenshot } from "./wire";
 
 test.describe.configure({ timeout: 90_000 });

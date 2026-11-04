@@ -40,9 +40,3 @@ export function snapshotCounts(page: Page, pane: string): () => { working: numbe
   }));
   return () => last;
 }
-
-/** The in-process subagents working in `pane`, as the last snapshot frame the page received that names it says. */
-export function snapshotWorking(page: Page, pane: string): () => number | null | undefined {
-  const counts = snapshotCounts(page, pane);
-  return () => counts()?.working;
-}

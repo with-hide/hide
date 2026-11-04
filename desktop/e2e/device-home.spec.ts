@@ -151,7 +151,7 @@ test("a device's Home is made on its first start, the rail follows registration,
 
     const state = JSON.parse(fs.readFileSync(path.join(run.env.HIDE_STATE_DIR!, "hided.json"), "utf8")) as { port: number; token: string };
     await sendFrame(page, state, { kind: "register_device", payload: {
-      id: DEVICE, label: DEVICE_LABEL, ssh_alias: "isolated-device", herdr_socket_path: device.socket, host_consent: true,
+      id: DEVICE, label: DEVICE_LABEL, ssh_alias: "isolated-device", host_consent: true,
     } });
 
     // B1: the device's tile joins the rail with This Mac still in front and the same screen.

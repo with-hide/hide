@@ -12,7 +12,7 @@ import { expect } from "@playwright/test";
 import { toPage } from "../../desktop/src/main/wirePath";
 import { connectControl, type HidedControl, type Rest } from "./hided-control.mjs";
 import type { Daemon } from "./hided-fixture";
-import { paneProgramLine, type PaneShell } from "./herdr-fixture";
+import { paneProgramLine, type PaneShell } from "./pane-fixture";
 
 type LayoutNode = { type: "pane"; pane_id: string } | { type: "split"; first: LayoutNode; second: LayoutNode };
 type PaneLayout = { tab_id: string; focused_pane_id: string | null; zoomed: boolean; root: LayoutNode };

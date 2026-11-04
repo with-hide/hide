@@ -3,9 +3,8 @@ import path from "node:path";
 import type { EngineServer } from "./engine-fixture";
 import type { Daemon } from "./hided-fixture";
 import { sendEvent } from "./wire";
-import { paneCommandLine, type HerdrFixture } from "./herdr-fixture";
+import { paneCommandLine } from "./pane-fixture";
 import { fixtureProgram } from "./platform-fixture";
-import { herdrTabs } from "./failure-dump";
 
 /**
  * Proves typed input executes in the pane's shell, independently of its
@@ -24,18 +23,6 @@ export async function executeTerminalCheck(page: Page, fixture: Pick<EngineServe
   await page.keyboard.type(paneCommandLine(fixture.shell, [executable]));
   await page.keyboard.press("Enter");
   await expect.poll(() => page.evaluate((id) => (window as unknown as { __hideProbe?: { paneText: (id: string) => string } }).__hideProbe?.paneText(id), pane), { timeout }).toContain(marker);
-}
-
-/** Every tab id the fixture's Herdr holds now, across its workspaces. */
-export function herdrTabIds(herdr: HerdrFixture): string[] {
-  return herdrTabs(herdr).flatMap((workspace) => workspace.tabs);
-}
-
-/** The `count` tabs Herdr created since `before` was read, in Herdr's order, once it holds them all. */
-export async function createdTabs(herdr: HerdrFixture, before: readonly string[], count = 1): Promise<string[]> {
-  const created = () => herdrTabIds(herdr).filter((id) => !before.includes(id));
-  await expect.poll(() => created().length, { timeout: 20_000 }).toBe(count);
-  return created();
 }
 
 /**

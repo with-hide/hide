@@ -10,7 +10,7 @@ import path from "node:path";
 import { agentIn, preparePaneInput, sendKeys, withControl } from "./daemon-actions";
 import { startFixture } from "./engine-fixture";
 import { setAgentState } from "./fixture-agents";
-import { continueFixtureTranscript } from "./herdr-fixture";
+import { continueFixtureTranscript } from "./pane-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { nativeSessionId, prepareEngineWriter } from "./session-reader-fixture";
 import { sendEvent } from "./wire";

@@ -9,7 +9,7 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { linkFixtureTranscripts } from "../../web/e2e/herdr-fixture";
+import { linkFixtureTranscripts } from "../../web/e2e/pane-fixture";
 import { bundledExecutable, linkBundle } from "../../web/e2e/bundled-app";
 import { dumpOnFailure, pageSide } from "../../web/e2e/failure-dump";
 import { startFixture, type AgentFixture } from "../../web/e2e/engine-fixture";

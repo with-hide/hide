@@ -4,7 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { startFixture } from "./engine-fixture";
 import { setAgentState } from "./fixture-agents";
-import { claudeProjects, continueFixtureTranscript, labelMarker, type FixtureLabel } from "./herdr-fixture";
+import { claudeProjects, continueFixtureTranscript, labelMarker, type FixtureLabel } from "./pane-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { FIRST_GOAL, MISSED, NEXT_GOAL, nextWork, reseedWork, seedFirstWork, startWork, workFixture, workRepositoryReady } from "./session-work-fixture";
 import { enterWorkspace, showProjectRow, taskRow } from "./wire";

@@ -64,14 +64,14 @@ test('Overview selects explicitly, shares filters and preserves layout in a priv
     await graph.getByRole('button', { name: 'Graph', exact: true }).click();
     await expect(graph).toHaveAttribute('data-graph-phase', 'ready');
     const evidence = process.env.HIDE_E2E_SCREENSHOT_DIR;
-    await captureElectronWindow(app, 'overview-focus-renderer', { state: run.env.HIDE_STATE_DIR, socket: fixture.socket, daemonPid: run.daemonPid(), scenario: 'explicit selection, filters, stable coordinates' });
+    await captureElectronWindow(app, 'overview-focus-renderer', { state: run.env.HIDE_STATE_DIR, daemonPid: run.daemonPid(), scenario: 'explicit selection, filters, stable coordinates' });
     if (evidence && process.platform === 'darwin') {
       const identity = await app.evaluate(({ BrowserWindow }) => {
         const windows = BrowserWindow.getAllWindows();
         if (windows.length !== 1) throw new Error('expected one owned candidate window');
         return { pid: process.pid, executable: process.execPath, window: windows[0]!.getMediaSourceId() };
       });
-      fs.writeFileSync(path.join(evidence, 'overview-focus-native.json'), JSON.stringify({ ...identity, state: run.env.HIDE_STATE_DIR, socket: fixture.socket, head: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim() }));
+      fs.writeFileSync(path.join(evidence, 'overview-focus-native.json'), JSON.stringify({ ...identity, state: run.env.HIDE_STATE_DIR, head: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim() }));
       execFileSync('/usr/sbin/screencapture', ['-x', '-o', '-l', identity.window.split(':')[1]!, path.join(evidence, 'overview-focus-native.png')]);
     }
   } finally {

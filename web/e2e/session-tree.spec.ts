@@ -8,7 +8,7 @@ import path from "node:path";
 import { closePane, showTabOf, viewPane, withControl } from "./daemon-actions";
 import { startFixture } from "./engine-fixture";
 import { setAgentState, spawnChild } from "./fixture-agents";
-import { claudeProjects, continueFixtureTranscript, writeFixtureTranscript } from "./herdr-fixture";
+import { claudeProjects, continueFixtureTranscript, writeFixtureTranscript } from "./pane-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { measure } from "./session-panel-geometry.mjs";
 import { chooseTheme, screenshot, showTasks } from "./wire";

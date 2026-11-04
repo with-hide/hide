@@ -15,10 +15,8 @@ import { agentRunner, reportedMarker, type AgentRun, type HideAnswer } from "./a
 import { agentIn, waitForInputGate, withControl } from "./daemon-actions";
 import { startFixture, type AgentFixture } from "./engine-fixture";
 import { setAgentState } from "./fixture-agents";
-import { CLAUDE_FULL_ACCESS_LINE, claudeProjects, liveHandoff, setFixtureSession, startHerdr, writeFixtureTranscript, type HerdrFixture } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { fixtureExecutable } from "./platform-fixture";
-import { snapshotWorking } from "./subagent-counts";
 import { countSent, screenshot } from "./wire";
 
 test.describe.configure({ timeout: 150_000 });
@@ -27,8 +25,6 @@ test.describe.configure({ timeout: 150_000 });
 const FIXTURE_SESSION = "fixture-two";
 const SESSION = "22222222-3333-4444-5555-666666666666";
 const HELPER = path.resolve("..", "target", "debug", "hide-agent-hooks");
-
-type ProcessInfo = { result: { process_info: { foreground_processes?: { argv?: string[] | null }[] } } };
 
 /** Hide's hook entries as the kit writes them (`hide-agent-hooks/src/install.rs`), so this machine's files say the hook is installed. */
 function installHook(home: string): void {
@@ -49,10 +45,6 @@ function installHook(home: string): void {
   fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
   fs.writeFileSync(path.join(home, ".claude", "settings.json"), JSON.stringify({ hooks }));
 }
-
-/** The reopen continues the conversation with the default 전부 허용 option, which every restart Hide makes carries. */
-const resumeLine = (session: string) => `--resume ${session} ${CLAUDE_FULL_ACCESS_LINE}`;
-const RESUME = resumeLine(SESSION);
 
 /** Runs Hide's hook for `event` as the agent in the pane does: from inside its process, which hided proves is the pane's. */
 async function runHook(asAgent: (args: string[], run?: AgentRun) => Promise<HideAnswer>, event: "SessionStart" | "SubagentStart", session = SESSION): Promise<void> {
@@ -190,69 +182,5 @@ test("a Reopen the core refuses leaves the pane as it was and the popover says w
   } finally {
     daemon.stop();
     fixture.stop();
-  }
-});
-
-/** The Herdr-only handoff test's fixture: the pinned Herdr on a short root, with its agents. */
-async function startHandoff(page: Page, label: string): Promise<{ herdr: HerdrFixture; daemon: Daemon; pane: string; working: () => number | null | undefined }> {
-  await page.setViewportSize({ width: 1440, height: 900 });
-  const herdr = await startHerdr({ shortRoot: true });
-  const [, pane] = herdr.panes;
-  writeFixtureTranscript(claudeProjects(herdr), SESSION, { task: "Agent two" });
-  setFixtureSession(herdr, pane, SESSION);
-  const home = path.join(herdr.root, "hided-home");
-  installHook(home);
-  const daemon = await startHided(herdr, label, home);
-  // Listening before the page loads: the snapshot frames of its first connection are the ones a later read is compared with.
-  const working = snapshotWorking(page, pane);
-  await page.goto(`${daemon.origin}/#token=${daemon.token}`);
-  await page.locator("[data-checkout]").first().click();
-  await expect(page.locator(`[data-pane-view="${pane}"]`)).toBeVisible({ timeout: 20_000 });
-  return { herdr, daemon, pane, working };
-}
-
-// Herdr leaves `foreground_processes` out of the answer while the pane's shell has not started a program yet.
-const processArgv = (herdr: HerdrFixture, pane: string) =>
-  ((herdr.run(["pane", "process-info", "--pane", pane]) as ProcessInfo).result.process_info.foreground_processes ?? []).map((process) => process.argv?.join(" "));
-
-/** Whether the pane's foreground now runs the same conversation again; the agent runner execs as `.../claude`. */
-const resumedOnHerdr = (herdr: HerdrFixture, pane: string): boolean =>
-  processArgv(herdr, pane).some((argv) => argv === `claude ${RESUME}` || argv.endsWith(`/claude ${RESUME}`) || argv.endsWith(`\\claude.exe ${RESUME}`));
-
-type PaneRow = { result: { pane: { terminal_id: string } } };
-const paneRow = (herdr: HerdrFixture, pane: string) => (herdr.run(["pane", "get", pane]) as PaneRow).result.pane;
-
-// Herdr's live handoff is what an update runs (`scripts/install-local-runtime.sh`) and it starts the new server with
-// no pane tokens. The hook reports to the core, so nothing of its connection is Herdr's to lose (PRD engine-bundle-1
-// D-8). Windows has no handoff.
-// Herdr only: it asks the pinned Herdr server for its live handoff and compares the pane's terminal before and after.
-test("a pane the hook connected stays connected across a Herdr live handoff with no further hook event @herdr", async ({ page }) => {
-  test.skip(process.platform === "win32", "Herdr's live handoff is a Unix server feature");
-  const { herdr, daemon, pane, working } = await startHandoff(page, "pane-connection-handoff");
-  try {
-    const chip = page.locator(`[data-pane-view="${pane}"] [data-pane-connection]`);
-    await expect(chip).toHaveAttribute("data-pane-connection", "started_before_hide", { timeout: 30_000 });
-
-    // Reopened, the agent's own hooks connect the pane and count one running subagent.
-    const asAgent = agentRunner(herdr, daemon.stateDir, pane);
-    await chip.click();
-    await page.locator(`[data-pane-reopen="${pane}"]`).click();
-    await expect.poll(() => resumedOnHerdr(herdr, pane), { timeout: 40_000 }).toBe(true);
-    await runHook(asAgent, "SessionStart");
-    await runHook(asAgent, "SubagentStart");
-    await expect(chip).toHaveCount(0, { timeout: 30_000 });
-    const before = paneRow(herdr, pane);
-    await expect.poll(working, { message: "the snapshot's working count before the handoff", timeout: 20_000 }).toBe(1);
-
-    liveHandoff(herdr);
-    // The pane is the same pane in another terminal: Herdr started a new server.
-    expect(paneRow(herdr, pane).terminal_id).not.toBe(before.terminal_id);
-
-    // No hook event follows, and the core still holds what the hook reported.
-    await expect(chip).toHaveCount(0);
-    await expect.poll(working, { message: "the snapshot's working count after the handoff", timeout: 20_000 }).toBe(1);
-  } finally {
-    daemon.stop();
-    herdr.stop();
   }
 });

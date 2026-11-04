@@ -134,7 +134,7 @@ test("a device gets this Mac's kit, keeps a part the operator removed out until 
 
     // B13: allowing the helper is the only question; the connection installs every part.
     await sendFrame(page, state, { kind: "register_device", payload: {
-      id: DEVICE, label: "SSH kit fixture", ssh_alias: ALIAS, herdr_socket_path: device.socket, host_consent: true,
+      id: DEVICE, label: "SSH kit fixture", ssh_alias: ALIAS, host_consent: true,
     } });
     const applied = () => daemonEvents(daemonLog).filter((line) => line.kind === "apply.completed" && line.device_id === DEVICE);
     await expect.poll(() => applied().length, { timeout: 120_000 }).toBeGreaterThan(0);
@@ -240,7 +240,7 @@ test("a device gets this Mac's kit, keeps a part the operator removed out until 
 // dead bridge folder when it starts.
 test("a device an older Hide ran keeps only this build and no dead bridge folder", async () => {
   const setup = await startDeviceRun("upgrade", [ALIAS]);
-  const { device, run, bridge, helper, daemonLog } = setup;
+  const { run, bridge, helper, daemonLog } = setup;
   const OLD_BUILD = "0123456789abcdef";
   fs.mkdirSync(path.join(helper, OLD_BUILD), { recursive: true, mode: 0o700 });
   fs.writeFileSync(path.join(helper, OLD_BUILD, "hide-host-helper"), "#!/bin/sh\nexit 1\n", { mode: 0o700 });
@@ -257,7 +257,7 @@ test("a device an older Hide ran keeps only this build and no dead bridge folder
     await enterWorkspace(page, "fixture");
     const state = JSON.parse(fs.readFileSync(path.join(run.env.HIDE_STATE_DIR!, "hided.json"), "utf8")) as { port: number; token: string };
     await sendFrame(page, state, { kind: "register_device", payload: {
-      id: DEVICE, label: "SSH kit fixture", ssh_alias: ALIAS, herdr_socket_path: device.socket, host_consent: true,
+      id: DEVICE, label: "SSH kit fixture", ssh_alias: ALIAS, host_consent: true,
     } });
     await expect.poll(() => daemonEvents(daemonLog).some((line) => line.kind === "apply.completed" && line.device_id === DEVICE), { timeout: 120_000 }).toBe(true);
 
@@ -284,7 +284,7 @@ test("a device an older Hide ran keeps only this build and no dead bridge folder
 // one leaves the account's kit for the other; removing the last takes it off.
 test("two registrations of one device account connect at once and share its kit until the last is removed", async () => {
   const setup = await startDeviceRun("kit2", [ALIAS, SECOND_ALIAS]);
-  const { home, device, run, helper, cliDir, original, daemonLog } = setup;
+  const { home, run, helper, cliDir, original, daemonLog } = setup;
   let app: ElectronApplication | undefined;
   try {
     app = await relaunch(run.env);
@@ -292,7 +292,7 @@ test("two registrations of one device account connect at once and share its kit 
     const state = JSON.parse(fs.readFileSync(path.join(run.env.HIDE_STATE_DIR!, "hided.json"), "utf8")) as { port: number; token: string };
     const both = [[DEVICE, ALIAS], [SECOND_DEVICE, SECOND_ALIAS]] as const;
     await Promise.all(both.map(([id, alias]) => sendFrame(page, state, { kind: "register_device", payload: {
-      id, label: id, ssh_alias: alias, herdr_socket_path: device.socket, host_consent: true,
+      id, label: id, ssh_alias: alias, host_consent: true,
     } })));
     for (const [id] of both) {
       await expect.poll(() => daemonEvents(daemonLog).find((line) => line.kind === "apply.completed" && line.device_id === id)?.components, { timeout: 120_000 })

@@ -11,7 +11,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { dumpOnFailure } from "./failure-dump";
 import { withControl, agentIn } from "./daemon-actions";
 import { startFixture } from "./engine-fixture";
-import { CLAUDE_FULL_ACCESS } from "./herdr-fixture";
+import { CLAUDE_FULL_ACCESS } from "./pane-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { screenshot } from "./wire";
 

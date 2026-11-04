@@ -7,7 +7,6 @@ import { expect, test, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 import { startEngine } from "./engine-fixture";
-import { startHerdr } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { screenshot } from "./wire";
 
@@ -18,8 +17,8 @@ test.describe.configure({ timeout: 120_000 });
 const read = (file: string) => (fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "");
 
 /** A private HOME with `programs` in `~/.local/bin` (which the kit searches), `folders` made, and `files` written. */
-async function start(label: string, programs: string[], folders: string[], files: Record<string, string>, { integrations = false } = {}) {
-  const herdr = integrations ? await startHerdr({ readiness: "registered" }) : await startEngine();
+async function start(label: string, programs: string[], folders: string[], files: Record<string, string>) {
+  const herdr = await startEngine();
   const home = path.join(fs.mkdtempSync(path.join(herdr.root, "fh-")), "home");
   for (const folder of [".local/bin", ...folders]) fs.mkdirSync(path.join(home, folder), { recursive: true });
   for (const program of programs) fs.writeFileSync(path.join(home, ".local", "bin", program), "#!/bin/sh\n", { mode: 0o755 });
@@ -27,8 +26,7 @@ async function start(label: string, programs: string[], folders: string[], files
     fs.mkdirSync(path.dirname(path.join(home, file)), { recursive: true });
     fs.writeFileSync(path.join(home, file), text);
   }
-  // With the pinned Herdr the bundle carries it, so the kit installs agents' Herdr integrations with it.
-  const daemon = await startHided(herdr, label, home, {}, true, { bundledHerdr: integrations });
+  const daemon = await startHided(herdr, label, home, {}, true);
   return { herdr, daemon, home };
 }
 
@@ -41,61 +39,8 @@ async function openAgents(page: Page, daemon: Daemon) {
 }
 
 const RECORD = ".hide/kit/installed.json";
-const SHARED_SKILL = ".agents/skills/hide/SKILL.md";
 // The stub an earlier build wrote there, which the kit now takes out.
 const OLD_SHARED_SKILL = ".agents/skills/hide-browser/SKILL.md";
-
-/** Every active program plus retired Cursor: only seven rows may appear, even when Cursor is installed. */
-const PROGRAMS = ["claude", "codex", "grok", "opencode", "pi", "omp", "cursor-agent", "agy"];
-
-// Herdr only: the switch installs Herdr's own omp integration, which the pinned Herdr's bundle carries.
-test("omp is a row after Pi, and its switch installs Herdr's omp integration in ~/.omp/agent once omp has made it @herdr", async ({ page }) => {
-  // No `~/.omp/agent` yet: omp is installed but has not run.
-  const { herdr, daemon, home } = await start("follow-omp", PROGRAMS, [".claude"], { [RECORD]: JSON.stringify({ format: 1, installed: [] }) }, { integrations: true });
-  const integration = path.join(home, ".omp", "agent", "extensions", "herdr-omp-agent-state.ts");
-  try {
-    const list = await openAgents(page, daemon);
-    // B1, B5: the order of the supported agents, omp after Pi, off by default.
-    await expect(list.locator("[data-agent-row]")).toHaveCount(7, { timeout: 60_000 });
-    const rows = await list.locator("[data-agent-row]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-agent-row")));
-    // Claude Code, Codex and agy are on by default (agy by the operator's amendment to antigravity-first-class B1/D-14).
-    const on = new Set(["claude-code", "codex", "antigravity"]);
-    expect(rows).toEqual(["claude-code", "codex", "grok", "opencode", "pi", "omp", "antigravity"].map((id) => `${daemon.node}:${id}:${on.has(id) ? "on" : "off"}`));
-    await expect(list.locator('[data-agent-row*="cursor"], [data-agent-switch*="cursor"]')).toHaveCount(0);
-    const off = list.locator(`[data-agent-switch="${daemon.node}:omp:off"]`);
-    await expect(off).toBeVisible();
-    // Hide's extension gives omp letters and the spawn guard, so it carries no Basic chip (PRD pi-omp-extension).
-    await expect(list.locator('[data-agent-partial="omp"]')).toHaveCount(0);
-
-    // B6, B7: on, the shared skill is there; Herdr's integration waits for omp's own folder and nobody makes it.
-    await off.click();
-    await expect(list.locator(`[data-agent-switch="${daemon.node}:omp:on"]`)).toBeVisible();
-    await expect.poll(() => read(path.join(home, SHARED_SKILL)), { timeout: 60_000 }).toContain("hide-skill@");
-    await expect.poll(() => read(path.join(home, RECORD)), { timeout: 60_000 }).toMatch(/"omp":\s*true/);
-    expect(fs.existsSync(path.join(home, ".omp"))).toBe(false);
-
-    // Once omp has made its folder, the next pass that switches it on installs the real pinned Herdr's omp
-    // integration there (the launch pass does too, as for Pi). Each press waits for the record, so the two are
-    // two passes and not one queued press replacing the other.
-    fs.mkdirSync(path.join(home, ".omp", "agent"), { recursive: true });
-    await list.locator(`[data-agent-switch="${daemon.node}:omp:on"]`).click();
-    await expect.poll(() => read(path.join(home, RECORD)), { timeout: 60_000 }).toMatch(/"omp":\s*false/);
-    await list.locator(`[data-agent-switch="${daemon.node}:omp:off"]`).click();
-    await expect.poll(() => fs.existsSync(integration), { timeout: 60_000 }).toBe(true);
-    await expect.poll(() => read(path.join(home, RECORD)), { timeout: 60_000 }).toContain("herdr:omp");
-    await screenshot(page, "agents-omp-on");
-
-    // Off: Hide's integration goes; the shared stub stays because Codex, which is on, reads it too (B3).
-    await list.locator(`[data-agent-switch="${daemon.node}:omp:on"]`).click();
-    await expect.poll(() => fs.existsSync(integration), { timeout: 60_000 }).toBe(false);
-    await expect.poll(() => read(path.join(home, RECORD)), { timeout: 60_000 }).not.toContain("herdr:omp");
-    expect(read(path.join(home, SHARED_SKILL))).toContain("hide-skill@");
-    expect(fs.existsSync(path.join(home, ".omp", "agent"))).toBe(true);
-  } finally {
-    daemon.stop();
-    herdr.stop();
-  }
-});
 
 /** What an earlier build left on a Mac it put Gemini CLI on, in the shapes that build wrote. */
 const GEMINI_SETTINGS = JSON.stringify({

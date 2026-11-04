@@ -13,7 +13,7 @@ import type { HideAnswer } from "./agent-pane";
 import { agentIn, closePane, corePaneFocus, tabOfPane, withControl } from "./daemon-actions";
 import { startFixture } from "./engine-fixture";
 import { spawnChild } from "./fixture-agents";
-import { claudeProjects, writeFixtureTranscript } from "./herdr-fixture";
+import { claudeProjects, writeFixtureTranscript } from "./pane-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace, screenshot } from "./wire";
 import { chord } from "./chords";

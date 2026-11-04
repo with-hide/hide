@@ -18,11 +18,11 @@ import { agentIn, checkoutAt, closePane, openProject, tabPanes, tabsOf, withCont
 import { startEngine, type EngineServer } from "./engine-fixture";
 import { setAgentSession } from "./fixture-agents";
 import type { HidedControl } from "./hided-control.mjs";
-import { claudeProjects, startHerdr, writeFixtureTranscript } from "./herdr-fixture";
+import { claudeProjects, writeFixtureTranscript } from "./pane-fixture";
 import { waitForTerminal } from "./group-start-helper";
 import { startHided, type Daemon } from "./hided-fixture";
 import { toPage } from "../../desktop/src/main/wirePath";
-import { enterWorkspace, rest, screenshot, showProjectRow } from "./wire";
+import { rest, screenshot } from "./wire";
 import { chord, commandLabel } from "./chords";
 
 test.describe.configure({ timeout: 180_000 });
@@ -157,41 +157,6 @@ test("the project row's menu lists the board's items, and Pin pins it", async ({
     await expect(menu.locator('[data-menu-item="unpin"]')).toHaveText(/Unpin/);
     await page.keyboard.press("Escape");
   } finally { stop(); }
-});
-
-// Herdr only: Hide lists a Git project that only Herdr has (a workspace made in Herdr outside Hide) without a registration, and Pin registers it.
-test("Pin registers and pins a project Herdr shows without a registration @herdr", async ({ page }) => {
-  await page.setViewportSize({ width: 1400, height: 900 });
-  const herdr = await startHerdr({ agents: false });
-  let daemon: Daemon | null = null;
-  try {
-    const repo = path.join(herdr.root, "repo");
-    fs.mkdirSync(repo);
-    git(repo, ["init"]);
-    fs.writeFileSync(path.join(repo, "README.md"), "# repo\n");
-    git(repo, ["add", "README.md"]);
-    git(repo, ["commit", "-m", "initial"]);
-    herdr.run(["workspace", "create", "--cwd", repo, "--label", "repo", "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]);
-    daemon = await startHided(herdr, "sidebar-menus-unregistered", herdr.root);
-    await page.goto(`${daemon.origin}/#token=${daemon.token}`);
-    await expect(page.locator("[data-main-screen]")).toBeVisible({ timeout: 20_000 });
-    const row = page.locator("[data-project]").filter({ has: page.locator("[data-project-row]", { hasText: /^repo/ }) }).locator("[data-project-menu]").first();
-    await expect(page.locator('[data-section="pinned"]')).toHaveCount(0);
-    // Startup can select either project. Make the other one current so this
-    // unregistered shell project is folded, then reach Pin through that fold.
-    await enterWorkspace(page, "fixture");
-    const fold = page.locator("[data-no-agent-projects]");
-    await expect(fold).toBeVisible();
-    if (await fold.getAttribute("aria-expanded") === "true") await fold.click();
-    await expect(row).toHaveCount(0);
-    const menu = await openMenu(page, await showProjectRow(page, row), "repo actions");
-    await menu.locator('[data-menu-item="pin"]').click();
-    await expect(page.locator('[data-section="pinned"]')).toHaveText(/Pinned · 1/);
-    await expect(page.locator("[data-project-row]", { hasText: /^repo/ })).toHaveCount(1);
-  } finally {
-    daemon?.stop();
-    herdr.stop();
-  }
 });
 
 // B7, D-04: the project's issue source is a submenu of the row's menu; the

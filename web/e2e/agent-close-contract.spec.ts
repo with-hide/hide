@@ -1,43 +1,17 @@
 // Herdr's refusal to close a primary checkout's last tab or pane, observed on a repository and worktree owned
 // by this fixture, and what the operator sees when Hide closes them on either engine.
 import { expect, test, type Page } from "@playwright/test";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { checkoutAt, tabOfPane, withControl, openProject, openWorktree } from "./daemon-actions";
 import { startEngine, type EngineServer } from "./engine-fixture";
-import { startHerdr } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { toPage } from "../../desktop/src/main/wirePath";
 import { enterWorkspace, screenshot } from "./wire";
 
 // Each contract has its own private engine and linked worktree; only the UI contracts start hided.
 test.describe.configure({ timeout: 120_000 });
-
-type Created = { result: { workspace: { workspace_id: string }; tab: { tab_id: string }; root_pane: { pane_id: string } } };
-type Snapshot = { result: { snapshot: { tabs: { tab_id: string; workspace_id: string }[]; panes: { pane_id: string; tab_id: string }[]; workspaces: { workspace_id: string }[] } } };
-
-// A primary checkout with one linked worktree, both opened as Herdr workspaces.
-async function startRefusalFixture() {
-  const herdr = await startHerdr({ agents: false });
-  try {
-    const repo = path.join(herdr.root, "primary");
-    const linked = path.join(herdr.root, "linked");
-    fs.mkdirSync(repo);
-    const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { env: herdr.env, encoding: "utf8", stdio: "pipe" });
-    git("init", "-b", "main");
-    git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "fixture");
-    git("worktree", "add", "-b", "linked", linked);
-    const open = (at: string) => herdr.run(["worktree", "open", "--cwd", repo, "--path", at, "--no-focus"]) as Created;
-    const primary = open(repo);
-    const sibling = open(linked);
-    const snapshot = () => (herdr.run(["api", "snapshot"]) as Snapshot).result.snapshot;
-    return { herdr, repo, open, primary, sibling, snapshot };
-  } catch (error) {
-    herdr.stop();
-    throw error;
-  }
-}
 
 type Stack = { server: EngineServer; daemon: Daemon; primary: { folder: string; workspace: string; tab: string; pane: string }; linkedFolder: string };
 
@@ -76,35 +50,6 @@ async function openPrimary(page: Page) {
   await enterWorkspace(page, "primary");
   await page.locator('[data-project]', { hasText: "primary" }).locator('[data-checkout][aria-label^="main"]').click();
 }
-
-// Herdr only: it reads Herdr's own refusal (`confirmation_required`) from its CLI.
-test("Herdr refuses to close the last tab or pane of a primary checkout without confirmation @herdr", async () => {
-  const { herdr, open, primary, sibling, snapshot } = await startRefusalFixture();
-  try {
-    const close = (args: string[]) => {
-      const result = spawnSync(herdr.bin, args, { env: herdr.env, encoding: "utf8", timeout: 10_000 });
-      return { exit: result.status, stdout: result.stdout, stderr: result.stderr };
-    };
-    const before = snapshot();
-    const tabClose = close(["tab", "close", primary.result.tab.tab_id]);
-    expect(tabClose.exit).toBe(1);
-    expect(JSON.parse(tabClose.stderr).error.code).toBe("confirmation_required");
-    const afterTab = snapshot();
-    const secondPrimary = open(path.join(herdr.root, "primary"));
-    const beforePane = snapshot();
-    const paneClose = close(["pane", "close", secondPrimary.result.root_pane.pane_id]);
-    expect(paneClose.exit).toBe(1);
-    expect(JSON.parse(paneClose.stderr).error.code).toBe("confirmation_required");
-    const afterPane = snapshot();
-    const output = process.env.HIDE_E2E_SCREENSHOT_DIR;
-    if (output) {
-      const record = { version: execFileSync(herdr.bin, ["--version"], { encoding: "utf8" }).trim(), primary: primary.result, linked: sibling.result, before, tabClose, afterTab, beforePane, paneClose, afterPane };
-      fs.writeFileSync(path.join(output, "primary-close-contract.json"), JSON.stringify(record, null, 2));
-    }
-    expect(JSON.stringify(afterTab)).toContain(sibling.result.workspace.workspace_id);
-    expect(JSON.stringify(afterPane)).toContain(sibling.result.workspace.workspace_id);
-  } finally { herdr.stop(); }
-});
 
 
 test("closing a primary checkout's last tab in the UI leaves a replacement tab in the same area and keeps the linked workspace", async ({ page }) => {

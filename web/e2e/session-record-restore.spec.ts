@@ -1,6 +1,6 @@
 // The record restores the exact retained native conversation after its pane closes.
 import { expect, test } from "@playwright/test";
-import { CLAUDE_FULL_ACCESS_LINE } from "./herdr-fixture";
+import { CLAUDE_FULL_ACCESS_LINE } from "./pane-fixture";
 import { agentIn, closePane, tabOfPane, withControl } from "./daemon-actions";
 import { startFixture } from "./engine-fixture";
 import { labelAgentPane } from "./fixture-agents";

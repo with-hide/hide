@@ -13,7 +13,7 @@ import { altScreenProgram, bytesReceived } from "./alt-screen-program";
 import { corePaneFocus, focusTab, newTab, openProject, tabsOf, withControl } from "./daemon-actions";
 import { startFixture, type AgentFixture } from "./engine-fixture";
 import { executeTerminalCheck, waitForTerminal } from "./group-start-helper";
-import { panePrompt, printFileCommand, printLinesCommand } from "./herdr-fixture";
+import { panePrompt, printFileCommand, printLinesCommand } from "./pane-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { projectRow } from "./overview-entry";
 import { countSent, screenshot, showProjectRow } from "./wire";

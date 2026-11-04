@@ -21,7 +21,7 @@ import path from "node:path";
 import { startFixture, type AgentFixture } from "./engine-fixture";
 import { closePane, sendKeys, withControl } from "./daemon-actions";
 import { elsewhereTab, finishUnseenTurn, sessionIn, setAgentAsking, setAgentSession, setAgentState } from "./fixture-agents";
-import { claudeProjects, continueFixtureTranscript, labelMarker } from "./herdr-fixture";
+import { claudeProjects, continueFixtureTranscript, labelMarker } from "./pane-fixture";
 import { DNS, FakeTailscale } from "./fake-tailscale";
 import { startHided, type Daemon } from "./hided-fixture";
 import { screenshot, THIS_MACHINE } from "./wire";
