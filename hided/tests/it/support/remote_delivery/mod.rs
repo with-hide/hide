@@ -270,9 +270,12 @@ pub fn pane_on_session(value: &Value, session: &str) -> Option<String> {
             {
                 return Some(pane.to_owned());
             }
-            map.values().find_map(|value| pane_on_session(value, session))
+            map.values()
+                .find_map(|value| pane_on_session(value, session))
         }
-        Value::Array(rows) => rows.iter().find_map(|value| pane_on_session(value, session)),
+        Value::Array(rows) => rows
+            .iter()
+            .find_map(|value| pane_on_session(value, session)),
         _ => None,
     }
 }
@@ -357,6 +360,7 @@ impl Agent {
         hooks: PathBuf,
         session: &str,
         name: &str,
+        host_scope: &str,
     ) -> Result<Self> {
         finished_session(&environment.home, session)?;
         let mut start = json!({
@@ -387,9 +391,10 @@ impl Agent {
         agent.view(&agent.pane.clone())?;
         let registered = agent
             .run_in_pane(&format!(
-                "{} agent register --host-scope own --session {session} \
+                "{} agent register --host-scope {} --session {session} \
                  --instance \"$HIDE_PANE_ID\" --name {name} --pane \"$HIDE_PANE_ID\"",
-                quote(&agent.hide)
+                quote(&agent.hide),
+                quote(host_scope)
             ))?
             .value()?;
         agent.registration = registered["id"]
@@ -715,6 +720,7 @@ impl Fixture {
                     .into(),
             };
             Self::connect_device(&screen, &state, &remote_env)?;
+            Self::add_local_project(&screen, &local_env.home.join("project"))?;
             let local = Agent::start(
                 &screen,
                 root.join("l"),
@@ -724,6 +730,9 @@ impl Fixture {
                 cli.join("hide-agent-hooks"),
                 "fixture-local-session",
                 "local-parent",
+                // The core's own engine is named by its folder in the
+                // daemon's state (`hide_kit::layout::engine_dir`).
+                &state.join("engine").to_string_lossy(),
             )?;
             let remote_hide = remote_env.home.join("bin/hide");
             let remote_hooks = fs::canonicalize(&remote_hide)?
@@ -743,6 +752,8 @@ impl Fixture {
                 remote_hooks,
                 "fixture-remote-session",
                 "remote-child",
+                // A device's agents are scoped by the device.
+                DEVICE,
             )?;
             Ok((screen, local, remote))
         })();
@@ -774,6 +785,33 @@ impl Fixture {
 
     /// Registers the device and its project and waits for its node's pane
     /// service and installed CLI.
+    /// Adds the account's project on this machine as Add project does, and
+    /// waits until the navigator lists it, so the local agent starts in a
+    /// checkout the core knows.
+    fn add_local_project(screen: &Daemon, project: &Path) -> Result<()> {
+        let path = project.to_string_lossy().into_owned();
+        screen.event(
+            "create_workspace",
+            json!({"path":path,"label":"Local fixture","initialize_git":false}),
+        )?;
+        wait_for("registered private local checkout", || {
+            let snapshot = screen.snapshot()?;
+            let listed = |row: &Value| row["path"] == path.as_str();
+            Ok(snapshot
+                .pointer("/navigator/workspaces")
+                .and_then(Value::as_array)
+                .is_some_and(|rows| {
+                    rows.iter().any(|row| {
+                        listed(row)
+                            || row["checkouts"]
+                                .as_array()
+                                .is_some_and(|checkouts| checkouts.iter().any(listed))
+                    })
+                })
+                .then_some(()))
+        })
+    }
+
     fn connect_device(screen: &Daemon, state: &Path, remote: &Environment) -> Result<()> {
         let device_state = || match screen.snapshot() {
             Ok(snapshot) => format!(
@@ -926,7 +964,11 @@ impl Fixture {
 
     /// Ends the daemon, the device's sshd and every holder either node
     /// started, confirming each exit.
-    fn end(daemon: &mut Option<OwnedChild>, ssh: &mut super::sshd::Sshd, states: &[&Path]) -> Result<()> {
+    fn end(
+        daemon: &mut Option<OwnedChild>,
+        ssh: &mut super::sshd::Sshd,
+        states: &[&Path],
+    ) -> Result<()> {
         if let Some(mut daemon) = daemon.take() {
             daemon.kill_tree()?;
             wait_for("private hided confirmed exit", || {
@@ -952,7 +994,9 @@ fn wait_bridge(state: &Path, minimum: usize) -> Result<()> {
         let count = String::from_utf8(read(&path)?)?
             .lines()
             .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-            .filter(|row| row["component"] == "remote_host" && row["kind"] == "host.panes_started")
+            .filter(|row| {
+                row["component"] == "remote_host" && row["kind"] == "host.holders_started"
+            })
             .count();
         Ok((count >= minimum).then_some(()))
     })
@@ -965,7 +1009,11 @@ impl Run for Fixture {
 
     fn stop(&mut self) -> Result<()> {
         let device_state = self.ipc.path().join("d");
-        Self::end(&mut self.daemon, &mut self.ssh, &[&self.state, &device_state])?;
+        Self::end(
+            &mut self.daemon,
+            &mut self.ssh,
+            &[&self.state, &device_state],
+        )?;
         // The state folders sit under /tmp for their sockets' sake; their
         // records stay with the run, which a failed journey keeps.
         for (state, kept) in [(&self.state, "logs-local"), (&device_state, "logs-device")] {

@@ -1968,11 +1968,14 @@ mod tests {
         true
     }
 
-    /// A one-shot command against a running daemon sends no claim and
-    /// writes no claimed marker, and the daemon revokes its token once the
-    /// connection ends; a named reference's command still claims. This
-    /// process stands in for the pane's shell, so every credential stays
-    /// alive until the daemon or the command ends it.
+    /// A one-shot command against a running daemon writes no claimed
+    /// marker, and the daemon revokes its token once the connection ends; a
+    /// command for a pane the engine cannot prove is refused and its
+    /// credential revoked before any claim. This process stands in for the
+    /// pane's shell, so every credential stays alive until the daemon or the
+    /// command ends it. A named reference's claim needs a pane the engine
+    /// runs, and the device contract proves it
+    /// (`workspace_guidance_gets_one_reusable_reference_and_rejects_writes`).
     #[test]
     fn a_one_shot_command_is_not_claimed_and_its_token_ends_with_its_connection() {
         let directory = tempfile::tempdir().unwrap();
@@ -2016,8 +2019,8 @@ mod tests {
             named: false,
             _one_shot: Some(OneShotReference(path.to_path_buf())),
         };
-        // This daemon has no Herdr to read the pane from, so each command is
-        // answered with that refusal; what follows an answer is the same.
+        // The daemon's engine runs no pane `w1:p1`, so each command is
+        // refused with that and its credential revoked.
         let answered = |credential: &mut Credential| {
             let answer = request(credential, "info").unwrap();
             assert_eq!(answer["reason"], "pane_unavailable", "{answer}");
@@ -2035,21 +2038,14 @@ mod tests {
         drop(credential);
         assert!(!path.exists());
 
-        // The same command on a token the daemon would keep: it sends no
-        // claim, so neither side records one.
+        // The same command on a token the daemon would keep: the refusal
+        // revokes the credential, so neither side records a claim.
         let (path, token) = issue('2', None);
         let mut credential = one_shot(&path);
         answered(&mut credential);
         assert!(!path.with_extension("claimed").exists());
-        assert_eq!(registry.claimed(&token), Some(false));
+        assert_eq!(registry.claimed(&token), None);
         drop(credential);
-
-        // A named reference is persistent, and its command claims it.
-        let (path, token) = issue('3', None);
-        let mut credential = Credential::named(&env, path.clone());
-        answered(&mut credential);
-        assert!(path.with_extension("claimed").is_file());
-        assert_eq!(registry.claimed(&token), Some(true));
 
         running.stop();
         drop(running);

@@ -794,18 +794,24 @@ fn a_saturated_core_answers_busy_over_ssh_and_keeps_its_reader_usable() {
     runtime.block_on(worker).unwrap();
     assert_eq!(
         caller.answer(overflow),
-        [json!({"ok": false, "reason": "bridge_busy", "next_action": "Reconnect the pane and retry"})]
+        [
+            json!({"ok": false, "reason": "bridge_busy", "next_action": "Reconnect the pane and retry"})
+        ]
     );
     for asked in waiting {
         assert_eq!(
             caller.answer(asked),
-            [json!({"ok": false, "reason": "hide_unavailable", "next_action": "Reconnect the pane and retry"})]
+            [
+                json!({"ok": false, "reason": "hide_unavailable", "next_action": "Reconnect the pane and retry"})
+            ]
         );
     }
     assert!(links[2].call(Call::Hello, TIMEOUT).is_ok());
     assert_eq!(
         caller.answer(request(&sockets[2], 33)),
-        [json!({"ok": false, "reason": "hide_unavailable", "next_action": "Reconnect the pane and retry"})]
+        [
+            json!({"ok": false, "reason": "hide_unavailable", "next_action": "Reconnect the pane and retry"})
+        ]
     );
     // Each attempt is one connection of its own, and nothing else dialed.
     assert_eq!(device.ssh.accepted(), 3);
@@ -1479,8 +1485,10 @@ impl Caller {
             Arc::clone(&device.link),
             Arc::new(|record| eprintln!("device pane record: {record}")),
         );
-        // As the core's own engine starts a pane: a number, the pane's
+        // As the core's own engine starts its panes: recovery names the
+        // link's owner first, then each pane takes a number, its
         // reservation, its start, then the number retired.
+        panes.recovered(Duration::from_secs(10)).unwrap();
         let start = HolderStart {
             pane: PROVED_PANE.to_owned(),
             program: Some(vec![
@@ -1634,7 +1642,7 @@ fn a_device_s_pane_socket_lives_with_its_link() {
     let answer: Value = serde_json::from_str(&answer).unwrap();
     assert_eq!(
         answer,
-        json!({"ok": false, "reason": "pane_unavailable", "next_action": "Reconnect the pane and retry"})
+        json!({"ok": false, "reason": "pane_not_found", "next_action": "Reconnect the pane and retry"})
     );
     device.link.close("contract");
     gone_within(socket, TIMEOUT);
@@ -1710,7 +1718,7 @@ fn a_device_pane_s_proof_crosses_the_link_and_its_refusals_are_reported() {
     let unknown = caller.ask(socket, &credential("w1:p1", 'c', false));
     assert_eq!(
         unknown,
-        json!({"ok": false, "reason": "pane_unavailable", "next_action": "Reconnect the pane and retry"})
+        json!({"ok": false, "reason": "pane_not_found", "next_action": "Reconnect the pane and retry"})
     );
     // At the cap: sixteen callers that never ask hold every place.
     let waiting = (0..16)
@@ -1737,7 +1745,7 @@ fn a_device_pane_s_proof_crosses_the_link_and_its_refusals_are_reported() {
     assert_eq!(
         refusals(&heard)[..2],
         [
-            (Some("w1:p1".to_owned()), "pane_unavailable".to_owned()),
+            (Some("w1:p1".to_owned()), "pane_not_found".to_owned()),
             (None, "bridge_busy".to_owned()),
         ]
     );
@@ -1798,11 +1806,7 @@ fn a_stream_opened_by_a_one_shot_holder_names_its_pane() {
     let socket = &sockets[0];
     let caller = Caller::start(&device);
     let open = |count: usize, token: Option<&str>| {
-        let stream = caller.send(
-            socket,
-            &json!({"stream": true, "token": token}),
-            Read::Hold,
-        );
+        let stream = caller.send(socket, &json!({"stream": true, "token": token}), Read::Hold);
         let heard = events.0.heard_until(|heard| {
             heard
                 .iter()
