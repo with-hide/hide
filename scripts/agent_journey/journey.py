@@ -859,8 +859,7 @@ class Journey:
             return {"gone": True}
 
         def registered():
-            listing = self.controller.hide(["agent", "list"])
-            item = next((item for item in (listing.get("value") or {}).get("items") or []
+            item = next((item for item in self.controller.list_agents()
                          if item.get("id") == self.agent), None)
             pane = (item or {}).get("pane")
             return pane if pane and pane != old else None
@@ -878,10 +877,10 @@ class Journey:
             woke = self.daemon.wait(woken, WAKE_SECONDS, "the sleeping session to wake")
             if "failed" not in woke:
                 try:
-                    # Outside the snapshot lock: the listing is a command the controller runs.
+                    # Outside the snapshot lock, without waking the controller on each poll.
                     record["registered_pane"] = self.runtime.wait(registered, max(1, end - time.monotonic()))
                 except ProcessError as error:
-                    if self.runtime.owner.cancelled.is_set():
+                    if self.runtime.owner.cancelled.is_set() or str(error) != "scene_timeout":
                         raise
                     raise ProcessError(f"timeout after {WAKE_SECONDS:.0f}s waiting for Hide's registration of "
                                        f"{self.agent} to name a pane other than {old}") from error

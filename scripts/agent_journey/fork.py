@@ -104,8 +104,7 @@ def measure(journey):
         record["unmarked"] = {"herdr_session": (journey.runtime.agent(opened[0]) or {}).get("agent_session"),
                               "hide_row": {key: (journey.daemon.row(opened[0]) or {}).get(key)
                                            for key in ("session_id", "forked_from", "identity_label")}}
-    listing = journey.controller.hide(["agent", "list"])
-    listed = next((item for item in (listing.get("value") or {}).get("items") or []
+    listed = next((item for item in journey.controller.list_agents()
                    if pane and item.get("pane") == pane), None)
     record["prompt"].update(turn=turn, read=read)
     record.update(herdr_session=herdr_session, listed=listed, errors=list(journey.daemon.errors))

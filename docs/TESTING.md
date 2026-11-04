@@ -215,6 +215,8 @@ When the behavior depends on the order of two events, the test fixes that order;
   Every completion retains the integer status and publishes a correlated `.json` sidecar first, with the supervisor's phase, OS error, elapsed time and cleanup result.
   `python3 scripts/check-agent-journey-controller.py --provider <compiled-provider> --run-dir agents/runs/<run>/controller` exercises that same supervisor with real Python children, without a Herdr server or a model.
   Its opt-in `--deadline-comparison` compares a controlled 21-second child under the old 20-second watchdog and the journey's protocol budget; it cannot establish why an earlier Windows command failed.
+  Journey observations (`pane read` and registration `agent list`) use the controller's claimed capability from the host, bounded by the same process owner, without typing an input turn into its pane.
+  Repeated reads therefore consume none of the controller's 512 command-file budget; mutations still use that bounded command path, and a read failure retains its cause instead of becoming a registration timeout.
   The private Herdr server, panes and `hided` use `fixturePath`: the shim directory followed by system-tool directories, including `/usr/sbin` for `lsof` on Unix and native Windows and Git directories on Windows.
   `fixtureExecutable` supplies native `.exe` names and `fixtureToolPath` uses the native path delimiter while refusing missing or non-absolute Windows system-root or program-files values.
   On disposable Windows CI runners, the web and desktop e2e jobs share `.github/actions/windows-fixture-path`, which prepends `%HIDE_E2E_ROOT%\bin` to the user's registry `Path` as `REG_EXPAND_SZ`, preserving its other entries.

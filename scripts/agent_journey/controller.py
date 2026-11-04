@@ -154,25 +154,42 @@ class Controller:
             runtime.controller_registered = True
         return self.agent_id
 
-    def read_pane(self, pane, *, visible=False, lines=120):
-        """Read through this controller's claimed pane capability, on either
-        engine. Reading from the host does not wake the controller or type
-        into the measured agent while a turn's activity is being observed.
-        A styled screen must be whole before the composer can judge it.
+    def _read(self, args):
+        """Observe through the controller's capability without waking its pane.
+
+        Polling owns no command file and consumes none of the controller's
+        bounded mutation budget. The process owner still bounds each read.
         """
         runtime = self.runtime
         reference = runtime.pane_credentials[self.pane]
-        flags = ["--source", "visible", "--format", "ansi"] if visible else ["--lines", str(lines)]
         code, output, error = runtime.owner.run(
-            [str(runtime.hide), "pane", "read", pane, *flags, "--json"],
+            [str(runtime.hide), *args, "--json"],
             env={**runtime.daemon_env, "HIDE_CAP_REF": str(reference)}, check=False,
         )
         if code:
-            raise ProcessError(f"journey_pane_read_exit_{code}: {error.strip()[:200]}")
+            raise ProcessError(f"journey_read_exit_{code}: {error.strip()[:200]}")
         try:
             answer = json.loads(output)
             value = answer["value"]
-            if answer.get("ok") is not True or not isinstance(value.get("text"), str):
+            if answer.get("ok") is not True or not isinstance(value, dict):
+                raise ValueError("missing read result")
+            return value
+        except (ValueError, KeyError, TypeError) as error:
+            raise ProcessError("journey_read_unreadable") from error
+
+    def list_agents(self):
+        """The same public registration list, read without an input turn."""
+        value = self._read(["agent", "list"])
+        if not isinstance(value.get("items"), list):
+            raise ProcessError("journey_agent_list_unreadable")
+        return value["items"]
+
+    def read_pane(self, pane, *, visible=False, lines=120):
+        """A styled screen must be whole before the composer can judge it."""
+        flags = ["--source", "visible", "--format", "ansi"] if visible else ["--lines", str(lines)]
+        value = self._read(["pane", "read", pane, *flags])
+        try:
+            if not isinstance(value.get("text"), str):
                 raise ValueError("missing pane text")
             if visible and value.get("truncated") is not False:
                 raise ProcessError("journey_visible_screen_truncated")
