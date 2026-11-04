@@ -344,6 +344,42 @@ static int append_argv(const char *path, int argc, char **argv) {
   return fclose(file) != 0;
 }
 
+/* The session a native-file stand-in has written or resumed, reported as the
+   agent's own Hide integration reports it, from inside the pane: on the core's
+   own engine nothing else names a pane's session. The spec writes
+   `<kind>-session-report.config` (`web/e2e/session-reader-fixture.ts`): the
+   command line to run, then a newline, then what that command reads on its
+   standard input. Each integration's input is the spec's knowledge, not this
+   program's. With no such file (Herdr's engine, whose own report the spec
+   makes) nothing is reported. */
+static int report_session(const char *root, const char *kind) {
+  static char report[8192];
+  char filename[4096];
+  if (snprintf(filename, sizeof filename, "%s/%s-session-report.config", root, kind) >= (int)sizeof filename) return 1;
+  FILE *file = fopen(filename, "rb");
+  if (!file) return errno == ENOENT ? 0 : 1;
+  size_t count = fread(report, 1, sizeof report - 1, file);
+  int complete = !ferror(file) && feof(file);
+  fclose(file);
+  report[count] = 0;
+  char *input = strchr(report, '\n');
+  if (!complete || !count || !input) return 1;
+  *input++ = 0;
+#ifdef _WIN32
+  FILE *command = _popen(report, "w");
+#else
+  FILE *command = popen(report, "w");
+#endif
+  if (!command) return 1;
+  int wrote = fputs(input, command) >= 0;
+#ifdef _WIN32
+  int status = _pclose(command);
+#else
+  int status = pclose(command);
+#endif
+  return !wrote || status != 0;
+}
+
 /* The native-file fixture writes its own session, rather than having
    the spec plant an already-readable transcript. The private root supplies
    a bounded seed and destination; resumed launches preserve the same file.
@@ -393,6 +429,8 @@ static int native_session(int argc, char **argv) {
     }
   }
   if (append_argv(launches, argc, argv)) return 1;
+  /* A resume is a session start too: the real integrations report again. */
+  if (report_session(root, kind)) return 1;
   printf("%s fixture ready\n", kind);
   return 0;
 }

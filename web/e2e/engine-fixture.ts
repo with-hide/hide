@@ -160,6 +160,11 @@ export function paneInputLog(root: string, pane: string): string {
   return path.join(root, `input-${pane.replaceAll(":", "-")}.log`);
 }
 
+/** The `hide-agent-hooks` this worktree built, which a stand-in runs from inside its pane as the agent's own integration does. */
+export function builtHooks(): string {
+  return path.resolve("..", "target", "debug", fixtureExecutable("hide-agent-hooks"));
+}
+
 /** The session each of the fixture's two agents runs, whose transcript names its task. */
 const FIXTURE_AGENTS = [
   { session: "fixture-one", task: "Agent one" },
@@ -235,7 +240,7 @@ export async function startFixture({ agents = true, family = false }: { agents?:
   return {
     ...server,
     // The stand-in reports a new session through Hide's own hook from inside its pane (`setAgentSession`).
-    daemonEnv: { ...server.daemonEnv, HIDE_E2E_HOOKS: path.resolve("..", "target", "debug", fixtureExecutable("hide-agent-hooks")) },
+    daemonEnv: { ...server.daemonEnv, HIDE_E2E_HOOKS: builtHooks() },
     opened,
     get workspace() { return need().workspace; },
     get checkout() { return need().checkout; },
