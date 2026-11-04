@@ -785,7 +785,6 @@ fn an_own_engine_claude_slept_with_its_hooked_conversation_wakes_resuming_it() {
     built.stop();
 }
 
-#[cfg(unix)]
 #[allow(clippy::disallowed_methods)] // a polling helper bounded by a deadline
 fn until(what: &str, done: impl Fn() -> bool) {
     let deadline = Instant::now() + SHOWN_WITHIN;

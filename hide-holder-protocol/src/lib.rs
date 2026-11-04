@@ -190,6 +190,9 @@ pub enum Capability {
     Notices,
     /// The holder sends the pane's [`Facts`] on a watch connection.
     Facts,
+    /// Facts may append the foreground script's installed package. A
+    /// holder sends this extension only to a watcher accepting it.
+    ProgramPackage,
     /// The holder reads [`ClientMessage::Key`]; a node sends it only to a
     /// holder whose welcome names this, since an older holder reads it as a
     /// message it does not know and closes the connection.
@@ -205,6 +208,7 @@ impl Capability {
             Self::Screen => "screen",
             Self::Notices => "notices",
             Self::Facts => "facts",
+            Self::ProgramPackage => "program_package",
             Self::Keys => "keys",
             Self::Other(name) => name,
         }
@@ -215,6 +219,7 @@ impl Capability {
             "screen" => Self::Screen,
             "notices" => Self::Notices,
             "facts" => Self::Facts,
+            "program_package" => Self::ProgramPackage,
             "keys" => Self::Keys,
             other => Self::Other(other.to_owned()),
         }
@@ -311,9 +316,11 @@ pub struct Facts {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Program {
     pub pid: u32,
-    /// Its executable or runtime script name, or `npm:<package>` when the
-    /// platform identifies an installed package from the script path.
+    /// Its executable or runtime script name.
     pub name: String,
+    /// The installed package, a second clue after the executable name.
+    /// Only sent when the watch accepts [`Capability::ProgramPackage`].
+    pub package: Option<String>,
     /// Its arguments, the program first; empty when the system cannot read them.
     pub argv: Vec<String>,
 }
@@ -2017,6 +2024,11 @@ impl Facts {
                 put_text(payload, &bounded(reason, MAX_DETAIL));
             }
         }
+        // No extension is the original facts frame. Older watchers are
+        // handed a program with no package by the negotiated writer.
+        if let Some(package) = self.foreground.as_ref().and_then(|p| p.package.as_deref()) {
+            put_text(payload, &bounded(package, MAX_PROCESS_NAME));
+        }
     }
 
     fn take(payload: &mut Payload<'_>) -> Result<Self, FrameError> {
@@ -2025,7 +2037,7 @@ impl Facts {
         let bells = payload.u64()?;
         let prompts = payload.u64()?;
         let bracketed_paste = payload.u8()? != 0;
-        let foreground = match payload.u8()? {
+        let mut foreground = match payload.u8()? {
             0 => None,
             _ => {
                 let pid = payload.u32()?;
@@ -2044,7 +2056,12 @@ impl Facts {
                         "a program's arguments are past their bound".to_owned(),
                     ));
                 }
-                Some(Program { pid, name, argv })
+                Some(Program {
+                    pid,
+                    name,
+                    package: None,
+                    argv,
+                })
             }
         };
         let screen = match payload.u8()? {
@@ -2062,6 +2079,12 @@ impl Facts {
                 )));
             }
         };
+        if !payload.0.is_empty() {
+            let program = foreground.as_mut().ok_or_else(|| {
+                FrameError::Malformed("a package without a foreground program".to_owned())
+            })?;
+            program.package = Some(payload.text(MAX_PROCESS_NAME)?);
+        }
         Ok(Self {
             cwd,
             title,
@@ -2240,6 +2263,7 @@ mod tests {
                 foreground: Some(Program {
                     pid: 42,
                     name: "gemini".to_owned(),
+                    package: Some("@google/gemini-cli".to_owned()),
                     argv: vec!["node".to_owned(), "/opt/gemini.js".to_owned()],
                 }),
                 screen: ScreenRead::Read {
@@ -2443,12 +2467,56 @@ mod tests {
     }
 
     #[test]
+    fn facts_accept_the_original_frame_and_bound_the_optional_package() {
+        let facts = Facts {
+            foreground: Some(Program {
+                pid: 42,
+                name: "cli".to_owned(),
+                package: None,
+                argv: vec!["node".to_owned()],
+            }),
+            ..Facts::default()
+        };
+        let mut original = Vec::new();
+        facts.put(&mut original);
+        // Version 1 before package support: absent cwd/title, zero clocks
+        // and mode, then pid, name, argv and NoRules, with no trailer.
+        let mut old_wire = vec![0; 19];
+        old_wire.extend_from_slice(&[
+            1, 42, 0, 0, 0, 3, 0, b'c', b'l', b'i', 1, 0, 4, 0, b'n', b'o', b'd', b'e', 0,
+        ]);
+        assert_eq!(original, old_wire);
+        let mut payload = Payload(&original);
+        assert_eq!(Facts::take(&mut payload).unwrap(), facts);
+        payload.end().unwrap();
+
+        // This is the extension's wire format, appended after the old
+        // frame: a length-prefixed full package name, not another name.
+        let mut extended = original.clone();
+        put_text(&mut extended, "@scope/tool");
+        let mut payload = Payload(&extended);
+        let read = Facts::take(&mut payload).unwrap();
+        let program = read.foreground.unwrap();
+        assert_eq!(program.name, "cli");
+        assert_eq!(program.package.as_deref(), Some("@scope/tool"));
+        payload.end().unwrap();
+
+        put_text(&mut original, &"x".repeat(MAX_PROCESS_NAME + 1));
+        assert!(Facts::take(&mut Payload(&original)).is_err());
+        let mut no_program = Vec::new();
+        Facts::default().put(&mut no_program);
+        put_text(&mut no_program, "@scope/tool");
+        assert!(Facts::take(&mut Payload(&no_program)).is_err());
+    }
+
+    #[test]
     fn facts_past_their_bounds_are_cut_on_the_way_out_and_refused_on_the_way_in() {
         let facts = Facts {
             title: Some("t".repeat(MAX_TITLE_CHARS + 10)),
             foreground: Some(Program {
                 pid: 1,
                 name: "x".to_owned(),
+                package: None,
                 argv: (0..MAX_ARGS + 5).map(|i| format!("{i:0>200}")).collect(),
             }),
             ..Facts::default()

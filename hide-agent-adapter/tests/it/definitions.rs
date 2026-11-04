@@ -6,6 +6,73 @@ use hide_agent_adapter::definition::{
 };
 use hide_agent_adapter::{ADAPTERS, AgentId};
 
+#[test]
+fn built_in_package_identities_match_their_install_routes() {
+    use hide_agent_adapter::InstallMethod;
+    for adapter in ADAPTERS {
+        let installed: std::collections::BTreeSet<_> = adapter
+            .updates
+            .iter()
+            .filter_map(|route| match route.method {
+                InstallMethod::Npm(name) | InstallMethod::Bun(name) => Some(name),
+                _ => None,
+            })
+            .collect();
+        let declared: std::collections::BTreeSet<_> = builtin(adapter.id)
+            .unwrap()
+            .packages
+            .iter()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(declared, installed, "{}", adapter.id);
+    }
+}
+
+#[test]
+fn package_identities_are_full_names_and_a_bad_file_is_left_out_alone() {
+    let file = |id: &str, package: &str| {
+        format!(
+            "schema = 1\nid = {id:?}\nname = {id:?}\nexecutables = [{id:?}]\nhooks = \"none\"\npackages = [{package:?}]\n"
+        )
+    };
+    for bad in [
+        "",
+        "@scope",
+        "@/name",
+        "@scope/",
+        "@scope/name/extra",
+        "../name",
+        "name@1",
+        "Name",
+        "name with space",
+        "C:\\name",
+    ] {
+        let catalog = Catalog::read(vec![
+            text("bad.toml", &file("bad", bad)),
+            text("good.toml", &file("good", "@local/good")),
+        ]);
+        assert_eq!(catalog.rejected.len(), 1, "{bad:?}");
+        assert_eq!(catalog.rejected[0].file, "bad.toml");
+        assert!(catalog.rejected[0].reason.contains("package"));
+        assert_eq!(
+            catalog.definitions.last().unwrap().packages,
+            ["@local/good"]
+        );
+    }
+    let catalog = Catalog::read(vec![
+        text("first.toml", &file("first", "@local/shared")),
+        text("second.toml", &file("second", "@local/shared")),
+        text("third.toml", &file("third", "@other/shared")),
+    ]);
+    assert_eq!(catalog.rejected.len(), 1);
+    assert!(
+        catalog.rejected[0]
+            .reason
+            .contains("package @local/shared is taken by first")
+    );
+    assert_eq!(catalog.definitions.last().unwrap().id, "third");
+}
+
 fn text(name: &str, text: &str) -> UserFile {
     UserFile::Text {
         name: name.to_owned(),

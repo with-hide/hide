@@ -8,6 +8,7 @@ schema = 1
 id = "claude-code"
 name = "Claude Code"
 executables = ["claude"]
+packages = ["@anthropic-ai/claude-code"]
 aliases = ["claude", "claude_code"]
 home = "~/.claude"
 hooks = "claude"

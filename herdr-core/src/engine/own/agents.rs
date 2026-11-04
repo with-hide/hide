@@ -72,23 +72,28 @@ pub(super) fn definition<'c>(catalog: &'c Catalog, kind: &str) -> Option<&'c Def
     })
 }
 
-/// The definition whose `executables` name `program`, by the name its
-/// holder gave it (`hide_holder::foreground::program_name`: its first
-/// argument's file name, the script a runtime runs, or its installed package
-/// resolved by the same declarations that install it).
+/// Native and runtime script names take precedence over the optional
+/// package identity. Both identities come from the agent definition;
+/// neither installation routes nor an unscoped guess participate.
 fn recognized<'c>(catalog: &'c Catalog, program: &ForegroundProgram) -> Option<&'c Definition> {
-    let package = hide_agent_adapter::adapter_for_package_program(&program.name);
-    catalog.definitions.iter().find(|definition| {
-        definition.executables.iter().any(|executable| {
-            executable.eq_ignore_ascii_case(&program.name)
-                || package.is_some_and(|adapter| {
-                    adapter
-                        .executables
-                        .iter()
-                        .any(|name| executable.eq_ignore_ascii_case(name))
-                })
+    catalog
+        .definitions
+        .iter()
+        .find(|definition| {
+            definition
+                .executables
+                .iter()
+                .any(|executable| executable.eq_ignore_ascii_case(&program.name))
         })
-    })
+        .or_else(|| {
+            let package = program.package.as_deref()?;
+            catalog.definitions.iter().find(|definition| {
+                definition
+                    .packages
+                    .iter()
+                    .any(|declared| declared.eq_ignore_ascii_case(package))
+            })
+        })
 }
 
 /// The name the core knows an agent kind by: Herdr's spelling for an agent
@@ -524,6 +529,7 @@ mod tests {
         Some(ForegroundProgram {
             pid: 7,
             name: name.to_owned(),
+            package: None,
             argv: vec![name.to_owned()],
         })
     }
@@ -545,16 +551,54 @@ mod tests {
             ("opencode-ai", "opencode"),
             ("@earendil-works/pi-coding-agent", "pi"),
             ("@oh-my-pi/pi-coding-agent", "omp"),
+            ("@moonshot-ai/kimi-code", "kimi"),
+            ("@qwen-code/qwen-code", "qwen"),
+            ("@letta-ai/letta-code", "letta"),
         ] {
-            let program = program(&format!("npm:{package}")).unwrap();
+            let mut program = program("cli").unwrap();
+            program.package = Some(package.to_owned());
             assert_eq!(
                 recognized(&catalog, &program).map(kind_name).as_deref(),
                 Some(kind)
             );
         }
-        for unknown in ["cli", "npm:helper", "npm:@unknown/pi-coding-agent"] {
-            assert!(recognized(&catalog, &program(unknown).unwrap()).is_none());
+        for unknown in [
+            "helper",
+            "@unknown/pi-coding-agent",
+            "@unknown/kimi-code",
+            "@unknown/qwen-code",
+        ] {
+            let mut program = program("cli").unwrap();
+            program.package = Some(unknown.to_owned());
+            assert!(recognized(&catalog, &program).is_none());
         }
+    }
+
+    #[test]
+    fn a_package_keeps_the_script_name_and_can_name_a_generic_script() {
+        let catalog = catalog();
+        for (name, package) in [
+            ("gemini", "@oh-my-pi/pi-coding-agent"),
+            ("letta", "@letta-ai/letta-code"),
+            ("codex", "@earendil-works/pi-coding-agent"),
+        ] {
+            let mut program = program(name).unwrap();
+            assert_eq!(
+                recognized(&catalog, &program).map(kind_name).as_deref(),
+                Some(name)
+            );
+            program.package = Some(package.to_owned());
+            assert_eq!(
+                recognized(&catalog, &program).map(kind_name).as_deref(),
+                Some(name)
+            );
+        }
+        let mut program = program("main").unwrap();
+        program.package = Some("@moonshot-ai/kimi-code".to_owned());
+        assert_eq!(
+            recognized(&catalog, &program).map(kind_name).as_deref(),
+            Some("kimi")
+        );
     }
 
     struct Pane {

@@ -284,7 +284,7 @@ Regression owners are `checkout_header_reads_file_edits_unborn_head_and_tracking
 Windows foreground detection reuses the holder's output-driven fact reader, at most once per 16 ms, with no idle timer or new worker.
 The existing process-table snapshot validates child birth times and now follows only a single-child cmd or PowerShell wrapper chain, bounded by the process walk's depth limit; an unreadable identity refuses the readiness proof.
 A newly observed process adds one bounded native command-line query (at most three reads after its size probe, at most 64 KiB plus the native descriptor), cached by pid and image name; the Windows argument parser owns and releases its native allocation on every path.
-Package identity comes from the command-line path with no file read or subprocess, and the adapter reuses its static install declarations.
+Package identity comes from the command-line path with no file read or subprocess, and the core compares the bounded package identity with the agent definitions after trying the executable or script name.
 The holder keeps one cached program and sends at most 64 arguments within 8 KiB; facts publish only when changed, with no added notification fan-out or pending queue.
 The existing process-table snapshot scales with the machine's process count and has no row cap; this change adds no process table or resident cache.
 The argv contract, real-holder busy-shell refusal and `agent-start-platform.spec.ts` own the regression checks; CPU and latency parity remain unmeasured.

@@ -17,8 +17,7 @@ use windows_sys::Win32::Foundation::{HANDLE, LocalFree, RtlNtStatusToDosError};
 use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows_sys::Win32::UI::Shell::CommandLineToArgvW;
 
-pub(crate) type NtQuery =
-    unsafe extern "system" fn(HANDLE, u32, *mut c_void, u32, *mut u32) -> i32;
+pub(crate) type NtQuery = unsafe extern "system" fn(HANDLE, u32, *mut c_void, u32, *mut u32) -> i32;
 
 pub(crate) fn nt_query() -> io::Result<NtQuery> {
     let name: Vec<u16> = "ntdll.dll\0".encode_utf16().collect();
@@ -140,13 +139,17 @@ fn command_line(bytes: &[u8]) -> io::Result<Vec<u16>> {
         || !length.is_multiple_of(2)
         || descriptor.length > descriptor.maximum_length
         || offset < size_of::<UnicodeString>()
-        || offset.checked_add(length).is_none_or(|end| end > bytes.len())
+        || offset
+            .checked_add(length)
+            .is_none_or(|end| end > bytes.len())
     {
         return Err(invalid("invalid process command-line descriptor"));
     }
     let mut line: Vec<u16> = bytes[offset..offset + length]
-        .chunks_exact(2)
-        .map(|unit| u16::from_ne_bytes([unit[0], unit[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|unit| u16::from_ne_bytes(*unit))
         .collect();
     if line.contains(&0) {
         return Err(invalid("process command line contains an embedded NUL"));
@@ -242,7 +245,9 @@ mod tests {
     #[test]
     fn a_nested_dependency_is_not_its_outer_package() {
         assert_eq!(
-            package_name(r"C:\npm\node_modules\@oh-my-pi\pi-coding-agent\node_modules\helper\cli.js"),
+            package_name(
+                r"C:\npm\node_modules\@oh-my-pi\pi-coding-agent\node_modules\helper\cli.js"
+            ),
             Some("helper".into())
         );
     }

@@ -2459,7 +2459,13 @@ fn the_working_directory_is_the_kernels_answer_or_unsupported() {
 fn the_arguments_are_the_ones_the_process_started_with() {
     let _serial = serial();
     let program = std::env::current_exe().unwrap();
-    let arguments = ["a word with spaces", "", "한글", "a\"quoted\"word", "C:\\a path\\"];
+    let arguments = [
+        "a word with spaces",
+        "",
+        "한글",
+        "a\"quoted\"word",
+        "C:\\a path\\",
+    ];
     let mut child = role_command("sleep").args(arguments).spawn().unwrap();
     let pid = child.id();
     ready_number(child.stdout.take().unwrap());

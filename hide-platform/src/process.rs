@@ -1372,21 +1372,17 @@ fn is_console_host(pid: u32) -> bool {
 #[cfg(windows)]
 pub fn console_foreground(shell: u32) -> io::Result<u32> {
     let shell_started = start_time(shell)?;
-    let mut walk = sys::Walk::new()?;
+    let walk = sys::Walk::new()?;
     let mut oldest = None;
     // A walk used to end a tree may leave an unreadable row alone. A
     // readiness proof cannot: skipping that child would type into a busy
     // pane. Propagate uncertainty, which the holder reports as unreadable.
-    for child in walk.confirmed_children_of(shell)? {
-        match start_time(child) {
-            Ok(started) if !is_console_host(child) => {
-                oldest = Some(oldest.map_or((started, child), |previous| {
-                    std::cmp::min(previous, (started, child))
-                }));
-            }
-            Ok(_) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
+    for child in walk.child_identities(shell)? {
+        let (child, started) = child?;
+        if !is_console_host(child) {
+            oldest = Some(oldest.map_or((started, child), |previous| {
+                std::cmp::min(previous, (started, child))
+            }));
         }
     }
     let mut foreground = oldest.map_or(shell, |(_, child)| child);
@@ -1405,8 +1401,11 @@ pub fn console_foreground(shell: u32) -> io::Result<u32> {
             break;
         }
         let children: Vec<_> = walk
-            .confirmed_children_of(foreground)?
+            .child_identities(foreground)?
             .into_iter()
+            .collect::<io::Result<Vec<_>>>()?
+            .into_iter()
+            .map(|(pid, _)| pid)
             .filter(|child| !is_console_host(*child))
             .collect();
         if children.len() != 1 {
@@ -6137,8 +6136,7 @@ mod sys {
             more = unsafe { Process32NextW(snapshot.0, &mut entry) } != 0;
         }
         let error = io::Error::last_os_error();
-        if error.raw_os_error()
-            != Some(windows_sys::Win32::Foundation::ERROR_NO_MORE_FILES as i32)
+        if error.raw_os_error() != Some(windows_sys::Win32::Foundation::ERROR_NO_MORE_FILES as i32)
         {
             return Err(error);
         }
@@ -6163,7 +6161,7 @@ mod sys {
         /// been checked. An exited child is absent, an unreadable one is
         /// unknown, and a child older than this parent belongs to an old
         /// holder of its pid.
-        pub(super) fn confirmed_children_of(&mut self, pid: u32) -> io::Result<Vec<u32>> {
+        pub(super) fn child_identities(&self, pid: u32) -> io::Result<Vec<io::Result<(u32, u64)>>> {
             let parent_started = start_time(pid)?;
             let mut children = Vec::new();
             for &(child, parent) in &self.table {
@@ -6171,10 +6169,10 @@ mod sys {
                     continue;
                 }
                 match start_time(child) {
-                    Ok(started) if started >= parent_started => children.push(child),
+                    Ok(started) if started >= parent_started => children.push(Ok((child, started))),
                     Ok(_) => {}
                     Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-                    Err(error) => return Err(error),
+                    Err(error) => children.push(Err(error)),
                 }
             }
             Ok(children)
@@ -6183,14 +6181,11 @@ mod sys {
         /// A row whose start, or whose parent's, cannot be read is no child:
         /// it cannot be told from a later process holding an ended one's pid.
         pub(super) fn children_of(&mut self, pid: u32) -> Vec<u32> {
-            let Ok(parent_started) = start_time(pid) else {
-                return Vec::new();
-            };
-            self.table
-                .iter()
-                .filter(|(_, parent)| *parent == pid)
-                .map(|(child, _)| *child)
-                .filter(|child| start_time(*child).is_ok_and(|child| child >= parent_started))
+            self.child_identities(pid)
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(Result::ok)
+                .map(|(pid, _)| pid)
                 .collect()
         }
     }

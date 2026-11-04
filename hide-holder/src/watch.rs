@@ -226,6 +226,8 @@ pub struct FactsWriter {
     pub rules: SharedRules,
     /// The pane's program, which never counts as its foreground.
     pub shell: u32,
+    /// Whether this watch negotiated the optional package extension.
+    pub program_package: bool,
     /// The terminal's foreground process group, or why it is not known.
     pub group: Box<dyn Fn() -> Result<u32, Unknown> + Send>,
     pub log: Log,
@@ -247,7 +249,12 @@ impl FactsWriter {
                 Job::Send(message) => message,
                 Job::Read { owed } => {
                     next = Instant::now() + MIN_FACTS_INTERVAL;
-                    let program = foreground.program(self.shell, (self.group)(), &self.log);
+                    let mut program = foreground.program(self.shell, (self.group)(), &self.log);
+                    if !self.program_package
+                        && let Some(program) = &mut program
+                    {
+                        program.package = None;
+                    }
                     let facts = match facts(&self.pane, &self.rules, &mut reading, program) {
                         Ok(facts) => facts,
                         Err(error) => {

@@ -13,7 +13,7 @@
 //! leader has ended, when the group is not the pane's own program's, named
 //! by its file, or by the script a runtime (node, bun, deno, python) runs.
 //! On Windows the platform can name that script's installed npm package,
-//! which the core resolves through its existing install declarations.
+//! which the core resolves through its agent definitions after the name.
 //! The system is asked once per process: a process is
 //! known again by its pid and the name the system gives it, which an `exec`
 //! changes.
@@ -82,11 +82,14 @@ impl Foreground {
             }
         });
         let name = program_name(&key.1, &argv);
-        let name = runtime_script(&key.1, &argv)
-            .and_then(hide_platform::process::package_of_script)
-            .map(|package| format!("npm:{package}"))
-            .unwrap_or(name);
-        let program = Program { pid, name, argv };
+        let package =
+            runtime_script(&key.1, &argv).and_then(hide_platform::process::package_of_script);
+        let program = Program {
+            pid,
+            name,
+            package,
+            argv,
+        };
         self.known = Some((key, program.clone()));
         Some(program)
     }
