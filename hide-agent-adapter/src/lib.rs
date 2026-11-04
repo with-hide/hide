@@ -278,6 +278,15 @@ impl SessionFormat {
     pub const fn reports_wake_devices(self) -> bool {
         matches!(self, Self::Claude)
     }
+    /// Whether Hide's integration reports the agent's session as its session
+    /// file's path rather than the id its resume names: Pi 1.0.4 and omp
+    /// 18.7.0 hand the extension `sessionManager.getSessionFile()`
+    /// (`hide-agent-hooks/src/pi_extension/extension.js`), so a resume id is
+    /// not the session such an agent reports.
+    pub const fn reports_session_path(self) -> bool {
+        matches!(self, Self::Pi | Self::Omp)
+    }
+
     pub const fn has_session_file(self) -> bool {
         matches!(
             self,

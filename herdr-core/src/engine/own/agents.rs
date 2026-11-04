@@ -196,18 +196,17 @@ pub(super) fn resume_argv(definition: &Definition, session: Option<&str>) -> Opt
 /// The session a program's arguments resume, by `definition`'s `[resume]
 /// session` selector, before any `--`.
 /// The session a start the engine types runs, before its agent says: the
-/// one its resume names, only for an agent that does not report its session
-/// on resume itself (agy, Cursor), as the core reports it to Herdr for those
-/// (`agent_sleep_herdr::report_resumed_session`). Any other agent reports
-/// its own, in its own form: Pi and omp resume by id and report the session
-/// file's path, and a woken omp whose id stood for its session read as
-/// another conversation, so its registration was refused
-/// (`identity_changed`, journey 871294628).
+/// one its resume names, so a woken agent names the conversation it resumed
+/// at once. Not for an agent whose integration reports its session as a
+/// file's path (Pi, omp): they resume by id, and an id recorded for a woken
+/// omp read as another conversation than the path its registration held, so
+/// the registration was refused (`identity_changed`, journey 871294628);
+/// such an agent's session waits for its own report.
 pub(super) fn started_session(definition: &Definition, argv: &[String]) -> Option<String> {
-    let reports = hide_agent_adapter::adapter(&definition.id)
-        .and_then(|adapter| adapter.resume)
-        .is_none_or(hide_agent_adapter::LaunchDialect::resume_reports_session);
-    if reports {
+    let reports_path = hide_agent_adapter::adapter(&definition.id)
+        .and_then(|adapter| adapter.session)
+        .is_some_and(hide_agent_adapter::SessionFormat::reports_session_path);
+    if reports_path {
         return None;
     }
     resumed_in(definition, argv)
@@ -1045,12 +1044,12 @@ mod tests {
         assert_eq!(resumed_in(codex, &argv[..3]), None);
     }
 
-    /// A start records the session its resume names only for an agent that
-    /// does not report its own on resume (agy): omp resumes by id and reports
-    /// its session file's path, so the id would read as another conversation
-    /// and a woken omp's registration would be refused.
+    /// A start records the session its resume names, except for an agent
+    /// that reports its session as a file's path: omp resumes by id, so the
+    /// id would read as another conversation and a woken omp's registration
+    /// would be refused. Claude reports the id it resumes.
     #[test]
-    fn a_start_records_its_resumed_session_only_for_an_agent_that_does_not_report_it() {
+    fn a_start_records_its_resumed_session_unless_its_agent_reports_a_path() {
         let catalog = catalog();
         let words = |words: &[&str]| -> Vec<String> {
             words.iter().map(|word| (*word).to_owned()).collect()
@@ -1063,6 +1062,12 @@ mod tests {
         let argv = words(&["agy", "--conversation", "c-1"]);
         assert_eq!(resumed_in(agy, &argv).as_deref(), Some("c-1"));
         assert_eq!(started_session(agy, &argv).as_deref(), Some("c-1"));
+        let claude = definition(&catalog, "claude").unwrap();
+        let argv = words(&["claude", "--resume", "0b8f1f3e-5c2a-4a8e-9a54-2d4c1f6b7e90"]);
+        assert_eq!(
+            started_session(claude, &argv).as_deref(),
+            Some("0b8f1f3e-5c2a-4a8e-9a54-2d4c1f6b7e90")
+        );
     }
 
     #[test]
