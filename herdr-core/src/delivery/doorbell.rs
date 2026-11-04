@@ -2775,42 +2775,37 @@ mod tests {
     /// timer type the same bell twice.
     #[test]
     fn a_timed_out_prompt_stays_pending_until_the_pane_moves() {
-        for code in ["timeout"] {
-            let bell = Bell::with_submission_error(json!({}), Some(code));
-            let mut doorbell = Doorbell::default();
-            let at = now();
-            let records = bell.pass(&mut doorbell, at);
-            assert!(
-                records
-                    .iter()
-                    .any(|record| record["kind"] == "doorbell.failed"),
-                "{code}: {records:?}"
-            );
-            assert_eq!(bell.typed().len(), 1, "{code}");
-            {
-                let guard = bell.runtime.lock().unwrap();
-                let ledger = guard.delivery_state().unwrap();
-                let letter = ledger
-                    .letters
-                    .iter()
-                    .find(|letter| letter.id == bell.letter)
-                    .unwrap();
-                assert_eq!(letter.state, State::Pending, "{code}");
-                assert!(!letter.bell_sent, "{code}");
-                assert_eq!(letter.bell_errors, 1, "{code}");
-                assert_eq!(letter.attempts(), 1, "{code}");
-            }
-            assert!(
-                bell.pass(&mut doorbell, at + 2 * RETRY_LIMIT_MS).is_empty(),
-                "{code}"
-            );
-            assert_eq!(
-                bell.typed().len(),
-                1,
-                "{code}: a timer must not retry an uncertain submission"
-            );
-            assert_eq!(bell.attempts(), 1, "{code}");
+        let bell = Bell::with_submission_error(json!({}), Some("timeout"));
+        let mut doorbell = Doorbell::default();
+        let at = now();
+        let records = bell.pass(&mut doorbell, at);
+        assert!(
+            records
+                .iter()
+                .any(|record| record["kind"] == "doorbell.failed"),
+            "{records:?}"
+        );
+        assert_eq!(bell.typed().len(), 1);
+        {
+            let guard = bell.runtime.lock().unwrap();
+            let ledger = guard.delivery_state().unwrap();
+            let letter = ledger
+                .letters
+                .iter()
+                .find(|letter| letter.id == bell.letter)
+                .unwrap();
+            assert_eq!(letter.state, State::Pending);
+            assert!(!letter.bell_sent);
+            assert_eq!(letter.bell_errors, 1);
+            assert_eq!(letter.attempts(), 1);
         }
+        assert!(bell.pass(&mut doorbell, at + 2 * RETRY_LIMIT_MS).is_empty());
+        assert_eq!(
+            bell.typed().len(),
+            1,
+            "a timer must not retry an uncertain submission"
+        );
+        assert_eq!(bell.attempts(), 1);
     }
 
     /// B3, B4: while the recipient's session waits for the operator to
