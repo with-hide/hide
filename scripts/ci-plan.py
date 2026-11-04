@@ -79,7 +79,7 @@ LANES = (
 FULL_LANES = tuple(lane for lane in LANES if lane not in ("package", "agent-clis", "holder-restart"))
 
 # Crates whose change reaches what differs by operating system: the platform
-# layer, the Herdr client's IPC, the install kit and hooks, and the daemon and
+# layer, the install kit and hooks, and the daemon and
 # core that `windows check` and the OS contract run on each system.
 OS_CRATES = {
     "herdr-core",
@@ -99,7 +99,7 @@ OS_LANES = ("os-contract", "windows-check", "windows-e2e", "windows-desktop")
 # The remote mailbox lane builds `hided`, `hide`, the host helper and the hook
 # binary, and runs `hided`'s `remote_delivery`, `node_contract`,
 # `device_bootstrap` and `system_ssh` tests against them over the system's
-# ssh and sshd, its `held_letter_notice` test against the pinned Herdr, and
+# ssh and sshd, its `held_letter_notice` test against a real daemon, and
 # `hide-host`'s check of another account's open on a device's bridge; a
 # change to any crate they link (the device link's `hide-node` and
 # `hide-node-link` reach it through `hided`), or to the tests, can change its
@@ -674,7 +674,7 @@ def classify(path, status, crates, root):
     if reader_entries(path.as_posix()):
         # `select` adds the readers' lanes and crates.
         return set(), f"read by a known set of readers: {path}", set()
-    # `pr.yml`, the scripts the lanes call, the Herdr pin and schema, lockfiles,
+    # `pr.yml`, the scripts the lanes call, the contracts, lockfiles,
     # toolchain and package configuration, and any path no rule above, in
     # `named_lanes` or in READERS names: every lane. `Cargo.lock` is among
     # them: every member but two depends on `workspace-hack`, which holds

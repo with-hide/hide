@@ -141,14 +141,11 @@ jobs:
         env:
           HIDE_E2E_SCREENSHOT_DIR: ${{ runner.temp }}/hide-e2e
           GREP: ${{ inputs.grep }}
-          # A test that looks at Herdr itself is tagged `@herdr`; no Herdr runs here (docs/TESTING.md).
-          GREP_INVERT: "@herdr"
           SHARD: ${{ matrix.shard }}/${{ inputs.shards }}
         run: |
           mkdir -p "$HIDE_E2E_SCREENSHOT_DIR"
           args=()
           if [ -n "$GREP" ]; then args+=(--grep "$GREP"); fi
-          if [ -n "$GREP_INVERT" ]; then args+=(--grep-invert "$GREP_INVERT"); fi
           if [ "${SHARD#*/}" -gt 1 ]; then
             # Dealt and checked as in web-e2e.yml. `--no-deps`: Playwright runs
             # a project's dependencies whole, so a shard holding one

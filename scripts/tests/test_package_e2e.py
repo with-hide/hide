@@ -57,7 +57,7 @@ class PackageEvidence(unittest.TestCase):
                 self.assertEqual(json.loads((evidence / "report.json").read_text()), {"suite": suite})
                 args = (evidence / "screenshots/args.txt").read_text().splitlines()
                 self.assertEqual(args[:3], ["desktop", "e2e", "packaged-window.spec.ts"])
-                self.assertIn("--grep-invert", args)
+                self.assertNotIn("--grep-invert", args)
                 self.assertEqual(args[-2:], ["--output", str(evidence / "test-results")])
             self.assertFalse((root / "desktop/e2e-report.json").exists())
 

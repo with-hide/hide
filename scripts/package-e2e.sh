@@ -9,8 +9,7 @@ case "$suite" in window|update|macos) ;; *) exit 2 ;; esac
 output="$PWD/agents/runs/package-e2e/$suite"
 mkdir -p "$output/screenshots"
 export HIDE_E2E_SCREENSHOT_DIR="$output/screenshots"
-# A test that looks at Herdr itself is tagged `@herdr`; no package carries Herdr.
-package_test=(bash scripts/verify-web.sh desktop e2e "$@" --grep-invert @herdr)
+package_test=(bash scripts/verify-web.sh desktop e2e "$@")
 if [[ "${RUNNER_OS:-}" == Linux ]]; then package_test=(xvfb-run -a "${package_test[@]}"); fi
 # Never attribute a preceding run's report to a build that failed before Playwright.
 rm -f desktop/e2e-report.json

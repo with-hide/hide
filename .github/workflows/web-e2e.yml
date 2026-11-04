@@ -296,14 +296,11 @@ jobs:
           HIDE_E2E_SCREENSHOT_DIR: ${{ runner.temp }}/hide-e2e
           HIDE_E2E_TRACE: "1"
           GREP: ${{ inputs.grep }}
-          # A test that looks at Herdr itself is tagged `@herdr`; no lane runs Herdr.
-          GREP_INVERT: "@herdr"
           SHARD: ${{ format('{0}/{1}', matrix.shard, inputs.shards) }}
         run: |
           mkdir -p "$HIDE_E2E_SCREENSHOT_DIR"
           args=()
           if [ -n "$GREP" ]; then args+=(--grep "$GREP"); fi
-          if [ -n "$GREP_INVERT" ]; then args+=(--grep-invert "$GREP_INVERT"); fi
           if [ "${SHARD#*/}" -gt 1 ]; then
             # The shard's tests are dealt by their recorded durations, not by
             # Playwright's equal counts. Playwright counts a `--test-list` that

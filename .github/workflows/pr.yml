@@ -37,7 +37,7 @@
 # takes a macOS runner only when it changes a macOS path (`scripts/ci-plan.py`,
 # MACOS_PATHS and MACOS_CODE: the macOS forms of `hide-platform` and the
 # desktop host, the packaged macOS app's scripts and resources, hide-vt's Zig
-# build, the Herdr pin and the CI that defines these jobs; operator decision
+# build and the CI that defines these jobs; operator decision
 # 2026-11-01, docs/TESTING.md, Where the macOS runners went). Such a pull
 # request runs the macOS jobs its paths plan: `desktop e2e`, `os
 # contract (macos)`, and the macOS legs of `vt`, `holder restart`, `omp SDK`
