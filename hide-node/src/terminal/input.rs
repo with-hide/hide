@@ -707,27 +707,65 @@ pub(super) fn paces(chunk: &HeldChunk) -> bool {
     chunk.by == Typist::Operator && matches!(&chunk.input, Typed::Bytes(bytes) if submits(bytes))
 }
 
-/// The rest of a replay of held keys, from a submit on, written at `due`;
-/// the operator's keys typed meanwhile queue behind it. Capped at
-/// [`INPUT_HOLD_LIMIT_BYTES`] like every hold: past the cap the keys
-/// typed until the replay ends are dropped, with one diagnostic.
+/// The rest of a replay of held keys, from a submit on, and when it is
+/// written; the operator's keys typed meanwhile queue behind it. Capped at
+/// [`INPUT_HOLD_LIMIT_BYTES`] like every hold: past the cap the keys typed
+/// until the replay ends are dropped, with one diagnostic.
 pub(super) struct Replay {
-    pub(super) due: Instant,
+    /// When the rest is written: [`REPLAYED_SUBMIT_GAP`] after the keys
+    /// before it reached the pane's terminal, `None` while they still wait
+    /// for it.
+    due: Option<Instant>,
+    /// [`HELD_INPUT_MAX_AGE`] after the fork's keys were released, kept by
+    /// every replay that follows: no key waits on pacing past it, so the
+    /// rest is written at once then, or dropped when the keys before it
+    /// still wait for the terminal, as an attaching pane's hold drops keys
+    /// that old.
+    ends: Instant,
     chunks: Vec<HeldChunk>,
     bytes: usize,
     overflowed: bool,
 }
 
 impl Replay {
-    pub(super) fn new(due: Instant, chunks: impl IntoIterator<Item = HeldChunk>) -> Self {
+    pub(super) fn new(
+        due: Option<Instant>,
+        ends: Instant,
+        chunks: impl IntoIterator<Item = HeldChunk>,
+    ) -> Self {
         let chunks: Vec<HeldChunk> = chunks.into_iter().collect();
         let bytes = chunks.iter().map(|chunk| chunk.input.len()).sum();
         Self {
             due,
+            ends,
             chunks,
             bytes,
             overflowed: false,
         }
+    }
+
+    pub(super) fn ends(&self) -> Instant {
+        self.ends
+    }
+
+    /// When the clock next looks at it: its gap's end, or its end.
+    pub(super) fn deadline(&self) -> Instant {
+        self.due.map_or(self.ends, |due| due.min(self.ends))
+    }
+
+    /// The keys before it still wait for the pane's terminal.
+    pub(super) fn waits_for_terminal(&self) -> bool {
+        self.due.is_none()
+    }
+
+    /// The keys before it reached the pane's terminal at `now`; whether
+    /// that started its gap.
+    pub(super) fn start_gap(&mut self, now: Instant) -> bool {
+        if self.due.is_some() {
+            return false;
+        }
+        self.due = Some(now + REPLAYED_SUBMIT_GAP);
+        true
     }
 
     pub(super) fn push(&mut self, pane_id: &str, chunk: HeldChunk) {

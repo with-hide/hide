@@ -919,47 +919,107 @@ fn bare_pane_keys_wait_for_the_fork_and_reach_only_its_terminal() {
     assert_eq!(fork.next_input(), b"next\r");
 }
 
-#[test]
-fn a_held_enter_reaches_the_fork_a_moment_after_the_keys_before_it() {
-    // Codex reads an Enter that arrives with the keys before it as a
-    // newline of a paste; the operator had pressed it after a pause.
-    let harness = harness(RetryPolicy::Automatic);
-    let fork = harness.controlling("w1:p2");
+/// Opens a fork request holding keys for `pane` and types `keys` into it,
+/// one key each, as the operator typed them while the fork started.
+fn fork_holding(harness: &Harness, pane: &str, keys: &[&[u8]]) {
     harness.service.control(TerminalControl::RequestOpen {
         request: "fork-1".into(),
         fork: true,
     });
     harness.service.control(TerminalControl::RequestHold {
         request: "fork-1".into(),
-        pane: "w1:p2".into(),
+        pane: pane.into(),
     });
-    harness.key("w1:p2", b"hello");
-    harness.key("w1:p2", b"\r");
-    harness.key("w1:p2", b"more");
+    for key in keys {
+        harness.key(pane, key);
+    }
+}
+
+/// What `opened` is written from now until `expected` has arrived, and when
+/// its byte at `mark` arrived.
+fn written_until(opened: &Opened, expected: &[u8], mark: usize) -> (Vec<u8>, Instant) {
+    let mut written = Vec::new();
+    let mut marked = None;
+    while written.len() < expected.len() {
+        written.extend(opened.next_input());
+        if marked.is_none() && written.len() > mark {
+            marked = Some(Instant::now());
+        }
+    }
+    (written, marked.expect("the marked byte arrived"))
+}
+
+#[test]
+fn a_held_enter_reaches_the_fork_a_moment_after_the_keys_before_it() {
+    // Codex reads an Enter that arrives with the keys before it as a
+    // newline of a paste; the operator had pressed it after a pause. The
+    // node's clock writes the Enter, so only what cannot race it is
+    // asserted: it never comes sooner than the gap, and a key typed while
+    // it waits goes behind it.
+    let harness = harness(RetryPolicy::Automatic);
+    let fork = harness.controlling("w1:p2");
+    fork_holding(&harness, "w1:p2", &[b"hello", b"\r", b"more"]);
     let released = Instant::now();
     harness.service.control(TerminalControl::RequestResolve {
         request: "fork-1".into(),
         pane: "w1:p2".into(),
     });
     assert_eq!(fork.next_input(), b"hello");
-    // A key typed while the Enter waits goes behind it.
     harness.key("w1:p2", b"!");
-    fork.assert_no_input();
-    let due = harness
+    let (written, entered) = written_until(&fork, b"\rmore!", 0);
+    assert_eq!(written, b"\rmore!");
+    assert!(entered >= released + input::REPLAYED_SUBMIT_GAP);
+}
+
+#[test]
+fn a_held_enter_waits_for_the_keys_before_it_to_reach_an_attaching_fork() {
+    // The fork's terminal attaches after its keys were released: the gap
+    // starts once the keys before the Enter were written there, so the two
+    // are never handed to the terminal together however long it took.
+    let harness = harness(RetryPolicy::Automatic);
+    fork_holding(&harness, "w1:p2", &[b"hello", b"\r"]);
+    harness.service.control(TerminalControl::RequestResolve {
+        request: "fork-1".into(),
+        pane: "w1:p2".into(),
+    });
+    assert!(
+        harness.service.shared.lock().panes["w1:p2"]
+            .replay
+            .as_ref()
+            .is_some_and(input::Replay::waits_for_terminal),
+        "the Enter waits for the terminal, not for a time"
+    );
+    let attached = Instant::now();
+    harness.attach("w1:p2", Some(SIZE));
+    let opened = harness.opened();
+    let (written, entered) = written_until(&opened, b"hello\r", 5);
+    assert_eq!(written, b"hello\r");
+    assert!(entered >= attached + input::REPLAYED_SUBMIT_GAP);
+}
+
+#[test]
+fn a_held_enter_whose_terminal_never_attaches_is_dropped_at_the_holds_age() {
+    let harness = harness(RetryPolicy::Automatic);
+    fork_holding(&harness, "w1:p2", &[b"hello", b"\r"]);
+    harness.service.control(TerminalControl::RequestResolve {
+        request: "fork-1".into(),
+        pane: "w1:p2".into(),
+    });
+    let deadline = harness
         .service
         .shared
         .lock()
         .next_deadline()
-        .expect("the held Enter owns a deadline");
-    assert!(due >= released + input::REPLAYED_SUBMIT_GAP);
+        .expect("the waiting Enter owns a deadline");
+    assert!(deadline <= Instant::now() + input::HELD_INPUT_MAX_AGE);
     harness.service.shared.run(|inner, shared| {
-        inner.tick(shared, due);
+        inner.tick(shared, deadline);
     });
-    let mut written = Vec::new();
-    while written.len() < b"\rmore!".len() {
-        written.extend(fork.next_input());
-    }
-    assert_eq!(written, b"\rmore!");
+    assert!(
+        harness.service.shared.lock().panes["w1:p2"]
+            .replay
+            .is_none()
+    );
 }
 
 #[test]

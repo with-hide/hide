@@ -483,6 +483,7 @@ impl Service {
                     for chunk in held.keys.take_in_order(self.pane, now) {
                         inner.route_input(KeyTarget::Pane(self.pane.to_owned()), chunk, now);
                     }
+                    inner.replay_gap(self.pane, now);
                     inner.finish_input_release(self.pane);
                 });
             }
@@ -1302,7 +1303,7 @@ impl Inner {
                     "bytes": held.iter().map(|chunk| chunk.input.len()).sum::<usize>(),
                 }));
                 if fork {
-                    self.replay(&pane, held, now);
+                    self.replay(&pane, held, now + input::HELD_INPUT_MAX_AGE, now);
                 } else {
                     for chunk in held {
                         self.write_key(&pane, chunk, false, now);
@@ -1467,15 +1468,13 @@ impl Inner {
         });
     }
 
-    /// Writes one key to its pane. `focus` is a key the operator typed into
-    /// this pane on the screen; a key held for a creation reaches its new
-    /// pane without moving the keyboard.
     /// Writes keys a fork request held for `pane` in the order typed, into
-    /// the agent that now runs there. The
-    /// operator's submit behind other replayed keys waits
-    /// [`input::REPLAYED_SUBMIT_GAP`], with everything after it, so a
-    /// program that reads keys arriving together as a paste still submits.
-    fn replay(&mut self, pane: &str, chunks: Vec<HeldChunk>, now: Instant) {
+    /// the agent that now runs there. The operator's submit behind other
+    /// replayed keys waits [`input::REPLAYED_SUBMIT_GAP`] after those keys
+    /// reached the pane's terminal, with everything after it, so a program
+    /// that reads keys arriving together as a paste still submits; past the
+    /// replay's end ([`input::Replay::ends`]) the rest is written at once.
+    fn replay(&mut self, pane: &str, chunks: Vec<HeldChunk>, ends: Instant, now: Instant) {
         if let Some(replay) = self
             .panes
             .get_mut(pane)
@@ -1490,11 +1489,18 @@ impl Inner {
         let mut wrote = false;
         while let Some(chunk) = chunks.next() {
             if wrote
+                && now < ends
                 && input::paces(&chunk)
                 && let Some(entry) = self.panes.get_mut(pane)
             {
+                // Keys before it still held for the terminal or behind a
+                // letter have not reached the program: the gap starts when
+                // they do (`replay_gap`).
+                let waiting = !matches!(entry.hold, PaneHold::Empty) || entry.letter.is_some();
+                let due = (!waiting).then(|| now + input::REPLAYED_SUBMIT_GAP);
                 entry.replay = Some(input::Replay::new(
-                    now + input::REPLAYED_SUBMIT_GAP,
+                    due,
+                    ends,
                     std::iter::once(chunk).chain(chunks),
                 ));
                 self.wake_clock = true;
@@ -1505,6 +1511,22 @@ impl Inner {
         }
     }
 
+    /// The keys before a waiting replay's submit have reached the pane's
+    /// terminal: its gap starts now.
+    fn replay_gap(&mut self, pane: &str, now: Instant) {
+        if let Some(replay) = self
+            .panes
+            .get_mut(pane)
+            .and_then(|entry| entry.replay.as_mut())
+            && replay.start_gap(now)
+        {
+            self.wake_clock = true;
+        }
+    }
+
+    /// Writes one key to its pane. `focus` is a key the operator typed into
+    /// this pane on the screen; a key held for a creation reaches its new
+    /// pane without moving the keyboard.
     fn write_key(&mut self, pane: &str, chunk: HeldChunk, focus: bool, now: Instant) {
         if chunk.by == Typist::Operator
             && let Some(replay) = self
@@ -2252,6 +2274,7 @@ impl Inner {
                         self.error(pane, "terminal.write_failed", refused.message(pane));
                     }
                 }
+                self.replay_gap(pane, now);
             } else {
                 crate::diagnostic!(json!({
                     "component": "terminal_input",
@@ -2260,6 +2283,14 @@ impl Inner {
                     "reason": "read_only",
                     "bytes": held.iter().map(|chunk| chunk.input.len()).sum::<usize>(),
                 }));
+            }
+            if mode != Mode::Control
+                && let Some(replay) = self
+                    .panes
+                    .get_mut(pane)
+                    .and_then(|entry| entry.replay.take())
+            {
+                replay.discard(pane, "read_only");
             }
         }
         let reader_shared = Arc::downgrade(shared);
@@ -2735,6 +2766,9 @@ impl Inner {
         entry.awaiting_size = false;
         entry.recovery = None;
         entry.hold.discard(pane, "released");
+        if let Some(replay) = entry.replay.take() {
+            replay.discard(pane, "released");
+        }
         entry.lifecycle = Lifecycle {
             state: "released",
             message: Some(message),
@@ -2872,7 +2906,7 @@ impl Inner {
                 entry
                     .replay
                     .as_ref()
-                    .is_some_and(|replay| now >= replay.due)
+                    .is_some_and(|replay| now >= replay.deadline())
             })
             .map(|(pane, _)| pane.clone())
             .collect::<Vec<_>>();
@@ -2881,8 +2915,15 @@ impl Inner {
                 .panes
                 .get_mut(&pane)
                 .and_then(|entry| entry.replay.take());
-            if let Some(replay) = replay {
-                self.replay(&pane, replay.take(), now);
+            match replay {
+                // Its terminal never took the keys before it in time: an
+                // attaching pane's hold drops keys that old too.
+                Some(replay) if replay.waits_for_terminal() => replay.discard(&pane, "stale"),
+                Some(replay) => {
+                    let ends = replay.ends();
+                    self.replay(&pane, replay.take(), ends, now);
+                }
+                None => {}
             }
         }
         let settled = self
@@ -2967,6 +3008,9 @@ impl Inner {
                 // The pane is no longer connecting; keys held for it would
                 // run whenever the operator reconnects, so they end here.
                 entry.hold.discard(pane, "session_failed");
+                if let Some(replay) = entry.replay.take() {
+                    replay.discard(pane, "session_failed");
+                }
             }
             self.sync(pane);
         }
@@ -2991,7 +3035,7 @@ impl Inner {
             let observer = entry
                 .observer_resized_at
                 .map(|at| at + OBSERVER_RESIZE_QUIET);
-            let replay = entry.replay.as_ref().map(|replay| replay.due);
+            let replay = entry.replay.as_ref().map(input::Replay::deadline);
             [retry, observer, entry.hold.permit_deadline(), replay]
         });
         let facts = self.facts.values().map(InputFacts::deadline);
