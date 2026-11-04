@@ -83,9 +83,11 @@ def validate_isolation(run: Path, home: Path, socket: Path, state: Path,
     if home.resolve() == operator_home.resolve():
         raise ProtectionError("daemon_home_is_operator_home")
     for path in (home, state):
-        if (short_state and path == state and socket_root is not None
-                and state == socket_root / "state" and socket_root.is_dir()
-                and not state.is_symlink() and not socket_root.is_symlink() and private(socket_root)):
+        if short_state and path == state:
+            if (socket_root is None or state != socket_root / "state"
+                    or not socket_root.is_dir() or state.is_symlink()
+                    or socket_root.is_symlink() or not private(socket_root)):
+                raise ProtectionError("state_parent_not_owned_by_run")
             continue
         if not beneath(path, run) or path.resolve() == run.resolve():
             raise ProtectionError("runtime_path_outside_run")

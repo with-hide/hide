@@ -118,7 +118,7 @@ class Fork(unittest.TestCase):
                                       "agent-2")[0], cells.FAIL)
         status, reason = fork.verdict(self.row(), "source-1", {**self.herdr, "value": "fork-2"}, "herdr:claude",
                                       self.listed, "agent-2")
-        self.assertEqual((status, reason), (cells.FAIL, "Herdr reports session fork-2 in the fork, Hide registered fork-1"))
+        self.assertEqual((status, reason), (cells.FAIL, "The engine reports session fork-2 in the fork, Hide registered fork-1"))
         self.assertEqual(fork.verdict(self.row(), "source-1", None, "herdr:claude", self.listed, "agent-2")[0], cells.FAIL)
 
     def test_a_fork_registered_as_a_child_or_from_another_source_fails(self):
