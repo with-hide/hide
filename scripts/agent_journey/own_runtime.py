@@ -50,10 +50,12 @@ class OwnRuntime(Runtime):
         folder = str(cwd.resolve())
         self.control.dispatch("create_workspace", {"path": folder, "label": "Local bell check",
                               "initialize_git": False, "confirmed_outside_home": folder})
+        # The core spells a path with `/` between names on every system.
+        spelled = cwd.resolve().as_posix()
 
         def opened(rest):
             for workspace in (rest.get("navigator") or {}).get("workspaces", []):
-                checkout = next((row for row in workspace.get("checkouts", []) if row["path"] == folder), None)
+                checkout = next((row for row in workspace.get("checkouts", []) if row["path"] == spelled), None)
                 if not checkout:
                     continue
                 tabs = [tab for group in (checkout.get("agent_groups") or {}).get("groups", [])
