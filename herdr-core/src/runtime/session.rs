@@ -2568,6 +2568,7 @@ impl Runtime {
             // hand one to a tab Hide never created.
             self.created_tab_checkouts.clear();
             self.provisional_tabs.clear();
+            self.read_ahead.clear();
         }
         // The session update is this runtime's only regular tick, so it is
         // also where a notification Herdr never answered stops being pending.
@@ -2634,6 +2635,16 @@ impl Runtime {
                     .iter()
                     .any(|layout| layout.panes.iter().any(|pane| pane.pane_id == pane_id))
             });
+            let laid_out = &self.snapshot.pane_layouts;
+            self.read_ahead.observe(
+                payload,
+                |pane_id| {
+                    laid_out
+                        .iter()
+                        .any(|layout| layout.pane_ids().contains(&pane_id))
+                },
+                now_unix_ms,
+            );
             self.overlay_drawn_ahead(payload);
         }
         let previously_projected_pane = self
@@ -2679,8 +2690,18 @@ impl Runtime {
                 .collect::<HashSet<_>>()
         });
         if let Some(live_pane_ids) = live_pane_ids.as_ref() {
+            // A pane a read of Herdr's own showed is not gone before the
+            // stream first lays it out (`read_ahead.rs`).
+            let read_ahead = self
+                .read_ahead
+                .panes
+                .iter()
+                .map(|(pane_id, _)| pane_id.clone())
+                .collect::<HashSet<_>>();
             let keep = |pane_id: &str| {
-                crate::address::is_device_scoped(pane_id) || live_pane_ids.contains(pane_id)
+                crate::address::is_device_scoped(pane_id)
+                    || live_pane_ids.contains(pane_id)
+                    || read_ahead.contains(pane_id)
             };
             self.retain_terminal_pane_state(keep);
             // Metadata belongs to the session's panes, not its selection.
