@@ -392,9 +392,10 @@ export function paneSizeCommand(shell: PaneShell, marker: string): string {
 
 /** The text that runs `program` in a pane's shell, ready for `pane run`. */
 export function paneProgramLine(shell: PaneShell, program: PaneProgram): string {
-  if (shell === "powershell") {
+  if (shell !== "posix") {
     // Keep redirected bytes and exit status independent of PowerShell 5's
-    // UTF-16 redirection. The private file also keeps the typed line bounded.
+    // UTF-16 redirection and cmd.exe's quoting. The private file also keeps
+    // multiline program arguments out of the typed command.
     const script = `${program.status}.cjs`;
     fs.writeFileSync(script, `
 const fs = require("node:fs");
@@ -412,12 +413,6 @@ try {
     return paneCommandLine(shell, [process.execPath, script]);
   }
   const env = Object.entries(program.env ?? {});
-  if (shell === "cmd") {
-    const sets = env.map(([key, value]) => `set ${cmdQuote(`${key}=${value}`)} && `).join("");
-    const run = paneCommandLine(shell, program.argv);
-    // `call echo %^errorlevel%` reads the status when it runs, not when the line is parsed.
-    return `${sets}${run} > ${cmdQuote(program.stdout ?? "nul")} 2> ${cmdQuote(program.stderr)} & >${cmdQuote(program.status)} call echo %^errorlevel%`;
-  }
   const sets = env.map(([key, value]) => `${key}=${posixQuote(value)} `).join("");
   return `${sets}${paneCommandLine(shell, program.argv)} > ${posixQuote(program.stdout ?? "/dev/null")} 2> ${posixQuote(program.stderr)}; printf '%s' "$?" > ${posixQuote(program.status)}`;
 }
