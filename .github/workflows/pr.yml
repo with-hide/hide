@@ -873,8 +873,8 @@ jobs:
       shards: 1
       grep: "@platform"
       keep-screenshots: true
-      # The same tests again on the core's own engine.
-      own-engine: true
+      # Windows CI Job forbids holder breakaway; b4-default owns its lifetime fix.
+      own-engine: false
 
   # A real WSL 2 distribution on the Windows runner, connected as a device
   # through `wsl.exe` (see wsl-device.yml), for a change to the crates the

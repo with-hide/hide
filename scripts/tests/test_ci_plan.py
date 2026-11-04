@@ -1002,11 +1002,11 @@ class Workflows(unittest.TestCase):
         # The core's own engine runs the web suite over as many shards again
         # as Herdr's, on Linux and Windows, until the Herdr lane goes with
         # Herdr (PRD engine-bundle-3-core-owns D-24): seven more. It runs the
-        # desktop suite again too, its two macOS shards and its Windows job:
-        # three more.
+        # desktop suite again too, its two macOS shards; Windows awaits the
+        # holder lifetime fix because its CI Job forbids breakaway.
         # The package lane already ran six preparation/compile jobs omitted
         # from the old count; correcting the accounting starts no new job.
-        self.assertLessEqual(most, 61, "a run starts more jobs than the suites and native SDK contracts need")
+        self.assertLessEqual(most, 60, "a run starts more jobs than the suites and native SDK contracts need")
         testing = (ROOT / "docs/TESTING.md").read_text()
         self.assertIn(f"starts at most {most} jobs", testing)
 

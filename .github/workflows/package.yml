@@ -518,7 +518,7 @@ jobs:
           cp -R "${{ steps.installed.outputs.app }}/resources/holder-conpty" target/debug/
       - name: The packaged app's window
         # The installed hide.exe with its window, against a private HOME, state
-        # and each engine (desktop/e2e/packaged-window.spec.ts); the shell it draws
+        # and Herdr (desktop/e2e/packaged-window.spec.ts); the shell it draws
         # is kept below.
         id: window
         timeout-minutes: 20
@@ -526,11 +526,8 @@ jobs:
           HIDE_E2E_PACKAGED_APP: ${{ steps.installed.outputs.app }}/hide.exe
           HIDE_E2E_HERDR_BIN: ${{ steps.installed.outputs.app }}/resources/herdr.exe
         run: |
-          status=0
-          for engine in herdr own; do
-            bash scripts/package-e2e.sh window "$engine" packaged-window.spec.ts status-page.spec.ts || status=1
-          done
-          exit "$status"
+          echo 'Own engine excluded: CI Job forbids holder breakaway; b4-default owns holder lifetime.' >> "$GITHUB_STEP_SUMMARY"
+          bash scripts/package-e2e.sh window herdr packaged-window.spec.ts status-page.spec.ts
       - name: Build two release versions of the same app for the update test
         # N is installed, N+1 is served from a local feed (PRD auto-update
         # D-29); both are the package above with another version, so the
@@ -562,12 +559,9 @@ jobs:
           HIDE_E2E_HERDR_BIN="$(sed -n 's/^bundle=//p' "$RUNNER_TEMP/package.out")/resources/herdr.exe"
           export HIDE_E2E_HERDR_BIN
           test -f "$HIDE_E2E_HERDR_BIN"
-          status=0
-          for engine in herdr own; do
-            MSYS_NO_PATHCONV=1 "$RUNNER_TEMP/update-n/hide-v0.0.1-windows-x64-setup.exe" /S
-            bash scripts/package-e2e.sh update "$engine" packaged-update.spec.ts || status=1
-          done
-          exit "$status"
+          echo 'Own engine excluded: CI Job forbids holder breakaway; b4-default owns holder lifetime.' >> "$GITHUB_STEP_SUMMARY"
+          MSYS_NO_PATHCONV=1 "$RUNNER_TEMP/update-n/hide-v0.0.1-windows-x64-setup.exe" /S
+          bash scripts/package-e2e.sh update herdr packaged-update.spec.ts
       - name: Mint the development issues token
         # Development issues live in with-hide/hide-private (docs/TESTING.md,
         # Flaky tests); one App token reads this run here and files there. A run
