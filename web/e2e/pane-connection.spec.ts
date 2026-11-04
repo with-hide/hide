@@ -34,7 +34,7 @@ type ProcessInfo = { result: { process_info: { foreground_processes?: { argv?: s
 function installHook(home: string): void {
   const entry = (event: string) => [
     {
-      // The spawn guard's entry selects the shell tool and asks for no Memory.
+      // The opener guard's entry selects the shell tool and asks for no Memory.
       ...(event === "PreToolUse" ? { matcher: "Bash" } : {}),
       hooks: [
         {

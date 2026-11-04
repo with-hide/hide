@@ -20,7 +20,6 @@ pub(super) fn agent(id: &str, enabled: bool, skill: ComponentState) -> AgentRepo
             location: None,
         },
         hook: None,
-        herdr: None,
         update: None,
         doc_url: "https://example.test/skills".to_owned(),
     }

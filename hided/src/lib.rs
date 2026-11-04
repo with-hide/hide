@@ -25,7 +25,6 @@ pub mod ending;
 pub mod env;
 pub mod file_url;
 pub mod guide;
-pub mod herdr_handoff;
 mod herdr_transition;
 pub mod index;
 pub mod link_mux;

@@ -490,15 +490,6 @@ pub(crate) trait Engine: Send + Sync {
     fn agent_state(&self, wait: Wait, target: &str) -> Answer<AgentState>;
     /// An agent as a letter's delivery checks it, by name or pane.
     fn delivery_agent(&self, wait: Wait, target: &str) -> Answer<DeliveryAgent>;
-    /// [`Self::delivery_agent`] with the native session the agent reports.
-    fn observed_agent(
-        &self,
-        wait: Wait,
-        target: &str,
-    ) -> Answer<(
-        DeliveryAgent,
-        Option<hide_agent_hooks::observation::ObservationNativeSession>,
-    )>;
     /// Types `text` into the agent's input and submits it.
     fn prompt_agent(&self, wait: Wait, target: &str, text: &str) -> Answer<()>;
 

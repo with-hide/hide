@@ -6,7 +6,7 @@ fn main() {
     // `src/engine/herdr/wire.rs`, inside the engine's Herdr implementation, is
     // the only module that names the types generated here, from
     // the contract the pinned Herdr binary reports for `api schema --json`
-    // (scripts/bump-herdr.sh writes it beside the pin). The client crate reads
+    // (written beside the pin when it last moved). The client crate reads
     // the same file for the protocol revision only.
     const SCHEMA_PATH: &str = "../contracts/herdr-api.schema.json";
 

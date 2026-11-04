@@ -11,12 +11,6 @@
 //! owns `Mutex<Runtime>` would put a `settings.json` write behind the same
 //! lock as the render snapshot and drag the FFI boundary into the tests that
 //! matter most here (PRD D-47).
-//!
-//! The only Herdr traffic here is the hook helper's `pane.report_metadata`
-//! request, sent through `hide-herdr-client` (see `report`), which Herdr
-//! defines as display-only metadata; the core reads the tokens back out of
-//! the pane tokens its ordinary snapshot already carries. Nothing subscribes
-//! or polls.
 
 pub mod antigravity;
 pub mod antigravity_trust;
@@ -30,20 +24,20 @@ pub mod folder_trust;
 pub mod global_guard;
 pub mod guardrails;
 pub mod guidance;
+mod hook_log;
 pub mod install;
 mod lossless_json;
 pub mod memory;
-pub mod observation;
 pub mod opencode;
 pub mod opener_guard;
 pub mod pane;
 pub mod pi_extension;
 pub mod plan_record;
 pub mod plugin;
+pub mod pre_tool;
 pub mod report;
 pub mod route;
 pub mod runtime;
-pub mod spawn_guard;
 #[cfg(all(test, unix))]
 #[path = "../../hide-platform/tests/it/stand_ins.rs"]
 mod stand_ins;

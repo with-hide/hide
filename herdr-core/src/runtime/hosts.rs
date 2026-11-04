@@ -1211,14 +1211,11 @@ impl Runtime {
                 let problem = match &error {
                     EstablishError::Ssh(failure) => Some(failure.problem),
                     EstablishError::Unsupported(_) if ssh_device => Some(SshProblem::Unsupported),
-                    EstablishError::NeedsNewEngine(_) => Some(SshProblem::NeedsNewEngine),
                     _ => None,
                 };
                 if matches!(
                     &error,
-                    EstablishError::IdentityChanged { .. }
-                        | EstablishError::Unsupported(_)
-                        | EstablishError::NeedsNewEngine(_)
+                    EstablishError::IdentityChanged { .. } | EstablishError::Unsupported(_)
                 ) || problem.is_some_and(|problem| !problem.retried()) && !needs_operator
                 {
                     self.device_wake_pending.remove(device_id);
@@ -1228,10 +1225,6 @@ impl Runtime {
                     EstablishError::IdentityChanged { .. } => HostPhase::IdentityChanged(message),
                     EstablishError::Unsupported(_) => HostPhase::Unsupported(message),
                     EstablishError::Stopped(_) => HostPhase::Unavailable(message),
-                    // Not unsupported: the device may hold what the core's
-                    // own engine installed there, and only this core running
-                    // that engine connects it again.
-                    EstablishError::NeedsNewEngine(_) => HostPhase::Unavailable(message),
                     // A refused sign-in, a changed server key or a missing
                     // ssh would only be refused again: the operator's retry
                     // tries it (B7, B13, B14, B18).

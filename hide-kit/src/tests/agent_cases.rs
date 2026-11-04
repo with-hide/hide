@@ -1234,72 +1234,25 @@ fn claude_code_and_codex_do_everything_opencode_pi_omp_and_antigravity_collabora
     // the table: what Hide does for each agent in this build (D-10, B18;
     // opencode-plugin D-11: OpenCode takes letters and is refused a launch,
     // so it is no longer Basic, while no bell rings for it; grok-grok-hooks:
-    // Grok and Grok get the spawn guard from their official hooks, and Grok
-    // the subagent count (Grok's hooks never fire for a Task subagent, issue
-    // 911), take no letters and stay Basic, and Grok discards a
-    // session-start hook's output). The session-reader common contract B1/B6
+    // Grok gets the opener guard and the subagent count from its official
+    // hooks (they never fire for a Task subagent, issue 911), takes no
+    // letters and stays Basic, and discards a session-start hook's output). The session-reader common contract B1/B6
     // enables starts for the five agents besides Claude Code and Codex
     // without enabling their future reader/sleep/fork features. The complete
     // Pi and OMP slices add native title and exact sleep/fork beside the
     // accepted extension's collaboration features (reader B1/B2/B3/B14, D13);
     // the Grok slice adds the same to its hook features and Grok stays Basic;
     // the OpenCode slice does the same beside its plugin.
-    let opencode = [
-        Skill,
-        Guidance,
-        Letters,
-        Memory,
-        SpawnGuard,
-        HerdrIntegration,
-        Sleep,
-        Fork,
-        Start,
-        Titles,
-    ];
+    let opencode = [Skill, Guidance, Letters, Memory, Sleep, Fork, Start, Titles];
     // pi-omp-extension D-08, D-09, D-10: Pi and omp take letters and Memory
     // and are refused a launch through Hide's extension; only omp runs
     // subagents, and no bell rings for either. Their session readers add sleep, fork and titles.
-    let pi = [
-        Skill,
-        Guidance,
-        Letters,
-        Memory,
-        SpawnGuard,
-        HerdrIntegration,
-        Sleep,
-        Fork,
-        Start,
-        Titles,
-    ];
-    let omp = [
-        Skill,
-        Guidance,
-        Letters,
-        Memory,
-        SpawnGuard,
-        HerdrIntegration,
-        Sleep,
-        Fork,
-        Start,
-        Titles,
-    ];
+    let pi = [Skill, Guidance, Letters, Memory, Sleep, Fork, Start, Titles];
+    let omp = [Skill, Guidance, Letters, Memory, Sleep, Fork, Start, Titles];
     let expected: [(&str, &[Feature], bool); 7] = [
         ("claude-code", &Feature::ALL, false),
         ("codex", &Feature::ALL, false),
-        (
-            "grok",
-            &[
-                Skill,
-                Bell,
-                SpawnGuard,
-                HerdrIntegration,
-                Sleep,
-                Fork,
-                Start,
-                Titles,
-            ],
-            true,
-        ),
+        ("grok", &[Skill, Bell, Sleep, Fork, Start, Titles], true),
         ("opencode", &opencode, false),
         ("pi", &pi, false),
         ("omp", &omp, false),
@@ -1328,7 +1281,7 @@ fn the_features_the_hook_gives_are_the_ones_a_hook_runtime_exists_for() {
     // Hide's (OpenCode's plugin, Pi's and omp's extension) or agy's hook
     // block, which answers its prompt event,
     // which the hook crate speaks a dialect for; the subagent count and the
-    // spawn guard also come from Grok's and Grok's own hook files. An agent
+    // opener guard also come from Grok's own hook file. An agent
     // claiming them without a hook would be a popover that says more than
     // the kit installs.
     let with_runtime: Vec<&str> = ADAPTERS
@@ -1366,15 +1319,6 @@ fn the_features_the_hook_gives_are_the_ones_a_hook_runtime_exists_for() {
             row.supports(crate::agents::Feature::Memory),
             instrumented && declared.memory.is_some(),
             "{}: memory",
-            row.id
-        );
-        // The spawn guard needs any hook of Hide's, including Grok's and
-        // Grok's own hook files, and its own declaration.
-        let hook = !matches!(row.hook, HookSupport::None);
-        assert_eq!(
-            row.supports(crate::agents::Feature::SpawnGuard),
-            hook && declared.spawn_guard.is_some(),
-            "{}: spawn guard",
             row.id
         );
     }

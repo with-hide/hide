@@ -586,7 +586,7 @@ function Step-Start([string]$relative, [string]$herdr, [string]$homeWire) {
             }
         } catch { Say fail "the home $homeWire could not be made"; exit 65 }
     }
-    Hand-Over $helper @('node', 'serve', '--own-herdr') 'start'
+    Hand-Over $helper @('node', 'serve') 'start'
 }
 
 function Step-Attach([string]$program, [string]$stateDir) {

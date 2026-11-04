@@ -231,32 +231,6 @@ function DeviceAttention({ device, actions, onAct, onAllow }: { device: Device; 
         {host?.message ? <Note tone={helper.tone === "muted" ? "muted" : "warn"}>{host.message}</Note> : null}
       </div>
     ) : null,
-    // The line is about the server last reached; an unreachable device says that instead.
-    remote && device.state === "ready" && device.herdr_behind ? (
-      <div key="herdr" className="space-y-xxs" data-device-herdr-behind={`${device.id}:${device.herdr_behind.cause}`}>
-        <Status tone="warn">{t("devices.herdrBehind", { server: device.herdr_behind.server_version, version: device.herdr_behind.version })}</Status>
-        <Note tone="warn">
-          {device.herdr_behind.cause === "cannot_hand_off" ? t("devices.herdrBehindUpdate") : t("devices.herdrBehindRestart", { version: device.herdr_behind.version })}
-        </Note>
-      </div>
-    ) : null,
-    remote && kit?.herdr_start_failed ? (
-      <div key="herdr-start" className="flex flex-wrap items-center gap-x-sm gap-y-xs" data-device-herdr-start-failed={device.id}>
-        <Status tone="warn">{t("devices.herdrStartFailed")}</Status>
-        <Button
-          variant="secondary"
-          size="sm"
-          disabled={kit.busy}
-          onClick={() => {
-            onAct();
-            actions.reinstallKit(device.id);
-          }}
-          data-device-herdr-start-retry={device.id}
-        >
-          {t("common.retry")}
-        </Button>
-      </div>
-    ) : null,
     kitShown ? <KitProblem key="kit" device={device} actions={actions} onAct={onAct} /> : null,
     device.test ? <DeviceTest key="test" test={device.test} language={requireInterfaceLanguage(i18n.language)} /> : null,
   ].filter((row) => row !== null);

@@ -60,7 +60,8 @@ const MAX_REQUEST_BYTES: usize = 40 * 1024 * 1024;
 /// service's own lines go out between the answers.
 pub trait Terminals: Send + Sync {
     /// Starts the service for the Herdr at `herdr_socket`; starting it again
-    /// while it runs changes nothing.
+    /// while it runs changes nothing. No call starts it now; it goes with the
+    /// Herdr terminal sessions it attaches.
     fn start(&self, herdr_socket: &str) -> Result<(), String>;
     /// Starts the service over the node's own pane holders, with no Herdr,
     /// and answers those holders for the core's own engine (PRD
@@ -83,23 +84,18 @@ pub fn serve(input: impl BufRead, output: impl Write + Send) -> io::Result<()> {
     serve_in(input, output, Env::of_process(), Services::none())
 }
 
-/// [`serve`] with the node's terminal service. `own_herdr` is the socket
-/// of the account's Herdr this node bridges to its core over its link
-/// streams, for a helper whose core reaches no socket on this machine (a
-/// WSL distribution's, PRD wsl-device D-07); an SSH device's helper bridges
-/// none, since its core reaches the socket over SSH.
+/// [`serve`] with the node's terminal service.
 pub fn serve_with_terminals(
     input: impl BufRead,
     output: impl Write + Send,
     terminals: &dyn Terminals,
-    own_herdr: Option<PathBuf>,
 ) -> io::Result<()> {
     serve_with(
         input,
         output,
         Services {
             terminals: Some(terminals),
-            herdr_socket: own_herdr,
+            herdr_socket: None,
             heartbeat: false,
             checkout_callers: false,
             opened_roots: None,
@@ -327,18 +323,10 @@ fn serve_in(
                             ErrorCode::Unsupported,
                             "A device does not answer this request; the core's own node does",
                         )),
-                        Call::PanesStart { herdr_socket } => match bridges {
-                            Ok(bridges) => panes
-                                .start(scope, output, bridges, &herdr_socket)
-                                .and_then(to_value),
-                            Err(error) => Err(HostError::new(ErrorCode::Io, error.to_string())),
-                        },
-                        // One node runs one engine's panes: its holders,
-                        // started once, take the place of its Herdr's
-                        // terminals, and its pane requests reach them.
-                        // A pane's `hide` is proved by the holders' records
-                        // from then on, answered with the bootstrap socket it
-                        // asks on, as `PanesStart` answers it for a Herdr.
+                        // The node's holders, started once, run its panes,
+                        // and its pane requests reach them. A pane's `hide`
+                        // is proved by the holders' records from then on,
+                        // answered with the bootstrap socket it asks on.
                         Call::HoldersStart => match (terminals, bridges) {
                             (Some(terminals), Ok(bridges)) => terminals
                                 .start_holders()
@@ -360,16 +348,6 @@ fn serve_in(
                             (_, Err(error)) => {
                                 Err(HostError::new(ErrorCode::Io, error.to_string()))
                             }
-                        },
-                        Call::TerminalsStart { herdr_socket } => match terminals {
-                            Some(terminals) => terminals
-                                .start(&herdr_socket)
-                                .map(|()| Value::Null)
-                                .map_err(|message| HostError::new(ErrorCode::Io, message)),
-                            None => Err(HostError::new(
-                                ErrorCode::Unsupported,
-                                "This node runs no terminal service",
-                            )),
                         },
                         Call::PaneProofAnswer { request, answer } => {
                             panes.answer_proof(request, answer)
@@ -434,26 +412,6 @@ fn serve_in(
                                     env,
                                 )
                             },
-                        ),
-                        Call::Kit {
-                            action,
-                            cli_dir,
-                            herdr_socket,
-                            retirement_projects,
-                            preserve_herdr_server,
-                        } => handle_in(
-                            Call::Kit {
-                                action,
-                                cli_dir,
-                                herdr_socket: if preserve_herdr_server {
-                                    herdr_socket
-                                } else {
-                                    kit_herdr_socket(herdr_socket, link.herdr_socket())
-                                },
-                                retirement_projects,
-                                preserve_herdr_server,
-                            },
-                            env,
                         ),
                         Call::RootOpen { root } => {
                             let opened = handle_in(Call::RootOpen { root: root.clone() }, env);
@@ -545,13 +503,6 @@ fn serve_in(
     });
     panes.remove_folder();
     result
-}
-
-/// The Herdr server a kit call installs against: the one the core named,
-/// else the one this link bridges. A node that dialed its core knows its own
-/// Herdr, which the core does not, so the core names none.
-fn kit_herdr_socket(named: Option<String>, bridged: Option<&Path>) -> Option<String> {
-    named.or_else(|| bridged.map(|own| own.to_string_lossy().into_owned()))
 }
 
 /// Where this machine shows the Windows PC's drives, for `Hello`: none on a
@@ -1272,17 +1223,8 @@ pub fn handle_with_progress(
         Call::Kit {
             action,
             cli_dir,
-            herdr_socket,
             retirement_projects,
-            preserve_herdr_server,
-        } => crate::kit::handle(
-            action,
-            &cli_dir,
-            herdr_socket.as_deref(),
-            &retirement_projects,
-            preserve_herdr_server,
-            env,
-        ),
+        } => crate::kit::handle(action, &cli_dir, &retirement_projects, env),
         Call::WorktreesRegistered { root } => to_value(
             worktrees::registered(&absolute(&root)?)
                 .map_err(|reason| HostError::new(ErrorCode::Io, reason))?,
@@ -1765,9 +1707,7 @@ pub fn handle_with_progress(
         // The core's own node is given its holders when it is made; a
         // device's node starts them in its serve loop, answering the pane
         // socket its panes' `hide` asks on.
-        Call::PanesStart { .. }
-        | Call::HoldersStart
-        | Call::TerminalsStart { .. }
+        Call::HoldersStart
         | Call::PaneProofAnswer { .. }
         | Call::PaneInspect { .. }
         | Call::StreamWrite { .. }
@@ -2532,23 +2472,6 @@ mod tests {
             .recv_timeout(Duration::from_secs(20))
             .expect("the watch outlived its link");
         assert!(result.is_ok(), "{result:?}");
-    }
-
-    /// A kit call installs against the Herdr server the core named, else
-    /// the one the link bridges: a core never knows the Herdr of a node
-    /// that dialed it.
-    #[test]
-    fn a_kit_call_that_names_no_herdr_uses_the_link_s() {
-        let bridged = Path::new("/srv/node/herdr.sock");
-        assert_eq!(
-            kit_herdr_socket(None, Some(bridged)),
-            Some("/srv/node/herdr.sock".to_owned())
-        );
-        assert_eq!(
-            kit_herdr_socket(Some("~/named.sock".to_owned()), Some(bridged)),
-            Some("~/named.sock".to_owned())
-        );
-        assert_eq!(kit_herdr_socket(None, None), None);
     }
 
     /// A request whose id is still running is refused, and the running one

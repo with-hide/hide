@@ -115,7 +115,6 @@ fn a_newer_helpers_unknown_row_is_omitted_while_known_rows_keep_their_features()
             location: None,
         },
         hook: None,
-        herdr: None,
         update: None,
         doc_url: String::new(),
     };
@@ -153,8 +152,6 @@ fn a_newer_helpers_unknown_row_is_omitted_while_known_rows_keep_their_features()
         [
             Feature::Skill,
             Feature::Bell,
-            Feature::SpawnGuard,
-            Feature::HerdrIntegration,
             Feature::Sleep,
             Feature::Fork,
             Feature::Start,
@@ -176,8 +173,6 @@ fn a_newer_helpers_unknown_row_is_omitted_while_known_rows_keep_their_features()
             Feature::Guidance,
             Feature::Letters,
             Feature::Memory,
-            Feature::SpawnGuard,
-            Feature::HerdrIntegration,
             Feature::Sleep,
             Feature::Fork,
             Feature::Start,

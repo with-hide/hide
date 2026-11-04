@@ -25,8 +25,8 @@ export function graphActivity(agent: AgentRow): GraphActivity {
 /** Whether a session's own words, its title, checkout or branch, hold a search's lowercased needle. */
 export const graphSessionMatches = (row: GraphAgent, needle: string) => [row.agent.identity_label, row.checkout.label, row.checkout.branch].some((text) => text?.toLocaleLowerCase().includes(needle));
 const PRIORITY: Record<GraphActivity, number> = { turn: 0, working: 1, results: 2, unknown: 3, idle: 4, resting: 5 };
-/** One pair of sessions and every letter and Herdr input between them, by direction. */
-export type Communication = { id: string; source: string; target: string; letters: number; direct: number; directions: { from: string; to: string; letters: number; direct: number }[] };
+/** One pair of sessions and every letter between them, by direction. */
+export type Communication = { id: string; source: string; target: string; letters: number; directions: { from: string; to: string; letters: number }[] };
 /** A project row of the map's side column: its graph members and their states. */
 export type ProjectSummary = { id: string; project: BoardProject; sessions: number; turn: number; working: number; results: number; admitted: boolean };
 export type OverviewGraphModel = {
@@ -273,10 +273,8 @@ export function overviewGraphModel(projects: readonly BoardProject[], metadata: 
   for (const row of allAgents) if (row.digest) endpoint.set(partyKey({ device_id: row.deviceId, pane_id: row.agent.pane_id, session: row.digest }), row.id);
   const pairs = new Map<string, Communication>();
   const limit = Math.max(0, Math.min(2000, metadata?.limit ?? 2000));
-  const records = [
-    ...(metadata?.available ? metadata.letters.slice(0, Math.min(2000, metadata.limit)).map((letter) => ({ ...letter, type: "letters" as const })) : []),
-    ...(metadata?.direct_inputs ?? []).slice(0, 2000).map((input) => ({ ...input, type: "direct" as const })),
-  ].sort((a, b) => b.at_unix_ms - a.at_unix_ms || b.id.localeCompare(a.id)).slice(0, limit);
+  const records = (metadata?.available ? metadata.letters.slice(0, limit) : [])
+    .sort((a, b) => b.at_unix_ms - a.at_unix_ms || b.id.localeCompare(a.id));
   for (const record of records) {
     const from = endpoint.get(partyKey(record.sender));
     const to = endpoint.get(partyKey(record.recipient));
@@ -284,11 +282,11 @@ export function overviewGraphModel(projects: readonly BoardProject[], metadata: 
     const [source, target] = [from, to].sort() as [string, string];
     const key = `pair:${JSON.stringify([source, target])}`;
     let pair = pairs.get(key);
-    if (!pair) { pair = { id: key, source, target, letters: 0, direct: 0, directions: [] }; pairs.set(key, pair); }
-    pair[record.type] += 1;
+    if (!pair) { pair = { id: key, source, target, letters: 0, directions: [] }; pairs.set(key, pair); }
+    pair.letters += 1;
     let direction = pair.directions.find((row) => row.from === from && row.to === to);
-    if (!direction) { direction = { from, to, letters: 0, direct: 0 }; pair.directions.push(direction); }
-    direction[record.type] += 1;
+    if (!direction) { direction = { from, to, letters: 0 }; pair.directions.push(direction); }
+    direction.letters += 1;
   }
   const communication = [...pairs.values()].sort((a, b) => a.id.localeCompare(b.id));
   for (const pair of communication) if (pair.directions.length === 1) {

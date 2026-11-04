@@ -69,7 +69,6 @@ pub(crate) struct AgentState {
 /// Fresh delivery guard, converted here rather than exposing generated types.
 pub(crate) struct DeliveryAgent {
     pub pane_id: String,
-    pub terminal_id: String,
     pub name: String,
     pub kind: Option<String>,
     pub session: Option<String>,

@@ -963,22 +963,6 @@ impl Engine for HerdrEngine<'_> {
         )
     }
 
-    fn observed_agent(
-        &self,
-        wait: Wait,
-        target: &str,
-    ) -> Answer<(
-        DeliveryAgent,
-        Option<hide_agent_hooks::observation::ObservationNativeSession>,
-    )> {
-        self.call(
-            "agent.get",
-            wire::agent_target_params(target),
-            wait,
-            wire::direct_observation_agent,
-        )
-    }
-
     fn prompt_agent(&self, wait: Wait, target: &str, text: &str) -> Answer<()> {
         self.call(
             "agent.prompt",

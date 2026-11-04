@@ -1518,7 +1518,6 @@ mod tests {
                     location: None,
                 },
                 hook: None,
-                herdr: None,
                 partial: false,
                 features: Vec::new(),
                 sessions: None,

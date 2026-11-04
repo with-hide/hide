@@ -71,9 +71,6 @@ pub(super) fn behaves_as_the_host_runs_it(file: &PluginFile, agent: &str) {
             "HIDE_EXTENSION_HELPER_ANSWERS",
             dir.path().join("answers.json"),
         )
-        .env_remove("HERDR_ENV")
-        .env_remove("HERDR_PANE_ID")
-        .env_remove("HERDR_SOCKET_PATH")
         .env_remove("OMPCODE")
         .env_remove("PI_SESSION_ID")
         .output()

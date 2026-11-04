@@ -309,7 +309,7 @@ impl Runtime {
             .iter()
             .filter(|row| apply.agents.contains(&row.id) && row.enabled)
             .filter(|row| {
-                [Some(&row.skill), row.hook.as_ref(), row.herdr.as_ref()]
+                [Some(&row.skill), row.hook.as_ref()]
                     .into_iter()
                     .flatten()
                     // A piece refused because the agent's copy is too old is

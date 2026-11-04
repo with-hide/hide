@@ -89,7 +89,7 @@ impl Kit {
         command
             .env(hide_platform::host::HOME_VARIABLE, self.root.path())
             .env("FAKE_HIDE_LOG", self.log())
-            .env("HERDR_PANE_ID", PANE);
+            .env("HIDE_PANE_ID", PANE);
         let mut child = OwnedChild::spawn(&mut command).unwrap();
         let mut stdin = child.take_stdin().unwrap();
         stdin.write_all(payload.to_string().as_bytes()).unwrap();

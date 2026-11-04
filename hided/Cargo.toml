@@ -25,7 +25,6 @@ hide-node-link = { path = "../hide-node-link" }
 hide-platform = { path = "../hide-platform" }
 hide-relay-protocol = { path = "../hide-relay-protocol" }
 hide-kit = { path = "../hide-kit" }
-hide-herdr-client = { path = "../hide-herdr-client" }
 hide-session = { path = "../hide-session" }
 axum = { version = "=0.8.9", features = ["ws"] }
 tokio = { version = "=1.53.2", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }

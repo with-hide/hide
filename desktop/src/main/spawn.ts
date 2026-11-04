@@ -78,13 +78,10 @@ export class ChildRunner {
 }
 
 /**
- * The children this host starts and does not own. A Herdr server: its panes
- * are the operator's work and outlive the app, exactly as a server `herdr`
- * starts from a terminal does, so it leads its own session, keeps no pipe to
- * this process, and only `herdr server stop` ends it; the caller starts it at
- * most once per discovery, and only after Herdr said none was running. And
- * on Windows VS Code's `Code.exe` handed a folder (`editor.ts`): the
- * operator's editor window, which the operator closes.
+ * The children this host starts and does not own: on Windows VS Code's
+ * `Code.exe` handed a folder (`editor.ts`), the operator's editor window,
+ * which the operator closes. It leads its own session and keeps no pipe to
+ * this process.
  */
 export function startDetached(file: string, args: readonly string[], env: Record<string, string | undefined>): Promise<{ pid: number } | { spawnError: string }> {
   return new Promise((resolve) => {

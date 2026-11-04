@@ -1,7 +1,7 @@
 //! The guardrails of a shell call: the `git` and `gh` commands each
 //! protection names, and the files protection over every word.
 //!
-//! The call is read as the spawn guard reads it (`spawn_guard::shell_line`):
+//! The call is read as a shell reads it (`hide_shell::shell_line`):
 //! one simple command at a time, with quotes, heredoc bodies and comments set
 //! aside. A `cd` or `pushd` earlier in the line moves where the commands after
 //! it run, and `git -C <dir>` moves one command. A command hidden a layer
@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use super::facts::{Checkout, Located, Place};
 use super::{Dirty, Facts, Refusal, Rule, absolute, protected};
-use crate::spawn_guard::{command_words, shell_line};
+use hide_shell::{command_words, shell_line};
 
 /// The most words of one call checked against the protected paths; past it
 /// the words are left unchecked and the log says so, while every later
@@ -28,7 +28,7 @@ pub(super) fn shell(
     let mut dir = cwd.to_path_buf();
     let mut checked = 0usize;
     for (index, words) in line.commands.iter().enumerate() {
-        let (words, _) = command_words(words, &|_| None, true);
+        let words = command_words(words, true);
         let Some((first, args)) = words.split_first() else {
             continue;
         };

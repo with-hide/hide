@@ -1038,7 +1038,6 @@ fn held_hook_diagnosis_does_not_hold_startup_or_settings_topology() {
         Arc::downgrade(&runtime),
         ChangeNotifier::noop(),
         host.clone(),
-        None,
         crate::node::test_node(),
     )
     .unwrap();

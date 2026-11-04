@@ -1,5 +1,5 @@
 // The stand-in for `hide-agent-hooks <pi|omp> <operation>` the extension test
-// runs: it logs the agent, the operation, its input and the pane it ran in,
+// runs: it logs the agent, the operation and its input,
 // then answers from HIDE_EXTENSION_HELPER_ANSWERS. `delay_ms` holds the answer
 // back, `exit` ends without one, `raw` prints it unparsed.
 
@@ -19,7 +19,7 @@ const { delay_ms: delay, exit, raw, ...answer } =
   JSON.parse(readFileSync(process.env.HIDE_EXTENSION_HELPER_ANSWERS, "utf8"))[operation] ?? {};
 appendFileSync(
   process.env.HIDE_EXTENSION_HELPER_LOG,
-  `${JSON.stringify({ agent, operation, input: JSON.parse(stdin), env: { HERDR_PANE_ID: process.env.HERDR_PANE_ID } })}\n`,
+  `${JSON.stringify({ agent, operation, input: JSON.parse(stdin) })}\n`,
 );
 if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
 if (exit !== undefined) process.exit(exit);

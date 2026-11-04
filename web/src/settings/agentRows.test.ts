@@ -131,12 +131,10 @@ describe("the agents of a machine (B8, B9, D-06)", () => {
 
 describe("what a row says (B13, B14, B16, B19, B20)", () => {
   it("names the pieces a Reinstall would repair, the failed ones first, only for an agent that is on (B13, B20)", () => {
-    const row = agent("codex", { hook: piece("removed"), herdr: piece("failed", "not_changed"), skill: piece("outdated") });
-    expect(agentProblems(row).map(({ part }) => part)).toEqual(["herdr", "skill", "hook"]);
-    expect(agentProblems(agent("codex", { hook: piece("absent", "not_created_yet"), skill: piece("installed"), herdr: piece("off") }))).toEqual([]);
+    const row = agent("codex", { hook: piece("failed", "not_changed"), skill: piece("outdated") });
+    expect(agentProblems(row).map(({ part }) => part)).toEqual(["hook", "skill"]);
+    expect(agentProblems(agent("codex", { hook: piece("absent", "not_created_yet"), skill: piece("installed") }))).toEqual([]);
     expect(agentProblems(agent("codex", { enabled: false, skill: piece("removed") }))).toEqual([]);
-    // A row from a helper whose build predates the Herdr piece has nothing there to fail.
-    expect(agentProblems(agent("grok", { herdr: null }))).toEqual([]);
     // OpenCode's hook piece is Hide's plugin, Pi's and omp's Hide's extension, and each row says so.
     expect(agentProblems(agent("opencode", { hook: piece("outdated", "edited") })).map(({ part }) => part)).toEqual(["plugin"]);
     expect(agentProblems(agent("pi", { hook: piece("outdated", "edited") })).map(({ part }) => part)).toEqual(["extension"]);

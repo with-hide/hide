@@ -53,10 +53,7 @@ fn node_test(dir: &Path, test: &str, env: &[(&str, &Path)]) {
         .env("HIDE_OPENCODE_HELPER_LOG", dir.join("calls.jsonl"))
         // The guardrails policy is read from HOME, which the test writes.
         .env("HOME", dir)
-        .env("HIDE_OPENCODE_HELPER_ANSWERS", dir.join("answers.json"))
-        .env_remove("HERDR_ENV")
-        .env_remove("HERDR_PANE_ID")
-        .env_remove("HERDR_SOCKET_PATH");
+        .env("HIDE_OPENCODE_HELPER_ANSWERS", dir.join("answers.json"));
     for (name, value) in env {
         command.env(name, value);
     }

@@ -59,7 +59,7 @@ export const ENV_REGISTRY: readonly EnvKey[] = [
     requirement: "optional",
     shape: "absolute directory path; read on Windows only",
     fallback: "none: the install folders below it are left out of the search and of every child's PATH, and `env.locations_missing` names the key",
-    note: "Holds the per-account installs of Codex (`Programs\\OpenAI\\Codex\\bin`), Herdr (`Programs\\Herdr\\bin`) and Git for Windows (`Programs\\Git\\cmd`)",
+    note: "Holds the per-account installs of Codex (`Programs\\OpenAI\\Codex\\bin`) and Git for Windows (`Programs\\Git\\cmd`)",
   },
   {
     key: "APPDATA",
@@ -101,7 +101,7 @@ export const ENV_REGISTRY: readonly EnvKey[] = [
     requirement: "optional",
     shape: "directories separated by the system's PATH separator (`:`, `;` on Windows)",
     fallback: "empty: the search goes on to the CLI that last attached",
-    note: "Searched for `hide` after the override and the worktree build; every `hide` child gets the system's own folders when PATH is absent and the install folders appended (`cli.ts`, `wellKnownDirs`) so a daemon started from Finder or the Start menu can find installed tools such as `git`, `gh`, the agent CLIs and Herdr",
+    note: "Searched for `hide` after the override and the worktree build; every `hide` child gets the system's own folders when PATH is absent and the install folders appended (`cli.ts`, `wellKnownDirs`) so a daemon started from Finder or the Start menu can find installed tools such as `git`, `gh` and the agent CLIs",
   },
 ];
 

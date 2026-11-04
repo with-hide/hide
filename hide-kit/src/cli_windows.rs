@@ -197,12 +197,7 @@ mod tests {
             resources.join("hide.exe"),
         )
         .unwrap();
-        crate::local_target(
-            resources,
-            home,
-            Path::new("isolated.sock"),
-            Default::default(),
-        )
+        crate::local_target(resources, home, Default::default())
     }
 
     #[test]

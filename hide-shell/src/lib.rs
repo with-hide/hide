@@ -5,8 +5,8 @@
 //! are kept, since the shell runs them.
 //!
 //! The hooks read an agent's shell call through it before the call runs
-//! (`hide-agent-hooks`: the spawn guard, the guardrails, the observation and
-//! the plan record), and the session reader reads the calls a session file
+//! (`hide-agent-hooks`: the opener guard, the guardrails and the plan
+//! record), and the session reader reads the calls a session file
 //! recorded through it (`hide-session`, the pull requests a call names). It
 //! reads text only: it starts nothing, opens nothing and keeps no state.
 //! [`quote`] is the other direction, how a word is written for a shell to
@@ -779,6 +779,17 @@ pub fn is_assignment(word: &str) -> bool {
                 c == '_' || c.is_ascii_alphabetic() || (index > 0 && c.is_ascii_digit())
             })
     })
+}
+
+/// A command's words from its program on: without the `NAME=value` words a
+/// shell takes as the environment of the command that follows and the prefix
+/// words [`is_prefix`] names.
+pub fn command_words(words: &[String], compound: bool) -> &[String] {
+    let at = words
+        .iter()
+        .position(|word| !is_assignment(word) && !is_prefix(word, compound))
+        .unwrap_or(words.len());
+    &words[at..]
 }
 
 /// Words a shell puts before a command without changing which command runs:

@@ -329,15 +329,13 @@ mod tests {
             nodes: herdr_core::product_analytics::MissionSize::TwoToThree,
         });
         let first = bodies.recv_timeout(Duration::from_secs(10)).unwrap();
-        use herdr_core::product_analytics::{
-            DeviceFailedStep, DeviceHerdr, DeviceOutcome, DevicePlatform,
-        };
+        use herdr_core::product_analytics::{DeviceFailedStep, DeviceOutcome, DevicePlatform};
         let ready = Event::DeviceConnected {
-            outcome: DeviceOutcome::Ready(DeviceHerdr::Started),
+            outcome: DeviceOutcome::Ready,
             platform: DevicePlatform::LinuxAarch64,
         };
         let failed = Event::DeviceConnected {
-            outcome: DeviceOutcome::Failed(DeviceFailedStep::HerdrStart),
+            outcome: DeviceOutcome::Failed(DeviceFailedStep::Download),
             platform: DevicePlatform::MacosAarch64,
         };
         worker.client.capture(ready);
@@ -360,7 +358,7 @@ mod tests {
         release.send(()).unwrap();
         let fifth = bodies.recv_timeout(Duration::from_secs(10)).unwrap();
         worker.client.capture(Event::DeviceConnected {
-            outcome: DeviceOutcome::Ready(DeviceHerdr::Preserved),
+            outcome: DeviceOutcome::Ready,
             platform: DevicePlatform::MacosX86_64,
         });
         release.send(()).unwrap();
@@ -420,17 +418,15 @@ mod tests {
         assert_eq!(phone["properties"], paired);
         let mut device_ready = common.clone();
         device_ready["outcome"] = "ready".into();
-        device_ready["herdr"] = "started".into();
         device_ready["platform"] = "linux-aarch64".into();
         assert_eq!(fourth["properties"], device_ready);
         let mut preserved = common.clone();
         preserved["outcome"] = "ready".into();
-        preserved["herdr"] = "preserved".into();
         preserved["platform"] = "macos-x86_64".into();
         assert_eq!(sixth["properties"], preserved);
         let mut device_failed = common;
         device_failed["outcome"] = "failed".into();
-        device_failed["failed_step"] = "herdr_start".into();
+        device_failed["failed_step"] = "download".into();
         device_failed["platform"] = "macos-aarch64".into();
         assert_eq!(fifth["properties"], device_failed);
         for body in [

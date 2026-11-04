@@ -1418,14 +1418,6 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "first_run_back", payload: { from } });
     },
     /**
-     * The operator's answer to moving their older Herdr server (PRD herdr-takeover): `move` hands it to Hide's Herdr, `later` leaves the
-     * wizard's Herdr step without moving, `continue` closes a moved server's step. One press is one event; a second `move` while one
-     * runs is the same move.
-     */
-    herdrTakeover(action: "move" | "later" | "continue" | "look" | "stop_failed") {
-      dispatch({ schema_version: 2, kind: "herdr_takeover", payload: { action } });
-    },
-    /**
      * The operator's answer to moving this machine's Herdr save into Hide's own engine (PRD engine-bundle-4-herdr-removal): `move`
      * stops Hide's Herdr and moves its session, `import` imports a save read only, `look` reads it again, `continue` closes the
      * last move's result. One press is one event; a second press while a move runs is the same move. `device` names a

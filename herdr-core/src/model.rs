@@ -989,21 +989,6 @@ pub struct DeviceSnapshot {
     /// SSH alias, connection test or helper consent here (PRD
     /// core-host-node-remote-core D-04).
     pub dials_in: bool,
-    /// The device's Herdr server stays on an older release than this
-    /// build's pinned Herdr, as its node last found after a kit pass (PRD
-    /// device-herdr-update B8); `None` while it runs the pin, a newer
-    /// release, or nothing the node could read.
-    pub herdr_behind: Option<HerdrBehindSnapshot>,
-}
-
-/// A device's Herdr server older than the pin, and why it stays there,
-/// which decides the operator's step: `cannot_hand_off` is updated on that
-/// machine, `handoff_failed` is restarted there when its work is safe.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct HerdrBehindSnapshot {
-    pub server_version: String,
-    pub version: String,
-    pub cause: hide_kit::device_herdr::BehindCause,
 }
 
 /// Why the kit does not run on a machine at all, as a code the web words
@@ -1049,9 +1034,6 @@ pub struct KitSnapshot {
     pub unavailable: Option<KitUnavailable>,
     /// An install is running for this machine; Reinstall shows its progress.
     pub busy: bool,
-    /// Starting the device's pinned Herdr failed. The row offers another
-    /// install pass; diagnostic details stay in the log.
-    pub herdr_start_failed: bool,
     /// Every part, in the kit's own order; empty until the machine was first
     /// checked.
     pub components: Vec<KitComponentSnapshot>,
@@ -1174,10 +1156,6 @@ pub struct KitAgentSnapshot {
     pub skill: KitPieceSnapshot,
     /// `None` for an agent that gets the skill only.
     pub hook: Option<KitPieceSnapshot>,
-    /// Herdr's own integration for the agent, installed through the
-    /// machine's Herdr CLI. Every supported agent has one; `None` only from a
-    /// device helper whose build predates the field.
-    pub herdr: Option<KitPieceSnapshot>,
     /// Hide does only some of what it does for Claude Code with this agent:
     /// the row wears the Partial chip whether or not the agent is on (PRD
     /// settings-cleanup B18).
@@ -1213,11 +1191,7 @@ impl KitAgentSnapshot {
                 || self
                     .hook
                     .as_ref()
-                    .is_some_and(|hook| hook.state.needs_attention())
-                || self
-                    .herdr
-                    .as_ref()
-                    .is_some_and(|herdr| herdr.state.needs_attention()))
+                    .is_some_and(|hook| hook.state.needs_attention()))
     }
 }
 
@@ -1265,7 +1239,6 @@ impl KitSnapshot {
                     chosen: agent.chosen,
                     skill: (&agent.skill).into(),
                     hook: agent.hook.as_ref().map(Into::into),
-                    herdr: agent.herdr.as_ref().map(Into::into),
                     partial: row.basic(),
                     features: hide_agent_adapter::Feature::ALL
                         .into_iter()
@@ -1292,10 +1265,6 @@ impl KitSnapshot {
         Self {
             unavailable: None,
             busy: false,
-            herdr_start_failed: matches!(
-                report.herdr.as_deref(),
-                Some(hide_kit::device_herdr::HerdrUpdate::Failed { stage, .. }) if stage == "start"
-            ),
             // Reinstall repairs what is on: a hook part of an agent that is
             // switched off is not a repair, and the pass would refuse it.
             offers_reinstall: components.iter().any(|part| {
@@ -1413,7 +1382,6 @@ pub enum DeviceProblem {
     SshMissing,
     OpenSshOld,
     Unsupported,
-    NeedsNewEngine,
     HideUpdated,
 }
 
@@ -1428,7 +1396,6 @@ impl DeviceProblem {
             (FailureAction::Retry, SshProblem::SshMissing) => Self::SshMissing,
             (FailureAction::Retry, SshProblem::OpenSshOld) => Self::OpenSshOld,
             (FailureAction::Retry, SshProblem::Unsupported) => Self::Unsupported,
-            (FailureAction::Retry, SshProblem::NeedsNewEngine) => Self::NeedsNewEngine,
             (FailureAction::Retry, _) => Self::CannotConnect,
         }
     }
@@ -1442,7 +1409,6 @@ impl DeviceProblem {
             Self::SshMissing => "ssh_missing",
             Self::OpenSshOld => "openssh_old",
             Self::Unsupported => "unsupported",
-            Self::NeedsNewEngine => "needs_new_engine",
             Self::HideUpdated => "hide_updated",
         }
     }
@@ -7718,7 +7684,7 @@ mod rest;
 mod session_thread;
 mod suggestions;
 pub use desk::*;
-pub use overview_graph::{GraphDirectInput, GraphParty, GraphSession, OverviewGraphSnapshot};
+pub use overview_graph::{GraphSession, OverviewGraphSnapshot};
 pub use overview_graph_choices::{
     OVERVIEW_GRAPH_LIST_LIMIT, OverviewGraphChange, OverviewGraphChoices,
 };
@@ -8845,19 +8811,6 @@ mod wire_enum_tests {
         assert_wire(&contract, "pane_turn_row_mode", &turn_row_modes);
         checked.insert("pane_turn_row_mode");
 
-        let behind = [
-            hide_kit::device_herdr::BehindCause::CannotHandOff,
-            hide_kit::device_herdr::BehindCause::HandoffFailed,
-        ];
-        for variant in behind {
-            match variant {
-                hide_kit::device_herdr::BehindCause::CannotHandOff
-                | hide_kit::device_herdr::BehindCause::HandoffFailed => {}
-            }
-        }
-        assert_wire(&contract, "herdr_behind_cause", &behind);
-        checked.insert("herdr_behind_cause");
-
         let kit_availability = [
             hide_kit::Availability::Available,
             hide_kit::Availability::NotInstalled,
@@ -8881,8 +8834,6 @@ mod wire_enum_tests {
                 | hide_kit::Feature::Letters
                 | hide_kit::Feature::Bell
                 | hide_kit::Feature::Memory
-                | hide_kit::Feature::SpawnGuard
-                | hide_kit::Feature::HerdrIntegration
                 | hide_kit::Feature::Sleep
                 | hide_kit::Feature::Fork
                 | hide_kit::Feature::Start
@@ -10071,7 +10022,6 @@ mod wire_enum_tests {
             DeviceProblem::SshMissing,
             DeviceProblem::OpenSshOld,
             DeviceProblem::Unsupported,
-            DeviceProblem::NeedsNewEngine,
             DeviceProblem::HideUpdated,
         ];
         for variant in problems {
@@ -10083,7 +10033,6 @@ mod wire_enum_tests {
                 | DeviceProblem::SshMissing
                 | DeviceProblem::OpenSshOld
                 | DeviceProblem::Unsupported
-                | DeviceProblem::NeedsNewEngine
                 | DeviceProblem::HideUpdated => {}
             }
         }
@@ -10474,7 +10423,6 @@ mod wire_enum_tests {
         assert_eq!(row(SshProblem::SshMissing), "ssh_missing");
         assert_eq!(row(SshProblem::OpenSshOld), "openssh_old");
         assert_eq!(row(SshProblem::Unsupported), "unsupported");
-        assert_eq!(row(SshProblem::NeedsNewEngine), "needs_new_engine");
         assert_eq!(row(SshProblem::HideUpdated), "hide_updated");
     }
 }

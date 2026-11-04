@@ -1892,11 +1892,6 @@ export type Device = {
   machine_name?: string | null;
   /** A node that dials the core rather than a device the core dials (`DeviceSnapshot::dials_in`). */
   dials_in?: boolean;
-  /**
-   * The device's Herdr server stays on an older release than Hide's pinned
-   * Herdr (`DeviceSnapshot::herdr_behind`); null while it runs the pin or newer.
-   */
-  herdr_behind?: HerdrBehind | null;
 };
 
 /**
@@ -1906,7 +1901,7 @@ export type Device = {
  * A retry over ssh's last line, in `message`, is `cannot_connect`; the
  * retries ssh says nothing useful for carry their own value, for a sentence.
  */
-export type DeviceProblem = "sign_in_needed" | "sign_in_refused" | "host_key_changed" | "cannot_connect" | "ssh_missing" | "openssh_old" | "unsupported" | "needs_new_engine" | "hide_updated";
+export type DeviceProblem = "sign_in_needed" | "sign_in_refused" | "host_key_changed" | "cannot_connect" | "ssh_missing" | "openssh_old" | "unsupported" | "hide_updated";
 
 /**
  * What a device's connection waits on (`contracts/snapshot-wire-enums.json`:
@@ -1925,10 +1920,6 @@ export type DeviceSignIn = { question: number; key_command: string | null } & (
 /** The operator's reply to what ssh asks, on whichever screen shows it: the device row, a node window's strip, the move dialog. */
 export type SignInReply = { reply: "text"; text: string } | { reply: "accept" } | { reply: "cancel" };
 
-/** Why a device's Herdr stays older than Hide's (`contracts/snapshot-wire-enums.json`: `herdr_behind_cause`). */
-export type HerdrBehindCause = "cannot_hand_off" | "handoff_failed";
-
-export type HerdrBehind = { server_version: string; version: string; cause: HerdrBehindCause };
 
 /** One part of the install kit (`contracts/snapshot-wire-enums.json`: `kit_component_id`). */
 export type KitComponentId = "cli" | "claude_code_hook" | "codex_hook" | "coordination_retirement";
@@ -2002,8 +1993,6 @@ export type KitAgent = {
   chosen: boolean;
   skill: KitPiece;
   hook: KitPiece | null;
-  /** Herdr's own integration for the agent; every supported agent has one, so null only from a device helper whose build predates the field. */
-  herdr?: KitPiece | null;
   /** Hide does only some of what it does for Claude Code with this agent: the row wears the Partial chip, on or off. */
   partial?: boolean;
   /** Every feature of the Partial popover in the table's order (`hide_kit::Feature` ids); `supported` is what this build does. */
@@ -2021,8 +2010,6 @@ export type KitFeatureId =
   | "letters"
   | "bell"
   | "memory"
-  | "spawn_guard"
-  | "herdr_integration"
   | "sleep"
   | "fork"
   | "start"
@@ -2067,8 +2054,6 @@ export type KitRefusal = {
 };
 
 export type Kit = {
-  /** The device could not start its pinned Herdr; retry an install pass. */
-  herdr_start_failed?: boolean;
   unavailable: KitUnavailable | null;
   busy: boolean;
   /** The machine's last pass or read stopped before changing anything; its parts and agents are then empty. */
@@ -3142,7 +3127,6 @@ export type OverviewGraphMetadata = {
   truncated: boolean;
   retention_ms: number;
   letters: OverviewGraphLetter[];
-  direct_inputs?: { id: string; sender: OverviewGraphParty; recipient: OverviewGraphParty; at_unix_ms: number }[];
   sessions: { device_id: string; pane_id: string; session_digest: string; launch_model: string | null; launch_effort: string | null }[];
 };
 

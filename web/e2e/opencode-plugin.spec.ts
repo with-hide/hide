@@ -1,8 +1,8 @@
 // Hide's OpenCode plugin on the engine and a hided that runs the install kit (PRD opencode-plugin
 // B1, B3, B4, B7, B9, D-13): the kit writes the plugin into the fixture HOME's OpenCode folder, and two
 // OpenCode stand-ins (`opencode-host.ts`) load it from there in two panes. A letter from one reaches the
-// other's next prompt and is confirmed only once that prompt is stored, a shell call that starts an agent
-// through Herdr is refused with the spawn guard's reason, and child sessions move the pane's subagent counts.
+// other's next prompt and is confirmed only once that prompt is stored, a shell call that hands a result
+// to the system opener is refused with the opener guard's reason, and child sessions move the pane's subagent counts.
 
 import { expect, test } from "@playwright/test";
 import { execFileSync } from "node:child_process";
@@ -104,14 +104,14 @@ test("a letter rides the recipient's next prompt and is confirmed only once Open
   }
 });
 
-test("a shell call that starts an agent through Herdr is refused with the spawn guard's reason, and others run", async () => {
+test("a shell call that hands a result to the system opener is refused with the opener guard's reason, and others run", async () => {
   const stack = await start("opencode-guard");
   try {
     // B7: the model reads the reason as the tool's error.
-    const refused = await stack.recipient.send({ op: "tool", tool: "bash", args: { command: "herdr agent start --kind claude --name helper" } });
-    expect(String(refused.refused)).toContain("hide agent spawn --parent here");
-    expect(String(refused.refused)).toContain("--kind claude");
+    const refused = await stack.recipient.send({ op: "tool", tool: "bash", args: { command: "open report.html" } });
+    expect(String(refused.refused)).toContain("browser open report.html");
     const log = fs.readFileSync(path.join(stack.home, ".hide", "agent-hooks", "spawn-guard.log"), "utf8");
+    expect(log).toContain('"kind":"opener.refused"');
     expect(log).toContain('"runtime":"opencode"');
 
     expect(await stack.recipient.send({ op: "tool", tool: "bash", args: { command: "ls -la" } })).toEqual({ ran: true });

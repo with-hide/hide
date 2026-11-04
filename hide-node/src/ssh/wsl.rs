@@ -3,12 +3,11 @@
 //! The core reaches it as it reaches any device it dials: its node is this
 //! build's Linux `hided`, installed on consent under the Linux account's
 //! helper root, answering the node contract. What differs is the pipe: one
-//! `wsl.exe -d <distro> -u <user> -e <hided> node serve --own-herdr` child
+//! `wsl.exe -d <distro> -u <user> -e <hided> node serve` child
 //! per distribution, owned by its link ([`super::over_child`]), whose stdin
 //! and stdout carry the link. No `wsl.exe` runs per request. The device's
-//! Herdr stays inside WSL and is reached through the link's own streams, and
-//! its files and Git are the node's, by their Linux paths, never through a
-//! `\\wsl$` share (D-15).
+//! panes run in holders inside WSL, and its files and Git are the node's, by
+//! their Linux paths, never through a `\\wsl$` share (D-15).
 //!
 //! The link's child first runs the start script every dialed device runs
 //! ([`super::bootstrap`], PRD system-ssh-device-link D-02): the account

@@ -337,9 +337,7 @@ A script that stops earning its place here is deleted rather than left unreferen
 | `python3 scripts/premerge-check.py <number>` | A pull request may merge into main as main is now: its latest `verify` passed, it does not conflict, and the fast checks pass on the merge result ([Merging into main](#merging-into-main)) | `gh` logged in for this repository, and the web and Rust toolchains the checks build with |
 | `python3 scripts/merge-order.py [<number> \| --branch <name>]` | Which green pull request merges first and what each breaks ([Which green pull request merges first](#which-green-pull-request-merges-first)), or where a pull request or branch stands beside the open ones ([Starting work beside open pull requests](#starting-work-beside-open-pull-requests)); it only reads and fetches | `gh` logged in for this repository |
 | `python3 scripts/check-no-attribution.py` | No AI tooling attribution in the branch name, the commits, or a prepared PR body | A fetched `origin/main`; `--range` and `--pr-body` override the defaults |
-| `python3 scripts/check-herdr-release.py <source\|asset>` | A Herdr release at its public and local source boundaries before the pin moves | A Herdr checkout or a reference binary |
 | `python3 scripts/check-worktree-performance-evidence.py [dir]` | A worktree performance run recorded what the guide requires | A completed native run directory |
-| `zsh scripts/install-local-runtime.sh --herdr-root PATH` | Not a gate: installs a locally built Herdr for runtime work | A Herdr checkout |
 
 ## Performance-sensitive changes
 
@@ -416,12 +414,6 @@ A published release is final: a fault the gates missed is fixed by the next vers
 The Windows and Linux packages are unsigned, and [docs/INSTALL.md](docs/INSTALL.md) gives the SmartScreen and sandbox steps.
 `package.yml` also runs as `pr.yml`'s `package` lane on a pull request that changes what goes into a package (`PACKAGE_PATHS` in `scripts/ci-plan.py`: `desktop/scripts/`, `desktop/package.json`, `desktop/resources/`, the Herdr pin and its fetch scripts, `verify-cargo.sh`, `verify-web.sh` and `toolchain-env.sh`, `hided/build.rs`, which embeds the web shell, `hided/src/cli.rs`, `hide-kit/` and `hide-agent-hooks/`, and the package and release workflows).
 There it also builds the macOS archive and runs the packaged app's own specs on it, keeps the packages for a week as the run's artifacts, and `verify` requires it like any planned lane.
-
-## Bundled Herdr runtime
-
-The version and digest of the Herdr binary the app ships are pinned in `contracts/herdr-bundle.json` and nowhere else.
-`scripts/bump-herdr.sh <version>` moves the pin after verifying the release asset; a daily workflow proposes that bump as a pull request when a new stable Herdr release appears.
-It never merges, because three Herdr behaviors the core relies on are covered by fixtures this repository wrote, not by Herdr's own tests.
 
 ## License of contributions
 

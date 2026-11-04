@@ -24,7 +24,6 @@ pub mod desk;
 mod device_catalog;
 pub mod device_command;
 pub mod diagnostics;
-pub mod direct_observation;
 mod disk;
 mod display_text;
 pub mod domain;

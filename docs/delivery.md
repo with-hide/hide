@@ -295,7 +295,7 @@ A swallowed bell moves no observed state, so `Rung` prevents another ring in tha
 ### Forced letters
 
 `hide request send … --force` puts a letter into the recipient's input now, even while it works (PRD engine-bundle-1 D-5, D-14, B4); there is no separate prompt command, and the letter is recorded, answered and retried like any other.
-It is how an agent hands another agent input since Hide stopped teaching Herdr's `agent prompt`, and the letter's record replaces the relationship a passive observation of that call recorded ([agent-hooks.md](agent-hooks.md#passive-direct-prompt-observations)).
+It is how an agent hands another agent input, and the letter's record keeps the relationship between the two.
 
 1. Before anything is recorded, the daemon reads the recipient's visible screen off the runtime lock and judges it by the agent's composer declaration ([Reading the composer](#reading-the-composer)), for any version of the agent (`delivery/composer.rs`, `forced_clear`).
    Text there refuses the send with `composer_not_empty`, and a screen that cannot be read empty (no declaration for the kind, no composer where it is declared, as under a menu or a dialog, or a failed or cut read) with `composer_unconfirmed`; nothing is recorded or typed, each refusal is logged as `delivery.forced_refused` with the pane and the code, and its `next_action` says to send again without `--force`.
@@ -869,7 +869,7 @@ A split whose own reply is lost before the label is written leaves a bare shell 
 The no-focus request applies to opening the checkout's owner workspace as well as creating its tab; interactive workspace and tab creation keep their focus behavior.
 `hide agent spawn --help` explains the modes without contacting a daemon; the removed `--no-watch` flag is refused before any effects.
 Every other `hide` command ending in `--help` or `-h` prints that command's usage to stdout and exits 0; a wrong command prints one line that says what is wrong (`hide device needs a subcommand`, `unknown flag for hide ps: --x`, `--body is required and cannot be blank`), then that command's usage under `usage:`.
-A command that could not reach the core prints the same next step for a code whichever topic ran it (`request_next_action`), and its stderr line stays the bare code, which the spawn guard reads.
+A command that could not reach the core prints the same next step for a code whichever topic ran it (`request_next_action`), and its stderr line stays the bare code, which the hooks' pre-tool guards read.
 
 Every `AgentView` includes `origin`, the spawner id for either mode and null for ordinary roots.
 Delegation derives origin from parent; handoff stores origin separately, and it grants no parent, subtree-close or end authority.
@@ -916,7 +916,6 @@ A retry of a spawn that already created its pane needs the device only to be rea
 `--machine` is allowed only from an agent on the machine that runs Hide; an agent on a device that names any other device is refused with `machine_not_permitted`, which lists no device.
 A parent other than the caller is refused with `parent_authority_required` before any device is asked.
 The receipt keeps the device as an optional field of the version 1 ledger, absent for every older record.
-The spawn guard is unchanged: a direct `herdr --machine …` start is still the operator's own responsibility.
 The ledger stays at version 1: older records without mode load as delegation, missing origin defaults to null and legacy `no_watch` data is ignored without changing existing watches.
 The unsupported reconciliation/resume/session flags and relay, escalate, graph and events commands are absent.
 
@@ -933,11 +932,6 @@ Removing a device retires its cached pane read and rejects late reads from its r
 Only the coordinator sharing the currently installed remote control connector may begin a pane read, publish delivery observations or replace the remote session and connection status.
 Each check holds the runtime lock through its write, including a second check after projecting a remote session; replacing the coordinator for the same device ID rejects the old one's late snapshot and failure, while the current coordinator may bootstrap before its first connected status.
 
-An agent started through Herdr directly bypasses Hide's responsibility record.
-The Claude Code and Codex `PreToolUse` spawn guard refuses such a call in a registered checkout and offers two filled commands: delegation with `--parent here`, or operator handoff without it ([agent-hooks.md](agent-hooks.md#the-spawn-guard)).
-The guard remains bypassable guidance; it does not change either mode's authority or execution path.
-A launch chained behind another command is refused whole, and a launch inside `bash -c`, `$(...)`, a script or an alias is not seen, so a child started that way has no parent line, as before the guard.
-A launch the guard did not see, such as one in an unregistered folder, may still be seen afterward by the passive Post observation, which records the started agent only as the operator's root with its starter as origin, never as a child ([agent-hooks.md](agent-hooks.md#passive-direct-prompt-observations)).
 A spawn whose child shows no session within 5 seconds (Codex before its first turn, OpenCode 2 before its first prompt) answers `native_identity_unavailable`, and the core binds the child when Herdr shows the session ([A registration that waits for its agent's session](#a-registration-that-waits-for-its-agents-session)).
 A spawn's tab, like the first tab of a new worktree the web starts an agent in, runs the account's shell with Hide's shell integration where that shell is zsh, bash or fish (Windows PowerShell on Windows), and its start is typed only after the shell marked its first prompt ([ARCHITECTURE.md](ARCHITECTURE.md)); a shell stopped at a startup question within the 30 s wait is refused as `shell_starting` with that question's line, nothing typed, and the next action is to answer it in that pane and spawn again.
 Herdr refuses a start as `agent_pane_busy` while anything besides the shell runs in the pane; on Windows that is any child process of the shell, which `pane.process_info` does not name unless it is an agent, so Hide's own reading keeps saying ready and only Herdr's next answer can say the pane is free.

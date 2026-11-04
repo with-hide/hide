@@ -1,22 +1,10 @@
 # Herdr API contract
 
-`herdr-api.schema.json` is what the pinned Herdr binary answers to `herdr api schema --json`, written by `scripts/bump-herdr.sh` in the same run that moves the pin recorded in `contracts/herdr-bundle.json`.
+`herdr-api.schema.json` is what the pinned Herdr binary answers to `herdr api schema --json`, written when the pin recorded in `contracts/herdr-bundle.json` last moved.
 Herdr owns the schema and the protocol revision; `herdr-core/build.rs` derives `HERDR_PROTOCOL_REVISION` from this file, so no protocol number is maintained by hand anywhere in this repository.
 
-<!-- herdr-provenance:start -->
-hide distributes the [upstream Herdr release v0.9.5](https://github.com/herdrdev/herdr/releases/tag/v0.9.5).
-The bundled binary's code is not modified by hide; a macOS release replaces only its ad-hoc signature with hide's Developer ID one, which notarization requires.
-`herdr-update.yml` proposes an upstream stable release with `--repo herdrdev/herdr` only when run by hand, since the pin holds while Hide moves to its own engine; updates must pass contract and runtime checks.
-<!-- herdr-provenance:end -->
-
 Never edit this file directly.
-Move the pin and the contract together:
-
-```sh
-./scripts/bump-herdr.sh <release-tag>
-```
-
-Re-running the script for the tag already pinned rewrites the contract only when it drifted from what the binary reports, and is otherwise a no-op.
+The pin and this contract no longer move: no package carries Herdr, and they stay only for the core's Herdr engine, which builds its wire types from this file, and the test fixtures that start the pinned binary.
 
 Before launching the IDE against a local runtime, verify that the contract, the CLI, and the running server agree:
 

@@ -352,13 +352,12 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, initi
   }
   // A line touching the chosen or pointed session carries its counts; its hint says them per direction.
   const drawnName = (id: string) => agentsById.get(id)?.agent.identity_label ?? projectsById.get(clusterProject.get(id) ?? "")?.project.workspace.label ?? id;
-  const counts = (row: { letters: number; direct: number }) => [row.letters ? t("overviewGraph.letterCount", { count: row.letters }) : null, row.direct ? t("overviewGraph.inputCount", { count: row.direct }) : null].filter(Boolean).join(" · ");
-  for (const { id, from, to, active, muted, badged, letters, direct, directions } of exchangeLines(communicationLines(model.communication, (id) => endpoint.has(id), lineState), (id) => endpoint.get(id), lineState)) {
+  for (const { id, from, to, active, muted, badged, letters, directions } of exchangeLines(communicationLines(model.communication, (id) => endpoint.has(id), lineState), (id) => endpoint.get(id), lineState)) {
     const marker = arrow("var(--subtle-foreground)");
     const forward = directions.some((row) => row.from === from && row.to === to);
     const [start, end] = forward ? [from, to] : [to, from];
-    const exchange = badged ? { letters, direct, label: directions.map((row) => t("overviewGraph.exchangeLine", { from: drawnName(row.from), to: drawnName(row.to), counts: counts(row) })).join("\n") } : undefined;
-    line(id, start, end, `og-communication${letters ? "" : " og-direct-input"}${active ? " og-emphasized" : muted ? " og-muted" : ""}`, { markerEnd: marker, markerStart: directions.length > 1 ? marker : undefined }, exchange);
+    const exchange = badged ? { letters, label: directions.map((row) => t("overviewGraph.exchangeLine", { from: drawnName(row.from), to: drawnName(row.to), counts: t("overviewGraph.letterCount", { count: row.letters }) })).join("\n") } : undefined;
+    line(id, start, end, `og-communication${active ? " og-emphasized" : muted ? " og-muted" : ""}`, { markerEnd: marker, markerStart: directions.length > 1 ? marker : undefined }, exchange);
   }
   const positionOf = (id: string) => orbs.get(id) ?? { x: 0, y: 0 };
   // A session follows the hand through the physics; a project's name or folded circle carries every session of the project.
@@ -514,8 +513,8 @@ function OverviewMissionAsks({ deviceId, projectId, actions }: { deviceId: strin
 
 /** A pair's counts as the chosen session sees them: what it sent and what it received. */
 function exchange(pair: Communication, self: string) {
-  const sent = pair.directions.filter((row) => row.from === self).reduce((total, row) => ({ letters: total.letters + row.letters, direct: total.direct + row.direct }), { letters: 0, direct: 0 });
-  return { other: pair.source === self ? pair.target : pair.source, sent: sent.letters + sent.direct, received: pair.letters + pair.direct - sent.letters - sent.direct, letters: pair.letters, direct: pair.direct };
+  const sent = pair.directions.filter((row) => row.from === self).reduce((total, row) => total + row.letters, 0);
+  return { other: pair.source === self ? pair.target : pair.source, sent, received: pair.letters - sent, letters: pair.letters };
 }
 
 function SessionPreview({ row, model, actions, openRecord, close, choose }: { row: GraphAgent; model: OverviewGraphModel; actions: Actions; openRecord: (session: WorkSession) => void; close: () => void; choose: (id: string, target: HTMLElement) => void }) {
@@ -535,7 +534,7 @@ function SessionPreview({ row, model, actions, openRecord, close, choose }: { ro
     {ask ? <div className="og-ask"><small>{t("overviewGraph.asks")}</small><p>{askWhat(t, ask.verb, ask.what, ask.subject)}</p></div> : null}
     <div className="og-details-actions"><Button variant="outline" size="sm" onClick={() => actions.openAgent(row.agent.pane_id)}>{t("overviewGraph.openSession")}</Button>{session ? <Button variant="secondary" size="sm" onClick={() => openRecord(session)}>{t("overviewGraph.openRecord")}</Button> : null}</div>
     {team.length > 0 ? <section className="og-team-list" aria-label={t("overviewGraph.team", { count: team.length })}><h3>{t("overviewGraph.team", { count: team.length })}</h3>{team.map(({ row: member, depth }) => <button key={member.id} type="button" style={{ paddingInlineStart: `calc(var(--spacing-md) * ${depth - 1})` }} aria-label={rowAccessibleName(t, member.agent, member.device)} onClick={(event) => choose(member.id, event.currentTarget)}><StatusMark mark={member.agent.mark} /><span><AgentRecordTitle agent={member.agent} /></span><small>{markWords(t, member.agent)}</small></button>)}</section> : null}
-    {talks.length > 0 ? <section className="og-talks" aria-label={t("overviewGraph.counterparts")}><h3>{t("overviewGraph.counterparts")}</h3>{talks.map((talk) => { const other = rows.get(talk.other)!; return <div key={talk.other} title={t("overviewGraph.exchange", { letters: talk.letters, direct: talk.direct })}><AgentMark kind={other.agent.agent_kind} /><span><AgentRecordTitle agent={other.agent} /></span><small>{[talk.sent ? t("overviewGraph.sent", { count: talk.sent }) : null, talk.received ? t("overviewGraph.received", { count: talk.received }) : null].filter(Boolean).join(" · ")}</small></div>; })}</section> : null}
+    {talks.length > 0 ? <section className="og-talks" aria-label={t("overviewGraph.counterparts")}><h3>{t("overviewGraph.counterparts")}</h3>{talks.map((talk) => { const other = rows.get(talk.other)!; return <div key={talk.other} title={t("overviewGraph.letterCount", { count: talk.letters })}><AgentMark kind={other.agent.agent_kind} /><span><AgentRecordTitle agent={other.agent} /></span><small>{[talk.sent ? t("overviewGraph.sent", { count: talk.sent }) : null, talk.received ? t("overviewGraph.received", { count: talk.received }) : null].filter(Boolean).join(" · ")}</small></div>; })}</section> : null}
   </aside>;
 }
 

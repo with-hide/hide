@@ -11,13 +11,9 @@
 //! once nothing names them (`hide_kit::legacy::device`), whose paths are
 //! constants of the helper, never a request's.
 //!
-//! A build that carries Herdr for the device names its copy in `herdr.pin`
-//! (`hide_kit::device_herdr`): before the kit applies, the helper points
-//! `<root>/herdr/current` at it, and after the kit has applied, the node's
-//! Herdr updater (installed by `hided node serve`) looks at the server on the
-//! device's registered socket and hands it to that copy when the rules allow
-//! (PRD device-herdr-update D-07). A copy is removed only once no process on
-//! the device runs it (D-09).
+//! A Herdr copy an earlier build put beside the builds
+//! (`hide_kit::device_herdr`) is taken off once no process on the device
+//! runs it (PRD engine-bundle-4-herdr-removal D-10): no build brings one now.
 //!
 //! A core or a node that runs a build Hide placed under a helper root (a
 //! moved core's login item runs one) keeps its kit from that root too, but
@@ -38,27 +34,8 @@ use crate::error::{ErrorCode, HostError, HostResult};
 use crate::protocol::{KitAction, KitRemoved};
 use crate::serve::{Env, KitPlace};
 
-use hide_kit::device_herdr::{self, HerdrUpdate};
+use hide_kit::device_herdr;
 pub use hide_kit::is_build_name;
-
-/// What a device's node does about the Herdr server on its registered socket
-/// once its kit has applied: given the pinned copy, the socket and the file
-/// recording failed handoffs, it answers what it found and did.
-pub type HerdrUpdater = fn(pinned: &Path, socket: &Path, record: &Path) -> HerdrUpdate;
-
-struct HerdrPolicy {
-    preserve_server: bool,
-    updater: Option<HerdrUpdater>,
-}
-
-static HERDR_UPDATER: std::sync::OnceLock<HerdrUpdater> = std::sync::OnceLock::new();
-
-/// Installs the node's Herdr updater; the helper's process does this once
-/// before it serves. A process that installs none (the core's own node, a
-/// test) hands nothing over.
-pub fn set_herdr_updater(updater: HerdrUpdater) {
-    let _ = HERDR_UPDATER.set(updater);
-}
 
 /// Answers one `kit` request for the node `env` describes: the helper root
 /// the running helper was installed under, the build a core or node runs
@@ -66,17 +43,9 @@ pub fn set_herdr_updater(updater: HerdrUpdater) {
 pub fn handle(
     action: KitAction,
     cli_dir: &str,
-    herdr_socket: Option<&str>,
     retirement_projects: &[String],
-    preserve_herdr_server: bool,
     env: &Env,
 ) -> HostResult<Value> {
-    if preserve_herdr_server && herdr_socket.is_none() {
-        return Err(HostError::new(
-            ErrorCode::Unsupported,
-            "The saved Herdr session has no resolved socket; reconnect that profile first",
-        ));
-    }
     match &env.kit {
         KitPlace::Installed => {}
         KitPlace::Build { root, version } => {
@@ -94,20 +63,12 @@ pub fn handle(
                 },
                 action,
                 cli_dir,
-                herdr_socket,
                 retirement_projects,
                 Arc::clone(&env.stop),
             );
         }
         KitPlace::Bundled(kit_dir) => {
-            return bundled(
-                kit_dir,
-                env,
-                action,
-                cli_dir,
-                herdr_socket,
-                retirement_projects,
-            );
+            return bundled(kit_dir, env, action, cli_dir, retirement_projects);
         }
         KitPlace::Standalone => {
             return Err(HostError::new(
@@ -138,13 +99,8 @@ pub fn handle(
         },
         action,
         cli_dir,
-        herdr_socket,
         retirement_projects,
         Arc::clone(&env.stop),
-        HerdrPolicy {
-            preserve_server: preserve_herdr_server,
-            updater: HERDR_UPDATER.get().copied(),
-        },
     )
 }
 
@@ -156,7 +112,6 @@ fn bundled(
     env: &Env,
     action: KitAction,
     cli_dir: &str,
-    herdr_socket: Option<&str>,
     retirement_projects: &[String],
 ) -> HostResult<Value> {
     let home = env.home.clone().ok_or_else(|| {
@@ -165,9 +120,8 @@ fn bundled(
             "HOME is not set, so Hide cannot tell where to install",
         )
     })?;
-    let inputs = Inputs::read(&home, cli_dir, herdr_socket, retirement_projects)?;
-    let mut target =
-        hide_kit::local_target(kit_dir, &home, &inputs.herdr_socket, Arc::clone(&env.stop));
+    let inputs = Inputs::read(&home, cli_dir, retirement_projects)?;
+    let mut target = hide_kit::local_target(kit_dir, &home, Arc::clone(&env.stop));
     target.cli_dir = inputs.cli_dir;
     target.retirement_projects = inputs.projects;
     let mut report = match action {
@@ -196,24 +150,18 @@ fn not_removed() -> HostError {
 /// The kit of a core or node that runs a build Hide placed: it installs
 /// from the root's `current`, which it points at this build first so the
 /// hooks and the `hide` link name the build that runs, and it removes no
-/// build and points no Herdr copy, since the move and the core update own
-/// both (`adopt_build`). Public for the core's tests, which place a build
+/// build, since the move and the core update own them (`adopt_build`). Public for the core's tests, which place a build
 /// folder without a device.
 pub fn run_build(
     placement: &Placement,
     action: KitAction,
     cli_dir: &str,
-    herdr_socket: Option<&str>,
     retirement_projects: &[String],
     stop: Arc<AtomicBool>,
 ) -> HostResult<Value> {
     let home = &placement.home;
-    let Inputs {
-        projects,
-        cli_dir,
-        herdr_socket,
-    } = Inputs::read(home, cli_dir, herdr_socket, retirement_projects)?;
-    let mut target = hide_kit::device_target(&placement.root, home, &cli_dir, &herdr_socket, stop);
+    let Inputs { projects, cli_dir } = Inputs::read(home, cli_dir, retirement_projects)?;
+    let mut target = hide_kit::device_target(&placement.root, home, &cli_dir, stop);
     target.retirement_projects = projects;
     match action {
         KitAction::Apply | KitAction::Reinstall { .. } => {
@@ -339,46 +287,23 @@ pub fn run(
     placement: &Placement,
     action: KitAction,
     cli_dir: &str,
-    herdr_socket: Option<&str>,
     stop: Arc<AtomicBool>,
 ) -> HostResult<Value> {
-    run_for_projects(
-        placement,
-        action,
-        cli_dir,
-        herdr_socket,
-        &[],
-        stop,
-        HerdrPolicy {
-            preserve_server: false,
-            updater: HERDR_UPDATER.get().copied(),
-        },
-    )
+    run_for_projects(placement, action, cli_dir, &[], stop)
 }
 
 fn run_for_projects(
     placement: &Placement,
     action: KitAction,
     cli_dir: &str,
-    herdr_socket: Option<&str>,
     retirement_projects: &[String],
     stop: Arc<AtomicBool>,
-    herdr_policy: HerdrPolicy,
 ) -> HostResult<Value> {
     let home = &placement.home;
-    let Inputs {
-        projects,
-        cli_dir,
-        herdr_socket,
-    } = Inputs::read(home, cli_dir, herdr_socket, retirement_projects)?;
+    let Inputs { projects, cli_dir } = Inputs::read(home, cli_dir, retirement_projects)?;
     let target = || {
-        let mut target = hide_kit::device_target(
-            &placement.root,
-            home,
-            &cli_dir,
-            &herdr_socket,
-            Arc::clone(&stop),
-        );
+        let mut target =
+            hide_kit::device_target(&placement.root, home, &cli_dir, Arc::clone(&stop));
         target.retirement_projects = projects.clone();
         target
     };
@@ -387,22 +312,11 @@ fn run_for_projects(
             if let Err(refusal) = hide_kit::retirement_preflight(&target()) {
                 return to_value(hide_kit::KitReport::refused(refusal));
             }
-            // Resolve the required copy before retiring the last usable build.
-            let pinned = point_herdr(&placement.root, &placement.version)?;
             point_current(&placement.root, &placement.version)?;
             remove_other_builds(&placement.root, &placement.version);
-            let mut report = hide_kit::apply(&target(), &scope_of(action));
-            if let (Some(pinned), Some(update)) = (
-                pinned.as_deref(),
-                herdr_policy
-                    .updater
-                    .filter(|_| !herdr_policy.preserve_server),
-            ) {
-                let record =
-                    device_herdr::herdr_dir(&placement.root).join(device_herdr::HANDOFF_RECORD);
-                report.herdr = Some(Box::new(update(pinned, &herdr_socket, &record)));
-            }
-            remove_unused_herdr(&placement.root);
+            let report = hide_kit::apply(&target(), &scope_of(action));
+            // A copy a server still runs stays, with a record, for a later pass.
+            let _ = remove_herdr(&placement.root);
             to_value(report)
         }
         KitAction::Status => to_value(hide_kit::status(&target())),
@@ -420,45 +334,16 @@ fn run_for_projects(
 struct Inputs {
     projects: Vec<PathBuf>,
     cli_dir: PathBuf,
-    herdr_socket: PathBuf,
 }
 
 impl Inputs {
-    fn read(
-        home: &Path,
-        cli_dir: &str,
-        herdr_socket: Option<&str>,
-        retirement_projects: &[String],
-    ) -> HostResult<Self> {
+    fn read(home: &Path, cli_dir: &str, retirement_projects: &[String]) -> HostResult<Self> {
         let projects = retirement_projects
             .iter()
             .map(|project| expand(project, home))
             .collect::<HostResult<Vec<_>>>()?;
         let cli_dir = expand(cli_dir, home)?;
-        let herdr_socket = match herdr_socket {
-            Some(socket) => expand(socket, home)?,
-            // Herdr's default for this home, in Herdr's own order.
-            None => {
-                let variables = |name: &str| {
-                    if name == hide_platform::host::HOME_VARIABLE {
-                        Some(home.as_os_str().to_owned())
-                    } else {
-                        std::env::var_os(name)
-                    }
-                };
-                hide_platform::host::herdr_socket_from(&variables).map_err(|error| {
-                    HostError::new(
-                        ErrorCode::Unsupported,
-                        format!("Herdr's socket has no location: {error}"),
-                    )
-                })?
-            }
-        };
-        Ok(Self {
-            projects,
-            cli_dir,
-            herdr_socket,
-        })
+        Ok(Self { projects, cli_dir })
     }
 }
 
@@ -566,75 +451,13 @@ fn remove_other_builds(root: &Path, keep: &str) {
     }
 }
 
-/// Points `<root>/herdr/current` at the copy this build requires. A missing
-/// required copy or refused link replacement fails without removing the
-/// last valid link. Only a build that intentionally names no pin removes it.
-fn point_herdr(root: &Path, version: &str) -> HostResult<Option<PathBuf>> {
-    let folder = device_herdr::herdr_dir(root);
-    let current = folder.join(hide_kit::CURRENT);
-    let pin_path = root.join(version).join(device_herdr::HERDR_PIN);
-    let failure = |reason| HostError::new(ErrorCode::Io, reason);
-    let pin = match std::fs::read_to_string(&pin_path) {
-        Ok(pin) if is_build_name(pin.trim()) => pin.trim().to_owned(),
-        Ok(_) => {
-            return Err(failure(
-                "The build's Herdr pin is invalid; reconnect to install it again".to_owned(),
-            ));
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            if std::fs::symlink_metadata(&current).is_ok_and(|meta| meta.file_type().is_symlink()) {
-                hide_platform::fs::link::remove_link(&current).map_err(|error| {
-                    failure(format!(
-                        "The previous Herdr link could not be removed: {error}"
-                    ))
-                })?;
-            }
-            return Ok(None);
-        }
-        Err(error) => {
-            return Err(failure(format!(
-                "The build's Herdr pin could not be read: {error}"
-            )));
-        }
-    };
-    let copy = folder.join(&pin).join(device_herdr::HERDR_PROGRAM);
-    if !copy.is_file() {
-        return Err(failure(
-            "The required Herdr copy is missing; reconnect to install it again".to_owned(),
-        ));
-    }
-    if !hide_platform::fs::link::is_link_to(&current, Path::new(&pin)) {
-        hide_platform::fs::link::replace_link(Path::new(&pin), &current)
-            .map_err(|error| failure(format!("The Herdr copy could not be selected: {error}")))?;
-    }
-    Ok(Some(copy))
-}
-
-/// The pinned Herdr copy the build folder `build` names, if any.
-fn build_pin(build: &Path) -> Option<String> {
-    std::fs::read_to_string(build.join(device_herdr::HERDR_PIN))
-        .ok()
-        .map(|pin| pin.trim().to_owned())
-        .filter(|pin| is_build_name(pin))
-}
-
-/// Removes every pinned Herdr copy that no build folder names and no process
-/// on the device runs, so a server the operator has not restarted keeps the
-/// program it runs (PRD device-herdr-update D-09), and a copy another
-/// connection uploaded for its build, whose folder it places first, stays
-/// for that build. A copy whose use cannot be read is kept for the next pass.
-/// A copy kept for its use and a removal that fails each leave one record on
-/// the node's error stream, its diagnostic log.
+/// Removes every Herdr copy no process on the device runs, so a server the
+/// operator has not restarted keeps the program it runs (PRD
+/// device-herdr-update D-09). A copy whose use cannot be read is kept for the
+/// next pass. A copy kept for its use and a removal that fails each leave one
+/// record on the node's error stream, its diagnostic log.
 fn remove_unused_herdr(root: &Path) {
-    let named = builds(root, None)
-        .iter()
-        .filter_map(|build| build_pin(build))
-        .collect::<std::collections::HashSet<_>>();
     for copy in builds(&device_herdr::herdr_dir(root), None) {
-        let name = copy.file_name().and_then(|name| name.to_str());
-        if name.is_some_and(|name| named.contains(name)) {
-            continue;
-        }
         if let Some(reason) = herdr_use(&copy) {
             herdr_copy_record("kit.herdr_copy_kept", &copy, &reason);
             continue;
@@ -749,9 +572,10 @@ fn remove_root(root: &Path) -> hide_kit::RemoveOutcome {
     }
 }
 
-/// Takes the pinned Herdr copies off a device leaving Hide: every copy no
-/// process runs, the link, the handoff record and the folder. A copy a
-/// server still runs stays with the folder (D-09), and the answer says why.
+/// Takes the Herdr copies an earlier build put on the device off it, on every
+/// pass and when the device leaves Hide: every copy no process runs, the
+/// link, the handoff record and the folder. A copy a server still runs stays
+/// with the folder (D-09), and the answer says why.
 fn remove_herdr(root: &Path) -> Option<String> {
     let folder = device_herdr::herdr_dir(root);
     if !folder.exists() {
@@ -776,83 +600,6 @@ fn remove_herdr(root: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The external server updater records an attempted handoff. The kit
-    /// itself runs against private files and a raised cancellation flag.
-    #[test]
-    fn saved_session_apply_and_reinstall_leave_the_selected_server_untouched() {
-        fn updater(_pinned: &Path, _socket: &Path, record: &Path) -> HerdrUpdate {
-            std::fs::write(record, "handoff attempted").unwrap();
-            HerdrUpdate::Current {
-                version: "fixture".to_owned(),
-            }
-        }
-        let dir = tempfile::tempdir().unwrap();
-        let placement = placed(dir.path(), "aaaaaaaaaaaaaaaa");
-        let copy = device_herdr::herdr_dir(&placement.root).join("bbbbbbbbbbbbbbbb");
-        std::fs::create_dir_all(&copy).unwrap();
-        std::fs::write(copy.join(device_herdr::HERDR_PROGRAM), "private fixture").unwrap();
-        std::fs::write(
-            placement
-                .root
-                .join(&placement.version)
-                .join(device_herdr::HERDR_PIN),
-            "bbbbbbbbbbbbbbbb\n",
-        )
-        .unwrap();
-        let record = device_herdr::herdr_dir(&placement.root).join(device_herdr::HANDOFF_RECORD);
-        for action in [
-            KitAction::Apply,
-            KitAction::Reinstall {
-                components: Vec::new(),
-                agents_on: Vec::new(),
-                agents_off: Vec::new(),
-                codex_daemon_off: false,
-            },
-        ] {
-            let value = run_for_projects(
-                &placement,
-                action,
-                "~/.local/bin",
-                Some("~/review.sock"),
-                &[],
-                Arc::new(AtomicBool::new(true)),
-                HerdrPolicy {
-                    preserve_server: true,
-                    updater: Some(updater),
-                },
-            )
-            .unwrap();
-            let report: hide_kit::KitReport = serde_json::from_value(value).unwrap();
-            assert!(report.herdr.is_none());
-            assert!(
-                !record.exists(),
-                "saved-session consent does not permit a server handoff"
-            );
-        }
-        let value = run_for_projects(
-            &placement,
-            KitAction::Apply,
-            "~/.local/bin",
-            Some("~/default.sock"),
-            &[],
-            Arc::new(AtomicBool::new(true)),
-            HerdrPolicy {
-                preserve_server: false,
-                updater: Some(updater),
-            },
-        )
-        .unwrap();
-        let report: hide_kit::KitReport = serde_json::from_value(value).unwrap();
-        assert!(matches!(
-            report.herdr.as_deref(),
-            Some(HerdrUpdate::Current { .. })
-        ));
-        assert_eq!(
-            std::fs::read_to_string(record).unwrap(),
-            "handoff attempted"
-        );
-    }
 
     /// A device helper started with a home of its own
     /// (`HIDE_DEV_DEVICE_HOME`) keeps every place its kit and state write
@@ -899,7 +646,7 @@ mod tests {
             Some(own.join(".hide").join("state").as_path())
         );
         let home = env.home.unwrap();
-        let inputs = Inputs::read(&home, "~/.local/bin", None, &["~/work".to_owned()]).unwrap();
+        let inputs = Inputs::read(&home, "~/.local/bin", &["~/work".to_owned()]).unwrap();
         let mut locations = vec![hide_kit::kit_state_dir(&home), inputs.cli_dir];
         locations.extend(inputs.projects);
         locations.extend(
@@ -990,7 +737,7 @@ mod tests {
         std::fs::write(resources.join("app.asar"), b"shell").unwrap();
         assert_eq!(place(&unpacked), KitPlace::Bundled(resources));
         let copy = home.join(".hide/runtime/0.4.0-0123456789ab");
-        let runtime = programs(&copy, &["hided", "hide", "hide-agent-hooks", "herdr"]);
+        let runtime = programs(&copy, &["hided", "hide", "hide-agent-hooks", "hide-holder"]);
         std::fs::write(copy.join(hide_kit::runtime::MARKER), "0.4.0-0123456789ab").unwrap();
         assert_eq!(place(&runtime), KitPlace::Bundled(copy));
 
@@ -1049,7 +796,6 @@ mod tests {
             &placement,
             KitAction::Apply,
             "~/.local/bin",
-            Some("~/private-herdr.sock"),
             &[],
             Arc::new(AtomicBool::new(true)),
         )
@@ -1080,7 +826,6 @@ mod tests {
             &placement,
             KitAction::Remove,
             "~/.local/bin",
-            None,
             &[],
             Arc::default(),
         )
@@ -1128,14 +873,7 @@ mod tests {
         std::fs::create_dir_all(ledger.parent().unwrap()).unwrap();
         let bytes = serde_json::json!({"schema":"hcoord.ledger.v1","requests":{"open":{"status":"open"}},"watches":{}}).to_string();
         std::fs::write(&ledger, &bytes).unwrap();
-        let report = run(
-            &placement,
-            KitAction::Apply,
-            "~/.local/bin",
-            Some("~/private-herdr.sock"),
-            Arc::default(),
-        )
-        .unwrap();
+        let report = run(&placement, KitAction::Apply, "~/.local/bin", Arc::default()).unwrap();
         let report: hide_kit::KitReport = serde_json::from_value(report).unwrap();
         let refusal = report.refused.expect("the pass stops before anything");
         assert_eq!(refusal.cause, hide_kit::RefusalCause::Record);
@@ -1193,7 +931,8 @@ mod tests {
         assert!(!placement.root.exists());
     }
 
-    /// A pinned Herdr copy under `root` named `id`, made from `program`.
+    /// A Herdr copy an earlier build left under `root` named `id`, made from
+    /// `program`.
     fn herdr_copy(root: &Path, id: &str, program: &Path) -> PathBuf {
         let folder = device_herdr::herdr_dir(root).join(id);
         std::fs::create_dir_all(&folder).unwrap();
@@ -1209,7 +948,7 @@ mod tests {
     }
 
     /// Set on a copy of this test binary that stands in for a Herdr server
-    /// running a pinned copy: it waits for its parent to end it. A copy of a
+    /// running a copy: it waits for its parent to end it. A copy of a
     /// system program will not do, because macOS kills a fresh copy of one
     /// as it starts.
     const HELD: &str = "HIDE_HOST_HELD_COPY";
@@ -1224,83 +963,32 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
-    fn a_build_points_herdr_current_at_its_pinned_copy_and_a_build_without_one_takes_it_away() {
+    fn an_apply_takes_off_the_herdr_copy_and_link_an_earlier_build_left() {
         let dir = tempfile::tempdir().unwrap();
         let placement = placed(dir.path(), "bbbbbbbbbbbbbbbb");
-        let copy = herdr_copy(&placement.root, "1111111111111111", Path::new("/bin/sh"));
-        std::fs::write(
-            placement
-                .root
-                .join(&placement.version)
-                .join(device_herdr::HERDR_PIN),
-            "1111111111111111\n",
+        std::fs::create_dir_all(&placement.home).unwrap();
+        herdr_copy(&placement.root, "1111111111111111", Path::new("/bin/sh"));
+        let folder = device_herdr::herdr_dir(&placement.root);
+        hide_platform::fs::link::replace_link(
+            Path::new("1111111111111111"),
+            &folder.join(hide_kit::CURRENT),
         )
         .unwrap();
+        std::fs::write(folder.join(device_herdr::HANDOFF_RECORD), b"{}").unwrap();
 
-        assert_eq!(
-            point_herdr(&placement.root, &placement.version).unwrap(),
-            Some(copy)
-        );
-        assert!(device_herdr::pinned_herdr(&placement.root).is_file());
-
-        let without = placed(dir.path(), "cccccccccccccccc");
-        assert_eq!(point_herdr(&without.root, &without.version).unwrap(), None);
-        assert!(
-            std::fs::symlink_metadata(
-                device_herdr::herdr_dir(&without.root).join(hide_kit::CURRENT)
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn an_incomplete_herdr_delivery_fails_without_changing_either_current_link() {
-        let dir = tempfile::tempdir().unwrap();
-        let old = placed(dir.path(), "aaaaaaaaaaaaaaaa");
-        let copy = pinned_build(&old.root, &old.version, "1111111111111111");
-        point_current(&old.root, &old.version).unwrap();
-        point_herdr(&old.root, &old.version).unwrap();
-        let next = placed(dir.path(), "bbbbbbbbbbbbbbbb");
-        std::fs::write(
-            next.root.join(&next.version).join(device_herdr::HERDR_PIN),
-            "2222222222222222\n",
-        )
-        .unwrap();
-        let result = run_for_projects(
-            &next,
+        run_for_projects(
+            &placement,
             KitAction::Apply,
             "~/.local/bin",
-            Some("~/private.sock"),
             &[],
             Arc::new(AtomicBool::new(true)),
-            HerdrPolicy {
-                preserve_server: false,
-                updater: None,
-            },
-        );
-        assert!(result.is_err(), "a required pinned copy did not arrive");
-        assert!(hide_platform::fs::link::is_link_to(
-            &old.root.join(hide_kit::CURRENT),
-            Path::new(&old.version)
-        ));
-        assert!(hide_platform::fs::link::is_link_to(
-            &device_herdr::herdr_dir(&old.root).join(hide_kit::CURRENT),
-            Path::new("1111111111111111")
-        ));
-        assert!(copy.is_file());
-    }
-
-    /// A build folder `version` under `root` that names the copy `pin`, and
-    /// that copy.
-    fn pinned_build(root: &Path, version: &str, pin: &str) -> PathBuf {
-        std::fs::create_dir_all(root.join(version)).unwrap();
-        std::fs::write(
-            root.join(version).join(device_herdr::HERDR_PIN),
-            format!("{pin}\n"),
         )
         .unwrap();
-        herdr_copy(root, pin, &std::env::current_exe().unwrap())
+        assert!(!folder.exists());
+        assert!(hide_platform::fs::link::is_link_to(
+            &placement.root.join(hide_kit::CURRENT),
+            Path::new(&placement.version)
+        ));
     }
 
     /// A process running the copy `program` of this test binary, once it
@@ -1338,17 +1026,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let placement = placed(dir.path(), "bbbbbbbbbbbbbbbb");
         let root = placement.root;
-        let pinned = pinned_build(&root, "bbbbbbbbbbbbbbbb", "2222222222222222");
-        // Another connection's build, placed before its apply.
-        let arriving = pinned_build(&root, "cccccccccccccccc", "3333333333333333");
         let test_binary = std::env::current_exe().unwrap();
         let older = herdr_copy(&root, "1111111111111111", &test_binary);
         let unused = herdr_copy(&root, "0000000000000000", &test_binary);
         let mut server = run_copy(&older);
 
         remove_unused_herdr(&root);
-        assert!(pinned.is_file());
-        assert!(arriving.is_file(), "a copy a build names stays");
         assert!(older.is_file(), "the copy a server runs stays");
         assert!(!unused.parent().unwrap().exists());
 
@@ -1356,7 +1039,6 @@ mod tests {
         server.wait().unwrap();
         remove_unused_herdr(&root);
         assert!(!older.parent().unwrap().exists());
-        assert!(pinned.is_file());
     }
 
     #[test]
@@ -1366,15 +1048,11 @@ mod tests {
         let placement = placed(dir.path(), "bbbbbbbbbbbbbbbb");
         point_current(&placement.root, &placement.version).unwrap();
         herdr_copy(&placement.root, "1111111111111111", Path::new("/bin/sh"));
-        std::fs::write(
-            placement
-                .root
-                .join(&placement.version)
-                .join(device_herdr::HERDR_PIN),
-            "1111111111111111\n",
+        hide_platform::fs::link::replace_link(
+            Path::new("1111111111111111"),
+            &device_herdr::herdr_dir(&placement.root).join(hide_kit::CURRENT),
         )
         .unwrap();
-        point_herdr(&placement.root, &placement.version).unwrap();
         std::fs::write(
             device_herdr::herdr_dir(&placement.root).join(device_herdr::HANDOFF_RECORD),
             b"{}",
@@ -1393,7 +1071,11 @@ mod tests {
     fn removal_keeps_the_root_while_a_server_runs_its_herdr_copy_and_says_why() {
         let dir = tempfile::tempdir().unwrap();
         let placement = placed(dir.path(), "bbbbbbbbbbbbbbbb");
-        let copy = pinned_build(&placement.root, &placement.version, "1111111111111111");
+        let copy = herdr_copy(
+            &placement.root,
+            "1111111111111111",
+            &std::env::current_exe().unwrap(),
+        );
         let mut server = run_copy(&copy);
 
         let outcome = remove_root(&placement.root);

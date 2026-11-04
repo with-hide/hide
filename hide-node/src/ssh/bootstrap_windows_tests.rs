@@ -526,7 +526,7 @@ fn the_helper_starts_on_the_same_pipes_and_takes_no_herdr() {
     assert_eq!(read_step(&mut pipe, soon()).unwrap(), ["end"]);
     start(&mut pipe, "v1/helper.cmd", &HerdrChoice::Account, None).unwrap();
     assert_eq!(line(&mut pipe), "args:node serve");
-    assert_eq!(line(&mut pipe), "third:--own-herdr");
+    assert_eq!(line(&mut pipe), "third:");
     assert_eq!(line(&mut pipe), "cwd:home");
     assert_eq!(line(&mut pipe), "home:home");
     assert_eq!(line(&mut pipe), "folders:other");

@@ -1189,10 +1189,6 @@ fn pane_scroll(scroll: HolderScroll) -> crate::find::pane::PaneScroll {
 /// waits.
 const PROMPT_SUBMIT_DELAY: std::time::Duration = std::time::Duration::from_millis(300);
 
-/// The source a session this engine knows is reported under: what the
-/// engine itself saw at a start or a report, never an agent's integration.
-const NATIVE_SESSION_SOURCE: &str = "hide";
-
 /// The agent kind a pane runs, in the name Herdr would give it.
 fn shown_kind(catalog: &hide_agent_adapter::definition::Catalog, kind: &str) -> String {
     agents::definition(catalog, kind).map_or_else(|| kind.to_owned(), agents::kind_name)
@@ -1205,7 +1201,6 @@ fn delivery_of(
     agent: &agents::PaneAgent,
 ) -> DeliveryAgent {
     DeliveryAgent {
-        terminal_id: pane.clone(),
         name: agent.name.clone().unwrap_or_else(|| pane.clone()),
         pane_id: pane,
         kind: Some(shown_kind(catalog, &agent.kind)),
@@ -2158,33 +2153,6 @@ impl<'g> Engine for OwnEngine<'g> {
         let topology = self.topology();
         let (pane, _, agent) = topology.agent(target)?;
         Ok(delivery_of(&catalog, pane, agent))
-    }
-
-    fn observed_agent(
-        &self,
-        _wait: Wait,
-        target: &str,
-    ) -> Answer<(
-        DeliveryAgent,
-        Option<hide_agent_hooks::observation::ObservationNativeSession>,
-    )> {
-        self.check()?;
-        let catalog = self.shared.definitions.get();
-        let topology = self.topology();
-        let (pane, _, agent) = topology.agent(target)?;
-        let native = agent.session.as_ref().map(|session| {
-            hide_agent_hooks::observation::ObservationNativeSession {
-                source: NATIVE_SESSION_SOURCE.to_owned(),
-                agent: shown_kind(&catalog, &agent.kind),
-                kind: match agents::session_kind(session) {
-                    PaneSessionKind::Id => "id",
-                    PaneSessionKind::Path => "path",
-                }
-                .to_owned(),
-                value: session.clone(),
-            }
-        });
-        Ok((delivery_of(&catalog, pane, agent), native))
     }
 
     #[allow(clippy::disallowed_methods)] // Herdr's submit delay, a production wait

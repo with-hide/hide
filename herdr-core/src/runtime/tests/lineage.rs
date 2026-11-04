@@ -2019,7 +2019,6 @@ fn a_reinstall_queues_only_the_parts_that_need_it() {
             ],
             agents: Vec::new(),
             held_for_onboarding: false,
-            labels_retirement: Default::default(),
             legacy_retirement: Default::default(),
             codex_daemon: None,
             codex_daemon_on: None,
@@ -2027,7 +2026,6 @@ fn a_reinstall_queues_only_the_parts_that_need_it() {
             codex_daemon_unreadable: None,
             codex_capability_unread: None,
             codex_daemon_off: None,
-            herdr: None,
             refused: None,
         },
     );
@@ -2066,7 +2064,6 @@ fn a_reinstall_queues_only_the_parts_that_need_it() {
             )],
             agents: Vec::new(),
             held_for_onboarding: false,
-            labels_retirement: Default::default(),
             legacy_retirement: Default::default(),
             codex_daemon: None,
             codex_daemon_on: None,
@@ -2074,7 +2071,6 @@ fn a_reinstall_queues_only_the_parts_that_need_it() {
             codex_daemon_unreadable: None,
             codex_capability_unread: None,
             codex_daemon_off: None,
-            herdr: None,
             refused: None,
         },
     );

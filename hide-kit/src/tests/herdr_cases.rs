@@ -5,14 +5,6 @@
 
 use super::*;
 
-fn agent<'a>(report: &'a KitReport, id: &str) -> &'a AgentReport {
-    report
-        .agents
-        .iter()
-        .find(|agent| agent.id == id)
-        .unwrap_or_else(|| panic!("no agent {id} in {report:?}"))
-}
-
 /// An agent installed the way its installer leaves it: its program and its
 /// own folder.
 fn install(fixture: &Fixture, program: &str, folder: &str) {
@@ -108,9 +100,8 @@ fn switching_an_agent_on_installs_no_herdr_integration() {
     let fixture = Fixture::new();
     install(&fixture, "pi", ".pi/agent");
 
-    let report = apply(&fixture.target, &Scope::agents(["pi"], []));
+    apply(&fixture.target, &Scope::agents(["pi"], []));
 
-    assert!(agent(&report, "pi").herdr.is_none(), "{report:?}");
     assert!(!recorded(&fixture, "pi"));
     assert!(!fixture.root.join("herdr-integration.log").exists());
 }

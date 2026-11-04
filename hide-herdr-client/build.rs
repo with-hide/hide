@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 fn main() {
     // The contract is what the pinned Herdr binary reports for
-    // `api schema --json`; scripts/bump-herdr.sh writes it beside the pin. The
+    // `api schema --json`, written beside the pin when it last moved. The
     // core reads its protocol revision from here and nothing else, so the
     // runtime manifest itself is not a build input.
     const SCHEMA_PATH: &str = "../contracts/herdr-api.schema.json";

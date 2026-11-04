@@ -91,19 +91,9 @@ IMPLEMENTATION = [
 # What may still speak Herdr directly, with its number of findings and the
 # bundle that deletes it. Nothing joins without that bundle.
 ALLOWED = {
-    # Herdr runtime management: the operator's Herdr server and its program.
-    "hided/src/herdr_handoff.rs": (
-        20, "moves the operator's Herdr server onto the bundled one; bundle 4 deletes the handoff"),
-    "desktop/src/main/herdr.ts": (
-        5, "chooses the Herdr program `hide` runs; bundle 4 removes `HERDR_*`"),
     # The terminal path: Herdr's own terminal client.
     "hide-node/src/terminal/session.rs": (
         1, "runs `herdr terminal session` for a pane's bytes; bundle 2 replaces the terminal path"),
-    # Herdr's plugin, which the kit installs and retires.
-    "hide-kit/src/labels.rs": (
-        10, "uninstalls the retired labels plugin; bundle 4 deletes the plugin"),
-    "hide-kit/src/coordination_retirement.rs": (
-        1, "names the retired coordination plugin's Herdr types; bundle 4 deletes the plugin"),
     # A device's half: the node holds that machine's Herdr socket and proves
     # a pane's process against it.
     "hide-node/src/lib.rs": (

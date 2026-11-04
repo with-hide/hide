@@ -128,7 +128,6 @@ pub(super) fn kit_rows(runtime: &mut Runtime, codex_daemon_on: Option<bool>) {
                 chosen: false,
                 skill: piece,
                 hook: None,
-                herdr: None,
                 partial: adapter.partial(),
                 features: Vec::new(),
                 sessions: None,

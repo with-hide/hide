@@ -119,16 +119,13 @@ test("the agy switch writes Hide's block, skill and Hide AI folder beside the op
     // B1: agy takes letters and is refused a launch, so its row wears no Basic chip.
     await expect(list.locator('[data-agent-partial="antigravity"]')).toHaveCount(0);
 
-    // B3 and onboarding B23: Hide's block joins the operator's, including passive tool results.
+    // B3 and onboarding B23: Hide's block joins the operator's.
     await switchOf("off").click();
     await expect(switchOf("on")).toBeVisible();
     await expect.poll(() => read(hooksFile(home)), { timeout: 60_000 }).toContain("--runtime antigravity");
     const block = json<Block & typeof OPERATOR_HOOKS>(hooksFile(home));
     expect(block.mine).toEqual(OPERATOR_HOOKS.mine);
-    expect(Object.keys(block.hide).sort()).toEqual(["PostToolUse", "PreInvocation", "PreToolUse", "SessionStart", "Stop"]);
-    const post = block.hide.PostToolUse![0] as { matcher: string; hooks: { command: string }[] };
-    expect(post.matcher).toBe("run_command");
-    expect(post.hooks[0]!.command).toContain("--event PostToolUse");
+    expect(Object.keys(block.hide).sort()).toEqual(["PreInvocation", "PreToolUse", "SessionStart", "Stop"]);
     expect((block.hide.PreToolUse![0] as { matcher: string }).matcher).toBe("run_command|view_file|write_to_file|replace_file_content|multi_replace_file_content");
     // D-12: the stub goes where agy's model reads skills, never into the operator's antigravity-cli folder.
     await expect.poll(() => read(stubFile(home)), { timeout: 60_000 }).toContain("hide browser help");

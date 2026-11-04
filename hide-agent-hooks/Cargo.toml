@@ -16,7 +16,6 @@ base64 = "=0.23.1"
 hide-agent-adapter = { path = "../hide-agent-adapter" }
 # Hide AI's tool-free folder for agy, whose trust this crate records.
 hide-ai = { path = "../hide-ai" }
-hide-herdr-client = { path = "../hide-herdr-client" }
 hide-memory = { path = "../hide-memory" }
 hide-platform = { path = "../hide-platform" }
 hide-project = { path = "../hide-project" }

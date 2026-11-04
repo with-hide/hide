@@ -1,7 +1,7 @@
 //! Hide's command hooks for Grok and Antigravity, plus the ownership layouts
 //! retained only to remove retired agents' marked hooks.
 //!
-//! Grok carries its spawn guard, subagent count and letter routes, while
+//! Grok carries its opener guard, subagent count and letter routes, while
 //! Antigravity's session and invocation events can add context.
 //! Cursor is retired: no new hook is installed and an old entry runs nothing.
 //!
@@ -180,16 +180,6 @@ impl GuidanceAgent {
             // letters due while the agent works go at any call's gap (PRD
             // letters-to-busy-agents B6).
             Slot::new(HookEvent::PreToolUse, "PreToolUse", None),
-            Slot::new(
-                HookEvent::PostToolUse,
-                "PostToolUse",
-                Some("run_terminal_command|Bash"),
-            ),
-            Slot::new(
-                HookEvent::PostToolUseFailure,
-                "PostToolUseFailure",
-                Some("run_terminal_command|Bash"),
-            ),
             Slot::new(HookEvent::SubagentStart, "SubagentStart", None),
             Slot::new(HookEvent::SubagentStop, "SubagentStop", None),
             Slot::new(HookEvent::Stop, "Stop", None),
@@ -202,7 +192,6 @@ impl GuidanceAgent {
         const ANTIGRAVITY: &[Slot] = &[
             Slot::new(HookEvent::SessionStart, "SessionStart", None),
             Slot::new(HookEvent::UserPromptSubmit, "PreInvocation", None),
-            Slot::new(HookEvent::PostToolUse, "PostToolUse", Some("run_command")),
             Slot::new(
                 HookEvent::PreToolUse,
                 "PreToolUse",

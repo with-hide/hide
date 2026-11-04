@@ -219,16 +219,6 @@ impl ThreadPart {
     pub const ALL: [Self; 3] = [Self::Image, Self::FileChange, Self::CommandOutput];
 }
 
-/// Passive tool-result observation is an independent, required decision.
-/// The hook owner implements the selected dialect; unsupported agents must
-/// explain why no result can be observed rather than silently omitting it.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ObservationSupport {
-    Native(HookDialect),
-    Plugin(PluginDialect),
-    Unsupported { reason: &'static str },
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SessionFormat {
     Claude,
@@ -949,7 +939,6 @@ pub struct AgentAdapter {
     pub minimum: Option<MinimumVersion>,
     pub skill_location: SkillLocation,
     pub hook: HookInstall,
-    pub observation: ObservationSupport,
     pub guidance: Capability<ContextRoute>,
     pub herdr: HerdrIntegration,
     /// The variable that moves the agent's own folder away from
@@ -962,7 +951,11 @@ pub struct AgentAdapter {
     pub ai: Capability<AiProvider>,
     pub default_on: bool,
     pub prompt_hook: Option<PromptHook>,
-    pub spawn_guard: Option<HookDialect>,
+    /// The dialect in which the agent's `PreToolUse` hook refuses a call:
+    /// the guardrails, the plan record, the global-instruction guard and the
+    /// opener guard answer in it; `None` for an agent whose hook refuses
+    /// nothing.
+    pub guard: Option<HookDialect>,
     pub subagent_counts: Option<HookDialect>,
     /// Automatic model-context injection, not the Memory store or extraction.
     pub memory: Capability<ContextRoute>,
@@ -1062,8 +1055,6 @@ pub enum Feature {
     Letters,
     Bell,
     Memory,
-    SpawnGuard,
-    HerdrIntegration,
     Sleep,
     Fork,
     Start,
@@ -1071,14 +1062,12 @@ pub enum Feature {
 }
 
 impl Feature {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 9] = [
         Self::Skill,
         Self::Guidance,
         Self::Letters,
         Self::Bell,
         Self::Memory,
-        Self::SpawnGuard,
-        Self::HerdrIntegration,
         Self::Sleep,
         Self::Fork,
         Self::Start,
@@ -1099,12 +1088,11 @@ impl AgentAdapter {
 
     pub const fn supports(&self, feature: Feature) -> bool {
         match feature {
-            Feature::Skill | Feature::HerdrIntegration => true,
+            Feature::Skill => true,
             Feature::Guidance => self.guidance.is_some(),
             Feature::Letters => matches!(self.prompt_hook, Some(PromptHook { context: true, .. })),
             Feature::Bell => self.bell,
             Feature::Memory => self.memory.is_some(),
-            Feature::SpawnGuard => self.spawn_guard.is_some(),
             Feature::Sleep => self.sleep.is_some(),
             Feature::Fork => self.fork.is_some(),
             Feature::Start => self.start.is_some(),
@@ -1115,7 +1103,6 @@ impl AgentAdapter {
     }
 
     pub const fn basic(&self) -> bool {
-        !matches!(self.prompt_hook, Some(PromptHook { context: true, .. }))
-            || self.spawn_guard.is_none()
+        !matches!(self.prompt_hook, Some(PromptHook { context: true, .. })) || self.guard.is_none()
     }
 }

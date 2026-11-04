@@ -195,7 +195,6 @@ fn a_verified_download_is_reused_offline_and_corruption_is_repaired_before_uploa
     assert_eq!(holder.relative, HOLDER);
     assert!(holder.executable);
     assert!(first.missing.is_empty());
-    assert!(first.herdr.is_none());
     assert_eq!(server.hits(), 1);
     let (second, _) = load(
         &manifest,

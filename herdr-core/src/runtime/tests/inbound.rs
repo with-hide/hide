@@ -1111,7 +1111,6 @@ fn machine_kit(cli: hide_kit::ComponentState) -> hide_kit::KitReport {
             location: None,
         },
         hook: None,
-        herdr: None,
         update: None,
         doc_url: String::new(),
     }];
@@ -1144,7 +1143,7 @@ fn a_node_that_dials_in_has_its_kit_kept_through_its_link() {
     });
     assert_eq!(
         node.calls(),
-        [(KitAction::Apply, "/private/fixture-bin".to_owned(), None)]
+        [(KitAction::Apply, "/private/fixture-bin".to_owned())]
     );
     let kit = kit_row(&shared.lock().unwrap(), NODE);
     assert_eq!(kit.unavailable, None);
@@ -1216,7 +1215,6 @@ fn a_moved_core_reads_its_own_kit_and_its_node_s_and_each_read_ends() {
         shared.weak(),
         crate::handle::ChangeNotifier::noop(),
         Arc::clone(&own_node) as Arc<dyn crate::node_access::NodeLink>,
-        None,
         own.clone(),
     )
     .unwrap();

@@ -122,9 +122,8 @@ impl Machine {
                 command.env_remove(key);
             }
         }
-        command.env("HERDR_SOCKET_PATH", self.root.join("no-herdr.sock"));
         if let Some(pane) = pane {
-            command.env("HERDR_PANE_ID", pane);
+            command.env("HIDE_PANE_ID", pane);
         }
         let mut child = OwnedChild::spawn(&mut command).unwrap();
         let output = child

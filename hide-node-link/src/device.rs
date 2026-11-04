@@ -669,9 +669,6 @@ pub enum SshProblem {
     ProxyFailed,
     /// The machine is not one Hide can run on.
     Unsupported,
-    /// The machine's system connects only on the core's own engine, which
-    /// this core does not run; nothing was installed there.
-    NeedsNewEngine,
     /// This computer has no `ssh` program.
     SshMissing,
     /// This computer's OpenSSH is older than 8.4, which cannot hand Hide a
@@ -697,7 +694,6 @@ impl SshProblem {
             Self::Unreachable => "unreachable",
             Self::ProxyFailed => "proxy_failed",
             Self::Unsupported => "unsupported",
-            Self::NeedsNewEngine => "needs_new_engine",
             Self::SshMissing => "ssh_missing",
             Self::OpenSshOld => "openssh_old",
             Self::HideUpdated => "hide_updated",
@@ -731,7 +727,6 @@ impl SshProblem {
             | Self::Unreachable
             | Self::ProxyFailed
             | Self::Unsupported
-            | Self::NeedsNewEngine
             | Self::SshMissing
             | Self::OpenSshOld
             | Self::Unclassified => FailureAction::Retry,
@@ -785,9 +780,6 @@ pub enum EstablishError {
     },
     /// This build cannot serve the device; nothing was installed.
     Unsupported(String),
-    /// The device's system connects only on the core's own engine, which
-    /// this core does not run; nothing was installed.
-    NeedsNewEngine(String),
     /// Acquiring the release kit for a known foreign platform failed.
     Download {
         os: String,
@@ -811,7 +803,6 @@ impl fmt::Display for EstablishError {
             ),
             Self::Stopped(reason)
             | Self::Unsupported(reason)
-            | Self::NeedsNewEngine(reason)
             | Self::Install(reason)
             | Self::Helper(reason) => formatter.write_str(reason),
             Self::Download { reason, .. } => formatter.write_str(reason),

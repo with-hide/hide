@@ -183,31 +183,25 @@ Their command, walk and storage bounds remain in the feature cost contracts belo
 Agent registration and spawn records share the durable delivery worker: 2,048 agent records, 4,096 spawn intents, 128 native arguments totaling 8 KiB, the 16 MiB ledger bound and a 64-slot admitted-operation queue.
 The shared `BackgroundRead` has one in-flight request and observes the latest desired request at its next poll; only owners that explicitly cancel and call `join_pending` obtain that shutdown guarantee (`reader.rs`, `session_sync/process_info.rs`).
 
-## The spawn guard hook on a shell call
+## The opener guard hook on a shell call
 
-The `Bash` branch of the `PreToolUse` matcher runs `hide-agent-hooks` before every shell call a Claude Code or Codex agent makes, so it is a high-frequency path that every agent pays and no operator sees (PRD herdr-spawn-guard B13).
-Per input it adds one process start: the helper reads the payload (at most 256 KiB, waiting at most 0.5 seconds), runs a byte test for `herdr` or `HERDR_BIN_PATH` over the whole payload (its `cwd` and transcript path too, so under a checkout whose path contains `herdr` every call also pays the JSON parse and the lexer, microseconds that start nothing), and exits with no output when neither is there, before it parses JSON or starts a child; the [project guardrails](#the-guardrails-on-a-pre-tool-call) read their policy file first.
-A call that mentions `herdr` without launching an agent (`pane split`, `agent list`) pays one JSON parse and the shell lexer, and still starts nothing.
-Only a launch in a Herdr pane starts a child: one `hide workspace bootstrap`, owned through `hide_platform::process` with the guard's 2.5 second deadline, a 16 KiB output cap, and an end of the child on success, failure and timeout alike.
-The guard keeps no state, runs no timer or worker, takes no lock of the runtime, publishes nothing and fans out no notification; the daemon sees one `bootstrap` request per refused launch, the call `SessionStart` already makes.
-The retained data is the refusal log, capped at 256 KiB with one rotation, and the throttled diagnostic store `delivery` already caps; crossing a cap rotates or suppresses, and never refuses a call.
+The `PreToolUse` entry runs `hide-agent-hooks` before every shell call a Claude Code or Codex agent makes, so it is a high-frequency path that every agent pays and no operator sees.
+Per input it adds one process start: the helper reads the payload (at most 256 KiB, waiting at most 0.5 seconds) and runs a byte test over the whole payload for a word of an opener and a viewable mark ([agent-hooks.md](agent-hooks.md#the-opener-guard)), and exits with no output when either is missing, before it parses JSON or starts a child; the [project guardrails](#the-guardrails-on-a-pre-tool-call) read their policy file first.
+A call that holds both, which includes an ordinary call whose payload mentions `open` and a `.md` file, pays one JSON parse and the shell lexer and starts nothing.
+Only an opener of a viewable target in a Hide pane starts a child: one `hide workspace bootstrap`, owned through `hide_platform::process` with the guard's 2.5 second deadline, a 16 KiB output cap, and an end of the child on success, failure and timeout alike.
+The guard keeps no state, runs no timer or worker, takes no lock of the runtime, publishes nothing and fans out no notification; the daemon sees one `bootstrap` request per refused call, the call `SessionStart` already makes.
+The retained data is the hooks' log, capped at 256 KiB with one rotation, holding one `opener.refused` line per refusal, and the throttled diagnostic store `delivery` already caps; crossing a cap rotates or suppresses, and never refuses a call.
 A defect, a missing `hide` or a daemon that does not answer lets the shell call run, so the worst the guard can add to an ordinary call is its own bounded wait, never a refusal.
 
 Measure it at the command boundary: the installed command line run as the runtime runs it (`sh -c`, the payload on stdin), wall time per call from the caller's side, against a process-spawn baseline, with the first calls discarded as warm-up (ten, and five for the real `hide` row).
-Report p50, p95 and the load average before and after, and report the idle and driven (launch) paths separately.
+Report p50, p95 and the load average before and after, and report the idle and driven (refusal) paths separately.
 Time the exact installed command through `sh -c` with the payload on stdin and retain the bounded measurement script and raw observations in the run directory.
 Keep the command/binary hash, OS, load, sample count, warm-up exclusions, failures and path classification with the result.
-The ordinary shell-call, Herdr-mention, stand-in refusal and real-daemon refusal rows are separate workloads.
+The ordinary shell-call, byte-test-only, stand-in refusal and real-daemon refusal rows are separate workloads.
 Helper return time does not prove the agent's time to first token or its runtime's hook scheduling latency.
 Observe the actual supported runtimes separately when claiming native behavior.
-Regression owners are `hide-agent-hooks/tests/it/spawn_guard.rs` (nothing spawned for a payload without `herdr`, a slow `hide` stays under the budget) and the parser tests in `src/spawn_guard.rs` (the parser is `hide-shell`).
-
-The [opener guard](agent-hooks.md#the-opener-guard) rides the same hook and adds a second byte test in the same pass, so the per-input work is unchanged for a call that names no opener word or no viewable mark: no JSON parse, no lexer and no child.
-A call that holds both, which includes an ordinary call whose payload mentions `open` and a `.md` file, pays one JSON parse and the lexer and starts nothing; only an opener of a viewable target asks `hide workspace bootstrap`, the spawn guard's one bounded child, and only once per refused call.
-It adds no state, timer, lock, notification or retained data beyond one `opener.refused` line in the spawn guard's capped log.
 Measured on 2026-10-30 (macOS 15.1, debug build, load average 22 before and 21 after, so the scheduler dominates; 10 warm-up and 100 timed calls per row through `sh -c` with the payload on stdin): `/usr/bin/true` p50 14.4 ms and p95 20.2 ms, an ordinary call 20.1 and 31.5, a call that passes the byte test and holds no opener 19.1 and 33.1, and an opener refused through a stand-in `hide` 33.8 and 51.2.
 Regression owners are `hide-agent-hooks/tests/it/opener_guard.rs` (no `hide` started for a call that is not an opening) and the reading's table tests in `src/opener_guard.rs`.
-
 
 ## Letters at a tool event
 
@@ -226,37 +220,21 @@ This shell runs only for that event; it adds no resident worker, timer, retained
 agy owns the command's existing eight-second timeout; this wrapper adds no separate descendant-cancellation guarantee.
 Measure its cold call and warmed caller-side p50, p95 and maximum against a cmd command that actually runs the same helper, reporting the old escaped command's skipped helper separately rather than counting that skipped work as a working baseline.
 Claude Code and Codex start no tool-letter helper: their letters are typed by the doorbell, on its own thread, as at rest.
-Their passive Post helper cost is recorded separately below.
 Nothing here keeps state, runs a timer or publishes; the retained data is the throttled delivery diagnostic.
 
-Measure it at the command boundary as the spawn guard is measured: the helper's `letters` operation with its JSON on stdin, and the hook with each agent's documented tool payload, against a real daemon that holds no letter for the pane, wall time per call from the caller's side with the first calls discarded as warm-up, p50 and p95, the load average before and after; that is the cost per tool call, since every call asks.
+Measure it at the command boundary as the opener guard is measured: the helper's `letters` operation with its JSON on stdin, and the hook with each agent's documented tool payload, against a real daemon that holds no letter for the pane, wall time per call from the caller's side with the first calls discarded as warm-up, p50 and p95, the load average before and after; that is the cost per tool call, since every call asks.
 The PRD that landed it set no bar (D-12); the figures measured on macOS are in the pull request that landed it, and a later change to this path reports its own.
 Regression owners are `hide-agent-hooks/tests/opencode/plugin.test.mjs` and `tests/pi-extension/extension.test.mjs` (no ask while a handover waits for its receipt, a late helper leaves the result unchanged) and `tests/it/grok_cursor_hooks.rs` (nothing asked outside a pane or without a session).
 
-## Passive Post observations
-
-Claude Code, Codex, Grok and Antigravity add one native helper start per selected shell Post event; their ordinary result pays the bounded input read and local JSON/command filter, with no observation CLI child.
-OpenCode 1/2 and Pi/omp filter the actual shell command inside the existing result handler before starting an observation helper.
-Only a recognized direct prompt or agent start starts an owned sibling `hide observation --hook` (and, for starts, one more with `--start`), carrying one array of at most 64 observations of at most 8 KiB each within one shared 1.2-second send budget; the child asks the daemon once per observation.
-The helper transiently bounds command text to 64 KiB and result text to 128 KiB, discards both after parsing, and never resends the original prompt.
-No observation adds a Pre RPC, spool, timer, polling thread or detached process.
-Plugin/extension helpers share the existing eight-child admission cap, 1.5-second outer budget and shutdown cleanup; saturated helpers report a bounded lost diagnostic and preserve the tool result.
-Native hooks share the 256 KiB input cap and 500 ms input deadline, and always print no permission or replacement result.
-The existing proof-bound daemon admission owns freshness and endpoint validation, and the existing links worker owns metadata storage; their queue, TTL and storage limits are described with the admission implementation.
-No runtime mutex is acquired by this parser and it publishes no notification itself.
-Measure ordinary Post startup, the existing ordinary Pre path and a matched candidate separately through their installed `sh -c` command, with the same payload size, process baseline, warm-up exclusions and caller-side p50/p95 methodology above.
-A stand-in observation CLI measures local parsing and owned child transport only, not native provider scheduling or real proof admission.
-Regression owners are `observation.rs` and the OpenCode and Pi/omp result fixtures; native provider event emission remains a separate observed result.
-
 ## The guardrails on a pre-tool call
 
-The project guardrails run in the same helper, before the spawn guard, on every shell call and, from matcher version eight, on every file tool call of Claude Code, Codex, Grok and Cursor (PRD agent-guardrails B27, [agent-hooks.md](agent-hooks.md#project-guardrails)); a file call that started no helper before now starts one.
-Per input they add one read of the policy file (at most 8 MiB, a few hundred bytes in practice), in any agent session, a Herdr pane or not, and, when no project of the machine has a protection on, nothing more: no JSON parse of the payload, no Git read, no child.
+The project guardrails run in the same helper, before the opener guard, on every shell call and, from matcher version eight, on every file tool call of Claude Code, Codex, Grok and Cursor (PRD agent-guardrails B27, [agent-hooks.md](agent-hooks.md#project-guardrails)); a file call that started no helper before now starts one.
+Per input they add one read of the policy file (at most 8 MiB, a few hundred bytes in practice), in any agent session, a Hide pane or not, and, when no project of the machine has a protection on, nothing more: no JSON parse of the payload, no Git read, no child.
 With a protection on, the call pays one JSON parse, the shell lexer for a shell call, and reads of the repository's own files (`hide_project::git`, no process) for each path it names; only a command that would discard changes starts `git --no-optional-locks status`, once per checkout and call, owned through `hide_platform::process` with a 2 second budget and a 4 KiB output cap; at most 512 words of one shell call are matched against the protected paths.
 OpenCode's plugin and the Pi and omp extension read the policy in their own process, again when its file changes, and start no helper for a file tool while nothing is on.
 The guardrails keep no state, run no timer or worker and publish nothing; the retained data is the shared refusal log and one `policy.unreadable` line per ten minutes.
 
-Measure it as the spawn guard is measured, with the helper's own CPU time (`getrusage` of the child) beside wall time, because on a loaded machine wall time measures the scheduler: each runtime's file call and shell call, under an empty policy and under a policy whose only project is elsewhere, against `/usr/bin/true` measured the same way.
+Measure it as the opener guard is measured, with the helper's own CPU time (`getrusage` of the child) beside wall time, because on a loaded machine wall time measures the scheduler: each runtime's file call and shell call, under an empty policy and under a policy whose only project is elsewhere, against `/usr/bin/true` measured the same way.
 B27's bar is the no-protection call's p95 at or under 15 ms on macOS; report the load average with it, and treat a run whose `/usr/bin/true` p95 is above that bar as not measuring the helper.
 
 ## Resident work cost review

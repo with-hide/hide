@@ -252,7 +252,6 @@ fn load(
         // on a downloading system without Unix mode bits.
         let mut payload = Payload {
             files: Vec::new(),
-            herdr: None,
             missing: Vec::new(),
         };
         let mut holder = None;

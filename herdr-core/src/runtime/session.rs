@@ -2066,17 +2066,6 @@ impl Runtime {
         // The machine answers again: its helper link does not wait out a
         // retry that doubled while it was away.
         let reachable_again = session_ok && !was_connected;
-        // The row's line holds only while the server it is about still
-        // answers with the release it was left on: a server restarted on
-        // another release ends it without waiting for the next kit pass (B8).
-        if let Some(live) = live_herdr_version.as_deref()
-            && self
-                .device_herdr_behind
-                .get(target_id)
-                .is_some_and(|behind| behind.server_version != live)
-        {
-            self.device_herdr_behind.remove(target_id);
-        }
         let herdr_version = live_herdr_version.or_else(|| {
             self.remote_connections
                 .get(target_id)

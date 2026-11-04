@@ -71,7 +71,7 @@ impl Machine {
             .args(["--source", "hide-subagents@6"])
             .env(hide_platform::host::HOME_VARIABLE, &self.home)
             .env("PATH", &self.home)
-            .env("HERDR_PANE_ID", PANE)
+            .env("HIDE_PANE_ID", PANE)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -80,7 +80,7 @@ impl Machine {
             if ["HERDR_", "HIDE_", "HCOORD_", "CURSOR_", "OPENCODE", "GROK_"]
                 .iter()
                 .any(|prefix| name.starts_with(prefix))
-                && name != "HERDR_PANE_ID"
+                && name != "HIDE_PANE_ID"
             {
                 command.env_remove(key);
             }

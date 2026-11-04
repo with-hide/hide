@@ -103,7 +103,6 @@ fn remote_session_sync_reconciles_target_scoped_structured_terminals() {
         kit: Default::default(),
         machine_name: None,
         dials_in: false,
-        herdr_behind: None,
     });
     runtime.snapshot.status.remote.push(RemoteStatusSnapshot {
         target_id: "mini".to_owned(),
@@ -560,7 +559,6 @@ fn switch_on(runtime: &mut Runtime, ids: &[&str]) {
                 chosen: false,
                 skill: piece.clone(),
                 hook: None,
-                herdr: None,
                 partial: false,
                 features: Vec::new(),
                 sessions: None,

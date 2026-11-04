@@ -414,7 +414,7 @@ fn the_helper_starts_on_the_same_pipes_with_the_chosen_herdr() {
         None,
     )
     .unwrap();
-    assert_eq!(pipe.line(soon()).unwrap(), b"args:node serve --own-herdr");
+    assert_eq!(pipe.line(soon()).unwrap(), b"args:node serve");
     assert_eq!(pipe.line(soon()).unwrap(), b"session:work socket:");
     let home = std::fs::canonicalize(device.home()).unwrap();
     assert_eq!(

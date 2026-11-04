@@ -156,7 +156,7 @@ test("Grok's switch installs only its owned file while retired Cursor has no swi
     await switchOf("grok", "off").click();
     await expect(switchOf("grok", "on")).toBeVisible();
     await expect.poll(() => read(grokFile(home)), { timeout: 60_000 }).toContain(capturedState(daemon));
-    expect(Object.keys(json<Grouped>(grokFile(home)).hooks).sort()).toEqual(["PostToolUse", "PostToolUseFailure", "PreToolUse", "SessionStart", "Stop", "SubagentStart", "SubagentStop", "UserPromptSubmit"]);
+    expect(Object.keys(json<Grouped>(grokFile(home)).hooks).sort()).toEqual(["PreToolUse", "SessionStart", "Stop", "SubagentStart", "SubagentStop", "UserPromptSubmit"]);
     expect(json<Grouped>(grokFile(home)).hooks.UserPromptSubmit![0]!.matcher).toBeUndefined();
     expect(installed.grok(home, "UserPromptSubmit")).toContain("--event UserPromptSubmit");
     // B6 (letters-to-busy-agents): the tool hook carries no matcher, so every tool call is a gap a due letter goes at.
@@ -172,7 +172,7 @@ test("Grok's switch installs only its owned file while retired Cursor has no swi
     await expect(list.locator("[data-agent-problem]")).toHaveCount(0);
     await list.locator('[data-agent-partial="grok"]').click();
     const popover = page.locator('[data-agent-partial-popover="grok"]');
-    for (const feature of ["spawn_guard:yes", "letters:no", "bell:yes", "memory:no"]) await expect(popover.locator(`[data-agent-feature="${feature}"]`)).toBeVisible();
+    for (const feature of ["letters:no", "bell:yes", "memory:no"]) await expect(popover.locator(`[data-agent-feature="${feature}"]`)).toBeVisible();
     await screenshot(page, "grok-cursor-hooks-on");
     await page.keyboard.press("Escape");
 

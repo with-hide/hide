@@ -104,11 +104,6 @@ pub enum CommandKind {
     },
     WorkspaceInfo,
     WorkspaceHookInfo,
-    /// Private post-tool transport. Its bounded metadata is read from stdin:
-    /// one observation per recipient, or per started agent with `--start`.
-    ObservationHook {
-        start: bool,
-    },
     /// Private hook transport: one agent hook's report on its pane's agent
     /// (`HookStatusReport` as JSON on stdin), proven like every hook request.
     StatusHook,
@@ -210,7 +205,7 @@ fn topic_usage(topic: &str) -> Option<String> {
 
 /// `hide --help`: the commands a person types, then the ones an agent in a
 /// Hide pane uses. The host's and the hooks' own commands (`connect`,
-/// `serve`, `dev`, `runtime prepare`, `observation`, `workspace bootstrap`,
+/// `serve`, `dev`, `runtime prepare`, `workspace bootstrap`,
 /// `workspace memory`) are not listed.
 fn help_text() -> String {
     let indent =
@@ -425,13 +420,6 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
                 .map_err(|reason| wrong(reason, crate::delivery_cli::USAGE))
         }
         Some("browser") => parse_browser(iter),
-        Some("observation") => match (iter.next().map(String::as_str), iter.next()) {
-            (Some("--hook"), None) => Ok(CommandKind::ObservationHook { start: false }),
-            (Some("--hook"), Some(flag)) if flag == "--start" && iter.next().is_none() => {
-                Ok(CommandKind::ObservationHook { start: true })
-            }
-            _ => Err("usage: hide observation --hook [--start]".into()),
-        },
         Some("workspace") => match iter.next().map(String::as_str) {
             Some("memory") => {
                 let words: Vec<&str> = iter.map(String::as_str).collect();
@@ -841,7 +829,6 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
                     | CommandKind::WorkspaceRemove(_)
                     | CommandKind::WorkspaceInfo
                     | CommandKind::WorkspaceHookInfo
-                    | CommandKind::ObservationHook { .. }
                     | CommandKind::StatusHook
                     | CommandKind::ViewList { .. }
                     | CommandKind::ViewStatus { .. }
@@ -960,55 +947,6 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
                     .as_str()
                     .unwrap_or("status_unavailable")
                     .to_owned())
-            }
-        }
-        CommandKind::ObservationHook { start } => {
-            use hide_node_link::panes::{
-                HookCommand, OBSERVATION_ITEM_LIMIT, OBSERVATION_RECIPIENT_LIMIT,
-            };
-            use std::io::Read;
-            // One item per recipient, each already bounded; the array adds
-            // its brackets and commas.
-            let limit = (OBSERVATION_ITEM_LIMIT + 1) * OBSERVATION_RECIPIENT_LIMIT + 2;
-            let mut bytes = Vec::new();
-            std::io::stdin()
-                .lock()
-                .take((limit + 1) as u64)
-                .read_to_end(&mut bytes)
-                .map_err(|_| "observation_input_unavailable")?;
-            if bytes.len() > limit {
-                return Err("observation_input_too_large".into());
-            }
-            let observations: Vec<hide_node_link::panes::DirectObservation> =
-                serde_json::from_slice(&bytes).map_err(|_| "observation_input_invalid")?;
-            if observations.is_empty() || observations.len() > OBSERVATION_RECIPIENT_LIMIT {
-                return Err("observation_input_invalid".into());
-            }
-            // Each recipient is proven and recorded on its own; one refusal
-            // does not withhold the others.
-            let mut refusal = None;
-            for observation in observations {
-                let command = if start {
-                    HookCommand::StartObservation { observation }
-                } else {
-                    HookCommand::Observation { observation }
-                };
-                let answer = crate::workspace_cli::request_hook(&env, command)?;
-                if answer["ok"] != true && refusal.is_none() {
-                    refusal = Some(answer);
-                }
-            }
-            let answer = refusal.unwrap_or_else(|| {
-                serde_json::json!({"type":"workspace_result","ok":true,"result":{"queued":true}})
-            });
-            println!("{answer}");
-            if answer["ok"] == true {
-                Ok(())
-            } else {
-                Err(answer["reason"]
-                    .as_str()
-                    .unwrap_or("observation_unavailable")
-                    .into())
             }
         }
         CommandKind::WorkspaceMemory {
@@ -1859,12 +1797,7 @@ impl ConnectError {
 /// installed app's daemon is the operator's. A daemon that will not stop
 /// is a start failure. Only the daemon of this state folder is looked at,
 /// so a dev or e2e daemon elsewhere is never replaced, and stopping it
-/// leaves Herdr, its panes and their agents running.
-///
-/// The app's own `hide` first moves a Herdr server another Hide app
-/// started onto this app's Herdr, its panes kept
-/// ([`crate::herdr_handoff`]), so the daemon follows a server of the same
-/// app.
+/// leaves the pane holders, their panes and their agents running.
 ///
 /// The whole look-and-replace holds this state folder's connect lock, so
 /// two connects never both stop a daemon and start their own.

@@ -8,18 +8,17 @@ import type { NotificationPermission } from "./host";
 import { FIRST_RUN_VERSION, type AgentUpdate, type AiProvider, type FirstRunStep, type HerdrProfiles, type Kit, type KitAgent, type KitPiece, type KitWhy, type SnapshotRest } from "./snapshot";
 
 /** The desktop route includes saved devices; a browser tab has its first step alone. */
-export type WizardStep = Exclude<FirstRunStep, "done">;
+/** A Herdr step an earlier version saved opens as the agent step (`firstRunStep`). */
+export type WizardStep = Exclude<FirstRunStep, "done" | "herdr">;
 
 /**
  * Failed or unread discovery has its own retry step; only a complete read that found nothing skips it, so a list cut
- * at a bound keeps the step (the core's `first_run_has_devices` holds the same rule). Moving the operator's
- * older Herdr comes first, and only while there is one to move (PRD herdr-takeover B1, B17).
+ * at a bound keeps the step (the core's `first_run_has_devices` holds the same rule).
  */
-export function wizardSteps(profiles: HerdrProfiles | undefined, herdr = false): readonly WizardStep[] {
-  const rest: readonly WizardStep[] = profiles?.state === "ready" && profiles.profiles.length === 0 && !profiles.truncated
+export function wizardSteps(profiles: HerdrProfiles | undefined): readonly WizardStep[] {
+  return profiles?.state === "ready" && profiles.profiles.length === 0 && !profiles.truncated
     ? ["agents", "notifications", "project"]
     : ["agents", "devices", "notifications", "project"];
-  return herdr ? ["herdr", ...rest] : rest;
 }
 
 /**
@@ -31,9 +30,12 @@ export function wizardSteps(profiles: HerdrProfiles | undefined, herdr = false):
 export function firstRunStep(rest: SnapshotRest | null, desktop: boolean): WizardStep | null {
   const run = rest?.ui_state?.first_run;
   if (!run || run.version !== FIRST_RUN_VERSION || run.step === "done") return null;
-  // A browser tab's wizard is the agent step alone; its Continue leaves a Herdr step unanswered (PRD herdr-takeover D-24).
-  if (!desktop) return run.step === "agents" || run.step === "herdr" ? "agents" : null;
-  return run.step;
+  // The Herdr step an earlier version saved is the agent step now: Hide runs no Herdr to move (PRD
+  // engine-bundle-4-herdr-removal D-2).
+  const step = run.step === "herdr" ? "agents" : run.step;
+  // A browser tab's wizard is the agent step alone.
+  if (!desktop) return step === "agents" ? "agents" : null;
+  return step;
 }
 
 /** The agents whose sign-in Hide checks (D-06); the others can only say they are installed. */
@@ -97,7 +99,7 @@ export function whatChanges(agents: readonly KitAgent[], on: ReadonlySet<string>
   const rows: ChangeRow[] = [];
   for (const agent of agents) {
     if (!on.has(agent.id)) continue;
-    const pieces: (KitPiece | null | undefined)[] = [agent.hook, agent.skill, agent.herdr];
+    const pieces: (KitPiece | null | undefined)[] = [agent.hook, agent.skill];
     for (const piece of pieces) {
       if (!piece || piece.state === "absent" || !piece.location) continue;
       const path = underHome(piece.location, home);
@@ -118,7 +120,7 @@ export function failedAgents(agents: readonly KitAgent[], chosen: readonly strin
   return agents.flatMap((agent) => {
     if (!agent.enabled || !chosen.includes(agent.id)) return [];
     // A piece refused because the copy is too old is not a failure Try again fixes; the update installs it.
-    const failed = [agent.hook, agent.skill, agent.herdr ?? null].find((piece) => piece?.state === "failed" && piece.why?.cause !== "update_agent");
+    const failed = [agent.hook, agent.skill].find((piece) => piece?.state === "failed" && piece.why?.cause !== "update_agent");
     return failed ? [{ id: agent.id, label: agent.label, why: failed.why ?? null }] : [];
   });
 }

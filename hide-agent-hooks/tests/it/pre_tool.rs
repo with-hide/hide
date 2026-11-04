@@ -1,10 +1,11 @@
-//! The spawn guard (PRD herdr-spawn-guard B1, B2, B4 to B7, B11 to B13), run as
-//! an agent runs it: the compiled helper with a runtime's `PreToolUse` payload
-//! on stdin, beside a stand-in `hide` that answers `workspace bootstrap` the way
-//! the daemon does (registered, refused, not running, or not answering) and
-//! records every call. What it proves is what the agent observes: the call is
-//! refused with the filled `hide agent spawn` command, or nothing is printed and
-//! the call runs.
+//! What every `PreToolUse` guard shares (`hide_agent_hooks::pre_tool`), run
+//! as an agent runs it: the compiled helper with a runtime's `PreToolUse`
+//! payload on stdin, beside a stand-in `hide` that answers `workspace
+//! bootstrap` the way the daemon does (registered, refused, not running, or
+//! not answering) and records every call. The opener guard is the guard that
+//! asks the daemon, so its call drives these; what they prove is what the
+//! agent observes: the call is refused, or nothing is printed and the call
+//! runs.
 
 #![cfg(unix)]
 
@@ -191,7 +192,7 @@ impl Machine {
             }
         }
         if let Some(pane) = pane {
-            command.env("HERDR_PANE_ID", pane);
+            command.env("HIDE_PANE_ID", pane);
         }
         command.envs(extra.iter().copied());
         let started = Instant::now();
@@ -255,7 +256,8 @@ impl Machine {
     }
 }
 
-pub(crate) const START: &str = "herdr agent start set-g --kind claude --pane w1:p9 -- --model opus";
+/// A shell call the opener guard asks the daemon about.
+pub(crate) const OPENER: &str = "open https://example.com/report";
 
 #[test]
 fn questions_without_native_identity_or_from_another_runtime_never_query() {
@@ -293,113 +295,18 @@ fn questions_without_native_identity_or_from_another_runtime_never_query() {
 }
 
 #[test]
-fn a_launch_in_a_registered_checkout_is_refused_with_the_command_to_use_instead() {
-    for runtime in ["claude-code", "codex"] {
-        let machine = Machine::new("registered");
-        let run = machine.run(runtime, &machine.payload(START), Some(PANE), &[]);
-
-        assert!(run.status_ok, "a refusal is an answer, not a failure");
-        let reason = machine.reason(&run);
-        // B1: the name, kind, repository and current branch filled, the intent left.
-        let repo = machine.checkout.display();
-        assert!(
-            reason.contains(&format!(
-                "hide agent spawn --parent here --name set-g --intent <intent> --kind claude --repo {repo} --branch topic -- --model opus"
-            )),
-            "{runtime}: {reason}"
-        );
-        assert!(reason.contains(&format!(
-            "hide agent spawn --name set-g --intent <intent> --kind claude --repo {repo} --branch topic -- --model opus"
-        )), "{runtime}: {reason}");
-        assert!(reason.contains("root agent, no automatic watch"));
-        assert_eq!(machine.calls(), ["workspace bootstrap"], "{runtime}");
-        // B12: the pane, the kind and the shape are logged, the command is not.
-        let log = machine.guard_log();
-        assert!(
-            log.contains(PANE)
-                && log.contains("\"agent\":\"claude\"")
-                && log.contains("agent_start"),
-            "{log}"
-        );
-        assert!(!log.contains("set-g") && !log.contains("--model"), "{log}");
-    }
-}
-
-#[test]
-fn a_pane_run_or_send_text_launch_leaves_the_name_and_intent_for_the_agent() {
-    let machine = Machine::new("registered");
-    for command in [
-        "herdr pane run w1:p9 codex --model gpt-6 'fix it'",
-        "cd /tmp && herdr pane send-text w1:p9 'codex --model gpt-6 \"fix it\"'",
-    ] {
-        let run = machine.run("codex", &machine.payload(command), Some(PANE), &[]);
-        let reason = machine.reason(&run);
-        assert!(
-            reason.contains("--name <name> --intent <intent> --kind codex"),
-            "{command}: {reason}"
-        );
-        assert!(
-            reason.contains(" --branch topic -- --model gpt-6"),
-            "{reason}"
-        );
-    }
-}
-
-#[test]
-fn what_is_not_a_launch_runs_and_never_asks_the_daemon() {
-    let machine = Machine::new("registered");
-    for command in [
-        "cargo test -p hide-agent-hooks",
-        "herdr pane split w1:p9 --direction right",
-        "herdr tab create --workspace w1",
-        "herdr pane run w1:p9 'npm run dev'",
-        "git commit -m 'herdr agent start a --kind claude --pane p'",
-    ] {
-        let run = machine.run("claude-code", &machine.payload(command), Some(PANE), &[]);
-        assert!(run.status_ok);
-        assert_eq!(run.stdout, "", "{command}");
-    }
-    // B13: not even a process for `hide` was started for any of them.
-    assert!(machine.calls().is_empty(), "{:?}", machine.calls());
-    assert!(machine.status_reports().is_empty());
-    assert_eq!(machine.guard_log(), "");
-}
-
-#[test]
-fn outside_a_registered_checkout_or_a_herdr_pane_the_same_command_runs() {
-    let machine = Machine::new("unregistered");
-    let refused = machine.run("claude-code", &machine.payload(START), Some(PANE), &[]);
-    assert!(refused.status_ok);
-    assert_eq!(
-        refused.stdout, "",
-        "B5: the daemon does not know this checkout"
-    );
-    assert_eq!(
-        refused.stderr, "",
-        "a refusal by the daemon is not a diagnostic"
-    );
-    assert_eq!(machine.calls(), ["workspace bootstrap"]);
-
-    let machine = Machine::new("registered");
-    let plain = machine.run("claude-code", &machine.payload(START), None, &[]);
-    assert!(plain.status_ok);
-    assert_eq!(plain.stdout, "", "B5: a plain terminal has no pane");
-    assert!(machine.calls().is_empty());
-}
-
-#[test]
 fn a_daemon_that_cannot_be_asked_lets_the_call_run_and_leaves_one_diagnostic() {
     // A daemon that is down, mute, a device bridge that is gone and a reason this
     // build does not know are all "could not ask", never "not Hide's".
     for daemon in ["down", "mute", "bridge", "later"] {
         let machine = Machine::new(daemon);
-        let first = machine.run("claude-code", &machine.payload(START), Some(PANE), &[]);
+        let first = machine.run("claude-code", &machine.payload(OPENER), Some(PANE), &[]);
         assert!(first.status_ok, "B6: the hook does not fail the call");
         assert_eq!(first.stdout, "", "nothing on screen");
         assert_eq!(first.stderr, "", "nothing on the hook's stderr either");
         // The diagnostic is one line of the guard's log, and a repeat within the
         // throttle window adds none.
-        let second = machine.run("codex", &machine.payload(START), Some(PANE), &[]);
+        let second = machine.run("codex", &machine.payload(OPENER), Some(PANE), &[]);
         assert_eq!(second.stdout, "");
         assert_eq!(second.stderr, "");
         let log = machine.guard_log();
@@ -414,7 +321,7 @@ fn a_daemon_that_cannot_be_asked_lets_the_call_run_and_leaves_one_diagnostic() {
 #[test]
 fn a_daemon_that_does_not_answer_in_time_lets_the_call_run() {
     let machine = Machine::new("slow");
-    let run = machine.run("claude-code", &machine.payload(START), Some(PANE), &[]);
+    let run = machine.run("claude-code", &machine.payload(OPENER), Some(PANE), &[]);
     assert!(run.status_ok);
     assert_eq!(run.stdout, "");
     assert!(
@@ -437,7 +344,7 @@ fn inside_another_agents_session_the_guard_stays_out() {
         &[("CURSOR_VERSION", "1")][..],
     ] {
         let machine = Machine::new("registered");
-        let run = machine.run("claude-code", &machine.payload(START), Some(PANE), origin);
+        let run = machine.run("claude-code", &machine.payload(OPENER), Some(PANE), origin);
         assert!(run.status_ok);
         assert_eq!(run.stdout, "", "{origin:?}");
         assert!(machine.calls().is_empty(), "{origin:?}");
@@ -448,9 +355,9 @@ fn inside_another_agents_session_the_guard_stays_out() {
 fn a_payload_the_guard_cannot_read_lets_the_call_run() {
     let machine = Machine::new("registered");
     for payload in [
-        "herdr agent start but not json",
-        &serde_json::json!({"tool_name": "Edit", "tool_input": {"command": START}}).to_string(),
-        &serde_json::json!({"tool_name": "Bash", "tool_input": {"command": ["herdr", "agent", "start"]}}).to_string(),
+        "open https://example.com/report but not json",
+        &serde_json::json!({"tool_name": "Edit", "tool_input": {"command": OPENER}}).to_string(),
+        &serde_json::json!({"tool_name": "Bash", "tool_input": {"command": ["open", "https://example.com/report"]}}).to_string(),
         "",
     ] {
         let run = machine.run("claude-code", payload, Some(PANE), &[]);
@@ -458,18 +365,6 @@ fn a_payload_the_guard_cannot_read_lets_the_call_run() {
         assert_eq!(run.stdout, "", "{payload}");
     }
     assert!(machine.calls().is_empty());
-}
-
-#[test]
-fn a_checkout_with_a_detached_head_leaves_the_branch_for_the_agent() {
-    let machine = Machine::new("registered");
-    std::fs::write(
-        machine.checkout.join(".git/HEAD"),
-        "0123456789abcdef0123456789abcdef01234567\n",
-    )
-    .unwrap();
-    let run = machine.run("claude-code", &machine.payload(START), Some(PANE), &[]);
-    assert!(machine.reason(&run).contains("--branch <branch>"));
 }
 
 #[test]
@@ -485,7 +380,7 @@ fn a_failed_owner_handshake_never_ends_the_guard_with_a_refusal_code() {
         .args(["--source", "hide-subagents@6"])
         .env_clear()
         .env("PATH", &machine.home)
-        .env("HERDR_PANE_ID", PANE)
+        .env("HIDE_PANE_ID", PANE)
         .env("HIDE_PROCESS_OWNER_JOB", "no-such-job")
         .env(hide_platform::host::HOME_VARIABLE, &machine.home)
         .stdin(Stdio::piped())
@@ -493,23 +388,8 @@ fn a_failed_owner_handshake_never_ends_the_guard_with_a_refusal_code() {
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
-    send_payload(child.stdin.take().unwrap(), &machine.payload(START));
+    send_payload(child.stdin.take().unwrap(), &machine.payload(OPENER));
     let output = child.wait_with_output().unwrap();
     assert!(output.status.success(), "{:?}", output.status);
     assert_eq!(output.stdout, b"");
-}
-
-#[test]
-fn a_call_aimed_at_another_herdr_runs_in_a_registered_checkout() {
-    let machine = Machine::new("registered");
-    let run = machine.run(
-        "claude-code",
-        &machine
-            .payload("HERDR_SOCKET_PATH=/tmp/qa.sock herdr agent start qa --kind claude --pane p"),
-        Some(PANE),
-        &[("HERDR_SOCKET_PATH", "/run/own.sock")],
-    );
-    assert!(run.status_ok);
-    assert_eq!(run.stdout, "");
-    assert!(machine.calls().is_empty(), "{:?}", machine.calls());
 }

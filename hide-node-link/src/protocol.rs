@@ -308,7 +308,12 @@ use crate::error::HostError;
 /// 74: adds `HerdrSave` and `HerdrStop`, so the core moves a device's Herdr
 /// session into its own engine (PRD engine-bundle-4-herdr-removal D-10); an
 /// older helper would refuse both, so it upgrades.
-pub const PROTOCOL_VERSION: u32 = 74;
+/// 75: drops what started or fed a node's Herdr services (`PanesStart`,
+/// `TerminalsStart`, the kit call's Herdr socket and saved-session flag) and
+/// the pane proofs' passive hook observations, since every node runs its
+/// panes in holders (PRD engine-bundle-4-herdr-removal D-10); a helper on 74
+/// still takes them, so it upgrades.
+pub const PROTOCOL_VERSION: u32 = 75;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
 /// runs it ([`Call::AgentInstalled`]).
@@ -687,16 +692,11 @@ pub enum Call {
     },
     /// The device's install kit (`hide_host::kit`): the helper acts on the
     /// helper root it runs from, never on a folder the request names.
-    /// `cli_dir` is where the consent allows the `hide` link, and
-    /// `herdr_socket` the registration's Herdr socket; both may start with
-    /// `~/`.
+    /// `cli_dir` is where the consent allows the `hide` link; it may start
+    /// with `~/`.
     Kit {
         action: KitAction,
         cli_dir: String,
-        herdr_socket: Option<String>,
-        /// A saved Herdr profile grants attachment, without server replacement.
-        #[serde(default)]
-        preserve_herdr_server: bool,
         /// Known registered checkout roots on this helper's device only.
         #[serde(default)]
         retirement_projects: Vec<String>,
@@ -1061,19 +1061,6 @@ pub enum Call {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         checkpoint: Option<hide_session::ConversationCheckpoint>,
     },
-    /// Starts this node's pane service for the Herdr at `herdr_socket`: the
-    /// bootstrap socket a device pane's `hide` asks on. Answered with
-    /// [`crate::panes::PanesStarted`]; asking again for the same Herdr
-    /// answers the same socket.
-    PanesStart {
-        herdr_socket: String,
-    },
-    /// Starts this node's terminal service for the Herdr at `herdr_socket`:
-    /// from then on the link's terminal lines reach it. Asking again while
-    /// it runs changes nothing.
-    TerminalsStart {
-        herdr_socket: String,
-    },
     /// The core's answer to the pane proof `request` the node sent up.
     PaneProofAnswer {
         request: u64,
@@ -1319,8 +1306,6 @@ impl Call {
             | Self::SessionText { .. }
             | Self::SessionConversation { .. }
             | Self::SessionThread { .. }
-            | Self::PanesStart { .. }
-            | Self::TerminalsStart { .. }
             | Self::PaneProofAnswer { .. }
             | Self::PaneInspect { .. }
             | Self::HoldersStart

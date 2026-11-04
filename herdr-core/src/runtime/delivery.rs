@@ -1644,8 +1644,7 @@ impl Runtime {
                 .matches_ledger(previous, &ledger, now)
         });
         if graph_changed {
-            let mut graph = crate::model::OverviewGraphSnapshot::from_ledger(&ledger, now)
-                .with_direct_inputs(self.links_work.direct_inputs.clone());
+            let mut graph = crate::model::OverviewGraphSnapshot::from_ledger(&ledger, now);
             graph.sessions = std::mem::take(&mut self.snapshot.overview_graph.sessions);
             self.snapshot.overview_graph = graph;
         }

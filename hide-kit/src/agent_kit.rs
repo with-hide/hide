@@ -669,7 +669,6 @@ fn report_agent(
         chosen: record.agent_choice(adapter.id).is_some(),
         skill,
         hook,
-        herdr: None,
         update,
         doc_url: adapter.doc_url.to_owned(),
     }

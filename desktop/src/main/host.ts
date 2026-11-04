@@ -14,10 +14,10 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, net, Notification, powerMonitor, screen, session, shell, type IpcMainEvent, type IpcMainInvokeEvent, type NativeImage } from "electron";
 import { DebUpdater, MacUpdater, NsisUpdater, RpmUpdater } from "electron-updater";
-import { CHECK_UPDATES_COMMAND, SETUP_COMMAND, type ExternalGrant, type HerdrRestart } from "../../../web/src/host";
+import { CHECK_UPDATES_COMMAND, SETUP_COMMAND, type ExternalGrant } from "../../../web/src/host";
 import { pageKeepsKeyboard } from "../../../web/src/shortcuts";
 import type { MenuCommand } from "./menu";
-import { BINDINGS_CHANNEL, COME_FORWARD_CHANNEL, DESK_CHANNEL, COMMAND_CHANNEL, EDITOR_AVAILABLE_CHANNEL, EDITOR_OPEN_CHANNEL, LANGUAGE_CHANNEL, NOTIFY_BADGE_CHANNEL, NOTIFY_CHANNEL, NOTIFY_OPEN_CHANNEL, NOTIFY_PERMISSION_CHANNEL, NOTIFY_SETTINGS_CHANNEL, NOTIFY_WITHDRAW_CHANNEL, OPEN_PATH_CHANNEL, EXTERNAL_DESCRIBE_CHANNEL, EXTERNAL_LIVE_CHANNEL, EXTERNAL_OPEN_CHANNEL, EXTERNAL_READ_CHANNEL, PICK_FOLDER_CHANNEL, PRACTICE_OPEN_CHANNEL, PROBE_PATHS_CHANNEL, HERDR_RESTART_CHANNEL, QUIT_CHANNEL, REVEAL_CHANNEL, UPDATE_CHECK_CHANNEL, UPDATE_PRERELEASE_CHANNEL, UPDATE_RESTART_CHANNEL, UPDATE_STATUS_CHANNEL, UPDATE_STATUS_GET_CHANNEL, WINDOW_CHROME_CHANNEL, WINDOW_CHROME_GET_CHANNEL } from "../channel";
+import { BINDINGS_CHANNEL, COME_FORWARD_CHANNEL, DESK_CHANNEL, COMMAND_CHANNEL, EDITOR_AVAILABLE_CHANNEL, EDITOR_OPEN_CHANNEL, LANGUAGE_CHANNEL, NOTIFY_BADGE_CHANNEL, NOTIFY_CHANNEL, NOTIFY_OPEN_CHANNEL, NOTIFY_PERMISSION_CHANNEL, NOTIFY_SETTINGS_CHANNEL, NOTIFY_WITHDRAW_CHANNEL, OPEN_PATH_CHANNEL, EXTERNAL_DESCRIBE_CHANNEL, EXTERNAL_LIVE_CHANNEL, EXTERNAL_OPEN_CHANNEL, EXTERNAL_READ_CHANNEL, PICK_FOLDER_CHANNEL, PRACTICE_OPEN_CHANNEL, PROBE_PATHS_CHANNEL, REVEAL_CHANNEL, UPDATE_CHECK_CHANNEL, UPDATE_PRERELEASE_CHANNEL, UPDATE_RESTART_CHANNEL, UPDATE_STATUS_CHANNEL, UPDATE_STATUS_GET_CHANNEL, WINDOW_CHROME_CHANNEL, WINDOW_CHROME_GET_CHANNEL } from "../channel";
 import { BrowserViews, type ResolvedPage } from "./browser";
 import { practiceBounds, practiceUrl } from "./practice";
 import { BrowserCdpGateway, CdpActionUncertain, parseBrowserControlResult, type CdpAction, type CdpActionResult, type CdpScope } from "./browserCdp";
@@ -144,12 +144,10 @@ export class DesktopHost {
   /** Every CLI child runs through this chain, so the runner's cap of one is never crossed. */
   private cliChain: Promise<unknown> = Promise.resolve();
   private discovering: Promise<void> | null = null;
-  /** The one Herdr restart running (`listenHerdrRestart`). */
-  private herdrRestart: Promise<HerdrRestart> | null = null;
   private attempts = 0;
   private cli: { path: string; source: CliSource } | null = null;
   /**
-   * Where a packaged Windows app runs its daemon, CLI and Herdr from: this
+   * Where a packaged Windows app runs its daemon and CLI from: this
    * build's copy outside the install folder (`hide runtime prepare`; PRD
    * auto-update D-10), learned once per launch. Null until then, and always
    * null elsewhere, where the package's own resources folder is used.
@@ -230,8 +228,6 @@ export class DesktopHost {
     this.listenReveal();
     this.listenComeForward();
     this.listenPickFolder();
-    this.listenHerdrRestart();
-    this.listenQuit();
     this.listenLocalPaths();
     this.listenNotify();
     this.listenWindowChrome();
@@ -655,45 +651,6 @@ export class DesktopHost {
   }
 
   /**
-   * Restarting the operator's Herdr server on this app's Herdr (PRD
-   * herdr-takeover B12, B13), asked by this window's shell after the operator
-   * confirmed what ends; one runs at a time and a second ask answers with it.
-   * Only a packaged app has a Herdr of its own to restart onto. A server that
-   * does not come back shows the status page's start failure, with Retry and
-   * Copy diagnostics, as a launch whose server does not start would.
-   */
-  private listenHerdrRestart(): void {
-    ipcMain.handle(HERDR_RESTART_CHANNEL, (event: IpcMainInvokeEvent) => {
-      if (!this.fromShell(event)) {
-        this.log.event("herdr.restart_refused", { reason: "sender" });
-        return "refused";
-      }
-      this.herdrRestart ??= this.restartHerdr().finally(() => {
-        this.herdrRestart = null;
-      });
-      return this.herdrRestart;
-    });
-  }
-
-  /** The Quit of the screen that holds Hide while Herdr speaks another protocol; only this window's shell is heard. */
-  private listenQuit(): void {
-    ipcMain.on(QUIT_CHANNEL, (event: IpcMainEvent) => {
-      if (!this.fromShell(event)) {
-        this.log.event("quit.refused", { reason: "sender" });
-        return;
-      }
-      this.log.event("quit.asked", {});
-      app.quit();
-    });
-  }
-
-  /** This app bundles no Herdr to restart onto (PRD engine-bundle-4-herdr-removal D-2), so every ask answers unavailable. */
-  private async restartHerdr(): Promise<HerdrRestart> {
-    this.log.event("herdr.restart_unavailable", { source: "none" });
-    return "unavailable";
-  }
-
-  /**
    * Add a project's Browse folder: the system's own folder picker, a sheet on
    * this window on macOS, which can also make a new folder. Only this window's
    * page on the daemon origin is answered; a refused sender and a cancelled
@@ -967,7 +924,7 @@ export class DesktopHost {
   }
 
   /**
-   * The folder `hide`, `hided` and `herdr` run from in a packaged app: its
+   * The folder `hide` and `hided` run from in a packaged app: its
    * `Contents/Resources` or `resources`, or on Windows the build's runtime
    * copy once `prepareRuntime` found it.
    */
@@ -978,8 +935,7 @@ export class DesktopHost {
   /**
    * A packaged Windows app's runtime copy (PRD auto-update D-10): the
    * installer stops every program under the install folder and Windows cannot
-   * replace a running file, so the daemon and the Herdr server must not run
-   * from there. Asked of the install folder's own `hide` once per launch;
+   * replace a running file, so the daemon must not run from there. Asked of the install folder's own `hide` once per launch;
    * what it could not remove of older copies goes to the log (D-11). Null
    * when the copy is ready or none is needed, else why it failed.
    */

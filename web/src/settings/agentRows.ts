@@ -129,7 +129,7 @@ export function checkFailedReason(code: string): "agents.checkReason.unreachable
  * An agent's piece by name; the hook piece is named by what the contract says it is: OpenCode's is a plugin, Pi's
  * and omp's an extension. The page shows no piece's name: it names one only in a problem's hover detail.
  */
-export type AgentPart = "skill" | "hook" | "plugin" | "extension" | "herdr";
+export type AgentPart = "skill" | "hook" | "plugin" | "extension";
 
 export type AgentProblem = { part: AgentPart; piece: KitPiece };
 
@@ -143,7 +143,6 @@ export function agentProblems(agent: KitAgent): AgentProblem[] {
   if (!agent.enabled) return [];
   const pieces: AgentProblem[] = [{ part: "skill", piece: agent.skill }];
   if (agent.hook) pieces.push({ part: hookPart(agent), piece: agent.hook });
-  if (agent.herdr) pieces.push({ part: "herdr", piece: agent.herdr });
   const broken = pieces.filter(({ piece }) => kitPartNeedsReinstall(piece));
   return [...broken.filter(({ piece }) => piece.state === "failed"), ...broken.filter(({ piece }) => piece.state !== "failed")];
 }
@@ -158,7 +157,7 @@ export type AgentTooOld = { update: AgentUpdate } | { update: null; piece: KitPi
 export function agentTooOld(agent: KitAgent): AgentTooOld | null {
   if (!agent.enabled) return null;
   if (agent.update) return { update: agent.update };
-  const piece = [agent.skill, agent.hook, agent.herdr].find((row): row is KitPiece => row?.why?.cause === "update_agent");
+  const piece = [agent.skill, agent.hook].find((row): row is KitPiece => row?.why?.cause === "update_agent");
   return piece ? { update: null, piece } : null;
 }
 
@@ -180,7 +179,7 @@ export function agentHookWait(agent: KitAgent): AgentProblem | null {
  */
 export function agentLeftover(agent: KitAgent): KitPiece | null {
   if (agent.enabled) return null;
-  return [agent.skill, agent.hook, agent.herdr].find((piece): piece is KitPiece => piece?.state === "failed") ?? null;
+  return [agent.skill, agent.hook].find((piece): piece is KitPiece => piece?.state === "failed") ?? null;
 }
 
 /**

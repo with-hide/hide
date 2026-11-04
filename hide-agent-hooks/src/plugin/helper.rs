@@ -6,8 +6,8 @@
 //! same private diagnostic the other hooks use.
 //!
 //! The operations reuse the Claude Code and Codex hook's parts: the letter
-//! intake (`delivery`), the spawn guard
-//! (`spawn_guard`), the pane counts (`counters`, `report`) and Project Memory
+//! intake (`delivery`), the guards (`guardrails`, `plan_record`,
+//! `opener_guard`), the pane counts (`counters`, `report`) and Project Memory
 //! (`memory`). What differs is only the transport: these agents have no
 //! command hook, so the script hands over the facts a hook payload would
 //! carry. What each agent gets follows its adapter declaration.
@@ -20,7 +20,6 @@ use hide_agent_adapter::{AgentAdapter, PluginDialect};
 use hide_agent_hooks::delivery::{self, Intake, Prompt};
 use hide_agent_hooks::memory::{self, HookMemoryOutcome, MemoryRequest, memory_context_until};
 use hide_agent_hooks::runtime::HookEvent;
-use hide_agent_hooks::spawn_guard as guard;
 use hide_agent_hooks::{counters, guardrails, guidance, report};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -73,9 +72,6 @@ struct Input {
     /// is an agent started in another agent's shell, which a pane variable
     /// it inherited does not make the pane's own (PRD agent-guardrails B22).
     guard_only: bool,
-    /// Transient Post input, consumed by the same owned helper. Never stored
-    /// in the metadata admission request.
-    observation: Option<Value>,
 }
 
 /// The agent a script speaks for: its adapter row and the runtime id the
@@ -154,12 +150,6 @@ pub fn run(agent: &str, operation: Option<&str>, started: Instant) {
         Some("prompt") => prompt(&home, &agent, input, started + PROMPT_BUDGET),
         Some("confirm") => confirm(&home, input, started + CONFIRM_BUDGET),
         Some("tool") => tool(&home, &agent, input, started + TOOL_BUDGET),
-        Some("observation")
-            if agent.adapter.observation
-                == hide_agent_adapter::ObservationSupport::Plugin(agent.dialect) =>
-        {
-            observation(&home, &agent, &input, started)
-        }
         Some("letters") if agent.adapter.tool_letters.is_some() => {
             letters(&home, input, started + LETTERS_BUDGET)
         }
@@ -171,49 +161,6 @@ pub fn run(agent: &str, operation: Option<&str>, started: Instant) {
         _ => json!({}),
     };
     answer(&output);
-}
-
-fn observation(home: &Path, agent: &Agent, input: &Input, started: Instant) -> Value {
-    use hide_agent_hooks::observation::{self, ObservationCorrelation, ToolResult};
-    let Some(post) = input.observation.as_ref() else {
-        return json!({});
-    };
-    if input.guard_only {
-        return json!({});
-    }
-    let Some(command) = post["command"].as_str() else {
-        return json!({});
-    };
-    let Some(session) = input.session_id.as_deref() else {
-        return json!({});
-    };
-    let Some(call_id) = post["call_id"].as_str() else {
-        return json!({});
-    };
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or(0);
-    let parsed = observation::observe(
-        ToolResult {
-            runtime_id: agent.runtime(),
-            session_id: session,
-            call_id,
-            command,
-            correlation_kind: ObservationCorrelation::ToolCall,
-            result: post.get("result"),
-            failed: post["failed"] == true,
-            interrupted: post["interrupted"] == true,
-            truncated: post["truncated"] == true,
-            asynchronous: post["asynchronous"] == true,
-        },
-        now,
-        &|name| std::env::var(name).ok(),
-    );
-    let accepted = parsed
-        .as_ref()
-        .is_some_and(|parsed| observation::send(home, parsed, started + observation::SEND_BUDGET));
-    json!({ "observed": accepted })
 }
 
 fn answer(value: &Value) {
@@ -399,7 +346,7 @@ fn confirm(home: &Path, input: Input, deadline: Instant) -> Value {
     }
 }
 
-/// The project's guardrails for a shell or file tool, the spawn guard for
+/// The project's guardrails for a shell or file tool, the opener guard for
 /// the shell (`bash`, OpenCode 2's `shell`): `deny`
 /// carries the reason the script refuses with, and every other outcome lets
 /// the call run, as the Claude Code and Codex guards do.
@@ -427,8 +374,8 @@ fn tool(home: &Path, agent: &Agent, input: Input, deadline: Instant) -> Value {
         hide_agent_hooks::global_guard::record_refusal(home, runtime, pane.as_deref());
         return json!({ "deny": reason });
     }
-    // The guardrails hold in any session of a guarded project, a Herdr pane
-    // or not (PRD agent-guardrails B22); the guards after them only in one.
+    // The guardrails hold in any session of a guarded project, a pane or not
+    // (PRD agent-guardrails B22); the guards after them only in one.
     if let Some(reason) = guardrails::refusal_for(home, runtime, pane.as_deref(), call) {
         return json!({ "deny": reason });
     }
@@ -455,15 +402,8 @@ fn tool(home: &Path, agent: &Agent, input: Input, deadline: Instant) -> Value {
             let Some(command) = input.command.as_deref() else {
                 return json!({});
             };
-            let refusal = guard::pane_refusal(
-                home,
-                runtime,
-                &pane,
-                command,
-                input.cwd,
-                &program,
-                deadline,
-                &|name| std::env::var(name).ok(),
+            let refusal = hide_agent_hooks::opener_guard::pane_refusal(
+                home, runtime, &pane, command, &program, deadline,
             );
             refusal.map_or_else(|| json!({}), |reason| json!({ "deny": reason }))
         }

@@ -189,7 +189,7 @@ case $b in session=*) unset HERDR_SOCKET_PATH; HERDR_SESSION=${b#session=}; expo
 below "$a" || { say fail "$ub"; exit 65; }; [ -x "$h" ] && mine "$h" || { say fail "the helper $h is missing or can be changed by other accounts"; exit 65; };
 case ${c:--} in -) ;; *) { (umask 077; mkdir -p -- "$c") && HOME=$c && export HOME && unset @HOME_FOLDER_VARIABLES@@AGENT_HOMES@; } || { say fail "the home $c could not be made"; exit 65; };; esac;
 cd -- "$HOME" 2>/dev/null || :;
-say start; exec "$h" node serve --own-herdr;;
+say start; exec "$h" node serve;;
 run) set --; i=0; while [ "$i" -lt "$a" ] && IFS= read -r w; do set -- "$@" "$w"; i=$((i+1)); done;
 o=$(mktemp "${TMPDIR:-/tmp}/hide-run.XXXXXX") && e=$(mktemp "${TMPDIR:-/tmp}/hide-run.XXXXXX") && x=$(mktemp "${TMPDIR:-/tmp}/hide-run.XXXXXX") || { rm -f -- ${o:+"$o"} ${e:+"$e"}; o= e= x=; say fail "no temporary file for the command's output"; continue; };
 { { command "$@" </dev/null; echo $? >"$x"; } 2>&1 1>&3 3>&- | head -c $((b+1)) >"$e"; } 3>&1 | head -c $((b+1)) >"$o";
@@ -444,22 +444,11 @@ pub(crate) fn install(
         other => return Err(failed(refusal(other))),
     };
     let version = &payload.version()[..16];
-    let mut files: Vec<(String, &Package)> = payload
+    let files: Vec<(String, &Package)> = payload
         .files
         .iter()
         .map(|file| (format!("{version}/{}", file.relative), file))
         .collect();
-    if let Some(herdr) = &payload.herdr {
-        files.push((
-            format!(
-                "{}/{}/{}",
-                hide_kit::device_herdr::HERDR_DIR,
-                herdr_copy_name(herdr),
-                herdr.relative
-            ),
-            herdr,
-        ));
-    }
     if files.iter().any(|(relative, _)| !plain(relative)) {
         return Err(failed("The build names a file Hide cannot send".to_owned()));
     }
@@ -506,12 +495,9 @@ pub(crate) fn install(
                 fresh |= index == 0;
             }
             [kind, reason] if kind == "fail" => {
-                // The helper, a chosen Herdr and its pin must arrive before
-                // the helper starts; an optional kit part the kit reports.
-                if index == 0
-                    || file.relative == hide_kit::device_herdr::HERDR_PIN
-                    || file.relative == hide_kit::device_herdr::HERDR_PROGRAM
-                {
+                // The helper must arrive before it starts; an optional kit
+                // part the kit reports.
+                if index == 0 {
                     return Err(failed(format!("The device could not take {reason}")));
                 }
                 upload.missing.push(reason.clone());
@@ -591,15 +577,14 @@ pub(crate) fn start(
 
 /// Puts this build in its version folder under `root` on a machine that
 /// already runs a build of Hide's (a core update, PRD core-host-node-move
-/// B10), sending only the files it lacks or holds damaged, without the
-/// device's Herdr. Answers where the build's `hided` is.
+/// B10), sending only the files it lacks or holds damaged. Answers where the
+/// build's `hided` is.
 pub(crate) fn install_build(
     pipe: &mut dyn Pipe,
     root: &str,
     home: &str,
     payload: Payload,
 ) -> Result<String, EstablishError> {
-    let payload = payload.without_herdr();
     if !payload.missing.is_empty() {
         return Err(EstablishError::Install(format!(
             "This build cannot update a core without all of its parts: {}",

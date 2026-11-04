@@ -1091,7 +1091,6 @@ dependencies = [
  "base64 0.23.1",
  "hide-agent-adapter",
  "hide-ai",
- "hide-herdr-client",
  "hide-memory",
  "hide-platform",
  "hide-project",
@@ -1208,7 +1207,6 @@ version = "0.1.0"
 dependencies = [
  "hide-agent-adapter",
  "hide-agent-hooks",
- "hide-herdr-client",
  "hide-holder-protocol",
  "hide-platform",
  "serde",
@@ -1412,7 +1410,6 @@ dependencies = [
  "hide-agent-adapter",
  "hide-agent-hooks",
  "hide-desk",
- "hide-herdr-client",
  "hide-host",
  "hide-kit",
  "hide-memory",
