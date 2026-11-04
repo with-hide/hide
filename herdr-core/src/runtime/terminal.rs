@@ -65,6 +65,12 @@ pub(super) fn attach_allowed(state: &str) -> bool {
 }
 
 impl Runtime {
+    /// Whether `pane` sits in the tab the screen shows: the only panes a
+    /// key moves the keyboard between as a click does.
+    fn pane_in_shown_tab(&self, pane: &str) -> bool {
+        self.snapshot.tab.panes.iter().any(|shown| shown.id == pane)
+    }
+
     pub(crate) fn ingest_pane_focus_completion(
         &mut self,
         control: PendingPaneFocusControl,
@@ -1772,9 +1778,11 @@ impl Runtime {
                 }
                 if focus && self.terminal_keyboard_pane() != Some(pane.as_str()) {
                     self.ensure_terminal_pane(&pane);
-                    if crate::address::is_device_pane(&pane) {
+                    if crate::address::is_device_pane(&pane) || !self.pane_in_shown_tab(&pane) {
                         // A device's pane is no pane of this engine, and this
-                        // machine's selection stays its own.
+                        // machine's selection stays its own; a key into a
+                        // pane of a tab not shown moves no tab and reads no
+                        // turn.
                         self.snapshot.focused.surface = Surface::Terminal;
                         self.snapshot.focused.pane_id = Some(pane.clone());
                         self.snapshot.terminal.pane_id = Some(pane);
@@ -1784,8 +1792,8 @@ impl Runtime {
                         // engine, whose layout then confirms it while that is
                         // pending; set here alone, the engine's next layout,
                         // still on the old pane, read as the engine's own
-                        // move and took the keyboard back. Only on a move,
-                        // never per key.
+                        // move and took the keyboard back. Only on a move
+                        // within the tab shown, never per key.
                         self.focus_pane(pane, super::events::PaneFocusOrigin::Operator, None);
                     }
                     return true;

@@ -2336,39 +2336,100 @@ fn view_authority_a_pane_click_moves_focus_and_a_stale_layout_does_not_undo_it()
 /// engine is told, and its layout that still names the old pane does not
 /// take the keyboard back (an own-engine pane's find searched the wrong
 /// pane after the operator typed into the one they then clicked).
+/// A registered checkout's session: tab `t1` holds `w-order:a` and
+/// `w-order:b` side by side, tab `t2` holds `w-order:c`, and `t1` is shown
+/// with the engine's keyboard on `focused`.
+fn split_tab_payload(checkout_path: &str, focused: &str) -> SessionSnapshotPayload {
+    let rect = |pane_id: &str, x: u32, width: u32| serde_json::json!({"pane_id": pane_id, "rect": {"x": x, "y": 0, "width": width, "height": 24}});
+    let panes = ["w-order:a", "w-order:b", "w-order:c"]
+        .map(|pane_id| serde_json::json!({"pane_id": pane_id, "cwd": checkout_path}));
+    crate::sidebar::owned_label_fixture(serde_json::json!({
+        "agents": [],
+        "focused_workspace_id": "w-order",
+        "focused_pane_id": focused,
+        "workspaces": [{"workspace_id": "w-order", "label": "order", "active_tab_id": "w-order:t1"}],
+        "tabs": [
+            {"workspace_id": "w-order", "tab_id": "w-order:t1", "label": "", "number": 1},
+            {"workspace_id": "w-order", "tab_id": "w-order:t2", "label": "", "number": 2}
+        ],
+        "panes": panes,
+        "layouts": [{
+            "workspace_id": "w-order", "tab_id": "w-order:t1", "zoomed": false,
+            "area": {"x": 0, "y": 0, "width": 80, "height": 24},
+            "focused_pane_id": focused,
+            "panes": [rect("w-order:a", 0, 40), rect("w-order:b", 40, 40)],
+            "splits": [{"direction": "right", "ratio": 0.5, "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}]
+        }, {
+            "workspace_id": "w-order", "tab_id": "w-order:t2", "zoomed": false,
+            "area": {"x": 0, "y": 0, "width": 80, "height": 24},
+            "focused_pane_id": "w-order:c",
+            "panes": [rect("w-order:c", 0, 80)],
+            "splits": []
+        }]
+    }))
+    .expect("split tab payload")
+}
+
+fn typed_into(pane: &str) -> TerminalReport {
+    TerminalReport::Input {
+        pane: pane.into(),
+        at_unix_ms: 1,
+        submitted: false,
+        focus: true,
+    }
+}
+
 #[test]
 fn a_key_that_moves_the_keyboard_tells_the_engine_and_a_stale_layout_does_not_undo_it() {
-    let mut runtime = live_runtime();
-    let panes = [("w1:p1", 6018_u64), ("w1:p2", 6019), ("w1:p3", 6020)];
-    runtime.ingest_session(Ok(finished_tab_payload(&panes, "w1:p1")));
-    let typed = |submitted| TerminalReport::Input {
-        pane: "w1:p2".into(),
-        at_unix_ms: 1,
-        submitted,
-        focus: true,
-    };
-    assert!(runtime.ingest_terminal_reports(vec![typed(false)]));
-    assert_eq!(runtime.snapshot().focused.pane_id.as_deref(), Some("w1:p2"));
+    let checkout_path = "/private/tmp/hide-key-moves-keyboard";
+    let (mut runtime, _) = live_tab_order_runtime(checkout_path);
+    runtime.ingest_session(Ok(split_tab_payload(checkout_path, "w-order:a")));
+    assert_eq!(runtime.snapshot().tab.id.as_deref(), Some("w-order:t1"));
+    assert!(runtime.ingest_terminal_reports(vec![typed_into("w-order:b")]));
+    assert_eq!(
+        runtime.snapshot().focused.pane_id.as_deref(),
+        Some("w-order:b")
+    );
     assert_eq!(
         runtime
             .pane_focus_in_flight
             .as_ref()
             .map(|control| control.target_id.as_str()),
-        Some("w1:p2"),
+        Some("w-order:b"),
         "the engine is told where the keyboard went"
     );
     // A second key into the same pane moves nothing and tells nothing more.
     let serial = runtime.next_pane_focus_serial;
-    assert!(!runtime.ingest_terminal_reports(vec![typed(false)]));
+    assert!(!runtime.ingest_terminal_reports(vec![typed_into("w-order:b")]));
     assert_eq!(runtime.next_pane_focus_serial, serial);
 
-    runtime.ingest_session(Ok(finished_tab_payload(&panes, "w1:p1")));
-    assert_eq!(runtime.snapshot().focused.pane_id.as_deref(), Some("w1:p2"));
+    runtime.ingest_session(Ok(split_tab_payload(checkout_path, "w-order:a")));
+    assert_eq!(
+        runtime.snapshot().focused.pane_id.as_deref(),
+        Some("w-order:b")
+    );
     assert_eq!(
         runtime.snapshot().terminal.pane_id.as_deref(),
-        Some("w1:p2")
+        Some("w-order:b")
     );
     assert_eq!(diagnostic_count(&runtime, "pane.focus.followed"), 0);
+}
+
+/// A key into a pane of a tab not shown, which only a client and never a
+/// drawn pane sends, brings no tab forward, so a turn finished there stays
+/// unread, and tells the engine nothing.
+#[test]
+fn a_key_into_a_pane_of_a_tab_not_shown_brings_no_tab_forward_and_tells_the_engine_nothing() {
+    let checkout_path = "/private/tmp/hide-key-other-tab";
+    let (mut runtime, checkout_id) = live_tab_order_runtime(checkout_path);
+    runtime.ingest_session(Ok(split_tab_payload(checkout_path, "w-order:a")));
+    assert!(runtime.ingest_terminal_reports(vec![typed_into("w-order:c")]));
+    assert_eq!(runtime.snapshot().tab.id.as_deref(), Some("w-order:t1"));
+    assert_eq!(
+        checkout_active_tab_id(&runtime, &checkout_id).as_deref(),
+        Some("w-order:t1")
+    );
+    assert!(runtime.pane_focus_in_flight.is_none());
 }
 
 #[test]
