@@ -10,7 +10,7 @@ A claim is verified by the check that observes what a caller of the behavior obs
 
 | The change claims | Check | Owner |
 | --- | --- | --- |
-| Core state, a runtime event, a Herdr fixture, the hided wire | `bash scripts/verify-cargo.sh test` | [CONTRIBUTING.md: CI gates](../CONTRIBUTING.md#ci-gates) |
+| Core state, a runtime event, an engine fixture, the hided wire | `bash scripts/verify-cargo.sh test` | [CONTRIBUTING.md: CI gates](../CONTRIBUTING.md#ci-gates) |
 | Local mailbox intake, safe doorbells, durable watches and activity privacy | Named library checks plus actual isolated runtime observations | [delivery.md: Verification](delivery.md#verification) |
 | Web or desktop logic that needs no window | `bash scripts/verify-web.sh` | [CONTRIBUTING.md: CI gates](../CONTRIBUTING.md#ci-gates) |
 | A flow a user performs in the web shell | `pnpm --dir web e2e` | [Before an e2e run](#before-an-e2e-run) |
@@ -20,7 +20,7 @@ A claim is verified by the check that observes what a caller of the behavior obs
 | A screen matches its approved design | Gallery or isolated candidate captures under the approved conditions | [DESIGN_WORKFLOW.md](DESIGN_WORKFLOW.md#visual-review) |
 | Responsiveness, rendering, CPU, or memory | The layered procedure | [PERFORMANCE_TESTING.md](PERFORMANCE_TESTING.md) |
 | The installed app carries the fix | A rebuilt package, then the identity checks | [dev-runtime.md](dev-runtime.md), [INSTALL.md](INSTALL.md#verify-the-installed-app) |
-| A remote device's behavior | A private Herdr on the device | [A device check](#a-device-check) |
+| A remote device's behavior | A private daemon and device home | [A device check](#a-device-check) |
 | Each supported agent works end to end in Hide | `python3 scripts/agent-journey-check.py` | [Agent journey](#agent-journey) |
 | Anything the rows above cannot reach yet | Manual QA on an isolated candidate | [Manual native QA](#manual-native-qa) |
 
@@ -100,7 +100,7 @@ Read [PERFORMANCE_TESTING.md](PERFORMANCE_TESTING.md#2-identify-the-build-and-pr
 | `desktop/e2e/electron-window.ts` | The Electron process and sole BrowserWindow Playwright launched | The running candidate's renderer, without Screen Recording permission or OS focus; retains its PID, window id, bounds, build and capture method | OS window chrome, compositor presentation and native input; renderer captures do not prove those surfaces |
 | The window list below | PID to window id | Resolving the candidate's window id before each capture | |
 | open-computer-use (`ocu`, or its MCP server) | An app name or bundle id, never a PID | Reading the accessibility tree; `click` on an element index and `set_value` on a candidate whose name answers exactly one process | A packaged candidate while the operator's app runs; keyboard input into the renderer, which 0.3.5 does not deliver reliably to Chromium; `click_method: global` |
-| `herdr pane read <pane> --source recent --lines <N>` under the private socket | One pane | Terminal content without a screenshot | History of a Claude or Codex pane: they draw in the alternate screen, so `recent` is what is visible, and history comes from the transcript |
+| `hide pane read <pane> --lines <N>` run from a pane of the candidate | One pane | Terminal content without a screenshot | History of a Claude or Codex pane: they draw in the alternate screen, so the read is what is visible, and history comes from the transcript |
 
 A capture shows an old frame unless the candidate was launched with `--disable-backgrounding-occluded-windows`, because Chromium stops painting an occluded window.
 Before trusting open-computer-use's target, check that `ocu list-apps` shows the candidate's name once and that no other process answers it.
@@ -114,8 +114,8 @@ osascript -l JavaScript -e 'ObjC.import("CoreGraphics"); ObjC.deepUnwrap(ObjC.ca
 
 ### Procedure
 
-1. Start a private Herdr server with the pinned binary and the isolation environment, and prove `herdr workspace list` is empty under that environment before creating fixtures.
-2. Clear every inherited `HERDR_*` and `HIDE_*` variable, then launch the candidate with its own `HOME`, `HIDE_STATE_DIR`, `HIDE_DESKTOP_USER_DATA_DIR`, and `HERDR_SOCKET_PATH`, and `HERDR_BIN_PATH` naming the pinned binary.
+1. Make a private `HOME` and state folder, and prove the candidate's state folder holds no session before creating fixtures.
+2. Clear every inherited `HERDR_*` and `HIDE_*` variable, then launch the candidate with its own `HOME`, `HIDE_STATE_DIR` and `HIDE_DESKTOP_USER_DATA_DIR`.
    Pass `--hide-show-inactive --disable-backgrounding-occluded-windows` so it opens behind the operator's windows and keeps painting: `pnpm --dir desktop dev --hide-show-inactive --disable-backgrounding-occluded-windows` appends them to `electron .`, and a `--` before them would reach Electron literally.
    The `host.start` line in `$HIDE_DESKTOP_USER_DATA_DIR/logs/desktop.log` records `packaged`, `version`, and `show_inactive`.
 3. Resolve the candidate's PID from the process your launch started, never by name, then its window id from the window list.
@@ -123,7 +123,7 @@ osascript -l JavaScript -e 'ObjC.import("CoreGraphics"); ObjC.deepUnwrap(ObjC.ca
 4. Before each action, confirm the target again; after each action, observe again with a fresh capture, accessibility read, or pane read, rather than trusting the tool's success reply.
 5. Drive a scenario that needs real key semantics (an Enter or Tab override, a physical input method's key order, a chord through the menu, a pinch, a native drag) with a `@needs-focus` spec, or in a foreground window agreed with the operator.
    A scenario that cannot be driven either way is covered by tests and reported as not observed natively.
-6. Quit only what you launched, by exact PID, stop the private server with `herdr server stop` under the same environment, and check that no process of your run remains.
+6. Quit only what you launched, by exact PID, stop the private daemon with `hide stop` under the same environment, end the pane holders its state folder records (`web/e2e/pane-holders.mjs` names them), and check that no process of your run remains.
 
 ### Evidence
 
@@ -136,7 +136,7 @@ osascript -l JavaScript -e 'ObjC.import("CoreGraphics"); ObjC.deepUnwrap(ObjC.ca
 ### Focused-area navigation
 
 `web/src/areaCycle.test.ts` checks full device/checkout/area identity for View areas, the Agent pane order across devices and checkouts, commit events, Agent cycling outside a View without inventing visits, and single-tab or retired View no-op boundaries.
-`web/e2e/recent.spec.ts` commits an Agent pane in another project on a real isolated Herdr, opens the list from the sidebar, Explorer and Overview, and keeps focused files in their own View scope.
+`web/e2e/recent.spec.ts` commits an Agent pane in another project on a real isolated daemon, opens the list from the sidebar, Explorer and Overview, and keeps focused files in their own View scope.
 `web/e2e/recent-agents-restart.spec.ts` restarts hided and reloads the page, then reaches an agent pane visited only before the restart from the same cycle.
 `desktop/e2e/keys.spec.ts` walks ⌃Tab over Agent panes in the desktop host, including from sidebar focus.
 The area renderer can be checked with Korean document fixtures in both themes and two widths, including unchanged geometry when keyboard ownership moves.
@@ -571,8 +571,7 @@ Product follow-up: agy's first-run onboarding holds the first prompt of an agy t
 That server logs in as the account running the suite and connecting with consent installs Hide's kit there, so its sessions must get a private `HOME` (`SetEnv` in its config); `desktop/e2e/device-home.ts` describes the setup and refuses to register a device until it has proved both.
 `SetEnv` reaches the commands a session runs but not its SFTP, which spells `~/` from the account's own home, so the consent folders (`HIDE_HOST_HELPER_ROOT`, `HIDE_HOST_CLI_DIR`) must be absolute paths inside the private `HOME`: on 2026-10-09 a probe that kept the `~/` defaults uploaded its helper into the real account's `~/.hide/host-helper` while its commands ran in the private one.
 
-- Start a private `herdr server` on the device with the same isolation variables, sent as a script over `ssh <alias> 'bash -s' < script.sh`, and keep the device's real `HOME` so its agent CLIs stay logged in.
-- Drive it from a private hided: the web e2e fixtures `startHerdr` and `startHided` with the fixture home's `.ssh` linked to the operator's, because hided resolves the alias from `$HOME/.ssh/config`.
+- Drive the device from a private hided: the web e2e fixtures `startEngine` and `startHided` with the fixture home's `.ssh` linked to the operator's, because hided resolves the alias from `$HOME/.ssh/config`.
 - Register the device with `register_device` and `host_consent: false`, which installs no helper and no kit on the device; a check that needs the kit there needs a private `HOME` on the device too.
 - On a device you cannot give a private `HOME` through its sshd (a shared Windows PC, whose OpenSSH config is the operator's), start the candidate with `HIDE_DEV_DEVICE_HOME` naming a home of its own on the device, `~/` and a path below the account's home or an absolute device path (`C:/...` on Windows).
   From then on `~/` in the consent folders means that home, so leave `HIDE_HOST_HELPER_ROOT` and `HIDE_HOST_CLI_DIR` at their defaults (`~/.hide/host-helper`, `~/.local/bin`); a value that names the device home again nests it inside itself.

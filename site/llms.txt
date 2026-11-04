@@ -1,6 +1,6 @@
 # hide
 
-> hide is the multi-agent IDE for people: Claude Code, Codex, Antigravity, OpenCode, Grok, Pi and omp run in real Herdr panes, start, watch and write to each other, and only what needs a person reaches the operator. Free and fair source (FSL), on macOS, Windows and Linux.
+> hide is the multi-agent IDE for people: Claude Code, Codex, Antigravity, OpenCode, Grok, Pi and omp run in real terminal panes, start, watch and write to each other, and only what needs a person reaches the operator. Free and fair source (FSL), on macOS, Windows and Linux.
 
 An agent inside hide runs `hide guide` for how to work there and `hide --help` for every command.
 Each link below is the current Markdown source on the main branch.
@@ -18,6 +18,6 @@ Each link below is the current Markdown source on the main branch.
 
 ## Build hide
 
-- [Architecture](https://raw.githubusercontent.com/with-hide/hide/main/docs/ARCHITECTURE.md): the core, the daemon, the desktop host and the Herdr boundary
+- [Architecture](https://raw.githubusercontent.com/with-hide/hide/main/docs/ARCHITECTURE.md): the core, its engine and pane holders, the daemon and the desktop host
 - [Build](https://raw.githubusercontent.com/with-hide/hide/main/docs/BUILD.md): source builds and release packaging
 - [All docs](https://raw.githubusercontent.com/with-hide/hide/main/docs/README.md): every current guide and what owns it
