@@ -206,14 +206,14 @@ esac;
 done
 "#;
 
-/// Each agent's home variable set to its folder inside the home `$c` names,
+/// Each agent's home variable set to its folder inside the home `$b` names,
 /// made private, as the POSIX script's commands.
 fn posix_agent_homes() -> String {
     agent_home_variables()
         .iter()
         .map(|(variable, folder)| {
             format!(
-                " && (umask 077; mkdir -p -- \"$c/{folder}\") && {variable}=$c/{folder} && export {variable}"
+                " && (umask 077; mkdir -p -- \"$b/{folder}\") && {variable}=$b/{folder} && export {variable}"
             )
         })
         .collect()
