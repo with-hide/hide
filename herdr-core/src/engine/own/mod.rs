@@ -4505,22 +4505,28 @@ mod tests {
             line_editing,
             ..running("codex", ScreenState::Idle)
         };
-        let confirm = || {
-            crate::agent_start::confirm_fork_started(
-                &engine,
-                &pane,
-                "fork-w1-p2",
-                "codex",
-                &|| Ok(()),
-                std::time::Instant::now() + std::time::Duration::from_millis(300),
-            )
-        };
+        let readiness = || engine.delivery_agent(WAIT, "fork-w1-p2").unwrap().readiness;
         holders.say(&pane, &at(Some(true)));
         settle_start(&engine, &pane);
-        assert!(confirm().is_err(), "its terminal still edits lines");
+        assert!(
+            !readiness().accepts_input(),
+            "its terminal still edits lines: {:?}",
+            readiness()
+        );
         holders.say(&pane, &at(Some(false)));
         settle_start(&engine, &pane);
-        confirm().unwrap();
+        assert!(readiness().accepts_input(), "{:?}", readiness());
+        // What the fork's input waits on reads the same readiness; the
+        // deadline only guards the test against a hang.
+        crate::agent_start::confirm_fork_started(
+            &engine,
+            &pane,
+            "fork-w1-p2",
+            "codex",
+            &|| Ok(()),
+            std::time::Instant::now() + std::time::Duration::from_secs(30),
+        )
+        .unwrap();
     }
 
     /// D-7, B13: after a reboot each agent pane resumes its conversation
