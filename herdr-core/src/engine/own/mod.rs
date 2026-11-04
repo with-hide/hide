@@ -3254,6 +3254,15 @@ mod tests {
         }
     }
 
+    /// Moves the start of the agent in `pane` back by the settle delay, as
+    /// if it had been typed that long ago.
+    fn settle_start(engine: &OwnEngine, pane: &str) {
+        let mut topology = engine.topology();
+        let agent = topology.pane_mut(pane).unwrap().agent.as_mut().unwrap();
+        let started = agent.live.started.as_mut().unwrap();
+        *started -= agents::START_SETTLE;
+    }
+
     fn running(program: &str, screen: hide_node_link::holders::ScreenState) -> PaneFacts {
         PaneFacts {
             foreground: Some(hide_node_link::holders::ForegroundProgram {
@@ -3351,18 +3360,23 @@ mod tests {
         assert_eq!(starting.kind.as_deref(), Some("claude"));
         assert_eq!(starting.status, "unknown");
 
+        settle_start(&engine, &pane);
         holders.say(&pane, &running("claude", ScreenState::Working));
         let working = engine.agent_state(WAIT, "worker").unwrap();
         assert_eq!(working.status, "working");
         assert_eq!(
             engine.delivery_agent(WAIT, &pane).unwrap().readiness,
-            Readiness::Ready,
-            "the pane id names its agent too"
+            Readiness::Launching,
+            "the pane id names its agent too, still starting until it rests"
         );
         holders.say(&pane, &running("claude", ScreenState::Idle));
         let done = engine.agent_state(WAIT, "worker").unwrap();
         assert_eq!(done.status, "done", "a rest after work is done");
         assert!(done.state_change_seq > working.state_change_seq);
+        assert_eq!(
+            engine.delivery_agent(WAIT, &pane).unwrap().readiness,
+            Readiness::Ready
+        );
         let listed = engine.agents(WAIT).unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].name.as_deref(), Some("worker"));
@@ -3456,13 +3470,17 @@ mod tests {
             refused(engine.prompt_agent(WAIT, "worker", "hi")),
             "agent_not_ready"
         );
-        holders.say(
-            &pane,
-            &PaneFacts {
-                bracketed_paste: true,
-                ..running("codex", ScreenState::Idle)
-            },
+        let idle = PaneFacts {
+            bracketed_paste: true,
+            ..running("codex", ScreenState::Idle)
+        };
+        holders.say(&pane, &idle);
+        assert_eq!(
+            refused(engine.prompt_agent(WAIT, "worker", "hi")),
+            "agent_not_ready",
+            "a screen drawn within the start's settle"
         );
+        settle_start(&engine, &pane);
         engine.prompt_agent(WAIT, "worker", "a\nb").unwrap();
         assert!(
             holders
