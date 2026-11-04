@@ -88,7 +88,7 @@ An owl's loop is CSS keyframes inside its own SVG, so it plays as a plain `<img>
 The header icon's blink is the page's other repeating image: it is SMIL inside an `<img>`, which a hidden tab does not paint, and under `prefers-reduced-motion` a `<picture>` source shows `hide-icon.svg` instead.
 The Software Factory is one line under the free plan; its link is an email to the site's contact address, because the site has no backend to receive a sign-up.
 Pro carries no price, because none is decided; free covers everything a person runs themselves.
-Enterprise shows no price either: its button is an email to the same contact address, and its list names only team sharing and the Factory, the paid side of the line between what a person runs and what a team shares.
+Enterprise shows no price either: its button is an email to the same contact address, and its list names only security and what a team shares (missions and memory), the paid side of the line between what a person runs and what a team shares.
 The workflow and feature descriptions follow [UI_BEHAVIOR.md](../docs/UI_BEHAVIOR.md), with current main's agent launcher, project overview and Workspace components as implementation references.
 Supported platforms, signing limitations, prerequisites and installation links follow [INSTALL.md](../docs/INSTALL.md).
 The site has its own small CSS scale and brand palette; it does not consume or replace the product's generated UI tokens.
