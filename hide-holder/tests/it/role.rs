@@ -169,7 +169,8 @@ fn flood() {
 /// names: `step-0` at once, and each `step-<n>` after it once the test has
 /// made `go-<n>`, each in one write. The terminal is raw, so the bytes go out
 /// as they are and everything the program is sent (input, answers) comes in
-/// unchanged and unechoed; it is kept in `heard`, as it comes.
+/// unchanged and unechoed; it is kept in `heard`, as it comes, and when
+/// each read came in `heard.times`.
 fn script() {
     let folder = std::path::PathBuf::from(std::env::var_os(SCRIPT).unwrap());
     raw_terminal();
@@ -184,6 +185,21 @@ fn script() {
                     Ok(0) | Err(_) => return,
                     Ok(count) => count,
                 };
+                // When each read came, for a test that times what the
+                // holder wrote: one line of nanoseconds and the bytes' count,
+                // written before the bytes, so a test that has seen the
+                // bytes finds their time.
+                let at = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos();
+                std::fs::OpenOptions::new()
+                    .append(true)
+                    .create(true)
+                    .open(heard.with_extension("times"))
+                    .unwrap()
+                    .write_all(format!("{at} {count}\n").as_bytes())
+                    .unwrap();
                 let mut file = std::fs::OpenOptions::new()
                     .append(true)
                     .create(true)

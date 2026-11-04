@@ -515,6 +515,7 @@ fn the_own_engine_refuses_an_agent_start_over_a_running_program() {
             kind: "claude".into(),
             args: Vec::new(),
             codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
+            wakes: false,
         })
         .unwrap();
     let error = engine.start_agent(WAIT, &start).unwrap_err();
@@ -1108,6 +1109,7 @@ fn an_own_engine_claude_slept_with_its_hooked_conversation_wakes_resuming_it() {
             kind: "claude".into(),
             args: Vec::new(),
             codex_daemon: CodexDaemon::Unsupported,
+            wakes: false,
         })
         .expect("the start is prepared");
     start_at_shell_reusing_name(

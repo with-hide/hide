@@ -308,14 +308,18 @@ use crate::error::HostError;
 /// 74: adds `HerdrSave` and `HerdrStop`, so the core moves a device's Herdr
 /// session into its own engine (PRD engine-bundle-4-herdr-removal D-10); an
 /// older helper would refuse both, so it upgrades.
-/// 75: drops what started or fed a node's Herdr services (`PanesStart`,
+/// 75: a letter's text is a list of parts (`holders::PaneCall::Letter`), so
+/// the core types Herdr's focus report before a Copilot prompt and its
+/// paste boundary after a Windows Codex one, inside the submission. An
+/// older helper would refuse the letter, so it upgrades.
+/// 76: drops what started or fed a node's Herdr services (`PanesStart`,
 /// `TerminalsStart`, the kit call's Herdr socket and saved-session flag) and
 /// the pane proofs' passive hook observations, since every node runs its
 /// panes in holders (PRD engine-bundle-4-herdr-removal D-10), and the Herdr
 /// link stream, the Hello's Herdr socket and the label lock's Herdr socket
-/// (the lock now names the engine folder, `scope`); a helper on 74 still
+/// (the lock now names the engine folder, `scope`); a helper on 75 still
 /// takes them, so it upgrades.
-pub const PROTOCOL_VERSION: u32 = 75;
+pub const PROTOCOL_VERSION: u32 = 76;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
 /// runs it ([`Call::AgentInstalled`]).

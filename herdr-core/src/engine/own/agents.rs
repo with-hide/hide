@@ -37,7 +37,9 @@ pub(super) const START_DEADLINE: std::time::Duration = crate::agent_start::AGENT
 /// taking input: Herdr's `AGENT_START_SETTLE_DELAY`. A program in the
 /// foreground has not drawn its screen yet, and a screen no rule matches
 /// reads at rest, so a start read sooner would be typed into a program that
-/// has not asked for input.
+/// has not asked for input. The time alone does not say the program reads
+/// keys yet: a start whose program still leaves the terminal editing lines
+/// is pending however long it took ([`Live::line_editing`]).
 pub(super) const START_SETTLE: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// The agent definitions the engine starts and recognizes agents by: the
@@ -193,6 +195,33 @@ pub(super) fn resume_argv(definition: &Definition, session: Option<&str>) -> Opt
 
 /// The session a program's arguments resume, by `definition`'s `[resume]
 /// session` selector, before any `--`.
+/// The session a start the engine types runs, before its agent says: the
+/// one its resume names, so a woken agent names the conversation it resumed
+/// at once. Not when an agent whose integration reports its session as a
+/// file's path (Pi, omp) resumes by id: an id recorded for a woken omp read
+/// as another conversation than the path its registration held, so the
+/// registration was refused (`identity_changed`, journey 871294628), and
+/// such a session waits for the agent's own report. Resumed by that file's
+/// path (Pi's `--session <path>`), the path is the session it reports.
+/// Nor for a wake of OpenCode, which takes keys only once it has loaded the
+/// session its plugin then reports (`AgentLaunch::wakes`); a spawn that
+/// resumes OpenCode is known by its resume at once.
+pub(super) fn started_session(
+    definition: &Definition,
+    argv: &[String],
+    wakes: bool,
+) -> Option<String> {
+    let session = resumed_in(definition, argv)?;
+    let format = hide_agent_adapter::adapter(&definition.id).and_then(|adapter| adapter.session);
+    if wakes && format.is_some_and(hide_agent_adapter::SessionFormat::reports_session_once_loaded) {
+        return None;
+    }
+    let reports_path = format.is_some_and(hide_agent_adapter::SessionFormat::reports_session_path);
+    // A Windows device's path comes in its own spelling.
+    let names_path = hide_platform::path::is_wire_absolute(&session.replace('\\', "/"));
+    (!reports_path || names_path).then_some(session)
+}
+
 pub(super) fn resumed_in(definition: &Definition, argv: &[String]) -> Option<String> {
     let template = definition.resume_session.as_ref()?;
     let at = template.iter().position(|word| word == "{session}")?;
@@ -261,6 +290,26 @@ pub(super) struct Live {
     pub(super) start_previous_name: Option<String>,
     /// Its program is in the pane's foreground.
     pub(super) shown: bool,
+    /// The terminal edits lines, as its holder last read it: the program has
+    /// not turned that off to read keys, so what is typed waits in the
+    /// terminal's line and the Enter that submits it reaches the program as
+    /// a line break. Pi 1.0.4 started on a CI runner took more than
+    /// [`START_SETTLE`] after its start line to do so, and a brief typed at
+    /// that mark sat in its editor, never submitted (nightly 41789009557).
+    /// `None` where the holder cannot say (Windows, or a holder or node
+    /// built before it), which leaves a start to the settle alone, as
+    /// before; never read as reading keys.
+    pub(super) line_editing: Option<bool>,
+    /// The holder could not say what holds the terminal, so who the agent
+    /// is stays as it was and it takes no input until it can: read as the
+    /// shell holding it, it would have ended the agent and its session.
+    pub(super) foreground_unread: bool,
+    /// Its definition declares no screen rules (omp), so its screen never
+    /// reads at rest and a start cannot wait for that: it settles on what
+    /// the holder can say, its program shown and reading keys, and the
+    /// settle. Waiting for a rest that never comes held every omp start
+    /// pending to its 120 s deadline (journey 871294628).
+    pub(super) rest_unread: bool,
     pub(super) status: Status,
     /// One more each time its status changed, from the engine's own count.
     pub(super) seq: u64,
@@ -324,10 +373,23 @@ impl PaneAgent {
                 || now.duration_since(started) < START_DEADLINE)
     }
 
-    /// Whether a start made at `started` has settled by `now`.
+    /// Whether the agent's program takes what is typed to it: it shows, the
+    /// holder can say what holds the terminal, and the program does not
+    /// leave it editing lines. This is not whether its
+    /// start is pending: a start ends at its deadline, while a program that
+    /// never turns line editing off takes no input however long ago it
+    /// started, and a retried letter must not be typed into its line.
+    pub(super) fn interactive(&self) -> bool {
+        self.live.shown && !self.live.foreground_unread && self.live.line_editing != Some(true)
+    }
+
+    /// Whether a start made at `started` has settled by `now`: its program
+    /// takes input ([`Self::interactive`]) and its screen rests, or cannot be
+    /// read at rest ([`Live::rest_unread`]), at least [`START_SETTLE`] after
+    /// the start.
     fn settled(&self, started: Instant, now: Instant) -> bool {
-        self.live.shown
-            && matches!(self.live.status, Status::Idle | Status::Done)
+        self.interactive()
+            && (matches!(self.live.status, Status::Idle | Status::Done) || self.live.rest_unread)
             && now.duration_since(started) >= START_SETTLE
     }
 }
@@ -414,6 +476,9 @@ pub(super) fn apply(
     let program = facts.foreground.as_ref();
     let foreground = program.and_then(|program| recognized(catalog, program));
     match (agent.as_mut(), program, foreground) {
+        // The system could not say what holds the terminal: the agent stays
+        // who it is until the holder reads its terminal again.
+        _ if facts.foreground_unread => {}
         // The program of the agent the pane runs is in the foreground, or a
         // program no definition names where that agent was started or ran:
         // the agent itself, run by a wrapper or a runtime under another
@@ -447,8 +512,16 @@ pub(super) fn apply(
         }
         (None, _, None) => {}
     }
+    if let Some(current) = agent.as_mut()
+        && current.live.foreground_unread != facts.foreground_unread
+    {
+        current.live.foreground_unread = facts.foreground_unread;
+        applied.changed = true;
+    }
     applied.rules_for = live.rules_due(agent.as_ref());
     if let Some(current) = agent.as_mut().filter(|current| current.live.shown) {
+        current.live.rest_unread =
+            definition(catalog, &current.kind).is_none_or(|definition| definition.screen.is_none());
         // A start that settled on what the screen read last stays settled
         // whatever this screen reads, as Herdr's active agent does.
         if current
@@ -458,7 +531,30 @@ pub(super) fn apply(
         {
             current.live.started = None;
         }
-        let status = status_of(&facts.screen, current.live.status);
+        if facts.line_editing != current.live.line_editing {
+            // The program taking the terminal's keys restarts a pending
+            // start's settle, as an answered question does: it draws its
+            // input screen after, and OpenCode 2.0.29 dropped what was typed
+            // up to a second after it took the keys.
+            if current.live.line_editing == Some(true)
+                && facts.line_editing == Some(false)
+                && current.live.started.is_some()
+            {
+                current.live.started = Some(now);
+            }
+            current.live.line_editing = facts.line_editing;
+            applied.changed |= current.live.started.is_some();
+        }
+        let mut status = status_of(&facts.screen, current.live.status);
+        // A screen no rules read never says the agent rests, so once its
+        // program takes input it reads idle, as Herdr reads an agent it
+        // started, and its integration's turns say when it works (they
+        // outrank this, `agent_state::axes`). Read unknown, a woken or
+        // forked omp stayed a starting row with no state change to publish
+        // its settle (journey 41850644522).
+        if current.live.rest_unread && status == Status::Unknown && current.interactive() {
+            status = Status::Idle;
+        }
         // An answered question restarts a pending start's settle: the agent
         // draws its next screen after it, and input typed while it does is
         // lost (Claude Code 2.1.318 on Windows after its folder trust).
@@ -700,7 +796,7 @@ mod tests {
     }
 
     #[test]
-    fn a_start_waits_for_its_program_and_a_screen_without_rules_is_unknown() {
+    fn a_start_waits_for_its_program_and_a_screen_without_rules_reads_idle_once_shown() {
         let mut pane = Pane::new();
         pane.agent = Some(PaneAgent::started("omp", Some("worker"), None));
         // The shell holds the terminal while the start is typed.
@@ -713,7 +809,52 @@ mod tests {
         let agent = pane.agent.as_ref().unwrap();
         assert!(agent.live.shown);
         assert_eq!(agent.name.as_deref(), Some("worker"));
-        assert_eq!(agent.live.status, Status::Unknown);
+        // Where the holder cannot say whether it reads keys, the settle
+        // alone decides its input; its turns come from its integration.
+        assert_eq!(agent.live.status, Status::Idle);
+    }
+
+    /// An agent whose definition has no screen rules (omp) never reads at
+    /// rest, so its start settles once its program reads keys and the settle
+    /// passed, not at its 120 s deadline; one with rules still waits for its
+    /// screen to rest.
+    #[test]
+    fn a_start_without_screen_rules_settles_once_its_program_reads_keys() {
+        let at = |name: &str, line_editing| PaneFacts {
+            foreground: program(name),
+            line_editing,
+            ..PaneFacts::default()
+        };
+        let mut pane = Pane::new();
+        pane.agent = Some(PaneAgent::started("omp", Some("worker"), None));
+        pane.facts(at("omp", Some(true)));
+        let started = Instant::now() - START_SETTLE;
+        pane.agent.as_mut().unwrap().live.started = Some(started);
+        assert!(
+            pane.agent.as_ref().unwrap().launch_pending(Instant::now()),
+            "its terminal still edits lines"
+        );
+        assert_eq!(pane.status(), Some("unknown"), "it takes no input yet");
+        pane.facts(at("omp", Some(false)));
+        let agent = pane.agent.as_mut().unwrap();
+        // Read at rest once it takes input, a state change the core hears.
+        assert_eq!(agent.live.status, Status::Idle);
+        assert_eq!(agent.live.seq, 1);
+        assert!(agent.launch_pending(Instant::now()), "a settle of its own");
+        agent.live.started = Some(Instant::now() - START_SETTLE);
+        assert!(!agent.launch_pending(Instant::now()));
+
+        let mut pane = Pane::new();
+        pane.agent = Some(PaneAgent::started("claude-code", Some("worker"), None));
+        pane.facts(PaneFacts {
+            screen: read(ScreenState::Working),
+            ..at("claude", Some(false))
+        });
+        pane.agent.as_mut().unwrap().live.started = Some(started);
+        assert!(
+            pane.agent.as_ref().unwrap().launch_pending(Instant::now()),
+            "a screen with rules that does not rest keeps its start pending"
+        );
     }
 
     /// Herdr's `launch_pending` for a start of its own: the agent takes
@@ -765,6 +906,104 @@ mod tests {
             "a settled start stays settled"
         );
         assert_eq!(agent.live.started, None);
+    }
+
+    /// A program in the foreground whose screen rests can still leave the
+    /// terminal editing lines: Pi 1.0.4 on a CI runner had not turned it off
+    /// [`START_SETTLE`] after its start, and a brief typed then sat in its
+    /// editor with its Enter read as a line break. Its start settles a
+    /// settle after the program reads keys; a holder that cannot say keeps
+    /// the settle alone.
+    #[test]
+    fn a_start_takes_input_only_once_its_program_reads_keys() {
+        let mut pane = Pane::new();
+        pane.agent = Some(PaneAgent::started("pi", Some("worker"), None));
+        let at = |line_editing| PaneFacts {
+            foreground: program("pi"),
+            screen: read(ScreenState::Idle),
+            line_editing,
+            ..PaneFacts::default()
+        };
+        pane.facts(at(Some(true)));
+        let started = Instant::now() - START_SETTLE;
+        pane.agent.as_mut().unwrap().live.started = Some(started);
+        let agent = pane.agent.as_ref().unwrap();
+        assert!(
+            agent.launch_pending(Instant::now()),
+            "its screen rests past the settle, but the terminal edits lines"
+        );
+        assert!(!agent.interactive());
+        let deadline = started + START_DEADLINE;
+        assert!(
+            !agent.launch_pending(deadline),
+            "the start ends at its deadline"
+        );
+        assert!(
+            !agent.interactive(),
+            "yet a program that leaves the terminal editing lines takes no input"
+        );
+        let applied = pane.facts(at(Some(false)));
+        assert!(applied.changed, "the start's readiness moved");
+        let agent = pane.agent.as_mut().unwrap();
+        assert!(
+            agent.launch_pending(Instant::now()),
+            "the screen it draws once it reads keys is drawn within a settle of its own"
+        );
+        let took_keys = agent.live.started.unwrap();
+        assert!(took_keys > started);
+        assert!(agent.interactive());
+        agent.live.started = Some(took_keys - START_SETTLE);
+        assert!(!agent.launch_pending(Instant::now()));
+
+        let mut pane = Pane::new();
+        pane.agent = Some(PaneAgent::started("pi", Some("worker"), None));
+        pane.facts(at(None));
+        pane.agent.as_mut().unwrap().live.started = Some(started);
+        assert!(
+            !pane.agent.as_ref().unwrap().launch_pending(Instant::now()),
+            "a holder that cannot say leaves the start to the settle"
+        );
+    }
+
+    /// A terminal whose foreground the system could not say keeps the
+    /// agent it runs, its name and session, and takes no input; only a
+    /// terminal read as the shell's again ends it.
+    #[test]
+    fn an_unread_foreground_keeps_the_agent_and_takes_no_input() {
+        let mut pane = Pane::new();
+        pane.agent = Some(PaneAgent::started(
+            "pi",
+            Some("worker"),
+            Some("/s/pi.jsonl".to_owned()),
+        ));
+        pane.facts(PaneFacts {
+            foreground: program("pi"),
+            screen: read(ScreenState::Idle),
+            ..PaneFacts::default()
+        });
+        assert!(pane.agent.as_ref().unwrap().interactive());
+        let applied = pane.facts(PaneFacts {
+            foreground_unread: true,
+            screen: read(ScreenState::Idle),
+            ..PaneFacts::default()
+        });
+        assert!(applied.changed);
+        let agent = pane.agent.as_ref().expect("the agent stays");
+        assert_eq!(agent.name.as_deref(), Some("worker"));
+        assert_eq!(agent.session.as_deref(), Some("/s/pi.jsonl"));
+        assert!(!agent.interactive(), "it takes no input meanwhile");
+
+        pane.facts(PaneFacts {
+            foreground: program("pi"),
+            screen: read(ScreenState::Idle),
+            ..PaneFacts::default()
+        });
+        assert!(pane.agent.as_ref().unwrap().interactive());
+        pane.facts(PaneFacts {
+            screen: read(ScreenState::Idle),
+            ..PaneFacts::default()
+        });
+        assert!(pane.agent.is_none(), "the shell holds the terminal again");
     }
 
     #[test]
@@ -827,6 +1066,47 @@ mod tests {
         .collect();
         assert_eq!(resumed_in(codex, &argv).as_deref(), Some("s-1"));
         assert_eq!(resumed_in(codex, &argv[..3]), None);
+    }
+
+    /// A start records the session its resume names, except for an agent
+    /// that reports its session as a file's path and resumes by id: omp's id
+    /// would read as another conversation and a woken omp's registration
+    /// would be refused. Pi resumed by its file's path records the path;
+    /// Claude reports the id it resumes.
+    #[test]
+    fn a_start_records_its_resumed_session_unless_its_agent_reports_a_path() {
+        let catalog = catalog();
+        let words = |words: &[&str]| -> Vec<String> {
+            words.iter().map(|word| (*word).to_owned()).collect()
+        };
+        let omp = definition(&catalog, "omp").unwrap();
+        let argv = words(&["omp", "--resume", "01a1a635-dc01-749e-b762-b4aa840d457c"]);
+        assert!(resumed_in(omp, &argv).is_some());
+        assert_eq!(started_session(omp, &argv, false), None);
+        let pi = definition(&catalog, "pi").unwrap();
+        for path in ["/home/me/.pi/s.jsonl", "C:\\Users\\me\\.pi\\s.jsonl"] {
+            let argv = words(&["pi", "--session", path]);
+            assert_eq!(started_session(pi, &argv, false).as_deref(), Some(path));
+        }
+        let agy = definition(&catalog, "agy").unwrap();
+        let argv = words(&["agy", "--conversation", "c-1"]);
+        assert_eq!(resumed_in(agy, &argv).as_deref(), Some("c-1"));
+        assert_eq!(started_session(agy, &argv, false).as_deref(), Some("c-1"));
+        // A woken OpenCode takes keys only once it has loaded the session
+        // its plugin then reports; a spawn that resumes it is known at once.
+        let opencode = definition(&catalog, "opencode").unwrap();
+        let argv = words(&["opencode", "-s", "ses_e584ebfb9ffeITTA6qYHnKhdkZ"]);
+        assert_eq!(started_session(opencode, &argv, true), None);
+        assert_eq!(
+            started_session(opencode, &argv, false).as_deref(),
+            Some("ses_e584ebfb9ffeITTA6qYHnKhdkZ")
+        );
+        let claude = definition(&catalog, "claude").unwrap();
+        let argv = words(&["claude", "--resume", "0b8f1f3e-5c2a-4a8e-9a54-2d4c1f6b7e90"]);
+        assert_eq!(
+            started_session(claude, &argv, false).as_deref(),
+            Some("0b8f1f3e-5c2a-4a8e-9a54-2d4c1f6b7e90")
+        );
     }
 
     #[test]

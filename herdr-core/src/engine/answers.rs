@@ -201,6 +201,13 @@ pub(crate) struct AgentLaunch {
     pub(crate) kind: String,
     pub(crate) args: Vec<String>,
     pub(crate) codex_daemon: crate::codex_launch::CodexDaemon,
+    /// The start wakes a sleeping session: an agent whose integration
+    /// reports its session only once it has loaded it
+    /// (`hide_agent_adapter::SessionFormat::reports_session_once_loaded`)
+    /// is then known by that report, not by the id its resume names, so
+    /// nothing is typed to it before it takes keys. A spawn that resumes is
+    /// known by its resume at once, as its caller asked.
+    pub(crate) wakes: bool,
 }
 
 /// A start its engine accepted to send ([`super::Engine::prepare_start`]),

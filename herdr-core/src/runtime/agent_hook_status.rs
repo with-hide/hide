@@ -65,6 +65,16 @@ impl Runtime {
             return Ok(());
         }
         if local {
+            // A turn the hook reports moved the agent where the engine may
+            // not have: an agent with no screen rules (omp) reads at rest on
+            // the core's own engine, so no state change of the engine's asks
+            // the label reader to read its session again. The turn is when
+            // its file was written; reported at the session's start, before
+            // the file existed, the session stayed unconfirmed, and with it
+            // the native id a fork needs (journey 41904789052).
+            if report.turn.is_some() {
+                self.queue_session_reread(pane.clone());
+            }
             self.request_republish();
         } else if let Some(sync) = self
             .remote_connections

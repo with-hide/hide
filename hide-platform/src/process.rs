@@ -1302,20 +1302,35 @@ pub fn name_of(pid: u32) -> io::Result<String> {
     sys::name_of(pid)
 }
 
-/// The installed package whose script Windows runs through an npm launcher.
-/// Windows has no exec transition from a launcher to its script; the package
-/// path distinguishes generic script names such as cli.js. Other systems
-/// keep their existing executable and script-name detection. No file is read.
+/// The installed npm package a runtime's script belongs to: the package
+/// under the nearest `node_modules` in its path, scoped or not, so a
+/// generic script name such as `cli.js` still says which program it is.
+/// Windows runs an npm launcher's script with no exec from the launcher,
+/// and a program started as `node …/node_modules/<package>/dist/cli.js`
+/// names only `cli` anywhere. A path with `.` or `..` in it, or with no
+/// file under its package, names none. No file is read.
 pub fn package_of_script(script: &str) -> Option<String> {
-    #[cfg(windows)]
-    {
-        crate::windows_process::package_name(script)
+    let parts: Vec<_> = script
+        .split(['/', '\\'])
+        .filter(|part| !part.is_empty())
+        .collect();
+    if parts.iter().any(|part| matches!(*part, "." | "..")) {
+        return None;
     }
-    #[cfg(not(windows))]
-    {
-        let _ = script;
-        None
+    let at = parts
+        .iter()
+        .rposition(|part| part.eq_ignore_ascii_case("node_modules"))?;
+    let package = parts.get(at + 1)?;
+    let (package, first_script) = if package.starts_with('@') {
+        (format!("{package}/{}", parts.get(at + 2)?), at + 3)
+    } else {
+        ((*package).to_owned(), at + 2)
+    };
+    // npm's own bound on a package name.
+    if package.len() > 214 || first_script >= parts.len() {
+        return None;
     }
+    Some(package)
 }
 
 /// The arguments `pid` was started with, its program first, as the system
@@ -1519,6 +1534,23 @@ pub enum LineInput {
     /// A Windows console: there is no kernel line discipline in front of
     /// the program, so no line length is enforced by the terminal.
     Console,
+}
+
+/// How the terminal whose pseudoterminal master the caller holds takes input
+/// now, read as [`line_input`] reads a process's terminal, from the master's
+/// own descriptor, so a pane's holder asks its terminal without finding it
+/// again by pid. `None` on Windows: a pseudoconsole keeps its program's
+/// console input mode (`ENABLE_LINE_INPUT`) inside the console host, which
+/// the holder of its master has no handle to ask.
+#[cfg(unix)]
+pub fn master_line_input(master: std::os::fd::BorrowedFd<'_>) -> io::Result<Option<LineInput>> {
+    sys::input_of_descriptor(std::os::fd::AsRawFd::as_raw_fd(&master)).map(Some)
+}
+
+/// See the Unix form: Windows' pseudoconsole cannot say.
+#[cfg(windows)]
+pub fn master_line_input(_master: ()) -> io::Result<Option<LineInput>> {
+    Ok(None)
 }
 
 /// How the controlling terminal of `pid` takes input now. `NotFound` when
@@ -3887,11 +3919,19 @@ mod sys {
     }
 
     fn input_of(terminal: &std::fs::File) -> io::Result<super::LineInput> {
+        input_of_descriptor(terminal.as_raw_fd())
+    }
+
+    /// The input mode of the terminal open on `descriptor`, which the caller
+    /// keeps open for the call.
+    pub(super) fn input_of_descriptor(
+        descriptor: std::os::fd::RawFd,
+    ) -> io::Result<super::LineInput> {
         // SAFETY: an all-zero `termios` is a valid value for the call to fill.
         let mut attributes: libc::termios = unsafe { std::mem::zeroed() };
-        // SAFETY: the descriptor stays open for the call and the structure is
-        // valid for writes.
-        if unsafe { libc::tcgetattr(terminal.as_raw_fd(), &mut attributes) } != 0 {
+        // SAFETY: the caller keeps the descriptor open for the call and the
+        // structure is valid for writes.
+        if unsafe { libc::tcgetattr(descriptor, &mut attributes) } != 0 {
             return Err(io::Error::last_os_error());
         }
         Ok(if attributes.c_lflag & libc::ICANON != 0 {

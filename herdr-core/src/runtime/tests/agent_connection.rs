@@ -4,7 +4,8 @@
 
 use super::*;
 use crate::model::{
-    PaneConnectionReason, PaneConnectionSnapshot, PaneReopenFailure, PaneReopenSnapshot,
+    PaneConnectionReason, PaneConnectionSnapshot, PaneLayoutNodeSnapshot, PaneLayoutSnapshot,
+    PaneReopenFailure, PaneReopenSnapshot,
 };
 use crate::pane_reopen::ReopenFailure;
 use hide_agent_hooks::{AgentRuntime, HookStatus};
@@ -1324,4 +1325,92 @@ fn a_session_hide_cannot_read_marks_its_pane_until_a_read_lands() {
         Some(true)
     );
     assert_eq!(connection_of(&runtime, "w1:p2"), None);
+}
+
+/// A turn an agent's hook reports asks the label reader to read the pane's
+/// session again, since the engine may not have moved: omp, which has no
+/// screen rules, reads at rest on the core's own engine through its turns,
+/// and the session it reported before writing its file is confirmed only by
+/// such a read. Turns reported before the reader takes the list wait as one
+/// read per pane, a report that moves nothing or carries no turn asks for
+/// nothing, and a pane that closed before the reader came leaves the list.
+#[test]
+fn turns_a_hook_reports_ask_for_one_read_of_each_open_pane() {
+    let mut runtime = runtime();
+    let only = |panes: &[&str]| -> Vec<PaneLayoutSnapshot> {
+        panes
+            .iter()
+            .enumerate()
+            .map(|(index, pane)| PaneLayoutSnapshot {
+                workspace_id: "w1".to_owned(),
+                tab_id: format!("w1:t{index}"),
+                focused_pane_id: (*pane).to_owned(),
+                zoomed: false,
+                root: PaneLayoutNodeSnapshot::Pane {
+                    pane_id: (*pane).to_owned(),
+                },
+            })
+            .collect()
+    };
+    runtime.snapshot.pane_layouts = only(&["w1:p1", "w1:p2", "w1:p3"]);
+    let report = |turn| hide_node_link::panes::HookStatusReport {
+        runtime: "omp".to_owned(),
+        version: hide_agent_hooks::HOOK_VERSION,
+        session: Some("/home/me/.omp/agent/sessions/--w--/s.jsonl".to_owned()),
+        turn,
+        counts: None,
+        session_start: false,
+        waiting: None,
+    };
+    let ingest = |runtime: &mut Runtime, pane: &str, turn| {
+        runtime
+            .ingest_hook_status(crate::node::TEST_NODE, pane, &report(turn))
+            .expect("the report is recorded");
+    };
+    let working = Some(hide_node_link::panes::HookTurn::Working);
+    let idle = Some(hide_node_link::panes::HookTurn::Idle);
+    ingest(&mut runtime, "w1:p3", None);
+    ingest(&mut runtime, "w1:p1", working);
+    ingest(&mut runtime, "w1:p2", working);
+    ingest(&mut runtime, "w1:p1", idle);
+    ingest(&mut runtime, "w1:p1", working);
+    assert_eq!(
+        runtime.take_session_rereads(),
+        vec!["w1:p1".to_owned(), "w1:p2".to_owned()],
+        "a session alone is no turn, and three turns of one pane are one read"
+    );
+    ingest(&mut runtime, "w1:p1", working);
+    assert!(runtime.take_session_rereads().is_empty(), "nothing moved");
+
+    ingest(&mut runtime, "w1:p2", idle);
+    runtime.snapshot.pane_layouts = only(&["w1:p1", "w1:p3"]);
+    ingest(&mut runtime, "w1:p1", idle);
+    assert_eq!(
+        runtime.take_session_rereads(),
+        vec!["w1:p1".to_owned()],
+        "the closed pane left the list"
+    );
+}
+
+/// Nothing takes the list on a machine whose label reader never started, so
+/// it is capped: past `SESSION_REREADS_LIMIT` panes a new one is refused,
+/// the ones already waiting stay, and once the reader takes the list a pane
+/// is queued again.
+#[test]
+fn panes_waiting_for_a_session_read_are_capped() {
+    use crate::runtime::typed_input::SESSION_REREADS_LIMIT;
+    let mut runtime = runtime();
+    runtime.snapshot.pane_layouts.clear();
+    for index in 0..SESSION_REREADS_LIMIT + 3 {
+        runtime.queue_session_reread(format!("w1:p{index}"));
+    }
+    let taken = runtime.take_session_rereads();
+    assert_eq!(taken.len(), SESSION_REREADS_LIMIT);
+    assert_eq!(taken.first().map(String::as_str), Some("w1:p0"));
+    assert!(!taken.contains(&format!("w1:p{SESSION_REREADS_LIMIT}")));
+    runtime.queue_session_reread(format!("w1:p{SESSION_REREADS_LIMIT}"));
+    assert_eq!(
+        runtime.take_session_rereads(),
+        vec![format!("w1:p{SESSION_REREADS_LIMIT}")]
+    );
 }

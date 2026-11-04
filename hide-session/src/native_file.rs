@@ -276,8 +276,13 @@ pub(crate) fn checked_path_under(
                 RootRefusal::Unreadable
             }
         })?;
-        let followed =
-            hide_platform::fs::identity::file_id(&checked).map_err(|_| RootRefusal::Unreadable)?;
+        let followed = hide_platform::fs::identity::file_id(&checked).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                RootRefusal::Missing
+            } else {
+                RootRefusal::Unreadable
+            }
+        })?;
         if native != followed {
             return Err(RootRefusal::Outside);
         }

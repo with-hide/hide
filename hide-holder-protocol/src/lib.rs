@@ -101,8 +101,21 @@ pub const MAX_INPUT: usize = 64 * 1024;
 /// The most bytes one [`ClientMessage::Paste`] carries.
 pub const MAX_PASTE: usize = 512 * 1024;
 
-/// The most bytes a node's message after its hello carries.
-const MAX_CLIENT: usize = MAX_PASTE + 64;
+/// The most bytes a [`Submit`]'s submitting part carries, and the most its
+/// text carries beyond [`MAX_PASTE`]: a focus report before it and a paste
+/// boundary after it, as Herdr's `agent.prompt` sends them.
+pub const MAX_SUBMIT_ENTER: usize = 64;
+
+/// The most parts a [`Submit`]'s text has.
+pub const MAX_SUBMIT_PARTS: usize = 4;
+
+/// The longest gap a [`Submit`] asks for between its text and its submit.
+pub const MAX_SUBMIT_GAP: Duration = Duration::from_secs(2);
+
+/// The most bytes a node's message after its hello carries: a
+/// [`ClientMessage::Submit`] with the longest text and submit, and each
+/// part's tag and length.
+const MAX_CLIENT: usize = MAX_PASTE + 2 * MAX_SUBMIT_ENTER + 64;
 
 /// The most rows one [`Ask::Read`] asks for.
 pub const MAX_READ_LINES: u16 = 2000;
@@ -163,6 +176,7 @@ mod kind {
     pub const SCROLL: u8 = 0x13;
     pub const THEME: u8 = 0x14;
     pub const KEY: u8 = 0x15;
+    pub const SUBMIT: u8 = 0x16;
     /// A first message, like [`HELLO`].
     pub const ASK: u8 = 0x18;
     /// A first message, like [`HELLO`]: a connection that follows the facts.
@@ -197,6 +211,17 @@ pub enum Capability {
     /// holder whose welcome names this, since an older holder reads it as a
     /// message it does not know and closes the connection.
     Keys,
+    /// The holder says on a watch whether its terminal edits lines
+    /// ([`Facts::line_editing`]); a node that does not accept it, as one
+    /// built before it does not, is sent facts without it.
+    LineEditing,
+    /// The holder says on a watch whether the system could not say what
+    /// holds the terminal ([`Facts::foreground_unread`]), which a node built
+    /// before it reads as the pane's own program holding it.
+    ForegroundUnread,
+    /// The holder reads [`ClientMessage::Submit`]; a node sends it only to a
+    /// holder whose welcome names this.
+    Submit,
     /// A capability this build does not know, kept by name so a side can
     /// answer with the ones it does.
     Other(String),
@@ -210,6 +235,9 @@ impl Capability {
             Self::Facts => "facts",
             Self::ProgramPackage => "program_package",
             Self::Keys => "keys",
+            Self::LineEditing => "line_editing",
+            Self::ForegroundUnread => "foreground_unread",
+            Self::Submit => "submit",
             Self::Other(name) => name,
         }
     }
@@ -221,6 +249,9 @@ impl Capability {
             "facts" => Self::Facts,
             "program_package" => Self::ProgramPackage,
             "keys" => Self::Keys,
+            "line_editing" => Self::LineEditing,
+            "foreground_unread" => Self::ForegroundUnread,
+            "submit" => Self::Submit,
             other => Self::Other(other.to_owned()),
         }
     }
@@ -310,6 +341,69 @@ pub struct Facts {
     /// The program in the terminal's foreground other than the pane's own.
     pub foreground: Option<Program>,
     pub screen: ScreenRead,
+    /// Whether the terminal edits input a line at a time before its program
+    /// reads it, in every facts frame of a watch that accepted
+    /// [`Capability::LineEditing`] and in no other (`None`).
+    pub line_editing: Option<LineEditing>,
+    /// Whether the system could not say what holds the terminal, so
+    /// [`Self::foreground`] is none for want of an answer rather than
+    /// because the pane's own program holds it, in every facts frame of a
+    /// watch that accepted [`Capability::ForegroundUnread`] and in no other
+    /// (`None`).
+    pub foreground_unread: Option<bool>,
+}
+
+/// The facts extensions a watch agreed: each is in every facts frame of that
+/// watch and in no other, in this order after the screen.
+#[derive(Clone, Copy, Debug, Default)]
+struct Extensions {
+    line_editing: bool,
+    foreground_unread: bool,
+}
+
+impl Extensions {
+    fn of(agreed: &[Capability]) -> Self {
+        Self {
+            line_editing: agreed.contains(&Capability::LineEditing),
+            foreground_unread: agreed.contains(&Capability::ForegroundUnread),
+        }
+    }
+}
+
+/// Whether a terminal edits input a line at a time before its program reads
+/// it (canonical mode): until a program turns that off to read keys, as every
+/// agent's screen does, what is typed waits in the terminal's line and an
+/// Enter in it reaches the program as a line break.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LineEditing {
+    /// The program reads keys.
+    ReadsKeys,
+    /// The terminal edits lines.
+    Edits,
+    /// The system keeps no such mode (Windows) or the terminal could not be
+    /// asked.
+    Unknown,
+}
+
+impl LineEditing {
+    fn code(self) -> u8 {
+        match self {
+            Self::ReadsKeys => 0,
+            Self::Edits => 1,
+            Self::Unknown => 2,
+        }
+    }
+
+    fn from_code(code: u8) -> Result<Self, FrameError> {
+        match code {
+            0 => Ok(Self::ReadsKeys),
+            1 => Ok(Self::Edits),
+            2 => Ok(Self::Unknown),
+            other => Err(FrameError::Malformed(format!(
+                "an unknown line editing {other}"
+            ))),
+        }
+    }
 }
 
 /// A program in a pane's foreground.
@@ -918,6 +1012,8 @@ pub enum ClientMessage {
     /// Keys pressed in order, at most [`MAX_KEYS`], to a holder that names
     /// [`Capability::Keys`].
     Key(Vec<Key>),
+    /// One submission to a holder that names [`Capability::Submit`].
+    Submit(Submit),
     Resize(Size),
     Theme(Theme),
     /// The next fragment is full: the node lost track of the screen.
@@ -926,6 +1022,93 @@ pub enum ClientMessage {
     Release,
     /// Ends the pane's program and everything it started, then the holder.
     Terminate,
+}
+
+/// One submission, as Herdr's `agent.prompt` makes it, never without text
+/// or a submit: the holder writes
+/// `text`'s parts to the program in order and flushes them, waits `gap`,
+/// then writes `enter`,
+/// and the connection's input that came after waits until `enter` was
+/// written, so nothing lands between them and a program that reads keys
+/// arriving together as a paste still submits.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Submit {
+    /// At most [`MAX_SUBMIT_PARTS`], [`MAX_PASTE`] and [`MAX_SUBMIT_ENTER`]
+    /// bytes together.
+    pub text: Vec<SubmitPart>,
+    /// At most [`MAX_SUBMIT_GAP`].
+    pub gap: Duration,
+    pub enter: SubmitPart,
+}
+
+/// What one part of a [`Submit`] types, encoded the way the message of the
+/// same kind is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SubmitPart {
+    Input(Vec<u8>),
+    Paste(Vec<u8>),
+    Keys(Vec<Key>),
+}
+
+impl SubmitPart {
+    /// The bytes or keys it carries, as its bound counts them.
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Input(bytes) | Self::Paste(bytes) => bytes.len(),
+            Self::Keys(keys) => keys.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Puts it in `payload` and answers how much of `bound` it took.
+    fn put(&self, payload: &mut Vec<u8>, bound: usize) -> io::Result<usize> {
+        let (tag, bytes): (u8, Vec<u8>) = match self {
+            Self::Input(bytes) => (0, bytes.clone()),
+            Self::Paste(bytes) => (1, bytes.clone()),
+            Self::Keys(keys) => (2, keys.iter().map(|key| key.code()).collect()),
+        };
+        let bound = if tag == 2 { bound.min(MAX_KEYS) } else { bound };
+        if bytes.len() > bound {
+            return Err(too_long("submit part", bytes.len(), bound));
+        }
+        payload.push(tag);
+        payload.extend_from_slice(&u32::try_from(bytes.len()).expect("bounded").to_le_bytes());
+        payload.extend_from_slice(&bytes);
+        Ok(bytes.len())
+    }
+
+    fn take(payload: &mut Payload<'_>, bound: usize) -> Result<Self, FrameError> {
+        let tag = payload.u8()?;
+        let length = usize::try_from(payload.u32()?).unwrap_or(usize::MAX);
+        let bound = if tag == 2 { bound.min(MAX_KEYS) } else { bound };
+        if length > bound {
+            return Err(FrameError::Malformed(format!(
+                "a submit part of {length} bytes, past {bound}"
+            )));
+        }
+        let bytes = payload.take(length)?.to_vec();
+        Ok(match tag {
+            0 => Self::Input(bytes),
+            1 => Self::Paste(bytes),
+            2 => Self::Keys(
+                bytes
+                    .into_iter()
+                    .map(|code| {
+                        Key::from_code(code)
+                            .ok_or_else(|| FrameError::Malformed(format!("an unknown key {code}")))
+                    })
+                    .collect::<Result<_, _>>()?,
+            ),
+            other => {
+                return Err(FrameError::Malformed(format!(
+                    "an unknown submit part {other}"
+                )));
+            }
+        })
+    }
 }
 
 /// A connection's first message.
@@ -1223,6 +1406,36 @@ pub fn write_client(writer: &mut impl Write, message: &ClientMessage) -> io::Res
             let payload: Vec<u8> = keys.iter().map(|key| key.code()).collect();
             write_frame(writer, kind::KEY, &payload)
         }
+        ClientMessage::Submit(submit) => {
+            if submit.gap > MAX_SUBMIT_GAP {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("a submit gap of {:?}, past {MAX_SUBMIT_GAP:?}", submit.gap),
+                ));
+            }
+            let gap = u16::try_from(submit.gap.as_millis()).expect("bounded above");
+            let mut payload = gap.to_le_bytes().to_vec();
+            if submit.text.len() > MAX_SUBMIT_PARTS {
+                return Err(too_long(
+                    "submit text parts",
+                    submit.text.len(),
+                    MAX_SUBMIT_PARTS,
+                ));
+            }
+            if submit.text.iter().all(SubmitPart::is_empty) || submit.enter.is_empty() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "a submission types text and a submit",
+                ));
+            }
+            payload.push(u8::try_from(submit.text.len()).expect("bounded above"));
+            let mut left = MAX_PASTE + MAX_SUBMIT_ENTER;
+            for part in &submit.text {
+                left -= part.put(&mut payload, left)?;
+            }
+            submit.enter.put(&mut payload, MAX_SUBMIT_ENTER)?;
+            write_frame(writer, kind::SUBMIT, &payload)
+        }
         ClientMessage::Resize(size) => {
             let mut payload = size.rows.to_le_bytes().to_vec();
             payload.extend_from_slice(&size.cols.to_le_bytes());
@@ -1420,6 +1633,35 @@ pub fn read_client(reader: &mut impl Read) -> Result<ClientMessage, FrameError> 
                 .collect::<Result<_, _>>()?;
             ClientMessage::Key(keys)
         }
+        kind::SUBMIT => {
+            let gap = Duration::from_millis(u64::from(payload.u16()?));
+            if gap > MAX_SUBMIT_GAP {
+                return Err(FrameError::Malformed(format!(
+                    "a submit gap of {gap:?}, past {MAX_SUBMIT_GAP:?}"
+                )));
+            }
+            let parts = usize::from(payload.u8()?);
+            if parts > MAX_SUBMIT_PARTS {
+                return Err(FrameError::Malformed(format!(
+                    "a submit of {parts} text parts, past {MAX_SUBMIT_PARTS}"
+                )));
+            }
+            let mut left = MAX_PASTE + MAX_SUBMIT_ENTER;
+            let text: Vec<SubmitPart> = (0..parts)
+                .map(|_| {
+                    let part = SubmitPart::take(&mut payload, left)?;
+                    left -= part.len();
+                    Ok(part)
+                })
+                .collect::<Result<_, FrameError>>()?;
+            let enter = SubmitPart::take(&mut payload, MAX_SUBMIT_ENTER)?;
+            if text.iter().all(SubmitPart::is_empty) || enter.is_empty() {
+                return Err(FrameError::Malformed(
+                    "a submission without text or a submit".to_owned(),
+                ));
+            }
+            ClientMessage::Submit(Submit { text, gap, enter })
+        }
         kind::RESIZE => ClientMessage::Resize(payload.size()?),
         kind::THEME => ClientMessage::Theme(Theme::take(&mut payload)?),
         kind::REDRAW => ClientMessage::Redraw,
@@ -1559,8 +1801,26 @@ pub fn write_holder(writer: &mut impl Write, message: &HolderMessage) -> io::Res
     }
 }
 
-/// Reads one message from a holder.
+/// Reads one message from a holder, on a connection that agreed no facts
+/// extension beyond the package.
 pub fn read_holder(reader: &mut impl Read) -> Result<HolderMessage, FrameError> {
+    read_holder_agreed(reader, Extensions::default())
+}
+
+/// Reads one message on a watch whose [`Watching`] named `agreed`: a facts
+/// extension is in a frame exactly when its watch agreed it, so it is read
+/// only then.
+pub fn read_watch_holder(
+    reader: &mut impl Read,
+    agreed: &[Capability],
+) -> Result<HolderMessage, FrameError> {
+    read_holder_agreed(reader, Extensions::of(agreed))
+}
+
+fn read_holder_agreed(
+    reader: &mut impl Read,
+    agreed: Extensions,
+) -> Result<HolderMessage, FrameError> {
     let (kind, payload) = read_frame(reader, MAX_FRAME)?;
     let mut payload = Payload(&payload);
     let message = match kind {
@@ -1669,7 +1929,7 @@ pub fn read_holder(reader: &mut impl Read) -> Result<HolderMessage, FrameError> 
                 sends,
             })
         }
-        kind::FACTS => HolderMessage::Facts(Facts::take(&mut payload)?),
+        kind::FACTS => HolderMessage::Facts(Facts::take(&mut payload, agreed)?),
         kind::CLOSED => {
             let code = payload.u16()?;
             let reason = CloseReason::from_code(code)
@@ -2024,6 +2284,14 @@ impl Facts {
                 put_text(payload, &bounded(reason, MAX_DETAIL));
             }
         }
+        // Present exactly when the watch agreed it, before the package,
+        // so each extension is read only where it was agreed.
+        if let Some(editing) = self.line_editing {
+            payload.push(editing.code());
+        }
+        if let Some(unread) = self.foreground_unread {
+            payload.push(u8::from(unread));
+        }
         // No extension is the original facts frame. Older watchers are
         // handed a program with no package by the negotiated writer.
         if let Some(package) = self.foreground.as_ref().and_then(|p| p.package.as_deref()) {
@@ -2031,7 +2299,8 @@ impl Facts {
         }
     }
 
-    fn take(payload: &mut Payload<'_>) -> Result<Self, FrameError> {
+    /// Reads facts whose frame carries the extensions its watch agreed.
+    fn take(payload: &mut Payload<'_>, agreed: Extensions) -> Result<Self, FrameError> {
         let cwd = payload.optional_text(MAX_CWD)?;
         let title = payload.optional_text(MAX_TITLE)?;
         let bells = payload.u64()?;
@@ -2079,6 +2348,22 @@ impl Facts {
                 )));
             }
         };
+        let line_editing = if agreed.line_editing {
+            Some(LineEditing::from_code(payload.u8()?)?)
+        } else {
+            None
+        };
+        let foreground_unread = if agreed.foreground_unread {
+            let unread = payload.u8()? != 0;
+            if unread && foreground.is_some() {
+                return Err(FrameError::Malformed(
+                    "a foreground program the system could not say".to_owned(),
+                ));
+            }
+            Some(unread)
+        } else {
+            None
+        };
         if !payload.0.is_empty() {
             let program = foreground.as_mut().ok_or_else(|| {
                 FrameError::Malformed("a package without a foreground program".to_owned())
@@ -2093,6 +2378,8 @@ impl Facts {
             bracketed_paste,
             foreground,
             screen,
+            line_editing,
+            foreground_unread,
         })
     }
 }
@@ -2117,6 +2404,77 @@ mod tests {
         let mut bytes = Vec::new();
         write_holder(&mut bytes, &message).unwrap();
         read_holder(&mut &bytes[..]).unwrap()
+    }
+
+    /// The extensions a watch agreed sit between the screen and the package,
+    /// in every facts frame of that watch and in no other: facts without
+    /// them are the frame an older holder sends, and only a reader that
+    /// agreed them reads them.
+    #[test]
+    fn facts_extensions_ride_only_on_a_watch_that_agreed_them() {
+        let facts = Facts {
+            foreground: Some(Program {
+                pid: 7,
+                name: "pi".to_owned(),
+                package: Some("@scope/pi".to_owned()),
+                argv: Vec::new(),
+            }),
+            ..Facts::default()
+        };
+        let mut original = Vec::new();
+        write_holder(&mut original, &HolderMessage::Facts(facts.clone())).unwrap();
+        assert_eq!(
+            read_holder(&mut &original[..]).unwrap(),
+            HolderMessage::Facts(facts.clone())
+        );
+        let agreed = [
+            Capability::Facts,
+            Capability::ProgramPackage,
+            Capability::LineEditing,
+            Capability::ForegroundUnread,
+        ];
+        for editing in [
+            LineEditing::ReadsKeys,
+            LineEditing::Edits,
+            LineEditing::Unknown,
+        ] {
+            let sent = Facts {
+                line_editing: Some(editing),
+                foreground_unread: Some(false),
+                ..facts.clone()
+            };
+            let mut bytes = Vec::new();
+            write_holder(&mut bytes, &HolderMessage::Facts(sent.clone())).unwrap();
+            assert_eq!(bytes.len(), original.len() + 2);
+            assert_eq!(
+                read_watch_holder(&mut &bytes[..], &agreed).unwrap(),
+                HolderMessage::Facts(sent)
+            );
+        }
+        let unread = Facts {
+            line_editing: Some(LineEditing::Unknown),
+            foreground_unread: Some(true),
+            ..Facts::default()
+        };
+        let mut bytes = Vec::new();
+        write_holder(&mut bytes, &HolderMessage::Facts(unread.clone())).unwrap();
+        assert_eq!(
+            read_watch_holder(&mut &bytes[..], &agreed).unwrap(),
+            HolderMessage::Facts(unread)
+        );
+        // A frame that lacks what its watch agreed is broken, not facts that
+        // do not know; so is a program the system could not say.
+        let mut bare = Vec::new();
+        write_holder(&mut bare, &HolderMessage::Facts(Facts::default())).unwrap();
+        assert!(read_watch_holder(&mut &bare[..], &agreed).is_err());
+        let mut both = Vec::new();
+        let forged = Facts {
+            line_editing: Some(LineEditing::Edits),
+            foreground_unread: Some(true),
+            ..facts
+        };
+        write_holder(&mut both, &HolderMessage::Facts(forged)).unwrap();
+        assert!(read_watch_holder(&mut &both[..], &agreed).is_err());
     }
 
     #[test]
@@ -2176,6 +2534,20 @@ mod tests {
                 modifiers: Modifiers::default(),
             }),
             ClientMessage::Key(Key::ALL.to_vec()),
+            ClientMessage::Submit(Submit {
+                text: vec![
+                    SubmitPart::Input(b"\x1b[I".to_vec()),
+                    SubmitPart::Paste(b"two\nlines".to_vec()),
+                    SubmitPart::Keys(vec![Key::Right]),
+                ],
+                gap: Duration::from_millis(300),
+                enter: SubmitPart::Keys(vec![Key::Enter]),
+            }),
+            ClientMessage::Submit(Submit {
+                text: vec![SubmitPart::Input(b"hello".to_vec())],
+                gap: MAX_SUBMIT_GAP,
+                enter: SubmitPart::Input(b"\r".to_vec()),
+            }),
             ClientMessage::Resize(Size {
                 rows: 40,
                 cols: 120,
@@ -2270,6 +2642,8 @@ mod tests {
                     state: ScreenState::Working,
                     rule: Some("osc_title_working".to_owned()),
                 },
+                line_editing: None,
+                foreground_unread: None,
             }),
             HolderMessage::Facts(Facts {
                 screen: ScreenRead::Unknown {
@@ -2394,6 +2768,40 @@ mod tests {
         ));
     }
 
+    /// A submission without text or a submit would hold the holder's writer
+    /// for its gap and count nothing against its queue's cap.
+    #[test]
+    fn a_submission_without_text_or_a_submit_is_not_written_or_read() {
+        for (text, enter) in [
+            (
+                vec![SubmitPart::Input(Vec::new())],
+                SubmitPart::Keys(vec![Key::Enter]),
+            ),
+            (Vec::new(), SubmitPart::Keys(vec![Key::Enter])),
+            (
+                vec![SubmitPart::Input(b"hi".to_vec())],
+                SubmitPart::Input(Vec::new()),
+            ),
+        ] {
+            let submit = ClientMessage::Submit(Submit {
+                text,
+                gap: MAX_SUBMIT_GAP,
+                enter,
+            });
+            assert!(write_client(&mut Vec::new(), &submit).is_err());
+        }
+        // Gap 2000 ms, one empty text part, then an Enter.
+        let mut payload = 2000u16.to_le_bytes().to_vec();
+        payload.extend([1, 0, 0, 0, 0, 0]);
+        payload.extend([2, 1, 0, 0, 0, Key::Enter.code()]);
+        let mut forged = Vec::new();
+        write_frame(&mut forged, kind::SUBMIT, &payload).unwrap();
+        assert!(matches!(
+            read_client(&mut &forged[..]),
+            Err(FrameError::Malformed(_))
+        ));
+    }
+
     #[test]
     fn a_message_past_its_bound_is_not_written_or_read() {
         let paste = ClientMessage::Paste(vec![b'x'; MAX_PASTE + 1]);
@@ -2487,7 +2895,10 @@ mod tests {
         ]);
         assert_eq!(original, old_wire);
         let mut payload = Payload(&original);
-        assert_eq!(Facts::take(&mut payload).unwrap(), facts);
+        assert_eq!(
+            Facts::take(&mut payload, Extensions::default()).unwrap(),
+            facts
+        );
         payload.end().unwrap();
 
         // This is the extension's wire format, appended after the old
@@ -2495,18 +2906,18 @@ mod tests {
         let mut extended = original.clone();
         put_text(&mut extended, "@scope/tool");
         let mut payload = Payload(&extended);
-        let read = Facts::take(&mut payload).unwrap();
+        let read = Facts::take(&mut payload, Extensions::default()).unwrap();
         let program = read.foreground.unwrap();
         assert_eq!(program.name, "cli");
         assert_eq!(program.package.as_deref(), Some("@scope/tool"));
         payload.end().unwrap();
 
         put_text(&mut original, &"x".repeat(MAX_PROCESS_NAME + 1));
-        assert!(Facts::take(&mut Payload(&original)).is_err());
+        assert!(Facts::take(&mut Payload(&original), Extensions::default()).is_err());
         let mut no_program = Vec::new();
         Facts::default().put(&mut no_program);
         put_text(&mut no_program, "@scope/tool");
-        assert!(Facts::take(&mut Payload(&no_program)).is_err());
+        assert!(Facts::take(&mut Payload(&no_program), Extensions::default()).is_err());
     }
 
     #[test]

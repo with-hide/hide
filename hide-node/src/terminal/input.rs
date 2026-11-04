@@ -25,6 +25,7 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
+use hide_holder_protocol::{Submit, SubmitPart};
 use hide_node_link::terminal::{
     HELD_INPUT_MAX_AGE_MS, INPUT_HOLD_LIMIT_BYTES, INPUT_REQUEST_LIMIT,
 };
@@ -108,6 +109,15 @@ pub(super) enum Typed {
     Bytes(Vec<u8>),
     Paste(Vec<u8>),
     Keys(Vec<hide_holder_protocol::Key>),
+    /// One submission, as Herdr's `agent.prompt` makes it: its text, then
+    /// its submit once its gap has passed since the text was written, with
+    /// the pane's later input behind it ([`hide_holder_protocol::Submit`]).
+    Submit(Box<hide_holder_protocol::Submit>),
+}
+
+/// What a submission counts against a cap: its parts' bytes or keys.
+pub(super) fn submit_len(submit: &Submit) -> usize {
+    submit.text.iter().map(SubmitPart::len).sum::<usize>() + submit.enter.len()
 }
 
 impl Typed {
@@ -116,6 +126,21 @@ impl Typed {
         match self {
             Self::Bytes(bytes) | Self::Paste(bytes) => bytes.len(),
             Self::Keys(keys) => keys.len(),
+            Self::Submit(submit) => submit_len(submit),
+        }
+    }
+
+    /// Whether it types named keys, which only a transport that reads them
+    /// is sent.
+    pub(super) fn names_keys(&self) -> bool {
+        match self {
+            Self::Keys(_) => true,
+            Self::Bytes(_) | Self::Paste(_) => false,
+            Self::Submit(submit) => submit
+                .text
+                .iter()
+                .chain([&submit.enter])
+                .any(|part| matches!(part, SubmitPart::Keys(_))),
         }
     }
 
@@ -498,6 +523,14 @@ impl Requests {
     }
 
     /// Whether a creation's answer named `pane_id`.
+    /// Whether `request_id` holds keys for a fork, whose agent runs by the
+    /// time they are released; any other request's go to a starting shell.
+    pub(super) fn is_fork(&self, request_id: &str) -> bool {
+        self.requests
+            .iter()
+            .any(|request| request.id == request_id && request.fork)
+    }
+
     pub(super) fn names(&self, pane_id: &str) -> bool {
         self.requests
             .iter()
@@ -683,6 +716,182 @@ impl PaneHold {
                 "bytes": bytes,
             }));
         }
+    }
+}
+
+/// How long a submit replayed from a fork's hold waits after the keys
+/// before it were written, as Herdr's `agent.prompt` waits from its text's
+/// flush before its Enter. Held keys reach the program together, and a
+/// program that reads keys arriving together as a paste (Codex) takes an
+/// Enter inside one for a newline, where the operator had pressed it after
+/// a pause.
+pub(super) const REPLAYED_SUBMIT_GAP: Duration = Duration::from_millis(300);
+
+/// Whether a replayed chunk is the operator's submit, which goes as one
+/// submission with the keys typed before it.
+pub(super) fn paces(chunk: &HeldChunk) -> bool {
+    chunk.by == Typist::Operator && matches!(&chunk.input, Typed::Bytes(bytes) if submits(bytes))
+}
+
+/// Whether a replayed chunk is plain typing that a submission can carry as
+/// its text: the operator's bytes, with no permit or command to answer.
+fn plain(chunk: &HeldChunk) -> bool {
+    chunk.by == Typist::Operator
+        && chunk.permit.is_none()
+        && chunk.command.is_none()
+        && matches!(chunk.input, Typed::Bytes(_))
+}
+
+/// What a fork's released keys become for the pane's writer, in the order
+/// typed: each submit with the plain keys typed right before it as one
+/// submission ([`Typed::Submit`], [`REPLAYED_SUBMIT_GAP`]), everything else
+/// as it was typed.
+pub(super) fn submissions(chunks: Vec<HeldChunk>) -> Vec<HeldChunk> {
+    let mut out = Vec::new();
+    let mut text: Vec<HeldChunk> = Vec::new();
+    for chunk in chunks {
+        if paces(&chunk) && !text.is_empty() {
+            let typed = std::mem::take(&mut text)
+                .into_iter()
+                .flat_map(|held| match held.input {
+                    Typed::Bytes(bytes) => bytes,
+                    _ => unreachable!("only plain keys are kept as text"),
+                })
+                .collect();
+            let Typed::Bytes(enter) = chunk.input else {
+                unreachable!("a submit is the operator's bytes");
+            };
+            out.push(HeldChunk {
+                input: Typed::Submit(Box::new(Submit {
+                    text: vec![SubmitPart::Input(typed)],
+                    gap: REPLAYED_SUBMIT_GAP,
+                    enter: SubmitPart::Input(enter),
+                })),
+                ..chunk
+            });
+        } else if plain(&chunk) && !paces(&chunk) {
+            text.push(chunk);
+        } else {
+            out.append(&mut text);
+            out.push(chunk);
+        }
+    }
+    out.append(&mut text);
+    out
+}
+
+/// The one queue a fork's released keys wait in, in the order typed, with
+/// the operator's keys typed meanwhile behind them, until the pane takes
+/// keys: a control session and no letter being typed. Then the whole queue
+/// goes to the pane's writer at once as [`submissions`], so no other hold
+/// reorders them and the writer, a holder that owns the program's terminal,
+/// keeps each submit's gap. What the pane has not taken by [`Self::ends`],
+/// [`HELD_INPUT_MAX_AGE`] after the release, is dropped and reported.
+/// Capped at [`INPUT_HOLD_LIMIT_BYTES`] like every hold: past the cap the
+/// keys typed until the queue ends are dropped, with one diagnostic.
+pub(super) struct Replay {
+    /// The fork request the keys were held for, which a drop reports.
+    pub(super) request: String,
+    pub(super) ends: Instant,
+    chunks: Vec<HeldChunk>,
+    bytes: usize,
+    overflowed: bool,
+}
+
+impl Replay {
+    pub(super) fn new(request: &str, ends: Instant, chunks: Vec<HeldChunk>) -> Self {
+        let bytes = chunks.iter().map(|chunk| chunk.input.len()).sum();
+        Self {
+            request: request.to_owned(),
+            ends,
+            chunks,
+            bytes,
+            overflowed: false,
+        }
+    }
+
+    /// Queues `chunk` behind the rest; answers whether it is the key that
+    /// crossed the cap, dropped with every key after it, which the caller
+    /// reports once ([`TerminalReport::RequestDiscarded`] `limit`).
+    #[must_use]
+    pub(super) fn push(&mut self, pane_id: &str, chunk: HeldChunk) -> bool {
+        if self.overflowed {
+            return false;
+        }
+        if self.bytes + chunk.input.len() > INPUT_HOLD_LIMIT_BYTES {
+            self.overflowed = true;
+            crate::diagnostic!(json!({
+                "component": "terminal_input",
+                "kind": "terminal.input_discarded",
+                "pane_id": pane_id,
+                "reason": "limit",
+                "bytes": chunk.input.len(),
+            }));
+            return true;
+        }
+        self.bytes += chunk.input.len();
+        self.chunks.push(chunk);
+        false
+    }
+
+    /// Keys a letter held for the pane, which go ahead of every key queued
+    /// here: a key typed while a fork holds the pane is the fork's, so the
+    /// fork's hold, and every key it queued, began after them. The cap
+    /// counts them like any other, so past it the latest typed are dropped,
+    /// as [`Self::push`] drops them, and a queue that already dropped keys
+    /// goes on dropping. Answers whether this crossed the cap.
+    #[must_use]
+    pub(super) fn put_first(&mut self, pane_id: &str, chunks: Vec<HeldChunk>) -> bool {
+        if chunks.is_empty() {
+            return false;
+        }
+        let queued = std::mem::take(&mut self.chunks);
+        let overflowed = std::mem::replace(&mut self.overflowed, false);
+        self.bytes = 0;
+        let mut crossed = false;
+        for chunk in chunks.into_iter().chain(queued) {
+            crossed |= self.push(pane_id, chunk);
+        }
+        self.overflowed |= overflowed;
+        crossed && !overflowed
+    }
+
+    /// A side channel's permit at its head, which no earlier key waits in
+    /// front of: it is answered the way it would have been unqueued.
+    pub(super) fn take_permit_head(&mut self) -> Option<HeldChunk> {
+        if self
+            .chunks
+            .first()
+            .is_none_or(|chunk| chunk.permit.is_none())
+        {
+            return None;
+        }
+        let chunk = self.chunks.remove(0);
+        self.bytes -= chunk.input.len();
+        Some(chunk)
+    }
+
+    pub(super) fn take(self) -> Vec<HeldChunk> {
+        self.chunks
+    }
+
+    /// Whether [`submissions`] makes a submission of it.
+    pub(super) fn submits(&self) -> bool {
+        self.chunks
+            .windows(2)
+            .any(|pair| plain(&pair[0]) && !paces(&pair[0]) && paces(&pair[1]))
+    }
+
+    /// The pane will not take the rest of it.
+    pub(super) fn discard(self, pane_id: &str, reason: &str) {
+        crate::diagnostic!(json!({
+            "component": "terminal_input",
+            "kind": "terminal.input_discarded",
+            "pane_id": pane_id,
+            "request_id": self.request,
+            "reason": reason,
+            "bytes": self.bytes,
+        }));
     }
 }
 

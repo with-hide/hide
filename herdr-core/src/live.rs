@@ -589,6 +589,7 @@ pub(crate) fn start_agent_checked(
             kind: kind.to_owned(),
             args,
             codex_daemon,
+            wakes: false,
         })
         .map_err(|detail| crate::agent_start::StartError::NotStarted {
             reason: "agent_start.failed".into(),

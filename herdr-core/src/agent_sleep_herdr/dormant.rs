@@ -300,6 +300,7 @@ fn start_dormant(
         kind: work.record.kind.clone(),
         args,
         codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
+        wakes: true,
     }) {
         Ok(start) => start,
         Err(_) => return DormantStartOutcome::NotStarted,

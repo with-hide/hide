@@ -15,6 +15,10 @@ use crate::model::AskSubject;
 use super::Runtime;
 use super::delivery::Observation;
 
+/// The most panes that wait at once for their session to be read again
+/// (`Runtime::queue_session_reread`): more than one machine's open agents.
+pub(crate) const SESSION_REREADS_LIMIT: usize = 256;
+
 /// Which typed input a piece of work is about.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum InputKey {
@@ -399,9 +403,7 @@ impl Runtime {
         self.plans.input_held.retain(|id, _| open.contains(id));
         for (id, attempts, pane) in rereads {
             self.plans.input_reread.insert(id, (attempts, now));
-            if !self.plans.session_rereads.contains(&pane) {
-                self.plans.session_rereads.push(pane);
-            }
+            self.queue_session_reread(pane);
         }
         work
     }
@@ -481,7 +483,34 @@ impl Runtime {
     /// The panes whose sessions are to be read again, for this machine's
     /// session-sync thread.
     pub(crate) fn take_session_rereads(&mut self) -> Vec<String> {
+        self.plans.session_rereads_refused = false;
         std::mem::take(&mut self.plans.session_rereads)
+    }
+
+    /// Asks this machine's label reader to read `pane`'s session again on
+    /// its next tick. A pane already waiting waits once. A pane not yet
+    /// waiting first drops the waiting panes the core no longer projects (a
+    /// machine with no layout yet keeps them all), and past
+    /// `SESSION_REREADS_LIMIT` it is refused and the refusal logged once
+    /// until the reader takes the list: nothing takes it on a machine whose
+    /// reader never started, and it holds no more than the limit.
+    pub(crate) fn queue_session_reread(&mut self, pane: String) {
+        if self.plans.session_rereads.contains(&pane) {
+            return;
+        }
+        let mut queued = std::mem::take(&mut self.plans.session_rereads);
+        queued.retain(|waiting| self.pane_still_terminal(waiting));
+        self.plans.session_rereads = queued;
+        if self.plans.session_rereads.len() >= SESSION_REREADS_LIMIT {
+            if !std::mem::replace(&mut self.plans.session_rereads_refused, true) {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "labels", "kind": "session_reread.capacity",
+                    "pane": pane, "limit": SESSION_REREADS_LIMIT,
+                }));
+            }
+            return;
+        }
+        self.plans.session_rereads.push(pane);
     }
 
     /// Whether the agent in `pane_id` has a source for its own record of

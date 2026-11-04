@@ -52,20 +52,13 @@ class Plan(unittest.TestCase):
     def test_retired_cursor_is_absent_from_the_active_journey(self):
         self.assertNotIn("cursor", cells.plan(contract(), ["codex"]))
 
-    def test_only_the_approved_own_fake_rows_wait_for_the_first_brief_fix(self):
-        reasons = {"pi": "own-start-fixes 노드 대기(Pi 첫 지시문 input_unconfirmed, 제품 결함)",
-                   "opencode": "own-start-fixes 노드 대기(OpenCode 첫 지시문 미전달, 제품 결함)"}
+    def test_every_agent_row_is_planned(self):
+        # The own engine's first-input fix closed the Pi and OpenCode rows.
         for fake in (False, True):
-            for agent, reason in reasons.items():
+            for agent in ("pi", "opencode"):
                 with self.subTest(fake=fake, agent=agent):
                     table = cells.plan(contract(), [agent, "codex"], fake_model=fake)
-                    if fake:
-                        self.assertTrue(all(row["status"] == cells.EXCLUDED and row["reason"] == reason
-                                            for row in table[agent].values()))
-                        self.assertEqual(cells.exit_code(table, [agent], setup_failed=False), 0)
-                        self.assertEqual(cells.exit_code(table, [agent], setup_failed=True), 2)
-                    else:
-                        self.assertEqual(table[agent]["start"]["status"], cells.PENDING)
+                    self.assertEqual(table[agent]["start"]["status"], cells.PENDING)
                     self.assertEqual(table["codex"]["start"]["status"], cells.PENDING)
 
     def test_a_legacy_cursor_row_is_excluded_in_every_cell_and_counts_nowhere(self):
@@ -78,21 +71,14 @@ class Plan(unittest.TestCase):
         self.assertEqual(cells.exit_code({"codex": passed, "cursor": table["cursor"]}, ["codex", "cursor"],
                                          setup_failed=False), 0)
 
-    def test_product_gaps_exclude_only_the_approved_cells_of_other_rows(self):
-        expected = {("codex", "fork"), ("antigravity", "fork"),
-                    ("omp", "sleep_wake"), ("omp", "resume"), ("omp", "fork"), ("omp", "title")}
-        selected = ["codex", "antigravity", "omp", "claude-code", "grok"]
+    def test_no_cell_of_a_registered_agent_is_excluded(self):
+        selected = ["codex", "antigravity", "omp", "claude-code", "grok", "pi", "opencode"]
         for fake in (True, False):
             with self.subTest(fake=fake):
                 table = cells.plan(contract(), selected, fake_model=fake)
                 actual = {(agent, name) for agent in selected for name, value in table[agent].items()
                           if value["status"] == cells.EXCLUDED}
-                self.assertEqual(actual, expected if fake else set())
-                for agent, name in actual:
-                    self.assertIn("own-start-fixes", table[agent][name]["reason"])
-                    self.assertFalse(cells.measurable(table, agent, name))
-                    self.assertFalse(cells.settle(table, agent, name, cells.PASS, "not run"))
-                self.assertEqual(table["omp"]["usage"]["status"], cells.PENDING)
+                self.assertEqual(actual, set())
 
     def test_a_new_adapter_participates_without_a_second_agent_list(self):
         codex = next(row for row in contract() if row["id"] == "codex")

@@ -65,6 +65,12 @@ pub(super) fn attach_allowed(state: &str) -> bool {
 }
 
 impl Runtime {
+    /// Whether `pane` sits in the tab the screen shows: the only panes a
+    /// key moves the keyboard between as a click does.
+    fn pane_in_shown_tab(&self, pane: &str) -> bool {
+        self.snapshot.tab.panes.iter().any(|shown| shown.id == pane)
+    }
+
     pub(crate) fn ingest_pane_focus_completion(
         &mut self,
         control: PendingPaneFocusControl,
@@ -1720,11 +1726,28 @@ impl Runtime {
                     self.record_operator_submit(&pane);
                 }
                 if focus && self.terminal_keyboard_pane() != Some(pane.as_str()) {
-                    self.snapshot.focused.surface = Surface::Terminal;
-                    self.snapshot.focused.pane_id = Some(pane.clone());
-                    self.snapshot.terminal.pane_id = Some(pane.clone());
                     self.ensure_terminal_pane(&pane);
-                    self.sync_focused_terminal_projection();
+                    if crate::address::is_device_pane(&pane) || !self.pane_in_shown_tab(&pane) {
+                        // A device's pane is no pane of this engine, and this
+                        // machine's selection stays its own; a key into a
+                        // pane of a tab not shown moves no tab and reads no
+                        // turn.
+                        self.snapshot.focused.surface = Surface::Terminal;
+                        self.snapshot.focused.pane_id = Some(pane.clone());
+                        self.snapshot.terminal.pane_id = Some(pane);
+                        self.sync_focused_terminal_projection();
+                    } else {
+                        // A focus like any other the core makes, told to the
+                        // engine, whose layout then confirms it while that is
+                        // pending; set here alone, the engine's next layout,
+                        // still on the old pane, read as the engine's own
+                        // move and took the keyboard back. Only on a move
+                        // within the tab shown, never per key. A key is not
+                        // a look: the read record stays where the operator
+                        // last looked (a phone's keys reach this machine's
+                        // panes too), so the focus is not the operator's.
+                        self.focus_pane(pane, super::events::PaneFocusOrigin::Restore, None);
+                    }
                     return true;
                 }
                 false
@@ -1772,7 +1795,7 @@ impl Runtime {
     /// Whether the core still projects a terminal for `pane`: one of this
     /// machine's panes in a layout or named by a creation, or a connected
     /// device's pane.
-    fn pane_still_terminal(&self, pane: &str) -> bool {
+    pub(super) fn pane_still_terminal(&self, pane: &str) -> bool {
         if crate::address::is_device_scoped(pane) {
             return self
                 .snapshot

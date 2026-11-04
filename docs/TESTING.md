@@ -702,11 +702,6 @@ The transition retains these explicit exceptions:
 
 | Cell | Current coverage | What closes it |
 | --- | --- | --- |
-| Pi own-engine fake journey, entire row | Excluded: `own-start-fixes 노드 대기(Pi 첫 지시문 input_unconfirmed, 제품 결함)`; cells outside the named exclusions remain required | `own-start-fixes` fixes the first brief and removes this exclusion |
-| OpenCode own-engine fake journey, entire row | Excluded: `own-start-fixes 노드 대기(OpenCode 첫 지시문 미전달, 제품 결함)` | `own-start-fixes` delivers the first brief and removes this exclusion |
-| Codex and Antigravity own-engine fake journey, `fork` only | Excluded: `own-start-fixes 노드 대기`; Codex's new pane has no session or fork lineage, and Antigravity's fork input is discarded before readiness is confirmed | `own-start-fixes` confirms the fork's readiness and registration and removes these exclusions |
-| OMP own-engine fake journey, `sleep_wake`, `fork`, `title` | Excluded: `own-start-fixes 노드 대기`; wake confirmation arrives after the cell ends, the following fork is not ready for input, and the title's row is gone | `own-start-fixes` fixes wake and its following operations and removes these exclusions |
-| OMP own-engine fake journey, `resume` | Excluded: `own-start-fixes(#2075) 대기(깨우기 제외에 따른 선행 조건 미충족)`; it compares the sessions before and after the excluded wake | Remove this exclusion when #2075 merges |
 | Desktop SSH specs on the own engine | Fixture prepared; existing private-SSH prerequisites still skip without that environment | Connect an isolated SSH CI lane |
 
 A run that plans every lane a pull request can plan starts at most 50 jobs.

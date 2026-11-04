@@ -232,11 +232,21 @@ fn open_watched(
 ) -> Result<Transport, OpenFailure> {
     let (stream, welcome) = hide_holder_protocol::open(
         socket,
-        vec![Capability::Screen, Capability::Notices, Capability::Keys],
+        vec![
+            Capability::Screen,
+            Capability::Notices,
+            Capability::Keys,
+            Capability::Submit,
+        ],
         Instant::now() + OPEN_LIMIT,
     )
     .map_err(open_failure)?;
     let reads_keys = welcome.sends.contains(&Capability::Keys);
+    let submissions = if welcome.sends.contains(&Capability::Submit) {
+        super::session::Submissions::Whole
+    } else {
+        super::session::Submissions::Refused
+    };
     let found = GridSize {
         rows: welcome.size.rows,
         cols: welcome.size.cols,
@@ -260,6 +270,7 @@ fn open_watched(
         }),
         writer: Box::new(writer),
         reads_keys,
+        submissions,
         // After the release has been written (or a second passed), a
         // reader still waiting on a holder that never answered it is let go.
         cleanup: Cleanup::Other(Box::new(move || shutdown.shutdown())),
@@ -421,6 +432,10 @@ struct HolderWriter {
 }
 
 impl SessionWriter for HolderWriter {
+    fn submit(&mut self, submit: &hide_holder_protocol::Submit) -> std::io::Result<()> {
+        write_client(&mut self.stream, &ClientMessage::Submit(submit.clone()))
+    }
+
     fn input(&mut self, bytes: &[u8]) -> std::io::Result<()> {
         for chunk in bytes.chunks(MAX_INPUT) {
             write_client(&mut self.stream, &ClientMessage::Input(chunk.to_vec()))?;

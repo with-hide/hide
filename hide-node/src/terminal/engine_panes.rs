@@ -456,12 +456,16 @@ impl PaneHolders for LocalPanes {
     fn letter(
         &self,
         pane: &str,
-        body: PaneInput,
+        text: Vec<PaneInput>,
         submit: PaneInput,
         gap: std::time::Duration,
     ) -> Result<(), HolderError> {
-        self.service
-            .type_letter(pane, typed(body), typed(submit), gap)
+        self.service.type_letter(
+            pane,
+            text.into_iter().map(typed).collect(),
+            typed(submit),
+            gap,
+        )
     }
 
     fn watch_ends(&self, ended: PaneEnded) {

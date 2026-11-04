@@ -24,8 +24,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use hide_holder_protocol::{
-    Capability, CloseReason, Facts, HolderMessage, OpenError, ScreenRead as WireRead,
-    ScreenState as WireState, WatchMessage, Watching, read_holder, write_watch,
+    Capability, CloseReason, Facts, HolderMessage, LineEditing, OpenError, ScreenRead as WireRead,
+    ScreenState as WireState, WatchMessage, Watching, read_watch_holder, write_watch,
 };
 use hide_node_link::holders::{
     ForegroundProgram, HolderError, NO_RULES_FOR_HOLDER, PaneFacts, PaneFactsSink, ScreenRead,
@@ -261,7 +261,12 @@ impl Watches {
     fn read_watch(&self, pane: &str, socket: &Path, generation: u64) -> Ended {
         let opened = hide_holder_protocol::watch(
             socket,
-            vec![Capability::Facts, Capability::ProgramPackage],
+            vec![
+                Capability::Facts,
+                Capability::ProgramPackage,
+                Capability::LineEditing,
+                Capability::ForegroundUnread,
+            ],
             Instant::now() + OPEN_LIMIT,
         );
         if let Some(version) = sends_no_facts(&opened) {
@@ -310,7 +315,7 @@ impl Watches {
         }
         drop(initial);
         loop {
-            match read_holder(&mut stream) {
+            match read_watch_holder(&mut stream, &watching.sends) {
                 Ok(HolderMessage::Facts(facts)) => {
                     let facts = pane_facts(pane, facts);
                     let mut current = true;
@@ -467,6 +472,12 @@ fn pane_facts(pane: &str, facts: Facts) -> PaneFacts {
         bells: facts.bells,
         prompts: facts.prompts,
         bracketed_paste: facts.bracketed_paste,
+        line_editing: facts.line_editing.and_then(|editing| match editing {
+            LineEditing::Edits => Some(true),
+            LineEditing::ReadsKeys => Some(false),
+            LineEditing::Unknown => None,
+        }),
+        foreground_unread: facts.foreground_unread == Some(true),
         foreground: facts.foreground.map(|program| ForegroundProgram {
             pid: program.pid,
             name: program.name,

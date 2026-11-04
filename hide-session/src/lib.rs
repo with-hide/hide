@@ -182,6 +182,21 @@ pub enum RootRefusal {
     Unreadable,
 }
 
+impl RootRefusal {
+    /// The stable reason code a session read or proof answers with, one per
+    /// cause: a file the agent has not written yet (`session_file_missing`,
+    /// which reading again can answer) is never told as one outside the
+    /// agent's folder.
+    pub fn reason(self) -> &'static str {
+        match self {
+            Self::Unsupported => "session_kind_unsupported",
+            Self::Outside => "label_session_outside_roots",
+            Self::Missing => "session_file_missing",
+            Self::Unreadable => "session_unreadable",
+        }
+    }
+}
+
 /// `path` with every link resolved, refused unless it lies under one of
 /// `agents`' session folders in `home`: a path a caller names, or a link
 /// planted inside a folder, never makes a reader open a file elsewhere.
