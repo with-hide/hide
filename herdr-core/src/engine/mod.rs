@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 
 pub(crate) mod answers;
 #[cfg(test)]
-mod contract;
+pub(crate) mod contract;
 pub mod herdr;
 pub mod keys;
 pub(crate) mod own;

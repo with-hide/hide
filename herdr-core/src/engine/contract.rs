@@ -352,17 +352,19 @@ fn the_pinned_herdr_meets_the_engine_contract() {
 
 /// The core's own engine over holders started from the built holder
 /// (`HIDE_TEST_HOLDER_BIN`), whose panes run `/bin/sh` (PowerShell on
-/// Windows) in a folder of their own; the holders end with it.
-struct BuiltHolders {
-    engine: super::own::OwnEngine<'static>,
+/// Windows) in a folder of their own; the holders end with it (also
+/// `real_agent_trust_tests`).
+pub(crate) struct BuiltHolders {
+    pub(crate) engine: super::own::OwnEngine<'static>,
     panes: std::sync::Arc<dyn hide_node_link::holders::PaneHolders>,
     service: std::sync::Arc<hide_node::terminal::Service>,
-    folder: String,
+    /// The panes' folder, in the wire spelling.
+    pub(crate) folder: String,
     _root: tempfile::TempDir,
 }
 
 impl BuiltHolders {
-    fn start() -> Self {
+    pub(crate) fn start() -> Self {
         use std::path::PathBuf;
         use std::sync::Arc;
 
@@ -456,7 +458,7 @@ impl BuiltHolders {
 
     /// Ends the engine and every holder it left: the holders outlive an
     /// engine, so the test that started them ends them.
-    fn stop(&self) {
+    pub(crate) fn stop(&self) {
         let left = self.engine.pane_folders(WAIT).expect("the session reads");
         self.engine.stop();
         for (pane, _) in left {
