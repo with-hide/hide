@@ -67,6 +67,12 @@ export function reportedMarker(root: string, pane: string): string {
   return path.join(root, `session-reported-${pane.replaceAll(":", "-")}`);
 }
 
+/** The native stand-in has configured its terminal and can consume keys. */
+export async function waitForAgentInput(root: string, pane: string): Promise<void> {
+  const marker = path.join(root, `terminal-ready-${pane.replaceAll(":", "-")}`);
+  await expect.poll(() => fs.existsSync(marker), { message: `the agent in ${pane} reading its terminal`, timeout: 30_000 }).toBe(true);
+}
+
 /**
  * Makes every fixture `claude` started from now on run as such an agent, as a
  * Reopen's resumed one does, and returns the way to run `hide` as the agent
@@ -111,6 +117,7 @@ fs.writeFileSync(${JSON.stringify(output)}, JSON.stringify({ status: ran.status 
 `);
   configureSpawnProvider(root, { reporter: writeSessionReporter(fixture), completed, command: [process.execPath, driver] });
   return (pane) => async (args, run = {}) => {
+    await waitForAgentInput(root, pane);
     fs.writeFileSync(command, JSON.stringify({ args, ...run }));
     fs.rmSync(completed, { force: true });
     fs.rmSync(output, { force: true });

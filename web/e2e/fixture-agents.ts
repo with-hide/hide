@@ -10,8 +10,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { expect } from "@playwright/test";
-import { reportedMarker } from "./agent-pane";
+import { waitForAgentInput } from "./agent-pane";
 import { claudeProjects, declareAgentSession, writeFixtureTranscript, type FixtureLabel } from "./herdr-fixture";
 import { agentIn, checkoutAt, closePane, focusTab, newTab, preparePaneInput, sendKeys, tabPanes, withControl, type AgentRow, type OpenedProject } from "./daemon-actions";
 import type { Daemon } from "./hided-fixture";
@@ -65,6 +64,7 @@ export async function setAgentSession(fixture: EngineServer, daemon: Pick<Daemon
     if (fixture.engine === "herdr") {
       declareAgentSession(fixture as EngineServer & { env: NodeJS.ProcessEnv; bin: string }, pane, session, true);
     } else {
+      await waitForAgentInput(fixture.root, pane);
       sendKeys(control, pane, `\x1b]7770;session=${session}\x07`);
     }
     await control.until((rest) => agentIn(rest, pane)?.session_id === session, `${pane} on session ${session}`, 20_000);
@@ -263,10 +263,10 @@ export async function spawnRoot(
 
 /**
  * Waits until the stand-in a family fixture's agent runs in `pane` has
- * reported its session and so reads its terminal: a child `spawnChild`
+ * configured its terminal for input: a child `spawnChild`
  * lists is registered before its stand-in runs, and keys typed before it
  * reads are dropped by the terminal mode it sets.
  */
 export async function agentReading(fixture: Pick<EngineServer, "root">, pane: string): Promise<void> {
-  await expect.poll(() => fs.existsSync(reportedMarker(fixture.root, pane)), { message: `the agent in ${pane} reading its terminal`, timeout: 30_000 }).toBe(true);
+  await waitForAgentInput(fixture.root, pane);
 }

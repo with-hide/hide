@@ -422,7 +422,7 @@ test("a wheel over an alternate-screen program is one terminal_scroll and no key
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hide-e2e-alt-"));
     herdr.afterStop(() => fs.rmSync(dir, { recursive: true, force: true }));
     const log = path.join(dir, "bytes.log");
-    await page.keyboard.type(`${altScreenProgram(dir, log).command}\n`);
+    await page.keyboard.type(`${altScreenProgram(dir, log, herdr.shell).command}\n`);
     await expect.poll(() => screen(page), { timeout: 15_000 }).toMatch(/^1\s/);
     expect(bytesReceived(log).length).toBe(0);
     const shellBox = (await shellPane.boundingBox())!;
