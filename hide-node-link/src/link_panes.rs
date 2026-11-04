@@ -404,14 +404,14 @@ impl PaneHolders for LinkPanes {
     fn letter(
         &self,
         pane: &str,
-        body: PaneInput,
+        text: Vec<PaneInput>,
         submit: PaneInput,
         gap: Duration,
     ) -> Result<(), HolderError> {
         self.done(
             PaneCall::Letter {
                 pane: pane.to_owned(),
-                body,
+                text,
                 submit,
                 gap_ms: u64::try_from(gap.as_millis()).unwrap_or(u64::MAX),
             },

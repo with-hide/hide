@@ -424,14 +424,16 @@ pub trait PaneHolders: Send + Sync {
     /// screen was let go is attached again for it. It is the engine's
     /// typing, never reported as the operator's.
     fn input(&self, pane: &str, input: PaneInput) -> Result<(), HolderError>;
-    /// Types a letter: `body`, then `submit` once `gap` has passed, holding
+    /// Types a letter: `text`'s parts in order, at most
+    /// `hide_holder_protocol::MAX_SUBMIT_PARTS`, then `submit` once `gap`
+    /// has passed, as one submission, holding
     /// the operator's keys typed into the pane meanwhile and writing them
     /// after the submit in the order typed (PRD engine-bundle-3-core-owns
     /// D-13). Returns once the submit was handed over.
     fn letter(
         &self,
         pane: &str,
-        body: PaneInput,
+        text: Vec<PaneInput>,
         submit: PaneInput,
         gap: std::time::Duration,
     ) -> Result<(), HolderError>;
@@ -523,7 +525,7 @@ pub enum PaneCall {
     /// over.
     Letter {
         pane: String,
-        body: PaneInput,
+        text: Vec<PaneInput>,
         submit: PaneInput,
         gap_ms: u64,
     },

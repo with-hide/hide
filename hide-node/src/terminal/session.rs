@@ -113,6 +113,27 @@ pub trait SessionWriter: Send {
     fn release(&mut self) -> io::Result<()>;
     /// Answers once everything written before has reached the transport.
     fn flush(&mut self) -> io::Result<()>;
+    /// One submission, as Herdr's `agent.prompt` makes it, which the
+    /// transport keeps whole at the program's terminal; only a session whose
+    /// [`Transport::submissions`] is [`Submissions::Whole`] is sent one.
+    fn submit(&mut self, submit: &hide_holder_protocol::Submit) -> io::Result<()>;
+}
+
+/// How a transport takes one submission ([`SessionWriter::submit`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Submissions {
+    /// Whole, its gap kept at the program's terminal: a holder that names
+    /// `Capability::Submit`.
+    Whole,
+    /// Never: a Herdr session, whose terminal Herdr owns. The Herdr engine
+    /// types its own text through Herdr's `agent.prompt`, and a fork's
+    /// released keys go to it as they were typed.
+    AsTyped,
+    /// Refused: a holder built before `Capability::Submit`. A submission for
+    /// it is refused with nothing sent, and a fork's released keys are
+    /// dropped and reported, since typed together a submit among them can
+    /// land inside the program's paste.
+    Refused,
 }
 
 /// An opened session as the service holds it.
@@ -129,6 +150,7 @@ pub struct Transport {
     /// Whether the writer encodes named keys ([`SessionWriter::keys`]): a
     /// holder that names `Capability::Keys`.
     pub reads_keys: bool,
+    pub submissions: Submissions,
 }
 
 impl Transport {
@@ -165,6 +187,7 @@ impl Transport {
             cleanup,
             size: None,
             reads_keys: false,
+            submissions: Submissions::AsTyped,
         }
     }
 }
@@ -212,6 +235,12 @@ impl SessionWriter for LineWriter {
     /// Never sent: a Herdr session does not read named keys.
     fn keys(&mut self, _keys: &[Key]) -> io::Result<()> {
         Err(io::Error::other("a Herdr session takes no named keys"))
+    }
+
+    /// Never sent: a Herdr session takes no submission
+    /// ([`Submissions::AsTyped`]).
+    fn submit(&mut self, _submit: &hide_holder_protocol::Submit) -> io::Result<()> {
+        Err(io::Error::other("a Herdr session takes no submission"))
     }
 
     fn resize(&mut self, size: GridSize) -> io::Result<()> {
@@ -473,6 +502,8 @@ pub(super) enum WriterCommand {
     Paste(Vec<u8>),
     /// Named keys, each counted as one byte.
     Keys(Vec<Key>),
+    /// One submission, counted by its text and submit.
+    Submit(Box<hide_holder_protocol::Submit>),
     Engine {
         input: super::input::Typed,
         command: super::command::Command,
@@ -500,6 +531,7 @@ impl WriterCommand {
             Self::Scroll { .. } | Self::Resize(_) | Self::Redraw(_) => CONTROL_LINE_COST,
             Self::Input { bytes, .. } | Self::Paste(bytes) => bytes.len(),
             Self::Keys(keys) => keys.len(),
+            Self::Submit(submit) => super::input::Typed::Submit(submit.clone()).len(),
             Self::Engine { input, .. } => input.len(),
             Self::Barrier(_) | Self::Release { .. } => 0,
         }
@@ -574,6 +606,7 @@ pub(super) struct Session {
     pane_id: String,
     /// [`Transport::reads_keys`].
     reads_keys: bool,
+    submissions: Submissions,
     /// Times input to the next frame; its writer stamps, its reader closes.
     echo: Arc<EchoClock>,
 }
@@ -596,6 +629,7 @@ impl Session {
             cleanup,
             size: _,
             reads_keys,
+            submissions,
         } = transport;
         let unwritten = Arc::new(Unwritten::default());
         let echo = Arc::new(EchoClock::new(pane_id));
@@ -630,6 +664,7 @@ impl Session {
                 child: None,
                 pane_id: pane_id.to_owned(),
                 reads_keys,
+                submissions,
                 echo,
             },
             events,
@@ -681,13 +716,9 @@ impl Session {
         input: super::input::Typed,
         command: super::command::Command,
     ) -> Result<(), WriteRefused> {
-        if matches!(&input, super::input::Typed::Keys(_)) && !self.reads_keys {
-            let message = format!(
-                "Pane {}'s holder does not support named keys; input was not sent",
-                self.pane_id
-            );
-            command.refused(&message);
-            return Err(WriteRefused::Unsupported(message));
+        if let Err(refused) = self.takes(&input) {
+            command.refused(&refused.message(&self.pane_id));
+            return Err(refused);
         }
         self.send(WriterCommand::Engine { input, command })
     }
@@ -713,6 +744,44 @@ impl Session {
             )));
         }
         self.send(WriterCommand::Keys(keys))
+    }
+
+    /// One submission ([`SessionWriter::submit`]); refused, with nothing
+    /// sent, by a transport that does not take it whole.
+    pub(super) fn submit(
+        &self,
+        submit: Box<hide_holder_protocol::Submit>,
+    ) -> Result<(), WriteRefused> {
+        let submit = super::input::Typed::Submit(submit);
+        self.takes(&submit)?;
+        let super::input::Typed::Submit(submit) = submit else {
+            unreachable!("built above");
+        };
+        self.send(WriterCommand::Submit(submit))
+    }
+
+    /// How the transport takes a submission.
+    pub(super) fn submissions(&self) -> Submissions {
+        self.submissions
+    }
+
+    /// Refuses input the transport cannot take: named keys a holder built
+    /// before them would be sent, or a submission it does not take whole.
+    fn takes(&self, input: &super::input::Typed) -> Result<(), WriteRefused> {
+        if input.names_keys() && !self.reads_keys {
+            return Err(WriteRefused::Unsupported(format!(
+                "Pane {}'s holder was built before named keys; input was not sent",
+                self.pane_id
+            )));
+        }
+        if matches!(input, super::input::Typed::Submit(_)) && self.submissions != Submissions::Whole
+        {
+            return Err(WriteRefused::Unsupported(format!(
+                "Pane {}'s terminal takes no submission; input was not sent",
+                self.pane_id
+            )));
+        }
+        Ok(())
     }
 
     /// [`Session::write`], telling `written` once the bytes reached the
@@ -866,6 +935,7 @@ fn spawn_session_writer(
                             super::input::Typed::Bytes(bytes) => writer.input(&bytes),
                             super::input::Typed::Paste(text) => writer.paste(&text),
                             super::input::Typed::Keys(keys) => writer.keys(&keys),
+                            super::input::Typed::Submit(submit) => writer.submit(&submit),
                         };
                         let failed = result.as_ref().err().map(|error| error.to_string());
                         command.finish(result);
@@ -874,6 +944,10 @@ fn spawn_session_writer(
                             None,
                             None,
                         )
+                    }
+                    WriterCommand::Submit(submit) => {
+                        echo.input();
+                        (writer.submit(&submit), None, None)
                     }
                     WriterCommand::Paste(text) => {
                         echo.input();

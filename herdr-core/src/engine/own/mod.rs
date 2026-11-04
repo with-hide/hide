@@ -1190,22 +1190,34 @@ fn pane_scroll(scroll: HolderScroll) -> crate::find::pane::PaneScroll {
 /// waits.
 const PROMPT_SUBMIT_DELAY: std::time::Duration = std::time::Duration::from_millis(300);
 
-/// The keys that submit a prompt the engine typed for an agent of `kind`.
-/// Codex's Windows input reader does not surface bracketed paste: it reads
-/// the text as a paste burst and, while the burst is buffered, takes an
-/// Enter for a newline; a non-character key flushes the burst at once, so
-/// an arrow ahead of the Enter makes the submit's boundary certain however
-/// late the console delivers the text, as Herdr's `agent.prompt` types one
-/// after Codex's text there. At the end of the composer the arrow moves
-/// nothing. Only the engine's own text gets it: the operator's keys are
-/// never changed.
-fn prompt_submit(kind: &str, windows: bool) -> Vec<HolderKey> {
-    if windows && hide_agent_adapter::canonical_kind(kind) == "codex" {
-        vec![HolderKey::Right, HolderKey::Enter]
-    } else {
-        vec![HolderKey::Enter]
+/// What the engine types as a prompt's text for an agent of `kind` on a
+/// machine that runs Windows or not, before the gap and its Enter, as
+/// Herdr's `agent.prompt` types it (src/app/api/agents.rs at 2ecf19a).
+/// Copilot ignores a typed Enter after it lost focus until it is told focus
+/// came back, so a focus report goes first. Codex's Windows input reader
+/// does not surface bracketed paste: it reads the text as a paste burst
+/// and, while the burst is buffered, takes an Enter for a newline; a
+/// non-character key flushes the burst at once, so an arrow right after the
+/// text, ahead of the gap, makes the submit's boundary certain however late
+/// the console delivers the text. At the end of the composer the arrow
+/// moves nothing. Only the engine's own text gets either: the operator's
+/// keys are never changed.
+fn prompt_text(kind: &str, windows: bool, body: PaneInput) -> Vec<PaneInput> {
+    let kind = hide_agent_adapter::canonical_kind(kind);
+    let mut text = Vec::with_capacity(3);
+    if kind == "copilot" {
+        text.push(PaneInput::Bytes(FOCUS_GAINED.to_vec()));
     }
+    text.push(body);
+    if windows && kind == "codex" {
+        text.push(PaneInput::Keys(vec![HolderKey::Right]));
+    }
+    text
 }
+
+/// A terminal's focus report that focus came back (`CSI I`), as Herdr's
+/// Ghostty encoder writes it.
+const FOCUS_GAINED: &[u8] = b"\x1b[I";
 
 /// The source a session this engine knows is reported under: what the
 /// engine itself saw at a start or a report, never an agent's integration.
@@ -2251,8 +2263,8 @@ impl<'g> Engine for OwnEngine<'g> {
             .holders
             .letter(
                 &pane,
-                body,
-                PaneInput::Keys(prompt_submit(&kind, cfg!(windows))),
+                prompt_text(&kind, self.shared.windows, body),
+                PaneInput::Keys(vec![HolderKey::Enter]),
                 PROMPT_SUBMIT_DELAY,
             )
             .map_err(holder_error)
@@ -2673,12 +2685,12 @@ mod tests {
         fn letter(
             &self,
             pane: &str,
-            body: PaneInput,
+            text: Vec<PaneInput>,
             submit: PaneInput,
             _gap: Duration,
         ) -> Result<(), HolderError> {
             let mut letter = b"<letter>".to_vec();
-            letter.extend(shown(body));
+            letter.extend(text.into_iter().flat_map(shown));
             letter.extend(shown(submit));
             letter.extend(b"</letter>");
             self.typed.0.lock().unwrap().push((pane.to_owned(), letter));
@@ -4500,19 +4512,29 @@ mod tests {
         );
     }
 
+    /// Herdr's `agent.prompt` at 2ecf19a (src/app/api/agents.rs): a focus
+    /// report before a Copilot prompt, an arrow after a Windows Codex one's
+    /// text, before the gap.
+    #[test]
+    fn a_prompt_to_copilot_reports_focus_and_one_to_codex_on_windows_ends_its_paste_burst() {
+        let body = || PaneInput::Paste(b"brief".to_vec());
+        assert_eq!(
+            prompt_text("codex", true, body()),
+            vec![body(), PaneInput::Keys(vec![HolderKey::Right])]
+        );
+        assert_eq!(prompt_text("codex", false, body()), vec![body()]);
+        assert_eq!(prompt_text("claude-code", true, body()), vec![body()]);
+        assert_eq!(
+            prompt_text("copilot", false, body()),
+            vec![PaneInput::Bytes(b"\x1b[I".to_vec()), body()]
+        );
+    }
+
     /// A fork's held prompt is handed over once its agent takes input
     /// (`confirm_fork_started`): a Codex fork whose terminal still edits
     /// lines past the settle is not confirmed, since its Enter would be a
     /// line break and the fork's first turn, which reports its session and
     /// lineage, would never come (journey 871294628).
-    #[test]
-    fn a_prompt_to_codex_on_windows_flushes_its_paste_burst_before_the_enter() {
-        use HolderKey::{Enter, Right};
-        assert_eq!(prompt_submit("codex", true), vec![Right, Enter]);
-        assert_eq!(prompt_submit("codex", false), vec![Enter]);
-        assert_eq!(prompt_submit("claude-code", true), vec![Enter]);
-    }
-
     #[test]
     fn a_forks_held_prompt_waits_for_its_agent_to_read_keys() {
         use hide_node_link::holders::ScreenState;
