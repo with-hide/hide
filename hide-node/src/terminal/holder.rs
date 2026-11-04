@@ -972,9 +972,10 @@ impl Holders {
     }
 
     /// The pane's shell and the processes in its terminal's foreground, as
-    /// [`Holders::read`] asks.
-    pub fn processes(&self, pane: &str) -> Result<Answer, OpenError> {
-        self.ask(pane, Ask::Processes)
+    /// [`Holders::read`] asks, by `within` when that is sooner than an ask's
+    /// own bound.
+    pub fn processes(&self, pane: &str, within: Duration) -> Result<Answer, OpenError> {
+        self.ask_by(pane, Ask::Processes, Instant::now() + within.min(ASK_LIMIT))
     }
 
     /// The pane's record, read under no lock: a reader sees one whole
@@ -988,6 +989,11 @@ impl Holders {
     /// Asks in the version the pane's record says its holder speaks, so a
     /// newer node still reads an older holder.
     fn ask(&self, pane: &str, ask: Ask) -> Result<Answer, OpenError> {
+        self.ask_by(pane, ask, Instant::now() + ASK_LIMIT)
+    }
+
+    /// [`Self::ask`], answered by `deadline`.
+    fn ask_by(&self, pane: &str, ask: Ask, deadline: Instant) -> Result<Answer, OpenError> {
         let holder = holder_pane(pane);
         let record = self
             .panes
@@ -1003,7 +1009,7 @@ impl Holders {
             &hide_kit::layout::holder_socket(&self.state_dir, &holder),
             ask,
             record.protocol,
-            Instant::now() + ASK_LIMIT,
+            deadline,
         )
     }
 

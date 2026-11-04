@@ -1123,6 +1123,7 @@ mod tests {
                 label: "fixture".to_owned(),
                 cwds: vec![path.clone()],
                 purpose: None,
+                owner_mark: None,
             }],
             &Default::default(),
             &paths,

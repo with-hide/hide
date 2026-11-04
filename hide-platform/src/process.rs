@@ -1277,6 +1277,24 @@ pub fn cwd_of(pid: u32) -> io::Result<PathBuf> {
     sys::cwd_of(pid)
 }
 
+/// The directory `pid` works in, as far as this system lets another process
+/// see it: the kernel's answer ([`cwd_of`]) on macOS and Linux, and on
+/// Windows, which has no such query, the directory the process's own
+/// parameters hold, observed as a listener owner's is
+/// ([`crate::listeners`]). It is fit to refuse removing a folder a program
+/// works in, never to prove who a caller is. `NotFound` when the process is
+/// gone, `PermissionDenied` when the system refuses to say.
+pub fn observed_cwd_of(pid: u32) -> io::Result<PathBuf> {
+    #[cfg(windows)]
+    {
+        crate::listeners::observe_cwd(pid).map(|cwd| cwd.as_path().to_path_buf())
+    }
+    #[cfg(not(windows))]
+    {
+        cwd_of(pid)
+    }
+}
+
 /// The name of the program `pid` runs, as the system lists it: the file name
 /// of its image on Windows, the command name elsewhere, which Linux keeps to
 /// its first 15 bytes. `NotFound` when the process is gone.

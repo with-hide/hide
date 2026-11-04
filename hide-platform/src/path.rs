@@ -323,6 +323,23 @@ pub fn wire_name(path: &str) -> &str {
         .unwrap_or(path)
 }
 
+/// The folder above a wire spelling, by names alone, so any machine may ask
+/// it of any machine's path: a root keeps its `/` (`/`, a drive's `C:/`),
+/// and a root, a share's `//server/share` among them, has none.
+pub fn wire_parent(path: &str) -> Option<&str> {
+    let trimmed = path.trim_end_matches('/');
+    if windows::share_rest(trimmed) == Some("") {
+        return None;
+    }
+    let cut = trimmed.rfind('/')?;
+    let (parent, root) = (&trimmed[..cut], &trimmed[..=cut]);
+    if !is_wire_absolute(parent) && is_wire_absolute(root) {
+        Some(root)
+    } else {
+        Some(parent)
+    }
+}
+
 /// `relative` below the wire spelling `root`, by names alone: any machine
 /// may ask, whatever system owns the root.
 pub fn wire_join(root: &str, relative: &RelPath) -> String {
@@ -459,7 +476,7 @@ mod windows {
     }
 
     /// What follows `//server/share` in `//server/share/...`.
-    fn share_rest(wire: &str) -> Option<&str> {
+    pub(super) fn share_rest(wire: &str) -> Option<&str> {
         let body = wire.strip_prefix("//")?;
         let mut names = body.splitn(3, '/');
         let server = names.next()?;
