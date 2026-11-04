@@ -15,7 +15,6 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
-use base64::Engine as _;
 use hide_platform::process::{CapturedOutput, OwnedChild, Session, SessionEnd};
 use serde_json::{Value, json};
 
@@ -249,14 +248,6 @@ impl Daemon {
             json!({"pane_id": pane, "cols": 120, "rows": 40}),
         )
     }
-
-    /// Types `text` into `pane` as the operator's keys.
-    fn type_into(&self, pane: &str, text: &str) -> Result<()> {
-        self.event(
-            "key",
-            json!({"pane_id": pane, "bytes_base64": base64::engine::general_purpose::STANDARD.encode(text)}),
-        )
-    }
 }
 
 /// The pane of the agent on `session` in a snapshot, wherever the snapshot
@@ -284,6 +275,12 @@ pub fn pane_on_session(value: &Value, session: &str) -> Option<String> {
 /// once it reads its terminal (`SHIM`), in the account's home.
 fn ready_marker(home: &Path, pane: &str) -> PathBuf {
     home.join(".fixture-ready").join(pane.replace(':', "-"))
+}
+
+/// The file that hands the stand-in agent in the pane its machine calls
+/// `pane` the script to run next (`SHIM`), in the account's home.
+fn run_order(home: &Path, pane: &str) -> PathBuf {
+    home.join(".fixture-run").join(pane.replace(':', "-"))
 }
 
 /// The panes of an account whose stand-in reads its terminal, as the
@@ -466,8 +463,7 @@ impl Agent {
     }
 
     /// Runs a command in a pane of this account whose provider is the
-    /// fixture shim, such as the pane of an agent Hide spawned here, typed
-    /// as the operator's keys.
+    /// fixture shim, such as the pane of an agent Hide spawned here.
     pub fn run_in(&mut self, pane: &str, command: &str) -> Result<PaneOutput> {
         ensure!(self.sequence < 32, "private pane command cap");
         self.sequence += 1;
@@ -486,12 +482,15 @@ impl Agent {
                 quote(&status)
             ),
         )?;
-        // The line, then its Enter on its own, as a person types it: a
-        // chunk longer than a typed burst reads as a paste, which submits
-        // nothing and would leave the pane holding a draft.
-        self.daemon
-            .type_into(pane, &format!("RUN {}", script.display()))?;
-        self.daemon.type_into(pane, "\r")?;
+        // The script reaches the stand-in by a file of its pane, not by the
+        // pane's keys: a key is the operator's input, which stands as a
+        // draft in front of every later letter until the agent's prompt hook
+        // says it was sent, and a fixture command is no one's prompt.
+        let order = run_order(&self.environment.home, self.own_pane(pane)?);
+        hide_platform::fs::private::create_dir_all(order.parent().context("run order folder")?)?;
+        let staged = order.with_extension("tmp");
+        fs::write(&staged, script.display().to_string())?;
+        fs::rename(&staged, &order)?;
         wait_for("attested pane command status", || {
             if status.exists() && timing.exists() {
                 Ok(Some(()))
@@ -1058,14 +1057,16 @@ impl Drop for Fixture {
 }
 
 /// The stand-in agent: it reads its terminal raw, draws Claude Code's empty
-/// composer, marks itself ready under `$HOME/.fixture-ready` by the pane its
-/// machine names (`HIDE_PANE_ID`), and runs each `RUN <script>` line it reads,
+/// composer again after each Enter, marks itself ready under
+/// `$HOME/.fixture-ready` by the pane its machine names (`HIDE_PANE_ID`), and
+/// runs each script `$HOME/.fixture-run` hands that pane (`run_order`),
 /// writing the script's run time beside it once the script ended.
 const SHIM: &str = r#"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <termios.h>
+#include <poll.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -1092,6 +1093,39 @@ static void ready(void) {
   fclose(out);
   rename(staged, name);
 }
+/* The script named in this pane's run order, if one waits: taken, run, and
+   its run time written beside it whole, since the test takes the timing
+   file's existence as the command's end. */
+static void run(void) {
+  const char *home = getenv("HOME"), *pane = getenv("HIDE_PANE_ID");
+  if (!home || !pane || !*pane) return;
+  char order[4096];
+  snprintf(order, sizeof order, "%s/.fixture-run/", home);
+  size_t at = strlen(order);
+  for (const char *c = pane; *c && at + 1 < sizeof order; c++) order[at++] = *c == ':' ? '-' : *c;
+  order[at] = 0;
+  FILE *in = fopen(order, "r");
+  if (!in) return;
+  char script[4096];
+  size_t size = fread(script, 1, sizeof script - 1, in);
+  fclose(in);
+  unlink(order);
+  script[size] = 0;
+  struct timespec started, ended;
+  clock_gettime(CLOCK_MONOTONIC, &started);
+  pid_t child = fork();
+  if (child == 0) { execl("/bin/sh", "sh", script, NULL); _exit(127); }
+  if (child > 0) { int status; waitpid(child, &status, 0); }
+  clock_gettime(CLOCK_MONOTONIC, &ended);
+  char timing[4200], staged[4300];
+  snprintf(timing, sizeof timing, "%s.ms", script);
+  snprintf(staged, sizeof staged, "%s.tmp", timing);
+  FILE *out = fopen(staged, "w");
+  if (!out) return;
+  fprintf(out, "%lld", (long long)(ended.tv_sec - started.tv_sec) * 1000LL + (ended.tv_nsec - started.tv_nsec) / 1000000LL);
+  fclose(out);
+  rename(staged, timing);
+}
 int main(int argc, char **argv) {
   if (argc > 1 && strcmp(argv[1], "--version") == 0) { puts("fixture provider"); return 0; }
   if (argc > 1 && strcmp(argv[1], "auth") == 0) { puts("{\"loggedIn\":false}"); return 0; }
@@ -1107,33 +1141,17 @@ int main(int argc, char **argv) {
   puts("DELIVERY_FIXTURE_READY"); fflush(stdout);
   composer();
   ready();
-  char line[8192]; size_t size = 0; char byte;
-  while (read(0, &byte, 1) == 1) {
-    if (byte == '\r' || byte == '\n') {
-      line[size] = 0;
-      if (strncmp(line, "RUN ", 4) == 0) {
-        struct timespec started, ended;
-        clock_gettime(CLOCK_MONOTONIC, &started);
-        pid_t child = fork();
-        if (child == 0) { execl("/bin/sh", "sh", line + 4, NULL); _exit(127); }
-        if (child > 0) { int status; waitpid(child, &status, 0); }
-        clock_gettime(CLOCK_MONOTONIC, &ended);
-        /* The test takes the timing file's existence as the command's end, so
-           it appears whole: fopen would show it empty before the write. */
-        char timing[8192], staged[8200];
-        snprintf(timing, sizeof timing, "%s.ms", line + 4);
-        snprintf(staged, sizeof staged, "%s.tmp", timing);
-        FILE *out = fopen(staged, "w");
-        if (out) {
-          fprintf(out, "%lld", (long long)(ended.tv_sec - started.tv_sec) * 1000LL + (ended.tv_nsec - started.tv_nsec) / 1000000LL);
-          fclose(out);
-          rename(staged, timing);
-        }
-      }
-      size = 0;
-      composer();
-    } else if (size + 1 < sizeof line) { line[size++] = byte; }
+  /* Keys are read as they come, and the run order is looked at every 20 ms;
+     the terminal closing ends the stand-in. */
+  struct pollfd input = { .fd = 0, .events = POLLIN };
+  char byte;
+  for (;;) {
+    int woke = poll(&input, 1, 20);
+    if (woke > 0) {
+      if (read(0, &byte, 1) != 1) return 0;
+      if (byte == '\r' || byte == '\n') composer();
+    }
+    run();
   }
-  return 0;
 }
 "#;
