@@ -323,22 +323,26 @@ pub(crate) fn save(home: &Path, record: &Record) -> Result<(), String> {
 }
 
 /// Forgets the installation `install`'s part of the record, and the record
-/// with it when no other installation on the account keeps a part.
+/// with it when no other installation on the account keeps a part. A record
+/// that cannot be read stays as it is: it may hold another installation's
+/// part and the account's choices, which removing it would lose.
 pub(crate) fn forget(home: &Path, install: &str) -> Result<(), String> {
     private_state_dir(home, false)?;
     let path = path(home);
-    if let Ok(mut record) = load(home, install) {
-        let others = record.installs.get_or_insert_default();
-        if is_app(install) {
-            record.app = InstallRecord::default();
-        } else {
-            others.remove(install);
-        }
-        if !record.installs.as_ref().is_none_or(BTreeMap::is_empty)
-            || record.app != InstallRecord::default()
-        {
-            return save(home, &record);
-        }
+    let mut record = load(home, install).map_err(|refusal| refusal.detail)?;
+    if record.fresh {
+        return Ok(());
+    }
+    let others = record.installs.get_or_insert_default();
+    if is_app(install) {
+        record.app = InstallRecord::default();
+    } else {
+        others.remove(install);
+    }
+    if !record.installs.as_ref().is_none_or(BTreeMap::is_empty)
+        || record.app != InstallRecord::default()
+    {
+        return save(home, &record);
     }
     match std::fs::remove_file(&path) {
         Ok(()) => Ok(()),
@@ -401,6 +405,26 @@ mod tests {
         );
         forget(home, APP).unwrap();
         assert!(!path(home).exists());
+    }
+
+    /// A record this build cannot read, one a newer build wrote or one that
+    /// is damaged, may hold another installation's part and the account's
+    /// choices: forgetting one installation refuses and leaves its bytes.
+    #[test]
+    fn an_unreadable_record_is_kept_when_an_installation_is_forgotten() {
+        let home = tempfile::tempdir().unwrap();
+        let home = home.path();
+        private_state_dir(home, true).unwrap();
+        for bytes in [
+            r#"{"format":99,"installed":["cli"],"installs":{"root:/helper":{"installed":["cli"]}}}"#,
+            r#"{"format":1,"installed":["cli"],"installs":{"root:/helper":"#,
+        ] {
+            std::fs::write(path(home), bytes).unwrap();
+            for install in [APP, "root:/helper"] {
+                assert!(forget(home, install).is_err(), "{install}: {bytes}");
+                assert_eq!(std::fs::read_to_string(path(home)).unwrap(), bytes);
+            }
+        }
     }
 
     const APP: &str = hide_agent_hooks::route::APP_INSTALL;

@@ -1218,10 +1218,12 @@ A pane that names no installation, a Herdr pane or a plain terminal, lets every 
 
 A `hide` that another installation put first on the pane's `PATH` hands the call to `HIDE_INSTALL_CLI` (`hided::pane_install`), so the call speaks its own daemon's protocol.
 In a pane of an installation other than the app, `hide` asks the device bridges first and this account's daemon after (`workspace_cli::bootstrap`), since the daemon would bind the pane by its folder alone.
+The call names the pane's installation, and a daemon of another one refuses it with `other_install` before it looks at the folder (`pane_auth`), so a pane whose own Hide does not answer never runs its calls against another.
 The `hide` link in the command folder stays with the installation that holds it while that installation's command is there: the other's part reads Not on this machine, "another Hide on this account holds it", and takes the name back once that command is gone.
 
 The kit record keeps the app's parts, command and hook route where earlier builds read them, and every other installation's under `installs`.
 A record without `installs` is an earlier build's, which was the account's, and another installation starts from it once.
+A record that cannot be read, damaged or written by a newer build, stays as it is when an installation goes, since it may hold the other's part and the account's choices; removing that installation reports the record as kept.
 The operator's agent choices and the retirements stay the account's.
 A pane of an installation other than the app keeps its subagent counts and plan record under `~/.hide/agent-hooks/installs/<mark>/`, so the app's core neither reads nor sweeps them and equal pane ids never meet.
 
