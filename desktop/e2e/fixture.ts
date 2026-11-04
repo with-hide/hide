@@ -127,13 +127,18 @@ export function isolate(herdr: IsolatedEngine, label: string): Isolated {
     }
     // Read before the root goes: an exception nothing in the host caught fails
     // the test with its stack, instead of passing unseen (issue 675).
-    const uncaught = hostLog(cleanupEnv).filter((line) => line.event === "host.uncaught"
-      && !allowed.some((part) => String(line.message).includes(part)));
     const errors: unknown[] = [];
+    let uncaught: ReturnType<typeof hostLog> = [];
+    try {
+      uncaught = hostLog(cleanupEnv).filter((line) => line.event === "host.uncaught"
+        && !allowed.some((part) => String(line.message).includes(part)));
+    } catch (error) { errors.push(error); }
+    const stoppedStates: string[] = [];
     for (const state of states()) {
       if (!fs.existsSync(state)) continue;
       const stopped = spawnSync(HIDE_CLI, ["stop"], { env: { ...cleanupEnv, HIDE_STATE_DIR: state }, encoding: "utf8", timeout: 20_000 });
       if (stopped.error || stopped.status !== 0) errors.push(new Error(`private hided stop failed for ${state}: ${stopped.error?.message ?? (stopped.stderr || stopped.stdout || stopped.status)}`));
+      else stoppedStates.push(state);
     }
     // A spec cleans up in its own hooks, before the test's outcome is final,
     // so the logs are read here and the test fixture decides whether to keep them.
@@ -141,8 +146,9 @@ export function isolate(herdr: IsolatedEngine, label: string): Isolated {
       try { daemonLogs.push(...daemonLogTails(states(), root, home)); } catch (error) { errors.push(error); }
     }
     // The own engine's holders outlive their daemon by design; the home that started them ends them.
-    if (own && !errors.length) {
-      for (const state of states()) {
+    // A log read failure must not strand holders after their daemon stopped.
+    if (own) {
+      for (const state of stoppedStates) {
         if (!fs.existsSync(path.join(state, "holders"))) continue;
         try {
           endPaneHolders(state, process.platform === "win32" ? { endTree: (pid: number) => endWindowsProcesses(windowsProcessTree(pid)) } : {});
