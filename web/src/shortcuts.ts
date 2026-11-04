@@ -142,6 +142,10 @@ export type CommandId =
   | "explorer_paste"
   | "split_right"
   | "split_down"
+  | "focus_pane_left"
+  | "focus_pane_right"
+  | "focus_pane_up"
+  | "focus_pane_down"
   | "toggle_zoom"
   | "toggle_plan"
   | "close_pane"
@@ -302,6 +306,10 @@ export const REGISTRY: readonly Command[] = [
   { id: "keep_open", title: "Keep open", group: "Panes", browser: { code: "KeyK", meta: true, shift: true }, electron: { code: "KeyK", meta: true, shift: true }, moved: false },
   { id: "split_right", title: "Split right", group: "Panes", browser: { code: "KeyD", meta: true }, electron: { code: "KeyD", meta: true }, moved: false },
   { id: "split_down", title: "Split down", group: "Panes", browser: { code: "KeyD", meta: true, shift: true }, electron: { code: "KeyD", meta: true, shift: true }, moved: false },
+  { id: "focus_pane_left", title: "Focus pane left", group: "Panes", browser: { code: "ArrowLeft", meta: true, alt: true }, electron: { code: "ArrowLeft", meta: true, alt: true }, moved: false },
+  { id: "focus_pane_right", title: "Focus pane right", group: "Panes", browser: { code: "ArrowRight", meta: true, alt: true }, electron: { code: "ArrowRight", meta: true, alt: true }, moved: false },
+  { id: "focus_pane_up", title: "Focus pane up", group: "Panes", browser: { code: "ArrowUp", meta: true, alt: true }, electron: { code: "ArrowUp", meta: true, alt: true }, moved: false },
+  { id: "focus_pane_down", title: "Focus pane down", group: "Panes", browser: { code: "ArrowDown", meta: true, alt: true }, electron: { code: "ArrowDown", meta: true, alt: true }, moved: false },
   { id: "toggle_zoom", title: "Zoom pane", group: "Panes", browser: { code: "Enter", meta: true, shift: true }, electron: { code: "Enter", meta: true, shift: true }, moved: false },
   // The focused pane's plan (PRD hide-plan B7), in the place the task list's
   // chord had: ⇧⌘U on macOS in both hosts, Alt+Shift+U on Windows and Linux
@@ -339,6 +347,12 @@ export const REGISTRY: readonly Command[] = [
  * without it, and an operator's own binding replaces the entry.
  */
 export const PC_KEYS: Readonly<Partial<Record<CommandId, { chord?: Chord; browser?: Chord; passthrough?: Passthrough }>>> = {
+  // Directional terminal focus keeps Ctrl+Shift on Windows and Linux (Discussion 2055).
+  focus_pane_left: { chord: { code: "ArrowLeft", ctrl: true, shift: true } },
+  focus_pane_right: { chord: { code: "ArrowRight", ctrl: true, shift: true } },
+  focus_pane_up: { chord: { code: "ArrowUp", ctrl: true, shift: true } },
+  focus_pane_down: { chord: { code: "ArrowDown", ctrl: true, shift: true } },
+
   // Alt+Tab is the system's window switcher and never reaches an app, so the
   // cycle moves to ` under the rule (macOS keeps ⌘` for its own window cycle,
   // which is why it uses ⌥Tab). Going back adds Alt to the Ctrl+Shift the
@@ -511,6 +525,10 @@ export const EDITABLE_PANE_COMMANDS: readonly CommandId[] = [
   "desk_terminal",
   "split_right",
   "split_down",
+  "focus_pane_left",
+  "focus_pane_right",
+  "focus_pane_up",
+  "focus_pane_down",
   "toggle_zoom",
   "toggle_plan",
   "close_pane",
@@ -568,10 +586,15 @@ export function parseChord(text: string): Chord | null {
 }
 
 // The macOS set's keys: one printable ASCII key, named by the character it
-// types unshifted, or Return.
+// types unshifted, Return or a directional arrow.
 const MACOS_KEY_CODES: Readonly<Record<string, string>> = {
   tab: "Tab",
   return: "Enter",
+  left: "ArrowLeft",
+  right: "ArrowRight",
+  up: "ArrowUp",
+  down: "ArrowDown",
+
   "`": "Backquote",
   "-": "Minus",
   "=": "Equal",
@@ -941,15 +964,19 @@ export function sheetRows(group: Command["group"], registry: readonly Command[],
   return rows;
 }
 
+export function isPaneFocusCommand(id: CommandId): boolean {
+  return id === "focus_pane_left" || id === "focus_pane_right" || id === "focus_pane_up" || id === "focus_pane_down";
+}
+
 /**
  * Commands that leave the operator where they work: pressed while a native
  * page holds the keyboard, the page keeps it, so the next key and the next
  * chord act on that page. Zoom pane in a page is Expand and Expand again
- * (`keyboard.ts`); any other command needs the shell's keyboard for the
- * surface it opens, or moves the keyboard itself.
+ * (`keyboard.ts`); terminal direction commands leave a page alone. Other
+ * commands need the shell's keyboard for the surface they open, or move it.
  */
 export function pageKeepsKeyboard(id: CommandId): boolean {
-  return id === "toggle_zoom";
+  return id === "toggle_zoom" || isPaneFocusCommand(id);
 }
 
 /** Held navigation commands bypass native menu accelerators and share release routing. */

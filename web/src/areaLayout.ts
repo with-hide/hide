@@ -260,13 +260,17 @@ const TOPOLOGY_BODY: Rect = { x: 0, y: 0, width: 1024, height: 1024 };
  * centre, then tree order. Null when that edge is the Views' own edge.
  */
 export function neighbourArea<I extends AreaItem>(root: AreaNode<I>, areaId: string, direction: Edge): string | null {
-  const boxes = areaGeometry(root, TOPOLOGY_BODY, TOPOLOGY_SIZES).areas;
+  return neighbourBox(areaGeometry(root, TOPOLOGY_BODY, TOPOLOGY_SIZES).areas, areaId, direction);
+}
+
+/** Shared edge navigation, with overlap, centre and input order as the tie breakers. */
+export function neighbourBox(boxes: readonly { id: string; rect: Rect }[], areaId: string, direction: Edge, edgeTolerance = 0): string | null {
   const from = boxes.find((box) => box.id === areaId)?.rect;
   if (!from) return null;
   const across = direction === "left" || direction === "right";
   let best: { id: string; overlap: number; distance: number } | null = null;
   for (const box of boxes) {
-    if (box.id === areaId || !touches(from, box.rect, direction)) continue;
+    if (box.id === areaId || !touches(from, box.rect, direction, edgeTolerance)) continue;
     const overlap = across
       ? Math.min(from.y + from.height, box.rect.y + box.rect.height) - Math.max(from.y, box.rect.y)
       : Math.min(from.x + from.width, box.rect.x + box.rect.width) - Math.max(from.x, box.rect.x);
@@ -274,23 +278,23 @@ export function neighbourArea<I extends AreaItem>(root: AreaNode<I>, areaId: str
     const distance = across
       ? Math.abs(from.y + from.height / 2 - (box.rect.y + box.rect.height / 2))
       : Math.abs(from.x + from.width / 2 - (box.rect.x + box.rect.width / 2));
-    if (!best || overlap > best.overlap || (overlap === best.overlap && distance < best.distance)) {
+    if (!best || overlap > best.overlap + edgeTolerance || (Math.abs(overlap - best.overlap) <= edgeTolerance && distance < best.distance - edgeTolerance)) {
       best = { id: box.id, overlap, distance };
     }
   }
   return best?.id ?? null;
 }
 
-function touches(from: Rect, to: Rect, direction: Edge): boolean {
+function touches(from: Rect, to: Rect, direction: Edge, tolerance: number): boolean {
   switch (direction) {
     case "right":
-      return to.x === from.x + from.width;
+      return Math.abs(to.x - (from.x + from.width)) <= tolerance;
     case "left":
-      return to.x + to.width === from.x;
+      return Math.abs(to.x + to.width - from.x) <= tolerance;
     case "down":
-      return to.y === from.y + from.height;
+      return Math.abs(to.y - (from.y + from.height)) <= tolerance;
     case "up":
-      return to.y + to.height === from.y;
+      return Math.abs(to.y + to.height - from.y) <= tolerance;
   }
 }
 
