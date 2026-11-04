@@ -164,9 +164,11 @@ fn an_idle_holder_does_not_wake_attached_or_not() {
     let holder = start_ready(&folder.program, &home.socket("p"), &shell(), &[]);
     drop(folder);
     let mut connection = holder.open();
+    // The capabilities a node's watch accepts: a shell at its prompt reads
+    // keys, so its line editing is never asked again on a timer.
     let (mut watch, _) = hide_holder_protocol::watch(
         &holder.socket,
-        vec![Capability::Facts],
+        vec![Capability::Facts, Capability::LineEditing],
         Instant::now() + HANG_LIMIT,
     )
     .unwrap();
