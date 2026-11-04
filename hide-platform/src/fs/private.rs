@@ -1485,8 +1485,8 @@ mod sys {
             Sid::well_known(WinBuiltinAdministratorsSid)?,
         ];
         let owner_rights = Sid::parse("S-1-3-4")?;
-        let owner_trusted = trusted.iter().any(|known| known.same_as(security.owner))
-            || owned(security)?;
+        let owner_trusted =
+            trusted.iter().any(|known| known.same_as(security.owner)) || owned(security)?;
         if security.acl.is_null() {
             // No access list at all means everybody has every access.
             return Ok(true);

@@ -1453,9 +1453,11 @@ fn an_upgrade_keeps_the_retired_direct_inputs() {
     assert_eq!(opened, Opened::Existing);
     let kept: (String, i64, i64, String) = store
         .connection
-        .query_row("SELECT id, at, bytes, fact FROM direct_observations", [], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
-        })
+        .query_row(
+            "SELECT id, at, bytes, fact FROM direct_observations",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
         .unwrap();
     assert_eq!(kept, ("one".to_owned(), 1, 2, "{}".to_owned()));
 }
