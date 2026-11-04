@@ -12,7 +12,7 @@ import fs from "node:fs";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
-import { focusTab, newTab, openProject, runInPaneKeepingFocus, viewPane, waitForPaneInput, withControl } from "../../web/e2e/daemon-actions";
+import { corePaneFocus, focusPane, focusTab, newTab, openProject, runInPaneKeepingFocus, viewPane, waitForPaneInput, withControl } from "../../web/e2e/daemon-actions";
 import type { AgentFixture } from "../../web/e2e/engine-fixture";
 import { fixtureExecutable } from "../../web/e2e/platform-fixture";
 import { chooseExpand, countSent, enterWorkspace, setLanePinned, showDocuments, showExplorer, showProjectRow } from "../../web/e2e/wire";
@@ -185,8 +185,12 @@ async function nativePageShot(url: string, name: string): Promise<void> {
 /** A tab in the fixture's checkout that is made without being shown, so the operator's tab stays in front. */
 async function backgroundTab(label: string): Promise<{ tab: string; pane: string }> {
   return withControl(stack.daemon, async (control) => {
+    const focused = await control.until((rest) => corePaneFocus(rest) ?? undefined, "the operator's pane");
     const made = await newTab(control, fixture, label);
     await focusTab(control, fixture, fixture.tab);
+    // A tab selection can choose its other split. Preserve the actual pane:
+    // only that pane's browser open brings a page forward on this checkout.
+    await focusPane(control, focused);
     return made;
   });
 }
