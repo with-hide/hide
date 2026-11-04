@@ -524,7 +524,23 @@ pub const COMMANDS: &[Spec] = &[
         }],
         repeats: None,
         needs_one_of: &[],
-        options: &[optional("--lines", Unsigned), switch("--json")],
+        options: &[
+            Opt {
+                conflicts: &["--source", "--format"],
+                ..optional("--lines", Unsigned)
+            },
+            Opt {
+                requires: &["--format"],
+                conflicts: &["--lines"],
+                ..optional("--source", OneOf(&["visible"]))
+            },
+            Opt {
+                requires: &["--source"],
+                conflicts: &["--lines"],
+                ..optional("--format", OneOf(&["ansi"]))
+            },
+            switch("--json"),
+        ],
         rest: None,
         answers: &["pane_read"],
         refusals: &["pane_required", "lines_out_of_range", "pane_unavailable"],
