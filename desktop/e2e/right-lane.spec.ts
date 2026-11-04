@@ -479,7 +479,7 @@ test("an SSH Workspace's lane keeps its chords, narrow fallback and saved widths
     run.env.HIDE_CLI_PATH = path.join(stageBuild(run.root), "hide");
     const shared = path.join(fs.realpathSync(local.root), "shared-lane");
     const other = path.join(fs.realpathSync(remote.root), "remote-only");
-    prepareLaneRepositories([shared, other], local.env);
+    prepareLaneRepositories([shared, other], run.env);
     ({ app } = await launchShell(run.env));
     await local.attach(run);
     await local.open(shared, "shared-lane");
