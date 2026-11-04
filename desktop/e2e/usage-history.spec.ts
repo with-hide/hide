@@ -96,6 +96,8 @@ test("native usage history preserves totals, hover geometry and the Overview fil
         await expect(overview.locator('[data-usage-date-row]')).toHaveCount(6);
         expect(await overview.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
         await capture(`usage-overview-${language}-${large ? "largest" : "default"}`);
+        await page.keyboard.press("Escape");
+        await expect(overview).not.toBeVisible();
       }
     }
   } catch (error) { failures.push(error); }
