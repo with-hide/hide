@@ -9,17 +9,14 @@ import json
 import os
 import re
 from pathlib import Path
-import sys
 import tempfile
 import threading
 import time
 import urllib.request
-import zipfile
 
 from .processes import COMMAND_SECONDS, GUARDIAN_FAILURES, MAX_FAILURE_REASON, MAX_OUTPUT, OwnedProcesses, ProcessError
-from .authentication import require_no_login
 from .protection import ProtectionError, beneath, private_directory, validate_isolation, write_private
-from .system import READY, WINDOWS, PaneShell, exe, git, home_env, remove_pane_files, remove_tree, temp_env, tool_path
+from .system import PaneShell, exe, git, home_env, remove_pane_files, remove_tree, temp_env, tool_path
 from .timing import Deadline, ObservationTimeout
 
 
@@ -303,7 +300,7 @@ class Runtime:
         # hooks. Only the actual pane's shell receives it, before native start.
         reference_input = self.run / (name + ".reference-input")
         ready = self.run / (name + ".reference-ready")
-        # One line with no line break, which cmd.exe's `set /p` reads whole.
+        # One line with no line break.
         write_private(reference_input, str(reference).encode())
         try:
             self.send(pane, self.shell.read_variable("HIDE_CAP_REF", reference_input, ready))

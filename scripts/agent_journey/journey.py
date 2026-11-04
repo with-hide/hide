@@ -10,7 +10,6 @@ composer cell, which reads the pane's screen only to judge it.
 import base64
 import json
 import os
-from pathlib import Path
 import secrets
 import time
 

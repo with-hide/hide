@@ -8,13 +8,12 @@ ledger. Holder records identify cleanup targets, never terminal contents.
 import base64
 import json
 from pathlib import Path
-import shlex
 
 from agent_live_check.authentication import require_no_login
 from agent_live_check.processes import ProcessError
-from agent_live_check.protection import ProtectionError, write_private
+from agent_live_check.protection import ProtectionError
 from agent_live_check.runtime import Runtime
-from agent_live_check.system import READY, remove_pane_files
+from agent_live_check.system import READY, remove_pane_files, same_path
 from holder_owned import Owned
 
 from .daemon import Daemon
@@ -50,12 +49,10 @@ class OwnRuntime(Runtime):
         folder = str(cwd.resolve())
         self.control.dispatch("create_workspace", {"path": folder, "label": "Local bell check",
                               "initialize_git": False, "confirmed_outside_home": folder})
-        # The core spells a path with `/` between names on every system.
-        spelled = cwd.resolve().as_posix()
 
         def opened(rest):
             for workspace in (rest.get("navigator") or {}).get("workspaces", []):
-                checkout = next((row for row in workspace.get("checkouts", []) if row["path"] == spelled), None)
+                checkout = next((row for row in workspace.get("checkouts", []) if same_path(row["path"], cwd.resolve())), None)
                 if not checkout:
                     continue
                 tabs = [tab for group in (checkout.get("agent_groups") or {}).get("groups", [])
@@ -82,14 +79,9 @@ class OwnRuntime(Runtime):
         for name in environment:
             if not name.replace("_", "").isalnum() or name[0].isdigit():
                 raise ProtectionError("invalid_controller_environment_name")
-        # The PTY can accept input before zsh leaves canonical mode. Its line
-        # limit can truncate a long PATH along with the final Enter. Source a
-        # private file instead, so only its short invocation crosses the PTY.
-        setup = self.run / "native-controller-shell-setup.zsh"
-        write_private(setup, ("\n".join(f"export {name}={shlex.quote(value)}" for name, value in environment.items())
-                              + f"\nprintf ready > {shlex.quote(str(ready))}\n").encode())
+        setup = self.run / "native-controller-shell-setup"
         try:
-            self.send_text(pane, f". {shlex.quote(str(setup))}\r")
+            self.send_text(pane, self.shell.setup(setup, environment, ready) + "\r")
             self.wait(lambda: ready.exists() and ready.read_text() == "ready", 20)
         finally:
             remove_pane_files(ready, setup)

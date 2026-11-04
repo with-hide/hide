@@ -13,7 +13,6 @@ measurement boundary, checked independently of Herdr and the agent CLIs.
 import json
 from pathlib import Path
 import shutil
-import shlex
 import sys
 
 from agent_live_check.processes import ProcessError
@@ -104,7 +103,7 @@ class Controller:
         workspace, pane, _ = runtime.new_workspace(recipe, "journey", runtime.home, shim,
                                                    {"env": {"HIDE_E2E_ROOT": str(self.root)}})
         self.workspace, self.pane = workspace, pane
-        runtime.send(pane, shlex.quote(str(shim)))
+        runtime.send(pane, runtime.shell.run([shim]))
         runtime.initial_shells.discard(pane)
         native = runtime.wait(lambda: (agent := runtime.agent(pane)) and (agent.get("agent_session") or {}).get("value")
                               and agent, 20)
