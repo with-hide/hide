@@ -411,15 +411,14 @@ mod windows_job {
             } else {
                 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
             } | if setup.contains("breakaway") {
-                    JOB_OBJECT_LIMIT_BREAKAWAY_OK
-                } else {
-                    0
-                }
-                | if setup.contains("silent") {
-                    JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK
-                } else {
-                    0
-                };
+                JOB_OBJECT_LIMIT_BREAKAWAY_OK
+            } else {
+                0
+            } | if setup.contains("silent") {
+                JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK
+            } else {
+                0
+            };
             assert_ne!(
                 SetInformationJobObject(
                     job,
