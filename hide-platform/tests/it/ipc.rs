@@ -1351,7 +1351,8 @@ fn the_endpoint_is_private_to_the_account() {
 /// A program Git Bash starts runs with the same elevated token as a
 /// PowerShell beside it, except that its default owner is the user rather
 /// than the Administrators group. What the elevated side made (a private
-/// folder, a pipe) stays the account's own to that program.
+/// folder, a pipe) stays the account's own to that program. The test sets
+/// each side's default owner itself, since a runner's own default varies.
 #[cfg(windows)]
 #[test]
 fn an_elevated_account_whose_default_owner_is_the_user_reaches_what_it_made() {
@@ -1359,12 +1360,16 @@ fn an_elevated_account_whose_default_owner_is_the_user_reaches_what_it_made() {
 
     let folder = tempfile::Builder::new().prefix("hp").tempdir().unwrap();
     let made = folder.path().join("bridge");
-    private::create_dir(&made).unwrap();
     let path = made.join("s.sock");
-    let listener = LocalListener::bind(&path).unwrap();
+    let acting = ActingOwner::act(Owner::Administrators);
+    let created = private::create_dir(&made);
+    let bound = created.as_ref().map(|_| LocalListener::bind(&path));
+    drop(acting);
+    created.unwrap();
+    let listener = bound.unwrap().unwrap();
     let accepted = thread::spawn(move || listener.accept().map(|_| ()));
 
-    let acting = UserOwner::act();
+    let acting = ActingOwner::act(Owner::User);
     let owned = private::owned_by_current_user(&made);
     let connected = LocalStream::connect(&path).map(|_| ());
     drop(acting);
@@ -1374,22 +1379,33 @@ fn an_elevated_account_whose_default_owner_is_the_user_reaches_what_it_made() {
     accepted.join().unwrap().unwrap();
 }
 
-/// The calling thread acting with the process's own token, its default
-/// owner set to the user the way Git Bash's runtime sets it. The test runs
-/// elevated (the Windows runner and a device's ssh session both do), so
-/// before the act that owner is the Administrators group. Dropping it ends
-/// the act on every exit; it never leaves its thread.
+/// Whom the acting thread's new objects belong to by default.
 #[cfg(windows)]
-struct UserOwner(std::marker::PhantomData<*const ()>);
+#[derive(Clone, Copy)]
+enum Owner {
+    /// The user, as Git Bash's runtime sets it.
+    User,
+    /// The Administrators group, an elevated token's usual default.
+    Administrators,
+}
+
+/// The calling thread acting with the process's own token, its default
+/// owner set to `Owner`. The test runs elevated (the Windows runner and a
+/// device's ssh session both do), where the token may name either as its
+/// owner. Dropping it ends the act on every exit; it never leaves its
+/// thread.
+#[cfg(windows)]
+struct ActingOwner(std::marker::PhantomData<*const ()>);
 
 #[cfg(windows)]
-impl UserOwner {
-    fn act() -> Self {
+impl ActingOwner {
+    fn act(owner: Owner) -> Self {
         use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
         use windows_sys::Win32::Security::{
-            DuplicateTokenEx, EqualSid, GetTokenInformation, SecurityImpersonation,
+            CreateWellKnownSid, DuplicateTokenEx, GetTokenInformation, SecurityImpersonation,
             SetTokenInformation, TOKEN_ADJUST_DEFAULT, TOKEN_DUPLICATE, TOKEN_IMPERSONATE,
             TOKEN_OWNER, TOKEN_QUERY, TOKEN_USER, TokenImpersonation, TokenOwner, TokenUser,
+            WinBuiltinAdministratorsSid,
         };
         use windows_sys::Win32::System::Threading::{
             GetCurrentProcess, OpenProcessToken, SetThreadToken,
@@ -1436,24 +1452,31 @@ impl UserOwner {
         assert_ne!(duplicated, 0, "{duplicated_error}");
 
         let user = information(acting, TokenUser);
-        let owner = information(acting, TokenOwner);
-        // SAFETY: both buffers hold what GetTokenInformation wrote for
-        // their classes, and the SIDs they point at lie inside them.
-        let (user_sid, owner_sid) = unsafe {
-            (
-                (*user.as_ptr().cast::<TOKEN_USER>()).User.Sid,
-                (*owner.as_ptr().cast::<TOKEN_OWNER>()).Owner,
-            )
+        // A SID's largest size (SECURITY_MAX_SID_SIZE) is 68 bytes.
+        let mut administrators = [0u64; 9];
+        let sid = match owner {
+            // SAFETY: the buffer holds what GetTokenInformation wrote for
+            // TokenUser, and the SID it points at lies inside it.
+            Owner::User => unsafe { (*user.as_ptr().cast::<TOKEN_USER>()).User.Sid },
+            Owner::Administrators => {
+                let mut size = size_of_val(&administrators) as u32;
+                // SAFETY: `administrators` holds `size` writable bytes.
+                let made = unsafe {
+                    CreateWellKnownSid(
+                        WinBuiltinAdministratorsSid,
+                        std::ptr::null_mut(),
+                        administrators.as_mut_ptr().cast(),
+                        &mut size,
+                    )
+                };
+                assert_ne!(made, 0, "{}", std::io::Error::last_os_error());
+                administrators.as_mut_ptr().cast()
+            }
         };
-        // SAFETY: both SIDs are valid for the life of their buffers.
-        assert_eq!(
-            unsafe { EqualSid(user_sid, owner_sid) },
-            0,
-            "the test has to run elevated, where the default owner is the Administrators group"
-        );
-        let set_owner = TOKEN_OWNER { Owner: user_sid };
+        let set_owner = TOKEN_OWNER { Owner: sid };
         // SAFETY: `acting` is open with TOKEN_ADJUST_DEFAULT and `set_owner`
-        // names a SID the token holds.
+        // names a SID whose buffer outlives the call. An elevated token
+        // holds both as owners it may name.
         let set = unsafe {
             SetTokenInformation(
                 acting,
@@ -1472,14 +1495,14 @@ impl UserOwner {
         };
         let applied_error = std::io::Error::last_os_error();
         unsafe { CloseHandle(acting) };
-        assert_ne!(set, 0, "{set_error}");
+        assert_ne!(set, 0, "the test has to run elevated: {set_error}");
         assert_ne!(applied, 0, "{applied_error}");
         Self(std::marker::PhantomData)
     }
 }
 
 #[cfg(windows)]
-impl Drop for UserOwner {
+impl Drop for ActingOwner {
     fn drop(&mut self) {
         use windows_sys::Win32::Security::RevertToSelf;
         // SAFETY: ends this thread's impersonation, which `act` began.
