@@ -44,8 +44,8 @@ pub fn cli_program() -> Option<OsString> {
 fn run_cli(program: &OsString, arguments: &[&str]) -> Option<Value> {
     let mut command = Command::new(program);
     if let Err(cause) = hide_agent_hooks::route::apply(&mut command) {
-        if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
-            hide_agent_hooks::delivery::diagnose(Path::new(&home), cause);
+        if let Ok(home) = hide_platform::host::home_dir() {
+            hide_agent_hooks::delivery::diagnose(&home, cause);
         }
         return None;
     }

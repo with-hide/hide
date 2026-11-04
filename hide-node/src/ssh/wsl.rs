@@ -42,8 +42,8 @@ use hide_platform::wsl::Distribution;
 use serde_json::json;
 
 use super::{
-    ChildLink, DEFAULT_CLI_DIR, HELLO_TIMEOUT, HelperPackages, PaneHook, RemoteHost, TerminalHook,
-    UnaskedStart, bootstrap, helper_protocol_refusal, lock_recover,
+    ChildLink, DEFAULT_CLI_DIR, HelperPackages, PaneHook, RemoteHost, TerminalHook, UnaskedStart,
+    bootstrap, helper_protocol_refusal, lock_recover,
 };
 
 /// `wsl.exe` calls this process runs at once, across every distribution: a
@@ -437,6 +437,7 @@ impl DialedTransport for WslDevice {
                 &mut *pipe,
                 &installed.helper_relative,
                 &bootstrap::HerdrChoice::Account,
+                None,
             )?;
             Ok((installed, identity))
         })(&mut pipe);
@@ -456,10 +457,11 @@ impl DialedTransport for WslDevice {
             .link
             .into_host(Vec::new(), self.panes.clone(), on_close);
         stage("hello");
-        let hello: Hello = call_as(&host, Call::Hello, HELLO_TIMEOUT).map_err(|error| {
-            host.close("the helper did not answer Hello");
-            EstablishError::Helper(format!("The WSL helper did not start: {error}"))
-        })?;
+        let hello: Hello = call_as(&host, Call::Hello, super::hello_timeout(installed.fresh))
+            .map_err(|error| {
+                host.close("the helper did not answer Hello");
+                EstablishError::Helper(format!("The WSL helper did not start: {error}"))
+            })?;
         if let Some(reason) = helper_protocol_refusal(&hello) {
             host.close("helper protocol mismatch");
             return Err(EstablishError::Helper(reason));

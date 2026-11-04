@@ -63,6 +63,69 @@ pub struct Connector {
     wsl: Option<host::wsl::WslAccess>,
     /// The engine every device's panes run on.
     engine: host::DeviceEngine,
+    /// The home every SSH device's node runs with in place of its account's
+    /// (`HIDE_DEV_DEVICE_HOME`), as [`parse_device_home`] read it.
+    device_home: Option<String>,
+}
+
+/// The development variable that gives every SSH device's node a home of
+/// its own in place of the device account's, so a candidate's live check on
+/// a shared account never writes that account's `~/.hide`, agent settings or
+/// device node state: `~/<path>` under the account's home, or an absolute
+/// path as the device's own system spells it (`/srv/x`, `C:/x`). The install
+/// root's `~/` is that home too.
+pub const DEVICE_HOME_VARIABLE: &str = "HIDE_DEV_DEVICE_HOME";
+
+/// [`DEVICE_HOME_VARIABLE`]'s value when it names a home a device can be
+/// given: `~/` and a path below the home, or a wire-absolute path, on one
+/// line with no empty, `.` or `..` name.
+pub fn parse_device_home(value: &str) -> Result<String, String> {
+    let names = match value.strip_prefix("~/") {
+        Some(rest) => rest,
+        None if hide_platform::path::is_wire_absolute(value) => value,
+        None => {
+            return Err(format!(
+                "{DEVICE_HOME_VARIABLE} must start with ~/ or name an absolute path"
+            ));
+        }
+    };
+    let names = names.trim_start_matches('/');
+    if value.chars().any(char::is_control)
+        || names.is_empty()
+        || names
+            .split('/')
+            .any(|name| name.is_empty() || name == "." || name == "..")
+    {
+        return Err(format!(
+            "{DEVICE_HOME_VARIABLE} must be a plain path with no empty, `.` or `..` name"
+        ));
+    }
+    Ok(value.to_owned())
+}
+
+/// The home `configured` names on a device whose account's home is `home`
+/// and whose system is `os`: below that home for `~/`, else as given when
+/// it is absolute on that system.
+pub(super) fn resolve_device_home(
+    configured: &str,
+    home: &str,
+    os: &str,
+) -> Result<String, String> {
+    if let Some(rest) = configured.strip_prefix("~/") {
+        return Ok(format!("{}/{rest}", home.trim_end_matches('/')));
+    }
+    let absolute = if os == "windows" {
+        !configured.starts_with('/') && hide_platform::path::is_wire_absolute(configured)
+    } else {
+        configured.starts_with('/')
+    };
+    if absolute {
+        Ok(configured.to_owned())
+    } else {
+        Err(format!(
+            "{DEVICE_HOME_VARIABLE} {configured:?} is not an absolute path on this {os} device"
+        ))
+    }
 }
 
 impl Connector {
@@ -83,7 +146,15 @@ impl Connector {
             herdr_program: PathBuf::from("herdr"),
             wsl: None,
             engine: host::DeviceEngine::Herdr,
+            device_home: None,
         }
+    }
+
+    /// Runs every SSH device's node with `home` in place of its account's
+    /// home ([`DEVICE_HOME_VARIABLE`]); `None` leaves the account's.
+    pub fn with_device_home(mut self, home: Option<String>) -> Self {
+        self.device_home = home;
+        self
     }
 
     /// Runs every device's panes on `engine`: the core's own engine over the
@@ -204,6 +275,7 @@ impl DeviceConnector for Connector {
             askpass: self.askpass.clone(),
             packages: self.packages.clone(),
             engine: self.engine,
+            device_home: self.device_home.clone(),
             panes,
             terminals,
             link: Arc::default(),
@@ -253,6 +325,7 @@ pub struct SshDevice {
     askpass: Option<PathBuf>,
     packages: HelperPackages,
     engine: host::DeviceEngine,
+    device_home: Option<String>,
     panes: Option<PaneHook>,
     terminals: Option<TerminalHook>,
     /// The link the latest attempt started, which carries the device's
@@ -452,10 +525,22 @@ impl DialedTransport for SshDevice {
                 });
             }
             let payload = self.packages.payload_for(&facts.os, &facts.arch, self.engine)?;
+            let home = match &self.device_home {
+                Some(configured) => Some(
+                    resolve_device_home(configured, &facts.home, &facts.os)
+                        .map_err(EstablishError::Install)?,
+                ),
+                None => None,
+            };
             stage("install");
-            let installed = bootstrap::install(&mut *pipe, &consent.helper_root, &facts.home, &payload)?;
+            let installed = bootstrap::install(
+                &mut *pipe,
+                &consent.helper_root,
+                home.as_deref().unwrap_or(&facts.home),
+                &payload,
+            )?;
             stage("start");
-            bootstrap::start(&mut *pipe, &installed.helper_relative, &self.herdr)?;
+            bootstrap::start(&mut *pipe, &installed.helper_relative, &self.herdr, home.as_deref())?;
             Ok((identity, installed))
         })(&mut pipe);
         let (identity, installed) = match started {
@@ -473,10 +558,11 @@ impl DialedTransport for SshDevice {
         let rest = link.take_rest();
         let host = link.into_host(rest, self.panes.clone(), on_close);
         stage("hello");
-        let hello: Hello = call_as(&host, Call::Hello, host::HELLO_TIMEOUT).map_err(|error| {
-            host.close("the helper did not answer Hello");
-            EstablishError::Helper(format!("The device helper did not start: {error}"))
-        })?;
+        let hello: Hello = call_as(&host, Call::Hello, host::hello_timeout(installed.fresh))
+            .map_err(|error| {
+                host.close("the helper did not answer Hello");
+                EstablishError::Helper(format!("The device helper did not start: {error}"))
+            })?;
         if let Some(reason) = host::helper_protocol_refusal(&hello) {
             host.close("helper protocol mismatch");
             return Err(EstablishError::Helper(reason));

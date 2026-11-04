@@ -133,6 +133,22 @@ const HERDR_NAME: &str = "herdr";
 /// app carries it beside `hided` (PRD engine-bundle-3-core-owns D-22).
 const HOLDER_NAME: &str = "hide-holder";
 
+/// Why a Windows device is refused before anything is installed when the
+/// device's panes would run on its Herdr: a Windows device runs its panes in
+/// pane holders only, on the core's own engine (`HIDE_DEV_PANE_HOLDER=1`).
+pub const WINDOWS_NEEDS_OWN_ENGINE: &str =
+    "Windows devices connect only on the new engine; nothing was installed on this one";
+
+/// A program's file name on a device of `os`: Windows finds a program by its
+/// `.exe` suffix.
+fn device_program(name: &str, os: &str) -> String {
+    if os == "windows" {
+        format!("{name}.exe")
+    } else {
+        name.to_owned()
+    }
+}
+
 /// Which engine runs a device's panes: the device's Herdr, as every shipped
 /// Hide does, or the core's own engine over pane holders the device's node
 /// runs, with the development switch `HIDE_DEV_PANE_HOLDER` on (PRD
@@ -154,6 +170,24 @@ const DRAIN_BOUND: Duration = Duration::from_secs(250);
 /// own timeout whatever happens to the cancel.
 const CANCEL_TIMEOUT: Duration = Duration::from_secs(5);
 pub(super) const HELLO_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long the first Hello waits when the helper program was written by
+/// this very connection's install: a program's first start after it is
+/// written can take tens of seconds while the system scans it (Windows
+/// Defender on a new `.exe`; on a real Windows 11 PC on 2026-11-04 the
+/// first Hello passed [`HELLO_TIMEOUT`] once, and the row showed the helper
+/// unavailable until the retry), while a helper the device already held
+/// starts well inside [`HELLO_TIMEOUT`].
+pub(super) const FIRST_HELLO_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// The bound for a connection's first Hello: [`FIRST_HELLO_TIMEOUT`] when
+/// its install wrote the helper (`fresh`), [`HELLO_TIMEOUT`] otherwise.
+pub(super) fn hello_timeout(fresh: bool) -> Duration {
+    if fresh {
+        FIRST_HELLO_TIMEOUT
+    } else {
+        HELLO_TIMEOUT
+    }
+}
 
 /// A device test's Git stage: the node runs `git --version` over the link
 /// the device has, read-only and with no login of its own (PRD
@@ -221,6 +255,12 @@ impl HelperPackages {
         arch: &str,
         engine: DeviceEngine,
     ) -> Result<Payload, EstablishError> {
+        // Asked before anything is read or sent, so the device gets nothing.
+        if os == "windows" && engine == DeviceEngine::Herdr {
+            return Err(EstablishError::NeedsNewEngine(
+                WINDOWS_NEEDS_OWN_ENGINE.to_owned(),
+            ));
+        }
         let (payload, bundled) = self.kit(os, arch)?;
         match engine {
             DeviceEngine::Herdr => Ok(payload),
@@ -242,10 +282,27 @@ impl HelperPackages {
                                 platform_label(os)
                             ))
                         })?;
-                        read_package(HOLDER_NAME, &holder).map_err(EstablishError::Install)?
+                        read_package(&device_program(HOLDER_NAME, os), &holder)
+                            .map_err(EstablishError::Install)?
                     }
                 };
                 payload.files.push(holder);
+                // A Windows holder loads the pinned ConPTY runtime from the
+                // folder beside the node's program (`hide_kit::holders`).
+                if os == "windows" {
+                    let conpty = self
+                        .find_named(hide_kit::holders::CONPTY_SOURCE, os, arch)
+                        .map_err(|()| {
+                            EstablishError::Unsupported(format!(
+                                "This Hide build does not include the pane holder's ConPTY runtime for {} {arch}; the core's own engine cannot run this device's panes",
+                                platform_label(os)
+                            ))
+                        })?;
+                    payload.files.extend(
+                        read_folder(hide_kit::holders::CONPTY_SOURCE, &conpty)
+                            .map_err(EstablishError::Install)?,
+                    );
+                }
                 Ok(payload)
             }
         }
@@ -282,7 +339,8 @@ impl HelperPackages {
                 });
         }
         let helper = self.find(os, arch).map_err(EstablishError::Unsupported)?;
-        let helper = read_package(HELPER_NAME, &helper).map_err(EstablishError::Install)?;
+        let helper = read_package(&device_program(HELPER_NAME, os), &helper)
+            .map_err(EstablishError::Install)?;
         let mut payload = Payload {
             files: vec![helper],
             herdr: None,
@@ -290,7 +348,7 @@ impl HelperPackages {
         };
         for name in [CLI_NAME, HOOKS_NAME] {
             match self.find_named(name, os, arch) {
-                Ok(path) => match read_package(name, &path) {
+                Ok(path) => match read_package(&device_program(name, os), &path) {
                     Ok(package) => payload.files.push(package),
                     Err(reason) => payload.missing.push(reason),
                 },
@@ -435,24 +493,70 @@ fn read_package(relative: &str, path: &Path) -> Result<Package, String> {
 }
 
 /// Whether the kit part at `relative` is a program, for a system whose
-/// files carry no mode; `None` for a name the kit does not define.
+/// files carry no mode; `None` for a name the kit does not define. A Windows
+/// device's programs carry their `.exe`, and the ConPTY runtime's programs
+/// are its `.exe` files.
 fn program_by_contract(relative: &str) -> Option<bool> {
-    match relative {
+    if let Some(runtime) = relative
+        .strip_prefix(hide_kit::holders::CONPTY_SOURCE)
+        .and_then(|rest| rest.strip_prefix('/'))
+    {
+        return Some(runtime.ends_with(".exe"));
+    }
+    match relative.strip_suffix(".exe").unwrap_or(relative) {
         HELPER_NAME | CLI_NAME | HOOKS_NAME | HOLDER_NAME => Some(true),
         name if name == hide_kit::device_herdr::HERDR_PROGRAM => Some(true),
         _ => None,
     }
 }
 
+/// Every file under the folder `dir`, as packages under `relative`, in name
+/// order; anything but a file or a folder in it is refused.
+fn read_folder(relative: &str, dir: &Path) -> Result<Vec<Package>, String> {
+    let unreadable =
+        |error: std::io::Error| format!("The package {} could not be read: {error}", dir.display());
+    let mut entries = std::fs::read_dir(dir)
+        .map_err(unreadable)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(unreadable)?;
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+    let mut packages = Vec::new();
+    for entry in entries {
+        let name = entry.file_name();
+        let name = name.to_str().ok_or_else(|| {
+            format!(
+                "The package {} names a file that is not UTF-8",
+                dir.display()
+            )
+        })?;
+        let child = format!("{relative}/{name}");
+        let kind = entry.file_type().map_err(unreadable)?;
+        if kind.is_dir() {
+            packages.extend(read_folder(&child, &entry.path())?);
+        } else if kind.is_file() {
+            packages.push(read_package(&child, &entry.path())?);
+        } else {
+            return Err(format!(
+                "The package {} is not a file or a folder",
+                entry.path().display()
+            ));
+        }
+    }
+    Ok(packages)
+}
+
 fn platform_label(os: &str) -> &str {
     match os {
         "macos" => "macOS",
         "linux" => "Linux",
+        "windows" => "Windows",
         other => other,
     }
 }
 
-/// `uname -s -m` in Rust's platform names.
+/// `uname -s -m` in Rust's platform names; a Windows device's PowerShell
+/// script answers `Windows` and its processor as Windows names it (`amd64`,
+/// `arm64`).
 pub(super) fn platform_of(uname: &str) -> Result<(String, String), String> {
     let mut parts = uname.split_whitespace();
     let (Some(system), Some(machine)) = (parts.next(), parts.next()) else {
@@ -463,6 +567,7 @@ pub(super) fn platform_of(uname: &str) -> Result<(String, String), String> {
     let os = match system {
         "Darwin" => "macos",
         "Linux" => "linux",
+        "Windows" => "windows",
         other => {
             return Err(format!(
                 "The device runs {other}, which the helper does not support"
@@ -2545,6 +2650,16 @@ fn deliver_event(inner: &Arc<Inner>, panes: Option<&PaneHook>, line: &[u8]) {
 mod tests {
     use super::*;
 
+    /// The first Hello after the connection's install wrote the helper
+    /// waits long enough for a scanned first start, past the bound a helper
+    /// the device already held gets; it is a fixed bound, not a retry.
+    #[test]
+    fn a_freshly_installed_helper_gets_a_longer_first_hello() {
+        assert_eq!(hello_timeout(false), Duration::from_secs(15));
+        assert_eq!(hello_timeout(true), Duration::from_secs(60));
+        assert!(hello_timeout(true) > hello_timeout(false));
+    }
+
     /// A device's terminal line past its cap ends the link, and an answer
     /// keeps its own, larger cap: a device's node is another machine's
     /// program.
@@ -2955,6 +3070,16 @@ mod tests {
         );
         assert!(platform_of("FreeBSD amd64").is_err());
         assert!(platform_of("").is_err());
+        // A Windows device's PowerShell script names its processor as
+        // Windows does.
+        assert_eq!(
+            platform_of("Windows amd64").unwrap(),
+            ("windows".to_owned(), "x86_64".to_owned())
+        );
+        assert_eq!(
+            platform_of("Windows arm64").unwrap(),
+            ("windows".to_owned(), "aarch64".to_owned())
+        );
     }
 
     #[test]
@@ -3158,6 +3283,73 @@ mod tests {
                 .any(|file| file.relative == hide_kit::device_herdr::HERDR_PIN)
         );
         assert_ne!(own.version(), before.version());
+    }
+
+    /// A Windows device runs its panes in holders only: on the device's
+    /// Herdr it is refused before anything is read or sent, and on the core's
+    /// own engine it gets its programs under their `.exe` names, the holder
+    /// and the ConPTY runtime the holder loads, and no Herdr.
+    #[cfg(unix)]
+    #[test]
+    fn a_windows_device_gets_its_programs_and_the_conpty_runtime_and_never_herdr() {
+        let directory = tempfile::tempdir().unwrap();
+        let folder = directory.path();
+        for name in [HELPER_NAME, CLI_NAME, HOOKS_NAME, HOLDER_NAME, HERDR_NAME] {
+            write(
+                &folder.join(format!("{name}-windows-x86_64")),
+                name.as_bytes(),
+                0o755,
+            );
+        }
+        let packages = HelperPackages::new(Some(folder.to_path_buf()));
+        match packages.payload_for("windows", "x86_64", DeviceEngine::Herdr) {
+            Err(EstablishError::NeedsNewEngine(reason)) => {
+                assert_eq!(reason, WINDOWS_NEEDS_OWN_ENGINE);
+            }
+            other => panic!(
+                "a Windows device on Herdr was not refused: {:?}",
+                other.err()
+            ),
+        }
+        assert!(
+            matches!(
+                packages.payload_for("windows", "x86_64", DeviceEngine::Holders),
+                Err(EstablishError::Unsupported(reason)) if reason.contains("ConPTY")
+            ),
+            "a holder without its ConPTY runtime runs no pane"
+        );
+
+        let conpty = folder.join(format!(
+            "{}-windows-x86_64",
+            hide_kit::holders::CONPTY_SOURCE
+        ));
+        std::fs::create_dir_all(conpty.join("x64")).unwrap();
+        write(&conpty.join("conpty.dll"), b"dll", 0o644);
+        write(&conpty.join("x64/OpenConsole.exe"), b"console", 0o755);
+        let own = packages
+            .payload_for("windows", "x86_64", DeviceEngine::Holders)
+            .unwrap();
+        assert!(own.herdr.is_none());
+        assert_eq!(
+            own.files
+                .iter()
+                .map(|file| (file.relative.as_str(), file.executable))
+                .collect::<Vec<_>>(),
+            [
+                ("hided.exe", true),
+                ("hide.exe", true),
+                ("hide-agent-hooks.exe", true),
+                ("hide-holder.exe", true),
+                ("holder-conpty/conpty.dll", false),
+                ("holder-conpty/x64/OpenConsole.exe", true),
+            ]
+        );
+        assert_eq!(program_by_contract("hide-holder.exe"), Some(true));
+        assert_eq!(program_by_contract("holder-conpty/conpty.dll"), Some(false));
+        assert_eq!(
+            program_by_contract("holder-conpty/x64/OpenConsole.exe"),
+            Some(true)
+        );
     }
 
     /// Any change to any part is a new version folder on the device, so a

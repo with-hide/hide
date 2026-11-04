@@ -920,6 +920,51 @@ fn a_device_on_an_unsupported_platform_shows_why() {
     );
 }
 
+/// A device whose system connects only on the core's own engine, dialed by a
+/// core on Herdr's, says so on its row and waits for the operator: it is not
+/// a system Hide does not run on, and what the own engine installed there
+/// before is still its kit's, so the kit is not called unsupported.
+#[test]
+fn a_device_that_needs_the_new_engine_says_so_and_waits() {
+    let probe = device_runtime(None, None);
+    let shared = device_runtime(Some(granted(&probe)), None);
+    {
+        let mut runtime = shared.lock().unwrap();
+        runtime.start_device_host(DEVICE, hosts::HostAttempt::Background);
+        let attempt = runtime.device_host_generation(DEVICE);
+        runtime.ingest_host_established(
+            DEVICE,
+            attempt,
+            Err(hide_node_link::device::EstablishError::NeedsNewEngine(
+                "Windows devices connect only on the new engine".to_owned(),
+            )),
+        );
+        assert!(
+            runtime
+                .device_host_retries
+                .get(DEVICE)
+                .is_none_or(|retry| retry.at_unix_ms.is_none()),
+            "no retry of this engine can connect it"
+        );
+    }
+    let row = shared
+        .lock()
+        .unwrap()
+        .snapshot()
+        .navigator
+        .devices
+        .iter()
+        .find(|device| device.id == DEVICE)
+        .expect("device row")
+        .clone();
+    assert_eq!(row.problem.as_deref(), Some("needs_new_engine"));
+    assert_eq!(row.host.state, "unavailable");
+    assert_ne!(
+        row.kit.unavailable,
+        Some(crate::model::KitUnavailable::UnsupportedPlatform)
+    );
+}
+
 /// D-13, B19: a device allowed under contract 2 for the same folders is
 /// carried to the whole kit without asking when its connection starts, and
 /// keeps the identity it was bound to; one allowed for other folders asks

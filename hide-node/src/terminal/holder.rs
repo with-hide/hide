@@ -20,9 +20,9 @@
 //! `unsupported_holder_version` and left running (B10). A device's node
 //! runs holders only when the core that dialed it asks
 //! (`Call::HoldersStart`, PRD engine-bundle-3-core-owns D-22), never by its
-//! own environment's switch ([`device_switch`]); a Windows device runs none,
-//! since its node runs under a job its `OwnedChild` start made, which a
-//! holder cannot break away from.
+//! own environment's switch ([`device_switch`]); a Windows device's node
+//! runs inside the job its SSH session made, which a holder leaves through
+//! `start_resident`.
 
 use std::collections::BTreeMap;
 use std::ffi::OsStr;

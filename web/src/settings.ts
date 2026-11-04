@@ -280,6 +280,8 @@ export function deviceProblemLine(problem: DeviceProblem | null | undefined, ali
       return { headline: t("devices.problem.cannotConnect"), note: t("devices.problem.opensshOld"), command: null };
     case "unsupported":
       return { headline: t("devices.problem.cannotConnect"), note: t("devices.problem.unsupported"), command: null };
+    case "needs_new_engine":
+      return { headline: t("devices.problem.cannotConnect"), note: t("devices.problem.needsNewEngine"), command: null };
     case "hide_updated":
       return { headline: t("devices.problem.cannotConnect"), note: t("devices.problem.hideUpdated"), command: null };
     default:
