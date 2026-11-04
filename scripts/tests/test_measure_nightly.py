@@ -93,6 +93,21 @@ class Verdict(unittest.TestCase):
         self.assertIn("panes: the private server has 65, the scale asks for 66", failure["error"])
         self.assertIn("isolated_headless", failure["error"])
 
+    def test_an_own_engine_run_with_no_herdr_passes_and_names_its_engine(self):
+        identity = (self.run / "identity.txt").read_text().replace("herdr_version=herdr 0.9.3\n", "")
+        write(self.run / "identity.txt", identity + "engine=own\n")
+        status, record = judge(self.run)
+        self.assertEqual(status, 0)
+        self.assertEqual((record["failures"], record["missing"]), ([], []))
+        self.assertEqual(record["engine"], "own")
+        self.assertEqual(record["lane"], "topology at operator scale, own engine")
+        self.assertIsNone(record["identity"]["herdr_version"])
+
+    def test_a_run_that_names_no_engine_ran_on_herdr(self):
+        status, record = judge(self.run)
+        self.assertEqual(status, 0)
+        self.assertEqual((record["engine"], record["lane"]), ("herdr", "topology at operator scale"))
+
     def test_a_run_that_stopped_fails_without_naming_a_measurement(self):
         for name in ("echo-1.json", "topology.json", "memory-after-topology.json"):
             (self.run / name).unlink()

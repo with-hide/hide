@@ -667,8 +667,9 @@ The numbers belong to the run record; this document keeps the method, not a verd
 
 ### The nightly performance lane
 
-`nightly.yml` calls `perf.yml`, whose one job (`performance (macOS) / topology operator`, on `macos-15`) measures the same fixture every night against the product `hided` built from that night's `main`.
-It builds the web shell and the release `hided` at the fixed `target/release/hided`, fetches the pinned Herdr, and runs `run.sh --isolated-headless` with `MEASURE_SCENARIO=topology`, `MEASURE_SCALE=operator` and `MEASURE_TOPOLOGY_ROUNDS=20`, the run directory under the job's workspace.
+`nightly.yml` calls `perf.yml`, whose two jobs (`performance (macOS) / topology operator` on Herdr and `topology operator own engine` on the core's own engine, each on `macos-15`) measure the same fixture every night against the product `hided` built from that night's `main`.
+Each builds the web shell and the release `hided` at the fixed `target/release/hided` and runs `run.sh --isolated-headless` with `MEASURE_SCENARIO=topology`, `MEASURE_SCALE=operator` and `MEASURE_TOPOLOGY_ROUNDS=20`, the run directory under the job's workspace.
+The Herdr job fetches the pinned Herdr; the own engine's job builds the release `hide-holder` beside `hided` instead, runs with `MEASURE_ENGINE=own` and fetches no Herdr, so its run needs none.
 The browser is the hosted image's Google Chrome, headless; `run.sh` starts it with `--remote-debugging-port=0` and reads the port Chrome chose from `DevToolsActivePort` in the run's own profile.
 `perf.yml` also has a `workflow_dispatch`, so a branch can be measured alone without starting every nightly lane.
 Nothing a pull request runs depends on it, and no pull request runs it.
@@ -677,7 +678,7 @@ The fixture is the measurement's identity, so it is fixed:
 
 | Part | Contract |
 | --- | --- |
-| Topology | `fixture.mjs` at `operator`, on Herdr: 43 workspaces and 43 projects (the measured checkout, a linked worktree of the fixture repository, and 42 others that are each their own Git checkout), 62 tabs (the measured tab and the switch target, one root tab in each other workspace, 18 more), 66 panes (one per tab and four splits) |
+| Topology | `fixture.mjs` at `operator`, on each job's engine: 43 workspaces and 43 projects (the measured checkout, a linked worktree of the fixture repository, and 42 others that are each their own Git checkout), 62 tabs (the measured tab and the switch target, one root tab in each other workspace, 18 more), 66 panes (one per tab and four splits) |
 | Printing | No agent is reported; 5 panes print a line every 50 ms after the idle sample |
 | Idle resources | `resources-idle.json`: 20 one-second samples of the owned `hided`, Herdr and Chrome trees before anything moves |
 | Echo | One trial of 50 screen keys on the measured pane, renderer keydown to xterm write on the page's clock |
@@ -689,7 +690,7 @@ The fixture is the measurement's identity, so it is fixed:
 `fixture.mjs` writes the counts the daemon's snapshot answers beside the ones the scale asks for (`scale.json`), and a run whose counts differ is not this fixture.
 The series changed on 2026-11-02 (PRD engine-bundle-3-core-owns D-24): the fixture is made through the daemon on either engine, without the agent reports and their churn, and each round adds two resizes; a record before it is not compared with one after.
 Changing any row of this table, `fixture.mjs`'s operator numbers or the driver's measurement boundaries starts a new series: do it in its own pull request that says so.
-Each record carries the driver's hash, the runner image, the Chrome, Herdr and `hided` identities and the load, so a reader compares only records of one series.
+Each record carries its engine, the driver's hash, the runner image, the Chrome, Herdr (none on the own engine) and `hided` identities and the load, so a reader compares only records of one series; each engine's records are a series of their own.
 
 `scripts/web-shell-measure/nightly.py` judges the run and writes its record, `nightly-summary.json`.
 It derives every figure again from the raw files through `summarize.py`, writes the same table to the job's summary page with the record beneath it, and fails the job in three cases only:
@@ -718,10 +719,10 @@ A fixture failure means the driver, the pin or the runner no longer builds the f
 When no candidate explains it, for instance a new runner image or Chrome that the record's identity shows, the issue goes to the operator, who decides whether the series has to start again.
 A green run proves the measurement was valid, not that performance held; read the trend.
 
-Each run keeps its run directory, without the throwaway Chrome profile, as the artifact `perf-run-<date>-<run id>-<attempt>` for 30 days, and its record alone as `perf-record-<date>` for 90.
+Each run keeps its run directory, without the throwaway Chrome profile, as the artifact `perf-run-<date>-<run id>-<attempt>` for 30 days, and its record alone as `perf-record-<date>` for 90; the own engine's are `perf-run-own-…` and `perf-record-own-<date>`.
 Read a series with `gh run download <run id> -n perf-record-<date>`; nothing about a run is committed.
 
-The job costs about 17 runner minutes a night on `macos-15`, most of it the release build.
+Each job costs about 17 runner minutes a night on `macos-15`, most of it the release build.
 Its first run on a branch, with no Rust cache, took 21.8 minutes when the release profile had one codegen unit: about a minute of setup, a minute for the web shell, 16.4 minutes for the release `hided` (14.4 in another run) and 3.6 for the measurement.
 Sixteen units cut a clean macOS release build by 29% (`docs/BUILD.md`, The release profile), so the release `hided` should now take about 12 minutes.
 The same change raised `hided`'s resident memory by about 5 MiB once, so the series steps up by that much at the merge that moved to sixteen units, not through a leak.

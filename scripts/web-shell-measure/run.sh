@@ -68,7 +68,7 @@
 # only, with the fixture the Herdr CLI makes.
 # MEASURE_HIDED_BIN measures another hided build, such as a baseline, with
 # the same fixture.
-# Needs: the pinned herdr (HERDR_BIN_PATH or PATH), Google Chrome,
+# Needs: the pinned herdr (HERDR_BIN_PATH or PATH) unless MEASURE_ENGINE=own, Google Chrome,
 # target/release/hided built after `pnpm --dir web build` (docs/BUILD.md: a release hided embeds web/dist).
 set -euo pipefail
 # Optional unattended mode: no native window and no operator socket read.
@@ -243,8 +243,11 @@ reset_fixture() {
   echo "worktree_dirty=$(git -C "$MEASURE_WORKTREE" status --porcelain | wc -l | tr -d ' ')"
   echo "hided_bin=$hided_bin"
   echo "hided_sha256=$(shasum -a 256 "$hided_bin" | awk '{print $1}')"
-  echo "herdr_bin=$HERDR_BIN_PATH"
-  echo "herdr_version=$("$HERDR_BIN_PATH" --version)"
+  # The own engine runs no Herdr, and its record says so by its engine.
+  if [[ "$engine" == herdr ]]; then
+    echo "herdr_bin=$HERDR_BIN_PATH"
+    echo "herdr_version=$("$HERDR_BIN_PATH" --version)"
+  fi
   echo "chrome_version=$("$chrome_bin" --version 2>/dev/null)"
   echo "socket=$HERDR_SOCKET_PATH"
   echo "scenario=$scenario"

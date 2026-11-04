@@ -5,7 +5,8 @@ usage: nightly.py <run-dir> <record.json>
 
 <run-dir> is one `MEASURE_SCENARIO=topology MEASURE_SCALE=operator` run of
 run.sh with `--isolated-headless` (docs/PERFORMANCE_TESTING.md, "The nightly
-performance lane"). Every figure is derived again from the run's raw files
+performance lane"), on either engine (`MEASURE_ENGINE`), which the record
+names. Every figure is derived again from the run's raw files
 through summarize.py, so the record follows the measurement contract rather
 than a copy of it. It writes the run's record to <record.json>, the same
 figures as a table on stdout and on $GITHUB_STEP_SUMMARY when Actions sets
@@ -110,8 +111,11 @@ def build(run):
             return None
 
     ident = part("identity", lambda: identity(run)) or {}
+    # A run before the engine line was written ran on Herdr.
+    engine = ident.get("engine", "herdr")
     record = {
-        "lane": "topology at operator scale",
+        "lane": "topology at operator scale" + ("" if engine == "herdr" else f", {engine} engine"),
+        "engine": engine,
         "date": ident.get("started_at", "")[:10] or None,
         "started_at": ident.get("started_at"),
         "commit": ident.get("worktree_head"),
@@ -161,7 +165,7 @@ def table(record):
         f"### Performance: {record['lane']}, {record['date']}", "", verdict, "",
         f"Fixture: {fixture.get('workspaces')} workspaces, {fixture.get('tabs')} tabs, {fixture.get('panes')} panes, "
         f"{fixture.get('printing_targets')} printing, {fixture.get('agents_reported')} agents reported; "
-        f"{ident['chrome_version']} headless; {ident['herdr_version']}; hided {str(ident['hided_sha256'])[:12]}; "
+        f"{ident['chrome_version']} headless; {ident['herdr_version'] or 'no Herdr'}; hided {str(ident['hided_sha256'])[:12]}; "
         f"driver {ident['driver_sha256'][:12]}; image {ident['runner_image'] or 'not a hosted runner'}; {ident['load']}", "",
         "| Key echo at operator scale | n | p50 | p95 | p99 | max | verdict |",
         "| --- | ---: | ---: | ---: | ---: | ---: | --- |",
