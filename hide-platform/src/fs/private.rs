@@ -1484,6 +1484,9 @@ mod sys {
             Sid::well_known(WinLocalSystemSid)?,
             Sid::well_known(WinBuiltinAdministratorsSid)?,
         ];
+        let owner_rights = Sid::parse("S-1-3-4")?;
+        let owner_trusted = trusted.iter().any(|known| known.same_as(security.owner))
+            || owned(security)?;
         if security.acl.is_null() {
             // No access list at all means everybody has every access.
             return Ok(true);
@@ -1532,6 +1535,12 @@ mod sys {
             let allowed = unsafe { &*entry.cast::<ACCESS_ALLOWED_ACE>() };
             let sid: PSID = (&allowed.SidStart as *const u32).cast_mut().cast();
             if trusted.iter().any(|known| known.same_as(sid)) {
+                continue;
+            }
+            // OWNER RIGHTS grants whoever owns the entry, as Python's private
+            // `mkdir(mode=0o700)` does; it is the owner's own access when the
+            // owner is trusted, and a stranger's when the owner is not.
+            if owner_rights.same_as(sid) && owner_trusted {
                 continue;
             }
             if allowed.Mask & watched != 0 {
