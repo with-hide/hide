@@ -79,7 +79,7 @@ The rest of this file is for the people who open pull requests.
 
 hide is a macOS app over the [Herdr](https://herdr.dev) runtime.
 The Rust core in `herdr-core/` owns every piece of state; the `hided` daemon serves a snapshot of it to the web shell in `web/`, which the Electron host in `desktop/` shows in its own window and dispatches typed events back from.
-`AGENTS.md` keeps the rules; [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) owns the architecture and the Herdr wire boundary with their reasons, [docs/BUILD.md](docs/BUILD.md) the build output and worktree rules, and [docs/PERFORMANCE_TESTING.md](docs/PERFORMANCE_TESTING.md) the performance rules that came out of real incidents.
+`AGENTS.md` keeps the rules; [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) owns the architecture with its reasons, [docs/BUILD.md](docs/BUILD.md) the build output and worktree rules, and [docs/PERFORMANCE_TESTING.md](docs/PERFORMANCE_TESTING.md) the performance rules that came out of real incidents.
 Read `AGENTS.md` and the architecture guide before changing anything under `herdr-core/`, `hided/` or `desktop/`; [docs/UI_BEHAVIOR.md](docs/UI_BEHAVIOR.md) before changing anything a user looks at, [docs/DESIGN_GUIDE.md](docs/DESIGN_GUIDE.md) before changing a screen or a token, and [docs/DESIGN_WORKFLOW.md](docs/DESIGN_WORKFLOW.md) before making a design change.
 Use [docs/README.md](docs/README.md) to find current guides and distinguish historical/reference-only material.
 

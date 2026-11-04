@@ -180,7 +180,7 @@ The macOS app the private publisher signs is built on the Mac mini from its own 
 
 `hide-vt` is the terminal parser the pane holder (`hide-holder`) links: Herdr's binding to libghostty-vt, renamed ([hide-vt/PATCHES.md](../hide-vt/PATCHES.md) lists its origin and every change).
 libghostty-vt is Zig and C, 22 MB of source, and is never copied into this repository, so a build needs three inputs it downloads once: the Zig 0.16.0 compiler for the machine, the Herdr source archive whose `vendor/libghostty-vt` is the source dist with Herdr's patches applied, and the eight Zig packages that build reads.
-`hide-vt/build-inputs.json` pins each one by digest; it is the only place the versions are written, and it pins its own Herdr release, separate from the Herdr release Hide bundles (`contracts/herdr-bundle.json`), because the parser moves only when someone moves it.
+`hide-vt/build-inputs.json` pins each one by digest; it is the only place the versions are written, and it pins the Herdr release the binding was taken from, because the parser moves only when someone moves it.
 
 `scripts/prepare-vt-inputs.py` is the one preparation step, on every system and in every lane.
 It downloads each input, refuses one whose sha256 differs from its pin, checks that every one of Herdr's patches applies in reverse to the extracted tree (so the tree is the dist plus exactly those patches), has Zig fetch the packages, which Zig checks against its own content hash, and moves the finished folder into place in one rename.

@@ -297,4 +297,4 @@ hide is fair source under the [Functional Source License 1.1, ALv2 Future Licens
 You may use, change and redistribute it for any purpose except offering others a commercial product or service that competes with hide, and using it in your own work, including at a company, is always allowed.
 Each release becomes available under the Apache License 2.0 two years after it is published, and releases up to and including 1.1.1 remain under the Apache License 2.0.
 [NOTICE](NOTICE) carries the copyright notice and the files derived from Herdr and other projects, which keep their own licenses.
-The bundled Herdr and other third-party components keep their own licenses, listed in [THIRD_PARTY_NOTICES](desktop/resources/THIRD_PARTY_NOTICES).
+Code taken from Herdr and other third-party components keep their own licenses, listed in [THIRD_PARTY_NOTICES](desktop/resources/THIRD_PARTY_NOTICES).
