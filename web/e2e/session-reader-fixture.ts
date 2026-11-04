@@ -302,6 +302,9 @@ if (config.herdr) {
     const [request, state] = line.trim().split(" ");
     const turn = { working: "working", idle: "done" }[state];
     if (turn) {
+      // The real TUI redraws the interrupt hint as a turn starts and ends.
+      // Its screen transition also gives the native reader a new engine state.
+      process.stdout.write("\x1b[2J\x1b[H" + (state === "working" ? "opencode esc to interrupt\n" : "opencode fixture ready\n"));
       helper("turn", { session_id: config.id, turn });
       fs.writeFileSync(config.turnReceipt, request);
     }
@@ -354,10 +357,15 @@ let reported = 0;
  * `turn` report: the line typed into the pane is read by the double
  * (`OPENCODE_DOUBLE`), which asks the helper from inside the pane.
  */
-export async function reportOpenCodeState(fixture: OpenCodeHost, daemon: Pick<Daemon, "origin" | "token">, pane: string, state: "working" | "idle"): Promise<void> {
+export async function reportOpenCodeState(fixture: OpenCodeHost, daemon: Pick<Daemon, "origin" | "token" | "stateDir">, pane: string, state: "working" | "idle"): Promise<void> {
   if (fixture.engine === "own") {
     const request = randomUUID();
     const receipt = path.join(fixture.root, "opencode-turn-receipt");
+    const engineRead = () => fs.readFileSync(path.join(daemon.stateDir, "Logs", "core.jsonl"), "utf8").trim().split("\n")
+      .map(line => JSON.parse(line) as { kind?: string; pane_id?: string; state_change_seq?: number; activity?: string })
+      .findLast(record => record.kind === "pane.read_record" && record.pane_id === pane);
+    const before = engineRead()?.state_change_seq;
+    expect(before, "the engine has read the initial OpenCode screen").toBeDefined();
     await withControl(daemon, async (control) => {
       await preparePaneInput(control, pane);
       sendKeys(control, pane, `${request} ${state}\r`);
@@ -365,6 +373,10 @@ export async function reportOpenCodeState(fixture: OpenCodeHost, daemon: Pick<Da
       // the input connection until the double has reported this command.
       await expect.poll(() => fs.existsSync(receipt) ? fs.readFileSync(receipt, "utf8") : "",
         { message: `OpenCode reported ${state}`, timeout: 10_000 }).toBe(request);
+      // A plugin report can change activity before the holder reads its new
+      // screen. Do not draw the next state until that engine transition lands.
+      await expect.poll(() => engineRead()?.state_change_seq,
+        { message: `the engine read OpenCode's ${state} screen`, timeout: 10_000 }).toBeGreaterThan(before!);
       await control.until((rest) => {
         const row = agentIn(rest, pane);
         return row && (state === "working" ? row.activity === "working" : row.activity !== "working") ? true : undefined;
