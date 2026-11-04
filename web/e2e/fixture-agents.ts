@@ -57,7 +57,7 @@ export async function setAgentState(daemon: Pick<Daemon, "origin" | "token">, pa
  * SessionStart hook the stand-in runs from inside its pane
  * (`shims/claude-shim.c`, `session_request`).
  */
-export async function setAgentSession(fixture: EngineServer, daemon: Pick<Daemon, "origin" | "token">, pane: string, session: string): Promise<void> {
+export async function setAgentSession(daemon: Pick<Daemon, "origin" | "token">, pane: string, session: string): Promise<void> {
   await withControl(daemon, async (control) => {
     sendKeys(control, pane, `\x1b]7770;session=${session}\x07`);
     await control.until((rest) => agentIn(rest, pane)?.session_id === session, `${pane} on session ${session}`, 20_000);
@@ -74,7 +74,7 @@ let labelSessions = 0;
 export async function labelAgentPane(fixture: AgentFixture, daemon: Pick<Daemon, "origin" | "token">, pane: string, label: FixtureLabel): Promise<string> {
   const session = `label-${process.pid}-${(labelSessions += 1)}`;
   writeFixtureTranscript(claudeProjects(fixture), session, label);
-  await setAgentSession(fixture, daemon, pane, session);
+  await setAgentSession(daemon, pane, session);
   return session;
 }
 
@@ -100,14 +100,14 @@ export async function finishUnseenTurn(fixture: AgentFixture, daemon: Pick<Daemo
  * the stand-in then reports that session as Claude Code does
  * (`setAgentSession`).
  */
-export async function startAgentIn(fixture: EngineServer, daemon: Pick<Daemon, "origin" | "token">, pane: string, session?: string): Promise<AgentRow> {
+export async function startAgentIn(daemon: Pick<Daemon, "origin" | "token">, pane: string, session?: string): Promise<AgentRow> {
   const row = await withControl(daemon, async (control) => {
     await preparePaneInput(control, pane);
     sendKeys(control, pane, "claude\r");
     return control.until((rest) => agentIn(rest, pane), `an agent in ${pane}`, 30_000);
   });
   if (!session) return row;
-  await setAgentSession(fixture, daemon, pane, session);
+  await setAgentSession(daemon, pane, session);
   return withControl(daemon, (control) => control.until((rest) => agentIn(rest, pane), `the agent in ${pane}`));
 }
 

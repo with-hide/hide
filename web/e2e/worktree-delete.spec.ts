@@ -307,7 +307,7 @@ test("a dirty worktree with an unmerged branch and an agent is deleted once both
       viewPane(control, opened.pane);
       return opened.pane;
     });
-    await startAgentIn(fixture, daemon, pane);
+    await startAgentIn(daemon, pane);
     await labelAgentPane(fixture, daemon, pane, { task: "삭제 대상 작업 정리" });
 
     const feature = page.locator("[data-checkout-row]").filter({ has: page.locator(`[data-checkout][aria-label^="${BRANCH}"]`) });

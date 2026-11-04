@@ -41,7 +41,7 @@ test("prompt elapsed survives state changes and restart, advances only on a prom
     await expect(taskTime).toHaveText("7m", { timeout: 30_000 });
     // Metadata alone cannot manufacture a prompt time or inherit the old session's.
     fs.writeFileSync(path.join(claudeProjects(herdr), "e2e", "no-prompt.jsonl"), `${JSON.stringify({ type: "system", sessionId: "no-prompt", timestamp: new Date().toISOString(), subtype: "init" })}\n`);
-    await setAgentSession(herdr, daemon, pane, "no-prompt");
+    await setAgentSession(daemon, pane, "no-prompt");
     await expect(tasks.locator(`[data-task-row="${pane}"]`)).toBeVisible();
     await expect(taskTime).toHaveCount(0, { timeout: 30_000 });
     continueFixtureTranscript(herdr, "no-prompt", { task: "새 세션 요청", at: Date.now() - 2 * 60_000 - 5_000 });

@@ -177,7 +177,7 @@ const ko = {
   "coreMove.fix.other_node": "그 기기에서 연결을 끊으세요",
   "coreMove.fix.target_state": "{{machine}}에서 정리하세요",
   "coreMove.fix.target_folder": "{{machine}}에서 폴더를 고치세요",
-  "coreMove.fix.engine": "아직 지원하지 않습니다",
+  "coreMove.fix.engine": "아직 지원하지 않아요",
   "coreMove.fix.identity": "SSH 설정을 확인하세요",
   "coreMove.fix.own_state": "이 Mac에서 정리하세요",
   "coreMove.fix.link": "core에 다시 연결하세요",

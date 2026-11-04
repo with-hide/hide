@@ -109,7 +109,7 @@ async function fork(page: Page, herdr: AgentFixture, daemon: Daemon, forker: str
   test.info().annotations.push({ type: `${item} timing`, description: `keyboard on fork ${focusMs} ms, fixture ready ${startMs} ms, sent against pending holder ${heldPane !== null}` });
   console.log(`${item}: keyboard on fork ${focusMs} ms, fixture ready ${startMs} ms; sent against pending holder: ${heldPane !== null}`);
   // Claude Code reports the fork's own conversation id.
-  await setAgentSession(herdr, daemon, forked, FORKED_SESSION);
+  await setAgentSession(daemon, forked, FORKED_SESSION);
   return { forked, startMs };
 }
 

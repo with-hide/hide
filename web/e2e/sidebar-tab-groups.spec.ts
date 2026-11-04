@@ -48,7 +48,7 @@ async function startAgent(herdr: AgentFixture, daemon: Awaited<ReturnType<typeof
     }, beside ? `a new agent beside ${beside}` : "a new agent in a tab of its own", 30_000);
   });
   // The stand-in reports its session, as Claude Code does, so its row leaves Starting.
-  await setAgentSession(herdr, daemon, started.pane, `sidebar-${started.pane.replaceAll(":", "-")}`);
+  await setAgentSession(daemon, started.pane, `sidebar-${started.pane.replaceAll(":", "-")}`);
   return started;
 }
 
