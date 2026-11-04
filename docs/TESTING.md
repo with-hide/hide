@@ -314,8 +314,11 @@ A piece that another open change is still building is marked as pending with the
    Ordinary Windows shell panes use the private Herdr server's configured cmd.exe on Herdr, and the product's integrated PowerShell on the own engine; an agent-start tab uses the integrated launch recipe.
    The engine fixture names its ordinary shell, and shared command and prompt helpers use that syntax without changing the account's PowerShell profile.
    The disposable runner's registry PATH preparation above belongs to the CI job, not to a fixture running on a developer's account.
-   On the own engine's Windows lane, each test that needs an agent start explicitly calls `skipOwnWindowsAgentStart` with the bundle 4 PR A foreground-proof reason; this is a declared transition gap in [INSTALL.md](INSTALL.md#what-each-system-supports), not a flaky marker or a file-wide exclusion.
+   On the own engine's Windows lane, each test that needs an agent start explicitly calls `skipOwnWindowsAgentStart` with the `win-agent-start 대기` foreground-proof reason; this is a declared transition gap in [INSTALL.md](INSTALL.md#what-each-system-supports), not a flaky marker or a file-wide exclusion.
    Herdr on Windows, shell-only own-engine flows, and both engines on macOS and Linux keep those tests enabled.
+   The desktop SSH specs use `ssh-pane-fixture.ts` on either engine: a native pane is made through the connected device's node, and cleanup ends its private HOME's holder records.
+   They retain their isolated-SSH environment skips; the native fixture is prepared, while connecting an SSH CI lane remains follow-up work.
+   Only the pinned-Herdr repair case and the pre-connection Herdr pane premise stay Herdr-specific.
    The Windows stand-in waits for its command runner instead of overlaying itself: Windows exec ends that parent, which would break the live ancestry the pane capability proves.
    A failed engine-fixture setup keeps its final snapshot and at most 32 terminal updates within 256 KiB, with a dropped-update count, in the run directory; these are diagnostics, never a successful start assertion.
    Every web e2e lane runs once on each engine: the own engine's jobs run every test not tagged `@herdr` (`--grep-invert @herdr`) over as many shards as the Herdr jobs (`own-engine` in `web-e2e.yml`), on Linux in every full plan and on Windows with the `@platform` tests.

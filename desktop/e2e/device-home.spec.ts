@@ -12,9 +12,11 @@ import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { setFixtureLifecycle, setFixtureSession, startHerdr, type HerdrFixture } from "../../web/e2e/herdr-fixture";
+import { setFixtureLifecycle, setFixtureSession, type HerdrFixture } from "../../web/e2e/herdr-fixture";
+import { startSshPaneFixture, ownSshPaneRunning, type SshPaneFixture, type SshRest } from "./ssh-pane-fixture";
+import { deviceHome as declaredDeviceHome, proveDeviceHome, stageBuild } from "./device-home";
 import { enterWorkspace } from "../../web/e2e/wire";
-import { HIDE_CLI, isolate, nodeOf, relaunch, shellPage, test } from "./fixture";
+import { HIDE_CLI, endChild, isolate, nodeOf, relaunch, shellPage, test } from "./fixture";
 import { animationsFinished, compositorPresents } from "../../web/e2e/wait";
 
 test.describe.configure({ timeout: 300_000 });
@@ -53,6 +55,10 @@ function paneRunning(herdr: HerdrFixture, text: string): { pane: string; info: s
     if (info.includes(text)) return { pane, info };
   }
   return null;
+}
+
+function devicePaneRunning(fixture: SshPaneFixture, home: string, text: string): { pane: string; info: string; cwd?: string } | null {
+  return fixture.herdr ? paneRunning(fixture.herdr, text) : ownSshPaneRunning(home, DEVICE, text);
 }
 
 async function openStartPanel(page: Page): Promise<void> {
@@ -98,16 +104,32 @@ async function capture(page: Page, app: ElectronApplication, name: string): Prom
   }
 }
 
-test("a device's Home is made on its first start, the rail follows registration, and a device start lands on that device", async () => {
+async function startDeviceHomeRun() {
   const deviceHome = process.env.HIDE_E2E_DEVICE_HOME!;
-  const local = await startHerdr({ agents: false });
-  const device = await startHerdr({ agents: false });
+  const local = await startSshPaneFixture();
+  const device = await startSshPaneFixture();
+  // The declared SSH HOME must carry the same ownership marker as the other
+  // device fixtures before the native node can create holders there.
+  if (device.engine === "own" && fs.realpathSync(deviceHome) !== declaredDeviceHome()) {
+    throw new Error("HIDE_E2E_DEVICE_HOME and HIDE_E2E_SSH_HOME must name the same private HOME");
+  }
   // The device's panes find the fixture's `claude` shim before anything else.
   fs.writeFileSync(path.join(device.root, "home", ".zshenv"), `skip_global_compinit=1\nexport PATH="${path.join(device.root, "bin")}:$PATH"\n`);
   // The device's `herdr` is the pinned binary, found where hide looks for it on a device.
   fs.mkdirSync(path.join(deviceHome, ".local", "bin"), { recursive: true });
-  fs.rmSync(path.join(deviceHome, ".local", "bin", "herdr"), { force: true });
-  fs.symlinkSync(device.bin, path.join(deviceHome, ".local", "bin", "herdr"));
+  if (device.herdr) {
+    fs.rmSync(path.join(deviceHome, ".local", "bin", "herdr"), { force: true });
+    fs.symlinkSync(device.herdr.bin, path.join(deviceHome, ".local", "bin", "herdr"));
+  } else {
+    // The remote node's login shell and every new pane read this isolated
+    // HOME. Its shim reports sessions through this build's real hook binary.
+    fs.writeFileSync(path.join(deviceHome, ".zshenv"), [
+      "skip_global_compinit=1",
+      `export PATH='${path.join(device.root, "bin")}':"$PATH"`,
+      `export HIDE_E2E_ROOT='${device.root}'`,
+      `export HIDE_E2E_HOOKS='${path.join(path.dirname(HIDE_CLI), "hide-agent-hooks")}'`, "",
+    ].join("\n"));
+  }
   const run = isolate(local, "device-home");
   run.env.HIDE_HOST_HELPER_ROOT = path.join(run.root, "remote-helper");
   run.env.HIDE_HOST_CLI_DIR = path.join(run.root, "remote-bin");
@@ -119,13 +141,21 @@ test("a device's Home is made on its first start, the rail follows registration,
     "Host isolated-device", "  HostName 127.0.0.1", `  Port ${process.env.HIDE_E2E_SSH_PORT}`,
     `  User ${os.userInfo().username}`, `  IdentityFile ${process.env.HIDE_E2E_SSH_KEY}`, "  IdentityAgent none", "",
   ].join("\n"), { mode: 0o600 });
+  proveDeviceHome(run.env, "isolated-device", fs.realpathSync(deviceHome));
+  const build = stageBuild(run.root);
   const daemonLog = path.join(run.root, "daemon.log");
   const daemonOutput = fs.openSync(daemonLog, "w");
-  const daemon = spawn(path.join(path.dirname(HIDE_CLI), "hided"), [], { env: run.env, stdio: ["ignore", daemonOutput, daemonOutput] });
+  const daemon = spawn(path.join(build, "hided"), [], { env: run.env, stdio: ["ignore", daemonOutput, daemonOutput] });
   fs.closeSync(daemonOutput);
+  return { deviceHome, local, device, run, daemonLog, daemon };
+}
+
+test("a device's Home is made on its first start, the rail follows registration, and a device start lands on that device", async () => {
+  const { deviceHome, local, device, run, daemonLog, daemon } = await startDeviceHomeRun();
   let app: ElectronApplication | undefined;
   try {
     await expect.poll(() => run.hide(["status", "--json"]).stdout.includes('"running":true'), { timeout: 30_000 }).toBe(true);
+    await local.attach(run);
     // The app attaches to the daemon already running, so the window is read through the main process.
     app = await relaunch(run.env);
     const page = await shellPage(app);
@@ -160,6 +190,7 @@ test("a device's Home is made on its first start, the rail follows registration,
     await expect
       .poll(() => fs.readFileSync(daemonLog, "utf8").includes('"kind":"host.ready","target":"mini-e2e"'), { timeout: 120_000 })
       .toBe(true);
+    await device.attach(run, DEVICE, deviceHome);
     // Before any Home start the device has no ~/hide (B18).
     expect(fs.existsSync(path.join(deviceHome, "hide"))).toBe(false);
 
@@ -172,9 +203,11 @@ test("a device's Home is made on its first start, the rail follows registration,
     await submitStart(page);
     await expect.poll(() => fs.existsSync(path.join(deviceHome, "hide", ".hide-home.json")), { timeout: 60_000 }).toBe(true);
     for (const guide of ["AGENTS.md", "CLAUDE.md"]) expect(fs.existsSync(path.join(deviceHome, "hide", guide))).toBe(true);
-    await expect.poll(() => paneRunning(device, "홈에서 첫 지시 확인")?.info ?? "", { timeout: 60_000 }).toContain("claude");
-    const homeAgent = paneRunning(device, "홈에서 첫 지시 확인")!;
-    const homeCwd = execFileSync(device.bin, ["pane", "get", homeAgent.pane], { env: device.env, encoding: "utf8" });
+    await expect.poll(() => devicePaneRunning(device, deviceHome, "홈에서 첫 지시 확인")?.info ?? "", { timeout: 60_000 }).toContain("claude");
+    const homeAgent = devicePaneRunning(device, deviceHome, "홈에서 첫 지시 확인")!;
+    const homeCwd = device.herdr
+      ? execFileSync(device.herdr.bin, ["pane", "get", homeAgent.pane], { env: device.herdr.env, encoding: "utf8" })
+      : homeAgent.cwd!;
     expect(homeCwd).toContain(fs.realpathSync(path.join(deviceHome, "hide")));
     // B15, B2: the center, rail and sidebar moved to that device's pane together, under the device band.
     await expect(page.locator(`[data-device-band="${DEVICE}"]`)).toBeVisible({ timeout: 30_000 });
@@ -190,12 +223,21 @@ test("a device's Home is made on its first start, the rail follows registration,
     await chooseTarget(page, `[data-start-target-option^="checkout:${DEVICE}:"][data-start-target-option$="/fixture"]`);
     await page.locator("[data-start-text]").fill("체크아웃 지시 확인");
     await submitStart(page);
-    await expect.poll(() => paneRunning(device, "체크아웃 지시 확인")?.info ?? "", { timeout: 60_000 }).toContain("claude");
+    await expect.poll(() => devicePaneRunning(device, deviceHome, "체크아웃 지시 확인")?.info ?? "", { timeout: 60_000 }).toContain("claude");
     await expect(page.locator(`[data-device-band="${DEVICE}"]`)).toBeVisible();
 
     // The raw shim starts idle; give its Home pane a real detected question for the counts and rail mark.
-    setFixtureSession(device, homeAgent.pane, `device-home-${process.pid}`);
-    await setFixtureLifecycle(device, homeAgent.pane, "blocked");
+    if (device.herdr) {
+      setFixtureSession(device.herdr, homeAgent.pane, `device-home-${process.pid}`);
+      await setFixtureLifecycle(device.herdr, homeAgent.pane, "blocked");
+    } else {
+      const session = `device-home-${process.pid}`;
+      await device.send(`\x1b]7770;session=${session}\x07`, homeAgent.pane);
+      const homeRow = (rest: unknown) => (rest as SshRest).status?.remote?.find((row) => row.target_id === DEVICE)?.session?.agents.find((row) => row.pane_id === homeAgent.pane);
+      await device.control.until((rest) => homeRow(rest)?.session_id === session, "the device's own session report");
+      await device.send("\x1b]0;Fixture\x07\x1b[2J\x1b[Hdo you want to proceed?\nbash command\n❯ 1. Yes\n2. No\n", homeAgent.pane);
+      await device.control.until((rest) => homeRow(rest)?.state.needs_you, "the device's real permission screen");
+    }
     await expect(page.locator("nav[data-sidebar]")).toBeVisible();
     await expect(page.locator("nav[data-sidebar] [data-device-chip]")).toHaveCount(0);
     await expect(page.locator('[data-raised-group="needs_you"]')).toBeVisible();
@@ -207,10 +249,10 @@ test("a device's Home is made on its first start, the rail follows registration,
     await expect(nav).toHaveAttribute("data-sidebar-rail", "device");
     await expect(page.locator(`[data-device-band="${DEVICE}"]`)).toHaveCount(0);
     expect(fs.existsSync(path.join(deviceHome, "hide", ".hide-home.json"))).toBe(true);
-    expect(paneRunning(device, "홈에서 첫 지시 확인")).not.toBeNull();
+    expect(devicePaneRunning(device, deviceHome, "홈에서 첫 지시 확인")).not.toBeNull();
   } finally {
     await app?.close();
-    daemon.kill();
+    await endChild(daemon);
     const keep = process.env.HIDE_E2E_SCREENSHOT_DIR;
     if (keep && fs.existsSync(daemonLog)) fs.copyFileSync(daemonLog, path.join(keep, "device-home-daemon.log"));
     // The core's diagnostic log, where each step of a start is recorded.

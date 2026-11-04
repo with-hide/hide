@@ -20,10 +20,6 @@
       "lines": 161,
       "expect": 42
     },
-    "device-home.spec.ts::a device's Home is made on its first start, the rail follows registration, and a device start lands on that device": {
-      "lines": 126,
-      "expect": 35
-    },
     "digit-shortcuts.spec.ts::⌥⌘n selects a device, ⌥n an agent, ⌃n nothing, and holding ⌥⌘ or ⌥ shows the numbers without moving anything": {
       "lines": 173,
       "expect": 39
