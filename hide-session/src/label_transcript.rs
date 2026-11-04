@@ -598,6 +598,25 @@ fn fold_tools(
     (Some(tools), ended)
 }
 
+/// Why a session could not be located, by its cause, so a session the
+/// reader cannot confirm says in the log which step refused it: no folder
+/// to look in, a kind the locator does not read, a proof the session's
+/// records refused, or a file operation that failed (named, without the
+/// path or the system's words).
+fn location_refusal(error: SessionError) -> ReadRefusal {
+    match error {
+        SessionError::SessionFileMissing => "session_file_missing".into(),
+        SessionError::Capacity { resource, limit } => {
+            format!("session_capacity:{resource}:{limit}").into()
+        }
+        SessionError::InMotion(reason) => ReadRefusal::InMotion(reason),
+        SessionError::CwdUnavailable => "session_cwd_unavailable".into(),
+        SessionError::UnsupportedSessionKind => "session_kind_unsupported".into(),
+        SessionError::Checkpoint(reason) => reason.into(),
+        SessionError::Io { operation, .. } => format!("session_{operation}_failed").into(),
+    }
+}
+
 /// Shared location and native ownership proof for conversation and activity
 /// readers. Neither reader may use cwd as ownership evidence or leave the
 /// provider's transcript root through a reported path or a link.
@@ -621,14 +640,7 @@ pub(crate) fn locate_confirmed(
     }
     let located = SessionLocator::new(home)
         .locate("label", agent, Some(&identity), cwd)
-        .map_err(|error| match error {
-            SessionError::SessionFileMissing => "session_file_missing".into(),
-            SessionError::Capacity { resource, limit } => {
-                format!("session_capacity:{resource}:{limit}").into()
-            }
-            SessionError::InMotion(reason) => ReadRefusal::InMotion(reason),
-            _ => "label_session_location_unavailable".into(),
-        })?;
+        .map_err(location_refusal)?;
     let path = inside_agent_root(home, agent, &located)?;
     let reported_id = (reference_kind == "id").then_some(reference_value);
     let confirmed = crate::confirm_session_file(home, agent, &path, reported_id, cwd)
@@ -769,6 +781,34 @@ fn inside_agent_root(home: &Path, agent: Agent, located: &Path) -> Result<PathBu
 
 #[cfg(test)]
 mod tests {
+    /// Each cause a session's location fails for reaches the log as its own
+    /// reason; none is folded into another's.
+    #[test]
+    fn a_session_that_cannot_be_located_says_which_step_refused_it() {
+        let reasons = [
+            crate::SessionError::SessionFileMissing,
+            crate::SessionError::CwdUnavailable,
+            crate::SessionError::UnsupportedSessionKind,
+            crate::SessionError::Checkpoint("session_owner_unconfirmed".into()),
+            crate::SessionError::Io {
+                operation: "read_dir",
+                path: "/home/me/.omp/agent/sessions".into(),
+                source: anyhow::anyhow!("permission denied for /home/me"),
+            },
+        ]
+        .map(|error| location_refusal(error).reason().to_owned());
+        assert_eq!(
+            reasons,
+            [
+                "session_file_missing",
+                "session_cwd_unavailable",
+                "session_kind_unsupported",
+                "session_owner_unconfirmed",
+                "session_read_dir_failed",
+            ]
+        );
+    }
+
     use super::*;
     use std::fs;
     use std::io::Write;
