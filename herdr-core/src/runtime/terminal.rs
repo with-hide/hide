@@ -178,7 +178,7 @@ impl Runtime {
                     self.push_diagnostic(
                         "pane.focus.refused",
                         format!(
-                            "Herdr did not confirm pane focus {}: {message}; Hide keeps it",
+                            "The engine did not confirm pane focus {}: {message}; Hide keeps it",
                             pending.target_id
                         ),
                     );
@@ -864,7 +864,7 @@ impl Runtime {
             // only the controlling client's wheel reaches the program itself.
             Ok(_) => self.hold_scroll_elsewhere(
                 pane_id,
-                "Herdr has no history to move for this pane, and only the client controlling it can scroll the program",
+                "The engine has no history to move for this pane, and only the client controlling it can scroll the program",
             ),
             Err(crate::find::pane::ViewportScrollError::Refused(message)) => {
                 self.hold_scroll_elsewhere(pane_id, &message)
@@ -916,7 +916,7 @@ impl Runtime {
                 .live
                 .as_ref()
                 .map(|context| crate::find::pane::PaneApiRoute::local(context, pane_id))
-                .ok_or_else(|| "This pane needs a live Herdr connection".to_owned());
+                .ok_or_else(|| "This pane needs a live engine connection".to_owned());
         }
         let (device, source_pane_id) = self
             .snapshot
@@ -1035,7 +1035,7 @@ impl Runtime {
                         self.push_diagnostic(
                             "lineage.relocated",
                             format!(
-                                "Herdr acknowledged moving delegated pane {pane_id} to its own tab in {elapsed_ms} ms"
+                                "The engine acknowledged moving delegated pane {pane_id} to its own tab in {elapsed_ms} ms"
                             ),
                         );
                     }
@@ -1155,7 +1155,7 @@ impl Runtime {
             ) => {
                 self.push_diagnostic(
                     "pane.unchanged",
-                    format!("Herdr changed nothing for pane {pane_id} in {elapsed_ms} ms"),
+                    format!("The engine changed nothing for pane {pane_id} in {elapsed_ms} ms"),
                 );
                 true
             }

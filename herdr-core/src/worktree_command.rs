@@ -194,7 +194,7 @@ pub fn next_action(code: &str) -> Option<&'static str> {
             "The worktree changed while its panes closed; run the command again"
         }
         "worktree_remove_close_failed" => {
-            "Herdr did not confirm its panes closed and the worktree remains; run the command again"
+            "The engine did not confirm its panes closed and the worktree remains; run the command again"
         }
         "worktree_remove_host_failed" => {
             "The repository's host could not be asked and the worktree remains; retry, and the reason is in Hide's diagnostic log"

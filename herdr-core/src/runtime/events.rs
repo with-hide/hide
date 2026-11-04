@@ -2642,7 +2642,7 @@ impl Runtime {
                 }
                 self.set_error(
                     "workspace.control_unavailable",
-                    "Workspace creation requires a live Herdr connection so its initial tab and pane can be created",
+                    "Workspace creation requires a live engine connection so its initial tab and pane can be created",
                     true,
                 );
                 let node = self.node.as_str().to_owned();
@@ -2731,7 +2731,7 @@ impl Runtime {
                 if self.live.is_none() {
                     self.set_error(
                         "tab.control_unavailable",
-                        "Tab creation requires a live Herdr connection",
+                        "Tab creation requires a live engine connection",
                         true,
                     );
                     return true;
@@ -2977,7 +2977,7 @@ impl Runtime {
                 if self.live.is_none() {
                     self.set_error(
                         "tab.control_unavailable",
-                        "Tab focus requires a live Herdr connection",
+                        "Tab focus requires a live engine connection",
                         true,
                     );
                     return true;
@@ -3232,7 +3232,7 @@ impl Runtime {
                 if self.live.is_none() {
                     self.set_error(
                         "pane.control_unavailable",
-                        "Pane split requires a live Herdr connection",
+                        "Pane split requires a live engine connection",
                         true,
                     );
                     return true;
@@ -3262,7 +3262,7 @@ impl Runtime {
                 if self.live.is_none() {
                     self.set_error(
                         "pane.control_unavailable",
-                        "Pane resize requires a live Herdr connection",
+                        "Pane resize requires a live engine connection",
                         true,
                     );
                     return true;
@@ -3287,7 +3287,7 @@ impl Runtime {
                 if self.live.is_none() {
                     self.set_error(
                         "pane.control_unavailable",
-                        "Pane zoom requires a live Herdr connection",
+                        "Pane zoom requires a live engine connection",
                         true,
                     );
                     return true;
@@ -3451,7 +3451,7 @@ impl Runtime {
                     self.forks_in_flight.remove(&pane_id);
                     self.set_error(
                         "pane.control_unavailable",
-                        "Forking a pane requires a live Herdr connection",
+                        "Forking a pane requires a live engine connection",
                         true,
                     );
                     return true;

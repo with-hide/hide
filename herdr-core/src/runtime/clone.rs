@@ -82,7 +82,7 @@ impl Runtime {
         let Some(context) = self.live.as_ref().cloned() else {
             self.set_error(
                 "workspace.control_unavailable",
-                "Cloning requires a live Herdr connection so the new project can be opened",
+                "Cloning requires a live engine connection so the new project can be opened",
                 true,
             );
             return true;

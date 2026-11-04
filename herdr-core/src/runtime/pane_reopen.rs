@@ -71,7 +71,7 @@ impl Runtime {
             return self.settle_pane_reopen(
                 pane_id,
                 PaneReopenFailure::SessionGone,
-                "Herdr has not reported this agent's conversation",
+                "The engine has not reported this agent's conversation",
             );
         };
         if crate::agent_state::rest_refusal(agent).is_some() {
@@ -112,7 +112,7 @@ impl Runtime {
             return self.settle_pane_reopen(
                 pane_id,
                 PaneReopenFailure::StartRefused,
-                "no live Herdr connection",
+                "no live engine connection",
             );
         };
         crate::diagnostic!(serde_json::json!({

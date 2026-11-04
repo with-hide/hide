@@ -1438,7 +1438,7 @@ fn removing_a_registration_with_panes_needs_a_live_connection() {
     );
     let error = runtime.snapshot.status.last_error.clone().unwrap();
     assert_eq!(error.kind, "workspace.remove_failed");
-    assert!(error.message.contains("live Herdr connection"));
+    assert!(error.message.contains("live engine connection"));
 }
 
 /// B2, B4, B5, B10. Pinning moves the registered row ahead of its device's
@@ -1946,7 +1946,7 @@ fn cleanup_review_without_live_state_is_visible_and_never_deletes() {
             shown[field]
                 .as_str()
                 .unwrap()
-                .contains("live Herdr connection"),
+                .contains("live engine connection"),
             "{field}"
         );
     }

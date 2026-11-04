@@ -994,7 +994,7 @@ impl Runtime {
             self.set_error(
                 "tab.reorder_inconsistent",
                 format!(
-                    "Tab {} cannot be placed there: Herdr does not list it in any workspace",
+                    "Tab {} cannot be placed there: the engine does not list it in any workspace",
                     moved.source_id
                 ),
                 false,
@@ -1026,7 +1026,7 @@ impl Runtime {
             self.set_error(
                 "tab.reorder_inconsistent",
                 format!(
-                    "Tab {} cannot be placed there: it is not one of Herdr's tabs in this checkout",
+                    "Tab {} cannot be placed there: it is not one of the engine's tabs in this checkout",
                     moved.source_id
                 ),
                 false,
@@ -1038,7 +1038,7 @@ impl Runtime {
                 .live
                 .as_ref()
                 .map(|_| (TabMoveCarrier::Local, self.live_generation))
-                .ok_or_else(|| "Moving a Herdr tab requires a live Herdr connection".to_owned()),
+                .ok_or_else(|| "Moving an engine tab requires a live engine connection".to_owned()),
             Some(target) => self.device_tab_move_carrier(target),
         };
         let (carrier, connection_generation) = match carrier {
@@ -1072,7 +1072,7 @@ impl Runtime {
                 // so its five seconds start when it leaves (`start_job`).
                 deadline_at_unix_ms: (!matches!(carrier, TabMoveCarrier::Local))
                     .then(|| now.saturating_add(CLOSE_STAGE_TIMEOUT_MS)),
-                message: Some("Waiting for Herdr to confirm the tab order".to_owned()),
+                message: Some("Waiting for the engine to confirm the tab order".to_owned()),
                 retryable: false,
             },
         );
@@ -1080,7 +1080,7 @@ impl Runtime {
         self.push_diagnostic(
             "tab.move.requested",
             format!(
-                "Asking Herdr to insert tab {} at {insert_index} in its own workspace",
+                "Asking the engine to insert tab {} at {insert_index} in its own workspace",
                 moved.source_id
             ),
         );
@@ -1149,7 +1149,7 @@ impl Runtime {
             .remote_controls
             .get(target)
             .cloned()
-            .ok_or_else(|| format!("Herdr control for {target} is unavailable"))?;
+            .ok_or_else(|| format!("Engine control for {target} is unavailable"))?;
         let generation = self
             .remote_connection_generations
             .get(target)
@@ -1303,7 +1303,7 @@ impl Runtime {
             self.push_diagnostic(
                 "tab.move.dropped",
                 format!(
-                    "The tab arrangement held for {checkout_id} was abandoned: its tabs changed before Herdr reported the order"
+                    "The tab arrangement held for {checkout_id} was abandoned: its tabs changed before the engine reported the order"
                 ),
             );
         }
@@ -1531,7 +1531,7 @@ impl Runtime {
                     })
                 {
                     agent_layout_errors.push(format!(
-                        "Ignored Herdr focus on waiting Agent tab in {}",
+                        "Ignored engine focus on waiting Agent tab in {}",
                         checkout.id
                     ));
                 }
@@ -1861,7 +1861,7 @@ impl Runtime {
             &pending.target_id,
             "failed",
             Some(format!(
-                "Herdr did not confirm pane focus within {VIEW_FOCUS_NOTIFICATION_TIMEOUT_MS} ms."
+                "The engine did not confirm pane focus within {VIEW_FOCUS_NOTIFICATION_TIMEOUT_MS} ms."
             )),
             true,
         );
@@ -1880,7 +1880,7 @@ impl Runtime {
         self.push_diagnostic(
             "view_focus.timed_out",
             format!(
-                "Herdr did not confirm {what} focus {target_id} within {VIEW_FOCUS_NOTIFICATION_TIMEOUT_MS} ms; Hide keeps it"
+                "The engine did not confirm {what} focus {target_id} within {VIEW_FOCUS_NOTIFICATION_TIMEOUT_MS} ms; Hide keeps it"
             ),
         );
     }
@@ -2038,7 +2038,7 @@ impl Runtime {
         else {
             self.set_error(
                 "remote.target_unknown",
-                format!("Remote Herdr sync returned an unconfigured target {target_id}"),
+                format!("Remote engine sync returned an unconfigured target {target_id}"),
                 false,
             );
             return true;
@@ -2967,7 +2967,9 @@ impl Runtime {
                     let retired_pane_id = selected_pane_id.as_deref().unwrap_or("<missing>");
                     self.fail_pending_pane_focus_for_target(
                         retired_pane_id,
-                        format!("Pane {retired_pane_id} retired before Herdr confirmed focus."),
+                        format!(
+                            "Pane {retired_pane_id} retired before the engine confirmed focus."
+                        ),
                     );
                     self.clear_selected_terminal_state();
                     self.snapshot.terminal.pane_id = replacement_pane_id.clone();
@@ -3032,7 +3034,7 @@ impl Runtime {
                     Err(projection_error) => (
                         "malformed",
                         Some(format!(
-                            "Herdr pane layout could not be projected: {projection_error}"
+                            "Engine pane layout could not be projected: {projection_error}"
                         )),
                         None,
                         layouts,
@@ -3408,7 +3410,7 @@ impl Runtime {
             self.persist_current_ui_state();
         }
         if self.live.is_none() {
-            let message = "Pane focus requires a live Herdr connection".to_owned();
+            let message = "Pane focus requires a live engine connection".to_owned();
             self.finish_pane_focus_request(
                 request_id.as_deref(),
                 &pane_id,
@@ -3867,7 +3869,7 @@ impl Runtime {
         self.push_diagnostic(
             slot.refused_kind(),
             format!(
-                "Herdr refused {what} focus {target_id}: {message}; {}",
+                "The engine refused {what} focus {target_id}: {message}; {}",
                 slot.kept_phrase()
             ),
         );
@@ -3963,7 +3965,7 @@ impl Runtime {
         }
         self.push_diagnostic(
             "pane.read_focus.released",
-            format!("Herdr moved focus from {operator} to {arriving}"),
+            format!("The engine moved focus from {operator} to {arriving}"),
         );
         self.operator_focused_pane_id = None;
     }
@@ -5556,7 +5558,7 @@ impl Runtime {
                 self.push_diagnostic(
                     "tab.control.ready",
                     format!(
-                        "{action_kind} acknowledged in {elapsed_ms} ms; awaiting authoritative Herdr event"
+                        "{action_kind} acknowledged in {elapsed_ms} ms; awaiting authoritative engine event"
                     ),
                 );
                 crate::diagnostic!(serde_json::json!({
@@ -5706,7 +5708,7 @@ impl Runtime {
                         pending.phase = "awaiting_topology".to_owned();
                         pending.stage = "topology".to_owned();
                         pending.message = Some(
-                            "Request accepted; waiting for the ordered Herdr event".to_owned(),
+                            "Request accepted; waiting for the ordered engine event".to_owned(),
                         );
                         pending.retryable = false;
                     }
@@ -5714,7 +5716,7 @@ impl Runtime {
                     self.push_diagnostic(
                         "tab.move.ready",
                         format!(
-                            "Herdr placed tab {tab_id} as asked in {elapsed_ms} ms; awaiting the ordered event"
+                            "The engine placed tab {tab_id} as asked in {elapsed_ms} ms; awaiting the ordered event"
                         ),
                     );
                     crate::diagnostic!(serde_json::json!({
@@ -5740,7 +5742,9 @@ impl Runtime {
                     checkout_id,
                     generation,
                     connection_generation,
-                    format!("Herdr put tab {tab_id} somewhere else; the strip follows Herdr"),
+                    format!(
+                        "The engine put tab {tab_id} somewhere else; the strip follows the engine"
+                    ),
                 );
                 true
             }
@@ -5773,7 +5777,7 @@ impl Runtime {
                     checkout_id,
                     generation,
                     connection_generation,
-                    format!("Herdr refused to move tab {tab_id}: {message}"),
+                    format!("The engine refused to move tab {tab_id}: {message}"),
                 );
                 true
             }

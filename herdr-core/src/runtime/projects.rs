@@ -796,14 +796,14 @@ impl Runtime {
             });
         let Some(node) = node else {
             let context = self.live.clone().ok_or_else(|| {
-                "A live Herdr connection is required to verify what is in use. Connect and review again.".to_owned()
+                "A live engine connection is required to verify what is in use. Connect and review again.".to_owned()
             })?;
             return Ok(crate::worktree_cleanup::CleanupPlace::local(
                 context, github,
             ));
         };
         let control = self.remote_controls.get(node).cloned().ok_or_else(|| {
-            "The node's Herdr connection is unavailable. Reconnect and review again.".to_owned()
+            "The node's engine connection is unavailable. Reconnect and review again.".to_owned()
         })?;
         Ok(crate::worktree_cleanup::CleanupPlace::node(
             &control,
@@ -2042,7 +2042,7 @@ impl Runtime {
         let Some(context) = self.live.as_ref().cloned() else {
             self.ingest_worktree_open_result(
                 checkout_path,
-                Err("Opening a worktree needs a live Herdr connection".to_owned()),
+                Err("Opening a worktree needs a live engine connection".to_owned()),
             );
             return true;
         };
@@ -2449,7 +2449,7 @@ impl Runtime {
                     &[],
                     Err(crate::worktree_control::RemovalFailure::new(
                         crate::model::WorktreeRemovalNotice::CloseFailed,
-                        format!("Deleting a worktree needs a live Herdr connection: {message}"),
+                        format!("Deleting a worktree needs a live engine connection: {message}"),
                     )),
                 );
             }
@@ -2944,7 +2944,7 @@ impl Runtime {
             Err(message) => {
                 self.set_error(
                     "workspace.remove_failed",
-                    format!("Removing a project with open panes needs its device's Herdr connection: {message}"),
+                    format!("Removing a project with open panes needs its device's engine connection: {message}"),
                     true,
                 );
                 return true;
@@ -3491,7 +3491,7 @@ impl Runtime {
             .map(|context| {
                 crate::worktree_control::WorktreeTarget::local(context, Arc::clone(&self.own_node))
             })
-            .ok_or_else(|| "A live Herdr connection is required".to_owned())
+            .ok_or_else(|| "A live engine connection is required".to_owned())
     }
 
     /// A device's Herdr and file helper, for a worktree task there. Both
@@ -3505,7 +3505,7 @@ impl Runtime {
             .remote_controls
             .get(device)
             .cloned()
-            .ok_or_else(|| "The device's Herdr connection is unavailable".to_owned())?;
+            .ok_or_else(|| "The device's engine connection is unavailable".to_owned())?;
         let host = self.node_link(device)?;
         Ok(crate::worktree_control::WorktreeTarget::device(
             &control, host,
@@ -4471,7 +4471,7 @@ impl Runtime {
         if branch.is_none() && session_workspace_id.is_none() {
             return self.fail_purpose_operation(
                 id,
-                "This detached checkout has no live Herdr workspace to hold a purpose",
+                "This detached checkout has no live engine workspace to hold a purpose",
                 "checkout_purpose.no_target",
             );
         }
@@ -4487,7 +4487,7 @@ impl Runtime {
             self.remote_controls
                 .get(target_id)
                 .cloned()
-                .ok_or_else(|| "The remote Herdr connection is unavailable".to_owned())
+                .ok_or_else(|| "The remote engine connection is unavailable".to_owned())
                 .and_then(|context| {
                     crate::worktree_control::spawn_remote_purpose_write(context, request)
                 })
@@ -4495,7 +4495,7 @@ impl Runtime {
             self.live
                 .as_ref()
                 .cloned()
-                .ok_or_else(|| "A live Herdr connection is required".to_owned())
+                .ok_or_else(|| "A live engine connection is required".to_owned())
                 .and_then(|context| crate::worktree_control::spawn_purpose_write(context, request))
         };
         if let Err(message) = spawn_result {
@@ -4843,7 +4843,7 @@ impl Runtime {
                 .map(|context| {
                     crate::worktree_control::TabTarget::local(context, self.live_generation)
                 })
-                .ok_or("start an agent: a live Herdr connection is required")
+                .ok_or("start an agent: a live engine connection is required")
         } else {
             self.remote_controls
                 .get(&device)

@@ -307,7 +307,7 @@ fn ordered_strip(
             *entry = queues
                 .get_mut(owner(entry))
                 .and_then(VecDeque::pop_front)
-                .expect("every Herdr slot has a Herdr tab from its own workspace to fill it")
+                .expect("every engine slot has an engine tab from its own workspace to fill it")
                 .clone();
         }
     }
@@ -2815,7 +2815,7 @@ impl Runtime {
             self.push_diagnostic(
                 "tab.active_unresolved",
                 format!(
-                    "Herdr workspace {workspace_id} reports active tab {tab_id}, which is not in any checkout's tab list"
+                    "Engine workspace {workspace_id} reports active tab {tab_id}, which is not in any checkout's tab list"
                 ),
             );
         }

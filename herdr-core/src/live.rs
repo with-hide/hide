@@ -760,7 +760,7 @@ fn confirm_pane_focus_with_timeout(
     let (layout, active_tab_id) = read_pane_focus(engine, pane_id, response_timeout)?;
     if layout.focused_pane_id != pane_id || active_tab_id != layout.tab_id {
         return Err(ControlFailure::Definite(format!(
-            "Herdr did not confirm pane {pane_id}: pane {} is focused in tab {}, and workspace {} shows tab {active_tab_id}",
+            "The engine did not confirm pane {pane_id}: pane {} is focused in tab {}, and workspace {} shows tab {active_tab_id}",
             layout.focused_pane_id, layout.tab_id, layout.workspace_id
         )));
     }
@@ -1254,7 +1254,7 @@ pub fn project_layout_for_pane(
         .layouts
         .iter()
         .find(|layout| layout.panes.iter().any(|pane| pane.pane_id == pane_id))
-        .ok_or_else(|| format!("Herdr session has no layout containing pane {pane_id}"))?;
+        .ok_or_else(|| format!("Engine session has no layout containing pane {pane_id}"))?;
     project_layout(layout)
 }
 
@@ -1280,7 +1280,7 @@ pub fn project_layouts(
 
 pub(crate) fn project_layout(layout: &SessionLayoutPayload) -> Result<PaneLayoutSnapshot, String> {
     if layout.panes.is_empty() {
-        return Err(format!("Herdr tab {} has no panes", layout.tab_id));
+        return Err(format!("Engine tab {} has no panes", layout.tab_id));
     }
     let root = project_layout_node(layout.area, &layout.panes, &layout.splits)?;
     Ok(PaneLayoutSnapshot {
@@ -1302,20 +1302,20 @@ fn project_layout_node(
         .filter(|split| split.rect == area)
         .collect::<Vec<_>>();
     if matching_splits.len() > 1 {
-        return Err("Herdr layout contains duplicate splits for one area".to_owned());
+        return Err("Engine layout contains duplicate splits for one area".to_owned());
     }
     let Some(split) = matching_splits.first().copied() else {
         return match panes {
             [pane] => Ok(PaneLayoutNodeSnapshot::Pane {
                 pane_id: pane.pane_id.clone(),
             }),
-            [] => Err("Herdr layout produced an empty leaf".to_owned()),
-            _ => Err("Herdr layout has multiple panes without an authoritative split".to_owned()),
+            [] => Err("Engine layout produced an empty leaf".to_owned()),
+            _ => Err("Engine layout has multiple panes without an authoritative split".to_owned()),
         };
     };
     if !split.ratio.is_finite() || split.ratio <= 0.0 || split.ratio >= 1.0 {
         return Err(format!(
-            "Herdr layout split ratio {} is invalid",
+            "Engine layout split ratio {} is invalid",
             split.ratio
         ));
     }
@@ -1328,7 +1328,7 @@ fn project_layout_node(
         center < boundary
     });
     if first_panes.is_empty() || second_panes.is_empty() {
-        return Err("Herdr layout split does not divide panes into two children".to_owned());
+        return Err("Engine layout split does not divide panes into two children".to_owned());
     }
     let first = project_layout_node(
         first_area,
@@ -1356,7 +1356,7 @@ pub(crate) fn split_areas(
     match direction {
         PaneLayoutDirection::Right => {
             if area.width < 2 {
-                return Err("Herdr right split area is too narrow".to_owned());
+                return Err("The right split area is too narrow".to_owned());
             }
             let first_width =
                 ((f32::from(area.width) * ratio).round() as u16).clamp(1, area.width - 1);
@@ -1377,7 +1377,7 @@ pub(crate) fn split_areas(
         }
         PaneLayoutDirection::Down => {
             if area.height < 2 {
-                return Err("Herdr down split area is too short".to_owned());
+                return Err("The down split area is too short".to_owned());
             }
             let first_height =
                 ((f32::from(area.height) * ratio).round() as u16).clamp(1, area.height - 1);

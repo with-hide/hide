@@ -1922,7 +1922,7 @@ impl AgentActionRefusal {
             Self::Working => "This agent is working",
             Self::WaitingForYou => "This agent is waiting for the operator",
             Self::UnknownActivity => "Hide cannot tell what this agent is doing",
-            Self::NoConversation => "Herdr has not reported this agent's conversation",
+            Self::NoConversation => "The engine has not reported this agent's conversation",
         }
     }
 }

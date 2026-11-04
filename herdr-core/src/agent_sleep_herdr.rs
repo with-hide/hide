@@ -123,14 +123,14 @@ pub(crate) fn end_agent(
     let (Some(shell), Some(foreground)) = (group.shell_pid, group.foreground_process_group_id)
     else {
         return Err(EndError::Failed(
-            "Herdr reported no shell or foreground process group for the pane".into(),
+            "The engine reported no shell or foreground process group for the pane".into(),
         ));
     };
     // kill(-0) signals Hide's own group and kill(-1) every process the user
     // owns, so a group id that is not a real group never reaches the signal.
     if foreground <= 1 || shell <= 1 {
         return Err(EndError::Failed(format!(
-            "Herdr reported process group {foreground} and shell {shell}, which are not a pane's"
+            "The engine reported process group {foreground} and shell {shell}, which are not a pane's"
         )));
     }
     if foreground == shell {

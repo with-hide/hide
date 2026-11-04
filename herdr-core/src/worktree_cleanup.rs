@@ -2906,7 +2906,7 @@ mod tests {
                 if Path::new(path) == stuck {
                     return Err(Refusal::failed(
                         "close_refused",
-                        "Timed out waiting for Herdr to confirm closed panes",
+                        "Timed out waiting for the engine to confirm closed panes",
                     ));
                 }
                 Ok(())

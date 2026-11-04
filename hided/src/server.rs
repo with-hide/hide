@@ -1341,7 +1341,7 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
             "Pass a --model that is a model name, and an --effort the agent's CLI takes (Claude Code: low, medium, high, xhigh, max; Codex: minimal, low, medium, high, xhigh), then run the command again"
         }
         "worktree_unconfirmed" => {
-            "Herdr had not confirmed the new worktree in time and may still finish it; run the same command again with the same intent"
+            "The engine had not confirmed the new worktree in time and may still finish it; run the same command again with the same intent"
         }
         "agent_not_started" => {
             "The agent's start ended in its pane without the agent and was not typed again; check that pane for why, then spawn with a new intent"
@@ -1408,7 +1408,7 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
             "--beside opens the agent beside the pane that calls it; run the command from an agent pane Hide knows, or without --beside to open it in a new tab"
         }
         "beside_pane_unavailable" => {
-            "Herdr could not split your pane (it closed, or Herdr refused the split), so nothing was opened; run the same command again from your agent pane, or with a new intent without --beside to open it in a new tab"
+            "The engine could not split your pane (it closed, or the engine refused the split), so nothing was opened; run the same command again from your agent pane, or with a new intent without --beside to open it in a new tab"
         }
         _ => "Check the current agent pane and retry the same intent",
     }

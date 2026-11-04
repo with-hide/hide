@@ -260,7 +260,7 @@ impl ProjectionState {
             let area_height = f64::from(layout.area.height);
             if area_width <= 0.0 || area_height <= 0.0 {
                 return Err(SessionFetchError::Malformed(format!(
-                    "remote Herdr layout {} has an empty area",
+                    "remote engine layout {} has an empty area",
                     layout.tab_id
                 )));
             }
@@ -281,7 +281,7 @@ impl ProjectionState {
                     || frame.y + frame.height > 1.0
                 {
                     return Err(SessionFetchError::Malformed(format!(
-                        "remote Herdr layout {} contains an out-of-bounds pane {}",
+                        "remote engine layout {} contains an out-of-bounds pane {}",
                         layout.tab_id, pane.pane_id
                     )));
                 }

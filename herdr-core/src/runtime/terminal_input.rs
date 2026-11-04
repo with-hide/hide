@@ -937,7 +937,7 @@ mod tests {
             let Call::LineInput { pid } = call else {
                 panic!("the wait asks the node only how the shell's terminal reads");
             };
-            assert_eq!(pid, SHELL, "the shell Herdr named is the one read");
+            assert_eq!(pid, SHELL, "the shell the engine named is the one read");
             let read = self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             match &self.answers[read.min(self.answers.len() - 1)] {
                 Ok(input) => Ok(crate::node_access::LinkAnswer::Parsed(

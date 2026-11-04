@@ -1666,7 +1666,7 @@ fn launch_agent(
         Err(StartError::Herdr(EngineError::Answer(message))) => {
             Launch::Unknown(AgentFailure::with_detail(
                 "agent_start.unconfirmed",
-                format!("Herdr answered the agent start in an unexpected shape ({message})"),
+                format!("The engine answered the agent start in an unexpected shape ({message})"),
             ))
         }
         Err(StartError::NotStarted { reason, detail }) => {
@@ -1690,7 +1690,7 @@ fn launch_agent(
         ),
         Err(StartError::Herdr(error)) => Launch::Unknown(AgentFailure::with_detail(
             "agent_start.unconfirmed",
-            format!("Herdr did not confirm the agent start ({error})"),
+            format!("The engine did not confirm the agent start ({error})"),
         )),
     }
 }
@@ -2354,7 +2354,7 @@ fn create_worktree_observing_purpose(
 
     let reason = if created.branch.as_deref() != Some(request.branch.as_str()) {
         format!(
-            "created branch mismatch: requested {}, Herdr returned {}",
+            "created branch mismatch: requested {}, the engine returned {}",
             request.branch,
             created.branch.as_deref().unwrap_or("detached")
         )
@@ -2362,12 +2362,12 @@ fn create_worktree_observing_purpose(
         format!("created path is missing on disk: {}", created.path)
     } else {
         let detail = match &listed {
-            Ok(Some(path)) => format!("Herdr listed the branch at {path}"),
-            Ok(None) => "Herdr did not list the created branch".to_owned(),
+            Ok(Some(path)) => format!("The engine listed the branch at {path}"),
+            Ok(None) => "The engine did not list the created branch".to_owned(),
             Err(error) => error.clone(),
         };
         format!(
-            "created worktree is absent from Herdr's worktree list: {}",
+            "created worktree is absent from the engine's worktree list: {}",
             detail
         )
     };
@@ -2394,7 +2394,7 @@ fn create_worktree_observing_purpose(
     }
     if residue.is_ok_and(|real| real.is_some()) || still_listed {
         return Err(format!(
-            "{reason}; rollback left residue at {} or in Herdr's worktree list",
+            "{reason}; rollback left residue at {} or in the engine's worktree list",
             created.path
         ));
     }
@@ -2429,7 +2429,7 @@ struct HerdrOnly;
 
 impl GitCommands for HerdrOnly {
     fn run(&self, _cwd: &str, _command: GitCommand) -> Result<String, String> {
-        Err("A device checkout keeps its purpose in Herdr only".to_owned())
+        Err("A device checkout keeps its purpose in the engine only".to_owned())
     }
 }
 
@@ -2541,7 +2541,7 @@ fn write_created_purpose(
                     unconfirmed_token: None,
                 }),
                 Some(Err(cleanup_error)) => Some(CreatedPurposeFailure {
-                    detail: format!("{detail}; Herdr token cleanup failed: {cleanup_error}"),
+                    detail: format!("{detail}; engine token cleanup failed: {cleanup_error}"),
                     unconfirmed_token: Some(purpose),
                 }),
             }
@@ -2752,7 +2752,7 @@ fn wait_for_processes_to_end(
         let Some(left) = deadline.checked_duration_since(Instant::now()) else {
             return Err(CloseFailure {
                 message: format!(
-                    "Herdr closed the panes but their processes are still running ({}), so the folder may still be held",
+                    "The engine closed the panes but their processes are still running ({}), so the folder may still be held",
                     held.iter()
                         .map(|process| format!("{} pid {}", process.name, process.pid))
                         .collect::<Vec<_>>()
@@ -2886,7 +2886,7 @@ fn close_checkout_panes_detailed(
                 .checked_duration_since(Instant::now())
                 .ok_or_else(|| {
                     format!(
-                        "Timed out waiting for Herdr to confirm closed panes: {}",
+                        "Timed out waiting for the engine to confirm closed panes: {}",
                         pane_ids.join(", ")
                     )
                 })?;
@@ -3371,7 +3371,7 @@ mod tests {
         assert_eq!(
             write_created_purpose(&*server, &git, &purpose_request("Use the fallback")),
             Some(CreatedPurposeFailure {
-                detail: "injected git lock; Herdr token cleanup failed: workspace.report_metadata failed: unavailable: injected cleanup refusal".to_owned(),
+                detail: "injected git lock; engine token cleanup failed: workspace.report_metadata failed: unavailable: injected cleanup refusal".to_owned(),
                 unconfirmed_token: Some("Use the fallback".to_owned()),
             })
         );
@@ -4225,7 +4225,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             create["params"]["focus"], false,
-            "migration must not move Herdr focus"
+            "migration must not move engine focus"
         );
     }
 

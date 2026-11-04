@@ -55,8 +55,8 @@ fn run(args: &[std::ffi::OsString]) -> Result<(), String> {
     if args.first().is_some_and(|arg| arg == "attach") {
         return hided::attach::run(&args[1..]);
     }
-    // What the login item of a core moved here runs: Herdr first, then the
-    // daemon below.
+    // What the login item of a core moved here runs: its log kept within its
+    // limit first, then the daemon below.
     if args.first().is_some_and(|arg| arg == "core-login") {
         hided::login_item::before_core_at_login();
     }

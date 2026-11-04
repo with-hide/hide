@@ -224,7 +224,7 @@ impl Runtime {
         action: RemoteControlAction,
     ) -> Result<(), String> {
         if self.live.is_none() {
-            return Err("Herdr control is unavailable".to_owned());
+            return Err("Engine control is unavailable".to_owned());
         }
         let focus = matches!(action, RemoteControlAction::FocusTab { .. });
         let kind = action.kind();
@@ -267,7 +267,7 @@ impl Runtime {
                     "limit": CONTROL_LANE_LIMIT,
                 }));
                 Err(format!(
-                    "Too many Herdr controls are waiting; {kind} was not sent"
+                    "Too many engine controls are waiting; {kind} was not sent"
                 ))
             }
         }
@@ -307,7 +307,7 @@ impl Runtime {
                         self.ingest_local_control_failure(
                             action,
                             Err(ControlFailure::Definite(
-                                "Herdr control is unavailable".to_owned(),
+                                "Engine control is unavailable".to_owned(),
                             )),
                             0,
                         );
@@ -431,7 +431,7 @@ impl Runtime {
                     dropped,
                     &cause,
                     format!(
-                        "Herdr's answer to the pane focus for {} was lost, so {dropped} queued pane focus {} not sent",
+                        "The engine's answer to the pane focus for {} was lost, so {dropped} queued pane focus {} not sent",
                         cause.target_id,
                         if dropped == 1 { "was" } else { "were" },
                     ),
@@ -477,7 +477,7 @@ impl Runtime {
             dropped,
             cause,
             format!(
-                "Herdr's answer to the {} focus for {} was lost, so {dropped} newer tab focus {} not sent; Hide keeps the tab it shows",
+                "The engine's answer to the {} focus for {} was lost, so {dropped} newer tab focus {} not sent; Hide keeps the tab it shows",
                 cause.kind,
                 cause.target_id,
                 if dropped == 1 { "was" } else { "were" },
@@ -498,7 +498,7 @@ impl Runtime {
             dropped,
             cause,
             format!(
-                "Herdr's answer to the {} focus for {} was lost, so {dropped} queued pane focus {} not sent",
+                "The engine's answer to the {} focus for {} was lost, so {dropped} queued pane focus {} not sent",
                 cause.kind,
                 cause.target_id,
                 if dropped == 1 { "was" } else { "were" },
@@ -506,7 +506,7 @@ impl Runtime {
         );
         if let Some(pending) = self.pending_pane_focus.take_if(|pending| !pending.sent) {
             let message = format!(
-                "Herdr's answer to an earlier tab focus was lost, so the focus for {} was not sent. Select the pane again to retry.",
+                "The engine's answer to an earlier tab focus was lost, so the focus for {} was not sent. Select the pane again to retry.",
                 pending.target_id
             );
             self.finish_pane_focus_request(

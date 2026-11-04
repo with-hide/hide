@@ -2819,7 +2819,7 @@ mod tests {
         assert_eq!(logged["pane_id"], "recipient");
         assert!(held(&bell.pass(&mut doorbell, start + 1_000)).is_empty());
         assert!(bell.typed().is_empty());
-        assert_eq!(bell.asked(), 0, "a held verdict asks Herdr nothing");
+        assert_eq!(bell.asked(), 0, "a held verdict asks the engine nothing");
         assert_eq!(bell.attempts(), 0);
 
         turn(Some(Waiting::Nothing));
@@ -3239,7 +3239,7 @@ mod tests {
         assert_eq!(
             bell.asked(),
             0,
-            "a draft holds the letter before Herdr is asked"
+            "a draft holds the letter before the engine is asked"
         );
         assert_eq!(bell.attempts(), 0);
     }

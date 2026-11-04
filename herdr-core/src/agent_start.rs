@@ -1058,7 +1058,7 @@ mod tests {
         });
         let wait = Duration::from_millis(600);
         let Err(StartError::Herdr(EngineError::Refused { code, .. })) = start(&herdr, wait) else {
-            panic!("a pane Herdr never frees is not a start");
+            panic!("a pane the engine never frees is not a start");
         };
         assert_eq!(code, PANE_BUSY);
         let asked = herdr
@@ -1294,7 +1294,7 @@ mod tests {
             let Call::LineInput { pid } = call else {
                 panic!("a start asks its node only how the shell's terminal reads");
             };
-            assert_eq!(pid, SHELL, "the shell Herdr named is the one read");
+            assert_eq!(pid, SHELL, "the shell the engine named is the one read");
             let read = self.reads.fetch_add(1, Ordering::SeqCst);
             match &self.answers[read.min(self.answers.len() - 1)] {
                 Ok(input) => Ok(crate::node_access::LinkAnswer::Parsed(

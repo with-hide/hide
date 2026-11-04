@@ -873,7 +873,7 @@ pub fn sleep_next_action(code: &str) -> &'static str {
         }
         "agent_sleep_waking" => "The agent is waking; ask again once it is awake",
         "agent_sleep_unreachable" => {
-            "Hide has no live Herdr connection to the agent's machine; retry once it reconnects"
+            "Hide has no live engine connection to the agent's machine; retry once it reconnects"
         }
         "agent_sleep_not_started" | "agent_sleep_busy" => {
             "The agent's pane is busy with another change; retry in a moment"

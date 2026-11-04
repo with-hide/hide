@@ -1232,10 +1232,13 @@ fn execute(engine: &dyn Engine, intent: &Intent, local: bool) -> Result<(), Stri
             let result =
                 engine.move_pane_to_new_tab(CALL_WAIT, &current, &intent.workspace_id, "")?;
             if !result.changed {
-                return Err(format!("Herdr refused the pane move: {:?}", result.reason));
+                return Err(format!(
+                    "The engine refused the pane move: {:?}",
+                    result.reason
+                ));
             }
             if result.terminal_id != intent.terminal_id {
-                return Err("Herdr returned a different terminal identity".into());
+                return Err("The engine returned a different terminal identity".into());
             }
             current = result.pane_id;
         }
@@ -1247,10 +1250,13 @@ fn execute(engine: &dyn Engine, intent: &Intent, local: bool) -> Result<(), Stri
             matches!(edge, Edge::Up | Edge::Down),
         )?;
         if !result.changed {
-            return Err(format!("Herdr refused the pane move: {:?}", result.reason));
+            return Err(format!(
+                "The engine refused the pane move: {:?}",
+                result.reason
+            ));
         }
         if result.terminal_id != intent.terminal_id {
-            return Err("Herdr returned a different terminal identity".into());
+            return Err("The engine returned a different terminal identity".into());
         }
         if matches!(edge, Edge::Left | Edge::Up) {
             engine.swap_panes(CALL_WAIT, &result.pane_id, &pane)?;
@@ -1258,10 +1264,13 @@ fn execute(engine: &dyn Engine, intent: &Intent, local: bool) -> Result<(), Stri
     } else {
         let result = engine.move_pane_to_new_tab(CALL_WAIT, &current, &intent.workspace_id, "")?;
         if !result.changed {
-            return Err(format!("Herdr refused the pane move: {:?}", result.reason));
+            return Err(format!(
+                "The engine refused the pane move: {:?}",
+                result.reason
+            ));
         }
         if result.terminal_id != intent.terminal_id {
-            return Err("Herdr returned a different terminal identity".into());
+            return Err("The engine returned a different terminal identity".into());
         }
     }
     Ok(())
