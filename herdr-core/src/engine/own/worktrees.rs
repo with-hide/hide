@@ -15,7 +15,6 @@
 //! (PRD core-host-node D-21): the node of the machine the panes run on reads
 //! each repository and runs its Git.
 
-use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use hide_node_link::cleanup::{CleanRemoval, RepositoryDirs};
@@ -42,20 +41,16 @@ fn refused(code: &str, message: String) -> EngineError {
     }
 }
 
-fn native(path: &str) -> Answer<PathBuf> {
-    hide_platform::path::from_wire(path)
-        .map_err(|error| EngineError::Request(format!("{path} is not a folder path: {error}")))
-}
-
-fn wire(path: &Path) -> Answer<String> {
-    hide_platform::path::to_wire(path).map_err(|error| {
-        EngineError::Request(format!("{} has no wire spelling: {error}", path.display()))
-    })
-}
-
-/// A path as the node spelled it, in the engine's wire spelling.
-fn rewired(path: &str) -> Answer<String> {
-    wire(Path::new(path))
+/// A path the node answered, which it spelled on the wire
+/// (`hide_platform::path`): kept as it came and related by its names only,
+/// since the machine it is on may be another system than this one.
+fn node_path(path: &str) -> Answer<String> {
+    if !hide_platform::path::is_wire_absolute(path) {
+        return Err(EngineError::Request(format!(
+            "{path} is not an absolute folder path"
+        )));
+    }
+    Ok(path.to_owned())
 }
 
 /// A branch as a folder name: its letters and digits in lower case, every
@@ -84,17 +79,17 @@ pub(super) fn path_slug(branch: &str) -> String {
 /// shared Git folder, which is the main checkout's `.git`, and whether it is
 /// a linked worktree, whose own Git folder is not the shared one.
 fn bound(path: &str, dirs: RepositoryDirs) -> Answer<Bound> {
-    let common = PathBuf::from(&dirs.common_dir);
-    let root = match common.file_name() {
-        Some(name) if name == ".git" => {
-            common.parent().map(Path::to_path_buf).ok_or_else(|| {
-                refused(
-                    "not_a_checkout",
-                    format!("{} has no folder", common.display()),
-                )
-            })?
+    let common = node_path(&dirs.common_dir)?;
+    let root = match common.trim_end_matches('/').strip_suffix("/.git") {
+        Some(root) if hide_platform::path::is_wire_absolute(root) => root.to_owned(),
+        // The main checkout of a drive's or the system's root.
+        Some(root) if hide_platform::path::is_wire_absolute(&format!("{root}/")) => {
+            format!("{root}/")
         }
-        _ => {
+        Some(_) => {
+            return Err(refused("not_a_checkout", format!("{common} has no folder")));
+        }
+        None => {
             return Err(refused(
                 "not_a_checkout",
                 format!("{path} belongs to a bare repository"),
@@ -102,15 +97,23 @@ fn bound(path: &str, dirs: RepositoryDirs) -> Answer<Bound> {
         }
     };
     Ok(Bound {
-        repo_key: wire(&common)?,
-        repo_name: root
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default(),
+        repo_name: folder_name(&root),
+        repo_key: common,
         linked: dirs.git_dir != dirs.common_dir,
-        repo_root: wire(&root)?,
-        checkout_path: rewired(&dirs.root)?,
+        repo_root: root,
+        checkout_path: node_path(&dirs.root)?,
     })
+}
+
+/// The last name of a folder the node spelled, empty for a root.
+fn folder_name(path: &str) -> String {
+    let trimmed = path.trim_end_matches('/');
+    if hide_platform::path::is_wire_absolute(path)
+        && !hide_platform::path::is_wire_absolute(trimmed)
+    {
+        return String::new();
+    }
+    hide_platform::path::wire_name(trimmed).to_owned()
 }
 
 impl OwnEngine<'_> {
@@ -201,18 +204,7 @@ impl OwnEngine<'_> {
             CHANGE_WAIT,
         )?;
         let bound = self.binding(&place)?;
-        let label = label.map_or_else(
-            || {
-                native(&bound.checkout_path)
-                    .ok()
-                    .and_then(|path| {
-                        path.file_name()
-                            .map(|name| name.to_string_lossy().into_owned())
-                    })
-                    .unwrap_or_default()
-            },
-            str::to_owned,
-        );
+        let label = label.map_or_else(|| folder_name(&bound.checkout_path), str::to_owned);
         let checkout = bound.checkout_path.clone();
         let (workspace, tab, pane) = self.open_bound(&checkout, &label, focus, bound)?;
         Ok(CreatedWorktree {
@@ -237,7 +229,7 @@ impl OwnEngine<'_> {
         listed
             .into_iter()
             .find(|worktree| worktree.branch.as_deref() == Some(branch))
-            .map(|worktree| rewired(&worktree.path))
+            .map(|worktree| node_path(&worktree.path))
             .transpose()
     }
 
@@ -266,10 +258,7 @@ impl OwnEngine<'_> {
             });
         }
         let checkout = bound.checkout_path.clone();
-        let label = native(&checkout)?
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default();
+        let label = folder_name(&checkout);
         let (workspace, tab, pane) = self.open_bound(&checkout, &label, focus, bound)?;
         Ok(OpenedWorktree {
             tab_label: self.topology().tab_label(&tab)?,
@@ -363,6 +352,51 @@ impl OwnEngine<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn dirs(root: &str, git_dir: &str, common_dir: &str) -> RepositoryDirs {
+        RepositoryDirs {
+            root: root.to_owned(),
+            git_dir: git_dir.to_owned(),
+            common_dir: common_dir.to_owned(),
+        }
+    }
+
+    /// The node spells its paths on the wire, so a Windows device's
+    /// checkout binds on any core by its names, as a Unix one always did.
+    #[test]
+    fn a_checkout_binds_by_the_names_its_node_spelled() {
+        let unix = bound("/repo", dirs("/repo", "/repo/.git", "/repo/.git")).unwrap();
+        assert_eq!(
+            (
+                unix.repo_root.as_str(),
+                unix.repo_name.as_str(),
+                unix.linked
+            ),
+            ("/repo", "repo", false)
+        );
+        let windows = bound(
+            "C:/Users/me/wt",
+            dirs(
+                "C:/Users/me/wt",
+                "C:/Users/me/repo/.git/worktrees/wt",
+                "C:/Users/me/repo/.git",
+            ),
+        )
+        .unwrap();
+        assert_eq!(windows.repo_root, "C:/Users/me/repo");
+        assert_eq!(windows.repo_key, "C:/Users/me/repo/.git");
+        assert_eq!(windows.repo_name, "repo");
+        assert_eq!(windows.checkout_path, "C:/Users/me/wt");
+        assert!(windows.linked);
+        let drive = bound("D:/", dirs("D:/", "D:/.git", "D:/.git")).unwrap();
+        assert_eq!(
+            (drive.repo_root.as_str(), drive.repo_name.as_str()),
+            ("D:/", "")
+        );
+        assert!(bound("C:/x", dirs("C:/x", "C:/x/bare", "C:/x/bare")).is_err());
+        assert!(bound("x", dirs("x", "x/.git", "x/.git")).is_err());
+        assert_eq!(folder_name("//server/share/repo"), "repo");
+    }
 
     #[test]
     fn a_branch_becomes_a_folder_name_as_herdr_spells_it() {

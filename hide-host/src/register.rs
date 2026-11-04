@@ -170,7 +170,7 @@ pub fn check(path: &Path, confirmed: Option<&Path>, home: &Path) -> HostResult<R
                 format!("{shown} is outside the home folder {home}; adding it needs the operator's confirmation"),
             ),
             Unregistrable::NeedsConfirmation(Some(root)) => HostError::needs_confirmation(
-                Some(root.to_string_lossy().into_owned()),
+                Some(crate::root::wire(&root)),
                 format!(
                     "{shown} belongs to the project {}, which is outside the home folder {home}; adding it needs the operator's confirmation of that project",
                     root.display()
@@ -186,7 +186,7 @@ pub fn check(path: &Path, confirmed: Option<&Path>, home: &Path) -> HostResult<R
         }
     })?;
     Ok(Registrable {
-        root: judged.root.to_string_lossy().into_owned(),
+        root: crate::root::wire(&judged.root),
         is_git: judged.is_git,
     })
 }
@@ -234,6 +234,6 @@ pub fn expand_home(path: &str, home: &str) -> PathBuf {
         Some(rest) if rest.is_empty() || rest.starts_with('/') => {
             PathBuf::from(format!("{home}{rest}"))
         }
-        _ => PathBuf::from(path),
+        _ => crate::root::native_absolute(path).unwrap_or_else(|| PathBuf::from(path)),
     }
 }

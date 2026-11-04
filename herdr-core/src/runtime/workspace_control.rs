@@ -326,7 +326,9 @@ impl Runtime {
             Action::OpenDiff { path, .. } => (path, false),
             _ => return Ok(ActionPreparation::Ready),
         };
-        if !std::path::Path::new(path).is_absolute() {
+        // The caller's machine spelled it on the wire: `C:/...` from a
+        // Windows device is absolute here too.
+        if !hide_platform::path::is_wire_absolute(path) {
             return Err(Refusal {
                 reason: "invalid_path",
                 next_action: "Resolve the path from the caller's cwd and retry",

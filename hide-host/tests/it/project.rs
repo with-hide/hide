@@ -5,6 +5,12 @@ use hide_host::ErrorCode;
 use hide_host::protocol::Call;
 use hide_host::serve::handle;
 
+/// A path as the answer spells it, on the wire: the same text on macOS and
+/// Linux, `C:/...` on Windows.
+fn wire(path: &std::path::Path) -> std::path::PathBuf {
+    hide_platform::path::to_wire_lossy(path).into()
+}
+
 #[test]
 fn a_folder_answers_its_facts_and_a_missing_or_relative_path_is_refused() {
     let dir = tempfile::tempdir().unwrap();
@@ -18,7 +24,7 @@ fn a_folder_answers_its_facts_and_a_missing_or_relative_path_is_refused() {
     )
     .unwrap();
     assert_eq!(facts.kind, hide_project::ProjectKind::Folder);
-    assert_eq!(facts.root, folder.join("inner"));
+    assert_eq!(facts.root, wire(&folder.join("inner")));
 
     let missing = handle(Call::Project {
         path: folder.join("gone").to_string_lossy().into_owned(),
@@ -65,8 +71,8 @@ fn a_linked_worktree_names_its_repository_as_the_project() {
     )
     .unwrap();
     assert_eq!(facts.kind, hide_project::ProjectKind::Git);
-    assert_eq!(facts.root, main);
-    assert_eq!(facts.checkout_root, linked);
+    assert_eq!(facts.root, wire(&main));
+    assert_eq!(facts.checkout_root, wire(&linked));
     assert!(facts.linked_worktree);
     assert_eq!(facts.branch.as_deref(), Some("feature"));
 }

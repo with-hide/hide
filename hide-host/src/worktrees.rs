@@ -426,7 +426,7 @@ pub fn read(
     let until = Instant::now() + WORKTREES_READ_TIME;
     if !path.exists() {
         return Some(RepositoryWorktrees {
-            root_path: path.to_string_lossy().into_owned(),
+            root_path: crate::root::wire(path),
             unavailable_reason: Some(format!("Repository unavailable: {}", path.display())),
             ..RepositoryWorktrees::default()
         });
@@ -434,7 +434,7 @@ pub fn read(
     // A folder that is not a repository has no worktrees and is not a
     // failure; the card and the tree both present it as a plain folder.
     let root = main_worktree(path, until)?;
-    let root_path = root.to_string_lossy().into_owned();
+    let root_path = crate::root::wire(&root);
     Some(read_project_until(
         &root,
         root_path,
@@ -529,7 +529,7 @@ fn read_project_until(
         until,
     )
     .ok()
-    .map(|value| value.trim().to_owned());
+    .map(|value| crate::root::wire_text(value.trim()));
     // Read from the repository's own configuration, not another git process.
     let origin_url = hide_project::git::discover(root)
         .and_then(|repository| repository.config().ok())
@@ -705,7 +705,7 @@ fn measure(
 /// A worktree the read ran out of time for before it began.
 fn unmeasured(listed: &ListedWorktree) -> WorktreeFacts {
     WorktreeFacts {
-        path: listed.path.to_string_lossy().into_owned(),
+        path: crate::root::wire(&listed.path),
         branch: listed.branch.clone(),
         is_main: listed.is_main,
         head_sha: listed.head_sha.clone(),
@@ -1128,7 +1128,7 @@ pub fn parse_worktree_list(output: &str) -> Vec<ListedWorktree> {
 /// scan included. A worktree measured only in part names itself in its
 /// unavailable reason, and what was not measured stays unknown.
 fn describe_within(listed: ListedWorktree, bases: &Bases<'_>, until: Instant) -> WorktreeFacts {
-    let path = listed.path.to_string_lossy().into_owned();
+    let path = crate::root::wire(&listed.path);
     if !listed.path.exists() {
         // Nothing can be counted against a path that is not there, and
         // reporting zeros would read as a clean checkout rather than a gone
@@ -2053,7 +2053,7 @@ pub fn check_new_branch(repository_root: &Path, branch: &str) -> HostResult<()> 
 /// that the folder Herdr says it created is there and is the one it listed.
 pub fn directory(path: &Path) -> Option<String> {
     let real = hide_platform::fs::identity::canonical(path).ok()?;
-    real.is_dir().then(|| real.to_string_lossy().into_owned())
+    real.is_dir().then(|| crate::root::wire(&real))
 }
 
 // --- removal ---------------------------------------------------------------
@@ -2120,7 +2120,7 @@ fn registered_until(root: &Path, until: Instant) -> Result<Vec<Registered>, Stri
             .find_map(|v| v.strip_prefix("worktree "))
             .ok_or("Git returned an invalid worktree record. Refresh the review.")?;
         rows.push(Registered {
-            path: path.into(),
+            path: crate::root::wire_text(path),
             branch: fields
                 .iter()
                 .find_map(|v| v.strip_prefix("branch refs/heads/"))

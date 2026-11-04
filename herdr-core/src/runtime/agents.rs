@@ -68,7 +68,7 @@ impl Runtime {
             );
             return true;
         };
-        if !Path::new(&root_path).is_absolute()
+        if !hide_platform::path::is_wire_absolute(&root_path)
             || root_path.bytes().any(|byte| byte.is_ascii_control())
         {
             let generation = self.advance_remote_file_generation();

@@ -37,9 +37,8 @@ fn path_facts_within(paths: &[String], answer_limit: usize) -> HostResult<PathFa
         if facts.paths.contains_key(asked) {
             continue;
         }
-        let native = Path::new(asked);
-        let fact = if native.is_absolute() {
-            read(native, &mut facts, &mut bytes)
+        let fact = if let Some(native) = crate::root::native_absolute(asked) {
+            read(&native, &mut facts, &mut bytes)
         } else {
             PathFact {
                 comparison: asked.clone(),
@@ -183,9 +182,21 @@ fn read(native: &Path, facts: &mut PathFacts, bytes: &mut usize) -> PathFact {
 /// The facts as the wire can carry them: it spells paths in UTF-8.
 fn wire_project(project: hide_project::ProjectFacts) -> Result<hide_project::ProjectFacts, String> {
     if project.root.to_str().is_some() && project.checkout_root.to_str().is_some() {
-        Ok(project)
+        Ok(wire_facts(project))
     } else {
         Err("project_path_not_utf8".to_owned())
+    }
+}
+
+/// The facts with their roots in the wire spelling, as `Call::Project` and
+/// `Call::PathFacts` answer them: a core on another system reads them as
+/// absolute and derives the Project id this node's own session reading
+/// derives (`hide_project::project_id`). On macOS and Linux nothing changes.
+pub fn wire_facts(project: hide_project::ProjectFacts) -> hide_project::ProjectFacts {
+    hide_project::ProjectFacts {
+        root: PathBuf::from(crate::root::wire(&project.root)),
+        checkout_root: PathBuf::from(crate::root::wire(&project.checkout_root)),
+        ..project
     }
 }
 
@@ -338,7 +349,9 @@ mod tests {
             .as_ref()
             .expect("the other path keeps its Project");
         assert_eq!(project.kind, hide_project::ProjectKind::Folder);
-        assert_eq!(project.root, hide_project::facts(&plain).unwrap().root);
+        // The Project's roots are the wire spelling the core asked with.
+        assert_eq!(project.root, PathBuf::from(&plain_wire));
+        assert_eq!(project.checkout_root, PathBuf::from(&plain_wire));
     }
 
     #[cfg(unix)]

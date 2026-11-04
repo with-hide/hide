@@ -768,14 +768,8 @@ fn to_value(value: impl serde::Serialize) -> HostResult<Value> {
 /// A repository path from the core. Only an absolute path names a folder on
 /// this machine; anything else is refused before Git sees it.
 fn absolute(path: &str) -> HostResult<std::path::PathBuf> {
-    let path = Path::new(path);
-    if !path.is_absolute() {
-        return Err(HostError::new(
-            ErrorCode::InvalidPath,
-            "A repository path must be absolute",
-        ));
-    }
-    Ok(path.to_path_buf())
+    crate::root::native_absolute(path)
+        .ok_or_else(|| HostError::new(ErrorCode::InvalidPath, "A repository path must be absolute"))
 }
 
 /// The agents whose session files the core reads by path.
@@ -831,9 +825,7 @@ fn session_read<T: serde::Serialize>(
 /// A folder the core names for agy on this machine: its wire spelling, or
 /// the native one a checkout path Herdr reported keeps.
 fn antigravity_folder(path: &str) -> Option<PathBuf> {
-    hide_platform::path::from_wire(path)
-        .ok()
-        .or_else(|| Some(PathBuf::from(path)).filter(|path| path.is_absolute()))
+    crate::root::native_absolute(path)
 }
 
 /// The checkout an agy fork is looked for in, as agy's index names it.
@@ -852,23 +844,30 @@ fn session_file_agent(home: &Path, path: &Path) -> HostResult<hide_session::Agen
 }
 
 fn project_facts(path: &str) -> HostResult<hide_project::ProjectFacts> {
-    let path = Path::new(path);
-    if !path.is_absolute() {
-        return Err(HostError::new(
+    let path = crate::root::native_absolute(path)
+        .ok_or_else(|| HostError::new(ErrorCode::InvalidPath, "A project path must be absolute"))?;
+    hide_project::facts(&path)
+        .map(crate::catalog::wire_facts)
+        .map_err(|error| match error {
+            hide_project::ResolveError::MissingPath(_) => {
+                HostError::new(ErrorCode::NotFound, error.to_string())
+            }
+            other => HostError::new(ErrorCode::Io, other.to_string()),
+        })
+}
+
+/// The checkout root the core names, opened as this machine spells it.
+fn root_path(path: &str) -> HostResult<PathBuf> {
+    crate::root::native_absolute(path).ok_or_else(|| {
+        HostError::new(
             ErrorCode::InvalidPath,
-            "A project path must be absolute",
-        ));
-    }
-    hide_project::facts(path).map_err(|error| match error {
-        hide_project::ResolveError::MissingPath(_) => {
-            HostError::new(ErrorCode::NotFound, error.to_string())
-        }
-        other => HostError::new(ErrorCode::Io, other.to_string()),
+            "A checkout root must be an absolute path",
+        )
     })
 }
 
 fn open_root(root: &RootRef) -> HostResult<Root> {
-    Root::open_pinned(Path::new(&root.path), root.identity)
+    Root::open_pinned(&root_path(&root.path)?, root.identity)
 }
 
 /// The `label_transcript` answer for the transcripts under `home`; the
@@ -1087,10 +1086,9 @@ pub fn handle_with_progress(
             version: env!("CARGO_PKG_VERSION").to_owned(),
             os: std::env::consts::OS.to_owned(),
             arch: std::env::consts::ARCH.to_owned(),
-            home: env
-                .home
-                .as_ref()
-                .map(|home| home.to_string_lossy().into_owned()),
+            // On the wire, so a core on another system joins the engine's
+            // worktree folders under it by names (`hide_kit::layout`).
+            home: env.home.as_deref().map(crate::root::wire),
             machine_identity: match hide_platform::host::machine_id() {
                 Ok(id) => MachineIdentity::Available { id },
                 Err(error) => MachineIdentity::Unavailable {
@@ -1123,7 +1121,7 @@ pub fn handle_with_progress(
             to_value(())
         }
         Call::RootOpen { root } => {
-            let opened = Root::open(Path::new(&root))?;
+            let opened = Root::open(&root_path(&root)?)?;
             to_value(RootOpened {
                 identity: opened.identity(),
             })
